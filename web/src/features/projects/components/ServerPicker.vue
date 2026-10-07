@@ -9,6 +9,7 @@ import {
   singleUsableServerId,
   unusableServerHint,
 } from "@/features/projects/utils/serverOptions";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 const props = withDefaults(
   defineProps<{
@@ -18,7 +19,7 @@ const props = withDefaults(
     /** Disabled with the pin reason when the resource cannot change node (M4). */
     disabled?: boolean;
   }>(),
-  { label: "Node", feedback: "", disabled: false },
+  { label: undefined, feedback: "", disabled: false },
 );
 
 const emit = defineEmits<{
@@ -38,6 +39,15 @@ const serversStore = useServersStore();
 const options = computed(() => buildServerOptions(serversStore.servers));
 
 const blockedHint = computed(() => unusableServerHint(serversStore.servers));
+
+/** t renders picker copy in the active locale (tracks language switches). */
+function t(key: string): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key));
+}
+
+/** labelText is the caller override or the localized node wording. */
+const labelText = computed<string>(() => props.label ?? t("projects.server.label"));
 
 const noServers = computed<boolean>(
   () =>
@@ -73,7 +83,7 @@ onMounted(() => {
 
 <template>
   <NFormItem
-    :label="props.label"
+    :label="labelText"
     required
     :feedback="props.feedback"
     :validation-status="props.feedback ? 'error' : undefined"
@@ -83,28 +93,28 @@ onMounted(() => {
       :options="options"
       :loading="serversStore.loading"
       :disabled="props.disabled"
-      placeholder="Select a node"
-      aria-label="Node"
+      :placeholder="t('projects.server.placeholder')"
+      :aria-label="t('projects.server.aria')"
       @update:value="(value: string) => emit('update:modelValue', value)"
     />
     <template v-if="serversStore.error">
       <NAlert type="error" :show-icon="true">
         {{ serversStore.error }}
       </NAlert>
-      <NButton size="small" @click="reload">Retry</NButton>
+      <NButton size="small" @click="reload">{{ t("common.actions.retry") }}</NButton>
     </template>
     <template v-else-if="noServers">
       <NText depth="3">
-        No node is registered yet.
-        <RouterLink to="/servers">Add a server</RouterLink>
-        before creating a resource.
+        {{ t("projects.server.emptyPrefix") }}
+        <RouterLink to="/servers">{{ t("projects.server.emptyLink") }}</RouterLink>
+        {{ t("projects.server.emptySuffix") }}
       </NText>
     </template>
     <template v-else-if="blockedHint">
-      <NText depth="3">{{ blockedHint }} — cannot host resources.</NText>
+      <NText depth="3">{{ blockedHint }} {{ t("projects.server.cannotHost") }}</NText>
     </template>
     <template v-else>
-      <NText depth="3">The resource runs on this node.</NText>
+      <NText depth="3">{{ t("projects.server.runsHere") }}</NText>
     </template>
   </NFormItem>
 </template>

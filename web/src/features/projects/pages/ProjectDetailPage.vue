@@ -14,7 +14,11 @@ import {
   NTabs,
   NText,
 } from "naive-ui";
+import type { FormInst } from "naive-ui";
 import { RouterLink, useRoute } from "vue-router";
+import { onUnmounted, ref } from "vue";
+
+import { createVisibleValidation } from "@/features/auth";
 
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import SharedVariablesEditor from "@/features/projects/components/SharedVariablesEditor.vue";
@@ -31,6 +35,7 @@ import {
   projectNameRules,
 } from "@/features/projects/schemas/projects";
 import { useProjectsStore } from "@/features/projects/stores/projects";
+import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 
 /**
@@ -100,19 +105,51 @@ const {
   handleEnvDelete,
   reload,
 } = page;
-const renameRules = projectNameRules();
-const envRules = environmentNameRules();
+/**
+ * Visible-feedback trackers (one per form): a language switch revalidates
+ * exactly the paths with shown feedback, so visible errors refresh while
+ * pristine fields stay clean (shared visibleValidation via features/auth).
+ */
+const renameVisible = createVisibleValidation();
+const envCreateVisible = createVisibleValidation();
+const envRenameVisible = createVisibleValidation();
+const renameRules = renameVisible.trackRules(projectNameRules());
+const envCreateRules = envCreateVisible.trackRules(environmentNameRules());
+const envRenameRules = envRenameVisible.trackRules(environmentNameRules());
+const renameFormRef = ref<FormInst | null>(null);
+const envCreateFormRef = ref<FormInst | null>(null);
+const envRenameFormRef = ref<FormInst | null>(null);
+
+const stopDetailLocaleWatch = onLocaleChange(() => {
+  renameVisible.refreshVisible(renameFormRef);
+  envCreateVisible.refreshVisible(envCreateFormRef);
+  envRenameVisible.refreshVisible(envRenameFormRef);
+});
+
+onUnmounted(() => {
+  stopDetailLocaleWatch();
+});
+
+/**
+ * t renders page copy in the active locale (tracks language switches).
+ * Called during render, so tabs, tables and open dialogs refresh without
+ * losing drafts.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
 </script>
 
 <template>
   <div class="project-page">
-    <NSpin v-if="projectsStore.detailLoading && !projectsStore.detail" description="Loading project…" />
+    <NSpin v-if="projectsStore.detailLoading && !projectsStore.detail" :description="t('projects.detail.loading')" />
 
     <NSpace v-else-if="projectsStore.detailError" vertical :size="8">
       <NAlert type="error" :show-icon="true">
         {{ projectsStore.detailError }}
       </NAlert>
-      <div><NButton size="small" @click="void reload()">Retry</NButton></div>
+      <div><NButton size="small" @click="void reload()">{{ t("common.actions.retry") }}</NButton></div>
     </NSpace>
 
     <template v-else-if="projectsStore.detail">
@@ -130,28 +167,28 @@ const envRules = environmentNameRules();
           </p>
         </div>
         <div v-if="canWrite" class="page-actions">
-          <NButton @click="openRename()">Rename</NButton>
+          <NButton @click="openRename()">{{ t("projects.detail.rename") }}</NButton>
           <NButton @click="deleteOpen = true">
-            Delete project
+            {{ t("projects.detail.deleteProject") }}
           </NButton>
         </div>
       </div>
 
       <NTabs v-model:value="tab" type="line" animated class="tabs">
-        <NTabPane name="environments" tab="Environments">
+        <NTabPane name="environments" :tab="t('projects.detail.tabs.environments')">
           <div class="toolbar">
             <NButton v-if="canWrite" type="primary" @click="openEnvCreate()">
-              Add environment
+              {{ t("projects.environments.add") }}
             </NButton>
           </div>
 
           <NEmpty
             v-if="projectsStore.environments.length === 0"
-            description="No environments yet. Add one to start deploying."
+            :description="t('projects.detail.noEnvironments')"
           >
             <template v-if="canWrite" #extra>
               <NButton type="primary" @click="openEnvCreate()">
-                Add environment
+                {{ t("projects.environments.add") }}
               </NButton>
             </template>
           </NEmpty>
@@ -161,20 +198,20 @@ const envRules = environmentNameRules();
             <table class="env-table">
               <thead>
                 <tr>
-                  <th scope="col">Environment</th>
-                  <th scope="col">Applications</th>
-                  <th scope="col">Services</th>
-                  <th scope="col">Databases</th>
-                  <th scope="col"><span class="sr-only">Actions</span></th>
+                  <th scope="col">{{ t("projects.detail.table.environment") }}</th>
+                  <th scope="col">{{ t("projects.detail.table.applications") }}</th>
+                  <th scope="col">{{ t("projects.detail.table.services") }}</th>
+                  <th scope="col">{{ t("projects.detail.table.databases") }}</th>
+                  <th scope="col"><span class="sr-only">{{ t("projects.detail.table.actions") }}</span></th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="environment in projectsStore.environments" :key="environment.id">
-                  <td class="mono env-name" data-label="Environment" :title="environment.name">{{ environment.name }}</td>
-                  <td class="num" data-label="Applications">{{ environment.resource_counts.applications }}</td>
-                  <td class="num" data-label="Services">{{ environment.resource_counts.services }}</td>
-                  <td class="num" data-label="Databases">{{ environment.resource_counts.databases }}</td>
-                  <td class="actions" data-label="Actions">
+                  <td class="mono env-name" :data-label="t('projects.detail.table.environment')" :title="environment.name">{{ environment.name }}</td>
+                  <td class="num" :data-label="t('projects.detail.table.applications')">{{ environment.resource_counts.applications }}</td>
+                  <td class="num" :data-label="t('projects.detail.table.services')">{{ environment.resource_counts.services }}</td>
+                  <td class="num" :data-label="t('projects.detail.table.databases')">{{ environment.resource_counts.databases }}</td>
+                  <td class="actions" :data-label="t('projects.detail.table.actions')">
                     <NSpace :size="8" justify="end" class="action-buttons">
                       <RouterLink
                         :to="{
@@ -185,14 +222,14 @@ const envRules = environmentNameRules();
                           },
                         }"
                       >
-                        <NButton size="small">Open</NButton>
+                        <NButton size="small">{{ t("projects.detail.open") }}</NButton>
                       </RouterLink>
                       <template v-if="canWrite">
                         <NButton size="small" @click="openEnvRename(environment)">
-                          Rename
+                          {{ t("projects.detail.rename") }}
                         </NButton>
                         <NButton size="small" @click="openEnvDelete(environment)">
-                          Delete
+                          {{ t("projects.detail.delete") }}
                         </NButton>
                       </template>
                     </NSpace>
@@ -204,7 +241,7 @@ const envRules = environmentNameRules();
           </NCard>
         </NTabPane>
 
-        <NTabPane name="variables" tab="Shared variables">
+        <NTabPane name="variables" :tab="t('projects.detail.tabs.variables')">
           <SharedVariablesEditor
             :draft="projectVariables.draft.value"
             :loading="projectVariables.loading.value"
@@ -215,7 +252,7 @@ const envRules = environmentNameRules();
             :can-write="canWrite"
             :stored-secrets="[...projectVariables.storedSecrets.value]"
             :problems="projectVariables.problems.value"
-            precedence-hint="Project variables apply to every resource in every environment of this project. An environment variable overrides a project one; an application variable overrides both."
+            :precedence-hint="t('projects.variables.projectPrecedence')"
             @update:draft="projectVariables.draft.value = $event"
             @save="void projectVariables.save()"
             @retry="void projectVariables.retry()"
@@ -228,13 +265,14 @@ const envRules = environmentNameRules();
     <NModal
       v-model:show="renameOpen"
       preset="card"
-      title="Rename project"
+      :title="t('projects.rename.title')"
+      @after-leave="renameVisible.reset()"
       style="width: 460px; max-width: 94vw"
     >
-      <NForm :model="{ name: renameName }" :rules="renameRules">
+      <NForm ref="renameFormRef" :model="{ name: renameName }" :rules="renameRules">
         <NSpace vertical :size="12">
           <NFormItem
-            label="Name"
+            :label="t('projects.rename.nameLabel')"
             path="name"
             :feedback="renameConflict.feedback.value"
             :validation-status="renameConflict.status.value"
@@ -243,12 +281,12 @@ const envRules = environmentNameRules();
               v-model:value="renameName"
               maxlength="64"
               show-count
-              :input-props="{ id: 'project-rename-name', 'aria-label': 'Project name' }"
+              :input-props="{ id: 'project-rename-name', 'aria-label': t('projects.rename.nameAria') }"
               @update:value="renameConflict.clear()"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleRename)"
             />
           </NFormItem>
-          <NText depth="3">Unique within the team. 1-64 characters.</NText>
+          <NText depth="3">{{ t("projects.rename.nameHint") }}</NText>
           <NAlert v-if="renameError" type="error" :show-icon="true">
             {{ renameError }}
           </NAlert>
@@ -256,14 +294,14 @@ const envRules = environmentNameRules();
       </NForm>
       <template #footer>
         <NSpace justify="end" :size="8">
-          <NButton @click="renameOpen = false">Cancel</NButton>
+          <NButton @click="renameOpen = false">{{ t("common.actions.cancel") }}</NButton>
           <NButton
             type="primary"
             :loading="renameBusy"
             :disabled="!isProjectNameValid(renameName)"
             @click="void handleRename()"
           >
-            Save
+            {{ t("projects.rename.submit") }}
           </NButton>
         </NSpace>
       </template>
@@ -273,19 +311,16 @@ const envRules = environmentNameRules();
     <NModal
       v-model:show="deleteOpen"
       preset="card"
-      title="Delete project"
+      :title="t('projects.delete.title')"
       style="width: 460px; max-width: 94vw"
     >
       <NSpace vertical :size="12">
         <NText depth="3">
           <template v-if="hasResources">
-            This project still holds resources. Move or delete every resource
-            in every environment first — the backend refuses the delete
-            otherwise.
+            {{ t("projects.delete.blocked") }}
           </template>
           <template v-else>
-            This removes the project, its environments and its shared
-            variables. This cannot be undone.
+            {{ t("projects.delete.confirm") }}
           </template>
         </NText>
         <NAlert
@@ -298,14 +333,14 @@ const envRules = environmentNameRules();
       </NSpace>
       <template #footer>
         <NSpace justify="end" :size="8">
-          <NButton @click="deleteOpen = false">Cancel</NButton>
+          <NButton @click="deleteOpen = false">{{ t("common.actions.cancel") }}</NButton>
           <NButton
             type="error"
             :loading="deleting"
             :disabled="hasResources"
             @click="void handleDelete()"
           >
-            Delete project
+            {{ t("projects.delete.submit") }}
           </NButton>
         </NSpace>
       </template>
@@ -315,28 +350,29 @@ const envRules = environmentNameRules();
     <NModal
       v-model:show="envCreateOpen"
       preset="card"
-      title="Add environment"
+      :title="t('projects.environments.createTitle')"
+      @after-leave="envCreateVisible.reset()"
       style="width: 460px; max-width: 94vw"
     >
-      <NForm :model="{ name: envName }" :rules="envRules">
+      <NForm ref="envCreateFormRef" :model="{ name: envName }" :rules="envCreateRules">
         <NSpace vertical :size="12">
           <NFormItem
-            label="Name"
+            :label="t('projects.environments.nameLabel')"
             path="name"
             :feedback="envConflict.feedback.value"
             :validation-status="envConflict.status.value"
           >
             <NInput
               v-model:value="envName"
-              placeholder="staging"
+              :placeholder="t('projects.environments.namePlaceholder')"
               maxlength="64"
               show-count
-              :input-props="{ id: 'environment-create-name', 'aria-label': 'Environment name' }"
+              :input-props="{ id: 'environment-create-name', 'aria-label': t('projects.environments.nameAria') }"
               @update:value="envConflict.clear()"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleEnvCreate)"
             />
           </NFormItem>
-          <NText depth="3">Unique within the project. 1-64 characters.</NText>
+          <NText depth="3">{{ t("projects.environments.nameHint") }}</NText>
           <NAlert v-if="envError" type="error" :show-icon="true">
             {{ envError }}
           </NAlert>
@@ -344,14 +380,14 @@ const envRules = environmentNameRules();
       </NForm>
       <template #footer>
         <NSpace justify="end" :size="8">
-          <NButton @click="envCreateOpen = false">Cancel</NButton>
+          <NButton @click="envCreateOpen = false">{{ t("common.actions.cancel") }}</NButton>
           <NButton
             type="primary"
             :loading="envBusy"
             :disabled="!isEnvironmentNameValid(envName)"
             @click="void handleEnvCreate()"
           >
-            Add environment
+            {{ t("projects.environments.add") }}
           </NButton>
         </NSpace>
       </template>
@@ -361,14 +397,15 @@ const envRules = environmentNameRules();
     <NModal
       :show="envRenameTarget !== null"
       preset="card"
-      title="Rename environment"
+      :title="t('projects.environments.renameTitle')"
+      @after-leave="envRenameVisible.reset()"
       style="width: 460px; max-width: 94vw"
       @update:show="(show: boolean) => { if (!show) envRenameTarget = null; }"
     >
-      <NForm :model="{ name: envRenameName }" :rules="envRules">
+      <NForm ref="envRenameFormRef" :model="{ name: envRenameName }" :rules="envRenameRules">
         <NSpace vertical :size="12">
           <NFormItem
-            label="Name"
+            :label="t('projects.environments.nameLabel')"
             path="name"
             :feedback="envRenameConflict.feedback.value"
             :validation-status="envRenameConflict.status.value"
@@ -377,7 +414,7 @@ const envRules = environmentNameRules();
               v-model:value="envRenameName"
               maxlength="64"
               show-count
-              :input-props="{ id: 'environment-rename-name', 'aria-label': 'Environment name' }"
+              :input-props="{ id: 'environment-rename-name', 'aria-label': t('projects.environments.nameAria') }"
               @update:value="envRenameConflict.clear()"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleEnvRename)"
             />
@@ -389,14 +426,14 @@ const envRules = environmentNameRules();
       </NForm>
       <template #footer>
         <NSpace justify="end" :size="8">
-          <NButton @click="envRenameTarget = null">Cancel</NButton>
+          <NButton @click="envRenameTarget = null">{{ t("common.actions.cancel") }}</NButton>
           <NButton
             type="primary"
             :loading="envRenameBusy"
             :disabled="!isEnvironmentNameValid(envRenameName)"
             @click="void handleEnvRename()"
           >
-            Save
+            {{ t("projects.rename.submit") }}
           </NButton>
         </NSpace>
       </template>
@@ -406,21 +443,17 @@ const envRules = environmentNameRules();
     <NModal
       :show="envDeleteTarget !== null"
       preset="card"
-      title="Delete environment"
+      :title="t('projects.environments.deleteTitle')"
       style="width: 460px; max-width: 94vw"
       @update:show="(show: boolean) => { if (!show) envDeleteTarget = null; }"
     >
       <NSpace vertical :size="12">
         <NText depth="3">
           <template v-if="envDeleteTarget && environmentResourceTotal(envDeleteTarget) > 0">
-            {{ envDeleteTarget.name }} still holds
-            {{ resourceSummary(envDeleteTarget.resource_counts) }}. Move or
-            delete them first.
+            {{ t("projects.environments.deleteBlocked", { name: envDeleteTarget.name, summary: resourceSummary(envDeleteTarget.resource_counts) }) }}
           </template>
           <template v-else>
-            This removes the environment
-            <span v-if="envDeleteTarget" class="mono">{{ envDeleteTarget.name }}</span>.
-            This cannot be undone.
+            {{ t("projects.environments.deleteConfirm", { name: envDeleteTarget?.name ?? "" }) }}
           </template>
         </NText>
         <NAlert v-if="envDeleteError" type="error" :show-icon="true">
@@ -429,14 +462,14 @@ const envRules = environmentNameRules();
       </NSpace>
       <template #footer>
         <NSpace justify="end" :size="8">
-          <NButton @click="envDeleteTarget = null">Cancel</NButton>
+          <NButton @click="envDeleteTarget = null">{{ t("common.actions.cancel") }}</NButton>
           <NButton
             type="error"
             :loading="envDeleting"
             :disabled="!!envDeleteTarget && environmentResourceTotal(envDeleteTarget) > 0"
             @click="void handleEnvDelete()"
           >
-            Delete environment
+            {{ t("projects.environments.deleteSubmit") }}
           </NButton>
         </NSpace>
       </template>

@@ -1,4 +1,5 @@
 import { computed, onMounted, ref } from "vue";
+import type { Ref } from "vue";
 
 import {
   describeProjectError,
@@ -10,7 +11,6 @@ import type {
   Project,
 } from "@/features/projects/api/projects";
 import { useTeamsStore } from "@/features/teams";
-
 /**
  * Project/environment options behind the create-flow scope summary and the
  * resource move card (PE-5, Linear JUS-34).
@@ -23,11 +23,23 @@ export function useEnvironmentOptions() {
   const teamsStore = useTeamsStore();
 
   const projectsLoading = ref(false);
-  const projectsError = ref<string | null>(null);
+  /** projectsFailure retains the raw list refusal for reactive display. */
+  const projectsFailure: Ref<unknown> = ref(null);
+  const projectsError = computed<string | null>(() =>
+    projectsFailure.value === null
+      ? null
+      : describeProjectError(projectsFailure.value),
+  );
   const projects = ref<Project[]>([]);
   const environmentsByProject = ref<Record<string, Environment[]>>({});
   const environmentsLoading = ref(false);
-  const environmentsError = ref<string | null>(null);
+  /** environmentsFailure retains the raw environments refusal. */
+  const environmentsFailure: Ref<unknown> = ref(null);
+  const environmentsError = computed<string | null>(() =>
+    environmentsFailure.value === null
+      ? null
+      : describeProjectError(environmentsFailure.value),
+  );
 
   /** projectOptions lists every project of the active team for the selects. */
   const projectOptions = computed<Array<{ label: string; value: string }>>(() =>
@@ -68,11 +80,11 @@ export function useEnvironmentOptions() {
   /** fetchProjects loads the active team's projects for the selects. */
   async function fetchProjects(): Promise<void> {
     projectsLoading.value = true;
-    projectsError.value = null;
+    projectsFailure.value = null;
     try {
       projects.value = await listProjectsRequest(teamsStore.activeTeamId);
     } catch (error) {
-      projectsError.value = describeProjectError(error);
+      projectsFailure.value = error;
     } finally {
       projectsLoading.value = false;
     }
@@ -84,12 +96,12 @@ export function useEnvironmentOptions() {
       return;
     }
     environmentsLoading.value = true;
-    environmentsError.value = null;
+    environmentsFailure.value = null;
     try {
       const detail = await getProjectRequest(teamsStore.activeTeamId, projectId);
       environmentsByProject.value[projectId] = detail.environments;
     } catch (error) {
-      environmentsError.value = describeProjectError(error);
+      environmentsFailure.value = error;
     } finally {
       environmentsLoading.value = false;
     }

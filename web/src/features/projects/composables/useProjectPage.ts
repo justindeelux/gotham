@@ -8,6 +8,7 @@ import {
   describeProjectError,
   environmentResourceTotal,
 } from "@/features/projects/api/projects";
+import { i18n } from "@/shared/i18n";
 import {
   isEnvironmentNameValid,
   isProjectNameValid,
@@ -31,24 +32,24 @@ export interface ProjectPageState {
   renameOpen: Ref<boolean>;
   renameName: Ref<string>;
   renameBusy: Ref<boolean>;
-  renameError: Ref<string | null>;
+  renameError: ComputedRef<string | null>;
   renameConflict: NameConflictState;
   deleteOpen: Ref<boolean>;
   deleting: Ref<boolean>;
-  deleteError: Ref<string | null>;
+  deleteError: ComputedRef<string | null>;
   envCreateOpen: Ref<boolean>;
   envName: Ref<string>;
   envBusy: Ref<boolean>;
-  envError: Ref<string | null>;
+  envError: ComputedRef<string | null>;
   envConflict: NameConflictState;
   envRenameTarget: Ref<Environment | null>;
   envRenameName: Ref<string>;
   envRenameBusy: Ref<boolean>;
-  envRenameError: Ref<string | null>;
+  envRenameError: ComputedRef<string | null>;
   envRenameConflict: NameConflictState;
   envDeleteTarget: Ref<Environment | null>;
   envDeleting: Ref<boolean>;
-  envDeleteError: Ref<string | null>;
+  envDeleteError: ComputedRef<string | null>;
   /** True while the project holds any resource (delete explains itself). */
   hasResources: ComputedRef<boolean>;
   canWrite: ComputedRef<boolean>;
@@ -84,28 +85,51 @@ export function useProjectPage(
   const renameOpen = ref(false);
   const renameName = ref("");
   const renameBusy = ref(false);
-  const renameError = ref<string | null>(null);
+  const renameFailure: Ref<unknown> = ref(null);
+  const renameError = computed<string | null>(() =>
+    renameFailure.value === null
+      ? null
+      : describeProjectError(renameFailure.value),
+  );
   const renameConflict = useNameConflict();
 
   const deleteOpen = ref(false);
   const deleting = ref(false);
-  const deleteError = ref<string | null>(null);
+  const deleteFailure: Ref<unknown> = ref(null);
+  const deleteError = computed<string | null>(() =>
+    deleteFailure.value === null
+      ? null
+      : describeProjectError(deleteFailure.value),
+  );
 
   const envCreateOpen = ref(false);
   const envName = ref("");
   const envBusy = ref(false);
-  const envError = ref<string | null>(null);
+  const envFailure: Ref<unknown> = ref(null);
+  const envError = computed<string | null>(() =>
+    envFailure.value === null ? null : describeProjectError(envFailure.value),
+  );
   const envConflict = useNameConflict();
 
   const envRenameTarget = ref<Environment | null>(null);
   const envRenameName = ref("");
   const envRenameBusy = ref(false);
-  const envRenameError = ref<string | null>(null);
+  const envRenameFailure: Ref<unknown> = ref(null);
+  const envRenameError = computed<string | null>(() =>
+    envRenameFailure.value === null
+      ? null
+      : describeProjectError(envRenameFailure.value),
+  );
   const envRenameConflict = useNameConflict();
 
   const envDeleteTarget = ref<Environment | null>(null);
   const envDeleting = ref(false);
-  const envDeleteError = ref<string | null>(null);
+  const envDeleteFailure: Ref<unknown> = ref(null);
+  const envDeleteError = computed<string | null>(() =>
+    envDeleteFailure.value === null
+      ? null
+      : describeProjectError(envDeleteFailure.value),
+  );
 
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
 
@@ -123,7 +147,7 @@ export function useProjectPage(
   /** openRename prefills the rename dialog with the project name. */
   function openRename(): void {
     renameName.value = projectsStore.detail?.name ?? "";
-    renameError.value = null;
+    renameFailure.value = null;
     renameConflict.clear();
     renameOpen.value = true;
   }
@@ -139,16 +163,16 @@ export function useProjectPage(
     // project (see resetDialogs, which drops the old dialogs on the move).
     const projectId = currentId();
     renameBusy.value = true;
-    renameError.value = null;
+    renameFailure.value = null;
     try {
       await projectsStore.rename(detail.id, { name: renameName.value.trim() });
-      message.success("Project renamed");
+      message.success(String(i18n.global.t("projects.toast.projectRenamed")));
       if (currentId() === projectId) {
         renameOpen.value = false;
       }
     } catch (error) {
       if (!renameConflict.take(error)) {
-        renameError.value = describeProjectError(error);
+        renameFailure.value = error;
       }
     } finally {
       renameBusy.value = false;
@@ -163,11 +187,13 @@ export function useProjectPage(
     }
     const projectId = currentId();
     deleting.value = true;
-    deleteError.value = null;
+    deleteFailure.value = null;
     try {
       const name = detail.name;
       await projectsStore.remove(detail.id);
-      message.success(`Deleted project ${name}`);
+      message.success(
+        String(i18n.global.t("projects.toast.deletedProject", { name })),
+      );
       if (currentId() !== projectId) {
         return;
       }
@@ -176,7 +202,7 @@ export function useProjectPage(
     } catch (error) {
       // The backend message is the actionable part: a project that still
       // holds resources is refused with 409 naming the block.
-      deleteError.value = describeProjectError(error);
+      deleteFailure.value = error;
     } finally {
       deleting.value = false;
     }
@@ -185,7 +211,7 @@ export function useProjectPage(
   /** openEnvCreate resets the environment draft. */
   function openEnvCreate(): void {
     envName.value = "";
-    envError.value = null;
+    envFailure.value = null;
     envConflict.clear();
     envCreateOpen.value = true;
   }
@@ -197,19 +223,25 @@ export function useProjectPage(
     }
     const projectId = currentId();
     envBusy.value = true;
-    envError.value = null;
+    envFailure.value = null;
     try {
       const environment = await projectsStore.addEnvironment(
         projectId,
         envName.value,
       );
-      message.success(`Added environment ${environment.name}`);
+      message.success(
+        String(
+          i18n.global.t("projects.toast.addedEnvironment", {
+            name: environment.name,
+          }),
+        ),
+      );
       if (currentId() === projectId) {
         envCreateOpen.value = false;
       }
     } catch (error) {
       if (!envConflict.take(error)) {
-        envError.value = describeProjectError(error);
+        envFailure.value = error;
       }
     } finally {
       envBusy.value = false;
@@ -220,7 +252,7 @@ export function useProjectPage(
   function openEnvRename(environment: Environment): void {
     envRenameTarget.value = environment;
     envRenameName.value = environment.name;
-    envRenameError.value = null;
+    envRenameFailure.value = null;
     envRenameConflict.clear();
   }
 
@@ -235,13 +267,13 @@ export function useProjectPage(
       return;
     }
     envRenameBusy.value = true;
-    envRenameError.value = null;
+    envRenameFailure.value = null;
     try {
       await projectsStore.renameEnvironmentEntry(
         target.id,
         envRenameName.value,
       );
-      message.success("Environment renamed");
+      message.success(String(i18n.global.t("projects.toast.environmentRenamed")));
       // Same late-response guard, on dialog identity: only the dialog this
       // mutation opened may close (a move already dropped it via
       // resetDialogs, so the check also covers the cross-project case).
@@ -250,7 +282,7 @@ export function useProjectPage(
       }
     } catch (error) {
       if (!envRenameConflict.take(error)) {
-        envRenameError.value = describeProjectError(error);
+        envRenameFailure.value = error;
       }
     } finally {
       envRenameBusy.value = false;
@@ -260,7 +292,7 @@ export function useProjectPage(
   /** openEnvDelete targets one environment for the delete confirm. */
   function openEnvDelete(environment: Environment): void {
     envDeleteTarget.value = environment;
-    envDeleteError.value = null;
+    envDeleteFailure.value = null;
   }
 
   /** handleEnvDelete deletes the targeted environment. */
@@ -270,15 +302,21 @@ export function useProjectPage(
       return;
     }
     envDeleting.value = true;
-    envDeleteError.value = null;
+    envDeleteFailure.value = null;
     try {
       await projectsStore.removeEnvironment(target.id);
-      message.success(`Deleted environment ${target.name}`);
+      message.success(
+        String(
+          i18n.global.t("projects.toast.deletedEnvironment", {
+            name: target.name,
+          }),
+        ),
+      );
       if (envDeleteTarget.value?.id === target.id) {
         envDeleteTarget.value = null;
       }
     } catch (error) {
-      envDeleteError.value = describeProjectError(error);
+      envDeleteFailure.value = error;
     } finally {
       envDeleting.value = false;
     }
@@ -301,19 +339,19 @@ export function useProjectPage(
    */
   function resetDialogs(): void {
     renameOpen.value = false;
-    renameError.value = null;
+    renameFailure.value = null;
     renameConflict.clear();
     deleteOpen.value = false;
-    deleteError.value = null;
+    deleteFailure.value = null;
     envCreateOpen.value = false;
     envName.value = "";
-    envError.value = null;
+    envFailure.value = null;
     envConflict.clear();
     envRenameTarget.value = null;
-    envRenameError.value = null;
+    envRenameFailure.value = null;
     envRenameConflict.clear();
     envDeleteTarget.value = null;
-    envDeleteError.value = null;
+    envDeleteFailure.value = null;
   }
 
   watch(

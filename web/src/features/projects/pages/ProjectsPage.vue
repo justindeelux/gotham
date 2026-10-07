@@ -12,8 +12,11 @@ import {
   NSpin,
   NText,
 } from "naive-ui";
+import type { FormInst } from "naive-ui";
 import { RouterLink } from "vue-router";
+import { onUnmounted, ref } from "vue";
 
+import { createVisibleValidation } from "@/features/auth";
 import { projectResourceTotal, resourceSummary } from "@/features/projects/api/projects";
 import { useProjectsPage } from "@/features/projects/composables/useProjectsPage";
 import {
@@ -22,6 +25,7 @@ import {
   projectCreateRules,
 } from "@/features/projects/schemas/projects";
 import { useProjectsStore } from "@/features/projects/stores/projects";
+import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 
 /**
@@ -58,24 +62,52 @@ const {
   handleCreate,
   reload,
 } = page;
-const createRules = projectCreateRules();
+/**
+ * visible tracks create-form paths with shown feedback; a language switch
+ * revalidates exactly those paths so visible errors refresh while pristine
+ * fields stay clean (shared visibleValidation pattern via features/auth).
+ */
+const createVisible = createVisibleValidation();
+const createRules = createVisible.trackRules(projectCreateRules());
+const createFormRef = ref<FormInst | null>(null);
+
+const stopCreateLocaleWatch = onLocaleChange(() => {
+  createVisible.refreshVisible(createFormRef);
+});
+
+onUnmounted(() => {
+  stopCreateLocaleWatch();
+});
+
+/**
+ * t renders page copy in the active locale (tracks language switches).
+ * Called during render, so labels, counts and dialog text refresh without
+ * losing the search query or the create draft.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
+/** unit picks the singular/plural unit label for a count. */
+function unit(one: string, other: string, count: number): string {
+  return t(count === 1 ? one : other, { count });
+}
 </script>
 
 <template>
   <div class="projects-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Workspace</p>
-        <h1>Projects</h1>
+        <p class="eyebrow">{{ t("projects.list.eyebrow") }}</p>
+        <h1>{{ t("projects.list.title") }}</h1>
         <p class="page-desc">
-          A project groups the applications, services and databases that make
-          up one product. Each project has environments (production, staging,
-          …); every resource runs on one server you choose.
+          {{ t("projects.list.description") }}
         </p>
       </div>
       <div class="page-actions">
         <NButton v-if="canCreate" type="primary" @click="openCreate()">
-          New project
+          {{ t("projects.list.newProject") }}
         </NButton>
       </div>
     </div>
@@ -84,36 +116,36 @@ const createRules = projectCreateRules();
       <NAlert type="error" :show-icon="true">
         {{ projectsStore.error }}
       </NAlert>
-      <div><NButton size="small" @click="void reload()">Retry</NButton></div>
+      <div><NButton size="small" @click="void reload()">{{ t("common.actions.retry") }}</NButton></div>
     </NSpace>
 
     <div class="toolbar">
       <NInput
         v-model:value="query"
-        placeholder="Search projects…"
-        aria-label="Search projects"
+        :placeholder="t('projects.list.searchPlaceholder')"
+        :aria-label="t('projects.list.searchLabel')"
         clearable
         style="max-width: 300px"
       />
     </div>
 
-    <NSpin v-if="projectsStore.loading && !projectsStore.loaded" description="Loading projects…" />
+    <NSpin v-if="projectsStore.loading && !projectsStore.loaded" :description="t('projects.list.loading')" />
 
     <template v-else-if="projectsStore.loaded">
       <NEmpty
         v-if="filtered.length === 0 && query.trim() === ''"
-        description="Create your first project to deploy an application, service or database."
+        :description="t('projects.list.emptyDescription')"
       >
         <template #extra>
           <NButton v-if="canCreate" type="primary" @click="openCreate()">
-            New project
+            {{ t("projects.list.newProject") }}
           </NButton>
         </template>
       </NEmpty>
 
       <NEmpty
         v-else-if="filtered.length === 0"
-        description="No project matches this search."
+        :description="t('projects.list.noMatch')"
       />
 
       <div v-else class="project-grid">
@@ -122,7 +154,7 @@ const createRules = projectCreateRules();
           :key="project.id"
           class="project-card-link"
           :to="{ name: 'project-detail', params: { projectId: project.id } }"
-          :aria-label="`Open project ${project.name}`"
+          :aria-label="t('projects.list.openProject', { name: project.name })"
         >
           <NCard :title="project.name" hoverable>
             <template #header-extra>
@@ -135,15 +167,13 @@ const createRules = projectCreateRules();
                 {{ project.description }}
               </NText>
               <NText depth="3" class="counts">
-                {{ project.environment_count }}
-                {{ project.environment_count === 1 ? "environment" : "environments" }}
+                {{ unit("projects.list.environmentsOne", "projects.list.environmentsOther", project.environment_count) }}
               </NText>
               <NText depth="3" class="counts">
                 {{ resourceSummary(project.resource_counts) }}
               </NText>
               <NText depth="3" class="counts">
-                {{ projectResourceTotal(project) }}
-                {{ projectResourceTotal(project) === 1 ? "resource" : "resources" }} total
+                {{ unit("projects.list.resourcesTotalOne", "projects.list.resourcesTotalOther", projectResourceTotal(project)) }}
               </NText>
             </NSpace>
           </NCard>
@@ -154,41 +184,43 @@ const createRules = projectCreateRules();
     <NModal
       v-model:show="createOpen"
       preset="card"
-      title="New project"
+      :title="t('projects.create.title')"
+      @after-leave="createVisible.reset()"
       style="width: 460px; max-width: 94vw"
     >
       <NForm
+        ref="createFormRef"
         :model="{ name: createName, description: createDescription }"
         :rules="createRules"
       >
         <NSpace vertical :size="12">
           <NText depth="3">
-            A <span class="mono">production</span> environment is created with it.
+            {{ t("projects.create.productionNote") }}
           </NText>
           <NFormItem
-            label="Name"
+            :label="t('projects.create.nameLabel')"
             path="name"
             :feedback="createConflict.feedback.value"
             :validation-status="createConflict.status.value"
           >
             <NInput
               v-model:value="createName"
-              placeholder="storefront"
+              :placeholder="t('projects.create.namePlaceholder')"
               maxlength="64"
               show-count
-              :input-props="{ id: 'project-create-name', 'aria-label': 'Project name' }"
+              :input-props="{ id: 'project-create-name', 'aria-label': t('projects.create.nameAria') }"
               @update:value="createConflict.clear()"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleCreate)"
             />
           </NFormItem>
-          <NText depth="3">Unique within the team. 1-64 characters.</NText>
-          <NFormItem label="Description (optional)" path="description">
+          <NText depth="3">{{ t("projects.create.nameHint") }}</NText>
+          <NFormItem :label="t('projects.create.descriptionLabel')" path="description">
             <NInput
               v-model:value="createDescription"
-              placeholder="What this product is"
+              :placeholder="t('projects.create.descriptionPlaceholder')"
               maxlength="500"
               show-count
-              :input-props="{ id: 'project-create-description', 'aria-label': 'Project description' }"
+              :input-props="{ id: 'project-create-description', 'aria-label': t('projects.create.descriptionAria') }"
               @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, handleCreate)"
             />
           </NFormItem>
@@ -199,14 +231,14 @@ const createRules = projectCreateRules();
       </NForm>
       <template #footer>
         <NSpace justify="end" :size="8">
-          <NButton @click="createOpen = false">Cancel</NButton>
+          <NButton @click="createOpen = false">{{ t("common.actions.cancel") }}</NButton>
           <NButton
             type="primary"
             :loading="createBusy"
             :disabled="!isProjectNameValid(createName) || !isProjectDescriptionValid(createDescription)"
             @click="void handleCreate()"
           >
-            Create project
+            {{ t("projects.create.submit") }}
           </NButton>
         </NSpace>
       </template>

@@ -25,6 +25,7 @@ import type {
   InheritedVariable,
   VariableDraft,
 } from "@/features/projects/schemas/variables";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { useStableRowKeys } from "@/shared/composables/useStableRowKeys";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
@@ -48,7 +49,9 @@ const props = withDefaults(
     /** inherited renders read-only context rows above the editor, if any. */
     inherited?: InheritedVariable[];
     inheritedLoading?: boolean;
+    /** cardTitle overrides the localized editor title when provided. */
     cardTitle?: string;
+    /** precedenceHint overrides the localized precedence hint when set. */
     precedenceHint?: string;
   }>(),
   {
@@ -56,9 +59,8 @@ const props = withDefaults(
     problems: () => [],
     inherited: () => [],
     inheritedLoading: false,
-    cardTitle: "Shared variables",
-    precedenceHint:
-      "Application variables override environment ones; environment ones override project ones.",
+    cardTitle: undefined,
+    precedenceHint: undefined,
   },
 );
 
@@ -78,6 +80,26 @@ const emit = defineEmits<{
 const rows = computed<VariableDraft[]>(() => props.draft);
 const { keys: rowKeys, insertAt, removeAt } = useStableRowKeys(() => rows.value.length);
 const storedSet = computed<Set<string>>(() => new Set(props.storedSecrets));
+
+/**
+ * t renders editor copy in the active locale (tracks language switches).
+ * Called during render and inside computeds, so visible rows, aria names
+ * and inline problems refresh without losing the dirty draft.
+ */
+function t(key: string, params?: Record<string, string>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
+/** titleText is the caller override or the localized editor title. */
+const titleText = computed<string>(
+  () => props.cardTitle ?? t("projects.variables.title"),
+);
+
+/** hintText is the caller override or the localized precedence hint. */
+const hintText = computed<string>(
+  () => props.precedenceHint ?? t("projects.variables.applicationPrecedence"),
+);
 
 /** isKeptSecret marks a stored secret the save would keep (empty value). */
 function isKeptSecret(row: VariableDraft): boolean {
@@ -105,22 +127,22 @@ function duplicateKeyAt(index: number): boolean {
 /** rowProblem names one row's client-side problem for inline display. */
 function rowProblem(row: VariableDraft, index: number): string | null {
   if (row.key === "") {
-    return "Key is required.";
+    return t("projects.variables.row.keyRequired");
   }
   if (!isSharedVariableKeyValid(row.key)) {
-    return "Must match ^[A-Za-z_][A-Za-z0-9_]*$, 128 characters or fewer.";
+    return t("projects.variables.row.keyPattern");
   }
   if (duplicateKeyAt(index)) {
-    return "Duplicate key.";
+    return t("projects.variables.row.duplicate");
   }
   if (row.value !== "" && !isSharedVariableValueValid(row.value)) {
-    return "Value must not contain NUL.";
+    return t("projects.variables.row.valueNul");
   }
   if (row.secret && row.value === "" && !storedSet.value.has(row.key)) {
-    return "A new secret needs a value.";
+    return t("projects.variables.row.newSecretValue");
   }
   if (!row.secret && row.value === "" && storedSet.value.has(row.key)) {
-    return "Saving clears the stored secret — enter a value.";
+    return t("projects.variables.row.clearWarning");
   }
   return null;
 }
@@ -138,10 +160,10 @@ const serverRowKey = computed<string | null>(() =>
  * `aria-label` prop lands on the wrapper, not the `<input>`) and opts it
  * out of password-manager autofill.
  */
-const keyInputProps = {
-  "aria-label": "Variable name",
+const keyInputProps = computed<Record<string, string>>(() => ({
+  "aria-label": t("projects.variables.keyAria"),
   autocomplete: "off",
-} as const;
+}));
 
 /**
  * valueInputProps names the native value input after its key (so rows are
@@ -152,9 +174,9 @@ function valueInputProps(row: VariableDraft): Record<string, string> {
   const name =
     row.key !== ""
       ? row.secret
-        ? `Secret value for ${row.key}`
-        : `Value for ${row.key}`
-      : "Variable value";
+        ? t("projects.variables.secretValueAriaFor", { key: row.key })
+        : t("projects.variables.valueAriaFor", { key: row.key })
+      : t("projects.variables.valueAria");
   return {
     "aria-label": name,
     autocomplete: row.secret ? "new-password" : "off",
@@ -163,7 +185,9 @@ function valueInputProps(row: VariableDraft): Record<string, string> {
 
 /** secretSwitchLabel names the secret toggle after its row key. */
 function secretSwitchLabel(row: VariableDraft): string {
-  return row.key !== "" ? `Secret for ${row.key}` : "Secret variable";
+  return row.key !== ""
+    ? t("projects.variables.secretToggleFor", { key: row.key })
+    : t("projects.variables.secretToggleBare");
 }
 
 /** updateRow replaces one row, keeping the array immutable for v-model. */
@@ -201,7 +225,7 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
 </script>
 
 <template>
-  <NCard :title="props.cardTitle" class="variables-card">
+  <NCard :title="titleText" class="variables-card">
     <template v-if="props.canWrite" #header-extra>
       <NButton
         type="primary"
@@ -210,46 +234,46 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
         :disabled="props.saveDisabled"
         @click="emit('save')"
       >
-        Save
+        {{ t("projects.variables.save") }}
       </NButton>
     </template>
 
     <NSpace vertical :size="12">
-      <NText depth="3">{{ props.precedenceHint }}</NText>
+      <NText depth="3">{{ hintText }}</NText>
 
       <NAlert v-if="props.loadError" type="error" :show-icon="true">
         <NSpace align="center" :size="12" wrap>
           <span>{{ props.loadError }}</span>
-          <NButton size="small" @click="emit('retry')">Retry</NButton>
+          <NButton size="small" @click="emit('retry')">{{ t("common.actions.retry") }}</NButton>
         </NSpace>
       </NAlert>
 
       <NSpin :show="props.loading">
         <div v-if="inheritedShown.length > 0" class="inherited">
-          <NText depth="3" class="inherited-title">Inherited (read-only)</NText>
+          <NText depth="3" class="inherited-title">{{ t("projects.variables.inheritedTitle") }}</NText>
           <div class="table-wrap">
             <table class="variables-table">
               <thead>
                 <tr>
-                  <th scope="col">Key</th>
-                  <th scope="col">Value</th>
-                  <th scope="col">Origin</th>
+                  <th scope="col">{{ t("projects.variables.table.key") }}</th>
+                  <th scope="col">{{ t("projects.variables.table.value") }}</th>
+                  <th scope="col">{{ t("projects.variables.table.origin") }}</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="row in inheritedShown" :key="`${row.origin}:${row.key}`">
-                  <td class="mono" data-label="Key">
+                  <td class="mono" :data-label="t('projects.variables.table.key')">
                     {{ row.key }}
-                    <NTag v-if="row.secret" size="small">secret</NTag>
+                    <NTag v-if="row.secret" size="small">{{ t("projects.variables.secretTag") }}</NTag>
                   </td>
-                  <td class="mono muted" data-label="Value">
+                  <td class="mono muted" :data-label="t('projects.variables.table.value')">
                     {{ row.secret ? "••••••••" : row.value }}
                   </td>
-                  <td data-label="Origin">
+                  <td :data-label="t('projects.variables.table.origin')">
                     <NSpace :size="4" align="center" wrap>
                       <NTag size="small">{{ inheritedOriginLabel(row.origin) }}</NTag>
                       <NTag v-if="isOverriddenBy(row.key, rows)" size="small" type="warning">
-                        overridden
+                        {{ t("projects.variables.overriddenTag") }}
                       </NTag>
                     </NSpace>
                   </td>
@@ -263,29 +287,29 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
           <table class="variables-table">
             <thead>
               <tr>
-                <th scope="col">Key</th>
-                <th scope="col">Value</th>
-                <th scope="col"><span class="sr-only">Flags</span></th>
+                <th scope="col">{{ t("projects.variables.table.key") }}</th>
+                <th scope="col">{{ t("projects.variables.table.value") }}</th>
+                <th scope="col"><span class="sr-only">{{ t("projects.variables.table.flags") }}</span></th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(row, index) in rows" :key="rowKeys[index] ?? index">
-                <td class="mono" data-label="Key">{{ row.key }}</td>
-                <td class="mono muted" data-label="Value">
+                <td class="mono" :data-label="t('projects.variables.table.key')">{{ row.key }}</td>
+                <td class="mono muted" :data-label="t('projects.variables.table.value')">
                   {{ row.secret ? "••••••••" : row.value }}
                 </td>
-                <td data-label="Flags">
-                  <NTag v-if="row.secret" size="small">secret</NTag>
+                <td :data-label="t('projects.variables.table.flags')">
+                  <NTag v-if="row.secret" size="small">{{ t("projects.variables.secretTag") }}</NTag>
                 </td>
               </tr>
             </tbody>
           </table>
-          <NText v-if="rows.length === 0" depth="3">No variables yet.</NText>
+          <NText v-if="rows.length === 0" depth="3">{{ t("projects.variables.emptyReadOnly") }}</NText>
         </div>
 
         <div v-else class="editor">
           <div v-if="rows.length === 0" class="editor-empty">
-            <NText depth="3">No variables yet. Add the first one below.</NText>
+            <NText depth="3">{{ t("projects.variables.emptyEditor") }}</NText>
           </div>
           <div
             v-for="(row, index) in rows"
@@ -295,7 +319,7 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
             <NInput
               :value="row.key"
               class="mono"
-              placeholder="LOG_LEVEL"
+              :placeholder="t('projects.variables.keyPlaceholder')"
               :input-props="keyInputProps"
               :status="keyStatus(row.key)"
               :disabled="props.saving"
@@ -307,8 +331,8 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
               :type="row.secret ? 'password' : 'text'"
               :placeholder="
                 row.secret && storedSet.has(row.key)
-                  ? '•••••••• (stored — kept)'
-                  : 'value'
+                  ? t('projects.variables.secretKeptPlaceholder')
+                  : t('projects.variables.valuePlaceholder')
               "
               :input-props="valueInputProps(row)"
               :status="row.value !== '' && !isSharedVariableValueValid(row.value) ? 'error' : undefined"
@@ -323,12 +347,12 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
                 :disabled="props.saving"
                 @update:value="(value: boolean) => updateRow(index, { secret: value })"
               />
-              <NText depth="3">Secret</NText>
+              <NText depth="3">{{ t("projects.variables.secretToggle") }}</NText>
             </label>
             <NButton
               quaternary
               type="error"
-              aria-label="Remove variable"
+              :aria-label="t('projects.variables.removeAria')"
               :disabled="props.saving"
               @click="removeRow(index)"
             >
@@ -338,7 +362,7 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
                 </NIcon>
               </template>
             </NButton>
-            <span v-if="isKeptSecret(row)" class="kept-badge">stored — kept on save</span>
+            <span v-if="isKeptSecret(row)" class="kept-badge">{{ t("projects.variables.keptBadge") }}</span>
             <span
               v-else-if="serverRowKey !== null && serverRowKey === row.key"
               class="row-error"
@@ -356,7 +380,7 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
             class="problems"
           >
             <NSpace vertical :size="4">
-              <span>Fix these before saving:</span>
+              <span>{{ t("projects.variables.fixBeforeSaving") }}</span>
               <ul class="problems-list">
                 <li v-for="problem in props.problems" :key="problem">
                   {{ problem }}
@@ -370,7 +394,7 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
             :disabled="props.saving || rows.length >= maxSharedVariables"
             @click="addRow"
           >
-            Add variable
+            {{ t("projects.variables.addVariable") }}
           </NButton>
         </div>
       </NSpin>
@@ -382,9 +406,7 @@ const inheritedShown = computed<InheritedVariable[]>(() =>
 
     <template v-if="props.canWrite" #footer>
       <NText depth="3">
-        Saving replaces the whole set; removing every row clears it. Secrets
-        are write-only and never shown again. New variables apply to the next
-        deploy.
+        {{ t("projects.variables.footer") }}
       </NText>
     </template>
   </NCard>

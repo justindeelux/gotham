@@ -3,15 +3,19 @@ import { NAlert, NButton, NSelect, NText } from "naive-ui";
 import { computed, ref, watch } from "vue";
 
 import { useEnvironmentOptions } from "@/features/projects/composables/useEnvironmentOptions";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 const props = withDefaults(
   defineProps<{
     projectId: string;
     environmentId: string;
-    /** Leading verb: creation flows say "Creating in", settings "Located in". */
+    /**
+     * Leading verb override (a translated sentence fragment). When absent
+     * the creation wording renders in the active locale.
+     */
     verb?: string;
   }>(),
-  { verb: "Creating in" },
+  { verb: undefined },
 );
 
 const emit = defineEmits<{
@@ -31,6 +35,15 @@ const options = useEnvironmentOptions();
 // immediately instead of an empty summary.
 const changing = ref(props.projectId === "" || props.environmentId === "");
 
+/** t renders scope copy in the active locale (tracks language switches). */
+function t(key: string): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key));
+}
+
+/** verbText is the caller override or the localized creation wording. */
+const verbText = computed<string>(() => props.verb ?? t("projects.scope.creatingIn"));
+
 watch(
   () => props.projectId,
   (projectId) => {
@@ -42,13 +55,13 @@ watch(
 const projectLabel = computed<string>(
   () =>
     options.projectNameOf(props.projectId) ||
-    (options.projectsLoading.value ? "Loading…" : props.projectId.slice(0, 8)),
+    (options.projectsLoading.value ? t("projects.scope.loading") : props.projectId.slice(0, 8)),
 );
 
 const environmentLabel = computed<string>(
   () =>
     options.environmentNameOf(props.projectId, props.environmentId) ||
-    (options.environmentsLoading.value ? "Loading…" : props.environmentId.slice(0, 8)),
+    (options.environmentsLoading.value ? t("projects.scope.loading") : props.environmentId.slice(0, 8)),
 );
 
 /** changeReady gates Done: both selects must name a scope. */
@@ -68,10 +81,10 @@ function handleProjectChange(projectId: string): void {
   <div class="scope-summary">
     <div v-if="!changing" class="scope-summary__read">
       <NText depth="3">
-        {{ props.verb }}
+        {{ verbText }}
         <span class="mono">{{ projectLabel }} / {{ environmentLabel }}</span>.
       </NText>
-      <NButton text size="small" @click="changing = true">Change</NButton>
+      <NButton text size="small" @click="changing = true">{{ t("projects.scope.change") }}</NButton>
     </div>
 
     <div v-else class="scope-summary__edit">
@@ -83,8 +96,8 @@ function handleProjectChange(projectId: string): void {
           :value="props.projectId"
           :options="options.projectOptions.value"
           :loading="options.projectsLoading.value"
-          placeholder="Select a project"
-          aria-label="Project"
+          :placeholder="t('projects.scope.projectPlaceholder')"
+          :aria-label="t('projects.scope.projectAria')"
           @update:value="handleProjectChange"
         />
         <NSelect
@@ -92,8 +105,8 @@ function handleProjectChange(projectId: string): void {
           :options="options.environmentOptions(props.projectId)"
           :loading="options.environmentsLoading.value"
           :disabled="props.projectId === ''"
-          placeholder="Select an environment"
-          aria-label="Environment"
+          :placeholder="t('projects.scope.environmentPlaceholder')"
+          :aria-label="t('projects.scope.environmentAria')"
           @update:value="(value: string) => emit('update:environmentId', value)"
         />
       </div>
@@ -102,7 +115,7 @@ function handleProjectChange(projectId: string): void {
       </NAlert>
       <div class="scope-summary__done">
         <NButton size="small" :disabled="!changeReady" @click="changing = false">
-          Done
+          {{ t("projects.scope.done") }}
         </NButton>
       </div>
     </div>

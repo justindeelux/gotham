@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
+import type { Ref } from "vue";
 
 import {
   createEnvironment as createEnvironmentRequest,
@@ -37,12 +38,22 @@ export const useProjectsStore = defineStore("projects", () => {
   const projects = ref<Project[]>([]);
   const loading = ref(false);
   const loaded = ref(false);
-  const error = ref<string | null>(null);
+  /** listFailure retains the raw list refusal; error derives its display. */
+  const listFailure: Ref<unknown> = ref(null);
+  const error = computed<string | null>(() =>
+    listFailure.value === null ? null : describeProjectError(listFailure.value),
+  );
 
   const detail = ref<Project | null>(null);
   const environments = ref<Environment[]>([]);
   const detailLoading = ref(false);
-  const detailError = ref<string | null>(null);
+  /** detailFailure retains the raw detail refusal; detailError derives it. */
+  const detailFailure: Ref<unknown> = ref(null);
+  const detailError = computed<string | null>(() =>
+    detailFailure.value === null
+      ? null
+      : describeProjectError(detailFailure.value),
+  );
   /** Project the detail belongs to; empty when no detail is held. */
   const detailProjectId = ref("");
 
@@ -83,14 +94,14 @@ export const useProjectsStore = defineStore("projects", () => {
   function clearList(): void {
     projects.value = [];
     loaded.value = false;
-    error.value = null;
+    listFailure.value = null;
   }
 
   /** clearDetail drops the held detail (used on team/project change). */
   function clearDetail(): void {
     detail.value = null;
     environments.value = [];
-    detailError.value = null;
+    detailFailure.value = null;
     detailProjectId.value = "";
   }
 
@@ -107,7 +118,7 @@ export const useProjectsStore = defineStore("projects", () => {
       loadedTeamId.value = teamId;
     }
     loading.value = true;
-    error.value = null;
+    listFailure.value = null;
     try {
       const next = await listProjectsRequest(teamId);
       if (!isCurrent()) {
@@ -120,7 +131,7 @@ export const useProjectsStore = defineStore("projects", () => {
       if (!isCurrent()) {
         return;
       }
-      error.value = describeProjectError(err);
+      listFailure.value = err;
       throw err;
     } finally {
       // Only the newest read owns the spinner; an older one must not clear
@@ -148,7 +159,7 @@ export const useProjectsStore = defineStore("projects", () => {
       detailTeamId.value = teamId;
     }
     detailLoading.value = true;
-    detailError.value = null;
+    detailFailure.value = null;
     try {
       const next = await getProjectRequest(teamId, projectId);
       if (!isCurrent()) {
@@ -161,7 +172,7 @@ export const useProjectsStore = defineStore("projects", () => {
       if (!isCurrent()) {
         return;
       }
-      detailError.value = describeProjectError(err);
+      detailFailure.value = err;
       throw err;
     } finally {
       // Same spinner ownership as the list read: only the newest read

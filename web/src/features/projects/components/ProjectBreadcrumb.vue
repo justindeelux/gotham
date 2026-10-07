@@ -2,6 +2,8 @@
 import { computed } from "vue";
 import { RouterLink } from "vue-router";
 
+import { activeLocale, i18n } from "@/shared/i18n";
+
 /**
  * Breadcrumb for the project surfaces: `Projects / <project>` on the detail
  * page, `Projects / <project> / <environment>` on the environment page
@@ -24,9 +26,22 @@ interface Crumb {
   current: boolean;
 }
 
+/** landmarkLabel names the nav landmark in the active locale. */
+const landmarkLabel = computed<string>(() => {
+  void activeLocale.value;
+  return String(i18n.global.t("projects.breadcrumb.label"));
+});
+
 const crumbs = computed<Crumb[]>(() => {
+  // Real scope names ride through untouched; only the root label and the
+  // landmark name translate. Tracking the locale refreshes both on switch.
+  void activeLocale.value;
   const trail: Crumb[] = [
-    { label: "Projects", to: { name: "projects" }, current: false },
+    {
+      label: String(i18n.global.t("projects.breadcrumb.projects")),
+      to: { name: "projects" },
+      current: false,
+    },
     {
       label: props.projectName,
       to: { name: "project-detail", params: { projectId: props.projectId } },
@@ -57,7 +72,7 @@ const crumbs = computed<Crumb[]>(() => {
 </script>
 
 <template>
-  <nav class="breadcrumb" aria-label="Breadcrumb">
+  <nav class="breadcrumb" :aria-label="landmarkLabel">
     <template v-for="(crumb, index) in crumbs" :key="`${crumb.label}-${index}`">
       <span v-if="index > 0" class="sep" aria-hidden="true">/</span>
       <RouterLink

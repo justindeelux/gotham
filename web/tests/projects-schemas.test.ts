@@ -1,7 +1,7 @@
 // Schemas and pure helpers for the projects surface (PE-4, JUS-33).
 // Pins the contract's validation (names 1-64 chars after trim), the list
 // search, the card summary text and the error mapping.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   describeProjectError,
@@ -20,6 +20,27 @@ import {
   projectListEnvelopeSchema,
   projectNameSchema,
 } from "@/features/projects/schemas/projects";
+import projectsEn from "@/features/projects/locales/en";
+import projectsVi from "@/features/projects/locales/vi";
+import {
+  i18n,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
+
+// Display helpers resolve through the projects catalog: merge it once and
+// run English by default so the pinned copy below keeps proving behavior.
+beforeEach(() => {
+  i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
+  i18n.global.mergeLocaleMessage("vi", { projects: projectsVi });
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+afterEach(() => {
+  setLocale("en", null);
+});
 
 const counts = { applications: 5, services: 1, databases: 2 };
 
@@ -169,7 +190,9 @@ describe("describeProjectError", () => {
     expect(
       describeProjectError({ status: 401, message: "x", cause: null }),
     ).toContain("sign in again");
-    expect(describeProjectError(new Error("boom"))).toBe("boom");
+    expect(describeProjectError(new Error("boom"))).toBe(
+      "Something went wrong. Please try again: boom",
+    );
     expect(describeProjectError(null)).toContain("went wrong");
   });
 });

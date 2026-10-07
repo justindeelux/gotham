@@ -4,6 +4,16 @@
 // key ^[A-Za-z_][A-Za-z0-9_]*$, 128 keys per scope, 128-char keys, NUL
 // rejected, secrets write-only, omitted value keeps an existing secret.
 import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach } from "vitest";
+
+import projectsEn from "@/features/projects/locales/en";
+import projectsVi from "@/features/projects/locales/vi";
+import {
+  i18n,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
 
 vi.mock("@/shared/api/http", () => ({
   http: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn(), put: vi.fn() },
@@ -36,6 +46,19 @@ import {
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const environmentId = "22222222-2222-4222-8222-222222222222";
+
+// Display helpers resolve through the projects catalog: merge it once and
+// run English by default so the pinned copy below keeps proving behavior.
+beforeEach(() => {
+  i18n.global.mergeLocaleMessage("en", { projects: projectsEn });
+  i18n.global.mergeLocaleMessage("vi", { projects: projectsVi });
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+afterEach(() => {
+  setLocale("en", null);
+});
 
 describe("shared variable key gating matches the contract", () => {
   it("accepts shell identifiers", () => {

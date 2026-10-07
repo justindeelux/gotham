@@ -1,4 +1,5 @@
 import { computed, onMounted, ref, watch } from "vue";
+import type { Ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import type { DeploymentState } from "@/features/applications/api/applications";
@@ -10,6 +11,7 @@ import {
   getEnvironmentResources,
   getProject,
 } from "@/features/projects/api/projects";
+import { activeLocale, i18n } from "@/shared/i18n";
 import type {
   Environment,
   EnvironmentResourceApplication,
@@ -45,6 +47,16 @@ export interface EnvironmentRow {
 }
 
 /**
+ * statusText resolves one environment status key in the active locale.
+ * Unknown wire values pass through untouched (technical diagnostics stay
+ * raw); English output is unchanged.
+ */
+function statusText(key: string): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key));
+}
+
+/**
  * applicationStatusView maps an application's newest deployment state onto
  * the table status. A null state means the application never deployed; the
  * caller passes "unknown" through when the state read itself failed, so a
@@ -54,18 +66,18 @@ export function applicationStatusView(
   state: DeploymentState | null | "unknown",
 ): { text: string; tag: EnvironmentRow["statusTag"] } {
   if (state === "unknown") {
-    return { text: "unknown", tag: "default" };
+    return { text: statusText("projects.environment.status.unknown"), tag: "default" };
   }
   if (state === null) {
-    return { text: "not deployed", tag: "default" };
+    return { text: statusText("projects.environment.status.notDeployed"), tag: "default" };
   }
   if (state === "running") {
-    return { text: "running", tag: "success" };
+    return { text: statusText("projects.environment.status.running"), tag: "success" };
   }
   if (state === "failed") {
-    return { text: "failed", tag: "error" };
+    return { text: statusText("projects.environment.status.failed"), tag: "error" };
   }
-  return { text: "deploying", tag: "warning" };
+  return { text: statusText("projects.environment.status.deploying"), tag: "warning" };
 }
 
 /** databaseStatusView maps a database lifecycle status onto the table status. */
@@ -73,15 +85,18 @@ export function databaseStatusView(
   status: string,
 ): { text: string; tag: EnvironmentRow["statusTag"] } {
   if (status === "running") {
-    return { text: "running", tag: "success" };
+    return { text: statusText("projects.environment.status.running"), tag: "success" };
   }
   if (status === "error") {
-    return { text: "error", tag: "error" };
+    return { text: statusText("projects.environment.status.error"), tag: "error" };
   }
   if (status === "creating") {
-    return { text: "creating", tag: "warning" };
+    return { text: statusText("projects.environment.status.creating"), tag: "warning" };
   }
-  return { text: status === "" ? "unknown" : status, tag: "default" };
+  return {
+    text: status === "" ? statusText("projects.environment.status.unknown") : status,
+    tag: "default",
+  };
 }
 
 /** applicationSubtitle renders `repo · branch` for the table sub-line. */
@@ -97,7 +112,7 @@ export function serviceSubtitle(service: Service): string {
   if (service.domains.length > 0) {
     return service.domains.map((route) => route.domain).join(", ");
   }
-  return "compose service";
+  return statusText("projects.environment.composeService");
 }
 
 /** databaseSubtitle renders `engine:version` for the table sub-line. */
@@ -139,7 +154,7 @@ export function buildEnvironmentRows(
       id: application.id,
       name: application.name,
       subtitle: applicationSubtitle(application),
-      serverName: application.server_name || "unassigned",
+      serverName: application.server_name || statusText("projects.environment.unassigned"),
       statusText: view.text,
       statusTag: view.tag,
       preview,
@@ -237,7 +252,14 @@ export function useEnvironmentPage() {
   const environmentId = computed<string>(() => String(route.params.environmentId ?? ""));
 
   const loading = ref(false);
-  const error = ref<string | null>(null);
+  /**
+   * failure retains the raw resources refusal; error derives its display
+   * text reactively so the banner refreshes on a language switch.
+   */
+  const failure: Ref<unknown> = ref(null);
+  const error = computed<string | null>(() =>
+    failure.value === null ? null : describeProjectError(failure.value),
+  );
   /** notFound renders the 404 state (no retry: the URL names nothing). */
   const notFound = ref(false);
   const resources = ref<EnvironmentResources | null>(null);
@@ -303,7 +325,7 @@ export function useEnvironmentPage() {
     reloadGeneration.bump();
     const token = reloadGeneration.current();
     loading.value = true;
-    error.value = null;
+    failure.value = null;
     notFound.value = false;
     try {
       const next = await getEnvironmentResources(
@@ -336,7 +358,7 @@ export function useEnvironmentPage() {
         return;
       }
       notFound.value = isApiError(err) && err.status === 404;
-      error.value = describeProjectError(err);
+      failure.value = err;
       resources.value = null;
       return;
     } finally {

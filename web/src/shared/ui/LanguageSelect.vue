@@ -1,40 +1,50 @@
 <script setup lang="ts">
-import { NRadioButton, NRadioGroup } from "naive-ui";
-import { computed } from "vue";
+import { NButton, NDropdown } from "naive-ui";
+import type { DropdownOption } from "naive-ui";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { activeLocale, setLocale } from "@/shared/i18n";
+import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
 const { t } = useI18n();
 
-/** value bridges the Naive radio model to the locale setter. */
-const value = computed<string>({
-  get: () => activeLocale.value,
-  set: (locale: string) => {
-    setLocale(locale);
-  },
-});
+const show = ref(false);
+const button = ref<InstanceType<typeof NButton> | null>(null);
+const options = computed<DropdownOption[]>(() =>
+  ["en", "vi"].map((locale) => ({
+    label: t(`language.names.${locale}`),
+    key: locale,
+    props: { role: "menuitemradio", "aria-checked": activeLocale.value === locale },
+  })),
+);
+
+function handleSelect(locale: string | number): void {
+  setLocale(locale);
+  (button.value?.$el as HTMLButtonElement | undefined)?.focus();
+}
 </script>
 
 <template>
-  <div
-    class="language-select"
-    role="radiogroup"
-    :aria-label="t('language.label')"
+  <NDropdown
+    v-model:show="show"
+    trigger="click"
+    :options="options"
+    :value="activeLocale"
+    @select="handleSelect"
   >
-    <NRadioGroup v-model:value="value" size="small">
-      <NRadioButton value="en">
-        {{ t("language.names.en") }}
-      </NRadioButton>
-      <NRadioButton value="vi">
-        {{ t("language.names.vi") }}
-      </NRadioButton>
-    </NRadioGroup>
-  </div>
+    <NButton
+      ref="button"
+      quaternary
+      circle
+      class="language-select"
+      :aria-label="t('language.label')"
+      aria-haspopup="menu"
+      :aria-expanded="show"
+    >
+      <template #icon>
+        <GothamIcon name="globe" />
+      </template>
+    </NButton>
+  </NDropdown>
 </template>
-
-<style scoped>
-.language-select {
-  display: inline-flex;
-}
-</style>

@@ -128,12 +128,13 @@ describe("describeDatabaseError", () => {
     expect(describeDatabaseError(apiError(404, "databases: gone"))).toBe(
       "Database not found. It may have been deleted or belong to another account.",
     );
-    // Exact backend refusals still render inline for the move settings.
+    // Exact backend refusals still render inline for the move settings,
+    // under a non-misleading localized refusal summary.
     expect(
       describeDatabaseError(
         apiError(409, "databases: a database cannot change server once created"),
       ),
-    ).toBe("a database cannot change server once created");
+    ).toBe("Request refused (a database cannot change server once created)");
     expect(describeDatabaseError(apiError(409, "databases: "))).toBe(
       "A database with that name already exists.",
     );
@@ -145,7 +146,7 @@ describe("describeDatabaseError", () => {
       describeDatabaseError(
         apiError(409, "databases: a database cannot change server once created"),
       ),
-    ).toBe("a database cannot change server once created");
+    ).toBe("Yêu cầu bị từ chối (a database cannot change server once created)");
     expect(describeDatabaseError(apiError(409, "databases: "))).toBe(
       "Đã tồn tại database trùng tên.",
     );
@@ -182,15 +183,84 @@ describe("describeBackupError", () => {
   it("keeps the raw running-job diagnostic under the localized summary", () => {
     const raw = "databases: backup already running";
     expect(describeBackupError(apiError(409, raw))).toBe(
-      "backup already running",
+      "Request refused (backup already running)",
     );
     setLocale("vi", null);
     expect(describeBackupError(apiError(409, raw))).toBe(
-      "backup already running",
+      "Yêu cầu bị từ chối (backup already running)",
     );
     expect(describeBackupError(apiError(409, "databases: "))).toBe(
       "Đã có một backup hoặc restore đang chạy cho database này.",
     );
+  });
+
+  it("keeps distinct refusal diagnostics across nonempty 400/409 in both locales", () => {
+    const rows: Array<[string, unknown, string, string]> = [
+      [
+        "busy backup",
+        apiError(409, "databases: backup already running"),
+        "Request refused (backup already running)",
+        "Yêu cầu bị từ chối (backup already running)",
+      ],
+      [
+        "corrupt artifact on 400",
+        apiError(400, "databases: backup artifact corrupt: checksum mismatch"),
+        "Request refused (backup artifact corrupt: checksum mismatch)",
+        "Yêu cầu bị từ chối (backup artifact corrupt: checksum mismatch)",
+      ],
+      [
+        "blank 400 keeps curated wording",
+        apiError(400, "databases: "),
+        "Invalid request. Check the cron expression and target fields.",
+        "Yêu cầu không hợp lệ. Kiểm tra biểu thức cron và các trường đích lưu trữ.",
+      ],
+      [
+        "blank 409 keeps curated wording",
+        apiError(409, "databases: "),
+        "A backup or restore is already running for this database.",
+        "Đã có một backup hoặc restore đang chạy cho database này.",
+      ],
+    ];
+    for (const [label, error, enText, viText] of rows) {
+      expect(describeBackupError(error), label).toBe(enText);
+    }
+    setLocale("vi", null);
+    for (const [label, error, , viText] of rows) {
+      expect(describeBackupError(error), label).toBe(viText);
+    }
+  });
+
+  it("keeps distinct database refusal diagnostics in both locales", () => {
+    const rows: Array<[string, unknown, string, string]> = [
+      [
+        "pinned server change",
+        apiError(409, "databases: a database cannot change server once created"),
+        "Request refused (a database cannot change server once created)",
+        "Yêu cầu bị từ chối (a database cannot change server once created)",
+      ],
+      [
+        "partial restore with restart failure",
+        apiError(
+          409,
+          "databases: database restored, restart failed: container exited",
+        ),
+        "Request refused (container exited)",
+        "Yêu cầu bị từ chối (container exited)",
+      ],
+      [
+        "blank 409 keeps duplicate-name wording",
+        apiError(409, "databases: "),
+        "A database with that name already exists.",
+        "Đã tồn tại database trùng tên.",
+      ],
+    ];
+    for (const [label, error, enText, viText] of rows) {
+      expect(describeDatabaseError(error), label).toBe(enText);
+    }
+    setLocale("vi", null);
+    for (const [label, error, , viText] of rows) {
+      expect(describeDatabaseError(error), label).toBe(viText);
+    }
   });
 });
 

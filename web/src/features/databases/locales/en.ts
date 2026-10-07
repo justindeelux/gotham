@@ -22,6 +22,7 @@ const en = {
   },
   errors: {
     withDetail: "{summary} ({detail})",
+    requestRefused: "Request refused",
     databaseNotFound:
       "Database not found. It may have been deleted or belong to another account.",
     nameTaken: "A database with that name already exists.",

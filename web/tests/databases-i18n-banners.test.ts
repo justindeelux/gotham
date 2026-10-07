@@ -17,6 +17,9 @@ import {
 declare global {
   // Counts mocked target test POSTs for the single-request assertion below.
   var __targetTestPosts: number | undefined;
+  // Overrides the mocked backup-list failure and counts list calls.
+  var __backupsFailure: unknown;
+  var __backupsCalls: number | undefined;
 }
 
 vi.mock("@/features/databases/api/backups", async (importOriginal) => {
@@ -25,7 +28,10 @@ vi.mock("@/features/databases/api/backups", async (importOriginal) => {
   return {
     ...mod,
     listBackups: async () => {
-      throw { status: 401, message: "auth: expired" };
+      globalThis.__backupsCalls = (globalThis.__backupsCalls ?? 0) + 1;
+      throw (
+        globalThis.__backupsFailure ?? { status: 401, message: "auth: expired" }
+      );
     },
     testTarget: async () => {
       globalThis.__targetTestPosts = (globalThis.__targetTestPosts ?? 0) + 1;
@@ -55,6 +61,39 @@ describe("retained backup banners refresh on switch", () => {
     expect(store.backupsError).toBe(
       "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     );
+  });
+});
+
+describe("retained 409 refusal refreshes en-vi-en with zero refetch", () => {
+  it("re-derives busy detail across locales on one failed list call", async () => {
+    globalThis.__backupsFailure = {
+      status: 409,
+      message: "databases: backup already running",
+    };
+    globalThis.__backupsCalls = 0;
+    try {
+      const store = useBackupsStore();
+      await expect(store.fetchBackups("db-1")).rejects.toEqual(
+        globalThis.__backupsFailure,
+      );
+      expect(globalThis.__backupsCalls).toBe(1);
+      expect(store.backupsError).toBe(
+        "Request refused (backup already running)",
+      );
+      setLocale("vi", null);
+      await nextTick();
+      expect(store.backupsError).toBe(
+        "Yêu cầu bị từ chối (backup already running)",
+      );
+      setLocale("en", null);
+      await nextTick();
+      expect(store.backupsError).toBe(
+        "Request refused (backup already running)",
+      );
+      expect(globalThis.__backupsCalls).toBe(1);
+    } finally {
+      globalThis.__backupsFailure = undefined;
+    }
   });
 });
 

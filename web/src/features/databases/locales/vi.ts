@@ -25,6 +25,7 @@ const vi: typeof en = {
   },
   errors: {
     withDetail: "{summary} ({detail})",
+    requestRefused: "Yêu cầu bị từ chối",
     databaseNotFound:
       "Không tìm thấy database. Có thể nó đã bị xóa hoặc thuộc tài khoản khác.",
     nameTaken: "Đã tồn tại database trùng tên.",

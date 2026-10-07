@@ -286,12 +286,12 @@ export function describeDatabaseError(error: unknown): string {
     if (error.status === 409) {
       // The backend names the refusal exactly (a duplicate name, `a deploy
       // is in progress`, `a database cannot change server once created`), so
-      // the message passes through for the move/server-change settings to
-      // render inline.
-      return (
-        conflictDetail(stripErrorPrefix(error.message)) ||
-        t("databases.errors.nameTaken")
-      );
+      // the detail passes through for the move/server-change settings to
+      // render inline, under a non-misleading localized refusal summary.
+      const detail = conflictDetail(stripErrorPrefix(error.message));
+      return detail === ""
+        ? t("databases.errors.nameTaken")
+        : withSummary("databases.errors.requestRefused", detail);
     }
     if (error.status === 502) {
       return withSummary(

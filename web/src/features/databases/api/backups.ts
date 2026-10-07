@@ -415,10 +415,10 @@ export function describeBackupError(error: unknown): string {
         );
   if (isApiError(error)) {
     if (error.status === 400) {
-      return (
-        stripErrorPrefix(error.message) ||
-        t("databases.errors.backupInvalidRequest")
-      );
+      const raw = stripErrorPrefix(error.message);
+      return raw === ""
+        ? t("databases.errors.backupInvalidRequest")
+        : withSummary("databases.errors.requestRefused", raw);
     }
     if (error.status === 401) {
       return t("databases.errors.sessionExpired");
@@ -427,10 +427,10 @@ export function describeBackupError(error: unknown): string {
       return t("databases.errors.backupNotFound");
     }
     if (error.status === 409) {
-      return (
-        stripErrorPrefix(error.message) ||
-        t("databases.errors.backupConflict")
-      );
+      const raw = stripErrorPrefix(error.message);
+      return raw === ""
+        ? t("databases.errors.backupConflict")
+        : withSummary("databases.errors.requestRefused", raw);
     }
     if (error.status === 502) {
       return withSummary(

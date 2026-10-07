@@ -14,7 +14,11 @@ import {
   NTabs,
   NText,
 } from "naive-ui";
+import type { FormInst } from "naive-ui";
 import { RouterLink, useRoute } from "vue-router";
+import { onUnmounted, ref } from "vue";
+
+import { createVisibleValidation } from "@/features/auth";
 
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import SharedVariablesEditor from "@/features/projects/components/SharedVariablesEditor.vue";
@@ -31,7 +35,7 @@ import {
   projectNameRules,
 } from "@/features/projects/schemas/projects";
 import { useProjectsStore } from "@/features/projects/stores/projects";
-import { activeLocale, i18n } from "@/shared/i18n";
+import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 
 /**
@@ -101,8 +105,30 @@ const {
   handleEnvDelete,
   reload,
 } = page;
-const renameRules = projectNameRules();
-const envRules = environmentNameRules();
+/**
+ * Visible-feedback trackers (one per form): a language switch revalidates
+ * exactly the paths with shown feedback, so visible errors refresh while
+ * pristine fields stay clean (shared visibleValidation via features/auth).
+ */
+const renameVisible = createVisibleValidation();
+const envCreateVisible = createVisibleValidation();
+const envRenameVisible = createVisibleValidation();
+const renameRules = renameVisible.trackRules(projectNameRules());
+const envCreateRules = envCreateVisible.trackRules(environmentNameRules());
+const envRenameRules = envRenameVisible.trackRules(environmentNameRules());
+const renameFormRef = ref<FormInst | null>(null);
+const envCreateFormRef = ref<FormInst | null>(null);
+const envRenameFormRef = ref<FormInst | null>(null);
+
+const stopDetailLocaleWatch = onLocaleChange(() => {
+  renameVisible.refreshVisible(renameFormRef);
+  envCreateVisible.refreshVisible(envCreateFormRef);
+  envRenameVisible.refreshVisible(envRenameFormRef);
+});
+
+onUnmounted(() => {
+  stopDetailLocaleWatch();
+});
 
 /**
  * t renders page copy in the active locale (tracks language switches).
@@ -242,7 +268,7 @@ function t(key: string, params?: Record<string, string | number>): string {
       :title="t('projects.rename.title')"
       style="width: 460px; max-width: 94vw"
     >
-      <NForm :model="{ name: renameName }" :rules="renameRules">
+      <NForm ref="renameFormRef" :model="{ name: renameName }" :rules="renameRules">
         <NSpace vertical :size="12">
           <NFormItem
             :label="t('projects.rename.nameLabel')"
@@ -326,7 +352,7 @@ function t(key: string, params?: Record<string, string | number>): string {
       :title="t('projects.environments.createTitle')"
       style="width: 460px; max-width: 94vw"
     >
-      <NForm :model="{ name: envName }" :rules="envRules">
+      <NForm ref="envCreateFormRef" :model="{ name: envName }" :rules="envCreateRules">
         <NSpace vertical :size="12">
           <NFormItem
             :label="t('projects.environments.nameLabel')"
@@ -373,7 +399,7 @@ function t(key: string, params?: Record<string, string | number>): string {
       style="width: 460px; max-width: 94vw"
       @update:show="(show: boolean) => { if (!show) envRenameTarget = null; }"
     >
-      <NForm :model="{ name: envRenameName }" :rules="envRules">
+      <NForm ref="envRenameFormRef" :model="{ name: envRenameName }" :rules="envRenameRules">
         <NSpace vertical :size="12">
           <NFormItem
             :label="t('projects.environments.nameLabel')"

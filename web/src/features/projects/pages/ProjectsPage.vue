@@ -12,8 +12,11 @@ import {
   NSpin,
   NText,
 } from "naive-ui";
+import type { FormInst } from "naive-ui";
 import { RouterLink } from "vue-router";
+import { onUnmounted, ref } from "vue";
 
+import { createVisibleValidation } from "@/features/auth";
 import { projectResourceTotal, resourceSummary } from "@/features/projects/api/projects";
 import { useProjectsPage } from "@/features/projects/composables/useProjectsPage";
 import {
@@ -22,7 +25,7 @@ import {
   projectCreateRules,
 } from "@/features/projects/schemas/projects";
 import { useProjectsStore } from "@/features/projects/stores/projects";
-import { activeLocale, i18n } from "@/shared/i18n";
+import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 
 /**
@@ -59,7 +62,22 @@ const {
   handleCreate,
   reload,
 } = page;
-const createRules = projectCreateRules();
+/**
+ * visible tracks create-form paths with shown feedback; a language switch
+ * revalidates exactly those paths so visible errors refresh while pristine
+ * fields stay clean (shared visibleValidation pattern via features/auth).
+ */
+const createVisible = createVisibleValidation();
+const createRules = createVisible.trackRules(projectCreateRules());
+const createFormRef = ref<FormInst | null>(null);
+
+const stopCreateLocaleWatch = onLocaleChange(() => {
+  createVisible.refreshVisible(createFormRef);
+});
+
+onUnmounted(() => {
+  stopCreateLocaleWatch();
+});
 
 /**
  * t renders page copy in the active locale (tracks language switches).
@@ -170,6 +188,7 @@ function unit(one: string, other: string, count: number): string {
       style="width: 460px; max-width: 94vw"
     >
       <NForm
+        ref="createFormRef"
         :model="{ name: createName, description: createDescription }"
         :rules="createRules"
       >

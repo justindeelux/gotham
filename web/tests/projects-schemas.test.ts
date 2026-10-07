@@ -190,7 +190,9 @@ describe("describeProjectError", () => {
     expect(
       describeProjectError({ status: 401, message: "x", cause: null }),
     ).toContain("sign in again");
-    expect(describeProjectError(new Error("boom"))).toBe("boom");
+    expect(describeProjectError(new Error("boom"))).toBe(
+      "Something went wrong. Please try again: boom",
+    );
     expect(describeProjectError(null)).toContain("went wrong");
   });
 });

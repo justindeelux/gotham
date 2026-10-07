@@ -134,6 +134,22 @@ describe("error summaries keep raw diagnostics", () => {
       "Đã xảy ra lỗi. Vui lòng thử lại.",
     );
   });
+
+  it("frames unknown failures with a localized summary", () => {
+    const sshTimeout = { status: 500, message: "ssh: dial timeout", cause: null };
+    expect(describeProjectError(sshTimeout)).toBe("Request failed: dial timeout");
+    expect(describeProjectError(new Error("build failed: exit 1"))).toBe(
+      "Something went wrong. Please try again: build failed: exit 1",
+    );
+    expect(describeProjectError({ status: 500, message: "", cause: null })).toBe(
+      "Request failed",
+    );
+    setLocale("vi", null);
+    expect(describeProjectError(sshTimeout)).toBe("Yêu cầu thất bại: dial timeout");
+    expect(describeProjectError(new Error("build failed: exit 1"))).toBe(
+      "Đã xảy ra lỗi. Vui lòng thử lại: build failed: exit 1",
+    );
+  });
 });
 
 describe("counts, kinds and variable copy switch", () => {
@@ -232,5 +248,71 @@ describe("drafts survive a language switch", () => {
     expect(wrapper.text()).toContain("Dự án mới");
     expect(wrapper.text()).toContain("Duy nhất trong nhóm");
     wrapper.unmount();
+  });
+
+  it("refreshes a visible create-form error on locale switch", async () => {
+    const teams = useTeamsStore();
+    const team = {
+      id: "team-1",
+      name: "Acme",
+      is_personal: false,
+      role: "owner",
+      created_at: "2026-10-01T00:00:00Z",
+      updated_at: "2026-10-01T00:00:00Z",
+    };
+    vi.mocked(listTeams).mockResolvedValue([team] as never);
+    teams.teams = [team] as never;
+    teams.activeTeamId = "team-1";
+    vi.mocked(listProjects).mockResolvedValue([]);
+
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/projects", name: "projects", component: { render: () => h("div") } },
+        { path: "/projects/:projectId", name: "project-detail", component: { render: () => h("div") } },
+      ],
+    });
+    router.push("/projects");
+    await router.isReady();
+    const shell = defineComponent({
+      render() {
+        return h(NMessageProvider, null, { default: () => h(ProjectsPage as never) });
+      },
+    });
+    const wrapper = mount(shell, {
+      global: { plugins: [router] },
+      attachTo: globalThis.document.body,
+    });
+    await nextTick();
+    await flushPromises();
+    await nextTick();
+
+    const open = wrapper
+      .findAllComponents(NButton)
+      .find((button) => button.text() === "New project");
+    expect(open).toBeDefined();
+    await open!.trigger("click");
+    await flushPromises();
+    const modal = (): string =>
+      globalThis.document.body.querySelector(".n-modal")?.textContent ?? "";
+    const nameInput = globalThis.document.body.querySelector(
+      ".n-modal .n-form-item input",
+    ) as HTMLInputElement;
+    // Empty required name validated on blur through the real teleported modal.
+    nameInput.focus();
+    nameInput.dispatchEvent(new Event("blur"));
+    await flushPromises();
+    await nextTick();
+    expect(modal()).toContain("Name is required");
+
+    setLocale("vi", null);
+    for (let i = 0; i < 6; i++) {
+      await nextTick();
+      await flushPromises();
+    }
+    expect(modal()).toContain("Tên là bắt buộc");
+    expect(modal()).not.toContain("Name is required");
+    wrapper.unmount();
+    globalThis.document.body.innerHTML = "";
   });
 });

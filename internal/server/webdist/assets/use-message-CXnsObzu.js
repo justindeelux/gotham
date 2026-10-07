@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:internal/server/webdist/assets/use-message-HAUSVBHj.js
-import{b0 as s,U as o,eu as t}from"./index-OteTxw7e.js";function u(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{u};
-========
-import{aV as s,P as o,ec as t}from"./index-CegDijDj.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
->>>>>>>> 942a6ad9 (feat(i18n): localize projects, environments and shared resource controls (JUS-44)):internal/server/webdist/assets/use-message-CXnsObzu.js

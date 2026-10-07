@@ -347,6 +347,20 @@ export function isNameTakenError(error: unknown): boolean {
  * resolve in the active locale. Actionable server text passes through
  * untouched so secrets stay redacted and diagnostics stay intact.
  */
+/**
+ * withDiagnostic pairs an unknown failure's raw diagnostic with a localized
+ * summary (`<summary>: <raw>`). An empty or already-generic diagnostic
+ * renders the summary alone. Known refusal branches above keep their raw
+ * actionable text untouched.
+ */
+function withDiagnostic(summary: string, raw: string): string {
+  if (raw === "" || raw === summary) {
+    return summary;
+  }
+  const lead = summary.endsWith(".") ? summary.slice(0, -1) : summary;
+  return `${lead}: ${raw}`;
+}
+
 export function describeProjectError(error: unknown): string {
   // Tracks the locale when called during render or inside a computed, so
   // retained failures refresh on a language switch.
@@ -380,11 +394,15 @@ export function describeProjectError(error: unknown): string {
     if (error.status === 400) {
       return stripErrorPrefix(error.message) || text("projects.errors.badRequestFallback");
     }
-    return stripErrorPrefix(error.message) || text("common.errors.requestFailed");
+    return withDiagnostic(
+      text("common.errors.requestFailed"),
+      stripErrorPrefix(error.message),
+    );
   }
   if (error instanceof Error) {
-    return (
-      stripErrorPrefix(error.message) || text("common.errors.unexpected")
+    return withDiagnostic(
+      text("common.errors.unexpected"),
+      stripErrorPrefix(error.message),
     );
   }
   return text("common.errors.unexpected");

@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:internal/server/webdist/assets/use-message-CNir1hLi.js
-import{aX as s,Q as o,eg as t}from"./index-D_xLTFMx.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
-========
-import{aV as s,P as o,ee as t}from"./index-C6EtZCOI.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
->>>>>>>> 87444433 (feat(i18n): localize applications, deployments and previews in English/Vietnamese (JUS-45)):internal/server/webdist/assets/use-message-DrfDg7ym.js

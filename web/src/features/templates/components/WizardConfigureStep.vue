@@ -3,6 +3,7 @@ import type {
   TemplateField,
   TemplateValues,
 } from "@/features/templates/api/templates";
+import { activeLocale, i18n } from "@/shared/i18n";
 import DynamicForm from "./DynamicForm.vue";
 
 interface Props {
@@ -14,6 +15,15 @@ interface Props {
 
 defineProps<Props>();
 
+/**
+ * t renders step copy in the active locale (tracks language switches).
+ * The endpoint stays a raw parameter, never a translated key.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const emit = defineEmits<{
   "update:values": [values: TemplateValues];
 }>();
@@ -22,15 +32,13 @@ const emit = defineEmits<{
 <template>
   <section class="wizard__step" data-testid="wizard-step-1">
     <p class="wizard__desc">
-      Fields come from the template schema
-      (<span class="mono">GET /api/v1/templates/{{ slug }}</span>);
-      adding a template does not require a UI change. Secret values stay
-      in this form until they are sent as the service environment.
+      {{ t("templates.configure.description", { endpoint: `GET /api/v1/templates/${slug}` }) }}
     </p>
     <DynamicForm
       :model-value="values"
       :fields="fields"
       :errors="errors"
+      :slug="slug"
       @update:model-value="(next) => emit('update:values', next)"
     />
   </section>

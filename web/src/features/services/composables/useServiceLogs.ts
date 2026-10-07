@@ -3,6 +3,7 @@ import type { ComputedRef, Ref } from "vue";
 
 import { expireSession, isStaleRefreshError, refreshSession } from "@/shared/api/http";
 import { describeServiceError, serviceLogsPath } from "@/features/services/api/services";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { getAccessToken, getRefreshToken } from "@/shared/api/token";
 
 export type StreamStatus =
@@ -32,7 +33,7 @@ export interface ServiceLogsSource {
  */
 export interface ServiceLogsState {
   status: Ref<StreamStatus>;
-  error: Ref<string | null>;
+  error: ComputedRef<string | null>;
   lines: Ref<LogLine[]>;
   isPaused: Ref<boolean>;
   isFollowing: Ref<boolean>;
@@ -49,7 +50,11 @@ export interface ServiceLogsState {
   handleScroll: () => void;
 }
 
-const sessionExpiredMessage = "Your session expired. Please sign in again.";
+/**
+ * sessionExpiredKey is the curated summary stored for a dead session; the
+ * display text resolves in the active locale through streamError below.
+ */
+const sessionExpiredKey = "services.errors.sessionExpired";
 
 /**
  * useServiceLogs owns the log stream lifecycle: open / consume / pause /
@@ -59,7 +64,27 @@ const sessionExpiredMessage = "Your session expired. Please sign in again.";
  */
 export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
   const status = ref<StreamStatus>("idle");
-  const error = ref<string | null>(null);
+  /**
+   * streamFailure retains the raw stream refusal; error derives its display
+   * text in the active locale so an open failure refreshes on a switch.
+   * A dead session stores a marker resolved through the services catalog.
+   */
+  const streamFailure: Ref<unknown> = ref(null);
+  const error = computed<string | null>(() => {
+    if (streamFailure.value === null) {
+      return null;
+    }
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    const failure = streamFailure.value;
+    if (
+      failure === sessionExpiredKey ||
+      (failure instanceof Error && failure.message === sessionExpiredKey)
+    ) {
+      return String(i18n.global.t(sessionExpiredKey));
+    }
+    return describeServiceError(failure);
+  });
   const lines = ref<LogLine[]>([]);
   const pending = ref<LogLine[]>([]);
   const isPaused = ref(false);
@@ -76,26 +101,33 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
   /** Coalesces tail-scroll work across a burst of chunks. */
   let scrollQueued = false;
 
-  const serviceOptions = computed<Array<{ label: string; value: string }>>(() => [
-    { label: "All services", value: "" },
-    ...source.services.value.map((name) => ({ label: name, value: name })),
-  ]);
+  const serviceOptions = computed<Array<{ label: string; value: string }>>(() => {
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    return [
+      { label: String(i18n.global.t("services.logs.allServices")), value: "" },
+      ...source.services.value.map((name) => ({ label: name, value: name })),
+    ];
+  });
 
   const statusLabel = computed<string>(() => {
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    const text = (key: string): string => String(i18n.global.t(key));
     if (isPaused.value) {
-      return "Paused";
+      return text("services.logs.status.paused");
     }
     switch (status.value) {
       case "connecting":
-        return "Connecting";
+        return text("services.logs.status.connecting");
       case "streaming":
-        return "Streaming";
+        return text("services.logs.status.streaming");
       case "closed":
-        return "Closed";
+        return text("services.logs.status.closed");
       case "error":
-        return "Failed";
+        return text("services.logs.status.failed");
       default:
-        return "Idle";
+        return text("services.logs.status.idle");
     }
   });
 
@@ -110,7 +142,7 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     stop();
     lines.value = [];
     pending.value = [];
-    error.value = null;
+    streamFailure.value = null;
     status.value = "connecting";
 
     const abort = new AbortController();
@@ -118,9 +150,7 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
     try {
       const response = await openStream(abort.signal);
       if (!response.ok || response.body === null) {
-        error.value = describeServiceError(
-          await toApiError(response),
-        );
+        streamFailure.value = await toApiError(response);
         status.value = "error";
         return;
       }
@@ -134,7 +164,7 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
         return;
       }
       status.value = "error";
-      error.value = describeServiceError(err);
+      streamFailure.value = err;
     } finally {
       if (controller === abort) {
         controller = null;
@@ -176,7 +206,7 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
           // Genuine auth failure for the current session: drop it and redirect to
           // the login page instead of leaving the reader on a dead session.
           expireSession();
-          throw new Error(sessionExpiredMessage, { cause: error });
+          throw new Error(sessionExpiredKey, { cause: error });
         }
         // A newer session replaced this one mid-refresh: keep it and retry the
         // request with its token below.

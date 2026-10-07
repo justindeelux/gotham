@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { NButton, NSelect, NTooltip } from "naive-ui";
-import { toRef } from "vue";
+import { computed, toRef } from "vue";
 
 import { useServiceLogs } from "@/features/services/composables/useServiceLogs";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 interface Props {
   serviceId: string;
@@ -22,9 +23,22 @@ interface Props {
  */
 const props = withDefaults(defineProps<Props>(), {
   services: () => [],
-  title: "Service logs",
+  title: "",
   maxLines: 2000,
 });
+
+/**
+ * t renders log-terminal copy in the active locale (tracks language
+ * switches). Called during render, so controls refresh without dropping
+ * the stream. Streamed log lines stay raw and are never translated.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
+/** heading is the caller override or the localized logs wording. */
+const heading = computed<string>(() => props.title || t("services.logs.title"));
 
 const {
   status,
@@ -51,14 +65,14 @@ const {
 </script>
 
 <template>
-  <section class="service-logs">
+  <section class="service-logs" :aria-label="heading">
     <div class="service-logs__toolbar">
       <NSelect
         v-model:value="selectedService"
         :options="serviceOptions"
         size="small"
         style="width: 200px"
-        aria-label="Compose service to stream"
+        :aria-label="t('services.logs.serviceAria')"
       />
       <NButton
         v-if="status === 'streaming' || status === 'connecting'"
@@ -67,10 +81,10 @@ const {
         secondary
         @click="stop"
       >
-        Stop
+        {{ t("services.logs.stop") }}
       </NButton>
       <NButton v-else size="small" type="primary" secondary @click="start">
-        Stream logs
+        {{ t("services.logs.stream") }}
       </NButton>
       <NButton
         size="small"
@@ -78,7 +92,7 @@ const {
         :disabled="status !== 'streaming'"
         @click="togglePause"
       >
-        {{ isPaused ? "Resume" : "Pause" }}
+        {{ isPaused ? t("services.logs.resume") : t("services.logs.pause") }}
       </NButton>
       <NButton
         size="small"
@@ -86,18 +100,21 @@ const {
         :type="isFollowing ? 'primary' : 'default'"
         @click="toggleFollow"
       >
-        {{ isFollowing ? "Following" : "Follow" }}
+        {{ isFollowing ? t("services.logs.following") : t("services.logs.follow") }}
       </NButton>
-      <NButton size="small" secondary @click="clearLines">Clear</NButton>
+      <NButton size="small" secondary @click="clearLines">{{ t("services.logs.clear") }}</NButton>
       <NTooltip trigger="hover">
         <template #trigger>
-          <NButton size="small" secondary disabled>Download</NButton>
+          <NButton size="small" secondary disabled>{{ t("services.logs.download") }}</NButton>
         </template>
-        Backend pending: the API serves a live stream only, so there is no
-        stored log file to download.
+        {{ t("services.logs.downloadTip") }}
       </NTooltip>
       <span class="realtime" :class="statusClasses">{{ statusLabel }}</span>
-      <span class="service-logs__count">{{ lines.length }} lines</span>
+      <span class="service-logs__count">{{
+          t(lines.length === 1 ? "services.logs.linesOne" : "services.logs.linesOther", {
+            count: lines.length,
+          })
+        }}</span>
     </div>
 
     <p v-if="error" class="service-logs__error">{{ error }}</p>
@@ -106,8 +123,8 @@ const {
       <p v-if="lines.length === 0" class="service-logs__empty">
         {{
           status === "idle"
-            ? "No stream open. Select a compose service and start streaming."
-            : "Waiting for log output…"
+            ? t("services.logs.emptyIdle")
+            : t("services.logs.emptyWaiting")
         }}
       </p>
       <div v-for="line in lines" :key="line.id" class="log-line">
@@ -116,10 +133,12 @@ const {
     </div>
 
     <p class="service-logs__channel">
-      Channel: <span class="mono">GET /api/v1/services/{{
-        serviceId.slice(0, 8)
-      }}…/logs?follow=true</span> · agent runs
-      <span class="mono">docker compose logs -f</span>.
+      {{
+        t("services.logs.channel", {
+          url: `GET /api/v1/services/${serviceId.slice(0, 8)}…/logs?follow=true`,
+          cmd: "docker compose logs -f",
+        })
+      }}
     </p>
   </section>
 </template>

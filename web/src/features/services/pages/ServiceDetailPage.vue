@@ -11,6 +11,7 @@ import ServiceEnvCard from "@/features/services/components/ServiceEnvCard.vue";
 import ServiceLogs from "@/features/services/components/ServiceLogs.vue";
 import ServiceOverviewCard from "@/features/services/components/ServiceOverviewCard.vue";
 import { serviceDetailKey, useServiceDetail } from "@/features/services/composables/useServiceDetail";
+import { activeLocale, i18n } from "@/shared/i18n";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
 
@@ -29,6 +30,15 @@ import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vu
  */
 const page = useServiceDetail();
 provide(serviceDetailKey, page);
+
+/**
+ * t renders page copy in the active locale (tracks language switches).
+ * Called during render, so labels refresh without losing drafts.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
 const {
   service,
   serviceId,
@@ -62,11 +72,11 @@ const {
 
     <NEmpty
       v-if="notFound"
-      description="This service does not exist (or belongs to another account)."
+      :description="t('services.detail.notFound')"
     >
       <template #extra>
         <RouterLink :to="{ name: 'projects' }">
-          <NButton>Back to projects</NButton>
+          <NButton>{{ t("services.detail.backToProjects") }}</NButton>
         </RouterLink>
       </template>
     </NEmpty>
@@ -86,7 +96,7 @@ const {
         :saving="moveSaving"
         :error="moveError"
         :server-pinned="deploys.length > 0"
-        server-pinned-reason="This service already deployed, so its node is pinned and cannot be changed. Moving it to another environment stays possible."
+        :server-pinned-reason="t('services.detail.serverPinnedReason')"
         @save="handleMove"
       />
 
@@ -96,10 +106,10 @@ const {
 
       <ServiceContainersCard />
 
-      <NCard title="Logs">
+      <NCard :title="t('services.detail.logsTitle')">
         <template #header-extra>
           <NText depth="3" class="small">
-            docker compose logs -f via the node agent
+            {{ t("services.detail.logsNote") }}
           </NText>
         </template>
         <ServiceLogs

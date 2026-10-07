@@ -2,8 +2,19 @@
 import { NAlert, NButton, NCard, NInput, NSpace, NText } from "naive-ui";
 
 import { useServiceDetailContext } from "@/features/services/composables/useServiceDetail";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 /** ServiceEnvCard renders the masked environment editor card. */
+
+/**
+ * t renders card copy in the active locale (tracks language switches).
+ * Called during render, so labels refresh without losing env rows.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const {
   error,
   envReference,
@@ -19,10 +30,10 @@ const {
 </script>
 
 <template>
-  <NCard title="Environment">
+  <NCard :title="t('services.env.title')">
     <template #header-extra>
       <NText depth="3" class="small">
-        <span class="mono">{{ envReference }}</span> substitution input
+        {{ t("services.env.substitutionInput", { ref: envReference }) }}
       </NText>
     </template>
     <NSpace vertical :size="12">
@@ -31,18 +42,15 @@ const {
       </NAlert>
       <template v-if="canEditCurrent">
         <p class="small muted">
-          Values are masked here: a service created from a template keeps
-          its secret values in this map, and they must never be displayed in
-          clear. The control plane redacts every value from errors and from
-          the deploy history.
+          {{ t("services.env.maskedNote") }}
         </p>
         <div v-if="envDraft.length > 0" class="env-rows">
           <div v-for="row in envDraft" :key="row.id" class="env-row">
             <NInput
               :value="row.key"
               class="mono"
-              placeholder="MYSQL_PASSWORD"
-              aria-label="Variable name"
+              :placeholder="t('services.env.keyPlaceholder')"
+              :aria-label="t('services.env.keyAria')"
               @update:value="(value: string) => updateEnvRow(row.id, { key: value })"
             />
             <NInput
@@ -51,40 +59,40 @@ const {
               show-password-on="click"
               :input-props="{ autocomplete: 'new-password' }"
               class="mono"
-              placeholder="value"
-              aria-label="Variable value"
+              :placeholder="t('services.env.valuePlaceholder')"
+              :aria-label="t('services.env.valueAria')"
               @update:value="(value: string) => updateEnvRow(row.id, { value })"
             />
             <NButton
               quaternary
               type="error"
-              aria-label="Remove variable"
+              :aria-label="t('services.env.remove')"
               @click="removeEnvRow(row.id)"
             >
-              Remove
+              {{ t("services.env.remove") }}
             </NButton>
           </div>
         </div>
         <NText v-else depth="3">
-          The environment is empty. Saving an empty environment clears it.
+          {{ t("services.env.empty") }}
         </NText>
         <NSpace :size="8" align="center">
-          <NButton size="small" @click="addEnvRow">Add variable</NButton>
+          <NButton size="small" @click="addEnvRow">{{ t("services.env.add") }}</NButton>
           <NButton
             size="small"
             type="primary"
             :loading="envSaving"
             @click="handleSaveEnv"
           >
-            Save environment
+            {{ t("services.env.save") }}
           </NButton>
         </NSpace>
       </template>
       <NText v-else depth="3" class="small">
         {{
           error
-            ? "The environment is unavailable."
-            : "Loading the environment…"
+            ? t("services.env.unavailable")
+            : t("services.env.loading")
         }}
       </NText>
     </NSpace>

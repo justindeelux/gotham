@@ -3,6 +3,7 @@ import { NAlert, NForm, NFormItem, NInput } from "naive-ui";
 
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
 import ServerPicker from "@/features/projects/components/ServerPicker.vue";
+import { activeLocale, i18n } from "@/shared/i18n";
 
 interface Props {
   name: string;
@@ -16,6 +17,16 @@ interface Props {
 }
 
 defineProps<Props>();
+
+/**
+ * t renders target-form copy in the active locale (tracks language
+ * switches). Called during render, so labels refresh without losing the
+ * typed name or node choice.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
 
 const emit = defineEmits<{
   "update:name": [value: string];
@@ -37,7 +48,7 @@ const emit = defineEmits<{
   </NAlert>
   <NForm label-placement="top" class="wizard__metaform">
     <NFormItem
-      label="Service name"
+      :label="t('templates.target.nameLabel')"
       required
       :feedback="nameError"
       :validation-status="nameError ? 'error' : undefined"
@@ -45,7 +56,7 @@ const emit = defineEmits<{
     >
       <NInput
         :value="name"
-        aria-label="Service name"
+        :aria-label="t('templates.target.nameLabel')"
         @update:value="(value) => emit('update:name', value)"
       />
     </NFormItem>
@@ -59,10 +70,7 @@ const emit = defineEmits<{
     {{ createError }}
   </NAlert>
   <p class="wizard__desc">
-    Creating stores the rendered document and its environment
-    (<span class="mono">POST /api/v1/services</span>); a service runs
-    on exactly one node. Deploy sends the project to that node's agent
-    and shows what the agent reports back.
+    {{ t("templates.target.description", { endpoint: "POST /api/v1/services" }) }}
   </p>
 </template>
 

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { NButton, NText } from "naive-ui";
 
+import { activeLocale, i18n } from "@/shared/i18n";
+
 interface Props {
   step: number;
   renderLoading: boolean;
@@ -12,6 +14,15 @@ interface Props {
 }
 
 defineProps<Props>();
+
+/**
+ * t renders footer copy in the active locale (tracks language switches).
+ * Step state and draft ownership never change on a switch.
+ */
+function t(key: string, params?: Record<string, string | number>): string {
+  void activeLocale.value;
+  return String(i18n.global.t(key, params ?? {}));
+}
 
 const emit = defineEmits<{
   back: [];
@@ -29,13 +40,13 @@ const emit = defineEmits<{
       size="small"
       @click="emit('back')"
     >
-      Back
+      {{ t("templates.wizard.back") }}
     </NButton>
     <NText depth="3" class="wizard__counter">
-      Step {{ step }} / 3
+      {{ t("templates.wizard.counter", { step }) }}
     </NText>
     <span class="wizard__spacer"></span>
-    <NButton size="small" @click="emit('close')">Close</NButton>
+    <NButton size="small" @click="emit('close')">{{ t("templates.wizard.close") }}</NButton>
     <NButton
       v-if="step < 3"
       size="small"
@@ -43,7 +54,7 @@ const emit = defineEmits<{
       :disabled="step === 2 && (renderLoading || !hasRender)"
       @click="emit('next')"
     >
-      Next
+      {{ t("templates.wizard.next") }}
     </NButton>
     <NButton
       v-else-if="!created"
@@ -53,7 +64,7 @@ const emit = defineEmits<{
       :disabled="renderLoading || !hasRender"
       @click="emit('create')"
     >
-      Create service
+      {{ t("templates.wizard.create") }}
     </NButton>
     <NButton
       v-else-if="!deployed"
@@ -62,7 +73,7 @@ const emit = defineEmits<{
       :loading="deploying"
       @click="emit('deploy')"
     >
-      Deploy now
+      {{ t("templates.wizard.deploy") }}
     </NButton>
   </div>
 </template>

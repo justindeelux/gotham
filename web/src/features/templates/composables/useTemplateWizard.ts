@@ -16,6 +16,7 @@ import type {
   TemplateRender,
   TemplateValues,
 } from "@/features/templates/api/templates";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
 import { serviceNameSchema, serviceNodeSchema } from "@/shared/validation/primitives";
 import { useServersStore } from "@/features/servers";
@@ -86,13 +87,20 @@ export function useTemplateWizard(
   const step = ref(1);
   const detail = ref<TemplateDetail | null>(null);
   const detailLoading = ref(false);
-  const detailError = ref<string | null>(null);
+  /**
+   * Raw refusals retained per surface; each display error derives from its
+   * refusal in the active locale (see retained below), so an open wizard
+   * refreshes on a language switch without losing values or refetching.
+   */
+  const detailFailure: Ref<unknown> = ref(null);
+  const detailError = retained(detailFailure, describeTemplateError);
   const values = ref<TemplateValues>({});
   const showErrors = ref(false);
 
   const render = ref<TemplateRender | null>(null);
   const renderLoading = ref(false);
-  const renderError = ref<string | null>(null);
+  const renderFailure: Ref<unknown> = ref(null);
+  const renderError = retained(renderFailure, describeTemplateError);
 
   const name = ref("");
   const scopeProjectId = ref(toValue(scope.projectId));
@@ -100,11 +108,13 @@ export function useTemplateWizard(
   const serverId = ref("");
   const createAttempted = ref(false);
   const creating = ref(false);
-  const createError = ref<string | null>(null);
+  const createFailure: Ref<unknown> = ref(null);
+  const createError = retained(createFailure, describeServiceError);
   const created = ref<Service | null>(null);
 
   const deploying = ref(false);
-  const deployError = ref<string | null>(null);
+  const deployFailure: Ref<unknown> = ref(null);
+  const deployError = retained(deployFailure, describeServiceError);
   const deployed = ref(false);
 
   /**
@@ -142,22 +152,46 @@ export function useTemplateWizard(
   /** scopeValid gates the create: the API requires an environment. */
   const scopeValid = computed<boolean>(() => scopeEnvironmentId.value !== "");
 
-  const scopeError = computed<string>(() =>
-    !createAttempted.value || scopeValid.value ? "" : "Select a project and environment.",
-  );
+  const scopeError = computed<string>(() => {
+    if (!createAttempted.value || scopeValid.value) {
+      return "";
+    }
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    return String(i18n.global.t("templates.target.scopeError"));
+  });
+
+  /**
+   * retained derives display text from a raw refusal in the active locale
+   * through the caller's describe helper, so an open wizard refreshes on a
+   * language switch without losing values or refetching.
+   */
+  function retained(
+    failure: Ref<unknown>,
+    describe: (_error: unknown) => string,
+  ): Ref<string | null> {
+    return computed<string | null>(() => {
+      if (failure.value === null) {
+        return null;
+      }
+      // Tracks the locale when called during render or inside a computed.
+      void activeLocale.value;
+      return describe(failure.value);
+    });
+  }
 
   /** open loads the template schema and seeds the form with its defaults. */
   async function open(): Promise<void> {
     reset();
     detailLoading.value = true;
-    detailError.value = null;
+    detailFailure.value = null;
     try {
       const template = await templatesStore.fetchDetail(slug.value);
       detail.value = template;
       values.value = templateValuesFromFields(template.fields);
       name.value = template.slug;
     } catch (error) {
-      detailError.value = describeTemplateError(error);
+      detailFailure.value = error;
     } finally {
       detailLoading.value = false;
     }
@@ -171,21 +205,21 @@ export function useTemplateWizard(
     renderToken += 1;
     step.value = 1;
     detail.value = null;
-    detailError.value = null;
+    detailFailure.value = null;
     values.value = {};
     showErrors.value = false;
     render.value = null;
-    renderError.value = null;
+    renderFailure.value = null;
     renderLoading.value = false;
     name.value = "";
     seedScope();
     serverId.value = "";
     createAttempted.value = false;
     creating.value = false;
-    createError.value = null;
+    createFailure.value = null;
     created.value = null;
     deploying.value = false;
-    deployError.value = null;
+    deployFailure.value = null;
     deployed.value = false;
   }
 
@@ -208,7 +242,7 @@ export function useTemplateWizard(
     }
     const token = ++renderToken;
     render.value = null;
-    renderError.value = null;
+    renderFailure.value = null;
     renderLoading.value = true;
     try {
       const rendered = await templatesStore.render(
@@ -224,7 +258,7 @@ export function useTemplateWizard(
         return;
       }
       render.value = null;
-      renderError.value = describeTemplateError(error);
+      renderFailure.value = error;
     } finally {
       if (token === renderToken) {
         renderLoading.value = false;
@@ -269,7 +303,7 @@ export function useTemplateWizard(
       return;
     }
     creating.value = true;
-    createError.value = null;
+    createFailure.value = null;
     try {
       created.value = await servicesStore.create({
         name: name.value.trim(),
@@ -278,9 +312,9 @@ export function useTemplateWizard(
         compose_yaml: rendered.compose_yaml,
         env: rendered.env,
       });
-      message.success(`Service ${created.value.name} created.`);
+      message.success(String(i18n.global.t("templates.toast.created", { name: created.value.name })));
     } catch (error) {
-      createError.value = describeServiceError(error);
+      createFailure.value = error;
     } finally {
       creating.value = false;
     }
@@ -293,13 +327,13 @@ export function useTemplateWizard(
       return;
     }
     deploying.value = true;
-    deployError.value = null;
+    deployFailure.value = null;
     try {
       await servicesStore.deploy(service.id);
       deployed.value = true;
-      message.success("Deploy finished.");
+      message.success(String(i18n.global.t("templates.toast.deployed")));
     } catch (error) {
-      deployError.value = describeServiceError(error);
+      deployFailure.value = error;
     } finally {
       deploying.value = false;
     }

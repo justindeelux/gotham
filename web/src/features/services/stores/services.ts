@@ -1,5 +1,8 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import type { Ref } from "vue";
+
+import { activeLocale } from "@/shared/i18n";
 
 import {
   createService,
@@ -29,6 +32,12 @@ export interface ServiceHistory {
   loaded: boolean;
   /** Redacted failure message of the last read; null when it succeeded. */
   error: string | null;
+  /**
+   * Raw refusal of the last history read; display text derives from it in
+   * the active locale (see useServiceDetail historyUnavailable), so an open
+   * warning refreshes on a language switch.
+   */
+  failure: unknown;
 }
 
 /**
@@ -47,7 +56,16 @@ export const useServicesStore = defineStore("services", () => {
   const services = ref<Service[]>([]);
   const histories = ref<Record<string, ServiceHistory>>({});
   const loading = ref(false);
-  const error = ref<string | null>(null);
+  /** listFailure retains the raw list refusal; error derives its display. */
+  const listFailure: Ref<unknown> = ref(null);
+  const error = computed<string | null>(() => {
+    if (listFailure.value === null) {
+      return null;
+    }
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    return describeServiceError(listFailure.value);
+  });
 
   /** Monotonic token of the newest history read per service. */
   let historyReadToken = 0;
@@ -64,7 +82,7 @@ export const useServicesStore = defineStore("services", () => {
     services.value = [];
     histories.value = {};
     loading.value = false;
-    error.value = null;
+    listFailure.value = null;
   }
 
   /** applyService merges one service into the in-memory list in place. */
@@ -80,11 +98,11 @@ export const useServicesStore = defineStore("services", () => {
   /** fetchServices loads the caller's services, newest first. */
   async function fetchServices(): Promise<void> {
     loading.value = true;
-    error.value = null;
+    listFailure.value = null;
     try {
       services.value = await listServices();
     } catch (err) {
-      error.value = describeServiceError(err);
+      listFailure.value = err;
       throw err;
     } finally {
       loading.value = false;
@@ -144,6 +162,7 @@ export const useServicesStore = defineStore("services", () => {
         loading: true,
         loaded: previous?.loaded ?? false,
         error: null,
+        failure: null,
       },
     };
     try {
@@ -153,7 +172,7 @@ export const useServicesStore = defineStore("services", () => {
       }
       histories.value = {
         ...histories.value,
-        [id]: { deploys, loading: false, loaded: true, error: null },
+        [id]: { deploys, loading: false, loaded: true, error: null, failure: null },
       };
     } catch (err) {
       if (!isLatest()) {
@@ -170,6 +189,7 @@ export const useServicesStore = defineStore("services", () => {
           loading: false,
           loaded: latest?.loaded ?? false,
           error: describeServiceError(err),
+          failure: err,
         },
       };
       throw err;

@@ -3,6 +3,7 @@ import { computed, ref, toValue, watch } from "vue";
 import type { Ref } from "vue";
 
 import { describeServiceError } from "@/features/services/api/services";
+import { activeLocale, i18n } from "@/shared/i18n";
 import type { Service } from "@/features/services/api/services";
 import { serviceNameSchema, serviceNodeSchema } from "@/shared/validation/primitives";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
@@ -33,7 +34,20 @@ export function useImportService(
   const yaml = ref("");
   const attempted = ref(false);
   const importing = ref(false);
-  const importError = ref<string | null>(null);
+  /**
+   * importFailure retains the raw create refusal; importError derives its
+   * display text in the active locale so an open dialog refreshes on a
+   * language switch without losing the typed draft.
+   */
+  const importFailure: Ref<unknown> = ref(null);
+  const importError = computed<string | null>(() => {
+    if (importFailure.value === null) {
+      return null;
+    }
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    return describeServiceError(importFailure.value);
+  });
 
   /** envReference is the compose `${VAR}` substitution form shown in copy. */
   const envReference = "${VAR}";
@@ -46,11 +60,14 @@ export function useImportService(
     !attempted.value ? "" : (fieldErrors(serviceNodeSchema, serverId.value)[0] ?? ""),
   );
 
-  const scopeError = computed<string>(() =>
-    !attempted.value || scopeEnvironmentId.value !== ""
-      ? ""
-      : "Select a project and environment.",
-  );
+  const scopeError = computed<string>(() => {
+    if (!attempted.value || scopeEnvironmentId.value !== "") {
+      return "";
+    }
+    // Tracks the locale when called during render or inside a computed.
+    void activeLocale.value;
+    return String(i18n.global.t("services.import.scopeError"));
+  });
 
   /** reset restores the dialog to the live host scope with an empty form. */
   function reset(): void {
@@ -59,7 +76,7 @@ export function useImportService(
     serverId.value = "";
     yaml.value = "";
     attempted.value = false;
-    importError.value = null;
+    importFailure.value = null;
     importing.value = false;
   }
 
@@ -83,7 +100,7 @@ export function useImportService(
       return;
     }
     importing.value = true;
-    importError.value = null;
+    importFailure.value = null;
     try {
       const created = await servicesStore.create({
         name: name.value.trim(),
@@ -91,10 +108,10 @@ export function useImportService(
         server_id: serverId.value,
         compose_yaml: yaml.value,
       });
-      message.success(`Service ${created.name} created.`);
+      message.success(String(i18n.global.t("services.toast.created", { name: created.name })));
       onCreated(created);
     } catch (error) {
-      importError.value = describeServiceError(error);
+      importFailure.value = error;
     } finally {
       importing.value = false;
     }

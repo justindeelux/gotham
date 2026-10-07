@@ -12,6 +12,7 @@ export default defineConfig({
     "i18n-account-layout.spec.ts",
     "profile-layout.spec.ts",
     "projects-layout.spec.ts",
+    "services-templates-layout.spec.ts",
     "sessions-layout.spec.ts",
     "shared-variables-layout.spec.ts",
   ],

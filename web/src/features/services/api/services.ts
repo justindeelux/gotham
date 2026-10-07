@@ -1,4 +1,5 @@
 import { http } from "@/shared/api/http";
+import { activeLocale, i18n } from "@/shared/i18n";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
 /**
@@ -314,8 +315,17 @@ export function serviceLogsPath(
   return `/api/v1/services/${id}/logs${query ? `?${query}` : ""}`;
 }
 
-/** serviceStatusLabel renders the lifecycle state as display text. */
+/** serviceStatusLabel renders the lifecycle state as display text.
+ * Resolves in the active locale at invocation time so template callers
+ * refresh on a language switch; the wire status value itself is never
+ * translated. English output is unchanged. */
 export function serviceStatusLabel(status: ServiceStatus): string {
+  // Tracks the locale when called during render or inside a computed.
+  void activeLocale.value;
+  const key = `services.status.${status}`;
+  if (i18n.global.te(key)) {
+    return String(i18n.global.t(key));
+  }
   return status;
 }
 
@@ -336,8 +346,16 @@ export function serviceStatusTagType(
   }
 }
 
-/** deployStateLabel renders a deploy state as display text. */
+/** deployStateLabel renders a deploy state as display text.
+ * Resolves in the active locale at invocation time; the wire state value
+ * itself is never translated. English output is unchanged. */
 export function deployStateLabel(state: ServiceDeployState): string {
+  // Tracks the locale when called during render or inside a computed.
+  void activeLocale.value;
+  const key = `services.deployState.${state}`;
+  if (i18n.global.te(key)) {
+    return String(i18n.global.t(key));
+  }
   return state;
 }
 
@@ -364,47 +382,92 @@ export function deployStateTagType(
  * duplicate name, 502 an unreachable node agent and 503 a disabled feature
  * flag. Secret material never reaches a message: the control plane redacts
  * every environment value before it is stored or returned.
+ *
+ * Classification still runs on the raw error (status plus the stripped
+ * server message, exactly as before); only the curated fallback summaries
+ * resolve in the active locale. Actionable server text passes through
+ * untouched. The 502 detail pairs a localized UI heading with the raw node
+ * diagnostic: the heading translates, the detail stays byte-identical, and
+ * English output matches the historical literal exactly. Unknown statuses
+ * and plain errors pair the same way: one localized `unknownWithDetail`
+ * summary plus the identical stripped raw detail, with the empty case
+ * falling back exactly once.
  */
 export function describeServiceError(error: unknown): string {
+  // Tracks the locale when called during render or inside a computed, so
+  // retained failures refresh on a language switch.
+  void activeLocale.value;
+  const text = (
+    key: string,
+    params?: Record<string, string | number>,
+  ): string => String(i18n.global.t(key, params ?? {}));
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return text("services.errors.sessionExpired");
     }
     if (error.status === 400) {
-      return (
-      stripErrorPrefix(error.message) ||
-      "Invalid request. Check the compose document and retry."
-    );
+      const detail = stripErrorPrefix(error.message);
+      return detail
+        ? text("services.errors.badRequestWithDetail", { detail })
+        : text("services.errors.badRequest");
     }
     if (error.status === 404) {
-      return (
-      stripErrorPrefix(error.message) ||
-      "Service not found. It may have been deleted already."
-    );
+      const detail = stripErrorPrefix(error.message);
+      return detail
+        ? text("services.errors.notFoundWithDetail", { detail })
+        : text("services.errors.notFound");
     }
     if (error.status === 409) {
       // The backend names the refusal exactly (a duplicate name, `a deploy
       // is in progress`, `a deployed service cannot change server`), so the
-      // message passes through for the move/server-change settings to
-      // render inline.
-      return (
-        conflictDetail(stripErrorPrefix(error.message)) ||
-        "A service with that name already exists. Pick another name."
-      );
+      // raw refusal stays intact inside a minimal localized frame for the
+      // move/server-change settings to render inline.
+      const detail = conflictDetail(stripErrorPrefix(error.message));
+      return detail
+        ? text("services.errors.conflictWithDetail", { detail })
+        : text("services.errors.conflictFallback");
     }
     if (error.status === 502) {
       const detail = stripErrorPrefix(error.message);
-      return detail
-        ? `Node agent error: ${detail}`
-        : "The node agent is unreachable. Check the node status and retry.";
+      if (detail === "") {
+        return text("services.errors.nodeUnreachable");
+      }
+      // The heading resolves through the services catalog when it is
+      // registered (the app's synchronous discovery); harnesses that bundle
+      // this module without catalogs keep the exact English baseline.
+      const key = "services.errors.nodeAgentError";
+      if (i18n.global.te(key)) {
+        return String(i18n.global.t(key, { detail }));
+      }
+      return `Node agent error: ${detail}`;
     }
     if (error.status === 503) {
-      return "Services are disabled on the control plane (FEATURE_SERVICES=false).";
+      return text("services.errors.disabled");
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return unknownFailure(stripErrorPrefix(error.message), text("common.errors.requestFailed"));
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    return unknownFailure(stripErrorPrefix(error.message), text("common.errors.unexpected"));
   }
-  return "Something went wrong. Please try again.";
+  return text("common.errors.unexpected");
+}
+
+/**
+ * unknownFailure pairs one stripped raw diagnostic with the localized
+ * unknown-failure summary, or renders the single empty-failure fallback.
+ * The summary resolves through the services catalog when it is registered
+ * (the app's synchronous discovery); harnesses that bundle this module
+ * without catalogs keep the exact English baseline, exactly like the 502
+ * heading above. No caller classifies this display text: status guards,
+ * prefix stripping, retries and redaction all run on the raw error first.
+ */
+function unknownFailure(detail: string, emptyFallback: string): string {
+  if (detail === "") {
+    return emptyFallback;
+  }
+  const key = "services.errors.unknownWithDetail";
+  if (i18n.global.te(key)) {
+    return String(i18n.global.t(key, { detail }));
+  }
+  return `Request failed: ${detail}`;
 }

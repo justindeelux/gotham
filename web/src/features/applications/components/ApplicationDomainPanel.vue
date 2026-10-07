@@ -36,7 +36,7 @@ const { t } = useI18n();
           class="mono"
           style="max-width: 360px"
           placeholder="app.example.com"
-          :aria-label="t('applications.domain.baseAria')"
+          :input-props="{ 'aria-label': t('applications.domain.baseAria') }"
           @keyup.enter="domain.handleSaveDomain"
         />
         <NButton

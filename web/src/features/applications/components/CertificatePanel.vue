@@ -13,7 +13,7 @@ import {
   NText,
 } from "naive-ui";
 import { computed, toRef } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n, I18nT } from "vue-i18n";
 import { RouterLink } from "vue-router";
 
 import type { Application } from "@/features/applications/api/applications";
@@ -69,10 +69,10 @@ const deleteConfirm = computed<string>(() =>
         type="warning"
         :show-icon="true"
       >
-        {{ t("applications.cert.rerecordHintStart") }}
-        <span class="mono">{{ certs.certificate.value.domain }}</span>.
-        {{ t("applications.cert.rerecordHintMiddle") }}
-        <span class="mono">{{ props.application.base_domain }}</span>.
+      <i18n-t keypath="applications.cert.rerecordHint" tag="span">
+        <template #recorded><span class="mono">{{ certs.certificate.value.domain }}</span></template>
+        <template #current><span class="mono">{{ props.application.base_domain }}</span></template>
+      </i18n-t>
         <NSpace style="margin-top: 8px">
           <NButton size="small" @click="certs.handleRerecordDomain">
             {{ t("applications.cert.rerecord") }}

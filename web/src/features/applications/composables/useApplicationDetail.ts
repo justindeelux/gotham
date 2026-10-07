@@ -216,7 +216,7 @@ export function useApplicationDetail() {
 
   const deploymentOptions = computed<Array<{ label: string; value: string }>>(() =>
     deployments.value.map((item) => ({
-      label: `${item.id.slice(0, 8)} · ${item.kind} · ${item.state}`,
+      label: `${item.id.slice(0, 8)} · ${item.kind} · ${tr(`applications.status.${item.state}`)}`,
       value: item.id,
     })),
   );

@@ -100,16 +100,16 @@ export function describePreviewError(error: unknown): string {
     if (error.status === 404) {
       return String(t("applications.errors.previewsDisabled"));
     }
-    return (
-      stripErrorPrefix(error.message) ||
-      String(t("common.errors.requestFailed"))
-    );
+    const raw = stripErrorPrefix(error.message);
+    return raw
+      ? `${String(t("common.errors.requestFailed"))} ${raw}`
+      : String(t("common.errors.requestFailed"));
   }
   if (error instanceof Error) {
-    return (
-      stripErrorPrefix(error.message) ||
-      String(t("common.errors.unexpected"))
-    );
+    const raw = stripErrorPrefix(error.message);
+    return raw
+      ? `${String(t("common.errors.unexpected"))} ${raw}`
+      : String(t("common.errors.unexpected"));
   }
   return String(t("common.errors.unexpected"));
 }

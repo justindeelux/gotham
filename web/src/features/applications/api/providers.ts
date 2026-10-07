@@ -65,16 +65,16 @@ export async function listRepos(providerId: string): Promise<ProviderRepo[]> {
 export function describeProviderError(error: unknown): string {
   const t = i18n.global.t.bind(i18n.global);
   if (isApiError(error)) {
-    return (
-      stripErrorPrefix(error.message) ||
-      String(t("common.errors.requestFailed"))
-    );
+    const raw = stripErrorPrefix(error.message);
+    return raw
+      ? `${String(t("common.errors.requestFailed"))} ${raw}`
+      : String(t("common.errors.requestFailed"));
   }
   if (error instanceof Error) {
-    return (
-      stripErrorPrefix(error.message) ||
-      String(t("common.errors.unexpected"))
-    );
+    const raw = stripErrorPrefix(error.message);
+    return raw
+      ? `${String(t("common.errors.unexpected"))} ${raw}`
+      : String(t("common.errors.unexpected"));
   }
   return String(t("common.errors.unexpected"));
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NCard, NSelect, NSpace, NText } from "naive-ui";
 import { computed } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n, I18nT } from "vue-i18n";
 
 import type { Deployment } from "@/features/applications/api/applications";
 import DeployLogs from "@/features/applications/components/DeployLogs.vue";
@@ -53,8 +53,9 @@ const deploymentPlaceholder = computed<string>(() =>
         />
       </NSpace>
       <NText depth="3">
-        {{ t("applications.logsTab.hint") }}
-        <span class="mono">logs:{node}:{deployment}</span>.
+        <i18n-t keypath="applications.logsTab.hint" tag="span">
+          <template #channel><span class="mono">logs:{node}:{deployment}</span></template>
+        </i18n-t>
       </NText>
       <DeployLogs
         :server-id="props.effectiveLogServerId"

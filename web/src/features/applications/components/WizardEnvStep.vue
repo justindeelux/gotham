@@ -12,11 +12,15 @@ const { form } = wizard;
 
 const { t } = useI18n();
 
-/** droppedText keeps the 1/many grammar in the current locale. */
+/** droppedText renders the 1/many grammar through library pluralization. */
 const droppedText = computed<string>(() =>
-  wizard.droppedEnvRows.value === 1
-    ? String(t("applications.wizard.droppedOne", { count: wizard.droppedEnvRows.value }))
-    : String(t("applications.wizard.droppedOther", { count: wizard.droppedEnvRows.value })),
+  String(
+    t(
+      "applications.wizard.droppedRows",
+      { count: wizard.droppedEnvRows.value },
+      wizard.droppedEnvRows.value,
+    ),
+  ),
 );
 </script>
 

@@ -18,7 +18,7 @@ const { t } = useI18n();
     </NText>
     <NRadioGroup v-model:value="form.buildPack">
       <NSpace vertical :size="8">
-        <NRadio v-for="pack in wizard.buildPacks.value" :key="pack.label" :value="pack.value">
+        <NRadio v-for="pack in wizard.buildPacks.value" :key="pack.value" :value="pack.value">
           <NText strong>{{ pack.label }}</NText>
           <br />
           <NText depth="3">{{ pack.hint }}</NText>

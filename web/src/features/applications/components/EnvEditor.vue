@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NButton, NIcon, NInput, NText } from "naive-ui";
 import { computed } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n, I18nT } from "vue-i18n";
 
 import type { EnvVar } from "@/features/applications/api/applications";
 import { isRecommendedEnvKey } from "@/features/applications/schemas/env";
@@ -92,13 +92,10 @@ function removeRow(index: number): void {
     <NButton secondary size="small" @click="addRow">
       {{ t("applications.envEditor.add") }}
     </NButton>
-    <p class="env-editor__hint">
-      {{ t("applications.envEditor.hintNames") }}
-      <code class="inline-code">^[A-Z][A-Z0-9_]*$</code>.
-      {{ t("applications.envEditor.hintValues") }}
-      <code class="inline-code">secret:</code>
-      {{ t("applications.envEditor.hintValuesRest") }}
-    </p>
+    <i18n-t keypath="applications.envEditor.hint" tag="p" class="env-editor__hint">
+      <template #pattern><code class="inline-code">^[A-Z][A-Z0-9_]*$</code></template>
+      <template #prefix><code class="inline-code">secret:</code></template>
+    </i18n-t>
   </div>
 </template>
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NButton, NIcon, NInput, NText } from "naive-ui";
 import { computed } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n, I18nT } from "vue-i18n";
 
 import type { StorageMapping } from "@/features/applications/api/applications";
 import { useStableRowKeys } from "@/shared/composables/useStableRowKeys";
@@ -65,21 +65,21 @@ function removeRow(index: number): void {
         :value="row.name"
         class="mono"
         placeholder="uploads"
-        :aria-label="t('applications.storageEditor.nameAria')"
+        :input-props="{ 'aria-label': t('applications.storageEditor.nameAria') }"
         @update:value="(value: string) => updateRow(index, { name: value })"
       />
       <NInput
         :value="row.host_path"
         class="mono"
         :placeholder="t('applications.storageEditor.hostPlaceholder')"
-        :aria-label="t('applications.storageEditor.hostAria')"
+        :input-props="{ 'aria-label': t('applications.storageEditor.hostAria') }"
         @update:value="(value: string) => updateRow(index, { host_path: value })"
       />
       <NInput
         :value="row.container_path"
         class="mono"
         placeholder="/app/public/uploads"
-        :aria-label="t('applications.storageEditor.containerAria')"
+        :input-props="{ 'aria-label': t('applications.storageEditor.containerAria') }"
         @update:value="(value: string) => updateRow(index, { container_path: value })"
       />
       <NButton quaternary type="error" :aria-label="t('applications.storageEditor.removeAria')" @click="removeRow(index)">
@@ -93,12 +93,10 @@ function removeRow(index: number): void {
     <NButton secondary size="small" @click="addRow">
       {{ t("applications.storageEditor.add") }}
     </NButton>
-    <p class="storage-editor__hint">
-      {{ t("applications.storageEditor.hintStart") }}
-      <span class="mono">name → host path → container path</span>.
-      {{ t("applications.storageEditor.hintMiddle") }}
-      <span class="mono">/var/lib/gotham/volumes/&lt;app id&gt;</span>.
-    </p>
+    <i18n-t keypath="applications.storageEditor.hint" tag="p" class="storage-editor__hint">
+      <template #columns><span class="mono">{{ t("applications.storageEditor.columns") }}</span></template>
+      <template #path><span class="mono">/var/lib/gotham/volumes/&lt;app id&gt;</span></template>
+    </i18n-t>
   </div>
 </template>
 

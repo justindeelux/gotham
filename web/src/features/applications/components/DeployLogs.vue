@@ -42,7 +42,7 @@ const title = computed<string>(() =>
 
 const subtitle = computed<string>(() =>
   props.deployment
-    ? `${props.deployment.kind} · ${props.deployment.state}`
+    ? `${props.deployment.kind} · ${String(t(`applications.status.${props.deployment.state}`))}`
     : "",
 );
 </script>

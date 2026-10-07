@@ -20,6 +20,8 @@ import { durationText } from "@/features/applications/utils/deploymentDuration";
 import type { Deployment } from "@/features/applications/api/applications";
 import { pipelineStepsFor } from "@/features/applications/utils/deployPipeline";
 import ApplicationOverviewTab from "@/features/applications/components/ApplicationOverviewTab.vue";
+import StorageEditor from "@/features/applications/components/StorageEditor.vue";
+import ApplicationDomainPanel from "@/features/applications/components/ApplicationDomainPanel.vue";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
 import {
   i18n,
@@ -99,18 +101,94 @@ describe("describe*Error localization", () => {
     expect(describePreviewError(apiError(404))).toBe(
       "Triển khai xem trước chưa bật trên control plane này (FEATURE_PREVIEWS=false).",
     );
-    expect(describeProviderError(new Error("boom"))).toBe("boom");
+    expect(describeProviderError(new Error("boom"))).toBe(
+      "Đã xảy ra lỗi. Vui lòng thử lại. boom",
+    );
   });
 
-  it("never translates raw server diagnostics or provider data", () => {
-    const raw = { message: "deploy: container exploded", status: 500 };
-    expect(describeApplicationError(raw)).toBe("container exploded");
-    expect(describePreviewError(raw)).toBe("container exploded");
-    expect(describeProviderError(raw)).toBe("container exploded");
+  it("pairs every nonempty failure with its summary and the exact raw detail", () => {
+    // Unknown 500s keep the exact stripped diagnostic under a summary.
+    expect(describeApplicationError({ message: "deploy: container exploded", status: 500 })).toBe(
+      "Request failed container exploded",
+    );
+    expect(describePreviewError({ message: "deploy: container exploded", status: 500 })).toBe(
+      "Request failed container exploded",
+    );
+    expect(describeProviderError({ message: "deploy: container exploded", status: 500 })).toBe(
+      "Request failed container exploded",
+    );
+    // Blank failures render the summary alone.
+    expect(describeApplicationError(apiError(500))).toBe("Request failed");
+    expect(describeProviderError(new Error(""))).toBe(
+      "Something went wrong. Please try again.",
+    );
+    // Plain errors keep their exact message under the unexpected summary.
+    expect(describeProviderError(new Error("boom"))).toBe(
+      "Something went wrong. Please try again. boom",
+    );
+    // Known 400/502 refusals keep their exact detail under distinct summaries.
+    expect(describeApplicationError({ message: "deploy: bad port", status: 400 })).toBe(
+      "Invalid request. Check the highlighted fields and retry. bad port",
+    );
+    expect(
+      describeApplicationError({ message: "deploy: dial tcp: refused", status: 502 }),
+    ).toBe(
+      "The node agent is unreachable. Check the node status and retry. dial tcp: refused",
+    );
     setLocale("vi", null);
-    expect(describeApplicationError(raw)).toBe("container exploded");
-    expect(describePreviewError(raw)).toBe("container exploded");
-    expect(describeProviderError(raw)).toBe("container exploded");
+    expect(describeApplicationError({ message: "deploy: container exploded", status: 500 })).toBe(
+      "Yêu cầu thất bại container exploded",
+    );
+    expect(describePreviewError({ message: "deploy: container exploded", status: 500 })).toBe(
+      "Yêu cầu thất bại container exploded",
+    );
+    expect(describeProviderError({ message: "deploy: container exploded", status: 500 })).toBe(
+      "Yêu cầu thất bại container exploded",
+    );
+    expect(describeApplicationError(apiError(500))).toBe("Yêu cầu thất bại");
+    expect(describeProviderError(new Error("boom"))).toBe(
+      "Đã xảy ra lỗi. Vui lòng thử lại. boom",
+    );
+    expect(describeApplicationError({ message: "deploy: bad port", status: 400 })).toBe(
+      "Yêu cầu không hợp lệ. Kiểm tra các trường được đánh dấu rồi thử lại. bad port",
+    );
+    expect(
+      describeApplicationError({ message: "deploy: dial tcp: refused", status: 502 }),
+    ).toBe(
+      "Không kết nối được node agent. Kiểm tra trạng thái node rồi thử lại. dial tcp: refused",
+    );
+  });
+
+  it("keeps the three 409 refusals distinct without collapsing into in-flight", () => {
+    const inflight = describeApplicationError(apiError(409, "a deploy is in progress"));
+    const previews = describeApplicationError(apiError(409, "close the open previews first"));
+    const collision = describeApplicationError(
+      apiError(409, 'deploy: name already exists in the target environment: an application named "shop" already exists in the target environment'),
+    );
+    expect(inflight).toBe(
+      "A deployment is already in progress for this application. Wait for it to finish and retry. a deploy is in progress",
+    );
+    expect(previews).toBe(
+      "Close the open previews first, then retry. close the open previews first",
+    );
+    expect(collision).toBe(
+      'An application with this name already exists in the target environment. an application named "shop" already exists in the target environment',
+    );
+    // An unrelated 409 never reads as an in-flight deployment.
+    const other = describeApplicationError(apiError(409, "a deploy key already exists"));
+    expect(other).toContain("conflicts with the current state");
+    expect(other).toContain("a deploy key already exists");
+    expect(other).not.toContain("already in progress");
+    setLocale("vi", null);
+    expect(describeApplicationError(apiError(409, "a deploy is in progress"))).toContain(
+      "đang có đợt triển khai chạy",
+    );
+    expect(describeApplicationError(apiError(409, "close the open previews first"))).toContain(
+      "đóng các bản xem trước",
+    );
+    expect(
+      describeApplicationError(apiError(409, "name already exists in the target environment")),
+    ).toContain("cùng tên trong môi trường đích");
   });
 
   it("classifies on raw status, not on translated text", () => {
@@ -189,6 +267,80 @@ describe("locale-independent display helpers", () => {
     expect(durationText(deployment)).toBe("2m5s");
     setLocale("vi", null);
     expect(durationText(deployment)).toBe("2m5s");
+  });
+});
+
+describe("native textbox names follow the locale", () => {
+  it("exposes localized names on the real inputs in both locales", async () => {
+    const storage = mount(StorageEditor, {
+      props: {
+        modelValue: [{ name: "uploads", host_path: "", container_path: "/app/public/uploads" }],
+      },
+      global: { plugins: [i18n] },
+    });
+    const names = () =>
+      storage.findAll("input").map((input) => input.attributes("aria-label"));
+    expect(names()).toEqual(["Volume name", "Host path on the node (optional)", "Container path"]);
+    setLocale("vi", null);
+    await storage.vm.$nextTick();
+    expect(names()).toEqual([
+      "Tên volume",
+      "Đường dẫn host trên node (tùy chọn)",
+      "Đường dẫn container",
+    ]);
+    storage.unmount();
+  });
+
+  it("exposes the localized domain name on the real input in both locales", async () => {
+    setActivePinia(createPinia());
+    const Harness = defineComponent({
+      setup() {
+        return () =>
+          h(ApplicationDomainPanel, {
+            application: { id: "app-1", base_domain: "app.example.com" },
+          });
+      },
+    });
+    const Root = defineComponent({
+      render: () => h(NMessageProvider, null, { default: () => h(Harness) }),
+    });
+    const panel = mount(Root, { global: { plugins: [i18n] } });
+    expect(panel.find("input").attributes("aria-label")).toBe("Application base domain");
+    setLocale("vi", null);
+    await panel.vm.$nextTick();
+    expect(panel.find("input").attributes("aria-label")).toBe("Tên miền cơ sở của ứng dụng");
+    panel.unmount();
+  });
+});
+
+describe("library pluralization", () => {
+  it("selects 0/1/many forms through the installed compiler in both locales", () => {
+    const dropped = "applications.wizard.droppedRows";
+    expect(String(i18n.global.t(dropped, { count: 0 }, 0))).toBe(
+      "0 variable rows without a name will be ignored on create.",
+    );
+    expect(String(i18n.global.t(dropped, { count: 1 }, 1))).toBe(
+      "1 variable row without a name will be ignored on create.",
+    );
+    expect(String(i18n.global.t(dropped, { count: 5 }, 5))).toBe(
+      "5 variable rows without a name will be ignored on create.",
+    );
+    const review = "applications.wizard.reviewDropped";
+    expect(String(i18n.global.t(review, { count: 1 }, 1))).toBe(
+      "1 nameless variable row will be ignored on create.",
+    );
+    expect(String(i18n.global.t(review, { count: 2 }, 2))).toBe(
+      "2 nameless variable rows will be ignored on create.",
+    );
+    setLocale("vi", null);
+    for (const count of [0, 1, 5]) {
+      expect(String(i18n.global.t(dropped, { count }, count))).toBe(
+        `${count} biến không tên sẽ bị bỏ qua khi tạo.`,
+      );
+      expect(String(i18n.global.t(review, { count }, count))).toBe(
+        `${count} biến không tên sẽ bị bỏ qua khi tạo.`,
+      );
+    }
   });
 });
 

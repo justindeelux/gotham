@@ -806,26 +806,29 @@ async function main() {
         "channel generic strips",
       );
       assert(
-        previews.module.describePreviewError(prefixed("deploy")) === "boom",
-        "preview generic strips",
+        previews.module.describePreviewError(prefixed("deploy")) ===
+          "Request failed boom",
+        "preview generic keeps the summary with the stripped raw",
       );
       assert(
-        providers.module.describeProviderError(prefixed("providers")) === "boom",
-        "provider generic strips",
+        providers.module.describeProviderError(prefixed("providers")) ===
+          "Request failed boom",
+        "provider generic keeps the summary with the stripped raw",
       );
       assert(
         templates.module.describeTemplateError(prefixed("templates")) === "boom",
         "template generic strips",
       );
       assert(
-        applications.module.describeApplicationError(prefixed("deploy")) === "boom",
-        "application generic strips",
+        applications.module.describeApplicationError(prefixed("deploy")) ===
+          "Request failed boom",
+        "application generic keeps the summary with the stripped raw",
       );
       assert(
         applications.module.describeApplicationError(
           { message: "config: key X missing", status: 500 },
-        ) === "config: key X missing",
-        "ordinary words still pass through",
+        ) === "Request failed config: key X missing",
+        "ordinary words still pass through under the summary",
       );
     } finally {
       for (const loaded of [

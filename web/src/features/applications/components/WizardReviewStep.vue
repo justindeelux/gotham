@@ -10,11 +10,15 @@ const { form } = wizard;
 
 const { t } = useI18n();
 
-/** reviewDroppedText keeps the 1/many grammar in the current locale. */
+/** reviewDroppedText renders the 1/many grammar through library pluralization. */
 const reviewDroppedText = computed<string>(() =>
-  wizard.droppedEnvRows.value === 1
-    ? String(t("applications.wizard.reviewDroppedOne", { count: wizard.droppedEnvRows.value }))
-    : String(t("applications.wizard.reviewDroppedOther", { count: wizard.droppedEnvRows.value })),
+  String(
+    t(
+      "applications.wizard.reviewDropped",
+      { count: wizard.droppedEnvRows.value },
+      wizard.droppedEnvRows.value,
+    ),
+  ),
 );
 
 /** envVolumesText renders the raw counts; numbers are locale-independent. */

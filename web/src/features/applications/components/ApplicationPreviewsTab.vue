@@ -2,7 +2,7 @@
 import { NAlert, NButton, NCard, NDataTable, NEmpty, NSpace, NTag, NText } from "naive-ui";
 import type { DataTableColumns } from "naive-ui";
 import { computed, h } from "vue";
-import { useI18n } from "vue-i18n";
+import { useI18n, I18nT } from "vue-i18n";
 
 import type { Preview } from "@/features/applications/api/previews";
 import { previewStateTagType, previewURL } from "@/features/applications/api/previews";
@@ -144,9 +144,9 @@ function previewRowKey(row: Preview): string {
       >
         <template #extra>
           <NText depth="3">
-            {{ t("applications.previewsTab.emptyStart") }}
-            <span class="mono">{{ props.branch || t("applications.previewsTab.emptyBranchFallback") }}</span>,
-            {{ t("applications.previewsTab.emptyEnd") }}
+            <i18n-t keypath="applications.previewsTab.emptyHint" tag="span">
+              <template #branch><span class="mono">{{ props.branch || t("applications.previewsTab.emptyBranchFallback") }}</span></template>
+            </i18n-t>
           </NText>
         </template>
       </NEmpty>

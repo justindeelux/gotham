@@ -493,6 +493,36 @@ export async function startApplication(appId: string): Promise<Deployment> {
 export type ApplicationControlAction = "stop" | "start";
 
 /**
+ * withRaw pairs a curated summary with its retained raw diagnostic. Unknown
+ * failures require a localized summary with useful plain-text detail (plan
+ * §3): the summary is translated, the diagnostic passes through byte-identical
+ * (still redacted upstream), and an empty diagnostic renders the summary alone.
+ */
+function withRaw(summary: string, raw: string): string {
+  return raw ? `${summary} ${raw}` : summary;
+}
+
+/** conflictSummary maps a raw 409 refusal onto its distinct curated summary. */
+function conflictSummary(raw: string): string {
+  const t = i18n.global.t.bind(i18n.global);
+  if (raw === "") {
+    // No detail to retain: keep the long-standing in-flight fallback copy.
+    return String(t("applications.errors.conflictDeploy"));
+  }
+  if (raw.includes("a deploy is in progress")) {
+    return String(t("applications.errors.conflictDeploy"));
+  }
+  if (raw.includes("close the open previews first")) {
+    return String(t("applications.errors.previewsOpen"));
+  }
+  if (raw.includes("in the target environment")) {
+    return String(t("applications.errors.nameConflict"));
+  }
+  // Any other refusal keeps a generic conflict summary, never the in-flight hint.
+  return String(t("applications.errors.conflict"));
+}
+
+/**
  * describeApplicationError maps a thrown error to a user-facing message. The
  * mapping mirrors `writeServiceError` in `internal/deploy/routes.go`: 404 is
  * a missing (or foreign) application, 409 an in-flight deployment, 502 an
@@ -515,9 +545,9 @@ export function describeApplicationError(
       return String(t("applications.errors.sessionExpired"));
     }
     if (error.status === 400) {
-      return (
-        stripErrorPrefix(error.message) ||
-        String(t("applications.errors.invalidRequest"))
+      return withRaw(
+        String(t("applications.errors.invalidRequest")),
+        stripErrorPrefix(error.message),
       );
     }
     if (error.status === 404) {
@@ -533,26 +563,28 @@ export function describeApplicationError(
       // The backend names the refusal exactly (`a deploy is in progress`
       // while one runs, `close the open previews first` for a base
       // application with open previews, or the name-collision text on a
-      // move), so the message passes through for the move/server-change
-      // settings to render inline.
-      return (
-        conflictDetail(stripErrorPrefix(error.message)) ||
-        String(t("applications.errors.conflictDeploy"))
-      );
+      // move), so each maps to its own curated summary with the raw detail
+      // retained for the move/server-change settings to render inline.
+      // Classification reads the raw English refusal, never display text.
+      const raw = stripErrorPrefix(error.message);
+      return withRaw(conflictSummary(raw), raw === "" ? "" : conflictDetail(raw));
     }
     if (error.status === 502) {
-      return String(t("applications.errors.agentUnreachable"));
+      return withRaw(
+        String(t("applications.errors.agentUnreachable")),
+        stripErrorPrefix(error.message),
+      );
     }
     if (error.status === 503) {
       return String(t("applications.errors.appsDisabled"));
     }
-    return (
-      stripErrorPrefix(error.message) ||
-      String(t("common.errors.requestFailed"))
+    return withRaw(
+      String(t("common.errors.requestFailed")),
+      stripErrorPrefix(error.message),
     );
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || unexpected();
+    return withRaw(unexpected(), stripErrorPrefix(error.message));
   }
   return unexpected();
 }

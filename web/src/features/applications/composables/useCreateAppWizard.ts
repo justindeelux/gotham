@@ -229,7 +229,7 @@ export function useCreateAppWizard(
 
   const repoOptions = computed<Array<{ label: string; value: string }>>(() =>
     providersStore.reposOf(form.providerId).map((repo) => ({
-      label: `${repo.full_name}${repo.private ? " (private)" : ""}`,
+      label: `${repo.full_name}${repo.private ? tr("applications.wizard.privateSuffix") : ""}`,
       value: repo.full_name,
     })),
   );

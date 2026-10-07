@@ -1,16 +1,22 @@
 /**
  * Register password strength, following docs/design/login.html. Shared by
  * RegisterPage and the PasswordStrengthMeter component so the meter, the
- * label, and the submit validation agree on one definition.
+ * label, and the submit validation agree on one definition. Labels resolve
+ * from the auth feature catalog for the given locale (callers pass the
+ * active locale); the util itself stays dependency-free so unit tests and
+ * build scripts can import it without the vue-i18n runtime.
  */
+import type { AuthMessages } from "@/features/auth/locales/en";
+import enCatalog from "@/features/auth/locales/en";
+import viCatalog from "@/features/auth/locales/vi";
 
-export const passwordStrengthLabels = [
-  "Not entered",
-  "Very weak",
-  "Weak",
-  "Fair",
-  "Strong",
-];
+/** StrengthLocale selects the meter label language. */
+export type StrengthLocale = "en" | "vi";
+
+const strengthTables: Record<StrengthLocale, AuthMessages["strength"]> = {
+  en: enCatalog.strength,
+  vi: viCatalog.strength,
+};
 
 /** countCharClasses counts the character classes present (lower, upper, digit, symbol). */
 export function countCharClasses(value: string): number {
@@ -56,9 +62,11 @@ export function strengthOf(password: string): number {
   return password ? Math.max(1, scorePassword(password)) : 0;
 }
 
-/** strengthLabelOf names a 0-4 meter score. */
-export function strengthLabelOf(score: number): string {
-  return passwordStrengthLabels[score] ?? passwordStrengthLabels[0];
+/** strengthLabelOf names a 0-4 meter score in the given locale. */
+export function strengthLabelOf(score: number, locale: StrengthLocale = "en"): string {
+  const table = strengthTables[locale] ?? strengthTables.en;
+  const level = Math.min(Math.max(Math.trunc(score), 0), 4) as 0 | 1 | 2 | 3 | 4;
+  return table[`level${level}`] ?? table.level0;
 }
 
 /** strengthKindOf picks the meter bar class for a 0-4 score. */

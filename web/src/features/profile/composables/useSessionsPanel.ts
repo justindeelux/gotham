@@ -1,5 +1,6 @@
 import { useMessage } from "naive-ui";
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
 import { useAuthStore } from "@/features/auth";
@@ -11,9 +12,11 @@ import {
 import { profileMessages } from "@/features/profile/schemas/profile";
 import type { AuthSession } from "@/features/profile/schemas/sessions";
 
-// Error convention (shared with the profile forms): failures render in the
-// NAlert above the panel, never replacing the list. A 404 on revoke means
-// the session is already gone, so it refreshes silently instead of erroring.
+// Error convention (shared with the profile forms): failures keep a message
+// key and render in the NAlert above the panel through a computed, never
+// replacing the list, so a language switch refreshes the banner reactively.
+// A 404 on revoke means the session is already gone, so it refreshes
+// silently instead of erroring.
 
 /**
  * useSessionsPanel holds the active-sessions panel state. Created per panel
@@ -21,6 +24,7 @@ import type { AuthSession } from "@/features/profile/schemas/sessions";
  * and never shows a stale list.
  */
 export function useSessionsPanel() {
+  const { t } = useI18n();
   const authStore = useAuthStore();
   const message = useMessage();
   const router = useRouter();
@@ -28,7 +32,11 @@ export function useSessionsPanel() {
   const sessions = ref<AuthSession[]>([]);
   const loading = ref(false);
   const loaded = ref(false);
-  const errorMessage = ref("");
+  /** errorKey is the banner message key; the display text renders via t. */
+  const errorKey = ref<string | null>(null);
+  const errorMessage = computed<string>(() =>
+    errorKey.value === null ? "" : t(errorKey.value),
+  );
   const revokingId = ref<string | null>(null);
   const revokingOthers = ref(false);
   // needsReauth marks the 409 path: the token predates session management,
@@ -48,7 +56,7 @@ export function useSessionsPanel() {
   async function load(): Promise<void> {
     const seq = ++listSeq;
     loading.value = true;
-    errorMessage.value = "";
+    errorKey.value = null;
     try {
       const list = await listSessions();
       if (seq !== listSeq) {
@@ -60,7 +68,7 @@ export function useSessionsPanel() {
       if (seq !== listSeq) {
         return;
       }
-      errorMessage.value = profileMessages.sessionsLoadFailed;
+      errorKey.value = profileMessages.sessionsLoadFailed;
     } finally {
       if (seq === listSeq) {
         loading.value = false;
@@ -119,7 +127,7 @@ export function useSessionsPanel() {
       return;
     }
     revokingId.value = session.id;
-    errorMessage.value = "";
+    errorKey.value = null;
     const seq = ++listSeq;
     try {
       await revokeSession(session.id);
@@ -129,19 +137,19 @@ export function useSessionsPanel() {
         await refreshList(seq);
         return;
       }
-      errorMessage.value = profileMessages.sessionEndFailed;
+      errorKey.value = profileMessages.sessionEndFailed;
       return;
     }
     revokingId.value = null;
     if (session.current) {
-      message.success(profileMessages.sessionsSignedOutHere);
+      message.success(t("profile.sessions.signedOutHere"));
       await signOutHere();
       return;
     }
-    message.success(profileMessages.sessionSignedOut);
+    message.success(t("profile.sessions.sessionSignedOut"));
     if (!(await refreshList(seq))) {
       sessions.value = sessions.value.filter((row) => row.id !== session.id);
-      errorMessage.value = profileMessages.sessionsListStale;
+      errorKey.value = profileMessages.sessionsListStale;
     }
   }
 
@@ -155,7 +163,7 @@ export function useSessionsPanel() {
       return;
     }
     revokingOthers.value = true;
-    errorMessage.value = "";
+    errorKey.value = null;
     const seq = ++listSeq;
     try {
       await revokeOtherSessions();
@@ -165,14 +173,14 @@ export function useSessionsPanel() {
         needsReauth.value = true;
         return;
       }
-      errorMessage.value = profileMessages.revokeOthersFailed;
+      errorKey.value = profileMessages.revokeOthersFailed;
       return;
     }
     revokingOthers.value = false;
-    message.success(profileMessages.sessionsSignedOut);
+    message.success(t("profile.sessions.signedOut"));
     if (!(await refreshList(seq))) {
       sessions.value = sessions.value.filter((row) => row.current);
-      errorMessage.value = profileMessages.sessionsListStale;
+      errorKey.value = profileMessages.sessionsListStale;
     }
   }
 

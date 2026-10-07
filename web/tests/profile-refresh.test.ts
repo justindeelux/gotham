@@ -27,6 +27,12 @@ import {
 } from "@/shared/api/token";
 import ProfilePage from "@/features/profile/pages/ProfilePage.vue";
 import { useAuthStore } from "@/features/auth";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "@/shared/i18n";
 import type { User } from "@/shared/api/token";
 
 const mockGet = vi.mocked(http.get);
@@ -73,7 +79,7 @@ async function mountPage(): Promise<VueWrapper> {
   await router.isReady();
   const wrapper = mount(shell(), {
     attachTo: globalThis.document.body,
-    global: { plugins: [router], stubs: { transition: false } },
+    global: { plugins: [router, i18n], stubs: { transition: false } },
   });
   await flushPromises();
   await nextTick();
@@ -95,6 +101,9 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
   vi.restoreAllMocks();
   globalThis.document.body.innerHTML = "";
 });

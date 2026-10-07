@@ -5,28 +5,28 @@ import { confirmPasswordSchema, registerPasswordSchema } from "@/features/auth";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 /**
- * Profile schemas (JUS-27). One message catalog seeds every string rendered
- * by the profile forms; the new/confirm password rules are reused from the
- * auth schemas (same policy message as register, per the API contract) and
- * are not duplicated here.
+ * Profile schemas (JUS-27). Messages are namespaced i18n keys resolved at
+ * validation/display time, so a language switch refreshes visible feedback;
+ * the English catalog values stay byte-identical to the previous strings.
+ * The new/confirm password rules are reused from the auth schemas (same
+ * policy message as register, per the API contract) and are not duplicated
+ * here. Session notice keys double as the useSessionsPanel banner state.
  */
 export const profileMessages = {
-  displayNameLength: "Display name must be 1-64 characters",
-  currentPasswordRequired: "Current password is required",
-  sessionsLoadFailed: "Could not load sessions. Try again.",
-  sessionEndFailed: "Could not sign out that session. Try again.",
-  revokeOthersFailed: "Could not sign out the other sessions. Try again.",
-  sessionsListStale: "Signed out, but the session list may be out of date.",
-  sessionsSignedOut: "Other devices were signed out.",
-  sessionSignedOut: "Session signed out.",
-  sessionsSignedOutHere: "Signed out on this device.",
-  needsReauth:
-    "Your sign-in predates session management. Sign in again to manage other sessions.",
-  sessionsIntro:
-    "Every device signed in to your account. Ending a session signs that device out; ending this device signs you out here.",
-  sessionsEmpty: "No active sessions.",
-  actionRetry: "Retry",
-  signInAgain: "Sign in again",
+  displayNameLength: "profile.validation.displayNameLength",
+  currentPasswordRequired: "profile.validation.currentPasswordRequired",
+  sessionsLoadFailed: "profile.sessions.loadFailed",
+  sessionEndFailed: "profile.sessions.endFailed",
+  revokeOthersFailed: "profile.sessions.revokeOthersFailed",
+  sessionsListStale: "profile.sessions.listStale",
+  sessionsSignedOut: "profile.sessions.signedOut",
+  sessionSignedOut: "profile.sessions.sessionSignedOut",
+  sessionsSignedOutHere: "profile.sessions.signedOutHere",
+  needsReauth: "profile.sessions.needsReauth",
+  sessionsIntro: "profile.sessions.intro",
+  sessionsEmpty: "profile.sessions.empty",
+  actionRetry: "profile.sessions.retry",
+  signInAgain: "profile.sessions.signInAgain",
 } as const;
 
 /**

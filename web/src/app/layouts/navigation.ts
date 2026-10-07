@@ -4,47 +4,57 @@ import type { IconName } from "@/shared/ui/GothamIcon.vue";
 export interface NavItem {
   key: string;
   label: string;
+  /** labelKey renders the item label in the active locale (stable key). */
+  labelKey: string;
   icon: IconName;
   to?: string;
 }
 
 export interface NavSection {
   label: string;
+  /** labelKey renders the section label in the active locale. */
+  labelKey: string;
   items: NavItem[];
 }
 
 // Group order and English labels follow the docs/design shell renderer
 // (docs/design/assets/gotham-ui.js SECTIONS). Entries with no route are inert
 // and say so — every backend phase has shipped, so no phase number is claimed.
+// `label` keeps the English text for source checks; `labelKey` is what the
+// sidebar renders, so a language switch updates labels without remounting.
 export const navSections: NavSection[] = [
   {
     label: "Operations",
+    labelKey: "nav.sections.operations",
     items: [
-      { key: "dashboard", label: "Dashboard", icon: "grid", to: "dashboard" },
-      { key: "projects", label: "Projects", icon: "layers", to: "projects" },
-      { key: "files", label: "File manager", icon: "folder" },
-      { key: "templates", label: "Template library", icon: "rocket", to: "templates" },
-      { key: "servers", label: "Servers", icon: "server", to: "servers" },
-      { key: "domains", label: "Domains & SSL", icon: "globe", to: "domains" },
+      { key: "dashboard", label: "Dashboard", labelKey: "nav.items.dashboard", icon: "grid", to: "dashboard" },
+      { key: "projects", label: "Projects", labelKey: "nav.items.projects", icon: "layers", to: "projects" },
+      { key: "files", label: "File manager", labelKey: "nav.items.files", icon: "folder" },
+      { key: "templates", label: "Template library", labelKey: "nav.items.templates", icon: "rocket", to: "templates" },
+      { key: "servers", label: "Servers", labelKey: "nav.items.servers", icon: "server", to: "servers" },
+      { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains" },
     ],
   },
   {
     label: "Team",
+    labelKey: "nav.sections.team",
     items: [
-      { key: "teams", label: "Members & roles", icon: "users", to: "teams" },
+      { key: "teams", label: "Members & roles", labelKey: "nav.items.teams", icon: "users", to: "teams" },
       {
         key: "notifications",
         label: "Notification channels",
+        labelKey: "nav.items.notifications",
         icon: "bell",
         to: "notifications",
       },
-      { key: "tokens", label: "API tokens", icon: "key" },
+      { key: "tokens", label: "API tokens", labelKey: "nav.items.tokens", icon: "key" },
     ],
   },
   {
     label: "System",
+    labelKey: "nav.sections.system",
     items: [
-      { key: "updates", label: "Updates & settings", icon: "gear" },
+      { key: "updates", label: "Updates & settings", labelKey: "nav.items.updates", icon: "gear" },
     ],
   },
 ];

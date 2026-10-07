@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { NButton } from "naive-ui";
+import { useI18n } from "vue-i18n";
 
 interface Props {
   mode: "signin" | "signup";
 }
 
 defineProps<Props>();
+
+const { t } = useI18n();
 </script>
 
 <template>
@@ -26,8 +29,8 @@ defineProps<Props>();
         />
       </svg>
     </template>
-    <template v-if="mode === 'signup'"> Sign up with GitHub </template>
-    <template v-else> Sign in with GitHub </template>
+    <template v-if="mode === 'signup'">{{ t("auth.oauth.githubSignup") }}</template>
+    <template v-else>{{ t("auth.oauth.githubSignin") }}</template>
   </NButton>
 </template>
 

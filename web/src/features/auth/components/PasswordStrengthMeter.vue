@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import {
   strengthKindOf,
   strengthLabelOf,
 } from "@/features/auth/utils/passwordStrength";
+import type { StrengthLocale } from "@/features/auth/utils/passwordStrength";
 
 interface Props {
   /** Meter score 0-4 (0 renders the empty meter). */
@@ -12,9 +14,13 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+const { locale } = useI18n();
 
 const kind = computed<string>(() => strengthKindOf(props.score));
-const label = computed<string>(() => strengthLabelOf(props.score));
+/** label renders the meter score in the active locale, reactively. */
+const label = computed<string>(() =>
+  strengthLabelOf(props.score, locale.value as StrengthLocale),
+);
 </script>
 
 <template>

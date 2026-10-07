@@ -4,6 +4,9 @@ import { computed, ref } from "vue";
 import type { ApiError } from "@/shared/api/http";
 import { http } from "@/shared/api/http";
 import { stripErrorPrefix } from "@/features/servers";
+import { activeLocale } from "@/shared/i18n/locale";
+import enCatalog from "@/shared/i18n/locales/en";
+import viCatalog from "@/shared/i18n/locales/vi";
 import {
   clearSession as clearStoredSession,
   getSession,
@@ -283,11 +286,19 @@ export function isUnauthorized(error: unknown): boolean {
   return getStatus(error) === 401;
 }
 
-/** describeAuthError maps a thrown API error to a user-facing message. */
+/**
+ * describeAuthError maps a thrown API error to a user-facing message in the
+ * active locale at call time (so a computed banner refreshes on language
+ * switch). Known rate-limit refusals and the empty fallback resolve to
+ * curated summaries; any other failure gets a localized summary with the
+ * useful raw diagnostic retained as plain text (never translated, never
+ * used for classification), so status checks and `stripErrorPrefix`
+ * semantics stay language-independent.
+ */
 export function describeAuthError(error: unknown): string {
   const status = getStatus(error);
   if (status === 429) {
-    return "Too many attempts, please wait";
+    return commonErrors().rateLimited;
   }
 
   const message =
@@ -295,9 +306,14 @@ export function describeAuthError(error: unknown): string {
       ? (error as Partial<ApiError>).message
       : undefined;
   if (typeof message === "string" && message.trim() !== "") {
-    return stripErrorPrefix(message);
+    return `${commonErrors().requestFailed}: ${stripErrorPrefix(message)}`;
   }
-  return "Something went wrong. Please try again.";
+  return commonErrors().unexpected;
+}
+
+/** commonErrors reads the shared error summaries for the active locale. */
+function commonErrors(): { rateLimited: string; unexpected: string; requestFailed: string } {
+  return (activeLocale.value === "vi" ? viCatalog : enCatalog).common.errors;
 }
 
 /** getStatus extracts the HTTP status from a thrown ApiError, if present. */

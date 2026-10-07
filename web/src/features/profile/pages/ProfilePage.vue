@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NSpace } from "naive-ui";
 import { onMounted } from "vue";
+import { useI18n } from "vue-i18n";
 
 import { useAuthStore } from "@/features/auth";
 import ChangePasswordForm from "@/features/profile/components/ChangePasswordForm.vue";
@@ -8,6 +9,7 @@ import DisplayNameForm from "@/features/profile/components/DisplayNameForm.vue";
 import ProfileIdentityCard from "@/features/profile/components/ProfileIdentityCard.vue";
 import SessionsPanel from "@/features/profile/components/SessionsPanel.vue";
 
+const { t } = useI18n();
 const authStore = useAuthStore();
 
 /**
@@ -35,11 +37,10 @@ onMounted(() => {
   <div class="profile-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Settings · Account</p>
-        <h1>Profile</h1>
+        <p class="eyebrow">{{ t("profile.page.eyebrow") }}</p>
+        <h1>{{ t("profile.page.title") }}</h1>
         <p class="page-desc">
-          Your account facts, the name shown in the sidebar, and your
-          password. Your email address cannot be changed here.
+          {{ t("profile.page.description") }}
         </p>
       </div>
     </div>

@@ -1,8 +1,13 @@
 <script setup lang="ts">
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { RouterView } from "vue-router";
 
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import type { IconName } from "@/shared/ui/GothamIcon.vue";
+import LanguageSelect from "@/shared/ui/LanguageSelect.vue";
+
+const { t } = useI18n();
 
 interface ValueProp {
   icon: IconName;
@@ -10,30 +15,32 @@ interface ValueProp {
   body: string;
 }
 
-// English copy rewritten from the Vietnamese mockup (docs/design/login.html,
-// the UI source of truth). Form copy stays with UI-2; only the shell lives here.
-const valueProps: ValueProp[] = [
+// Value props rewritten from the Vietnamese mockup (docs/design/login.html,
+// the UI source of truth). Copy renders through the auth catalog so a
+// language switch updates the shell without navigating; form copy stays with
+// UI-2 pages, only the shell lives here.
+const valueProps = computed<ValueProp[]>(() => [
   {
     icon: "server",
-    title: "Self-hosted on a VPS with 1 GB of RAM",
-    body: "The control plane is a single Go binary with PostgreSQL and Redis; 1 vCPU and 1 GB of RAM is enough to start.",
+    title: t("auth.shell.selfHostedTitle"),
+    body: t("auth.shell.selfHostedBody"),
   },
   {
     icon: "shield",
-    title: "Control channel over server-authenticated gRPC TLS",
-    body: "The agent drives the Docker Engine on each node; the control plane and the agent speak versioned protobuf over :9442, with certificates from the internal CA.",
+    title: t("auth.shell.tlsTitle"),
+    body: t("auth.shell.tlsBody"),
   },
   {
     icon: "refresh",
-    title: "Signed Ed25519 updates with rollback",
-    body: "The control plane and the agent self-update from GitHub Releases, verifying the signature before swapping the binary and keeping the old one for rollback.",
+    title: t("auth.shell.updatesTitle"),
+    body: t("auth.shell.updatesBody"),
   },
   {
     icon: "rocket",
-    title: "4 build engines plus one-click templates",
-    body: "Dockerfile, Railpack, Buildpacks, and static; the template library sets up WordPress, Nextcloud, n8n, or Uptime Kuma in one click.",
+    title: t("auth.shell.enginesTitle"),
+    body: t("auth.shell.enginesBody"),
   },
-];
+]);
 </script>
 
 <template>
@@ -58,16 +65,15 @@ const valueProps: ValueProp[] = [
         </div>
 
         <div class="stack gap-4">
-          <p class="eyebrow">Self-hosted PaaS</p>
-          <h1>The control plane for your own infrastructure</h1>
+          <p class="eyebrow">{{ t("auth.shell.eyebrow") }}</p>
+          <h1>{{ t("auth.shell.headline") }}</h1>
           <p class="lede">
-            One Go binary runs the control plane, a small agent on every node.
-            No outside services, no layer whose source you cannot read.
+            {{ t("auth.shell.lede") }}
           </p>
         </div>
 
         <ul class="stack gap-4 auth-values" data-od-id="auth-values">
-          <li v-for="prop in valueProps" :key="prop.title" class="auth-value">
+          <li v-for="prop in valueProps" :key="prop.icon" class="auth-value">
             <GothamIcon :name="prop.icon" />
             <div>
               <p class="fg-2">{{ prop.title }}</p>
@@ -79,12 +85,15 @@ const valueProps: ValueProp[] = [
 
       <div class="stack gap-2" data-od-id="auth-aside-foot">
         <p class="small muted">
-          Self-hosted control plane · your infrastructure, your data.
+          {{ t("auth.shell.footnote") }}
         </p>
       </div>
     </aside>
 
     <main class="auth-main">
+      <div class="auth-lang">
+        <LanguageSelect />
+      </div>
       <RouterView />
     </main>
   </div>
@@ -115,6 +124,13 @@ const valueProps: ValueProp[] = [
   place-items: center;
   padding: var(--space-8) var(--space-6);
   background: var(--bg);
+  position: relative;
+}
+
+.auth-lang {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
 }
 
 .auth-values {

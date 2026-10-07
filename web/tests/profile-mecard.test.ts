@@ -10,6 +10,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import MeCard from "../src/app/layouts/MeCard.vue";
 import { useAuthStore } from "../src/features/auth";
 import { useTeamsStore } from "../src/features/teams";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "../src/shared/i18n";
 
 const stub = { template: "<div />" };
 
@@ -43,7 +49,7 @@ async function mountCard(user: Record<string, unknown>) {
   await router.isReady();
   const wrapper = mount(MeCard, {
     attachTo: globalThis.document.body,
-    global: { plugins: [router], stubs: { transition: false } },
+    global: { plugins: [router, i18n], stubs: { transition: false } },
   });
   await flushPromises();
   await nextTick();
@@ -64,6 +70,9 @@ async function openMenu(
 }
 
 beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
   globalThis.document.body.innerHTML = "";
   vi.restoreAllMocks();
 });

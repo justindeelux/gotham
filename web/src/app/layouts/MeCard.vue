@@ -2,21 +2,25 @@
 import { NAvatar, NButton, NDropdown, NSpace, NText } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
 import { computed, onMounted, onUnmounted, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
 import { useAuthStore } from "@/features/auth";
 import { useTeamsStore } from "@/features/teams";
-import { meRoleLabel, roleReadRetryMs, shouldRetryRoleRead } from "@/features/teams";
+import { roleReadRetryMs, shouldRetryRoleRead } from "@/features/teams";
+import type { TeamRole } from "@/features/teams";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
+const { t } = useI18n();
 const authStore = useAuthStore();
 const teamsStore = useTeamsStore();
 const router = useRouter();
 
-const accountOptions: DropdownOption[] = [
-  { label: "Profile", key: "profile" },
-  { label: "Sign out", key: "sign-out" },
-];
+/** accountOptions keeps stable keys; labels render in the active locale. */
+const accountOptions = computed<DropdownOption[]>(() => [
+  { label: t("shell.profile"), key: "profile" },
+  { label: t("shell.signOut"), key: "sign-out" },
+]);
 
 /** displayName is the footer name: display name, falling back to the email. */
 const displayName = computed<string>(() => {
@@ -24,7 +28,7 @@ const displayName = computed<string>(() => {
   if (name) {
     return name;
   }
-  return authStore.user?.email ?? "Signed in";
+  return authStore.user?.email ?? t("shell.signedIn");
 });
 
 const userInitial = computed<string>(() =>
@@ -32,10 +36,27 @@ const userInitial = computed<string>(() =>
 );
 
 /**
- * roleText derives the footer label from the caller's real role in the
- * active team (same wording as the Teams page); neutral text while loading.
+ * roleText derives the footer label from the caller's raw team role through
+ * the shared common role catalog (reactive in the active locale). The
+ * teams-owned meRoleLabel helper stays untouched (I18N-8 owns it); an
+ * unknown future role falls back to the raw value, never a guessed label.
  */
-const roleText = computed<string>(() => meRoleLabel(teamsStore.activeTeam?.role ?? null));
+const roleText = computed<string>(() => {
+  const role: TeamRole | null = teamsStore.activeTeam?.role ?? null;
+  if (role === null) {
+    return t("common.roles.member");
+  }
+  if (role === "owner") {
+    return t("common.roles.owner");
+  }
+  if (role === "admin") {
+    return t("common.roles.admin");
+  }
+  if (role === "read_only") {
+    return t("common.roles.readOnly");
+  }
+  return role;
+});
 
 /**
  * loadRole reads the caller's teams for the footer label. A failed read
@@ -115,7 +136,7 @@ async function handleSelect(key: string | number): Promise<void> {
 
 <template>
   <NDropdown trigger="click" :options="accountOptions" @select="handleSelect">
-    <NButton quaternary class="me-card" aria-label="Account">
+    <NButton quaternary class="me-card" :aria-label="t('shell.account')">
       <NSpace align="center" :size="8" :wrap="false" class="me-card-inner">
         <NAvatar round :size="24" :src="authStore.user?.avatar">
           <template v-if="!authStore.user?.avatar">{{ userInitial }}</template>

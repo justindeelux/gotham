@@ -1,14 +1,17 @@
 import type { FormInst, FormRules } from "naive-ui";
 import { useMessage } from "naive-ui";
-import { reactive, ref } from "vue";
+import { computed, onUnmounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
-import { describeAuthError, useAuthStore } from "@/features/auth";
+import { createVisibleValidation, describeAuthError, useAuthStore } from "@/features/auth";
 import { patchDisplayName } from "@/features/profile/api/profile";
 import { displayNameRules } from "@/features/profile/schemas/profile";
+import { onLocaleChange } from "@/shared/i18n";
 
 // Error convention (shared with the auth pages): client-side validation
 // errors render inline on the field via NFormItem; server-side submit
-// failures render once in the NAlert above the form.
+// failures keep the raw error and render once in the NAlert above the form
+// through a computed, so a language switch refreshes the banner reactively.
 interface DisplayNameForm {
   displayName: string;
 }
@@ -20,17 +23,38 @@ interface DisplayNameForm {
  * sidebar follows without a reload.
  */
 export function useDisplayNameForm() {
+  const { t } = useI18n();
   const authStore = useAuthStore();
   const message = useMessage();
 
   const formRef = ref<FormInst | null>(null);
   const submitting = ref(false);
-  const errorMessage = ref("");
+  const rawError = ref<unknown>(null);
+  const errorMessage = computed<string>(() =>
+    rawError.value === null ? "" : describeAuthError(rawError.value),
+  );
   const form = reactive<DisplayNameForm>({
     displayName: authStore.user?.display_name ?? "",
   });
 
   const rules: FormRules = displayNameRules();
+
+  /**
+   * visible tracks paths with currently-shown feedback (input/blur/submit).
+   * A language switch revalidates exactly those paths: already-visible
+   * errors refresh, pristine fields stay clean, and nothing submits or
+   * calls an API. The record clears on success so a cleared form stays
+   * pristine across later switches.
+   */
+  const visible = createVisibleValidation();
+  const trackedRules: FormRules = visible.trackRules(rules);
+  const stopLocaleWatch = onLocaleChange(() => {
+    visible.refreshVisible(formRef);
+  });
+
+  onUnmounted(() => {
+    stopLocaleWatch();
+  });
 
   async function handleSubmit(): Promise<void> {
     // Guard: a click on a submit button plus the native submit (or Enter
@@ -40,7 +64,7 @@ export function useDisplayNameForm() {
       return;
     }
     submitting.value = true;
-    errorMessage.value = "";
+    rawError.value = null;
 
     try {
       await formRef.value?.validate();
@@ -53,13 +77,14 @@ export function useDisplayNameForm() {
       const trimmed = form.displayName.trim();
       const user = await patchDisplayName(trimmed === "" ? null : trimmed);
       authStore.setUser(user);
-      message.success("Display name updated.");
+      visible.reset();
+      message.success(t("profile.displayName.updated"));
     } catch (error) {
-      errorMessage.value = describeAuthError(error);
+      rawError.value = error;
     } finally {
       submitting.value = false;
     }
   }
 
-  return { formRef, submitting, errorMessage, form, rules, handleSubmit };
+  return { formRef, submitting, errorMessage, form, rules: trackedRules, handleSubmit };
 }

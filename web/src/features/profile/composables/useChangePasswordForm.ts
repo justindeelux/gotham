@@ -1,14 +1,17 @@
 import type { FormInst, FormRules } from "naive-ui";
 import { useMessage } from "naive-ui";
-import { computed, reactive, ref } from "vue";
+import { computed, onUnmounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
-import { describeAuthError, strengthOf, useAuthStore } from "@/features/auth";
+import { createVisibleValidation, describeAuthError, strengthOf, useAuthStore } from "@/features/auth";
 import { changePassword } from "@/features/profile/api/profile";
 import { changePasswordRules } from "@/features/profile/schemas/profile";
+import { onLocaleChange } from "@/shared/i18n";
 
 // Error convention (shared with the auth pages): client-side validation
 // errors render inline on the field via NFormItem; server-side submit
-// failures render once in the NAlert above the form.
+// failures keep the raw error and render once in the NAlert above the form
+// through a computed, so a language switch refreshes the banner reactively.
 interface ChangePasswordForm {
   currentPassword: string;
   newPassword: string;
@@ -23,6 +26,7 @@ interface ChangePasswordForm {
  * are cleared.
  */
 export function useChangePasswordForm() {
+  const { t } = useI18n();
   const authStore = useAuthStore();
   const message = useMessage();
 
@@ -36,7 +40,10 @@ export function useChangePasswordForm() {
 
   const formRef = ref<FormInst | null>(null);
   const submitting = ref(false);
-  const errorMessage = ref("");
+  const rawError = ref<unknown>(null);
+  const errorMessage = computed<string>(() =>
+    rawError.value === null ? "" : describeAuthError(rawError.value),
+  );
   const form = reactive<ChangePasswordForm>({
     currentPassword: "",
     newPassword: "",
@@ -48,9 +55,26 @@ export function useChangePasswordForm() {
   // The confirm rule reads the live new password through a reader (not a
   // snapshot), so retyping the password revalidates the confirmation. Built
   // reactively from hasPassword so a late fetchMe flips the current field.
+  // Validators are wrapped to track visible feedback (see below), so a
+  // language switch refreshes exactly the paths already showing errors.
+  const visible = createVisibleValidation();
   const rules = computed<FormRules>(() =>
-    changePasswordRules(hasPassword.value, () => form.newPassword),
+    visible.trackRules(changePasswordRules(hasPassword.value, () => form.newPassword)),
   );
+
+  /**
+   * A language switch revalidates exactly the paths with visible feedback
+   * (input/blur/submit): already-visible errors refresh, pristine fields
+   * stay clean, and nothing submits or calls an API. The record clears on
+   * success so the cleared form stays pristine across later switches.
+   */
+  const stopLocaleWatch = onLocaleChange(() => {
+    visible.refreshVisible(formRef);
+  });
+
+  onUnmounted(() => {
+    stopLocaleWatch();
+  });
 
   async function handleSubmit(): Promise<void> {
     // Guard: a click on a submit button plus the native submit (or Enter
@@ -60,7 +84,7 @@ export function useChangePasswordForm() {
       return;
     }
     submitting.value = true;
-    errorMessage.value = "";
+    rawError.value = null;
 
     try {
       await formRef.value?.validate();
@@ -78,9 +102,10 @@ export function useChangePasswordForm() {
       form.currentPassword = "";
       form.newPassword = "";
       form.confirmPassword = "";
-      message.success("Password changed. Other devices were signed out.");
+      visible.reset();
+      message.success(t("profile.password.changed"));
     } catch (error) {
-      errorMessage.value = describeAuthError(error);
+      rawError.value = error;
     } finally {
       submitting.value = false;
     }

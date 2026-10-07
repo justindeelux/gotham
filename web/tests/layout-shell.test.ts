@@ -7,6 +7,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "../src/features/auth/stores/auth";
 import { useServersStore } from "../src/features/servers/stores/servers";
 import type { Server } from "../src/features/servers";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "../src/shared/i18n";
 
 vi.mock("../src/features/version", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/features/version")>();
@@ -83,13 +89,16 @@ async function mountShell(): Promise<ReturnType<typeof mount>> {
   await router.isReady();
   const wrapper = mount(AppLayout, {
     attachTo: globalThis.document.body,
-    global: { plugins: [router], stubs: { transition: false } },
+    global: { plugins: [router, i18n], stubs: { transition: false } },
   });
   await flushPromises();
   return wrapper;
 }
 
 beforeEach(() => {
+  registerDiscoveredCatalogs();
+  resetLocaleState();
+  syncComposerLocale("en");
   globalThis.document.body.innerHTML = "";
   vi.restoreAllMocks();
 });

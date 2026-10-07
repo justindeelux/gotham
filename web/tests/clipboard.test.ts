@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useCopyText } from "@/shared/composables/useCopyText";
+import {
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
 
 /* global window: readonly, document: readonly */
 
@@ -63,6 +69,9 @@ describe("useCopyText", () => {
   const hadExecCommand = "execCommand" in document;
 
   beforeEach(() => {
+    registerDiscoveredCatalogs();
+    resetLocaleState();
+    syncComposerLocale("en");
     mockSuccess.mockClear();
     mockError.mockClear();
     if (!hadClipboard) {
@@ -123,5 +132,28 @@ describe("useCopyText", () => {
       "Connection string copied to clipboard",
     );
     expect(mockError).not.toHaveBeenCalled();
+  });
+
+  it("toasts the shared catalog strings in the current locale", async () => {
+    const execCommand = vi.fn(() => true);
+    (document as unknown as { execCommand: unknown }).execCommand = execCommand;
+    const { copyText } = useCopyText();
+    setLocale("vi", null);
+    try {
+      await copyText("s3cret", "Password");
+      expect(mockSuccess).toHaveBeenCalledWith("Đã sao chép Password");
+      expect(mockError).not.toHaveBeenCalled();
+
+      (document as unknown as { execCommand: unknown }).execCommand = vi.fn(
+        () => {
+          throw new Error("denied");
+        },
+      );
+      await copyText("s3cret", "Password");
+      expect(mockError).toHaveBeenCalledWith("Không thể sao chép password");
+    } finally {
+      resetLocaleState();
+      syncComposerLocale("en");
+    }
   });
 });

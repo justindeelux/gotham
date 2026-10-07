@@ -9,6 +9,7 @@ export default defineConfig({
     "environment-layout.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",
+    "i18n-account-layout.spec.ts",
     "profile-layout.spec.ts",
     "projects-layout.spec.ts",
     "sessions-layout.spec.ts",

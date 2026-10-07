@@ -1,8 +1,13 @@
+<script setup lang="ts">
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
+</script>
+
 <template>
   <p class="auth-footnote">
-    Passwords are hashed with <span class="mono">argon2id</span> · 15-minute
-    JWT access tokens with 30-day rotating refresh tokens · GitHub OAuth
-    via the <span class="mono">OAuthProvider</span> interface.
+    {{ t("auth.footnote.hashPrefix") }} <span class="mono">argon2id</span>
+    {{ t("auth.footnote.tokenMid") }} <span class="mono">OAuthProvider</span>{{ t("auth.footnote.interfaceSuffix") }}
   </p>
 </template>
 

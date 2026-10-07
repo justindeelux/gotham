@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { NAvatar, NCard, NDescriptions, NDescriptionsItem } from "naive-ui";
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import { useAuthStore } from "@/features/auth";
+import { localeTag } from "@/shared/i18n";
 
+const { t } = useI18n();
 const authStore = useAuthStore();
 
 const displayName = computed<string>(() => {
   const name = authStore.user?.display_name?.trim();
-  return name ? name : (authStore.user?.email ?? "Signed in");
+  return name ? name : (authStore.user?.email ?? t("profile.identity.signedIn"));
 });
 
 const userInitial = computed<string>(() =>
@@ -22,10 +25,10 @@ const userInitial = computed<string>(() =>
  */
 const platformRoleLabel = computed<string>(() => {
   const isAdmin = authStore.user?.is_platform_admin ?? authStore.user?.role === "admin";
-  return isAdmin ? "Platform admin" : "Member";
+  return isAdmin ? t("profile.identity.admin") : t("profile.identity.member");
 });
 
-/** memberSince renders created_at as a plain calendar date. */
+/** memberSince renders created_at as a calendar date in the active locale. */
 const memberSince = computed<string>(() => {
   const raw = authStore.user?.created_at;
   if (!raw) {
@@ -35,7 +38,7 @@ const memberSince = computed<string>(() => {
   if (Number.isNaN(date.getTime())) {
     return "—";
   }
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString(localeTag(), {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -44,7 +47,7 @@ const memberSince = computed<string>(() => {
 </script>
 
 <template>
-  <NCard title="Account">
+  <NCard :title="t('profile.identity.title')">
     <div class="identity-row">
       <NAvatar round :size="48" :src="authStore.user?.avatar">
         <template v-if="!authStore.user?.avatar">{{ userInitial }}</template>
@@ -53,8 +56,7 @@ const memberSince = computed<string>(() => {
       <div class="identity-meta">
         <strong class="identity-name">{{ displayName }}</strong>
         <span class="small muted">
-          Your avatar comes from GitHub when you sign in with GitHub,
-          otherwise your initials are shown.
+          {{ t("profile.identity.avatarNote") }}
         </span>
       </div>
     </div>
@@ -65,9 +67,9 @@ const memberSince = computed<string>(() => {
         label-placement="left"
         class="identity-facts"
       >
-        <NDescriptionsItem label="Email">{{ authStore.user?.email }}</NDescriptionsItem>
-        <NDescriptionsItem label="Platform role">{{ platformRoleLabel }}</NDescriptionsItem>
-        <NDescriptionsItem label="Member since">{{ memberSince }}</NDescriptionsItem>
+        <NDescriptionsItem :label="t('profile.identity.email')">{{ authStore.user?.email }}</NDescriptionsItem>
+        <NDescriptionsItem :label="t('profile.identity.platformRole')">{{ platformRoleLabel }}</NDescriptionsItem>
+        <NDescriptionsItem :label="t('profile.identity.memberSince')">{{ memberSince }}</NDescriptionsItem>
       </NDescriptions>
     </div>
   </NCard>

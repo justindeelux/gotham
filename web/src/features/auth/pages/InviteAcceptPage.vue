@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NSpin, NText } from "naive-ui";
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import { acceptInvite, describeTeamError } from "@/features/teams";
+import { stripErrorPrefix } from "@/features/servers";
 
 /**
  * Invite acceptance: the page the one-time link points at.
@@ -11,18 +13,71 @@ import { acceptInvite, describeTeamError } from "@/features/teams";
  * The recipient posts the token from the query string to
  * `POST /v1/invites/accept` (never a URL path) as the signed-in account whose
  * email the invite names. The token is consumed once and is not stored.
+ *
+ * Failure display derives per locale from the retained raw failure object:
+ * the team helper is re-invoked on every evaluation (never a cached
+ * translated string, so I18N-8's locale-aware describer stays compatible),
+ * classification uses only the raw untranslated message, and a failure with
+ * no useful diagnostic renders the single localized fallback.
  */
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
 const token = ref<string>(String(route.query.token ?? ""));
 const accepting = ref(false);
-const error = ref<string | null>(null);
+/** rawFailure retains the original failure; display derives per locale. */
+const rawFailure = ref<unknown>(null);
+/**
+ * knownTeamStatuses are the HTTP statuses describeTeamError curates with
+ * distinct guidance (session/role/removed/conflict/expired/invalid). Only
+ * the raw numeric status and the raw stripped message classify the failure
+ * below — never translated text or helper result strings — so a future
+ * locale-aware team helper stays compatible without double-framing.
+ */
+const knownTeamStatuses = [400, 401, 403, 404, 409, 410];
+/**
+ * error renders the failure for the current locale: known refusal statuses
+ * keep their curated team guidance under the shared summary (even with a
+ * blank server message); failures with no usable diagnostic and no known
+ * status collapse once to the single localized fallback. The team helper
+ * re-invokes on every evaluation, never from a cached translated string.
+ */
+const error = computed<string | null>(() => {
+  if (rawFailure.value === null) {
+    return null;
+  }
+  if (
+    rawFailureMessage(rawFailure.value) === "" &&
+    !knownTeamStatuses.includes(rawFailureStatus(rawFailure.value))
+  ) {
+    return t("common.errors.unexpected");
+  }
+  return `${t("common.errors.requestFailed")}: ${describeTeamError(rawFailure.value)}`;
+});
 const joined = ref("");
+
+/** rawFailureStatus extracts the raw numeric HTTP status, or -1. */
+function rawFailureStatus(failure: unknown): number {
+  if (typeof failure !== "object" || failure === null) {
+    return -1;
+  }
+  const status = (failure as { status?: unknown }).status;
+  return typeof status === "number" ? status : -1;
+}
+
+/** rawFailureMessage extracts the stripped raw message, or "" when unusable. */
+function rawFailureMessage(failure: unknown): string {
+  if (typeof failure !== "object" || failure === null) {
+    return "";
+  }
+  const message = (failure as { message?: unknown }).message;
+  return typeof message === "string" ? stripErrorPrefix(message).trim() : "";
+}
 
 async function handleAccept(): Promise<void> {
   accepting.value = true;
-  error.value = null;
+  rawFailure.value = null;
   try {
     const team = await acceptInvite(token.value);
     joined.value = team.name;
@@ -30,7 +85,7 @@ async function handleAccept(): Promise<void> {
     // reload or a shared URL cannot replay it.
     scrubToken();
   } catch (err) {
-    error.value = describeTeamError(err);
+    rawFailure.value = err;
   } finally {
     accepting.value = false;
   }
@@ -59,25 +114,23 @@ onMounted(() => {
 
 <template>
   <div class="invite-page">
-    <NCard title="Team invite">
+    <NCard :title="t('auth.invite.title')">
       <NSpin :show="accepting">
         <div class="stack">
           <NAlert v-if="joined" type="success" :show-icon="true">
-            You joined {{ joined }}.
+            {{ t("auth.invite.joined", { name: joined }) }}
           </NAlert>
           <NAlert v-else-if="!token" type="warning" :show-icon="true">
-            This link carries no invite token. Open the link from the invite
-            exactly as it was shared.
+            {{ t("auth.invite.noToken") }}
           </NAlert>
           <NAlert v-else-if="error" type="error" :show-icon="true">
             {{ error }}
           </NAlert>
           <NText v-if="!joined" depth="3">
-            Accepting uses the session you are signed in with — sign in with
-            the invited address. Invites are single-use.
+            {{ t("auth.invite.hint") }}
           </NText>
           <NButton type="primary" @click="goToTeams">
-            {{ joined ? "Open teams" : "Back to teams" }}
+            {{ joined ? t("auth.invite.openTeams") : t("auth.invite.backToTeams") }}
           </NButton>
         </div>
       </NSpin>

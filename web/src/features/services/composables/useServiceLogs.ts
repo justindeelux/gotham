@@ -206,7 +206,6 @@ export function useServiceLogs(source: ServiceLogsSource): ServiceLogsState {
           // Genuine auth failure for the current session: drop it and redirect to
           // the login page instead of leaving the reader on a dead session.
           expireSession();
-          expireSession();
           throw new Error(sessionExpiredKey, { cause: error });
         }
         // A newer session replaced this one mid-refresh: keep it and retry the

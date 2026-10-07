@@ -29,22 +29,42 @@ const accepting = ref(false);
 /** rawFailure retains the original failure; display derives per locale. */
 const rawFailure = ref<unknown>(null);
 /**
- * error renders the failure for the current locale: failures with no useful
- * raw diagnostic show the single localized fallback (never a duplicated
- * generic summary); otherwise the shared summary heads the team diagnostic,
- * re-derived on every evaluation so a locale-aware team helper is never
- * read from a stale cached string.
+ * knownTeamStatuses are the HTTP statuses describeTeamError curates with
+ * distinct guidance (session/role/removed/conflict/expired/invalid). Only
+ * the raw numeric status and the raw stripped message classify the failure
+ * below — never translated text or helper result strings — so a future
+ * locale-aware team helper stays compatible without double-framing.
+ */
+const knownTeamStatuses = [400, 401, 403, 404, 409, 410];
+/**
+ * error renders the failure for the current locale: known refusal statuses
+ * keep their curated team guidance under the shared summary (even with a
+ * blank server message); failures with no usable diagnostic and no known
+ * status collapse once to the single localized fallback. The team helper
+ * re-invokes on every evaluation, never from a cached translated string.
  */
 const error = computed<string | null>(() => {
   if (rawFailure.value === null) {
     return null;
   }
-  if (rawFailureMessage(rawFailure.value) === "") {
+  if (
+    rawFailureMessage(rawFailure.value) === "" &&
+    !knownTeamStatuses.includes(rawFailureStatus(rawFailure.value))
+  ) {
     return t("common.errors.unexpected");
   }
   return `${t("common.errors.requestFailed")}: ${describeTeamError(rawFailure.value)}`;
 });
 const joined = ref("");
+
+/** rawFailureStatus extracts the raw numeric HTTP status, or -1. */
+function rawFailureStatus(failure: unknown): number {
+  if (typeof failure !== "object" || failure === null) {
+    return -1;
+  }
+  const status = (failure as { status?: unknown }).status;
+  return typeof status === "number" ? status : -1;
+}
 
 /** rawFailureMessage extracts the stripped raw message, or "" when unusable. */
 function rawFailureMessage(failure: unknown): string {

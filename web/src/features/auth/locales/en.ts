@@ -81,7 +81,7 @@ const en = {
     hashPrefix: "Passwords are hashed with",
     tokenMid:
       "· 15-minute JWT access tokens with 30-day rotating refresh tokens · GitHub OAuth via the",
-    interfaceSuffix: "interface.",
+    interfaceSuffix: " interface.",
   },
   strength: {
     level0: "Not entered",

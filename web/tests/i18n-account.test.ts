@@ -580,6 +580,72 @@ describe("unknown diagnostics carry a localized summary", () => {
     expect(accept).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
+
+  it("keeps distinct guidance for blank-message known invite statuses", async () => {
+    // describeTeamError curates per-status fallbacks when the server sends
+    // status without message; only genuinely unknown failures collapse.
+    const cases: Array<{ status: number; en: string }> = [
+      { status: 400, en: "Request failed: Invalid request." },
+      {
+        status: 401,
+        en: "Request failed: Your session expired. Please sign in again.",
+      },
+      {
+        status: 403,
+        en: "Request failed: Your team role does not allow this action.",
+      },
+      {
+        status: 404,
+        en: "Request failed: Not found. It may have been removed already.",
+      },
+      {
+        status: 409,
+        en: "Request failed: The team changed while you were editing it. Reload and retry.",
+      },
+      {
+        status: 410,
+        en: "Request failed: This invite expired. Issue a new one.",
+      },
+      { status: 500, en: "Something went wrong. Please try again." },
+    ];
+    for (const { status, en } of cases) {
+      seedAuth();
+      setLocale("en", null);
+      await nextTick();
+      vi.mocked(acceptInvite).mockRejectedValue({ status, message: "" });
+      const test = testRouter();
+      test.addRoute({
+        path: "/invite/accept",
+        name: "invite-accept",
+        component: { template: "<div />" },
+      });
+      await test.push({ path: "/invite/accept", query: { token: "abc" } });
+      await test.isReady();
+      const wrapper = mount(shell(InviteAcceptPage), {
+        attachTo: globalThis.document.body,
+        global: { plugins: [test, i18n], stubs: { transition: false } },
+      });
+      await flushPromises();
+      await nextTick();
+      await nextTick();
+      expect(wrapper.find(".n-alert").text()).toBe(en);
+      setLocale("vi", null);
+      await nextTick();
+      await flushPromises();
+      const viText = wrapper.find(".n-alert").text();
+      if (status === 500) {
+        expect(viText).toBe("Đã xảy ra lỗi. Vui lòng thử lại.");
+      } else {
+        // Localized summary, team diagnostic retained verbatim.
+        expect(viText.startsWith("Yêu cầu thất bại: ")).toBe(true);
+        expect(viText).toContain(en.replace("Request failed: ", ""));
+      }
+      wrapper.unmount();
+      globalThis.document.body.innerHTML = "";
+    }
+    resetLocaleState();
+    syncComposerLocale("en");
+  });
 });
 
 describe("session row invalid timestamps", () => {

@@ -30,13 +30,13 @@ const {
 } = useSessionsPanel();
 
 /**
- * othersConfirmText names the destructive count with whole-sentence keys
- * (one vs many) instead of plural syntax, so both catalogs stay in parity.
+ * othersConfirmText names the destructive count through the vue-i18n
+ * library plural choice on one message with a named count parameter
+ * (0/1/many), so the compiler (not a manual branch) selects the form.
+ * The popconfirm stays guarded by the same disabled/empty rules.
  */
 const othersConfirmText = computed<string>(() =>
-  others.value.length === 1
-    ? t("profile.sessions.confirmOthersOne", { count: others.value.length })
-    : t("profile.sessions.confirmOthersMany", { count: others.value.length }),
+  t("profile.sessions.confirmOthers", { count: others.value.length }, { plural: others.value.length }),
 );
 
 onMounted(() => {

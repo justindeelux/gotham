@@ -63,10 +63,8 @@ const en = {
     confirmCurrent:
       "Sign out this device? You will be signed out here and returned to the sign-in page.",
     confirmOther: "Sign out {label}? That device will need to sign in again.",
-    confirmOthersOne:
-      "Sign out {count} other session? Those devices will need to sign in again.",
-    confirmOthersMany:
-      "Sign out {count} other sessions? Those devices will need to sign in again.",
+    confirmOthers:
+      "Sign out {count} other session? Those devices will need to sign in again. | Sign out {count} other sessions? Those devices will need to sign in again.",
     needsReauth:
       "Your sign-in predates session management. Sign in again to manage other sessions.",
     signInAgain: "Sign in again",

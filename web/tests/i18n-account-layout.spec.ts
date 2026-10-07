@@ -317,6 +317,28 @@ for (const locale of ["en", "vi"]) {
   }
 }
 
+test("auth footnote renders exact sentence per locale", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state: MockState = { apiCalls: 0 };
+  await mockApi(page, state);
+  const exact = {
+    en: "Passwords are hashed with argon2id · 15-minute JWT access tokens with 30-day rotating refresh tokens · GitHub OAuth via the OAuthProvider interface.",
+    vi: "Mật khẩu được băm bằng argon2id · JWT truy cập 15 phút với refresh token xoay vòng 30 ngày · GitHub OAuth qua giao diện OAuthProvider.",
+  };
+  for (const locale of ["en", "vi"] as const) {
+    await seedStorage(page, locale, false);
+    await page.goto(`${baseURL}/login`);
+    await page.locator(".auth-footnote").waitFor();
+    const text = await page.locator(".auth-footnote").evaluate((node) =>
+      (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+    );
+    // Exact match: no joined words in EN, no stray space before the
+    // period in VI.
+    expect(text).toBe(exact[locale]);
+    await page.evaluate(() => window.localStorage.clear());
+  }
+});
+
 test("locale switch on login issues no API call and keeps the draft", async ({
   page,
 }) => {

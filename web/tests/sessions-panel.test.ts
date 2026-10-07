@@ -599,6 +599,60 @@ describe("SessionsPanel mount", () => {
     expect(second.wrapper.text()).not.toContain("Firefox on Windows");
     second.wrapper.unmount();
   });
+
+  it("renders the plural confirm body in the open popover", async () => {
+    const { wrapper } = await mountPanel([
+      currentSession(),
+      otherSession(),
+      { ...otherSession(), id: "s-third" },
+    ]);
+    await buttonByLabel(wrapper, "Sign out all other devices").trigger("click");
+    await flushPromises();
+    await nextTick();
+    await flushPromises();
+    const popover = globalThis.document.body.querySelector(".n-popconfirm");
+    expect(popover, "expected the confirm popover to open").not.toBeNull();
+    expect(popover!.textContent).toContain(
+      "Sign out 2 other sessions? Those devices will need to sign in again.",
+    );
+    wrapper.unmount();
+  });
+});
+
+describe("others confirm plural", () => {
+  it("selects exact 0/1/many wording through the real compiler", async () => {
+    const { i18n: composer } = await import("@/shared/i18n");
+    const choose = (count: number): string =>
+      String(
+        composer.global.t(
+          "profile.sessions.confirmOthers",
+          { count },
+          { plural: count },
+        ),
+      );
+    expect(choose(0)).toBe(
+      "Sign out 0 other sessions? Those devices will need to sign in again.",
+    );
+    expect(choose(1)).toBe(
+      "Sign out 1 other session? Those devices will need to sign in again.",
+    );
+    expect(choose(5)).toBe(
+      "Sign out 5 other sessions? Those devices will need to sign in again.",
+    );
+    const { setLocale } = await import("@/shared/i18n");
+    setLocale("vi", null);
+    try {
+      expect(choose(1)).toBe(
+        "Đăng xuất 1 phiên khác? Các thiết bị đó sẽ phải đăng nhập lại.",
+      );
+      expect(choose(5)).toBe(
+        "Đăng xuất 5 phiên khác? Các thiết bị đó sẽ phải đăng nhập lại.",
+      );
+    } finally {
+      resetLocaleState();
+      syncComposerLocale("en");
+    }
+  });
 });
 
 describe("SessionRow", () => {

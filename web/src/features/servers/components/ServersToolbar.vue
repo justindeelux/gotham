@@ -30,7 +30,7 @@ function isActive(filter: ServerFilter): boolean {
 
 <template>
   <div class="toolbar">
-    <div class="filters" role="group" aria-label="Filter servers by status">
+    <div class="filters" role="group" :aria-label="$t('servers.toolbar.filterServers')">
       <button
         class="chip"
         type="button"
@@ -38,7 +38,7 @@ function isActive(filter: ServerFilter): boolean {
         :aria-pressed="isActive('all')"
         @click="selectFilter('all')"
       >
-        All <span class="nav-count">{{ totalCount }}</span>
+        {{ $t("servers.filters.all") }} <span class="nav-count">{{ totalCount }}</span>
       </button>
       <button
         class="chip"
@@ -47,7 +47,7 @@ function isActive(filter: ServerFilter): boolean {
         :aria-pressed="isActive('ready')"
         @click="selectFilter('ready')"
       >
-        Ready <span class="nav-count">{{ readyCount }}</span>
+        {{ $t("servers.filters.ready") }} <span class="nav-count">{{ readyCount }}</span>
       </button>
       <button
         class="chip"
@@ -56,7 +56,7 @@ function isActive(filter: ServerFilter): boolean {
         :aria-pressed="isActive('offline')"
         @click="selectFilter('offline')"
       >
-        Offline <span class="nav-count">{{ offlineCount }}</span>
+        {{ $t("servers.filters.offline") }} <span class="nav-count">{{ offlineCount }}</span>
       </button>
       <button
         class="chip"
@@ -65,14 +65,14 @@ function isActive(filter: ServerFilter): boolean {
         :aria-pressed="isActive('update')"
         @click="selectFilter('update')"
       >
-        Agent update needed <span class="nav-count">{{ updateCount }}</span>
+        {{ $t("servers.filters.updateNeeded") }} <span class="nav-count">{{ updateCount }}</span>
       </button>
     </div>
     <NInput
       v-model:value="searchQuery"
       class="search-input"
-      placeholder="Search by name, IP, OS…"
-      aria-label="Search servers"
+      :placeholder="$t('servers.toolbar.searchServersPlaceholder')"
+      :aria-label="$t('servers.toolbar.searchServers')"
       clearable
     >
       <template #prefix>

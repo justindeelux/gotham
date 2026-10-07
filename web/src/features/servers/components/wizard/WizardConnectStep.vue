@@ -41,58 +41,56 @@ onUnmounted(() => {
   >
     <div class="connect-form form-container">
       <NAlert v-if="wizard.hasCreatedServer.value" type="info" :show-icon="true">
-        This node is already registered. Changing the connection
-        details here does not update it — delete and re-add the node to
-        change them. Continue without creating a duplicate.
+        {{ $t("servers.wizard.alreadyRegistered") }}
       </NAlert>
 
-      <section class="connect-group" aria-label="Identity">
-        <h4 class="connect-group__title">Identity</h4>
+      <section class="connect-group" :aria-label="$t('servers.wizard.connectIdentity')">
+        <h4 class="connect-group__title">{{ $t("servers.wizard.connectIdentity") }}</h4>
         <div class="form-row">
           <NFormItem
-            label="Node name"
+            :label="$t('servers.wizard.nodeName')"
             path="name"
             :label-props="{ for: 'add-server-name' }"
           >
             <NInput
               v-model:value="wizard.form.name"
               placeholder="build-node-03"
-              :input-props="{ id: 'add-server-name', 'aria-label': 'Node name' }"
+              :input-props="{ id: 'add-server-name', 'aria-label': $t('servers.wizard.nodeName') }"
             />
-            <span class="field-hint">A short unique name, e.g. build-node-03.</span>
+            <span class="field-hint">{{ $t("servers.wizard.nodeNameHint") }}</span>
           </NFormItem>
           <NFormItem
-            label="SSH user"
+            :label="$t('servers.wizard.sshUser')"
             path="sshUser"
             :label-props="{ for: 'add-server-ssh-user' }"
           >
             <NInput
               v-model:value="wizard.form.sshUser"
               placeholder="root"
-              :input-props="{ id: 'add-server-ssh-user', 'aria-label': 'SSH user' }"
+              :input-props="{ id: 'add-server-ssh-user', 'aria-label': $t('servers.wizard.sshUser') }"
             />
-            <span class="field-hint">The Unix user the control plane connects as.</span>
+            <span class="field-hint">{{ $t("servers.wizard.sshUserHint") }}</span>
           </NFormItem>
         </div>
       </section>
 
-      <section class="connect-group" aria-label="Address">
-        <h4 class="connect-group__title">Address</h4>
+      <section class="connect-group" :aria-label="$t('servers.wizard.connectAddress')">
+        <h4 class="connect-group__title">{{ $t("servers.wizard.connectAddress") }}</h4>
         <div class="addr-row">
           <NFormItem
-            label="IP address / hostname"
+            :label="$t('servers.wizard.ipLabel')"
             path="ip"
             :label-props="{ for: 'add-server-ip' }"
           >
             <NInput
               v-model:value="wizard.form.ip"
               placeholder="203.0.113.90"
-              :input-props="{ id: 'add-server-ip', 'aria-label': 'IP address or hostname' }"
+              :input-props="{ id: 'add-server-ip', 'aria-label': $t('servers.wizard.ipLabel') }"
             />
-            <span class="field-hint">IPv4 or hostname, e.g. 203.0.113.90 or node3.internal.</span>
+            <span class="field-hint">{{ $t("servers.wizard.ipHint") }}</span>
           </NFormItem>
           <NFormItem
-            label="SSH port"
+            :label="$t('servers.wizard.portLabel')"
             path="port"
             :label-props="{ for: 'add-server-port' }"
           >
@@ -101,57 +99,57 @@ onUnmounted(() => {
               :min="1"
               :max="65535"
               placeholder="22"
-              :input-props="{ id: 'add-server-port', 'aria-label': 'SSH port' }"
+              :input-props="{ id: 'add-server-port', 'aria-label': $t('servers.wizard.portLabel') }"
             />
-            <span class="field-hint">Usually 22.</span>
+            <span class="field-hint">{{ $t("servers.wizard.portHint") }}</span>
           </NFormItem>
         </div>
       </section>
 
-      <section class="connect-group" aria-label="Access">
-        <h4 class="connect-group__title">Access</h4>
-        <NFormItem label="Authentication">
+      <section class="connect-group" :aria-label="$t('servers.wizard.connectAccess')">
+        <h4 class="connect-group__title">{{ $t("servers.wizard.connectAccess") }}</h4>
+        <NFormItem :label="$t('servers.wizard.authLabel')">
           <NRadioGroup
             v-model:value="wizard.form.authMode"
             size="small"
-            aria-label="Authentication method"
+            :aria-label="$t('servers.wizard.authMethod')"
           >
-            <NRadioButton value="key">SSH key</NRadioButton>
-            <NRadioButton value="password">Password</NRadioButton>
+            <NRadioButton value="key">{{ $t("servers.wizard.keyModeLabel") }}</NRadioButton>
+            <NRadioButton value="password">{{ $t("servers.wizard.authPassword") }}</NRadioButton>
           </NRadioGroup>
-          <span class="field-hint">Authenticate with a stored private key or a node password.</span>
+          <span class="field-hint">{{ $t("servers.wizard.authHint") }}</span>
         </NFormItem>
-        <NFormItem v-if="wizard.form.authMode === 'key'" label="SSH key">
+        <NFormItem v-if="wizard.form.authMode === 'key'" :label="$t('servers.wizard.keyModeLabel')">
           <NRadioGroup
             v-model:value="wizard.form.keyMode"
             size="small"
-            aria-label="SSH key mode"
+            :aria-label="$t('servers.wizard.keyModeName')"
           >
-            <NRadioButton value="new">Paste a new key</NRadioButton>
-            <NRadioButton value="existing">Use an existing key ID</NRadioButton>
+            <NRadioButton value="new">{{ $t("servers.wizard.keyNew") }}</NRadioButton>
+            <NRadioButton value="existing">{{ $t("servers.wizard.keyExisting") }}</NRadioButton>
           </NRadioGroup>
-          <span class="field-hint">Key listing is not exposed by the API yet — paste the key material or a known key ID.</span>
+          <span class="field-hint">{{ $t("servers.wizard.keyModeHint") }}</span>
         </NFormItem>
       </section>
 
-      <section class="connect-group" aria-label="Credentials">
-        <h4 class="connect-group__title">Credentials</h4>
+      <section class="connect-group" :aria-label="$t('servers.wizard.connectCredentials')">
+        <h4 class="connect-group__title">{{ $t("servers.wizard.connectCredentials") }}</h4>
 
         <template v-if="wizard.form.authMode === 'key' && wizard.form.keyMode === 'new'">
           <NFormItem
-            label="Key name"
+            :label="$t('servers.wizard.keyName')"
             path="keyName"
             :label-props="{ for: 'add-server-key-name' }"
           >
             <NInput
               v-model:value="wizard.form.keyName"
               placeholder="deploy-key"
-              :input-props="{ id: 'add-server-key-name', 'aria-label': 'Key name' }"
+              :input-props="{ id: 'add-server-key-name', 'aria-label': $t('servers.wizard.keyName') }"
             />
-            <span class="field-hint">A label so you can reuse the key for other nodes.</span>
+            <span class="field-hint">{{ $t("servers.wizard.keyNameHint") }}</span>
           </NFormItem>
           <NFormItem
-            label="Private key (PEM)"
+            :label="$t('servers.wizard.privateKey')"
             path="privateKey"
             :label-props="{ for: 'add-server-private-key' }"
           >
@@ -160,12 +158,12 @@ onUnmounted(() => {
               type="textarea"
               :autosize="{ minRows: 4, maxRows: 10 }"
               placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-              :input-props="{ id: 'add-server-private-key', 'aria-label': 'Private key (PEM)' }"
+              :input-props="{ id: 'add-server-private-key', 'aria-label': $t('servers.wizard.privateKey') }"
             />
-            <span class="field-hint">Ed25519 or RSA in PEM format. Stored encrypted, never returned.</span>
+            <span class="field-hint">{{ $t("servers.wizard.privateKeyHint") }}</span>
           </NFormItem>
           <NFormItem
-            label="Key passphrase (if any)"
+            :label="$t('servers.wizard.passphrase')"
             path="passphrase"
             :label-props="{ for: 'add-server-passphrase' }"
           >
@@ -173,30 +171,30 @@ onUnmounted(() => {
               v-model:value="wizard.form.passphrase"
               type="password"
               show-password-on="click"
-              placeholder="Leave empty for unencrypted keys"
-              :input-props="{ id: 'add-server-passphrase', 'aria-label': 'Key passphrase' }"
+              :placeholder="$t('servers.wizard.passphraseHint')"
+              :input-props="{ id: 'add-server-passphrase', 'aria-label': $t('servers.wizard.passphrase') }"
             />
-            <span class="field-hint">Required only for a passphrase-protected key. Sent for validation, never stored.</span>
+            <span class="field-hint">{{ $t("servers.wizard.passphraseHint") }}</span>
           </NFormItem>
         </template>
 
         <NFormItem
           v-else-if="wizard.form.authMode === 'key'"
-          label="Key ID"
+          :label="$t('servers.wizard.keyId')"
           path="keyId"
           :label-props="{ for: 'add-server-key-id' }"
         >
           <NInput
             v-model:value="wizard.form.keyId"
             placeholder="00000000-0000-0000-0000-000000000000"
-            :input-props="{ id: 'add-server-key-id', 'aria-label': 'Key ID' }"
+            :input-props="{ id: 'add-server-key-id', 'aria-label': $t('servers.wizard.keyId') }"
           />
-          <span class="field-hint">The UUID of a key already stored on the control plane.</span>
+          <span class="field-hint">{{ $t("servers.wizard.keyIdHint") }}</span>
         </NFormItem>
 
         <template v-else>
           <NFormItem
-            label="Node password"
+            :label="$t('servers.wizard.nodePassword')"
             path="password"
             :label-props="{ for: 'add-server-password' }"
           >
@@ -204,10 +202,10 @@ onUnmounted(() => {
               v-model:value="wizard.form.password"
               type="password"
               show-password-on="click"
-              placeholder="Node SSH password"
-              :input-props="{ id: 'add-server-password', 'aria-label': 'Node password', autocomplete: 'new-password' }"
+              :placeholder="$t('servers.wizard.nodePasswordHint')"
+              :input-props="{ id: 'add-server-password', 'aria-label': $t('servers.wizard.nodePassword'), autocomplete: 'new-password' }"
             />
-            <span class="field-hint">Stored encrypted, never returned. Sent over SSH for validation.</span>
+            <span class="field-hint">{{ $t("servers.wizard.nodePasswordHint") }}</span>
           </NFormItem>
         </template>
       </section>
@@ -215,14 +213,14 @@ onUnmounted(() => {
       <section
         v-if="wizard.form.authMode === 'password'"
         class="connect-group"
-        aria-label="Trust"
+        :aria-label="$t('servers.wizard.connectTrust')"
       >
-        <h4 class="connect-group__title">Trust</h4>
-        <NFormItem label="First connection" :show-feedback="false">
+        <h4 class="connect-group__title">{{ $t("servers.wizard.connectTrust") }}</h4>
+        <NFormItem :label="$t('servers.wizard.firstConnection')" :show-feedback="false">
           <NCheckbox v-model:checked="wizard.form.trustHostKey">
-            Trust this host key on first validation
+            {{ $t("servers.wizard.trustHostKey") }}
           </NCheckbox>
-          <span class="field-hint">Required once: a password node has no key to pin until it is trusted.</span>
+          <span class="field-hint">{{ $t("servers.wizard.trustHint") }}</span>
         </NFormItem>
       </section>
     </div>

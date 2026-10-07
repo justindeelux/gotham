@@ -25,7 +25,7 @@ const dotClass = computed<string>(() => {
 <template>
   <NSpace vertical :size="12">
     <div class="status-line-row">
-      <NText strong>Validate node</NText>
+      <NText strong>{{ $t("servers.wizard.validateTitle") }}</NText>
       <span v-if="wizard.sshStatusLine.value" class="status-line">
         <span class="dot" :class="dotClass" />
         {{ wizard.sshStatusLine.value }}
@@ -40,7 +40,7 @@ const dotClass = computed<string>(() => {
       v-if="wizard.currentServer.value?.has_password"
       v-model:checked="wizard.form.trustHostKey"
     >
-      Trust this host key on first validation
+      {{ $t("servers.wizard.trustHostKey") }}
     </NCheckbox>
 
     <div class="check-list">
@@ -55,7 +55,7 @@ const dotClass = computed<string>(() => {
     <NText depth="3">{{ wizard.checkSummary.value }}</NText>
 
     <NAlert v-if="wizard.validationPassed.value" type="success" :show-icon="true">
-      All checks passed. Continue to install the node agent.
+      {{ $t("servers.wizard.validatePassed") }}
     </NAlert>
   </NSpace>
 </template>

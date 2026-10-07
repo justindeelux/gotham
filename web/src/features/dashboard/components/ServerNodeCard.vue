@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { NCard, NProgress, NSpace, NTag, NText } from "naive-ui";
+import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
 import type { ServerNodeCardModel } from "@/features/dashboard/utils/serverNode";
@@ -8,7 +10,15 @@ interface Props {
   card: ServerNodeCardModel;
 }
 
-defineProps<Props>();
+const props = defineProps<Props>();
+const { t } = useI18n();
+
+/** containersText renders the container count tag in the display locale. */
+const containersText = computed<string>(() =>
+  props.card.containerCount === 1
+    ? t("dashboard.health.containersOne", { count: 1 })
+    : t("dashboard.health.containersOther", { count: props.card.containerCount }),
+);
 </script>
 
 <template>
@@ -67,7 +77,7 @@ defineProps<Props>();
       </div>
       <NSpace align="center" :size="8">
         <NTag v-if="card.containerCount !== null" size="small" :bordered="false">
-          {{ card.containerCount }} containers
+          {{ containersText }}
         </NTag>
         <NTag v-if="card.arch" size="small" :bordered="false">
           {{ card.arch }}

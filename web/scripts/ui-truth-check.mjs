@@ -632,9 +632,9 @@ async function main() {
       new URL("../src/features/dashboard/pages/DashboardPage.vue", import.meta.url),
       "utf8",
     );
-    const start = source.indexOf('title="Running applications"');
+    const start = source.indexOf("dashboard.kpi.applications");
     assert(start !== -1, "tile card exists");
-    const end = source.indexOf('title="Deploys in 24h"', start);
+    const end = source.indexOf("dashboard.kpi.deploys", start);
     assert(end !== -1, "tile card block ends");
     const block = source.slice(start, end);
     // Every tile branch directive is exactly a tile.state comparison: an
@@ -1031,6 +1031,9 @@ async function main() {
         "export const validateServer = (...a) => api().validateServer(...a);",
         "export const updateServer = (...a) => api().updateServer(...a);",
         "export const describeServerError = (e) => String((e && e.message) || e);",
+        "export const isApiError = (e) => typeof e === 'object' && e !== null && 'message' in e && 'status' in e;",
+        "export const stripErrorPrefix = (m) => String(m ?? '').trim();",
+        "export const failureText = (e) => String((e && e.message) || e);",
       ].join("\n"),
     });
     const appsHarness = await loadStoreHarness("../src/features/applications/stores", "applications", "useApplicationsStore", {

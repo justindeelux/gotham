@@ -6,6 +6,7 @@
 import { useMessage } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ComputedRef } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { Container, ContainerAction } from "@/features/servers/api/containers";
 import {
@@ -15,7 +16,7 @@ import {
   startContainer,
   stopContainer,
 } from "@/features/servers/api/containers";
-import { getServer } from "@/features/servers/api/servers";
+import { failureText, getServer } from "@/features/servers/api/servers";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import {
   countByFilter,
@@ -29,10 +30,22 @@ const pollIntervalMs = 5_000;
 
 export function useContainersPage(serverId: ComputedRef<string>) {
   const message = useMessage();
+  const { locale, t } = useI18n();
 
   const containers = ref<Container[]>([]);
   const loading = ref(false);
-  const error = ref<string | null>(null);
+  /**
+   * fetchFailure keeps the raw last list failure. The `error` display
+   * derives from it in the current locale, so a language switch re-renders
+   * a retained banner without refetching or resetting the selection.
+   */
+  const fetchFailure = ref<unknown>(null);
+  /** error renders the retained failure, or null while healthy. */
+  const error = computed<string | null>(() =>
+    fetchFailure.value === null || fetchFailure.value === undefined
+      ? null
+      : failureText(fetchFailure.value, locale.value),
+  );
   const serverName = ref<string>("");
   const loaded = ref(false);
 
@@ -104,10 +117,10 @@ export function useContainersPage(serverId: ComputedRef<string>) {
     }
     try {
       containers.value = await listContainers(serverId.value);
-      error.value = null;
+      fetchFailure.value = null;
       loaded.value = true;
     } catch (err) {
-      error.value = describeContainerError(err);
+      fetchFailure.value = err;
     } finally {
       loading.value = false;
     }
@@ -142,7 +155,7 @@ export function useContainersPage(serverId: ComputedRef<string>) {
       } else {
         await restartContainer(serverId.value, row.id);
       }
-      message.success(`${label} requested for ${row.name}`);
+      message.success(t("servers.containers.actionRequested", { action: label, name: row.name }));
       await fetchContainers(false);
     } catch (err) {
       message.error(describeContainerError(err));

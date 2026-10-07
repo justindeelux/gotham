@@ -1,6 +1,15 @@
 // Pure formatting helpers for the log viewer (extracted from LogViewer).
 
 import type { WebSocketMessage } from "@/shared/composables/useWebSocket";
+import { activeLocale } from "@/shared/i18n/locale";
+
+import enCatalog from "../locales/en";
+import viCatalog from "../locales/vi";
+
+/** catalogFor selects the servers display dictionary for one locale. */
+function catalogFor(locale?: string | null): typeof enCatalog {
+  return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
+}
 
 /** One rendered log line. */
 export interface LogLine {
@@ -38,12 +47,12 @@ export function formatTimestamp(ts: unknown, receivedAt: number): string {
 }
 
 /** noticeText extracts the server's own notice copy when provided. */
-export function noticeText(message: WebSocketMessage): string {
+export function noticeText(message: WebSocketMessage, locale?: string | null): string {
   const payload = message.payload;
   const candidate =
     payload?.message ?? payload?.notice ?? payload?.reason ?? payload?.data;
   if (typeof candidate === "string" && candidate.trim() !== "") {
     return candidate;
   }
-  return "Log stream interrupted; reconnecting…";
+  return catalogFor(locale).logs.streamInterrupted;
 }

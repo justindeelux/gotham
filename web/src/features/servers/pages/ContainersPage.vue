@@ -10,6 +10,7 @@ import {
 } from "naive-ui";
 import { computed } from "vue";
 import { RouterLink, useRoute } from "vue-router";
+import { useI18n } from "vue-i18n";
 
 import ContainersTable from "@/features/servers/components/ContainersTable.vue";
 import ContainersToolbar from "@/features/servers/components/ContainersToolbar.vue";
@@ -18,6 +19,7 @@ import { useContainersPage } from "@/features/servers/composables/useContainersP
 
 const route = useRoute();
 const serverId = computed<string>(() => String(route.params.id ?? ""));
+const { t } = useI18n();
 
 const {
   containers,
@@ -42,19 +44,19 @@ const {
 /** emptyDescription renders the table empty state for each data condition. */
 const emptyDescription = computed<string>(() => {
   if (!loaded.value) {
-    return "Loading containers…";
+    return t("servers.containers.emptyLoading");
   }
   if (containers.value.length === 0) {
-    return "No containers on this node.";
+    return t("servers.containers.emptyNone");
   }
-  return "No containers match the current filter.";
+  return t("servers.containers.emptyFiltered");
 });
 </script>
 
 <template>
   <NSpace vertical :size="16">
-    <nav class="breadcrumb" aria-label="Breadcrumb">
-      <RouterLink to="/servers">Servers</RouterLink>
+    <nav class="breadcrumb" :aria-label="$t('servers.detail.breadcrumbNav')">
+      <RouterLink to="/servers">{{ $t("servers.detail.serversBreadcrumb") }}</RouterLink>
       <span class="breadcrumb__sep">/</span>
       <span class="muted" aria-current="page">{{ serverName || serverId }}</span>
     </nav>
@@ -63,11 +65,11 @@ const emptyDescription = computed<string>(() => {
       <template #header>
         <NSpace align="center" justify="space-between">
           <NSpace align="center" :size="10">
-            <NText strong>Containers</NText>
+            <NText strong>{{ $t("servers.containers.title") }}</NText>
             <NText v-if="serverName" depth="3">{{ serverName }}</NText>
           </NSpace>
           <NButton secondary :loading="loading" @click="fetchContainers(true)">
-            Refresh
+            {{ $t("servers.containers.refresh") }}
           </NButton>
         </NSpace>
       </template>

@@ -5,6 +5,7 @@
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 import {
   describeContainerError,
@@ -43,6 +44,7 @@ export interface LogStreamProps {
 }
 
 export function useLogStream(props: LogStreamProps, logBody: Ref<HTMLElement | null>) {
+  const { locale, t } = useI18n();
   const lines = ref<LogLine[]>([]);
   const pending = ref<LogLine[]>([]);
   const isPaused = ref(false);
@@ -115,21 +117,21 @@ export function useLogStream(props: LogStreamProps, logBody: Ref<HTMLElement | n
 
   const statusLabel = computed<string>(() => {
     if (isPaused.value) {
-      return "Paused";
+      return t("servers.logs.statusPaused");
     }
     switch (streamStatus.value) {
       case "open":
-        return "Streaming";
+        return t("servers.logs.statusStreaming");
       case "connecting":
-        return "Connecting";
+        return t("servers.logs.statusConnecting");
       case "reconnecting":
-        return "Reconnecting";
+        return t("servers.logs.statusReconnecting");
       case "error":
-        return "Offline";
+        return t("servers.logs.statusOffline");
       case "closed":
-        return "Closed";
+        return t("servers.logs.statusClosed");
       default:
-        return "Idle";
+        return t("servers.logs.statusIdle");
     }
   });
 
@@ -169,7 +171,9 @@ export function useLogStream(props: LogStreamProps, logBody: Ref<HTMLElement | n
       appendLine({
         id: ++lineId,
         ts: formatTimestamp(null, message.receivedAt),
-        text: reason ? `Subscription denied: ${reason}` : "Subscription denied",
+        text: reason
+          ? t("servers.logs.subscriptionDeniedReason", { reason })
+          : t("servers.logs.subscriptionDenied"),
         kind: "notice",
       });
       return;
@@ -180,7 +184,7 @@ export function useLogStream(props: LogStreamProps, logBody: Ref<HTMLElement | n
       appendLine({
         id: ++lineId,
         ts: formatTimestamp(null, message.receivedAt),
-        text: "Log stream resumed",
+        text: t("servers.logs.streamResumed"),
         kind: "notice",
       });
       return;
@@ -198,7 +202,7 @@ export function useLogStream(props: LogStreamProps, logBody: Ref<HTMLElement | n
       appendLine({
         id: ++lineId,
         ts: formatTimestamp(null, message.receivedAt),
-        text: noticeText(message),
+        text: noticeText(message, locale.value),
         kind: "notice",
       });
       return;
@@ -383,7 +387,7 @@ export function useLogStream(props: LogStreamProps, logBody: Ref<HTMLElement | n
         const notice: LogLine = {
           id: ++lineId,
           ts: formatTimestamp(null, Date.now()),
-          text: `Could not start log stream: ${describeContainerError(error)}`,
+          text: t("servers.logs.streamStartFailed", { detail: describeContainerError(error) }),
           kind: "notice",
         };
         if (

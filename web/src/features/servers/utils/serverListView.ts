@@ -4,6 +4,15 @@
 // store or the network.
 
 import type { Server } from "@/features/servers/api/servers";
+import { activeLocale } from "@/shared/i18n/locale";
+
+import enCatalog from "../locales/en";
+import viCatalog from "../locales/vi";
+
+/** catalogFor selects the servers display dictionary for one locale. */
+function catalogFor(locale?: string | null): typeof enCatalog {
+  return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
+}
 
 /** Filter chip keys mirroring the servers.html toolbar. */
 export type ServerFilter = "all" | "ready" | "offline" | "update";
@@ -54,22 +63,26 @@ export function initials(name: string): string {
 }
 
 /** keyLabel identifies the stored credential without revealing any secret. */
-export function keyLabel(server: Server): string {
+export function keyLabel(server: Server, locale?: string | null): string {
   if (server.ssh_key_id) {
     return server.ssh_key_id.slice(0, 8);
   }
   if (server.has_password) {
-    return "password stored";
+    return catalogFor(locale).credential.passwordStored;
   }
-  return "no credentials";
+  return catalogFor(locale).credential.none;
 }
 
 /** containerLabel keeps an unknown count (no heartbeat yet) distinct from zero. */
-export function containerLabel(server: Server): string {
+export function containerLabel(server: Server, locale?: string | null): string {
   if (server.container_count === null || server.container_count === undefined) {
     return "—";
   }
-  return `${server.container_count} container${server.container_count === 1 ? "" : "s"}`;
+  const word =
+    server.container_count === 1
+      ? catalogFor(locale).list.containerOne
+      : catalogFor(locale).list.containerOther;
+  return `${server.container_count} ${word}`;
 }
 
 /**

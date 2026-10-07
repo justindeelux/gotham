@@ -11,24 +11,24 @@ import { ruleFrom } from "@/shared/validation/naiveAdapter";
 /**
  * Shared server connection schemas (JUS-23 V3/V4). Both the add-server
  * wizard and the edit-server modal build their Naive rules from this module,
- * so the two forms cannot drift apart. Message strings are preserved
- * verbatim from the pre-zod rules; the wizard and the modal keep their own
- * key-ID strings (they differ), selected via requiredField.
+ * so the two forms cannot drift apart. Messages are namespaced catalog keys
+ * resolved to display text at validation time (see resolveValidationMessage),
+ * so visible feedback follows the language switch; predicates are unchanged.
  */
 export const serverMessages = {
-  nameRequired: "Enter a node name.",
-  namePattern: "Letters, digits, dots, dashes, and underscores only.",
-  hostRequired: "Enter an IP address or hostname.",
-  hostInvalid: "Enter a valid IPv4 address or hostname.",
-  portRequired: "Enter an SSH port (1-65535).",
-  portRange: "Port must be a number from 1 to 65535.",
-  sshUserRequired: "Enter the SSH user.",
-  sshUserPattern: "Enter a valid Unix username (lowercase, digits, _, -).",
-  keyNameRequired: "Enter a key name.",
-  privateKeyRequired: "Paste the PEM-encoded private key.",
-  wizardKeyIdRequired: "Enter an existing key ID.",
-  editKeyIdRequired: "Enter a key ID.",
-  nodePasswordRequired: "Enter the node password.",
+  nameRequired: "servers.validation.nameRequired",
+  namePattern: "servers.validation.namePattern",
+  hostRequired: "servers.validation.hostRequired",
+  hostInvalid: "servers.validation.hostInvalid",
+  portRequired: "servers.validation.portRequired",
+  portRange: "servers.validation.portRange",
+  sshUserRequired: "servers.validation.sshUserRequired",
+  sshUserPattern: "servers.validation.sshUserPattern",
+  keyNameRequired: "servers.validation.keyNameRequired",
+  privateKeyRequired: "servers.validation.privateKeyRequired",
+  wizardKeyIdRequired: "servers.validation.wizardKeyIdRequired",
+  editKeyIdRequired: "servers.validation.editKeyIdRequired",
+  nodePasswordRequired: "servers.validation.nodePasswordRequired",
 } as const;
 
 /**

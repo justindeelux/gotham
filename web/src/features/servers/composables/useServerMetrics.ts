@@ -9,7 +9,6 @@ import type { ComputedRef, InjectionKey, Ref } from "vue";
 
 import type { MetricPoint, MetricStep } from "@/features/servers/api/metrics";
 import {
-  describeMetricsError,
   getServerMetrics,
   isMetricsDisabled,
 } from "@/features/servers/api/metrics";
@@ -17,6 +16,7 @@ import {
   buildMetricCharts,
   isMetricStep,
   metricRanges,
+  metricsFailureText,
   refreshMsForChoice,
 } from "@/features/servers/utils/serverMetricsView";
 import type {
@@ -24,6 +24,7 @@ import type {
   MetricRange,
   MetricRefreshChoice,
 } from "@/features/servers/utils/serverMetricsView";
+import { activeLocale } from "@/shared/i18n/locale";
 
 export interface ServerMetricsContext {
   metricRanges: MetricRange[];
@@ -55,7 +56,17 @@ export function useServerMetrics(
   const metricPoints = ref<MetricPoint[]>([]);
   const metricsLoading = ref(false);
   const metricsLoaded = ref(false);
-  const metricsError = ref<string | null>(null);
+  /**
+   * metricsFailure keeps the raw last window failure. The `metricsError`
+   * display derives from it in the current locale, so a language switch
+   * re-renders a retained alert without reloading the window or touching
+   * the auto-refresh cadence.
+   */
+  const metricsFailure = ref<unknown>(null);
+  /** metricsError renders the retained failure, or null while healthy. */
+  const metricsError = computed<string | null>(() =>
+    metricsFailureText(metricsFailure.value, activeLocale.value),
+  );
   /** False once the API answers the FEATURE_METRICS 404: the charts are hidden. */
   const metricsAvailable = ref(true);
 
@@ -106,9 +117,12 @@ export function useServerMetrics(
 
   /**
    * metricCharts maps the window's points onto the four real charts. Nothing is
-   * synthesized: every series is a projection of the returned `points`.
+   * synthesized: every series is a projection of the returned `points`. Chart
+   * titles follow the display locale; thresholds and values are untouched.
    */
-  const metricCharts = computed<MetricChart[]>(() => buildMetricCharts(metricPoints.value));
+  const metricCharts = computed<MetricChart[]>(() =>
+    buildMetricCharts(metricPoints.value, activeLocale.value),
+  );
 
   /**
    * loadMetrics reads the active step's window. Completion is guarded by both a
@@ -135,7 +149,7 @@ export function useServerMetrics(
     if (!quiet) {
       metricsLoading.value = true;
     }
-    metricsError.value = null;
+    metricsFailure.value = null;
     try {
       const to = new Date();
       const from = new Date(to.getTime() - range.windowMs);
@@ -163,7 +177,7 @@ export function useServerMetrics(
         stopMetricRefresh();
         return;
       }
-      metricsError.value = describeMetricsError(error);
+      metricsFailure.value = error;
     } finally {
       // Every request releases its own count. Only the newest one owns the
       // spinner; an obsolete one must not clear a loading state the current
@@ -239,7 +253,7 @@ export function useServerMetrics(
     metricSeriesStep.value = "1m";
     metricPoints.value = [];
     metricsLoaded.value = false;
-    metricsError.value = null;
+    metricsFailure.value = null;
     metricsAvailable.value = true;
     stopMetricRefresh();
   }

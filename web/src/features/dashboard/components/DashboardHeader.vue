@@ -6,23 +6,23 @@ import { RouterLink } from "vue-router";
 <template>
   <div class="page-head">
     <div>
-      <p class="eyebrow">Overview</p>
-      <h1>Dashboard</h1>
+      <p class="eyebrow">{{ $t("dashboard.header.eyebrow") }}</p>
+      <h1>{{ $t("dashboard.header.title") }}</h1>
       <p class="page-desc">
-        One control plane for every node, application, and database.
+        {{ $t("dashboard.header.description") }}
       </p>
     </div>
     <div class="page-actions">
       <RouterLink :to="{ name: 'servers' }" custom>
         <template #default="{ navigate }">
-          <NButton quaternary @click="navigate">View servers</NButton>
+          <NButton quaternary @click="navigate">{{ $t("dashboard.header.viewServers") }}</NButton>
         </template>
       </RouterLink>
       <!-- The add-server wizard lives on the servers page (no dedicated
            route), so this links there with a forward-compatible flag. -->
       <RouterLink :to="{ name: 'servers', query: { add: '1' } }" custom>
         <template #default="{ navigate }">
-          <NButton type="primary" @click="navigate">Add server</NButton>
+          <NButton type="primary" @click="navigate">{{ $t("dashboard.header.addServer") }}</NButton>
         </template>
       </RouterLink>
     </div>

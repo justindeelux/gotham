@@ -5,6 +5,7 @@
 
 import { useMessage } from "naive-ui";
 import { computed, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 
 import { describeServerError } from "@/features/servers/api/servers";
@@ -30,6 +31,7 @@ export function useServersPage() {
   const route = useRoute();
   const serversStore = useServersStore();
   const message = useMessage();
+  const { t } = useI18n();
 
   const wizardOpen = ref(false);
   const editOpen = ref(false);
@@ -100,7 +102,7 @@ export function useServersPage() {
     try {
       const outcome = await serversStore.validate(server.id);
       if (outcome.ok) {
-        message.success(`${server.name}: validation passed`);
+        message.success(t("servers.toasts.validationPassed", { name: server.name }));
         return;
       }
       const failed = outcome.checks
@@ -108,7 +110,7 @@ export function useServersPage() {
         .map((check) => check.name)
         .join(", ");
       message.error(
-        outcome.message || `${server.name}: failed checks: ${failed}`,
+        outcome.message || t("servers.toasts.validationFailed", { name: server.name, failed }),
       );
     } catch (error) {
       message.error(describeServerError(error));
@@ -135,9 +137,11 @@ export function useServersPage() {
       ).length;
       const total = results.length;
       if (failed === 0) {
-        message.success(`SSH check passed for ${total} ${total === 1 ? "node" : "nodes"}`);
+        const key =
+          total === 1 ? "servers.toasts.sshAllPassedOne" : "servers.toasts.sshAllPassedOther";
+        message.success(t(key, { total }));
       } else {
-        message.error(`SSH check failed for ${failed} of ${total} nodes`);
+        message.error(t("servers.toasts.sshSomeFailed", { failed, total }));
       }
     } finally {
       checkingAll.value = false;
@@ -162,14 +166,14 @@ export function useServersPage() {
 
   /** handleUpdated refreshes the edited row in place. */
   function handleUpdated(updated: Server): void {
-    message.success(`Saved ${updated.name}`);
+    message.success(t("servers.toasts.saved", { name: updated.name }));
   }
 
   /** handleDelete removes one server after the popconfirm is accepted. */
   async function handleDelete(server: Server): Promise<void> {
     try {
       await serversStore.removeServer(server.id);
-      message.success(`Deleted ${server.name}`);
+      message.success(t("servers.toasts.deleted", { name: server.name }));
     } catch (error) {
       message.error(describeServerError(error));
     }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { NButton } from "naive-ui";
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 
 import { useLogStream } from "@/features/servers/composables/useLogStream";
 
@@ -59,6 +60,15 @@ const {
   clearLines,
   downloadLog,
 } = useLogStream(props, logBody);
+
+const { t } = useI18n();
+
+/** lineCountText renders the rendered-line count in the display locale. */
+const lineCountText = computed<string>(() =>
+  lines.value.length === 1
+    ? t("servers.logs.lineOne", { count: 1 })
+    : t("servers.logs.lineOther", { count: lines.value.length }),
+);
 </script>
 
 <template>
@@ -79,7 +89,7 @@ const {
         secondary
         @click="togglePause"
       >
-        {{ isPaused ? "Resume" : "Pause" }}
+        {{ isPaused ? $t("servers.logs.resume") : $t("servers.logs.pause") }}
       </NButton>
       <NButton
         size="small"
@@ -87,11 +97,11 @@ const {
         :type="isFollowing ? 'primary' : 'default'"
         @click="toggleFollow"
       >
-        {{ isFollowing ? "Following" : "Follow" }}
+        {{ isFollowing ? $t("servers.logs.following") : $t("servers.logs.follow") }}
       </NButton>
-      <NButton size="small" secondary @click="clearLines">Clear</NButton>
-      <NButton size="small" secondary @click="downloadLog">Download</NButton>
-      <span class="log-viewer__count">{{ lines.length }} lines</span>
+      <NButton size="small" secondary @click="clearLines">{{ $t("servers.logs.clear") }}</NButton>
+      <NButton size="small" secondary @click="downloadLog">{{ $t("servers.logs.download") }}</NButton>
+      <span class="log-viewer__count">{{ lineCountText }}</span>
     </div>
 
     <!-- role=log + aria-live announce appended lines; tabindex makes the
@@ -103,12 +113,12 @@ const {
       role="log"
       aria-live="polite"
       aria-relevant="additions"
-      aria-label="Log output"
+      :aria-label="$t('servers.logs.logLabel')"
       tabindex="0"
       @scroll="handleScroll"
     >
       <p v-if="lines.length === 0" class="log-viewer__empty">
-        Waiting for log output…
+        {{ $t("servers.logs.waiting") }}
       </p>
       <div
         v-for="line in lines"
@@ -122,7 +132,7 @@ const {
     </div>
 
     <p class="log-viewer__channel">
-      Channel: <span class="mono">{{ channelName }}</span>
+      {{ $t("servers.logs.channel") }} <span class="mono">{{ channelName }}</span>
     </p>
   </section>
 </template>

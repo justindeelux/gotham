@@ -27,7 +27,7 @@ function isActive(filter: ContainerFilter): boolean {
 
 <template>
   <div class="toolbar">
-    <div class="filters" role="group" aria-label="Filter containers by status">
+    <div class="filters" role="group" :aria-label="$t('servers.toolbar.filterContainers')">
       <button
         class="chip"
         type="button"
@@ -35,7 +35,7 @@ function isActive(filter: ContainerFilter): boolean {
         :aria-pressed="isActive('all')"
         @click="selectFilter('all')"
       >
-        All <span class="nav-count">{{ filterCounts.all }}</span>
+        {{ $t("servers.filters.all") }} <span class="nav-count">{{ filterCounts.all }}</span>
       </button>
       <button
         class="chip"
@@ -44,7 +44,7 @@ function isActive(filter: ContainerFilter): boolean {
         :aria-pressed="isActive('running')"
         @click="selectFilter('running')"
       >
-        Running <span class="nav-count">{{ filterCounts.running }}</span>
+        {{ $t("servers.filters.running") }} <span class="nav-count">{{ filterCounts.running }}</span>
       </button>
       <button
         class="chip"
@@ -53,14 +53,14 @@ function isActive(filter: ContainerFilter): boolean {
         :aria-pressed="isActive('exited')"
         @click="selectFilter('exited')"
       >
-        Exited <span class="nav-count">{{ filterCounts.exited }}</span>
+        {{ $t("servers.filters.exited") }} <span class="nav-count">{{ filterCounts.exited }}</span>
       </button>
     </div>
     <NInput
       v-model:value="searchQuery"
       class="search-input"
-      placeholder="Search container or image…"
-      aria-label="Search containers"
+      :placeholder="$t('servers.toolbar.searchContainersPlaceholder')"
+      :aria-label="$t('servers.toolbar.searchContainers')"
       clearable
     >
       <template #prefix>

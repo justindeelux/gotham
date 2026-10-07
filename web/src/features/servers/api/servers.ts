@@ -2,6 +2,15 @@ import type { AxiosResponse } from "axios";
 
 import type { ApiError } from "@/shared/api/http";
 import { http } from "@/shared/api/http";
+import { activeLocale } from "@/shared/i18n/locale";
+
+import enCatalog from "../locales/en";
+import viCatalog from "../locales/vi";
+
+/** catalogFor selects the servers display dictionary for one locale. */
+function catalogFor(locale?: string | null): typeof enCatalog {
+  return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
+}
 
 /** Lifecycle state of a managed server. */
 export type ServerStatus =
@@ -209,15 +218,39 @@ export function isApiError(error: unknown): error is ApiError {
   );
 }
 
-/** describeServerError maps a thrown error to a user-facing message. */
-export function describeServerError(error: unknown): string {
+/**
+ * describeServerError maps a thrown error to a user-facing message.
+ * The useful technical detail always passes through untouched; only the
+ * empty fallbacks follow the display locale.
+ */
+export function describeServerError(error: unknown, locale?: string | null): string {
+  const errors = catalogFor(locale).errors;
   if (isApiError(error)) {
-    return stripErrorPrefix(error.message) || "Request failed";
+    return stripErrorPrefix(error.message) || errors.requestFailed;
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    return stripErrorPrefix(error.message) || errors.unexpected;
   }
-  return "Something went wrong. Please try again.";
+  return errors.unexpected;
+}
+
+/**
+ * failureText renders a retained failure for display in the current locale:
+ * a localized summary plus the useful raw diagnostic as plain text. Raw
+ * classification still happens on the untouched error object (isApiError,
+ * stripErrorPrefix); only this presentation string is localized, resolved
+ * at render time so a language switch re-renders without refetching.
+ */
+export function failureText(error: unknown, locale?: string | null): string {
+  const errors = catalogFor(locale).errors;
+  const raw =
+    isApiError(error) || error instanceof Error ? error.message : "";
+  const detail = stripErrorPrefix(raw ?? "");
+  if (detail === "") {
+    return isApiError(error) ? errors.requestFailed : errors.unexpected;
+  }
+  const summary = isApiError(error) ? errors.requestFailed : errors.unexpected;
+  return `${summary} — ${detail}`;
 }
 
 /**

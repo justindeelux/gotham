@@ -11,6 +11,7 @@ import {
   NText,
 } from "naive-ui";
 import { inject } from "vue";
+import { useI18n } from "vue-i18n";
 
 import type { MetricStep } from "@/features/servers/api/metrics";
 import {
@@ -20,6 +21,7 @@ import type { MetricRefreshChoice } from "@/features/servers/utils/serverMetrics
 import {
   formatPercentValue,
   formatRateValue,
+  metricRangeHint,
 } from "@/features/servers/utils/serverMetricsView";
 import MetricsChart from "@/shared/ui/MetricsChart.vue";
 
@@ -27,6 +29,8 @@ const metrics = inject(ServerMetricsKey);
 if (!metrics) {
   throw new Error("ServerMetricsTab must be used inside ServerDetailPage.");
 }
+
+const { locale } = useI18n();
 
 const {
   metricRanges,
@@ -38,7 +42,6 @@ const {
   metricsAvailable,
   metricRefresh,
   metricSeriesStep,
-  activeMetricRange,
   appliedMetricRange,
   hasMetrics,
   metricCharts,
@@ -50,8 +53,8 @@ const {
 
 <template>
   <NSpace vertical :size="16" style="margin-top: 16px">
-    <NCard v-if="!metricsAvailable" title="Metrics unavailable">
-      <NEmpty description="Server metrics are not enabled on this control plane (FEATURE_METRICS=false)." />
+    <NCard v-if="!metricsAvailable" :title="$t('servers.metrics.unavailable')">
+      <NEmpty :description="$t('servers.errors.metricsDisabled')" />
     </NCard>
 
     <template v-else>
@@ -70,17 +73,17 @@ const {
           </NRadioButton>
         </NRadioGroup>
         <NText depth="3">
-          {{ activeMetricRange.hint }}
+          {{ metricRangeHint(metricStep, locale) }}
           <template v-if="metricsLoaded && metricSeriesStep !== metricStep">
-            · server returned step {{ metricSeriesStep }}
+            · {{ $t("servers.metrics.serverStep", { step: metricSeriesStep }) }}
           </template>
         </NText>
         <NSpace align="center" :size="8">
-          <NText depth="3">Auto-refresh</NText>
+          <NText depth="3">{{ $t("servers.metrics.autoRefresh") }}</NText>
           <NRadioGroup
             :value="metricRefresh"
             size="small"
-            aria-label="Metrics auto-refresh"
+            :aria-label="$t('servers.metrics.autoRefresh')"
             @update:value="(value: MetricRefreshChoice) => selectMetricRefresh(value)"
           >
             <NRadioButton
@@ -93,15 +96,14 @@ const {
           </NRadioGroup>
         </NSpace>
         <NText depth="3" style="margin-left: auto">
-          Samples are kept 30 days · empty buckets are gaps, not
-          zeros
+          {{ $t("servers.metrics.samplesNote") }}
         </NText>
         <NButton
           size="small"
           :loading="metricsLoading"
           @click="void loadMetrics()"
         >
-          Refresh
+          {{ $t("servers.metrics.refresh") }}
         </NButton>
       </div>
 
@@ -114,7 +116,7 @@ const {
         <NSpace align="center" :size="12" wrap>
           <span>{{ metricsError }}</span>
           <NButton size="small" @click="void loadMetrics()">
-            Retry
+            {{ $t("servers.metrics.retry") }}
           </NButton>
         </NSpace>
       </NAlert>
@@ -147,10 +149,10 @@ const {
                 size="small"
                 :description="
                   metricsError
-                    ? 'Metrics unavailable.'
+                    ? $t('servers.metrics.emptyError')
                     : metricsLoaded
-                      ? 'No samples in this window.'
-                      : 'Loading the metrics window…'
+                      ? $t('servers.metrics.emptyNone')
+                      : $t('servers.metrics.emptyLoading')
                 "
               />
             </div>

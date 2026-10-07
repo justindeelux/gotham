@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NTag, NText } from "naive-ui";
-import { inject } from "vue";
+import { computed, inject } from "vue";
 
 import { WizardKey } from "@/features/servers/composables/useAddServerWizard";
 import ServerStatusTag from "@/features/servers/components/ServerStatusTag.vue";
@@ -9,15 +9,19 @@ const wizard = inject(WizardKey);
 if (!wizard) {
   throw new Error("WizardFinishStep must be used inside AddServerWizard.");
 }
+
+/** statusName renders the current lifecycle state for the finish hint. */
+const statusName = computed<string>(() =>
+  wizard.currentServer.value ? wizard.currentServer.value.status : "pending",
+);
 </script>
 
 <template>
   <div class="finish">
     <span class="avatar avatar--lg">{{ wizard.nodeInitials.value }}</span>
-    <h4>{{ wizard.currentServer.value?.name ?? wizard.form.name }} passed validation</h4>
+    <h4>{{ $t("servers.wizard.finishPassed", { name: wizard.currentServer.value?.name ?? wizard.form.name }) }}</h4>
     <NText depth="3">
-      Install the agent on the node and it will check in over gRPC.
-      The server shows Ready only after its first heartbeat.
+      {{ $t("servers.wizard.finishHint", { status: $t(`servers.status.${statusName}`) }) }}
     </NText>
     <div class="finish-tags">
       <ServerStatusTag v-if="wizard.currentServer.value" :status="wizard.currentServer.value.status" />

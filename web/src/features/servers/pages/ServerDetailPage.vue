@@ -12,9 +12,10 @@ import {
 } from "naive-ui";
 import { computed, onMounted, provide, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 
 import type { Server } from "@/features/servers/api/servers";
-import { describeServerError, getServer } from "@/features/servers/api/servers";
+import { describeServerError, failureText, getServer } from "@/features/servers/api/servers";
 import EditServerModal from "@/features/servers/components/EditServerModal.vue";
 import ServerDetailHeader from "@/features/servers/components/ServerDetailHeader.vue";
 import ServerMetricsTab from "@/features/servers/components/ServerMetricsTab.vue";
@@ -29,13 +30,29 @@ import { useServersStore } from "@/features/servers/stores/servers";
 const route = useRoute();
 const router = useRouter();
 const message = useMessage();
+const { locale, t } = useI18n();
 const serversStore = useServersStore();
 
 const serverId = computed<string>(() => String(route.params.id ?? ""));
 
 const server = ref<Server | null>(null);
 const loading = ref(false);
-const error = ref<string | null>(null);
+/**
+ * fetchFailure keeps the raw last detail failure. The `error` display
+ * derives from it in the current locale, so a language switch re-renders
+ * a retained banner without reloading the server.
+ */
+const fetchFailure = ref<unknown>(null);
+/** error renders the retained failure, or null while healthy. */
+const error = computed<string | null>(() => {
+  if (!serverId.value) {
+    return t("servers.detail.unknownServer");
+  }
+  if (fetchFailure.value === null || fetchFailure.value === undefined) {
+    return null;
+  }
+  return failureText(fetchFailure.value, locale.value);
+});
 const validating = ref(false);
 const deleting = ref(false);
 const editOpen = ref(false);
@@ -48,16 +65,15 @@ provide(ServerMetricsKey, metricsContext);
 /** fetchServer loads one server by route id; 404 surfaces as an error state. */
 async function fetchServer(): Promise<void> {
   if (!serverId.value) {
-    error.value = "Unknown server.";
     return;
   }
   loading.value = true;
-  error.value = null;
+  fetchFailure.value = null;
   try {
     server.value = await getServer(serverId.value);
   } catch (err) {
     server.value = null;
-    error.value = describeServerError(err);
+    fetchFailure.value = err;
   } finally {
     loading.value = false;
   }
@@ -75,7 +91,7 @@ async function handleValidate(): Promise<void> {
       server.value = outcome.server;
     }
     if (outcome.ok) {
-      message.success(`${server.value.name}: validation passed`);
+      message.success(t("servers.toasts.validationPassed", { name: server.value.name }));
       return;
     }
     const failed = outcome.checks
@@ -83,7 +99,7 @@ async function handleValidate(): Promise<void> {
       .map((check) => check.name)
       .join(", ");
     message.error(
-      outcome.message || `${server.value.name}: failed checks: ${failed}`,
+      outcome.message || t("servers.toasts.validationFailed", { name: server.value.name, failed }),
     );
   } catch (err) {
     message.error(describeServerError(err));
@@ -95,7 +111,7 @@ async function handleValidate(): Promise<void> {
 /** handleUpdated applies an edit-modal save to the header. */
 function handleUpdated(updated: Server): void {
   server.value = updated;
-  message.success(`Saved ${updated.name}`);
+  message.success(t("servers.toasts.saved", { name: updated.name }));
 }
 
 /** handleDelete removes the server and returns to the list. */
@@ -107,7 +123,7 @@ async function handleDelete(): Promise<void> {
   deleting.value = true;
   try {
     await serversStore.removeServer(server.value.id);
-    message.success(`Deleted ${name}`);
+    message.success(t("servers.toasts.deleted", { name }));
     await router.push({ name: "servers" });
   } catch (err) {
     message.error(describeServerError(err));
@@ -129,8 +145,8 @@ onMounted(() => {
 
 <template>
   <NSpace vertical :size="16">
-    <nav class="breadcrumb" aria-label="Breadcrumb">
-      <RouterLink to="/servers">Servers</RouterLink>
+    <nav class="breadcrumb" :aria-label="$t('servers.detail.breadcrumbNav')">
+      <RouterLink to="/servers">{{ $t("servers.detail.serversBreadcrumb") }}</RouterLink>
       <span class="breadcrumb__sep">/</span>
       <span class="muted">{{ server?.name ?? serverId }}</span>
     </nav>
@@ -154,7 +170,7 @@ onMounted(() => {
         />
 
         <NTabs v-model:value="activeTab" type="line" animated>
-          <NTabPane name="overview" tab="Overview">
+          <NTabPane name="overview" :tab="$t('servers.detail.tabOverview')">
             <ServerOverviewTab
               :server="server"
               :deleting="deleting"
@@ -162,10 +178,10 @@ onMounted(() => {
             />
           </NTabPane>
 
-          <NTabPane name="containers" tab="Containers">
+          <NTabPane name="containers" :tab="$t('servers.detail.tabContainers')">
             <NCard style="margin-top: 16px">
               <NEmpty
-                description="Container management lives on the containers page."
+                :description="$t('servers.detail.containersEmpty')"
               >
                 <template #extra>
                   <RouterLink
@@ -177,7 +193,7 @@ onMounted(() => {
                   >
                     <template #default="{ navigate }">
                       <NButton type="primary" @click="navigate">
-                        Open containers
+                        {{ $t("servers.detail.openContainers") }}
                       </NButton>
                     </template>
                   </RouterLink>
@@ -186,17 +202,17 @@ onMounted(() => {
             </NCard>
           </NTabPane>
 
-          <NTabPane name="metrics" tab="Metrics">
+          <NTabPane name="metrics" :tab="$t('servers.detail.tabMetrics')">
             <ServerMetricsTab />
           </NTabPane>
 
-          <NTabPane name="proxy" tab="Proxy & Traefik">
+          <NTabPane name="proxy" :tab="$t('servers.detail.tabProxy')">
             <NCard style="margin-top: 16px">
-              <NEmpty description="Proxy & Traefik ships in Phase 6." />
+              <NEmpty :description="$t('servers.detail.proxyEmpty')" />
             </NCard>
           </NTabPane>
 
-          <NTabPane name="settings" tab="Node settings">
+          <NTabPane name="settings" :tab="$t('servers.detail.tabSettings')">
             <ServerSettingsTab :server="server" />
           </NTabPane>
         </NTabs>

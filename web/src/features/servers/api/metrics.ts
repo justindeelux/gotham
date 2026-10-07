@@ -1,5 +1,14 @@
 import { http } from "@/shared/api/http";
+import { activeLocale } from "@/shared/i18n/locale";
 import { isApiError, stripErrorPrefix } from "./servers";
+
+import enCatalog from "../locales/en";
+import viCatalog from "../locales/vi";
+
+/** catalogFor selects the servers display dictionary for one locale. */
+function catalogFor(locale?: string | null): typeof enCatalog {
+  return (locale ?? activeLocale.value) === "vi" ? viCatalog : enCatalog;
+}
 
 /**
  * Typed client for the server metrics range route served by
@@ -66,25 +75,30 @@ export function isMetricsDisabled(error: unknown): boolean {
   return isApiError(error) && error.status === 404;
 }
 
-/** describeMetricsError maps a thrown error to a user-facing message. */
-export function describeMetricsError(error: unknown): string {
+/**
+ * describeMetricsError maps a thrown error to a user-facing message.
+ * Curated summaries follow the display locale; the useful technical detail
+ * always passes through untouched.
+ */
+export function describeMetricsError(error: unknown, locale?: string | null): string {
+  const errors = catalogFor(locale).errors;
   if (isApiError(error)) {
     if (error.status === 401) {
-      return "Your session expired. Please sign in again.";
+      return errors.sessionExpired;
     }
     if (error.status === 404) {
-      return "Server metrics are not enabled on this control plane (FEATURE_METRICS=false).";
+      return errors.metricsDisabled;
     }
     if (error.status === 400) {
       return (
       stripErrorPrefix(error.message) ||
-      "Invalid metrics range. Pick another range and retry."
+      errors.metricsRange
     );
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return stripErrorPrefix(error.message) || errors.requestFailed;
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    return stripErrorPrefix(error.message) || errors.unexpected;
   }
-  return "Something went wrong. Please try again.";
+  return errors.unexpected;
 }

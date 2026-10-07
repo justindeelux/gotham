@@ -21,6 +21,7 @@ import {
   useAddServerWizard,
 } from "@/features/servers/composables/useAddServerWizard";
 import { formatBytes } from "@/shared/utils/format";
+import { useI18n } from "vue-i18n";
 
 interface Props {
   show: boolean;
@@ -34,7 +35,6 @@ const emit = defineEmits<{
 
 const wizard = useAddServerWizard(emit);
 provide(WizardKey, wizard);
-
 const {
   step,
   stepNames,
@@ -49,6 +49,7 @@ const {
 } = wizard;
 
 const message = useMessage();
+const { t } = useI18n();
 
 // The agent installer is not a release asset and needs its sibling files
 // (deploy/release-verify.sh, gotham-agent-updater.conf, ...); it also fails
@@ -74,9 +75,9 @@ const installCommand = [
 async function copyInstallCommand(): Promise<void> {
   try {
     await navigator.clipboard.writeText(installCommand);
-    message.success("Install command copied");
+    message.success(t("servers.wizard.installCopied"));
   } catch {
-    message.error("Could not copy to clipboard");
+    message.error(t("servers.wizard.copyFailed"));
   }
 }
 </script>
@@ -85,15 +86,14 @@ async function copyInstallCommand(): Promise<void> {
   <NModal
     :show="props.show"
     preset="card"
-    title="Add server"
+    :title="$t('servers.wizard.title')"
     :mask-closable="false"
     class="wizard-modal"
     style="width: 880px; max-width: 96vw"
     @update:show="wizard.handleShowChange"
   >
     <NText depth="3">
-      Probe the node over SSH (Docker, CPU, RAM, disk), then install the agent.
-      Probes run for at most 15 seconds.
+      {{ $t("servers.wizard.intro") }}
     </NText>
 
     <div class="wizard">
@@ -111,8 +111,7 @@ async function copyInstallCommand(): Promise<void> {
           </li>
         </ol>
         <p class="wizard-rail-note">
-          The private key or password is encrypted before it is stored and is
-          never returned by the API.
+          {{ $t("servers.wizard.secretNote") }}
         </p>
       </div>
 
@@ -132,42 +131,37 @@ async function copyInstallCommand(): Promise<void> {
 
           <!-- Step 3: install the agent (real states only) -->
           <NSpace v-else-if="step === 2" vertical :size="12">
-            <NText strong>Install the agent</NText>
+            <NText strong>{{ $t("servers.wizard.installTitle") }}</NText>
 
             <div class="check-list">
               <WizardCheckRow
                 state="ok"
-                label="Server registered on the control plane"
+                :label="$t('servers.wizard.registeredRow')"
                 :detail="currentServer?.name ?? ''"
               />
               <WizardCheckRow
                 :state="validationPassed ? 'ok' : 'idle'"
-                label="Readiness probes passed"
+                :label="$t('servers.wizard.probesRow')"
                 :detail="`${passedCount}/${fixedChecks.length}`"
               />
               <WizardCheckRow
                 :state="isReady ? 'ok' : validating ? 'running' : 'idle'"
-                label="Agent installed and reporting"
-                :detail="isReady ? 'heartbeat received' : 'waiting for first heartbeat'"
+                :label="$t('servers.wizard.agentRow')"
+                :detail="isReady ? $t('servers.wizard.agentHeartbeat') : $t('servers.wizard.agentWaiting')"
               />
             </div>
 
             <NSpace align="center" :size="8">
-              <NText depth="2">Current status:</NText>
+              <NText depth="2">{{ $t("servers.wizard.currentStatus") }}</NText>
               <ServerStatusTag v-if="currentServer" :status="currentServer.status" />
             </NSpace>
 
             <NAlert v-if="isReady" type="success" :show-icon="true">
-              The agent registered and the server is ready.
+              {{ $t("servers.wizard.installReady") }}
             </NAlert>
 
             <NText depth="2">
-              SSH into the node and run the block below. It copies the control
-              plane's CA certificate, clones the installer's sibling files, and
-              registers the node. Replace the CP host and node placeholders; the
-              installer fails closed without --ca, and the agent dials the
-              loopback address unless GOTHAM_AGENT_CP_ADDR points at the control
-              plane.
+              {{ $t("servers.wizard.installHowto") }}
             </NText>
 
             <NSpace align="start" :size="8">
@@ -178,19 +172,15 @@ async function copyInstallCommand(): Promise<void> {
                 :autosize="{ minRows: 8, maxRows: 11 }"
                 class="grow install-command"
               />
-              <NButton @click="copyInstallCommand">Copy</NButton>
+              <NButton @click="copyInstallCommand">{{ $t("servers.wizard.copy") }}</NButton>
             </NSpace>
 
             <NText depth="3">
-              The page keeps polling every 5 seconds; the status badge flips to
-              Ready once the agent checks in. No install progress stream exists
-              yet, so this screen only shows live states — never a simulated
-              percentage.
+              {{ $t("servers.wizard.pollingNote") }}
             </NText>
 
             <NText v-if="currentServer" depth="3">
-              Detected memory: {{ formatBytes(currentServer.total_mem) }} · disk:
-              {{ formatBytes(currentServer.total_disk) }}
+              {{ $t("servers.wizard.detectedMemory", { mem: formatBytes(currentServer.total_mem), disk: formatBytes(currentServer.total_disk) }) }}
             </NText>
           </NSpace>
 
@@ -199,32 +189,32 @@ async function copyInstallCommand(): Promise<void> {
         </div>
 
         <div class="wizard-foot">
-          <NButton v-if="step > 0" tertiary @click="step -= 1">Back</NButton>
-          <span class="step-counter">Step {{ step + 1 }} / 4</span>
+          <NButton v-if="step > 0" tertiary @click="step -= 1">{{ $t("servers.wizard.back") }}</NButton>
+          <span class="step-counter">{{ $t("servers.wizard.stepOf", { current: step + 1 }) }}</span>
           <span class="grow" />
           <template v-if="step === 0">
-            <NButton @click="wizard.closeWizard">Cancel</NButton>
+            <NButton @click="wizard.closeWizard">{{ $t("servers.wizard.cancel") }}</NButton>
             <NButton type="primary" :loading="creating" @click="wizard.handleCreate">
-              {{ hasCreatedServer ? "Continue" : "Create & continue" }}
+              {{ hasCreatedServer ? $t("servers.wizard.continue") : $t("servers.wizard.createContinue") }}
             </NButton>
           </template>
           <template v-else-if="step === 1">
             <NButton :loading="validating" @click="wizard.handleValidate">
-              Retry validation
+              {{ $t("servers.wizard.retryValidation") }}
             </NButton>
             <NButton
               type="primary"
               :disabled="!validationPassed"
               @click="step = 2"
             >
-              Continue
+              {{ $t("servers.wizard.continue") }}
             </NButton>
           </template>
           <template v-else-if="step === 2">
-            <NButton type="primary" @click="step = 3">Continue to finish</NButton>
+            <NButton type="primary" @click="step = 3">{{ $t("servers.wizard.continueToFinish") }}</NButton>
           </template>
           <template v-else>
-            <NButton type="primary" @click="wizard.closeWizard">Done</NButton>
+            <NButton type="primary" @click="wizard.closeWizard">{{ $t("servers.wizard.done") }}</NButton>
           </template>
         </div>
       </div>

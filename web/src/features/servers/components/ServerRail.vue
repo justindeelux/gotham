@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
+import { useI18n } from "vue-i18n";
 
 import RailIconButton from "@/features/servers/components/RailIconButton.vue";
 import {
@@ -14,12 +15,17 @@ import { useServersStore } from "@/features/servers/stores/servers";
 
 const serversStore = useServersStore();
 const route = useRoute();
+const { locale, t } = useI18n();
 
 const isDashboard = computed<boolean>(() => route.name === "dashboard");
 
 const alertCount = computed<number>(() => countAlerts(serversStore.servers));
 
-const alertText = computed<string>(() => alertsLabel(alertCount.value));
+const alertText = computed<string>(() => alertsLabel(alertCount.value, locale.value));
+
+const alertsLabelText = computed<string>(() =>
+  t("servers.rail.alerts", { text: alertText.value }),
+);
 
 // The persistent rail owns the shared server poll: it arms the interval on
 // mount and is the only component that clears it (on its own unmount). Pages
@@ -40,9 +46,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <nav class="rail" aria-label="Servers">
+  <nav class="rail" :aria-label="$t('servers.rail.navLabel')">
     <div class="rail-item" :class="{ 'is-active': isDashboard }">
-      <RailIconButton :to="{ name: 'dashboard' }" label="Gotham — home">
+      <RailIconButton :to="{ name: 'dashboard' }" :label="$t('servers.rail.home')">
         <svg
           viewBox="0 0 24 24"
           fill="none"
@@ -59,7 +65,7 @@ onUnmounted(() => {
 
     <div class="rail-sep" aria-hidden="true"></div>
 
-    <div class="rail-nav" role="list" aria-label="Managed servers">
+    <div class="rail-nav" role="list" :aria-label="$t('servers.rail.managedServers')">
       <div
         v-for="server in serversStore.servers"
         :key="server.id"
@@ -68,7 +74,7 @@ onUnmounted(() => {
       >
         <RailIconButton
           :to="{ name: 'server-detail', params: { id: server.id } }"
-          :label="serverTip(server)"
+          :label="serverTip(server, locale)"
         >
           {{ serverInitials(server.name) }}
           <span
@@ -83,7 +89,7 @@ onUnmounted(() => {
     <div class="rail-item">
       <RailIconButton
         :to="{ name: 'servers', query: { add: '1' } }"
-        label="Add server"
+        :label="$t('servers.rail.addServer')"
         link-class="rail-btn--add"
       >
         <svg
@@ -103,7 +109,7 @@ onUnmounted(() => {
     <div class="rail-foot">
       <div class="rail-sep" aria-hidden="true"></div>
       <div class="rail-item">
-        <RailIconButton :to="{ name: 'dashboard' }" label="Overview">
+        <RailIconButton :to="{ name: 'dashboard' }" :label="$t('servers.rail.overview')">
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -122,7 +128,7 @@ onUnmounted(() => {
       <div class="rail-item">
         <RailIconButton
           :to="{ name: 'servers' }"
-          :label="`System alerts — ${alertText}`"
+          :label="alertsLabelText"
           :tip="alertText"
           :badge-count="alertCount"
         >

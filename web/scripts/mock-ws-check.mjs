@@ -284,6 +284,9 @@ async function loadServersStore() {
               "export const validateServer = (...a) => api().validateServer(...a);",
               "export const updateServer = (...a) => api().updateServer(...a);",
               "export const describeServerError = (...a) => api().describeServerError(...a);",
+              "export const isApiError = (...a) => api().isApiError(...a);",
+              "export const stripErrorPrefix = (...a) => api().stripErrorPrefix(...a);",
+              "export const failureText = (...a) => api().failureText(...a);",
             ].join("\n"),
             loader: "js",
           }));
@@ -323,6 +326,14 @@ function makeServersApi() {
     }),
     updateServer: async () => ({ id: "updated" }),
     describeServerError: (error) =>
+      error instanceof Error ? error.message : String(error),
+    isApiError: (error) =>
+      typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      "status" in error,
+    stripErrorPrefix: (message) => String(message ?? "").trim(),
+    failureText: (error) =>
       error instanceof Error ? error.message : String(error),
   };
 }

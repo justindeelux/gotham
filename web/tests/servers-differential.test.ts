@@ -9,7 +9,7 @@
 // and out-of-range IPv4-shaped input passes the host check via the hostname
 // fallback (matches the forms, see server-validation.test.ts).
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
 import {
@@ -20,8 +20,27 @@ import {
   serverPortSchema,
   serverUserSchema,
 } from "@/features/servers/schemas/servers";
+import {
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 import type { RuleFromOptions } from "@/shared/validation/naiveAdapter";
+
+// Schema messages are namespaced catalog keys resolved at validation time,
+// so the feature catalogs must be registered and the composer on English
+// before the differential rows run. Resolved English display text stays
+// byte-identical to the pre-i18n literals pinned below.
+beforeAll(() => {
+  registerDiscoveredCatalogs();
+});
+
+beforeEach(() => {
+  resetLocaleState();
+  syncComposerLocale("en");
+});
 
 interface Outcome {
   ok: boolean;
@@ -64,12 +83,12 @@ describe("server name field", () => {
         ["digit", "0", true, null],
         ["trailing dash", "trail-", true, null],
         ["63 chars", "a".repeat(63), true, null],
-        ["64 chars", "a".repeat(64), false, serverMessages.namePattern],
-        ["leading dash", "-lead", false, serverMessages.namePattern],
-        ["space", "has space", false, serverMessages.namePattern],
+        ["64 chars", "a".repeat(64), false, "Letters, digits, dots, dashes, and underscores only."],
+        ["leading dash", "-lead", false, "Letters, digits, dots, dashes, and underscores only."],
+        ["space", "has space", false, "Letters, digits, dots, dashes, and underscores only."],
         ["mixed", "UPPER_1-2.x", true, null],
-        ["unicode", "nœud", false, serverMessages.namePattern],
-        ["dot only", ".", false, serverMessages.namePattern],
+        ["unicode", "nœud", false, "Letters, digits, dots, dashes, and underscores only."],
+        ["dot only", ".", false, "Letters, digits, dots, dashes, and underscores only."],
       ],
       (value) => check(serverNameSchema, value),
     );
@@ -81,18 +100,18 @@ describe("server host field", () => {
     checkRows(
       [
         ["empty", "", false, "Enter an IP address or hostname."],
-        ["whitespace", "   ", false, serverMessages.hostInvalid],
+        ["whitespace", "   ", false, "Enter a valid IPv4 address or hostname."],
         ["ipv4", "203.0.113.90", true, null],
         ["padded ipv4", " 10.0.0.1 ", true, null],
         ["hostname", "node3.internal", true, null],
         ["single label", "a", true, null],
         ["bad-range ipv4", "999.1.1.1", true, null],
         ["bad-range ipv4 b", "256.1.1.1", true, null],
-        ["space", "bad host!", false, serverMessages.hostInvalid],
-        ["underscore", "bad_host.com", false, serverMessages.hostInvalid],
-        ["leading dash", "-bad.com", false, serverMessages.hostInvalid],
-        ["empty label", "a..b", false, serverMessages.hostInvalid],
-        ["long label", `${"a".repeat(64)}.com`, false, serverMessages.hostInvalid],
+        ["space", "bad host!", false, "Enter a valid IPv4 address or hostname."],
+        ["underscore", "bad_host.com", false, "Enter a valid IPv4 address or hostname."],
+        ["leading dash", "-bad.com", false, "Enter a valid IPv4 address or hostname."],
+        ["empty label", "a..b", false, "Enter a valid IPv4 address or hostname."],
+        ["long label", `${"a".repeat(64)}.com`, false, "Enter a valid IPv4 address or hostname."],
         ["punycode", "xn--nxasmq6b.example", true, null],
         ["uppercase", "UPPER.COM", true, null],
       ],
@@ -135,10 +154,10 @@ describe("ssh user field", () => {
         ["root", "root", true, null],
         ["underscored", "deploy_2", true, null],
         ["trailing dollar", "depl-oy$", true, null],
-        ["uppercase", "Root", false, serverMessages.sshUserPattern],
-        ["leading digit", "0root", false, serverMessages.sshUserPattern],
+        ["uppercase", "Root", false, "Enter a valid Unix username (lowercase, digits, _, -)."],
+        ["leading digit", "0root", false, "Enter a valid Unix username (lowercase, digits, _, -)."],
         ["leading underscore", "_ok", true, null],
-        ["space", "has space", false, serverMessages.sshUserPattern],
+        ["space", "has space", false, "Enter a valid Unix username (lowercase, digits, _, -)."],
       ],
       (value) => check(serverUserSchema, value),
     );
@@ -174,5 +193,29 @@ describe("conditional required fields", () => {
     expect(
       check(requiredField(serverMessages.keyNameRequired), "not-a-key", off),
     ).toEqual({ ok: true, message: null });
+  });
+});
+
+describe("vietnamese feedback", () => {
+  it("keeps acceptance while rendering translated messages", () => {
+    setLocale("vi", null);
+    try {
+      expect(check(serverNameSchema, "").message).toBe("Nhập tên nút.");
+      expect(check(serverNameSchema, "-lead").message).toBe(
+        "Chỉ dùng chữ cái, chữ số, chấm, gạch ngang và gạch dưới.",
+      );
+      expect(check(serverNameSchema, "build-node-03").ok).toBe(true);
+      expect(check(serverHostSchema, "").message).toBe("Nhập địa chỉ IP hoặc tên máy.");
+      expect(check(serverPortSchema, null).message).toBe("Nhập cổng SSH (1-65535).");
+      expect(check(serverPortSchema, 0).message).toBe(
+        "Cổng phải là số từ 1 đến 65535.",
+      );
+      expect(check(serverUserSchema, "").message).toBe("Nhập người dùng SSH.");
+      expect(
+        check(requiredField(serverMessages.nodePasswordRequired), "").message,
+      ).toBe("Nhập mật khẩu nút.");
+    } finally {
+      setLocale("en", null);
+    }
   });
 });

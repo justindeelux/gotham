@@ -34,12 +34,15 @@ func (h *hangingContainers) List(context.Context, uuid.UUID) ([]containers.Conta
 type gatedContainers struct {
 	containers.ContainerService
 	release chan struct{}
+	entered chan struct{}
+	once    sync.Once
 	listed  []containers.Container
 	mu      sync.Mutex
 	removes []string
 }
 
 func (g *gatedContainers) ListFresh(ctx context.Context, _ uuid.UUID) ([]containers.Container, error) {
+	g.once.Do(func() { close(g.entered) })
 	select {
 	case <-g.release:
 	case <-ctx.Done():
@@ -68,7 +71,7 @@ func TestSweepSkipsJobStartedMidList(t *testing.T) {
 	backups := newFakeBackupRepository()
 	serverID := uuid.New()
 	backups.serverIDs = []uuid.UUID{serverID}
-	gated := &gatedContainers{release: make(chan struct{})}
+	gated := &gatedContainers{release: make(chan struct{}), entered: make(chan struct{})}
 
 	manager := NewBackupService(BackupConfig{
 		Repository:         backups,
@@ -90,8 +93,15 @@ func TestSweepSkipsJobStartedMidList(t *testing.T) {
 		manager.sweepJobContainers()
 	}()
 
-	// The job starts while the list is stalled: lease first, then the run
-	// row (the order startRun guarantees), then its container appears.
+	// The job starts while the list is stalled: wait until the sweep is
+	// inside ListFresh (guards already read on old code), then lease,
+	// then the run row (the order startRun guarantees), then its
+	// container appears.
+	select {
+	case <-gated.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("sweep never reached ListFresh")
+	}
 	if !manager.claim(databaseID) {
 		t.Fatal("could not claim the database lease")
 	}

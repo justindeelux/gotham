@@ -19,15 +19,17 @@ import type { VueWrapper } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import CertificateForm from "../src/features/domains/components/CertificateForm.vue";
-import DynamicForm from "../src/features/templates/components/DynamicForm.vue";
-import EnvEditor from "../src/features/applications/components/EnvEditor.vue";
-import type { CertificateDraft } from "../src/features/domains/api/proxy";
+import domainsEn from "../src/features/domains/locales/en";
+import domainsVi from "../src/features/domains/locales/vi";
 import {
   i18n,
   registerDiscoveredCatalogs,
   resetLocaleState,
   syncComposerLocale,
-} from "@/shared/i18n";
+} from "../src/shared/i18n";
+import DynamicForm from "../src/features/templates/components/DynamicForm.vue";
+import EnvEditor from "../src/features/applications/components/EnvEditor.vue";
+import type { CertificateDraft } from "../src/features/domains/api/proxy";
 
 beforeEach(() => {
   registerDiscoveredCatalogs();
@@ -45,6 +47,14 @@ function mountWithI18n(component: unknown, options: Record<string, unknown>) {
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const mainCss = readFileSync(resolve(webRoot, "src/shared/styles/main.css"), "utf8");
+
+/** Feature catalogs render through the real composer in mounted checks. */
+beforeEach(() => {
+  resetLocaleState();
+  i18n.global.mergeLocaleMessage("en", { domains: domainsEn });
+  i18n.global.mergeLocaleMessage("vi", { domains: domainsVi });
+  syncComposerLocale("en");
+});
 
 /** readSfc returns the raw source of one single-file component. */
 function readSfc(relativePath: string): string {
@@ -202,6 +212,7 @@ describe("JUS-19 CertificateForm rows", () => {
   function mountForm() {
     return mount(CertificateForm, {
       props: { modelValue: draft, applications: [], providers: [] },
+      global: { plugins: [i18n] },
     });
   }
 
@@ -384,12 +395,12 @@ describe("JUS-19 DomainsPage rows", () => {
   const redirectSource = readSfc("src/features/domains/components/RedirectCreateCard.vue");
 
   it("pairs Provider|Name in one row of the DNS provider modal", () => {
-    expectPair(providerSource, 'label="Provider"', 'label="Name"');
+    expectPair(providerSource, "domains.providerDialog.provider", "domains.providerDialog.name");
   });
 
   it("puts Preserve path|Enabled beside the submit button", () => {
-    expectPair(redirectSource, "Redirect preserve path", "Add redirect", "redirect-form__bottom");
-    expectPair(redirectSource, "Redirect enabled now", "Add redirect", "redirect-form__bottom");
+    expectPair(redirectSource, "domains.redirects.preserveAria", "domains.redirects.addRedirect", "redirect-form__bottom");
+    expectPair(redirectSource, "domains.redirects.enabledNowAria", "domains.redirects.addRedirect", "redirect-form__bottom");
   });
 
   it("collapses the redirect bottom row per container, not viewport", () => {
@@ -404,11 +415,11 @@ describe("JUS-19 NotificationsPage rows", () => {
   const source = readSfc("src/features/notifications/components/ChannelFormDialog.vue");
 
   it("pairs Name|Kind in one row", () => {
-    expectPair(source, 'label="Name"', 'label="Kind"');
+    expectPair(source, "notifications.dialog.name", "notifications.dialog.kind");
   });
 
   it("pairs Resource scope|Enabled in one row", () => {
-    expectPair(source, 'label="Resource scope"', 'label="Enabled"');
+    expectPair(source, "notifications.dialog.resourceScope", "notifications.dialog.enabled");
   });
 });
 

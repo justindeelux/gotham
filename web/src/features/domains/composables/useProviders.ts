@@ -1,8 +1,9 @@
-import { inject, provide, ref } from "vue";
+import { computed, inject, provide, ref } from "vue";
 import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
+import { activeLocale } from "@/shared/i18n";
 
-import { describeProxyError } from "@/features/domains/api/proxy";
+import { describeProxyError, proxyText } from "@/features/domains/api/proxy";
 import type { DNSProvider, DNSProviderName } from "@/features/domains/api/proxy";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
@@ -37,7 +38,18 @@ function createProvidersState() {
 
   const providerOpen = ref(false);
   const providerSaving = ref(false);
-  const providerError = ref<string | null>(null);
+  /**
+   * Raw failure behind the dialog alert. The display string derives from it
+   * plus the current locale, so a language switch refreshes a retained
+   * alert without losing the typed draft.
+   */
+  const providerErrorRaw = ref<unknown>(null);
+  const providerError = computed<string | null>(() => {
+    void activeLocale.value;
+    return providerErrorRaw.value === null
+      ? null
+      : describeProxyError(providerErrorRaw.value);
+  });
   const editingProvider = ref<DNSProvider | null>(null);
   const providerForm = ref<ProviderForm>(emptyProviderForm());
 
@@ -66,7 +78,7 @@ function createProvidersState() {
       zones: [],
       enabled: true,
     };
-    providerError.value = null;
+    providerErrorRaw.value = null;
     providerOpen.value = true;
   }
 
@@ -84,13 +96,13 @@ function createProvidersState() {
       zones: [...provider.zones],
       enabled: provider.enabled,
     };
-    providerError.value = null;
+    providerErrorRaw.value = null;
     providerOpen.value = true;
   }
 
   /** handleSaveProvider creates or patches one DNS provider. */
   async function handleSaveProvider(): Promise<void> {
-    providerError.value = null;
+    providerErrorRaw.value = null;
     providerSaving.value = true;
     try {
       const form = providerForm.value;
@@ -104,7 +116,7 @@ function createProvidersState() {
           ...(form.credential !== "" ? { credential: form.credential } : {}),
           enabled: form.enabled,
         });
-        message.success("DNS provider saved.");
+        message.success(proxyText("domains.providers.saved", "DNS provider saved."));
       } else {
         await proxyStore.createProvider({
           provider: form.provider,
@@ -113,13 +125,13 @@ function createProvidersState() {
           credential: form.credential,
           enabled: form.enabled,
         });
-        message.success("DNS provider created.");
+        message.success(proxyText("domains.providers.created", "DNS provider created."));
       }
       // The plaintext token must not outlive the write (or the dialog).
       clearProviderCredential();
       providerOpen.value = false;
     } catch (error) {
-      providerError.value = describeProxyError(error);
+      providerErrorRaw.value = error;
     } finally {
       providerSaving.value = false;
     }
@@ -132,7 +144,11 @@ function createProvidersState() {
   ): Promise<void> {
     try {
       await proxyStore.updateProvider(provider.id, { enabled });
-      message.success(enabled ? "Provider enabled." : "Provider disabled.");
+      message.success(
+        enabled
+          ? proxyText("domains.providers.enabledToast", "Provider enabled.")
+          : proxyText("domains.providers.disabledToast", "Provider disabled."),
+      );
     } catch (error) {
       message.error(describeProxyError(error));
       // The store list still holds the server state after the refresh the
@@ -145,7 +161,7 @@ function createProvidersState() {
   async function handleDeleteProvider(provider: DNSProvider): Promise<void> {
     try {
       await proxyStore.removeProvider(provider.id);
-      message.success("DNS provider deleted.");
+      message.success(proxyText("domains.providers.deleted", "DNS provider deleted."));
     } catch (error) {
       message.error(describeProxyError(error));
     }

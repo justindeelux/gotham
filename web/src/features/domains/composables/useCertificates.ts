@@ -1,10 +1,12 @@
-import { inject, provide, ref } from "vue";
+import { computed, inject, provide, ref } from "vue";
 import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
+import { activeLocale } from "@/shared/i18n";
 
 import {
   describeProxyError,
   draftFromCertificate,
+  proxyText,
   toCertificateInput,
 } from "@/features/domains/api/proxy";
 import type { Certificate, CertificateDraft } from "@/features/domains/api/proxy";
@@ -20,7 +22,18 @@ function createCertificatesState() {
 
   const certificateOpen = ref(false);
   const certificateSaving = ref(false);
-  const certificateError = ref<string | null>(null);
+  /**
+   * Raw failure behind the dialog alert. The display string derives from it
+   * plus the current locale, so a language switch refreshes a retained
+   * alert without losing the typed draft.
+   */
+  const certificateErrorRaw = ref<unknown>(null);
+  const certificateError = computed<string | null>(() => {
+    void activeLocale.value;
+    return certificateErrorRaw.value === null
+      ? null
+      : describeProxyError(certificateErrorRaw.value);
+  });
   const editingCertificate = ref<Certificate | null>(null);
   const certificateDraft = ref<CertificateDraft>(emptyCertificateDraft());
 
@@ -28,7 +41,7 @@ function createCertificatesState() {
   function openCertificateCreate(): void {
     editingCertificate.value = null;
     certificateDraft.value = emptyCertificateDraft();
-    certificateError.value = null;
+    certificateErrorRaw.value = null;
     certificateOpen.value = true;
   }
 
@@ -36,30 +49,34 @@ function createCertificatesState() {
   function openCertificateEdit(certificate: Certificate): void {
     editingCertificate.value = certificate;
     certificateDraft.value = draftFromCertificate(certificate);
-    certificateError.value = null;
+    certificateErrorRaw.value = null;
     certificateOpen.value = true;
   }
 
   /** handleSaveCertificate creates or patches one certificate configuration. */
   async function handleSaveCertificate(): Promise<void> {
-    certificateError.value = null;
+    certificateErrorRaw.value = null;
     certificateSaving.value = true;
     try {
       const input = toCertificateInput(certificateDraft.value);
       const existing = editingCertificate.value;
       if (existing) {
         await proxyStore.updateCertificateConfig(existing.id, input);
-        message.success("Certificate configuration saved.");
+        message.success(
+          proxyText("domains.certificates.saved", "Certificate configuration saved."),
+        );
       } else {
         await proxyStore.createCertificateConfig({
           ...input,
           application_id: certificateDraft.value.application_id,
         });
-        message.success("Certificate configuration created.");
+        message.success(
+          proxyText("domains.certificates.created", "Certificate configuration created."),
+        );
       }
       certificateOpen.value = false;
     } catch (error) {
-      certificateError.value = describeProxyError(error);
+      certificateErrorRaw.value = error;
     } finally {
       certificateSaving.value = false;
     }
@@ -69,7 +86,9 @@ function createCertificatesState() {
   async function handleDeleteCertificate(certificate: Certificate): Promise<void> {
     try {
       await proxyStore.removeCertificate(certificate.id);
-      message.success("Certificate configuration deleted.");
+      message.success(
+        proxyText("domains.certificates.deleted", "Certificate configuration deleted."),
+      );
     } catch (error) {
       message.error(describeProxyError(error));
     }

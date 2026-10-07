@@ -776,8 +776,9 @@ async function main() {
         "team 400 strips through the shared helper",
       );
       assert(
-        teams.module.describeTeamError(prefixed("teams")) === "boom",
-        "team generic strips",
+        teams.module.describeTeamError(prefixed("teams")) ===
+          "Request failed: boom",
+        "team generic pairs the summary with the raw diagnostic",
       );
       assert(
         proxy.module.describeProxyError({ message: "proxy: bad", status: 400 }) ===
@@ -817,8 +818,9 @@ async function main() {
         "metrics generic strips",
       );
       assert(
-        notifications.module.describeChannelError(prefixed("notifications")) === "boom",
-        "channel generic strips",
+        notifications.module.describeChannelError(prefixed("notifications")) ===
+          "Request failed: boom",
+        "channel generic pairs the summary with the raw diagnostic",
       );
       assert(
         previews.module.describePreviewError(prefixed("deploy")) ===

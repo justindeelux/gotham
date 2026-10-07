@@ -4,7 +4,7 @@ import type { DataTableColumns } from "naive-ui";
 import { computed, h } from "vue";
 
 import type { TeamMember, TeamRole } from "@/features/teams/api/teams";
-import { roleLabel, roleTagType } from "@/features/teams/api/teams";
+import { roleLabel, roleTagType, teamText } from "@/features/teams/api/teams";
 import { relativeTime } from "@/shared/utils/format";
 import { useTeamsPageContext } from "@/features/teams/composables/useTeamsPage";
 
@@ -26,7 +26,7 @@ const {
 
 const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
   {
-    title: "Member",
+    title: teamText("teams.members.member", "Member"),
     key: "email",
     minWidth: 220,
     render: (row) =>
@@ -36,13 +36,13 @@ const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
           ? h(
               "span",
               { class: "muted", style: "font-size:var(--text-xs)" },
-              "personal team owner",
+              teamText("teams.members.personalOwner", "personal team owner"),
             )
           : null,
       ]),
   },
   {
-    title: "Role",
+    title: teamText("teams.members.role", "Role"),
     key: "role",
     width: 150,
     render: (row) => {
@@ -56,21 +56,23 @@ const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
       return h(NSelect, {
         value: row.role,
         size: "small",
-        options: roleOptions,
-        "aria-label": `Role of ${row.email}`,
+        options: roleOptions.value,
+        "aria-label": teamText("teams.members.roleOfAria", "Role of {email}", {
+          email: row.email,
+        }),
         loading: memberPending(row.user_id),
         "onUpdate:value": (role: TeamRole) => void changeMemberRole(row, role),
       });
     },
   },
   {
-    title: "Joined",
+    title: teamText("teams.members.joined", "Joined"),
     key: "created_at",
     width: 130,
     render: (row) => h("span", { class: "mono" }, relativeTime(row.created_at)),
   },
   {
-    title: "Actions",
+    title: teamText("teams.members.actions", "Actions"),
     key: "actions",
     width: 110,
     render: (row) =>
@@ -91,9 +93,20 @@ const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
                     type: "error",
                     loading: memberPending(row.user_id),
                   },
-                  { default: () => "Remove" },
+                  {
+                    default: () =>
+                      teamText("teams.members.remove", "Remove"),
+                  },
                 ),
-              default: () => `Remove ${row.email} from ${selectedTeam.value?.name ?? "the team"}?`,
+              default: () =>
+                teamText(
+                  "teams.members.removeConfirm",
+                  "Remove {email} from {team}?",
+                  {
+                    email: row.email,
+                    team: selectedTeam.value?.name ?? "the team",
+                  },
+                ),
             },
           )
         : h(NText, { depth: 3 }, { default: () => "—" }),
@@ -130,9 +143,7 @@ const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
       data-testid="members-table"
     />
     <NText depth="3">
-      A team always keeps at least one owner: demoting or removing the
-      last one is refused with the backend's message. The personal
-      team's owner membership is immutable.
+      {{ $t("teams.members.footnote") }}
     </NText>
   </NSpace>
 </template>

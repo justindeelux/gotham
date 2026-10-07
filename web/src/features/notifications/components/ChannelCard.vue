@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { NButton, NCard, NPopconfirm, NSpace, NSwitch, NTag, NText, useMessage } from "naive-ui";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 import type {
   NotificationChannel,
   TestResult,
 } from "@/features/notifications/api/notifications";
 import {
+  channelText,
   describeChannelError,
   eventLabel,
   kindLabel,
@@ -30,7 +31,19 @@ const channelsStore = useNotificationsStore();
 const { canMutate, openEdit, resolveResourceName } = useChannelDialog();
 
 const testing = ref(false);
+/** Last server answer, rendered verbatim (wire text, never translated). */
 const testResult = ref<TestResult | null>(null);
+/**
+ * Raw failure behind a failed test run. The display text derives from it
+ * plus the current locale, so a language switch refreshes a retained
+ * failure without resending the test (no outbound delivery on switch).
+ */
+const testErrorRaw = ref<unknown>(null);
+const testFailure = computed<string | null>(() =>
+  testErrorRaw.value === null
+    ? null
+    : describeChannelError(testErrorRaw.value),
+);
 
 /** handleToggle flips a channel's enabled flag in place. */
 async function handleToggle(channel: NotificationChannel, enabled: boolean): Promise<void> {
@@ -45,7 +58,11 @@ async function handleToggle(channel: NotificationChannel, enabled: boolean): Pro
 async function handleDelete(channel: NotificationChannel): Promise<void> {
   try {
     await channelsStore.remove(channel.id);
-    message.success(`Deleted ${channel.name}`);
+    message.success(
+      channelText("notifications.toast.deleted", "Deleted {name}", {
+        name: channel.name,
+      }),
+    );
   } catch (error) {
     message.error(describeChannelError(error));
   }
@@ -54,10 +71,12 @@ async function handleDelete(channel: NotificationChannel): Promise<void> {
 /** handleTest delivers a synthetic event and records the outcome. */
 async function handleTest(channel: NotificationChannel): Promise<void> {
   testing.value = true;
+  testResult.value = null;
+  testErrorRaw.value = null;
   try {
     testResult.value = await channelsStore.test(channel.id);
   } catch (error) {
-    testResult.value = { ok: false, message: describeChannelError(error) };
+    testErrorRaw.value = error;
   } finally {
     testing.value = false;
   }
@@ -78,7 +97,7 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
           size="small"
           round
         >
-          {{ props.channel.enabled ? "enabled" : "disabled" }}
+          {{ props.channel.enabled ? $t("notifications.card.enabled") : $t("notifications.card.disabled") }}
         </NTag>
         <NTag
           v-if="props.channel.secrets_configured"
@@ -86,17 +105,17 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
           round
           type="info"
         >
-          secret configured
+          {{ $t("notifications.card.secretConfigured") }}
         </NTag>
       </NSpace>
     </template>
     <template #header-extra>
       <NSpace align="center" :size="8">
-        <NText depth="3" class="small">Enabled</NText>
+        <NText depth="3" class="small">{{ $t("notifications.card.enabledLabel") }}</NText>
         <NSwitch
           :value="props.channel.enabled"
           :disabled="!canMutate"
-          :aria-label="`Enable ${props.channel.name}`"
+          :aria-label="$t('notifications.card.enableAria', { name: props.channel.name })"
           @update:value="(value: boolean) => void handleToggle(props.channel, value)"
         />
       </NSpace>
@@ -123,21 +142,30 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
             :loading="testing"
             @click="void handleTest(props.channel)"
           >
-            Send test
+            {{ $t("notifications.card.sendTest") }}
           </NButton>
           <NText
-            v-if="testResult"
+            v-if="testFailure"
+            type="error"
+            depth="1"
+            class="small"
+            data-test-channel-result
+          >
+            {{ $t("notifications.card.testFailed") }}{{ testFailure }}
+          </NText>
+          <NText
+            v-else-if="testResult"
             :type="testResult.ok ? 'success' : 'error'"
             depth="1"
             class="small"
             data-test-channel-result
           >
-            {{ testResult.ok ? "Test delivered: " : "Test failed: " }}{{
+            {{ testResult.ok ? $t("notifications.card.testDelivered") : $t("notifications.card.testFailed") }}{{
               testResult.message
             }}
           </NText>
           <NText v-else depth="3" class="small">
-            No test sent yet.
+            {{ $t("notifications.card.noTest") }}
           </NText>
         </NSpace>
         <NSpace align="center" :size="12">
@@ -146,7 +174,7 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
             :disabled="!canMutate"
             @click="openEdit(props.channel)"
           >
-            Edit
+            {{ $t("notifications.card.edit") }}
           </NButton>
           <NPopconfirm
             :positive-button-props="{ type: 'error' }"
@@ -159,14 +187,13 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
                 type="error"
                 :disabled="!canMutate"
               >
-                Delete
+                {{ $t("notifications.card.delete") }}
               </NButton>
             </template>
-            Delete channel "{{ props.channel.name }}"? Deploy and backup
-            notifications stop immediately.
+            {{ $t("notifications.card.deleteConfirm", { name: props.channel.name }) }}
           </NPopconfirm>
           <NText depth="3" class="small">
-            Updated {{ relativeTime(props.channel.updated_at) }}
+            {{ $t("notifications.card.updated") }} {{ relativeTime(props.channel.updated_at) }}
           </NText>
         </NSpace>
       </NSpace>

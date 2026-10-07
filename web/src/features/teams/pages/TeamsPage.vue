@@ -50,14 +50,14 @@ const {
   <div class="teams-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Team · Access control</p>
-        <h1>Teams</h1>
+        <p class="eyebrow">{{ $t("teams.page.eyebrow") }}</p>
+        <h1>{{ $t("teams.page.title") }}</h1>
         <p class="page-desc">
-          Every resource belongs to exactly one team, and a member holds one of
-          three roles — <span class="mono">owner</span> /
+          {{ $t("teams.page.descriptionPre") }}
+          <span class="mono">owner</span> /
           <span class="mono">admin</span> /
-          <span class="mono">read-only</span>. Owners manage ownership,
-          admins manage resources and members, read-only members may only look.
+          <span class="mono">read-only</span>.
+          {{ $t("teams.page.descriptionPost") }}
         </p>
       </div>
       <div class="page-actions">
@@ -66,14 +66,14 @@ const {
           type="primary"
           @click="createOpen = true"
         >
-          New team
+          {{ $t("teams.page.newTeam") }}
         </NButton>
       </div>
     </div>
 
-    <NCard v-if="teamsStore.featureDisabled" title="Teams unavailable">
+    <NCard v-if="teamsStore.featureDisabled" :title="$t('teams.page.unavailableTitle')">
       <NEmpty
-        description="Team management is not enabled on this control plane (FEATURE_TEAMS=false)."
+        :description="$t('teams.page.unavailableDesc')"
       />
     </NCard>
 
@@ -84,7 +84,7 @@ const {
 
       <TeamsListCard />
 
-      <NCard v-if="selectedTeam" :title="selectedTeam.name">
+      <NCard v-if="selectedTeam" :title="selectedTeam.name" class="team-card">
         <template #header-extra>
           <NSpace align="center" :size="8">
             <NButton
@@ -92,21 +92,21 @@ const {
               :loading="membersLoading || invitesLoading"
               @click="void loadTeam()"
             >
-              Refresh
+              {{ $t("teams.page.refresh") }}
             </NButton>
-            <NTag v-if="isPersonal" size="small" round>personal</NTag>
+            <NTag v-if="isPersonal" size="small" round>{{ $t("teams.page.personal") }}</NTag>
             <NTag :type="roleTagType(selectedTeam.role)" size="small" round>
-              your role: {{ roleLabel(selectedTeam.role) }}
+              {{ $t("teams.page.yourRole", { role: roleLabel(selectedTeam.role) }) }}
             </NTag>
           </NSpace>
         </template>
 
         <NTabs type="line" animated>
-          <NTabPane name="members" :tab="`Members (${members.length})`">
+          <NTabPane name="members" :tab="$t('teams.page.membersTab', { count: members.length })">
             <TeamMembersPanel />
           </NTabPane>
 
-          <NTabPane name="invites" :tab="`Invites (${invites.length})`">
+          <NTabPane name="invites" :tab="$t('teams.page.invitesTab', { count: invites.length })">
             <TeamInvitesPanel />
           </NTabPane>
         </NTabs>
@@ -161,9 +161,27 @@ const {
   flex-wrap: wrap;
 }
 
+/**
+ * Selected-team header: the title plus Refresh/role tags share one Naive
+ * card header row. At narrow widths the title takes a full row and the
+ * extra block drops below it, so the full team name stays readable in both
+ * languages (adaptation: the shipped card evolved past the team-settings
+ * mockup tabs, which have no card header). A 100% title basis forces the
+ * break — a 100% extra basis would sum to exactly one line and starve the
+ * title instead. No font-size change; wrapping only.
+ */
+.team-card :deep(.n-card-header) {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
 @media (max-width: 860px) {
   .page-actions {
     margin-left: 0;
+  }
+
+  .team-card :deep(.n-card-header__main) {
+    flex: 1 1 100%;
   }
 }
 </style>

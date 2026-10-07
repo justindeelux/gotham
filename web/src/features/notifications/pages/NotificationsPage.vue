@@ -61,13 +61,10 @@ onMounted(async () => {
   <div class="notifications-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Team · Notifications</p>
-        <h1>Notification channels</h1>
+        <p class="eyebrow">{{ $t("notifications.page.eyebrow") }}</p>
+        <h1>{{ $t("notifications.page.title") }}</h1>
         <p class="page-desc">
-          Deploy and backup events are delivered to the team's channels:
-          Discord and Slack webhooks, a Telegram bot, or SMTP email. Channels
-          are team-scoped, and secrets are write-only — reads only ever show a
-          masked value.
+          {{ $t("notifications.page.description") }}
         </p>
       </div>
       <div class="page-actions">
@@ -77,14 +74,14 @@ onMounted(async () => {
           :disabled="channelsStore.featureDisabled"
           @click="openCreate"
         >
-          New channel
+          {{ $t("notifications.page.newChannel") }}
         </NButton>
       </div>
     </div>
 
-    <NCard v-if="channelsStore.featureDisabled" title="Notifications unavailable">
+    <NCard v-if="channelsStore.featureDisabled" :title="$t('notifications.page.unavailableTitle')">
       <NEmpty
-        description="Notification channels are not enabled on this control plane (FEATURE_NOTIFICATIONS=false)."
+        :description="$t('notifications.page.unavailableDesc')"
       />
     </NCard>
 
@@ -116,10 +113,10 @@ onMounted(async () => {
               !channelsStore.error
             "
           >
-            <NEmpty description="No channels for this team yet.">
+            <NEmpty :description="$t('notifications.page.empty')">
               <template v-if="canMutate" #extra>
                 <NButton type="primary" @click="openCreate">
-                  Create the first channel
+                  {{ $t("notifications.page.createFirst") }}
                 </NButton>
               </template>
             </NEmpty>

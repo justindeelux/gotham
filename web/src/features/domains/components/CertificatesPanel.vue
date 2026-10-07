@@ -13,10 +13,12 @@ import {
 import type { DataTableColumns } from "naive-ui";
 import { h } from "vue";
 import type { VNode } from "vue";
+import { computed } from "vue";
 
 import {
   certificateStatusLabel,
   certificateStatusTagType,
+  proxyText,
 } from "@/features/domains/api/proxy";
 import type { Certificate } from "@/features/domains/api/proxy";
 import { useCertificates } from "@/features/domains/composables/useCertificates";
@@ -38,8 +40,14 @@ function domainCell(certificate: Certificate): VNode {
       "span",
       { class: "cell-sub" },
       domain && domain !== certificate.domain
-        ? `${applicationName(certificate.application_id)} · base domain ` +
-          `changed to ${domain} — re-save to re-record`
+        ? proxyText(
+            "domains.certificates.baseDomainChanged",
+            "{app} · base domain changed to {domain} — re-save to re-record",
+            {
+              app: applicationName(certificate.application_id),
+              domain,
+            },
+          )
         : applicationName(certificate.application_id),
     ),
   ]);
@@ -63,7 +71,17 @@ function expiryCell(certificate: Certificate): VNode {
     return h(NText, { depth: 3 }, { default: () => "—" });
   }
   if (!certificate.not_after) {
-    return h(NText, { depth: 3 }, { default: () => "not reported" });
+    return h(
+      NText,
+      { depth: 3 },
+      {
+        default: () =>
+          proxyText(
+            "domains.certificates.expiryNotReported",
+            "not reported",
+          ),
+      },
+    );
   }
   return h("div", { class: "cell-main" }, [
     h("span", { class: "mono" }, formatDate(certificate.not_after)),
@@ -78,7 +96,9 @@ function certificateActions(certificate: Certificate): VNode {
       h(
         NButton,
         { size: "small", onClick: () => openCertificateEdit(certificate) },
-        { default: () => "Edit" },
+        {
+          default: () => proxyText("domains.certificates.edit", "Edit"),
+        },
       ),
       h(
         NPopconfirm,
@@ -91,81 +111,107 @@ function certificateActions(certificate: Certificate): VNode {
             h(
               NButton,
               { size: "small", type: "error", ghost: true },
-              { default: () => "Delete" },
+              {
+                default: () =>
+                  proxyText("domains.certificates.delete", "Delete"),
+              },
             ),
           default: () =>
-            `Delete the certificate configuration for ${certificate.domain}? ` +
-            "The route falls back to plain HTTP.",
+            proxyText(
+              "domains.certificates.deleteConfirm",
+              "Delete the certificate configuration for {domain}? The route " +
+                "falls back to plain HTTP.",
+              { domain: certificate.domain },
+            ),
         },
       ),
     ],
   });
 }
 
-const certificateColumns: DataTableColumns<Certificate> = [
+const certificateColumns = computed<DataTableColumns<Certificate>>(() => [
   {
-    title: "Domain",
+    title: proxyText("domains.certificates.domain", "Domain"),
     key: "domain",
     minWidth: 240,
     render: (row) => domainCell(row),
   },
   {
-    title: "Challenge",
+    title: proxyText("domains.certificates.challenge", "Challenge"),
     key: "challenge",
     width: 110,
     render: (row) => h("span", { class: "mono" }, row.challenge),
   },
   {
-    title: "DNS provider",
+    title: proxyText("domains.certificates.dnsProvider", "DNS provider"),
     key: "dns_provider_id",
     minWidth: 160,
     render: (row) => h("span", { class: "mono" }, providerName(row.dns_provider_id)),
   },
   {
-    title: "Wildcard",
+    title: proxyText("domains.certificates.wildcard", "Wildcard"),
     key: "wildcard",
     width: 110,
     render: (row) =>
       row.wildcard
-        ? h(NTag, { size: "small" }, { default: () => "wildcard" })
-        : h(NText, { depth: 3 }, { default: () => "no" }),
+        ? h(
+            NTag,
+            { size: "small" },
+            {
+              default: () =>
+                proxyText(
+                  "domains.certificates.wildcardTag",
+                  "wildcard",
+                ),
+            },
+          )
+        : h(
+            NText,
+            { depth: 3 },
+            { default: () => proxyText("domains.certificates.no", "no") },
+          ),
   },
   {
-    title: "Enabled",
+    title: proxyText("domains.certificates.enabled", "Enabled"),
     key: "enabled",
     width: 110,
     render: (row) =>
       h(
         NTag,
         { size: "small", type: row.enabled ? "success" : "default" },
-        { default: () => (row.enabled ? "enabled" : "disabled") },
+        {
+          default: () =>
+            row.enabled
+              ? proxyText("domains.certificates.enabledTag", "enabled")
+              : proxyText("domains.certificates.disabledTag", "disabled"),
+        },
       ),
   },
   {
-    title: "Status",
+    title: proxyText("domains.certificates.status", "Status"),
     key: "status",
     width: 150,
     render: (row) => statusCell(row),
   },
   {
-    title: "Expires",
+    title: proxyText("domains.certificates.expires", "Expires"),
     key: "not_after",
     minWidth: 180,
     render: (row) => expiryCell(row),
   },
   {
-    title: "Updated",
+    title: proxyText("domains.certificates.updated", "Updated"),
     key: "updated_at",
     width: 120,
     render: (row) => relativeTime(row.updated_at),
   },
   {
-    title: "Actions",
+    title: proxyText("domains.certificates.actions", "Actions"),
     key: "actions",
     width: 160,
     render: (row) => certificateActions(row),
   },
-];
+]);
 
 /** rowKey identifies a certificate row by its id. */
 function certificateRowKey(row: Certificate): string {
@@ -174,9 +220,9 @@ function certificateRowKey(row: Certificate): string {
 </script>
 
 <template>
-  <NCard style="margin-top: 16px" title="Certificate configurations">
+  <NCard style="margin-top: 16px" :title="$t('domains.certificates.title')">
     <template #header-extra>
-      <NText depth="3">one per application</NText>
+      <NText depth="3">{{ $t("domains.certificates.onePerApp") }}</NText>
     </template>
     <NSpace vertical :size="12">
       <NAlert
@@ -196,30 +242,23 @@ function certificateRowKey(row: Certificate): string {
         :scroll-x="1000"
         :pagination="{ pageSize: 10 }"
       />
-      <NEmpty v-else description="No certificate configurations yet.">
+      <NEmpty v-else :description="$t('domains.certificates.empty')">
         <template #extra>
           <NButton type="primary" @click="openCertificateCreate">
-            Add certificate
+            {{ $t("domains.certificates.add") }}
           </NButton>
         </template>
       </NEmpty>
       <div class="embed">
-        <h4>Status is observed live from the owning node</h4>
+        <h4>{{ $t("domains.certificates.statusTitle") }}</h4>
         <p>
-          <span class="mono">present</span> means the node's ACME storage
-          holds a certificate for the recorded domain and its expiry is
-          shown; <span class="mono">absent</span> means the storage was
-          read and holds none; <span class="mono">unknown</span> means the
-          node could not be read. The status is computed on read — the
-          control plane stores the desired configuration only.
+          {{ $t("domains.certificates.statusBody") }}
         </p>
       </div>
     </NSpace>
     <template #footer>
       <NText depth="3">
-        The recorded domain comes from the application's base domain at
-        save time. Changing the base domain later requires saving the
-        configuration again to re-record it.
+        {{ $t("domains.certificates.footer") }}
       </NText>
     </template>
   </NCard>

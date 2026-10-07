@@ -39,18 +39,17 @@ const {
     v-if="!teamsStore.featureDisabled"
     v-model:show="createOpen"
     preset="card"
-    title="New team"
+    :title="$t('teams.dialogs.newTitle')"
     style="width: 460px; max-width: 94vw"
   >
     <NSpace vertical :size="12">
       <NText depth="3">
-        You become the new team's owner. Resources can be moved in from the
-        applications and servers you already manage.
+        {{ $t("teams.dialogs.newDesc") }}
       </NText>
       <NInput
         v-model:value="createName"
-        placeholder="Team name"
-        aria-label="Team name"
+        :placeholder="$t('teams.dialogs.teamNamePlaceholder')"
+        :aria-label="$t('teams.dialogs.teamNameAria')"
         @keyup.enter="void handleCreate()"
       />
       <NAlert v-if="createError" type="error" :show-icon="true">
@@ -59,14 +58,14 @@ const {
     </NSpace>
     <template #footer>
       <NSpace justify="end" :size="8">
-        <NButton @click="createOpen = false">Cancel</NButton>
+        <NButton @click="createOpen = false">{{ $t("teams.dialogs.cancel") }}</NButton>
         <NButton
           type="primary"
           :loading="createBusy"
           :disabled="!isTeamNameValid(createName)"
           @click="void handleCreate()"
         >
-          Create team
+          {{ $t("teams.dialogs.createTeam") }}
         </NButton>
       </NSpace>
     </template>
@@ -75,13 +74,13 @@ const {
   <NModal
     v-model:show="renameOpen"
     preset="card"
-    title="Rename team"
+    :title="$t('teams.dialogs.renameTitle')"
     style="width: 460px; max-width: 94vw"
   >
     <NSpace vertical :size="12">
       <NInput
         v-model:value="renameName"
-        aria-label="Team name"
+        :aria-label="$t('teams.dialogs.teamNameAria')"
         @keyup.enter="void handleRename()"
       />
       <NAlert v-if="renameError" type="error" :show-icon="true">
@@ -90,14 +89,14 @@ const {
     </NSpace>
     <template #footer>
       <NSpace justify="end" :size="8">
-        <NButton @click="renameOpen = false">Cancel</NButton>
+        <NButton @click="renameOpen = false">{{ $t("teams.dialogs.cancel") }}</NButton>
         <NButton
           type="primary"
           :loading="renameBusy"
           :disabled="!isTeamNameValid(renameName)"
           @click="void handleRename()"
         >
-          Save
+          {{ $t("teams.dialogs.save") }}
         </NButton>
       </NSpace>
     </template>
@@ -106,24 +105,23 @@ const {
   <NModal
     v-model:show="inviteOpen"
     preset="card"
-    title="Invite member"
+    :title="$t('teams.dialogs.inviteTitle')"
     style="width: 480px; max-width: 94vw"
   >
     <NSpace vertical :size="12">
       <NInput
         v-model:value="inviteEmail"
-        placeholder="name@example.com"
-        aria-label="Invite email"
+        :placeholder="$t('teams.dialogs.inviteEmailPlaceholder')"
+        :aria-label="$t('teams.dialogs.inviteEmailAria')"
         @keyup.enter="void handleCreateInvite()"
       />
       <NSelect
         v-model:value="inviteRole"
         :options="inviteRoleOptions"
-        aria-label="Invite role"
+        :aria-label="$t('teams.dialogs.inviteRoleAria')"
       />
       <NText depth="3">
-        Invites can grant admin or read-only — ownership is transferred from
-        the members table, never invited.
+        {{ $t("teams.dialogs.inviteHint") }}
       </NText>
       <NAlert v-if="inviteError" type="error" :show-icon="true">
         {{ inviteError }}
@@ -131,14 +129,14 @@ const {
     </NSpace>
     <template #footer>
       <NSpace justify="end" :size="8">
-        <NButton @click="inviteOpen = false">Cancel</NButton>
+        <NButton @click="inviteOpen = false">{{ $t("teams.dialogs.cancel") }}</NButton>
         <NButton
           type="primary"
           :loading="inviteBusy"
           :disabled="!isInviteEmailValid(inviteEmail)"
           @click="void handleCreateInvite()"
         >
-          Create invite
+          {{ $t("teams.dialogs.createInvite") }}
         </NButton>
       </NSpace>
     </template>
@@ -147,48 +145,48 @@ const {
   <NModal
     :show="createdInvite !== null"
     preset="card"
-    title="Invite created — copy the link now"
+    :title="$t('teams.dialogs.tokenTitle')"
     style="width: 560px; max-width: 94vw"
     :mask-closable="false"
     @update:show="(value: boolean) => { if (!value) closeInviteToken(); }"
   >
     <NSpace v-if="createdInvite" vertical :size="12">
       <NAlert type="warning" :show-icon="true">
-        This link is shown once and never stored. Email delivery is not wired
-        yet (BE-8.3) — send it to {{ createdInvite.email }} yourself.
+        {{ $t("teams.dialogs.tokenWarning", { email: createdInvite.email }) }}
       </NAlert>
       <NInput
         :value="registerLink(createdInvite.token)"
         readonly
         class="mono"
-        aria-label="New member link"
+        :aria-label="$t('teams.dialogs.newMemberLinkAria')"
         data-testid="invite-register-link"
       />
       <NInput
         :value="acceptLink(createdInvite.token)"
         readonly
         class="mono"
-        aria-label="Accept link"
+        :aria-label="$t('teams.dialogs.acceptLinkAria')"
         data-testid="invite-accept-link"
       />
       <NText depth="3" class="mono token-text" data-testid="invite-token">
-        token: {{ createdInvite.token }}
+        {{ $t("teams.dialogs.tokenText", { token: createdInvite.token }) }}
       </NText>
       <NText depth="3">
-        Send the first link to {{ createdInvite.email }} to create a new
-        account: registration is closed on an instance that already has an
-        account, so the invite is the only way in. The second link is for
-        someone who already has an account and is signed in. Either way the
-        member joins as <span class="mono">{{ createdInvite.role }}</span
-        >. It expires {{ expiryLabel(createdInvite.expires_at) }}.
+        {{
+          $t("teams.dialogs.tokenBody", {
+            email: createdInvite.email,
+            role: createdInvite.role,
+            expiry: expiryLabel(createdInvite.expires_at),
+          })
+        }}
       </NText>
     </NSpace>
     <template #footer>
       <NSpace justify="end" :size="8">
         <NButton @click="void copyAcceptLink()">
-          {{ copied ? "Copied" : "Copy link" }}
+          {{ copied ? $t("teams.dialogs.copied") : $t("teams.dialogs.copyLink") }}
         </NButton>
-        <NButton type="primary" @click="closeInviteToken()">Done</NButton>
+        <NButton type="primary" @click="closeInviteToken()">{{ $t("teams.dialogs.done") }}</NButton>
       </NSpace>
     </template>
   </NModal>

@@ -49,21 +49,17 @@ onMounted(() => {
   <div class="domains-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">Operations · Reverse proxy</p>
-        <h1>Domains &amp; SSL</h1>
+        <p class="eyebrow">{{ $t("domains.page.eyebrow") }}</p>
+        <h1>{{ $t("domains.page.title") }}</h1>
         <p class="page-desc">
-          Traefik 3.1 runs on every node as the container
-          <span class="mono">gotham-traefik</span>. The control plane generates
-          the dynamic configuration from application state through the file
-          provider — testable, idempotent, and keeping one previous version for
-          a quick rollback. Certificates below are intent records; the node
-          performs ACME issuance.
+          {{ $t("domains.page.descriptionPre") }}
+          <span class="mono">gotham-traefik</span>. {{ $t("domains.page.descriptionPost") }}
         </p>
       </div>
       <div class="page-actions">
-        <NButton @click="openProviderCreate">Add DNS provider</NButton>
+        <NButton @click="openProviderCreate">{{ $t("domains.page.addProvider") }}</NButton>
         <NButton type="primary" @click="openCertificateCreate">
-          Add certificate
+          {{ $t("domains.page.addCertificate") }}
         </NButton>
       </div>
     </div>
@@ -80,19 +76,19 @@ onMounted(() => {
     <DomainsStats />
 
     <NTabs v-model:value="activeTab" type="line" animated class="tabs">
-      <NTabPane name="routers" tab="Routers">
+      <NTabPane name="routers" :tab="$t('domains.tabs.routers')">
         <RoutersStubPanel />
       </NTabPane>
 
-      <NTabPane name="certificates" tab="Certificates">
+      <NTabPane name="certificates" :tab="$t('domains.tabs.certificates')">
         <CertificatesPanel />
       </NTabPane>
 
-      <NTabPane name="dns" tab="DNS providers">
+      <NTabPane name="dns" :tab="$t('domains.tabs.dns')">
         <DnsProvidersPanel />
       </NTabPane>
 
-      <NTabPane name="redirects" tab="Redirects">
+      <NTabPane name="redirects" :tab="$t('domains.tabs.redirects')">
         <RedirectRulesPanel />
         <RedirectCreateCard />
       </NTabPane>

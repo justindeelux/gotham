@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import { activeLocale } from "@/shared/i18n";
 
 import { listApplications } from "@/features/applications";
 import type { Application } from "@/features/applications";
@@ -38,18 +39,40 @@ export const useProxyStore = defineStore("proxy", () => {
   const loading = ref(false);
   const certificatesLoading = ref(false);
   const redirectsLoading = ref(false);
-  const error = ref<string | null>(null);
-  const certificatesError = ref<string | null>(null);
-  const redirectsError = ref<string | null>(null);
+  /**
+   * Raw failures behind the page alerts. The display strings below derive
+   * from these plus the current locale, so a language switch refreshes a
+   * retained banner without a refetch; classification always sees the raw
+   * error inside describeProxyError, never translated text.
+   */
+  const errorRaw = ref<unknown>(null);
+  const certificatesErrorRaw = ref<unknown>(null);
+  const redirectsErrorRaw = ref<unknown>(null);
+  const error = computed<string | null>(() => {
+    void activeLocale.value;
+    return errorRaw.value === null ? null : describeProxyError(errorRaw.value);
+  });
+  const certificatesError = computed<string | null>(() => {
+    void activeLocale.value;
+    return certificatesErrorRaw.value === null
+      ? null
+      : describeProxyError(certificatesErrorRaw.value);
+  });
+  const redirectsError = computed<string | null>(() => {
+    void activeLocale.value;
+    return redirectsErrorRaw.value === null
+      ? null
+      : describeProxyError(redirectsErrorRaw.value);
+  });
 
   /** fetchProviders loads every DNS provider (credentials never returned). */
   async function fetchProviders(): Promise<void> {
     loading.value = true;
-    error.value = null;
+    errorRaw.value = null;
     try {
       providers.value = await listDNSProviders();
     } catch (err) {
-      error.value = describeProxyError(err);
+      errorRaw.value = err;
       throw err;
     } finally {
       loading.value = false;
@@ -59,11 +82,11 @@ export const useProxyStore = defineStore("proxy", () => {
   /** fetchCertificates loads every certificate configuration. */
   async function fetchCertificates(): Promise<void> {
     certificatesLoading.value = true;
-    certificatesError.value = null;
+    certificatesErrorRaw.value = null;
     try {
       certificates.value = await listCertificates();
     } catch (err) {
-      certificatesError.value = describeProxyError(err);
+      certificatesErrorRaw.value = err;
       throw err;
     } finally {
       certificatesLoading.value = false;
@@ -75,7 +98,7 @@ export const useProxyStore = defineStore("proxy", () => {
     try {
       applications.value = await listApplications();
     } catch (err) {
-      error.value = describeProxyError(err);
+      errorRaw.value = err;
       throw err;
     }
   }
@@ -83,11 +106,11 @@ export const useProxyStore = defineStore("proxy", () => {
   /** fetchRedirects loads every domain redirect rule. */
   async function fetchRedirects(): Promise<void> {
     redirectsLoading.value = true;
-    redirectsError.value = null;
+    redirectsErrorRaw.value = null;
     try {
       redirects.value = await listRedirects();
     } catch (err) {
-      redirectsError.value = describeProxyError(err);
+      redirectsErrorRaw.value = err;
       throw err;
     } finally {
       redirectsLoading.value = false;
@@ -199,9 +222,9 @@ export const useProxyStore = defineStore("proxy", () => {
     loading.value = false;
     certificatesLoading.value = false;
     redirectsLoading.value = false;
-    error.value = null;
-    certificatesError.value = null;
-    redirectsError.value = null;
+    errorRaw.value = null;
+    certificatesErrorRaw.value = null;
+    redirectsErrorRaw.value = null;
   }
 
   return {

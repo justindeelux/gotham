@@ -544,6 +544,10 @@ for (const authenticated of [false, true]) {
     await expect(options.nth(1)).toHaveAttribute("aria-checked", "true");
     await page.getByRole("menuitemradio").nth(1).click();
     await expect(selector).toHaveAttribute("aria-expanded", "false");
+    await selector.click();
+    await expect(options.nth(1)).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(selector).toHaveAttribute("aria-expanded", "false");
+    await expect(selector).toBeFocused();
   });
 }
-

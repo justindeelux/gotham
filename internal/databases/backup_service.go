@@ -304,10 +304,13 @@ func NewDefaultBackupService(cfg BackupConfig) BackupService {
 	}
 	manager := NewBackupService(cfg)
 	manager.reconcileStaleBackups()
-	// The stale-run sweep runs first: a running row it failed is by definition
-	// orphaned, so its job container is safe to remove. Containers still leased
-	// by a live run are kept (see sweepJobContainers).
-	manager.sweepJobContainers()
+	// The stale-run sweep runs in the background: it dials every node agent
+	// and unreachable agents stall each attempt until the RPC timeout, so a
+	// synchronous sweep would hold HTTP startup hostage (JUS-51). A running
+	// row it failed is by definition orphaned, so its job container is safe
+	// to remove; containers still leased by a live run are kept
+	// (see sweepJobContainers).
+	go manager.sweepJobContainers()
 	if !cfg.DisableScheduler {
 		manager.scheduler.Start()
 	}

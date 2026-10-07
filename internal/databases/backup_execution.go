@@ -494,10 +494,12 @@ type backupServerLister interface {
 }
 
 // sweepJobContainers removes temporary job containers a crashed control plane
-// left behind. It runs once at construction, after the stale-run sweep: a
+// left behind. It runs in the background at construction (see
+// NewDefaultBackupService), concurrently with serving and the scheduler: the
+// live-run and lease guards are therefore re-read after every node's list,
+// so a job that started mid-sweep is never mistaken for a leftover. A
 // container is removed only when neither its database is leased by a live job
-// nor its run is still running, so a job this process is actively driving is
-// never killed.
+// nor its run is still running.
 func (m *BackupManager) sweepJobContainers() {
 	if m == nil || m.containers == nil || m.backups == nil {
 		return
@@ -508,21 +510,6 @@ func (m *BackupManager) sweepJobContainers() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-
-	liveRuns := map[uuid.UUID]bool{}
-	running, err := m.backups.ListRunningBackups(ctx)
-	if err != nil {
-		m.logger.Warn("databases: container sweep could not list running backups", "error", err)
-		return
-	}
-	for _, backup := range running {
-		liveRuns[backup.ID] = true
-	}
-
-	leased := map[uuid.UUID]bool{}
-	for _, databaseID := range m.leases.HeldIDs() {
-		leased[databaseID] = true
-	}
 
 	serverIDs, err := lister.ListServerIDs(ctx)
 	if err != nil {
@@ -537,6 +524,16 @@ func (m *BackupManager) sweepJobContainers() {
 				"server_id", serverID.String(), "error", err)
 			continue
 		}
+		// Re-read the guards after the (possibly slow) list: a job that
+		// started while listing claims its lease and writes its run row
+		// before creating any container (see startRun), so anything created
+		// since is covered and never removed as a leftover. A guard lookup
+		// failure skips this node: empty guards would mistake every live
+		// container for a leftover.
+		liveRuns, leased := m.liveGuards(ctx)
+		if liveRuns == nil || leased == nil {
+			continue
+		}
 		for _, container := range list {
 			if !isStaleJobContainer(container, leased, liveRuns) {
 				continue
@@ -548,6 +545,27 @@ func (m *BackupManager) sweepJobContainers() {
 	if removed > 0 {
 		m.logger.Info("databases: removed leftover backup job containers", "count", removed)
 	}
+}
+
+// liveGuards snapshots the run rows and leases a live job always holds: its
+// running backup row and its database lease. A lookup failure returns nil
+// maps; callers must skip removals on nil (empty guards would mistake every
+// live container for a leftover).
+func (m *BackupManager) liveGuards(ctx context.Context) (liveRuns, leased map[uuid.UUID]bool) {
+	liveRuns = map[uuid.UUID]bool{}
+	leased = map[uuid.UUID]bool{}
+	running, err := m.backups.ListRunningBackups(ctx)
+	if err != nil {
+		m.logger.Warn("databases: container sweep could not list running backups", "error", err)
+		return nil, nil
+	}
+	for _, backup := range running {
+		liveRuns[backup.ID] = true
+	}
+	for _, databaseID := range m.leases.HeldIDs() {
+		leased[databaseID] = true
+	}
+	return liveRuns, leased
 }
 
 // listContainersFresh reads a node's containers straight from the agent when

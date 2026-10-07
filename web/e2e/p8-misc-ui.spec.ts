@@ -617,7 +617,7 @@ test.describe("server metrics", () => {
 
     // ── auto-refresh: off by default, a chosen cadence refetches on its own,
     //    and a hidden document pauses the polling again ────────────────────
-    const refreshGroup = page.locator('[aria-label="Metrics auto-refresh"]');
+    const refreshGroup = page.locator('[aria-label="Auto-refresh"]');
     await expect(refreshGroup).toContainText("off");
 
     const beforeRefresh = requestedSteps.length;

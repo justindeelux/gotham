@@ -41,6 +41,7 @@ const en = {
       "The node agent is unreachable or the job failed on the node. Check the node status and retry.",
   },
   detail: {
+    breadcrumb: "Breadcrumb",
     tabs: {
       overview: "Overview",
       backups: "Backups",

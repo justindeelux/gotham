@@ -729,9 +729,9 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
     text-overflow: clip;
   }
 
-  .resource-table td[data-label="Type"]::before,
-  .resource-table td[data-label="Server"]::before,
-  .resource-table td[data-label="Status"]::before {
+  .resource-table td:nth-child(2)::before,
+  .resource-table td:nth-child(3)::before,
+  .resource-table td:nth-child(4)::before {
     content: attr(data-label) ": ";
     font-family: var(--font-mono);
     font-size: 11px;

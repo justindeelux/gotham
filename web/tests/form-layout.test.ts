@@ -29,6 +29,7 @@ import {
 } from "../src/shared/i18n";
 import DynamicForm from "../src/features/templates/components/DynamicForm.vue";
 import EnvEditor from "../src/features/applications/components/EnvEditor.vue";
+import en from "../src/features/databases/locales/en";
 import type { CertificateDraft } from "../src/features/domains/api/proxy";
 
 beforeEach(() => {
@@ -386,7 +387,12 @@ describe("JUS-19 CreateAppWizard rows", () => {
 
 describe("JUS-19 CreateDatabaseWizard rows", () => {
   it("pairs Version|Node in one row", () => {
-    expectPair(readSfc("src/features/databases/components/CreateDatabaseWizard.vue"), 'label="Version"', 'label="Node"');
+    // Labels are localized keys; the row pairing and the resolved English
+    // display text ("Version", "Node") are what this pins.
+    const source = readSfc("src/features/databases/components/CreateDatabaseWizard.vue");
+    expectPair(source, "databases.wizard.engineStep.version", "databases.wizard.engineStep.node");
+    expect(en.wizard.engineStep.version).toBe("Version");
+    expect(en.wizard.engineStep.node).toBe("Node");
   });
 });
 

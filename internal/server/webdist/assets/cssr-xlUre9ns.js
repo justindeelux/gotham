@@ -1,1 +1,0 @@
-import{k as s,P as a,el as d,em as i}from"./index-CjhrgSGA.js";let n,t;const r=()=>{var o,e;n=d?(e=(o=document)===null||o===void 0?void 0:o.fonts)===null||e===void 0?void 0:e.ready:void 0,t=!1,n!==void 0?n.then(()=>{t=!0}):t=!0};r();function l(o){if(t)return;let e=!1;s(()=>{t||n?.then(()=>{e||o()})}),a(()=>{e=!0})}const{c:f}=i(),c="vueuc-style";export{f as a,c,l as o};

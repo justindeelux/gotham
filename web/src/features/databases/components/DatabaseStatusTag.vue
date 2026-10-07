@@ -19,12 +19,12 @@ const statusTypes: Record<DatabaseStatus, TagType> = {
   deleting: "default",
 };
 
-const statusLabels: Record<DatabaseStatus, string> = {
-  creating: "Creating",
-  running: "Running",
-  stopped: "Stopped",
-  error: "Error",
-  deleting: "Deleting",
+const statusKeys: Record<DatabaseStatus, string> = {
+  creating: "databases.status.creating",
+  running: "databases.status.running",
+  stopped: "databases.status.stopped",
+  error: "databases.status.error",
+  deleting: "databases.status.deleting",
 };
 
 const statusDots: Record<DatabaseStatus, string> = {
@@ -40,9 +40,22 @@ const pulsing: ReadonlySet<DatabaseStatus> = new Set(["creating"]);
 
 const props = withDefaults(defineProps<Props>(), { size: "small" });
 
+
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const tagType = computed<TagType>(() => statusTypes[props.status] ?? "default");
 
-const label = computed<string>(() => statusLabels[props.status] ?? props.status);
+/** Unknown statuses render the raw wire value; known ones localize. */
+const label = computed<string>(() =>
+  props.status in statusKeys
+    ? String(t(statusKeys[props.status]))
+    : props.status,
+);
 
 const dotClass = computed<string>(() => statusDots[props.status] ?? "dot--deleting");
 

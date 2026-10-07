@@ -1,5 +1,6 @@
 import { http } from "@/shared/api/http";
 import { isApiError, stripErrorPrefix } from "@/features/servers";
+import { i18n } from "@/shared/i18n";
 import { toTargetBody } from "@/features/databases/utils/backupTarget";
 
 /**
@@ -393,37 +394,63 @@ export async function testTarget(targetId: string): Promise<TargetCheck> {
   return response.data.check;
 }
 
-/** describeBackupError maps a thrown error to a user-facing message. */
+/**
+ * describeBackupError maps a thrown error to a user-facing message.
+ * Classification stays on the raw status/message (never on translated text).
+ * Exact backend refusals (400/409 with a message) pass through raw so inline
+ * guards keep their wording; unknown failures render a localized summary
+ * with the useful raw diagnostic retained as plain text.
+ */
 export function describeBackupError(error: unknown): string {
+  const t = (key: string): string => String(i18n.global.t(key));
+  /** withSummary renders a curated summary, keeping nonempty raw detail. */
+  const withSummary = (summaryKey: string, raw: string): string =>
+    raw === ""
+      ? t(summaryKey)
+      : String(
+          i18n.global.t("databases.errors.withDetail", {
+            summary: t(summaryKey),
+            detail: raw,
+          }),
+        );
   if (isApiError(error)) {
     if (error.status === 400) {
-      return (
-        stripErrorPrefix(error.message) ||
-        "Invalid request. Check the cron expression and target fields."
-      );
+      const raw = stripErrorPrefix(error.message);
+      return raw === ""
+        ? t("databases.errors.backupInvalidRequest")
+        : withSummary("databases.errors.requestRefused", raw);
     }
     if (error.status === 401) {
-      return "Session expired. Please sign in again.";
+      return t("databases.errors.sessionExpired");
     }
     if (error.status === 404) {
-      return "Not found. It may have been deleted or belong to another account.";
+      return t("databases.errors.backupNotFound");
     }
     if (error.status === 409) {
-      return (
-        stripErrorPrefix(error.message) ||
-        "A backup or restore is already running for this database."
-      );
+      const raw = stripErrorPrefix(error.message);
+      return raw === ""
+        ? t("databases.errors.backupConflict")
+        : withSummary("databases.errors.requestRefused", raw);
     }
     if (error.status === 502) {
-      return "The node agent is unreachable or the job failed on the node. Check the node status and retry.";
+      return withSummary(
+        "databases.errors.backupAgentUnreachable",
+        stripErrorPrefix(error.message),
+      );
     }
     if (error.status === 503) {
-      return "Databases are disabled on the control plane (FEATURE_DATABASES=false).";
+      return t("databases.errors.featureDisabled");
     }
-    return stripErrorPrefix(error.message) || "Request failed";
+    return withSummary(
+      "common.errors.requestFailed",
+      stripErrorPrefix(error.message),
+    );
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || "Something went wrong. Please try again.";
+    return withSummary(
+      "common.errors.unexpected",
+      stripErrorPrefix(error.message),
+    );
   }
-  return "Something went wrong. Please try again.";
+  return t("common.errors.unexpected");
 }

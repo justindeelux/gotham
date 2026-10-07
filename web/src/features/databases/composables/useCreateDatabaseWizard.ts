@@ -2,6 +2,12 @@ import { useCopyText } from "@/shared/composables/useCopyText";
 import { useMessage } from "naive-ui";
 import { computed, reactive, ref, toValue, watch } from "vue";
 import type { InjectionKey, Ref } from "vue";
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
 
 import {
   describeDatabaseError,
@@ -35,6 +41,17 @@ export interface WizardForm {
 
 export const wizardStepNames = ["Engine", "Configure", "Review"];
 
+/**
+ * wizardStepKeys are the i18n keys for the step names above, in the same
+ * order. The legacy names stay for length/step logic; display uses the
+ * localized stepNames below.
+ */
+export const wizardStepKeys = [
+  "databases.wizard.steps.engine",
+  "databases.wizard.steps.configure",
+  "databases.wizard.steps.review",
+] as const;
+
 /** Injection key for the wizard form shared with the step components. */
 export const wizardFormKey: InjectionKey<WizardForm> =
   Symbol("wizard-form");
@@ -64,8 +81,20 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
 
   const step = ref(0);
   const submitting = ref(false);
-  const errorMessage = ref("");
   const created = ref<CreatedDatabase | null>(null);
+
+  /** SubmitIssue retains the submit failure so the alert refreshes on switch. */
+  type SubmitIssue = { kind: "scope" } | { kind: "failure"; error: unknown };
+  const submitIssue = ref<SubmitIssue | null>(null);
+  const errorMessage = computed<string>(() => {
+    if (submitIssue.value === null) {
+      return "";
+    }
+    if (submitIssue.value.kind === "scope") {
+      return t("databases.wizard.scopeError");
+    }
+    return describeDatabaseError(submitIssue.value.error);
+  });
 
   const form = reactive<WizardForm>({
     engine: "postgres",
@@ -130,18 +159,35 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     }
   });
 
+  /** stepNames renders the localized wizard step names in step order. */
+  const stepNames = computed<readonly string[]>(() =>
+    wizardStepKeys.map((key) => String(t(key))),
+  );
+
   /** credentialRows renders the generated credentials as label/value pairs. */
   function credentialRows(
     credentials: DatabaseCredentials,
   ): Array<{ label: string; value: string; secret: boolean }> {
     const rows: Array<{ label: string; value: string; secret: boolean }> = [
-      { label: "Username", value: credentials.username, secret: false },
-      { label: "Password", value: credentials.password, secret: true },
-      { label: "Database", value: credentials.database, secret: false },
+      {
+        label: String(t("databases.detail.credentials.username")),
+        value: credentials.username,
+        secret: false,
+      },
+      {
+        label: String(t("databases.detail.credentials.password")),
+        value: credentials.password,
+        secret: true,
+      },
+      {
+        label: String(t("databases.detail.credentials.database")),
+        value: credentials.database,
+        secret: false,
+      },
     ];
     if (credentials.root_password) {
       rows.push({
-        label: "Root password",
+        label: String(t("databases.detail.credentials.rootPassword")),
         value: credentials.root_password,
         secret: true,
       });
@@ -153,7 +199,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   function resetWizard(): void {
     step.value = 0;
     submitting.value = false;
-    errorMessage.value = "";
+    submitIssue.value = null;
     created.value = null;
     form.engine = "postgres";
     form.version = engineByValue(form.engine).defaultVersion;
@@ -193,9 +239,9 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
    */
   async function handleSubmit(): Promise<void> {
     submitting.value = true;
-    errorMessage.value = "";
+    submitIssue.value = null;
     if (form.environmentId === "") {
-      errorMessage.value = "Select a project and environment first.";
+      submitIssue.value = { kind: "scope" };
       submitting.value = false;
       return;
     }
@@ -208,10 +254,14 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
         server_id: form.serverId,
         public_port: form.exposePublic ? (form.publicPort ?? undefined) : undefined,
       });
-      message.success(`Database "${created.value.database.name}" created`);
+      message.success(
+        t("databases.wizard.created", {
+          name: created.value.database.name,
+        }),
+      );
       options.onCreated(created.value);
     } catch (error) {
-      errorMessage.value = describeDatabaseError(error);
+      submitIssue.value = { kind: "failure", error };
     } finally {
       submitting.value = false;
     }
@@ -255,6 +305,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     databasesStore,
     serversStore,
     step,
+    stepNames,
     submitting,
     errorMessage,
     created,

@@ -11,21 +11,24 @@ import {
 import { inject } from "vue";
 
 import { wizardFormKey } from "@/features/databases/composables/useCreateDatabaseWizard";
-import {
-  databaseMessages,
-  isDatabaseNameValid,
-} from "@/features/databases/schemas/databases";
+import { isDatabaseNameValid } from "@/features/databases/schemas/databases";
+import { i18n, resolveValidationMessage } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
 
 const form = inject(wizardFormKey)!;
 </script>
 
 <template>
   <NFormItem
-    label="Name"
+    :label="t('databases.wizard.configure.name')"
     :feedback="
       form.name === '' || isDatabaseNameValid(form.name)
-        ? 'Used for the container and the credentials; 1-63 chars: letters, digits, ., _ or -.'
-        : databaseMessages.nameRule
+        ? t('databases.wizard.configure.nameFeedback')
+        : resolveValidationMessage('databases.validation.nameRule')
     "
     :validation-status="
       form.name === '' || isDatabaseNameValid(form.name)
@@ -36,30 +39,31 @@ const form = inject(wizardFormKey)!;
     <NInput
       v-model:value="form.name"
       class="mono"
-      placeholder="pg-orders"
+      :placeholder="t('databases.wizard.configure.namePlaceholder')"
     />
   </NFormItem>
   <NFormItem :show-feedback="false">
     <NSpace align="center" :size="12">
-      <NSwitch v-model:value="form.exposePublic" />
-      <NText>Expose a public port</NText>
+      <NSwitch
+        v-model:value="form.exposePublic"
+        :aria-label="t('databases.wizard.configure.expose')"
+      />
+      <NText>{{ t("databases.wizard.configure.expose") }}</NText>
     </NSpace>
   </NFormItem>
   <NAlert v-if="form.exposePublic" type="warning" :show-icon="true">
-    A public port is an attack surface and cannot change later — Docker
-    port bindings are fixed at creation. Leave it off unless an external
-    client requires it.
+    {{ t("databases.wizard.configure.exposeWarning") }}
   </NAlert>
   <NFormItem
     v-if="form.exposePublic"
-    label="Public port"
-    feedback="Host port forwarding to the engine port."
+    :label="t('databases.wizard.configure.publicPort')"
+    :feedback="t('databases.wizard.configure.publicPortFeedback')"
   >
     <NInputNumber
       v-model:value="form.publicPort"
       :min="1"
       :max="65535"
-      placeholder="e.g. 15432"
+      :placeholder="t('databases.wizard.configure.publicPortPlaceholder')"
       style="width: 100%"
     />
   </NFormItem>

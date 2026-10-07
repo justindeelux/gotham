@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 import {
   createDatabase,
@@ -28,11 +28,27 @@ const pollIntervalMs = 5_000;
 export const useDatabasesStore = defineStore("databases", () => {
   const databases = ref<Database[]>([]);
   const loading = ref(false);
-  const error = ref<string | null>(null);
   const acting = ref(false);
   const credentialsById = ref<Record<string, DatabaseCredentials>>({});
   const credentialsLoading = ref(false);
-  const credentialsError = ref<string | null>(null);
+
+  /**
+   * Retained page errors keep the raw failure and derive display text in the
+   * current locale, so a language switch refreshes a visible banner without
+   * a refetch.
+   */
+  const errorRaw = ref<unknown>(null);
+  const credentialsErrorRaw = ref<unknown>(null);
+  const error = computed<string | null>(() =>
+    errorRaw.value === null
+      ? null
+      : describeDatabaseError(errorRaw.value),
+  );
+  const credentialsError = computed<string | null>(() =>
+    credentialsErrorRaw.value === null
+      ? null
+      : describeDatabaseError(credentialsErrorRaw.value),
+  );
 
   // Interval handle kept outside reactive state; the store instance is a
   // singleton so a single handle is enough for the whole app.
@@ -76,12 +92,12 @@ export const useDatabasesStore = defineStore("databases", () => {
   /** fetchDatabases loads the list, toggling the loading flag. */
   async function fetchDatabases(): Promise<void> {
     loading.value = true;
-    error.value = null;
+    errorRaw.value = null;
     const generation = mutationGeneration;
     try {
       applyServerList(await listDatabases(), generation);
     } catch (err) {
-      error.value = describeDatabaseError(err);
+      errorRaw.value = err;
       throw err;
     } finally {
       loading.value = false;
@@ -93,9 +109,9 @@ export const useDatabasesStore = defineStore("databases", () => {
     const generation = mutationGeneration;
     try {
       applyServerList(await listDatabases(), generation);
-      error.value = null;
+      errorRaw.value = null;
     } catch (err) {
-      error.value = describeDatabaseError(err);
+      errorRaw.value = err;
     }
   }
 
@@ -129,11 +145,11 @@ export const useDatabasesStore = defineStore("databases", () => {
     stopPolling();
     databases.value = [];
     loading.value = false;
-    error.value = null;
+    errorRaw.value = null;
     acting.value = false;
     credentialsById.value = {};
     credentialsLoading.value = false;
-    credentialsError.value = null;
+    credentialsErrorRaw.value = null;
   }
 
   /**
@@ -213,13 +229,13 @@ export const useDatabasesStore = defineStore("databases", () => {
   /** fetchCredentials loads the owner-only credentials of one database. */
   async function fetchCredentials(id: string): Promise<DatabaseCredentials> {
     credentialsLoading.value = true;
-    credentialsError.value = null;
+    credentialsErrorRaw.value = null;
     try {
       const credentials = await getDatabaseCredentials(id);
       credentialsById.value[id] = credentials;
       return credentials;
     } catch (err) {
-      credentialsError.value = describeDatabaseError(err);
+      credentialsErrorRaw.value = err;
       throw err;
     } finally {
       credentialsLoading.value = false;

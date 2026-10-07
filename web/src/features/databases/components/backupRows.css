@@ -58,4 +58,19 @@
   .backup-row {
     flex-direction: column;
   }
+
+  /**
+   * Phone card headers: stack the heading above the action cluster instead
+   * of squeezing the title to zero. The cluster itself (Naive NSpace) wraps
+   * its controls onto further lines.
+   */
+  :deep(.n-card-header) {
+    flex-direction: column;
+    align-items: stretch;
+    row-gap: var(--space-2);
+  }
+
+  :deep(.n-card-header__extra) {
+    margin-left: 0;
+  }
 }

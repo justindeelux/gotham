@@ -4,19 +4,20 @@ import type { BackupTargetKind } from "@/features/databases/api/backups";
 import { portSchema, requiredString } from "@/shared/validation/primitives";
 
 /**
- * Database form schemas (V7). Every message below is copied verbatim from
- * the toast the hand-written guard showed, so the swap has zero
- * user-visible diff. None of these sites uses NForm rules today (submit
- * guards toast + disabled states), so the schemas drive the same guards
- * and disabled states instead of Naive rules; adding NForm rules would
- * change validation timing.
+ * Database form schemas (V7). Every message below is a namespaced i18n key
+ * resolved at invocation time through resolveValidationMessage, so the
+ * English display text stays byte-identical to the toast the hand-written
+ * guard showed while Vietnamese renders on locale switch. None of these
+ * sites uses NForm rules today (submit guards toast + disabled states), so
+ * the schemas drive the same guards and disabled states instead of Naive
+ * rules; adding NForm rules would change validation timing.
  */
 export const databaseMessages = {
-  nameRule: "Name must be 1-63 characters of letters, digits, ., _ or -.",
-  cronRequired: "Cron expression is required, e.g. 0 2 * * *.",
-  targetNameRequired: "Target name is required.",
-  s3LocationRequired: "Endpoint and bucket are required for an S3 target.",
-  s3KeysRequired: "Access key and secret key are required for a new S3 target.",
+  nameRule: "databases.validation.nameRule",
+  cronRequired: "databases.validation.cronRequired",
+  targetNameRequired: "databases.validation.targetNameRequired",
+  s3LocationRequired: "databases.validation.s3LocationRequired",
+  s3KeysRequired: "databases.validation.s3KeysRequired",
 } as const;
 
 /** Backend name rule from internal/databases/service.go (namePattern). */

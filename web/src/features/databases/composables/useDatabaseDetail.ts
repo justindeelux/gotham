@@ -2,6 +2,12 @@ import { useCopyText } from "@/shared/composables/useCopyText";
 import { useMessage } from "naive-ui";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import type { InjectionKey } from "vue";
+
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
 import { useRoute, useRouter } from "vue-router";
 
 import { describeDatabaseError } from "@/features/databases/api/databases";
@@ -17,6 +23,7 @@ import {
   maskConnectionPassword,
 } from "@/features/databases/utils/databaseConnection";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
+import { i18n, resolveValidationMessage } from "@/shared/i18n";
 import { useDatabasesStore } from "@/features/databases/stores/databases";
 import { resolveEnvironmentScope } from "@/features/projects/utils/canonicalRoutes";
 import { useProjectsStore } from "@/features/projects/stores/projects";
@@ -46,9 +53,19 @@ export function useDatabaseDetail() {
 
   // The detail page owns its own load state: the list store's flags describe the
   // polling list, not this row's fetch, so a failed detail load would otherwise
-  // render an empty shell with no explanation.
+  // render an empty shell with no explanation. The raw failure is retained so
+  // a language switch refreshes the visible banner without a refetch.
   const pageLoading = ref(false);
-  const pageError = ref<string | null>(null);
+  const noSelection = ref(false);
+  const pageErrorRaw = ref<unknown>(null);
+  const pageError = computed<string | null>(() => {
+    if (noSelection.value) {
+      return t("databases.detail.noSelection");
+    }
+    return pageErrorRaw.value === null
+      ? null
+      : describeDatabaseError(pageErrorRaw.value);
+  });
 
   /** isNarrow stacks the two-column descriptions on small screens. */
   const isNarrow = useMediaQuery("(max-width: 640px)");
@@ -107,13 +124,17 @@ export function useDatabaseDetail() {
   );
 
   /** copyCredential copies one cached credential field without narrowing issues. */
-  function copyCredential(field: CredentialField, label: string): void {
+  function copyCredential(field: CredentialField, labelKey: string): void {
     const value = credentials.value?.[field] ?? "";
     if (value === "") {
-      message.error(`No ${label.toLowerCase()} cached yet`);
+      message.error(
+        t("databases.detail.credentials.noCached", {
+          label: String(t(labelKey)).toLowerCase(),
+        }),
+      );
       return;
     }
-    void copyText(value, label);
+    void copyText(value, String(t(labelKey)));
   }
 
   /**
@@ -158,24 +179,29 @@ export function useDatabaseDetail() {
   /** copyConnectionString copies the unmasked DSN. */
   function copyConnectionString(): void {
     if (nodeAddressUnknown.value) {
-      message.error("Node address unknown — cannot build the public DSN yet");
+      message.error(t("databases.detail.credentials.nodeDsnError"));
       return;
     }
     if (connectionString.value === "") {
-      message.error("Credentials are not loaded yet");
+      message.error(t("databases.detail.credentials.notLoaded"));
       return;
     }
-    void copyText(connectionString.value, "Connection string");
+    void copyText(
+      connectionString.value,
+      String(t("databases.detail.credentials.connectionString")),
+    );
   }
 
   /** fetchAll loads the row, its credentials and the node list. */
   async function fetchAll(): Promise<void> {
     if (!dbId.value) {
-      pageError.value = "No database selected.";
+      noSelection.value = true;
+      pageErrorRaw.value = null;
       return;
     }
     pageLoading.value = true;
-    pageError.value = null;
+    noSelection.value = false;
+    pageErrorRaw.value = null;
     try {
       const database = await databasesStore.fetchDatabase(dbId.value);
       // The row ids are the authority: a wrong project/environment in the
@@ -197,7 +223,7 @@ export function useDatabaseDetail() {
         return;
       }
     } catch (error) {
-      pageError.value = describeDatabaseError(error);
+      pageErrorRaw.value = error;
       pageLoading.value = false;
       return;
     }
@@ -216,7 +242,7 @@ export function useDatabaseDetail() {
     renameOpen.value = false;
     renameValue.value = "";
     moveSaving.value = false;
-    moveError.value = null;
+    moveErrorRaw.value = null;
   }
 
   /** handleLifecycle runs one start/stop/restart action. */
@@ -232,9 +258,11 @@ export function useDatabaseDetail() {
         await databasesStore.restart(dbId.value);
       }
       message.success(
-        action === "start" ? "Database started"
-          : action === "stop" ? "Database stopped"
-          : "Database restarted",
+        action === "start"
+          ? t("databases.detail.lifecycle.started")
+          : action === "stop"
+            ? t("databases.detail.lifecycle.stopped")
+            : t("databases.detail.lifecycle.restarted"),
       );
     } catch (error) {
       message.error(describeDatabaseError(error));
@@ -251,13 +279,13 @@ export function useDatabaseDetail() {
   async function handleRename(): Promise<void> {
     const name = renameValue.value.trim();
     if (!isDatabaseNameValid(name)) {
-      message.error(databaseMessages.nameRule);
+      message.error(resolveValidationMessage(databaseMessages.nameRule));
       return;
     }
     renaming.value = true;
     try {
       await databasesStore.rename(dbId.value, name);
-      message.success(`Database renamed to "${name}"`);
+      message.success(t("databases.detail.lifecycle.renamed", { name }));
       renameOpen.value = false;
     } catch (error) {
       message.error(describeDatabaseError(error));
@@ -272,7 +300,7 @@ export function useDatabaseDetail() {
     const name = current?.name ?? dbId.value;
     try {
       await databasesStore.remove(dbId.value);
-      message.success(`Database "${name}" deleted · volume kept for 7 days`);
+      message.success(t("databases.detail.lifecycle.deleted", { name }));
       if (current) {
         await router.push({
           name: "environment-detail",
@@ -290,7 +318,13 @@ export function useDatabaseDetail() {
   const canWrite = computed<boolean>(() => projectsStore.canWrite);
 
   const moveSaving = ref(false);
-  const moveError = ref<string | null>(null);
+  /** moveErrorRaw retains the move refusal so the inline error refreshes on switch. */
+  const moveErrorRaw = ref<unknown>(null);
+  const moveError = computed<string | null>(() =>
+    moveErrorRaw.value === null
+      ? null
+      : describeDatabaseError(moveErrorRaw.value),
+  );
 
   /**
    * handleMove applies the location settings (move environment, change
@@ -321,13 +355,13 @@ export function useDatabaseDetail() {
     }
     const targetId = dbId.value;
     moveSaving.value = true;
-    moveError.value = null;
+    moveErrorRaw.value = null;
     try {
       const updated = await databasesStore.update(targetId, input);
       if (targetId !== dbId.value) {
         return; // the route moved on while the write was in flight
       }
-      message.success("Location saved");
+      message.success(t("databases.detail.lifecycle.locationSaved"));
       await refreshProjectCounts([current.project_id, updated.project_id]);
       if (targetId !== dbId.value) {
         return;
@@ -344,7 +378,7 @@ export function useDatabaseDetail() {
       }
     } catch (error) {
       if (targetId === dbId.value) {
-        moveError.value = describeDatabaseError(error);
+        moveErrorRaw.value = error;
       }
     } finally {
       if (targetId === dbId.value) {

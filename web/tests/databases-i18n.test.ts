@@ -1,0 +1,421 @@
+// I18N-6 coverage: databases catalog parity, invocation-time error
+// summaries with raw diagnostics preserved, and live-switch behavior.
+/* global document: readonly */
+import { mount } from "@vue/test-utils";
+import { beforeEach, describe, expect, it } from "vitest";
+import { nextTick, reactive } from "vue";
+
+import { describeBackupError } from "@/features/databases/api/backups";
+import {
+  databaseEmptyDescription,
+  databaseEmptyHint,
+  describeDatabaseError,
+} from "@/features/databases/api/databases";
+import WizardConfigureStep from "@/features/databases/components/WizardConfigureStep.vue";
+import RestoreConfirmDialog from "@/features/databases/components/RestoreConfirmDialog.vue";
+import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
+import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
+import {
+  wizardFormKey,
+  type WizardForm,
+} from "@/features/databases/composables/useCreateDatabaseWizard";
+import en from "@/features/databases/locales/en";
+import vi from "@/features/databases/locales/vi";
+import { maskConnectionPassword } from "@/features/databases/utils/databaseConnection";
+import { runDisplay } from "@/features/databases/utils/backupStatus";
+import { checkCatalogParity, leafEntries, pluralSegments } from "@/shared/i18n/catalog";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
+
+registerDiscoveredCatalogs();
+
+beforeEach(() => {
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+/** apiError builds the shape the shared HTTP layer throws. */
+function apiError(status: number, message: string): unknown {
+  return { status, message };
+}
+
+describe("databases catalog", () => {
+  it("has en/vi parity (keys, params, plurals, syntax)", () => {
+    expect(
+      checkCatalogParity(
+        en as unknown as Record<string, unknown>,
+        vi as unknown as Record<string, unknown>,
+      ),
+    ).toEqual([]);
+  });
+
+  it("is registered under the databases namespace in both locales", () => {
+    expect(i18n.global.te("databases.wizard.title")).toBe(true);
+    expect(String(i18n.global.t("databases.wizard.title"))).toBe(
+      "Create database",
+    );
+    setLocale("vi", null);
+    expect(String(i18n.global.t("databases.wizard.title"))).toBe(
+      "Tạo database",
+    );
+  });
+
+  it("needs no library pluralization today; parity guards any future plural", () => {
+    const pluralLeaves = leafEntries(
+      en as unknown as Record<string, unknown>,
+    ).filter(
+      ([, value]) =>
+        typeof value === "string" && pluralSegments(value).length > 1,
+    );
+    expect(pluralLeaves).toEqual([]);
+  });
+
+  it("keeps database/backup identity params in the restore confirmation", () => {
+    const params = {
+      name: "pg-orders",
+      backup: "s3://gotham-backups/pg-orders.dump",
+      when: "2h ago",
+      size: "4.10 MiB",
+    };
+    const enPrompt = String(
+      i18n.global.t("databases.backups.dialog.prompt", params),
+    );
+    expect(enPrompt).toContain("pg-orders");
+    expect(enPrompt).toContain("s3://gotham-backups/pg-orders.dump");
+    setLocale("vi", null);
+    const viPrompt = String(
+      i18n.global.t("databases.backups.dialog.prompt", params),
+    );
+    expect(viPrompt).toContain("pg-orders");
+    expect(viPrompt).toContain("s3://gotham-backups/pg-orders.dump");
+  });
+});
+
+describe("describeDatabaseError", () => {
+  it("renders unknown failures as a localized summary with the raw diagnostic", () => {
+    const raw = "databases: boom";
+    expect(describeDatabaseError(apiError(500, raw))).toBe(
+      "Request failed (boom)",
+    );
+    expect(describeDatabaseError(new Error("databases: boom"))).toBe(
+      "Something went wrong. Please try again. (boom)",
+    );
+    setLocale("vi", null);
+    expect(describeDatabaseError(apiError(500, raw))).toBe(
+      "Yêu cầu thất bại (boom)",
+    );
+    expect(describeDatabaseError(new Error("databases: boom"))).toBe(
+      "Đã xảy ra lỗi. Vui lòng thử lại. (boom)",
+    );
+  });
+
+  it("keeps the raw 502 diagnostic under the localized agent summary", () => {
+    expect(describeDatabaseError(apiError(502, "agent: dial tcp down"))).toBe(
+      "The node agent is unreachable or the healthcheck failed. Check the node status and retry. (agent: dial tcp down)",
+    );
+    setLocale("vi", null);
+    expect(describeDatabaseError(apiError(502, "agent: dial tcp down"))).toBe(
+      "Không kết nối được node agent hoặc kiểm tra trạng thái thất bại. Kiểm tra trạng thái node rồi thử lại. (agent: dial tcp down)",
+    );
+  });
+
+  it("localizes curated summaries without touching the 409 classifier", () => {
+    expect(describeDatabaseError(apiError(404, "databases: gone"))).toBe(
+      "Database not found. It may have been deleted or belong to another account.",
+    );
+    // Exact backend refusals still render inline for the move settings,
+    // under a non-misleading localized refusal summary.
+    expect(
+      describeDatabaseError(
+        apiError(409, "databases: a database cannot change server once created"),
+      ),
+    ).toBe("Request refused (a database cannot change server once created)");
+    expect(describeDatabaseError(apiError(409, "databases: "))).toBe(
+      "A database with that name already exists.",
+    );
+    setLocale("vi", null);
+    expect(describeDatabaseError(apiError(404, "databases: gone"))).toBe(
+      "Không tìm thấy database. Có thể nó đã bị xóa hoặc thuộc tài khoản khác.",
+    );
+    expect(
+      describeDatabaseError(
+        apiError(409, "databases: a database cannot change server once created"),
+      ),
+    ).toBe("Yêu cầu bị từ chối (a database cannot change server once created)");
+    expect(describeDatabaseError(apiError(409, "databases: "))).toBe(
+      "Đã tồn tại database trùng tên.",
+    );
+  });
+});
+
+describe("describeBackupError", () => {
+  it("distinguishes curated summaries per status in both locales", () => {
+    expect(describeBackupError(apiError(401, "auth: expired"))).toBe(
+      "Session expired. Please sign in again.",
+    );
+    expect(describeBackupError(apiError(502, "agent: down"))).toBe(
+      "The node agent is unreachable or the job failed on the node. Check the node status and retry. (agent: down)",
+    );
+    setLocale("vi", null);
+    expect(describeBackupError(apiError(401, "auth: expired"))).toBe(
+      "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
+    );
+    expect(describeBackupError(apiError(502, "agent: down"))).toBe(
+      "Không kết nối được node agent hoặc tác vụ thất bại trên node. Kiểm tra trạng thái node rồi thử lại. (agent: down)",
+    );
+  });
+
+  it("renders unknown failures as a localized summary with the raw diagnostic", () => {
+    expect(describeBackupError(apiError(500, "databases: boom"))).toBe(
+      "Request failed (boom)",
+    );
+    setLocale("vi", null);
+    expect(describeBackupError(apiError(500, "databases: boom"))).toBe(
+      "Yêu cầu thất bại (boom)",
+    );
+  });
+
+  it("keeps the raw running-job diagnostic under the localized summary", () => {
+    const raw = "databases: backup already running";
+    expect(describeBackupError(apiError(409, raw))).toBe(
+      "Request refused (backup already running)",
+    );
+    setLocale("vi", null);
+    expect(describeBackupError(apiError(409, raw))).toBe(
+      "Yêu cầu bị từ chối (backup already running)",
+    );
+    expect(describeBackupError(apiError(409, "databases: "))).toBe(
+      "Đã có một backup hoặc restore đang chạy cho database này.",
+    );
+  });
+
+  it("keeps distinct refusal diagnostics across nonempty 400/409 in both locales", () => {
+    const rows: Array<[string, unknown, string, string]> = [
+      [
+        "busy backup",
+        apiError(409, "databases: backup already running"),
+        "Request refused (backup already running)",
+        "Yêu cầu bị từ chối (backup already running)",
+      ],
+      [
+        "corrupt artifact on 400",
+        apiError(400, "databases: backup artifact corrupt: checksum mismatch"),
+        "Request refused (backup artifact corrupt: checksum mismatch)",
+        "Yêu cầu bị từ chối (backup artifact corrupt: checksum mismatch)",
+      ],
+      [
+        "blank 400 keeps curated wording",
+        apiError(400, "databases: "),
+        "Invalid request. Check the cron expression and target fields.",
+        "Yêu cầu không hợp lệ. Kiểm tra biểu thức cron và các trường đích lưu trữ.",
+      ],
+      [
+        "blank 409 keeps curated wording",
+        apiError(409, "databases: "),
+        "A backup or restore is already running for this database.",
+        "Đã có một backup hoặc restore đang chạy cho database này.",
+      ],
+    ];
+    for (const [label, error, enText] of rows) {
+      expect(describeBackupError(error), label).toBe(enText);
+    }
+    setLocale("vi", null);
+    for (const [label, error, , viText] of rows) {
+      expect(describeBackupError(error), label).toBe(viText);
+    }
+  });
+
+  it("keeps distinct database refusal diagnostics in both locales", () => {
+    const rows: Array<[string, unknown, string, string]> = [
+      [
+        "pinned server change",
+        apiError(409, "databases: a database cannot change server once created"),
+        "Request refused (a database cannot change server once created)",
+        "Yêu cầu bị từ chối (a database cannot change server once created)",
+      ],
+      [
+        "partial restore with restart failure",
+        apiError(
+          409,
+          "databases: database restored, restart failed: container exited",
+        ),
+        "Request refused (container exited)",
+        "Yêu cầu bị từ chối (container exited)",
+      ],
+      [
+        "blank 409 keeps duplicate-name wording",
+        apiError(409, "databases: "),
+        "A database with that name already exists.",
+        "Đã tồn tại database trùng tên.",
+      ],
+    ];
+    for (const [label, error, enText] of rows) {
+      expect(describeDatabaseError(error), label).toBe(enText);
+    }
+    setLocale("vi", null);
+    for (const [label, error, , viText] of rows) {
+      expect(describeDatabaseError(error), label).toBe(viText);
+    }
+  });
+});
+
+describe("runDisplay keeps the English baseline and raw unknowns", () => {
+  it("renders exact former raw lowercase labels in English", () => {
+    expect(runDisplay("runStatus", "running")).toBe("running");
+    expect(runDisplay("runStatus", "completed")).toBe("completed");
+    expect(runDisplay("runStatus", "failed")).toBe("failed");
+    expect(runDisplay("runType", "manual")).toBe("manual");
+    expect(runDisplay("runType", "scheduled")).toBe("scheduled");
+  });
+
+  it("falls back to the raw wire value for unknown statuses in both locales", () => {
+    expect(runDisplay("runStatus", "recovering")).toBe("recovering");
+    expect(runDisplay("runType", "operator")).toBe("operator");
+    setLocale("vi", null);
+    expect(runDisplay("runStatus", "completed")).toBe("Hoàn tất");
+    expect(runDisplay("runStatus", "recovering")).toBe("recovering");
+    expect(runDisplay("runType", "operator")).toBe("operator");
+  });
+});
+
+describe("restore confirmation keeps backup identity without a location", () => {
+  /** mountRestoreDialog renders the real dialog for one candidate. */
+  function mountRestoreDialog(candidate: Record<string, unknown>) {
+    const detail = {
+      database: { value: { name: "pg-orders" } },
+      shortId: { value: "abc12345" },
+    };
+    const backups = {
+      restoreOpen: { value: true },
+      restoreCandidate: { value: candidate },
+      restoring: { value: false },
+      handleRestoreConfirm: () => undefined,
+    };
+    return mount(RestoreConfirmDialog, {
+      attachTo: document.body,
+      global: {
+        provide: {
+          [databaseDetailKey as symbol]: detail,
+          [databaseBackupsKey as symbol]: backups,
+        },
+      },
+    });
+  }
+
+  const candidate = {
+    id: "backup-1",
+    location: "",
+    created_at: "2026-10-01T12:00:00.000Z",
+    size: 10,
+  };
+
+  it("falls back to the backup id in English", () => {
+    const wrapper = mountRestoreDialog(candidate);
+    try {
+      expect(document.body.textContent).toContain("backup-1");
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it("falls back to the backup id in Vietnamese", async () => {
+    setLocale("vi", null);
+    await nextTick();
+    const wrapper = mountRestoreDialog(candidate);
+    try {
+      expect(document.body.textContent).toContain("backup-1");
+    } finally {
+      wrapper.unmount();
+    }
+  });
+});
+
+describe("restore outcome wording", () => {
+  it("keeps the raw failure detail so a restore failure stays distinct from a restart failure", () => {
+    const restartDetail = "database restored, restart failed: container exited";
+    const summary = String(
+      i18n.global.t("databases.backups.restores.failedWithDetail", {
+        detail: restartDetail,
+      }),
+    );
+    expect(summary).toContain(restartDetail);
+    setLocale("vi", null);
+    expect(
+      String(
+        i18n.global.t("databases.backups.restores.failedWithDetail", {
+          detail: restartDetail,
+        }),
+      ),
+    ).toContain(restartDetail);
+  });
+});
+
+describe("live language switch on the configure step", () => {
+  it("preserves the draft, refreshes visible feedback and starts nothing", async () => {
+    const form = reactive<WizardForm>({
+      engine: "postgres",
+      version: "16-alpine",
+      projectId: "proj-1",
+      environmentId: "env-1",
+      serverId: "srv-1",
+      name: "no spaces",
+      exposePublic: false,
+      publicPort: null,
+    });
+    const wrapper = mount(WizardConfigureStep, {
+      global: { provide: { [wizardFormKey as symbol]: form } },
+    });
+    try {
+      // Invalid-name feedback is visible before any submit.
+      expect(wrapper.text()).toContain(
+        "Name must be 1-63 characters of letters, digits, ., _ or -.",
+      );
+      await wrapper.find("input").setValue("no spaces");
+      expect(form.name).toBe("no spaces");
+      // The expose-port switch carries the translated field label as its
+      // accessible name in both locales.
+      expect(wrapper.find('[role="switch"]').attributes("aria-label")).toBe(
+        "Expose a public port",
+      );
+      setLocale("vi", null);
+      await nextTick();
+      // Draft survived, feedback switched, no API call or submit happened.
+      expect(form.name).toBe("no spaces");
+      expect(form.exposePublic).toBe(false);
+      expect(wrapper.find('[role="switch"]').attributes("aria-label")).toBe(
+        "Mở cổng public",
+      );
+      expect(wrapper.text()).toContain(
+        "Tên phải dài 1-63 ký tự gồm chữ cái, chữ số, ., _ hoặc -.",
+      );
+      expect(wrapper.text()).not.toContain(
+        "Name must be 1-63 characters of letters, digits, ., _ or -.",
+      );
+    } finally {
+      wrapper.unmount();
+    }
+  });
+});
+
+describe("connection handling stays raw", () => {
+  it("masks the DSN password identically in both locales", () => {
+    const dsn = "postgresql://app:s3cret@10.0.0.4:5432/shop";
+    expect(maskConnectionPassword(dsn)).toBe(
+      "postgresql://app:••••••••@10.0.0.4:5432/shop",
+    );
+    setLocale("vi", null);
+    expect(maskConnectionPassword(dsn)).toBe(
+      "postgresql://app:••••••••@10.0.0.4:5432/shop",
+    );
+  });
+
+  it("leaves the legacy empty-state helpers untouched", () => {
+    expect(databaseEmptyDescription(0)).toBe("No databases yet");
+    expect(databaseEmptyHint(0)).toContain("Create database");
+  });
+});

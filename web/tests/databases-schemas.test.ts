@@ -1,10 +1,19 @@
 // Differential tests for the V7 databases zod migration (JUS-23).
 // Each row pins the outcome + message the hand-written guard produced
 // (captured pre-migration in zz-scratch-old.test.ts): the new schemas must
-// produce the identical outcome + message for every row.
-import { describe, expect, it } from "vitest";
+// produce the identical outcome + message for every row. Messages are
+// namespaced i18n keys resolved at invocation time, so the suite registers
+// the real feature catalogs and asserts the resolved English display text.
+import { beforeEach, describe, expect, it } from "vitest";
 
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
+import {
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  resolveValidationMessage,
+  setLocale,
+  syncComposerLocale,
+} from "@/shared/i18n";
 import {
   cronSchema,
   databaseMessages,
@@ -15,7 +24,14 @@ import {
   validateTargetForm,
 } from "@/features/databases/schemas/databases";
 
-const NAME = databaseMessages.nameRule;
+registerDiscoveredCatalogs();
+
+beforeEach(() => {
+  resetLocaleState();
+  syncComposerLocale("en");
+});
+
+const NAME = "Name must be 1-63 characters of letters, digits, ., _ or -.";
 
 describe("databaseNameSchema matches isValidDatabaseName", () => {
   const valid = [
@@ -59,7 +75,7 @@ describe("cronSchema keeps non-empty-only, no grammar check", () => {
     for (const value of ["", "   ", undefined, null]) {
       expect(isCronPresent(value)).toBe(false);
       expect(fieldErrors(cronSchema, value)).toEqual([
-        databaseMessages.cronRequired,
+        "Cron expression is required, e.g. 0 2 * * *.",
       ]);
     }
   });
@@ -67,6 +83,14 @@ describe("cronSchema keeps non-empty-only, no grammar check", () => {
     for (const value of ["0 2 * * *", "  0 2 * * *  ", "not a cron"]) {
       expect(isCronPresent(value)).toBe(true);
     }
+  });
+  it("resolves the same key in Vietnamese without changing the predicate", () => {
+    setLocale("vi", null);
+    expect(isCronPresent("")).toBe(false);
+    expect(fieldErrors(cronSchema, "")).toEqual([
+      "Biểu thức cron là bắt buộc, ví dụ 0 2 * * *.",
+    ]);
+    expect(isCronPresent("0 2 * * *")).toBe(true);
   });
 });
 
@@ -80,22 +104,48 @@ describe("validateTargetForm keeps guard order and messages", () => {
     secretKey: "s",
     isNew: true,
   };
+  // Keys keep guard order; the resolved English display text stays pinned
+  // to the recorded guard strings below.
   const rows: Array<[string, typeof base, string | null]> = [
     ["ok", base, null],
-    ["empty name", { ...base, name: "  " }, "Target name is required."],
-    ["blank endpoint", { ...base, endpoint: " " }, "Endpoint and bucket are required for an S3 target."],
-    ["blank bucket", { ...base, bucket: "" }, "Endpoint and bucket are required for an S3 target."],
-    ["new missing secret", { ...base, secretKey: "" }, "Access key and secret key are required for a new S3 target."],
-    ["new missing access", { ...base, accessKey: "" }, "Access key and secret key are required for a new S3 target."],
+    ["empty name", { ...base, name: "  " }, databaseMessages.targetNameRequired],
+    ["blank endpoint", { ...base, endpoint: " " }, databaseMessages.s3LocationRequired],
+    ["blank bucket", { ...base, bucket: "" }, databaseMessages.s3LocationRequired],
+    ["new missing secret", { ...base, secretKey: "" }, databaseMessages.s3KeysRequired],
+    ["new missing access", { ...base, accessKey: "" }, databaseMessages.s3KeysRequired],
     ["new blank-space keys still pass (no trim)", { ...base, accessKey: " ", secretKey: " " }, null],
     ["edit keeps stored keys", { ...base, accessKey: "", secretKey: "", isNew: false }, null],
     ["local needs nothing", { ...base, kind: "local" as const, endpoint: "", bucket: "", accessKey: "", secretKey: "" }, null],
-    ["name wins over location", { ...base, name: "", endpoint: "" }, "Target name is required."],
+    ["name wins over location", { ...base, name: "", endpoint: "" }, databaseMessages.targetNameRequired],
   ];
   it("returns the recorded first message per row", () => {
     for (const [label, draft, message] of rows) {
       expect(validateTargetForm(draft), label).toBe(message);
     }
+  });
+  it("resolves the keys to the recorded English display text", () => {
+    const resolved = new Map([
+      [databaseMessages.targetNameRequired, "Target name is required."],
+      [
+        databaseMessages.s3LocationRequired,
+        "Endpoint and bucket are required for an S3 target.",
+      ],
+      [
+        databaseMessages.s3KeysRequired,
+        "Access key and secret key are required for a new S3 target.",
+      ],
+    ]);
+    for (const [, draft, message] of rows) {
+      if (message === null) {
+        continue;
+      }
+      expect(validateTargetForm(draft)).toBe(message);
+      expect(resolveValidationMessage(message)).toBe(resolved.get(message));
+    }
+    setLocale("vi", null);
+    expect(
+      resolveValidationMessage(databaseMessages.targetNameRequired),
+    ).toBe("Tên đích lưu trữ là bắt buộc.");
   });
 });
 

@@ -1,5 +1,6 @@
 import { http, teamHeaders } from "@/shared/api/http";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
+import { i18n } from "@/shared/i18n";
 
 /**
  * Typed client for the database routes served by `internal/databases`
@@ -259,39 +260,60 @@ export async function restartDatabase(id: string): Promise<Database> {
   return response.data.database;
 }
 
-/** describeDatabaseError maps a thrown error to a user-facing message. */
+/**
+ * describeDatabaseError maps a thrown error to a user-facing message.
+ * Classification stays on the raw status/message (never on translated text).
+ * Exact backend refusals (409 with a message) pass through raw so inline
+ * guards keep their wording; unknown failures render a localized summary
+ * with the useful raw diagnostic retained as plain text.
+ */
 export function describeDatabaseError(error: unknown): string {
+  const t = (key: string): string => String(i18n.global.t(key));
+  /** withSummary renders a curated summary, keeping nonempty raw detail. */
+  const withSummary = (summaryKey: string, raw: string): string =>
+    raw === ""
+      ? t(summaryKey)
+      : String(
+          i18n.global.t("databases.errors.withDetail", {
+            summary: t(summaryKey),
+            detail: raw,
+          }),
+        );
   if (isApiError(error)) {
     if (error.status === 404) {
-      return "Database not found. It may have been deleted or belong to another account.";
+      return t("databases.errors.databaseNotFound");
     }
     if (error.status === 409) {
       // The backend names the refusal exactly (a duplicate name, `a deploy
       // is in progress`, `a database cannot change server once created`), so
-      // the message passes through for the move/server-change settings to
-      // render inline.
-      return (
-        conflictDetail(stripErrorPrefix(error.message)) ||
-        "A database with that name already exists."
-      );
+      // the detail passes through for the move/server-change settings to
+      // render inline, under a non-misleading localized refusal summary.
+      const detail = conflictDetail(stripErrorPrefix(error.message));
+      return detail === ""
+        ? t("databases.errors.nameTaken")
+        : withSummary("databases.errors.requestRefused", detail);
     }
     if (error.status === 502) {
-      return (
-        "The node agent is unreachable or the healthcheck failed. " +
-        "Check the node status and retry."
+      return withSummary(
+        "databases.errors.databaseAgentUnreachable",
+        stripErrorPrefix(error.message),
       );
     }
     if (error.status === 503) {
-      return "Databases are disabled on the control plane (FEATURE_DATABASES=false).";
+      return t("databases.errors.featureDisabled");
     }
-    return stripErrorPrefix(error.message) || "Request failed";
-  }
-  if (error instanceof Error) {
-    return (
-      stripErrorPrefix(error.message) || "Something went wrong. Please try again."
+    return withSummary(
+      "common.errors.requestFailed",
+      stripErrorPrefix(error.message),
     );
   }
-  return "Something went wrong. Please try again.";
+  if (error instanceof Error) {
+    return withSummary(
+      "common.errors.unexpected",
+      stripErrorPrefix(error.message),
+    );
+  }
+  return t("common.errors.unexpected");
 }
 
 /**

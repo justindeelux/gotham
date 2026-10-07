@@ -5,6 +5,13 @@ import { inject } from "vue";
 import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
 import { isDatabaseNameValid } from "@/features/databases/schemas/databases";
 
+import { i18n } from "@/shared/i18n";
+
+/** t resolves a databases/common message in the current locale. */
+function t(key: string, params?: Record<string, string | number>): string {
+  return String(i18n.global.t(key, params ?? {}));
+}
+
 const detail = inject(databaseDetailKey)!;
 </script>
 
@@ -12,29 +19,28 @@ const detail = inject(databaseDetailKey)!;
   <NModal
     v-model:show="detail.renameOpen.value"
     preset="card"
-    title="Rename database"
+    :title="t('databases.detail.rename.title')"
     style="width: 480px; max-width: 94vw"
   >
     <NSpace vertical :size="12">
       <NText depth="3">
-        Only the display name changes — the container, volume and credentials
-        stay untouched.
+        {{ t("databases.detail.rename.hint") }}
       </NText>
       <NInput
         v-model:value="detail.renameValue.value"
         class="mono"
-        placeholder="New database name"
+        :placeholder="t('databases.detail.rename.placeholder')"
         @keyup.enter="() => void detail.handleRename()"
       />
       <NSpace justify="end" :size="8">
-        <NButton @click="detail.renameOpen.value = false">Cancel</NButton>
+        <NButton @click="detail.renameOpen.value = false">{{ t("common.actions.cancel") }}</NButton>
         <NButton
           type="primary"
           :loading="detail.renaming.value"
           :disabled="!isDatabaseNameValid(detail.renameValue.value)"
           @click="() => void detail.handleRename()"
         >
-          Rename
+          {{ t("databases.detail.actions.rename") }}
         </NButton>
       </NSpace>
     </NSpace>

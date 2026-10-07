@@ -30,6 +30,7 @@ const en = {
     notFoundWithDetail: "{detail}",
     conflictFallback: "A service with that name already exists. Pick another name.",
     conflictWithDetail: "{detail}",
+    unknownWithDetail: "Request failed: {detail}",
     nodeAgentError: "Node agent error: {detail}",
     nodeUnreachable: "The node agent is unreachable. Check the node status and retry.",
     disabled: "Services are disabled on the control plane (FEATURE_SERVICES=false).",

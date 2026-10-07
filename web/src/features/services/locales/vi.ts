@@ -31,6 +31,7 @@ const vi: typeof en = {
     notFoundWithDetail: "Không tìm thấy: {detail}",
     conflictFallback: "Đã có dịch vụ trùng tên. Hãy chọn tên khác.",
     conflictWithDetail: "Xung đột: {detail}",
+    unknownWithDetail: "Yêu cầu thất bại: {detail}",
     nodeAgentError: "Lỗi node agent: {detail}",
     nodeUnreachable: "Không kết nối được node agent. Kiểm tra trạng thái node rồi thử lại.",
     disabled: "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).",

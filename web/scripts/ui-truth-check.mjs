@@ -790,6 +790,21 @@ async function main() {
         "service 502 strips the embedded detail",
       );
       assert(
+        services.module.describeServiceError({ message: "services: down", status: 500 }) ===
+          "Request failed: down",
+        "service unknown status pairs the summary with the same raw",
+      );
+      assert(
+        services.module.describeServiceError(new Error("services: plain boom")) ===
+          "Request failed: plain boom",
+        "service plain error pairs the summary with the same raw",
+      );
+      assert(
+        services.module.describeServiceError({ message: "", status: 500 }) ===
+          "Request failed",
+        "service empty unknown falls back exactly once",
+      );
+      assert(
         backups.module.describeBackupError(prefixed("databases")) === "boom",
         "backup generic strips",
       );

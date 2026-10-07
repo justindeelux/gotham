@@ -119,16 +119,42 @@ describe("service errors keep raw diagnostics", () => {
     expect(
       describeTemplateError({ status: 404, message: "templates: gone", cause: null }),
     ).toBe("gone");
+    // Unknown statuses and plain errors pair a localized summary with the
+    // identical stripped raw detail; empty failures fall back exactly once.
+    expect(describeServiceError({ status: 500, message: "services: down", cause: null })).toBe(
+      "Request failed: down",
+    );
+    expect(describeServiceError(new Error("services: plain boom"))).toBe(
+      "Request failed: plain boom",
+    );
+    expect(describeServiceError({ status: 500, message: "", cause: null })).toBe(
+      "Request failed",
+    );
+    expect(describeServiceError(new Error(""))).toBe(
+      "Something went wrong. Please try again.",
+    );
+    expect(describeTemplateError({ status: 500, message: "templates: down", cause: null })).toBe(
+      "down",
+    );
     setLocale("vi", null);
     expect(describeServiceError(badRequest)).toBe("Yêu cầu không hợp lệ: compose invalid");
     expect(describeServiceError(missing)).toBe("Không tìm thấy: gone");
     expect(
       describeTemplateError({ status: 404, message: "templates: gone", cause: null }),
     ).toBe("Không tìm thấy: gone");
-    // Generic and unknown diagnostics keep their pinned raw passthrough.
     expect(describeServiceError({ status: 500, message: "services: down", cause: null })).toBe(
-      "down",
+      "Yêu cầu thất bại: down",
     );
+    expect(describeServiceError(new Error("services: plain boom"))).toBe(
+      "Yêu cầu thất bại: plain boom",
+    );
+    expect(describeServiceError({ status: 500, message: "", cause: null })).toBe(
+      "Yêu cầu thất bại",
+    );
+    expect(describeServiceError(new Error(""))).toBe(
+      "Đã xảy ra lỗi. Vui lòng thử lại.",
+    );
+    // Templates-owned generic passthrough is out of this fix's scope.
     expect(describeTemplateError({ status: 500, message: "templates: down", cause: null })).toBe(
       "down",
     );

@@ -179,7 +179,10 @@ test.afterAll(async () => {
 });
 
 /** mockApi seeds the session and answers the calls the I18N-7 surface makes. */
-async function mockApi(page: Page, deploysStatus = 200): Promise<void> {
+async function mockApi(
+  page: Page,
+  deploysFailure: { status: number; message: string } | null = null,
+): Promise<void> {
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
   }, JSON.stringify(session));
@@ -238,10 +241,13 @@ async function mockApi(page: Page, deploysStatus = 200): Promise<void> {
     });
   });
   await page.route("**/api/v1/services/svc-1/deploys", async (route) => {
-    if (deploysStatus === 200) {
+    if (deploysFailure === null) {
       await route.fulfill({ json: { deploys } });
     } else {
-      await route.fulfill({ status: 502, json: { message: "services: dial node" } });
+      await route.fulfill({
+        status: deploysFailure.status,
+        json: { message: deploysFailure.message },
+      });
     }
   });
   await page.route("**/api/v1/services/svc-1", async (route) => {
@@ -423,7 +429,7 @@ test("retained deploy-history failure re-derives in the current locale", async (
   page,
 }) => {
   await page.setViewportSize({ width: 900, height: 1000 });
-  await mockApi(page, 502);
+  await mockApi(page, { status: 502, message: "services: dial node" });
   await page.goto(`${baseURL}/projects/proj-1/environments/env-1/services/svc-1`);
   await expect(page.locator(".service-detail-page h1")).toHaveText("blog-staging");
   await expect(page.locator('[data-testid="history-unavailable"]')).toContainText(
@@ -435,4 +441,30 @@ test("retained deploy-history failure re-derives in the current locale", async (
     "Không đọc được lịch sử triển khai: Lỗi node agent: dial node",
   );
   await page.screenshot({ path: test.info().outputPath("service-history-vi-900.png") });
+});
+
+test("unknown failures pair a localized summary with the identical raw detail", async ({
+  page,
+}) => {
+  for (const width of widths) {
+    for (const locale of ["en", "vi"] as const) {
+      await page.setViewportSize({ width, height: 1000 });
+      await mockApi(page, { status: 500, message: "services: boom" });
+      await page.goto(`${baseURL}/projects/proj-1/environments/env-1/services/svc-1`);
+      await expect(page.locator(".service-detail-page h1")).toHaveText("blog-staging");
+      await switchLocale(page, locale);
+      const expected =
+        locale === "vi"
+          ? "Không đọc được lịch sử triển khai: Yêu cầu thất bại: boom"
+          : "Deploy history unavailable: Request failed: boom";
+      await expect(page.locator('[data-testid="history-unavailable"]')).toContainText(
+        expected,
+      );
+      await expectNoOverflow(page, width);
+      await page.screenshot({
+        path: test.info().outputPath(`service-unknown-${locale}-${width}.png`),
+      });
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  }
 });

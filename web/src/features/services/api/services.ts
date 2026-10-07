@@ -388,7 +388,10 @@ export function deployStateTagType(
  * resolve in the active locale. Actionable server text passes through
  * untouched. The 502 detail pairs a localized UI heading with the raw node
  * diagnostic: the heading translates, the detail stays byte-identical, and
- * English output matches the historical literal exactly.
+ * English output matches the historical literal exactly. Unknown statuses
+ * and plain errors pair the same way: one localized `unknownWithDetail`
+ * summary plus the identical stripped raw detail, with the empty case
+ * falling back exactly once.
  */
 export function describeServiceError(error: unknown): string {
   // Tracks the locale when called during render or inside a computed, so
@@ -441,10 +444,30 @@ export function describeServiceError(error: unknown): string {
     if (error.status === 503) {
       return text("services.errors.disabled");
     }
-    return stripErrorPrefix(error.message) || text("common.errors.requestFailed");
+    return unknownFailure(stripErrorPrefix(error.message), text("common.errors.requestFailed"));
   }
   if (error instanceof Error) {
-    return stripErrorPrefix(error.message) || text("common.errors.unexpected");
+    return unknownFailure(stripErrorPrefix(error.message), text("common.errors.unexpected"));
   }
   return text("common.errors.unexpected");
+}
+
+/**
+ * unknownFailure pairs one stripped raw diagnostic with the localized
+ * unknown-failure summary, or renders the single empty-failure fallback.
+ * The summary resolves through the services catalog when it is registered
+ * (the app's synchronous discovery); harnesses that bundle this module
+ * without catalogs keep the exact English baseline, exactly like the 502
+ * heading above. No caller classifies this display text: status guards,
+ * prefix stripping, retries and redaction all run on the raw error first.
+ */
+function unknownFailure(detail: string, emptyFallback: string): string {
+  if (detail === "") {
+    return emptyFallback;
+  }
+  const key = "services.errors.unknownWithDetail";
+  if (i18n.global.te(key)) {
+    return String(i18n.global.t(key, { detail }));
+  }
+  return `Request failed: ${detail}`;
 }

@@ -300,7 +300,7 @@ describe("drafts survive a language switch", () => {
     ) as HTMLInputElement;
     // Empty required name validated on blur through the real teleported modal.
     nameInput.focus();
-    nameInput.dispatchEvent(new Event("blur"));
+    nameInput.dispatchEvent(new globalThis.Event("blur"));
     await flushPromises();
     await nextTick();
     expect(modal()).toContain("Name is required");

@@ -337,20 +337,9 @@ export function isNameTakenError(error: unknown): boolean {
 }
 
 /**
- * describeProjectError maps a thrown error to a user-facing message. The
- * backend answers 400 for validation, 403 for an insufficient role, 404 for
- * an id from another team (or a removed row) and 409 for the duplicate-name
- * and non-empty delete protections, and its message is the actionable part.
- *
- * Classification still runs on the raw error (status plus the stripped
- * server message, exactly as before); only the curated fallback summaries
- * resolve in the active locale. Actionable server text passes through
- * untouched so secrets stay redacted and diagnostics stay intact.
- */
-/**
  * withDiagnostic pairs an unknown failure's raw diagnostic with a localized
  * summary (`<summary>: <raw>`). An empty or already-generic diagnostic
- * renders the summary alone. Known refusal branches above keep their raw
+ * renders the summary alone. Known refusal branches below keep their raw
  * actionable text untouched.
  */
 function withDiagnostic(summary: string, raw: string): string {
@@ -361,6 +350,17 @@ function withDiagnostic(summary: string, raw: string): string {
   return `${lead}: ${raw}`;
 }
 
+/**
+ * describeProjectError maps a thrown error to a user-facing message. The
+ * backend answers 400 for validation, 403 for an insufficient role, 404 for
+ * an id from another team (or a removed row) and 409 for the duplicate-name
+ * and non-empty delete protections, and its message is the actionable part.
+ *
+ * Classification still runs on the raw error (status plus the stripped
+ * server message, exactly as before); only the curated fallback summaries
+ * resolve in the active locale. Actionable server text passes through
+ * untouched so secrets stay redacted and diagnostics stay intact.
+ */
 export function describeProjectError(error: unknown): string {
   // Tracks the locale when called during render or inside a computed, so
   // retained failures refresh on a language switch.

@@ -185,6 +185,7 @@ function unit(one: string, other: string, count: number): string {
       v-model:show="createOpen"
       preset="card"
       :title="t('projects.create.title')"
+      @after-leave="createVisible.reset()"
       style="width: 460px; max-width: 94vw"
     >
       <NForm

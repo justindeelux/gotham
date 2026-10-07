@@ -266,6 +266,7 @@ function t(key: string, params?: Record<string, string | number>): string {
       v-model:show="renameOpen"
       preset="card"
       :title="t('projects.rename.title')"
+      @after-leave="renameVisible.reset()"
       style="width: 460px; max-width: 94vw"
     >
       <NForm ref="renameFormRef" :model="{ name: renameName }" :rules="renameRules">
@@ -350,6 +351,7 @@ function t(key: string, params?: Record<string, string | number>): string {
       v-model:show="envCreateOpen"
       preset="card"
       :title="t('projects.environments.createTitle')"
+      @after-leave="envCreateVisible.reset()"
       style="width: 460px; max-width: 94vw"
     >
       <NForm ref="envCreateFormRef" :model="{ name: envName }" :rules="envCreateRules">
@@ -396,6 +398,7 @@ function t(key: string, params?: Record<string, string | number>): string {
       :show="envRenameTarget !== null"
       preset="card"
       :title="t('projects.environments.renameTitle')"
+      @after-leave="envRenameVisible.reset()"
       style="width: 460px; max-width: 94vw"
       @update:show="(show: boolean) => { if (!show) envRenameTarget = null; }"
     >

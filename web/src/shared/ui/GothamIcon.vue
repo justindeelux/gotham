@@ -1,11 +1,31 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import type { Component } from "vue";
+import {
+  Bell,
+  Box,
+  ChevronDown,
+  Database,
+  FileText,
+  Folder,
+  Globe,
+  KeyRound,
+  Layers,
+  LayoutGrid,
+  Plus,
+  RefreshCw,
+  Rocket,
+  Search,
+  Server,
+  Settings,
+  ShieldCheck,
+  Trash2,
+  Users,
+} from "@lucide/vue";
 
-// Stroke icon set ported from the docs/design sprite
-// (docs/design/assets/gotham-ui.js ICONS map, the UI source of truth).
-// Chosen over Naive UI icon components because naive-ui ships no icons of
-// its own — the alternative would add an @vicons dependency for four glyphs
-// while diverging from the mockup stroke style (1.6px, round caps).
+// Thin adapter over @lucide/vue: call sites keep using the 19 Gotham
+// names with no changes. Per-icon imports keep tree-shaking intact — never
+// import the whole library here.
 export type IconName =
   | "server"
   | "shield"
@@ -33,50 +53,37 @@ interface Props {
 
 const props = defineProps<Props>();
 
-const paths: Record<IconName, string> = {
-  server:
-    '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
-  shield:
-    '<path d="M12 3l8 3v6c0 5-3.4 8-8 9-4.6-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/>',
-  refresh:
-    '<path d="M4 12a8 8 0 0113.7-5.6M20 12a8 8 0 01-13.7 5.6M20 4v4h-4M4 20v-4h4"/>',
-  rocket:
-    '<path d="M14 4c4 1 6 3 6 3s-2 2-3 6c-1 3.5-4 6.5-7 7l-3-3c.5-3 3.5-6 7-7z"/><path d="M9 15l-4 4M7 11l-3 1 1-3M13 17l-1 3 3-1"/>',
-  grid: '<path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>',
-  box: '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4 7.5l8 4.5 8-4.5M12 12v9"/>',
-  layers: '<path d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5M3 17l9 5 9-5"/>',
-  db: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
-  globe:
-    '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9S14.5 18.4 12 21c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/>',
-  users:
-    '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.4 6-5.4s6 2.1 6 5.4M16 5.5a3.2 3.2 0 010 6M18 20c0-2.4-.6-4-1.6-5.2"/>',
-  bell: '<path d="M6 9a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6zM10 20a2 2 0 004 0"/>',
-  search: '<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.3-4.3"/>',
-  doc: '<path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h4"/>',
-  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
-  folder: '<path d="M3 7a2 2 0 012-2h4l2 2.4h6a2 2 0 012 2V17a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>',
-  key: '<circle cx="8" cy="12" r="4"/><path d="M12 12h9M18 12v3M15 12v2.5"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  trash:
-    '<path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13M10 11v6M14 11v6"/>',
-  "chevron-down": '<path d="M6 9l6 6 6-6"/>',
+const components: Record<IconName, Component> = {
+  server: Server,
+  shield: ShieldCheck,
+  refresh: RefreshCw,
+  rocket: Rocket,
+  grid: LayoutGrid,
+  box: Box,
+  layers: Layers,
+  db: Database,
+  globe: Globe,
+  users: Users,
+  bell: Bell,
+  search: Search,
+  doc: FileText,
+  gear: Settings,
+  folder: Folder,
+  key: KeyRound,
+  plus: Plus,
+  trash: Trash2,
+  "chevron-down": ChevronDown,
 };
 
-const inner = computed<string>(() => paths[props.name]);
+const component = computed<Component>(() => components[props.name]);
+
+// @lucide/vue v1 renders stroke-width verbatim (no 24px-grid scaling),
+// so :stroke-width="1.6" below matches the old hand-drawn paths exactly.
+// Do NOT add absolute-stroke-width: in v1 that flag enables the scaling.
 </script>
 
 <template>
-  <svg
-    class="gotham-icon"
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="1.6"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    aria-hidden="true"
-    v-html="inner"
-  ></svg>
+  <component :is="component" class="gotham-icon" :size="18" :stroke-width="1.6" />
 </template>
 
 <style scoped>

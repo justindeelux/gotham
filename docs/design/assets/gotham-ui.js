@@ -7,6 +7,9 @@
   "use strict";
 
   /* ── Icon sprite ─────────────────────────────────────────────────────── */
+  /* Mockup-only artwork. The shipped app renders Lucide glyphs through
+   * web/src/shared/ui/GothamIcon.vue (JUS-55 supersedes this sprite):
+   * compare layout and meaning here, never pixel-match the paths. */
   const ICONS = {
     "i-grid": '<path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/>',
     "i-box": '<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4 7.5l8 4.5 8-4.5M12 12v9"/>',

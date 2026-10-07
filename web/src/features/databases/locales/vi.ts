@@ -24,6 +24,7 @@ const vi: typeof en = {
     deleting: "Đang xóa",
   },
   errors: {
+    withDetail: "{summary} ({detail})",
     databaseNotFound:
       "Không tìm thấy database. Có thể nó đã bị xóa hoặc thuộc tài khoản khác.",
     nameTaken: "Đã tồn tại database trùng tên.",

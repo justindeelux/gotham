@@ -10,7 +10,7 @@ import {
 import { inject } from "vue";
 
 import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
-import { statusTagType } from "@/features/databases/utils/backupStatus";
+import { runDisplay, statusTagType } from "@/features/databases/utils/backupStatus";
 import { relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -46,7 +46,7 @@ const backups = inject(databaseBackupsKey)!;
           <div class="backup-row__main">
             <NSpace align="center" :size="8">
               <NTag :type="statusTagType(restore.status)" size="small">
-                {{ t(`databases.backups.runStatus.${restore.status}`) }}
+                {{ runDisplay("runStatus", restore.status) }}
               </NTag>
               <NText class="mono" depth="3">
                 {{ t("databases.backups.restores.backupRef", { id: restore.backup_id.slice(0, 8) }) }}

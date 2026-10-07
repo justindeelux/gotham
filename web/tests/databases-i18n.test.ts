@@ -1,5 +1,6 @@
 // I18N-6 coverage: databases catalog parity, invocation-time error
 // summaries with raw diagnostics preserved, and live-switch behavior.
+/* global document: readonly */
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 import { nextTick, reactive } from "vue";
@@ -11,6 +12,9 @@ import {
   describeDatabaseError,
 } from "@/features/databases/api/databases";
 import WizardConfigureStep from "@/features/databases/components/WizardConfigureStep.vue";
+import RestoreConfirmDialog from "@/features/databases/components/RestoreConfirmDialog.vue";
+import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
+import { databaseDetailKey } from "@/features/databases/composables/useDatabaseDetail";
 import {
   wizardFormKey,
   type WizardForm,
@@ -18,7 +22,8 @@ import {
 import en from "@/features/databases/locales/en";
 import vi from "@/features/databases/locales/vi";
 import { maskConnectionPassword } from "@/features/databases/utils/databaseConnection";
-import { checkCatalogParity } from "@/shared/i18n/catalog";
+import { runDisplay } from "@/features/databases/utils/backupStatus";
+import { checkCatalogParity, leafEntries, pluralSegments } from "@/shared/i18n/catalog";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -60,6 +65,16 @@ describe("databases catalog", () => {
     );
   });
 
+  it("needs no library pluralization today; parity guards any future plural", () => {
+    const pluralLeaves = leafEntries(
+      en as unknown as Record<string, unknown>,
+    ).filter(
+      ([, value]) =>
+        typeof value === "string" && pluralSegments(value).length > 1,
+    );
+    expect(pluralLeaves).toEqual([]);
+  });
+
   it("keeps database/backup identity params in the restore confirmation", () => {
     const params = {
       name: "pg-orders",
@@ -82,11 +97,31 @@ describe("databases catalog", () => {
 });
 
 describe("describeDatabaseError", () => {
-  it("keeps raw classifier diagnostics byte-identical in both locales", () => {
+  it("renders unknown failures as a localized summary with the raw diagnostic", () => {
     const raw = "databases: boom";
-    expect(describeDatabaseError(apiError(500, raw))).toBe("boom");
+    expect(describeDatabaseError(apiError(500, raw))).toBe(
+      "Request failed (boom)",
+    );
+    expect(describeDatabaseError(new Error("databases: boom"))).toBe(
+      "Something went wrong. Please try again. (boom)",
+    );
     setLocale("vi", null);
-    expect(describeDatabaseError(apiError(500, raw))).toBe("boom");
+    expect(describeDatabaseError(apiError(500, raw))).toBe(
+      "Yêu cầu thất bại (boom)",
+    );
+    expect(describeDatabaseError(new Error("databases: boom"))).toBe(
+      "Đã xảy ra lỗi. Vui lòng thử lại. (boom)",
+    );
+  });
+
+  it("keeps the raw 502 diagnostic under the localized agent summary", () => {
+    expect(describeDatabaseError(apiError(502, "agent: dial tcp down"))).toBe(
+      "The node agent is unreachable or the healthcheck failed. Check the node status and retry. (agent: dial tcp down)",
+    );
+    setLocale("vi", null);
+    expect(describeDatabaseError(apiError(502, "agent: dial tcp down"))).toBe(
+      "Không kết nối được node agent hoặc kiểm tra trạng thái thất bại. Kiểm tra trạng thái node rồi thử lại. (agent: dial tcp down)",
+    );
   });
 
   it("localizes curated summaries without touching the 409 classifier", () => {
@@ -123,14 +158,24 @@ describe("describeBackupError", () => {
       "Session expired. Please sign in again.",
     );
     expect(describeBackupError(apiError(502, "agent: down"))).toBe(
-      "The node agent is unreachable or the job failed on the node. Check the node status and retry.",
+      "The node agent is unreachable or the job failed on the node. Check the node status and retry. (agent: down)",
     );
     setLocale("vi", null);
     expect(describeBackupError(apiError(401, "auth: expired"))).toBe(
       "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     );
     expect(describeBackupError(apiError(502, "agent: down"))).toBe(
-      "Không kết nối được node agent hoặc tác vụ thất bại trên node. Kiểm tra trạng thái node rồi thử lại.",
+      "Không kết nối được node agent hoặc tác vụ thất bại trên node. Kiểm tra trạng thái node rồi thử lại. (agent: down)",
+    );
+  });
+
+  it("renders unknown failures as a localized summary with the raw diagnostic", () => {
+    expect(describeBackupError(apiError(500, "databases: boom"))).toBe(
+      "Request failed (boom)",
+    );
+    setLocale("vi", null);
+    expect(describeBackupError(apiError(500, "databases: boom"))).toBe(
+      "Yêu cầu thất bại (boom)",
     );
   });
 
@@ -146,6 +191,77 @@ describe("describeBackupError", () => {
     expect(describeBackupError(apiError(409, "databases: "))).toBe(
       "Đã có một backup hoặc restore đang chạy cho database này.",
     );
+  });
+});
+
+describe("runDisplay keeps the English baseline and raw unknowns", () => {
+  it("renders exact former raw lowercase labels in English", () => {
+    expect(runDisplay("runStatus", "running")).toBe("running");
+    expect(runDisplay("runStatus", "completed")).toBe("completed");
+    expect(runDisplay("runStatus", "failed")).toBe("failed");
+    expect(runDisplay("runType", "manual")).toBe("manual");
+    expect(runDisplay("runType", "scheduled")).toBe("scheduled");
+  });
+
+  it("falls back to the raw wire value for unknown statuses in both locales", () => {
+    expect(runDisplay("runStatus", "recovering")).toBe("recovering");
+    expect(runDisplay("runType", "operator")).toBe("operator");
+    setLocale("vi", null);
+    expect(runDisplay("runStatus", "completed")).toBe("Hoàn tất");
+    expect(runDisplay("runStatus", "recovering")).toBe("recovering");
+    expect(runDisplay("runType", "operator")).toBe("operator");
+  });
+});
+
+describe("restore confirmation keeps backup identity without a location", () => {
+  /** mountRestoreDialog renders the real dialog for one candidate. */
+  function mountRestoreDialog(candidate: Record<string, unknown>) {
+    const detail = {
+      database: { value: { name: "pg-orders" } },
+      shortId: { value: "abc12345" },
+    };
+    const backups = {
+      restoreOpen: { value: true },
+      restoreCandidate: { value: candidate },
+      restoring: { value: false },
+      handleRestoreConfirm: () => undefined,
+    };
+    return mount(RestoreConfirmDialog, {
+      attachTo: document.body,
+      global: {
+        provide: {
+          [databaseDetailKey as symbol]: detail,
+          [databaseBackupsKey as symbol]: backups,
+        },
+      },
+    });
+  }
+
+  const candidate = {
+    id: "backup-1",
+    location: "",
+    created_at: "2026-10-01T12:00:00.000Z",
+    size: 10,
+  };
+
+  it("falls back to the backup id in English", () => {
+    const wrapper = mountRestoreDialog(candidate);
+    try {
+      expect(document.body.textContent).toContain("backup-1");
+    } finally {
+      wrapper.unmount();
+    }
+  });
+
+  it("falls back to the backup id in Vietnamese", async () => {
+    setLocale("vi", null);
+    await nextTick();
+    const wrapper = mountRestoreDialog(candidate);
+    try {
+      expect(document.body.textContent).toContain("backup-1");
+    } finally {
+      wrapper.unmount();
+    }
   });
 });
 
@@ -191,11 +307,19 @@ describe("live language switch on the configure step", () => {
       );
       await wrapper.find("input").setValue("no spaces");
       expect(form.name).toBe("no spaces");
+      // The expose-port switch carries the translated field label as its
+      // accessible name in both locales.
+      expect(wrapper.find('[role="switch"]').attributes("aria-label")).toBe(
+        "Expose a public port",
+      );
       setLocale("vi", null);
       await nextTick();
       // Draft survived, feedback switched, no API call or submit happened.
       expect(form.name).toBe("no spaces");
       expect(form.exposePublic).toBe(false);
+      expect(wrapper.find('[role="switch"]').attributes("aria-label")).toBe(
+        "Mở cổng public",
+      );
       expect(wrapper.text()).toContain(
         "Tên phải dài 1-63 ký tự gồm chữ cái, chữ số, ., _ hoặc -.",
       );

@@ -15,7 +15,7 @@ import { inject } from "vue";
 
 import type { DatabaseBackup } from "@/features/databases/api/backups";
 import { databaseBackupsKey } from "@/features/databases/composables/useDatabaseBackups";
-import { statusTagType } from "@/features/databases/utils/backupStatus";
+import { runDisplay, statusTagType } from "@/features/databases/utils/backupStatus";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
 
 import { i18n } from "@/shared/i18n";
@@ -92,10 +92,10 @@ const backups = inject(databaseBackupsKey)!;
           <div class="backup-row__main">
             <NSpace align="center" :size="8">
               <NTag :type="statusTagType(backup.status)" size="small">
-                {{ t(`databases.backups.runStatus.${backup.status}`) }}
+                {{ runDisplay("runStatus", backup.status) }}
               </NTag>
               <NTag size="small" :bordered="false">
-                {{ t(`databases.backups.runType.${backup.type}`) }}
+                {{ runDisplay("runType", backup.type) }}
               </NTag>
               <NText class="mono" depth="3">
                 {{

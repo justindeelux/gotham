@@ -1,3 +1,4 @@
+import { i18n } from "@/shared/i18n";
 import type {
   DatabaseBackup,
   DatabaseRestore,
@@ -14,4 +15,17 @@ export function statusTagType(
     return "error";
   }
   return "warning";
+}
+
+/**
+ * runDisplay renders a wire run status/type through the catalog when it is a
+ * known value, and falls back to the raw wire string otherwise (same pattern
+ * as DatabaseStatusTag): an unknown future value never renders a message key.
+ */
+export function runDisplay(
+  namespace: "runStatus" | "runType",
+  value: string,
+): string {
+  const key = `databases.backups.${namespace}.${value}`;
+  return i18n.global.te(key) ? String(i18n.global.t(key)) : value;
 }

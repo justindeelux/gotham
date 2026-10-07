@@ -21,6 +21,7 @@ const en = {
     deleting: "Deleting",
   },
   errors: {
+    withDetail: "{summary} ({detail})",
     databaseNotFound:
       "Database not found. It may have been deleted or belong to another account.",
     nameTaken: "A database with that name already exists.",
@@ -124,13 +125,13 @@ const en = {
       deleted: "Backup deleted",
     },
     runStatus: {
-      running: "Running",
-      completed: "Completed",
-      failed: "Failed",
+      running: "running",
+      completed: "completed",
+      failed: "failed",
     },
     runType: {
-      manual: "Manual",
-      scheduled: "Scheduled",
+      manual: "manual",
+      scheduled: "scheduled",
     },
     restores: {
       title: "Restore history",

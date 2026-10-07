@@ -46,7 +46,10 @@ const form = inject(wizardFormKey)!;
   </NFormItem>
   <NFormItem :show-feedback="false">
     <NSpace align="center" :size="12">
-      <NSwitch v-model:value="form.exposePublic" />
+      <NSwitch
+        v-model:value="form.exposePublic"
+        :aria-label="t('databases.wizard.configure.expose')"
+      />
       <NText>{{ t("databases.wizard.configure.expose") }}</NText>
     </NSpace>
   </NFormItem>

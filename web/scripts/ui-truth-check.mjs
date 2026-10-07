@@ -97,6 +97,64 @@ async function loadModule(relativePath) {
   };
 }
 
+// ── load an API module with catalogs registered ──────────────────────────
+// Node bundles never run initI18n (no import.meta.glob under esbuild), so a
+// describer with localized summaries would otherwise resolve against empty
+// catalogs. The entry registers the same synchronous catalogs the app merges
+// at startup, keeping assertions on real display text.
+async function loadApiWithCatalogs(apiImport, namespace, catalogImport) {
+  const { writeFile } = await import("node:fs/promises");
+  const directory = await mkdtemp(join(tmpdir(), "gotham-ui-truth-"));
+  const entry = join(directory, "entry.ts");
+  await writeFile(
+    entry,
+    [
+      `import { i18n } from "@/shared/i18n";`,
+      `import common from "@/shared/i18n/locales/en";`,
+      `import feature from "${catalogImport}";`,
+      `i18n.global.mergeLocaleMessage("en", common);`,
+      `i18n.global.mergeLocaleMessage("en", { ${namespace}: feature });`,
+      `export * from "${apiImport}";`,
+    ].join("\n"),
+  );
+  const outfile = join(directory, "module.mjs");
+  await build({
+    entryPoints: [entry],
+    outfile,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    target: "node20",
+    logLevel: "silent",
+    alias: { "@": srcDir },
+    plugins: [
+      vueStubPlugin,
+      {
+        name: "stub-http-layer",
+        setup(httpBuild) {
+          httpBuild.onResolve({ filter: /(^|\/)(\.\/)?http$/ }, () => ({
+            path: "stub-http-layer",
+            namespace: "stub-http",
+          }));
+          httpBuild.onLoad({ filter: /.*/, namespace: "stub-http" }, () => ({
+            contents: [
+              "export const http = { get: async () => ({}), post: async () => ({}),",
+              "  patch: async () => ({}), put: async () => ({}), delete: async () => ({}) };",
+              "export function teamHeaders() { return {}; }",
+            ].join("\n"),
+            loader: "js",
+          }));
+        },
+      },
+    ],
+  });
+  const module = await import(pathToFileURL(outfile).href);
+  return {
+    module,
+    cleanup: () => rm(directory, { recursive: true, force: true }),
+  };
+}
+
 /** sleep pauses the harness without pulling in a test runner. */
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -752,6 +810,17 @@ async function main() {
   console.log("every describe path strips backend prefixes (fix round 1)");
   await check("database, team, proxy, service and generic paths strip", async () => {
     const backups = await loadModule("../src/features/databases/api/backups.ts");
+    // Localized database summaries need the same catalogs the app merges.
+    const databasesI18n = await loadApiWithCatalogs(
+      "@/features/databases/api/databases",
+      "databases",
+      "@/features/databases/locales/en",
+    );
+    const backupsI18n = await loadApiWithCatalogs(
+      "@/features/databases/api/backups",
+      "databases",
+      "@/features/databases/locales/en",
+    );
     const containers = await loadModule("../src/features/servers/api/containers.ts");
     const metrics = await loadModule("../src/features/servers/api/metrics.ts");
     const notifications = await loadModule("../src/features/notifications/api/notifications.ts");
@@ -763,12 +832,14 @@ async function main() {
     try {
       const prefixed = (prefix) => ({ message: `${prefix}: boom`, status: 500 });
       assert(
-        databases.module.describeDatabaseError(prefixed("databases")) === "boom",
-        "database generic strips",
+        databasesI18n.module.describeDatabaseError(prefixed("databases")) ===
+          "Request failed (boom)",
+        "database generic strips then summarizes",
       );
       assert(
-        databases.module.describeDatabaseError(new Error("databases: gone")) === "gone",
-        "database Error path strips",
+        databasesI18n.module.describeDatabaseError(new Error("databases: gone")) ===
+          "Something went wrong. Please try again. (gone)",
+        "database Error path strips then summarizes",
       );
       assert(
         teams.module.describeTeamError({ message: "teams: gone", status: 400 }) ===
@@ -806,8 +877,9 @@ async function main() {
         "service empty unknown falls back exactly once",
       );
       assert(
-        backups.module.describeBackupError(prefixed("databases")) === "boom",
-        "backup generic strips",
+        backupsI18n.module.describeBackupError(prefixed("databases")) ===
+          "Request failed (boom)",
+        "backup generic strips then summarizes",
       );
       assert(
         containers.module.describeContainerError(prefixed("containers")) === "boom",

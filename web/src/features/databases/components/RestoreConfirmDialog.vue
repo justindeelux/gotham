@@ -22,8 +22,8 @@ const restorePrompt = computed<string>(() =>
     t("databases.backups.dialog.prompt", {
       name: detail.database.value?.name ?? detail.shortId.value,
       backup:
-        backups.restoreCandidate.value?.location ??
-        backups.restoreCandidate.value?.id ??
+        (backups.restoreCandidate.value?.location ||
+          backups.restoreCandidate.value?.id) ??
         "",
       when: relativeTime(backups.restoreCandidate.value?.created_at),
       size: formatBytes(backups.restoreCandidate.value?.size ?? 0),

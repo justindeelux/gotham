@@ -96,4 +96,11 @@ const detail = inject(databaseDetailKey)!;
   margin-left: auto;
   flex-shrink: 0;
 }
+
+@media (max-width: 640px) {
+  .page-head__actions {
+    margin-left: 0;
+    width: 100%;
+  }
+}
 </style>

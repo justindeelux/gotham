@@ -22,13 +22,18 @@ import {
 } from "@/features/databases/schemas/databases";
 import { useBackupsStore } from "@/features/databases/stores/backups";
 import { advanceRestoreStatuses } from "@/features/databases/utils/restoreOutcomes";
-import { stripErrorPrefix } from "@/features/servers";
 import { resolveValidationMessage } from "@/shared/i18n";
 
 export interface TargetTestState {
   checking: boolean;
   ok: boolean | null;
   message: string;
+  /**
+   * failure retains the raw check failure; the display text derives from it
+   * in the current locale so a switch refreshes the row without resending.
+   * Successful provider answers keep their raw message instead.
+   */
+  failure?: unknown;
 }
 
 /** Cron presets offered as chips above the schedule form. */
@@ -497,14 +502,18 @@ export function useDatabaseBackups(
   }
 
   /**
-   * targetTestMessage renders one target's retained check result. The raw
-   * server diagnostic passes through in both locales; only the empty
-   * transport failure localizes, at render time so a switch refreshes it.
+   * targetTestMessage renders one target's retained check result. A retained
+   * transport failure derives from the raw cause in the current locale; the
+   * raw server diagnostic passes through in both locales; only the empty
+   * failure localizes, at render time so a switch refreshes it.
    */
   function targetTestMessage(targetId: string): string {
     const state = targetTests.value[targetId];
     if (!state || state.checking) {
       return "";
+    }
+    if (state.failure !== undefined) {
+      return describeBackupError(state.failure);
     }
     return state.message !== ""
       ? state.message
@@ -525,8 +534,8 @@ export function useDatabaseBackups(
       targetTests.value[targetId] = {
         checking: false,
         ok: false,
-        message:
-          error instanceof Error ? stripErrorPrefix(error.message) : "",
+        message: "",
+        failure: error instanceof Error ? (error.cause ?? error) : error,
       };
     }
   }

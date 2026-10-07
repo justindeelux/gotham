@@ -396,12 +396,23 @@ export async function testTarget(targetId: string): Promise<TargetCheck> {
 
 /**
  * describeBackupError maps a thrown error to a user-facing message.
- * Classification stays on the raw status/message (never on translated text);
- * only the curated summaries resolve through the current locale, while the
- * useful raw diagnostic from stripErrorPrefix rides along untranslated.
+ * Classification stays on the raw status/message (never on translated text).
+ * Exact backend refusals (400/409 with a message) pass through raw so inline
+ * guards keep their wording; unknown failures render a localized summary
+ * with the useful raw diagnostic retained as plain text.
  */
 export function describeBackupError(error: unknown): string {
   const t = (key: string): string => String(i18n.global.t(key));
+  /** withSummary renders a curated summary, keeping nonempty raw detail. */
+  const withSummary = (summaryKey: string, raw: string): string =>
+    raw === ""
+      ? t(summaryKey)
+      : String(
+          i18n.global.t("databases.errors.withDetail", {
+            summary: t(summaryKey),
+            detail: raw,
+          }),
+        );
   if (isApiError(error)) {
     if (error.status === 400) {
       return (
@@ -422,18 +433,23 @@ export function describeBackupError(error: unknown): string {
       );
     }
     if (error.status === 502) {
-      return t("databases.errors.backupAgentUnreachable");
+      return withSummary(
+        "databases.errors.backupAgentUnreachable",
+        stripErrorPrefix(error.message),
+      );
     }
     if (error.status === 503) {
       return t("databases.errors.featureDisabled");
     }
-    return (
-      stripErrorPrefix(error.message) || t("common.errors.requestFailed")
+    return withSummary(
+      "common.errors.requestFailed",
+      stripErrorPrefix(error.message),
     );
   }
   if (error instanceof Error) {
-    return (
-      stripErrorPrefix(error.message) || t("common.errors.unexpected")
+    return withSummary(
+      "common.errors.unexpected",
+      stripErrorPrefix(error.message),
     );
   }
   return t("common.errors.unexpected");

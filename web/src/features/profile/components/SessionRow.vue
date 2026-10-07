@@ -96,7 +96,8 @@ const confirmText = computed<string>(() =>
       :positive-button-props="session.current ? { type: 'error' } : undefined"
       :positive-text="t('profile.sessions.signOut')"
       :negative-text="t('profile.sessions.keep')"
-      :style="{ maxWidth: 'min(26rem, calc(100vw - 32px))' }"
+      placement="top-end"
+      :style="{ maxWidth: 'min(26rem, calc(100vw - 3rem))' }"
       @positive-click="emit('signOut', session)"
     >
       <template #trigger>

@@ -411,25 +411,57 @@ for (const locale of ["en", "vi"] as const) {
       await bulk.waitFor({ state: "detached" });
       expect(state.apiCalls).toBe(callsBefore);
 
-      // Row confirm: same containment for the per-session popconfirm.
-      await page
-        .locator(".session-row")
-        .first()
-        .getByRole("button", { name: labels.row })
-        .click();
-      const row = page.locator(".n-popconfirm");
-      await row.waitFor();
-      const rowBox = await row.boundingBox();
-      expect(rowBox, "expected the row popconfirm to measure").not.toBeNull();
-      expect(rowBox!.x).toBeGreaterThanOrEqual(-1);
-      expect(rowBox!.x + rowBox!.width).toBeLessThanOrEqual(width + 1);
-      const rowPositive = row.getByRole("button", { name: labels.positiveRow });
-      await expect(rowPositive).toBeVisible();
-      const rowPositiveBox = await rowPositive.boundingBox();
-      expect(rowPositiveBox!.x).toBeGreaterThanOrEqual(-1);
-      expect(rowPositiveBox!.x + rowPositiveBox!.width).toBeLessThanOrEqual(
-        width + 1,
-      );
+      // Row confirms: every row (first/current and non-current) contains
+      // its popconfirm and buttons fully inside the viewport.
+      const rowCount = await page.locator(".session-row").count();
+      expect(rowCount).toBeGreaterThanOrEqual(2);
+      for (let index = 0; index < rowCount; index += 1) {
+        await page
+          .locator(".session-row")
+          .nth(index)
+          .getByRole("button", { name: labels.row })
+          .click();
+        const row = page.locator(".n-popconfirm");
+        await row.waitFor();
+        const rowBox = await row.boundingBox();
+        expect(rowBox, `expected row ${index} popconfirm to measure`).not.toBeNull();
+        expect(rowBox!.x).toBeGreaterThanOrEqual(-1);
+        expect(rowBox!.x + rowBox!.width).toBeLessThanOrEqual(width + 1);
+        const rowPositive = row.getByRole("button", { name: labels.positiveRow });
+        await expect(rowPositive).toBeVisible();
+        const rowPositiveBox = await rowPositive.boundingBox();
+        expect(rowPositiveBox!.x).toBeGreaterThanOrEqual(-1);
+        expect(rowPositiveBox!.x + rowPositiveBox!.width).toBeLessThanOrEqual(
+          width + 1,
+        );
+        // Dismiss via negative: closes with no API call. On the last row,
+        // additionally prove an open confirm survives a locale switch
+        // with reactive text, stable focus and zero DELETE/API.
+        const rowCallsBefore = state.apiCalls;
+        let dismissName = labels.negative;
+        if (index === rowCount - 1) {
+          const other = locale === "en" ? "vi" : "en";
+          const flipped = other === "vi"
+            ? "sẽ phải đăng nhập lại"
+            : "will need to sign in again";
+          await page.getByText(other === "vi" ? "Tiếng Việt" : "English", { exact: true }).click();
+          await expect(row).toContainText(flipped);
+          const focusIsRadio = await page.evaluate(
+            () => document.activeElement?.getAttribute("type") === "radio",
+          );
+          expect(focusIsRadio).toBe(true);
+          const switchedBox = await row.boundingBox();
+          expect(switchedBox!.x).toBeGreaterThanOrEqual(-1);
+          expect(switchedBox!.x + switchedBox!.width).toBeLessThanOrEqual(
+            width + 1,
+          );
+          expect(state.apiCalls).toBe(rowCallsBefore);
+          dismissName = other === "vi" ? "Giữ lại" : "Keep";
+        }
+        await row.getByRole("button", { name: dismissName }).click();
+        await row.waitFor({ state: "detached" });
+        expect(state.apiCalls).toBe(rowCallsBefore);
+      }
     });
   }
 }

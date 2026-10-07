@@ -702,17 +702,17 @@ async function main() {
     );
     const { readFile } = await import("node:fs/promises");
     const card = await readFile(
-      new URL("../src/app/layouts/MeCard.vue", import.meta.url),
+      new URL("../src/app/layouts/AccountMenu.vue", import.meta.url),
       "utf8",
     );
-    assert(card.includes("shouldRetryRoleRead("), "MeCard decides via the helper");
+    assert(card.includes("shouldRetryRoleRead("), "AccountMenu decides via the helper");
     assert(
       card.includes("roleReadRetryMs") && !card.includes("5_000"),
-      "MeCard takes the delay from the policy, not a local literal",
+      "AccountMenu takes the delay from the policy, not a local literal",
     );
     assert(
       !card.includes("maxRoleRetries") && !card.includes("roleRetryMs"),
-      "MeCard keeps no local retry constants",
+      "AccountMenu keeps no local retry constants",
     );
     assert(
       card.includes("onUnmounted(cancelRoleRetry)"),

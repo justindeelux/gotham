@@ -31,6 +31,7 @@ function handleSelect(locale: string | number): void {
     trigger="click"
     :options="options"
     :value="activeLocale"
+    :menu-props="() => ({ role: 'menu', 'aria-label': t('language.label') })"
     @select="handleSelect"
   >
     <NButton

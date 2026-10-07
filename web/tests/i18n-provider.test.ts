@@ -68,6 +68,7 @@ describe("LanguageSelect", () => {
       await vi.waitFor(() => {
         expect(document.querySelectorAll('[role="menuitemradio"]')).toHaveLength(2);
       });
+      expect(document.querySelector('[role="menu"]')).not.toBeNull();
       const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
       expect(items.map((item) => item.textContent?.trim())).toEqual([
         i18n.global.t("language.names.en"),

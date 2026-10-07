@@ -1,6 +1,7 @@
 import { computed, inject, provide, ref } from "vue";
 import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
+import { activeLocale } from "@/shared/i18n";
 
 import { describeProxyError, proxyText } from "@/features/domains/api/proxy";
 import type { DomainRedirect, RedirectCode } from "@/features/domains/api/proxy";
@@ -80,20 +81,22 @@ function createRedirectsState() {
    * alert without losing the typed draft.
    */
   const redirectErrorRaw = ref<unknown>(null);
-  const redirectError = computed<string | null>(() =>
-    redirectErrorRaw.value === null
+  const redirectError = computed<string | null>(() => {
+    void activeLocale.value;
+    return redirectErrorRaw.value === null
       ? null
-      : describeProxyError(redirectErrorRaw.value),
-  );
+      : describeProxyError(redirectErrorRaw.value);
+  });
   const editingRedirect = ref<DomainRedirect | null>(null);
   const redirectEditOpen = ref(false);
   const redirectEditSaving = ref(false);
   const redirectEditErrorRaw = ref<unknown>(null);
-  const redirectEditError = computed<string | null>(() =>
-    redirectEditErrorRaw.value === null
+  const redirectEditError = computed<string | null>(() => {
+    void activeLocale.value;
+    return redirectEditErrorRaw.value === null
       ? null
-      : describeProxyError(redirectEditErrorRaw.value),
-  );
+      : describeProxyError(redirectEditErrorRaw.value);
+  });
   const redirectEditForm = ref<RedirectForm>(emptyRedirectForm());
 
   const enabledRedirects = computed<number>(

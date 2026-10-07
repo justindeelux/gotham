@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
+import { activeLocale } from "@/shared/i18n";
 
 import { listApplications } from "@/features/applications";
 import type { Application } from "@/features/applications";
@@ -47,19 +48,22 @@ export const useProxyStore = defineStore("proxy", () => {
   const errorRaw = ref<unknown>(null);
   const certificatesErrorRaw = ref<unknown>(null);
   const redirectsErrorRaw = ref<unknown>(null);
-  const error = computed<string | null>(() =>
-    errorRaw.value === null ? null : describeProxyError(errorRaw.value),
-  );
-  const certificatesError = computed<string | null>(() =>
-    certificatesErrorRaw.value === null
+  const error = computed<string | null>(() => {
+    void activeLocale.value;
+    return errorRaw.value === null ? null : describeProxyError(errorRaw.value);
+  });
+  const certificatesError = computed<string | null>(() => {
+    void activeLocale.value;
+    return certificatesErrorRaw.value === null
       ? null
-      : describeProxyError(certificatesErrorRaw.value),
-  );
-  const redirectsError = computed<string | null>(() =>
-    redirectsErrorRaw.value === null
+      : describeProxyError(certificatesErrorRaw.value);
+  });
+  const redirectsError = computed<string | null>(() => {
+    void activeLocale.value;
+    return redirectsErrorRaw.value === null
       ? null
-      : describeProxyError(redirectsErrorRaw.value),
-  );
+      : describeProxyError(redirectsErrorRaw.value);
+  });
 
   /** fetchProviders loads every DNS provider (credentials never returned). */
   async function fetchProviders(): Promise<void> {

@@ -27,7 +27,7 @@ const vi = {
   list: {
     title: "Nhóm của bạn",
     /**
-     * Số lượng nhóm với pluralization của thư viện (one | other): Vietnamese
+     * Team count with library pluralization (one | other): Vietnamese
      * repeats the identical segment so the strict en/vi segment parity holds.
      */
     count: "{count} nhóm | {count} nhóm",

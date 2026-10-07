@@ -1,6 +1,7 @@
 import { computed, inject, provide, ref } from "vue";
 import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
+import { activeLocale } from "@/shared/i18n";
 
 import {
   describeProxyError,
@@ -27,11 +28,12 @@ function createCertificatesState() {
    * alert without losing the typed draft.
    */
   const certificateErrorRaw = ref<unknown>(null);
-  const certificateError = computed<string | null>(() =>
-    certificateErrorRaw.value === null
+  const certificateError = computed<string | null>(() => {
+    void activeLocale.value;
+    return certificateErrorRaw.value === null
       ? null
-      : describeProxyError(certificateErrorRaw.value),
-  );
+      : describeProxyError(certificateErrorRaw.value);
+  });
   const editingCertificate = ref<Certificate | null>(null);
   const certificateDraft = ref<CertificateDraft>(emptyCertificateDraft());
 

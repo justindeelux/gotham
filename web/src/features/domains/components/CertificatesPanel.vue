@@ -13,6 +13,7 @@ import {
 import type { DataTableColumns } from "naive-ui";
 import { h } from "vue";
 import type { VNode } from "vue";
+import { computed } from "vue";
 
 import {
   certificateStatusLabel,
@@ -24,7 +25,6 @@ import { useCertificates } from "@/features/domains/composables/useCertificates"
 import { useDomainLabels } from "@/features/domains/composables/useDomainLabels";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 import { expiryLabel, formatDate, relativeTime } from "@/shared/utils/format";
-import { computed } from "vue";
 
 const proxyStore = useProxyStore();
 const { openCertificateCreate, openCertificateEdit, handleDeleteCertificate } =

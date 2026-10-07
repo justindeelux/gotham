@@ -1,6 +1,7 @@
 import { computed, inject, provide, ref } from "vue";
 import type { InjectionKey } from "vue";
 import { useMessage } from "naive-ui";
+import { activeLocale } from "@/shared/i18n";
 
 import { describeProxyError, proxyText } from "@/features/domains/api/proxy";
 import type { DNSProvider, DNSProviderName } from "@/features/domains/api/proxy";
@@ -43,11 +44,12 @@ function createProvidersState() {
    * alert without losing the typed draft.
    */
   const providerErrorRaw = ref<unknown>(null);
-  const providerError = computed<string | null>(() =>
-    providerErrorRaw.value === null
+  const providerError = computed<string | null>(() => {
+    void activeLocale.value;
+    return providerErrorRaw.value === null
       ? null
-      : describeProxyError(providerErrorRaw.value),
-  );
+      : describeProxyError(providerErrorRaw.value);
+  });
   const editingProvider = ref<DNSProvider | null>(null);
   const providerForm = ref<ProviderForm>(emptyProviderForm());
 

@@ -598,31 +598,44 @@ describe("unknown diagnostics carry a localized summary", () => {
   it("keeps distinct guidance for blank-message known invite statuses", async () => {
     // describeTeamError curates per-status fallbacks when the server sends
     // status without message; only genuinely unknown failures collapse.
-    const cases: Array<{ status: number; en: string }> = [
-      { status: 400, en: "Request failed: Invalid request." },
+    const cases: Array<{ status: number; en: string; expectedVi: string }> = [
+      {
+        status: 400,
+        en: "Request failed: Invalid request.",
+        expectedVi: "Yêu cầu thất bại: Yêu cầu không hợp lệ.",
+      },
       {
         status: 401,
         en: "Request failed: Your session expired. Please sign in again.",
+        expectedVi: "Yêu cầu thất bại: Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
       },
       {
         status: 403,
         en: "Request failed: Your team role does not allow this action.",
+        expectedVi: "Yêu cầu thất bại: Vai trò nhóm của bạn không cho phép hành động này.",
       },
       {
         status: 404,
         en: "Request failed: Not found. It may have been removed already.",
+        expectedVi: "Yêu cầu thất bại: Không tìm thấy. Có thể nó đã bị gỡ.",
       },
       {
         status: 409,
         en: "Request failed: The team changed while you were editing it. Reload and retry.",
+        expectedVi: "Yêu cầu thất bại: Nhóm đã thay đổi trong lúc bạn chỉnh sửa. Tải lại rồi thử lại.",
       },
       {
         status: 410,
         en: "Request failed: This invite expired. Issue a new one.",
+        expectedVi: "Yêu cầu thất bại: Lời mời này đã hết hạn. Hãy tạo lời mời mới.",
       },
-      { status: 500, en: "Something went wrong. Please try again." },
+      {
+        status: 500,
+        en: "Something went wrong. Please try again.",
+        expectedVi: "Đã xảy ra lỗi. Vui lòng thử lại.",
+      },
     ];
-    for (const { status, en } of cases) {
+    for (const { status, en, expectedVi } of cases) {
       seedAuth();
       setLocale("en", null);
       await nextTick();
@@ -647,13 +660,9 @@ describe("unknown diagnostics carry a localized summary", () => {
       await nextTick();
       await flushPromises();
       const viText = wrapper.find(".n-alert").text();
-      if (status === 500) {
-        expect(viText).toBe("Đã xảy ra lỗi. Vui lòng thử lại.");
-      } else {
-        // Localized summary, team diagnostic retained verbatim.
-        expect(viText.startsWith("Yêu cầu thất bại: ")).toBe(true);
-        expect(viText).toContain(en.replace("Request failed: ", ""));
-      }
+      // Curated fallbacks are locale-aware since I18N-8: assert the full
+      // localized string per status, not the English fallback verbatim.
+      expect(viText).toBe(expectedVi);
       wrapper.unmount();
       globalThis.document.body.innerHTML = "";
     }

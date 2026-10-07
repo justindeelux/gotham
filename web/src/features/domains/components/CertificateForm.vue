@@ -12,8 +12,7 @@ import {
 import { computed } from "vue";
 
 import type { Application } from "@/features/applications";
-import { providerLabel } from "@/features/domains/api/proxy";
-import { proxyText } from "@/features/domains/api/proxy";
+import { providerLabel, proxyText } from "@/features/domains/api/proxy";
 import type { CertificateDraft, DNSProvider } from "@/features/domains/api/proxy";
 
 /**

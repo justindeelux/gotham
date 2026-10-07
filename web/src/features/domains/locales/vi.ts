@@ -223,7 +223,7 @@ const vi = {
       "Một quy tắc gửi một tên miền nguồn chính xác tới một tên miền đích " +
       "chính xác. Đích phải tự phục vụ chứng chỉ của nó.",
     /**
-     * Số lượng quy tắc với pluralization của thư viện (one | other): Vietnamese
+     * Rule count with library pluralization (one | other): Vietnamese
      * repeats the identical segment so the strict en/vi segment parity holds.
      */
     rulesSummary:

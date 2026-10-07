@@ -222,10 +222,13 @@ const vi = {
     emptyHint:
       "Một quy tắc gửi một tên miền nguồn chính xác tới một tên miền đích " +
       "chính xác. Đích phải tự phục vụ chứng chỉ của nó.",
-    summaryOne:
+    /**
+     * Số lượng quy tắc với pluralization của thư viện (one | other): Vietnamese
+     * repeats the identical segment so the strict en/vi segment parity holds.
+     */
+    rulesSummary:
       "{total} quy tắc · {enabled} đang bật. GET trả lời mã đã lưu; các " +
-      "phương thức khác trả lời 308/307 để giữ phương thức.",
-    summaryOther:
+      "phương thức khác trả lời 308/307 để giữ phương thức. | " +
       "{total} quy tắc · {enabled} đang bật. GET trả lời mã đã lưu; các " +
       "phương thức khác trả lời 308/307 để giữ phương thức.",
     footer:

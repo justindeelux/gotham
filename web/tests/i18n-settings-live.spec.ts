@@ -319,6 +319,86 @@ for (const width of [390, 900, 1280] as const) {
   });
 }
 
+test("I18N-8 counts render exactly en/vi with zero API on switch", async ({
+  browser,
+}) => {
+  const log: ApiLog = { calls: [] };
+  const redirects = [
+    {
+      id: "r1",
+      application_id: "app-1",
+      source_domain: "go.example.com",
+      target_domain: "checkout.example.com",
+      code: 301,
+      preserve_path: true,
+      enabled: true,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z",
+    },
+    {
+      id: "r2",
+      application_id: "app-1",
+      source_domain: "old.example.com",
+      target_domain: "new.example.com",
+      code: 302,
+      preserve_path: false,
+      enabled: false,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-02T00:00:00Z",
+    },
+  ];
+  const redirectOverride = {
+    ["GET /proxy/redirects"]: () => ({ status: 200, body: { redirects } }),
+  };
+  const teamsCtx = await openPage(browser, "/teams", "en", 900, log);
+  try {
+    await expect(
+      teamsCtx.page.getByRole("heading", { name: "Teams", exact: true }),
+    ).toBeVisible();
+    await expect(teamsCtx.page.getByText("2 teams", { exact: true })).toBeVisible();
+    const teamCalls = log.calls.length;
+    await switchLocale(teamsCtx.page, "vi");
+    await expect(teamsCtx.page.getByText("2 nhóm", { exact: true })).toBeVisible();
+    await new Promise((done) => setTimeout(done, 300));
+    expect(log.calls.length, "API calls during teams switch").toBe(teamCalls);
+  } finally {
+    await teamsCtx.context.close();
+  }
+
+  const domainsCtx = await openPage(
+    browser,
+    "/domains",
+    "en",
+    900,
+    log,
+    redirectOverride,
+  );
+  try {
+    await expect(
+      domainsCtx.page.getByRole("heading", { name: "Domains & SSL", exact: true }),
+    ).toBeVisible();
+    await domainsCtx.page.locator(".n-tabs-tab", { hasText: /^Redirects$/ }).click();
+    await expect(
+      domainsCtx.page.getByText(
+        "2 rules · 1 enabled. GET answers the stored code; other methods " +
+          "answer 308/307 so they keep their method.",
+      ),
+    ).toBeVisible();
+    const domainCalls = log.calls.length;
+    await switchLocale(domainsCtx.page, "vi");
+    await expect(
+      domainsCtx.page.getByText(
+        "2 quy tắc · 1 đang bật. GET trả lời mã đã lưu; các phương thức " +
+          "khác trả lời 308/307 để giữ phương thức.",
+      ),
+    ).toBeVisible();
+    await new Promise((done) => setTimeout(done, 300));
+    expect(log.calls.length, "API calls during domains switch").toBe(domainCalls);
+  } finally {
+    await domainsCtx.context.close();
+  }
+});
+
 test("I18N-8 channel draft survives a switch with zero API calls", async ({
   browser,
 }) => {

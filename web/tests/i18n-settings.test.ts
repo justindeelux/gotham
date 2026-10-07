@@ -542,3 +542,50 @@ describe("I18N-8 retained team 409", () => {
     wrapper.unmount();
   });
 });
+
+describe("I18N-8 library plural counts", () => {
+  const enRuleOne =
+    "1 rule · 1 enabled. GET answers the stored code; other methods " +
+    "answer 308/307 so they keep their method.";
+  const enRuleMany =
+    "3 rules · 2 enabled. GET answers the stored code; other methods " +
+    "answer 308/307 so they keep their method.";
+  const viRuleOne =
+    "1 quy tắc · 1 đang bật. GET trả lời mã đã lưu; các phương thức khác " +
+    "trả lời 308/307 để giữ phương thức.";
+  const viRuleMany =
+    "3 quy tắc · 2 đang bật. GET trả lời mã đã lưu; các phương thức khác " +
+    "trả lời 308/307 để giữ phương thức.";
+
+  it("renders 0/1/many team counts exactly in English", () => {
+    const t = i18n.global.t;
+    expect(t("teams.list.count", 0)).toBe("0 teams");
+    expect(t("teams.list.count", 1)).toBe("1 team");
+    expect(t("teams.list.count", 5)).toBe("5 teams");
+  });
+
+  it("renders meaningful Vietnamese team counts", () => {
+    setLocale("vi", null);
+    const t = i18n.global.t;
+    expect(t("teams.list.count", 0)).toBe("0 nhóm");
+    expect(t("teams.list.count", 1)).toBe("1 nhóm");
+    expect(t("teams.list.count", 5)).toBe("5 nhóm");
+  });
+
+  it("renders redirect summaries with named total/enabled in both locales", () => {
+    const t = i18n.global.t;
+    expect(
+      t("domains.redirects.rulesSummary", { total: 1, enabled: 1 }, 1),
+    ).toBe(enRuleOne);
+    expect(
+      t("domains.redirects.rulesSummary", { total: 3, enabled: 2 }, 3),
+    ).toBe(enRuleMany);
+    setLocale("vi", null);
+    expect(
+      t("domains.redirects.rulesSummary", { total: 1, enabled: 1 }, 1),
+    ).toBe(viRuleOne);
+    expect(
+      t("domains.redirects.rulesSummary", { total: 3, enabled: 2 }, 3),
+    ).toBe(viRuleMany);
+  });
+});

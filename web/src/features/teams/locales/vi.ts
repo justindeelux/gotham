@@ -26,8 +26,11 @@ const vi = {
   },
   list: {
     title: "Nhóm của bạn",
-    countOne: "{count} nhóm",
-    countOther: "{count} nhóm",
+    /**
+     * Số lượng nhóm với pluralization của thư viện (one | other): Vietnamese
+     * repeats the identical segment so the strict en/vi segment parity holds.
+     */
+    count: "{count} nhóm | {count} nhóm",
     rename: "Đổi tên",
     delete: "Xóa",
     deleteConfirm:

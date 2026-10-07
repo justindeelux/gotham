@@ -15,9 +15,7 @@ const { teamActionError, deleting, openRename, handleDelete } = useTeamsPageCont
   <NCard :title="$t('teams.list.title')">
     <template #header-extra>
       <NText depth="3">{{
-        teamsStore.teams.length === 1
-          ? $t("teams.list.countOne", { count: teamsStore.teams.length })
-          : $t("teams.list.countOther", { count: teamsStore.teams.length })
+        $t("teams.list.count", teamsStore.teams.length)
       }}</NText>
     </template>
     <NAlert

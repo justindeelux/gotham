@@ -26,8 +26,11 @@ const en = {
   },
   list: {
     title: "Your teams",
-    countOne: "{count} team",
-    countOther: "{count} teams",
+    /**
+     * Team count with library pluralization (one | other): the numeric
+     * argument selects the segment, `{count}` renders it.
+     */
+    count: "{count} team | {count} teams",
     rename: "Rename",
     delete: "Delete",
     deleteConfirm:

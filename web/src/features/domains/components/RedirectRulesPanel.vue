@@ -100,9 +100,14 @@ const {
       </NEmpty>
       <p v-if="proxyStore.redirects.length > 0" class="cell-sub">
         {{
-          proxyStore.redirects.length === 1
-            ? $t("domains.redirects.summaryOne", { total: proxyStore.redirects.length, enabled: enabledRedirects })
-            : $t("domains.redirects.summaryOther", { total: proxyStore.redirects.length, enabled: enabledRedirects })
+          $t(
+            "domains.redirects.rulesSummary",
+            {
+              total: proxyStore.redirects.length,
+              enabled: enabledRedirects,
+            },
+            proxyStore.redirects.length,
+          )
         }}
       </p>
     </NSpace>

@@ -223,10 +223,13 @@ const en = {
     emptyHint:
       "A rule sends one exact source host to one exact target host. The " +
       "target must serve its own certificate.",
-    summaryOne:
+    /**
+     * Rule count with library pluralization (one | other): the numeric total
+     * selects the segment; `{total}`/`{enabled}` interpolate raw counts.
+     */
+    rulesSummary:
       "{total} rule · {enabled} enabled. GET answers the stored code; " +
-      "other methods answer 308/307 so they keep their method.",
-    summaryOther:
+      "other methods answer 308/307 so they keep their method. | " +
       "{total} rules · {enabled} enabled. GET answers the stored code; " +
       "other methods answer 308/307 so they keep their method.",
     footer:

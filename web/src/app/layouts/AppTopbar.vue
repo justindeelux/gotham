@@ -1,24 +1,18 @@
 <script setup lang="ts">
-import { NAvatar, NButton, NDropdown, NInput, NTooltip } from "naive-ui";
-import type { DropdownOption } from "naive-ui";
+import { NButton, NInput, NTooltip } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { RouterLink, useRouter } from "vue-router";
+import { RouterLink } from "vue-router";
 
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import LanguageSelect from "@/shared/ui/LanguageSelect.vue";
 import { useAuthStore } from "@/features/auth";
+import AccountMenu from "./AccountMenu.vue";
 import { useMobileNav } from "./useMobileNav";
 
 const { t } = useI18n();
 const authStore = useAuthStore();
-const router = useRouter();
 const { mobileNavOpen, toggleNav } = useMobileNav();
-
-/** accountOptions keeps stable keys; labels render in the active locale. */
-const accountOptions = computed<DropdownOption[]>(() => [
-  { label: t("shell.signOut"), key: "sign-out" },
-]);
 
 /**
  * Listener ports shown as topbar chips. They mirror the backend defaults in
@@ -29,10 +23,6 @@ const accountOptions = computed<DropdownOption[]>(() => [
 const cpPort = 8000;
 const grpcPort = 9442;
 
-const userInitial = computed<string>(() =>
-  (authStore.user?.email?.[0] ?? "?").toUpperCase(),
-);
-
 // The control plane exposes no environment endpoint, so the chip reflects
 // where the SPA itself is served from: loopback means a local setup.
 const envLabel = computed<string>(() => {
@@ -42,18 +32,6 @@ const envLabel = computed<string>(() => {
     : "production";
 });
 
-async function handleAccountSelect(key: string | number): Promise<void> {
-  if (key !== "sign-out") {
-    return;
-  }
-  try {
-    await authStore.logout();
-  } catch {
-    // logout clears the local session in `finally`; a failed revoke must not
-    // block the redirect or surface as an unhandled rejection (B3-3).
-  }
-  await router.push({ name: "login" });
-}
 </script>
 
 <template>
@@ -109,24 +87,7 @@ async function handleAccountSelect(key: string | number): Promise<void> {
         </template>
         {{ t("shell.docsSoon") }}
       </NTooltip>
-      <NDropdown
-        v-if="authStore.isAuthenticated"
-        trigger="click"
-        :options="accountOptions"
-        @select="handleAccountSelect"
-      >
-        <NButton quaternary circle :aria-label="t('shell.account')">
-          <template #icon>
-            <NAvatar round :size="24" :src="authStore.user?.avatar">
-              <!-- NAvatar prefers the default slot over `src`, so the
-                   initial is rendered only when there is no avatar image;
-                   `#fallback` keeps it for a failed image load. -->
-              <template v-if="!authStore.user?.avatar">{{ userInitial }}</template>
-              <template #fallback>{{ userInitial }}</template>
-            </NAvatar>
-          </template>
-        </NButton>
-      </NDropdown>
+      <AccountMenu v-if="authStore.isAuthenticated" compact />
       <RouterLink v-else to="/login">
         <NButton quaternary type="primary">{{ t("shell.signIn") }}</NButton>
       </RouterLink>

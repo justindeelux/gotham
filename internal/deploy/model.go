@@ -137,7 +137,7 @@ type Application struct {
 	// also what lets the orphan sweep find a preview whose binding is gone.
 	IsPreview bool
 	// GitHubAppID links the application to its GitHub App connection (GS-5,
-	// migration 00039). Only a linked application with an http(s) clone URL
+	// migration 00038). Only a linked application with an https clone URL
 	// ever takes the installation-token clone path; uuid.Nil (every legacy
 	// row) keeps the previous OAuth/deploy-key behaviour.
 	GitHubAppID uuid.UUID

@@ -65,12 +65,10 @@ DELETE FROM github_repo_cache WHERE github_app_id = $1 AND installation_id = $2;
 SELECT count(*)::bigint FROM applications
 WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github';
 
--- name: CountGitHubAppApplicationsForApp :one
-SELECT count(*)::bigint FROM applications
-WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
-AND lower(repo) IN (
-    SELECT lower(full_name) FROM github_repo_cache WHERE github_repo_cache.github_app_id = $2
-);
+-- name: ListGitHubAppApplicationNames :many
+SELECT name FROM applications
+WHERE user_id = $1 AND github_app_id = $2
+ORDER BY name ASC;
 
 -- name: ListGitHubAppPushTargets :many
 SELECT id, branch FROM applications

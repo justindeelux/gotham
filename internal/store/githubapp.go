@@ -79,10 +79,10 @@ func (s *Store) CountGitHubAppApplications(ctx context.Context, userID pgtype.UU
 	return s.queries.CountGitHubAppApplications(ctx, userID)
 }
 
-// CountGitHubAppApplicationsForApp counts the caller's github_app
-// applications whose repo is granted to one connection's installations.
-func (s *Store) CountGitHubAppApplicationsForApp(ctx context.Context, params sqlc.CountGitHubAppApplicationsForAppParams) (int64, error) {
-	return s.queries.CountGitHubAppApplicationsForApp(ctx, params)
+// ListGitHubAppApplicationNames returns the names of the caller's
+// applications linked to one connection, for the disconnect warning.
+func (s *Store) ListGitHubAppApplicationNames(ctx context.Context, params sqlc.ListGitHubAppApplicationNamesParams) ([]string, error) {
+	return s.queries.ListGitHubAppApplicationNames(ctx, params)
 }
 
 // ListGitHubAppPushTargets returns the github_app applications of one owner

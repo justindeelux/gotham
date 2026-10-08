@@ -27,6 +27,7 @@ type composedFakeAPI struct {
 	tokenFor      []int64
 	repos         map[int64][]githubapp.Repo
 	reposErr      error
+	failFor       map[int64]error
 	installations map[int64]githubapp.InstallationInfo
 }
 
@@ -64,6 +65,11 @@ func (f *composedFakeAPI) ListInstallationRepos(_ context.Context, token string)
 	}
 	var id int64
 	_, _ = fmt.Sscanf(token, "tok-%d", &id)
+	// failFor breaks one installation's listing, so a test can prove an
+	// unrelated broken connection never affects a linked application.
+	if err, ok := f.failFor[id]; ok {
+		return nil, false, err
+	}
 	return append([]githubapp.Repo(nil), f.repos[id]...), false, nil
 }
 
@@ -204,8 +210,8 @@ func (m *composedAppRepo) ListRepoCache(_ context.Context, appID uuid.UUID, inst
 	return append([]githubapp.Repo(nil), m.cache[cacheKey(appID, installationID)]...), nil
 }
 
-func (m *composedAppRepo) CountApplicationsForApp(_ context.Context, _, _ uuid.UUID) (int64, error) {
-	return 0, nil
+func (m *composedAppRepo) ListApplicationNamesForApp(_ context.Context, _, _ uuid.UUID) ([]string, error) {
+	return nil, nil
 }
 
 func (m *composedAppRepo) PushTargets(_ context.Context, _, _ uuid.UUID, _ string) ([]githubapp.AppPushTarget, error) {
@@ -507,5 +513,260 @@ func TestCloneThroughRealAppService(t *testing.T) {
 	}
 	if app.CloneURL != "https://github.com/acme/web.git" {
 		t.Errorf("stored clone URL = %q, want it unchanged", app.CloneURL)
+	}
+}
+
+// mustLinkConnection runs manifest + install + record for one connection
+// through the REAL service and returns it. repos are what the installation
+// grants; the fake serves them per installation with no network.
+func mustLinkConnection(t *testing.T, ctx context.Context, svc *githubapp.Service, userID uuid.UUID, api *composedFakeAPI, installationID int64, repos []githubapp.Repo) githubapp.GitHubApp {
+	t.Helper()
+	manifest, err := svc.StartManifest(ctx, userID, "", "gotham", "https://gotham.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apps, err := svc.ListApps(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := make(map[uuid.UUID]bool, len(apps))
+	for _, app := range apps {
+		before[app.ID] = true
+	}
+	if _, err := svc.Callback(ctx, userID, "manifest-code", manifest.State); err != nil {
+		t.Fatal(err)
+	}
+	apps, err = svc.ListApps(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var app githubapp.GitHubApp
+	found := false
+	for _, candidate := range apps {
+		if !before[candidate.ID] {
+			app, found = candidate, true
+		}
+	}
+	if !found {
+		t.Fatalf("apps = %+v, want the newly connected app", apps)
+	}
+	_, installState, err := svc.InstallURL(ctx, userID, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.installations[installationID] = githubapp.InstallationInfo{ID: installationID, Account: "acme", AppID: 123}
+	api.repos[installationID] = append([]githubapp.Repo(nil), repos...)
+	if _, err := svc.RecordInstallation(ctx, userID, app.ID, installationID, installState); err != nil {
+		t.Fatal(err)
+	}
+	return app
+}
+
+func linkedComposedFixture(t *testing.T) (context.Context, uuid.UUID, *composedFakeAPI, *githubapp.Service) {
+	t.Helper()
+	ctx := context.Background()
+	userID := uuid.New()
+	api := &composedFakeAPI{
+		pem:           composedTestKey(t),
+		repos:         map[int64][]githubapp.Repo{},
+		installations: map[int64]githubapp.InstallationInfo{},
+	}
+	svc := githubapp.NewService(githubapp.Config{
+		Repository:         newComposedAppRepo(),
+		NewAPI:             func(_ string) githubapp.GitHubAPI { return api },
+		Secret:             "test-secret-key",
+		AllowUnsafeBaseURL: true,
+	})
+	return ctx, userID, api, svc
+}
+
+func webRepo() githubapp.Repo {
+	return githubapp.Repo{ExternalID: "2", Name: "web", FullName: "acme/web", DefaultBranch: "main", CloneURL: "https://github.com/acme/web.git"}
+}
+
+// TestCloneLinkedConnectionWinsOverAnotherGrant runs a linked application
+// whose repo is granted by TWO connections through the REAL service and
+// cloner: the clone authenticates as the linked connection, never the other.
+func TestCloneLinkedConnectionWinsOverAnotherGrant(t *testing.T) {
+	ctx, userID, api, svc := linkedComposedFixture(t)
+	other := mustLinkConnection(t, ctx, svc, userID, api, 1000, []githubapp.Repo{webRepo()})
+	linked := mustLinkConnection(t, ctx, svc, userID, api, 2000, []githubapp.Repo{webRepo()})
+	if other.ID == linked.ID {
+		t.Fatal("fixture linked the same connection twice")
+	}
+
+	app := testApplication(userID)
+	app.SourceType = SourceGitHubApp
+	app.GitHubAppID = linked.ID
+	app.Repo = "acme/web"
+	app.CloneURL = "https://github.com/acme/web.git"
+
+	var gotArgv []string
+	source := gitSource{
+		keys:      &staticKeyResolver{},
+		appTokens: svc,
+		run: func(_ context.Context, argv, _ []string) ([]byte, error) {
+			gotArgv = append([]string(nil), argv...)
+			return nil, nil
+		},
+	}
+	if err := source.Clone(ctx, app, filepath.Join(t.TempDir(), "repo"), nil); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if joined := strings.Join(gotArgv, " "); !strings.Contains(joined, "https://x-access-token:tok-2000@github.com/acme/web.git") {
+		t.Errorf("argv = %v, want the linked connection's token (tok-2000)", gotArgv)
+	}
+}
+
+// TestCloneLinkedRevokedGrantFails runs a linked application whose
+// connection no longer grants the repo (revoked upstream): the deploy fails
+// with the no-grant error and git never runs: no other connection is
+// consulted and no anonymous clone is attempted.
+func TestCloneLinkedRevokedGrantFails(t *testing.T) {
+	ctx, userID, api, svc := linkedComposedFixture(t)
+	linked := mustLinkConnection(t, ctx, svc, userID, api, 1000, []githubapp.Repo{webRepo()})
+	// Revoked upstream: the next listing is empty.
+	api.repos[1000] = nil
+
+	app := testApplication(userID)
+	app.SourceType = SourceGitHubApp
+	app.GitHubAppID = linked.ID
+	app.Repo = "acme/web"
+	app.CloneURL = "https://github.com/acme/web.git"
+
+	ran := false
+	source := gitSource{
+		keys:      &staticKeyResolver{},
+		appTokens: svc,
+		run: func(context.Context, []string, []string) ([]byte, error) {
+			ran = true
+			return nil, nil
+		},
+	}
+	err := source.Clone(ctx, app, filepath.Join(t.TempDir(), "repo"), func(string) {})
+	if err == nil {
+		t.Fatal("clone with a revoked grant on the linked connection succeeded")
+	}
+	if !errors.Is(err, githubapp.ErrNoInstallationGrant) {
+		t.Fatalf("clone err = %v, want ErrNoInstallationGrant", err)
+	}
+	if ran {
+		t.Error("git ran despite the revoked grant: no anonymous clone may be attempted")
+	}
+}
+
+// TestCloneBrokenUnrelatedInstallationIgnored runs a linked application next
+// to another connection whose listing is broken: the clone still
+// authenticates through the linked connection.
+func TestCloneBrokenUnrelatedInstallationIgnored(t *testing.T) {
+	ctx, userID, api, svc := linkedComposedFixture(t)
+	mustLinkConnection(t, ctx, svc, userID, api, 1000, []githubapp.Repo{webRepo()})
+	linked := mustLinkConnection(t, ctx, svc, userID, api, 2000, []githubapp.Repo{webRepo()})
+	api.failFor = map[int64]error{1000: errors.New("500 Internal Server Error")}
+
+	app := testApplication(userID)
+	app.SourceType = SourceGitHubApp
+	app.GitHubAppID = linked.ID
+	app.Repo = "acme/web"
+	app.CloneURL = "https://github.com/acme/web.git"
+
+	var gotArgv []string
+	source := gitSource{
+		keys:      &staticKeyResolver{},
+		appTokens: svc,
+		run: func(_ context.Context, argv, _ []string) ([]byte, error) {
+			gotArgv = append([]string(nil), argv...)
+			return nil, nil
+		},
+	}
+	if err := source.Clone(ctx, app, filepath.Join(t.TempDir(), "repo"), nil); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if joined := strings.Join(gotArgv, " "); !strings.Contains(joined, "https://x-access-token:tok-2000@github.com/acme/web.git") {
+		t.Errorf("argv = %v, want the linked connection's token (tok-2000)", gotArgv)
+	}
+}
+
+// TestCloneLinkedHTTPURLRefused runs a linked application with a plaintext
+// http clone URL: the clone fails with a validation error and git never
+// runs, so no token is ever embedded in a plaintext URL.
+func TestCloneLinkedHTTPURLRefused(t *testing.T) {
+	ctx, userID, api, svc := linkedComposedFixture(t)
+	linked := mustLinkConnection(t, ctx, svc, userID, api, 1000, []githubapp.Repo{webRepo()})
+
+	app := testApplication(userID)
+	app.SourceType = SourceGitHubApp
+	app.GitHubAppID = linked.ID
+	app.Repo = "acme/web"
+	app.CloneURL = "http://github.com/acme/web.git"
+
+	ran := false
+	source := gitSource{
+		keys:      &staticKeyResolver{},
+		appTokens: svc,
+		run: func(context.Context, []string, []string) ([]byte, error) {
+			ran = true
+			return nil, nil
+		},
+	}
+	err := source.Clone(ctx, app, filepath.Join(t.TempDir(), "repo"), func(string) {})
+	if err == nil {
+		t.Fatal("clone with an http clone URL succeeded")
+	}
+	if !errors.Is(err, githubapp.ErrValidation) {
+		t.Fatalf("clone err = %v, want ErrValidation", err)
+	}
+	if ran {
+		t.Error("git ran despite the http clone URL: no plaintext clone may be attempted")
+	}
+	api.mu.Lock()
+	mints := len(api.tokenFor)
+	api.mu.Unlock()
+	if mints != 1 {
+		t.Errorf("token mints = %d, want 1 (install-time only, none for the refused clone)", mints)
+	}
+}
+
+// TestCloneUnlinkedGitHubAppLogsNoConnection runs a github_app application
+// with no linked connection (as after a disconnect unlinks the row) through
+// the REAL service: it clones anonymously and says so on the deploy log.
+func TestCloneUnlinkedGitHubAppLogsNoConnection(t *testing.T) {
+	ctx, userID, api, svc := linkedComposedFixture(t)
+
+	app := testApplication(userID)
+	app.SourceType = SourceGitHubApp
+	app.GitHubAppID = uuid.Nil
+	app.Repo = "acme/web"
+	app.CloneURL = "https://github.com/acme/web.git"
+
+	var gotArgv []string
+	var logged []string
+	source := gitSource{
+		keys:      &staticKeyResolver{},
+		appTokens: svc,
+		run: func(_ context.Context, argv, _ []string) ([]byte, error) {
+			gotArgv = append([]string(nil), argv...)
+			return nil, nil
+		},
+	}
+	if err := source.Clone(ctx, app, filepath.Join(t.TempDir(), "repo"), func(line string) {
+		logged = append(logged, line)
+	}); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	if joined := strings.Join(gotArgv, " "); !strings.Contains(joined, "https://github.com/acme/web.git") {
+		t.Errorf("argv = %v, want the plain clone URL", gotArgv)
+	}
+	if strings.Contains(strings.Join(append(gotArgv, logged...), "\n"), "x-access-token") {
+		t.Error("output mentions a token for an unlinked application")
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "no GitHub App connection is linked") {
+		t.Errorf("log lines = %v, want the no-connection line", logged)
+	}
+	api.mu.Lock()
+	mints := len(api.tokenFor)
+	api.mu.Unlock()
+	if mints != 0 {
+		t.Errorf("token mints = %d, want 0 for an unlinked application", mints)
 	}
 }

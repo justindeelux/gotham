@@ -2,7 +2,6 @@ package deploy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	neturl "net/url"
@@ -14,8 +13,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/justindeelux/gotham/internal/githubapp"
 )
 
 // Source prepares the build tree for a deployment: it checks the
@@ -36,13 +33,13 @@ type deployKeyResolver interface {
 }
 
 // appTokenResolver builds the token-authenticated clone URL for a github_app
-// application. Resolution is by repository grant (not by row id): the token
-// is minted for the installation that grants the repo, embedded only in the
+// application through its own linked connection. The token is minted for the
+// installation of that connection granting the repo, embedded only in the
 // returned URL, never persisted and never logged by callers.
 type appTokenResolver interface {
 	// TokenCloneURL returns cloneURL with a fresh installation token for the
-	// installation granting repo and owned by userID.
-	TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, cloneURL string) (string, error)
+	// installation of appID granting repo and owned by userID.
+	TokenCloneURL(ctx context.Context, userID, appID uuid.UUID, repo, cloneURL string) (string, error)
 }
 
 // cloneRunner executes git with an environment and returns its combined
@@ -97,23 +94,22 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	// The token path is explicit: the application must be linked to a GitHub
 	// App connection AND carry an http(s) clone URL. Anything else (legacy
 	// provider=github rows, deploy keys, SSH URLs, local fixtures) never
-	// touches the resolver, so no GitHub API call happens for it.
+	// touches the resolver, so no GitHub API call happens for it. The link
+	// selects the connection: only its installations are consulted, and a
+	// revoked grant fails the deploy instead of borrowing another
+	// connection or silently cloning anonymously.
 	if app.GitHubAppID != uuid.Nil && s.appTokens != nil && isHTTPCloneURL(url) {
-		tokenURL, err := s.appTokens.TokenCloneURL(ctx, app.UserID, app.Repo, url)
-		if err == nil {
-			url = tokenURL
-			tokenClone = true
-		} else if errors.Is(err, githubapp.ErrNoInstallationGrant) {
-			// The link exists but no installation grants the repo (revoked
-			// grant): the legacy path still applies, visibly. Anything
-			// else (host mismatch, mint failure, unverifiable grants)
-			// fails the clone instead of silently cloning anonymously.
-			if log != nil {
-				log(fmt.Sprintf("no GitHub App installation grants %q; cloning without an installation token", app.Repo))
-			}
-		} else {
+		tokenURL, err := s.appTokens.TokenCloneURL(ctx, app.UserID, app.GitHubAppID, app.Repo, url)
+		if err != nil {
 			return err
 		}
+		url = tokenURL
+		tokenClone = true
+	} else if app.GitHubAppID == uuid.Nil && app.SourceType == SourceGitHubApp && isHTTPCloneURL(url) && log != nil {
+		// No connection is linked: after a disconnect unlinks the row (ON
+		// DELETE SET NULL) the application silently fell back to an
+		// anonymous clone. Say so on the deploy log, visibly.
+		log("no GitHub App connection is linked; cloning without an installation token")
 	}
 	var (
 		env     []string

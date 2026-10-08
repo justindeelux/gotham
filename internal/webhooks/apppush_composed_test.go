@@ -183,8 +183,8 @@ func (m *composedRepo) ListRepoCache(_ context.Context, _ uuid.UUID, _ int64) ([
 	return nil, nil
 }
 
-func (m *composedRepo) CountApplicationsForApp(_ context.Context, _, _ uuid.UUID) (int64, error) {
-	return 0, nil
+func (m *composedRepo) ListApplicationNamesForApp(_ context.Context, _, _ uuid.UUID) ([]string, error) {
+	return nil, nil
 }
 
 func (m *composedRepo) PushTargets(_ context.Context, _, _ uuid.UUID, repo string) ([]githubapp.AppPushTarget, error) {

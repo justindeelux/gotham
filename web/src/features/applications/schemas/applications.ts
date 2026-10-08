@@ -579,14 +579,14 @@ export const privateCloneUrlSchema = z
   .min(1)
   .refine(isPrivateGitUrl);
 
-/** isHttpsGitUrl reports an http(s) clone URL (the token transport). */
+/** isHttpsGitUrl reports an https clone URL (the token transport). Plain
+ * http never counts: the stored token is injected over TLS only. */
 export function isHttpsGitUrl(value: string): boolean {
   const sep = value.trim().indexOf("://");
   if (sep < 0) {
     return false;
   }
-  const scheme = value.trim().slice(0, sep).toLowerCase();
-  return scheme === "http" || scheme === "https";
+  return value.trim().slice(0, sep).toLowerCase() === "https";
 }
 
 /** repoSchema replaces repoFullName === "" (a select output, never padded). */

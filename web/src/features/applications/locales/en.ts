@@ -379,12 +379,16 @@ const en = {
     credSet: "HTTPS token saved.",
     credSetUser: "HTTPS token saved for {username}.",
     credUnset: "No HTTPS token saved.",
-    keyFailed:
-      "The application was created, but the deploy key could not be generated: {error}",
+    removeKey: "Remove deploy key",
+    removeToken: "Remove token",
     credentialFailed:
       "The application was created, but the HTTPS credential could not be saved: {error}",
     test: "Test connection",
     connected: "Connection succeeded.",
+    probedHost: "Host: {host}",
+    createdKey: "Application {name} created — register the key below, then deploy.",
+    confirmKey: "I added the public key as a read-only deploy key on the repository.",
+    deployNow: "Deploy now",
   },
   detail: {
     controlInProgress: "A deployment is in progress. Wait for it to finish.",

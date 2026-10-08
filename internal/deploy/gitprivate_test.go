@@ -1,9 +1,11 @@
 package deploy
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -62,7 +65,7 @@ func TestValidatePrivateGitURL(t *testing.T) {
 		{"scp-like", "git@git.internal:acme/demo.git", true, nil},
 		{"scp-like with user", "deploy@git.internal:acme/demo.git", true, nil},
 		{"https URL", "https://git.internal/acme/demo.git", true, nil},
-		{"http URL", "http://git.internal/acme/demo.git", true, nil},
+		{"http URL (anonymous only, never credentialed)", "http://git.internal/acme/demo.git", true, nil},
 		{"https userinfo refused", "https://user:token@git.internal/acme/demo.git", false, ErrValidation},
 		{"ssh userinfo refused", "ssh://user:pass@git.internal/acme/demo.git", false, ErrValidation},
 		{"git scheme refused", "git://git.internal/acme/demo.git", false, ErrValidation},
@@ -74,6 +77,11 @@ func TestValidatePrivateGitURL(t *testing.T) {
 		{"file URL denied by default", "file:///srv/fixtures/demo", false, ErrValidation},
 		{"ssh URL without host", "ssh://", false, ErrValidation},
 		{"https URL without host", "https:///acme/demo.git", false, ErrValidation},
+		{"leading dash URL", "-oProxyCommand=x@h:p", false, ErrValidation},
+		{"dash scp user", "-git@git.internal:acme/demo.git", false, ErrValidation},
+		{"dash scp host", "git@-internal:acme/demo.git", false, ErrValidation},
+		{"dash ssh host", "ssh://-internal/acme/demo.git", false, ErrValidation},
+		{"dash https host", "https://-internal/acme/demo.git", false, ErrValidation},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,6 +262,31 @@ func TestSetGitCredential(t *testing.T) {
 		t.Errorf("rotated credential opens to %q, %v; want the new token", token, err)
 	}
 
+	t.Run("values are trimmed before sealing", func(t *testing.T) {
+		if _, err := svc.SetGitCredential(context.Background(), userID, app.ID, "  bob  ", "  spaced-token  "); err != nil {
+			t.Fatalf("SetGitCredential: %v", err)
+		}
+		stored := repo.gitCreds[app.ID]
+		if stored.username != "bob" {
+			t.Errorf("username = %q, want trimmed", stored.username)
+		}
+		if opened, err := providers.OpenSecret(testSecretKey, stored.sealed); err != nil || opened != "spaced-token" {
+			t.Errorf("token opens to %q, %v; want trimmed", opened, err)
+		}
+	})
+
+	t.Run("cleartext http application is refused", func(t *testing.T) {
+		httpApp := privateTestApp(userID, "http://git.internal/acme/demo.git")
+		httpRepo := &fakeRepository{app: httpApp}
+		httpSvc := newTestService(t, httpRepo)
+		if _, err := httpSvc.SetGitCredential(context.Background(), userID, httpApp.ID, "bob", "tok"); !errors.Is(err, ErrValidation) {
+			t.Fatalf("err = %v, want ErrValidation", err)
+		}
+		if len(httpRepo.gitCreds) != 0 {
+			t.Error("a refused credential was stored")
+		}
+	})
+
 	for name, pair := range map[string][2]string{
 		"empty token":     {"bob", ""},
 		"blank token":     {"bob", "   "},
@@ -373,6 +406,13 @@ func TestCloneCredentialAskpass(t *testing.T) {
 			t.Errorf("env = %v, want %s", gotEnv, want)
 		}
 	}
+	// Redirects are refused so the token can never move to another host.
+	if got := envValue(gotEnv, "GIT_CONFIG_VALUE_1"); got != "false" {
+		t.Errorf("GIT_CONFIG_VALUE_1 = %q, want false (http.followRedirects)", got)
+	}
+	if got := envValue(gotEnv, "GIT_CONFIG_KEY_1"); got != "http.followRedirects" {
+		t.Errorf("GIT_CONFIG_KEY_1 = %q, want http.followRedirects", got)
+	}
 	if helperPath == "" {
 		t.Fatal("GIT_ASKPASS carries no helper path")
 	}
@@ -450,8 +490,10 @@ func TestCloneCredentialSSHRefusals(t *testing.T) {
 }
 
 // TestAskpassHelperExecution runs the generated helper with a real shell:
-// the username prompt answers the username, every other prompt the token.
-// It also pins the 0700 mode and the cleanup.
+// prompts naming the expected host answer the username/password, any other
+// prompt (a redirect to another host, an unexpected question) exits nonzero
+// so git fails instead of spending the credential there. It also pins the
+// 0700 mode and the cleanup.
 func TestAskpassHelperExecution(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the helper is a POSIX shell script")
@@ -460,7 +502,7 @@ func TestAskpassHelperExecution(t *testing.T) {
 	if err != nil {
 		t.Skip("sh is not available")
 	}
-	files, err := newAskpassFiles("bob", "s3cr3tTOK'en\"x")
+	files, err := newAskpassFiles("bob", "s3cr3tTOK'en\"x", "git.internal")
 	if err != nil {
 		t.Fatalf("newAskpassFiles: %v", err)
 	}
@@ -471,19 +513,25 @@ func TestAskpassHelperExecution(t *testing.T) {
 	if perm := info.Mode().Perm(); perm != 0o700 {
 		t.Fatalf("helper mode = %o, want 700", perm)
 	}
-	run := func(prompt string) string {
+	run := func(prompt string) (string, error) {
 		cmd := exec.Command(sh, files.scriptPath, prompt)
 		out, err := cmd.Output()
-		if err != nil {
-			t.Fatalf("helper(%q): %v", prompt, err)
+		return string(out), err
+	}
+	if got, err := run("Username for 'https://git.internal/acme/demo.git': "); err != nil || got != "bob" {
+		t.Errorf("username prompt answered %q, %v; want bob", got, err)
+	}
+	if got, err := run("Password for 'https://bob@git.internal:8443/acme/demo.git': "); err != nil || got != "s3cr3tTOK'en\"x" {
+		t.Errorf("password prompt answered %q, %v; want the token verbatim", got, err)
+	}
+	for name, prompt := range map[string]string{
+		"foreign host":   "Password for 'https://bob@evil.internal/acme/demo.git': ",
+		"prefix host":    "Password for 'https://bob@git.internal.evil.com/acme/demo.git': ",
+		"unknown prompt": "Answer the riddle: ",
+	} {
+		if out, err := run(prompt); err == nil {
+			t.Errorf("%s: helper answered %q, want a refusal", name, out)
 		}
-		return string(out)
-	}
-	if got := run("Username for 'https://git.internal': "); got != "bob" {
-		t.Errorf("username prompt answered %q, want bob", got)
-	}
-	if got := run("Password for 'https://git.internal': "); got != "s3cr3tTOK'en\"x" {
-		t.Errorf("password prompt answered %q, want the token verbatim", got)
 	}
 	dir := files.dir
 	files.remove()
@@ -567,11 +615,33 @@ func (s *smartHTTPStub) handler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("001e# service=git-upload-pack\n0000" + "0000"))
 }
 
+// trustTestTLS makes the git child trust a test TLS server: its
+// certificate is written as a CA file and pointed at with GIT_SSL_CAINFO
+// (inherited through the probe's environment).
+func trustTestTLS(t *testing.T, server *httptest.Server) {
+	t.Helper()
+	var pemData []byte
+	for _, cert := range server.TLS.Certificates {
+		for _, der := range cert.Certificate {
+			var block bytes.Buffer
+			if err := pem.Encode(&block, &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
+				t.Fatalf("encode test certificate: %v", err)
+			}
+			pemData = append(pemData, block.Bytes()...)
+		}
+	}
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caPath, pemData, 0o600); err != nil {
+		t.Fatalf("write test CA: %v", err)
+	}
+	t.Setenv("GIT_SSL_CAINFO", caPath)
+}
+
 // TestConnectionProbeHTTPSAgainstSmartHTTPStub runs the production probe
 // (TestGitConnection with the real git binary) against a local smart-HTTP
-// stub: the success case proves the stored token reaches the remote as a
-// Basic credential, and the 401 case proves the classified auth hint. No
-// external network is involved.
+// stub over TLS: the success case proves the stored token reaches the remote
+// as a Basic credential, and the 401 case proves the classified auth hint.
+// No external network is involved.
 func TestConnectionProbeHTTPSAgainstSmartHTTPStub(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -580,8 +650,9 @@ func TestConnectionProbeHTTPSAgainstSmartHTTPStub(t *testing.T) {
 	_ = git
 
 	stub := &smartHTTPStub{t: t, username: "bob", token: "s3cr3t-token"}
-	server := httptest.NewServer(http.HandlerFunc(stub.handler))
+	server := httptest.NewTLSServer(http.HandlerFunc(stub.handler))
 	defer server.Close()
+	trustTestTLS(t, server)
 
 	userID := uuid.New()
 	app := privateTestApp(userID, server.URL+"/repo.git")
@@ -612,6 +683,7 @@ func TestConnectionProbeHTTPSAgainstSmartHTTPStub(t *testing.T) {
 
 	t.Run("unauthorized is classified", func(t *testing.T) {
 		stub.advertiseFail = true
+		delete(svc.probeLast, probeThrottleKey{userID: userID, appID: app.ID})
 		result, err := svc.TestGitConnection(context.Background(), userID, app.ID)
 		if err != nil {
 			t.Fatalf("TestGitConnection: %v", err)
@@ -626,6 +698,82 @@ func TestConnectionProbeHTTPSAgainstSmartHTTPStub(t *testing.T) {
 			t.Errorf("the probe message leaked the token: %q", result.Message)
 		}
 	})
+}
+
+// TestConnectionProbeRefusesCrossHostRedirect is the regression test for the
+// redirect token leak: the first server challenges (so the helper spends the
+// token there, proving injection works) and then redirects to a second
+// server recording everything it receives. The probe must fail closed with
+// the second server untouched — no Authorization header, no token bytes.
+func TestConnectionProbeRefusesCrossHostRedirect(t *testing.T) {
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git binary is not available")
+	}
+	_ = git
+
+	var secondSawAuth, secondBody string
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondSawAuth = r.Header.Get("Authorization")
+		secondBody = r.URL.String()
+		w.Header().Set("WWW-Authenticate", `Basic realm="second"`)
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+	}))
+	defer second.Close()
+
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("bob:s3cr3t-token"))
+	var firstSawAuth string
+	first := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/info/refs") {
+			http.NotFound(w, r)
+			return
+		}
+		firstSawAuth = r.Header.Get("Authorization")
+		if firstSawAuth != want {
+			w.Header().Set("WWW-Authenticate", `Basic realm="first"`)
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		http.Redirect(w, r, second.URL+"/repo.git/info/refs?service=git-upload-pack", http.StatusMovedPermanently)
+	}))
+	defer first.Close()
+	trustTestTLS(t, first)
+
+	userID := uuid.New()
+	app := privateTestApp(userID, first.URL+"/repo.git")
+	repo := &fakeRepository{app: app}
+	svc := NewService(Config{Repository: repo, Secret: testSecretKey, Logger: discardLogger()})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	if _, err := svc.SetGitCredential(context.Background(), userID, app.ID, "bob", "s3cr3t-token"); err != nil {
+		t.Fatalf("SetGitCredential: %v", err)
+	}
+	result, err := svc.TestGitConnection(context.Background(), userID, app.ID)
+	if err != nil {
+		t.Fatalf("TestGitConnection: %v", err)
+	}
+	if result.OK {
+		t.Errorf("result = %+v, want the redirect refused", result)
+	}
+	if firstSawAuth == "" {
+		t.Error("the first server never saw the token: injection itself broke")
+	}
+	if secondSawAuth != "" || strings.Contains(secondBody, "s3cr3t-token") {
+		t.Errorf("the redirect target saw the credential (auth %q, url %q)", secondSawAuth, secondBody)
+	}
+	if strings.Contains(result.Message, "s3cr3t-token") {
+		t.Errorf("the probe message leaked the token: %q", result.Message)
+	}
+}
+
+// envValue returns the value of the env entry naming the variable.
+func envValue(env []string, name string) string {
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, name+"="); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 // serviceWithRunner builds a Service whose connection probe runs through the
@@ -847,6 +995,27 @@ func TestRoutesGitCredential(t *testing.T) {
 			t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 		}
 	})
+
+	t.Run("delete is idempotent", func(t *testing.T) {
+		svc := &fakeDeployService{deletedGitCred: true}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, gitCredentialPath(appID), nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var body deleteKeyEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if !body.Deleted {
+			t.Error("deleted = false, want true")
+		}
+		if svc.seenApplication != appID {
+			t.Errorf("service saw app %s, want %s", svc.seenApplication, appID)
+		}
+	})
 }
 
 // TestRoutesTestConnection pins the probe endpoint: the classified outcome
@@ -889,6 +1058,177 @@ func TestRoutesTestConnection(t *testing.T) {
 		}
 		if containsMessage(rec.Body.String(), "boom") {
 			t.Errorf("response leaked an internal error: %s", rec.Body.String())
+		}
+	})
+}
+
+// TestPrivateAndDeployURLGatesAgree pins finding 1: the creation gate
+// (ValidatePrivateGitURL) and the deploy gate (validateCloneURL) accept the
+// same private SSH shapes, so a created application always stays deployable.
+// The git:// scheme is the one documented divergence: the deploy gate keeps
+// accepting it for legacy rows, creation refuses it for new private rows.
+func TestPrivateAndDeployURLGatesAgree(t *testing.T) {
+	t.Setenv(devLocalCloneEnv, "false")
+	cases := []struct {
+		url     string
+		private bool
+		deploy  bool
+	}{
+		{"git@git.internal:acme/demo.git", true, true},
+		{"deploy@git.internal:acme/demo.git", true, true},
+		{"gitea@git.internal:acme/demo.git", true, true},
+		{"ssh://git@git.internal/acme/demo.git", true, true},
+		{"ssh://git@git.internal:2222/acme/demo.git", true, true},
+		{"https://git.internal/acme/demo.git", true, true},
+		{"http://git.internal/acme/demo.git", true, true},
+		{"git://git.internal/acme/demo.git", false, true},
+		{"-oProxyCommand=x@h:p", false, false},
+		{"git@-internal:acme/demo.git", false, false},
+		{"-git@git.internal:acme/demo.git", false, false},
+		{"ftp://example.com/demo.git", false, false},
+		{"", false, false},
+	}
+	for _, tc := range cases {
+		if err := ValidatePrivateGitURL(tc.url); (err == nil) != tc.private {
+			t.Errorf("ValidatePrivateGitURL(%q) = %v, want accepted=%v", tc.url, err, tc.private)
+		}
+		if err := validateCloneURL(tc.url); (err == nil) != tc.deploy {
+			t.Errorf("validateCloneURL(%q) = %v, want accepted=%v", tc.url, err, tc.deploy)
+		}
+	}
+}
+
+// TestCloneCredentialPlainHTTPIgnoresToken pins fix 4 at the clone layer: a
+// cleartext http URL never takes the askpass path, even when a token row
+// exists (SetGitCredential refuses such applications, so this is unreachable
+// through the API — the clone simply must not depend on that).
+func TestCloneCredentialPlainHTTPIgnoresToken(t *testing.T) {
+	app := privateTestApp(uuid.New(), "http://git.internal/acme/demo.git")
+	src := gitSource{creds: &staticCredResolver{username: "bob", token: "s3cr3t"}}
+	url, env, cleanup, using, err := src.cloneCredential(context.Background(), app, app.CloneURL)
+	defer cleanup()
+	if err != nil {
+		t.Fatalf("cloneCredential: %v", err)
+	}
+	if using != "" || url != app.CloneURL {
+		t.Errorf("url = %q using = %q, want the unchanged anonymous URL", url, using)
+	}
+	if hasEntry(env, "GIT_ASKPASS") {
+		t.Errorf("env = %v, want no askpass helper over cleartext http", env)
+	}
+}
+
+// TestTestGitConnectionThrottlesBursts pins the probe throttle: the first
+// probe runs, an immediate second answers the cooldown outcome without
+// running git, and a probe past the cooldown runs again.
+func TestTestGitConnectionThrottlesBursts(t *testing.T) {
+	userID := uuid.New()
+	app := privateTestApp(userID, "https://git.internal/acme/demo.git")
+	repo := &fakeRepository{app: app}
+	calls := 0
+	svc := serviceWithRunner(t, repo, func(context.Context, []string, []string) ([]byte, error) {
+		calls++
+		return []byte("deadbeef\tHEAD\n"), nil
+	})
+
+	first, err := svc.TestGitConnection(context.Background(), userID, app.ID)
+	if err != nil || !first.OK {
+		t.Fatalf("first probe = %+v, %v; want success", first, err)
+	}
+	second, err := svc.TestGitConnection(context.Background(), userID, app.ID)
+	if err != nil {
+		t.Fatalf("second probe: %v", err)
+	}
+	if second.OK || !strings.Contains(second.Message, "recently") {
+		t.Errorf("second probe = %+v, want the cooldown outcome", second)
+	}
+	if calls != 1 {
+		t.Errorf("git ran %d times, want 1 (the throttled probe must not run git)", calls)
+	}
+	svc.probeLast[probeThrottleKey{userID: userID, appID: app.ID}] = time.Now().Add(-gitProbeCooldown - time.Second)
+	third, err := svc.TestGitConnection(context.Background(), userID, app.ID)
+	if err != nil || !third.OK {
+		t.Fatalf("third probe = %+v, %v; want success past the cooldown", third, err)
+	}
+	if calls != 2 {
+		t.Errorf("git ran %d times, want 2", calls)
+	}
+}
+
+// TestDeleteGitCredential covers the removal path: set, delete (true),
+// read back unset, delete again (false), and a foreign application 404s.
+func TestDeleteGitCredential(t *testing.T) {
+	userID := uuid.New()
+	app := privateTestApp(userID, "https://git.internal/acme/demo.git")
+	repo := &fakeRepository{app: app}
+	svc := newTestService(t, repo)
+
+	if deleted, err := svc.DeleteGitCredential(context.Background(), userID, app.ID); err != nil || deleted {
+		t.Fatalf("delete without credential = %v, %v; want false, nil", deleted, err)
+	}
+	if _, err := svc.SetGitCredential(context.Background(), userID, app.ID, "bob", "tok"); err != nil {
+		t.Fatalf("SetGitCredential: %v", err)
+	}
+	if deleted, err := svc.DeleteGitCredential(context.Background(), userID, app.ID); err != nil || !deleted {
+		t.Fatalf("delete = %v, %v; want true, nil", deleted, err)
+	}
+	if state, err := svc.GetGitCredential(context.Background(), userID, app.ID); err != nil || state.HasCredential {
+		t.Fatalf("state = %+v, %v; want no credential", state, err)
+	}
+	if _, err := svc.DeleteGitCredential(context.Background(), uuid.New(), app.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign delete = %v, want ErrNotFound", err)
+	}
+}
+
+// TestGetGitCredentialDisabled pins the feature gate on the read path.
+func TestGetGitCredentialDisabled(t *testing.T) {
+	t.Setenv(FeatureEnv, "false")
+	userID := uuid.New()
+	svc := newTestService(t, &fakeRepository{app: privateTestApp(userID, "https://h/o/r.git")})
+	if _, err := svc.GetGitCredential(context.Background(), userID, uuid.New()); !errors.Is(err, ErrDisabled) {
+		t.Fatalf("err = %v, want ErrDisabled", err)
+	}
+}
+
+// TestPreviewOfHTTPSAppCopiesCredential pins fix 2: the preview sibling of
+// a token-authenticated private application inherits the sealed credential,
+// so its clone authenticates exactly like the base. A base without a token
+// previews without one (no error, nothing copied).
+func TestPreviewOfHTTPSAppCopiesCredential(t *testing.T) {
+	userID := uuid.New()
+	base := privateTestApp(userID, "https://git.internal/acme/demo.git")
+	base.TeamID = uuid.New()
+	repo := seedBaseForPreview(t, base)
+	svc := newTestService(t, repo)
+
+	if _, err := svc.SetGitCredential(context.Background(), userID, base.ID, "bob", "s3cr3t"); err != nil {
+		t.Fatalf("SetGitCredential: %v", err)
+	}
+	created, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
+		Name:   "demo app-pr-1",
+		Branch: "feat/x",
+	})
+	if err != nil {
+		t.Fatalf("CreatePreviewApplication: %v", err)
+	}
+	if username, token, err := repo.GitCredential(context.Background(), created.ID); err != nil || username != "bob" || token != "s3cr3t" {
+		t.Errorf("preview credential = %q/%q, %v; want the base token", username, token, err)
+	}
+
+	t.Run("base without a token", func(t *testing.T) {
+		plain := privateTestApp(userID, "git@git.internal:acme/other.git")
+		plain.TeamID = base.TeamID
+		plainRepo := seedBaseForPreview(t, plain)
+		plainSvc := newTestService(t, plainRepo)
+		sibling, err := plainSvc.CreatePreviewApplication(context.Background(), plain.ID, PreviewApplicationInput{
+			Name:   "other-pr-1",
+			Branch: "feat/y",
+		})
+		if err != nil {
+			t.Fatalf("CreatePreviewApplication: %v", err)
+		}
+		if username, token, err := plainRepo.GitCredential(context.Background(), sibling.ID); err != nil || username != "" || token != "" {
+			t.Errorf("preview credential = %q/%q, %v; want none", username, token, err)
 		}
 	})
 }

@@ -6,6 +6,7 @@ import {
   createDeployKey,
   describeApplicationError,
   setGitCredential,
+  testConnection,
 } from "@/features/applications/api/applications";
 import type {
   Application,
@@ -194,6 +195,24 @@ export function useCreateAppWizard(
    * its display text in the current locale.
    */
   const noSshUrl = ref(false);
+
+  /**
+   * createdKey holds the SSH post-create state (GS-4): the application row
+   * already exists and its deploy key is generated, but the operator has
+   * not registered the public half yet, so the first deploy must wait for
+   * an explicit Test + Deploy instead of queueing blindly.
+   */
+  const createdKey = ref<{ application: Application; publicKey: string } | null>(null);
+  const keyTesting = ref(false);
+  const keyTestPassed = ref(false);
+  const keyTestMessage = ref("");
+  const keyConfirmed = ref(false);
+  const keyDeploying = ref(false);
+
+  /** canDeployCreated gates Deploy on the key step: a passed test or an explicit confirm. */
+  const canDeployCreated = computed<boolean>(
+    () => createdKey.value !== null && (keyTestPassed.value || keyConfirmed.value),
+  );
 
   /**
    * tr resolves one applications message in the current locale. Reading
@@ -781,27 +800,30 @@ export function useCreateAppWizard(
     submitting.value = true;
     try {
       const { application, webhook } = await createApplication(buildPayload());
-      // A provider-less private source stores its credential right after the
-      // row: an SSH key is generated locally (the detail page shows the
-      // public half with registration instructions), an HTTPS token is
-      // sealed. Both are best effort like the webhook install — the row is
-      // already committed, so a failure warns instead of failing the
-      // create, and the detail page remains the retry path.
+      // A provider-less private SSH source stops here: the key is generated
+      // and shown on the key step, and the first deploy waits for the
+      // operator to register it (Test + Deploy). Queueing immediately would
+      // always fail with permission denied. The HTTPS token needs no
+      // operator action, so it seals and falls through to the auto-deploy.
+      if (form.sourceType === "git_private" && form.privateAuth === "ssh") {
+        try {
+          const key = await createDeployKey(application.id);
+          createdKey.value = { application, publicKey: key.public_key };
+        } catch (credError) {
+          submitFailure.value = { kind: "error", error: credError };
+        } finally {
+          submitting.value = false;
+        }
+        return;
+      }
       if (form.sourceType === "git_private") {
         try {
-          if (form.privateAuth === "https") {
-            await setGitCredential(application.id, form.httpsUsername.trim(), form.httpsToken);
-          } else {
-            await createDeployKey(application.id);
-          }
+          await setGitCredential(application.id, form.httpsUsername.trim(), form.httpsToken);
         } catch (credError) {
           message.warning(
-            tr(
-              form.privateAuth === "https"
-                ? "applications.privateGit.credentialFailed"
-                : "applications.privateGit.keyFailed",
-              { error: describeApplicationError(credError) },
-            ),
+            tr("applications.privateGit.credentialFailed", {
+              error: describeApplicationError(credError),
+            }),
             { duration: 8000 },
           );
         }
@@ -845,6 +867,66 @@ export function useCreateAppWizard(
   function closeWizard(): void {
     emit("update:show", false);
     resetWizard();
+  }
+
+  /** runCreatedKeyTest probes the new SSH application with its stored key. */
+  async function runCreatedKeyTest(): Promise<void> {
+    if (!createdKey.value) {
+      return;
+    }
+    keyTesting.value = true;
+    keyTestMessage.value = "";
+    try {
+      const result = await testConnection(createdKey.value.application.id);
+      keyTestPassed.value = result.ok;
+      keyTestMessage.value = result.ok
+        ? tr("applications.privateGit.connected")
+        : result.message;
+    } catch (error) {
+      keyTestPassed.value = false;
+      keyTestMessage.value = describeApplicationError(error);
+    } finally {
+      keyTesting.value = false;
+    }
+  }
+
+  /** deployCreatedKey queues the first deploy of the SSH application. */
+  async function deployCreatedKey(): Promise<void> {
+    if (!createdKey.value) {
+      return;
+    }
+    keyDeploying.value = true;
+    try {
+      await appsStore.deploy(createdKey.value.application.id);
+      message.success(
+        tr("applications.wizard.createdQueued", { name: createdKey.value.application.name }),
+      );
+    } catch (deployError) {
+      message.warning(
+        tr("applications.wizard.createdDeployFailed", {
+          name: createdKey.value.application.name,
+          error: describeApplicationError(deployError),
+        }),
+        { duration: 8000 },
+      );
+    } finally {
+      keyDeploying.value = false;
+    }
+    const created = createdKey.value.application;
+    resetWizard();
+    emit("created", created);
+    emit("update:show", false);
+  }
+
+  /** closeCreatedKey leaves the key step for the detail page (same landing). */
+  function closeCreatedKey(): void {
+    if (!createdKey.value) {
+      return;
+    }
+    const created = createdKey.value.application;
+    resetWizard();
+    emit("created", created);
+    emit("update:show", false);
   }
 
   /** seedScope copies the live route scope into the form. */
@@ -891,6 +973,12 @@ export function useCreateAppWizard(
     submitFailure.value = null;
     noSshUrl.value = false;
     submitting.value = false;
+    createdKey.value = null;
+    keyTesting.value = false;
+    keyTestPassed.value = false;
+    keyTestMessage.value = "";
+    keyConfirmed.value = false;
+    keyDeploying.value = false;
     // The provider store is a singleton: a stale repo error must not survive
     // into the next wizard with a Retry that no longer applies.
     providersStore.reposError = null;
@@ -940,6 +1028,16 @@ export function useCreateAppWizard(
     handleSubmit,
     closeWizard,
     handleShowChange,
+    createdKey,
+    keyTesting,
+    keyTestPassed,
+    keyTestMessage,
+    keyConfirmed,
+    keyDeploying,
+    canDeployCreated,
+    runCreatedKeyTest,
+    deployCreatedKey,
+    closeCreatedKey,
   };
 }
 

@@ -53,6 +53,7 @@ type fakeDeployService struct {
 	gitCredErr      error
 	seenGitUsername string
 	seenGitToken    string
+	deletedGitCred  bool
 	connResult      GitConnectionResult
 	connErr         error
 
@@ -179,6 +180,15 @@ func (f *fakeDeployService) TestGitConnection(_ context.Context, userID, appID u
 		return GitConnectionResult{}, f.connErr
 	}
 	return f.connResult, nil
+}
+
+// DeleteGitCredential implements DeployService.
+func (f *fakeDeployService) DeleteGitCredential(_ context.Context, userID, appID uuid.UUID) (bool, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	if f.gitCredErr != nil {
+		return false, f.gitCredErr
+	}
+	return f.deletedGitCred, nil
 }
 
 // GetEnv implements DeployService.

@@ -130,6 +130,14 @@ type Repository interface {
 	// cloner and the connection test. An application without one answers ""
 	// and no error, which is what keeps anonymous cloning the default.
 	GitCredential(ctx context.Context, appID uuid.UUID) (username, token string, err error)
+	// DeleteGitCredential removes an application's HTTPS credential row. It
+	// answers ErrNotFound when none is set, so the service can report the
+	// idempotent outcome honestly.
+	DeleteGitCredential(ctx context.Context, appID uuid.UUID) error
+	// CopyGitCredential copies the sealed HTTPS credential row to a preview
+	// sibling (the preview inherits the token like it inherits the deploy
+	// key). An application without one is a success with nothing copied.
+	CopyGitCredential(ctx context.Context, baseID, previewID uuid.UUID) error
 	// GetCertificateIntent returns an application's certificate configuration,
 	// or ErrNotFound when it has none. The preview clone reads it to copy an
 	// enabled wildcard DNS-01 intent onto the sibling.
@@ -843,6 +851,39 @@ func (r *storeRepository) GitCredential(ctx context.Context, appID uuid.UUID) (s
 		return "", "", fmt.Errorf("deploy: open git credential: %w", err)
 	}
 	return row.Username, token, nil
+}
+
+// DeleteGitCredential implements Repository: it removes the row, answering
+// ErrNotFound when none is set.
+func (r *storeRepository) DeleteGitCredential(ctx context.Context, appID uuid.UUID) error {
+	if _, err := r.store.GetApplicationGitCredential(ctx, pgUUID(appID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("deploy: get git credential: %w", err)
+	}
+	if err := r.store.DeleteApplicationGitCredential(ctx, pgUUID(appID)); err != nil {
+		return fmt.Errorf("deploy: delete git credential: %w", err)
+	}
+	return nil
+}
+
+// CopyGitCredential implements Repository: the preview sibling inherits the
+// sealed row as is (re-sealing would need the plaintext, which never leaves
+// the sealed store). The delete cascade on the applications FK removes the
+// copy with the sibling.
+func (r *storeRepository) CopyGitCredential(ctx context.Context, baseID, previewID uuid.UUID) error {
+	row, err := r.store.GetApplicationGitCredential(ctx, pgUUID(baseID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("deploy: get git credential: %w", err)
+	}
+	if _, err := r.store.UpsertApplicationGitCredential(ctx, pgUUID(previewID), row.Username, row.Ciphertext); err != nil {
+		return fmt.Errorf("deploy: copy git credential: %w", err)
+	}
+	return nil
 }
 
 // GetCertificateIntent loads an application's certificate configuration, or

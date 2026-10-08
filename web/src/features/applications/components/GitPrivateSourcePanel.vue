@@ -5,6 +5,8 @@ import { onMounted, ref } from "vue";
 
 import {
   createDeployKey,
+  deleteDeployKey,
+  deleteGitCredential,
   describeApplicationError,
   getDeployKey,
   getGitCredential,
@@ -26,10 +28,12 @@ const { copyText } = useCopyText();
 const key = ref<DeployKey | null>(null);
 const keyLoading = ref(true);
 const keySaving = ref(false);
+const keyRemoving = ref(false);
 const keyError = ref("");
 const cred = ref<GitCredentialState>({ has_credential: false });
 const credLoading = ref(true);
 const credSaving = ref(false);
+const credRemoving = ref(false);
 const credError = ref("");
 const username = ref("");
 const token = ref("");
@@ -86,6 +90,20 @@ async function generateKey(): Promise<void> {
   }
 }
 
+/** removeKey deletes the deploy key from the server. */
+async function removeKey(): Promise<void> {
+  keyRemoving.value = true;
+  keyError.value = "";
+  try {
+    await deleteDeployKey(props.applicationId);
+    key.value = null;
+  } catch (error: unknown) {
+    keyError.value = describeApplicationError(error);
+  } finally {
+    keyRemoving.value = false;
+  }
+}
+
 /** saveCredential stores (or rotates) the HTTPS token. */
 async function saveCredential(): Promise<void> {
   credSaving.value = true;
@@ -97,6 +115,21 @@ async function saveCredential(): Promise<void> {
     credError.value = describeApplicationError(error);
   } finally {
     credSaving.value = false;
+  }
+}
+
+/** removeCredential deletes the stored HTTPS token. */
+async function removeCredential(): Promise<void> {
+  credRemoving.value = true;
+  credError.value = "";
+  try {
+    await deleteGitCredential(props.applicationId);
+    cred.value = { has_credential: false };
+    username.value = "";
+  } catch (error: unknown) {
+    credError.value = describeApplicationError(error);
+  } finally {
+    credRemoving.value = false;
   }
 }
 
@@ -132,9 +165,14 @@ onMounted(() => {
           <pre class="mono key">{{ key.public_key }}</pre>
           <span class="field-hint">{{ t("applications.privateGit.keyHint") }}</span>
           <div style="margin-top: 8px">
-            <NButton size="small" @click="void copyText(key.public_key, t('applications.privateGit.publicKey'))">
-              {{ t("applications.privateGit.copyKey") }}
-            </NButton>
+            <NSpace :size="8">
+              <NButton size="small" @click="void copyText(key.public_key, t('applications.privateGit.publicKey'))">
+                {{ t("applications.privateGit.copyKey") }}
+              </NButton>
+              <NButton size="small" :loading="keyRemoving" @click="void removeKey()">
+                {{ t("applications.privateGit.removeKey") }}
+              </NButton>
+            </NSpace>
           </div>
         </template>
         <template v-else>
@@ -172,9 +210,19 @@ onMounted(() => {
             />
           </div>
           <div style="margin-top: 8px">
-            <NButton size="small" type="primary" :loading="credSaving" :disabled="token.trim() === ''" @click="void saveCredential()">
-              {{ t("applications.privateGit.saveCredential") }}
-            </NButton>
+            <NSpace :size="8">
+              <NButton size="small" type="primary" :loading="credSaving" :disabled="token.trim() === ''" @click="void saveCredential()">
+                {{ t("applications.privateGit.saveCredential") }}
+              </NButton>
+              <NButton
+                v-if="cred.has_credential"
+                size="small"
+                :loading="credRemoving"
+                @click="void removeCredential()"
+              >
+                {{ t("applications.privateGit.removeToken") }}
+              </NButton>
+            </NSpace>
           </div>
         </template>
       </div>
@@ -193,6 +241,10 @@ onMounted(() => {
           style="margin-top: 8px"
         >
           {{ probe.ok ? t("applications.privateGit.connected") : probe.message }}
+          <template v-if="probe.host">
+            <br />
+            <span class="field-hint">{{ t("applications.privateGit.probedHost", { host: probe.host }) }}</span>
+          </template>
         </NAlert>
       </div>
     </NSpace>

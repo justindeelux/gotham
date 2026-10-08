@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -831,5 +832,140 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 	}
 	if pem, err := repo.DeployKeyPrivatePEM(ctx, baseID); err != nil || pem != privatePEM {
 		t.Errorf("base private key after the preview teardown = %q, %v", pem, err)
+	}
+}
+
+// TestStoreRepositoryGitCredentialRoundtrip exercises the HTTPS credential
+// rows against a real server: the sealed token round-trips through the
+// repository (metadata never carries ciphertext, opening returns the token),
+// the copy lands on the preview sibling, and deletes behave. It skips when
+// no database is reachable.
+func TestStoreRepositoryGitCredentialRoundtrip(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	const secret = "integration-secret"
+	st := store.New(pool)
+	repo := newStoreRepository(st, secret)
+
+	email := fmt.Sprintf("gs4-cred-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	userID := uuid.UUID(user.ID.Bytes)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup delete user: %v", err)
+		}
+	})
+
+	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+
+	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID:        pgUUID(userID),
+		TeamID:        pgUUID(teamID),
+		ServerID:      pgUUID(serverID),
+		EnvironmentID: pgUUID(envID),
+		Name:          "credential-app",
+		Provider:      "",
+		Repo:          "https://git.internal/acme/demo.git",
+		CloneUrl:      "https://git.internal/acme/demo.git",
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		SourceType:    "git_private",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+	appID := uuid.UUID(app.ID.Bytes)
+
+	// No credential: metadata is NotFound, the opener answers empty.
+	if _, err := repo.GetGitCredential(ctx, appID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetGitCredential error = %v, want ErrNotFound", err)
+	}
+	if username, token, err := repo.GitCredential(ctx, appID); err != nil || username != "" || token != "" {
+		t.Fatalf("GitCredential = %q/%q, %v; want empty, nil", username, token, err)
+	}
+
+	sealed, err := providers.SealSecret(secret, "s3cr3t-token")
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if err := repo.UpsertGitCredential(ctx, appID, "bob", sealed); err != nil {
+		t.Fatalf("UpsertGitCredential: %v", err)
+	}
+	meta, err := repo.GetGitCredential(ctx, appID)
+	if err != nil {
+		t.Fatalf("GetGitCredential: %v", err)
+	}
+	if meta.Username != "bob" {
+		t.Errorf("username = %q, want bob", meta.Username)
+	}
+	var stored string
+	if err := pool.QueryRow(ctx,
+		"SELECT ciphertext FROM application_git_credentials WHERE application_id = $1", pgUUID(appID)).Scan(&stored); err != nil {
+		t.Fatalf("read ciphertext: %v", err)
+	}
+	if stored != sealed || strings.Contains(stored, "s3cr3t-token") {
+		t.Error("the token is not stored sealed")
+	}
+	if username, token, err := repo.GitCredential(ctx, appID); err != nil || username != "bob" || token != "s3cr3t-token" {
+		t.Errorf("GitCredential = %q/%q, %v; want the opened token", username, token, err)
+	}
+
+	// The copy lands on the sibling with the same sealed row.
+	sibling, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+		UserID:        pgUUID(userID),
+		TeamID:        pgUUID(teamID),
+		ServerID:      pgUUID(serverID),
+		EnvironmentID: pgUUID(envID),
+		Name:          "credential-sibling",
+		Provider:      "",
+		Repo:          "https://git.internal/acme/demo.git",
+		CloneUrl:      "https://git.internal/acme/demo.git",
+		Branch:        "feat/x",
+		BuildPack:     "dockerfile",
+		SourceType:    "git_private",
+	})
+	if err != nil {
+		t.Fatalf("CreateApplication sibling: %v", err)
+	}
+	siblingID := uuid.UUID(sibling.ID.Bytes)
+	if err := repo.CopyGitCredential(ctx, appID, siblingID); err != nil {
+		t.Fatalf("CopyGitCredential: %v", err)
+	}
+	if _, token, err := repo.GitCredential(ctx, siblingID); err != nil || token != "s3cr3t-token" {
+		t.Errorf("sibling credential opens to %q, %v; want the token", token, err)
+	}
+	// Copying from an application without one is a silent success.
+	if err := repo.CopyGitCredential(ctx, uuid.New(), uuid.New()); err != nil {
+		t.Errorf("CopyGitCredential without a row: %v", err)
+	}
+
+	// Delete removes the row; repeating it answers NotFound.
+	if err := repo.DeleteGitCredential(ctx, appID); err != nil {
+		t.Fatalf("DeleteGitCredential: %v", err)
+	}
+	if err := repo.DeleteGitCredential(ctx, appID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second delete error = %v, want ErrNotFound", err)
 	}
 }

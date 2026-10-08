@@ -325,16 +325,32 @@ func withoutEnv(env []string, name string) []string {
 	return kept
 }
 
+// withoutEnvPrefix returns env with every entry whose name starts with the
+// prefix dropped. Git reads numbered GIT_CONFIG_* variables from the child
+// environment, so an inherited set must be removed before the askpass helper
+// installs exactly its own.
+func withoutEnvPrefix(env []string, prefix string) []string {
+	kept := make([]string, 0, len(env))
+	for _, entry := range env {
+		if name, _, ok := strings.Cut(entry, "="); ok && strings.HasPrefix(name, prefix) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
 // sshEnv returns env plus GIT_SSH_COMMAND: ssh offering only this key
 // (IdentitiesOnly), verifying against the pinned ephemeral known_hosts, and
 // refusing an unknown host key (StrictHostKeyChecking=yes) unless the explicit
 // dev flag re-enables accept-new — the control plane neither touches ~/.ssh nor
-// prompts during a clone.
+// prompts during a clone. -F /dev/null keeps the service user's ~/.ssh/config
+// (a ProxyCommand there would otherwise still apply) out of the clone.
 func (f *deployKeyFiles) sshEnv(env []string) []string {
 	// GlobalKnownHostsFile=/dev/null ignores the host-wide
 	// /etc/ssh/ssh_known_hosts and KnownHostsCommand, so the ephemeral pinned
 	// set (embedded + GOTHAM_KNOWN_HOSTS) is the only trust anchor.
-	command := "ssh -i " + shellQuote(f.keyPath) +
+	command := "ssh -F /dev/null -i " + shellQuote(f.keyPath) +
 		" -o IdentitiesOnly=yes" +
 		" -o UserKnownHostsFile=" + shellQuote(f.knownHostsPath) +
 		" -o GlobalKnownHostsFile=/dev/null" +
@@ -396,18 +412,41 @@ func devLocalClone() bool {
 // validateCloneURL rejects values git would refuse anyway, so the deploy log
 // reports a clear validation error instead of a raw git usage message. Local
 // paths and file:// URLs are only accepted when GOTHAM_DEV_CLONE_LOCAL=true;
-// production allows remote http(s)/ssh/git URLs and scp-like git@host:path.
+// production allows remote http(s)/ssh/git URLs and scp-like [user@]host:path
+// (the same SSH shape ValidatePrivateGitURL accepts, so a created private
+// source always stays deployable).
 func validateCloneURL(url string) error {
 	if url == "" {
 		return fmt.Errorf("%w: application has no clone URL", ErrValidation)
+	}
+	if err := rejectLeadingDash("clone URL", url); err != nil {
+		return err
 	}
 	switch {
 	case strings.Contains(url, "://"):
 		if !hasAllowedScheme(url) {
 			return fmt.Errorf("%w: unsupported clone URL scheme", ErrValidation)
 		}
+		if parsed, err := neturl.Parse(url); err == nil {
+			if err := rejectLeadingDash("host", parsed.Hostname()); err != nil {
+				return err
+			}
+			if user := parsed.User.Username(); user != "" {
+				if err := rejectLeadingDash("user", user); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
-	case strings.HasPrefix(url, "git@"):
+	case isSSHTransportURL(url):
+		if user, host := splitScpAuthority(url); user != "" || host != "" {
+			if err := rejectLeadingDash("user", user); err != nil {
+				return err
+			}
+			if err := rejectLeadingDash("host", host); err != nil {
+				return err
+			}
+		}
 		return nil
 	case strings.HasPrefix(url, "/"):
 		if !devLocalClone() {

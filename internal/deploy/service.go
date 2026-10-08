@@ -92,6 +92,9 @@ type DeployService interface {
 	// GetGitCredential reports whether an application's HTTPS credential is
 	// set and the username it carries. The token itself is never returned.
 	GetGitCredential(ctx context.Context, userID, appID uuid.UUID) (GitCredentialState, error)
+	// DeleteGitCredential removes an application's HTTPS credential; an
+	// application without one reports false.
+	DeleteGitCredential(ctx context.Context, userID, appID uuid.UUID) (bool, error)
 	// TestGitConnection probes an application's remote with git ls-remote
 	// and the stored credential, and classifies the outcome.
 	TestGitConnection(ctx context.Context, userID, appID uuid.UUID) (GitConnectionResult, error)
@@ -239,6 +242,10 @@ type Service struct {
 	// application: deployment submission, manual container control, an update
 	// that moves the application between nodes, and deletion.
 	locks appLocks
+	// probeMu and probeLast throttle the connection probe per caller and
+	// application (see probeAllowed).
+	probeMu   sync.Mutex
+	probeLast map[probeThrottleKey]time.Time
 }
 
 // appLocks holds one mutex per application so different applications proceed

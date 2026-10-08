@@ -331,6 +331,7 @@ type handler struct {
 //	DELETE /v1/applications/{id}/deploy-key
 //	PUT    /v1/applications/{id}/git-credential
 //	GET    /v1/applications/{id}/git-credential
+//	DELETE /v1/applications/{id}/git-credential
 //	POST   /v1/applications/{id}/test-connection
 //
 // auth wraps the group (the server passes its RequireAuth); a nil svc or
@@ -362,6 +363,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Delete("/v1/applications/{id}/deploy-key", h.deleteDeployKey)
 		protected.Put("/v1/applications/{id}/git-credential", h.putGitCredential)
 		protected.Get("/v1/applications/{id}/git-credential", h.getGitCredential)
+		protected.Delete("/v1/applications/{id}/git-credential", h.deleteGitCredential)
 		protected.Post("/v1/applications/{id}/test-connection", h.testConnection)
 	})
 }
@@ -817,6 +819,22 @@ func (h *handler) getGitCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, newGitCredentialResponse(state))
+}
+
+// deleteGitCredential serves DELETE .../git-credential: removes the stored
+// token so the application falls back to a deploy key or an anonymous clone.
+// An application without a credential answers 200 with deleted=false.
+func (h *handler) deleteGitCredential(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	deleted, err := h.svc.DeleteGitCredential(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deleteKeyEnvelope{Deleted: deleted})
 }
 
 // testConnection serves POST .../test-connection: probes the application's

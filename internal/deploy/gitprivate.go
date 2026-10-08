@@ -15,8 +15,8 @@ import (
 )
 
 // Private git sources (GS-4) deploy from a repository no provider connection
-// covers: an SSH URL (ssh:// or scp-like git@host:path) authenticated with a
-// per-application ed25519 deploy key the operator registers by hand, or an
+// covers: an SSH URL (ssh:// or scp-like [user@]host:path) authenticated with
+// a per-application ed25519 deploy key the operator registers by hand, or an
 // HTTPS URL authenticated with a stored token injected through an ephemeral
 // GIT_ASKPASS helper. The token and the private key never appear in API
 // responses, process arguments or logs.
@@ -25,8 +25,10 @@ import (
 // source may carry: ssh://, scp-like [user@]host:path and http(s) with a
 // host, and no embedded userinfo — a token-bearing URL is refused, because
 // credentials travel sealed (the HTTPS token) or as a deploy key, never in
-// the stored URL. Local paths and file:// URLs exist only for development
-// fixtures behind GOTHAM_DEV_CLONE_LOCAL.
+// the stored URL. A plain http:// URL stays valid for anonymous clones, but
+// it can never carry the stored token (tokens are injected over TLS only);
+// SetGitCredential refuses such applications. Local paths and file:// URLs
+// exist only for development fixtures behind GOTHAM_DEV_CLONE_LOCAL.
 func ValidatePrivateGitURL(raw string) error {
 	url := strings.TrimSpace(raw)
 	if url == "" {
@@ -35,9 +37,16 @@ func ValidatePrivateGitURL(raw string) error {
 	if hasURLWhitespace(url) {
 		return fmt.Errorf("%w: unsupported clone URL: must not contain whitespace", ErrValidation)
 	}
+	if err := rejectLeadingDash("clone URL", url); err != nil {
+		return err
+	}
 	if !strings.Contains(url, "://") {
 		if isSSHTransportURL(url) {
-			return nil
+			user, host := splitScpAuthority(url)
+			if err := rejectLeadingDash("user", user); err != nil {
+				return err
+			}
+			return rejectLeadingDash("host", host)
 		}
 		if strings.HasPrefix(url, "/") {
 			if devLocalClone() {
@@ -56,6 +65,9 @@ func ValidatePrivateGitURL(raw string) error {
 		if parsed.Hostname() == "" {
 			return fmt.Errorf("%w: clone URL has no host", ErrValidation)
 		}
+		if err := rejectLeadingDash("host", parsed.Hostname()); err != nil {
+			return err
+		}
 		if parsed.User != nil {
 			return fmt.Errorf("%w: clone URL must not embed credentials: store the token as the HTTPS credential instead", ErrValidation)
 		}
@@ -63,6 +75,14 @@ func ValidatePrivateGitURL(raw string) error {
 	case "ssh":
 		if parsed.Hostname() == "" {
 			return fmt.Errorf("%w: clone URL has no host", ErrValidation)
+		}
+		if err := rejectLeadingDash("host", parsed.Hostname()); err != nil {
+			return err
+		}
+		if user := parsed.User.Username(); user != "" {
+			if err := rejectLeadingDash("user", user); err != nil {
+				return err
+			}
 		}
 		if parsed.User != nil && strings.Contains(parsed.User.String(), ":") {
 			return fmt.Errorf("%w: clone URL must not embed credentials", ErrValidation)
@@ -78,18 +98,50 @@ func ValidatePrivateGitURL(raw string) error {
 	}
 }
 
-// isHTTPSURL reports whether raw is an http(s) clone URL (after trimming).
+// rejectLeadingDash refuses a URL part starting with "-": git and ssh would
+// parse it as a command-line flag (option injection). Both validators and
+// the probe share it, so creation, deploy and test agree.
+func rejectLeadingDash(what, value string) error {
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("%w: unsupported clone URL: %s must not start with '-'", ErrValidation, what)
+	}
+	return nil
+}
+
+// splitScpAuthority splits an scp-like [user@]host:path into its user and
+// host ("", "" when the value carries a scheme and is not scp-like).
+func splitScpAuthority(raw string) (user, host string) {
+	if strings.Contains(raw, "://") {
+		return "", ""
+	}
+	rest := raw
+	if at := strings.LastIndex(rest, "@"); at > 0 {
+		user = rest[:at]
+		rest = rest[at+1:]
+	}
+	host, _, _ = strings.Cut(rest, ":")
+	return user, host
+}
+
+// isHTTPSURL reports whether raw is an https clone URL (after trimming).
+// Only TLS counts: the stored token is injected solely over https, never
+// over cleartext http.
 func isHTTPSURL(raw string) bool {
 	scheme, _, ok := strings.Cut(strings.TrimSpace(raw), "://")
 	if !ok {
 		return false
 	}
-	switch strings.ToLower(scheme) {
-	case "http", "https":
-		return true
-	default:
+	return strings.EqualFold(scheme, "https")
+}
+
+// isPlainHTTPURL reports whether raw is a cleartext http clone URL. Such a
+// URL stays cloneable anonymously, but it can never carry the stored token.
+func isPlainHTTPURL(raw string) bool {
+	scheme, _, ok := strings.Cut(strings.TrimSpace(raw), "://")
+	if !ok {
 		return false
 	}
+	return strings.EqualFold(scheme, "http")
 }
 
 // privateGitHost extracts the remote host of a private-git clone URL for the
@@ -104,12 +156,8 @@ func privateGitHost(raw string) string {
 		return ""
 	}
 	// Scp-like [user@]host:path: the host sits between the last "@" and ":".
-	rest := url
-	if at := strings.LastIndex(rest, "@"); at >= 0 {
-		rest = rest[at+1:]
-	}
-	host, _, ok := strings.Cut(rest, ":")
-	if !ok || strings.Contains(host, "/") || host == "" {
+	_, host := splitScpAuthority(url)
+	if host == "" || strings.Contains(host, "/") || !strings.Contains(url, ":") {
 		return ""
 	}
 	return host
@@ -161,24 +209,41 @@ const maxGitTokenLength = 8192
 // askpassFiles is the per-operation materialisation of an HTTPS credential:
 // one 0700 shell script inside a fresh private directory, removed as soon as
 // the git command returns. The token lives only in that file — never in the
-// clone URL, process arguments, environment values or logs.
+// clone URL, process arguments, environment values or logs. The helper
+// answers only prompts naming the expected host and refuses everything else,
+// so a redirect to another host can never spend the token there.
 type askpassFiles struct {
 	dir        string
 	scriptPath string
 }
 
 // newAskpassFiles writes a GIT_ASKPASS helper that answers git's username
-// prompt with username (empty when the credential carries none) and every
-// other prompt with the token. WriteFile only applies its mode when it
-// creates the file; chmod keeps the guarantee explicit, mirroring the deploy
-// key materialisation.
-func newAskpassFiles(username, password string) (*askpassFiles, error) {
+// prompt with username (empty when the credential carries none) and the
+// password prompt with the token — but only when the prompt names allowHost
+// (the clone URL's bare hostname; ports match through the ":" alternative).
+// Any other prompt (a redirect to another host, an unexpected question)
+// exits nonzero, which fails the git command instead of leaking the
+// credential.
+func newAskpassFiles(username, password, allowHost string) (*askpassFiles, error) {
 	dir, err := os.MkdirTemp("", "gotham-git-askpass-*")
 	if err != nil {
 		return nil, fmt.Errorf("deploy: git credential workspace: %w", err)
 	}
-	script := "#!/bin/sh\ncase \"$1\" in\n*Username*) printf '%s' " + shellQuote(username) +
-		" ;;\n*) printf '%s' " + shellQuote(password) + " ;;\nesac\n"
+	// The host is matched after "//" (no userinfo) or "@" (with userinfo),
+	// and must be followed by "/", ":" or "'" — so a longer hostname sharing
+	// the prefix (host.evil.com) or a path smuggling the hostname never
+	// matches. The host stays double-quoted (glob characters in it match
+	// literally) while the surrounding * wildcards stay unquoted.
+	quoted := `"` + shellDoubleQuote(allowHost)
+	hostPattern := `*//` + quoted + `/"*` +
+		`|*//` + quoted + `:"*` +
+		`|*//` + quoted + `'"*` +
+		`|*@` + quoted + `/"*` +
+		`|*@` + quoted + `:"*` +
+		`|*@` + quoted + `'"*`
+	script := "#!/bin/sh\ncase \"$1\" in\n" + hostPattern + ") ;;\n*) exit 1 ;;\nesac\n" +
+		"case \"$1\" in\n\"Username for\"*) printf '%s' " + shellQuote(username) +
+		" ;;\n\"Password for\"*) printf '%s' " + shellQuote(password) + " ;;\n*) exit 1 ;;\nesac\n"
 	path := dir + "/askpass.sh"
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 		_ = os.RemoveAll(dir)
@@ -191,25 +256,36 @@ func newAskpassFiles(username, password string) (*askpassFiles, error) {
 	return &askpassFiles{dir: dir, scriptPath: path}, nil
 }
 
+// shellDoubleQuote embeds a value in a double-quoted shell word (a case
+// pattern fragment here), escaping the characters that stay special inside
+// double quotes. Glob characters need no escaping: quoted, they match
+// literally — which is exactly what a hostname must do.
+func shellDoubleQuote(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`").Replace(value)
+}
+
 // remove deletes the ephemeral helper and its directory.
 func (f *askpassFiles) remove() {
 	_ = os.RemoveAll(f.dir)
 }
 
 // askpassEnv returns env plus the credential injection: GIT_ASKPASS pointing
-// at the ephemeral helper, terminal prompts off, and the credential helpers
-// disabled via the environment (so a control-plane gitconfig can neither
-// override the helper nor prompt). The inherited GIT_ASKPASS and
-// GIT_SSH_COMMAND are dropped first — an HTTPS clone must never spend an
-// ambient SSH identity.
+// at the ephemeral helper, terminal prompts off, redirects refused (a remote
+// that answers 301 fails the command instead of moving the token to another
+// host), and the credential helpers disabled via the environment (so a
+// control-plane gitconfig can neither override the helper nor prompt). The
+// inherited GIT_ASKPASS and GIT_SSH_COMMAND are dropped first — an HTTPS
+// clone must never spend an ambient SSH identity.
 func (f *askpassFiles) askpassEnv(env []string) []string {
-	env = withoutEnv(withoutEnv(env, "GIT_SSH_COMMAND"), "GIT_ASKPASS")
+	env = withoutEnvPrefix(withoutEnv(withoutEnv(env, "GIT_SSH_COMMAND"), "GIT_ASKPASS"), "GIT_CONFIG_")
 	return append(env,
 		"GIT_ASKPASS="+f.scriptPath,
 		"GIT_TERMINAL_PROMPT=0",
-		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_COUNT=2",
 		"GIT_CONFIG_KEY_0=credential.helper",
 		"GIT_CONFIG_VALUE_0=",
+		"GIT_CONFIG_KEY_1=http.followRedirects",
+		"GIT_CONFIG_VALUE_1=false",
 	)
 }
 
@@ -241,7 +317,10 @@ func (s gitSource) cloneCredential(ctx context.Context, app Application, rawURL 
 			return "", nil, cleanup, "", credErr
 		}
 		if token != "" {
-			files, askErr := newAskpassFiles(username, token)
+			// A cleartext http URL can never carry the token (see
+			// isHTTPSURL): with no TLS the helper stays out and the URL
+			// falls through to the keyed or anonymous path below.
+			files, askErr := newAskpassFiles(username, token, privateGitHost(rawURL))
 			if askErr != nil {
 				return "", nil, cleanup, "", askErr
 			}
@@ -299,8 +378,12 @@ func (s *Service) SetGitCredential(ctx context.Context, userID, appID uuid.UUID,
 		return GitCredentialState{}, fmt.Errorf("%w: HTTPS credentials are only stored for %q sources", ErrValidation, SourceGitPrivate)
 	}
 	username = strings.TrimSpace(username)
-	if strings.TrimSpace(token) == "" {
+	token = strings.TrimSpace(token)
+	if token == "" {
 		return GitCredentialState{}, fmt.Errorf("%w: token is required", ErrValidation)
+	}
+	if isPlainHTTPURL(app.CloneURL) {
+		return GitCredentialState{}, fmt.Errorf("%w: token authentication needs an https clone URL", ErrValidation)
 	}
 	if len(token) > maxGitTokenLength {
 		return GitCredentialState{}, fmt.Errorf("%w: token is too long", ErrValidation)
@@ -321,6 +404,9 @@ func (s *Service) SetGitCredential(ctx context.Context, userID, appID uuid.UUID,
 // GetGitCredential reports whether an application's HTTPS credential is set
 // and the username it carries. The token itself is never returned.
 func (s *Service) GetGitCredential(ctx context.Context, userID, appID uuid.UUID) (GitCredentialState, error) {
+	if !Enabled() {
+		return GitCredentialState{}, ErrDisabled
+	}
 	if s == nil || s.repo == nil {
 		return GitCredentialState{}, errors.New("deploy: repository is not configured")
 	}
@@ -338,6 +424,30 @@ func (s *Service) GetGitCredential(ctx context.Context, userID, appID uuid.UUID)
 	return GitCredentialState{HasCredential: true, Username: cred.Username}, nil
 }
 
+// DeleteGitCredential removes an application's HTTPS credential (switching
+// back to a deploy key or an anonymous clone). It is idempotent: an
+// application without one reports false and no error. The token itself is
+// never returned on any path.
+func (s *Service) DeleteGitCredential(ctx context.Context, userID, appID uuid.UUID) (bool, error) {
+	if !Enabled() {
+		return false, ErrDisabled
+	}
+	if s == nil || s.repo == nil {
+		return false, errors.New("deploy: repository is not configured")
+	}
+	app, err := s.application(ctx, userID, appID, true)
+	if err != nil {
+		return false, err
+	}
+	if err := s.repo.DeleteGitCredential(ctx, app.ID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // GetDeployKey returns an application's deploy key for the detail page: the
 // public half, its fingerprint and the provider key ID. The private half is
 // sealed on the server and never appears here.
@@ -353,6 +463,34 @@ func (s *Service) GetDeployKey(ctx context.Context, userID, appID uuid.UUID) (De
 		return DeployKey{}, err
 	}
 	return s.repo.GetDeployKey(ctx, app.ID)
+}
+
+// gitProbeCooldown throttles the connection probe per user and application:
+// the probe runs git against an operator-supplied URL on the request path,
+// so a burst must not turn the control plane into a port-scan oracle. The
+// throttle is per process (a note, not a distributed limit): a throttled
+// call answers a failure outcome, never an error status.
+const gitProbeCooldown = 10 * time.Second
+
+// probeThrottleKey scopes one probe-throttle entry to the caller and the app.
+type probeThrottleKey struct {
+	userID uuid.UUID
+	appID  uuid.UUID
+}
+
+// probeAllowed records a probe and reports whether one may run now.
+func (s *Service) probeAllowed(userID, appID uuid.UUID) bool {
+	key := probeThrottleKey{userID: userID, appID: appID}
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	if s.probeLast == nil {
+		s.probeLast = make(map[probeThrottleKey]time.Time)
+	}
+	if last, ok := s.probeLast[key]; ok && time.Since(last) < gitProbeCooldown {
+		return false
+	}
+	s.probeLast[key] = time.Now()
+	return true
 }
 
 // TestGitConnection probes an application's remote with git ls-remote and
@@ -377,6 +515,14 @@ func (s *Service) TestGitConnection(ctx context.Context, userID, appID uuid.UUID
 	rawURL := strings.TrimSpace(app.CloneURL)
 	if err := ValidatePrivateGitURL(rawURL); err != nil {
 		return GitConnectionResult{}, err
+	}
+	// The probe runs git against an operator-supplied URL: throttle it per
+	// caller and application so it cannot serve as a rapid port-scan oracle.
+	if !s.probeAllowed(userID, app.ID) {
+		return GitConnectionResult{
+			Host:    privateGitHost(rawURL),
+			Message: "a connection test ran recently; wait a moment and retry",
+		}, nil
 	}
 	src := gitSource{keys: s.repo, creds: s.repo, logger: s.logger, run: s.testRunner()}
 	url, env, cleanup, _, err := src.cloneCredential(ctx, app, rawURL)

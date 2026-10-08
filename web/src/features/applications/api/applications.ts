@@ -568,6 +568,17 @@ export async function createDeployKey(appId: string): Promise<DeployKey> {
 }
 
 /**
+ * deleteDeployKey removes the application's deploy key (DELETE .../deploy-key
+ * → 200). An application without one answers deleted=false.
+ */
+export async function deleteDeployKey(appId: string): Promise<boolean> {
+  const response = await http.delete<{ deleted: boolean }>(
+    `/applications/${appId}/deploy-key`,
+  );
+  return response.data.deleted;
+}
+
+/**
  * GitCredentialState is an application's HTTPS credential as the API sees
  * it: whether a token is set and the username it carries. The token itself
  * is never returned.
@@ -605,6 +616,18 @@ export async function setGitCredential(
     { username, token },
   );
   return response.data;
+}
+
+/**
+ * deleteGitCredential removes an application's HTTPS token
+ * (DELETE .../git-credential → 200). An application without one answers
+ * deleted=false.
+ */
+export async function deleteGitCredential(appId: string): Promise<boolean> {
+  const response = await http.delete<{ deleted: boolean }>(
+    `/applications/${appId}/git-credential`,
+  );
+  return response.data.deleted;
 }
 
 /**

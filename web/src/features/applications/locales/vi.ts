@@ -379,12 +379,16 @@ const vi: ApplicationsMessages = {
     credSet: "Đã lưu token HTTPS.",
     credSetUser: "Đã lưu token HTTPS cho {username}.",
     credUnset: "Chưa lưu token HTTPS.",
-    keyFailed:
-      "Ứng dụng đã được tạo, nhưng không tạo được deploy key: {error}",
+    removeKey: "Gỡ deploy key",
+    removeToken: "Gỡ token",
     credentialFailed:
       "Ứng dụng đã được tạo, nhưng không lưu được thông tin HTTPS: {error}",
     test: "Kiểm tra kết nối",
     connected: "Kết nối thành công.",
+    probedHost: "Máy chủ: {host}",
+    createdKey: "Đã tạo ứng dụng {name} — hãy đăng ký khóa bên dưới, rồi triển khai.",
+    confirmKey: "Tôi đã thêm khóa công khai làm read-only deploy key trên kho mã.",
+    deployNow: "Triển khai ngay",
   },
   detail: {
     controlInProgress: "Đợt triển khai đang chạy. Hãy chờ hoàn tất.",

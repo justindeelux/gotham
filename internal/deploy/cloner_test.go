@@ -35,11 +35,15 @@ func TestValidateCloneURL(t *testing.T) {
 		{"ssh", "ssh://git@git.internal/acme/demo.git", true},
 		{"ssh with port", "ssh://git@git.internal:2222/acme/demo.git", true},
 		{"scp-like", "git@git.internal:acme/demo.git", true},
+		{"scp-like with non-git user", "deploy@git.internal:acme/demo.git", true},
 		{"local path", "/srv/fixtures/demo", false},
 		{"file URL", "file:///srv/fixtures/demo", false},
 		{"empty", "", false},
 		{"unknown scheme", "ftp://example.com/demo.git", false},
 		{"option injection", "--upload-pack=touch /tmp/pwn", false},
+		{"leading dash URL", "-oProxyCommand=touch@h:p", false},
+		{"dash scp host", "git@-internal:acme/demo.git", false},
+		{"dash ssh host", "ssh://-internal/acme/demo.git", false},
 		{"bare name", "demo", false},
 	}
 	for _, tc := range cases {
@@ -257,7 +261,7 @@ func TestGitSourceCloneWithDeployKey(t *testing.T) {
 			command = strings.TrimPrefix(entry, "GIT_SSH_COMMAND=")
 		}
 	}
-	for _, option := range []string{"-i '", "IdentitiesOnly=yes", "StrictHostKeyChecking=yes", "UserKnownHostsFile="} {
+	for _, option := range []string{"-F /dev/null", "-i '", "IdentitiesOnly=yes", "StrictHostKeyChecking=yes", "UserKnownHostsFile="} {
 		if !strings.Contains(command, option) {
 			t.Errorf("GIT_SSH_COMMAND = %q, want it to contain %q", command, option)
 		}

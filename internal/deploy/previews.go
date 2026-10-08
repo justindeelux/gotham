@@ -114,6 +114,7 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 		return Application{}, err
 	}
 	s.copyDeployKey(ctx, base, created)
+	s.copyGitCredential(ctx, base, created)
 	s.cloneWildcardCertificate(ctx, base, created)
 	return created, nil
 }
@@ -210,6 +211,20 @@ func (s *Service) copyDeployKey(ctx context.Context, base, preview Application) 
 		PublicKey:     key.PublicKey,
 	}, privatePEM); err != nil {
 		s.logger.Warn("deploy: could not copy the deploy key to a preview",
+			"application_id", preview.ID, "error", err)
+	}
+}
+
+// copyGitCredential copies the base application's sealed HTTPS credential
+// onto the preview sibling, so a token-authenticated private source stays
+// cloneable exactly like a key-authenticated one. Best effort like
+// copyDeployKey: a failure is logged, the sibling still stands, and a
+// private clone reports the failure on its deployment row. The copy carries
+// the sealed ciphertext (the plaintext never leaves the store); the
+// applications FK cascade removes it with the sibling.
+func (s *Service) copyGitCredential(ctx context.Context, base, preview Application) {
+	if err := s.repo.CopyGitCredential(ctx, base.ID, preview.ID); err != nil {
+		s.logger.Warn("deploy: could not copy the git credential to a preview",
 			"application_id", preview.ID, "error", err)
 	}
 }

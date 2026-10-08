@@ -15,8 +15,10 @@ vi.mock("@/features/applications/api/applications", async (importOriginal) => {
     ...mod,
     getDeployKey: vi.fn(),
     createDeployKey: vi.fn(),
+    deleteDeployKey: vi.fn(),
     getGitCredential: vi.fn(),
     setGitCredential: vi.fn(),
+    deleteGitCredential: vi.fn(),
     testConnection: vi.fn(),
   };
 });
@@ -27,6 +29,8 @@ vi.mock("@/shared/composables/useCopyText", () => ({
 
 import {
   createDeployKey,
+  deleteDeployKey,
+  deleteGitCredential,
   getDeployKey,
   getGitCredential,
   setGitCredential,
@@ -42,8 +46,10 @@ import {
 
 const mockGetKey = vi.mocked(getDeployKey);
 const mockCreateKey = vi.mocked(createDeployKey);
+const mockDeleteKey = vi.mocked(deleteDeployKey);
 const mockGetCred = vi.mocked(getGitCredential);
 const mockSetCred = vi.mocked(setGitCredential);
+const mockDeleteCred = vi.mocked(deleteGitCredential);
 const mockProbe = vi.mocked(testConnection);
 
 function testKey() {
@@ -137,10 +143,36 @@ describe("GitPrivateSourcePanel", () => {
     await flushPromises();
     await nextTick();
     expect(wrapper.text()).toContain("Connection succeeded.");
+    expect(wrapper.text()).toContain("h");
     await test!.trigger("click");
     await flushPromises();
     await nextTick();
     expect(wrapper.text()).toContain("git ls-remote failed (auth)");
+    wrapper.unmount();
+  });
+
+  it("removes the key and the token", async () => {
+    mockDeleteKey.mockResolvedValue(true);
+    mockDeleteCred.mockResolvedValue(true);
+    mockGetCred.mockResolvedValue({ has_credential: true, username: "bob" });
+    const wrapper = await mounted();
+    const buttons = wrapper.findAll("button");
+    const removeKey = buttons.find((button) => button.text().includes("Remove deploy key"));
+    expect(removeKey).toBeDefined();
+    await removeKey!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(mockDeleteKey).toHaveBeenCalledWith("app1");
+    expect(wrapper.text()).toContain("Generate deploy key");
+    const removeToken = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Remove token"));
+    expect(removeToken).toBeDefined();
+    await removeToken!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(mockDeleteCred).toHaveBeenCalledWith("app1");
+    expect(wrapper.text()).toContain("No HTTPS token saved.");
     wrapper.unmount();
   });
 });

@@ -349,8 +349,10 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 	// Cascade the deploy-key mapping only: private_keys has no application FK
 	// (application_deploy_keys.private_key_id points at it), so the sealed
 	// row survives a bare application delete — the paths that must remove it
-	// call DeleteDeployKey explicitly.
+	// call DeleteDeployKey explicitly. The git credential row cascades with
+	// the application (its FK carries ON DELETE CASCADE).
 	delete(r.deployKeys, appID)
+	delete(r.gitCreds, appID)
 	certificates := make([]CertificateIntent, 0, len(r.certificates))
 	for _, cert := range r.certificates {
 		if cert.ApplicationID != appID {
@@ -906,6 +908,34 @@ func (r *fakeRepository) GitCredential(_ context.Context, appID uuid.UUID) (stri
 		return "", "", err
 	}
 	return stored.username, token, nil
+}
+
+// DeleteGitCredential implements Repository, answering ErrNotFound when none
+// is set so the service can report the idempotent outcome honestly.
+func (r *fakeRepository) DeleteGitCredential(_ context.Context, appID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.gitCreds[appID]; !ok {
+		return ErrNotFound
+	}
+	delete(r.gitCreds, appID)
+	return nil
+}
+
+// CopyGitCredential implements Repository: the preview sibling inherits the
+// sealed row as is.
+func (r *fakeRepository) CopyGitCredential(_ context.Context, baseID, previewID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.gitCreds[baseID]
+	if !ok {
+		return nil
+	}
+	if r.gitCreds == nil {
+		r.gitCreds = make(map[uuid.UUID]fakeGitCredential)
+	}
+	r.gitCreds[previewID] = stored
+	return nil
 }
 
 // GetCertificateIntent implements Repository.

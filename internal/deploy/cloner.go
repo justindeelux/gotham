@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/githubapp"
 )
 
 // Source prepares the build tree for a deployment: it checks the
@@ -82,19 +85,23 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	if err := validateCloneURL(url); err != nil {
 		return err
 	}
-	if app.SourceType == SourceGitHubApp {
-		// A github_app application clones with a fresh installation token
-		// for the installation granting its repo: the deploy-key path below
-		// does not apply (there is no SSH key on this flow) and an anonymous
-		// fallback would turn a revoked grant into a confusing auth error
-		// from the Git host. The token authenticates this attempt only: it
-		// is never stored on the application and never logged (see
-		// RedactCloneURL).
-		if s.appTokens == nil {
-			return fmt.Errorf("%w: github app token resolver is not configured", ErrValidation)
-		}
-		var err error
-		if url, err = s.appTokens.TokenCloneURL(ctx, app.UserID, app.Repo, url); err != nil {
+	// tokenClone marks the installation-token path for the log line: the
+	// token itself never appears (see RedactCloneURL).
+	tokenClone := false
+	if app.SourceType == SourceGitHubApp && s.appTokens != nil {
+		// A github_app application backed by a GitHub App connection clones
+		// with a fresh installation token for the installation granting its
+		// repo. Legacy provider=github applications (OAuth flow, deploy
+		// keys, local fixtures) hold no grant: the resolver reports
+		// ErrNoInstallationGrant and the clone keeps the previous
+		// deploy-key/anonymous behaviour. Any other token failure (host
+		// mismatch, mint failure) fails the clone instead of silently
+		// cloning anonymously. Without a resolver there is nothing to mint
+		// with, so the legacy path applies too.
+		if tokenURL, err := s.appTokens.TokenCloneURL(ctx, app.UserID, app.Repo, url); err == nil {
+			url = tokenURL
+			tokenClone = true
+		} else if !errors.Is(err, githubapp.ErrNoInstallationGrant) {
 			return err
 		}
 	}
@@ -165,7 +172,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 
 	if log != nil {
 		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, RedactCloneURL(url))
-		if app.SourceType == SourceGitHubApp {
+		if tokenClone {
 			line += " (using a fresh installation token)"
 		} else if privatePEM != "" {
 			line += " (using the application deploy key)"
@@ -384,21 +391,6 @@ func validateCloneURL(url string) error {
 }
 
 // hasAllowedScheme reports whether the URL uses a scheme git can clone from.
-// isHTTPSCloneURL reports whether raw is an http(s) URL: the only shape the
-// installation-token cloner accepts for github_app sources.
-func isHTTPSCloneURL(raw string) bool {
-	scheme, _, ok := strings.Cut(strings.TrimSpace(raw), "://")
-	if !ok {
-		return false
-	}
-	switch strings.ToLower(scheme) {
-	case "http", "https":
-		return true
-	default:
-		return false
-	}
-}
-
 func hasAllowedScheme(url string) bool {
 	scheme, _, ok := strings.Cut(url, "://")
 	if !ok {

@@ -944,10 +944,12 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 		}
 	})
 
-	// A github_app application with an SSH clone URL is a 400: the
-	// installation-token cloner only accepts http(s), so the failure must
-	// surface at create time, not as a failed deploy.
-	t.Run("github app with ssh clone url is rejected", func(t *testing.T) {
+	// A github_app application keeps the legacy validation: provider=github
+	// applications predate GitHub App connections (OAuth flow, deploy keys),
+	// so any clone URL the cloner supports stays creatable. The token path
+	// applies at clone time only when an installation actually grants the
+	// repo.
+	t.Run("github app keeps ssh clone urls", func(t *testing.T) {
 		userID := uuid.New()
 		svc := newTestService(t, &fakeRepository{})
 		srv := newRouteServer(svc, alwaysUser(userID))
@@ -956,8 +958,8 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
 			strings.NewReader(body(SourceGitHubApp, "github", "acme/demo", "git@github.com:acme/demo.git"))))
 
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 		}
 	})
 }

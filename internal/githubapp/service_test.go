@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -659,9 +660,9 @@ func TestTokenCloneURLResolvesGrant(t *testing.T) {
 	if _, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://evil.example/acme/web.git"); err == nil {
 		t.Fatal("foreign-host clone url was accepted")
 	}
-	// An ungranted repo fails closed.
-	if _, err := svc.TokenCloneURL(ctx, userID, "acme/unknown", "https://github.com/acme/unknown.git"); err == nil {
-		t.Fatal("ungranted repo was accepted")
+	// An ungranted repo fails with the sentinel the cloner falls back on.
+	if _, err := svc.TokenCloneURL(ctx, userID, "acme/unknown", "https://github.com/acme/unknown.git"); !errors.Is(err, ErrNoInstallationGrant) {
+		t.Fatalf("ungranted repo err = %v, want ErrNoInstallationGrant", err)
 	}
 }
 

@@ -873,17 +873,7 @@ func validateSource(app Application) error {
 		}
 		return ValidatePublicGitURL(app.CloneURL)
 	case SourceGitHubApp:
-		if err := validateProviderSource(app, "github"); err != nil {
-			return err
-		}
-		// The installation token is injected at clone time and only works
-		// over http(s): an SSH clone URL would fail the deploy, so it fails
-		// at create time instead.
-		if !isHTTPSCloneURL(app.CloneURL) {
-			return fmt.Errorf("%w: github_app needs an http(s) clone URL for the installation token",
-				ErrValidation)
-		}
-		return nil
+		return validateProviderSource(app, "github")
 	case SourceGitLabApp:
 		return validateProviderSource(app, "gitlab")
 	case SourceGitPrivate, SourceDockerfile, SourceCompose, SourceImage:

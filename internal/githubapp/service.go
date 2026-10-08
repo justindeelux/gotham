@@ -574,7 +574,7 @@ func (s *Service) installationGrantingRepo(ctx context.Context, userID uuid.UUID
 			return app, inst, nil
 		}
 	}
-	return GitHubApp{}, Installation{}, fmt.Errorf("%w: no installation grants %q", ErrValidation, repo)
+	return GitHubApp{}, Installation{}, fmt.Errorf("%w: %q", ErrNoInstallationGrant, repo)
 }
 
 // cachedRepos returns the merged repo caches of all installations, refreshing

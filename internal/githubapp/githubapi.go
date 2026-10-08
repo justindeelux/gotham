@@ -51,6 +51,9 @@ type InstallationToken struct {
 type GitHubAPI interface {
 	// ExchangeManifest converts a manifest code into the app credentials.
 	ExchangeManifest(ctx context.Context, code string) (ManifestConversion, error)
+	// GetInstallation verifies an installation belongs to the app and returns
+	// the account login. It authenticates with the app JWT.
+	GetInstallation(ctx context.Context, installationID int64, jwt string) (InstallationInfo, error)
 	// CreateInstallationToken mints a short-lived token for an installation,
 	// authenticated with the app JWT.
 	CreateInstallationToken(ctx context.Context, installationID int64, jwt string) (InstallationToken, error)
@@ -58,6 +61,14 @@ type GitHubAPI interface {
 	ListInstallationRepos(ctx context.Context, token string) ([]Repo, error)
 	// ListBranches lists the branches of repo ("owner/name").
 	ListBranches(ctx context.Context, token, repo string) ([]Branch, error)
+}
+
+// InstallationInfo is what GET /app/installations/{id} proves: the
+// installation exists, belongs to this app, and names the account.
+type InstallationInfo struct {
+	ID      int64
+	Account string
+	AppID   int64
 }
 
 // httpAPI implements GitHubAPI against one API base URL
@@ -69,14 +80,28 @@ type httpAPI struct {
 }
 
 // NewHTTPAPI builds the production GitHubAPI for apiBase. allowUnsafe permits
-// the loopback hosts tests use; production leaves it false.
+// the loopback hosts tests use; production leaves it false, and then every
+// connection is dial-guarded to public IPs (see net.go).
 func NewHTTPAPI(apiBase string, allowUnsafe bool) GitHubAPI {
 	apiBase = strings.TrimRight(strings.TrimSpace(apiBase), "/")
 	return &httpAPI{
-		apiBase:     apiBase,
-		client:      &http.Client{Timeout: 15 * time.Second},
+		apiBase: apiBase,
+		client: &http.Client{
+			Timeout:       15 * time.Second,
+			CheckRedirect: noRedirect,
+			Transport: &http.Transport{
+				DialContext:         guardedDialer(allowUnsafe),
+				TLSHandshakeTimeout: 10 * time.Second,
+			},
+		},
 		allowUnsafe: allowUnsafe,
 	}
+}
+
+// noRedirect refuses redirects: the GitHub API answers directly, and a
+// redirect to an attacker host must never be followed with credentials.
+func noRedirect(_ *http.Request, _ []*http.Request) error {
+	return errRedirect
 }
 
 func (a *httpAPI) ExchangeManifest(ctx context.Context, code string) (ManifestConversion, error) {
@@ -110,6 +135,35 @@ func (a *httpAPI) ExchangeManifest(ctx context.Context, code string) (ManifestCo
 	}, nil
 }
 
+// GetInstallation verifies the installation belongs to the app: GitHub only
+// answers when the JWT's app owns the installation, so a recorded id is
+// proof, not a claim. The manifest code never appears in errors (see
+// redactCode): the installation id is not sensitive.
+func (a *httpAPI) GetInstallation(ctx context.Context, installationID int64, jwt string) (InstallationInfo, error) {
+	if installationID <= 0 {
+		return InstallationInfo{}, fmt.Errorf("%w: installation id is required", ErrValidation)
+	}
+	endpoint := fmt.Sprintf("%s/app/installations/%d", a.apiBase, installationID)
+	var out struct {
+		ID      int64 `json:"id"`
+		Account *struct {
+			Login string `json:"login"`
+		} `json:"account"`
+		AppID int64 `json:"app_id"`
+	}
+	if err := a.getWithAuth(ctx, endpoint, jwt, &out); err != nil {
+		return InstallationInfo{}, err
+	}
+	if out.ID != installationID {
+		return InstallationInfo{}, fmt.Errorf("%w: github returned another installation", ErrValidation)
+	}
+	info := InstallationInfo{ID: out.ID, AppID: out.AppID}
+	if out.Account != nil {
+		info.Account = out.Account.Login
+	}
+	return info, nil
+}
+
 func (a *httpAPI) CreateInstallationToken(ctx context.Context, installationID int64, jwt string) (InstallationToken, error) {
 	if installationID <= 0 {
 		return InstallationToken{}, fmt.Errorf("%w: installation id is required", ErrValidation)
@@ -129,7 +183,6 @@ func (a *httpAPI) CreateInstallationToken(ctx context.Context, installationID in
 	if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(out.ExpiresAt)); err == nil {
 		expiresAt = parsed
 	}
-	_ = jwt
 	return InstallationToken{Token: out.Token, ExpiresAt: expiresAt}, nil
 }
 
@@ -209,13 +262,19 @@ func (a *httpAPI) postWithAuth(ctx context.Context, endpoint, jwt string, out an
 }
 
 func (a *httpAPI) get(ctx context.Context, endpoint, token string, out any) error {
+	return a.getWithAuth(ctx, endpoint, token, out)
+}
+
+// getWithAuth issues a GET, authenticating with a bearer token or app JWT.
+// The credential is never part of the error text.
+func (a *httpAPI) getWithAuth(ctx context.Context, endpoint, credential string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if credential != "" {
+		req.Header.Set("Authorization", "Bearer "+credential)
 	}
 	return a.do(req, out)
 }
@@ -228,7 +287,7 @@ func (a *httpAPI) do(req *http.Request, out any) error {
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("githubapp: request %s: %w", req.URL.Path, err)
+		return fmt.Errorf("githubapp: request %s: %w", redactCode(req.URL.Path), err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -236,13 +295,20 @@ func (a *httpAPI) do(req *http.Request, out any) error {
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("githubapp: request %s: unexpected status %d", req.URL.Path, resp.StatusCode)
+		return fmt.Errorf("githubapp: request %s: unexpected status %d", redactCode(req.URL.Path), resp.StatusCode)
 	}
 	if out == nil {
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("githubapp: decode %s: %w", req.URL.Path, err)
+		return fmt.Errorf("githubapp: decode %s: %w", redactCode(req.URL.Path), err)
 	}
 	return nil
+}
+
+// redactCode hides the manifest conversion code in request paths: the code is
+// a single-use credential, so it must never reach logs through a wrapped
+// url.Error. Every other path passes through unchanged.
+func redactCode(path string) string {
+	return manifestCodePattern.ReplaceAllString(path, "/app-manifests/[redacted]/conversions")
 }

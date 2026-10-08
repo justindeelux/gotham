@@ -30,6 +30,12 @@ func (s *Store) DeleteGitHubApp(ctx context.Context, params sqlc.DeleteGitHubApp
 	return s.queries.DeleteGitHubApp(ctx, params)
 }
 
+// GetGitHubAppByID returns one GitHub App without a user scope, for webhook
+// handling where the signature is the authentication.
+func (s *Store) GetGitHubAppByID(ctx context.Context, id pgtype.UUID) (sqlc.GithubApp, error) {
+	return s.queries.GetGitHubAppByID(ctx, id)
+}
+
 // UpsertGitHubInstallation records an installation of a GitHub App.
 func (s *Store) UpsertGitHubInstallation(ctx context.Context, params sqlc.UpsertGitHubInstallationParams) (sqlc.GithubInstallation, error) {
 	return s.queries.UpsertGitHubInstallation(ctx, params)
@@ -68,7 +74,50 @@ func (s *Store) DeleteGitHubRepoCache(ctx context.Context, params sqlc.DeleteGit
 }
 
 // CountGitHubAppApplications counts the caller's applications on the
-// github_app source, so disconnect can warn when credentials are in use.
+// github_app source.
 func (s *Store) CountGitHubAppApplications(ctx context.Context, userID pgtype.UUID) (int64, error) {
 	return s.queries.CountGitHubAppApplications(ctx, userID)
+}
+
+// CountGitHubAppApplicationsForApp counts the caller's github_app
+// applications whose repo is granted to one connection's installations.
+func (s *Store) CountGitHubAppApplicationsForApp(ctx context.Context, params sqlc.CountGitHubAppApplicationsForAppParams) (int64, error) {
+	return s.queries.CountGitHubAppApplicationsForApp(ctx, params)
+}
+
+// ListGitHubAppPushTargets returns the github_app applications of one owner
+// watching a repository, for webhook push routing.
+func (s *Store) ListGitHubAppPushTargets(ctx context.Context, params sqlc.ListGitHubAppPushTargetsParams) ([]sqlc.ListGitHubAppPushTargetsRow, error) {
+	return s.queries.ListGitHubAppPushTargets(ctx, params)
+}
+
+// ReplaceGitHubRepoCache atomically replaces an installation's cached
+// repositories: it locks the parent app row, deletes the old list and inserts
+// the new one in one transaction, so repos revoked upstream disappear instead
+// of lingering, and a partial failure keeps the previous complete list.
+func (s *Store) ReplaceGitHubRepoCache(ctx context.Context, appID pgtype.UUID, installationID int64, repos []sqlc.UpsertGitHubRepoCacheParams) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var locked pgtype.UUID
+	if err := tx.QueryRow(ctx, "SELECT id FROM github_apps WHERE id = $1 FOR UPDATE", appID).Scan(&locked); err != nil {
+		return err
+	}
+
+	queries := s.queries.WithTx(tx)
+	if err := queries.DeleteGitHubRepoCache(ctx, sqlc.DeleteGitHubRepoCacheParams{
+		GithubAppID:    appID,
+		InstallationID: installationID,
+	}); err != nil {
+		return err
+	}
+	for _, repo := range repos {
+		if _, err := queries.UpsertGitHubRepoCache(ctx, repo); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }

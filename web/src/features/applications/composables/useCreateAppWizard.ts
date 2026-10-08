@@ -277,24 +277,18 @@ export function useCreateAppWizard(
     }));
   });
 
-  /** branchOptions lists the installation branches of the selected repo. */
-  const branchOptions = computed<Array<{ label: string; value: string }>>(() =>
-    githubAppStore.branchesOf(form.providerId, form.repoFullName).map((branch) => ({
-      label: `${branch.name}${branch.protected ? tr("applications.wizard.protectedSuffix") : ""}`,
-      value: branch.name,
-    })),
-  );
-
-  /** branchOptions lists the branches of the selected provider repository, so
-   * the Source step offers them instead of free text once loaded. */
+  /** branchOptions lists the branches of the selected repository: the
+   * installation branches for the GitHub App flow, the provider branches
+   * otherwise. */
   const branchOptions = computed<Array<{ label: string; value: string }>>(() => {
     const suffix = tr("applications.wizard.protectedSuffix");
-    return providersStore
-      .branchesOf(form.providerId, form.repoFullName)
-      .map((branch) => ({
-        label: branch.protected ? `${branch.name}${suffix}` : branch.name,
-        value: branch.name,
-      }));
+    const branches = isGitHubAppFlow.value
+      ? githubAppStore.branchesOf(form.providerId, form.repoFullName)
+      : providersStore.branchesOf(form.providerId, form.repoFullName);
+    return branches.map((branch) => ({
+      label: branch.protected ? `${branch.name}${suffix}` : branch.name,
+      value: branch.name,
+    }));
   });
 
   const serverOptions = computed<Array<{ label: string; value: string }>>(() =>
@@ -640,7 +634,7 @@ export function useCreateAppWizard(
     // The provider store is a singleton: a stale repo error must not survive
     // into the next wizard with a Retry that no longer applies.
     providersStore.reposError = null;
-    githubAppStore.reposError = null;
+    githubAppStore.clearErrors();
     providersStore.reposErrorRaw = null;
   }
 

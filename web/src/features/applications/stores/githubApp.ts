@@ -109,6 +109,17 @@ export const useGitHubAppStore = defineStore("github-app", () => {
   }
 
   /**
+   * clearErrors drops the retained failure banners and their raw errors, so
+   * a later language change cannot resurrect a stale banner.
+   */
+  function clearErrors(): void {
+    error.value = null;
+    reposError.value = null;
+    errorRaw.value = null;
+    reposErrorRaw.value = null;
+  }
+
+  /**
    * reset drops the cached apps and repos, so the next sign-in never sees
    * the previous account's data. Called on sign-out (see the auth store).
    */
@@ -141,6 +152,7 @@ export const useGitHubAppStore = defineStore("github-app", () => {
     branchesOf,
     connectedApps,
     disconnect,
+    clearErrors,
     reset,
   };
 });

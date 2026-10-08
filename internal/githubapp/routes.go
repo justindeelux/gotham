@@ -124,29 +124,32 @@ type handler struct {
 	logger *slog.Logger
 }
 
-// Mount registers the authenticated GitHub App endpoints on r:
+// Mount registers the GitHub App endpoints on r:
 //
-//	POST   /v1/providers/github-app/manifest
-//	POST   /v1/providers/github-app/callback   (GET also serves the browser redirect)
-//	GET    /v1/providers/github-app
-//	GET    /v1/providers/github-app/{id}/install
-//	POST   /v1/providers/github-app/{id}/installations
-//	GET    /v1/providers/github-app/{id}/repos
-//	GET    /v1/providers/github-app/{id}/repos/{owner}/{repo}/branches
-//	DELETE /v1/providers/github-app/{id}
+//	GET    /v1/providers/github-app/callback   (public browser landing: the
+//	                                            state identifies the user, and
+//	                                            it finishes with a redirect
+//	                                            to the SPA result route)
+//	POST   /v1/providers/github-app/manifest    (authenticated)
+//	POST   /v1/providers/github-app/callback   (authenticated, SPA-driven)
+//	... the rest authenticated ...
 //
-// auth wraps the group with the server's scope boundary. A nil svc mounts
-// nothing, so the control plane can call Mount unconditionally.
+// auth wraps the authenticated group with the server's scope boundary. A nil
+// svc mounts nothing, so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc *Service) {
 	if svc == nil {
 		return
 	}
 	h := &handler{svc: svc, userID: userID, logger: slog.Default()}
+	// The manifest browser redirect lands here as a plain navigation (no
+	// bearer header): the single-use, expiring, user-bound state parameter
+	// is the identity, and the handler finishes with a redirect to the SPA
+	// result route, never JSON.
+	r.Get("/v1/providers/github-app/callback", h.callbackGet)
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Post("/v1/providers/github-app/manifest", h.manifest)
 		protected.Post("/v1/providers/github-app/callback", h.callbackPost)
-		protected.Get("/v1/providers/github-app/callback", h.callbackGet)
 		protected.Get("/v1/providers/github-app", h.list)
 		protected.Get("/v1/providers/github-app/{id}/install", h.install)
 		protected.Post("/v1/providers/github-app/{id}/installations", h.recordInstallation)
@@ -186,7 +189,7 @@ func (h *handler) callbackPost(w http.ResponseWriter, r *http.Request) {
 	if !h.decodeJSON(w, r, &req) {
 		return
 	}
-	app, err := h.svc.Callback(r.Context(), userID, req.Code, req.State, "")
+	app, err := h.svc.Callback(r.Context(), userID, req.Code, req.State)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -194,21 +197,56 @@ func (h *handler) callbackPost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, newAppResponse(app))
 }
 
-// callbackGet serves GET .../callback: the browser landing of the manifest
-// redirect (GitHub appends ?code=...&state=...). On success it redirects to
-// the applications page; failures render a JSON error.
+// callbackResult is the bounded set of outcome flags the browser callback
+// redirects with. Raw error text never reaches the query string.
+type callbackResult string
+
+const (
+	callbackConnected callbackResult = "connected"
+	callbackFailed    callbackResult = "failed"
+	callbackExpired   callbackResult = "expired"
+)
+
+// callbackGet serves GET .../callback without authentication: the browser
+// landing of the manifest redirect (GitHub appends ?code=...&state=...).
+// Identity comes from the state alone: it is single-use, expires, and is
+// bound to the user that started the manifest flow. Success and failure both
+// finish with a redirect to the SPA result route carrying a bounded flag.
 func (h *handler) callbackGet(w http.ResponseWriter, r *http.Request) {
-	userID, ok := h.currentUser(w, r)
+	// The state identifies the user, so no bearer token is needed — but the
+	// userID accessor still resolves the owner from it. A missing state can
+	// name nobody and fails closed to the expired flag.
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	userID, ok := h.stateUser(r.Context(), state)
 	if !ok {
+		h.redirectResult(w, r, "", callbackExpired)
 		return
 	}
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
-	state := strings.TrimSpace(r.URL.Query().Get("state"))
-	if _, err := h.svc.Callback(r.Context(), userID, code, state, ""); err != nil {
-		h.writeServiceError(w, err)
+	app, err := h.svc.Callback(r.Context(), userID, code, state)
+	if err != nil {
+		h.redirectResult(w, r, "", callbackResultFor(err))
 		return
 	}
-	http.Redirect(w, r, "/applications?github_app_connected=1", http.StatusFound)
+	h.redirectResult(w, r, app.ID.String(), callbackConnected)
+}
+
+// redirectResult finishes the browser callback with a redirect to the SPA
+// result route. Only the bounded flag and the new app id cross into the URL.
+func (h *handler) redirectResult(w http.ResponseWriter, r *http.Request, appID string, result callbackResult) {
+	target := "/applications/github-app/callback?github_app=" + string(result)
+	if appID != "" {
+		target += "&id=" + appID
+	}
+	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// callbackResultFor maps a callback failure to its bounded redirect flag.
+func callbackResultFor(err error) callbackResult {
+	if errors.Is(err, ErrValidation) {
+		return callbackExpired
+	}
+	return callbackFailed
 }
 
 // list serves GET .../github-app.
@@ -346,6 +384,16 @@ func (h *handler) disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, disconnectResponse{Deleted: true, ApplicationsUsing: using})
+}
+
+// stateUser resolves the owner of a pending manifest state without consuming
+// it, answering false when the state is missing, expired or of another kind.
+func (h *handler) stateUser(ctx context.Context, state string) (uuid.UUID, bool) {
+	if h.svc == nil || strings.TrimSpace(state) == "" {
+		return uuid.Nil, false
+	}
+	_ = ctx
+	return h.svc.StateOwner(state)
 }
 
 // appID parses the {id} path parameter, answering 400 when it is not a UUID.

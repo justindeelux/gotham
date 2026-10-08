@@ -9,6 +9,9 @@ RETURNING *;
 -- name: GetGitHubAppByIDAndUser :one
 SELECT * FROM github_apps WHERE id = $1 AND user_id = $2;
 
+-- name: GetGitHubAppByID :one
+SELECT * FROM github_apps WHERE id = $1;
+
 -- name: ListGitHubAppsByUser :many
 SELECT * FROM github_apps
 WHERE user_id = $1
@@ -61,6 +64,18 @@ DELETE FROM github_repo_cache WHERE github_app_id = $1 AND installation_id = $2;
 -- name: CountGitHubAppApplications :one
 SELECT count(*)::bigint FROM applications
 WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github';
+
+-- name: CountGitHubAppApplicationsForApp :one
+SELECT count(*)::bigint FROM applications
+WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
+AND lower(repo) IN (
+    SELECT lower(full_name) FROM github_repo_cache WHERE github_app_id = $2
+);
+
+-- name: ListGitHubAppPushTargets :many
+SELECT id, branch FROM applications
+WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
+AND lower(repo) = $2;
 
 -- name: ListGitHubAppsByInstallationID :many
 SELECT g.* FROM github_apps g

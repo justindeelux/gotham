@@ -23,6 +23,26 @@ func (q *Queries) CountGitHubAppApplications(ctx context.Context, userID pgtype.
 	return column_1, err
 }
 
+const countGitHubAppApplicationsForApp = `-- name: CountGitHubAppApplicationsForApp :one
+SELECT count(*)::bigint FROM applications
+WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
+AND lower(repo) IN (
+    SELECT lower(full_name) FROM github_repo_cache WHERE github_app_id = $2
+)
+`
+
+type CountGitHubAppApplicationsForAppParams struct {
+	UserID      pgtype.UUID `json:"user_id"`
+	GithubAppID pgtype.UUID `json:"github_app_id"`
+}
+
+func (q *Queries) CountGitHubAppApplicationsForApp(ctx context.Context, arg CountGitHubAppApplicationsForAppParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countGitHubAppApplicationsForApp, arg.UserID, arg.GithubAppID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createGitHubApp = `-- name: CreateGitHubApp :one
 INSERT INTO github_apps (
     user_id, app_id, slug, name, base_url, api_base_url, client_id,
@@ -117,6 +137,30 @@ func (q *Queries) DeleteGitHubRepoCache(ctx context.Context, arg DeleteGitHubRep
 	return err
 }
 
+const getGitHubAppByID = `-- name: GetGitHubAppByID :one
+SELECT id, user_id, app_id, slug, name, base_url, api_base_url, client_id, webhook_secret_cipher, private_key_cipher, created_at, updated_at FROM github_apps WHERE id = $1
+`
+
+func (q *Queries) GetGitHubAppByID(ctx context.Context, id pgtype.UUID) (GithubApp, error) {
+	row := q.db.QueryRow(ctx, getGitHubAppByID, id)
+	var i GithubApp
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.AppID,
+		&i.Slug,
+		&i.Name,
+		&i.BaseUrl,
+		&i.ApiBaseUrl,
+		&i.ClientID,
+		&i.WebhookSecretCipher,
+		&i.PrivateKeyCipher,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getGitHubAppByIDAndUser = `-- name: GetGitHubAppByIDAndUser :one
 SELECT id, user_id, app_id, slug, name, base_url, api_base_url, client_id, webhook_secret_cipher, private_key_cipher, created_at, updated_at FROM github_apps WHERE id = $1 AND user_id = $2
 `
@@ -144,6 +188,42 @@ func (q *Queries) GetGitHubAppByIDAndUser(ctx context.Context, arg GetGitHubAppB
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listGitHubAppPushTargets = `-- name: ListGitHubAppPushTargets :many
+SELECT id, branch FROM applications
+WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
+AND lower(repo) = $2
+`
+
+type ListGitHubAppPushTargetsParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	Repo   string      `json:"repo"`
+}
+
+type ListGitHubAppPushTargetsRow struct {
+	ID     pgtype.UUID `json:"id"`
+	Branch string      `json:"branch"`
+}
+
+func (q *Queries) ListGitHubAppPushTargets(ctx context.Context, arg ListGitHubAppPushTargetsParams) ([]ListGitHubAppPushTargetsRow, error) {
+	rows, err := q.db.Query(ctx, listGitHubAppPushTargets, arg.UserID, arg.Repo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGitHubAppPushTargetsRow{}
+	for rows.Next() {
+		var i ListGitHubAppPushTargetsRow
+		if err := rows.Scan(&i.ID, &i.Branch); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listGitHubAppsByInstallationID = `-- name: ListGitHubAppsByInstallationID :many

@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +27,10 @@ type fakeAPI struct {
 	repos         []Repo
 	branches      map[string][]Branch
 	conversionErr error
+	// installations is the fake's installation registry by id.
+	installations map[int64]InstallationInfo
+	// webhookSecret overrides the conversion secret per fake.
+	webhookSecret string
 }
 
 func (f *fakeAPI) ExchangeManifest(_ context.Context, code string) (ManifestConversion, error) {
@@ -34,12 +40,16 @@ func (f *fakeAPI) ExchangeManifest(_ context.Context, code string) (ManifestConv
 	if code == "" {
 		return ManifestConversion{}, fmt.Errorf("%w: empty code", ErrValidation)
 	}
+	secret := f.webhookSecret
+	if secret == "" {
+		secret = "wh-secret"
+	}
 	return ManifestConversion{
 		ID:            123,
 		Slug:          "gotham-test",
 		Name:          "gotham-test",
 		ClientID:      "cid",
-		WebhookSecret: "wh-secret",
+		WebhookSecret: secret,
 		PEM:           f.pem,
 	}, nil
 }
@@ -49,6 +59,19 @@ func (f *fakeAPI) CreateInstallationToken(_ context.Context, _ int64, _ string) 
 	defer f.mu.Unlock()
 	f.tokenCalls++
 	return InstallationToken{Token: f.token, ExpiresAt: f.expiresAt}, nil
+}
+
+// GetInstallation verifies the installation against the fake's registry:
+// only installations the fake knows for this app verify, so a foreign id
+// fails exactly like GitHub's 404.
+func (f *fakeAPI) GetInstallation(_ context.Context, installationID int64, _ string) (InstallationInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	info, ok := f.installations[installationID]
+	if !ok {
+		return InstallationInfo{}, fmt.Errorf("%w: unknown installation", ErrValidation)
+	}
+	return info, nil
 }
 
 func (f *fakeAPI) ListInstallationRepos(_ context.Context, _ string) ([]Repo, error) {
@@ -73,6 +96,8 @@ type memoryRepo struct {
 	byInstall map[int64][]uuid.UUID
 	cache     map[string][]Repo
 	appsUsing int64
+	// watched repos per app for PushTargets, keyed by lower(repo).
+	watched map[string][]AppPushTarget
 }
 
 func newMemoryRepo() *memoryRepo {
@@ -81,6 +106,7 @@ func newMemoryRepo() *memoryRepo {
 		insts:     make(map[uuid.UUID][]Installation),
 		byInstall: make(map[int64][]uuid.UUID),
 		cache:     make(map[string][]Repo),
+		watched:   make(map[string][]AppPushTarget),
 	}
 }
 
@@ -126,6 +152,15 @@ func (m *memoryRepo) ListApps(_ context.Context, _ uuid.UUID) ([]GitHubApp, erro
 	return apps, nil
 }
 
+func (m *memoryRepo) GetSealedByID(_ context.Context, id uuid.UUID) (sealedApp, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sealed, ok := m.apps[id]
+	if !ok {
+		return sealedApp{}, ErrNotFound
+	}
+	return sealed, nil
+}
 func (m *memoryRepo) DeleteApp(_ context.Context, id, _ uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -199,8 +234,24 @@ func (m *memoryRepo) ListRepoCache(_ context.Context, appID uuid.UUID, installat
 	return append([]Repo(nil), m.cache[cacheKey(appID, installationID)]...), nil
 }
 
-func (m *memoryRepo) CountApplications(_ context.Context, _ uuid.UUID) (int64, error) {
+func (m *memoryRepo) CountApplicationsForApp(_ context.Context, _, _ uuid.UUID) (int64, error) {
 	return m.appsUsing, nil
+}
+
+// watch records that appID's owner watches repo (a github_app application).
+func (m *memoryRepo) watch(appID uuid.UUID, repo, branch string) AppPushTarget {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	target := AppPushTarget{ApplicationID: uuid.New(), Branch: branch}
+	key := appID.String() + "\x00" + strings.ToLower(repo)
+	m.watched[key] = append(m.watched[key], target)
+	return target
+}
+
+func (m *memoryRepo) PushTargets(_ context.Context, appID, _ uuid.UUID, repo string) ([]AppPushTarget, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]AppPushTarget(nil), m.watched[appID.String()+"\x00"+strings.ToLower(repo)]...), nil
 }
 
 // testKeyPEM generates an RSA private key in PKCS#1 PEM form.
@@ -224,6 +275,9 @@ func testFixture() (*Service, *memoryRepo, *fakeAPI, uuid.UUID) {
 		},
 		branches: map[string][]Branch{
 			"acme/web": {{Name: "main", Commit: "abc"}, {Name: "dev", Commit: "def"}},
+		},
+		installations: map[int64]InstallationInfo{
+			999: {ID: 999, Account: "acme", AppID: 123},
 		},
 	}
 	svc := NewService(Config{
@@ -253,7 +307,7 @@ func connect(t *testing.T, svc *Service, userID uuid.UUID) GitHubApp {
 	if !ok || hooks["url"] != "https://gotham.example/api/v1/webhooks/github" {
 		t.Fatalf("manifest hook url = %v", manifest.Manifest["hook_attributes"])
 	}
-	app, err := svc.Callback(context.Background(), userID, "manifest-code", manifest.State, "")
+	app, err := svc.Callback(context.Background(), userID, "manifest-code", manifest.State)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,15 +363,15 @@ func TestManifestStateSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Callback(context.Background(), userID, "code", manifest.State, ""); err != nil {
+	if _, err := svc.Callback(context.Background(), userID, "code", manifest.State); err != nil {
 		t.Fatal(err)
 	}
 	// Replay of the same state must fail: states are single-use.
-	if _, err := svc.Callback(context.Background(), userID, "code", manifest.State, ""); err == nil {
+	if _, err := svc.Callback(context.Background(), userID, "code", manifest.State); err == nil {
 		t.Fatal("replayed state was accepted")
 	}
 	// A forged state must fail too.
-	if _, err := svc.Callback(context.Background(), userID, "code", "forged-state", ""); err == nil {
+	if _, err := svc.Callback(context.Background(), userID, "code", "forged-state"); err == nil {
 		t.Fatal("forged state was accepted")
 	}
 	// A state issued for another user must fail.
@@ -326,7 +380,7 @@ func TestManifestStateSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Callback(context.Background(), userID, "code", manifest2.State, ""); err == nil {
+	if _, err := svc.Callback(context.Background(), userID, "code", manifest2.State); err == nil {
 		t.Fatal("another user's state was accepted")
 	}
 }
@@ -376,6 +430,148 @@ func TestInstallationTokenCached(t *testing.T) {
 	}
 	if total := api.calls(); total != 1 {
 		t.Fatalf("installation token minted %d times total, want 1", total)
+	}
+}
+
+// TestRecordInstallationVerifiesWithGitHub proves a recorded installation id
+// is verified against the GitHub API: an id the app does not own is refused,
+// so replaying another installation's integer id records nothing.
+func TestRecordInstallationVerifiesWithGitHub(t *testing.T) {
+	svc, _, api, userID := testFixture()
+	api.pem = testKeyPEM(t)
+
+	app := connect(t, svc, userID)
+	_, state, err := svc.InstallURL(context.Background(), userID, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 4242 is unknown to the fake GitHub: recording it must fail.
+	if _, err := svc.RecordInstallation(context.Background(), userID, app.ID, 4242, state); err == nil {
+		t.Fatal("unverified installation was recorded")
+	}
+	// The consumed state cannot be reused for the real installation either:
+	// states stay single-use even when verification fails.
+	if _, err := svc.RecordInstallation(context.Background(), userID, app.ID, 999, state); err == nil {
+		t.Fatal("consumed state was reused")
+	}
+}
+
+// TestCrossUserInstallationTakeover reproduces the reviewer repro: user B
+// records user A's installation id and sends a signed deleted delivery. The
+// delivery must verify against B's app only and leave A's installation alone.
+func TestCrossUserInstallationTakeover(t *testing.T) {
+	ctx := context.Background()
+
+	newService := func(secret string) (*Service, *memoryRepo, *fakeAPI, uuid.UUID) {
+		userID := uuid.New()
+		repo := newMemoryRepo()
+		api := &fakeAPI{
+			token:         "inst-token",
+			expiresAt:     time.Now().Add(time.Hour),
+			webhookSecret: "wh-secret-" + secret,
+			installations: map[int64]InstallationInfo{
+				999: {ID: 999, Account: "acme", AppID: 123},
+			},
+		}
+		svc := NewService(Config{
+			Repository:         repo,
+			NewAPI:             func(_ string) GitHubAPI { return api },
+			Secret:             "test-secret-key",
+			AllowUnsafeBaseURL: true,
+		})
+		return svc, repo, api, userID
+	}
+
+	svcA, repoA, apiA, userA := newService("a")
+	svcB, repoB, apiB, userB := newService("b")
+	apiA.pem = testKeyPEM(t)
+	apiB.pem = testKeyPEM(t)
+
+	// B's GitHub knows no installation 999 for B's app: recording fails.
+	appB := connect(t, svcB, userB)
+	_, installState, err := svcB.InstallURL(ctx, userB, appB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(apiB.installations, 999)
+	if _, err := svcB.RecordInstallation(ctx, userB, appB.ID, 999, installState); err == nil {
+		t.Fatal("B recorded an installation its app does not own")
+	}
+
+	// A installs 999 legitimately.
+	appA := connect(t, svcA, userA)
+	_, installStateA, err := svcA.InstallURL(ctx, userA, appA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svcA.RecordInstallation(ctx, userA, appA.ID, 999, installStateA); err != nil {
+		t.Fatal(err)
+	}
+
+	// B holds a stale row for 999 (recorded before verification existed).
+	// B's signed deleted delivery verifies against B's app only...
+	if _, err := repoB.UpsertInstallation(ctx, appB.ID, 999, "acme"); err != nil {
+		t.Fatal(err)
+	}
+	deleted := []byte(`{"action":"deleted","installation":{"id":999,"account":{"login":"acme"}}}`)
+	header := http.Header{}
+	header.Set("X-Hub-Signature-256", signBody("wh-secret-b", deleted))
+	verifiedApp, ok := svcB.VerifyDelivery(header, deleted)
+	if !ok || verifiedApp != appB.ID {
+		t.Fatalf("B's delivery verified as %v, %v", verifiedApp, ok)
+	}
+	if err := svcB.HandleAppEvent(ctx, verifiedApp, "installation", deleted); err != nil {
+		t.Fatal(err)
+	}
+	// ...and A's installation survives it.
+	insts, err := repoA.ListInstallations(ctx, appA.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(insts) != 1 || insts[0].InstallationID != 999 {
+		t.Fatalf("A's installation after B's delivery = %+v", insts)
+	}
+}
+
+// TestVerifyPushAndTargets proves an app-signed push verifies to the owning
+// app and maps to the github_app applications watching the repository.
+func TestVerifyPushAndTargets(t *testing.T) {
+	svc, repo, api, userID := testFixture()
+	api.pem = testKeyPEM(t)
+
+	app := connect(t, svc, userID)
+	_, state, err := svc.InstallURL(context.Background(), userID, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RecordInstallation(context.Background(), userID, app.ID, 999, state); err != nil {
+		t.Fatal(err)
+	}
+	watched := repo.watch(app.ID, "acme/web", "main")
+
+	push := []byte(`{"ref":"refs/heads/main","after":"abc123",` +
+		`"repository":{"full_name":"acme/web"},"installation":{"id":999}}`)
+	header := http.Header{}
+	header.Set("X-Hub-Signature-256", signBody("wh-secret", push))
+	header.Set("X-GitHub-Hook-Installation-Target-ID", "999")
+	verifiedApp, ok := svc.VerifyPush(header, push)
+	if !ok || verifiedApp != app.ID {
+		t.Fatalf("push verified as %v, %v", verifiedApp, ok)
+	}
+
+	targets, err := svc.PushTargetsForWebhook(context.Background(), app.ID, "ACME/web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].ApplicationID != watched.ApplicationID || targets[0].Branch != "main" {
+		t.Fatalf("targets = %+v", targets)
+	}
+
+	// A push signed with another secret verifies against nothing.
+	forged := http.Header{}
+	forged.Set("X-Hub-Signature-256", signBody("attacker-secret", push))
+	if _, ok := svc.VerifyPush(forged, push); ok {
+		t.Fatal("forged push was verified")
 	}
 }
 

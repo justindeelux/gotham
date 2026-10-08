@@ -87,21 +87,25 @@ func TestVerifyDelivery(t *testing.T) {
 	body := []byte(`{"action":"added","installation":{"id":999,"account":{"login":"acme"}}}`)
 	header := http.Header{}
 	header.Set("X-Hub-Signature-256", signBody("wh-secret", body))
-	if !svc.VerifyDelivery(header, body) {
+	appID, ok := svc.VerifyDelivery(header, body)
+	if !ok {
 		t.Fatal("valid signature was rejected")
+	}
+	if appID != app.ID {
+		t.Fatalf("verified app = %v, want %v", appID, app.ID)
 	}
 
 	// Wrong secret must fail.
 	bad := http.Header{}
 	bad.Set("X-Hub-Signature-256", signBody("wrong-secret", body))
-	if svc.VerifyDelivery(bad, body) {
+	if _, ok := svc.VerifyDelivery(bad, body); ok {
 		t.Fatal("wrong secret was accepted")
 	}
 
 	// Missing prefix must fail.
 	bare := http.Header{}
 	bare.Set("X-Hub-Signature-256", strings.TrimPrefix(signBody("wh-secret", body), "sha256="))
-	if svc.VerifyDelivery(bare, body) {
+	if _, ok := svc.VerifyDelivery(bare, body); ok {
 		t.Fatal("unprefixed signature was accepted")
 	}
 
@@ -109,7 +113,7 @@ func TestVerifyDelivery(t *testing.T) {
 	unknown := []byte(`{"action":"added","installation":{"id":4242,"account":{"login":"acme"}}}`)
 	unknownHeader := http.Header{}
 	unknownHeader.Set("X-Hub-Signature-256", signBody("wh-secret", unknown))
-	if svc.VerifyDelivery(unknownHeader, unknown) {
+	if _, ok := svc.VerifyDelivery(unknownHeader, unknown); ok {
 		t.Fatal("unknown installation was accepted")
 	}
 	_ = repo
@@ -135,7 +139,7 @@ func TestHandleAppEventRefreshesCache(t *testing.T) {
 		{ExternalID: "2", Name: "api", FullName: "acme/api", DefaultBranch: "main"},
 	}
 	body := []byte(`{"action":"added","installation":{"id":999,"account":{"login":"acme"}}}`)
-	if err := svc.HandleAppEvent(context.Background(), "installation_repositories", body); err != nil {
+	if err := svc.HandleAppEvent(context.Background(), app.ID, "installation_repositories", body); err != nil {
 		t.Fatal(err)
 	}
 	cached, err := repo.ListRepoCache(context.Background(), app.ID, 999)
@@ -147,7 +151,7 @@ func TestHandleAppEventRefreshesCache(t *testing.T) {
 	}
 
 	deleted := []byte(`{"action":"deleted","installation":{"id":999,"account":{"login":"acme"}}}`)
-	if err := svc.HandleAppEvent(context.Background(), "installation", deleted); err != nil {
+	if err := svc.HandleAppEvent(context.Background(), app.ID, "installation", deleted); err != nil {
 		t.Fatal(err)
 	}
 	insts, err := repo.ListInstallations(context.Background(), app.ID)
@@ -159,8 +163,12 @@ func TestHandleAppEventRefreshesCache(t *testing.T) {
 	}
 
 	// Non-installation events are ignored.
-	if err := svc.HandleAppEvent(context.Background(), "push", body); err != nil {
+	if err := svc.HandleAppEvent(context.Background(), app.ID, "push", body); err != nil {
 		t.Fatal(err)
+	}
+	// Events for an app that does not own the installation are refused.
+	if err := svc.HandleAppEvent(context.Background(), uuid.New(), "installation", deleted); err == nil {
+		t.Fatal("foreign app event was accepted")
 	}
 }
 

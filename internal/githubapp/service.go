@@ -11,11 +11,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/store"
@@ -63,6 +66,9 @@ type Repository interface {
 	GetApp(ctx context.Context, id, userID uuid.UUID) (GitHubApp, error)
 	// GetSealed returns the app row with its still-sealed secrets for signing.
 	GetSealed(ctx context.Context, id, userID uuid.UUID) (sealedApp, error)
+	// GetSealedByID returns the sealed row for webhook handling, where no
+	// user session exists (the signature is the authentication).
+	GetSealedByID(ctx context.Context, id uuid.UUID) (sealedApp, error)
 	ListApps(ctx context.Context, userID uuid.UUID) ([]GitHubApp, error)
 	DeleteApp(ctx context.Context, id, userID uuid.UUID) error
 	UpsertInstallation(ctx context.Context, appID uuid.UUID, installationID int64, account string) (Installation, error)
@@ -71,7 +77,12 @@ type Repository interface {
 	AppsByInstallationID(ctx context.Context, installationID int64) ([]sealedApp, error)
 	ReplaceRepoCache(ctx context.Context, appID uuid.UUID, installationID int64, repos []Repo) error
 	ListRepoCache(ctx context.Context, appID uuid.UUID, installationID int64) ([]Repo, error)
-	CountApplications(ctx context.Context, userID uuid.UUID) (int64, error)
+	// CountApplicationsForApp counts the caller's github_app applications
+	// whose repo is granted to this connection's installations.
+	CountApplicationsForApp(ctx context.Context, userID, appID uuid.UUID) (int64, error)
+	// PushTargets returns the github_app applications of the app's owner
+	// watching repo (lowercased owner/name).
+	PushTargets(ctx context.Context, appID, userID uuid.UUID, repo string) ([]AppPushTarget, error)
 }
 
 // sealedApp is a GitHub App row with its still-sealed secrets, for webhook
@@ -93,6 +104,9 @@ type Service struct {
 
 	mu     sync.Mutex
 	tokens map[uuid.UUID]cachedToken
+	// tokensFlight deduplicates concurrent installation-token mints for one
+	// installation: without it N concurrent listings each mint a token.
+	tokensFlight singleflight.Group
 }
 
 // cachedToken is one installation token, kept until it nears expiry.
@@ -149,7 +163,11 @@ func NewDefaultService(st *store.Store, secret string, logger *slog.Logger) *Ser
 		}
 		logger.Warn("githubapp: secret_key is empty; app credentials use an ephemeral key")
 	}
-	return NewService(Config{Repository: newStoreRepository(st, secret), AllowUnsafeBaseURL: false})
+	return NewService(Config{
+		Repository:         newStoreRepository(st),
+		Secret:             secret,
+		AllowUnsafeBaseURL: false,
+	})
 }
 
 // randomSecret mirrors providers.randomSecret without importing unexported
@@ -175,20 +193,19 @@ type Manifest struct {
 
 // StartManifest serves the manifest for userID: the form posts it to the Git
 // host, which redirects back with a code the callback exchanges. origin is
-// the control-plane public origin (scheme + host), used for the hook and
-// redirect URLs.
+// the control-plane public origin (scheme + host), used for the hook URL and
+// the browser callback URLs: redirect_url is the public API callback the
+// browser lands on (identified by the state, no bearer token), and setup_url
+// is the SPA route that completes the installation. The chosen GitHub base
+// URL is bound to the state, so the callback exchanges the code against the
+// same host (github.com or Enterprise).
 func (s *Service) StartManifest(ctx context.Context, userID uuid.UUID, baseURL, name, origin string) (Manifest, error) {
 	if s.repo == nil {
 		return Manifest{}, ErrNotFound
 	}
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if baseURL == "" {
-		baseURL = defaultBaseURL
-	}
-	if !s.allowUnsafe {
-		if err := guardPublicURL(baseURL); err != nil {
-			return Manifest{}, err
-		}
+	webBase, apiBase, err := s.normalizeGitHubURLs(baseURL)
+	if err != nil {
+		return Manifest{}, err
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -198,14 +215,16 @@ func (s *Service) StartManifest(ctx context.Context, userID uuid.UUID, baseURL, 
 	if origin == "" {
 		return Manifest{}, fmt.Errorf("%w: origin is required", ErrValidation)
 	}
-	state, err := s.states.new(userID, uuid.Nil, stateManifest)
+	state, err := s.states.new(userID, uuid.Nil, stateManifest, webBase, apiBase)
 	if err != nil {
 		return Manifest{}, err
 	}
 	manifest := map[string]any{
-		"name":         name,
-		"url":          origin,
-		"redirect_url": origin + "/api/v1/providers/github-app/callback?state=" + state,
+		"name":          name,
+		"url":           origin,
+		"redirect_url":  origin + "/api/v1/providers/github-app/callback?state=" + state,
+		"setup_url":     origin + "/applications/github-app/callback",
+		"callback_urls": []string{origin + "/applications/github-app/callback"},
 		"hook_attributes": map[string]any{
 			"url": origin + "/api/v1/webhooks/github",
 		},
@@ -219,27 +238,56 @@ func (s *Service) StartManifest(ctx context.Context, userID uuid.UUID, baseURL, 
 		"default_events": []string{"push", "pull_request", "installation", "installation_repositories"},
 	}
 	return Manifest{
-		ActionURL: strings.TrimRight(baseURL, "/") + "/settings/apps/new?state=" + state,
+		ActionURL: strings.TrimRight(webBase, "/") + "/settings/apps/new?state=" + state,
 		Manifest:  manifest,
 		State:     state,
 	}, nil
 }
 
+// normalizeGitHubURLs resolves the caller's GitHub base URL into the web and
+// API roots. Empty selects github.com; anything else must be an https URL on
+// a public host (DNS-resolved, unless the explicit test setting allows
+// otherwise), and an Enterprise host uses its /api/v3 root.
+func (s *Service) normalizeGitHubURLs(baseURL string) (webBase, apiBase string, err error) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return defaultBaseURL, defaultAPIBaseURL, nil
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Hostname() == "" {
+		return "", "", fmt.Errorf("%w: github base url is not a URL", ErrValidation)
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return "", "", fmt.Errorf("%w: github base url must use https", ErrValidation)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" {
+		return "", "", fmt.Errorf("%w: github base url must be scheme and host only", ErrValidation)
+	}
+	if err := guardHostAllow(parsed.Hostname(), s.allowUnsafe); err != nil {
+		return "", "", err
+	}
+	webBase = "https://" + parsed.Host
+	if strings.EqualFold(parsed.Hostname(), "github.com") {
+		return defaultBaseURL, defaultAPIBaseURL, nil
+	}
+	return webBase, webBase + "/api/v3", nil
+}
+
 // Callback finishes the manifest flow: it redeems state once, exchanges code
-// for the app credentials and stores them sealed. The secrets never appear in
-// the returned app.
-func (s *Service) Callback(ctx context.Context, userID uuid.UUID, code, state, origin string) (GitHubApp, error) {
+// against the host bound to the state, and stores the sealed credentials.
+// The secrets never appear in the returned app.
+func (s *Service) Callback(ctx context.Context, userID uuid.UUID, code, state string) (GitHubApp, error) {
 	if s.repo == nil {
 		return GitHubApp{}, ErrNotFound
 	}
 	if strings.TrimSpace(code) == "" || strings.TrimSpace(state) == "" {
 		return GitHubApp{}, fmt.Errorf("%w: code and state are required", ErrValidation)
 	}
-	if !s.states.redeem(state, userID, uuid.Nil, stateManifest) {
+	entry, ok := s.states.redeem(state, userID, uuid.Nil, stateManifest)
+	if !ok {
 		return GitHubApp{}, fmt.Errorf("%w: invalid or expired manifest state", ErrValidation)
 	}
-	apiBase := apiBaseFor(strings.TrimSpace(origin))
-	api := s.newAPI(apiBase)
+	api := s.newAPI(entry.apiBaseURL)
 	conv, err := api.ExchangeManifest(ctx, code)
 	if err != nil {
 		return GitHubApp{}, err
@@ -252,20 +300,29 @@ func (s *Service) Callback(ctx context.Context, userID uuid.UUID, code, state, o
 	if err != nil {
 		return GitHubApp{}, err
 	}
-	baseURL := baseURLFor(strings.TrimSpace(origin))
 	app, err := s.repo.CreateApp(ctx, GitHubApp{
 		UserID:     userID,
 		AppID:      conv.ID,
 		Slug:       conv.Slug,
 		Name:       conv.Name,
-		BaseURL:    baseURL,
-		APIBaseURL: apiBase,
+		BaseURL:    entry.baseURL,
+		APIBaseURL: entry.apiBaseURL,
 		ClientID:   conv.ClientID,
 	}, sealedSecret, sealedKey)
 	if err != nil {
 		return GitHubApp{}, err
 	}
 	return s.repo.GetApp(ctx, app.ID, userID)
+}
+
+// StateOwner returns the user a pending manifest state was issued to, without
+// consuming it. It lets the public browser callback resolve the caller from
+// the state alone; the callback itself redeems the state exactly once.
+func (s *Service) StateOwner(state string) (uuid.UUID, bool) {
+	if s == nil || s.states == nil {
+		return uuid.Nil, false
+	}
+	return s.states.peek(state, stateManifest)
 }
 
 // InstallURL starts the installation step: the browser visits the URL to
@@ -278,7 +335,7 @@ func (s *Service) InstallURL(ctx context.Context, userID, appID uuid.UUID) (stri
 	if err != nil {
 		return "", "", err
 	}
-	state, err := s.states.new(userID, appID, stateInstall)
+	state, err := s.states.new(userID, appID, stateInstall, "", "")
 	if err != nil {
 		return "", "", err
 	}
@@ -294,7 +351,10 @@ func (s *Service) InstallURL(ctx context.Context, userID, appID uuid.UUID) (stri
 }
 
 // RecordInstallation stores the installation callback and refreshes its repo
-// cache, so the wizard lists repositories immediately.
+// cache, so the wizard lists repositories immediately. The installation is
+// verified with GitHub first (it must belong to this app), so a recorded id
+// is proof, not a claim: user B cannot take over user A's installation by
+// replaying its integer id.
 func (s *Service) RecordInstallation(ctx context.Context, userID, appID uuid.UUID, installationID int64, state string) (Installation, error) {
 	if s.repo == nil {
 		return Installation{}, ErrNotFound
@@ -302,10 +362,25 @@ func (s *Service) RecordInstallation(ctx context.Context, userID, appID uuid.UUI
 	if installationID <= 0 {
 		return Installation{}, fmt.Errorf("%w: installation id is required", ErrValidation)
 	}
-	if !s.states.redeem(state, userID, appID, stateInstall) {
+	if _, ok := s.states.redeem(state, userID, appID, stateInstall); !ok {
 		return Installation{}, fmt.Errorf("%w: invalid or expired install state", ErrValidation)
 	}
-	inst, err := s.repo.UpsertInstallation(ctx, appID, installationID, "")
+	app, err := s.repo.GetApp(ctx, appID, userID)
+	if err != nil {
+		return Installation{}, err
+	}
+	jwt, err := s.appJWT(ctx, app)
+	if err != nil {
+		return Installation{}, err
+	}
+	info, err := s.newAPI(app.APIBaseURL).GetInstallation(ctx, installationID, jwt)
+	if err != nil {
+		return Installation{}, err
+	}
+	if info.AppID != 0 && info.AppID != app.AppID {
+		return Installation{}, fmt.Errorf("%w: installation belongs to another app", ErrValidation)
+	}
+	inst, err := s.repo.UpsertInstallation(ctx, appID, installationID, info.Account)
 	if err != nil {
 		return Installation{}, err
 	}
@@ -364,11 +439,7 @@ func (s *Service) ListBranches(ctx context.Context, userID, appID uuid.UUID, rep
 	if err != nil {
 		return nil, err
 	}
-	key, err := providers.OpenSecret(s.secret, sealed.PrivateKey)
-	if err != nil {
-		return nil, err
-	}
-	jwt, err := signAppJWT(app.AppID, []byte(key), time.Now())
+	jwt, err := s.appJWTFromSealed(sealed)
 	if err != nil {
 		return nil, err
 	}
@@ -383,9 +454,65 @@ func (s *Service) ListBranches(ctx context.Context, userID, appID uuid.UUID, rep
 	return s.newAPI(app.APIBaseURL).ListBranches(ctx, token, strings.TrimSpace(repo))
 }
 
+// appJWT signs a fresh app JWT for the FAN-out of installation API calls.
+// The private key is opened only for signing and never leaves this function.
+func (s *Service) appJWT(ctx context.Context, app GitHubApp) (string, error) {
+	sealed, err := s.sealed(ctx, app)
+	if err != nil {
+		return "", err
+	}
+	return s.appJWTFromSealed(sealed)
+}
+
+func (s *Service) appJWTFromSealed(sealed sealedApp) (string, error) {
+	key, err := providers.OpenSecret(s.secret, sealed.PrivateKey)
+	if err != nil {
+		return "", err
+	}
+	return signAppJWT(sealed.AppID, []byte(key), time.Now())
+}
+
+// InstallationTokenForApp mints (or reuses a cached) installation token for
+// the app's first installation. It backs the deploy cloner, so a github_app
+// application clones with a fresh token instead of anonymously. The token is
+// cached in memory only: it is never persisted and never logged.
+func (s *Service) InstallationTokenForApp(ctx context.Context, userID, appID uuid.UUID) (string, error) {
+	if s.repo == nil {
+		return "", ErrNotFound
+	}
+	app, err := s.repo.GetApp(ctx, appID, userID)
+	if err != nil {
+		return "", err
+	}
+	if len(app.Installations) == 0 {
+		return "", fmt.Errorf("%w: app is not installed yet", ErrValidation)
+	}
+	jwt, err := s.appJWT(ctx, app)
+	if err != nil {
+		return "", err
+	}
+	return s.installationToken(ctx, app, app.Installations[0], jwt)
+}
+
+// AppPushTarget is one github_app application watching a repository: what a
+// verified app push delivery may build.
+type AppPushTarget struct {
+	ApplicationID uuid.UUID
+	Branch        string
+}
+
+// PushTargets returns the github_app applications of the app's owner watching
+// repo ("owner/name"), so a verified push delivery maps to deployments.
+func (s *Service) PushTargets(ctx context.Context, appID, userID uuid.UUID, repo string) ([]AppPushTarget, error) {
+	if s.repo == nil {
+		return nil, ErrNotFound
+	}
+	return s.repo.PushTargets(ctx, appID, userID, strings.ToLower(strings.TrimSpace(repo)))
+}
+
 // Disconnect deletes the stored credentials. It reports how many of the
-// caller's applications use the github_app source, so the UI can warn before
-// deleting.
+// caller's applications use this connection (repos granted to its
+// installations), so the UI can warn before deleting.
 func (s *Service) Disconnect(ctx context.Context, userID, appID uuid.UUID) (int64, error) {
 	if s.repo == nil {
 		return 0, ErrNotFound
@@ -393,7 +520,7 @@ func (s *Service) Disconnect(ctx context.Context, userID, appID uuid.UUID) (int6
 	if _, err := s.repo.GetApp(ctx, appID, userID); err != nil {
 		return 0, err
 	}
-	using, err := s.repo.CountApplications(ctx, userID)
+	using, err := s.repo.CountApplicationsForApp(ctx, userID, appID)
 	if err != nil {
 		return 0, err
 	}
@@ -411,6 +538,7 @@ func (s *Service) Disconnect(ctx context.Context, userID, appID uuid.UUID) (int6
 }
 
 // installationToken mints (or reuses a cached) installation token.
+// Concurrent minting for one installation collapses onto one flight.
 func (s *Service) installationToken(ctx context.Context, app GitHubApp, installation Installation, jwt string) (string, error) {
 	s.mu.Lock()
 	cached, ok := s.tokens[installation.ID]
@@ -418,14 +546,27 @@ func (s *Service) installationToken(ctx context.Context, app GitHubApp, installa
 	if ok && time.Now().Add(tokenRefreshMargin).Before(cached.expiresAt) {
 		return cached.token, nil
 	}
-	tok, err := s.newAPI(app.APIBaseURL).CreateInstallationToken(ctx, installation.InstallationID, jwt)
+	key := app.ID.String() + "/" + installation.ID.String()
+	token, err, _ := s.tokensFlight.Do(key, func() (any, error) {
+		s.mu.Lock()
+		recached, ok := s.tokens[installation.ID]
+		s.mu.Unlock()
+		if ok && time.Now().Add(tokenRefreshMargin).Before(recached.expiresAt) {
+			return recached.token, nil
+		}
+		tok, err := s.newAPI(app.APIBaseURL).CreateInstallationToken(ctx, installation.InstallationID, jwt)
+		if err != nil {
+			return "", err
+		}
+		s.mu.Lock()
+		s.tokens[installation.ID] = cachedToken{appID: app.ID, token: tok.Token, expiresAt: tok.ExpiresAt}
+		s.mu.Unlock()
+		return tok.Token, nil
+	})
 	if err != nil {
 		return "", err
 	}
-	s.mu.Lock()
-	s.tokens[installation.ID] = cachedToken{appID: app.ID, token: tok.Token, expiresAt: tok.ExpiresAt}
-	s.mu.Unlock()
-	return tok.Token, nil
+	return token.(string), nil
 }
 
 // refreshRepos lists through the installation token and rewrites the cache.
@@ -438,35 +579,7 @@ func (s *Service) refreshRepos(ctx context.Context, userID, appID uuid.UUID, ins
 	if err != nil {
 		return nil, err
 	}
-	key, err := providers.OpenSecret(s.secret, sealed.PrivateKey)
-	if err != nil {
-		return nil, err
-	}
-	jwt, err := signAppJWT(app.AppID, []byte(key), time.Now())
-	if err != nil {
-		return nil, err
-	}
-	var installation Installation
-	for _, inst := range app.Installations {
-		if inst.InstallationID == installationID {
-			installation = inst
-		}
-	}
-	if installation.ID == uuid.Nil {
-		return nil, fmt.Errorf("%w: unknown installation", ErrValidation)
-	}
-	token, err := s.installationToken(ctx, app, installation, jwt)
-	if err != nil {
-		return nil, err
-	}
-	repos, err := s.newAPI(app.APIBaseURL).ListInstallationRepos(ctx, token)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.repo.ReplaceRepoCache(ctx, appID, installationID, repos); err != nil {
-		return nil, err
-	}
-	return repos, nil
+	return s.refreshReposFor(ctx, sealed, installationID)
 }
 
 // sealed loads the app row with its sealed secrets for signing.
@@ -494,43 +607,14 @@ func (s *Service) installationForRepo(ctx context.Context, app GitHubApp, repo s
 	return app.Installations[0], nil
 }
 
-// baseURLFor derives the web base URL from a manifest origin hint: an empty
-// hint (github.com flow) stays on github.com, anything else is the Enterprise
-// host the manifest was started for.
-func baseURLFor(origin string) string {
-	origin = strings.TrimRight(strings.TrimSpace(origin), "/")
-	if origin == "" || strings.Contains(origin, "github.com") {
-		return defaultBaseURL
-	}
-	return origin
-}
-
-// apiBaseFor derives the API base URL the same way: github.com uses
-// api.github.com, an Enterprise host uses its /api/v3 root.
-func apiBaseFor(origin string) string {
-	origin = strings.TrimRight(strings.TrimSpace(origin), "/")
-	if origin == "" || strings.Contains(origin, "github.com") {
-		return defaultAPIBaseURL
-	}
-	return origin + "/api/v3"
-}
-
-// guardPublicURL refuses manifest base URLs that are not public.
-func guardPublicURL(raw string) error {
-	host := strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
-	if idx := strings.Index(host, "/"); idx >= 0 {
-		host = host[:idx]
-	}
-	if idx := strings.Index(host, ":"); idx >= 0 {
-		host = host[:idx]
-	}
-	if !strings.HasPrefix(raw, "https://") {
-		return fmt.Errorf("%w: github host must use https", ErrValidation)
-	}
-	return guardHost(host)
-}
+// baseURLFor and apiBaseURL derivation moved to normalizeGitHubURLs, bound to
+// the manifest state: the callback exchanges the code against the same host
+// the manifest was started for (github.com or Enterprise).
 
 // appEvent is the subset of installation deliveries this package acts on.
+// AppID disambiguates the app when a delivery names it (payload app id or
+// the hook-installation-target header); without it the installation id alone
+// selects candidates.
 type appEvent struct {
 	Action       string `json:"action"`
 	Installation *struct {
@@ -541,48 +625,90 @@ type appEvent struct {
 	} `json:"installation"`
 }
 
-// VerifyDelivery reports whether body authenticates as a GitHub App webhook
-// delivery: some stored app secret must produce the sha256=HMAC signature.
-// It mirrors the webhooks signature check, so the existing receiver keeps its
-// semantics for push deliveries while this covers installation events.
-func (s *Service) VerifyDelivery(header http.Header, body []byte) bool {
+// installationTargetID reads the installation the delivery is for: the
+// X-GitHub-Hook-Installation-Target-ID header when present, else the payload
+// installation id. A delivery naming neither is refused.
+func installationTargetID(header http.Header, body []byte) int64 {
+	if id, err := strconv.ParseInt(strings.TrimSpace(header.Get("X-GitHub-Hook-Installation-Target-ID")), 10, 64); err == nil && id > 0 {
+		return id
+	}
+	var event appEvent
+	if err := json.Unmarshal(body, &event); err != nil || event.Installation == nil {
+		return 0
+	}
+	return event.Installation.ID
+}
+
+// VerifyDelivery verifies body against the app secret of the installation the
+// delivery targets and returns that app's ID. Only the owning app's secret is
+// tried and only that app is ever mutated: a delivery signed with another
+// app's secret never touches this app's installations, so a cross-user
+// installation id replay fails closed.
+func (s *Service) VerifyDelivery(header http.Header, body []byte) (uuid.UUID, bool) {
 	if s.repo == nil {
-		return false
+		return uuid.Nil, false
 	}
 	provided := header.Get("X-Hub-Signature-256")
 	if !strings.HasPrefix(provided, "sha256=") {
-		return false
+		return uuid.Nil, false
 	}
 	provided = strings.TrimPrefix(provided, "sha256=")
-	var event appEvent
-	if err := json.Unmarshal(body, &event); err != nil || event.Installation == nil {
-		return false
+	installationID := installationTargetID(header, body)
+	if installationID <= 0 {
+		return uuid.Nil, false
 	}
 	ctx := context.Background()
-	apps, err := s.repo.AppsByInstallationID(ctx, event.Installation.ID)
+	apps, err := s.repo.AppsByInstallationID(ctx, installationID)
 	if err != nil || len(apps) == 0 {
-		return false
+		return uuid.Nil, false
 	}
 	for _, app := range apps {
 		secret, err := providers.OpenSecret(s.secret, app.WebhookSecret)
 		if err != nil || secret == "" {
 			continue
 		}
-		mac := hmac.New(sha256.New, []byte(secret))
-		mac.Write(body)
-		if hmac.Equal([]byte(provided), []byte(hex.EncodeToString(mac.Sum(nil)))) {
-			return true
+		if verifyAppSignature(provided, secret, body) {
+			return app.ID, true
 		}
 	}
-	return false
+	return uuid.Nil, false
+}
+
+// verifyAppSignature reports whether the hex HMAC-SHA256 digest authenticates
+// body. The comparison is constant time.
+func verifyAppSignature(provided, secret string, body []byte) bool {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return hmac.Equal([]byte(provided), []byte(hex.EncodeToString(mac.Sum(nil))))
+}
+
+// VerifyPush verifies a push (or pull request) body the same way:
+// app-signed deliveries carry the installation id, and the match returns the
+// owning app. It backs the webhook push fallback that triggers deploys for
+// github_app applications.
+func (s *Service) VerifyPush(header http.Header, body []byte) (uuid.UUID, bool) {
+	return s.VerifyDelivery(header, body)
+}
+
+// PushTargetsForWebhook lists the github_app applications watching repo for
+// the app's owner, resolving the owner from the app row (webhook context has
+// no user session).
+func (s *Service) PushTargetsForWebhook(ctx context.Context, appID uuid.UUID, repo string) ([]AppPushTarget, error) {
+	if s.repo == nil {
+		return nil, ErrNotFound
+	}
+	sealed, err := s.repo.GetSealedByID(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.PushTargets(ctx, appID, sealed.UserID, strings.ToLower(strings.TrimSpace(repo)))
 }
 
 // HandleAppEvent refreshes the repo cache for installation and
-// installation_repositories deliveries. Callers verify the signature first
-// (VerifyDelivery); an unverifiable body is refused here too. Push deliveries
-// keep flowing through the existing webhook receiver, which validates with the
-// per-hook secret and triggers the deploy.
-func (s *Service) HandleAppEvent(ctx context.Context, event string, body []byte) error {
+// installation_repositories deliveries of the verified app. appID must come
+// from VerifyDelivery: only installations owned by that same app are mutated,
+// so one app's delivery can never delete or refresh another app's rows.
+func (s *Service) HandleAppEvent(ctx context.Context, appID uuid.UUID, event string, body []byte) error {
 	if s.repo == nil {
 		return ErrNotFound
 	}
@@ -594,40 +720,52 @@ func (s *Service) HandleAppEvent(ctx context.Context, event string, body []byte)
 	if err := json.Unmarshal(body, &parsed); err != nil || parsed.Installation == nil {
 		return fmt.Errorf("%w: delivery names no installation", ErrValidation)
 	}
-	apps, err := s.repo.AppsByInstallationID(ctx, parsed.Installation.ID)
+	owned, err := s.ownsInstallation(ctx, appID, parsed.Installation.ID)
 	if err != nil {
 		return err
 	}
-	for _, app := range apps {
-		account := ""
-		if parsed.Installation.Account != nil {
-			account = parsed.Installation.Account.Login
-		}
-		if strings.ToLower(strings.TrimSpace(parsed.Action)) == "deleted" && event == "installation" {
-			if err := s.repo.DeleteInstallation(ctx, parsed.Installation.ID, app.ID); err != nil {
-				return err
-			}
-			continue
-		}
-		if _, err := s.repo.UpsertInstallation(ctx, app.ID, parsed.Installation.ID, account); err != nil {
-			return err
-		}
-		if _, err := s.refreshReposFor(ctx, app, parsed.Installation.ID); err != nil {
-			s.logger.Warn("githubapp: app event refresh failed",
-				"app", app.AppID, "installation", parsed.Installation.ID, "error", err)
-		}
+	if !owned {
+		return fmt.Errorf("%w: installation is not owned by this app", ErrValidation)
+	}
+	sealed, err := s.repo.GetSealedByID(ctx, appID)
+	if err != nil {
+		return err
+	}
+	account := ""
+	if parsed.Installation.Account != nil {
+		account = parsed.Installation.Account.Login
+	}
+	if strings.ToLower(strings.TrimSpace(parsed.Action)) == "deleted" && event == "installation" {
+		return s.repo.DeleteInstallation(ctx, parsed.Installation.ID, appID)
+	}
+	if _, err := s.repo.UpsertInstallation(ctx, appID, parsed.Installation.ID, account); err != nil {
+		return err
+	}
+	if _, err := s.refreshReposFor(ctx, sealed, parsed.Installation.ID); err != nil {
+		s.logger.Warn("githubapp: app event refresh failed",
+			"app", sealed.AppID, "installation", parsed.Installation.ID, "error", err)
 	}
 	return nil
+}
+
+// ownsInstallation reports whether installationID is recorded under appID.
+func (s *Service) ownsInstallation(ctx context.Context, appID uuid.UUID, installationID int64) (bool, error) {
+	insts, err := s.repo.ListInstallations(ctx, appID)
+	if err != nil {
+		return false, err
+	}
+	for _, inst := range insts {
+		if inst.InstallationID == installationID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // refreshReposFor refreshes one installation when the app row (with secrets)
 // is already in hand.
 func (s *Service) refreshReposFor(ctx context.Context, app sealedApp, installationID int64) ([]Repo, error) {
-	key, err := providers.OpenSecret(s.secret, app.PrivateKey)
-	if err != nil {
-		return nil, err
-	}
-	jwt, err := signAppJWT(app.AppID, []byte(key), time.Now())
+	jwt, err := s.appJWTFromSealed(app)
 	if err != nil {
 		return nil, err
 	}

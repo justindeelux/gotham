@@ -137,7 +137,11 @@ export async function listGitHubRepos(appId: string): Promise<GitHubRepo[]> {
 
 /** listGitHubBranches returns the branches of a repository. */
 export async function listGitHubBranches(appId: string, repo: string): Promise<GitHubBranch[]> {
-  const [owner, name] = repo.split("/");
+  const segments = repo.split("/");
+  if (segments.length !== 2 || segments[0].trim() === "" || segments[1].trim() === "") {
+    throw new Error("repository must be owner/name");
+  }
+  const [owner, name] = segments.map((segment) => encodeURIComponent(segment.trim()));
   const response = await http.get<BranchListEnvelope>(
     `/providers/github-app/${appId}/repos/${owner}/${name}/branches`,
   );

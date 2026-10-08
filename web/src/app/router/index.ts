@@ -95,6 +95,16 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.databaseDetail", requiresAuth: true },
       },
       // The flat list pages are gone since PE-5: old bookmarks land on Projects.
+      // The GitHub App callback landing (GS-5) is a static route above the
+      // applications redirect, so manifest and setup redirects resolve here.
+      // GS-10 owns the Connect/Install/Disconnect controls; this page only
+      // shows the callback result.
+      {
+        path: "applications/github-app/callback",
+        name: "github-app-callback",
+        component: () => import("@/features/applications/pages/GitHubAppCallbackPage.vue"),
+        meta: { titleKey: "titles.githubAppCallback", requiresAuth: true },
+      },
       { path: "applications", redirect: { name: "projects" } },
       { path: "applications/:id", redirect: { name: "projects" } },
       { path: "databases", redirect: { name: "projects" } },

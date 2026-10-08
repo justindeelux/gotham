@@ -29,29 +29,43 @@ const (
 )
 
 // stateEntry is one pending manifest/install authorization, bound to the user
-// and (for installs) the app that issued it. States are single-use and
-// expire after stateTTL.
+// and (for installs) the app that issued it. Manifest states also carry the
+// GitHub base URLs chosen at StartManifest, so the callback exchanges the
+// code against the same host (github.com or Enterprise). States are
+// single-use and expire after stateTTL.
 type stateEntry struct {
-	userID  uuid.UUID
-	appID   uuid.UUID
-	kind    stateKind
-	expires time.Time
+	userID     uuid.UUID
+	appID      uuid.UUID
+	kind       stateKind
+	baseURL    string
+	apiBaseURL string
+	expires    time.Time
 }
 
 // stateStore keeps issued states in memory with no background goroutine:
-// expired entries are swept on write and rejected on read.
+// expired entries are swept on write and rejected on read. now overrides the
+// clock in tests; it defaults to time.Now.
 type stateStore struct {
 	mu      sync.Mutex
 	entries map[string]stateEntry
+	now     func() time.Time
 }
 
 func newStateStore() *stateStore {
-	return &stateStore{entries: make(map[string]stateEntry)}
+	return &stateStore{entries: make(map[string]stateEntry), now: time.Now}
 }
 
-// new issues a state for userID (and appID for installs). It fails when the
-// caller already holds too many pending states.
-func (s *stateStore) new(userID, appID uuid.UUID, kind stateKind) (string, error) {
+func (s *stateStore) time() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+// new issues a state for userID (and appID for installs), remembering the
+// base URLs for manifest states. It fails when the caller already holds too
+// many pending states.
+func (s *stateStore) new(userID, appID uuid.UUID, kind stateKind, baseURL, apiBaseURL string) (string, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -73,35 +87,55 @@ func (s *stateStore) new(userID, appID uuid.UUID, kind stateKind) (string, error
 	if held >= statePerUser {
 		return "", ErrTooManyRequests
 	}
-	s.entries[state] = stateEntry{userID: userID, appID: appID, kind: kind, expires: time.Now().Add(stateTTL)}
+	s.entries[state] = stateEntry{
+		userID:     userID,
+		appID:      appID,
+		kind:       kind,
+		baseURL:    baseURL,
+		apiBaseURL: apiBaseURL,
+		expires:    s.time().Add(stateTTL),
+	}
 	return state, nil
 }
 
 // redeem consumes a state: a second use, an expired state, or a state issued
 // for another user, kind or app fails. Expiry is checked on read, so a state
-// that lapsed between issue and callback is refused.
-func (s *stateStore) redeem(state string, userID, appID uuid.UUID, kind stateKind) bool {
+// that lapsed between issue and callback is refused. On success it returns
+// the entry, carrying the manifest base URLs the callback must use.
+func (s *stateStore) redeem(state string, userID, appID uuid.UUID, kind stateKind) (stateEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.entries[state]
 	if !ok {
-		return false
+		return stateEntry{}, false
 	}
 	delete(s.entries, state)
-	if time.Now().After(entry.expires) {
-		return false
+	if s.time().After(entry.expires) {
+		return stateEntry{}, false
 	}
 	if entry.userID != userID || entry.kind != kind {
-		return false
+		return stateEntry{}, false
 	}
 	if kind == stateInstall && entry.appID != appID {
-		return false
+		return stateEntry{}, false
 	}
-	return true
+	return entry, true
+}
+
+// peek reports the user a pending state was issued to, without consuming it.
+// Expired states and kind mismatches fail.
+func (s *stateStore) peek(state string, kind stateKind) (uuid.UUID, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[state]
+	if !ok || s.time().After(entry.expires) || entry.kind != kind {
+		return uuid.Nil, false
+	}
+	return entry.userID, true
 }
 
 func (s *stateStore) sweepLocked() {
-	now := time.Now()
+	now := s.time()
 	for state, e := range s.entries {
 		if now.After(e.expires) {
 			delete(s.entries, state)

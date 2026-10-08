@@ -28,6 +28,17 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 			"pem":            "fake-pem",
 		})
 	})
+	mux.HandleFunc("/app/installations/999", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("installation method = %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); !strings.HasPrefix(got, "Bearer ") {
+			t.Errorf("installation request has no bearer jwt")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": 999, "app_id": 77, "account": map[string]any{"login": "acme"},
+		})
+	})
 	mux.HandleFunc("/app/installations/999/access_tokens", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); !strings.HasPrefix(got, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(got, "Bearer ")) == "" {
 			t.Errorf("token request has no bearer jwt")
@@ -77,6 +88,14 @@ func TestHTTPAPIAgainstFake(t *testing.T) {
 	}
 	if tok.Token != "inst-token-1" || time.Until(tok.ExpiresAt) > time.Hour {
 		t.Fatalf("token = %+v", tok)
+	}
+
+	info, err := api.GetInstallation(ctx, 999, "test-jwt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != 999 || info.Account != "acme" || info.AppID != 77 {
+		t.Fatalf("installation = %+v", info)
 	}
 
 	repos, err := api.ListInstallationRepos(ctx, tok.Token)

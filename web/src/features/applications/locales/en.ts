@@ -219,7 +219,6 @@ const en = {
     providerPlaceholder: "Select a connected provider",
     providerHint: "Each provider uses its own OAuth app.",
     privateSuffix: " (private)",
-    protectedSuffix: " (protected)",
     connected: "connected",
     notConnected: "not connected",
     cloneUrl: "Clone URL",
@@ -294,6 +293,13 @@ const en = {
     failed: "Connection failed",
     invalidHint: "The connection request expired or was already used.",
     failedHint: "The provider refused the exchange.",
+    back: "Back to projects",
+  },
+  githubAppCallback: {
+    connected: "GitHub App connected. Install it on your repositories to list them in the wizard.",
+    installed: "GitHub App installed. Its repositories are now listed in the application wizard.",
+    failed: "The GitHub App step did not complete. Start again from the Connect flow.",
+    hint: "The Connect, Install and Disconnect controls live in the Git sources management page.",
     back: "Back to projects",
   },
   detail: {

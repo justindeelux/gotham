@@ -41,6 +41,53 @@ func doRequest(t *testing.T, router http.Handler, method, path string, body any)
 	return rec
 }
 
+// TestRoutesBrowserCallback proves the browser callback needs no bearer
+// token: the state identifies the user, and both outcomes finish with a
+// redirect to the SPA result route carrying a bounded flag.
+func TestRoutesBrowserCallback(t *testing.T) {
+	svc, _, api, userID := testFixture()
+	api.pem = testKeyPEM(t)
+	router := testRouter(svc, userID)
+
+	rec := doRequest(t, router, http.MethodPost, "/v1/providers/github-app/manifest",
+		map[string]any{"name": "gotham-test"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manifest = %d %s", rec.Code, rec.Body.String())
+	}
+	var manifest manifestResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	rec = doRequest(t, router, http.MethodGet,
+		"/v1/providers/github-app/callback?code=manifest-code&state="+manifest.State, nil)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("browser callback = %d, want 302", rec.Code)
+	}
+	location := rec.Header().Get("Location")
+	if !strings.HasPrefix(location, "/applications/github-app/callback?github_app=connected&id=") {
+		t.Fatalf("location = %q", location)
+	}
+
+	// Replaying the consumed state redirects with the expired flag, and a
+	// missing state does too: no JSON error ever reaches the browser.
+	rec = doRequest(t, router, http.MethodGet,
+		"/v1/providers/github-app/callback?code=manifest-code&state="+manifest.State, nil)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("replay = %d, want 302", rec.Code)
+	}
+	if location := rec.Header().Get("Location"); location != "/applications/github-app/callback?github_app=expired" {
+		t.Fatalf("replay location = %q", location)
+	}
+	rec = doRequest(t, router, http.MethodGet, "/v1/providers/github-app/callback", nil)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("missing state = %d, want 302", rec.Code)
+	}
+	if location := rec.Header().Get("Location"); location != "/applications/github-app/callback?github_app=expired" {
+		t.Fatalf("missing state location = %q", location)
+	}
+}
+
 // TestRoutesEndToEnd runs connect + install + list repos + branches + push
 // shape + disconnect through HTTP against the fake.
 func TestRoutesEndToEnd(t *testing.T) {

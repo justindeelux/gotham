@@ -442,7 +442,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// a key on the Git host needs the same stored connection the webhook
 		// lifecycle uses. The proxy service (BE-6.1) receives a best-effort
 		// resync after application mutations and successful deployments.
-		s.deploy = s.deployService(providerSvc, s.proxy)
+		s.deploy = s.deployService(providerSvc, s.proxy, githubAppSvc)
 		deploy.Mount(api, s.withTeam(), UserIDFromContext, s.deploy)
 
 		// Push webhooks (BE-4.4) and preview deployments (BE-8.1): the public,
@@ -530,7 +530,7 @@ func (s *Server) baseMiddleware(r chi.Router) {
 // Tests pass a fake registry that cannot dial agents, which leaves the dialer
 // unwired instead of forcing a wider interface change. It returns nil (no
 // database, or FEATURE_APPLICATIONS=false) so deploy.Mount is a no-op.
-func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc proxy.ProxyService) deploy.DeployService {
+func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc proxy.ProxyService, githubAppSvc *githubapp.Service) deploy.DeployService {
 	if s.persistence == nil {
 		return nil
 	}
@@ -539,6 +539,9 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		Secret:    s.secretKey,
 		RedisAddr: s.cfg.Snapshot().Redis.Addr,
 		Logger:    s.logger,
+	}
+	if githubAppSvc != nil {
+		cfg.AppTokens = githubAppTokenAdapter{svc: githubAppSvc}
 	}
 	if providerSvc != nil {
 		if registrar, ok := providerSvc.(deploy.KeyRegistrar); ok {
@@ -693,6 +696,7 @@ func (s *Server) webhookService(providerSvc providers.ProviderService, githubApp
 	// unauthorized while push handling is untouched.
 	if githubAppSvc != nil {
 		cfg.AppEvents = githubAppSvc
+		cfg.AppPush = githubAppPushAdapter{svc: githubAppSvc}
 	}
 	return webhooks.NewDefaultService(cfg)
 }

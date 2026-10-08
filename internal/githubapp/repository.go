@@ -19,7 +19,7 @@ type storeRepository struct {
 }
 
 // newStoreRepository builds the PostgreSQL-backed repository.
-func newStoreRepository(st *store.Store, _ string) *storeRepository {
+func newStoreRepository(st *store.Store) *storeRepository {
 	return &storeRepository{store: st}
 }
 
@@ -68,6 +68,16 @@ func (r *storeRepository) GetSealed(ctx context.Context, id, userID uuid.UUID) (
 		ID:     pgUUID(id),
 		UserID: pgUUID(userID),
 	})
+	if err != nil {
+		return sealedApp{}, fmt.Errorf("%w: %w", ErrNotFound, err)
+	}
+	return sealedFromRow(row), nil
+}
+
+// GetSealedByID loads one app with its still-sealed secrets without a user
+// scope, for webhook handling where the signature is the authentication.
+func (r *storeRepository) GetSealedByID(ctx context.Context, id uuid.UUID) (sealedApp, error) {
+	row, err := r.store.GetGitHubAppByID(ctx, pgUUID(id))
 	if err != nil {
 		return sealedApp{}, fmt.Errorf("%w: %w", ErrNotFound, err)
 	}
@@ -168,10 +178,12 @@ func (r *storeRepository) AppsByInstallationID(ctx context.Context, installation
 	return apps, nil
 }
 
-// ReplaceRepoCache overwrites the cached repository list of one installation.
+// ReplaceRepoCache atomically overwrites the cached repository list of one
+// installation: repos revoked upstream disappear instead of lingering.
 func (r *storeRepository) ReplaceRepoCache(ctx context.Context, appID uuid.UUID, installationID int64, repos []Repo) error {
+	params := make([]sqlc.UpsertGitHubRepoCacheParams, 0, len(repos))
 	for _, repo := range repos {
-		if _, err := r.store.UpsertGitHubRepoCache(ctx, sqlc.UpsertGitHubRepoCacheParams{
+		params = append(params, sqlc.UpsertGitHubRepoCacheParams{
 			GithubAppID:    pgUUID(appID),
 			InstallationID: installationID,
 			ExternalID:     repo.ExternalID,
@@ -182,9 +194,10 @@ func (r *storeRepository) ReplaceRepoCache(ctx context.Context, appID uuid.UUID,
 			CloneUrl:       repo.CloneURL,
 			SshUrl:         repo.SSHURL,
 			HtmlUrl:        repo.HTMLURL,
-		}); err != nil {
-			return fmt.Errorf("githubapp: cache: %w", err)
-		}
+		})
+	}
+	if err := r.store.ReplaceGitHubRepoCache(ctx, pgUUID(appID), installationID, params); err != nil {
+		return fmt.Errorf("githubapp: cache: %w", err)
 	}
 	return nil
 }
@@ -214,14 +227,37 @@ func (r *storeRepository) ListRepoCache(ctx context.Context, appID uuid.UUID, in
 	return repos, nil
 }
 
-// CountApplications counts the caller's applications on the github_app source,
-// so disconnect can warn when credentials are still in use.
-func (r *storeRepository) CountApplications(ctx context.Context, userID uuid.UUID) (int64, error) {
-	n, err := r.store.CountGitHubAppApplications(ctx, pgUUID(userID))
+// CountApplicationsForApp counts the caller's github_app applications whose
+// repo is granted to this connection's installations.
+func (r *storeRepository) CountApplicationsForApp(ctx context.Context, userID, appID uuid.UUID) (int64, error) {
+	n, err := r.store.CountGitHubAppApplicationsForApp(ctx, sqlc.CountGitHubAppApplicationsForAppParams{
+		UserID:      pgUUID(userID),
+		GithubAppID: pgUUID(appID),
+	})
 	if err != nil {
 		return 0, fmt.Errorf("githubapp: count applications: %w", err)
 	}
 	return n, nil
+}
+
+// PushTargets returns the github_app applications of the app's owner watching
+// repo (lowercased owner/name), for webhook push routing.
+func (r *storeRepository) PushTargets(ctx context.Context, appID, userID uuid.UUID, repo string) ([]AppPushTarget, error) {
+	rows, err := r.store.ListGitHubAppPushTargets(ctx, sqlc.ListGitHubAppPushTargetsParams{
+		UserID: pgUUID(userID),
+		Repo:   repo,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("githubapp: push targets: %w", err)
+	}
+	targets := make([]AppPushTarget, 0, len(rows))
+	for _, row := range rows {
+		targets = append(targets, AppPushTarget{
+			ApplicationID: uuidFromPG(row.ID),
+			Branch:        row.Branch,
+		})
+	}
+	return targets, nil
 }
 
 func appFromRow(row sqlc.GithubApp) GitHubApp {

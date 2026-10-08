@@ -75,6 +75,7 @@ type applicationResponse struct {
 	Provider        string `json:"provider"`
 	Repo            string `json:"repo"`
 	CloneURL        string `json:"clone_url"`
+	SourceType      string `json:"source_type"`
 	Branch          string `json:"branch"`
 	BuildPack       string `json:"build_pack"`
 	BaseDomain      string `json:"base_domain"`
@@ -149,6 +150,7 @@ type createApplicationRequest struct {
 	Provider      string            `json:"provider"`
 	Repo          string            `json:"repo"`
 	CloneURL      string            `json:"clone_url"`
+	SourceType    string            `json:"source_type"`
 	Branch        string            `json:"branch"`
 	BuildPack     string            `json:"build_pack"`
 	BaseDomain    string            `json:"base_domain"`
@@ -284,6 +286,7 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		Provider:      req.Provider,
 		Repo:          req.Repo,
 		CloneURL:      req.CloneURL,
+		SourceType:    req.SourceType,
 		Branch:        req.Branch,
 		BuildPack:     req.BuildPack,
 		BaseDomain:    req.BaseDomain,
@@ -681,6 +684,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusForbidden, errorBody{Message: "insufficient team role"})
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrSourceNotImplemented):
+		writeJSON(w, http.StatusUnprocessableEntity, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deployment is already in progress"})
 	case errors.Is(err, ErrDeployInFlight):
@@ -881,6 +886,7 @@ func newApplicationResponse(application Application) applicationResponse {
 		Provider:           application.Provider,
 		Repo:               application.Repo,
 		CloneURL:           application.CloneURL,
+		SourceType:         application.SourceType,
 		Branch:             application.Branch,
 		BuildPack:          application.BuildPack,
 		BaseDomain:         application.BaseDomain,

@@ -49,7 +49,7 @@ const applicationBody = `{
 // exactly these, or the SPA reads undefined values.
 var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
-	"project_name", "provider", "repo", "clone_url", "branch", "build_pack",
+	"project_name", "provider", "repo", "clone_url", "source_type", "branch", "build_pack",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
 }
@@ -865,4 +865,83 @@ func mustJSON(t *testing.T, body []byte, path ...string) []byte {
 		t.Fatalf("re-encode: %v", err)
 	}
 	return encoded
+}
+
+// TestRoutesCreateApplicationSourceTypes posts source-typed payloads through
+// the real service: an unknown type is a 400, a not-yet-implemented type is
+// a 422, a provider/type mismatch is a 400, and a matching github_app
+// creates with the stored type.
+func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
+	body := func(sourceType, provider, repo, cloneURL string) string {
+		payload := map[string]any{
+			"name":           "demo app",
+			"environment_id": uuid.New().String(),
+			"provider":       provider,
+			"repo":           repo,
+			"clone_url":      cloneURL,
+			"source_type":    sourceType,
+			"branch":         "main",
+			"build_pack":     "dockerfile",
+			"server_id":      uuid.New().String(),
+		}
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("encode payload: %v", err)
+		}
+		return string(encoded)
+	}
+	cases := []struct {
+		name       string
+		sourceType string
+		provider   string
+		want       int
+	}{
+		{"unknown type", "tarball", "", http.StatusBadRequest},
+		{"dockerfile waits for GS-7", SourceDockerfile, "", http.StatusUnprocessableEntity},
+		{"private git waits for GS-4", SourceGitPrivate, "", http.StatusUnprocessableEntity},
+		{"github app with gitlab provider", SourceGitHubApp, "gitlab", http.StatusBadRequest},
+		{"public git with github provider", SourceGitPublic, "github", http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			userID := uuid.New()
+			svc := newTestService(t, &fakeRepository{})
+			srv := newRouteServer(svc, alwaysUser(userID))
+
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+				strings.NewReader(body(tc.sourceType, tc.provider, "acme/demo", "https://github.com/acme/demo.git"))))
+
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+
+	t.Run("matching github app creates", func(t *testing.T) {
+		userID := uuid.New()
+		repo := &fakeRepository{}
+		svc := newTestService(t, repo)
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+			strings.NewReader(body(SourceGitHubApp, "github", "acme/demo", "git@github.com:acme/demo.git"))))
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+		var envelope struct {
+			Application struct {
+				Provider   string `json:"provider"`
+				SourceType string `json:"source_type"`
+			} `json:"application"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if envelope.Application.SourceType != SourceGitHubApp || envelope.Application.Provider != "github" {
+			t.Errorf("application = %+v, want github_app/github", envelope.Application)
+		}
+	})
 }

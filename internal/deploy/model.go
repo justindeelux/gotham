@@ -6,6 +6,63 @@ import (
 	"github.com/google/uuid"
 )
 
+// Application source types (GS-2). Git-backed types share the deploy-key
+// cloner; Dockerfile, Compose and image sources land in GS-7..GS-9 and fail
+// closed in the orchestrator until then.
+const (
+	SourceGitPublic  = "git_public"
+	SourceGitPrivate = "git_private"
+	SourceGitHubApp  = "github_app"
+	SourceGitLabApp  = "gitlab_app"
+	SourceDockerfile = "dockerfile"
+	SourceCompose    = "compose"
+	SourceImage      = "image"
+)
+
+// ValidSourceType reports whether s names a known application source type.
+// Empty is valid: legacy rows and callers predate the column and behave
+// like SourceGitPublic.
+func ValidSourceType(s string) bool {
+	switch s {
+	case "", SourceGitPublic, SourceGitPrivate, SourceGitHubApp,
+		SourceGitLabApp, SourceDockerfile, SourceCompose, SourceImage:
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizeSourceType fills an empty source type from the provider, so API
+// clients that predate GS-2 keep their behaviour: a provider-connected
+// application stays on the provider-backed flow, everything else is public
+// git. It mirrors the 00037 backfill.
+func NormalizeSourceType(sourceType, provider string) string {
+	if sourceType != "" {
+		return sourceType
+	}
+	switch provider {
+	case "github":
+		return SourceGitHubApp
+	case "gitlab":
+		return SourceGitLabApp
+	default:
+		return SourceGitPublic
+	}
+}
+
+// SourceTypeImplemented reports whether the deploy pipeline can fetch
+// the type yet: only public git and the connected-provider flows in GS-2.
+// git_private waits for GS-4 (no key path exists yet), and Dockerfile,
+// Compose and image sources wait for GS-7..GS-9.
+func SourceTypeImplemented(s string) bool {
+	switch s {
+	case "", SourceGitPublic, SourceGitHubApp, SourceGitLabApp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Application is the parent resource of every deployment: it pins the
 // repository, branch, build pack and runtime shape (server, port, domains).
 // Env vars, secrets and storages hang off the application so every redeploy
@@ -22,9 +79,12 @@ type Application struct {
 	Provider      string
 	Repo          string
 	CloneURL      string
-	Branch        string
-	BuildPack     string
-	BaseDomain    string
+	// SourceType names how the application fetches its code (GS-2). Empty
+	// means a legacy row or caller and behaves like SourceGitPublic.
+	SourceType string
+	Branch     string
+	BuildPack  string
+	BaseDomain string
 	// BaseDomainDisabled marks a binding the domain-uniqueness migration had
 	// to disable because another application owned the domain first. The
 	// value is preserved; an explicit domain update re-enables it.

@@ -1,4 +1,5 @@
 import { http, teamHeaders } from "@/shared/api/http";
+import type { SourceType } from "@/features/applications/schemas/applications";
 import { i18n } from "@/shared/i18n";
 import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers";
 
@@ -42,6 +43,8 @@ export interface Application {
   provider: string;
   repo: string;
   clone_url: string;
+  /** How the application fetches its code (GS-2 source model). */
+  source_type: SourceType;
   branch: string;
   build_pack: string;
   base_domain: string;
@@ -118,6 +121,8 @@ export interface CreateApplicationInput {
   provider: string;
   repo: string;
   clone_url: string;
+  /** How the application fetches its code (GS-2 source model). */
+  source_type: SourceType;
   branch: string;
   build_pack: string;
   base_domain: string;

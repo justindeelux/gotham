@@ -13,6 +13,28 @@ const { t } = useI18n();
 <template>
   <NSpace vertical :size="16">
     <div class="form-row">
+      <NFormItem :label="t('applications.wizard.sourceType')" :show-feedback="true">
+        <NSelect
+          v-model:value="form.sourceType"
+          :options="wizard.sourceTypeOptions.value"
+          :placeholder="t('applications.wizard.sourceTypePlaceholder')"
+        />
+        <span class="field-hint">{{ t("applications.wizard.sourceTypeHint") }}</span>
+      </NFormItem>
+    </div>
+
+    <div class="form-row" v-if="wizard.isPublicRepo.value">
+      <NFormItem :label="t('applications.wizard.cloneUrl')">
+        <NInput
+          v-model:value="form.publicCloneUrl"
+          class="mono"
+          placeholder="https://github.com/owner/repo.git"
+        />
+        <span class="field-hint">{{ t("applications.wizard.cloneHint") }}</span>
+      </NFormItem>
+    </div>
+
+    <div class="form-row" v-else-if="wizard.isProviderFlow.value">
       <NFormItem :label="t('applications.wizard.provider')" :show-feedback="true">
         <NSelect
           v-model:value="form.providerId"
@@ -23,16 +45,7 @@ const { t } = useI18n();
         <span class="field-hint">{{ t("applications.wizard.providerHint") }}</span>
       </NFormItem>
 
-      <NFormItem v-if="wizard.isPublicRepo.value" :label="t('applications.wizard.cloneUrl')">
-        <NInput
-          v-model:value="form.publicCloneUrl"
-          class="mono"
-          placeholder="https://github.com/owner/repo.git"
-        />
-        <span class="field-hint">{{ t("applications.wizard.cloneHint") }}</span>
-      </NFormItem>
-
-      <NFormItem v-else :label="t('applications.wizard.repository')">
+      <NFormItem :label="t('applications.wizard.repository')">
         <NSelect
           v-model:value="form.repoFullName"
           :options="wizard.repoOptions.value"
@@ -56,6 +69,10 @@ const { t } = useI18n();
         </NAlert>
       </NFormItem>
     </div>
+
+    <NAlert v-else type="info" :show-icon="true">
+      {{ t("applications.wizard.sourceUnavailable") }}
+    </NAlert>
 
     <NAlert v-if="wizard.sourceError.value" type="warning" :show-icon="true">
       {{ wizard.sourceError.value }}

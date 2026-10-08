@@ -4,7 +4,6 @@ import { computed } from "vue";
 interface Props {
   letters: string;
   color: string;
-  label: string;
 }
 
 const props = defineProps<Props>();
@@ -25,8 +24,7 @@ const fontSize = computed<number>(() => {
   <svg
     class="brand-icon"
     viewBox="0 0 40 40"
-    role="img"
-    :aria-label="label"
+    aria-hidden="true"
   >
     <rect width="40" height="40" rx="9" :fill="color" />
     <text

@@ -17,10 +17,11 @@ const en = {
     label: "Filter services",
     placeholder: "Filter services…",
     empty: "No service matches this filter.",
+    emptyCatalog: "No templates in the catalog.",
   },
   groups: {
     application: "Application",
-    applicationMeta: "wizard · git, dockerfile, compose, image",
+    applicationMeta: "wizard · git repository",
     service: "Service",
     serviceMeta: "one card per template",
     serviceHint:
@@ -32,7 +33,7 @@ const en = {
   },
   applicationCard: {
     name: "Application",
-    description: "Build and deploy from source — Git repo, Dockerfile, compose or image.",
+    description: "Build and deploy from a Git repository.",
     tag: "source wizard",
   },
   serviceCard: {

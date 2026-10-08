@@ -12,6 +12,7 @@ import {
 } from "naive-ui";
 import { provide, toRef } from "vue";
 
+import { i18n } from "@/shared/i18n";
 import type {
   CreatedDatabase,
 } from "@/features/databases/api/databases";
@@ -52,8 +53,6 @@ const wizard = useCreateDatabaseWizard({
   environmentId: toRef(props, "environmentId"),
   engine: toRef(props, "engine"),
 });
-
-import { i18n } from "@/shared/i18n";
 
 /** t resolves a databases/common message in the current locale. */
 function t(key: string, params?: Record<string, string | number>): string {

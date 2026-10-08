@@ -8,6 +8,7 @@ import type { Application } from "@/features/applications/api/applications";
 import CreateDatabaseWizard from "@/features/databases/components/CreateDatabaseWizard.vue";
 import type { CreatedDatabase } from "@/features/databases/api/databases";
 import { ENGINES, engineByValue } from "@/features/databases/utils/databaseEngines";
+import { useProjectsStore } from "@/features/projects/stores/projects";
 import TemplateWizard from "@/features/templates/components/TemplateWizard.vue";
 import {
   templateOverlayDescription,
@@ -16,7 +17,7 @@ import type { TemplateSummary } from "@/features/templates/api/templates";
 import { useTemplatesStore } from "@/features/templates/stores/templates";
 import { activeLocale, i18n } from "@/shared/i18n";
 import BrandIcon from "../components/BrandIcon.vue";
-import { brandFor } from "../utils/brands";
+import { brandFor, templateBrand } from "../utils/brands";
 
 /**
  * Add-resource picker (GS-1, ported from docs/design/add-resource.html): one
@@ -25,15 +26,16 @@ import { brandFor } from "../utils/brands";
  * engine). Each card shows an inline-SVG brand mark, the name and a one-line
  * description; selecting a card opens the matching existing create wizard.
  *
- * Scope lands through the query when the user arrives from an environment
- * page (`?projectId=&environmentId=`); otherwise each wizard asks for the
- * scope itself. Thin route component: the wizards own their forms and
+ * Scope is an optional query (`?projectId=&environmentId=`, e.g. for a
+ * future environment-page link); otherwise each wizard asks for the scope
+ * itself. Thin route component: the wizards own their forms and
  * report back through `created`, after which this page navigates to the
  * new resource's detail page.
  */
 const route = useRoute();
 const router = useRouter();
 const templatesStore = useTemplatesStore();
+const projectsStore = useProjectsStore();
 
 /**
  * t renders page copy in the active locale (tracks language switches).
@@ -44,21 +46,50 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-/** queryText reads one string query value (the env page links it). */
+/** queryText reads one string query value (the optional scope link). */
 function queryText(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-/** scopeProjectId preselects the wizard scope from the env-page link. */
+/** scopeProjectId preselects the wizard scope from the query link. */
 const scopeProjectId = computed<string>(() => queryText(route.query.projectId));
 
-/** scopeEnvironmentId preselects the wizard scope from the env-page link. */
+/** scopeEnvironmentId preselects the wizard scope from the query link. */
 const scopeEnvironmentId = computed<string>(() => queryText(route.query.environmentId));
 
 /** hasScope is true when the page arrived with an environment scope. */
 const hasScope = computed<boolean>(
   () => scopeProjectId.value !== "" && scopeEnvironmentId.value !== "",
 );
+
+/**
+ * scopeProjectName resolves the banner project name through the projects
+ * store, falling back to the raw id while loading or when unresolved.
+ */
+const scopeProjectName = computed<string>(() => {
+  const detail = projectsStore.detail;
+  if (detail && detail.id === scopeProjectId.value) {
+    return detail.name;
+  }
+  return scopeProjectId.value;
+});
+
+/**
+ * scopeEnvironmentName resolves the banner environment name through the
+ * loaded project detail, falling back to the raw id when unresolved.
+ */
+const scopeEnvironmentName = computed<string>(() => {
+  const detail = projectsStore.detail;
+  if (detail && detail.id === scopeProjectId.value) {
+    const match = projectsStore.environments.find(
+      (environment) => environment.id === scopeEnvironmentId.value,
+    );
+    if (match) {
+      return match.name;
+    }
+  }
+  return scopeEnvironmentId.value;
+});
 
 /** serviceQuery filters the service cards by name or description. */
 const serviceQuery = ref("");
@@ -169,6 +200,9 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
 
 onMounted(() => {
   void templatesStore.fetchTemplates().catch(() => undefined);
+  if (hasScope.value) {
+    void projectsStore.fetchDetail(scopeProjectId.value).catch(() => undefined);
+  }
 });
 </script>
 
@@ -178,7 +212,7 @@ onMounted(() => {
       <p class="eyebrow">{{ t("add-resource.page.eyebrow") }}</p>
       <h1>{{ t("add-resource.page.title") }}</h1>
       <p class="page-desc">{{ t("add-resource.page.description") }}</p>
-      <p class="small muted">{{ t(hasScope ? "add-resource.page.scopeIn" : "add-resource.page.scopeGlobal", { project: scopeProjectId, environment: scopeEnvironmentId }) }}</p>
+      <p class="small muted">{{ t(hasScope ? "add-resource.page.scopeIn" : "add-resource.page.scopeGlobal", { project: scopeProjectName, environment: scopeEnvironmentName }) }}</p>
     </div>
 
     <section :aria-label="t('add-resource.groups.application')">
@@ -186,10 +220,10 @@ onMounted(() => {
         <h2>{{ t("add-resource.groups.application") }}</h2>
         <span class="meta">{{ t("add-resource.groups.applicationMeta") }}</span>
       </div>
-      <div class="res-grid" role="group" :aria-label="t('add-resource.groups.application')" @keydown="handleGroupKey">
+      <div class="res-grid" @keydown="handleGroupKey">
         <button type="button" class="res-card" @click="openApplication">
           <span class="res-head">
-            <BrandIcon v-bind="brandFor('application', t('add-resource.applicationCard.name'))" :label="t('add-resource.applicationCard.name')" />
+            <BrandIcon v-bind="brandFor('application', t('add-resource.applicationCard.name'))" />
             <span class="res-name">{{ t("add-resource.applicationCard.name") }}</span>
           </span>
           <span class="res-desc">{{ t("add-resource.applicationCard.description") }}</span>
@@ -223,8 +257,6 @@ onMounted(() => {
       <div
         v-else-if="filteredTemplates.length > 0"
         class="res-grid"
-        role="group"
-        :aria-label="t('add-resource.groups.service')"
         @keydown="handleGroupKey"
       >
         <button
@@ -236,14 +268,14 @@ onMounted(() => {
           @click="openTemplate(template.slug)"
         >
           <span class="res-head">
-            <BrandIcon v-bind="brandFor(template.icon, template.name)" :label="template.name" />
+            <BrandIcon v-bind="templateBrand(template.icon, template.name)" />
             <span class="res-name">{{ template.name }}</span>
           </span>
           <span class="res-desc">{{ templateOverlayDescription(template) }}</span>
           <span class="res-meta"><span class="tag">{{ t("add-resource.serviceCard.tag") }}</span></span>
         </button>
       </div>
-      <NEmpty v-else :description="t('add-resource.search.empty')" />
+      <NEmpty v-else :description="t(serviceQuery.trim() === '' ? 'add-resource.search.emptyCatalog' : 'add-resource.search.empty')" />
     </section>
 
     <section :aria-label="t('add-resource.groups.database')">
@@ -254,8 +286,6 @@ onMounted(() => {
       <p class="page-desc">{{ t("add-resource.groups.databaseHint") }}</p>
       <div
         class="res-grid"
-        role="group"
-        :aria-label="t('add-resource.groups.database')"
         @keydown="handleGroupKey"
       >
         <button
@@ -267,7 +297,7 @@ onMounted(() => {
           @click="openDatabase(engine.value)"
         >
           <span class="res-head">
-            <BrandIcon v-bind="brandFor(engine.value, engine.label)" :label="engine.label" />
+            <BrandIcon v-bind="brandFor(engine.value, engine.label)" />
             <span class="res-name">{{ engine.label }}</span>
           </span>
           <span class="res-desc">{{ engineDescription(engine.value) }}</span>

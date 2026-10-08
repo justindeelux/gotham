@@ -19,7 +19,7 @@
   @media (max-width: 560px) { .pg-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>
 </head>
-<body data-page="add-resource" data-nav="projects">
+<body data-page="add-resource" data-nav="add-resource">
 <div class="app">
   <nav class="rail" id="rail" aria-label="Managed servers"></nav>
   <aside class="sidebar" id="sidebar"></aside>
@@ -41,7 +41,7 @@
         <section aria-labelledby="add-app-title" data-od-id="add-group-application">
           <div class="section-title">
             <h2 id="add-app-title">Application</h2>
-            <span class="meta">wizard · git, dockerfile, compose, image</span>
+            <span class="meta">wizard · git repository</span>
           </div>
           <div class="pg-grid">
             <button class="tpl-card" type="button" data-open="app-wizard" data-od-id="add-application">
@@ -49,7 +49,7 @@
                 <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#5865f2"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">&lt;/&gt;</text></svg>
                 <span class="fg-2 bold">Application</span>
               </span>
-              <span class="small muted">Build and deploy from source — Git repo, Dockerfile, compose or image.</span>
+              <span class="small muted">Build and deploy from a Git repository.</span>
               <span class="tpl-meta"><span class="tag">source wizard</span></span>
             </button>
           </div>
@@ -79,7 +79,7 @@
             </button>
             <button class="tpl-card" type="button" data-tpl-card data-open="tpl-modal" data-template="nextcloud" data-od-id="add-service-nextcloud">
               <span class="pg-card-row">
-                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#0082c9"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">NC</text></svg>
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#0082c9"/><text x="20" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">N</text></svg>
                 <span class="fg-2 bold">Nextcloud</span>
               </span>
               <span class="small muted">Nextcloud with PostgreSQL and Redis, persistent named volumes and a routed domain.</span>
@@ -87,7 +87,7 @@
             </button>
             <button class="tpl-card" type="button" data-tpl-card data-open="tpl-modal" data-template="n8n" data-od-id="add-service-n8n">
               <span class="pg-card-row">
-                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#ea4b71"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">n8</text></svg>
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#ea4b71"/><text x="20" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">N</text></svg>
                 <span class="fg-2 bold">n8n</span>
               </span>
               <span class="small muted">n8n workflow automation with a persistent named volume and a routed domain.</span>
@@ -95,7 +95,7 @@
             </button>
             <button class="tpl-card" type="button" data-tpl-card data-open="tpl-modal" data-template="uptime-kuma" data-od-id="add-service-uptime-kuma">
               <span class="pg-card-row">
-                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#3f9e4d"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">UK</text></svg>
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#3f9e4d"/><text x="20" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">U</text></svg>
                 <span class="fg-2 bold">Uptime Kuma</span>
               </span>
               <span class="small muted">Uptime Kuma monitoring with a persistent named volume and a routed domain.</span>

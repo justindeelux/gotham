@@ -3,6 +3,7 @@ import { NAlert, NEmpty, NSpin } from "naive-ui";
 
 import type { TemplateSummary } from "@/features/templates/api/templates";
 import { templateOverlayDescription } from "@/features/templates/api/templates";
+import { cardMark } from "@/features/templates/utils/templateMark";
 import { activeLocale, i18n } from "@/shared/i18n";
 
 /**
@@ -37,16 +38,6 @@ function t(key: string, params?: Record<string, string | number>): string {
   return String(i18n.global.t(key, params ?? {}));
 }
 
-/**
- * cardMark derives the card mark from the template name. The API `icon` key
- * is carried as `data-icon` for traceability but not rendered as a glyph: the
- * app's stroke icon set has no brand glyphs, and the mockup's own gallery uses
- * the letter mark (`.tpl-mark`).
- */
-function cardMark(name: string): string {
-  const first = name.trim()[0];
-  return first ? first.toUpperCase() : "?";
-}
 </script>
 
 <template>

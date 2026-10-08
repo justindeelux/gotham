@@ -18,10 +18,11 @@ const vi: typeof en = {
     label: "Lọc service",
     placeholder: "Lọc service…",
     empty: "Không có service nào khớp với bộ lọc.",
+    emptyCatalog: "Không có template nào trong danh mục.",
   },
   groups: {
     application: "Ứng dụng",
-    applicationMeta: "wizard · git, dockerfile, compose, image",
+    applicationMeta: "wizard · kho git",
     service: "Service",
     serviceMeta: "một thẻ mỗi template",
     serviceHint:
@@ -33,7 +34,7 @@ const vi: typeof en = {
   },
   applicationCard: {
     name: "Ứng dụng",
-    description: "Build và deploy từ mã nguồn — repo Git, Dockerfile, compose hoặc image.",
+    description: "Build và deploy từ kho Git.",
     tag: "wizard mã nguồn",
   },
   serviceCard: {

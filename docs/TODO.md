@@ -46,10 +46,11 @@ Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
   public git (GS-3, JUS-59, #204), GitLab connect (GS-6, JUS-62, #205), GitHub App (GS-5,
   JUS-61, #206), Dockerfile (GS-7, JUS-63, #207), private git (GS-4, JUS-60, #208), Docker
   image (GS-9, JUS-65, #209), Compose (GS-8, JUS-64, #210), Git sources page (GS-10,
-  JUS-66, #211). Parent JUS-56 stays open for the follow-ups below.
-- [ ] **JUS-67** host deny-list (SSRF) for keyless git clone and `ls-remote`.
-- [ ] **JUS-68** GitHub App clone hardening residuals (https-only token URLs, resolver
-  honours `github_app_id`, disconnect usage count by link).
+  JUS-66, #211). Parent JUS-56 is closed.
+- [x] **JUS-67** host deny-list (SSRF) for keyless git clone and `ls-remote` (#214;
+  residuals in `docs/install.md`: ssh/`git://` not pinned, http(s) proxy bypasses the pin).
+- [x] **JUS-68** GitHub App clone hardening residuals (#213): https-only token URLs,
+  resolver scoped to the app's `github_app_id`, disconnect usage counted by link.
 - [ ] Live verification against real GitHub, GitLab and a private registry (tests use fakes).
 
 ## Phase 13 residuals (from the PE-2/PE-5/PE-6 reviews; none blocking)

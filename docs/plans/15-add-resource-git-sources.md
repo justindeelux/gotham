@@ -46,4 +46,4 @@ Decisions taken during review (each package had 2-6 review rounds by Claude Code
 - Compose: strict allowlist (`composeguard`) enforced on the control plane and the node (confined by default, capability probe refuses old agents); raw document stored per deployment, secrets re-rendered on rollback. Upgrade the control plane before the agents.
 - Git sources page: per-user connections, so disconnect usage covers only the active team's applications.
 
-Follow-ups: JUS-67 (host deny-list / SSRF for keyless clone and ls-remote), JUS-68 (GitHub App clone hardening residuals). Not verified against live GitHub, GitLab or registries (fakes only).
+Follow-ups merged: JUS-67 (host deny-list / SSRF for keyless clone and ls-remote, #214), JUS-68 (GitHub App clone hardening residuals, #213). Not verified against live GitHub, GitLab or registries (fakes only).

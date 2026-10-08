@@ -81,7 +81,11 @@ const { t } = useI18n();
     <div class="form-row">
       <NFormItem :label="t('applications.wizard.branch')">
         <NInput v-model:value="form.branch" class="mono" placeholder="main" />
-        <span class="field-hint">{{ t("applications.wizard.branchHint") }}</span>
+        <span class="field-hint">{{
+          wizard.isPublicRepo.value
+            ? t("applications.wizard.branchAutoHint")
+            : t("applications.wizard.branchHint")
+        }}</span>
       </NFormItem>
       <NFormItem :label="t('applications.wizard.appName')">
         <NInput v-model:value="form.name" class="mono" placeholder="storefront" />

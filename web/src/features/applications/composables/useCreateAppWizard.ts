@@ -27,6 +27,7 @@ import {
   cloneUrlSchema,
   hostPortSchema,
   providerSchema,
+  publicCloneUrlSchema,
   repoSchema,
   serverSchema,
   sourceTypeImplemented,
@@ -250,9 +251,9 @@ export function useCreateAppWizard(
     { label: tr("applications.wizard.sourceGitPrivate"), value: "git_private", disabled: true },
     { label: tr("applications.wizard.sourceGithubApp"), value: "github_app" },
     { label: tr("applications.wizard.sourceGitlabApp"), value: "gitlab_app" },
-    { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile" },
-    { label: tr("applications.wizard.sourceCompose"), value: "compose" },
-    { label: tr("applications.wizard.sourceImage"), value: "image" },
+    { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile", disabled: true },
+    { label: tr("applications.wizard.sourceCompose"), value: "compose", disabled: true },
+    { label: tr("applications.wizard.sourceImage"), value: "image", disabled: true },
   ]);
 
   const repoOptions = computed<Array<{ label: string; value: string }>>(() =>
@@ -292,7 +293,9 @@ export function useCreateAppWizard(
     }
     switch (form.sourceType) {
       case "git_public":
-        if (!cloneUrlSchema.safeParse(form.publicCloneUrl).success) {
+        // Keyless by definition: only the anonymous http(s)/git schemes pass,
+        // so an SSH URL can never reach a clone on ambient credentials.
+        if (!publicCloneUrlSchema.safeParse(form.publicCloneUrl).success) {
           return false;
         }
         break;
@@ -313,10 +316,13 @@ export function useCreateAppWizard(
         break;
       }
     }
-    return (
-      branchSchema.safeParse(form.branch).success &&
-      appNameSchema.safeParse(form.name).success
-    );
+    // A public repo with no branch pins the remote default at clone time
+    // (ls-remote); provider flows keep the required prefilled branch.
+    const branchOk =
+      form.sourceType === "git_public" && form.branch.trim() === ""
+        ? true
+        : branchSchema.safeParse(form.branch).success;
+    return branchOk && appNameSchema.safeParse(form.name).success;
   });
 
   /** runtimeValid gates the Runtime step: a node and a valid port. */
@@ -365,7 +371,8 @@ export function useCreateAppWizard(
   const reviewSource = computed<string>(() => {
     const repo =
       form.sourceType === "git_public" ? form.publicCloneUrl.trim() : form.repoFullName;
-    return `${repo} · ${form.branch.trim()}`;
+    const branch = form.branch.trim();
+    return `${repo} · ${branch === "" ? tr("applications.wizard.branchDefault") : branch}`;
   });
 
   // Entering the wizard loads providers and nodes; changing provider loads repos.

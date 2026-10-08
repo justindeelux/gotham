@@ -70,6 +70,9 @@ func TestValidateSourcePerType(t *testing.T) {
 		wantErr    error
 	}{
 		{"public git", SourceGitPublic, "", "", "https://github.com/acme/demo.git", nil},
+		{"public git over git scheme", SourceGitPublic, "", "", "git://git.internal/acme/demo.git", nil},
+		{"public git refuses ssh URL", SourceGitPublic, "", "", "ssh://git@git.internal/acme/demo.git", ErrValidation},
+		{"public git refuses scp-like URL", SourceGitPublic, "", "", "git@git.internal:acme/demo.git", ErrValidation},
 		{"legacy empty behaves like public git", "", "", "", "https://github.com/acme/demo.git", nil},
 		{"legacy public sentinel", SourceGitPublic, "public", "", "https://github.com/acme/demo.git", nil},
 		{"gitea-backed legacy app", SourceGitPublic, "gitea", "acme/demo", "https://gitea.example/acme/demo.git", nil},

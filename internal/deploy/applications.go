@@ -118,7 +118,13 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		HostPort:      in.HostPort,
 		ServerID:      in.ServerID,
 	}
-	if app.Branch == "" {
+	// An empty branch stays empty for public-git sources: the clone resolves
+	// the remote default via ls-remote (GS-3) instead of guessing "main".
+	// The branch column is NOT NULL DEFAULT 'main', which only fills rows
+	// that omit the column; storing '' explicitly is allowed and round-trips
+	// unchanged. Provider flows keep the "main" fallback (their wizard
+	// always prefills a branch, and empty would break push-branch matching).
+	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic {
 		app.Branch = defaultBranch
 	}
 	if err := validateApplication(app, true); err != nil {
@@ -320,7 +326,10 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		}
 		app.ServerID = *in.ServerID
 	}
-	if app.Branch == "" {
+	// Clearing the branch restores ls-remote default resolution for
+	// public-git sources (see the create path); provider flows fall back to
+	// "main" so push-branch matching keeps working.
+	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic {
 		app.Branch = defaultBranch
 	}
 	// Legacy rows may predate normalization: normalize the resulting value so
@@ -849,19 +858,20 @@ func validateApplication(app Application, checkSource bool) error {
 // slug must agree with the type (github_app needs provider "github",
 // gitlab_app "gitlab"), so hook and deploy-key paths that key off Provider
 // can never disagree with the orchestrator switch that keys off SourceType.
-// git_public refuses only the two slugs that own a dedicated type; every
-// other value ("", the legacy "public" sentinel, gitea and friends) passes,
-// so existing apps and their previews keep working with the provider-based
-// hook and key behavior they already have. git_private and the container
-// sources fail closed until their packages land (GS-4, GS-7..GS-9).
+// git_public refuses only the two slugs that own a dedicated type and takes a
+// keyless http(s)/git URL; every other provider value ("", the legacy
+// "public" sentinel, gitea and friends) stays git_public, so existing apps
+// and their previews keep working with the provider-based hook and key
+// behavior they already have. git_private and the container sources fail
+// closed until their packages land (GS-4, GS-7..GS-9).
 func validateSource(app Application) error {
 	switch app.SourceType {
 	case "", SourceGitPublic:
 		if app.Provider == "github" || app.Provider == "gitlab" {
-			return fmt.Errorf("%w: source type %q requires an empty provider, got %q",
-				ErrValidation, app.SourceType, app.Provider)
+			return fmt.Errorf("%w: provider %q owns the %q_app source type: use it instead of %q",
+				ErrValidation, app.Provider, app.Provider, SourceGitPublic)
 		}
-		return validateCloneURL(app.CloneURL)
+		return ValidatePublicGitURL(app.CloneURL)
 	case SourceGitHubApp:
 		return validateProviderSource(app, "github")
 	case SourceGitLabApp:

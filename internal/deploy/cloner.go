@@ -32,15 +32,14 @@ type deployKeyResolver interface {
 	DeployKeyPrivatePEM(ctx context.Context, appID uuid.UUID) (string, error)
 }
 
-// appTokenResolver mints a fresh installation access token for a github_app
-// application. The token is short-lived and embedded only in the clone URL
-// for this attempt: it is never persisted, and the log redaction below keeps
-// it out of the realtime log. It is an interface so tests hand the cloner a
-// fixed token without a GitHub App.
+// appTokenResolver builds the token-authenticated clone URL for a github_app
+// application. Resolution is by repository grant (not by row id): the token
+// is minted for the installation that grants the repo, embedded only in the
+// returned URL, never persisted and never logged by callers.
 type appTokenResolver interface {
-	// InstallationToken returns a fresh installation token for the
-	// application owned by userID.
-	InstallationToken(ctx context.Context, userID, appID uuid.UUID) (string, error)
+	// TokenCloneURL returns cloneURL with a fresh installation token for the
+	// installation granting repo and owned by userID.
+	TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, cloneURL string) (string, error)
 }
 
 // cloneRunner executes git with an environment and returns its combined
@@ -84,23 +83,18 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		return err
 	}
 	if app.SourceType == SourceGitHubApp {
-		// A github_app application clones with a fresh installation token:
-		// the deploy-key path below does not apply (there is no SSH key on
-		// this flow) and an anonymous fallback would turn a revoked grant
-		// into a confusing auth error from the Git host. The token
-		// authenticates this attempt only: it is never stored on the
-		// application and never logged (see RedactCloneURL).
+		// A github_app application clones with a fresh installation token
+		// for the installation granting its repo: the deploy-key path below
+		// does not apply (there is no SSH key on this flow) and an anonymous
+		// fallback would turn a revoked grant into a confusing auth error
+		// from the Git host. The token authenticates this attempt only: it
+		// is never stored on the application and never logged (see
+		// RedactCloneURL).
 		if s.appTokens == nil {
 			return fmt.Errorf("%w: github app token resolver is not configured", ErrValidation)
 		}
-		fresh, err := s.appTokens.InstallationToken(ctx, app.UserID, app.ID)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(fresh) == "" {
-			return fmt.Errorf("%w: github app installation token is empty", ErrValidation)
-		}
-		if url, err = tokenCloneURL(url, fresh); err != nil {
+		var err error
+		if url, err = s.appTokens.TokenCloneURL(ctx, app.UserID, app.Repo, url); err != nil {
 			return err
 		}
 	}
@@ -317,26 +311,6 @@ func (f *deployKeyFiles) sshEnv(env []string) []string {
 // POSIX way.
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
-}
-
-// tokenCloneURL embeds a short-lived installation token in an http(s) clone
-// URL (https://host/owner/repo.git →
-// https://x-access-token:<token>@host/owner/repo.git). Any other shape is
-// refused: the token must never be glued onto an SSH or local URL. Logging
-// and git stderr stay clean through RedactCloneURL/redactCloneError.
-func tokenCloneURL(raw, token string) (string, error) {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("%w: clone url is not a URL", ErrValidation)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("%w: installation token clone needs an http(s) url", ErrValidation)
-	}
-	if parsed.Hostname() == "" {
-		return "", fmt.Errorf("%w: clone url has no host", ErrValidation)
-	}
-	parsed.User = url.UserPassword("x-access-token", token)
-	return parsed.String(), nil
 }
 
 // sshCloneURL rewrites an http(s) clone URL into its SSH equivalent

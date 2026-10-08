@@ -22,6 +22,7 @@ type fakeAPI struct {
 	mu            sync.Mutex
 	pem           string
 	tokenCalls    int
+	tokenFor      []int64
 	token         string
 	expiresAt     time.Time
 	repos         []Repo
@@ -54,11 +55,17 @@ func (f *fakeAPI) ExchangeManifest(_ context.Context, code string) (ManifestConv
 	}, nil
 }
 
-func (f *fakeAPI) CreateInstallationToken(_ context.Context, _ int64, _ string) (InstallationToken, error) {
+func (f *fakeAPI) CreateInstallationToken(_ context.Context, installationID int64, _ string) (InstallationToken, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.tokenCalls++
-	return InstallationToken{Token: f.token, ExpiresAt: f.expiresAt}, nil
+	f.tokenFor = append(f.tokenFor, installationID)
+	// Per-installation tokens prove which installation a token came from.
+	token := f.token
+	if token == "" {
+		token = fmt.Sprintf("tok-%d", installationID)
+	}
+	return InstallationToken{Token: token, ExpiresAt: f.expiresAt}, nil
 }
 
 // GetInstallation verifies the installation against the fake's registry:
@@ -74,8 +81,8 @@ func (f *fakeAPI) GetInstallation(_ context.Context, installationID int64, _ str
 	return info, nil
 }
 
-func (f *fakeAPI) ListInstallationRepos(_ context.Context, _ string) ([]Repo, error) {
-	return f.repos, nil
+func (f *fakeAPI) ListInstallationRepos(_ context.Context, _ string) ([]Repo, bool, error) {
+	return f.repos, false, nil
 }
 
 func (f *fakeAPI) ListBranches(_ context.Context, _ string, repo string) ([]Branch, error) {
@@ -339,7 +346,7 @@ func TestManifestConnectInstallList(t *testing.T) {
 		t.Fatalf("installation = %+v", inst)
 	}
 
-	repos, err := svc.ListRepos(context.Background(), userID, app.ID)
+	repos, _, err := svc.ListRepos(context.Background(), userID, app.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,10 +425,10 @@ func TestInstallationTokenCached(t *testing.T) {
 		t.Fatal(err)
 	}
 	callsAfterInstall := api.calls()
-	if _, err := svc.ListRepos(context.Background(), userID, app.ID); err != nil {
+	if _, _, err := svc.ListRepos(context.Background(), userID, app.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ListRepos(context.Background(), userID, app.ID); err != nil {
+	if _, _, err := svc.ListRepos(context.Background(), userID, app.ID); err != nil {
 		t.Fatal(err)
 	}
 	// The install-time mint is reused: no new token crosses the wire.
@@ -594,6 +601,83 @@ func TestVerifyPushAndTargets(t *testing.T) {
 	mismatched.Set("X-GitHub-Hook-Installation-Target-ID", "456")
 	if _, ok := svc.VerifyPush(mismatched, push); ok {
 		t.Fatal("push with a foreign app hint was verified")
+	}
+}
+
+// TestTokenCloneURLResolvesGrant proves the clone URL carries a minted token
+// for the installation granting the repo: two installations, the repo granted
+// to the second, and the token minted for the second installation id. A clone
+// URL on a foreign host is refused before any token is minted.
+func TestTokenCloneURLResolvesGrant(t *testing.T) {
+	svc, _, api, userID := testFixture()
+	api.pem = testKeyPEM(t)
+	api.token = "" // per-installation tokens prove the granting installation
+	ctx := context.Background()
+
+	app := connect(t, svc, userID)
+	// Installation 999 grants nothing; 1000 grants acme/web.
+	api.repos = nil
+	mintInstall := func(id int64) {
+		_, state, err := svc.InstallURL(ctx, userID, app.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		api.installations[id] = InstallationInfo{ID: id, Account: "acme", AppID: 123}
+		if _, err := svc.RecordInstallation(ctx, userID, app.ID, id, state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mintInstall(999)
+	api.repos = []Repo{{ExternalID: "2", Name: "web", FullName: "acme/web", CloneURL: "https://github.com/acme/web.git"}}
+	mintInstall(1000)
+
+	mintsBefore := len(api.tokenFor)
+	tokenURL, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://github.com/acme/web.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The token belongs to installation 1000: per-installation tokens prove
+	// the clone used the granting installation, not Installations[0].
+	if tokenURL != "https://x-access-token:tok-1000@github.com/acme/web.git" {
+		t.Fatalf("token url = %q", tokenURL)
+	}
+	// The granting installation (1000) was already minted at install time and
+	// its cached token is reused: the clone lookup mints nothing new, and 999
+	// (which grants nothing) is never consulted.
+	if len(api.tokenFor) != mintsBefore {
+		t.Fatalf("clone lookup minted tokens: %v", api.tokenFor)
+	}
+	seen := map[int64]bool{}
+	for _, id := range api.tokenFor {
+		seen[id] = true
+	}
+	if !seen[1000] {
+		t.Fatalf("no token was ever minted for installation 1000: %v", api.tokenFor)
+	}
+
+	// A foreign host is refused before minting.
+	if _, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://evil.example/acme/web.git"); err == nil {
+		t.Fatal("foreign-host clone url was accepted")
+	}
+	// An ungranted repo fails closed.
+	if _, err := svc.TokenCloneURL(ctx, userID, "acme/unknown", "https://github.com/acme/unknown.git"); err == nil {
+		t.Fatal("ungranted repo was accepted")
+	}
+}
+
+// TestEmbedTokenShapes pins the token URL builder: userinfo replaced,
+// anything else refused.
+func TestEmbedTokenShapes(t *testing.T) {
+	got, err := embedToken("https://github.com/acme/demo.git", "tok")
+	if err != nil {
+		t.Fatalf("embedToken: %v", err)
+	}
+	if got != "https://x-access-token:tok@github.com/acme/demo.git" {
+		t.Errorf("embedToken = %q", got)
+	}
+	got, err = embedToken("https://user:old@github.com/acme/demo.git", "tok")
+	if err != nil || got != "https://x-access-token:tok@github.com/acme/demo.git" {
+		t.Errorf("embedToken with userinfo = %q, %v", got, err)
 	}
 }
 

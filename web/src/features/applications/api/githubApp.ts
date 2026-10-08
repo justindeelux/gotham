@@ -75,6 +75,7 @@ interface AppListEnvelope {
 
 interface RepoListEnvelope {
   repos: GitHubRepo[];
+  truncated: boolean;
 }
 
 interface BranchListEnvelope {
@@ -137,10 +138,16 @@ export async function recordInstallation(
   return response.data;
 }
 
+/** A repository list with its truncation flag. */
+export interface GitHubRepoList {
+  repos: GitHubRepo[];
+  truncated: boolean;
+}
+
 /** listGitHubRepos returns the repositories of an app installation. */
-export async function listGitHubRepos(appId: string): Promise<GitHubRepo[]> {
+export async function listGitHubRepos(appId: string): Promise<GitHubRepoList> {
   const response = await http.get<RepoListEnvelope>(`/providers/github-app/${appId}/repos`);
-  return response.data.repos ?? [];
+  return { repos: response.data.repos ?? [], truncated: response.data.truncated ?? false };
 }
 
 /** listGitHubBranches returns the branches of a repository. */

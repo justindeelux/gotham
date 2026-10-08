@@ -130,12 +130,15 @@ func TestRepoPagination(t *testing.T) {
 	defer paged.Close()
 
 	api := NewHTTPAPI(paged.URL, true)
-	repos, err := api.ListInstallationRepos(context.Background(), "tok")
+	repos, truncated, err := api.ListInstallationRepos(context.Background(), "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(repos) != repoListPageSize+1 || repos[repoListPageSize].FullName != "acme/last" {
 		t.Fatalf("repos = %d, want %d", len(repos), repoListPageSize+1)
+	}
+	if truncated {
+		t.Fatal("partial walk reports truncated")
 	}
 
 	endless := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -148,12 +151,15 @@ func TestRepoPagination(t *testing.T) {
 	defer endless.Close()
 
 	bounded := NewHTTPAPI(endless.URL, true)
-	repos, err = bounded.ListInstallationRepos(context.Background(), "tok")
+	repos, truncated, err = bounded.ListInstallationRepos(context.Background(), "tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(repos) != repoListPageSize*maxRepoListPages {
 		t.Fatalf("repos = %d, want the bounded %d", len(repos), repoListPageSize*maxRepoListPages)
+	}
+	if !truncated {
+		t.Fatal("bound-hit listing does not report truncated")
 	}
 }
 
@@ -188,12 +194,15 @@ func TestHTTPAPIAgainstFake(t *testing.T) {
 		t.Fatalf("installation = %+v", info)
 	}
 
-	repos, err := api.ListInstallationRepos(ctx, tok.Token)
+	repos, truncated, err := api.ListInstallationRepos(ctx, tok.Token)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(repos) != 1 || repos[0].FullName != "acme/web" || !repos[0].Private {
 		t.Fatalf("repos = %+v", repos)
+	}
+	if truncated {
+		t.Fatal("single-page listing reports truncated")
 	}
 
 	branches, err := api.ListBranches(ctx, tok.Token, "acme/web")

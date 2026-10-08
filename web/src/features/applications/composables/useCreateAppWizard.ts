@@ -277,8 +277,7 @@ export function useCreateAppWizard(
     }));
   });
 
-  /** branchOptions lists the branches of the selected repository: the
-   * installation branches for the GitHub App flow, the provider branches
+  /** branchOptions lists the branches of the selected repository: the   * installation branches for the GitHub App flow, the provider branches
    * otherwise. */
   const branchOptions = computed<Array<{ label: string; value: string }>>(() => {
     const suffix = tr("applications.wizard.protectedSuffix");
@@ -290,6 +289,11 @@ export function useCreateAppWizard(
       value: branch.name,
     }));
   });
+
+  /** reposTruncated flags a partial repository list, so the wizard says so. */
+  const reposTruncated = computed<boolean>(
+    () => isGitHubAppFlow.value && githubAppStore.reposTruncated(form.providerId),
+  );
 
   const serverOptions = computed<Array<{ label: string; value: string }>>(() =>
     serversStore.servers.map((server) => ({
@@ -658,6 +662,7 @@ export function useCreateAppWizard(
     isGitHubAppFlow,
     repoOptions,
     branchOptions,
+    reposTruncated,
     serverOptions,
     sourceValid,
     runtimeValid,

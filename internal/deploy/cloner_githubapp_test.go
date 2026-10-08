@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,24 +10,28 @@ import (
 	"github.com/google/uuid"
 )
 
-// staticTokenResolver hands the cloner a fixed installation token without a
-// GitHub App.
+// staticTokenResolver hands the cloner a fixed token clone URL without a
+// GitHub App, recording what it was asked for.
 type staticTokenResolver struct {
-	token string
-	err   error
-	calls int
+	tokenURL string
+	err      error
+	calls    int
+	gotRepo  string
+	gotURL   string
 }
 
 // Compile-time guarantee that staticTokenResolver satisfies the seam.
 var _ appTokenResolver = (*staticTokenResolver)(nil)
 
-// InstallationToken implements appTokenResolver.
-func (r *staticTokenResolver) InstallationToken(_ context.Context, _, _ uuid.UUID) (string, error) {
+// TokenCloneURL implements appTokenResolver.
+func (r *staticTokenResolver) TokenCloneURL(_ context.Context, _ uuid.UUID, repo, cloneURL string) (string, error) {
 	r.calls++
+	r.gotRepo = repo
+	r.gotURL = cloneURL
 	if r.err != nil {
 		return "", r.err
 	}
-	return r.token, nil
+	return r.tokenURL, nil
 }
 
 // TestGitSourceCloneGitHubAppUsesToken proves a github_app application clones
@@ -37,6 +42,7 @@ func (r *staticTokenResolver) InstallationToken(_ context.Context, _, _ uuid.UUI
 func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceGitHubApp
+	app.Repo = "acme/private-web"
 	app.CloneURL = "https://github.com/acme/private-web.git"
 	dir := filepath.Join(t.TempDir(), "repo")
 
@@ -46,7 +52,7 @@ func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 		gotArgv = append([]string(nil), argv...)
 		return nil, nil
 	}
-	resolver := &staticTokenResolver{token: "fresh-install-token"}
+	resolver := &staticTokenResolver{tokenURL: "https://x-access-token:fresh-install-token@github.com/acme/private-web.git"}
 	source := gitSource{keys: &staticKeyResolver{}, appTokens: resolver, run: run}
 
 	if err := source.Clone(context.Background(), app, dir, func(line string) {
@@ -56,6 +62,15 @@ func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 	}
 	if resolver.calls != 1 {
 		t.Fatalf("token calls = %d, want 1 (fresh per attempt)", resolver.calls)
+	}
+	// The resolver receives the application repo and stored URL, not opaque
+	// ids: that is what lets the real service resolve the granting
+	// installation instead of assuming one.
+	if resolver.gotRepo != "acme/private-web" {
+		t.Errorf("resolver repo = %q, want the application repo", resolver.gotRepo)
+	}
+	if resolver.gotURL != "https://github.com/acme/private-web.git" {
+		t.Errorf("resolver url = %q, want the stored clone URL", resolver.gotURL)
 	}
 	joined := strings.Join(gotArgv, " ")
 	if !strings.Contains(joined, "https://x-access-token:fresh-install-token@github.com/acme/private-web.git") {
@@ -86,36 +101,7 @@ func TestGitSourceCloneGitHubAppFailsClosed(t *testing.T) {
 	if err := (gitSource{run: run}).Clone(context.Background(), app, dir, nil); err == nil {
 		t.Error("clone without a token resolver succeeded")
 	}
-	if err := (gitSource{appTokens: &staticTokenResolver{token: "  "}, run: run}).Clone(context.Background(), app, dir, nil); err == nil {
-		t.Error("clone with an empty token succeeded")
-	}
-}
-
-// TestTokenCloneURLShapes pins the token URL builder: https only, userinfo
-// replaced, anything else refused.
-func TestTokenCloneURLShapes(t *testing.T) {
-	got, err := tokenCloneURL("https://github.com/acme/demo.git", "tok")
-	if err != nil {
-		t.Fatalf("tokenCloneURL: %v", err)
-	}
-	if got != "https://x-access-token:tok@github.com/acme/demo.git" {
-		t.Errorf("tokenCloneURL = %q", got)
-	}
-	for _, raw := range []string{
-		"git@github.com:acme/demo.git",
-		"ssh://git@github.com/acme/demo.git",
-		"/srv/repos/demo",
-		"https://user:old@github.com/acme/demo.git",
-	} {
-		got, err := tokenCloneURL(raw, "tok")
-		if raw == "https://user:old@github.com/acme/demo.git" {
-			if err != nil || got != "https://x-access-token:tok@github.com/acme/demo.git" {
-				t.Errorf("tokenCloneURL(%q) = %q, %v", raw, got, err)
-			}
-			continue
-		}
-		if err == nil {
-			t.Errorf("tokenCloneURL(%q) = %q, want an error", raw, got)
-		}
+	if err := (gitSource{appTokens: &staticTokenResolver{err: errors.New("no grant")}, run: run}).Clone(context.Background(), app, dir, nil); err == nil {
+		t.Error("clone with a resolver failure succeeded")
 	}
 }

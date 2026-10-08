@@ -227,6 +227,7 @@ const vi: ApplicationsMessages = {
     repository: "Kho mã",
     repositoryPlaceholder: "Chọn kho mã",
     repoHint: "Kho riêng triển khai bằng khóa SSH deploy key.",
+    repoTruncatedHint: "Danh sách chạm giới hạn máy chủ — installation rất lớn có thể thiếu kho.",
     sourceType: "Loại nguồn",
     sourceTypePlaceholder: "Chọn loại nguồn",
     sourceTypeHint: "Git công khai và GitHub/GitLab đã kết nối triển khai được ngay; các nguồn khác sẽ có trong gói sau.",

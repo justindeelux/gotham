@@ -8,9 +8,13 @@ var (
 	// ErrNotFound is returned when a GitHub App is unknown or not owned by
 	// the caller.
 	ErrNotFound = errors.New("githubapp: not found")
-	// ErrValidation is returned when user-supplied input fails validation,
-	// including a missing, reused or expired state.
+	// ErrValidation is returned when user-supplied input fails validation.
 	ErrValidation = errors.New("githubapp: validation failed")
+	// ErrExpiredState is returned when a single-use state is missing,
+	// reused or expired. It is distinct from ErrValidation so the browser
+	// callback can tell "start over" from "something broke" without
+	// leaking details.
+	ErrExpiredState = errors.New("githubapp: invalid or expired state")
 	// ErrUnauthorized is returned when a webhook delivery fails signature
 	// verification.
 	ErrUnauthorized = errors.New("githubapp: unauthorized")

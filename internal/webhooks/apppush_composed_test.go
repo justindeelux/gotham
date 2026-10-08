@@ -54,8 +54,8 @@ func (f *composedFakeAPI) CreateInstallationToken(_ context.Context, _ int64, _ 
 	return githubapp.InstallationToken{Token: "inst-token", ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
-func (f *composedFakeAPI) ListInstallationRepos(_ context.Context, _ string) ([]githubapp.Repo, error) {
-	return f.repos, nil
+func (f *composedFakeAPI) ListInstallationRepos(_ context.Context, _ string) ([]githubapp.Repo, bool, error) {
+	return f.repos, false, nil
 }
 
 func (f *composedFakeAPI) ListBranches(_ context.Context, _ string, _ string) ([]githubapp.Branch, error) {

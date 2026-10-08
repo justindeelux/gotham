@@ -15,18 +15,18 @@ import (
 // (no database) but a github_app flow needs it.
 var errGitHubAppUnavailable = errors.New("server: github app service is not configured")
 
-// githubAppTokenAdapter mints installation tokens for github_app clones. It
-// adapts the GitHub App service to the deploy cloner's resolver seam; a nil
-// service fails clones closed.
+// githubAppTokenAdapter builds token-authenticated clone URLs for github_app
+// applications. It adapts the GitHub App service to the deploy cloner's
+// resolver seam; a nil service fails clones closed.
 type githubAppTokenAdapter struct {
 	svc *githubapp.Service
 }
 
-func (a githubAppTokenAdapter) InstallationToken(ctx context.Context, userID, appID uuid.UUID) (string, error) {
+func (a githubAppTokenAdapter) TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, cloneURL string) (string, error) {
 	if a.svc == nil {
 		return "", errGitHubAppUnavailable
 	}
-	return a.svc.InstallationTokenForApp(ctx, userID, appID)
+	return a.svc.TokenCloneURL(ctx, userID, repo, cloneURL)
 }
 
 // githubAppPushAdapter routes verified GitHub App push deliveries to

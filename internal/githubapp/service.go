@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -289,7 +290,7 @@ func (s *Service) Callback(ctx context.Context, userID uuid.UUID, code, state st
 	}
 	entry, ok := s.states.redeem(state, userID, uuid.Nil, stateManifest)
 	if !ok {
-		return GitHubApp{}, fmt.Errorf("%w: invalid or expired manifest state", ErrValidation)
+		return GitHubApp{}, fmt.Errorf("%w: manifest state", ErrExpiredState)
 	}
 	api := s.newAPI(entry.apiBaseURL)
 	conv, err := api.ExchangeManifest(ctx, code)
@@ -378,7 +379,7 @@ func (s *Service) RecordInstallation(ctx context.Context, userID, appID uuid.UUI
 		return Installation{}, fmt.Errorf("%w: installation id is required", ErrValidation)
 	}
 	if _, ok := s.states.redeem(state, userID, appID, stateInstall); !ok {
-		return Installation{}, fmt.Errorf("%w: invalid or expired install state", ErrValidation)
+		return Installation{}, fmt.Errorf("%w: install state", ErrExpiredState)
 	}
 	app, err := s.repo.GetApp(ctx, appID, userID)
 	if err != nil {
@@ -401,7 +402,7 @@ func (s *Service) RecordInstallation(ctx context.Context, userID, appID uuid.UUI
 	if err != nil {
 		return Installation{}, err
 	}
-	if _, err := s.refreshRepos(ctx, userID, appID, installationID); err != nil {
+	if _, _, err := s.refreshRepos(ctx, userID, appID, installationID); err != nil {
 		s.logger.Warn("githubapp: installation repo refresh failed", "installation", installationID, "error", err)
 	}
 	return inst, nil
@@ -415,28 +416,53 @@ func (s *Service) ListApps(ctx context.Context, userID uuid.UUID) ([]GitHubApp, 
 	return s.repo.ListApps(ctx, userID)
 }
 
-// ListRepos returns the repositories of the app's first installation,
-// refreshing the cache through the installation token.
-func (s *Service) ListRepos(ctx context.Context, userID, appID uuid.UUID) ([]Repo, error) {
+// ListRepos returns the repositories of all installations merged and sorted,
+// refreshing each cache through its installation token. The second return
+// reports truncation: an installation whose page walk hit the bound. A
+// refresh failure falls back to that installation's cache.
+func (s *Service) ListRepos(ctx context.Context, userID, appID uuid.UUID) ([]Repo, bool, error) {
 	if s.repo == nil {
-		return nil, ErrNotFound
+		return nil, false, ErrNotFound
 	}
 	app, err := s.repo.GetApp(ctx, appID, userID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(app.Installations) == 0 {
-		return nil, fmt.Errorf("%w: app is not installed yet", ErrValidation)
+		return nil, false, fmt.Errorf("%w: app is not installed yet", ErrValidation)
 	}
-	installation := app.Installations[0].InstallationID
-	repos, err := s.refreshRepos(ctx, userID, appID, installation)
-	if err != nil {
-		// A refresh failure falls back to the cache: the listing stays
-		// available when GitHub is briefly unreachable.
-		s.logger.Warn("githubapp: repo refresh failed, serving cache", "app", app.AppID, "error", err)
-		return s.repo.ListRepoCache(ctx, appID, installation)
+	seen := make(map[string]bool)
+	merged := make([]Repo, 0)
+	truncated := false
+	var failed error
+	for _, inst := range app.Installations {
+		repos, trunc, err := s.refreshRepos(ctx, userID, appID, inst.InstallationID)
+		if err != nil {
+			// A refresh failure falls back to the cache: the listing stays
+			// available when GitHub is briefly unreachable.
+			s.logger.Warn("githubapp: repo refresh failed, serving cache", "app", app.AppID, "error", err)
+			failed = err
+			cached, cerr := s.repo.ListRepoCache(ctx, appID, inst.InstallationID)
+			if cerr != nil {
+				continue
+			}
+			repos = cached
+		}
+		truncated = truncated || trunc
+		for _, r := range repos {
+			key := strings.ToLower(strings.TrimSpace(r.FullName))
+			if key == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged = append(merged, r)
+		}
 	}
-	return repos, nil
+	if len(merged) == 0 && failed != nil {
+		return nil, false, failed
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].FullName < merged[j].FullName })
+	return merged, truncated, nil
 }
 
 // ListBranches returns the branches of repo through the installation token.
@@ -489,26 +515,146 @@ func (s *Service) appJWTFromSealed(sealed SealedApp) (string, error) {
 	return signAppJWT(sealed.AppID, []byte(key), time.Now())
 }
 
-// InstallationTokenForApp mints (or reuses a cached) installation token for
-// the app's first installation. It backs the deploy cloner, so a github_app
-// application clones with a fresh token instead of anonymously. The token is
-// cached in memory only: it is never persisted and never logged.
-func (s *Service) InstallationTokenForApp(ctx context.Context, userID, appID uuid.UUID) (string, error) {
+// TokenCloneURL mints a fresh installation token for the installation
+// granting repo and embeds it in cloneURL.
+//
+// Resolution is by repository grant, deliberately not by row id:
+// applications carry no github_apps foreign key, and one user may own
+// several apps and installations, so the cloner cannot pass an app id. The
+// installation whose cache holds repo (case-insensitive) is used, never
+// "the first installation". The stored clone URL must live on the app's own
+// host (github.com or the connected Enterprise origin), so a token can never
+// be embedded in an arbitrary https URL. The token authenticates one clone
+// attempt: it is never persisted and never logged.
+func (s *Service) TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, cloneURL string) (string, error) {
 	if s.repo == nil {
 		return "", ErrNotFound
 	}
-	app, err := s.repo.GetApp(ctx, appID, userID)
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return "", fmt.Errorf("%w: repository is required", ErrValidation)
+	}
+	app, installation, err := s.installationGrantingRepo(ctx, userID, repo)
 	if err != nil {
 		return "", err
 	}
-	if len(app.Installations) == 0 {
-		return "", fmt.Errorf("%w: app is not installed yet", ErrValidation)
+	if err := checkCloneHost(app, cloneURL); err != nil {
+		return "", err
 	}
 	jwt, err := s.appJWT(ctx, app)
 	if err != nil {
 		return "", err
 	}
-	return s.installationToken(ctx, app, app.Installations[0], jwt)
+	token, err := s.installationToken(ctx, app, installation, jwt)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("%w: github app installation token is empty", ErrValidation)
+	}
+	return embedToken(cloneURL, token)
+}
+
+// installationGrantingRepo finds the app and installation whose repo cache
+// holds repo. A cache miss refreshes every installation once before failing,
+// so a newly granted repository resolves without a manual refresh.
+func (s *Service) installationGrantingRepo(ctx context.Context, userID uuid.UUID, repo string) (GitHubApp, Installation, error) {
+	apps, err := s.repo.ListApps(ctx, userID)
+	if err != nil {
+		return GitHubApp{}, Installation{}, err
+	}
+	for _, app := range apps {
+		if inst, ok := findGrant(app, s.cachedRepos(ctx, app, false), repo); ok {
+			return app, inst, nil
+		}
+	}
+	// One refresh pass: the grant may be newer than every cache.
+	for _, app := range apps {
+		if inst, ok := findGrant(app, s.cachedRepos(ctx, app, true), repo); ok {
+			return app, inst, nil
+		}
+	}
+	return GitHubApp{}, Installation{}, fmt.Errorf("%w: no installation grants %q", ErrValidation, repo)
+}
+
+// cachedRepos returns the merged repo caches of all installations, refreshing
+// them first when refresh is set. Failures fall back to cache per
+// installation; only a total miss fails the caller.
+func (s *Service) cachedRepos(ctx context.Context, app GitHubApp, refresh bool) map[int64][]Repo {
+	merged := make(map[int64][]Repo)
+	for _, inst := range app.Installations {
+		var repos []Repo
+		if refresh {
+			if refreshed, _, err := s.refreshReposForInstallation(ctx, app, inst.InstallationID); err == nil {
+				repos = refreshed
+			} else {
+				s.logger.Warn("githubapp: grant refresh failed", "app", app.AppID, "error", err)
+			}
+		}
+		if repos == nil {
+			cached, err := s.repo.ListRepoCache(ctx, app.ID, inst.InstallationID)
+			if err != nil {
+				continue
+			}
+			repos = cached
+		}
+		merged[inst.InstallationID] = repos
+	}
+	return merged
+}
+
+// findGrant returns the installation whose repos hold repo (case-insensitive),
+// preferring the lowest installation id for determinism.
+func findGrant(app GitHubApp, byInstallation map[int64][]Repo, repo string) (Installation, bool) {
+	var best *Installation
+	for _, inst := range app.Installations {
+		for _, r := range byInstallation[inst.InstallationID] {
+			if strings.EqualFold(r.FullName, repo) {
+				if best == nil || inst.InstallationID < best.InstallationID {
+					candidate := inst
+					best = &candidate
+				}
+				break
+			}
+		}
+	}
+	if best == nil {
+		return Installation{}, false
+	}
+	return *best, true
+}
+
+// checkCloneHost requires the stored clone URL to live on the app's own git
+// host: github.com or the connected Enterprise origin. Anything else is
+// refused before a token is minted, so a token can never be embedded in an
+// arbitrary https URL.
+func checkCloneHost(app GitHubApp, cloneURL string) error {
+	parsed, err := url.Parse(strings.TrimSpace(cloneURL))
+	if err != nil || parsed.Hostname() == "" {
+		return fmt.Errorf("%w: clone url is not a URL", ErrValidation)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%w: installation token clone needs an http(s) url", ErrValidation)
+	}
+	base, err := url.Parse(app.BaseURL)
+	if err != nil || base.Hostname() == "" {
+		return fmt.Errorf("%w: app base url is not a URL", ErrValidation)
+	}
+	if !strings.EqualFold(parsed.Hostname(), base.Hostname()) {
+		return fmt.Errorf("%w: clone url host does not match the connected app host", ErrValidation)
+	}
+	return nil
+}
+
+// embedToken embeds a short-lived installation token in an http(s) clone URL.
+// Logging and git stderr stay clean through the cloner's redaction.
+func embedToken(raw, token string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("%w: clone url is not a URL", ErrValidation)
+	}
+	parsed.User = url.UserPassword("x-access-token", token)
+	return parsed.String(), nil
 }
 
 // AppPushTarget is one github_app application watching a repository: what a
@@ -587,14 +733,14 @@ func (s *Service) installationToken(ctx context.Context, app GitHubApp, installa
 }
 
 // refreshRepos lists through the installation token and rewrites the cache.
-func (s *Service) refreshRepos(ctx context.Context, userID, appID uuid.UUID, installationID int64) ([]Repo, error) {
+func (s *Service) refreshRepos(ctx context.Context, userID, appID uuid.UUID, installationID int64) ([]Repo, bool, error) {
 	app, err := s.repo.GetApp(ctx, appID, userID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	sealed, err := s.sealed(ctx, app)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	return s.refreshReposFor(ctx, sealed, installationID)
 }
@@ -765,7 +911,7 @@ func (s *Service) HandleAppEvent(ctx context.Context, appID uuid.UUID, event str
 	if _, err := s.repo.UpsertInstallation(ctx, appID, parsed.Installation.ID, account); err != nil {
 		return err
 	}
-	if _, err := s.refreshReposFor(ctx, sealed, parsed.Installation.ID); err != nil {
+	if _, _, err := s.refreshReposFor(ctx, sealed, parsed.Installation.ID); err != nil {
 		s.logger.Warn("githubapp: app event refresh failed",
 			"app", sealed.AppID, "installation", parsed.Installation.ID, "error", err)
 	}
@@ -786,16 +932,26 @@ func (s *Service) ownsInstallation(ctx context.Context, appID uuid.UUID, install
 	return false, nil
 }
 
-// refreshReposFor refreshes one installation when the app row (with secrets)
-// is already in hand.
-func (s *Service) refreshReposFor(ctx context.Context, app SealedApp, installationID int64) ([]Repo, error) {
+// refreshReposForInstallation refreshes one installation when the app row is
+// already in hand.
+func (s *Service) refreshReposForInstallation(ctx context.Context, app GitHubApp, installationID int64) ([]Repo, bool, error) {
+	sealed, err := s.sealed(ctx, app)
+	if err != nil {
+		return nil, false, err
+	}
+	return s.refreshReposFor(ctx, sealed, installationID)
+}
+
+// refreshReposFor refreshes one installation when the sealed app row (with
+// secrets) is already in hand.
+func (s *Service) refreshReposFor(ctx context.Context, app SealedApp, installationID int64) ([]Repo, bool, error) {
 	jwt, err := s.appJWTFromSealed(app)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	insts, err := s.repo.ListInstallations(ctx, app.ID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var installation Installation
 	for _, inst := range insts {
@@ -804,18 +960,18 @@ func (s *Service) refreshReposFor(ctx context.Context, app SealedApp, installati
 		}
 	}
 	if installation.ID == uuid.Nil {
-		return nil, fmt.Errorf("%w: unknown installation", ErrValidation)
+		return nil, false, fmt.Errorf("%w: unknown installation", ErrValidation)
 	}
 	token, err := s.installationToken(ctx, app.GitHubApp, installation, jwt)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	repos, err := s.newAPI(app.APIBaseURL).ListInstallationRepos(ctx, token)
+	repos, truncated, err := s.newAPI(app.APIBaseURL).ListInstallationRepos(ctx, token)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := s.repo.ReplaceRepoCache(ctx, app.ID, installationID, repos); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return repos, nil
+	return repos, truncated, nil
 }

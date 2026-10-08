@@ -23,6 +23,7 @@ import { onLocaleChange } from "@/shared/i18n/locale";
 export const useGitHubAppStore = defineStore("github-app", () => {
   const apps = ref<GitHubApp[]>([]);
   const reposByApp = ref<Record<string, GitHubRepo[]>>({});
+  const truncatedByApp = ref<Record<string, boolean>>({});
   const branchesByRepo = ref<Record<string, GitHubBranch[]>>({});
   const loading = ref(false);
   const reposLoading = ref(false);
@@ -65,7 +66,9 @@ export const useGitHubAppStore = defineStore("github-app", () => {
     reposError.value = null;
     reposErrorRaw.value = null;
     try {
-      reposByApp.value[appId] = await listGitHubRepos(appId);
+      const list = await listGitHubRepos(appId);
+      reposByApp.value[appId] = list.repos;
+      truncatedByApp.value[appId] = list.truncated;
     } catch (err) {
       reposErrorRaw.value = err;
       reposError.value = describeGitHubAppError(err);
@@ -88,6 +91,11 @@ export const useGitHubAppStore = defineStore("github-app", () => {
   /** reposOf returns the cached repos of one app, or an empty list. */
   function reposOf(appId: string): GitHubRepo[] {
     return reposByApp.value[appId] ?? [];
+  }
+
+  /** reposTruncated reports whether the cached list hit the server bound. */
+  function reposTruncated(appId: string): boolean {
+    return truncatedByApp.value[appId] ?? false;
   }
 
   /** branchesOf returns the cached branches of one repository, or empty. */
@@ -126,6 +134,7 @@ export const useGitHubAppStore = defineStore("github-app", () => {
   function reset(): void {
     apps.value = [];
     reposByApp.value = {};
+    truncatedByApp.value = {};
     branchesByRepo.value = {};
     loading.value = false;
     reposLoading.value = false;
@@ -139,6 +148,7 @@ export const useGitHubAppStore = defineStore("github-app", () => {
   return {
     apps,
     reposByApp,
+    truncatedByApp,
     branchesByRepo,
     loading,
     reposLoading,
@@ -149,6 +159,7 @@ export const useGitHubAppStore = defineStore("github-app", () => {
     fetchRepos,
     fetchBranches,
     reposOf,
+    reposTruncated,
     branchesOf,
     connectedApps,
     disconnect,

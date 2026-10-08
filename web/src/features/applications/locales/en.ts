@@ -226,6 +226,7 @@ const en = {
     repository: "Repository",
     repositoryPlaceholder: "Select a repository",
     repoHint: "Private repos deploy with an SSH deploy key.",
+    repoTruncatedHint: "The list hit the server bound — very large installations may miss repositories.",
     sourceType: "Source type",
     sourceTypePlaceholder: "Select a source type",
     sourceTypeHint: "Public git and connected GitHub/GitLab sources deploy today; other sources land in later packages.",

@@ -3,9 +3,11 @@ package githubapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -57,8 +59,9 @@ type GitHubAPI interface {
 	// CreateInstallationToken mints a short-lived token for an installation,
 	// authenticated with the app JWT.
 	CreateInstallationToken(ctx context.Context, installationID int64, jwt string) (InstallationToken, error)
-	// ListInstallationRepos lists the repositories of an installation.
-	ListInstallationRepos(ctx context.Context, token string) ([]Repo, error)
+	// ListInstallationRepos lists the repositories of an installation,
+	// reporting whether the page walk hit its bound (truncated).
+	ListInstallationRepos(ctx context.Context, token string) ([]Repo, bool, error)
 	// ListBranches lists the branches of repo ("owner/name").
 	ListBranches(ctx context.Context, token, repo string) ([]Branch, error)
 }
@@ -215,10 +218,12 @@ func (a *httpAPI) CreateInstallationToken(ctx context.Context, installationID in
 	return InstallationToken{Token: out.Token, ExpiresAt: expiresAt}, nil
 }
 
-func (a *httpAPI) ListInstallationRepos(ctx context.Context, token string) ([]Repo, error) {
+func (a *httpAPI) ListInstallationRepos(ctx context.Context, token string) ([]Repo, bool, error) {
 	repos := make([]Repo, 0)
 	// Installations can hold more than one page: follow pages until a short
-	// one, bounded so a misbehaving host cannot page forever.
+	// one, bounded so a misbehaving host cannot page forever. Hitting the
+	// bound truncates and reports it, so callers can say so instead of
+	// silently serving a partial list.
 	for page := 1; page <= maxRepoListPages; page++ {
 		endpoint := fmt.Sprintf("%s/installation/repositories?per_page=%d&page=%d", a.apiBase, repoListPageSize, page)
 		var out struct {
@@ -234,7 +239,7 @@ func (a *httpAPI) ListInstallationRepos(ctx context.Context, token string) ([]Re
 			} `json:"repositories"`
 		}
 		if err := a.get(ctx, endpoint, token, &out); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		for _, r := range out.Repositories {
 			repos = append(repos, Repo{
@@ -249,29 +254,37 @@ func (a *httpAPI) ListInstallationRepos(ctx context.Context, token string) ([]Re
 			})
 		}
 		if len(out.Repositories) < repoListPageSize {
-			return repos, nil
+			return repos, false, nil
 		}
 	}
-	return repos, nil
+	return repos, true, nil
 }
 
 func (a *httpAPI) ListBranches(ctx context.Context, token, repo string) ([]Branch, error) {
 	if strings.Count(strings.TrimSpace(repo), "/") != 1 {
 		return nil, fmt.Errorf("%w: repository must be owner/name", ErrValidation)
 	}
-	var out []struct {
-		Name      string `json:"name"`
-		Protected bool   `json:"protected"`
-		Commit    struct {
-			SHA string `json:"sha"`
-		} `json:"commit"`
-	}
-	if err := a.get(ctx, a.apiBase+"/repos/"+strings.TrimSpace(repo)+"/branches?per_page=100", token, &out); err != nil {
-		return nil, err
-	}
-	branches := make([]Branch, 0, len(out))
-	for _, b := range out {
-		branches = append(branches, Branch{Name: b.Name, Commit: b.Commit.SHA, Protected: b.Protected})
+	// Branches page like repositories: follow pages until a short one,
+	// bounded the same way.
+	branches := make([]Branch, 0)
+	for page := 1; page <= maxRepoListPages; page++ {
+		var out []struct {
+			Name      string `json:"name"`
+			Protected bool   `json:"protected"`
+			Commit    struct {
+				SHA string `json:"sha"`
+			} `json:"commit"`
+		}
+		endpoint := fmt.Sprintf("%s/repos/%s/branches?per_page=%d&page=%d", a.apiBase, strings.TrimSpace(repo), repoListPageSize, page)
+		if err := a.get(ctx, endpoint, token, &out); err != nil {
+			return nil, err
+		}
+		for _, b := range out {
+			branches = append(branches, Branch{Name: b.Name, Commit: b.Commit.SHA, Protected: b.Protected})
+		}
+		if len(out) < repoListPageSize {
+			return branches, nil
+		}
 	}
 	return branches, nil
 }
@@ -324,6 +337,13 @@ func (a *httpAPI) do(req *http.Request, out any) error {
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
+		// url.Error embeds the full request URL (including the single-use
+		// manifest code), so only the wrapped reason crosses into the error:
+		// redactCode covers the path this code prints, never the URL.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return fmt.Errorf("githubapp: request %s: %v", redactCode(req.URL.Path), urlErr.Err)
+		}
 		return fmt.Errorf("githubapp: request %s: %w", redactCode(req.URL.Path), err)
 	}
 	defer resp.Body.Close()

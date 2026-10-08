@@ -104,7 +104,8 @@ func TestManifestStateExpiry(t *testing.T) {
 }
 
 // TestManifestCodeRedacted proves a failed manifest conversion never carries
-// the single-use code in its error text.
+// the single-use code in its error text: neither an HTTP 500 nor a transport
+// failure (closed server, whose *url.Error embeds the full URL).
 func TestManifestCodeRedacted(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -118,6 +119,22 @@ func TestManifestCodeRedacted(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "super-secret-code") {
 		t.Fatalf("error leaks the manifest code: %v", err)
+	}
+
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+	_, err = NewHTTPAPI(closedURL, true).ExchangeManifest(context.Background(), "super-secret-code")
+	if err == nil {
+		t.Fatal("expected a transport error")
+	}
+	if strings.Contains(err.Error(), "super-secret-code") {
+		t.Fatalf("transport error leaks the manifest code: %v", err)
+	}
+	// writeServiceError logs the error text, so the redacted text is what can
+	// reach the logs through the callback path.
+	if strings.Contains(closedURL, "super-secret-code") {
+		t.Fatal("test setup leaked the code into the URL")
 	}
 }
 

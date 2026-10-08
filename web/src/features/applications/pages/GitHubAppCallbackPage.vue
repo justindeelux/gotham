@@ -41,15 +41,15 @@ async function finishManifest(code: string, state: string): Promise<void> {
 /** finishSetup records the installation_id GitHub returned to setup_url. */
 async function finishSetup(installationId: number): Promise<void> {
   // The installation is bound to the app identified by the single-use
-  // install state when present: with several pending apps a guess could
-  // record it on the wrong one. Without a state the single pending app is
-  // unambiguous; several pending apps without a state is an error the
-  // GS-10 Install control resolves by minting the state itself.
+  // install state when present: the received state is redeemed itself (not a
+  // freshly minted one), so single-use stays true. With several pending apps
+  // a guess could record it on the wrong one. Without a state the single
+  // pending app is unambiguous; several pending apps without a state is an
+  // error the GS-10 Install control resolves by minting the state itself.
   const state = typeof route.query.state === "string" ? route.query.state : "";
   if (state) {
     const appId = await installStateApp(state);
-    const install = await installUrl(appId);
-    await recordInstallation(appId, installationId, install.state);
+    await recordInstallation(appId, installationId, state);
     outcome.value = "installed";
     return;
   }

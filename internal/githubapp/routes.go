@@ -89,9 +89,11 @@ type repoResponse struct {
 	HTMLURL       string `json:"html_url"`
 }
 
-// repoListEnvelope wraps the repository list.
+// repoListEnvelope wraps the repository list, flagging truncation so the UI
+// can say the list is partial instead of silently showing it.
 type repoListEnvelope struct {
-	Repos []repoResponse `json:"repos"`
+	Repos     []repoResponse `json:"repos"`
+	Truncated bool           `json:"truncated"`
 }
 
 // branchResponse is the wire representation of a branch.
@@ -226,6 +228,10 @@ func (h *handler) callbackGet(w http.ResponseWriter, r *http.Request) {
 	code := strings.TrimSpace(r.URL.Query().Get("code"))
 	app, err := h.svc.Callback(r.Context(), userID, code, state)
 	if err != nil {
+		// Every failure redirects with a bounded flag, but the reason is
+		// logged server-side: the error text carries no code, state, token
+		// or key (see redactCode), so it is safe to log.
+		h.logger.Warn("githubapp: browser callback failed", "reason", err.Error())
 		h.redirectResult(w, r, "", callbackResultFor(err))
 		return
 	}
@@ -242,9 +248,11 @@ func (h *handler) redirectResult(w http.ResponseWriter, r *http.Request, appID s
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
-// callbackResultFor maps a callback failure to its bounded redirect flag.
+// callbackResultFor maps a callback failure to its bounded redirect flag: an
+// expired or spent state tells the UI to start over, everything else is a
+// plain failure.
 func callbackResultFor(err error) callbackResult {
-	if errors.Is(err, ErrValidation) {
+	if errors.Is(err, ErrExpiredState) {
 		return callbackExpired
 	}
 	return callbackFailed
@@ -347,7 +355,7 @@ func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	repos, err := h.svc.ListRepos(r.Context(), userID, appID)
+	repos, truncated, err := h.svc.ListRepos(r.Context(), userID, appID)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -365,7 +373,7 @@ func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
 			HTMLURL:       repo.HTMLURL,
 		})
 	}
-	writeJSON(w, http.StatusOK, repoListEnvelope{Repos: response})
+	writeJSON(w, http.StatusOK, repoListEnvelope{Repos: response, Truncated: truncated})
 }
 
 // listBranches serves GET .../{id}/repos/{owner}/{repo}/branches.
@@ -467,7 +475,7 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "github app not found"})
-	case errors.Is(err, ErrValidation):
+	case errors.Is(err, ErrValidation), errors.Is(err, ErrExpiredState):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrTooManyRequests):
 		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "too many pending requests"})

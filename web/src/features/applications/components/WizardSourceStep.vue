@@ -56,6 +56,9 @@ const { t } = useI18n();
           @update:value="wizard.handleRepoSelect"
         />
         <span class="field-hint">{{ t("applications.wizard.repoHint") }}</span>
+        <span v-if="wizard.reposTruncated.value" class="field-hint">{{
+          t("applications.wizard.repoTruncatedHint")
+        }}</span>
         <NAlert
           v-if="wizard.isGitHubAppFlow.value ? wizard.githubAppStore.reposError : wizard.providersStore.reposError"
           type="error"

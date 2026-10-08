@@ -272,23 +272,25 @@ func (c *DockerClient) RemoveVolume(ctx context.Context, name string) error {
 
 // PullImage pulls image from its registry, consuming the progress stream. An
 // error reported inside the progress payload is returned as an error.
-func (c *DockerClient) PullImage(ctx context.Context, image string) error {
+// username/password carry one private-registry credential for this pull only:
+// the Docker X-Registry-Auth header is built from them and the credential is
+// never cached or persisted (empty means the node-local registry credential
+// for node-owned images, anonymous otherwise). It answers the resolved image
+// digest (sha256:...), "" when the engine reported none.
+func (c *DockerClient) PullImage(ctx context.Context, image, username, password string) (string, error) {
 	if strings.TrimSpace(image) == "" {
-		return errors.New("docker: image is required")
+		return "", errors.New("docker: image is required")
 	}
 	query := url.Values{}
 	query.Set("fromImage", image)
 
-	if err := c.ensureRegistryCredentialFor(ctx, image); err != nil {
-		return err
-	}
-	authHeader, err := c.registryAuthHeader(image)
+	authHeader, err := c.pullAuthHeader(ctx, image, username, password)
 	if err != nil {
-		return err
+		return "", err
 	}
 	response, err := c.doRegistryRequest(ctx, http.MethodPost, "/images/create?"+query.Encode(), authHeader)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = response.Body.Close() }()
 
@@ -299,13 +301,70 @@ func (c *DockerClient) PullImage(ctx context.Context, image string) error {
 		}
 		switch err := decoder.Decode(&message); {
 		case errors.Is(err, io.EOF):
-			return nil
+			return c.inspectImageDigest(ctx, image)
 		case err != nil:
-			return fmt.Errorf("docker: decode pull progress: %w", err)
+			return "", fmt.Errorf("docker: decode pull progress: %w", err)
 		case message.Error != "":
-			return fmt.Errorf("docker: pull %s: %s", image, message.Error)
+			return "", fmt.Errorf("docker: pull %s: %s", image, message.Error)
 		}
 	}
+}
+
+// pullAuthHeader returns the X-Registry-Auth value for one image pull. An
+// explicit per-pull credential wins and is scoped to the image's own registry
+// host; otherwise the node-local registry credential (or anonymous) applies.
+// The error text never carries the credential.
+func (c *DockerClient) pullAuthHeader(ctx context.Context, image, username, password string) (string, error) {
+	if strings.TrimSpace(username) != "" {
+		auth := registryAuth{
+			Address:  registryServerAddress(image),
+			Username: username,
+			Password: password,
+		}
+		return auth.header()
+	}
+	if err := c.ensureRegistryCredentialFor(ctx, image); err != nil {
+		return "", err
+	}
+	return c.registryAuthHeader(image)
+}
+
+// registryServerAddress derives the Docker serveraddress for an image pull:
+// the explicit registry host, or the Docker Hub default for bare names. It
+// feeds the X-Registry-Auth config only; it is never used to route the pull.
+func registryServerAddress(image string) string {
+	ref := strings.TrimSpace(image)
+	if host, _, ok := strings.Cut(ref, "/"); ok && (strings.Contains(host, ".") || strings.Contains(host, ":") || host == "localhost") {
+		return host
+	}
+	return "https://index.docker.io/v1/"
+}
+
+// inspectImageDigest reads the manifest digest the engine recorded for image.
+// It answers "" when the engine reports no digest rather than failing a pull
+// that already succeeded.
+func (c *DockerClient) inspectImageDigest(ctx context.Context, image string) (string, error) {
+	var out struct {
+		RepoDigests []string `json:"RepoDigests"`
+	}
+	path := "/images/" + url.PathEscape(image) + "/json"
+	response, err := c.doRaw(ctx, http.MethodGet, path, nil, "")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if !dockerOK(response.StatusCode) {
+		return "", statusError(http.MethodGet, path, response)
+	}
+	if err := json.NewDecoder(response.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("docker: decode image inspect: %w", err)
+	}
+	for _, entry := range out.RepoDigests {
+		if _, digest, ok := strings.Cut(entry, "@"); ok && strings.HasPrefix(digest, "sha256:") {
+			return digest, nil
+		}
+	}
+	return "", nil
 }
 
 // CreateContainer creates a container from req and returns its id.

@@ -409,6 +409,7 @@ func (s *Service) checkStoredTarget(ctx context.Context, app Application) error 
 // Rollback queues a deployment of a previous release's image. The stored
 // image reference is copied onto the new rollback row, which is what makes
 // "back to the old version" a normal state-machine run rather than a rewind.
+// An image source rolls back to the previous digest, not the moving tag.
 func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
@@ -425,11 +426,23 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 		return Deployment{}, fmt.Errorf("%w: deployment %s has no released image to roll back to",
 			ErrValidation, target.ID)
 	}
+	registryImage := target.RegistryImage
+	if NormalizeSourceType(app.SourceType, app.Provider) == SourceImage {
+		base := strings.TrimSpace(registryImage)
+		if base == "" {
+			base = strings.TrimSpace(target.ImageTag)
+		}
+		pinned, err := PinnedImageReference(base, target.Digest)
+		if err != nil {
+			return Deployment{}, err
+		}
+		registryImage = pinned
+	}
 	return s.submit(ctx, app, Deployment{
 		Kind:          KindRollback,
 		State:         StateQueued,
 		ImageTag:      target.ImageTag,
-		RegistryImage: target.RegistryImage,
+		RegistryImage: registryImage,
 		Digest:        target.Digest,
 		RollbackFrom:  target.ID,
 	})
@@ -503,7 +516,8 @@ func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, writ
 
 // validateDeployTarget rejects an application that cannot be deployed: no
 // server assigned, an unknown or not-yet-implemented source type, no
-// cloneable repository, or an unknown build pack.
+// cloneable repository, or an unknown build pack. Image sources carry a
+// validated reference instead of a repository and build pack.
 func validateDeployTarget(app Application) error {
 	if app.ServerID == uuid.Nil {
 		return fmt.Errorf("%w: application has no server assigned", ErrValidation)
@@ -522,6 +536,9 @@ func validateDeployTarget(app Application) error {
 			return err
 		}
 		return ValidateBuildArgs(app.BuildArgs)
+	}
+	if NormalizeSourceType(app.SourceType, app.Provider) == SourceImage {
+		return ValidateImageReference(app.ImageRef)
 	}
 	if err := validateCloneURL(strings.TrimSpace(app.CloneURL)); err != nil {
 		return err

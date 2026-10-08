@@ -1,14 +1,21 @@
 <script setup lang="ts">
 import { NAlert, NButton, NFormItem, NInput, NSelect, NSpace } from "naive-ui";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import BuildArgsEditor from "@/features/applications/components/BuildArgsEditor.vue";
 import { useCreateWizardState } from "@/features/applications/composables/useCreateAppWizard";
+import { isLatestImageTag } from "@/features/applications/schemas/applications";
 
 const wizard = useCreateWizardState();
 const { form } = wizard;
 
 const { t } = useI18n();
+
+/** latestTagWarn flags a moving tag: redeploys follow it, pin a digest to freeze. */
+const latestTagWarn = computed<boolean>(
+  () => wizard.isImage.value && isLatestImageTag(form.imageRef),
+);
 </script>
 
 <template>
@@ -51,6 +58,40 @@ const { t } = useI18n();
         <BuildArgsEditor v-model="form.buildArgs" />
         <span class="field-hint">{{ t("applications.wizard.buildArgsHint") }}</span>
       </NFormItem>
+    </div>
+
+    <div class="form-row" v-else-if="wizard.isImage.value">
+      <NFormItem :label="t('applications.wizard.imageRef')">
+        <NInput
+          v-model:value="form.imageRef"
+          class="mono"
+          placeholder="registry.example.com/team/app:1.2"
+        />
+        <span class="field-hint">{{ t("applications.wizard.imageRefHint") }}</span>
+      </NFormItem>
+
+      <NFormItem :label="t('applications.wizard.registryUsername')">
+        <NInput
+          v-model:value="form.registryUsername"
+          class="mono"
+          :placeholder="t('applications.wizard.registryUsernamePlaceholder')"
+        />
+        <span class="field-hint">{{ t("applications.wizard.registryUsernameHint") }}</span>
+      </NFormItem>
+
+      <NFormItem :label="t('applications.wizard.registryPassword')">
+        <NInput
+          v-model:value="form.registryPassword"
+          type="password"
+          show-password-on="click"
+          :placeholder="t('applications.wizard.registryPasswordPlaceholder')"
+        />
+        <span class="field-hint">{{ t("applications.wizard.registryPasswordHint") }}</span>
+      </NFormItem>
+
+      <NAlert v-if="latestTagWarn" type="warning" :show-icon="true">
+        {{ t("applications.wizard.imageLatestWarn") }}
+      </NAlert>
     </div>
 
     <div class="form-row" v-else-if="wizard.isProviderFlow.value">
@@ -101,7 +142,7 @@ const { t } = useI18n();
     </NAlert>
 
     <div class="form-row">
-      <NFormItem v-if="!wizard.isDockerfile.value" :label="t('applications.wizard.branch')">
+      <NFormItem v-if="!wizard.isDockerfile.value && !wizard.isImage.value" :label="t('applications.wizard.branch')">
         <NSelect
           v-if="wizard.branchOptions.value.length > 0"
           v-model:value="form.branch"

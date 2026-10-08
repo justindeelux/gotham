@@ -84,8 +84,11 @@ func (f *fakeDockerClient) RemoveVolume(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeDockerClient) PullImage(context.Context, string) error {
-	return f.err
+func (f *fakeDockerClient) PullImage(context.Context, string, string, string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return "sha256:testdigest", nil
 }
 
 func (f *fakeDockerClient) CreateContainer(context.Context, *agentv1.CreateContainerRequest) (string, error) {

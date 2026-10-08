@@ -382,7 +382,7 @@ func (c *DockerClient) bootstrapRegistry(ctx context.Context, htpasswdPath strin
 	if err != nil {
 		return err
 	}
-	if err := c.PullImage(ctx, registryImage); err != nil {
+	if _, err := c.PullImage(ctx, registryImage, "", ""); err != nil {
 		return fmt.Errorf("docker: pull %s: %w", registryImage, err)
 	}
 	if err := c.createRegistryContainer(ctx, port, htpasswdPath); err != nil {

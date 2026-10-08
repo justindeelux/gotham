@@ -6,7 +6,8 @@
 INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
     branch, build_pack, base_domain, port, host_port, team_id, is_preview,
-    source_type, github_app_id, dockerfile_content, build_args
+    source_type, github_app_id, dockerfile_content, build_args,
+    image_ref, registry_username, registry_password_ciphertext
 )
 VALUES (
     COALESCE(sqlc.arg(id)::uuid, gen_random_uuid()),
@@ -21,7 +22,8 @@ VALUES (
     -- Direct sqlc callers (fixtures, previews) predate the GS-7 columns;
     -- COALESCE maps their zero values onto the column defaults.
     COALESCE(sqlc.arg(dockerfile_content)::text, ''),
-    COALESCE(sqlc.arg(build_args)::jsonb, '{}')
+    COALESCE(sqlc.arg(build_args)::jsonb, '{}'),
+    sqlc.arg(image_ref), sqlc.arg(registry_username), sqlc.arg(registry_password_ciphertext)
 )
 RETURNING *;
 
@@ -104,6 +106,9 @@ SET name = $2,
     github_app_id = $11,
     dockerfile_content = $12,
     build_args = $13,
+    image_ref = $14,
+    registry_username = $15,
+    registry_password_ciphertext = $16,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

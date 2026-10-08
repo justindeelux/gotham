@@ -53,6 +53,10 @@ type Node interface {
 	Build(ctx context.Context, meta BuildMeta, contextTar []byte, log func([]byte)) (BuildOutcome, error)
 	// Pull confirms an image is reachable from the node's registry.
 	Pull(ctx context.Context, image string) error
+	// PullWithAuth pulls a prebuilt image with one private-registry
+	// credential for this pull only (never persisted on the node) and
+	// answers the resolved image digest, "" when the engine reported none.
+	PullWithAuth(ctx context.Context, image, username, password string) (string, error)
 	// Run creates and starts a container, returning its ID.
 	Run(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	// Stop stops a running container (used to retire the previous release and
@@ -207,6 +211,23 @@ func (n *agentNode) Pull(ctx context.Context, image string) error {
 		return mapRPCError(err)
 	}
 	return nil
+}
+
+// PullWithAuth implements Node: the credential travels in this request only
+// and is never persisted on the node.
+func (n *agentNode) PullWithAuth(ctx context.Context, image, username, password string) (string, error) {
+	if strings.TrimSpace(image) == "" {
+		return "", fmt.Errorf("%w: image is required", ErrValidation)
+	}
+	response, err := n.docker.PullImage(ctx, &agentv1.PullImageRequest{
+		Image:    image,
+		Username: username,
+		Password: password,
+	})
+	if err != nil {
+		return "", mapRPCError(err)
+	}
+	return response.GetDigest(), nil
 }
 
 // Run implements Node.

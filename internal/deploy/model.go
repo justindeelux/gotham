@@ -52,12 +52,12 @@ func NormalizeSourceType(sourceType, provider string) string {
 }
 
 // SourceTypeImplemented reports whether the deploy pipeline can fetch
-// the type yet: public git, the connected-provider flows and pasted
-// Dockerfiles (GS-7). git_private waits for GS-4, and Compose and image
-// sources wait for GS-8..GS-9.
+// the type yet: public git, the connected-provider flows, pasted
+// Dockerfiles (GS-7) and prebuilt container images (GS-9). git_private waits
+// for GS-4 (no key path exists yet), and Compose sources wait for GS-8.
 func SourceTypeImplemented(s string) bool {
 	switch s {
-	case "", SourceGitPublic, SourceGitHubApp, SourceGitLabApp, SourceDockerfile:
+	case "", SourceGitPublic, SourceGitHubApp, SourceGitLabApp, SourceDockerfile, SourceImage:
 		return true
 	default:
 		return false
@@ -91,10 +91,20 @@ type Application struct {
 	DockerfileContent string
 	// BuildArgs holds the optional --build-arg pairs for SourceDockerfile
 	// applications, sent with the build context to the node.
-	BuildArgs  map[string]string
-	Branch     string
-	BuildPack  string
-	BaseDomain string
+	BuildArgs map[string]string
+	Branch    string
+	BuildPack string
+	// ImageRef is the prebuilt reference an image source pulls
+	// (registry/repo:tag, optionally digest-pinned). Only image sources
+	// carry it.
+	ImageRef string
+	// RegistryUsername and RegistryPasswordCiphertext are the optional
+	// private-registry credential of an image source. The password is
+	// AES-256-GCM sealed; neither value is ever returned by the API or
+	// logged.
+	RegistryUsername           string
+	RegistryPasswordCiphertext string
+	BaseDomain                 string
 	// BaseDomainDisabled marks a binding the domain-uniqueness migration had
 	// to disable because another application owned the domain first. The
 	// value is preserved; an explicit domain update re-enables it.

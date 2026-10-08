@@ -30,6 +30,7 @@ import {
   cloneUrlSchema,
   dockerfileContentSchema,
   hostPortSchema,
+  imageRefSchema,
   providerSchema,
   publicCloneUrlSchema,
   repoSchema,
@@ -54,6 +55,11 @@ export interface WizardForm {
   /** Optional --build-arg pairs for the dockerfile source type. */
   buildArgs: BuildArgRow[];
   branch: string;
+  /** GS-9 prebuilt reference (registry/repo:tag, optionally digest-pinned). */
+  imageRef: string;
+  /** GS-9 optional private-registry credential (sealed at rest). */
+  registryUsername: string;
+  registryPassword: string;
   name: string;
   buildPack: BuildPack;
   /** Project the application is created in (read-only summary, changeable). */
@@ -251,6 +257,9 @@ export function useCreateAppWizard(
     dockerfileContent: "",
     buildArgs: [],
     branch: "main",
+    imageRef: "",
+    registryUsername: "",
+    registryPassword: "",
     name: "",
     buildPack: "",
     projectId: toValue(scope.projectId),
@@ -298,6 +307,9 @@ export function useCreateAppWizard(
   /** isDockerfile covers the pasted-Dockerfile type (no repository, GS-7). */
   const isDockerfile = computed<boolean>(() => form.sourceType === "dockerfile");
 
+  /** isImage covers the prebuilt container image source (GS-9). */
+  const isImage = computed<boolean>(() => form.sourceType === "image");
+
   /** sourceTypeOptions renders the GS-2 type selector in the current locale. */
   const sourceTypeOptions = computed<Array<{ label: string; value: string; disabled?: boolean }>>(() => [
     { label: tr("applications.wizard.sourceGitPublic"), value: "git_public" },
@@ -306,7 +318,7 @@ export function useCreateAppWizard(
     { label: tr("applications.wizard.sourceGitlabApp"), value: "gitlab_app" },
     { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile" },
     { label: tr("applications.wizard.sourceCompose"), value: "compose", disabled: true },
-    { label: tr("applications.wizard.sourceImage"), value: "image", disabled: true },
+    { label: tr("applications.wizard.sourceImage"), value: "image" },
   ]);
 
   const repoOptions = computed<Array<{ label: string; value: string }>>(() => {
@@ -365,7 +377,7 @@ export function useCreateAppWizard(
     if (!sourceTypeSchema.safeParse(form.sourceType).success) {
       return false;
     }
-    // Unimplemented types (git_private until GS-4, containers until GS-8..9)
+    // Unimplemented types (git_private until GS-4, Compose until GS-8)
     // render a not-yet-available placeholder, so the step cannot continue.
     if (!sourceTypeImplemented(form.sourceType)) {
       return false;
@@ -388,6 +400,13 @@ export function useCreateAppWizard(
           return false;
         }
         break;
+      case "image":
+        // Prebuilt reference with optional digest pinning and credential; no
+        // branch or build pack (the API rejects them for this type).
+        if (!imageRefSchema.safeParse(form.imageRef).success) {
+          return false;
+        }
+        break;
       default: {
         // github_app/gitlab_app keep the existing provider-backed flow.
         if (!providerSchema.safeParse(form.providerId).success) {
@@ -406,8 +425,12 @@ export function useCreateAppWizard(
       }
     }
     // A public repo with no branch pins the remote default at clone time
-    // (ls-remote); provider flows keep the required prefilled branch. A
-    // Dockerfile source has no branch at all (the field is hidden).
+    // (ls-remote); provider flows keep the required prefilled branch.
+    // Dockerfile and image sources carry no branch at all (the field is
+    // hidden).
+    if (form.sourceType === "image") {
+      return appNameSchema.safeParse(form.name).success;
+    }
     const branchOk =
       form.sourceType === "dockerfile" ||
       (form.sourceType === "git_public" && form.branch.trim() === "")
@@ -460,11 +483,17 @@ export function useCreateAppWizard(
     if (form.sourceType === "dockerfile") {
       return tr("applications.wizard.sourceDockerfile");
     }
+    // Image sources are prebuilt: the review shows that no build runs.
+    if (form.sourceType === "image") {
+      return tr("applications.wizard.packImageNone");
+    }
     return buildPacks.value.find((item) => item.value === form.buildPack)?.label ?? tr("applications.wizard.packAuto");
   });
 
-  /** buildPackSkipped hides the build-pack step for Dockerfile sources. */
-  const buildPackSkipped = computed<boolean>(() => form.sourceType === "dockerfile");
+  /** buildPackSkipped hides the build-pack step for sources without a build. */
+  const buildPackSkipped = computed<boolean>(
+    () => form.sourceType === "dockerfile" || form.sourceType === "image",
+  );
 
   /** nextStep advances, jumping over the hidden build-pack step. */
   function nextStep(): void {
@@ -486,6 +515,14 @@ export function useCreateAppWizard(
   const stepPosition = computed<number>(() =>
     buildPackSkipped.value && step.value > 1 ? step.value : step.value + 1,
   );
+=======
+    // Image sources are prebuilt: the build-pack step is skipped and the
+    // review shows that no build runs.
+    if (form.sourceType === "image") {
+      return tr("applications.wizard.packImageNone");
+    }
+    return buildPacks.value.find((item) => item.value === form.buildPack)?.label ?? tr("applications.wizard.packAuto");
+  });
 
   /** stepTotal renders the visited step count (4 without build pack). */
   const stepTotal = computed<number>(() => (buildPackSkipped.value ? 4 : 5));
@@ -497,6 +534,9 @@ export function useCreateAppWizard(
       return String(
         i18n.global.t("applications.wizard.reviewDockerfileArgs", { count }, count),
       );
+    }
+    if (form.sourceType === "image") {
+      return form.imageRef.trim();
     }
     const repo =
       form.sourceType === "git_public" ? form.publicCloneUrl.trim() : form.repoFullName;
@@ -553,6 +593,9 @@ export function useCreateAppWizard(
       form.cloneUrl = "";
       form.dockerfileContent = "";
       form.buildArgs = [];
+      form.imageRef = "";
+      form.registryUsername = "";
+      form.registryPassword = "";
       noSshUrl.value = false;
       if (form.sourceType === "github_app") {
         void githubAppStore.fetchApps().catch(() => undefined);
@@ -624,6 +667,30 @@ export function useCreateAppWizard(
 
   /** buildPayload assembles the create-application body from the wizard state. */
   function buildPayload(): CreateApplicationInput {
+    if (form.sourceType === "image") {
+      // Image sources deploy a prebuilt reference: no provider, repository,
+      // branch or build pack. The credential is optional (public images need
+      // none) and is sealed at rest.
+      return {
+        name: form.name.trim(),
+        environment_id: form.environmentId,
+        provider: "",
+        repo: "",
+        clone_url: "",
+        source_type: form.sourceType,
+        branch: "",
+        build_pack: "",
+        image_ref: form.imageRef.trim(),
+        registry_username: form.registryUsername.trim(),
+        registry_password: form.registryPassword,
+        base_domain: form.baseDomain.trim(),
+        port: form.port ?? 3000,
+        host_port: form.hostPort ?? 0,
+        server_id: form.serverId,
+        env: form.env.filter((row) => row.key.trim() !== ""),
+        storage: form.storage.filter((row) => row.name.trim() !== ""),
+      };
+    }
     const source =
       form.sourceType === "git_public"
         ? { repo: form.publicCloneUrl.trim(), cloneUrl: form.publicCloneUrl.trim() }
@@ -647,6 +714,7 @@ export function useCreateAppWizard(
       // A Dockerfile source always builds with the Dockerfile engine; the
       // build-pack choice is hidden and never sent.
       build_pack: form.sourceType === "dockerfile" ? "" : form.buildPack,
+      image_ref: "",
       base_domain: form.baseDomain.trim(),
       port: form.port ?? 3000,
       host_port: form.hostPort ?? 0,
@@ -732,6 +800,9 @@ export function useCreateAppWizard(
     form.dockerfileContent = "";
     form.buildArgs = [];
     form.branch = "main";
+    form.imageRef = "";
+    form.registryUsername = "";
+    form.registryPassword = "";
     form.name = "";
     form.buildPack = "";
     seedScope();
@@ -767,6 +838,7 @@ export function useCreateAppWizard(
     isProviderFlow,
     isGitHubAppFlow,
     isDockerfile,
+    isImage,
     repoOptions,
     branchOptions,
     reposTruncated,

@@ -230,7 +230,7 @@ func newP7Harness(t *testing.T, ctx context.Context) *p7Harness {
 		AcmeDir:   proxyAcmeDir,
 	})
 	traefikPullCtx, traefikPullCancel := context.WithTimeout(ctx, p7PollTimeout)
-	if err := engine.PullImage(traefikPullCtx, proxy.TraefikImage); err != nil {
+	if _, err := engine.PullImage(traefikPullCtx, proxy.TraefikImage, "", ""); err != nil {
 		traefikPullCancel()
 		t.Fatalf("pull %s: %v", proxy.TraefikImage, err)
 	}

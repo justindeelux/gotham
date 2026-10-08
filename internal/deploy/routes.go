@@ -80,7 +80,12 @@ type applicationResponse struct {
 	GitHubAppID string `json:"github_app_id"`
 	Branch      string `json:"branch"`
 	BuildPack   string `json:"build_pack"`
-	BaseDomain  string `json:"base_domain"`
+	// ImageRef is the prebuilt reference of an image source (GS-9).
+	ImageRef string `json:"image_ref"`
+	// HasRegistryCredential reports whether a private-registry credential is
+	// stored. The username and password are never returned by the API.
+	HasRegistryCredential bool   `json:"has_registry_credential"`
+	BaseDomain            string `json:"base_domain"`
 	// DockerfileContent holds pasted Dockerfile text for dockerfile
 	// applications (empty otherwise); BuildArgs holds its --build-arg pairs
 	// (never nil on the wire).
@@ -143,7 +148,12 @@ type applicationListItem struct {
 	GitHubAppID string `json:"github_app_id"`
 	Branch      string `json:"branch"`
 	BuildPack   string `json:"build_pack"`
-	BaseDomain  string `json:"base_domain"`
+	// ImageRef is the prebuilt reference of an image source (GS-9).
+	ImageRef string `json:"image_ref"`
+	// HasRegistryCredential reports whether a private-registry credential
+	// is stored (never the credential itself).
+	HasRegistryCredential bool   `json:"has_registry_credential"`
+	BaseDomain            string `json:"base_domain"`
 	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
 	// migration (legacy duplicate); the value is preserved and an explicit
 	// domain update re-enables it.
@@ -194,15 +204,21 @@ type createApplicationRequest struct {
 	SourceType    string `json:"source_type"`
 	// GitHubAppID links the application to its GitHub App connection (GS-5);
 	// empty leaves it unlinked.
-	GitHubAppID string            `json:"github_app_id"`
-	Branch      string            `json:"branch"`
-	BuildPack   string            `json:"build_pack"`
-	BaseDomain  string            `json:"base_domain"`
-	Port        int32             `json:"port"`
-	HostPort    int32             `json:"host_port"`
-	ServerID    string            `json:"server_id"`
-	Env         []envEntryRequest `json:"env"`
-	Storage     []storageRequest  `json:"storage"`
+	GitHubAppID string `json:"github_app_id"`
+	Branch      string `json:"branch"`
+	BuildPack   string `json:"build_pack"`
+	// ImageRef and the registry credential are the image-source (GS-9)
+	// fields: the reference to pull and one optional private-registry
+	// credential, sealed at rest and never returned by the API.
+	ImageRef         string `json:"image_ref"`
+	RegistryUsername string `json:"registry_username"`
+	RegistryPassword string `json:"registry_password"`
+	BaseDomain       string `json:"base_domain"`
+	Port             int32  `json:"port"`
+	HostPort         int32  `json:"host_port"`
+	ServerID         string `json:"server_id"`
+	Env              []envEntryRequest `json:"env"`
+	Storage          []storageRequest  `json:"storage"`
 	// DockerfileContent holds pasted Dockerfile text for the dockerfile
 	// source type (GS-7); BuildArgs holds its optional --build-arg pairs.
 	DockerfileContent string            `json:"dockerfile_content"`
@@ -213,14 +229,17 @@ type createApplicationRequest struct {
 // optional pointers: absent fields stay unchanged. server_id must name a
 // server (clearing it is a 400 since the assignment is required).
 type updateApplicationRequest struct {
-	Name          *string `json:"name"`
-	EnvironmentID *string `json:"environment_id"`
-	Branch        *string `json:"branch"`
-	BuildPack     *string `json:"build_pack"`
-	BaseDomain    *string `json:"base_domain"`
-	Port          *int32  `json:"port"`
-	HostPort      *int32  `json:"host_port"`
-	ServerID      *string `json:"server_id"`
+	Name             *string `json:"name"`
+	EnvironmentID    *string `json:"environment_id"`
+	Branch           *string `json:"branch"`
+	BuildPack        *string `json:"build_pack"`
+	ImageRef         *string `json:"image_ref"`
+	RegistryUsername *string `json:"registry_username"`
+	RegistryPassword *string `json:"registry_password"`
+	BaseDomain       *string `json:"base_domain"`
+	Port             *int32  `json:"port"`
+	HostPort         *int32  `json:"host_port"`
+	ServerID         *string `json:"server_id"`
 	// GitHubAppID relinks the application: a UUID sets the connection, an
 	// empty string clears it, absent leaves it unchanged.
 	GitHubAppID *string `json:"github_app_id"`
@@ -350,6 +369,9 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		GitHubAppID:       githubAppID,
 		Branch:            req.Branch,
 		BuildPack:         req.BuildPack,
+		ImageRef:          req.ImageRef,
+		RegistryUsername:  req.RegistryUsername,
+		RegistryPassword:  req.RegistryPassword,
 		BaseDomain:        req.BaseDomain,
 		Port:              req.Port,
 		HostPort:          req.HostPort,
@@ -439,6 +461,9 @@ func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
 		Name:              req.Name,
 		Branch:            req.Branch,
 		BuildPack:         req.BuildPack,
+		ImageRef:          req.ImageRef,
+		RegistryUsername:  req.RegistryUsername,
+		RegistryPassword:  req.RegistryPassword,
 		BaseDomain:        req.BaseDomain,
 		Port:              req.Port,
 		HostPort:          req.HostPort,
@@ -969,6 +994,11 @@ func newApplicationResponse(application Application) applicationResponse {
 		BuildArgs:          nonNilBuildArgs(application.BuildArgs),
 		Branch:             application.Branch,
 		BuildPack:          application.BuildPack,
+		ImageRef:           application.ImageRef,
+		// The registry credential is never returned: only whether one is
+		// stored, so the UI can show "configured" without seeing it.
+		HasRegistryCredential: application.RegistryUsername != "" ||
+			application.RegistryPasswordCiphertext != "",
 		BaseDomain:         application.BaseDomain,
 		BaseDomainDisabled: application.BaseDomainDisabled,
 		Port:               application.Port,
@@ -1004,6 +1034,9 @@ func newApplicationListItem(application Application) applicationListItem {
 		SourceType:         application.SourceType,
 		Branch:             application.Branch,
 		BuildPack:          application.BuildPack,
+		ImageRef:           application.ImageRef,
+		HasRegistryCredential: application.RegistryUsername != "" ||
+			application.RegistryPasswordCiphertext != "",
 		BaseDomain:         application.BaseDomain,
 		BaseDomainDisabled: application.BaseDomainDisabled,
 		Port:               application.Port,

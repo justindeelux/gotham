@@ -56,15 +56,15 @@ export const sourceTypeSchema = z.enum([
 export type SourceType = z.infer<typeof sourceTypeSchema>;
 
 /** sourceTypeImplemented gates the wizard Source step on scope: public
- * git, the connected-provider flows and pasted Dockerfiles (GS-7).
- * git_private waits for GS-4 and the remaining container sources for
- * GS-8..GS-9. */
+ * git, the connected-provider flows, pasted Dockerfiles (GS-7) and prebuilt
+ * container images (GS-9). git_private waits for GS-4 and Compose for GS-8. */
 export function sourceTypeImplemented(value: string): boolean {
   return (
     value === "git_public" ||
     value === "github_app" ||
     value === "gitlab_app" ||
-    value === "dockerfile"
+    value === "dockerfile" ||
+    value === "image"
   );
 }
 
@@ -175,6 +175,113 @@ export const publicCloneUrlSchema = z
   .trim()
   .min(1)
   .refine(isPublicGitUrl);
+
+/**
+ * isImageRef mirrors ValidateImageReference (internal/deploy/image.go):
+ * [host[:port]/]path[:tag][@sha256:hex], no whitespace, lowercase path
+ * components, a valid tag when present, and never a loopback registry host
+ * (the node-local registry scope). A bare `latest` tag stays valid: the
+ * wizard warns, it does not refuse.
+ */
+export function isImageRef(value: string): boolean {
+  const ref = value.trim();
+  if (ref === "" || ref.length > 255 || /\s/.test(ref)) {
+    return false;
+  }
+  for (const ch of ref) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) {
+      return false;
+    }
+  }
+  const at = ref.indexOf("@");
+  let repo = ref;
+  if (at >= 0) {
+    const digest = ref.slice(at + 1);
+    if (digest === "" || digest.includes("@") || !/^sha256:[0-9a-fA-F]{64}$/.test(digest)) {
+      return false;
+    }
+    repo = ref.slice(0, at);
+  }
+  const slash = repo.lastIndexOf("/");
+  const colon = repo.lastIndexOf(":");
+  let name = repo;
+  if (colon >= 0 && colon > slash) {
+    const tag = repo.slice(colon + 1);
+    if (tag === "" || !/^[\w][\w.-]{0,127}$/.test(tag)) {
+      return false;
+    }
+    name = repo.slice(0, colon);
+  }
+  if (name === "") {
+    return false;
+  }
+  const headEnd = name.indexOf("/");
+  if (headEnd >= 0) {
+    const head = name.slice(0, headEnd);
+    if (head.includes(".") || head.includes(":") || head.toLowerCase() === "localhost") {
+      if (!isPublicRegistryHost(head)) {
+        return false;
+      }
+      name = name.slice(headEnd + 1);
+    }
+  }
+  if (name === "") {
+    return false;
+  }
+  return name.split("/").every((component) => /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(component));
+}
+
+/**
+ * isPublicRegistryHost accepts a registry host that is not the node-local
+ * scope: 127.0.0.0/8, ::1/localhost (with or without a port) are reserved.
+ * A port, when present, must be numeric.
+ */
+export function isPublicRegistryHost(host: string): boolean {
+  let bare = host;
+  const portIndex = host.lastIndexOf(":");
+  const isBracketedV6 = host.startsWith("[");
+  if (!isBracketedV6 && portIndex >= 0 && !host.includes("::")) {
+    bare = host.slice(0, portIndex);
+    const port = host.slice(portIndex + 1);
+    if (port === "" || !/^\d+$/.test(port)) {
+      return false;
+    }
+  } else if (host.includes("::") && !isBracketedV6) {
+    return false;
+  }
+  const trimmed = bare.replace(/^\[|\]$/g, "");
+  if (trimmed === "" || trimmed.toLowerCase() === "localhost") {
+    return false;
+  }
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(trimmed)) {
+    return false;
+  }
+  if (trimmed === "::1") {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * isLatestImageTag reports a reference whose effective tag is `latest`
+ * (explicit or implied): the wizard warns that redeploys follow the moving
+ * tag, it does not block.
+ */
+export function isLatestImageTag(value: string): boolean {
+  const ref = value.trim();
+  const at = ref.indexOf("@");
+  const repo = at >= 0 ? ref.slice(0, at) : ref;
+  const slash = repo.lastIndexOf("/");
+  const colon = repo.lastIndexOf(":");
+  if (colon >= 0 && colon > slash) {
+    return repo.slice(colon + 1).toLowerCase() === "latest";
+  }
+  return at < 0;
+}
+
+/** imageRefSchema gates the image reference field. Gate-only. */
+export const imageRefSchema = z.string().trim().min(1).refine(isImageRef);
 
 /** repoSchema replaces repoFullName === "" (a select output, never padded). */
 export const repoSchema = z.string().min(1);

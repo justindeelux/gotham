@@ -118,7 +118,8 @@ const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
     branch, build_pack, base_domain, port, host_port, team_id, is_preview,
-    source_type, github_app_id, dockerfile_content, build_args
+    source_type, github_app_id, dockerfile_content, build_args,
+    image_ref, registry_username, registry_password_ciphertext
 )
 VALUES (
     COALESCE($1::uuid, gen_random_uuid()),
@@ -133,31 +134,35 @@ VALUES (
     -- Direct sqlc callers (fixtures, previews) predate the GS-7 columns;
     -- COALESCE maps their zero values onto the column defaults.
     COALESCE($18::text, ''),
-    COALESCE($19::jsonb, '{}')
+    COALESCE($19::jsonb, '{}'),
+    $20, $21, $22
 )
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext
 `
 
 type CreateApplicationParams struct {
-	ID                pgtype.UUID `json:"id"`
-	UserID            pgtype.UUID `json:"user_id"`
-	ServerID          pgtype.UUID `json:"server_id"`
-	EnvironmentID     pgtype.UUID `json:"environment_id"`
-	Name              string      `json:"name"`
-	Provider          string      `json:"provider"`
-	Repo              string      `json:"repo"`
-	CloneUrl          string      `json:"clone_url"`
-	Branch            string      `json:"branch"`
-	BuildPack         string      `json:"build_pack"`
-	BaseDomain        string      `json:"base_domain"`
-	Port              int32       `json:"port"`
-	HostPort          int32       `json:"host_port"`
-	TeamID            pgtype.UUID `json:"team_id"`
-	IsPreview         bool        `json:"is_preview"`
-	SourceType        string      `json:"source_type"`
-	GithubAppID       pgtype.UUID `json:"github_app_id"`
-	DockerfileContent string      `json:"dockerfile_content"`
-	BuildArgs         []byte      `json:"build_args"`
+	ID                         pgtype.UUID `json:"id"`
+	UserID                     pgtype.UUID `json:"user_id"`
+	ServerID                   pgtype.UUID `json:"server_id"`
+	EnvironmentID              pgtype.UUID `json:"environment_id"`
+	Name                       string      `json:"name"`
+	Provider                   string      `json:"provider"`
+	Repo                       string      `json:"repo"`
+	CloneUrl                   string      `json:"clone_url"`
+	Branch                     string      `json:"branch"`
+	BuildPack                  string      `json:"build_pack"`
+	BaseDomain                 string      `json:"base_domain"`
+	Port                       int32       `json:"port"`
+	HostPort                   int32       `json:"host_port"`
+	TeamID                     pgtype.UUID `json:"team_id"`
+	IsPreview                  bool        `json:"is_preview"`
+	SourceType                 string      `json:"source_type"`
+	GithubAppID                pgtype.UUID `json:"github_app_id"`
+	DockerfileContent          string      `json:"dockerfile_content"`
+	BuildArgs                  []byte      `json:"build_args"`
+	ImageRef                   string      `json:"image_ref"`
+	RegistryUsername           string      `json:"registry_username"`
+	RegistryPasswordCiphertext string      `json:"registry_password_ciphertext"`
 }
 
 // The id is optional: a caller that must know the application id before the
@@ -185,6 +190,9 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		arg.GithubAppID,
 		arg.DockerfileContent,
 		arg.BuildArgs,
+		arg.ImageRef,
+		arg.RegistryUsername,
+		arg.RegistryPasswordCiphertext,
 	)
 	var i Application
 	err := row.Scan(
@@ -210,6 +218,9 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.GithubAppID,
 		&i.DockerfileContent,
 		&i.BuildArgs,
+		&i.ImageRef,
+		&i.RegistryUsername,
+		&i.RegistryPasswordCiphertext,
 	)
 	return i, err
 }
@@ -325,7 +336,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -354,6 +365,9 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.GithubAppID,
 		&i.DockerfileContent,
 		&i.BuildArgs,
+		&i.ImageRef,
+		&i.RegistryUsername,
+		&i.RegistryPasswordCiphertext,
 	)
 	return i, err
 }
@@ -482,7 +496,7 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 }
 
 const listApplicationsByEnvironment = `-- name: ListApplicationsByEnvironment :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext FROM applications
 WHERE environment_id = $1 AND (is_preview = false OR $2::bool = true)
 ORDER BY created_at DESC, id DESC
 `
@@ -526,6 +540,9 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 			&i.GithubAppID,
 			&i.DockerfileContent,
 			&i.BuildArgs,
+			&i.ImageRef,
+			&i.RegistryUsername,
+			&i.RegistryPasswordCiphertext,
 		); err != nil {
 			return nil, err
 		}
@@ -538,7 +555,7 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 }
 
 const listApplicationsByProject = `-- name: ListApplicationsByProject :many
-SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.base_domain, a.port, a.host_port, a.created_at, a.updated_at, a.base_domain_disabled, a.team_id, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args FROM applications a
+SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.base_domain, a.port, a.host_port, a.created_at, a.updated_at, a.base_domain_disabled, a.team_id, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args, a.image_ref, a.registry_username, a.registry_password_ciphertext FROM applications a
 JOIN environments e ON e.id = a.environment_id
 WHERE e.project_id = $1 AND (a.is_preview = false OR $2::bool = true)
 ORDER BY a.created_at DESC, a.id DESC
@@ -583,6 +600,9 @@ func (q *Queries) ListApplicationsByProject(ctx context.Context, arg ListApplica
 			&i.GithubAppID,
 			&i.DockerfileContent,
 			&i.BuildArgs,
+			&i.ImageRef,
+			&i.RegistryUsername,
+			&i.RegistryPasswordCiphertext,
 		); err != nil {
 			return nil, err
 		}
@@ -628,7 +648,7 @@ func (q *Queries) ListApplicationsByServer(ctx context.Context, serverID pgtype.
 }
 
 const listApplicationsByTeam = `-- name: ListApplicationsByTeam :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext FROM applications
 WHERE team_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
@@ -665,6 +685,9 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 			&i.GithubAppID,
 			&i.DockerfileContent,
 			&i.BuildArgs,
+			&i.ImageRef,
+			&i.RegistryUsername,
+			&i.RegistryPasswordCiphertext,
 		); err != nil {
 			return nil, err
 		}
@@ -677,7 +700,7 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 }
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext FROM applications
 WHERE user_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
@@ -714,6 +737,9 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.GithubAppID,
 			&i.DockerfileContent,
 			&i.BuildArgs,
+			&i.ImageRef,
+			&i.RegistryUsername,
+			&i.RegistryPasswordCiphertext,
 		); err != nil {
 			return nil, err
 		}
@@ -940,25 +966,31 @@ SET name = $2,
     github_app_id = $11,
     dockerfile_content = $12,
     build_args = $13,
+    image_ref = $14,
+    registry_username = $15,
+    registry_password_ciphertext = $16,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext
 `
 
 type UpdateApplicationParams struct {
-	ID                 pgtype.UUID `json:"id"`
-	Name               string      `json:"name"`
-	Branch             string      `json:"branch"`
-	BuildPack          string      `json:"build_pack"`
-	BaseDomain         string      `json:"base_domain"`
-	Port               int32       `json:"port"`
-	HostPort           int32       `json:"host_port"`
-	ServerID           pgtype.UUID `json:"server_id"`
-	BaseDomainDisabled bool        `json:"base_domain_disabled"`
-	EnvironmentID      pgtype.UUID `json:"environment_id"`
-	GithubAppID        pgtype.UUID `json:"github_app_id"`
-	DockerfileContent  string      `json:"dockerfile_content"`
-	BuildArgs          []byte      `json:"build_args"`
+	ID                         pgtype.UUID `json:"id"`
+	Name                       string      `json:"name"`
+	Branch                     string      `json:"branch"`
+	BuildPack                  string      `json:"build_pack"`
+	BaseDomain                 string      `json:"base_domain"`
+	Port                       int32       `json:"port"`
+	HostPort                   int32       `json:"host_port"`
+	ServerID                   pgtype.UUID `json:"server_id"`
+	BaseDomainDisabled         bool        `json:"base_domain_disabled"`
+	EnvironmentID              pgtype.UUID `json:"environment_id"`
+	GithubAppID                pgtype.UUID `json:"github_app_id"`
+	DockerfileContent          string      `json:"dockerfile_content"`
+	BuildArgs                  []byte      `json:"build_args"`
+	ImageRef                   string      `json:"image_ref"`
+	RegistryUsername           string      `json:"registry_username"`
+	RegistryPasswordCiphertext string      `json:"registry_password_ciphertext"`
 }
 
 func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error) {
@@ -976,6 +1008,9 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		arg.GithubAppID,
 		arg.DockerfileContent,
 		arg.BuildArgs,
+		arg.ImageRef,
+		arg.RegistryUsername,
+		arg.RegistryPasswordCiphertext,
 	)
 	var i Application
 	err := row.Scan(
@@ -1001,6 +1036,9 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.GithubAppID,
 		&i.DockerfileContent,
 		&i.BuildArgs,
+		&i.ImageRef,
+		&i.RegistryUsername,
+		&i.RegistryPasswordCiphertext,
 	)
 	return i, err
 }

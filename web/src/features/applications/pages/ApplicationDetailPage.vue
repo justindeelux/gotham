@@ -7,6 +7,7 @@ import ApplicationDeploymentsTab from "@/features/applications/components/Applic
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
 import ApplicationHeader from "@/features/applications/components/ApplicationHeader.vue";
 import ApplicationLogsTab from "@/features/applications/components/ApplicationLogsTab.vue";
+import ApplicationImagePanel from "@/features/applications/components/ApplicationImagePanel.vue";
 import ApplicationOverviewTab from "@/features/applications/components/ApplicationOverviewTab.vue";
 import ApplicationPreviewsTab from "@/features/applications/components/ApplicationPreviewsTab.vue";
 import ApplicationStorageTab from "@/features/applications/components/ApplicationStorageTab.vue";
@@ -88,6 +89,10 @@ const previewsTab = computed<string>(() =>
             @view-all="detail.activeTab.value = 'deployments'"
             @show-logs="detail.showLogsFor"
             @open-rollback="detail.openRollbackFor"
+          />
+          <ApplicationImagePanel
+            v-if="detail.application.value && detail.application.value.source_type === 'image'"
+            :application="detail.application.value"
           />
         </NTabPane>
 

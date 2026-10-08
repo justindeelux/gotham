@@ -22,28 +22,31 @@ type ApiToken struct {
 }
 
 type Application struct {
-	ID                 pgtype.UUID        `json:"id"`
-	UserID             pgtype.UUID        `json:"user_id"`
-	ServerID           pgtype.UUID        `json:"server_id"`
-	Name               string             `json:"name"`
-	Provider           string             `json:"provider"`
-	Repo               string             `json:"repo"`
-	CloneUrl           string             `json:"clone_url"`
-	Branch             string             `json:"branch"`
-	BuildPack          string             `json:"build_pack"`
-	BaseDomain         string             `json:"base_domain"`
-	Port               int32              `json:"port"`
-	HostPort           int32              `json:"host_port"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	BaseDomainDisabled bool               `json:"base_domain_disabled"`
-	TeamID             pgtype.UUID        `json:"team_id"`
-	IsPreview          bool               `json:"is_preview"`
-	EnvironmentID      pgtype.UUID        `json:"environment_id"`
-	SourceType         string             `json:"source_type"`
-	GithubAppID        pgtype.UUID        `json:"github_app_id"`
-	DockerfileContent  string             `json:"dockerfile_content"`
-	BuildArgs          []byte             `json:"build_args"`
+	ID                         pgtype.UUID        `json:"id"`
+	UserID                     pgtype.UUID        `json:"user_id"`
+	ServerID                   pgtype.UUID        `json:"server_id"`
+	Name                       string             `json:"name"`
+	Provider                   string             `json:"provider"`
+	Repo                       string             `json:"repo"`
+	CloneUrl                   string             `json:"clone_url"`
+	Branch                     string             `json:"branch"`
+	BuildPack                  string             `json:"build_pack"`
+	BaseDomain                 string             `json:"base_domain"`
+	Port                       int32              `json:"port"`
+	HostPort                   int32              `json:"host_port"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	BaseDomainDisabled         bool               `json:"base_domain_disabled"`
+	TeamID                     pgtype.UUID        `json:"team_id"`
+	IsPreview                  bool               `json:"is_preview"`
+	EnvironmentID              pgtype.UUID        `json:"environment_id"`
+	SourceType                 string             `json:"source_type"`
+	GithubAppID                pgtype.UUID        `json:"github_app_id"`
+	DockerfileContent          string             `json:"dockerfile_content"`
+	BuildArgs                  []byte             `json:"build_args"`
+	ImageRef                   string             `json:"image_ref"`
+	RegistryUsername           string             `json:"registry_username"`
+	RegistryPasswordCiphertext string             `json:"registry_password_ciphertext"`
 }
 
 type ApplicationDeployKey struct {

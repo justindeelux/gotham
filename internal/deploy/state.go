@@ -72,7 +72,15 @@ func CanTransition(from, to State) bool {
 // running on success). KindRollback skips cloning and building because it
 // redeploys an image an earlier deployment already pushed.
 func stepsFor(kind Kind) []State {
-	if kind == KindRollback {
+	return stepsForApp(kind, "", "")
+}
+
+// stepsForApp narrows the walk to the single legal path for a run. Image
+// sources (GS-9) have no repository to clone and nothing to build, so their
+// deploys walk the rollback path (pushing, where the pull happens, then
+// starting); queued → pushing is a legal edge.
+func stepsForApp(kind Kind, sourceType, provider string) []State {
+	if kind == KindRollback || NormalizeSourceType(sourceType, provider) == SourceImage {
 		return []State{StatePushing, StateStarting}
 	}
 	return []State{StateCloning, StateBuilding, StatePushing, StateStarting}

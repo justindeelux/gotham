@@ -83,7 +83,7 @@ volumes:
 
 	pullCtx, pullCancel := context.WithTimeout(ctx, p7PollTimeout)
 	for _, image := range []string{p7NginxImage, p7BusyboxImage} {
-		if err := h.engine.PullImage(pullCtx, image); err != nil {
+		if _, err := h.engine.PullImage(pullCtx, image, "", ""); err != nil {
 			pullCancel()
 			t.Fatalf("pull %s: %v", image, err)
 		}

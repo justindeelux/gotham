@@ -45,13 +45,14 @@ const applicationBody = `{
 }`
 
 // applicationWireKeys are the fields of the FE's `Application` interface plus
-// the additive `base_domain_disabled` visibility flag and the `github_app_id`
-// link; the envelope must carry exactly these, or the SPA reads undefined
-// values.
+// the additive `base_domain_disabled` visibility flag, the `github_app_id`
+// link and the GS-9 image fields; the envelope must carry exactly these, or
+// the SPA reads undefined values.
 var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
 	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id",
 	"dockerfile_content", "build_args", "branch", "build_pack",
+	"image_ref", "has_registry_credential",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
 }
@@ -65,6 +66,7 @@ var applicationListWireKeys = []string{
 	"project_name", "provider", "repo", "clone_url", "source_type",
 	"github_app_id",
 	"branch", "build_pack",
+	"image_ref", "has_registry_credential",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
 }

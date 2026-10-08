@@ -1399,10 +1399,16 @@ func (*VolumeActionResponse) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{20}
 }
 
-// PullImageRequest pulls an image from a registry.
+// PullImageRequest pulls an image from a registry. username/password carry
+// one private-registry credential for this pull only: the agent builds the
+// Docker X-Registry-Auth header from them and never persists them. Empty
+// means the node-local registry credential (for node-owned images) or an
+// anonymous pull.
 type PullImageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Image         string                 `protobuf:"bytes,1,opt,name=image,proto3" json:"image,omitempty"`
+	Username      string                 `protobuf:"bytes,2,opt,name=username,proto3" json:"username,omitempty"`
+	Password      string                 `protobuf:"bytes,3,opt,name=password,proto3" json:"password,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1444,8 +1450,26 @@ func (x *PullImageRequest) GetImage() string {
 	return ""
 }
 
+func (x *PullImageRequest) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *PullImageRequest) GetPassword() string {
+	if x != nil {
+		return x.Password
+	}
+	return ""
+}
+
+// PullImageResponse reports the resolved image digest (sha256:...) the node
+// pulled, so the control plane can record it on the deployment and pin
+// rollbacks to it. Empty when the engine reported no digest.
 type PullImageResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	Digest        string                 `protobuf:"bytes,1,opt,name=digest,proto3" json:"digest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1478,6 +1502,13 @@ func (x *PullImageResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use PullImageResponse.ProtoReflect.Descriptor instead.
 func (*PullImageResponse) Descriptor() ([]byte, []int) {
 	return file_agent_v1_agent_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *PullImageResponse) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
 }
 
 // CreateContainerRequest describes a container to create and (for RunImage)
@@ -2938,10 +2969,13 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\")\n" +
 	"\x13VolumeActionRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x16\n" +
-	"\x14VolumeActionResponse\"(\n" +
+	"\x14VolumeActionResponse\"`\n" +
 	"\x10PullImageRequest\x12\x14\n" +
-	"\x05image\x18\x01 \x01(\tR\x05image\"\x13\n" +
-	"\x11PullImageResponse\"\xc4\x03\n" +
+	"\x05image\x18\x01 \x01(\tR\x05image\x12\x1a\n" +
+	"\busername\x18\x02 \x01(\tR\busername\x12\x1a\n" +
+	"\bpassword\x18\x03 \x01(\tR\bpassword\"+\n" +
+	"\x11PullImageResponse\x12\x16\n" +
+	"\x06digest\x18\x01 \x01(\tR\x06digest\"\xc4\x03\n" +
 	"\x16CreateContainerRequest\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +

@@ -195,7 +195,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 	})
 
 	pullCtx, pullCancel := context.WithTimeout(ctx, p6PullTimeout)
-	if err := engine.PullImage(pullCtx, p6NginxImage); err != nil {
+	if _, err := engine.PullImage(pullCtx, p6NginxImage, "", ""); err != nil {
 		pullCancel()
 		t.Fatalf("pull %s: %v", p6NginxImage, err)
 	}

@@ -61,6 +61,16 @@ type Deployer interface {
 	DeploySystem(ctx context.Context, appID uuid.UUID) (deploy.Deployment, error)
 }
 
+// AppEventHandler verifies and handles GitHub App deliveries that carry no
+// per-hook secret: installation and installation_repositories events, signed
+// with the app webhook secret. Verify reports whether body authenticates;
+// HandleAppEvent refreshes the repo cache. Push deliveries keep flowing
+// through the hook-secret path below, which triggers the deploy.
+type AppEventHandler interface {
+	VerifyDelivery(header http.Header, body []byte) bool
+	HandleAppEvent(ctx context.Context, event string, body []byte) error
+}
+
 // Delivery is the outcome of one webhook delivery, returned as the response
 // body so the Git host's delivery log shows why a push did or did not build.
 type Delivery struct {
@@ -94,6 +104,9 @@ type Config struct {
 	Commenter Commenter
 	// Secret is the key providers.SealSecret seals hook secrets with.
 	Secret string
+	// AppEvents handles GitHub App installation deliveries (GS-5). nil
+	// leaves installation events unauthorized; push handling is untouched.
+	AppEvents AppEventHandler
 	// Logger defaults to slog.Default.
 	Logger *slog.Logger
 	// Limit is the delivery refill rate per client IP, Burst its bucket size.
@@ -120,6 +133,7 @@ type Service struct {
 	deployer    Deployer
 	provisioner PreviewProvisioner
 	commenter   Commenter
+	appEvents   AppEventHandler
 	logger      *slog.Logger
 	limiter     *deliveryLimiter
 	trusted     []netip.Prefix
@@ -157,6 +171,7 @@ func NewService(cfg Config) *Service {
 		deployer:    cfg.Deployer,
 		provisioner: cfg.Provisioner,
 		commenter:   cfg.Commenter,
+		appEvents:   cfg.AppEvents,
 		logger:      logger,
 		limiter:     newDeliveryLimiter(cfg.Limit, cfg.Burst),
 		trusted:     cfg.TrustedProxies,
@@ -392,6 +407,22 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	if err != nil {
 		return Delivery{}, err
 	}
+	// GitHub App installation deliveries carry no per-hook secret: they are
+	// signed with the app webhook secret and handled by the app service,
+	// which refreshes the repo cache. Push deliveries keep the hook-secret
+	// path below, which triggers the deploy.
+	if appEvent, ok := appDeliveryEvent(provider, r.Header); ok {
+		if s.appEvents == nil {
+			return Delivery{}, ErrUnauthorized
+		}
+		if !s.appEvents.VerifyDelivery(r.Header, body) {
+			return Delivery{}, ErrUnauthorized
+		}
+		if err := s.appEvents.HandleAppEvent(ctx, appEvent, body); err != nil {
+			return Delivery{}, err
+		}
+		return Delivery{Status: StatusIgnored, Reason: "event"}, nil
+	}
 	parsed, err := parseDelivery(provider, r.Header, body)
 	if err != nil {
 		return Delivery{}, err
@@ -471,6 +502,22 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	}
 	s.linkClaim(ctx, event, deployment)
 	return Delivery{Status: StatusQueued, DeploymentID: deployment.ID.String()}, nil
+}
+
+// appDeliveryEvent reports whether a delivery is a GitHub App installation
+// event, which the app service verifies with its own secret instead of a
+// per-hook secret. Every other event flows through the hook-secret path.
+func appDeliveryEvent(provider string, header http.Header) (string, bool) {
+	if provider != providers.NameGitHub {
+		return "", false
+	}
+	event := strings.ToLower(strings.TrimSpace(header.Get(headerGitHubEvent)))
+	switch event {
+	case "installation", "installation_repositories":
+		return event, true
+	default:
+		return "", false
+	}
 }
 
 // authorizedTarget returns the hook whose secret authenticates the delivery.

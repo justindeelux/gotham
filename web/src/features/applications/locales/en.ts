@@ -219,6 +219,7 @@ const en = {
     providerPlaceholder: "Select a connected provider",
     providerHint: "Each provider uses its own OAuth app.",
     privateSuffix: " (private)",
+    protectedSuffix: " (protected)",
     connected: "connected",
     notConnected: "not connected",
     cloneUrl: "Clone URL",

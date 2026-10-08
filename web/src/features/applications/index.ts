@@ -5,4 +5,5 @@ export {
 } from "./api/applications";
 export type { Application } from "./api/applications";
 export { useApplicationsStore } from "./stores/applications";
+export { useGitHubAppStore } from "./stores/githubApp";
 export { useProvidersStore } from "./stores/providers";

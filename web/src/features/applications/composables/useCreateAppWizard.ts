@@ -13,6 +13,7 @@ import type {
   StorageMapping,
 } from "@/features/applications/api/applications";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
+import { useGitHubAppStore } from "@/features/applications/stores/githubApp";
 import { useProvidersStore } from "@/features/applications/stores/providers";
 import { useServersStore } from "@/features/servers";
 import { cloneUrlFor, suggestAppName } from "@/features/applications/utils/wizardSource";
@@ -121,6 +122,7 @@ export function useCreateAppWizard(
   scope: WizardScope = { projectId: "", environmentId: "" },
 ) {
   const providersStore = useProvidersStore();
+  const githubAppStore = useGitHubAppStore();
   const serversStore = useServersStore();
   const appsStore = useApplicationsStore();
   const message = useMessage();
@@ -225,13 +227,18 @@ export function useCreateAppWizard(
   const providerOptions = computed<Array<{ label: string; value: string }>>(() => {
     // The provider list follows the source type, so a gitlab connection can
     // never be submitted under a github_app source (and the public sentinel
-    // stays out of the provider flow entirely).
+    // stays out of the provider flow entirely). github_app lists GitHub App
+    // connections (GS-5); gitlab_app keeps the OAuth provider list.
+    if (form.sourceType === "github_app") {
+      return githubAppStore.apps.map((item) => ({
+        label: `${item.name || item.slug} · ${item.connected ? tr("applications.wizard.connected") : tr("applications.wizard.notConnected")}`,
+        value: item.id,
+      }));
+    }
     const providers =
-      form.sourceType === "github_app"
-        ? providersStore.providers.filter((item) => item.provider === "github")
-        : form.sourceType === "gitlab_app"
-          ? providersStore.providers.filter((item) => item.provider === "gitlab")
-          : providersStore.providers;
+      form.sourceType === "gitlab_app"
+        ? providersStore.providers.filter((item) => item.provider === "gitlab")
+        : providersStore.providers;
     return providers.map((item) => ({
       label: `${item.provider} · ${item.connected ? tr("applications.wizard.connected") : tr("applications.wizard.notConnected")}`,
       value: item.id,
@@ -245,6 +252,10 @@ export function useCreateAppWizard(
     () => form.sourceType === "github_app" || form.sourceType === "gitlab_app",
   );
 
+  /** isGitHubAppFlow covers the GitHub App type (GS-5): repos and branches
+   * come from the installation, not the OAuth provider list. */
+  const isGitHubAppFlow = computed<boolean>(() => form.sourceType === "github_app");
+
   /** sourceTypeOptions renders the GS-2 type selector in the current locale. */
   const sourceTypeOptions = computed<Array<{ label: string; value: string; disabled?: boolean }>>(() => [
     { label: tr("applications.wizard.sourceGitPublic"), value: "git_public" },
@@ -256,10 +267,21 @@ export function useCreateAppWizard(
     { label: tr("applications.wizard.sourceImage"), value: "image", disabled: true },
   ]);
 
-  const repoOptions = computed<Array<{ label: string; value: string }>>(() =>
-    providersStore.reposOf(form.providerId).map((repo) => ({
+  const repoOptions = computed<Array<{ label: string; value: string }>>(() => {
+    const repos = isGitHubAppFlow.value
+      ? githubAppStore.reposOf(form.providerId)
+      : providersStore.reposOf(form.providerId);
+    return repos.map((repo) => ({
       label: `${repo.full_name}${repo.private ? tr("applications.wizard.privateSuffix") : ""}`,
       value: repo.full_name,
+    }));
+  });
+
+  /** branchOptions lists the installation branches of the selected repo. */
+  const branchOptions = computed<Array<{ label: string; value: string }>>(() =>
+    githubAppStore.branchesOf(form.providerId, form.repoFullName).map((branch) => ({
+      label: `${branch.name}${branch.protected ? tr("applications.wizard.protectedSuffix") : ""}`,
+      value: branch.name,
     })),
   );
 
@@ -286,6 +308,11 @@ export function useCreateAppWizard(
   const selectedProviderName = computed<string>(() => {
     if (!isProviderFlow.value) {
       return "";
+    }
+    // The GitHub App flow authenticates through the installation, but the
+    // application row still keys hooks and deploy keys off provider "github".
+    if (isGitHubAppFlow.value) {
+      return "github";
     }
     return (
       providersStore.providers.find((item) => item.id === form.providerId)
@@ -426,6 +453,7 @@ export function useCreateAppWizard(
   // Switching the source type drops the previous type's fields, so a github
   // provider picked under github_app can never leak into a gitlab_app
   // payload (and the backend agreement check would reject it anyway).
+  // Entering the GitHub App flow loads the connections for the selector.
   watch(
     () => form.sourceType,
     () => {
@@ -434,12 +462,19 @@ export function useCreateAppWizard(
       form.repoFullName = "";
       form.cloneUrl = "";
       noSshUrl.value = false;
+      if (form.sourceType === "github_app") {
+        void githubAppStore.fetchApps().catch(() => undefined);
+      }
     },
   );
 
   /** loadRepos fetches the selected provider's repositories; the store exposes any error. */
   async function loadRepos(): Promise<void> {
     if (form.providerId === "") {
+      return;
+    }
+    if (isGitHubAppFlow.value) {
+      await githubAppStore.fetchRepos(form.providerId).catch(() => undefined);
       return;
     }
     await providersStore.fetchRepos(form.providerId).catch(() => undefined);
@@ -458,6 +493,22 @@ export function useCreateAppWizard(
 
   /** handleRepoSelect prefills branch, clone URL and a name from the repo. */
   function handleRepoSelect(fullName: string): void {
+    if (isGitHubAppFlow.value) {
+      const repo = githubAppStore.reposOf(form.providerId).find((item) => item.full_name === fullName);
+      if (!repo) {
+        return;
+      }
+      form.cloneUrl = cloneUrlFor(repo);
+      noSshUrl.value = false;
+      if (repo.default_branch) {
+        form.branch = repo.default_branch;
+      }
+      if (form.name.trim() === "") {
+        form.name = suggestAppName(repo.name);
+      }
+      void githubAppStore.fetchBranches(form.providerId, fullName).catch(() => undefined);
+      return;
+    }
     const repo = providersStore.reposOf(form.providerId).find((item) => item.full_name === fullName);
     if (!repo) {
       return;
@@ -589,6 +640,7 @@ export function useCreateAppWizard(
     // The provider store is a singleton: a stale repo error must not survive
     // into the next wizard with a Retry that no longer applies.
     providersStore.reposError = null;
+    githubAppStore.reposError = null;
     providersStore.reposErrorRaw = null;
   }
 
@@ -601,10 +653,12 @@ export function useCreateAppWizard(
     errorMessage,
     sourceError,
     providersStore,
+    githubAppStore,
     providerOptions,
     sourceTypeOptions,
     isPublicRepo,
     isProviderFlow,
+    isGitHubAppFlow,
     repoOptions,
     branchOptions,
     serverOptions,

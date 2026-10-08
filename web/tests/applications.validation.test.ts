@@ -181,9 +181,13 @@ describe("wizard create payload carries the source type", () => {
       { id: "p2", provider: "gitlab", base_url: "", connected: true, scopes: "", created_at: "", updated_at: "" },
     ];
 
-    // Provider options follow the source type: no cross-provider selection.
+    // Provider options follow the source type: github_app lists GitHub App
+    // connections (GS-5), gitlab_app keeps the OAuth provider list.
+    w.githubAppStore.apps = [
+      { id: "g1", app_id: 1, slug: "gotham", name: "gotham", base_url: "", connected: true, installations: [] },
+    ];
     Object.assign(w.form, { sourceType: "github_app" });
-    expect(w.providerOptions.value.map((item) => item.value)).toEqual(["p1"]);
+    expect(w.providerOptions.value.map((item) => item.value)).toEqual(["g1"]);
     Object.assign(w.form, { sourceType: "gitlab_app" });
     expect(w.providerOptions.value.map((item) => item.value)).toEqual(["p2"]);
 

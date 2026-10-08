@@ -31,8 +31,20 @@ type ProviderService interface {
 	// Connect completes an OAuth connection: it redeems state, exchanges code
 	// for tokens and persists them.
 	Connect(ctx context.Context, userID, providerID uuid.UUID, code, state string) (Provider, error)
+	// Disconnect deletes a stored provider connection together with its
+	// credentials and cached repositories.
+	Delete(ctx context.Context, userID, providerID uuid.UUID) error
 	// ListRepos returns the repositories of one provider connection.
 	ListRepos(ctx context.Context, userID, providerID uuid.UUID) ([]Repo, error)
+	// ListBranches returns the branches of repo through one provider connection.
+	ListBranches(ctx context.Context, userID, providerID uuid.UUID, repo string) ([]Branch, error)
+	// AutoProvisionGitLab creates the GitLab OAuth application through the
+	// GitLab API from a one-time admin token (never stored) and stores the
+	// connection.
+	AutoProvisionGitLab(ctx context.Context, userID uuid.UUID, input AutoProvisionGitLabInput) (Provider, error)
+	// GitLabSetupInfoFor returns the exact redirect URI and scopes for a
+	// manually created GitLab OAuth application.
+	GitLabSetupInfoFor(baseURL, redirectURL string) (GitLabSetupInfo, error)
 	// CreateWebhook installs a push hook on target.Repo with the caller's
 	// stored connection for that provider and returns the provider's hook ID.
 	CreateWebhook(ctx context.Context, target HookTarget, hook Webhook) (string, error)
@@ -59,6 +71,20 @@ type CreateProviderInput struct {
 // URL. It is separate from SourceProvider so that interface stays stable.
 type authorizer interface {
 	AuthCodeURL(state string) string
+}
+
+// pkceAuthorizer is implemented by provider sources that bind the
+// authorization URL to an RFC 7636 S256 challenge. The service mints the
+// verifier, keeps it beside the one-time state and redeems it in Connect, so
+// the browser never sees it.
+type pkceAuthorizer interface {
+	AuthCodeURLWithPKCE(state, challenge string) string
+}
+
+// pkceExchanger is implemented by provider sources that redeem an
+// authorization code with a PKCE verifier.
+type pkceExchanger interface {
+	ExchangeTokenWithVerifier(ctx context.Context, code, verifier string) (*oauth2.Token, error)
 }
 
 // tokenReporter is implemented by provider sources that can report the token
@@ -191,7 +217,8 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateProv
 
 // Authorize starts an OAuth connection for a stored provider. It returns the
 // provider authorization URL and a state that binds the browser to this
-// connection; the state is single-use and expires.
+// connection; the state is single-use and expires. Sources with PKCE support
+// additionally bind the URL to a verifier the browser never sees.
 func (s *Service) Authorize(ctx context.Context, userID, providerID uuid.UUID) (string, string, error) {
 	if s.repo == nil {
 		return "", "", errors.New("providers: repository is not configured")
@@ -209,6 +236,18 @@ func (s *Service) Authorize(ctx context.Context, userID, providerID uuid.UUID) (
 		return "", "", fmt.Errorf("%w: %s cannot authorize", ErrUnsupported, provider.Name)
 	}
 
+	if pkce, ok := source.(pkceAuthorizer); ok {
+		verifier, err := generatePKCEVerifier()
+		if err != nil {
+			return "", "", err
+		}
+		state, err := s.states.newPKCE(userID, providerID, verifier)
+		if err != nil {
+			return "", "", err
+		}
+		return pkce.AuthCodeURLWithPKCE(state, pkceChallenge(verifier)), state, nil
+	}
+
 	state, err := s.states.new(userID, providerID)
 	if err != nil {
 		return "", "", err
@@ -218,7 +257,8 @@ func (s *Service) Authorize(ctx context.Context, userID, providerID uuid.UUID) (
 
 // Connect completes an OAuth connection started by Authorize: it redeems the
 // state, exchanges the code for tokens and persists the access/refresh pair so
-// later calls use the stored credentials.
+// later calls use the stored credentials. A PKCE verifier minted for the state
+// is consumed with it and never accepted twice.
 func (s *Service) Connect(ctx context.Context, userID, providerID uuid.UUID, code, state string) (Provider, error) {
 	if s.repo == nil {
 		return Provider{}, errors.New("providers: repository is not configured")
@@ -231,7 +271,8 @@ func (s *Service) Connect(ctx context.Context, userID, providerID uuid.UUID, cod
 	if err != nil {
 		return Provider{}, err
 	}
-	if !s.states.redeem(state, userID, providerID) {
+	verifier, ok := s.states.redeem(state, userID, providerID)
+	if !ok {
 		return Provider{}, fmt.Errorf("%w: invalid or expired oauth state", ErrValidation)
 	}
 	source, err := s.sourceProvider(provider)
@@ -239,7 +280,7 @@ func (s *Service) Connect(ctx context.Context, userID, providerID uuid.UUID, cod
 		return Provider{}, err
 	}
 
-	tok, err := source.ExchangeToken(ctx, code)
+	tok, err := s.exchangeToken(ctx, source, code, verifier)
 	if err != nil {
 		s.logger.Warn("providers: token exchange failed",
 			"provider_id", providerID.String(), "error", err)
@@ -254,6 +295,30 @@ func (s *Service) Connect(ctx context.Context, userID, providerID uuid.UUID, cod
 		return Provider{}, err
 	}
 	return updated, nil
+}
+
+// exchangeToken redeems code on source, proving the PKCE verifier when the
+// source minted one for this authorization. A source with PKCE support but no
+// verifier for this state fails closed: the authorization was not bound, so
+// the code must not be redeemed.
+func (s *Service) exchangeToken(ctx context.Context, source SourceProvider, code, verifier string) (*oauth2.Token, error) {
+	if pkce, ok := source.(pkceExchanger); ok {
+		if verifier == "" {
+			return nil, fmt.Errorf("%w: pkce verifier is missing", ErrValidation)
+		}
+		return pkce.ExchangeTokenWithVerifier(ctx, code, verifier)
+	}
+	return source.ExchangeToken(ctx, code)
+}
+
+// Delete removes a stored provider connection: its credentials and cached
+// repositories go with it (repos_cache rows cascade), so disconnecting is a
+// full credential forget. Deleting twice is a success.
+func (s *Service) Delete(ctx context.Context, userID, providerID uuid.UUID) error {
+	if s.repo == nil {
+		return errors.New("providers: repository is not configured")
+	}
+	return s.repo.Delete(ctx, providerID, userID)
 }
 
 // ListRepos returns the repositories of one provider connection. A live fetch
@@ -310,6 +375,41 @@ func (s *Service) ListRepos(ctx context.Context, userID, providerID uuid.UUID) (
 			"error", err)
 	}
 	return repos, nil
+}
+
+// ListBranches returns the branches of repo through one provider connection.
+// The stored token refreshes transparently inside the call, like ListRepos.
+func (s *Service) ListBranches(ctx context.Context, userID, providerID uuid.UUID, repo string) ([]Branch, error) {
+	if s.repo == nil {
+		return nil, errors.New("providers: repository is not configured")
+	}
+
+	provider, err := s.repo.Get(ctx, providerID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !provider.Connected() {
+		return nil, fmt.Errorf("%w: %s", ErrNotConnected, provider.Name)
+	}
+
+	source, err := s.sourceProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+
+	var branches []Branch
+	err = s.runWithToken(ctx, source, provider, func(tok *oauth2.Token) error {
+		var callErr error
+		branches, callErr = source.ListBranches(ctx, tok, repo)
+		return callErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	if branches == nil {
+		return []Branch{}, nil
+	}
+	return branches, nil
 }
 
 // CreateWebhook installs a push hook on target.Repo using the caller's stored
@@ -627,10 +727,13 @@ type connectState struct {
 	now     func() time.Time
 }
 
-// connectStateEntry is one pending provider authorization.
+// connectStateEntry is one pending provider authorization. verifier holds the
+// PKCE verifier minted for sources that bind the authorization URL to a
+// challenge; it is empty for legacy authorizations and consumed with the state.
 type connectStateEntry struct {
 	userID     uuid.UUID
 	providerID uuid.UUID
+	verifier   string
 	expiresAt  time.Time
 }
 
@@ -647,6 +750,19 @@ func newConnectState() *connectState {
 // answers ErrTooManyRequests when the user's or the global cap is reached, so a
 // caller gets a 429 rather than a 500 for everyone.
 func (s *connectState) new(userID, providerID uuid.UUID) (string, error) {
+	return s.newWithVerifier(userID, providerID, "")
+}
+
+// newPKCE mints a random single-use state bound to userID and providerID and
+// stores verifier beside it, under the same caps, single-use and expiry as
+// new.
+func (s *connectState) newPKCE(userID, providerID uuid.UUID, verifier string) (string, error) {
+	return s.newWithVerifier(userID, providerID, verifier)
+}
+
+// newWithVerifier mints a random single-use state bound to userID and
+// providerID, keeping verifier for the Connect that redeems it.
+func (s *connectState) newWithVerifier(userID, providerID uuid.UUID, verifier string) (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("providers: generate connect state: %w", err)
@@ -664,6 +780,7 @@ func (s *connectState) new(userID, providerID uuid.UUID) (string, error) {
 	s.entries[state] = connectStateEntry{
 		userID:     userID,
 		providerID: providerID,
+		verifier:   verifier,
 		expiresAt:  s.now().Add(connectStateTTL),
 	}
 	s.byUser[userID]++
@@ -671,21 +788,25 @@ func (s *connectState) new(userID, providerID uuid.UUID) (string, error) {
 }
 
 // redeem consumes state and reports whether it bound exactly this user and
-// provider. A missing, expired, already-used or foreign state is false.
-func (s *connectState) redeem(state string, userID, providerID uuid.UUID) bool {
+// provider, returning the PKCE verifier minted for it ("", false has none). A
+// missing, expired, already-used or foreign state is false.
+func (s *connectState) redeem(state string, userID, providerID uuid.UUID) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	entry, ok := s.entries[state]
 	if !ok {
-		return false
+		return "", false
 	}
 	delete(s.entries, state)
 	s.releaseLocked(entry.userID)
 	if s.now().After(entry.expiresAt) {
-		return false
+		return "", false
 	}
-	return entry.userID == userID && entry.providerID == providerID
+	if entry.userID != userID || entry.providerID != providerID {
+		return "", false
+	}
+	return entry.verifier, true
 }
 
 // releaseLocked decrements a user's outstanding count; the caller holds the lock.

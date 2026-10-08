@@ -1,0 +1,125 @@
+package providers
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+)
+
+// TestRoutesDeleteProvider forgets the connection and answers idempotently.
+func TestRoutesDeleteProvider(t *testing.T) {
+	userID := uuid.New()
+	providerID := uuid.New()
+	svc := &fakeService{}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/v1/providers/"+providerID.String(), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if svc.deletedProviderID != providerID {
+		t.Fatalf("deleted = %v, want %v", svc.deletedProviderID, providerID)
+	}
+	var body deleteEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.Deleted {
+		t.Fatalf("body = %+v, want deleted", body)
+	}
+}
+
+// TestRoutesListBranches returns the branches of the requested repo.
+func TestRoutesListBranches(t *testing.T) {
+	userID := uuid.New()
+	svc := &fakeService{branches: []Branch{{Name: "main", Commit: "abc", Protected: true}}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/providers/"+uuid.New().String()+"/branches?repo=acme%2Fdemo", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if svc.branchRepo != "acme/demo" {
+		t.Fatalf("repo = %q, want acme/demo", svc.branchRepo)
+	}
+	var body branchListEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Branches) != 1 || body.Branches[0].Name != "main" {
+		t.Fatalf("body = %+v", body)
+	}
+}
+
+// TestRoutesListBranchesRequiresRepo answers 400 without the repo query.
+func TestRoutesListBranchesRequiresRepo(t *testing.T) {
+	srv := newRouteServer(&fakeService{}, alwaysUser(uuid.New()))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/providers/"+uuid.New().String()+"/branches", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestRoutesGitLabAutoProvision stores the provisioned connection and never
+// echoes credentials.
+func TestRoutesGitLabAutoProvision(t *testing.T) {
+	userID := uuid.New()
+	svc := &fakeService{provisioned: Provider{
+		ID: uuid.New(), UserID: userID, Name: NameGitLab,
+		ClientID: "app-id", ClientSecret: "app-secret",
+		AccessToken: "access", RefreshToken: "refresh",
+	}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	body := `{"base_url":"https://git.example","admin_token":"one-time","redirect_url":"https://cp.example/oauth/callback"}`
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/v1/providers/gitlab/auto-provision", strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if svc.provisionSeen.AdminToken != "one-time" || svc.provisionSeen.RedirectURL != "https://cp.example/oauth/callback" {
+		t.Fatalf("provision input = %+v", svc.provisionSeen)
+	}
+	for _, leaked := range []string{"one-time", "app-secret", "access", "refresh"} {
+		if strings.Contains(rec.Body.String(), leaked) {
+			t.Errorf("response leaked %q: %s", leaked, rec.Body.String())
+		}
+	}
+}
+
+// TestRoutesGitLabSetupInfo returns the manual-application details.
+func TestRoutesGitLabSetupInfo(t *testing.T) {
+	svc := &fakeService{setupInfo: GitLabSetupInfo{
+		BaseURL: "https://git.example", RedirectURI: "https://cp.example/oauth/callback",
+		Scopes: gitLabProvisionScopes,
+	}}
+	srv := newRouteServer(svc, alwaysUser(uuid.New()))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/providers/gitlab/setup-info?base_url=https%3A%2F%2Fgit.example&redirect_url=https%3A%2F%2Fcp.example%2Foauth%2Fcallback", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body gitLabSetupInfoResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.RedirectURI != "https://cp.example/oauth/callback" || body.Scopes != gitLabProvisionScopes {
+		t.Fatalf("body = %+v", body)
+	}
+	if svc.setupBase != "https://git.example" || svc.setupReturn != "https://cp.example/oauth/callback" {
+		t.Fatalf("setup args = %q/%q", svc.setupBase, svc.setupReturn)
+	}
+}

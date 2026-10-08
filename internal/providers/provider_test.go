@@ -107,6 +107,16 @@ func (f *fakeRepo) ListCachedRepos(_ context.Context, providerID uuid.UUID) ([]R
 	return f.cached[providerID], nil
 }
 
+func (f *fakeRepo) Delete(_ context.Context, id, userID uuid.UUID) error {
+	p, ok := f.providers[id]
+	if !ok || p.UserID != userID {
+		return nil
+	}
+	delete(f.providers, id)
+	delete(f.cached, id)
+	return nil
+}
+
 // serve starts a test HTTP server and returns it.
 func serve(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()

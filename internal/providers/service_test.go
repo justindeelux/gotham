@@ -725,14 +725,14 @@ func TestConnectStatePerUserCapAndRedeem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	if states.redeem(foreignUser, uuid.New(), provider) {
+	if _, ok := states.redeem(foreignUser, uuid.New(), provider); ok {
 		t.Error("redeem with a foreign user returned true")
 	}
 	foreignProvider, err := states.new(user, provider)
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	if states.redeem(foreignProvider, user, uuid.New()) {
+	if _, ok := states.redeem(foreignProvider, user, uuid.New()); ok {
 		t.Error("redeem with a foreign provider returned true")
 	}
 
@@ -750,10 +750,10 @@ func TestConnectStatePerUserCapAndRedeem(t *testing.T) {
 	}
 
 	// The correct pair redeems once and frees a slot.
-	if !states.redeem(last, user, provider) {
+	if _, ok := states.redeem(last, user, provider); !ok {
 		t.Fatal("redeem with the bound pair returned false")
 	}
-	if states.redeem(last, user, provider) {
+	if _, ok := states.redeem(last, user, provider); ok {
 		t.Error("replaying a redeemed state returned true")
 	}
 	if _, err := states.new(user, provider); err != nil {

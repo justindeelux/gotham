@@ -80,7 +80,16 @@ const { t } = useI18n();
 
     <div class="form-row">
       <NFormItem :label="t('applications.wizard.branch')">
-        <NInput v-model:value="form.branch" class="mono" placeholder="main" />
+        <NSelect
+          v-if="wizard.branchOptions.value.length > 0"
+          v-model:value="form.branch"
+          :options="wizard.branchOptions.value"
+          :loading="wizard.providersStore.branchesLoading"
+          :placeholder="t('applications.wizard.branchPlaceholder')"
+          filterable
+          tag
+        />
+        <NInput v-else v-model:value="form.branch" class="mono" placeholder="main" />
         <span class="field-hint">{{
           wizard.isPublicRepo.value
             ? t("applications.wizard.branchAutoHint")

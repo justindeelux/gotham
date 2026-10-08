@@ -26,6 +26,9 @@ type Repository interface {
 	List(ctx context.Context, userID uuid.UUID) ([]Provider, error)
 	// UpdateToken replaces the stored access/refresh tokens.
 	UpdateToken(ctx context.Context, id uuid.UUID, accessToken, refreshToken string, expiresAt *time.Time) (Provider, error)
+	// Delete removes the provider with id when it is owned by userID. A
+	// missing row is a success, so disconnecting twice is idempotent.
+	Delete(ctx context.Context, id, userID uuid.UUID) error
 	// ReplaceRepos overwrites the cached repository list of a provider.
 	ReplaceRepos(ctx context.Context, providerID uuid.UUID, repos []Repo) error
 	// ListCachedRepos returns the cached repository list of a provider.
@@ -133,6 +136,17 @@ func (r *storeRepository) UpdateToken(ctx context.Context, id uuid.UUID, accessT
 		return Provider{}, fmt.Errorf("providers: update token: %w", err)
 	}
 	return r.providerFromRow(row)
+}
+
+// Delete removes one provider owned by userID; a missing row is a success.
+func (r *storeRepository) Delete(ctx context.Context, id, userID uuid.UUID) error {
+	if err := r.store.DeleteProviderByIDAndUser(ctx, sqlc.DeleteProviderByIDAndUserParams{
+		ID:     pgUUID(id),
+		UserID: pgUUID(userID),
+	}); err != nil {
+		return fmt.Errorf("providers: delete: %w", err)
+	}
+	return nil
 }
 
 // ReplaceRepos swaps the cached repository list of a provider. The new list is

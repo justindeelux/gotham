@@ -32,6 +32,12 @@ func (s *Store) UpdateProviderToken(ctx context.Context, params sqlc.UpdateProvi
 	return s.queries.UpdateProviderToken(ctx, params)
 }
 
+// DeleteProviderByIDAndUser removes the provider with the given ID when it is
+// owned by userID. Cached repositories cascade; a missing row is a success.
+func (s *Store) DeleteProviderByIDAndUser(ctx context.Context, params sqlc.DeleteProviderByIDAndUserParams) error {
+	return s.queries.DeleteProviderByIDAndUser(ctx, params)
+}
+
 // UpsertRepoCache inserts or refreshes one cached repository.
 func (s *Store) UpsertRepoCache(ctx context.Context, params sqlc.UpsertRepoCacheParams) (sqlc.ReposCache, error) {
 	return s.queries.UpsertRepoCache(ctx, params)

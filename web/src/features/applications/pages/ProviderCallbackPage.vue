@@ -33,9 +33,10 @@ const hint = computed<string>(() =>
     : t("applications.providerCallback.invalidHint"),
 );
 
-/** backToProjects returns to the project list; connect management lands in GS-10. */
-async function backToProjects(): Promise<void> {
-  await router.replace({ name: "projects" });
+/** backToGitSources returns to the Git sources page, which owns the Connect
+ * and Disconnect controls (GS-10). */
+async function backToGitSources(): Promise<void> {
+  await router.replace({ name: "git-sources" });
 }
 </script>
 
@@ -57,7 +58,7 @@ async function backToProjects(): Promise<void> {
               : hint
           }}
         </NAlert>
-        <NButton @click="backToProjects">
+        <NButton @click="backToGitSources">
           {{ t("applications.providerCallback.back") }}
         </NButton>
       </NSpace>

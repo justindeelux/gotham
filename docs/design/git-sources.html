@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Git sources · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* Local page: new pg- classes only, no shared-class redefinitions. */
+  .pg-status { display: inline-flex; align-items: center; gap: 6px; }
+  .pg-sub { display: block; font-size: var(--text-xs); color: var(--muted); }
+  .pg-dialog-grid { display: grid; gap: var(--space-3); }
+  .pg-field label { display: block; font-size: var(--text-xs); color: var(--muted); margin-bottom: 4px; }
+  .pg-field input { width: 100%; }
+  .pg-secret-note { font-size: var(--text-xs); color: var(--muted); }
+</style>
+</head>
+<body data-page="git-sources" data-nav="settings">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Managed servers"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Settings · Gotham Labs</p>
+            <h1>Git sources</h1>
+            <p class="page-desc">Connected GitHub Apps and GitLab connections the application wizard deploys from. Connecting is automatic — no hand-copied client IDs, secrets or webhooks. Secrets are never shown here.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" type="button">Connect GitHub</button>
+            <button class="btn btn-secondary" type="button">Connect GitLab</button>
+          </div>
+        </div>
+
+        <div class="card" data-od-id="git-sources-table">
+          <div class="card-head">
+            <h3>Connections</h3><span class="meta">2 connected · 1 needs attention</span>
+          </div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Source</th><th>Status</th><th>Account / instance</th><th>Installations</th><th>Repositories</th><th>Applications</th><th>Connected</th><th class="actions">Actions</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><div class="cell-main"><span class="fg-2">GitHub App</span><span class="cell-sub">gotham-ci</span></div></td>
+                  <td><span class="pg-status"><span class="dot dot--online dot--ring"></span>Connected</span></td>
+                  <td>acme-corp<span class="pg-sub">github.com</span></td>
+                  <td>1</td>
+                  <td>48</td>
+                  <td>3</td>
+                  <td>Oct 2, 2026</td>
+                  <td class="actions"><button class="btn btn-ghost btn-sm" type="button">Reconnect</button> <button class="btn btn-ghost btn-sm btn-danger" type="button">Disconnect</button></td>
+                </tr>
+                <tr>
+                  <td><div class="cell-main"><span class="fg-2">GitHub App</span><span class="cell-sub">gotham-docs</span></div></td>
+                  <td><span class="pg-status"><span class="dot dot--idle dot--ring"></span>Needs attention</span><span class="pg-sub">Waiting for installation</span></td>
+                  <td>—<span class="pg-sub">github.com</span></td>
+                  <td>0</td>
+                  <td>—</td>
+                  <td>0</td>
+                  <td>Oct 7, 2026</td>
+                  <td class="actions"><button class="btn btn-ghost btn-sm" type="button">Install</button> <button class="btn btn-ghost btn-sm btn-danger" type="button">Disconnect</button></td>
+                </tr>
+                <tr>
+                  <td><div class="cell-main"><span class="fg-2">GitLab</span><span class="cell-sub">OAuth · PKCE</span></div></td>
+                  <td><span class="pg-status"><span class="dot dot--online dot--ring"></span>Connected</span></td>
+                  <td>git.example.com<span class="pg-sub">api · read_api</span></td>
+                  <td>—</td>
+                  <td>12</td>
+                  <td>1</td>
+                  <td>Sep 28, 2026</td>
+                  <td class="actions"><button class="btn btn-ghost btn-sm" type="button">Reconnect</button> <button class="btn btn-ghost btn-sm btn-danger" type="button">Disconnect</button></td>
+                </tr>
+                <tr>
+                  <td><div class="cell-main"><span class="fg-2">GitHub</span><span class="cell-sub">Legacy OAuth · read-only</span></div></td>
+                  <td><span class="pg-status"><span class="dot dot--online dot--ring"></span>Connected</span></td>
+                  <td>github.com</td>
+                  <td>—</td>
+                  <td>—</td>
+                  <td>2</td>
+                  <td>Aug 14, 2026</td>
+                  <td class="actions"><span class="meta">Managed before Git sources</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card mt-5" data-od-id="gitlab-connect">
+          <div class="card-head"><h3>Connect GitLab</h3><span class="meta">Automatic provisioning or a manually created OAuth app</span></div>
+          <div class="pg-dialog-grid">
+            <div class="pg-field"><label for="pg-gitlab-url">Instance URL</label><input id="pg-gitlab-url" class="input mono" value="https://gitlab.com" /></div>
+            <div class="pg-field"><label for="pg-gitlab-token">Admin token (one-time, never stored)</label><input id="pg-gitlab-token" class="input mono" type="password" autocomplete="off" placeholder="Paste once to provision the OAuth app" /><p class="pg-secret-note">The token authenticates a single provisioning call and is cleared on submit. It is never stored, logged or shown again.</p></div>
+            <div><button class="btn btn-primary" type="button">Provision &amp; connect</button> <button class="btn btn-ghost" type="button">Use manual app fields instead</button></div>
+          </div>
+        </div>
+
+        <div class="card mt-5" data-od-id="disconnect-confirm">
+          <div class="card-head"><h3>Disconnect confirmation</h3></div>
+          <p>Disconnect <strong>gotham-ci</strong>? 3 applications still deploy through it:</p>
+          <ul><li>shop (main)</li><li>blog (main)</li><li>docs (preview)</li></ul>
+          <p class="pg-secret-note">When applications still use a connection the server refuses with the application names — delete or move those applications first.</p>
+          <div><button class="btn btn-danger" type="button">Disconnect</button> <button class="btn btn-ghost" type="button">Cancel</button></div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+<script src="assets/gotham-ui.js"></script>
+</body>
+</html>

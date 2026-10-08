@@ -231,6 +231,10 @@ func TestRoutesEndToEnd(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
 	}
+	// GS-10 lists the connection age: the wire shape carries created_at.
+	if !strings.Contains(rec.Body.String(), `"created_at"`) {
+		t.Fatalf("list misses created_at: %s", rec.Body.String())
+	}
 
 	rec = doRequest(t, router, http.MethodDelete, "/v1/providers/github-app/"+app.ID, nil)
 	if rec.Code != http.StatusOK {

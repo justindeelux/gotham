@@ -2,6 +2,7 @@
 import { NAlert, NButton, NFormItem, NInput, NSelect, NSpace } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { RouterLink } from "vue-router";
 
 import BuildArgsEditor from "@/features/applications/components/BuildArgsEditor.vue";
 import { useCreateWizardState } from "@/features/applications/composables/useCreateAppWizard";
@@ -95,6 +96,19 @@ const latestTagWarn = computed<boolean>(
     </div>
 
     <div class="form-row" v-else-if="wizard.isProviderFlow.value">
+      <NAlert
+        v-if="wizard.providerOptions.value.length === 0"
+        type="info"
+        :show-icon="true"
+        style="margin-bottom: 8px"
+      >
+        <NSpace align="center" :size="8">
+          <span>{{ t("applications.gitSources.wizardConnectHint") }}</span>
+          <RouterLink :to="{ name: 'git-sources' }">
+            {{ t("applications.gitSources.wizardConnect") }}
+          </RouterLink>
+        </NSpace>
+      </NAlert>
       <NFormItem :label="t('applications.wizard.provider')" :show-feedback="true">
         <NSelect
           v-model:value="form.providerId"

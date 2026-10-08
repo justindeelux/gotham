@@ -68,6 +68,23 @@ export interface GitLabSetupInfo {
   scopes: string;
 }
 
+/** Input for storing a manually created OAuth application (POST /providers).
+ * Client secrets are write-only: they are sent once and never read back. */
+export interface CreateProviderInput {
+  provider: string;
+  base_url: string;
+  client_id: string;
+  client_secret: string;
+  redirect_url: string;
+  scopes?: string;
+}
+
+/** An OAuth authorization start: redirect the browser to url. */
+export interface ProviderAuthorize {
+  url: string;
+  state: string;
+}
+
 /** Input for automatic GitLab OAuth application creation. The admin token is
  * one-time: it authenticates the single provisioning call and is never stored. */
 export interface AutoProvisionGitLabInput {
@@ -132,6 +149,43 @@ export async function gitlabSetupInfo(
     { params: { base_url: baseUrl, redirect_url: redirectUrl } },
   );
   return response.data;
+}
+
+/** createProvider stores a manually created OAuth application, unconnected
+ * until the authorize step. The client secret is write-only. */
+export async function createProvider(input: CreateProviderInput): Promise<SourceProvider> {
+  const response = await http.post<SourceProvider>("/providers", input);
+  return response.data;
+}
+
+/** authorizeProvider starts the OAuth (PKCE) connect: redirect the browser
+ * to the returned url; the provider calls back to the API, which lands the
+ * browser on the SPA provider-callback route. */
+export async function authorizeProvider(providerId: string): Promise<ProviderAuthorize> {
+  const response = await http.get<ProviderAuthorize>(`/providers/${providerId}/authorize`);
+  return response.data;
+}
+
+/** connectProvider completes an OAuth connection from a code/state pair that
+ * landed on the SPA route (used by tests and non-browser callers; the
+ * browser GitLab flow finishes server-side at the API callback). */
+export async function connectProvider(
+  providerId: string,
+  code: string,
+  state: string,
+): Promise<SourceProvider> {
+  const response = await http.post<SourceProvider>(`/providers/${providerId}/connect`, {
+    code,
+    state,
+  });
+  return response.data;
+}
+
+/** gitlabCallbackUrl is the OAuth redirect URL of this control plane: the
+ * API GitLab callback under the current origin. The backend rejects any
+ * redirect_url naming another host. */
+export function gitlabCallbackUrl(): string {
+  return `${window.location.origin}/api/v1/providers/gitlab/callback`;
 }
 
 /** describeProviderError maps a thrown error to a user-facing message. */

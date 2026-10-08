@@ -218,7 +218,6 @@ const en = {
     provider: "Provider",
     providerPlaceholder: "Select a connected provider",
     providerHint: "Each provider uses its own OAuth app.",
-    publicRepo: "Public repository · paste URL",
     privateSuffix: " (private)",
     connected: "connected",
     notConnected: "not connected",

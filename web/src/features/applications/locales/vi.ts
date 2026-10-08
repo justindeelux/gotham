@@ -219,7 +219,6 @@ const vi: ApplicationsMessages = {
     provider: "Nhà cung cấp",
     providerPlaceholder: "Chọn nhà cung cấp đã kết nối",
     providerHint: "Mỗi nhà cung cấp dùng OAuth app riêng.",
-    publicRepo: "Kho công khai · dán URL",
     privateSuffix: " (riêng tư)",
     connected: "đã kết nối",
     notConnected: "chưa kết nối",

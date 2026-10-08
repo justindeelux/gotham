@@ -447,24 +447,16 @@ export function useCreateAppWizard(
 
   /** buildPayload assembles the create-application body from the wizard state. */
   function buildPayload(): CreateApplicationInput {
-    let repo = "";
-    let cloneUrl = "";
-    switch (form.sourceType) {
-      case "git_public":
-        repo = form.publicCloneUrl.trim();
-        cloneUrl = form.publicCloneUrl.trim();
-        break;
-      default:
-        repo = form.repoFullName;
-        cloneUrl = form.cloneUrl;
-        break;
-    }
+    const source =
+      form.sourceType === "git_public"
+        ? { repo: form.publicCloneUrl.trim(), cloneUrl: form.publicCloneUrl.trim() }
+        : { repo: form.repoFullName, cloneUrl: form.cloneUrl };
     return {
       name: form.name.trim(),
       environment_id: form.environmentId,
       provider: selectedProviderName.value,
-      repo,
-      clone_url: cloneUrl,
+      repo: source.repo,
+      clone_url: source.cloneUrl,
       source_type: form.sourceType,
       branch: form.branch.trim(),
       build_pack: form.buildPack,

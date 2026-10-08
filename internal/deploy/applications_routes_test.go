@@ -58,10 +58,12 @@ var applicationWireKeys = []string{
 
 // applicationListWireKeys are the list-item fields: the Dockerfile source
 // text and --build-arg values travel on the detail routes only, so a list
-// read never exposes them.
+// read never exposes them. Every other detail key (including GS-5's
+// github_app_id) must appear here, or list readers see undefined values.
 var applicationListWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
 	"project_name", "provider", "repo", "clone_url", "source_type",
+	"github_app_id",
 	"branch", "build_pack",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
@@ -414,6 +416,41 @@ func TestRoutesListApplications(t *testing.T) {
 		}
 		if _, ok := keys["build_args"]; ok {
 			t.Error("list response carries build_args, want them detail-only")
+		}
+	})
+
+	// The list shape must keep every non-Dockerfile detail key: dropping
+	// one (as the GS-5 github_app_id was in the rebase) silently feeds
+	// undefined values to list readers. The link round-trips verbatim
+	// when set and encodes empty (not the zero UUID) when unlinked.
+	t.Run("list keeps the github app link", func(t *testing.T) {
+		linkID := uuid.New()
+		linked := sampleApplication()
+		linked.UserID = userID
+		linked.GitHubAppID = linkID
+		unlinked := sampleApplication()
+		unlinked.UserID = userID
+		svc := &fakeDeployService{listApps: []Application{linked, unlinked}}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var body applicationListEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Applications) != 2 {
+			t.Fatalf("applications = %d, want 2", len(body.Applications))
+		}
+		if body.Applications[0].GitHubAppID != linkID.String() {
+			t.Errorf("link = %q, want %q", body.Applications[0].GitHubAppID, linkID.String())
+		}
+		if body.Applications[1].GitHubAppID != "" {
+			t.Errorf("link = %q, want empty when unlinked", body.Applications[1].GitHubAppID)
 		}
 	})
 }

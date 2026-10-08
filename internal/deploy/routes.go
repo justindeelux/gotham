@@ -139,9 +139,11 @@ type applicationListItem struct {
 	Repo            string `json:"repo"`
 	CloneURL        string `json:"clone_url"`
 	SourceType      string `json:"source_type"`
-	Branch          string `json:"branch"`
-	BuildPack       string `json:"build_pack"`
-	BaseDomain      string `json:"base_domain"`
+	// GitHubAppID is the linked GitHub App connection, empty when unlinked.
+	GitHubAppID string `json:"github_app_id"`
+	Branch      string `json:"branch"`
+	BuildPack   string `json:"build_pack"`
+	BaseDomain  string `json:"base_domain"`
 	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
 	// migration (legacy duplicate); the value is preserved and an explicit
 	// domain update re-enables it.
@@ -1013,6 +1015,11 @@ func newApplicationListItem(application Application) applicationListItem {
 	if application.ServerID != uuid.Nil {
 		serverID := application.ServerID.String()
 		response.ServerID = &serverID
+	}
+	// The link is empty (not the zero UUID) when the application has none,
+	// mirroring the detail mapper.
+	if application.GitHubAppID != uuid.Nil {
+		response.GitHubAppID = application.GitHubAppID.String()
 	}
 	return response
 }

@@ -122,11 +122,14 @@ func TestManifestCodeRedacted(t *testing.T) {
 }
 
 // TestGuardHostRejectsNonPublic proves literal non-public IPs are refused,
-// with and without ports, in v4 and v6.
+// with and without ports, in v4 and v6, including transition embeddings and
+// IPv4-mapped forms.
 func TestGuardHostRejectsNonPublic(t *testing.T) {
 	for _, host := range []string{
 		"127.0.0.1", "::1", "10.0.0.1", "192.168.1.1", "172.16.0.1",
 		"169.254.169.254", "0.0.0.0", "", "224.0.0.1",
+		"100.100.100.200", "192.0.0.1", "198.18.0.1",
+		"64:ff9b::7f00:1", "2002:7f00:1::", "::ffff:127.0.0.1",
 	} {
 		if err := guardHostAllow(host, false); err == nil {
 			t.Errorf("host %q was accepted", host)
@@ -171,5 +174,18 @@ func TestManifestSetupURL(t *testing.T) {
 	redirect, _ := manifest.Manifest["redirect_url"].(string)
 	if !strings.HasPrefix(redirect, "https://gotham.example/api/v1/providers/github-app/callback?state=") {
 		t.Fatalf("redirect_url = %v", manifest.Manifest["redirect_url"])
+	}
+	// pull_request stays unsubscribed until previews support app-signed
+	// deliveries; push drives deploys and the installation events refresh
+	// the cache.
+	events, _ := manifest.Manifest["default_events"].([]string)
+	want := []string{"push", "installation", "installation_repositories"}
+	if len(events) != len(want) {
+		t.Fatalf("default_events = %v, want %v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("default_events = %v, want %v", events, want)
+		}
 	}
 }

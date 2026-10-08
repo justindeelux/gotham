@@ -116,6 +116,14 @@ export async function installUrl(appId: string): Promise<GitHubInstall> {
   return response.data;
 }
 
+/** installStateApp resolves a pending install state to its app id. */
+export async function installStateApp(state: string): Promise<string> {
+  const response = await http.get<{ app_id: string }>(
+    `/providers/github-app/install-state?state=${encodeURIComponent(state)}`,
+  );
+  return response.data.app_id;
+}
+
 /** recordInstallation stores the installation_id callback. */
 export async function recordInstallation(
   appId: string,

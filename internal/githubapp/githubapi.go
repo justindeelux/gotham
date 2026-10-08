@@ -71,6 +71,14 @@ type InstallationInfo struct {
 	AppID   int64
 }
 
+// repoListPageSize is the installation repository page size, and
+// maxRepoListPages bounds the page walk so a host that always answers full
+// pages cannot loop the lister forever (1000 repos).
+const (
+	repoListPageSize = 100
+	maxRepoListPages = 10
+)
+
 // httpAPI implements GitHubAPI against one API base URL
 // (https://api.github.com or a GitHub Enterprise /api/v3 root).
 type httpAPI struct {
@@ -110,14 +118,14 @@ func (a *httpAPI) ExchangeManifest(ctx context.Context, code string) (ManifestCo
 	}
 	endpoint := a.apiBase + "/app-manifests/" + code + "/conversions"
 	var out struct {
-		ID       int64  `json:"id"`
-		Slug     string `json:"slug"`
-		Name     string `json:"name"`
-		ClientID string `json:"client_id"`
-		Webhook  struct {
-			Secret string `json:"secret"`
-		} `json:"webhook_secret"`
-		PEM string `json:"pem"`
+		ID            int64          `json:"id"`
+		Slug          string         `json:"slug"`
+		Name          string         `json:"name"`
+		ClientID      string         `json:"client_id"`
+		ClientSecret  string         `json:"client_secret"`
+		WebhookSecret flexibleString `json:"webhook_secret"`
+		PEM           string         `json:"pem"`
+		HTMLURL       string         `json:"html_url"`
 	}
 	if err := a.post(ctx, endpoint, nil, &out); err != nil {
 		return ManifestConversion{}, err
@@ -130,9 +138,30 @@ func (a *httpAPI) ExchangeManifest(ctx context.Context, code string) (ManifestCo
 		Slug:          out.Slug,
 		Name:          out.Name,
 		ClientID:      out.ClientID,
-		WebhookSecret: out.Webhook.Secret,
+		WebhookSecret: string(out.WebhookSecret),
 		PEM:           out.PEM,
 	}, nil
+}
+
+// flexibleString decodes a JSON string that GitHub sometimes wraps: the
+// manifest conversion returns webhook_secret as a plain string, but older
+// Enterprise releases nest it, so both shapes are accepted defensively.
+type flexibleString string
+
+func (s *flexibleString) UnmarshalJSON(raw []byte) error {
+	var plain string
+	if err := json.Unmarshal(raw, &plain); err == nil {
+		*s = flexibleString(plain)
+		return nil
+	}
+	var nested struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(raw, &nested); err != nil {
+		return err
+	}
+	*s = flexibleString(nested.Secret)
+	return nil
 }
 
 // GetInstallation verifies the installation belongs to the app: GitHub only
@@ -187,33 +216,41 @@ func (a *httpAPI) CreateInstallationToken(ctx context.Context, installationID in
 }
 
 func (a *httpAPI) ListInstallationRepos(ctx context.Context, token string) ([]Repo, error) {
-	var out struct {
-		Repositories []struct {
-			ID            int64  `json:"id"`
-			Name          string `json:"name"`
-			FullName      string `json:"full_name"`
-			Private       bool   `json:"private"`
-			DefaultBranch string `json:"default_branch"`
-			CloneURL      string `json:"clone_url"`
-			SSHURL        string `json:"ssh_url"`
-			HTMLURL       string `json:"html_url"`
-		} `json:"repositories"`
-	}
-	if err := a.get(ctx, a.apiBase+"/installation/repositories?per_page=100", token, &out); err != nil {
-		return nil, err
-	}
-	repos := make([]Repo, 0, len(out.Repositories))
-	for _, r := range out.Repositories {
-		repos = append(repos, Repo{
-			ExternalID:    fmt.Sprintf("%d", r.ID),
-			Name:          r.Name,
-			FullName:      r.FullName,
-			Private:       r.Private,
-			DefaultBranch: r.DefaultBranch,
-			CloneURL:      r.CloneURL,
-			SSHURL:        r.SSHURL,
-			HTMLURL:       r.HTMLURL,
-		})
+	repos := make([]Repo, 0)
+	// Installations can hold more than one page: follow pages until a short
+	// one, bounded so a misbehaving host cannot page forever.
+	for page := 1; page <= maxRepoListPages; page++ {
+		endpoint := fmt.Sprintf("%s/installation/repositories?per_page=%d&page=%d", a.apiBase, repoListPageSize, page)
+		var out struct {
+			Repositories []struct {
+				ID            int64  `json:"id"`
+				Name          string `json:"name"`
+				FullName      string `json:"full_name"`
+				Private       bool   `json:"private"`
+				DefaultBranch string `json:"default_branch"`
+				CloneURL      string `json:"clone_url"`
+				SSHURL        string `json:"ssh_url"`
+				HTMLURL       string `json:"html_url"`
+			} `json:"repositories"`
+		}
+		if err := a.get(ctx, endpoint, token, &out); err != nil {
+			return nil, err
+		}
+		for _, r := range out.Repositories {
+			repos = append(repos, Repo{
+				ExternalID:    fmt.Sprintf("%d", r.ID),
+				Name:          r.Name,
+				FullName:      r.FullName,
+				Private:       r.Private,
+				DefaultBranch: r.DefaultBranch,
+				CloneURL:      r.CloneURL,
+				SSHURL:        r.SSHURL,
+				HTMLURL:       r.HTMLURL,
+			})
+		}
+		if len(out.Repositories) < repoListPageSize {
+			return repos, nil
+		}
 	}
 	return repos, nil
 }

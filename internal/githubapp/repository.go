@@ -63,23 +63,23 @@ func (r *storeRepository) GetApp(ctx context.Context, id, userID uuid.UUID) (Git
 }
 
 // GetSealed loads one app owned by userID with its still-sealed secrets.
-func (r *storeRepository) GetSealed(ctx context.Context, id, userID uuid.UUID) (sealedApp, error) {
+func (r *storeRepository) GetSealed(ctx context.Context, id, userID uuid.UUID) (SealedApp, error) {
 	row, err := r.store.GetGitHubAppByIDAndUser(ctx, sqlc.GetGitHubAppByIDAndUserParams{
 		ID:     pgUUID(id),
 		UserID: pgUUID(userID),
 	})
 	if err != nil {
-		return sealedApp{}, fmt.Errorf("%w: %w", ErrNotFound, err)
+		return SealedApp{}, fmt.Errorf("%w: %w", ErrNotFound, err)
 	}
 	return sealedFromRow(row), nil
 }
 
 // GetSealedByID loads one app with its still-sealed secrets without a user
 // scope, for webhook handling where the signature is the authentication.
-func (r *storeRepository) GetSealedByID(ctx context.Context, id uuid.UUID) (sealedApp, error) {
+func (r *storeRepository) GetSealedByID(ctx context.Context, id uuid.UUID) (SealedApp, error) {
 	row, err := r.store.GetGitHubAppByID(ctx, pgUUID(id))
 	if err != nil {
-		return sealedApp{}, fmt.Errorf("%w: %w", ErrNotFound, err)
+		return SealedApp{}, fmt.Errorf("%w: %w", ErrNotFound, err)
 	}
 	return sealedFromRow(row), nil
 }
@@ -166,12 +166,12 @@ func (r *storeRepository) DeleteInstallation(ctx context.Context, installationID
 
 // AppsByInstallationID returns every app holding an installation (with sealed
 // secrets), so webhook verification can try each candidate secret.
-func (r *storeRepository) AppsByInstallationID(ctx context.Context, installationID int64) ([]sealedApp, error) {
+func (r *storeRepository) AppsByInstallationID(ctx context.Context, installationID int64) ([]SealedApp, error) {
 	rows, err := r.store.ListGitHubAppsByInstallationID(ctx, installationID)
 	if err != nil {
 		return nil, fmt.Errorf("githubapp: by installation: %w", err)
 	}
-	apps := make([]sealedApp, 0, len(rows))
+	apps := make([]SealedApp, 0, len(rows))
 	for _, row := range rows {
 		apps = append(apps, sealedFromRow(row))
 	}
@@ -275,8 +275,8 @@ func appFromRow(row sqlc.GithubApp) GitHubApp {
 	}
 }
 
-func sealedFromRow(row sqlc.GithubApp) sealedApp {
-	return sealedApp{
+func sealedFromRow(row sqlc.GithubApp) SealedApp {
+	return SealedApp{
 		GitHubApp:     appFromRow(row),
 		WebhookSecret: row.WebhookSecretCipher,
 		PrivateKey:    row.PrivateKeyCipher,

@@ -65,16 +65,16 @@ type Repository interface {
 	CreateApp(ctx context.Context, app GitHubApp, webhookSecret, privateKey string) (GitHubApp, error)
 	GetApp(ctx context.Context, id, userID uuid.UUID) (GitHubApp, error)
 	// GetSealed returns the app row with its still-sealed secrets for signing.
-	GetSealed(ctx context.Context, id, userID uuid.UUID) (sealedApp, error)
+	GetSealed(ctx context.Context, id, userID uuid.UUID) (SealedApp, error)
 	// GetSealedByID returns the sealed row for webhook handling, where no
 	// user session exists (the signature is the authentication).
-	GetSealedByID(ctx context.Context, id uuid.UUID) (sealedApp, error)
+	GetSealedByID(ctx context.Context, id uuid.UUID) (SealedApp, error)
 	ListApps(ctx context.Context, userID uuid.UUID) ([]GitHubApp, error)
 	DeleteApp(ctx context.Context, id, userID uuid.UUID) error
 	UpsertInstallation(ctx context.Context, appID uuid.UUID, installationID int64, account string) (Installation, error)
 	ListInstallations(ctx context.Context, appID uuid.UUID) ([]Installation, error)
 	DeleteInstallation(ctx context.Context, installationID int64, appID uuid.UUID) error
-	AppsByInstallationID(ctx context.Context, installationID int64) ([]sealedApp, error)
+	AppsByInstallationID(ctx context.Context, installationID int64) ([]SealedApp, error)
 	ReplaceRepoCache(ctx context.Context, appID uuid.UUID, installationID int64, repos []Repo) error
 	ListRepoCache(ctx context.Context, appID uuid.UUID, installationID int64) ([]Repo, error)
 	// CountApplicationsForApp counts the caller's github_app applications
@@ -85,9 +85,9 @@ type Repository interface {
 	PushTargets(ctx context.Context, appID, userID uuid.UUID, repo string) ([]AppPushTarget, error)
 }
 
-// sealedApp is a GitHub App row with its still-sealed secrets, for webhook
+// SealedApp is a GitHub App row with its still-sealed secrets, for webhook
 // verification and signing.
-type sealedApp struct {
+type SealedApp struct {
 	GitHubApp
 	WebhookSecret string
 	PrivateKey    string
@@ -235,7 +235,11 @@ func (s *Service) StartManifest(ctx context.Context, userID uuid.UUID, baseURL, 
 			"metadata":      "read",
 			"pull_requests": "write",
 		},
-		"default_events": []string{"push", "pull_request", "installation", "installation_repositories"},
+		// pull_request is subscribed only once previews support app-signed
+		// deliveries: until then app-signed PR events would 401 in GitHub's
+		// delivery log, so the manifest subscribes to push (deploy) and the
+		// installation lifecycle (cache) only.
+		"default_events": []string{"push", "installation", "installation_repositories"},
 	}
 	return Manifest{
 		ActionURL: strings.TrimRight(webBase, "/") + "/settings/apps/new?state=" + state,
@@ -325,6 +329,17 @@ func (s *Service) StateOwner(state string) (uuid.UUID, bool) {
 	return s.states.peek(state, stateManifest)
 }
 
+// InstallStateOwner returns the user and app a pending install state was
+// issued for, without consuming it. The setup landing resolves the app from
+// the state GitHub returns instead of guessing, so an installation lands on
+// the right app even with several pending.
+func (s *Service) InstallStateOwner(state string) (userID, appID uuid.UUID, ok bool) {
+	if s == nil || s.states == nil {
+		return uuid.Nil, uuid.Nil, false
+	}
+	return s.states.peekApp(state)
+}
+
 // InstallURL starts the installation step: the browser visits the URL to
 // install the app, and the setup callback records the installation.
 func (s *Service) InstallURL(ctx context.Context, userID, appID uuid.UUID) (string, string, error) {
@@ -377,7 +392,9 @@ func (s *Service) RecordInstallation(ctx context.Context, userID, appID uuid.UUI
 	if err != nil {
 		return Installation{}, err
 	}
-	if info.AppID != 0 && info.AppID != app.AppID {
+	// The installation must belong to this app, unconditionally: a response
+	// without an app id proves nothing and is refused fail-closed.
+	if info.AppID != app.AppID {
 		return Installation{}, fmt.Errorf("%w: installation belongs to another app", ErrValidation)
 	}
 	inst, err := s.repo.UpsertInstallation(ctx, appID, installationID, info.Account)
@@ -464,7 +481,7 @@ func (s *Service) appJWT(ctx context.Context, app GitHubApp) (string, error) {
 	return s.appJWTFromSealed(sealed)
 }
 
-func (s *Service) appJWTFromSealed(sealed sealedApp) (string, error) {
+func (s *Service) appJWTFromSealed(sealed SealedApp) (string, error) {
 	key, err := providers.OpenSecret(s.secret, sealed.PrivateKey)
 	if err != nil {
 		return "", err
@@ -583,7 +600,7 @@ func (s *Service) refreshRepos(ctx context.Context, userID, appID uuid.UUID, ins
 }
 
 // sealed loads the app row with its sealed secrets for signing.
-func (s *Service) sealed(ctx context.Context, app GitHubApp) (sealedApp, error) {
+func (s *Service) sealed(ctx context.Context, app GitHubApp) (SealedApp, error) {
 	return s.repo.GetSealed(ctx, app.ID, app.UserID)
 }
 
@@ -625,18 +642,20 @@ type appEvent struct {
 	} `json:"installation"`
 }
 
-// installationTargetID reads the installation the delivery is for: the
-// X-GitHub-Hook-Installation-Target-ID header when present, else the payload
-// installation id. A delivery naming neither is refused.
-func installationTargetID(header http.Header, body []byte) int64 {
+// installationTargetID reads who a delivery is for: the installation id
+// always comes from payload.installation.id. The
+// X-GitHub-Hook-Installation-Target-ID header names the APP id for app
+// webhooks (target type "integration"), never the installation, so it is only
+// a cross-check hint that disambiguates candidates.
+func installationTargetID(header http.Header, body []byte) (installationID, appHint int64) {
 	if id, err := strconv.ParseInt(strings.TrimSpace(header.Get("X-GitHub-Hook-Installation-Target-ID")), 10, 64); err == nil && id > 0 {
-		return id
+		appHint = id
 	}
 	var event appEvent
 	if err := json.Unmarshal(body, &event); err != nil || event.Installation == nil {
-		return 0
+		return 0, appHint
 	}
-	return event.Installation.ID
+	return event.Installation.ID, appHint
 }
 
 // VerifyDelivery verifies body against the app secret of the installation the
@@ -653,7 +672,7 @@ func (s *Service) VerifyDelivery(header http.Header, body []byte) (uuid.UUID, bo
 		return uuid.Nil, false
 	}
 	provided = strings.TrimPrefix(provided, "sha256=")
-	installationID := installationTargetID(header, body)
+	installationID, appHint := installationTargetID(header, body)
 	if installationID <= 0 {
 		return uuid.Nil, false
 	}
@@ -663,6 +682,11 @@ func (s *Service) VerifyDelivery(header http.Header, body []byte) (uuid.UUID, bo
 		return uuid.Nil, false
 	}
 	for _, app := range apps {
+		// The header hint disambiguates when several rows share the
+		// installation id: only the hinted app's secret is tried.
+		if appHint > 0 && app.AppID != appHint {
+			continue
+		}
 		secret, err := providers.OpenSecret(s.secret, app.WebhookSecret)
 		if err != nil || secret == "" {
 			continue
@@ -764,7 +788,7 @@ func (s *Service) ownsInstallation(ctx context.Context, appID uuid.UUID, install
 
 // refreshReposFor refreshes one installation when the app row (with secrets)
 // is already in hand.
-func (s *Service) refreshReposFor(ctx context.Context, app sealedApp, installationID int64) ([]Repo, error) {
+func (s *Service) refreshReposFor(ctx context.Context, app SealedApp, installationID int64) ([]Repo, error) {
 	jwt, err := s.appJWTFromSealed(app)
 	if err != nil {
 		return nil, err

@@ -134,6 +134,18 @@ func (s *stateStore) peek(state string, kind stateKind) (uuid.UUID, bool) {
 	return entry.userID, true
 }
 
+// peekApp reports the user and app a pending install state was issued for,
+// without consuming it. Expired states and kind mismatches fail.
+func (s *stateStore) peekApp(state string) (userID, appID uuid.UUID, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, found := s.entries[state]
+	if !found || s.time().After(entry.expires) || entry.kind != stateInstall {
+		return uuid.Nil, uuid.Nil, false
+	}
+	return entry.userID, entry.appID, true
+}
+
 func (s *stateStore) sweepLocked() {
 	now := s.time()
 	for state, e := range s.entries {

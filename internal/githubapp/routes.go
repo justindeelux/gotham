@@ -150,6 +150,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Use(auth)
 		protected.Post("/v1/providers/github-app/manifest", h.manifest)
 		protected.Post("/v1/providers/github-app/callback", h.callbackPost)
+		protected.Get("/v1/providers/github-app/install-state", h.installState)
 		protected.Get("/v1/providers/github-app", h.list)
 		protected.Get("/v1/providers/github-app/{id}/install", h.install)
 		protected.Post("/v1/providers/github-app/{id}/installations", h.recordInstallation)
@@ -249,6 +250,23 @@ func callbackResultFor(err error) callbackResult {
 	return callbackFailed
 }
 
+// installState serves GET .../install-state?state=: it resolves a pending
+// install state to its app without consuming it. The caller must own the
+// state; recording still redeems the state exactly once.
+func (h *handler) installState(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	state := strings.TrimSpace(r.URL.Query().Get("state"))
+	owner, appID, ok := h.svc.InstallStateOwner(state)
+	if !ok || owner != userID {
+		writeJSON(w, http.StatusNotFound, errorBody{Message: "install state not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, installStateResponse{AppID: appID.String()})
+}
+
 // list serves GET .../github-app.
 func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
@@ -265,6 +283,12 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		response = append(response, newAppResponse(app))
 	}
 	writeJSON(w, http.StatusOK, appListEnvelope{Apps: response})
+}
+
+// installStateResponse resolves a pending install state to its app without
+// consuming it, so the setup landing binds the installation to the right app.
+type installStateResponse struct {
+	AppID string `json:"app_id"`
 }
 
 // install serves GET .../{id}/install: the URL that sends the user to the app

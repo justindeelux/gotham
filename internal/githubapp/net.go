@@ -19,15 +19,51 @@ var manifestCodePattern = regexp.MustCompile(`/app-manifests/[^/]+/conversions`)
 // resolveTimeout bounds DNS resolution for the SSRF guard.
 const resolveTimeout = 5 * time.Second
 
+// deniedRanges are never valid GitHub hosts, on top of what IsPrivate,
+// IsLoopback, IsLinkLocalUnicast and IsMulticast already refuse: shared
+// address space (carrier-grade NAT and cloud metadata), benchmarking,
+// NAT64/6to4 transition embeddings.
+var deniedRanges = []string{
+	"100.64.0.0/10",
+	"192.0.0.0/24",
+	"198.18.0.0/15",
+	"64:ff9b::/96",
+	"2002::/16",
+}
+
+func deniedNets() []*net.IPNet {
+	nets := make([]*net.IPNet, 0, len(deniedRanges))
+	for _, cidr := range deniedRanges {
+		if _, net, err := net.ParseCIDR(cidr); err == nil {
+			nets = append(nets, net)
+		}
+	}
+	return nets
+}
+
 // isPublicIP reports whether ip is a routable public address. Loopback,
 // link-local (including the 169.254.169.254 metadata endpoint), private,
-// multicast and unspecified addresses are never valid GitHub hosts.
+// multicast and unspecified addresses are never valid GitHub hosts, nor are
+// the denied transition ranges. IPv4-mapped IPv6 forms unwrap to their IPv4
+// half before the check, so ::ffff:127.0.0.1 cannot slip through as "IPv6".
 func isPublicIP(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
-	return !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() &&
-		!ip.IsMulticast() && !ip.IsUnspecified() && !ip.IsPrivate()
+	if unwrapped := ip.To4(); unwrapped != nil {
+		ip = unwrapped
+	}
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	for _, denied := range deniedNets() {
+		if denied.Contains(ip) {
+			return false
+		}
+	}
+	return true
 }
 
 // guardHost resolves hostname and rejects it unless every address is public.

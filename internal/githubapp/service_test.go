@@ -91,7 +91,7 @@ func (f *fakeAPI) calls() int {
 // memoryRepo implements Repository in memory for service tests.
 type memoryRepo struct {
 	mu        sync.Mutex
-	apps      map[uuid.UUID]sealedApp
+	apps      map[uuid.UUID]SealedApp
 	insts     map[uuid.UUID][]Installation
 	byInstall map[int64][]uuid.UUID
 	cache     map[string][]Repo
@@ -102,7 +102,7 @@ type memoryRepo struct {
 
 func newMemoryRepo() *memoryRepo {
 	return &memoryRepo{
-		apps:      make(map[uuid.UUID]sealedApp),
+		apps:      make(map[uuid.UUID]SealedApp),
 		insts:     make(map[uuid.UUID][]Installation),
 		byInstall: make(map[int64][]uuid.UUID),
 		cache:     make(map[string][]Repo),
@@ -114,7 +114,7 @@ func (m *memoryRepo) CreateApp(_ context.Context, app GitHubApp, webhookSecret, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	app.ID = uuid.New()
-	m.apps[app.ID] = sealedApp{GitHubApp: app, WebhookSecret: webhookSecret, PrivateKey: privateKey}
+	m.apps[app.ID] = SealedApp{GitHubApp: app, WebhookSecret: webhookSecret, PrivateKey: privateKey}
 	return app, nil
 }
 
@@ -130,12 +130,12 @@ func (m *memoryRepo) GetApp(_ context.Context, id, _ uuid.UUID) (GitHubApp, erro
 	return app, nil
 }
 
-func (m *memoryRepo) GetSealed(_ context.Context, id, _ uuid.UUID) (sealedApp, error) {
+func (m *memoryRepo) GetSealed(_ context.Context, id, _ uuid.UUID) (SealedApp, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sealed, ok := m.apps[id]
 	if !ok {
-		return sealedApp{}, ErrNotFound
+		return SealedApp{}, ErrNotFound
 	}
 	return sealed, nil
 }
@@ -152,12 +152,12 @@ func (m *memoryRepo) ListApps(_ context.Context, _ uuid.UUID) ([]GitHubApp, erro
 	return apps, nil
 }
 
-func (m *memoryRepo) GetSealedByID(_ context.Context, id uuid.UUID) (sealedApp, error) {
+func (m *memoryRepo) GetSealedByID(_ context.Context, id uuid.UUID) (SealedApp, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sealed, ok := m.apps[id]
 	if !ok {
-		return sealedApp{}, ErrNotFound
+		return SealedApp{}, ErrNotFound
 	}
 	return sealed, nil
 }
@@ -205,10 +205,10 @@ func (m *memoryRepo) DeleteInstallation(_ context.Context, installationID int64,
 	return nil
 }
 
-func (m *memoryRepo) AppsByInstallationID(_ context.Context, installationID int64) ([]sealedApp, error) {
+func (m *memoryRepo) AppsByInstallationID(_ context.Context, installationID int64) ([]SealedApp, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var apps []sealedApp
+	var apps []SealedApp
 	for _, appID := range m.byInstall[installationID] {
 		if sealed, ok := m.apps[appID]; ok {
 			apps = append(apps, sealed)
@@ -462,9 +462,8 @@ func TestRecordInstallationVerifiesWithGitHub(t *testing.T) {
 func TestCrossUserInstallationTakeover(t *testing.T) {
 	ctx := context.Background()
 
-	newService := func(secret string) (*Service, *memoryRepo, *fakeAPI, uuid.UUID) {
+	newService := func(secret string, repo *memoryRepo) (*Service, *fakeAPI, uuid.UUID) {
 		userID := uuid.New()
-		repo := newMemoryRepo()
 		api := &fakeAPI{
 			token:         "inst-token",
 			expiresAt:     time.Now().Add(time.Hour),
@@ -479,11 +478,14 @@ func TestCrossUserInstallationTakeover(t *testing.T) {
 			Secret:             "test-secret-key",
 			AllowUnsafeBaseURL: true,
 		})
-		return svc, repo, api, userID
+		return svc, api, userID
 	}
 
-	svcA, repoA, apiA, userA := newService("a")
-	svcB, repoB, apiB, userB := newService("b")
+	// Both services share one repository: installation 999 resolves to both
+	// apps, so the test proves scoping instead of isolation by separation.
+	shared := newMemoryRepo()
+	svcA, apiA, userA := newService("a", shared)
+	svcB, apiB, userB := newService("b", shared)
 	apiA.pem = testKeyPEM(t)
 	apiB.pem = testKeyPEM(t)
 
@@ -508,9 +510,10 @@ func TestCrossUserInstallationTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// B holds a stale row for 999 (recorded before verification existed).
-	// B's signed deleted delivery verifies against B's app only...
-	if _, err := repoB.UpsertInstallation(ctx, appB.ID, 999, "acme"); err != nil {
+	// B holds a stale row for 999 (recorded before verification existed), so
+	// the shared repository resolves 999 to BOTH apps. B's signed deleted
+	// delivery still verifies against B's app only...
+	if _, err := shared.UpsertInstallation(ctx, appB.ID, 999, "acme"); err != nil {
 		t.Fatal(err)
 	}
 	deleted := []byte(`{"action":"deleted","installation":{"id":999,"account":{"login":"acme"}}}`)
@@ -524,12 +527,20 @@ func TestCrossUserInstallationTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 	// ...and A's installation survives it.
-	insts, err := repoA.ListInstallations(ctx, appA.ID)
+	insts, err := shared.ListInstallations(ctx, appA.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(insts) != 1 || insts[0].InstallationID != 999 {
 		t.Fatalf("A's installation after B's delivery = %+v", insts)
+	}
+	// B's own row is gone.
+	insts, err = shared.ListInstallations(ctx, appB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(insts) != 0 {
+		t.Fatalf("B's installation after B's delivery = %+v", insts)
 	}
 }
 
@@ -553,7 +564,9 @@ func TestVerifyPushAndTargets(t *testing.T) {
 		`"repository":{"full_name":"acme/web"},"installation":{"id":999}}`)
 	header := http.Header{}
 	header.Set("X-Hub-Signature-256", signBody("wh-secret", push))
-	header.Set("X-GitHub-Hook-Installation-Target-ID", "999")
+	// The hook target header names the APP id (123), not the installation:
+	// real-shaped deliveries verify through the payload installation id.
+	header.Set("X-GitHub-Hook-Installation-Target-ID", "123")
 	verifiedApp, ok := svc.VerifyPush(header, push)
 	if !ok || verifiedApp != app.ID {
 		t.Fatalf("push verified as %v, %v", verifiedApp, ok)
@@ -572,6 +585,15 @@ func TestVerifyPushAndTargets(t *testing.T) {
 	forged.Set("X-Hub-Signature-256", signBody("attacker-secret", push))
 	if _, ok := svc.VerifyPush(forged, push); ok {
 		t.Fatal("forged push was verified")
+	}
+
+	// A target header naming another app fails closed: the hint selects no
+	// candidate, so even a valid signature verifies against nothing.
+	mismatched := http.Header{}
+	mismatched.Set("X-Hub-Signature-256", signBody("wh-secret", push))
+	mismatched.Set("X-GitHub-Hook-Installation-Target-ID", "456")
+	if _, ok := svc.VerifyPush(mismatched, push); ok {
+		t.Fatal("push with a foreign app hint was verified")
 	}
 }
 

@@ -88,8 +88,67 @@ func TestRoutesBrowserCallback(t *testing.T) {
 	}
 }
 
+// TestRoutesInstallStateResolvesApp proves the setup landing can bind an
+// installation to the right app when several wait: the pending install state
+// resolves to its app without being consumed.
+func TestRoutesInstallStateResolvesApp(t *testing.T) {
+	svc, _, api, userID := testFixture()
+	api.pem = testKeyPEM(t)
+	router := testRouter(svc, userID)
+	ctx := context.Background()
+
+	newApp := func() (string, string) {
+		manifest, err := svc.StartManifest(ctx, userID, "", "gotham", "https://gotham.example")
+		if err != nil {
+			t.Fatal(err)
+		}
+		app, err := svc.Callback(ctx, userID, "manifest-code", manifest.State)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, state, err := svc.InstallURL(ctx, userID, app.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return app.ID.String(), state
+	}
+	appAID, stateA := newApp()
+	appBID, stateB := newApp()
+
+	resolve := func(state string) (int, string) {
+		rec := doRequest(t, router, http.MethodGet, "/v1/providers/github-app/install-state?state="+state, nil)
+		var body struct {
+			AppID string `json:"app_id"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		return rec.Code, body.AppID
+	}
+	if code, got := resolve(stateA); code != http.StatusOK || got != appAID {
+		t.Fatalf("state A resolves to %q (%d), want %q", got, code, appAID)
+	}
+	if code, got := resolve(stateB); code != http.StatusOK || got != appBID {
+		t.Fatalf("state B resolves to %q (%d), want %q", got, code, appBID)
+	}
+	if code, _ := resolve("bogus"); code != http.StatusNotFound {
+		t.Fatalf("bogus state = %d, want 404", code)
+	}
+	// Resolution does not consume: both states still record.
+	if _, err := svc.RecordInstallation(ctx, userID, mustParseAppID(t, appAID), 999, stateA); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestRoutesEndToEnd runs connect + install + list repos + branches + push
 // shape + disconnect through HTTP against the fake.
+
+func mustParseAppID(t *testing.T, id string) uuid.UUID {
+	t.Helper()
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}
 func TestRoutesEndToEnd(t *testing.T) {
 	svc, _, api, userID := testFixture()
 	api.pem = testKeyPEM(t)

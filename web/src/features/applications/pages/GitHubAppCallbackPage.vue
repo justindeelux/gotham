@@ -7,6 +7,7 @@ import { useRoute, useRouter } from "vue-router";
 import {
   describeGitHubAppError,
   finishCallback,
+  installStateApp,
   installUrl,
   listGitHubApps,
   recordInstallation,
@@ -39,15 +40,26 @@ async function finishManifest(code: string, state: string): Promise<void> {
 
 /** finishSetup records the installation_id GitHub returned to setup_url. */
 async function finishSetup(installationId: number): Promise<void> {
-  const apps = await listGitHubApps();
-  // GS-10 owns the Connect/Install UI; until then the setup landing
-  // completes the oldest app that still waits for an installation.
-  const pending = apps.find((app) => !app.connected);
-  if (!pending) {
-    throw new Error("no GitHub App waits for an installation");
+  // The installation is bound to the app identified by the single-use
+  // install state when present: with several pending apps a guess could
+  // record it on the wrong one. Without a state the single pending app is
+  // unambiguous; several pending apps without a state is an error the
+  // GS-10 Install control resolves by minting the state itself.
+  const state = typeof route.query.state === "string" ? route.query.state : "";
+  if (state) {
+    const appId = await installStateApp(state);
+    const install = await installUrl(appId);
+    await recordInstallation(appId, installationId, install.state);
+    outcome.value = "installed";
+    return;
   }
-  const install = await installUrl(pending.id);
-  await recordInstallation(pending.id, installationId, install.state);
+  const apps = await listGitHubApps();
+  const pending = apps.filter((app) => !app.connected);
+  if (pending.length !== 1) {
+    throw new Error("no single GitHub App waits for an installation");
+  }
+  const install = await installUrl(pending[0].id);
+  await recordInstallation(pending[0].id, installationId, install.state);
   outcome.value = "installed";
 }
 

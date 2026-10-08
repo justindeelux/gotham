@@ -42,7 +42,10 @@ describe("github_app wizard flow", () => {
 
     w.handleRepoSelect("acme/web");
     expect(w.form.branch).toBe("main");
-    expect(w.form.cloneUrl).toBe("git@github.com:acme/web.git");
+    // The github_app flow stores the https clone_url even for private repos:
+    // the installation token is injected at clone time, and the token cloner
+    // only accepts http(s).
+    expect(w.form.cloneUrl).toBe("https://github.com/acme/web.git");
 
     w.githubAppStore.branchesByRepo = {
       "g1/acme/web": [

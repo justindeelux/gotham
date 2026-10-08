@@ -410,6 +410,21 @@ func validateCloneURL(url string) error {
 }
 
 // hasAllowedScheme reports whether the URL uses a scheme git can clone from.
+// isHTTPSCloneURL reports whether raw is an http(s) URL: the only shape the
+// installation-token cloner accepts for github_app sources.
+func isHTTPSCloneURL(raw string) bool {
+	scheme, _, ok := strings.Cut(strings.TrimSpace(raw), "://")
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
+}
+
 func hasAllowedScheme(url string) bool {
 	scheme, _, ok := strings.Cut(url, "://")
 	if !ok {

@@ -10,8 +10,12 @@ import (
 	"time"
 )
 
-// fakeGitHub serves the GitHub REST shapes the production client consumes, so
-// the client is proven against the wire format without network access.
+// fakeGitHub serves the documented GitHub REST shapes the production client
+// consumes, so the client is proven against the wire format without network
+// access. Payloads mirror the real schemas: the manifest conversion returns
+// webhook_secret as a plain string with owner/permissions/events siblings,
+// the installation object carries account and app_id, and the token response
+// carries permissions.
 func fakeGitHub(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -24,8 +28,13 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 			"slug":           "gotham-fake",
 			"name":           "gotham-fake",
 			"client_id":      "cid",
-			"webhook_secret": map[string]any{"secret": "shh"},
+			"client_secret":  "csecret",
+			"webhook_secret": "shh",
 			"pem":            "fake-pem",
+			"html_url":       "https://github.com/apps/gotham-fake",
+			"owner":          map[string]any{"login": "acme", "id": 1},
+			"permissions":    map[string]any{"contents": "read", "metadata": "read", "pull_requests": "write"},
+			"events":         []string{"push", "pull_request"},
 		})
 	})
 	mux.HandleFunc("/app/installations/999", func(w http.ResponseWriter, r *http.Request) {
@@ -44,8 +53,12 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 			t.Errorf("token request has no bearer jwt")
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"token":      "inst-token-1",
-			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"token":       "inst-token-1",
+			"expires_at":  time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"permissions": map[string]any{"contents": "read"},
+			"repositories": []map[string]any{
+				{"full_name": "acme/web"},
+			},
 		})
 	})
 	mux.HandleFunc("/installation/repositories", func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +78,83 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 		}})
 	})
 	return httptest.NewServer(mux)
+}
+
+// TestConversionAcceptsBothSecretShapes proves the decoder reads the
+// documented plain-string webhook_secret and still accepts a nested object,
+// so an Enterprise variant never breaks Connect.
+func TestConversionAcceptsBothSecretShapes(t *testing.T) {
+	for _, body := range []string{
+		`{"id":1,"pem":"p","webhook_secret":"plain"}`,
+		`{"id":1,"pem":"p","webhook_secret":{"secret":"nested"}}`,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		}))
+		api := NewHTTPAPI(server.URL, true)
+		conv, err := api.ExchangeManifest(context.Background(), "code")
+		server.Close()
+		if err != nil {
+			t.Fatalf("body %s: %v", body, err)
+		}
+		want := "plain"
+		if strings.Contains(body, "nested") {
+			want = "nested"
+		}
+		if conv.WebhookSecret != want {
+			t.Fatalf("body %s: secret = %q, want %q", body, conv.WebhookSecret, want)
+		}
+	}
+}
+
+// TestRepoPagination proves multi-page installations list fully and a host
+// that always answers full pages stops at the bound.
+func TestRepoPagination(t *testing.T) {
+	paged := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		var repos []map[string]any
+		switch page {
+		case "", "1":
+			// A full first page forces the walk on.
+			for i := 0; i < repoListPageSize; i++ {
+				repos = append(repos, map[string]any{
+					"id": i, "name": "r", "full_name": "acme/r",
+				})
+			}
+		case "2":
+			repos = []map[string]any{{"id": 1000, "name": "last", "full_name": "acme/last"}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"repositories": repos})
+	}))
+	defer paged.Close()
+
+	api := NewHTTPAPI(paged.URL, true)
+	repos, err := api.ListInstallationRepos(context.Background(), "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != repoListPageSize+1 || repos[repoListPageSize].FullName != "acme/last" {
+		t.Fatalf("repos = %d, want %d", len(repos), repoListPageSize+1)
+	}
+
+	endless := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		repos := make([]map[string]any, 0, repoListPageSize)
+		for i := 0; i < repoListPageSize; i++ {
+			repos = append(repos, map[string]any{"id": i, "full_name": "acme/r"})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"repositories": repos})
+	}))
+	defer endless.Close()
+
+	bounded := NewHTTPAPI(endless.URL, true)
+	repos, err = bounded.ListInstallationRepos(context.Background(), "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != repoListPageSize*maxRepoListPages {
+		t.Fatalf("repos = %d, want the bounded %d", len(repos), repoListPageSize*maxRepoListPages)
+	}
 }
 
 func TestHTTPAPIAgainstFake(t *testing.T) {

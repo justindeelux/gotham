@@ -8,7 +8,7 @@ vi.mock("@/shared/api/http", () => ({
 
 import { createPinia, setActivePinia } from "pinia";
 
-import { listGitHubBranches } from "@/features/applications/api/githubApp";
+import { installStateApp, listGitHubBranches } from "@/features/applications/api/githubApp";
 import { useGitHubAppStore } from "@/features/applications/stores/githubApp";
 import { http } from "@/shared/api/http";
 import {
@@ -41,8 +41,15 @@ describe("listGitHubBranches validates the repository", () => {
   });
 });
 
-describe("github-app store clearErrors", () => {
-  it("drops banners and raw errors so a locale change cannot resurrect them", () => {
+describe("installStateApp resolves the pending app", () => {
+  it("returns the app id for the setup landing", async () => {
+    get.mockResolvedValueOnce({ data: { app_id: "app-9" } });
+    await expect(installStateApp("state-1")).resolves.toBe("app-9");
+    expect(get).toHaveBeenCalledWith("/providers/github-app/install-state?state=state-1");
+  });
+});
+
+describe("github-app store clearErrors", () => {  it("drops banners and raw errors so a locale change cannot resurrect them", () => {
     setActivePinia(createPinia());
     const store = useGitHubAppStore();
     store.error = "old";

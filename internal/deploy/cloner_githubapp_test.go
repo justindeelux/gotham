@@ -32,10 +32,12 @@ func (r *staticTokenResolver) InstallationToken(_ context.Context, _, _ uuid.UUI
 // TestGitSourceCloneGitHubAppUsesToken proves a github_app application clones
 // with a fresh installation token: the token lands in the clone URL userinfo,
 // the log line carries the redacted URL, and the stored clone URL is never
-// rewritten with the token.
+// rewritten with the token. The stored URL is the wizard's https clone_url
+// (private repos included): the token cloner only accepts http(s).
 func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceGitHubApp
+	app.CloneURL = "https://github.com/acme/private-web.git"
 	dir := filepath.Join(t.TempDir(), "repo")
 
 	var gotArgv []string
@@ -56,7 +58,7 @@ func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 		t.Fatalf("token calls = %d, want 1 (fresh per attempt)", resolver.calls)
 	}
 	joined := strings.Join(gotArgv, " ")
-	if !strings.Contains(joined, "https://x-access-token:fresh-install-token@github.com/acme/demo.git") {
+	if !strings.Contains(joined, "https://x-access-token:fresh-install-token@github.com/acme/private-web.git") {
 		t.Errorf("argv = %v, want the token clone URL", gotArgv)
 	}
 	for _, line := range logged {
@@ -67,7 +69,7 @@ func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 	if !strings.Contains(strings.Join(logged, "\n"), "installation token") {
 		t.Errorf("log lines = %v, want the installation-token marker", logged)
 	}
-	if app.CloneURL != "https://github.com/acme/demo.git" {
+	if app.CloneURL != "https://github.com/acme/private-web.git" {
 		t.Errorf("stored clone URL = %q, want it unchanged (token never persisted)", app.CloneURL)
 	}
 }

@@ -900,8 +900,7 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 		{"dockerfile waits for GS-7", SourceDockerfile, "", http.StatusUnprocessableEntity},
 		{"private git waits for GS-4", SourceGitPrivate, "", http.StatusUnprocessableEntity},
 		{"github app with gitlab provider", SourceGitHubApp, "gitlab", http.StatusBadRequest},
-		{"public git with github provider", SourceGitPublic, "github", http.StatusBadRequest},
-	}
+		{"public git with github provider", SourceGitPublic, "github", http.StatusBadRequest}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			userID := uuid.New()
@@ -926,7 +925,7 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
-			strings.NewReader(body(SourceGitHubApp, "github", "acme/demo", "git@github.com:acme/demo.git"))))
+			strings.NewReader(body(SourceGitHubApp, "github", "acme/demo", "https://github.com/acme/demo.git"))))
 
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
@@ -942,6 +941,23 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 		}
 		if envelope.Application.SourceType != SourceGitHubApp || envelope.Application.Provider != "github" {
 			t.Errorf("application = %+v, want github_app/github", envelope.Application)
+		}
+	})
+
+	// A github_app application with an SSH clone URL is a 400: the
+	// installation-token cloner only accepts http(s), so the failure must
+	// surface at create time, not as a failed deploy.
+	t.Run("github app with ssh clone url is rejected", func(t *testing.T) {
+		userID := uuid.New()
+		svc := newTestService(t, &fakeRepository{})
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+			strings.NewReader(body(SourceGitHubApp, "github", "acme/demo", "git@github.com:acme/demo.git"))))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 		}
 	})
 }

@@ -492,7 +492,10 @@ export function useCreateAppWizard(
       if (!repo) {
         return;
       }
-      form.cloneUrl = cloneUrlFor(repo);
+      // The installation token is injected at clone time, so the stored URL
+      // is always the https clone_url: an ssh_url would fail the token
+      // cloner, which only accepts http(s).
+      form.cloneUrl = repo.clone_url;
       noSshUrl.value = false;
       if (repo.default_branch) {
         form.branch = repo.default_branch;

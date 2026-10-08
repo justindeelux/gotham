@@ -526,10 +526,16 @@ func (o *Orchestrator) pullImage(ctx context.Context, st *runState) error {
 	st.dep.RegistryImage = ref
 	if digest != "" {
 		st.dep.Digest = digest
+	} else if st.dep.Kind == KindRollback {
+		// A rollback pulls its pinned reference, so a missing digest here
+		// means the node could not report one for the release being
+		// restored — never a silent fall-forward to another tag.
+		st.log("rollback pulled " + ref + " without a reported digest")
 	} else {
 		// No digest came back: the deployment still runs the pulled tag, but
-		// a rollback of it would re-pull the moving tag, so the log says so.
-		st.log("image pulled without a recorded digest: rollback will re-pull the tag " + ref)
+		// a rollback of this release would re-pull the moving tag, so the
+		// log says so while the release it describes is still a deploy.
+		st.log("image pulled without a recorded digest: a rollback of this release will re-pull the tag " + ref)
 	}
 	if _, err := o.repo.UpdateDeployment(ctx, st.dep); err != nil {
 		return fmt.Errorf("deploy: persist image reference: %w", err)

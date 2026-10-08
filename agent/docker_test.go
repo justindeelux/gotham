@@ -395,7 +395,48 @@ func TestDockerClientPullImageAuth(t *testing.T) {
 	}
 }
 
-// TestDockerClientPullImageErrorRedactsCredential is the redaction guard: a
+// TestDockerClientPullImageHubSpellings records digests across the Docker
+// Hub spellings: an explicit docker.io reference listed under its familiar
+// name, and a legacy index.docker.io reference listed under docker.io.
+func TestDockerClientPullImageHubSpellings(t *testing.T) {
+	const digestA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const digestB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/images/create", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
+	})
+	mux.HandleFunc("/images/", func(w http.ResponseWriter, r *http.Request) {
+		var digests []string
+		// The path carries the escaped reference; match the distinctive tail.
+		switch {
+		case strings.Contains(r.URL.Path, "alpine"):
+			digests = []string{"alpine@" + digestA}
+		case strings.Contains(r.URL.Path, "app"):
+			digests = []string{"docker.io/team/app@" + digestB}
+		}
+		writeJSON(t, w, map[string]any{"Id": "sha256:deadbeef", "RepoDigests": digests})
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := newFakeDockerClient(t, server.URL)
+
+	digest, err := client.PullImage(context.Background(), "docker.io/library/alpine:3.20", "", "")
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if digest != digestA {
+		t.Errorf("digest = %q; want the familiar-name entry %q", digest, digestA)
+	}
+	digest, err = client.PullImage(context.Background(), "index.docker.io/team/app:1", "", "")
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if digest != digestB {
+		t.Errorf("digest = %q; want the normalized entry %q", digest, digestB)
+	}
+}
+
+// TestDockerClientPullImageErrorRedactsCredential is the redaction guard: a}
 // failed pull with a credential never echoes it in the error.
 func TestDockerClientPullImageErrorRedactsCredential(t *testing.T) {
 	server, _ := newFakeDockerServer(t)

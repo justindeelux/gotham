@@ -292,7 +292,11 @@ function isRegistryName(bare: string): boolean {
   if (bare === "") {
     return false;
   }
-  const kind = ipLiteralKind(bare) ?? inetAtonKind(bare);
+  const kind = ipLiteralKind(bare) ?? numericDotsKind(bare);
+  if (kind === "invalid") {
+    // Numeric but out of range (999.1.1.1): never a DNS name, mirroring Go.
+    return false;
+  }
   if (kind === "loopback" || kind === "unspecified") {
     return false;
   }
@@ -336,58 +340,108 @@ function ipLiteralKind(host: string): IpKind | null {
   if (!isIpv6Address(host)) {
     return null;
   }
-  if (host === "::1") {
+  return ipv6Kind(host);
+}
+
+/**
+ * ipv6Kind classifies a valid IPv6 literal: the all-zero address, the
+ * loopback address (including the expanded 0:0:0:0:0:0:0:1 spelling) and
+ * v4-mapped loopback/unspecified (::ffff:127.0.0.1), mirroring Go's
+ * IsLoopback/IsUnspecified.
+ */
+function ipv6Kind(host: string): IpKind {
+  const expanded = expandIpv6(host) ?? [];
+  if (expanded.every((value) => value === 0)) {
+    return "unspecified";
+  }
+  if (expanded.slice(0, 7).every((value) => value === 0) && expanded[7] === 1) {
     return "loopback";
   }
-  if (host === "::") {
-    return "unspecified";
+  if (expanded.slice(0, 5).every((value) => value === 0) && expanded[5] === 0xffff) {
+    const low = [(expanded[6] ?? 0) >>> 8 & 0xff, (expanded[6] ?? 0) & 0xff, (expanded[7] ?? 0) >>> 8 & 0xff, (expanded[7] ?? 0) & 0xff];
+    if (low[0] === 127) {
+      return "loopback";
+    }
+    if (low.every((value) => value === 0)) {
+      return "unspecified";
+    }
   }
   return "address";
 }
 
+/**
+ * expandIpv6 renders a valid IPv6 literal as 8 hextets, honouring one ::
+ * compression and one dotted-quad tail (the ::ffff:1.2.3.4 form). Null when
+ * the literal is malformed.
+ */
+function expandIpv6(host: string): Array<number> | null {
+  let head = host;
+  let tail: Array<number> = [];
+  const lastColon = host.lastIndexOf(":");
+  const maybeV4 = host.slice(lastColon + 1);
+  if (maybeV4.includes(".")) {
+    const v4 = maybeV4.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!v4) {
+      return null;
+    }
+    const parts = v4.slice(1).map(Number);
+    if (parts.some((part) => part > 255)) {
+      return null;
+    }
+    tail = [(parts[0] ?? 0) * 256 + (parts[1] ?? 0), (parts[2] ?? 0) * 256 + (parts[3] ?? 0)];
+    head = host.slice(0, lastColon);
+  }
+  if (!/^[0-9a-fA-F:]*$/.test(head) || head.includes(":::")) {
+    return null;
+  }
+  const halves = head.split("::");
+  if (halves.length > 2) {
+    return null;
+  }
+  const isHextet = (group: string): boolean => /^[0-9a-fA-F]{1,4}$/.test(group);
+  const groups = (part: string): Array<string> => (part === "" ? [] : part.split(":"));
+  const left = groups(halves[0] ?? "");
+  const right = halves.length === 2 ? groups(halves[1] ?? "") : [];
+  if (!left.every(isHextet) || !right.every(isHextet)) {
+    return null;
+  }
+  const total = left.length + right.length + tail.length;
+  if (halves.length === 1 ? total !== 8 : total >= 8) {
+    return null;
+  }
+  const zeros = new Array<number>(8 - total).fill(0);
+  const parse = (group: string): number => Number.parseInt(group, 16);
+  return [...left.map(parse), ...zeros, ...right.map(parse), ...tail];
+}
+
 /** isIpv6Address accepts colon-separated hextets with one :: compression. */
 function isIpv6Address(host: string): boolean {
-  if (!/^[0-9a-fA-F:]+$/.test(host) || host.includes(":::")) {
-    return false;
-  }
-  const halves = host.split("::");
-  if (halves.length > 2) {
-    return false;
-  }
-  const groups = (part: string): Array<string> => (part === "" ? [] : part.split(":"));
-  const isHextet = (group: string): boolean => /^[0-9a-fA-F]{1,4}$/.test(group);
-  if (halves.length === 1) {
-    const all = groups(halves[0] ?? "");
-    return all.length === 8 && all.every(isHextet);
-  }
-  const left = groups(halves[0] ?? "");
-  const right = groups(halves[1] ?? "");
-  return (
-    left.every(isHextet) && right.every(isHextet) && left.length + right.length <= 7
-  );
+  return expandIpv6(host) !== null;
 }
 
 /**
- * inetAtonKind classifies classic dotted-decimal shorthand (a, a.b, a.b.c,
+ * numericDotsKind classifies classic dotted-decimal shorthand (a, a.b, a.b.c,
  * a.b.c.d, decimal parts only): loopback for 127/8, unspecified for 0,
- * address for any other value, null when it is not numeric shorthand.
+ * address for any other value. Null when the host is not numeric at all (the
+ * DNS path owns it); "invalid" when it is numeric but out of range, which can
+ * never be a DNS name either — mirroring Go, which rejects it outright.
  */
-function inetAtonKind(host: string): IpKind | null {
+function numericDotsKind(host: string): IpKind | "invalid" | null {
   if (!/^[0-9.]+$/.test(host) || !host.includes(".")) {
     return null;
   }
   const parts = host.split(".");
   if (parts.length < 1 || parts.length > 4) {
-    return null;
+    return "invalid";
   }
   const nums: Array<number> = [];
   for (const part of parts) {
     if (part === "" || part.length > 10 || !/^\d+$/.test(part)) {
-      return null;
+      return "invalid";
     }
     const value = Number(part);
     if (!Number.isSafeInteger(value) || value > 0xffffffff) {
-      return null;
+      return "invalid";
     }
     nums.push(value);
   }
@@ -399,19 +453,19 @@ function inetAtonKind(host: string): IpKind | null {
       break;
     case 2:
       if (get(0) > 0xff || get(1) > 0xffffff) {
-        return null;
+        return "invalid";
       }
       value = get(0) * 0x1000000 + get(1);
       break;
     case 3:
       if (get(0) > 0xff || get(1) > 0xff || get(2) > 0xffff) {
-        return null;
+        return "invalid";
       }
       value = get(0) * 0x1000000 + get(1) * 0x10000 + get(2);
       break;
     default:
       if (nums.some((num) => num > 0xff)) {
-        return null;
+        return "invalid";
       }
       value = get(0) * 0x1000000 + get(1) * 0x10000 + get(2) * 0x100 + get(3);
       break;

@@ -473,20 +473,47 @@ func TestServiceImageCredentialBoundToRegistryHost(t *testing.T) {
 		}
 	})
 
-	t.Run("moving the reference with a fresh password is accepted", func(t *testing.T) {
+	t.Run("moving the reference with fresh halves is accepted", func(t *testing.T) {
 		svc, created, user := newImageApp(t)
 		ctx := context.Background()
-		ref, password := "evil.example.net/x:1", "new-token"
-		updated, err := svc.UpdateApplication(ctx, user, created.ID, UpdateApplicationInput{ImageRef: &ref, RegistryPassword: &password})
+		ref, username, password := "evil.example.net/x:1", "new-robot", "new-token"
+		updated, err := svc.UpdateApplication(ctx, user, created.ID, UpdateApplicationInput{
+			ImageRef: &ref, RegistryUsername: &username, RegistryPassword: &password,
+		})
 		if err != nil {
-			t.Fatalf("UpdateApplication(other host, fresh password): %v", err)
+			t.Fatalf("UpdateApplication(other host, fresh halves): %v", err)
 		}
 		if updated.ImageRef != ref {
 			t.Errorf("image ref = %q, want the moved reference", updated.ImageRef)
 		}
+		if updated.RegistryUsername != "new-robot" {
+			t.Errorf("username = %q, want the re-entered username", updated.RegistryUsername)
+		}
 		opened, err := providers.OpenSecret(testSecretKey, updated.RegistryPasswordCiphertext)
 		if err != nil || opened != "new-token" {
 			t.Errorf("credential = %q, %v; want the re-entered password", opened, err)
+		}
+	})
+
+	t.Run("moving with only a password drops the stale username", func(t *testing.T) {
+		svc, created, user := newImageApp(t)
+		ctx := context.Background()
+		ref, password := "evil.example.net/x:1", "new-token"
+		_, err := svc.UpdateApplication(ctx, user, created.ID, UpdateApplicationInput{ImageRef: &ref, RegistryPassword: &password})
+		if err == nil {
+			t.Fatal("UpdateApplication(other host, password only) = nil; want error")
+		}
+		if !strings.Contains(err.Error(), "both a username and a password") {
+			t.Errorf("err = %v; want the halves refusal", err)
+		}
+		// The refusal happens before the write: the old reference and the
+		// old username are still stored.
+		stored, storedErr := svc.GetApplication(ctx, user, created.ID)
+		if storedErr != nil {
+			t.Fatalf("GetApplication: %v", storedErr)
+		}
+		if stored.ImageRef != "registry.example.com/team/app:1.2" || stored.RegistryUsername != "robot" {
+			t.Errorf("stored = %+v; want the pre-move reference and username", stored)
 		}
 	})
 
@@ -639,5 +666,50 @@ func TestOrchestratorImagePinMismatchFails(t *testing.T) {
 	}
 	if !strings.Contains(stored.Error, "does not match the pinned") {
 		t.Errorf("error = %q, want the pin mismatch", stored.Error)
+	}
+}
+
+func TestOrchestratorImageRollbackWithoutDigestLogsLoudly(t *testing.T) {
+	app := testImageApplication(t, uuid.New())
+	repo := &fakeRepository{app: app}
+	// A release recorded before digest resolution: no digest to pin.
+	dep := seedDeployment(t, repo, app, Deployment{
+		Kind:          KindRollback,
+		ImageTag:      app.ImageRef,
+		RegistryImage: app.ImageRef,
+		RollbackFrom:  uuid.New(),
+	})
+	node := newMockNode()
+	node.digest = ""
+	pub := &recordPublisher{}
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+		Emitter:    NewEmitter(pub),
+	})
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, ok := repo.deployment(dep.ID)
+	if !ok {
+		t.Fatal("deployment row is gone")
+	}
+	if stored.State != StateRunning {
+		t.Errorf("state = %s, want running", stored.State)
+	}
+	var sawFallback, sawDeployWording bool
+	for _, event := range pub.payloads() {
+		if strings.Contains(event.Data, "without a reported digest") {
+			sawFallback = true
+		}
+		if strings.Contains(event.Data, "a rollback of this release will re-pull") {
+			sawDeployWording = true
+		}
+	}
+	if !sawFallback {
+		t.Error("no log line says the rollback pulled without a reported digest")
+	}
+	if sawDeployWording {
+		t.Error("deploy wording printed on a rollback run")
 	}
 }

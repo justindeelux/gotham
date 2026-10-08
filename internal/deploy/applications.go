@@ -399,10 +399,17 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		// password would send the stored secret to that host on the next
 		// pull, so the update is refused until the password is re-entered
 		// (or the credential is cleared explicitly in the same request).
-		if RegistryHost(app.ImageRef) != RegistryHost(ref) &&
-			app.RegistryPasswordCiphertext != "" && in.RegistryPassword == nil {
+		hostChanged := RegistryHost(app.ImageRef) != RegistryHost(ref)
+		if hostChanged && app.RegistryPasswordCiphertext != "" && in.RegistryPassword == nil {
 			return Application{}, fmt.Errorf("%w: image reference moves to another registry host: re-enter the registry password or clear the credential",
 				ErrValidation)
+		}
+		if hostChanged && in.RegistryUsername == nil {
+			// The username is half of the bound credential: it must not
+			// follow the reference to the new host. Dropping it here forces
+			// the writer to supply both halves with the password (or clear
+			// both), per the pair rule below.
+			app.RegistryUsername = ""
 		}
 		app.ImageRef = ref
 	}
@@ -430,7 +437,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	// The halves rotate independently, but the stored pair must stay whole:
 	// a username without a password (or the reverse) would pull anonymously
 	// while reporting a credential as configured.
-	if err := validateRegistryCredentialPair(app.RegistryUsername, app.RegistryPasswordCiphertext != ""); err != nil {
+	if err := requireCompleteRegistryCredential(app.RegistryUsername, app.RegistryPasswordCiphertext != ""); err != nil {
 		return Application{}, err
 	}
 	if in.Branch != nil {
@@ -1051,7 +1058,7 @@ const (
 // validateRegistryCredential checks a plaintext credential pair: both or
 // neither, within the length caps. The error never carries the values.
 func validateRegistryCredential(username, password string) error {
-	if err := validateRegistryCredentialPair(username, password != ""); err != nil {
+	if err := requireCompleteRegistryCredential(username, password != ""); err != nil {
 		return err
 	}
 	if len(username) > maxRegistryUsernameLen {
@@ -1063,14 +1070,15 @@ func validateRegistryCredential(username, password string) error {
 	return nil
 }
 
-// validateRegistryCredentialPair refuses a half credential: a username
+// requireCompleteRegistryCredential refuses a half credential: a username
 // without a password would pull anonymously while the API reports a
 // credential as configured (and the reverse stores a secret no pull uses).
-func validateRegistryCredentialPair(username string, hasPassword bool) error {
-	if (username == "") != hasPassword {
-		return nil
+func requireCompleteRegistryCredential(username string, hasPassword bool) error {
+	hasUser := username != ""
+	if (hasUser && !hasPassword) || (!hasUser && hasPassword) {
+		return fmt.Errorf("%w: registry credential needs both a username and a password", ErrValidation)
 	}
-	return fmt.Errorf("%w: registry credential needs both a username and a password", ErrValidation)
+	return nil
 }
 
 // validateSource checks the per-type source fields on creation. The provider

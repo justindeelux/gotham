@@ -377,8 +377,11 @@ func (c *DockerClient) inspectImageDigest(ctx context.Context, image string) (st
 }
 
 // digestRepoNames renders the repository names a pulled reference may appear
-// under in RepoDigests: the name as pulled, plus the Docker Hub expansion for
-// bare names (nginx pulls as docker.io/library/nginx).
+// under in RepoDigests: the name as pulled, the familiar spelling for
+// explicit Hub references (docker.io/library/nginx is listed as nginx) and
+// the Hub expansions for bare names (nginx pulls as docker.io/library/nginx).
+// index.docker.io is the legacy Hub hostname the engine may normalize either
+// way, so both spellings are candidates.
 func digestRepoNames(image string) []string {
 	name := strings.TrimSpace(image)
 	if cut, _, ok := strings.Cut(name, "@"); ok {
@@ -388,14 +391,35 @@ func digestRepoNames(image string) []string {
 		name = name[:index]
 	}
 	names := []string{name}
-	head, _, found := strings.Cut(name, "/")
+	head, tail, found := strings.Cut(name, "/")
 	switch {
 	case !found:
+		// Official image: nginx is docker.io/library/nginx on the Hub.
 		names = append(names, "docker.io/library/"+name)
-	case !strings.Contains(head, ".") && !strings.Contains(head, ":") && !strings.EqualFold(head, "localhost"):
+	case !isRegistryHostHead(head):
+		// Bare namespaced path: team/app is docker.io/team/app on the Hub.
 		names = append(names, "docker.io/"+name)
+	default:
+		familiar := tail
+		if stripped, ok := strings.CutPrefix(tail, "library/"); ok {
+			familiar = stripped
+		}
+		names = append(names, familiar)
+		if strings.EqualFold(head, "docker.io") {
+			names = append(names, "index.docker.io/"+tail)
+		}
+		if strings.EqualFold(head, "index.docker.io") {
+			names = append(names, "docker.io/"+tail)
+		}
 	}
 	return names
+}
+
+// isRegistryHostHead reports whether the first path component of a reference
+// names an explicit registry (a dot, a port or localhost), mirroring the
+// control plane's split rule without importing it.
+func isRegistryHostHead(head string) bool {
+	return strings.Contains(head, ".") || strings.Contains(head, ":") || strings.EqualFold(head, "localhost")
 }
 
 // CreateContainer creates a container from req and returns its id.

@@ -4,13 +4,14 @@
 import { mount } from "@vue/test-utils";
 import { NInput, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, nextTick, ref } from "vue";
 
 import type { Application } from "@/features/applications/api/applications";
 import ApplicationImagePanel from "@/features/applications/components/ApplicationImagePanel.vue";
 import ApplicationOverviewTab from "@/features/applications/components/ApplicationOverviewTab.vue";
 import { useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
+import ApplicationDetailPage from "@/features/applications/pages/ApplicationDetailPage.vue";
 import {
   imageRefSchema,
   isImageRef,
@@ -55,6 +56,11 @@ describe("image reference validation", () => {
     { name: "unspecified refused", ref: "0.0.0.0:5000/x:1", valid: false },
     { name: "unspecified v6 refused", ref: "[::]:5000/x:1", valid: false },
     { name: "loopback v6 refused", ref: "[::1]:5000/x:1", valid: false },
+    { name: "out-of-range quad refused", ref: "999.1.1.1/x:1", valid: false },
+    { name: "out-of-range quads refused", ref: "300.300.300.300/x:1", valid: false },
+    { name: "loopback v6 expanded refused", ref: "[0:0:0:0:0:0:0:1]/x:1", valid: false },
+    { name: "loopback v4-mapped refused", ref: "[::ffff:7f00:1]/x:1", valid: false },
+    { name: "loopback v4-mapped dotted refused", ref: "[::ffff:127.0.0.1]/x:1", valid: false },
     { name: "unbracketed v6 refused", ref: "::1/x:1", valid: false },
     { name: "dash-leading host refused", ref: "-v.evil/x:1", valid: false },
     { name: "double-dash host refused", ref: "--privileged.x/y:1", valid: false },
@@ -196,33 +202,34 @@ describe("image wizard flow", () => {
   });
 });
 
+function imageApp(): Application {
+  return {
+    id: "app-1",
+    name: "storefront",
+    environment_id: "env-1",
+    environment_name: "production",
+    project_id: "proj-1",
+    project_name: "shop",
+    provider: "",
+    repo: "",
+    clone_url: "",
+    source_type: "image",
+    branch: "",
+    build_pack: "",
+    image_ref: "registry.example.com/team/app:1.2",
+    has_registry_credential: true,
+    base_domain: "",
+    base_domain_disabled: false,
+    port: 3000,
+    host_port: 0,
+    server_id: "server-1",
+    server_name: "node-1",
+    created_at: "2026-09-01T10:00:00Z",
+    updated_at: "2026-09-01T10:00:00Z",
+  } as Application;
+}
+
 describe("image detail page", () => {
-  function imageApp(): Application {
-    return {
-      id: "app-1",
-      name: "storefront",
-      environment_id: "env-1",
-      environment_name: "production",
-      project_id: "proj-1",
-      project_name: "shop",
-      provider: "",
-      repo: "",
-      clone_url: "",
-      source_type: "image",
-      branch: "",
-      build_pack: "",
-      image_ref: "registry.example.com/team/app:1.2",
-      has_registry_credential: true,
-      base_domain: "",
-      base_domain_disabled: false,
-      port: 3000,
-      host_port: 0,
-      server_id: "server-1",
-      server_name: "node-1",
-      created_at: "2026-09-01T10:00:00Z",
-      updated_at: "2026-09-01T10:00:00Z",
-    } as Application;
-  }
 
   it("shows the reference instead of branch/build-pack rows", () => {
     const wrapper = mount(ApplicationOverviewTab, {
@@ -255,6 +262,118 @@ describe("image detail page", () => {
     await buttons[0]!.trigger("click");
     await nextTick();
     expect(wrapper.text()).toContain("valid image reference");
+    wrapper.unmount();
+  });
+});
+
+/** Controllable canWrite for the DetailPage gate test below. */
+let detailCanWrite = true;
+
+vi.mock("@/features/applications/composables/useApplicationDetail", () => ({
+  useApplicationDetail: () => mockImageDetail(),
+}));
+
+/** mockImageDetail stands in for the detail composable: real refs for every
+ * value the template reads, no-ops for handlers. */
+function mockImageDetail() {
+  const appsStore = {
+    loading: false,
+    acting: false,
+    error: null,
+    savingEnv: false,
+    savingStorages: false,
+  };
+  const values: Record<string, unknown> = {
+    application: ref(imageApp()),
+    canWrite: ref(detailCanWrite),
+    activeTab: ref("overview"),
+    appsStore,
+    deployments: ref([]),
+    previews: ref([]),
+    pipelineSteps: ref([]),
+    envDraft: ref([]),
+    storagesDraft: ref([]),
+    inheritedVars: ref([]),
+    serverOptions: ref([]),
+    deploymentOptions: ref([]),
+    latest: ref(null),
+    active: ref(null),
+    runningDeployments: ref([]),
+    appId: ref("app-1"),
+    shortId: ref("app-1"),
+    displayName: ref("storefront"),
+    initials: ref("ST"),
+    descColumns: ref(2),
+    controlHint: ref(""),
+    containerStopped: ref(false),
+    containerIsRunning: ref(false),
+    logTarget: ref(""),
+    effectiveLogServerId: ref(""),
+    logServerId: ref(""),
+    logDeploymentId: ref(""),
+    envError: ref(null),
+    envLoading: ref(false),
+    envLoadedFor: ref(""),
+    storagesError: ref(null),
+    storagesLoading: ref(false),
+    storagesLoadedFor: ref(""),
+    inheritedReady: ref(false),
+    inheritedLoading: ref(false),
+    moveError: ref(null),
+    moveSaving: ref(false),
+    previewsAvailable: ref(false),
+    previewsError: ref(null),
+    previewsLoaded: ref(false),
+    previewsLoading: ref(false),
+    rollbackOpen: ref(false),
+    rollbackTarget: ref(null),
+    rollingBack: ref(false),
+  };
+  return new Proxy(values, {
+    get(target, prop) {
+      if (prop in target) {
+        return target[prop as string];
+      }
+      return () => undefined;
+    },
+  });
+}
+
+describe("image panel viewer gate", () => {
+  function mountDetailPage() {
+    setActivePinia(createPinia());
+    return mount(NMessageProvider, {
+      slots: { default: () => h(ApplicationDetailPage) },
+      global: {
+        plugins: [i18n],
+        stubs: {
+          ProjectBreadcrumb: true,
+          ApplicationHeader: true,
+          ApplicationOverviewTab: true,
+          ApplicationDeploymentsTab: true,
+          ApplicationLogsTab: true,
+          ApplicationEnvTab: true,
+          ApplicationStorageTab: true,
+          ApplicationPreviewsTab: true,
+          DomainEditor: true,
+          RollbackDialog: true,
+          ResourceMoveCard: true,
+        },
+      },
+    });
+  }
+
+  it("shows the image panel to writers", () => {
+    detailCanWrite = true;
+    const wrapper = mountDetailPage();
+    expect(wrapper.findComponent(ApplicationImagePanel).exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("hides the image panel from viewers", () => {
+    detailCanWrite = false;
+    const wrapper = mountDetailPage();
+    expect(wrapper.findComponent(ApplicationImagePanel).exists()).toBe(false);
     wrapper.unmount();
   });
 });

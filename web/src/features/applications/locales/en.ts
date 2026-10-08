@@ -389,6 +389,8 @@ const en = {
     createdKey: "Application {name} created — register the key below, then deploy.",
     confirmKey: "I added the public key as a read-only deploy key on the repository.",
     deployNow: "Deploy now",
+    retryKey: "Retry key creation",
+    deleteRecoveryApp: "Delete application and start over",
   },
   detail: {
     controlInProgress: "A deployment is in progress. Wait for it to finish.",

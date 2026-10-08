@@ -232,9 +232,15 @@ func newAskpassFiles(username, password, allowHost string) (*askpassFiles, error
 	// The host is matched after "//" (no userinfo) or "@" (with userinfo),
 	// and must be followed by "/", ":" or "'" — so a longer hostname sharing
 	// the prefix (host.evil.com) or a path smuggling the hostname never
-	// matches. The host stays double-quoted (glob characters in it match
-	// literally) while the surrounding * wildcards stay unquoted.
-	quoted := `"` + shellDoubleQuote(allowHost)
+	// matches. Bracketed IPv6 literals match with their brackets (the prompt
+	// carries them: https://[::1]:8443/…). The host stays double-quoted
+	// (glob characters in it match literally) while the surrounding *
+	// wildcards stay unquoted.
+	host := allowHost
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	quoted := `"` + shellDoubleQuote(host)
 	hostPattern := `*//` + quoted + `/"*` +
 		`|*//` + quoted + `:"*` +
 		`|*//` + quoted + `'"*` +

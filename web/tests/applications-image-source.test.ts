@@ -93,7 +93,8 @@ describe("image reference validation", () => {
   it("implements the image source type", () => {
     expect(sourceTypeImplemented("image")).toBe(true);
     expect(sourceTypeImplemented("dockerfile")).toBe(true);
-    expect(sourceTypeImplemented("git_private")).toBe(false);
+    // Private git deploys since GS-4 (merged after this test was written).
+    expect(sourceTypeImplemented("git_private")).toBe(true);
     expect(sourceTypeImplemented("compose")).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NModal, NText } from "naive-ui";
+import { NAlert, NButton, NModal, NSpace, NText } from "naive-ui";
 import { computed, toRef } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -88,6 +88,24 @@ const stepCounter = computed<string>(() =>
           <NAlert v-if="wizard.errorMessage.value" type="error" :show-icon="true">
             {{ wizard.errorMessage.value }}
           </NAlert>
+
+          <NSpace v-if="wizard.keyRecovery.value" :size="8">
+            <NButton
+              type="primary"
+              size="small"
+              :loading="wizard.submitting.value"
+              @click="wizard.retryKeyCreation"
+            >
+              {{ t("applications.privateGit.retryKey") }}
+            </NButton>
+            <NButton
+              size="small"
+              :disabled="wizard.submitting.value"
+              @click="wizard.deleteRecoveryApp"
+            >
+              {{ t("applications.privateGit.deleteRecoveryApp") }}
+            </NButton>
+          </NSpace>
 
           <WizardKeyStep v-if="wizard.createdKey.value" />
           <template v-else>

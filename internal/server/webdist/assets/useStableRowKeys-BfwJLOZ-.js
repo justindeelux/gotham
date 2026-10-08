@@ -1,1 +1,0 @@
-import{P as a,p as c}from"./index-DFaraP62.js";function r(u){const e=c([]);let l=0;const s=()=>`row-${l+=1}`;a(u,t=>{for(;e.value.length<t;)e.value.push(s());e.value.length>t&&e.value.splice(t)},{immediate:!0,flush:"sync"});function i(t){e.value.splice(t,0,s())}function n(t){e.value.splice(t,1)}return{keys:e,insertAt:i,removeAt:n}}export{r as u};

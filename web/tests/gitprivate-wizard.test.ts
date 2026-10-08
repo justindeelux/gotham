@@ -17,6 +17,7 @@ vi.mock("@/features/applications/api/applications", async (importOriginal) => {
     ...mod,
     createApplication: vi.fn(),
     createDeployKey: vi.fn(),
+    deleteApplication: vi.fn(),
     setGitCredential: vi.fn(),
     testConnection: vi.fn(),
   };
@@ -29,6 +30,7 @@ vi.mock("@/features/applications/stores/applications", () => ({
 import {
   createApplication,
   createDeployKey,
+  deleteApplication,
   setGitCredential,
   testConnection,
 } from "@/features/applications/api/applications";
@@ -44,6 +46,7 @@ import {
 
 const mockCreate = vi.mocked(createApplication);
 const mockCreateKey = vi.mocked(createDeployKey);
+const mockDeleteApp = vi.mocked(deleteApplication);
 const mockSetCred = vi.mocked(setGitCredential);
 const mockProbe = vi.mocked(testConnection);
 
@@ -143,7 +146,7 @@ describe("wizard SSH post-create flow", () => {
     wrapper.unmount();
   });
 
-  it("surfaces a key failure without deploying", async () => {
+  it("surfaces a key failure with recovery instead of a blind retry", async () => {
     const { wrapper, wiz, emitted } = await harness();
     await sshForm(wiz);
     mockCreateKey.mockRejectedValueOnce({ status: 500, message: "boom" });
@@ -152,7 +155,42 @@ describe("wizard SSH post-create flow", () => {
     expect(wiz.createdKey.value).toBeNull();
     expect(mockDeploy).not.toHaveBeenCalled();
     expect(wiz.errorMessage.value).not.toBe("");
+    expect(wiz.keyRecovery.value?.application).toEqual(testApp());
     expect(emitted).toEqual([]);
+
+    // Retry lands on the key step without recreating the application.
+    mockCreateKey.mockResolvedValueOnce({ public_key: "ssh-ed25519 AAAA key" });
+    await wiz.retryKeyCreation();
+    expect(mockCreate).toHaveBeenCalledOnce();
+    expect(wiz.createdKey.value?.publicKey).toBe("ssh-ed25519 AAAA key");
+    expect(wiz.keyRecovery.value).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("rolls the parked application back on delete", async () => {
+    const { wrapper, wiz } = await harness();
+    await sshForm(wiz);
+    mockCreateKey.mockRejectedValueOnce({ status: 500, message: "boom" });
+    mockDeleteApp.mockResolvedValueOnce(undefined);
+
+    await wiz.handleSubmit();
+    expect(wiz.keyRecovery.value).not.toBeNull();
+    await wiz.deleteRecoveryApp();
+    expect(mockDeleteApp).toHaveBeenCalledWith("app1");
+    expect(wiz.keyRecovery.value).toBeNull();
+    expect(wiz.form.name).toBe("");
+    wrapper.unmount();
+  });
+
+  it("emits created when the key step closes without deploying", async () => {
+    const { wrapper, wiz, emitted } = await harness();
+    await sshForm(wiz);
+
+    await wiz.handleSubmit();
+    expect(wiz.createdKey.value).not.toBeNull();
+    wiz.handleShowChange(false);
+    expect(emitted).toContainEqual({ event: "created", value: testApp() });
+    expect(wiz.createdKey.value).toBeNull();
     wrapper.unmount();
   });
 

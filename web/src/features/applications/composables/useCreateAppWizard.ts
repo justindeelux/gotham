@@ -4,6 +4,7 @@ import { computed, inject, provide, reactive, ref, toValue, watch, type Injectio
 import {
   createApplication,
   createDeployKey,
+  deleteApplication,
   describeApplicationError,
   setGitCredential,
   testConnection,
@@ -203,6 +204,12 @@ export function useCreateAppWizard(
    * an explicit Test + Deploy instead of queueing blindly.
    */
   const createdKey = ref<{ application: Application; publicKey: string } | null>(null);
+  /**
+   * keyRecovery parks the created application when its deploy key could not
+   * be generated: retrying the submit would hit a name conflict on the
+   * existing row, so the wizard offers key retry or rollback instead.
+   */
+  const keyRecovery = ref<{ application: Application } | null>(null);
   const keyTesting = ref(false);
   const keyTestPassed = ref(false);
   const keyTestMessage = ref("");
@@ -810,7 +817,11 @@ export function useCreateAppWizard(
           const key = await createDeployKey(application.id);
           createdKey.value = { application, publicKey: key.public_key };
         } catch (credError) {
+          // The application row already exists, so a plain retry of the
+          // submit would hit a name conflict: park the application for the
+          // recovery actions (retry the key, or delete and start over).
           submitFailure.value = { kind: "error", error: credError };
+          keyRecovery.value = { application };
         } finally {
           submitting.value = false;
         }
@@ -870,8 +881,7 @@ export function useCreateAppWizard(
   }
 
   /** runCreatedKeyTest probes the new SSH application with its stored key. */
-  async function runCreatedKeyTest(): Promise<void> {
-    if (!createdKey.value) {
+  async function runCreatedKeyTest(): Promise<void> {    if (!createdKey.value) {
       return;
     }
     keyTesting.value = true;
@@ -929,16 +939,61 @@ export function useCreateAppWizard(
     emit("update:show", false);
   }
 
+  /** retryKeyCreation retries the deploy key for the parked application. */
+  async function retryKeyCreation(): Promise<void> {
+    if (!keyRecovery.value) {
+      return;
+    }
+    submitting.value = true;
+    try {
+      const key = await createDeployKey(keyRecovery.value.application.id);
+      createdKey.value = {
+        application: keyRecovery.value.application,
+        publicKey: key.public_key,
+      };
+      keyRecovery.value = null;
+      submitFailure.value = null;
+    } catch (credError) {
+      submitFailure.value = { kind: "error", error: credError };
+    } finally {
+      submitting.value = false;
+    }
+  }
+
+  /** deleteRecoveryApp rolls the parked application back and restarts. */
+  async function deleteRecoveryApp(): Promise<void> {
+    if (!keyRecovery.value) {
+      return;
+    }
+    submitting.value = true;
+    try {
+      await deleteApplication(keyRecovery.value.application.id);
+    } catch (error) {
+      submitFailure.value = { kind: "error", error };
+      submitting.value = false;
+      return;
+    }
+    resetWizard();
+  }
+
   /** seedScope copies the live route scope into the form. */
   function seedScope(): void {
     form.projectId = toValue(scope.projectId);
     form.environmentId = toValue(scope.environmentId);
   }
 
-  /** handleShowChange mirrors the modal visibility and resets when closing. */
+  /** handleShowChange mirrors the modal visibility and resets when closing.
+   * Closing from the key step still emits created: the application exists,
+   * and without the event the list behind the modal goes stale. */
   function handleShowChange(value: boolean): void {
     emit("update:show", value);
     if (!value) {
+      if (createdKey.value) {
+        const created = createdKey.value.application;
+        resetWizard();
+        emit("created", created);
+        return;
+      }
       resetWizard();
     }
   }
@@ -974,6 +1029,7 @@ export function useCreateAppWizard(
     noSshUrl.value = false;
     submitting.value = false;
     createdKey.value = null;
+    keyRecovery.value = null;
     keyTesting.value = false;
     keyTestPassed.value = false;
     keyTestMessage.value = "";
@@ -1029,6 +1085,7 @@ export function useCreateAppWizard(
     closeWizard,
     handleShowChange,
     createdKey,
+    keyRecovery,
     keyTesting,
     keyTestPassed,
     keyTestMessage,
@@ -1038,6 +1095,8 @@ export function useCreateAppWizard(
     runCreatedKeyTest,
     deployCreatedKey,
     closeCreatedKey,
+    retryKeyCreation,
+    deleteRecoveryApp,
   };
 }
 

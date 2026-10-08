@@ -389,6 +389,8 @@ const vi: ApplicationsMessages = {
     createdKey: "Đã tạo ứng dụng {name} — hãy đăng ký khóa bên dưới, rồi triển khai.",
     confirmKey: "Tôi đã thêm khóa công khai làm read-only deploy key trên kho mã.",
     deployNow: "Triển khai ngay",
+    retryKey: "Thử tạo khóa lại",
+    deleteRecoveryApp: "Xóa ứng dụng và làm lại",
   },
   detail: {
     controlInProgress: "Đợt triển khai đang chạy. Hãy chờ hoàn tất.",

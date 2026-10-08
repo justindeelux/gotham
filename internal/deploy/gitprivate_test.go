@@ -120,6 +120,7 @@ func TestPrivateGitHost(t *testing.T) {
 		{"git@git.internal:acme/demo.git", "git.internal"},
 		{"deploy@git.internal:acme/demo.git", "git.internal"},
 		{"https://git.internal/acme/demo.git", "git.internal"},
+		{"https://[::1]:8443/acme/demo.git", "::1"},
 		{"https://user:token@git.internal/acme/demo.git", "git.internal"},
 		{"not a url", ""},
 		{"", ""},
@@ -533,6 +534,24 @@ func TestAskpassHelperExecution(t *testing.T) {
 			t.Errorf("%s: helper answered %q, want a refusal", name, out)
 		}
 	}
+	t.Run("bracketed IPv6 host", func(t *testing.T) {
+		files, err := newAskpassFiles("bob", "tok", "::1")
+		if err != nil {
+			t.Fatalf("newAskpassFiles: %v", err)
+		}
+		defer files.remove()
+		run := func(prompt string) (string, error) {
+			cmd := exec.Command(sh, files.scriptPath, prompt)
+			out, err := cmd.Output()
+			return string(out), err
+		}
+		if got, err := run("Password for 'https://bob@[::1]:8443/acme/demo.git': "); err != nil || got != "tok" {
+			t.Errorf("bracketed IPv6 prompt answered %q, %v; want the token", got, err)
+		}
+		if out, err := run("Password for 'https://bob@[::2]:8443/acme/demo.git': "); err == nil {
+			t.Errorf("foreign IPv6 prompt answered %q, want a refusal", out)
+		}
+	})
 	dir := files.dir
 	files.remove()
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {

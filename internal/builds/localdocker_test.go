@@ -188,6 +188,40 @@ func TestStaticEngineE2E(t *testing.T) {
 	}
 }
 
+// TestInlineDockerfileBuildE2E builds a pasted-Dockerfile context (GS-7: the
+// file is the whole context, no repository checkout) through the local
+// Docker transport, skipping like the other live-Docker tests when the
+// daemon is unreachable.
+func TestInlineDockerfileBuildE2E(t *testing.T) {
+	if os.Getenv("GOTHAM_E2E") != "1" {
+		t.Skip("set GOTHAM_E2E=1 to run live Docker builds")
+	}
+	builder := requireDocker(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	dir := t.TempDir()
+	// A bare FROM scratch produces no image layer on the builder, so the
+	// context carries an ARG (also consumed, silencing the unused-arg
+	// warning) and a LABEL to give the image content.
+	writeTestFile(t, filepath.Join(dir, "Dockerfile"), "FROM scratch\nARG APP_ENV\nLABEL gotham.e2e=inline\n")
+	contextTar, err := buildContextTar(contextSpec{root: dir})
+	if err != nil {
+		t.Fatalf("buildContextTar: %v", err)
+	}
+	result, err := builder.Build(ctx, contextTar, ImageBuildOptions{
+		Tag:        "gotham/e2e-inline:" + uuid.NewString(),
+		Dockerfile: "Dockerfile",
+		BuildArgs:  map[string]string{"APP_ENV": "production"},
+	})
+	if err != nil {
+		t.Fatalf("Build: %v (logs: %s)", err, result.Logs)
+	}
+	if result.Digest == "" {
+		t.Error("Build returned an empty digest")
+	}
+}
+
 // TestLocalDockerBuilderDockerHost pins the endpoint handed to toolchain CLIs:
 // the toolchain runs with a stripped environment, so the builder must carry a
 // usable DOCKER_HOST itself.

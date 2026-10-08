@@ -38,7 +38,7 @@ const { t } = useI18n();
 
 /** stepCounter renders the raw position; numbers stay locale-independent. */
 const stepCounter = computed<string>(() =>
-  String(t("applications.wizard.counter", { current: wizard.step.value + 1, total: 5 })),
+  String(t("applications.wizard.counter", { current: wizard.stepPosition.value, total: wizard.stepTotal.value })),
 );
 </script>
 
@@ -96,12 +96,12 @@ const stepCounter = computed<string>(() =>
         </div>
 
         <div class="wizard-foot">
-          <NButton v-if="wizard.step.value > 0" tertiary @click="wizard.step.value -= 1">{{ t("applications.wizard.back") }}</NButton>
+          <NButton v-if="wizard.step.value > 0" tertiary @click="wizard.prevStep()">{{ t("applications.wizard.back") }}</NButton>
           <span class="step-counter">{{ stepCounter }}</span>
           <span class="grow" />
           <template v-if="wizard.step.value < 4">
             <NButton @click="wizard.closeWizard">{{ t("applications.wizard.cancel") }}</NButton>
-            <NButton type="primary" :disabled="!wizard.canContinue.value" @click="wizard.step.value += 1">
+            <NButton type="primary" :disabled="!wizard.canContinue.value" @click="wizard.nextStep()">
               {{ t("applications.wizard.cont") }}
             </NButton>
           </template>

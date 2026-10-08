@@ -50,7 +50,21 @@ const applicationBody = `{
 // values.
 var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
-	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id", "branch", "build_pack",
+	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id",
+	"dockerfile_content", "build_args", "branch", "build_pack",
+	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
+	"server_name", "created_at", "updated_at",
+}
+
+// applicationListWireKeys are the list-item fields: the Dockerfile source
+// text and --build-arg values travel on the detail routes only, so a list
+// read never exposes them. Every other detail key (including GS-5's
+// github_app_id) must appear here, or list readers see undefined values.
+var applicationListWireKeys = []string{
+	"id", "name", "environment_id", "environment_name", "project_id",
+	"project_name", "provider", "repo", "clone_url", "source_type",
+	"github_app_id",
+	"branch", "build_pack",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
 }
@@ -366,7 +380,7 @@ func TestRoutesListApplications(t *testing.T) {
 				t.Fatalf("applications = %d, want %d", len(body.Applications), len(tc.apps))
 			}
 			if len(tc.apps) == 1 {
-				assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "applications", "0"), applicationWireKeys...)
+				assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "applications", "0"), applicationListWireKeys...)
 				if body.Applications[0].ID != app.ID.String() {
 					t.Errorf("id = %q, want %q", body.Applications[0].ID, app.ID)
 				}
@@ -376,6 +390,69 @@ func TestRoutesListApplications(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("dockerfile fields stay on the detail routes", func(t *testing.T) {
+		dockerApp := sampleApplication()
+		dockerApp.UserID = userID
+		dockerApp.SourceType = SourceDockerfile
+		dockerApp.DockerfileContent = "FROM alpine:3.20\n"
+		dockerApp.BuildArgs = map[string]string{"APP_ENV": "production"}
+		svc := &fakeDeployService{listApps: []Application{dockerApp}}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		raw := mustJSON(t, rec.Body.Bytes(), "applications", "0")
+		var keys map[string]any
+		if err := json.Unmarshal(raw, &keys); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if _, ok := keys["dockerfile_content"]; ok {
+			t.Error("list response carries dockerfile_content, want it detail-only")
+		}
+		if _, ok := keys["build_args"]; ok {
+			t.Error("list response carries build_args, want them detail-only")
+		}
+	})
+
+	// The list shape must keep every non-Dockerfile detail key: dropping
+	// one (as the GS-5 github_app_id was in the rebase) silently feeds
+	// undefined values to list readers. The link round-trips verbatim
+	// when set and encodes empty (not the zero UUID) when unlinked.
+	t.Run("list keeps the github app link", func(t *testing.T) {
+		linkID := uuid.New()
+		linked := sampleApplication()
+		linked.UserID = userID
+		linked.GitHubAppID = linkID
+		unlinked := sampleApplication()
+		unlinked.UserID = userID
+		svc := &fakeDeployService{listApps: []Application{linked, unlinked}}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var body applicationListEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Applications) != 2 {
+			t.Fatalf("applications = %d, want 2", len(body.Applications))
+		}
+		if body.Applications[0].GitHubAppID != linkID.String() {
+			t.Errorf("link = %q, want %q", body.Applications[0].GitHubAppID, linkID.String())
+		}
+		if body.Applications[1].GitHubAppID != "" {
+			t.Errorf("link = %q, want empty when unlinked", body.Applications[1].GitHubAppID)
+		}
+	})
 }
 
 func TestRoutesGetApplication(t *testing.T) {
@@ -532,6 +609,28 @@ func TestRoutesUpdateApplication(t *testing.T) {
 					t.Errorf("link = %v, want %q", got, *tc.want)
 				}
 			})
+		}
+	})
+	t.Run("forwards dockerfile fields", func(t *testing.T) {
+		svc := &fakeDeployService{application: app}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, applicationsPath+"/"+appID.String(),
+			strings.NewReader(`{"dockerfile_content":"FROM alpine:3.21\n","build_args":{"APP_ENV":"staging"}}`)))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		in := svc.seenUpdate
+		if in.DockerfileContent == nil || *in.DockerfileContent != "FROM alpine:3.21\n" {
+			t.Errorf("dockerfile content = %v, want the patched value", in.DockerfileContent)
+		}
+		if in.BuildArgs == nil || (*in.BuildArgs)["APP_ENV"] != "staging" {
+			t.Errorf("build args = %v, want APP_ENV=staging", in.BuildArgs)
+		}
+		if in.Name != nil || in.Branch != nil {
+			t.Errorf("unpatched fields were sent: %+v", in)
 		}
 	})
 }
@@ -925,6 +1024,10 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 			"build_pack":     "dockerfile",
 			"server_id":      uuid.New().String(),
 		}
+		if sourceType == SourceDockerfile {
+			payload["dockerfile_content"] = "FROM alpine:3.20\n"
+			payload["build_args"] = map[string]string{"APP_ENV": "production"}
+		}
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			t.Fatalf("encode payload: %v", err)
@@ -938,7 +1041,6 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 		want       int
 	}{
 		{"unknown type", "tarball", "", http.StatusBadRequest},
-		{"dockerfile waits for GS-7", SourceDockerfile, "", http.StatusUnprocessableEntity},
 		{"private git waits for GS-4", SourceGitPrivate, "", http.StatusUnprocessableEntity},
 		{"github app with gitlab provider", SourceGitHubApp, "gitlab", http.StatusBadRequest},
 		{"public git with github provider", SourceGitPublic, "github", http.StatusBadRequest}}
@@ -957,6 +1059,40 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("dockerfile app creates with content and build args", func(t *testing.T) {
+		userID := uuid.New()
+		repo := &fakeRepository{}
+		svc := newTestService(t, repo)
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+			strings.NewReader(body(SourceDockerfile, "", "", ""))))
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+		var envelope struct {
+			Application struct {
+				SourceType        string            `json:"source_type"`
+				DockerfileContent string            `json:"dockerfile_content"`
+				BuildArgs         map[string]string `json:"build_args"`
+			} `json:"application"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if envelope.Application.SourceType != SourceDockerfile {
+			t.Errorf("source type = %q, want %q", envelope.Application.SourceType, SourceDockerfile)
+		}
+		if !strings.Contains(envelope.Application.DockerfileContent, "FROM") {
+			t.Errorf("dockerfile content = %q, want the pasted text", envelope.Application.DockerfileContent)
+		}
+		if envelope.Application.BuildArgs["APP_ENV"] != "production" {
+			t.Errorf("build args = %v, want APP_ENV=production", envelope.Application.BuildArgs)
+		}
+	})
 
 	t.Run("matching github app creates", func(t *testing.T) {
 		userID := uuid.New()

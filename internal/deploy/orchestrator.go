@@ -334,10 +334,12 @@ func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) er
 	}
 }
 
-// cloneSource selects the fetch step by application source type (GS-2).
-// The git/container partition lives in SourceTypeImplemented, so the switch
-// here cannot drift from the deploy gate: legacy rows with an empty type
-// behave as before, and anything GS-2 cannot fetch fails closed with
+// cloneSource selects the fetch step by application source type (GS-2,
+// GS-7). A pasted Dockerfile materializes as the build tree (no clone, no
+// build-pack detection); git-backed types share the deploy-key cloner. The
+// git/container partition lives in SourceTypeImplemented, so the switch here
+// cannot drift from the deploy gate: legacy rows with an empty type behave
+// as before, and anything unimplemented fails closed with
 // ErrSourceNotImplemented before any container is touched.
 func (o *Orchestrator) cloneSource(ctx context.Context, app Application, dir string, log func(string)) error {
 	if !ValidSourceType(app.SourceType) {
@@ -345,6 +347,18 @@ func (o *Orchestrator) cloneSource(ctx context.Context, app Application, dir str
 	}
 	if !SourceTypeImplemented(app.SourceType) {
 		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
+	}
+	if app.SourceType == SourceDockerfile {
+		if err := ValidateDockerfileContent(app.DockerfileContent); err != nil {
+			return err
+		}
+		if err := writeDockerfileContext(dir, app.DockerfileContent); err != nil {
+			return fmt.Errorf("deploy: write Dockerfile context: %w", err)
+		}
+		if log != nil {
+			log("Dockerfile source materialized")
+		}
+		return nil
 	}
 	return o.source.Clone(ctx, app, dir, log)
 }
@@ -382,9 +396,18 @@ func (o *Orchestrator) attempt(ctx context.Context, st *runState, what string, o
 // shell out on the control plane instead and leave the image in the local
 // daemon — the pushing step accounts for that difference.
 func (o *Orchestrator) build(ctx context.Context, st *runState) error {
-	kind, err := builds.ParseEngineKind(st.app.BuildPack)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrValidation, err)
+	// Dockerfile applications skip build-pack detection: the content
+	// materialized by cloneSource is the whole context, built with the
+	// Dockerfile engine and the application's --build-arg pairs through the
+	// same node BuildImage path as git builds.
+	kind := builds.EngineDockerfile
+	buildArgs := st.app.BuildArgs
+	if st.app.SourceType != SourceDockerfile {
+		var err error
+		kind, err = builds.ParseEngineKind(st.app.BuildPack)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrValidation, err)
+		}
 	}
 	logs := newLineLog(st.log)
 	builder := newNodeBuilder(st.node, st.app.ID, st.dep.ID, func(chunk []byte) {
@@ -398,6 +421,7 @@ func (o *Orchestrator) build(ctx context.Context, st *runState) error {
 		AppID:     st.app.ID,
 		DeployID:  st.dep.ID,
 		BuildPack: kind,
+		BuildArgs: buildArgs,
 		Labels: map[string]string{
 			labelAppID:        st.app.ID.String(),
 			labelDeploymentID: st.dep.ID.String(),

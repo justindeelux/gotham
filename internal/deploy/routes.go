@@ -81,6 +81,11 @@ type applicationResponse struct {
 	Branch      string `json:"branch"`
 	BuildPack   string `json:"build_pack"`
 	BaseDomain  string `json:"base_domain"`
+	// DockerfileContent holds pasted Dockerfile text for dockerfile
+	// applications (empty otherwise); BuildArgs holds its --build-arg pairs
+	// (never nil on the wire).
+	DockerfileContent string            `json:"dockerfile_content"`
+	BuildArgs         map[string]string `json:"build_args"`
 	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
 	// migration (legacy duplicate); the value is preserved and an explicit
 	// domain update re-enables it.
@@ -114,7 +119,41 @@ type webhookOutcome struct {
 
 // applicationListEnvelope wraps an application list.
 type applicationListEnvelope struct {
-	Applications []applicationResponse `json:"applications"`
+	Applications []applicationListItem `json:"applications"`
+}
+
+// applicationListItem is the wire representation of an application in list
+// responses. It mirrors applicationResponse except the Dockerfile source
+// fields: pasted text and --build-arg values travel only on the detail
+// routes (get/create/update), so a list read never exposes them. ARG values
+// persist in image history on the node, so they must never be treated as
+// secrets — the UI warns next to the field instead.
+type applicationListItem struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	EnvironmentID   string `json:"environment_id"`
+	EnvironmentName string `json:"environment_name"`
+	ProjectID       string `json:"project_id"`
+	ProjectName     string `json:"project_name"`
+	Provider        string `json:"provider"`
+	Repo            string `json:"repo"`
+	CloneURL        string `json:"clone_url"`
+	SourceType      string `json:"source_type"`
+	// GitHubAppID is the linked GitHub App connection, empty when unlinked.
+	GitHubAppID string `json:"github_app_id"`
+	Branch      string `json:"branch"`
+	BuildPack   string `json:"build_pack"`
+	BaseDomain  string `json:"base_domain"`
+	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
+	// migration (legacy duplicate); the value is preserved and an explicit
+	// domain update re-enables it.
+	BaseDomainDisabled bool      `json:"base_domain_disabled"`
+	Port               int32     `json:"port"`
+	HostPort           int32     `json:"host_port"`
+	ServerID           *string   `json:"server_id"`
+	ServerName         string    `json:"server_name"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // envEntryRequest is one environment row on the wire (`EnvVar` in the FE). A
@@ -164,6 +203,10 @@ type createApplicationRequest struct {
 	ServerID    string            `json:"server_id"`
 	Env         []envEntryRequest `json:"env"`
 	Storage     []storageRequest  `json:"storage"`
+	// DockerfileContent holds pasted Dockerfile text for the dockerfile
+	// source type (GS-7); BuildArgs holds its optional --build-arg pairs.
+	DockerfileContent string            `json:"dockerfile_content"`
+	BuildArgs         map[string]string `json:"build_args"`
 }
 
 // updateApplicationRequest is the PUT /applications/{id} body. Fields are
@@ -181,6 +224,11 @@ type updateApplicationRequest struct {
 	// GitHubAppID relinks the application: a UUID sets the connection, an
 	// empty string clears it, absent leaves it unchanged.
 	GitHubAppID *string `json:"github_app_id"`
+	// DockerfileContent replaces the stored Dockerfile text (dockerfile
+	// applications only); BuildArgs replaces the whole --build-arg
+	// collection (absent leaves it unchanged).
+	DockerfileContent *string            `json:"dockerfile_content"`
+	BuildArgs         *map[string]string `json:"build_args"`
 }
 
 // errorBody is the JSON body returned for failures.
@@ -293,21 +341,23 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	}
 
 	application, err := h.svc.CreateApplication(r.Context(), userID, CreateApplicationInput{
-		Name:          req.Name,
-		EnvironmentID: environmentID,
-		Provider:      req.Provider,
-		Repo:          req.Repo,
-		CloneURL:      req.CloneURL,
-		SourceType:    req.SourceType,
-		GitHubAppID:   githubAppID,
-		Branch:        req.Branch,
-		BuildPack:     req.BuildPack,
-		BaseDomain:    req.BaseDomain,
-		Port:          req.Port,
-		HostPort:      req.HostPort,
-		ServerID:      serverID,
-		Env:           toEnvEntries(req.Env),
-		Storage:       toStorages(req.Storage),
+		Name:              req.Name,
+		EnvironmentID:     environmentID,
+		Provider:          req.Provider,
+		Repo:              req.Repo,
+		CloneURL:          req.CloneURL,
+		SourceType:        req.SourceType,
+		GitHubAppID:       githubAppID,
+		Branch:            req.Branch,
+		BuildPack:         req.BuildPack,
+		BaseDomain:        req.BaseDomain,
+		Port:              req.Port,
+		HostPort:          req.HostPort,
+		ServerID:          serverID,
+		Env:               toEnvEntries(req.Env),
+		Storage:           toStorages(req.Storage),
+		DockerfileContent: req.DockerfileContent,
+		BuildArgs:         req.BuildArgs,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -353,9 +403,9 @@ func (h *handler) listApplications(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	response := make([]applicationResponse, 0, len(applications))
+	response := make([]applicationListItem, 0, len(applications))
 	for _, application := range applications {
-		response = append(response, newApplicationResponse(application))
+		response = append(response, newApplicationListItem(application))
 	}
 	writeJSON(w, http.StatusOK, applicationListEnvelope{Applications: response})
 }
@@ -386,13 +436,15 @@ func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := UpdateApplicationInput{
-		Name:        req.Name,
-		Branch:      req.Branch,
-		BuildPack:   req.BuildPack,
-		BaseDomain:  req.BaseDomain,
-		Port:        req.Port,
-		HostPort:    req.HostPort,
-		GitHubAppID: req.GitHubAppID,
+		Name:              req.Name,
+		Branch:            req.Branch,
+		BuildPack:         req.BuildPack,
+		BaseDomain:        req.BaseDomain,
+		Port:              req.Port,
+		HostPort:          req.HostPort,
+		GitHubAppID:       req.GitHubAppID,
+		DockerfileContent: req.DockerfileContent,
+		BuildArgs:         req.BuildArgs,
 	}
 	if req.ServerID != nil {
 		serverID, parsed := applicationServerID(w, *req.ServerID)
@@ -888,6 +940,15 @@ func wireStorages(storages []Storage) []storageRequest {
 	return rows
 }
 
+// nonNilBuildArgs keeps the wire field a JSON object (never null) so the FE
+// reuses one shape for the editor draft.
+func nonNilBuildArgs(args map[string]string) map[string]string {
+	if args == nil {
+		return map[string]string{}
+	}
+	return args
+}
+
 // newApplicationResponse maps a domain application to its wire representation.
 func newApplicationResponse(application Application) applicationResponse {
 	response := applicationResponse{
@@ -904,6 +965,8 @@ func newApplicationResponse(application Application) applicationResponse {
 		// (creation validation already refuses userinfo on new rows).
 		CloneURL:           RedactCloneURL(application.CloneURL),
 		SourceType:         application.SourceType,
+		DockerfileContent:  application.DockerfileContent,
+		BuildArgs:          nonNilBuildArgs(application.BuildArgs),
 		Branch:             application.Branch,
 		BuildPack:          application.BuildPack,
 		BaseDomain:         application.BaseDomain,
@@ -919,6 +982,42 @@ func newApplicationResponse(application Application) applicationResponse {
 		response.ServerID = &serverID
 	}
 	// The link is empty (not the zero UUID) when the application has none.
+	if application.GitHubAppID != uuid.Nil {
+		response.GitHubAppID = application.GitHubAppID.String()
+	}
+	return response
+}
+
+// newApplicationListItem maps a domain application to its list representation
+// (detail fields excluded, see applicationListItem).
+func newApplicationListItem(application Application) applicationListItem {
+	response := applicationListItem{
+		ID:                 application.ID.String(),
+		Name:               application.Name,
+		EnvironmentID:      application.EnvironmentID.String(),
+		EnvironmentName:    application.EnvironmentName,
+		ProjectID:          application.ProjectID.String(),
+		ProjectName:        application.ProjectName,
+		Provider:           application.Provider,
+		Repo:               application.Repo,
+		CloneURL:           RedactCloneURL(application.CloneURL),
+		SourceType:         application.SourceType,
+		Branch:             application.Branch,
+		BuildPack:          application.BuildPack,
+		BaseDomain:         application.BaseDomain,
+		BaseDomainDisabled: application.BaseDomainDisabled,
+		Port:               application.Port,
+		HostPort:           application.HostPort,
+		ServerName:         application.ServerName,
+		CreatedAt:          application.CreatedAt,
+		UpdatedAt:          application.UpdatedAt,
+	}
+	if application.ServerID != uuid.Nil {
+		serverID := application.ServerID.String()
+		response.ServerID = &serverID
+	}
+	// The link is empty (not the zero UUID) when the application has none,
+	// mirroring the detail mapper.
 	if application.GitHubAppID != uuid.Nil {
 		response.GitHubAppID = application.GitHubAppID.String()
 	}

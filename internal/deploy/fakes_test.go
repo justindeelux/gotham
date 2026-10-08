@@ -1032,6 +1032,9 @@ type mockNode struct {
 	started  []string
 	removed  []string
 	metas    []BuildMeta
+	// contexts records the raw build context tarball of every Build call, so
+	// tests can assert what the node actually received.
+	contexts [][]byte
 }
 
 // Compile-time guarantee that mockNode satisfies the seam.
@@ -1050,10 +1053,11 @@ func newMockNode() *mockNode {
 }
 
 // Build implements Node.
-func (m *mockNode) Build(_ context.Context, meta BuildMeta, _ []byte, log func([]byte)) (BuildOutcome, error) {
+func (m *mockNode) Build(_ context.Context, meta BuildMeta, contextTar []byte, log func([]byte)) (BuildOutcome, error) {
 	m.mu.Lock()
 	m.buildCalls++
 	m.metas = append(m.metas, meta)
+	m.contexts = append(m.contexts, contextTar)
 	err := m.buildErr
 	logs := append([]string(nil), m.buildLogs...)
 	registry, digest := m.registryAddr, m.digest

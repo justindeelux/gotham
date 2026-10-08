@@ -255,14 +255,14 @@ describe("wizard create payload carries the source type", () => {
     const options = Object.fromEntries(
       w.sourceTypeOptions.value.map((item) => [item.value, item.disabled === true]),
     );
-    // git_public and the connected-provider flows deploy; everything else
-    // stays disabled until its package lands (GS-4, GS-7..GS-9).
+    // git_public, the connected-provider flows and pasted Dockerfiles deploy;
+    // everything else stays disabled until its package lands (GS-4, GS-8..9).
     expect(options).toEqual({
       git_public: false,
       git_private: true,
       github_app: false,
       gitlab_app: false,
-      dockerfile: true,
+      dockerfile: false,
       compose: true,
       image: true,
     });

@@ -55,16 +55,71 @@ export const sourceTypeSchema = z.enum([
 
 export type SourceType = z.infer<typeof sourceTypeSchema>;
 
-/** sourceTypeImplemented gates the wizard Source step on GS-2 scope: public
- * git and the connected-provider flows. git_private waits for GS-4 and the
- * container sources for GS-7..GS-9. */
+/** sourceTypeImplemented gates the wizard Source step on scope: public
+ * git, the connected-provider flows and pasted Dockerfiles (GS-7).
+ * git_private waits for GS-4 and the remaining container sources for
+ * GS-8..GS-9. */
 export function sourceTypeImplemented(value: string): boolean {
   return (
     value === "git_public" ||
     value === "github_app" ||
-    value === "gitlab_app"
+    value === "gitlab_app" ||
+    value === "dockerfile"
   );
 }
+
+/**
+ * maxDockerfileBytes caps pasted Dockerfile text at 64 KiB, matching
+ * MaxDockerfileBytes in internal/deploy/dockerfile.go.
+ */
+export const maxDockerfileBytes = 64 * 1024;
+
+/**
+ * dockerfileContentSchema replaces the GS-7 creation gate: the trimmed value
+ * must be non-empty with a FROM instruction (comments and blank lines
+ * ignored, case-insensitive first word), while the size cap applies to the
+ * raw bytes, exactly like the server's len() check — trailing whitespace
+ * counts. Bytes are measured with TextEncoder so multi-byte text matches;
+ * deeper validation happens on the node at build time.
+ * Gate-only: consumers read `.success`.
+ */
+export const dockerfileContentSchema = z
+  .string()
+  .refine((value) => value.trim().length > 0)
+  .refine((value) => new TextEncoder().encode(value).length <= maxDockerfileBytes)
+  .refine((value) =>
+    value.split("\n").some((line) => {
+      const trimmed = line.trim();
+      if (trimmed === "" || trimmed.startsWith("#")) {
+        return false;
+      }
+      const [first] = trimmed.split(/\s+/);
+      return first?.toUpperCase() === "FROM";
+    }),
+  );
+
+/** buildArgKeySchema replaces the key check for one --build-arg pair: the
+ * same container-variable shape the API enforces (no spaces, '=' or NUL,
+ * 128 chars max). Gate-only. */
+export const buildArgKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .refine((value) => !/[= \t\r\n\0]/.test(value));
+
+/**
+ * maxBuildArgValueBytes caps one --build-arg value at 4 KiB, matching
+ * MaxBuildArgValueBytes in internal/deploy/dockerfile.go.
+ */
+export const maxBuildArgValueBytes = 4 * 1024;
+
+/** buildArgValueSchema bounds one --build-arg value in bytes (TextEncoder,
+ * like the server) and rejects NUL, which Postgres jsonb refuses. Gate-only. */
+export const buildArgValueSchema = z
+  .string()
+  .refine((value) => new TextEncoder().encode(value).length <= maxBuildArgValueBytes)
+  .refine((value) => !value.includes("\0"));
 
 /** cloneUrlSchema replaces cloneUrl.trim() !== "". Gate-only. */
 export const cloneUrlSchema = z.string().trim().min(1);

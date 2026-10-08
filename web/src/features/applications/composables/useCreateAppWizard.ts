@@ -25,7 +25,10 @@ import {
 import {
   appNameSchema,
   branchSchema,
+  buildArgKeySchema,
+  buildArgValueSchema,
   cloneUrlSchema,
+  dockerfileContentSchema,
   hostPortSchema,
   providerSchema,
   publicCloneUrlSchema,
@@ -37,6 +40,7 @@ import {
   type SourceType,
 } from "@/features/applications/schemas/applications";
 import { portSchema } from "@/shared/validation/primitives";
+import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
 
 export interface WizardForm {
   /** GS-2 source model: which fetcher the orchestrator uses. */
@@ -45,6 +49,10 @@ export interface WizardForm {
   publicCloneUrl: string;
   repoFullName: string;
   cloneUrl: string;
+  /** Pasted Dockerfile text for the dockerfile source type (GS-7). */
+  dockerfileContent: string;
+  /** Optional --build-arg pairs for the dockerfile source type. */
+  buildArgs: BuildArgRow[];
   branch: string;
   name: string;
   buildPack: BuildPack;
@@ -95,6 +103,35 @@ export const BUILD_PACKS: BuildPackOption[] = [
     hint: "Builds a static directory and serves it via Traefik. No process runs.",
   },
 ];
+
+/** buildArgsValid gates --build-arg drafts: named rows need a valid key and
+ * a bounded value; nameless rows are dropped on submit like env rows. */
+export function buildArgsValid(rows: BuildArgRow[]): boolean {
+  if (rows.length > 64) {
+    return false;
+  }
+  return rows
+    .filter((row) => row.key.trim() !== "" || row.value !== "")
+    .every(
+      (row) =>
+        buildArgKeySchema.safeParse(row.key).success &&
+        buildArgValueSchema.safeParse(row.value).success,
+    );
+}
+
+/** buildArgsPayload drops nameless draft rows for the create payload. */
+export function buildArgsPayload(
+  rows: BuildArgRow[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (key !== "") {
+      out[key] = row.value;
+    }
+  }
+  return out;
+}
 
 /** WizardEvents mirrors the shell's emits for the composable. */
 export interface WizardEvents {
@@ -211,6 +248,8 @@ export function useCreateAppWizard(
     publicCloneUrl: "",
     repoFullName: "",
     cloneUrl: "",
+    dockerfileContent: "",
+    buildArgs: [],
     branch: "main",
     name: "",
     buildPack: "",
@@ -256,13 +295,16 @@ export function useCreateAppWizard(
    * come from the installation, not the OAuth provider list. */
   const isGitHubAppFlow = computed<boolean>(() => form.sourceType === "github_app");
 
+  /** isDockerfile covers the pasted-Dockerfile type (no repository, GS-7). */
+  const isDockerfile = computed<boolean>(() => form.sourceType === "dockerfile");
+
   /** sourceTypeOptions renders the GS-2 type selector in the current locale. */
   const sourceTypeOptions = computed<Array<{ label: string; value: string; disabled?: boolean }>>(() => [
     { label: tr("applications.wizard.sourceGitPublic"), value: "git_public" },
     { label: tr("applications.wizard.sourceGitPrivate"), value: "git_private", disabled: true },
     { label: tr("applications.wizard.sourceGithubApp"), value: "github_app" },
     { label: tr("applications.wizard.sourceGitlabApp"), value: "gitlab_app" },
-    { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile", disabled: true },
+    { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile" },
     { label: tr("applications.wizard.sourceCompose"), value: "compose", disabled: true },
     { label: tr("applications.wizard.sourceImage"), value: "image", disabled: true },
   ]);
@@ -323,7 +365,7 @@ export function useCreateAppWizard(
     if (!sourceTypeSchema.safeParse(form.sourceType).success) {
       return false;
     }
-    // Unimplemented types (git_private until GS-4, containers until GS-7..9)
+    // Unimplemented types (git_private until GS-4, containers until GS-8..9)
     // render a not-yet-available placeholder, so the step cannot continue.
     if (!sourceTypeImplemented(form.sourceType)) {
       return false;
@@ -333,6 +375,16 @@ export function useCreateAppWizard(
         // Keyless by definition: only the anonymous http(s)/git schemes pass,
         // so an SSH URL can never reach a clone on ambient credentials.
         if (!publicCloneUrlSchema.safeParse(form.publicCloneUrl).success) {
+          return false;
+        }
+        break;
+      case "dockerfile":
+        // No repository: pasted text (FROM required, 64 KiB cap) plus
+        // optional build args with non-empty keys.
+        if (!dockerfileContentSchema.safeParse(form.dockerfileContent).success) {
+          return false;
+        }
+        if (!buildArgsValid(form.buildArgs)) {
           return false;
         }
         break;
@@ -354,9 +406,11 @@ export function useCreateAppWizard(
       }
     }
     // A public repo with no branch pins the remote default at clone time
-    // (ls-remote); provider flows keep the required prefilled branch.
+    // (ls-remote); provider flows keep the required prefilled branch. A
+    // Dockerfile source has no branch at all (the field is hidden).
     const branchOk =
-      form.sourceType === "git_public" && form.branch.trim() === ""
+      form.sourceType === "dockerfile" ||
+      (form.sourceType === "git_public" && form.branch.trim() === "")
         ? true
         : branchSchema.safeParse(form.branch).success;
     return branchOk && appNameSchema.safeParse(form.name).success;
@@ -400,12 +454,50 @@ export function useCreateAppWizard(
     }
   });
 
-  const buildPackLabel = computed<string>(
-    () => buildPacks.value.find((item) => item.value === form.buildPack)?.label ?? tr("applications.wizard.packAuto"),
+  const buildPackLabel = computed<string>(() => {
+    // A Dockerfile source always builds with the Dockerfile engine; the
+    // review names the source instead of the hidden auto-detect choice.
+    if (form.sourceType === "dockerfile") {
+      return tr("applications.wizard.sourceDockerfile");
+    }
+    return buildPacks.value.find((item) => item.value === form.buildPack)?.label ?? tr("applications.wizard.packAuto");
+  });
+
+  /** buildPackSkipped hides the build-pack step for Dockerfile sources. */
+  const buildPackSkipped = computed<boolean>(() => form.sourceType === "dockerfile");
+
+  /** nextStep advances, jumping over the hidden build-pack step. */
+  function nextStep(): void {
+    step.value += 1;
+    if (step.value === 1 && buildPackSkipped.value) {
+      step.value += 1;
+    }
+  }
+
+  /** prevStep goes back, jumping over the hidden build-pack step. */
+  function prevStep(): void {
+    step.value -= 1;
+    if (step.value === 1 && buildPackSkipped.value) {
+      step.value -= 1;
+    }
+  }
+
+  /** stepPosition renders the 1-based position among visited steps. */
+  const stepPosition = computed<number>(() =>
+    buildPackSkipped.value && step.value > 1 ? step.value : step.value + 1,
   );
+
+  /** stepTotal renders the visited step count (4 without build pack). */
+  const stepTotal = computed<number>(() => (buildPackSkipped.value ? 4 : 5));
 
   /** reviewSource renders the repo headline on the review step. */
   const reviewSource = computed<string>(() => {
+    if (form.sourceType === "dockerfile") {
+      const count = Object.keys(buildArgsPayload(form.buildArgs)).length;
+      return String(
+        i18n.global.t("applications.wizard.reviewDockerfileArgs", { count }, count),
+      );
+    }
     const repo =
       form.sourceType === "git_public" ? form.publicCloneUrl.trim() : form.repoFullName;
     const branch = form.branch.trim();
@@ -459,6 +551,8 @@ export function useCreateAppWizard(
       form.publicCloneUrl = "";
       form.repoFullName = "";
       form.cloneUrl = "";
+      form.dockerfileContent = "";
+      form.buildArgs = [];
       noSshUrl.value = false;
       if (form.sourceType === "github_app") {
         void githubAppStore.fetchApps().catch(() => undefined);
@@ -533,7 +627,9 @@ export function useCreateAppWizard(
     const source =
       form.sourceType === "git_public"
         ? { repo: form.publicCloneUrl.trim(), cloneUrl: form.publicCloneUrl.trim() }
-        : { repo: form.repoFullName, cloneUrl: form.cloneUrl };
+        : form.sourceType === "dockerfile"
+          ? { repo: "", cloneUrl: "" }
+          : { repo: form.repoFullName, cloneUrl: form.cloneUrl };
     return {
       name: form.name.trim(),
       environment_id: form.environmentId,
@@ -545,8 +641,12 @@ export function useCreateAppWizard(
       // clone takes the installation-token path; every other source stays
       // unlinked on the legacy path.
       github_app_id: isGitHubAppFlow.value ? form.providerId : undefined,
+      dockerfile_content: form.sourceType === "dockerfile" ? form.dockerfileContent : undefined,
+      build_args: form.sourceType === "dockerfile" ? buildArgsPayload(form.buildArgs) : undefined,
       branch: form.branch.trim(),
-      build_pack: form.buildPack,
+      // A Dockerfile source always builds with the Dockerfile engine; the
+      // build-pack choice is hidden and never sent.
+      build_pack: form.sourceType === "dockerfile" ? "" : form.buildPack,
       base_domain: form.baseDomain.trim(),
       port: form.port ?? 3000,
       host_port: form.hostPort ?? 0,
@@ -629,6 +729,8 @@ export function useCreateAppWizard(
     form.publicCloneUrl = "";
     form.repoFullName = "";
     form.cloneUrl = "";
+    form.dockerfileContent = "";
+    form.buildArgs = [];
     form.branch = "main";
     form.name = "";
     form.buildPack = "";
@@ -664,6 +766,7 @@ export function useCreateAppWizard(
     isPublicRepo,
     isProviderFlow,
     isGitHubAppFlow,
+    isDockerfile,
     repoOptions,
     branchOptions,
     reposTruncated,
@@ -675,6 +778,11 @@ export function useCreateAppWizard(
     droppedEnvRows,
     canContinue,
     buildPackLabel,
+    buildPackSkipped,
+    stepPosition,
+    stepTotal,
+    nextStep,
+    prevStep,
     reviewSource,
     buildPayload,
     loadRepos,

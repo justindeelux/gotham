@@ -514,6 +514,15 @@ func validateDeployTarget(app Application) error {
 	if !SourceTypeImplemented(app.SourceType) {
 		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
 	}
+	// Dockerfile applications carry no repository: the stored text is the
+	// build context, re-validated here so an edit that slipped past update
+	// validation still fails the deploy instead of the build.
+	if app.SourceType == SourceDockerfile {
+		if err := ValidateDockerfileContent(app.DockerfileContent); err != nil {
+			return err
+		}
+		return ValidateBuildArgs(app.BuildArgs)
+	}
 	if err := validateCloneURL(strings.TrimSpace(app.CloneURL)); err != nil {
 		return err
 	}

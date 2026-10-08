@@ -42,6 +42,8 @@ type Application struct {
 	EnvironmentID      pgtype.UUID        `json:"environment_id"`
 	SourceType         string             `json:"source_type"`
 	GithubAppID        pgtype.UUID        `json:"github_app_id"`
+	DockerfileContent  string             `json:"dockerfile_content"`
+	BuildArgs          []byte             `json:"build_args"`
 }
 
 type ApplicationDeployKey struct {

@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Add resource · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* Page-local helpers — pg- prefix only, built from existing tokens. */
+  .pg-brand { width: 40px; height: 40px; border-radius: var(--radius-md); flex: 0 0 auto; }
+  .pg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-4); }
+  .pg-card-row { display: flex; align-items: center; gap: var(--space-3); }
+  @media (max-width: 560px) { .pg-grid { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body data-page="add-resource" data-nav="add-resource">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Managed servers"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head" data-od-id="add-head">
+          <div>
+            <p class="eyebrow">Operations · new resource</p>
+            <h1>Add resource</h1>
+            <p class="page-desc">Pick what to create. An application builds and deploys from source, a service deploys a one-click template, a database provisions a managed engine. Each card opens the existing create flow.</p>
+            <p class="small muted mt-2">Creating in <span class="fg-2">acme</span> · <span class="fg-2">production</span> — the wizards keep this scope.</p>
+          </div>
+        </div>
+
+        <!-- ── Application ─────────────────────────────────────────────── -->
+        <section aria-labelledby="add-app-title" data-od-id="add-group-application">
+          <div class="section-title">
+            <h2 id="add-app-title">Application</h2>
+            <span class="meta">wizard · git repository</span>
+          </div>
+          <div class="pg-grid">
+            <button class="tpl-card" type="button" data-open="app-wizard" data-od-id="add-application">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#5865f2"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">&lt;/&gt;</text></svg>
+                <span class="fg-2 bold">Application</span>
+              </span>
+              <span class="small muted">Build and deploy from a Git repository.</span>
+              <span class="tpl-meta"><span class="tag">source wizard</span></span>
+            </button>
+          </div>
+        </section>
+
+        <!-- ── Service ─────────────────────────────────────────────────── -->
+        <section aria-labelledby="add-svc-title" data-od-id="add-group-service">
+          <div class="section-title">
+            <h2 id="add-svc-title">Service</h2>
+            <span class="meta">source: <span class="mono">GET /api/v1/templates</span> · 4 templates</span>
+          </div>
+          <p class="page-desc mb-4">One card per template from the template catalog. Selecting a card opens the template deploy wizard with the template preselected.</p>
+          <div class="toolbar mb-4" data-od-id="add-service-filter">
+            <div class="search grow" style="max-width:320px">
+              <svg aria-hidden="true"><use href="#i-search"></use></svg>
+              <input type="search" placeholder="Filter services…" aria-label="Filter services" data-search="[data-tpl-card]" data-filter-empty="#svc-empty" />
+            </div>
+          </div>
+          <div class="pg-grid" role="group" aria-label="Service templates" data-od-id="add-service-grid">
+            <button class="tpl-card" type="button" data-tpl-card data-open="tpl-modal" data-template="wordpress" data-od-id="add-service-wordpress">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#21759b"/><text x="20" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">W</text></svg>
+                <span class="fg-2 bold">WordPress</span>
+              </span>
+              <span class="small muted">WordPress with a MySQL database, persistent named volumes and a routed domain.</span>
+              <span class="tpl-meta"><span class="tag">template</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-tpl-card data-open="tpl-modal" data-template="nextcloud" data-od-id="add-service-nextcloud">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#0082c9"/><text x="20" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">N</text></svg>
+                <span class="fg-2 bold">Nextcloud</span>
+              </span>
+              <span class="small muted">Nextcloud with PostgreSQL and Redis, persistent named volumes and a routed domain.</span>
+              <span class="tpl-meta"><span class="tag">template</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-tpl-card data-open="tpl-modal" data-template="n8n" data-od-id="add-service-n8n">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#ea4b71"/><text x="20" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">N</text></svg>
+                <span class="fg-2 bold">n8n</span>
+              </span>
+              <span class="small muted">n8n workflow automation with a persistent named volume and a routed domain.</span>
+              <span class="tpl-meta"><span class="tag">template</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-tpl-card data-open="tpl-modal" data-template="uptime-kuma" data-od-id="add-service-uptime-kuma">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#3f9e4d"/><text x="20" y="26" text-anchor="middle" font-size="16" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">U</text></svg>
+                <span class="fg-2 bold">Uptime Kuma</span>
+              </span>
+              <span class="small muted">Uptime Kuma monitoring with a persistent named volume and a routed domain.</span>
+              <span class="tpl-meta"><span class="tag">template</span></span>
+            </button>
+          </div>
+          <p class="small muted mt-3" id="svc-empty" hidden>No service matches this filter.</p>
+        </section>
+
+        <!-- ── Database ────────────────────────────────────────────────── -->
+        <section aria-labelledby="add-db-title" data-od-id="add-group-database">
+          <div class="section-title">
+            <h2 id="add-db-title">Database</h2>
+            <span class="meta">5 supported engines</span>
+          </div>
+          <p class="page-desc mb-4">One card per supported engine. Selecting a card opens the database wizard with the engine preselected.</p>
+          <div class="pg-grid" role="group" aria-label="Database engines" data-od-id="add-database-grid">
+            <button class="tpl-card" type="button" data-open="db-wizard" data-engine="postgres" data-od-id="add-database-postgres">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#336791"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">PG</text></svg>
+                <span class="fg-2 bold">PostgreSQL</span>
+              </span>
+              <span class="small muted">Reliable relational database for application data.</span>
+              <span class="tpl-meta"><span class="tag mono">postgres:16-alpine</span><span class="tag mono">:5432</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-open="db-wizard" data-engine="mysql" data-od-id="add-database-mysql">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#00758f"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">MY</text></svg>
+                <span class="fg-2 bold">MySQL</span>
+              </span>
+              <span class="small muted">Popular relational database for web workloads.</span>
+              <span class="tpl-meta"><span class="tag mono">mysql:8.4</span><span class="tag mono">:3306</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-open="db-wizard" data-engine="mariadb" data-od-id="add-database-mariadb">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#c0765a"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">MD</text></svg>
+                <span class="fg-2 bold">MariaDB</span>
+              </span>
+              <span class="small muted">Community MySQL fork with a compatible wire protocol.</span>
+              <span class="tpl-meta"><span class="tag mono">mariadb:11.4</span><span class="tag mono">:3306</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-open="db-wizard" data-engine="mongodb" data-od-id="add-database-mongodb">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#47a248"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">MG</text></svg>
+                <span class="fg-2 bold">MongoDB</span>
+              </span>
+              <span class="small muted">Document database for flexible JSON-like data.</span>
+              <span class="tpl-meta"><span class="tag mono">mongo:7.0</span><span class="tag mono">:27017</span></span>
+            </button>
+            <button class="tpl-card" type="button" data-open="db-wizard" data-engine="redis" data-od-id="add-database-redis">
+              <span class="pg-card-row">
+                <svg class="pg-brand" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="9" fill="#dc382d"/><text x="20" y="26" text-anchor="middle" font-size="14" font-weight="700" fill="#ffffff" font-family="Google Sans, Helvetica, Arial, sans-serif">RD</text></svg>
+                <span class="fg-2 bold">Redis</span>
+              </span>
+              <span class="small muted">In-memory cache and queue with optional persistence.</span>
+              <span class="tpl-meta"><span class="tag mono">redis:7.2-alpine</span><span class="tag mono">:6379</span></span>
+            </button>
+          </div>
+        </section>
+
+        <p class="small muted mt-6" data-od-id="add-keyboard-hint">Keyboard: Tab moves between cards, arrow keys move inside a group, Enter opens the create flow.</p>
+
+      </div>
+    </div>
+  </main>
+</div>
+<script src="assets/gotham-ui.js"></script>
+</body>
+</html>

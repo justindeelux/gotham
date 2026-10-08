@@ -66,6 +66,8 @@ interface WizardOptions {
    */
   projectId?: string | Ref<string>;
   environmentId?: string | Ref<string>;
+  /** Preselected engine (the Add-resource picker passes its card). */
+  engine?: string | Ref<string>;
 }
 
 /**
@@ -97,10 +99,10 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
   });
 
   const form = reactive<WizardForm>({
-    engine: "postgres",
+    engine: engineByValue(toValue(options.engine ?? "")).value,
     // Preselected so the Version select shows the engine default instead
     // of a blank value (the empty string only renders as a placeholder).
-    version: engineByValue("postgres").defaultVersion,
+    version: engineByValue(toValue(options.engine ?? "")).defaultVersion,
     projectId: toValue(options.projectId ?? ""),
     environmentId: toValue(options.environmentId ?? ""),
     serverId: "",
@@ -201,13 +203,19 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     submitting.value = false;
     submitIssue.value = null;
     created.value = null;
-    form.engine = "postgres";
-    form.version = engineByValue(form.engine).defaultVersion;
+    seedEngine();
     seedScope();
     form.serverId = "";
     form.name = "";
     form.exposePublic = false;
     form.publicPort = null;
+  }
+
+  /** seedEngine copies the preselected engine into the form. */
+  function seedEngine(): void {
+    const engine = engineByValue(toValue(options.engine ?? ""));
+    form.engine = engine.value;
+    form.version = engine.defaultVersion;
   }
 
   /** seedScope copies the live route scope into the form. */
@@ -279,6 +287,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     (visible) => {
       if (visible) {
         seedScope();
+        seedEngine();
         void serversStore.fetchServers().catch(() => undefined);
       } else {
         resetWizard();

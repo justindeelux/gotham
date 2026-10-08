@@ -62,6 +62,7 @@ const en = {
     items: {
       dashboard: "Dashboard",
       projects: "Projects",
+      addResource: "Add resource",
       files: "File manager",
       templates: "Template library",
       servers: "Servers",
@@ -107,6 +108,7 @@ const en = {
     domains: "Domains & SSL",
     serviceDetail: "Service detail",
     templates: "Template library",
+    addResource: "Add resource",
     teams: "Teams",
     notifications: "Notification channels",
     profile: "Profile",

@@ -118,7 +118,13 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		HostPort:      in.HostPort,
 		ServerID:      in.ServerID,
 	}
-	if app.Branch == "" {
+	// An empty branch stays empty for public-git sources: the clone resolves
+	// the remote default via ls-remote (GS-3) instead of guessing "main".
+	// The branch column is NOT NULL DEFAULT 'main', which only fills rows
+	// that omit the column; storing '' explicitly is allowed and round-trips
+	// unchanged. Provider flows keep the "main" fallback (their wizard
+	// always prefills a branch, and empty would break push-branch matching).
+	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic {
 		app.Branch = defaultBranch
 	}
 	if err := validateApplication(app, true); err != nil {
@@ -320,7 +326,10 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		}
 		app.ServerID = *in.ServerID
 	}
-	if app.Branch == "" {
+	// Clearing the branch restores ls-remote default resolution for
+	// public-git sources (see the create path); provider flows fall back to
+	// "main" so push-branch matching keeps working.
+	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic {
 		app.Branch = defaultBranch
 	}
 	// Legacy rows may predate normalization: normalize the resulting value so

@@ -877,15 +877,18 @@ func wireStorages(storages []Storage) []storageRequest {
 // newApplicationResponse maps a domain application to its wire representation.
 func newApplicationResponse(application Application) applicationResponse {
 	response := applicationResponse{
-		ID:                 application.ID.String(),
-		Name:               application.Name,
-		EnvironmentID:      application.EnvironmentID.String(),
-		EnvironmentName:    application.EnvironmentName,
-		ProjectID:          application.ProjectID.String(),
-		ProjectName:        application.ProjectName,
-		Provider:           application.Provider,
-		Repo:               application.Repo,
-		CloneURL:           application.CloneURL,
+		ID:              application.ID.String(),
+		Name:            application.Name,
+		EnvironmentID:   application.EnvironmentID.String(),
+		EnvironmentName: application.EnvironmentName,
+		ProjectID:       application.ProjectID.String(),
+		ProjectName:     application.ProjectName,
+		Provider:        application.Provider,
+		Repo:            application.Repo,
+		// The clone URL is display data: strip any embedded credentials so a
+		// legacy token-bearing URL can never be echoed to API clients
+		// (creation validation already refuses userinfo on new rows).
+		CloneURL:           RedactCloneURL(application.CloneURL),
 		SourceType:         application.SourceType,
 		Branch:             application.Branch,
 		BuildPack:          application.BuildPack,

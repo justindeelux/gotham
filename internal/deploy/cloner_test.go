@@ -1024,8 +1024,8 @@ func TestRedactCloneURLAndError(t *testing.T) {
 		{"https://user:pa/ss@host/repo.git", "https://***@host/repo.git", []string{"pa/ss"}},
 	}
 	for _, tc := range cases {
-		if got := redactCloneURL(tc.in); got != tc.want {
-			t.Errorf("redactCloneURL(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := RedactCloneURL(tc.in); got != tc.want {
+			t.Errorf("RedactCloneURL(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 		got := redactCloneError("fatal: could not read from '" + tc.in + "'")
 		for _, leak := range tc.notLeaks {

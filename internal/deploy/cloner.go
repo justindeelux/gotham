@@ -73,12 +73,12 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	if err != nil {
 		return err
 	}
-	if privatePEM == "" && isScpLikeCloneURL(url) {
+	if privatePEM == "" && isSSHTransportURL(url) {
 		// A keyless clone runs ssh with the control plane's ambient
 		// identity: refuse, so an SSH URL on a credential-less source is a
 		// clear validation error instead of an authentication surprise.
 		return fmt.Errorf("%w: SSH clone URL %q needs a deploy key: use a public http(s) or git URL, or a private-git source",
-			ErrValidation, redactCloneURL(url))
+			ErrValidation, RedactCloneURL(url))
 	}
 	if privatePEM != "" {
 		// A deploy key is an SSH credential: over http(s) it would
@@ -135,7 +135,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	}
 
 	if log != nil {
-		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, redactCloneURL(url))
+		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, RedactCloneURL(url))
 		if privatePEM != "" {
 			line += " (using the application deploy key)"
 		}
@@ -378,15 +378,15 @@ func tail(s string, n int) string {
 	return "…" + s[len(s)-n:]
 }
 
-// redactCloneURL removes the userinfo from a clone URL before it is logged:
-// an operator-supplied URL may carry a token
+// RedactCloneURL removes the userinfo from a clone URL before it is logged
+// or returned to API clients: an operator-supplied URL may carry a token
 // (https://x-access-token:ghp_…@host/repo) and the realtime deploy log is
 // visible to the application's team. It never returns a credential-bearing
 // string raw: a URL url.Parse rejects falls back to the regex redaction, and a
 // scp-like git@host:path (no userinfo to strip) is returned unchanged. The one
 // bound is whitespace, which cannot be part of a userinfo a git/curl client
 // could use (see userinfoPattern).
-func redactCloneURL(raw string) string {
+func RedactCloneURL(raw string) string {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		// An unparseable URL can still be logged verbatim by callers, so

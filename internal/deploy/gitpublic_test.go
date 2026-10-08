@@ -38,6 +38,14 @@ func TestValidatePublicGitURL(t *testing.T) {
 		{"option injection", "--upload-pack=touch /tmp/pwn", false, "unsupported clone URL"},
 		{"local path", "/srv/fixtures/demo", false, "local clone sources are disabled"},
 		{"file URL", "file:///srv/fixtures/demo", false, "local clone sources are disabled"},
+		{"embedded token", "https://user:ghp_SECRET@github.com/acme/demo.git", false, "must not embed credentials"},
+		{"bare username", "https://token@github.com/acme/demo.git", false, "must not embed credentials"},
+		{"empty host", "https://", false, "no host"},
+		{"hostless path", "https:///acme/demo.git", false, "no host"},
+		{"space in path", "https://host/a b.git", false, "whitespace"},
+		{"newline smuggle", "https://h/x\n--upload-pack=touch", false, "whitespace"},
+		{"git+ssh scheme", "git+ssh://host/acme/demo.git", false, "unsupported clone URL scheme"},
+		{"ext scheme", "ext::sh -c id", false, "unsupported clone URL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,10 +80,10 @@ func TestValidatePublicGitURLDevLocal(t *testing.T) {
 	}
 }
 
-// TestIsScpLikeCloneURL pins the deploy-time SSH detector: ssh:// and both
+// TestIsSSHTransportURL pins the deploy-time SSH detector: ssh:// and both
 // scp spellings refuse a keyless clone, while public schemes and local
 // fixtures pass through.
-func TestIsScpLikeCloneURL(t *testing.T) {
+func TestIsSSHTransportURL(t *testing.T) {
 	for url, want := range map[string]bool{
 		"ssh://git@host/acme/demo.git": true,
 		"SSH://git@host/acme/demo.git": true,
@@ -88,8 +96,8 @@ func TestIsScpLikeCloneURL(t *testing.T) {
 		"file:///srv/fixtures/demo":    false,
 		"--upload-pack=touch /tmp/pwn": false,
 	} {
-		if got := isScpLikeCloneURL(url); got != want {
-			t.Errorf("isScpLikeCloneURL(%q) = %v, want %v", url, got, want)
+		if got := isSSHTransportURL(url); got != want {
+			t.Errorf("isSSHTransportURL(%q) = %v, want %v", url, got, want)
 		}
 	}
 }
@@ -144,7 +152,7 @@ func TestDefaultBranchForLsRemote(t *testing.T) {
 }
 
 // TestDefaultBranchForFailure pins the actionable error: an unreachable host
-// fails the resolution with the hint, wrapped for the deploy log.
+// fails the resolution with the quoted detail followed by the hint.
 func TestDefaultBranchForFailure(t *testing.T) {
 	run := func(context.Context, []string, []string) ([]byte, error) {
 		return []byte("fatal: Could not resolve host: git.example"), errors.New("exit status 128")
@@ -156,19 +164,32 @@ func TestDefaultBranchForFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "unreachable") {
 		t.Errorf("err = %v, want the unreachable hint", err)
 	}
+	// The hint trails the quoted git detail instead of leading it.
+	detailAt := strings.Index(err.Error(), "Could not resolve host")
+	hintAt := strings.Index(err.Error(), "unreachable")
+	if detailAt == -1 || hintAt == -1 || hintAt < detailAt {
+		t.Errorf("err = %v, want the detail quoted before the hint", err)
+	}
 }
 
-// TestClassifyGitFailure pins the three hint classes and the silent default.
+// TestClassifyGitFailure pins the hint classes against realistic git stderr:
+// a missing branch names the branch (not the repository), a tty-less 401
+// asks for credentials, and a port number never triggers the auth hint.
 func TestClassifyGitFailure(t *testing.T) {
 	cases := []struct {
 		output string
 		hint   string
 	}{
-		{"fatal: repository 'https://host/acme/demo.git/' not found", "not found"},
+		{"fatal: Remote branch foo not found in upstream origin", "branch not found"},
+		{"fatal: repository 'https://host/acme/demo.git/' not found", "repository not found"},
+		{"fatal: could not read Username for 'https://host/acme/demo.git': terminal prompts disabled", "authentication"},
 		{"fatal: Authentication failed for 'https://host/acme/demo.git/'", "authentication"},
-		{"fatal: Could not read from remote repository.", "authentication"},
+		{"fatal: could not read Username for 'http://127.0.0.1:18401/x.git': No such device or address", "authentication"},
+		{"fatal: unable to access 'https://host/x.git/': The requested URL returned error: 403", "authentication"},
 		{"fatal: unable to access 'https://host/x.git/': Could not resolve host: host", "unreachable"},
+		{"fatal: unable to access 'http://127.0.0.1:18401/x.git/': Failed to connect: Connection refused", "unreachable"},
 		{"ssh: connect to host host port 22: Connection refused", "unreachable"},
+		{"fatal: Could not read from remote repository.", "authentication"},
 		{"some new git message", ""},
 	}
 	for _, tc := range cases {
@@ -317,5 +338,138 @@ func TestCloneResolvesNonMainDefault(t *testing.T) {
 	}
 	if joined := strings.Join(lines, "\n"); !strings.Contains(joined, "--branch trunk") {
 		t.Errorf("log = %q, want the renamed default branch", joined)
+	}
+}
+
+// TestCreateApplicationKeepsEmptyBranchForPublicGit pins the GS-3 fix-round-1
+// rule end to end at the service boundary: a git_public application created
+// with no branch stores "", so the deploy clone resolves the remote default
+// via ls-remote. Provider flows keep the "main" fallback.
+func TestCreateApplicationKeepsEmptyBranchForPublicGit(t *testing.T) {
+	t.Run("public git keeps the empty branch", func(t *testing.T) {
+		repo := &fakeRepository{}
+		svc := newTestService(t, repo)
+		in := validCreateInput(uuid.New())
+		in.SourceType = SourceGitPublic
+		in.Provider = ""
+		in.Repo = "https://github.com/acme/demo.git"
+		in.CloneURL = "https://github.com/acme/demo.git"
+		in.Branch = ""
+		created, err := svc.CreateApplication(context.Background(), uuid.New(), in)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if created.Branch != "" {
+			t.Errorf("branch = %q, want it kept empty for ls-remote resolution", created.Branch)
+		}
+	})
+
+	t.Run("provider flow still defaults to main", func(t *testing.T) {
+		repo := &fakeRepository{}
+		svc := newTestService(t, repo)
+		in := validCreateInput(uuid.New())
+		in.SourceType = SourceGitHubApp
+		in.Provider = "github"
+		in.Branch = ""
+		created, err := svc.CreateApplication(context.Background(), uuid.New(), in)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if created.Branch != defaultBranch {
+			t.Errorf("branch = %q, want the %q fallback", created.Branch, defaultBranch)
+		}
+	})
+}
+
+// TestUpdateApplicationKeepsEmptyBranchForPublicGit pins the update half:
+// clearing the branch restores ls-remote resolution for public-git sources.
+func TestUpdateApplicationKeepsEmptyBranchForPublicGit(t *testing.T) {
+	empty := ""
+	newPublicApp := func() Application {
+		app := testApplication(uuid.New())
+		app.SourceType = SourceGitPublic
+		app.Provider = ""
+		app.CloneURL = "https://github.com/acme/demo.git"
+		app.Branch = "main"
+		return app
+	}
+
+	t.Run("public git clears to empty", func(t *testing.T) {
+		app := newPublicApp()
+		repo := &fakeRepository{app: app}
+		svc := newTestService(t, repo)
+		updated, err := svc.UpdateApplication(context.Background(), app.UserID, app.ID,
+			UpdateApplicationInput{Branch: &empty})
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		if updated.Branch != "" {
+			t.Errorf("branch = %q, want it cleared for ls-remote resolution", updated.Branch)
+		}
+	})
+
+	t.Run("provider flow falls back to main", func(t *testing.T) {
+		app := testApplication(uuid.New()) // legacy empty type, github provider
+		repo := &fakeRepository{app: app}
+		svc := newTestService(t, repo)
+		updated, err := svc.UpdateApplication(context.Background(), app.UserID, app.ID,
+			UpdateApplicationInput{Branch: &empty})
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		if updated.Branch != defaultBranch {
+			t.Errorf("branch = %q, want the %q fallback", updated.Branch, defaultBranch)
+		}
+	})
+}
+
+// TestCloneSourceResolvesMasterDefault is the finding-1 regression at the
+// deploy fetch step: a stored git_public application with an empty branch
+// clones the fixture's non-main default (master), not a guessed "main".
+func TestCloneSourceResolvesMasterDefault(t *testing.T) {
+	t.Setenv(devLocalCloneEnv, "true")
+	origin := seedGitFixture(t)
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git binary is not available")
+	}
+	cmd := exec.Command(git, "-C", origin, "branch", "-M", "master")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rename fixture branch: %v\n%s", err, out)
+	}
+
+	app := testApplication(uuid.New())
+	app.SourceType = SourceGitPublic
+	app.Provider = ""
+	app.CloneURL = origin
+	app.Branch = ""
+	dir := filepath.Join(t.TempDir(), "repo")
+
+	var lines []string
+	o := newTestOrchestrator(Config{Source: gitSource{}})
+	if err := o.cloneSource(context.Background(), app, dir, func(line string) {
+		lines = append(lines, line)
+	}); err != nil {
+		t.Fatalf("cloneSource: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
+		t.Errorf("cloned tree has no Dockerfile: %v", err)
+	}
+	if joined := strings.Join(lines, "\n"); !strings.Contains(joined, "--branch master") {
+		t.Errorf("log = %q, want the master default", joined)
+	}
+}
+
+// TestApplicationResponseRedactsCredentials pins the API echo guard: a
+// legacy token-bearing clone URL is returned without its userinfo.
+func TestApplicationResponseRedactsCredentials(t *testing.T) {
+	app := testApplication(uuid.New())
+	app.CloneURL = "https://user:ghp_SECRET@github.com/acme/demo.git"
+	got := newApplicationResponse(app)
+	if strings.Contains(got.CloneURL, "ghp_SECRET") || strings.Contains(got.CloneURL, "user@") {
+		t.Errorf("clone_url = %q, want the credentials stripped", got.CloneURL)
+	}
+	if got.CloneURL != "https://github.com/acme/demo.git" {
+		t.Errorf("clone_url = %q, want the clean public URL", got.CloneURL)
 	}
 }

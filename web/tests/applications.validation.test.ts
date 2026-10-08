@@ -12,7 +12,7 @@ import {
   hasEnvKeyWarnings,
   isRecommendedEnvKey,
 } from "@/features/applications/schemas/env";
-import { hostDomainSchema } from "@/features/applications/schemas/applications";
+import { hostDomainSchema, isPublicGitUrl } from "@/features/applications/schemas/applications";
 import { isValidDomain } from "@/features/applications/composables/useApplicationDomain";
 import { useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
@@ -112,6 +112,8 @@ describe("wizard gates match recorded outcomes", () => {
       { name: "empty", patch: {}, sourceValid: false },
       { name: "public-valid", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: true },
       { name: "public-git-scheme", patch: {"sourceType": "git_public", "publicCloneUrl": "git://git.internal/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: true },
+      { name: "public-token-url", patch: {"sourceType": "git_public", "publicCloneUrl": "https://user:tok@github.com/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: false },
+      { name: "public-no-host", patch: {"sourceType": "git_public", "publicCloneUrl": "https:///o/r.git", "branch": "main", "name": "storefront"}, sourceValid: false },
       { name: "public-blank-url", patch: {"sourceType": "git_public", "publicCloneUrl": "   ", "branch": "main", "name": "storefront"}, sourceValid: false },
       { name: "public-ssh-url", patch: {"sourceType": "git_public", "publicCloneUrl": "ssh://git@h/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: false },
       { name: "public-scp-url", patch: {"sourceType": "git_public", "publicCloneUrl": "git@h:o/r.git", "branch": "main", "name": "storefront"}, sourceValid: false },
@@ -284,5 +286,40 @@ describe("wizard create payload carries the source type", () => {
     expect(w.reviewSource.value).toBe("https://github.com/o/r.git · (default branch)");
     expect(w.buildPayload()).toMatchObject({ branch: "" });
     wrapper.unmount();
+  });
+});
+
+describe("isPublicGitUrl mirrors the backend allow-list", () => {
+  it("accepts only credential-free http(s)/git URLs with a host", () => {
+    const valid = [
+      "https://github.com/o/r.git",
+      "http://git.internal/o/r.git",
+      "git://git.internal/o/r.git",
+      "HTTPS://github.com/o/r.git",
+      "  https://github.com/o/r.git  ",
+    ];
+    for (const url of valid) {
+      expect({ url, actual: isPublicGitUrl(url) }).toEqual({ url, actual: true });
+    }
+    const invalid = [
+      "",
+      "   ",
+      "ssh://git@h/o/r.git",
+      "git@h:o/r.git",
+      "deploy@h:o/r.git",
+      "ftp://h/o/r.git",
+      "demo",
+      "--upload-pack=touch /tmp/pwn",
+      "/srv/fixtures/demo",
+      "file:///srv/fixtures/demo",
+      "https://user:tok@github.com/o/r.git",
+      "https://tok@github.com/o/r.git",
+      "https://",
+      "https:///o/r.git",
+      "https://host/a b.git",
+    ];
+    for (const url of invalid) {
+      expect({ url, actual: isPublicGitUrl(url) }).toEqual({ url, actual: false });
+    }
   });
 });

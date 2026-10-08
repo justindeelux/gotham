@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/deploy"
 	servicespkg "github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/teams"
 )
@@ -404,15 +405,17 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 			previewOf = base.String()
 		}
 		applications = append(applications, environmentResourceApplication{
-			ID:                 application.ID.String(),
-			Name:               application.Name,
-			EnvironmentID:      application.EnvironmentID.String(),
-			EnvironmentName:    application.EnvironmentName,
-			ProjectID:          application.ProjectID.String(),
-			ProjectName:        application.ProjectName,
-			Provider:           application.Provider,
-			Repo:               application.Repo,
-			CloneURL:           application.CloneURL,
+			ID:              application.ID.String(),
+			Name:            application.Name,
+			EnvironmentID:   application.EnvironmentID.String(),
+			EnvironmentName: application.EnvironmentName,
+			ProjectID:       application.ProjectID.String(),
+			ProjectName:     application.ProjectName,
+			Provider:        application.Provider,
+			Repo:            application.Repo,
+			// Display data: never echo embedded credentials (see
+			// deploy.RedactCloneURL).
+			CloneURL:           deploy.RedactCloneURL(application.CloneURL),
 			Branch:             application.Branch,
 			BuildPack:          application.BuildPack,
 			BaseDomain:         application.BaseDomain,

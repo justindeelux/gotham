@@ -424,7 +424,9 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	}
 	// Branch names are case-sensitive: a push to "Main" must not consume the
 	// claim of an application watching "main" (the clone still checks out the
-	// configured branch, so the two are different targets).
+	// configured branch, so the two are different targets). An application
+	// with no stored branch (public-git default resolution, GS-3) matches
+	// nothing here: its deploys come from manual redeploys, not pushes.
 	if branch != target.Branch {
 		return Delivery{Status: StatusIgnored, Reason: "branch"}, nil
 	}

@@ -72,16 +72,46 @@ export const cloneUrlSchema = z.string().trim().min(1);
 /**
  * isPublicGitUrl mirrors ValidatePublicGitURL's production allow-list
  * (internal/deploy/gitpublic.go): a keyless public source takes http, https
- * or git. SSH transports need a deploy key, so the gate refuses them here
- * instead of letting the clone spend the ambient SSH identity.
+ * or git with a host and no embedded credentials. SSH transports need a
+ * deploy key, so the gate refuses them here instead of letting the clone
+ * spend the ambient SSH identity.
  */
 export function isPublicGitUrl(value: string): boolean {
   const trimmed = value.trim();
-  if (!trimmed.includes("://")) {
+  // Whitespace and control characters can smuggle a second argv token or a
+  // newline into logs; the loop form keeps the control range out of a regex
+  // literal (no-control-regex).
+  if (trimmed === "" || /\s/.test(trimmed)) {
     return false;
   }
-  const scheme = trimmed.slice(0, trimmed.indexOf("://")).toLowerCase();
-  return scheme === "http" || scheme === "https" || scheme === "git";
+  for (const ch of trimmed) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) {
+      return false;
+    }
+  }
+  // The authority follows "://" directly: a leading slash means there is no
+  // host (this also keeps WHATWG parsing aligned with Go's net/url, which
+  // reads "https:///o/r.git" as hostless).
+  const sep = trimmed.indexOf("://");
+  const afterScheme = sep < 0 ? "" : trimmed.slice(sep + 3);
+  if (afterScheme === "" || afterScheme.startsWith("/")) {
+    return false;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return false;
+  }
+  const scheme = parsed.protocol.toLowerCase();
+  if (scheme !== "http:" && scheme !== "https:" && scheme !== "git:") {
+    return false;
+  }
+  if (parsed.hostname === "") {
+    return false;
+  }
+  return parsed.username === "" && parsed.password === "";
 }
 
 /** publicCloneUrlSchema gates the git_public URL field. Gate-only. */

@@ -152,6 +152,8 @@ func TestOrchestratorImageRollbackUsesPinnedDigest(t *testing.T) {
 		RollbackFrom:  uuid.New(),
 	})
 	node := newMockNode()
+	// The node pulls the pinned bits, so it resolves the pinned digest.
+	node.digest = digest
 	o := newTestOrchestrator(Config{
 		Repository: repo,
 		Source:     &fakeSource{},
@@ -303,12 +305,12 @@ func TestServiceImageSourceValidation(t *testing.T) {
 			t.Errorf("username = %q, want it preserved across a password rotation", updated.RegistryUsername)
 		}
 		empty := ""
-		cleared, err := svc.UpdateApplication(ctx, user, created.ID, UpdateApplicationInput{RegistryPassword: &empty})
+		cleared, err := svc.UpdateApplication(ctx, user, created.ID, UpdateApplicationInput{RegistryUsername: &empty, RegistryPassword: &empty})
 		if err != nil {
 			t.Fatalf("clear: %v", err)
 		}
-		if cleared.RegistryPasswordCiphertext != "" {
-			t.Error("empty password did not clear the sealed credential")
+		if cleared.RegistryPasswordCiphertext != "" || cleared.RegistryUsername != "" {
+			t.Error("empty halves did not clear the stored credential")
 		}
 	})
 
@@ -437,5 +439,205 @@ func TestServiceImageDeployQueues(t *testing.T) {
 	}
 	if stored := listStored(t, repo, app.ID); len(stored) != 1 {
 		t.Errorf("queued %d deployments, want 1", len(stored))
+	}
+}
+
+func TestServiceImageCredentialBoundToRegistryHost(t *testing.T) {
+	newImageApp := func(t *testing.T) (*Service, Application, uuid.UUID) {
+		t.Helper()
+		repo := &fakeRepository{}
+		svc := newNodeService(t, repo, newMockNode())
+		ctx := context.Background()
+		user := uuid.New()
+		in := validCreateInput(uuid.New())
+		in.Provider, in.Repo, in.CloneURL = "", "", ""
+		in.SourceType, in.Branch, in.BuildPack = SourceImage, "", ""
+		in.ImageRef = "registry.example.com/team/app:1.2"
+		in.RegistryUsername, in.RegistryPassword = "robot", "s3cret-token"
+		created, err := svc.CreateApplication(ctx, user, in)
+		if err != nil {
+			t.Fatalf("CreateApplication: %v", err)
+		}
+		return svc, created, user
+	}
+
+	t.Run("moving the reference without a password is refused", func(t *testing.T) {
+		svc, created, user := newImageApp(t)
+		ref := "evil.example.net/x:1"
+		_, err := svc.UpdateApplication(context.Background(), user, created.ID, UpdateApplicationInput{ImageRef: &ref})
+		if err == nil {
+			t.Fatal("UpdateApplication(other host, no password) = nil; want error")
+		}
+		if !strings.Contains(err.Error(), "another registry host") {
+			t.Errorf("err = %v; want it to name the registry-host move", err)
+		}
+	})
+
+	t.Run("moving the reference with a fresh password is accepted", func(t *testing.T) {
+		svc, created, user := newImageApp(t)
+		ctx := context.Background()
+		ref, password := "evil.example.net/x:1", "new-token"
+		updated, err := svc.UpdateApplication(ctx, user, created.ID, UpdateApplicationInput{ImageRef: &ref, RegistryPassword: &password})
+		if err != nil {
+			t.Fatalf("UpdateApplication(other host, fresh password): %v", err)
+		}
+		if updated.ImageRef != ref {
+			t.Errorf("image ref = %q, want the moved reference", updated.ImageRef)
+		}
+		opened, err := providers.OpenSecret(testSecretKey, updated.RegistryPasswordCiphertext)
+		if err != nil || opened != "new-token" {
+			t.Errorf("credential = %q, %v; want the re-entered password", opened, err)
+		}
+	})
+
+	t.Run("moving within the same host keeps the credential", func(t *testing.T) {
+		svc, created, user := newImageApp(t)
+		ref := "registry.example.com/team/app:2.0"
+		updated, err := svc.UpdateApplication(context.Background(), user, created.ID, UpdateApplicationInput{ImageRef: &ref})
+		if err != nil {
+			t.Fatalf("UpdateApplication(same host): %v", err)
+		}
+		if updated.RegistryPasswordCiphertext == "" {
+			t.Error("same-host move dropped the credential")
+		}
+	})
+
+	t.Run("rollback to another host pulls without the credential", func(t *testing.T) {
+		app := testImageApplication(t, uuid.New())
+		// The application has since moved (credential re-entered for the new
+		// host); the rollback target is pinned to the old one.
+		app.ImageRef = "other.example.net/team/app:2.0"
+		repo := &fakeRepository{app: app}
+		digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		pinned := "registry.example.com/team/app@" + digest
+		dep := seedDeployment(t, repo, app, Deployment{
+			Kind:          KindRollback,
+			ImageTag:      "registry.example.com/team/app:1.2",
+			RegistryImage: pinned,
+			Digest:        digest,
+			RollbackFrom:  uuid.New(),
+		})
+		node := newMockNode()
+		// The node pulls the pinned bits, so it resolves the pinned digest.
+		node.digest = digest
+		pub := &recordPublisher{}
+		o := newTestOrchestrator(Config{
+			Repository: repo,
+			Source:     &fakeSource{},
+			Dial:       dialAlways(node),
+			Emitter:    NewEmitter(pub),
+		})
+		o.run(context.Background(), job{app: app, dep: dep})
+
+		stored, ok := repo.deployment(dep.ID)
+		if !ok {
+			t.Fatal("deployment row is gone")
+		}
+		if stored.State != StateRunning {
+			t.Errorf("state = %s, want running", stored.State)
+		}
+		if len(node.pullUsers) != 1 || node.pullUsers[0] != "" {
+			t.Errorf("pull usernames = %v, want no credential on a foreign host", node.pullUsers)
+		}
+		if len(node.pullPasswords) != 1 || node.pullPasswords[0] != "" {
+			t.Errorf("pull pulled a password to a foreign host")
+		}
+		var sawSkip bool
+		for _, event := range pub.payloads() {
+			if strings.Contains(event.Data, "another registry host") {
+				sawSkip = true
+			}
+			if strings.Contains(event.Data, "s3cret-token") {
+				t.Errorf("published event carries the credential: %q", event.Data)
+			}
+		}
+		if !sawSkip {
+			t.Error("no log line explains the skipped credential")
+		}
+	})
+}
+
+func TestServiceImageCredentialHalvesRejected(t *testing.T) {
+	base := func(serverID uuid.UUID) CreateApplicationInput {
+		in := validCreateInput(serverID)
+		in.Provider, in.Repo, in.CloneURL = "", "", ""
+		in.SourceType, in.Branch, in.BuildPack = SourceImage, "", ""
+		in.ImageRef = "registry.example.com/team/app:1.2"
+		return in
+	}
+	t.Run("create refuses a username without a password", func(t *testing.T) {
+		svc := newTestService(t, &fakeRepository{})
+		in := base(uuid.New())
+		in.RegistryUsername = "robot"
+		if _, err := svc.CreateApplication(context.Background(), uuid.New(), in); err == nil {
+			t.Error("CreateApplication(username only) = nil; want error")
+		}
+	})
+	t.Run("create refuses a password without a username", func(t *testing.T) {
+		svc := newTestService(t, &fakeRepository{})
+		in := base(uuid.New())
+		in.RegistryPassword = "s3cret-token"
+		if _, err := svc.CreateApplication(context.Background(), uuid.New(), in); err == nil {
+			t.Error("CreateApplication(password only) = nil; want error")
+		}
+	})
+	t.Run("create caps lengths", func(t *testing.T) {
+		svc := newTestService(t, &fakeRepository{})
+		in := base(uuid.New())
+		in.RegistryUsername, in.RegistryPassword = strings.Repeat("u", 256), "p"
+		if _, err := svc.CreateApplication(context.Background(), uuid.New(), in); err == nil {
+			t.Error("CreateApplication(long username) = nil; want error")
+		}
+		in.RegistryUsername, in.RegistryPassword = "robot", strings.Repeat("p", 4097)
+		if _, err := svc.CreateApplication(context.Background(), uuid.New(), in); err == nil {
+			t.Error("CreateApplication(long password) = nil; want error")
+		}
+	})
+	t.Run("update refuses a half credential", func(t *testing.T) {
+		repo := &fakeRepository{}
+		svc := newNodeService(t, repo, newMockNode())
+		ctx := context.Background()
+		user := uuid.New()
+		in := base(uuid.New())
+		created, err := svc.CreateApplication(ctx, user, in)
+		if err != nil {
+			t.Fatalf("CreateApplication: %v", err)
+		}
+		username := "robot"
+		if _, err := svc.UpdateApplication(ctx, user, created.ID, UpdateApplicationInput{RegistryUsername: &username}); err == nil {
+			t.Error("UpdateApplication(username without password) = nil; want error")
+		}
+		password := "s3cret-token"
+		if _, err := svc.UpdateApplication(ctx, user, created.ID, UpdateApplicationInput{RegistryPassword: &password}); err == nil {
+			t.Error("UpdateApplication(password without username) = nil; want error")
+		}
+	})
+}
+
+func TestOrchestratorImagePinMismatchFails(t *testing.T) {
+	app := testImageApplication(t, uuid.New())
+	digest := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	app.ImageRef = "registry.example.com/team/app@" + digest
+	repo := &fakeRepository{app: app}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+	node := newMockNode()
+	node.digest = "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+		Emitter:    NewEmitter(&recordPublisher{}),
+	})
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, ok := repo.deployment(dep.ID)
+	if !ok {
+		t.Fatal("deployment row is gone")
+	}
+	if stored.State != StateFailed {
+		t.Errorf("state = %s, want failed on a pin mismatch", stored.State)
+	}
+	if !strings.Contains(stored.Error, "does not match the pinned") {
+		t.Errorf("error = %q, want the pin mismatch", stored.Error)
 	}
 }

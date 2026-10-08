@@ -402,8 +402,15 @@ export function useCreateAppWizard(
         break;
       case "image":
         // Prebuilt reference with optional digest pinning and credential; no
-        // branch or build pack (the API rejects them for this type).
+        // branch or build pack (the API rejects them for this type). The
+        // credential is both-or-neither, like the server enforces.
         if (!imageRefSchema.safeParse(form.imageRef).success) {
+          return false;
+        }
+        if (
+          (form.registryUsername.trim() === "") !==
+          (form.registryPassword.trim() === "")
+        ) {
           return false;
         }
         break;

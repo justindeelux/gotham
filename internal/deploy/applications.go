@@ -151,6 +151,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		ImageRef:      strings.TrimSpace(in.ImageRef),
 		// The username is an identifier, not a secret, but it is equally
 		// never returned by the API or logged; the password is sealed below.
+		// Both are validated together: a half credential is refused.
 		RegistryUsername:  strings.TrimSpace(in.RegistryUsername),
 		BaseDomain:        proxy.NormalizeDomain(in.BaseDomain),
 		Port:              in.Port,
@@ -372,8 +373,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		app.Name = strings.TrimSpace(*in.Name)
 	}
 	// Image sources carry no branch or build pack; the reference and the
-	// private-registry credential are their only source fields. The
-	// credential halves rotate independently (empty clears), and neither
+	// private-registry credential are their only source fields. Neither
 	// half is ever returned by the API.
 	isImage := NormalizeSourceType(app.SourceType, app.Provider) == SourceImage
 	if in.ImageRef != nil || in.RegistryUsername != nil || in.RegistryPassword != nil {
@@ -394,21 +394,44 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		if err := ValidateImageReference(ref); err != nil {
 			return Application{}, err
 		}
+		// The credential is bound to the registry host it was entered for:
+		// moving the reference to another host without re-entering the
+		// password would send the stored secret to that host on the next
+		// pull, so the update is refused until the password is re-entered
+		// (or the credential is cleared explicitly in the same request).
+		if RegistryHost(app.ImageRef) != RegistryHost(ref) &&
+			app.RegistryPasswordCiphertext != "" && in.RegistryPassword == nil {
+			return Application{}, fmt.Errorf("%w: image reference moves to another registry host: re-enter the registry password or clear the credential",
+				ErrValidation)
+		}
 		app.ImageRef = ref
 	}
 	if in.RegistryUsername != nil {
 		app.RegistryUsername = strings.TrimSpace(*in.RegistryUsername)
+		if len(app.RegistryUsername) > maxRegistryUsernameLen {
+			return Application{}, fmt.Errorf("%w: registry username is too long", ErrValidation)
+		}
 	}
 	if in.RegistryPassword != nil {
-		if *in.RegistryPassword == "" {
+		password := strings.TrimSpace(*in.RegistryPassword)
+		if len(password) > maxRegistryPasswordLen {
+			return Application{}, fmt.Errorf("%w: registry password is too long", ErrValidation)
+		}
+		if password == "" {
 			app.RegistryPasswordCiphertext = ""
 		} else {
-			sealed, err := providers.SealSecret(s.secret, *in.RegistryPassword)
+			sealed, err := providers.SealSecret(s.secret, password)
 			if err != nil {
 				return Application{}, fmt.Errorf("deploy: seal registry credential: %w", err)
 			}
 			app.RegistryPasswordCiphertext = sealed
 		}
+	}
+	// The halves rotate independently, but the stored pair must stay whole:
+	// a username without a password (or the reverse) would pull anonymously
+	// while reporting a credential as configured.
+	if err := validateRegistryCredentialPair(app.RegistryUsername, app.RegistryPasswordCiphertext != ""); err != nil {
+		return Application{}, err
 	}
 	if in.Branch != nil {
 		app.Branch = strings.TrimSpace(*in.Branch)
@@ -1015,6 +1038,39 @@ func validateApplication(app Application, checkSource bool) error {
 		return err
 	}
 	return validatePort("host port", app.HostPort)
+}
+
+// Registry credential bounds: a username is an identifier, a password or
+// token is sealed at rest. Halves are refused on every write path, so a
+// stored credential is always a usable pair.
+const (
+	maxRegistryUsernameLen = 255
+	maxRegistryPasswordLen = 4096
+)
+
+// validateRegistryCredential checks a plaintext credential pair: both or
+// neither, within the length caps. The error never carries the values.
+func validateRegistryCredential(username, password string) error {
+	if err := validateRegistryCredentialPair(username, password != ""); err != nil {
+		return err
+	}
+	if len(username) > maxRegistryUsernameLen {
+		return fmt.Errorf("%w: registry username is too long", ErrValidation)
+	}
+	if len(password) > maxRegistryPasswordLen {
+		return fmt.Errorf("%w: registry password is too long", ErrValidation)
+	}
+	return nil
+}
+
+// validateRegistryCredentialPair refuses a half credential: a username
+// without a password would pull anonymously while the API reports a
+// credential as configured (and the reverse stores a secret no pull uses).
+func validateRegistryCredentialPair(username string, hasPassword bool) error {
+	if (username == "") != hasPassword {
+		return nil
+	}
+	return fmt.Errorf("%w: registry credential needs both a username and a password", ErrValidation)
 }
 
 // validateSource checks the per-type source fields on creation. The provider

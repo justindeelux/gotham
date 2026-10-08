@@ -99,7 +99,7 @@ async function handleClear(): Promise<void> {
 </script>
 
 <template>
-  <NCard :title="t('applications.image.title')" style="margin-top: 16px">
+  <NCard :title="t('applications.image.title')" class="image-panel">
     <NSpace vertical :size="12">
       <NFormItem :label="t('applications.image.ref')">
         <NInput v-model:value="imageRef" class="mono" />
@@ -107,7 +107,7 @@ async function handleClear(): Promise<void> {
       </NFormItem>
 
       <NFormItem :label="t('applications.image.credential')">
-        <span class="field-hint" style="margin-bottom: 8px">{{
+        <span class="field-hint field-hint--block">{{
           props.application.has_registry_credential
             ? t("applications.image.configured")
             : t("applications.image.unconfigured")
@@ -122,9 +122,9 @@ async function handleClear(): Promise<void> {
           v-model:value="password"
           type="password"
           show-password-on="click"
+          class="field-gap"
           :placeholder="t('applications.image.passwordPlaceholder')"
           :aria-label="t('applications.image.password')"
-          style="margin-top: 8px"
         />
         <span class="field-hint">{{ t("applications.image.credentialHint") }}</span>
       </NFormItem>
@@ -154,9 +154,21 @@ async function handleClear(): Promise<void> {
 </template>
 
 <style scoped>
+.image-panel {
+  margin-top: 16px;
+}
+
 .field-hint {
   font-size: var(--text-xs);
   color: var(--meta);
+}
+
+.field-hint--block {
+  margin-bottom: 8px;
+}
+
+.field-gap {
+  margin-top: 8px;
 }
 
 .mono {

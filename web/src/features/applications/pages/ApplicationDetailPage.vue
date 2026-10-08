@@ -91,7 +91,7 @@ const previewsTab = computed<string>(() =>
             @open-rollback="detail.openRollbackFor"
           />
           <ApplicationImagePanel
-            v-if="detail.application.value && detail.application.value.source_type === 'image'"
+            v-if="detail.application.value && detail.application.value.source_type === 'image' && detail.canWrite.value"
             :application="detail.application.value"
           />
         </NTabPane>

@@ -482,6 +482,12 @@ func (o *Orchestrator) push(ctx context.Context, st *runState) error {
 // digest is recorded on the deployment. The registry credential travels per
 // pull and is never persisted on the node; log lines and errors carry the
 // reference only, never the credential.
+//
+// The credential is bound to the registry host it was entered for (see the
+// update path): it is sent only when the pull reference is on the same host
+// as the application's current reference. A rollback to a release recorded
+// on another host pulls anonymously and says so, so the secret can never
+// follow a moved tag or an old release to a foreign registry.
 func (o *Orchestrator) pullImage(ctx context.Context, st *runState) error {
 	ref := strings.TrimSpace(st.app.ImageRef)
 	if st.dep.Kind == KindRollback {
@@ -490,18 +496,29 @@ func (o *Orchestrator) pullImage(ctx context.Context, st *runState) error {
 	if ref == "" {
 		return fmt.Errorf("%w: image source has no reference to pull", ErrValidation)
 	}
-	var password string
+	var username, password string
 	if st.app.RegistryPasswordCiphertext != "" {
-		opened, err := providers.OpenSecret(o.secret, st.app.RegistryPasswordCiphertext)
-		if err != nil {
-			return fmt.Errorf("%w: open registry credential: %v", ErrValidation, err)
+		pullHost, appHost := RegistryHost(ref), RegistryHost(st.app.ImageRef)
+		if pullHost != "" && pullHost == appHost {
+			opened, err := providers.OpenSecret(o.secret, st.app.RegistryPasswordCiphertext)
+			if err != nil {
+				return fmt.Errorf("%w: open registry credential: %v", ErrValidation, err)
+			}
+			username, password = st.app.RegistryUsername, opened
+		} else {
+			st.log("registry credential not sent: " + ref + " is on another registry host")
 		}
-		password = opened
 	}
 	st.log("pulling image " + ref)
-	digest, err := st.node.PullWithAuth(ctx, ref, st.app.RegistryUsername, password)
+	digest, err := st.node.PullWithAuth(ctx, ref, username, password)
 	if err != nil {
 		return err
+	}
+	// A pinned reference must resolve to its pin: the engine enforces the pin
+	// on pull, and this asserts the recorded digest agrees with it.
+	if parsed, parseErr := ParseImageReference(ref); parseErr == nil && parsed.Pinned() &&
+		digest != "" && !strings.EqualFold(digest, parsed.Digest) {
+		return fmt.Errorf("%w: pulled digest %s does not match the pinned %s", ErrValidation, digest, parsed.Digest)
 	}
 	if st.dep.Kind != KindRollback {
 		st.dep.ImageTag = ref
@@ -509,6 +526,10 @@ func (o *Orchestrator) pullImage(ctx context.Context, st *runState) error {
 	st.dep.RegistryImage = ref
 	if digest != "" {
 		st.dep.Digest = digest
+	} else {
+		// No digest came back: the deployment still runs the pulled tag, but
+		// a rollback of it would re-pull the moving tag, so the log says so.
+		st.log("image pulled without a recorded digest: rollback will re-pull the tag " + ref)
 	}
 	if _, err := o.repo.UpdateDeployment(ctx, st.dep); err != nil {
 		return fmt.Errorf("deploy: persist image reference: %w", err)

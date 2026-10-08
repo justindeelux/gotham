@@ -122,11 +122,16 @@ func newFakeDockerServer(t *testing.T) (*httptest.Server, *fakeDockerState) {
 		_, _ = w.Write([]byte(`{"status":"Download complete"}` + "\n"))
 	})
 
-	// Image inspect backing digest resolution after a pull.
+	// Image inspect backing digest resolution after a pull. The decoy entry
+	// proves the client records the digest of the pulled repository, not
+	// just the first RepoDigests entry.
 	mux.HandleFunc("/images/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, map[string]any{
-			"Id":          "sha256:deadbeef",
-			"RepoDigests": []string{inspectRepoDigest + "@" + inspectDigest},
+			"Id": "sha256:deadbeef",
+			"RepoDigests": []string{
+				"unrelated/other@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+				inspectRepoDigest + "@" + inspectDigest,
+			},
 		})
 	})
 
@@ -361,8 +366,8 @@ func TestDockerClientPullImageAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PullImage: %v", err)
 	}
-	if digest != inspectDigest {
-		t.Errorf("digest = %q; want %q", digest, inspectDigest)
+	if digest != "" {
+		t.Errorf("digest = %q; the fake engine reports no digest for this repository", digest)
 	}
 	auth := decodeRegistryAuth(t, state.snapshot().pullAuth)
 	if auth["username"] != "robot" || auth["password"] != "s3cret-token" {
@@ -370,6 +375,16 @@ func TestDockerClientPullImageAuth(t *testing.T) {
 	}
 	if auth["serveraddress"] != "registry.example.com" {
 		t.Errorf("serveraddress = %q; want the image registry host", auth["serveraddress"])
+	}
+
+	// The digest answered is the pulled repository's, not the first entry's:
+	// the fake lists an unrelated digest first.
+	digest, err = client.PullImage(context.Background(), "alpine:latest", "robot", "s3cret-token")
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if digest != inspectDigest {
+		t.Errorf("digest = %q; want %q", digest, inspectDigest)
 	}
 
 	if _, err := client.PullImage(context.Background(), "alpine:latest", "", ""); err != nil {

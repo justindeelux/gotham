@@ -341,8 +341,11 @@ func registryServerAddress(image string) string {
 }
 
 // inspectImageDigest reads the manifest digest the engine recorded for image.
-// It answers "" when the engine reports no digest rather than failing a pull
-// that already succeeded.
+// Only a digest recorded under the pulled repository name (or its Docker Hub
+// expansion for bare names) is answered: the first RepoDigests entry may
+// belong to another repository sharing the image ID, and recording that would
+// pin a later rollback to the wrong bits. "" means the engine reported no
+// digest for this repository, never a failure of the pull itself.
 func (c *DockerClient) inspectImageDigest(ctx context.Context, image string) (string, error) {
 	var out struct {
 		RepoDigests []string `json:"RepoDigests"`
@@ -359,12 +362,40 @@ func (c *DockerClient) inspectImageDigest(ctx context.Context, image string) (st
 	if err := json.NewDecoder(response.Body).Decode(&out); err != nil {
 		return "", fmt.Errorf("docker: decode image inspect: %w", err)
 	}
-	for _, entry := range out.RepoDigests {
-		if _, digest, ok := strings.Cut(entry, "@"); ok && strings.HasPrefix(digest, "sha256:") {
-			return digest, nil
+	for _, candidate := range digestRepoNames(image) {
+		for _, entry := range out.RepoDigests {
+			repo, digest, ok := strings.Cut(entry, "@")
+			if !ok || !strings.HasPrefix(digest, "sha256:") {
+				continue
+			}
+			if repo == candidate {
+				return digest, nil
+			}
 		}
 	}
 	return "", nil
+}
+
+// digestRepoNames renders the repository names a pulled reference may appear
+// under in RepoDigests: the name as pulled, plus the Docker Hub expansion for
+// bare names (nginx pulls as docker.io/library/nginx).
+func digestRepoNames(image string) []string {
+	name := strings.TrimSpace(image)
+	if cut, _, ok := strings.Cut(name, "@"); ok {
+		name = cut
+	}
+	if index := strings.LastIndex(name, ":"); index >= 0 && index > strings.LastIndex(name, "/") {
+		name = name[:index]
+	}
+	names := []string{name}
+	head, _, found := strings.Cut(name, "/")
+	switch {
+	case !found:
+		names = append(names, "docker.io/library/"+name)
+	case !strings.Contains(head, ".") && !strings.Contains(head, ":") && !strings.EqualFold(head, "localhost"):
+		names = append(names, "docker.io/"+name)
+	}
+	return names
 }
 
 // CreateContainer creates a container from req and returns its id.

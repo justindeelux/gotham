@@ -46,7 +46,27 @@ describe("image reference validation", () => {
     { name: "uppercase path", ref: "Team/App:1", valid: false },
     { name: "bad digest", ref: "nginx@sha256:zzz", valid: false },
     { name: "localhost refused", ref: "localhost:5000/app:1", valid: false },
+    { name: "localhost bare refused", ref: "localhost/app:1", valid: false },
+    { name: "localhost trailing dot refused", ref: "localhost./x:1", valid: false },
+    { name: "localhost subdomain refused", ref: "evil.localhost/x:1", valid: false },
     { name: "loopback refused", ref: "127.0.0.1:5000/app:1", valid: false },
+    { name: "loopback shorthand refused", ref: "127.1/x:1", valid: false },
+    { name: "loopback shorthand 3-part refused", ref: "127.0.1/x:1", valid: false },
+    { name: "unspecified refused", ref: "0.0.0.0:5000/x:1", valid: false },
+    { name: "unspecified v6 refused", ref: "[::]:5000/x:1", valid: false },
+    { name: "loopback v6 refused", ref: "[::1]:5000/x:1", valid: false },
+    { name: "unbracketed v6 refused", ref: "::1/x:1", valid: false },
+    { name: "dash-leading host refused", ref: "-v.evil/x:1", valid: false },
+    { name: "double-dash host refused", ref: "--privileged.x/y:1", valid: false },
+    { name: "empty label refused", ref: "a..b/x:1", valid: false },
+    { name: "underscore host refused", ref: "reg_x.example.com/x:1", valid: false },
+    { name: "port zero refused", ref: "reg.example.com:0/x:1", valid: false },
+    { name: "port too big refused", ref: "reg.example.com:99999/x:1", valid: false },
+    { name: "port non-numeric refused", ref: "reg.example.com:http/x:1", valid: false },
+    { name: "empty port refused", ref: "reg.example.com:/x:1", valid: false },
+    { name: "multi-colon host refused", ref: "registry:abc:123/foo:1.0", valid: false },
+    { name: "private ipv4 allowed", ref: "192.168.1.10:5000/app:1", valid: true },
+    { name: "single-label host with port allowed", ref: "reg:5000/app:1", valid: true },
   ];
   for (const c of cases) {
     it(`${c.name}: ${c.ref || "(empty)"}`, () => {
@@ -59,7 +79,9 @@ describe("image reference validation", () => {
     expect(isLatestImageTag("nginx:latest")).toBe(true);
     expect(isLatestImageTag("nginx")).toBe(true);
     expect(isLatestImageTag("nginx:1.25")).toBe(false);
-    expect(isLatestImageTag(`nginx@${digest}`)).toBe(false);
+    expect(isLatestImageTag("nginx@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")).toBe(false);
+    // Pinned even with a latest tag: the digest freezes the release.
+    expect(isLatestImageTag("nginx:latest@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")).toBe(false);
   });
 
   it("implements the image source type", () => {
@@ -114,6 +136,9 @@ describe("image wizard flow", () => {
       { name: "loopback", patch: { sourceType: "image", imageRef: "127.0.0.1:5000/app:1", name: "storefront" }, valid: false },
       { name: "missing ref", patch: { sourceType: "image", name: "storefront" }, valid: false },
       { name: "missing name", patch: { sourceType: "image", imageRef: "nginx:1.25" }, valid: false },
+      { name: "half credential user only", patch: { sourceType: "image", imageRef: "nginx:1.25", name: "storefront", registryUsername: "robot" }, valid: false },
+      { name: "half credential password only", patch: { sourceType: "image", imageRef: "nginx:1.25", name: "storefront", registryPassword: "s3cret" }, valid: false },
+      { name: "full credential", patch: { sourceType: "image", imageRef: "nginx:1.25", name: "storefront", registryUsername: "robot", registryPassword: "s3cret" }, valid: true },
     ];
     for (const c of cases) {
       Object.assign(w.form, { ...reset }, c.patch);

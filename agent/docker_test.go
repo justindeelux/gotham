@@ -401,6 +401,7 @@ func TestDockerClientPullImageAuth(t *testing.T) {
 func TestDockerClientPullImageHubSpellings(t *testing.T) {
 	const digestA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const digestB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const digestC = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	mux := http.NewServeMux()
 	mux.HandleFunc("/images/create", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
@@ -413,6 +414,10 @@ func TestDockerClientPullImageHubSpellings(t *testing.T) {
 			digests = []string{"alpine@" + digestA}
 		case strings.Contains(r.URL.Path, "app"):
 			digests = []string{"docker.io/team/app@" + digestB}
+		case strings.Contains(r.URL.Path, "private"):
+			// A familiar-looking entry of another repository must not
+			// resolve a private pull; only the exact name counts.
+			digests = []string{"team/app@" + digestC, "registry.example.com/team/private@" + digestB}
 		}
 		writeJSON(t, w, map[string]any{"Id": "sha256:deadbeef", "RepoDigests": digests})
 	})
@@ -433,6 +438,13 @@ func TestDockerClientPullImageHubSpellings(t *testing.T) {
 	}
 	if digest != digestB {
 		t.Errorf("digest = %q; want the normalized entry %q", digest, digestB)
+	}
+	digest, err = client.PullImage(context.Background(), "registry.example.com/team/private:1", "", "")
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if digest != digestB {
+		t.Errorf("digest = %q; want the exact-name entry, not the familiar %q", digest, digestB)
 	}
 }
 

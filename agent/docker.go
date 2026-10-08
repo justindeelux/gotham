@@ -400,16 +400,23 @@ func digestRepoNames(image string) []string {
 		// Bare namespaced path: team/app is docker.io/team/app on the Hub.
 		names = append(names, "docker.io/"+name)
 	default:
-		familiar := tail
-		if stripped, ok := strings.CutPrefix(tail, "library/"); ok {
-			familiar = stripped
-		}
-		names = append(names, familiar)
-		if strings.EqualFold(head, "docker.io") {
-			names = append(names, "index.docker.io/"+tail)
-		}
-		if strings.EqualFold(head, "index.docker.io") {
-			names = append(names, "docker.io/"+tail)
+		// Explicit Hub spellings only: docker.io/library/nginx is listed
+		// as nginx, and index.docker.io is the legacy Hub hostname the
+		// engine may normalize either way. Any other registry keeps its
+		// exact name: a familiar-looking entry for another repository must
+		// never resolve a private pull.
+		lower := strings.ToLower(head)
+		if lower == "docker.io" || lower == "index.docker.io" {
+			familiar := tail
+			if stripped, ok := strings.CutPrefix(tail, "library/"); ok {
+				familiar = stripped
+			}
+			names = append(names, familiar)
+			if lower == "docker.io" {
+				names = append(names, "index.docker.io/"+tail)
+			} else {
+				names = append(names, "docker.io/"+tail)
+			}
 		}
 	}
 	return names

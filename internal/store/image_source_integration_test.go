@@ -100,6 +100,9 @@ func TestApplicationImageSourceColumnsRoundtrip(t *testing.T) {
 		ImageRef:                   "registry.example.com/team/app:2.0",
 		RegistryUsername:           "robot",
 		RegistryPasswordCiphertext: "rotated-credential",
+		// The merged schema (GS-7) holds build_args NOT NULL: pass the
+		// empty object like the repository's marshalBuildArgs does.
+		BuildArgs: []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("UpdateApplication: %v", err)

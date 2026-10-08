@@ -522,14 +522,6 @@ export function useCreateAppWizard(
   const stepPosition = computed<number>(() =>
     buildPackSkipped.value && step.value > 1 ? step.value : step.value + 1,
   );
-=======
-    // Image sources are prebuilt: the build-pack step is skipped and the
-    // review shows that no build runs.
-    if (form.sourceType === "image") {
-      return tr("applications.wizard.packImageNone");
-    }
-    return buildPacks.value.find((item) => item.value === form.buildPack)?.label ?? tr("applications.wizard.packAuto");
-  });
 
   /** stepTotal renders the visited step count (4 without build pack). */
   const stepTotal = computed<number>(() => (buildPackSkipped.value ? 4 : 5));

@@ -92,8 +92,8 @@ describe("image reference validation", () => {
 
   it("implements the image source type", () => {
     expect(sourceTypeImplemented("image")).toBe(true);
+    expect(sourceTypeImplemented("dockerfile")).toBe(true);
     expect(sourceTypeImplemented("git_private")).toBe(false);
-    expect(sourceTypeImplemented("dockerfile")).toBe(false);
     expect(sourceTypeImplemented("compose")).toBe(false);
   });
 });

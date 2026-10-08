@@ -210,13 +210,13 @@ type createApplicationRequest struct {
 	// ImageRef and the registry credential are the image-source (GS-9)
 	// fields: the reference to pull and one optional private-registry
 	// credential, sealed at rest and never returned by the API.
-	ImageRef         string `json:"image_ref"`
-	RegistryUsername string `json:"registry_username"`
-	RegistryPassword string `json:"registry_password"`
-	BaseDomain       string `json:"base_domain"`
-	Port             int32  `json:"port"`
-	HostPort         int32  `json:"host_port"`
-	ServerID         string `json:"server_id"`
+	ImageRef         string            `json:"image_ref"`
+	RegistryUsername string            `json:"registry_username"`
+	RegistryPassword string            `json:"registry_password"`
+	BaseDomain       string            `json:"base_domain"`
+	Port             int32             `json:"port"`
+	HostPort         int32             `json:"host_port"`
+	ServerID         string            `json:"server_id"`
 	Env              []envEntryRequest `json:"env"`
 	Storage          []storageRequest  `json:"storage"`
 	// DockerfileContent holds pasted Dockerfile text for the dockerfile
@@ -988,13 +988,13 @@ func newApplicationResponse(application Application) applicationResponse {
 		// The clone URL is display data: strip any embedded credentials so a
 		// legacy token-bearing URL can never be echoed to API clients
 		// (creation validation already refuses userinfo on new rows).
-		CloneURL:           RedactCloneURL(application.CloneURL),
-		SourceType:         application.SourceType,
-		DockerfileContent:  application.DockerfileContent,
-		BuildArgs:          nonNilBuildArgs(application.BuildArgs),
-		Branch:             application.Branch,
-		BuildPack:          application.BuildPack,
-		ImageRef:           application.ImageRef,
+		CloneURL:          RedactCloneURL(application.CloneURL),
+		SourceType:        application.SourceType,
+		DockerfileContent: application.DockerfileContent,
+		BuildArgs:         nonNilBuildArgs(application.BuildArgs),
+		Branch:            application.Branch,
+		BuildPack:         application.BuildPack,
+		ImageRef:          application.ImageRef,
 		// The registry credential is never returned: only whether one is
 		// stored, so the UI can show "configured" without seeing it.
 		HasRegistryCredential: application.RegistryUsername != "" ||
@@ -1022,19 +1022,19 @@ func newApplicationResponse(application Application) applicationResponse {
 // (detail fields excluded, see applicationListItem).
 func newApplicationListItem(application Application) applicationListItem {
 	response := applicationListItem{
-		ID:                 application.ID.String(),
-		Name:               application.Name,
-		EnvironmentID:      application.EnvironmentID.String(),
-		EnvironmentName:    application.EnvironmentName,
-		ProjectID:          application.ProjectID.String(),
-		ProjectName:        application.ProjectName,
-		Provider:           application.Provider,
-		Repo:               application.Repo,
-		CloneURL:           RedactCloneURL(application.CloneURL),
-		SourceType:         application.SourceType,
-		Branch:             application.Branch,
-		BuildPack:          application.BuildPack,
-		ImageRef:           application.ImageRef,
+		ID:              application.ID.String(),
+		Name:            application.Name,
+		EnvironmentID:   application.EnvironmentID.String(),
+		EnvironmentName: application.EnvironmentName,
+		ProjectID:       application.ProjectID.String(),
+		ProjectName:     application.ProjectName,
+		Provider:        application.Provider,
+		Repo:            application.Repo,
+		CloneURL:        RedactCloneURL(application.CloneURL),
+		SourceType:      application.SourceType,
+		Branch:          application.Branch,
+		BuildPack:       application.BuildPack,
+		ImageRef:        application.ImageRef,
 		HasRegistryCredential: application.RegistryUsername != "" ||
 			application.RegistryPasswordCiphertext != "",
 		BaseDomain:         application.BaseDomain,

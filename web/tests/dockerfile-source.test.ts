@@ -35,7 +35,8 @@ describe("dockerfile schemas", () => {
     expect(sourceTypeImplemented("dockerfile")).toBe(true);
     expect(sourceTypeImplemented("git_private")).toBe(false);
     expect(sourceTypeImplemented("compose")).toBe(false);
-    expect(sourceTypeImplemented("image")).toBe(false);
+    // Image sources deploy since GS-9.
+    expect(sourceTypeImplemented("image")).toBe(true);
   });
 
   it("gates pasted content on non-empty, size and FROM", () => {

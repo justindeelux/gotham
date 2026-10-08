@@ -97,28 +97,6 @@ func TestValidateSourcePerType(t *testing.T) {
 		{"compose waits for GS-8", SourceCompose, "", "", "", "", ErrSourceNotImplemented},
 		{"image with git fields is rejected", SourceImage, "", "", "", "", ErrValidation},
 		{"unknown type", "tarball", "", "", "", "", ErrValidation},
-=======
-		{"public git", SourceGitPublic, "", "", "https://github.com/acme/demo.git", nil},
-		{"public git over git scheme", SourceGitPublic, "", "", "git://git.internal/acme/demo.git", nil},
-		{"public git refuses ssh URL", SourceGitPublic, "", "", "ssh://git@git.internal/acme/demo.git", ErrValidation},
-		{"public git refuses scp-like URL", SourceGitPublic, "", "", "git@git.internal:acme/demo.git", ErrValidation},
-		{"legacy empty behaves like public git", "", "", "", "https://github.com/acme/demo.git", nil},
-		{"legacy public sentinel", SourceGitPublic, "public", "", "https://github.com/acme/demo.git", nil},
-		{"gitea-backed legacy app", SourceGitPublic, "gitea", "acme/demo", "https://gitea.example/acme/demo.git", nil},
-		{"public git with github provider", SourceGitPublic, "github", "", "https://github.com/acme/demo.git", ErrValidation},
-		{"public git with gitlab provider", SourceGitPublic, "gitlab", "", "https://github.com/acme/demo.git", ErrValidation},
-		{"public git without URL", SourceGitPublic, "", "", "", ErrValidation},
-		{"github app", SourceGitHubApp, "github", "acme/demo", "git@github.com:acme/demo.git", nil},
-		{"github app with gitlab provider", SourceGitHubApp, "gitlab", "acme/demo", "git@github.com:acme/demo.git", ErrValidation},
-		{"github app without provider", SourceGitHubApp, "", "acme/demo", "git@github.com:acme/demo.git", ErrValidation},
-		{"github app without repo", SourceGitHubApp, "github", "", "git@github.com:acme/demo.git", ErrValidation},
-		{"github app without URL", SourceGitHubApp, "github", "acme/demo", "", ErrValidation},
-		{"gitlab app", SourceGitLabApp, "gitlab", "acme/demo", "git@gitlab.com:acme/demo.git", nil},
-		{"gitlab app with github provider", SourceGitLabApp, "github", "acme/demo", "git@gitlab.com:acme/demo.git", ErrValidation},
-		{"private git waits for GS-4", SourceGitPrivate, "", "", "git@github.com:acme/demo.git", ErrSourceNotImplemented},
-		{"dockerfile waits for GS-7", SourceDockerfile, "", "", "", ErrSourceNotImplemented},
-		{"compose waits for GS-8", SourceCompose, "", "", "", ErrSourceNotImplemented},
-		{"unknown type", "tarball", "", "", "", "", ErrValidation},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -219,6 +197,7 @@ func TestCreateApplicationSourceType(t *testing.T) {
 // ErrSourceNotImplemented — not the clone-URL error — and queues nothing.
 // Dockerfile applications (GS-7) deploy from their stored text, and image
 // sources deploy since GS-9 (see TestServiceImageDeployQueues).
+// Dockerfile applications (GS-7) deploy from their stored text.
 func TestServiceDeployRejectsUnimplementedSource(t *testing.T) {
 	for _, sourceType := range []string{SourceGitPrivate, SourceCompose} {
 		t.Run(sourceType, func(t *testing.T) {

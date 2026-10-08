@@ -849,19 +849,20 @@ func validateApplication(app Application, checkSource bool) error {
 // slug must agree with the type (github_app needs provider "github",
 // gitlab_app "gitlab"), so hook and deploy-key paths that key off Provider
 // can never disagree with the orchestrator switch that keys off SourceType.
-// git_public refuses only the two slugs that own a dedicated type; every
-// other value ("", the legacy "public" sentinel, gitea and friends) passes,
-// so existing apps and their previews keep working with the provider-based
-// hook and key behavior they already have. git_private and the container
-// sources fail closed until their packages land (GS-4, GS-7..GS-9).
+// git_public refuses only the two slugs that own a dedicated type and takes a
+// keyless http(s)/git URL; every other provider value ("", the legacy
+// "public" sentinel, gitea and friends) stays git_public, so existing apps
+// and their previews keep working with the provider-based hook and key
+// behavior they already have. git_private and the container sources fail
+// closed until their packages land (GS-4, GS-7..GS-9).
 func validateSource(app Application) error {
 	switch app.SourceType {
 	case "", SourceGitPublic:
 		if app.Provider == "github" || app.Provider == "gitlab" {
-			return fmt.Errorf("%w: source type %q requires an empty provider, got %q",
-				ErrValidation, app.SourceType, app.Provider)
+			return fmt.Errorf("%w: provider %q owns the %q_app source type: use it instead of %q",
+				ErrValidation, app.Provider, app.Provider, SourceGitPublic)
 		}
-		return validateCloneURL(app.CloneURL)
+		return ValidatePublicGitURL(app.CloneURL)
 	case SourceGitHubApp:
 		return validateProviderSource(app, "github")
 	case SourceGitLabApp:

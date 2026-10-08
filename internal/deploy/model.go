@@ -80,7 +80,9 @@ type Application struct {
 	Repo          string
 	CloneURL      string
 	// SourceType names how the application fetches its code (GS-2). Empty
-	// means a legacy row or caller and behaves like SourceGitPublic.
+	// means a legacy row or caller: NormalizeSourceType derives the effective
+	// type from the provider (github/gitlab keep their provider flow,
+	// everything else behaves like SourceGitPublic).
 	SourceType string
 	Branch     string
 	BuildPack  string

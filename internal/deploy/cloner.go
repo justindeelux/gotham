@@ -73,6 +73,13 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	if err != nil {
 		return err
 	}
+	if privatePEM == "" && isScpLikeCloneURL(url) {
+		// A keyless clone runs ssh with the control plane's ambient
+		// identity: refuse, so an SSH URL on a credential-less source is a
+		// clear validation error instead of an authentication surprise.
+		return fmt.Errorf("%w: SSH clone URL %q needs a deploy key: use a public http(s) or git URL, or a private-git source",
+			ErrValidation, redactCloneURL(url))
+	}
 	if privatePEM != "" {
 		// A deploy key is an SSH credential: over http(s) it would
 		// authenticate nothing, so an http(s) URL is rewritten to its SSH
@@ -83,9 +90,6 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		url = sshCloneURL(url)
 	}
 	branch := strings.TrimSpace(app.Branch)
-	if branch == "" {
-		branch = defaultBranch
-	}
 	// A retried step re-enters Clone with the same directory: clear whatever
 	// the previous attempt left behind so git does not refuse a non-empty target.
 	if err := os.RemoveAll(dir); err != nil {
@@ -115,6 +119,21 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		env = files.sshEnv(env)
 	}
 
+	// An empty branch pins the remote's default via ls-remote (GS-3) instead
+	// of guessing "main". It runs with the clone environment, so a keyed SSH
+	// remote resolves through the same deploy key.
+	runner := s.run
+	if runner == nil {
+		runner = runGit
+	}
+	if branch == "" {
+		resolved, err := defaultBranchFor(ctx, runner, url, env)
+		if err != nil {
+			return err
+		}
+		branch = resolved
+	}
+
 	if log != nil {
 		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, redactCloneURL(url))
 		if privatePEM != "" {
@@ -124,16 +143,16 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	}
 	argv := []string{"git", "clone",
 		"--depth", "1", "--single-branch", "--branch", branch, "--", url, dir}
-	runner := s.run
-	if runner == nil {
-		runner = runGit
-	}
 	output, err := runner(ctx, argv, env)
 	if ctx.Err() != nil {
 		return fmt.Errorf("git clone: %w", ctx.Err())
 	}
 	if err != nil {
-		return fmt.Errorf("git clone: %w: %s", err, tail(redactCloneError(string(output)), 400))
+		quoted := tail(redactCloneError(string(output)), 400)
+		if hint := classifyGitFailure(string(output)); hint != "" {
+			return fmt.Errorf("git clone: %w: %s%s", err, quoted, hint)
+		}
+		return fmt.Errorf("git clone: %w: %s", err, quoted)
 	}
 	if log != nil {
 		log("repository cloned (" + branch + ")")

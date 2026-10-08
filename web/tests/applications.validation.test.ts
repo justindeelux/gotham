@@ -111,10 +111,14 @@ describe("wizard gates match recorded outcomes", () => {
     const sourceCases: Array<{ name: string; patch: Record<string, unknown>; sourceValid: boolean }> = [
       { name: "empty", patch: {}, sourceValid: false },
       { name: "public-valid", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: true },
+      { name: "public-git-scheme", patch: {"sourceType": "git_public", "publicCloneUrl": "git://git.internal/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: true },
       { name: "public-blank-url", patch: {"sourceType": "git_public", "publicCloneUrl": "   ", "branch": "main", "name": "storefront"}, sourceValid: false },
+      { name: "public-ssh-url", patch: {"sourceType": "git_public", "publicCloneUrl": "ssh://git@h/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: false },
+      { name: "public-scp-url", patch: {"sourceType": "git_public", "publicCloneUrl": "git@h:o/r.git", "branch": "main", "name": "storefront"}, sourceValid: false },
       { name: "public-bad-name", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "Bad_Name!"}, sourceValid: false },
       { name: "public-short-name", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "ab"}, sourceValid: false },
-      { name: "public-blank-branch", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "  ", "name": "storefront"}, sourceValid: false },
+      { name: "public-blank-branch", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "  ", "name": "storefront"}, sourceValid: true },
+      { name: "github-blank-branch", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "git@h:o/r.git", "branch": "  ", "name": "abc"}, sourceValid: false },
       { name: "private-soon", patch: {"sourceType": "git_private", "branch": "main", "name": "abc"}, sourceValid: false },
       { name: "private-soon-with-url", patch: {"sourceType": "git_private", "publicCloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: false },
       { name: "github-valid", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: true },
@@ -228,6 +232,57 @@ describe("wizard create payload carries the source type", () => {
       repoFullName: "",
       cloneUrl: "",
     });
+    wrapper.unmount();
+  });
+
+  it("leaves only implemented source types selectable", () => {
+    setActivePinia(createPinia());
+    let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
+    const Harness = defineComponent({
+      setup() {
+        wiz = useCreateAppWizard(ref(false), (() => undefined) as never);
+        return () => h("div");
+      },
+    });
+    const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
+    const w = wiz!;
+    const options = Object.fromEntries(
+      w.sourceTypeOptions.value.map((item) => [item.value, item.disabled === true]),
+    );
+    // git_public and the connected-provider flows deploy; everything else
+    // stays disabled until its package lands (GS-4, GS-7..GS-9).
+    expect(options).toEqual({
+      git_public: false,
+      git_private: true,
+      github_app: false,
+      gitlab_app: false,
+      dockerfile: true,
+      compose: true,
+      image: true,
+    });
+    wrapper.unmount();
+  });
+
+  it("renders an empty public branch as the repository default", () => {
+    setActivePinia(createPinia());
+    let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
+    const Harness = defineComponent({
+      setup() {
+        wiz = useCreateAppWizard(ref(false), (() => undefined) as never);
+        return () => h("div");
+      },
+    });
+    const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
+    const w = wiz!;
+    Object.assign(w.form, {
+      sourceType: "git_public",
+      publicCloneUrl: "https://github.com/o/r.git",
+      branch: "   ",
+      name: "storefront",
+    });
+    expect(w.sourceValid.value).toBe(true);
+    expect(w.reviewSource.value).toBe("https://github.com/o/r.git · (default branch)");
+    expect(w.buildPayload()).toMatchObject({ branch: "" });
     wrapper.unmount();
   });
 });

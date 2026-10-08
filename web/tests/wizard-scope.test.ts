@@ -126,7 +126,7 @@ describe("create wizards follow the live route scope", () => {
       .spyOn(applicationsApi, "createApplication")
       .mockResolvedValue({ application: { id: "app-1", name: "web" } } as never);
     let submit!: () => Promise<void>;
-    let form!: { environmentId: string; name: string; providerId: string };
+    let form!: { environmentId: string; name: string; publicCloneUrl: string };
     const Harness = defineComponent({
       setup() {
         const wizard = useCreateAppWizard(show, (() => undefined) as never, {
@@ -143,7 +143,8 @@ describe("create wizards follow the live route scope", () => {
     environmentId.value = "env-b";
     await nextTick();
     form.name = "web";
-    form.providerId = "public";
+    // git_public carries the pasted URL, not a provider selection.
+    form.publicCloneUrl = "https://github.com/o/r.git";
     await submit();
     expect(create).toHaveBeenCalledTimes(1);
     expect(create.mock.calls[0]![0]).toMatchObject({ environment_id: "env-b" });

@@ -69,6 +69,28 @@ export function sourceTypeImplemented(value: string): boolean {
 /** cloneUrlSchema replaces cloneUrl.trim() !== "". Gate-only. */
 export const cloneUrlSchema = z.string().trim().min(1);
 
+/**
+ * isPublicGitUrl mirrors ValidatePublicGitURL's production allow-list
+ * (internal/deploy/gitpublic.go): a keyless public source takes http, https
+ * or git. SSH transports need a deploy key, so the gate refuses them here
+ * instead of letting the clone spend the ambient SSH identity.
+ */
+export function isPublicGitUrl(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed.includes("://")) {
+    return false;
+  }
+  const scheme = trimmed.slice(0, trimmed.indexOf("://")).toLowerCase();
+  return scheme === "http" || scheme === "https" || scheme === "git";
+}
+
+/** publicCloneUrlSchema gates the git_public URL field. Gate-only. */
+export const publicCloneUrlSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(isPublicGitUrl);
+
 /** repoSchema replaces repoFullName === "" (a select output, never padded). */
 export const repoSchema = z.string().min(1);
 

@@ -49,7 +49,7 @@ const applicationBody = `{
 // exactly these, or the SPA reads undefined values.
 var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
-	"project_name", "provider", "repo", "clone_url", "branch", "build_pack",
+	"project_name", "provider", "repo", "clone_url", "source_type", "branch", "build_pack",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
 }

@@ -117,16 +117,20 @@ func (q *Queries) CountPreviewApplicationsByProject(ctx context.Context, project
 const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
-    branch, build_pack, base_domain, port, host_port, team_id, is_preview
+    branch, build_pack, base_domain, port, host_port, team_id, is_preview,
+    source_type
 )
 VALUES (
     COALESCE($1::uuid, gen_random_uuid()),
     $2, $3, $4, $5, $6,
     $7, $8, $9, $10,
     $11, $12, $13, $14,
-    $15
+    -- Direct sqlc callers (fixtures, previews) may pass an empty source
+    -- type; COALESCE maps it onto the default so the CHECK never sees it.
+    -- The deploy repository normalizes the same way in Go.
+    $15, COALESCE(NULLIF($16, ''), 'git_public')
 )
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type
 `
 
 type CreateApplicationParams struct {
@@ -145,6 +149,7 @@ type CreateApplicationParams struct {
 	HostPort      int32       `json:"host_port"`
 	TeamID        pgtype.UUID `json:"team_id"`
 	IsPreview     bool        `json:"is_preview"`
+	SourceType    interface{} `json:"source_type"`
 }
 
 // The id is optional: a caller that must know the application id before the
@@ -168,6 +173,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		arg.HostPort,
 		arg.TeamID,
 		arg.IsPreview,
+		arg.SourceType,
 	)
 	var i Application
 	err := row.Scan(
@@ -189,6 +195,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.TeamID,
 		&i.IsPreview,
 		&i.EnvironmentID,
+		&i.SourceType,
 	)
 	return i, err
 }
@@ -304,7 +311,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -329,6 +336,7 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.TeamID,
 		&i.IsPreview,
 		&i.EnvironmentID,
+		&i.SourceType,
 	)
 	return i, err
 }
@@ -457,7 +465,7 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 }
 
 const listApplicationsByEnvironment = `-- name: ListApplicationsByEnvironment :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type FROM applications
 WHERE environment_id = $1 AND (is_preview = false OR $2::bool = true)
 ORDER BY created_at DESC, id DESC
 `
@@ -497,6 +505,7 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 			&i.TeamID,
 			&i.IsPreview,
 			&i.EnvironmentID,
+			&i.SourceType,
 		); err != nil {
 			return nil, err
 		}
@@ -509,7 +518,7 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 }
 
 const listApplicationsByProject = `-- name: ListApplicationsByProject :many
-SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.base_domain, a.port, a.host_port, a.created_at, a.updated_at, a.base_domain_disabled, a.team_id, a.is_preview, a.environment_id FROM applications a
+SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.base_domain, a.port, a.host_port, a.created_at, a.updated_at, a.base_domain_disabled, a.team_id, a.is_preview, a.environment_id, a.source_type FROM applications a
 JOIN environments e ON e.id = a.environment_id
 WHERE e.project_id = $1 AND (a.is_preview = false OR $2::bool = true)
 ORDER BY a.created_at DESC, a.id DESC
@@ -550,6 +559,7 @@ func (q *Queries) ListApplicationsByProject(ctx context.Context, arg ListApplica
 			&i.TeamID,
 			&i.IsPreview,
 			&i.EnvironmentID,
+			&i.SourceType,
 		); err != nil {
 			return nil, err
 		}
@@ -595,7 +605,7 @@ func (q *Queries) ListApplicationsByServer(ctx context.Context, serverID pgtype.
 }
 
 const listApplicationsByTeam = `-- name: ListApplicationsByTeam :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type FROM applications
 WHERE team_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
@@ -628,6 +638,7 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 			&i.TeamID,
 			&i.IsPreview,
 			&i.EnvironmentID,
+			&i.SourceType,
 		); err != nil {
 			return nil, err
 		}
@@ -640,7 +651,7 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 }
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type FROM applications
 WHERE user_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
@@ -673,6 +684,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.TeamID,
 			&i.IsPreview,
 			&i.EnvironmentID,
+			&i.SourceType,
 		); err != nil {
 			return nil, err
 		}
@@ -898,7 +910,7 @@ SET name = $2,
     environment_id = $10,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type
 `
 
 type UpdateApplicationParams struct {
@@ -947,6 +959,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.TeamID,
 		&i.IsPreview,
 		&i.EnvironmentID,
+		&i.SourceType,
 	)
 	return i, err
 }

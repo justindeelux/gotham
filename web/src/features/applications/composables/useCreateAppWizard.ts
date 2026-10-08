@@ -29,13 +29,20 @@ import {
   providerSchema,
   repoSchema,
   serverSchema,
+  sourceTypeImplemented,
+  sourceTypeSchema,
   wizardDomainSchema,
+  type SourceType,
 } from "@/features/applications/schemas/applications";
 import { portSchema } from "@/shared/validation/primitives";
 
 export interface WizardForm {
+  /** GS-2 source model: which fetcher the orchestrator uses. */
+  sourceType: SourceType;
   providerId: string;
   publicCloneUrl: string;
+  /** SSH clone URL for a private repository without a provider (GS-4). */
+  privateCloneUrl: string;
   repoFullName: string;
   cloneUrl: string;
   branch: string;
@@ -200,8 +207,10 @@ export function useCreateAppWizard(
   ]);
 
   const form = reactive<WizardForm>({
+    sourceType: "git_public",
     providerId: "",
     publicCloneUrl: "",
+    privateCloneUrl: "",
     repoFullName: "",
     cloneUrl: "",
     branch: "main",
@@ -225,7 +234,25 @@ export function useCreateAppWizard(
     { label: tr("applications.wizard.publicRepo"), value: PUBLIC_PROVIDER },
   ]);
 
-  const isPublicRepo = computed<boolean>(() => form.providerId === PUBLIC_PROVIDER);
+  const isPublicRepo = computed<boolean>(() => form.sourceType === "git_public");
+
+  const isPrivateRepo = computed<boolean>(() => form.sourceType === "git_private");
+
+  /** isProviderFlow covers the connected-provider types (existing flow). */
+  const isProviderFlow = computed<boolean>(
+    () => form.sourceType === "github_app" || form.sourceType === "gitlab_app",
+  );
+
+  /** sourceTypeOptions renders the GS-2 type selector in the current locale. */
+  const sourceTypeOptions = computed<Array<{ label: string; value: string }>>(() => [
+    { label: tr("applications.wizard.sourceGitPublic"), value: "git_public" },
+    { label: tr("applications.wizard.sourceGitPrivate"), value: "git_private" },
+    { label: tr("applications.wizard.sourceGithubApp"), value: "github_app" },
+    { label: tr("applications.wizard.sourceGitlabApp"), value: "gitlab_app" },
+    { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile" },
+    { label: tr("applications.wizard.sourceCompose"), value: "compose" },
+    { label: tr("applications.wizard.sourceImage"), value: "image" },
+  ]);
 
   const repoOptions = computed<Array<{ label: string; value: string }>>(() =>
     providersStore.reposOf(form.providerId).map((repo) => ({
@@ -243,8 +270,11 @@ export function useCreateAppWizard(
 
   /** selectedProviderName resolves the provider slug for the create payload. */
   const selectedProviderName = computed<string>(() => {
-    if (isPublicRepo.value) {
+    if (form.sourceType === "git_public") {
       return "public";
+    }
+    if (form.sourceType === "git_private") {
+      return "";
     }
     return (
       providersStore.providers.find((item) => item.id === form.providerId)
@@ -252,24 +282,42 @@ export function useCreateAppWizard(
     );
   });
 
-  /** sourceValid gates the Source step: provider, repo (or URL), branch, name. */
+  /** sourceValid gates the Source step: the type, its fields, branch, name. */
   const sourceValid = computed<boolean>(() => {
-    if (!providerSchema.safeParse(form.providerId).success) {
+    if (!sourceTypeSchema.safeParse(form.sourceType).success) {
       return false;
     }
-    if (isPublicRepo.value) {
-      if (!cloneUrlSchema.safeParse(form.publicCloneUrl).success) {
-        return false;
-      }
-    } else {
-      if (!repoSchema.safeParse(form.repoFullName).success) {
-        return false;
-      }
-      // A private repository without a provider ssh_url is rejected rather than
-      // silently degraded to https: the keyed cloner would rewrite that URL and
-      // drop a self-hosted SSH port. sourceError names the gap.
-      if (!cloneUrlSchema.safeParse(form.cloneUrl).success) {
-        return false;
+    // Dockerfile, Compose and image sources render a not-yet-available
+    // placeholder until GS-7..GS-9, so the step cannot continue on them.
+    if (!sourceTypeImplemented(form.sourceType)) {
+      return false;
+    }
+    switch (form.sourceType) {
+      case "git_public":
+        if (!cloneUrlSchema.safeParse(form.publicCloneUrl).success) {
+          return false;
+        }
+        break;
+      case "git_private":
+        if (!cloneUrlSchema.safeParse(form.privateCloneUrl).success) {
+          return false;
+        }
+        break;
+      default: {
+        // github_app/gitlab_app keep the existing provider-backed flow.
+        if (!providerSchema.safeParse(form.providerId).success) {
+          return false;
+        }
+        if (!repoSchema.safeParse(form.repoFullName).success) {
+          return false;
+        }
+        // A private repository without a provider ssh_url is rejected rather than
+        // silently degraded to https: the keyed cloner would rewrite that URL and
+        // drop a self-hosted SSH port. sourceError names the gap.
+        if (!cloneUrlSchema.safeParse(form.cloneUrl).success) {
+          return false;
+        }
+        break;
       }
     }
     return (
@@ -322,7 +370,12 @@ export function useCreateAppWizard(
 
   /** reviewSource renders the repo headline on the review step. */
   const reviewSource = computed<string>(() => {
-    const repo = isPublicRepo.value ? form.publicCloneUrl.trim() : form.repoFullName;
+    const repo =
+      form.sourceType === "git_public"
+        ? form.publicCloneUrl.trim()
+        : form.sourceType === "git_private"
+          ? form.privateCloneUrl.trim()
+          : form.repoFullName;
     return `${repo} · ${form.branch.trim()}`;
   });
 
@@ -391,12 +444,29 @@ export function useCreateAppWizard(
 
   /** buildPayload assembles the create-application body from the wizard state. */
   function buildPayload(): CreateApplicationInput {
+    let repo = "";
+    let cloneUrl = "";
+    switch (form.sourceType) {
+      case "git_public":
+        repo = form.publicCloneUrl.trim();
+        cloneUrl = form.publicCloneUrl.trim();
+        break;
+      case "git_private":
+        repo = form.privateCloneUrl.trim();
+        cloneUrl = form.privateCloneUrl.trim();
+        break;
+      default:
+        repo = form.repoFullName;
+        cloneUrl = form.cloneUrl;
+        break;
+    }
     return {
       name: form.name.trim(),
       environment_id: form.environmentId,
       provider: selectedProviderName.value,
-      repo: isPublicRepo.value ? form.publicCloneUrl.trim() : form.repoFullName,
-      clone_url: isPublicRepo.value ? form.publicCloneUrl.trim() : form.cloneUrl,
+      repo,
+      clone_url: cloneUrl,
+      source_type: form.sourceType,
       branch: form.branch.trim(),
       build_pack: form.buildPack,
       base_domain: form.baseDomain.trim(),
@@ -476,8 +546,10 @@ export function useCreateAppWizard(
   /** resetWizard returns every field to its initial value. */
   function resetWizard(): void {
     step.value = 0;
+    form.sourceType = "git_public";
     form.providerId = "";
     form.publicCloneUrl = "";
+    form.privateCloneUrl = "";
     form.repoFullName = "";
     form.cloneUrl = "";
     form.branch = "main";
@@ -509,7 +581,10 @@ export function useCreateAppWizard(
     sourceError,
     providersStore,
     providerOptions,
+    sourceTypeOptions,
     isPublicRepo,
+    isPrivateRepo,
+    isProviderFlow,
     repoOptions,
     serverOptions,
     sourceValid,

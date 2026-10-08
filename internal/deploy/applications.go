@@ -40,14 +40,17 @@ type CreateApplicationInput struct {
 	Provider      string
 	Repo          string
 	CloneURL      string
-	Branch        string
-	BuildPack     string
-	BaseDomain    string
-	Port          int32
-	HostPort      int32
-	ServerID      uuid.UUID
-	Env           []EnvEntry
-	Storage       []Storage
+	// SourceType names how the application fetches its code (GS-2); empty
+	// normalizes from Provider so pre-GS-2 clients keep their behaviour.
+	SourceType string
+	Branch     string
+	BuildPack  string
+	BaseDomain string
+	Port       int32
+	HostPort   int32
+	ServerID   uuid.UUID
+	Env        []EnvEntry
+	Storage    []Storage
 }
 
 // UpdateApplicationInput carries the mutable application fields. Every field is
@@ -107,6 +110,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		Provider:      strings.TrimSpace(in.Provider),
 		Repo:          strings.TrimSpace(in.Repo),
 		CloneURL:      strings.TrimSpace(in.CloneURL),
+		SourceType:    NormalizeSourceType(strings.TrimSpace(in.SourceType), strings.TrimSpace(in.Provider)),
 		Branch:        strings.TrimSpace(in.Branch),
 		BuildPack:     strings.TrimSpace(in.BuildPack),
 		BaseDomain:    proxy.NormalizeDomain(in.BaseDomain),
@@ -808,15 +812,19 @@ func (s *Service) validateServer(ctx context.Context, userID, serverID uuid.UUID
 }
 
 // validateApplication checks the fields every write path shares: a name, a
-// cloneable source (creation only), a build pack builds.ParseEngineKind
+// cloneable source (creation only), a known source type with its per-type
+// fields, a build pack builds.ParseEngineKind
 // accepts ("" selects auto-detection) and ports inside the 0–65535 range the
 // schema CHECKs enforce.
 func validateApplication(app Application, checkSource bool) error {
 	if app.Name == "" {
 		return fmt.Errorf("%w: name is required", ErrValidation)
 	}
+	if !ValidSourceType(app.SourceType) {
+		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
+	}
 	if checkSource {
-		if err := validateCloneURL(app.CloneURL); err != nil {
+		if err := validateSource(app); err != nil {
 			return err
 		}
 	}
@@ -835,6 +843,26 @@ func validateApplication(app Application, checkSource bool) error {
 		return err
 	}
 	return validatePort("host port", app.HostPort)
+}
+
+// validateSource checks the per-type source fields on creation. Git-backed
+// types keep the existing requirement (a cloneable URL; provider-backed
+// types also name the repository), while Dockerfile, Compose and image
+// sources carry no fetch fields yet (GS-7..GS-9).
+func validateSource(app Application) error {
+	switch app.SourceType {
+	case "", SourceGitPublic, SourceGitPrivate:
+		return validateCloneURL(app.CloneURL)
+	case SourceGitHubApp, SourceGitLabApp:
+		if strings.TrimSpace(app.Repo) == "" {
+			return fmt.Errorf("%w: repository is required", ErrValidation)
+		}
+		return validateCloneURL(app.CloneURL)
+	case SourceDockerfile, SourceCompose, SourceImage:
+		return nil
+	default:
+		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
+	}
 }
 
 // validatePort rejects values the applications table CHECKs would refuse, so a

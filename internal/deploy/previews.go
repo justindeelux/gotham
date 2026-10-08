@@ -65,6 +65,7 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 		Provider:      base.Provider,
 		Repo:          base.Repo,
 		CloneURL:      base.CloneURL,
+		SourceType:    base.SourceType,
 		Branch:        strings.TrimSpace(in.Branch),
 		BuildPack:     base.BuildPack,
 		BaseDomain:    proxy.NormalizeDomain(in.BaseDomain),

@@ -36,4 +36,7 @@ var (
 	// ErrProvider — a Git-host API call (registering or removing a deploy key)
 	// failed; handlers answer a gateway status instead of leaking the body.
 	ErrProvider = errors.New("deploy: provider call failed")
+	// ErrSourceNotImplemented — the application names a source type the
+	// orchestrator cannot fetch yet (GS-7..GS-9); the deploy fails closed.
+	ErrSourceNotImplemented = errors.New("deploy: source type is not supported yet")
 )

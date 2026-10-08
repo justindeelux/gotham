@@ -40,6 +40,7 @@ type Application struct {
 	TeamID             pgtype.UUID        `json:"team_id"`
 	IsPreview          bool               `json:"is_preview"`
 	EnvironmentID      pgtype.UUID        `json:"environment_id"`
+	SourceType         string             `json:"source_type"`
 }
 
 type ApplicationDeployKey struct {

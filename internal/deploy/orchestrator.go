@@ -321,7 +321,7 @@ func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) er
 	switch step {
 	case StateCloning:
 		return o.attempt(ctx, st, "clone", func() error {
-			return o.source.Clone(ctx, st.app, st.repoDir, st.log)
+			return o.cloneSource(ctx, st.app, st.repoDir, st.log)
 		})
 	case StateBuilding:
 		return o.attempt(ctx, st, "build", func() error { return o.build(ctx, st) })
@@ -331,6 +331,22 @@ func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) er
 		return o.attempt(ctx, st, "start", func() error { return o.startContainer(ctx, st) })
 	default:
 		return fmt.Errorf("deploy: unexpected step %q", step)
+	}
+}
+
+// cloneSource selects the fetch step by application source type (GS-2).
+// Git-backed types share the git clone path (the cloner keys off the
+// deploy key, so legacy rows with an empty type behave as before);
+// Dockerfile, Compose and image sources have no fetch step until GS-7..GS-9
+// and fail closed with ErrSourceNotImplemented.
+func (o *Orchestrator) cloneSource(ctx context.Context, app Application, dir string, log func(string)) error {
+	switch app.SourceType {
+	case "", SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp:
+		return o.source.Clone(ctx, app, dir, log)
+	case SourceDockerfile, SourceCompose, SourceImage:
+		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
+	default:
+		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
 	}
 }
 

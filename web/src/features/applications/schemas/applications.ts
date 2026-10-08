@@ -38,6 +38,33 @@ export const branchSchema = z.string().trim().min(1);
 /** providerSchema replaces providerId === "" (a select output, never padded). */
 export const providerSchema = z.string().min(1);
 
+/**
+ * sourceTypeSchema is the GS-2 application source model: which fetcher the
+ * deploy orchestrator uses. Only git-backed types are implemented; the
+ * wizard gates continuation on sourceTypeImplemented below.
+ */
+export const sourceTypeSchema = z.enum([
+  "git_public",
+  "git_private",
+  "github_app",
+  "gitlab_app",
+  "dockerfile",
+  "compose",
+  "image",
+]);
+
+export type SourceType = z.infer<typeof sourceTypeSchema>;
+
+/** sourceTypeImplemented gates the wizard Source step on GS-2 scope. */
+export function sourceTypeImplemented(value: string): boolean {
+  return (
+    value === "git_public" ||
+    value === "git_private" ||
+    value === "github_app" ||
+    value === "gitlab_app"
+  );
+}
+
 /** cloneUrlSchema replaces cloneUrl.trim() !== "". Gate-only. */
 export const cloneUrlSchema = z.string().trim().min(1);
 

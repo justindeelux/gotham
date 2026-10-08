@@ -128,12 +128,12 @@ test.describe("environment page", () => {
     await expect(wizard).toBeVisible();
     await expect(wizard).toContainText(`${projectName} / production`);
 
-    // Public source: no provider round-trip, nothing is cloned here.
+    // Public git source: no provider round-trip, nothing is cloned here.
     const wizardAppName = `ui-e2e-wiz-${suffix}`.slice(0, 31);
     await wizard.locator(".n-select").first().click();
     await page
       .locator(".n-base-select-option")
-      .filter({ hasText: "Public repository" })
+      .filter({ hasText: "Public git repository" })
       .click();
     await wizard.locator("input[placeholder='https://github.com/owner/repo.git']").fill(cloneURL);
     await wizard.locator("input[placeholder='storefront']").fill(wizardAppName);
@@ -160,6 +160,7 @@ test.describe("environment page", () => {
     const createBody = (await createRequest).postDataJSON() as Record<string, unknown>;
     expect(createBody["environment_id"]).toBe(environmentId);
     expect(createBody["server_id"]).toBe(node.id);
+    expect(createBody["source_type"]).toBe("git_public");
     // The wizard queues the first deploy and lands on the nested detail.
     await expect(page).toHaveURL(
       new RegExp(`/projects/${projectId}/environments/${environmentId}/applications/[0-9a-f-]+$`),

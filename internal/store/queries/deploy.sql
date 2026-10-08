@@ -5,14 +5,18 @@
 -- caller.
 INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
-    branch, build_pack, base_domain, port, host_port, team_id, is_preview
+    branch, build_pack, base_domain, port, host_port, team_id, is_preview,
+    source_type
 )
 VALUES (
     COALESCE(sqlc.arg(id)::uuid, gen_random_uuid()),
     sqlc.arg(user_id), sqlc.arg(server_id), sqlc.arg(environment_id), sqlc.arg(name), sqlc.arg(provider),
     sqlc.arg(repo), sqlc.arg(clone_url), sqlc.arg(branch), sqlc.arg(build_pack),
     sqlc.arg(base_domain), sqlc.arg(port), sqlc.arg(host_port), sqlc.arg(team_id),
-    sqlc.arg(is_preview)
+    -- Direct sqlc callers (fixtures, previews) may pass an empty source
+    -- type; COALESCE maps it onto the default so the CHECK never sees it.
+    -- The deploy repository normalizes the same way in Go.
+    sqlc.arg(is_preview), COALESCE(NULLIF(sqlc.arg(source_type), ''), 'git_public')
 )
 RETURNING *;
 

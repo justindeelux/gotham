@@ -105,23 +105,29 @@ describe("wizard gates match recorded outcomes", () => {
     const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
     const w = wiz!;
     const reset = {
-      providerId: "", publicCloneUrl: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
+      sourceType: "git_public", providerId: "", publicCloneUrl: "", privateCloneUrl: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
       buildPack: "", serverId: "", port: 3000, hostPort: null, baseDomain: "", env: [], storage: [],
     };
     const sourceCases: Array<{ name: string; patch: Record<string, unknown>; sourceValid: boolean }> = [
       { name: "empty", patch: {}, sourceValid: false },
-      { name: "public-valid", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: true },
-      { name: "public-blank-url", patch: {"providerId": "public", "publicCloneUrl": "   ", "branch": "main", "name": "storefront"}, sourceValid: false },
-      { name: "public-bad-name", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "Bad_Name!"}, sourceValid: false },
-      { name: "public-short-name", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "ab"}, sourceValid: false },
-      { name: "public-blank-branch", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "  ", "name": "storefront"}, sourceValid: false },
-      { name: "private-valid", patch: {"providerId": "p1", "repoFullName": "o/r", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: true },
-      { name: "private-no-clone", patch: {"providerId": "p1", "repoFullName": "o/r", "cloneUrl": "  ", "branch": "main", "name": "abc"}, sourceValid: false },
-      { name: "private-no-repo", patch: {"providerId": "p1", "repoFullName": "", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: false },
-      { name: "name-31-chars", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, sourceValid: true },
-      { name: "name-32-chars", patch: {"providerId": "public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, sourceValid: false },
-      { name: "no-provider-else-valid", patch: {"providerId":"","repoFullName":"o/r","cloneUrl":"git@h:o/r.git","branch":"main","name":"storefront"}, sourceValid: false },
-      { name: "no-repo-else-valid", patch: {"providerId":"p1","repoFullName":"","cloneUrl":"git@h:o/r.git","branch":"main","name":"storefront"}, sourceValid: false },
+      { name: "public-valid", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "storefront"}, sourceValid: true },
+      { name: "public-blank-url", patch: {"sourceType": "git_public", "publicCloneUrl": "   ", "branch": "main", "name": "storefront"}, sourceValid: false },
+      { name: "public-bad-name", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "Bad_Name!"}, sourceValid: false },
+      { name: "public-short-name", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "ab"}, sourceValid: false },
+      { name: "public-blank-branch", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "  ", "name": "storefront"}, sourceValid: false },
+      { name: "private-valid", patch: {"sourceType": "git_private", "privateCloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: true },
+      { name: "private-blank-url", patch: {"sourceType": "git_private", "privateCloneUrl": "  ", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "github-valid", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: true },
+      { name: "github-no-clone", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "  ", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "github-no-repo", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "gitlab-valid", patch: {"sourceType": "gitlab_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: true },
+      { name: "dockerfile-placeholder", patch: {"sourceType": "dockerfile", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "compose-placeholder", patch: {"sourceType": "compose", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "image-placeholder", patch: {"sourceType": "image", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "name-31-chars", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, sourceValid: true },
+      { name: "name-32-chars", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, sourceValid: false },
+      { name: "no-provider-else-valid", patch: {"sourceType":"github_app","providerId":"","repoFullName":"o/r","cloneUrl":"git@h:o/r.git","branch":"main","name":"storefront"}, sourceValid: false },
+      { name: "no-repo-else-valid", patch: {"sourceType":"github_app","providerId":"p1","repoFullName":"","cloneUrl":"git@h:o/r.git","branch":"main","name":"storefront"}, sourceValid: false },
     ];
     for (const c of sourceCases) {
       Object.assign(w.form, { ...reset }, c.patch);

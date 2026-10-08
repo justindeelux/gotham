@@ -97,6 +97,7 @@ const vi: CommonMessages = {
     login: "Đăng nhập",
     register: "Tạo tài khoản",
     oauthCallback: "Đang đăng nhập",
+    providerCallback: "Đã kết nối nhà cung cấp",
     dashboard: "Bảng điều khiển",
     servers: "Máy chủ",
     serverDetail: "Chi tiết máy chủ",

@@ -287,6 +287,14 @@ const vi: ApplicationsMessages = {
     webhookOff: "Tự động triển khai đang tắt: {detail}",
     webhookOffDefault: "không cài được hook của nhà cung cấp",
   },
+  providerCallback: {
+    connected: "Đã kết nối {provider}",
+    connectedHint: "Kết nối đã được lưu. Quay lại wizard để chọn kho mã.",
+    failed: "Kết nối thất bại",
+    invalidHint: "Yêu cầu kết nối đã hết hạn hoặc đã được dùng. Hãy bắt đầu lại.",
+    failedHint: "Nhà cung cấp từ chối trao đổi mã. Hãy thử lại.",
+    back: "Về projects",
+  },
   detail: {
     controlInProgress: "Đợt triển khai đang chạy. Hãy chờ hoàn tất.",
     controlNoContainer: "Chưa có container để điều khiển. Hãy triển khai ứng dụng trước.",

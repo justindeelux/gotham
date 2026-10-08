@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -31,8 +32,16 @@ type ProviderService interface {
 	// Connect completes an OAuth connection: it redeems state, exchanges code
 	// for tokens and persists them.
 	Connect(ctx context.Context, userID, providerID uuid.UUID, code, state string) (Provider, error)
-	// Disconnect deletes a stored provider connection together with its
-	// credentials and cached repositories.
+	// ConnectCallback completes an OAuth connection from the browser
+	// callback: the single-use state identifies the user and connection, so
+	// the endpoint needs no session. It returns the provider name for the
+	// redirect result flag.
+	ConnectCallback(ctx context.Context, code, state string) (string, error)
+	// Delete disconnects a stored provider connection together with its
+	// credentials and cached repositories. A connection applications still
+	// deploy through is refused with ErrInUse naming them, so deleting can
+	// never strand a remote hook or deploy key the control plane knows; a
+	// missing row is a success.
 	Delete(ctx context.Context, userID, providerID uuid.UUID) error
 	// ListRepos returns the repositories of one provider connection.
 	ListRepos(ctx context.Context, userID, providerID uuid.UUID) ([]Repo, error)
@@ -105,6 +114,18 @@ type truncationReporter interface {
 // Factory builds a SourceProvider for a stored connection.
 type Factory func(p Provider) (SourceProvider, error)
 
+// ConnectionApplication is the slice of an application the disconnect
+// in-use check needs: which connection it deploys through.
+type ConnectionApplication struct {
+	Name     string
+	Provider string
+	CloneURL string
+}
+
+// ConnectionApplicationsFunc lists the caller's applications for the
+// disconnect in-use check.
+type ConnectionApplicationsFunc func(ctx context.Context, userID uuid.UUID) ([]ConnectionApplication, error)
+
 // Config wires a Service. Repository is required; Logger defaults to
 // slog.Default and Factories are merged over the built-in GitHub/GitLab/Gitea
 // implementations (a test can override one). AllowUnsafeBaseURL permits the
@@ -114,16 +135,22 @@ type Config struct {
 	Logger             *slog.Logger
 	Factories          map[string]Factory
 	AllowUnsafeBaseURL bool
+	// ConnectionApplications lists the caller's applications for the
+	// disconnect in-use check. Nil allows every delete; production wires
+	// the deploy service so a connection applications still use cannot be
+	// forgotten out from under them.
+	ConnectionApplications ConnectionApplicationsFunc
 }
 
 // Service coordinates provider connections and repository listing. It is safe
 // for concurrent use.
 type Service struct {
-	repo               Repository
-	logger             *slog.Logger
-	factories          map[string]Factory
-	allowUnsafeBaseURL bool
-	states             *connectState
+	repo                   Repository
+	logger                 *slog.Logger
+	factories              map[string]Factory
+	allowUnsafeBaseURL     bool
+	connectionApplications ConnectionApplicationsFunc
+	states                 *connectState
 }
 
 // NewService builds a Service from cfg.
@@ -139,11 +166,12 @@ func NewService(cfg Config) *Service {
 	}
 
 	return &Service{
-		repo:               cfg.Repository,
-		logger:             logger,
-		factories:          factories,
-		allowUnsafeBaseURL: cfg.AllowUnsafeBaseURL,
-		states:             newConnectState(),
+		repo:                   cfg.Repository,
+		logger:                 logger,
+		factories:              factories,
+		allowUnsafeBaseURL:     cfg.AllowUnsafeBaseURL,
+		connectionApplications: cfg.ConnectionApplications,
+		states:                 newConnectState(),
 	}
 }
 
@@ -151,8 +179,9 @@ func NewService(cfg Config) *Service {
 // ProviderService when st is nil (no database configured) so the HTTP layer
 // skips mounting the routes. An empty secret selects an ephemeral key: provider
 // credentials are still encrypted, but a restart makes stored tokens
-// unreadable, so production must set GOTHAM_SECRET_KEY.
-func NewDefaultService(st *store.Store, secret string, logger *slog.Logger) ProviderService {
+// unreadable, so production must set GOTHAM_SECRET_KEY. Optional listApps
+// wires the disconnect in-use check (the server passes the deploy service).
+func NewDefaultService(st *store.Store, secret string, logger *slog.Logger, listApps ...ConnectionApplicationsFunc) ProviderService {
 	if st == nil {
 		return nil
 	}
@@ -163,10 +192,14 @@ func NewDefaultService(st *store.Store, secret string, logger *slog.Logger) Prov
 		secret = randomSecret()
 		logger.Warn("providers: secret_key is empty; credential encryption uses an ephemeral key")
 	}
-	return NewService(Config{
+	cfg := Config{
 		Repository: newStoreRepository(st, newSecretCipher(secret)),
 		Logger:     logger,
-	})
+	}
+	if len(listApps) > 0 {
+		cfg.ConnectionApplications = listApps[0]
+	}
+	return NewService(cfg)
 }
 
 // List returns the caller's provider connections.
@@ -197,6 +230,12 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, input CreateProv
 	}
 
 	base := strings.TrimSpace(input.BaseURL)
+	if name == NameGitLab {
+		// Normalize the instance root so gitlab.com cannot be stored twice
+		// ("" and "https://gitlab.com"), which would make every webhook and
+		// deploy-key call of that user ambiguous.
+		base = gitLabInstanceBase(base)
+	}
 	if name == NameGitea && base == "" {
 		return Provider{}, fmt.Errorf("%w: gitea requires a base_url", ErrValidation)
 	}
@@ -241,14 +280,14 @@ func (s *Service) Authorize(ctx context.Context, userID, providerID uuid.UUID) (
 		if err != nil {
 			return "", "", err
 		}
-		state, err := s.states.newPKCE(userID, providerID, verifier)
+		state, err := s.states.new(userID, providerID, verifier)
 		if err != nil {
 			return "", "", err
 		}
 		return pkce.AuthCodeURLWithPKCE(state, pkceChallenge(verifier)), state, nil
 	}
 
-	state, err := s.states.new(userID, providerID)
+	state, err := s.states.new(userID, providerID, "")
 	if err != nil {
 		return "", "", err
 	}
@@ -313,12 +352,78 @@ func (s *Service) exchangeToken(ctx context.Context, source SourceProvider, code
 
 // Delete removes a stored provider connection: its credentials and cached
 // repositories go with it (repos_cache rows cascade), so disconnecting is a
-// full credential forget. Deleting twice is a success.
+// full credential forget. Deleting twice is a success. A connection
+// applications still deploy through is refused with ErrInUse naming them, so
+// no known remote hook or deploy key is stranded: with no application left,
+// the hook and key lifecycles have already removed what they installed (the
+// residual is a hook forgotten with ?force=true, which is documented on that
+// route). The stored tokens are deleted, not revoked at the Git host: a
+// token already issued stays valid there until it expires.
 func (s *Service) Delete(ctx context.Context, userID, providerID uuid.UUID) error {
 	if s.repo == nil {
 		return errors.New("providers: repository is not configured")
 	}
+	connection, err := s.repo.Get(ctx, providerID, userID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if s.connectionApplications != nil {
+		using, err := s.connectionUsers(ctx, userID, connection)
+		if err != nil {
+			return err
+		}
+		if len(using) > 0 {
+			return fmt.Errorf("%w: %s", ErrInUse, strings.Join(using, ", "))
+		}
+	}
 	return s.repo.Delete(ctx, providerID, userID)
+}
+
+// connectionUsers names the caller's applications deploying through
+// connection, matched by provider slug and instance host.
+func (s *Service) connectionUsers(ctx context.Context, userID uuid.UUID, connection Provider) ([]string, error) {
+	applications, err := s.connectionApplications(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	host := connectionHost(connection)
+	if host == "" {
+		return nil, nil
+	}
+	var using []string
+	for _, app := range applications {
+		if app.Provider == connection.Name && cloneHostOf(app.CloneURL) == host {
+			using = append(using, app.Name)
+		}
+	}
+	sort.Strings(using)
+	return using, nil
+}
+
+// ConnectCallback completes an OAuth connection from the browser callback: it
+// redeems code and state and returns the provider name for the redirect
+// result flag. The single-use state identifies the user and connection, so the
+// callback endpoint needs no session; a missing, expired or already-used
+// state fails like any forged one.
+func (s *Service) ConnectCallback(ctx context.Context, code, state string) (string, error) {
+	if s.repo == nil {
+		return "", errors.New("providers: repository is not configured")
+	}
+	if strings.TrimSpace(code) == "" || strings.TrimSpace(state) == "" {
+		return "", fmt.Errorf("%w: authorization code or state is empty", ErrValidation)
+	}
+	userID, providerID, ok := s.states.lookup(state)
+	if !ok {
+		return "", fmt.Errorf("%w: invalid or expired oauth state", ErrValidation)
+	}
+	provider, err := s.Connect(ctx, userID, providerID, code, state)
+	if err != nil {
+		return "", err
+	}
+	return provider.Name, nil
 }
 
 // ListRepos returns the repositories of one provider connection. A live fetch
@@ -746,23 +851,11 @@ func newConnectState() *connectState {
 	}
 }
 
-// new mints a random single-use state bound to userID and providerID. It
+// new mints a random single-use state bound to userID and providerID, keeping
+// verifier ("" for legacy authorizations) for the Connect that redeems it. It
 // answers ErrTooManyRequests when the user's or the global cap is reached, so a
 // caller gets a 429 rather than a 500 for everyone.
-func (s *connectState) new(userID, providerID uuid.UUID) (string, error) {
-	return s.newWithVerifier(userID, providerID, "")
-}
-
-// newPKCE mints a random single-use state bound to userID and providerID and
-// stores verifier beside it, under the same caps, single-use and expiry as
-// new.
-func (s *connectState) newPKCE(userID, providerID uuid.UUID, verifier string) (string, error) {
-	return s.newWithVerifier(userID, providerID, verifier)
-}
-
-// newWithVerifier mints a random single-use state bound to userID and
-// providerID, keeping verifier for the Connect that redeems it.
-func (s *connectState) newWithVerifier(userID, providerID uuid.UUID, verifier string) (string, error) {
+func (s *connectState) new(userID, providerID uuid.UUID, verifier string) (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("providers: generate connect state: %w", err)
@@ -807,6 +900,21 @@ func (s *connectState) redeem(state string, userID, providerID uuid.UUID) (strin
 		return "", false
 	}
 	return entry.verifier, true
+}
+
+// lookup reports the user and provider a pending state binds, without
+// consuming it. The browser callback uses it to find whose connection a
+// code belongs to; Connect still redeems the state, so a concurrent use
+// fails closed there.
+func (s *connectState) lookup(state string) (userID, providerID uuid.UUID, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.entries[state]
+	if !ok || s.now().After(entry.expiresAt) {
+		return uuid.Nil, uuid.Nil, false
+	}
+	return entry.userID, entry.providerID, true
 }
 
 // releaseLocked decrements a user's outstanding count; the caller holds the lock.

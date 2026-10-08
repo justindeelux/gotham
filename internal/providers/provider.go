@@ -34,6 +34,12 @@ var (
 	// ErrTooManyRequests is returned when a caller has too many pending OAuth
 	// authorizations, so a single account cannot exhaust the state store.
 	ErrTooManyRequests = errors.New("providers: too many pending requests")
+	// ErrConflict is returned when the caller already has the connection it
+	// tries to create (a repeated provision or a unique-violation race).
+	ErrConflict = errors.New("providers: provider already exists")
+	// ErrInUse is returned when a connection cannot be deleted because
+	// applications still deploy through it.
+	ErrInUse = errors.New("providers: provider is still in use")
 )
 
 // Repo is the provider-neutral repository representation.

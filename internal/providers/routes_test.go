@@ -85,6 +85,15 @@ func (f *fakeService) Connect(_ context.Context, _, _ uuid.UUID, code, state str
 	return f.connected, nil
 }
 
+// ConnectCallback implements ProviderService.
+func (f *fakeService) ConnectCallback(_ context.Context, code, state string) (string, error) {
+	f.connectCode, f.connectState = code, state
+	if f.connectErr != nil {
+		return "", f.connectErr
+	}
+	return f.connected.Name, nil
+}
+
 func (f *fakeService) ListRepos(context.Context, uuid.UUID, uuid.UUID) ([]Repo, error) {
 	return f.repos, f.reposErr
 }

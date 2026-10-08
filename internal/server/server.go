@@ -419,8 +419,28 @@ func (s *Server) routes() (http.Handler, error) {
 		// Source providers (GitHub/GitLab/Gitea): list connections and repos,
 		// plus create/connect. The method-based scope boundary keeps reads on
 		// the read scope and the create/connect mutations on the deploy scope,
-		// so a read-only API token cannot add a connection.
-		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger)
+		// so a read-only API token cannot add a connection. The deploy service
+		// feeds the disconnect in-use check, so a connection applications
+		// still deploy through is refused instead of stranding their hooks.
+		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger,
+			func(ctx context.Context, userID uuid.UUID) ([]providers.ConnectionApplication, error) {
+				if s.deploy == nil {
+					return nil, nil
+				}
+				applications, err := s.deploy.ListApplications(ctx, userID, deploy.ApplicationFilter{})
+				if err != nil {
+					return nil, err
+				}
+				out := make([]providers.ConnectionApplication, 0, len(applications))
+				for _, app := range applications {
+					out = append(out, providers.ConnectionApplication{
+						Name:     app.Name,
+						Provider: app.Provider,
+						CloneURL: app.CloneURL,
+					})
+				}
+				return out, nil
+			})
 		providers.Mount(api, s.resourceScopeAuth, UserIDFromContext, providerSvc)
 
 		// Application deploy orchestration (BE-4.3): a nil service (no

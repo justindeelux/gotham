@@ -8,11 +8,11 @@ import (
 	"io"
 )
 
-// PKCE (RFC 7636) parameters for the authorization-code flow. GitLab is a
-// public-codebase instance away from home: the SPA opens the provider's
-// authorize page directly, so the code is redeemed with an S256 challenge whose
-// verifier never leaves the control plane. The verifier is minted in
-// Authorize, stored beside the one-time state and consumed in Connect.
+// PKCE (RFC 7636) parameters for the authorization-code flow. The SPA opens
+// the provider's authorize page directly, so the code it receives is bound to
+// an S256 challenge whose verifier never leaves the control plane: the
+// verifier is minted in Authorize, stored beside the one-time state and
+// consumed in Connect.
 const (
 	// pkceVerifierBytes is the entropy of a generated verifier: 32 bytes
 	// encode to 43 base64url characters, inside the 43-128 range RFC 7636

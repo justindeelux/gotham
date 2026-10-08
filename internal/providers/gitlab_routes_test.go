@@ -2,6 +2,7 @@ package providers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -82,9 +83,11 @@ func TestRoutesGitLabAutoProvision(t *testing.T) {
 	srv := newRouteServer(svc, alwaysUser(userID))
 
 	body := `{"base_url":"https://git.example","admin_token":"one-time","redirect_url":"https://cp.example/oauth/callback"}`
+	req := httptest.NewRequest(http.MethodPost,
+		"/v1/providers/gitlab/auto-provision", strings.NewReader(body))
+	req.Host = "cp.example"
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/v1/providers/gitlab/auto-provision", strings.NewReader(body)))
+	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -102,13 +105,15 @@ func TestRoutesGitLabAutoProvision(t *testing.T) {
 func TestRoutesGitLabSetupInfo(t *testing.T) {
 	svc := &fakeService{setupInfo: GitLabSetupInfo{
 		BaseURL: "https://git.example", RedirectURI: "https://cp.example/oauth/callback",
-		Scopes: gitLabProvisionScopes,
+		Scopes: gitLabDefaultProvisionScopes,
 	}}
 	srv := newRouteServer(svc, alwaysUser(uuid.New()))
 
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/v1/providers/gitlab/setup-info?base_url=https%3A%2F%2Fgit.example&redirect_url=https%3A%2F%2Fcp.example%2Foauth%2Fcallback", nil))
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/providers/gitlab/setup-info?base_url=https%3A%2F%2Fgit.example&redirect_url=https%3A%2F%2Fcp.example%2Foauth%2Fcallback", nil)
+	req.Host = "cp.example"
+	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -116,10 +121,104 @@ func TestRoutesGitLabSetupInfo(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if body.RedirectURI != "https://cp.example/oauth/callback" || body.Scopes != gitLabProvisionScopes {
+	if body.RedirectURI != "https://cp.example/oauth/callback" || body.Scopes != gitLabDefaultProvisionScopes {
 		t.Fatalf("body = %+v", body)
 	}
 	if svc.setupBase != "https://git.example" || svc.setupReturn != "https://cp.example/oauth/callback" {
 		t.Fatalf("setup args = %q/%q", svc.setupBase, svc.setupReturn)
+	}
+}
+
+// TestRoutesGitLabCallbackRedirects completes the browser flow with a fixed
+// result flag instead of a session.
+func TestRoutesGitLabCallbackRedirects(t *testing.T) {
+	svc := &fakeService{connected: Provider{Name: NameGitLab}}
+	srv := newRouteServer(svc, alwaysUser(uuid.New()))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/providers/gitlab/callback?code=abc&state=xyz", nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 (body %s)", rec.Code, rec.Body.String())
+	}
+	location := rec.Header().Get("Location")
+	if location != "/providers/callback?status=ok&provider=gitlab" {
+		t.Fatalf("location = %q", location)
+	}
+	if svc.connectCode != "abc" || svc.connectState != "xyz" {
+		t.Fatalf("callback args = %q/%q", svc.connectCode, svc.connectState)
+	}
+}
+
+// TestRoutesGitLabCallbackFailure carries fixed reason codes, never detail.
+func TestRoutesGitLabCallbackFailure(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    error
+		reason string
+	}{
+		{"invalid state", ErrValidation, "invalid"},
+		{"exchange down", errors.New("boom"), "failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeService{connectErr: tc.err}
+			srv := newRouteServer(svc, alwaysUser(uuid.New()))
+
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/v1/providers/gitlab/callback?code=abc&state=xyz", nil))
+			if rec.Code != http.StatusFound {
+				t.Fatalf("status = %d, want 302", rec.Code)
+			}
+			want := "/providers/callback?status=error&reason=" + tc.reason
+			if location := rec.Header().Get("Location"); location != want {
+				t.Fatalf("location = %q, want %q", location, want)
+			}
+		})
+	}
+}
+
+// TestRoutesDeleteConflict answers 409 when applications still use the
+// connection.
+func TestRoutesDeleteConflict(t *testing.T) {
+	svc := &fakeService{deleteErr: ErrInUse}
+	srv := newRouteServer(svc, alwaysUser(uuid.New()))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/v1/providers/"+uuid.New().String(), nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRoutesProvisionRejectsForeignRedirect refuses a redirect URL that does
+// not name this control plane.
+func TestRoutesProvisionRejectsForeignRedirect(t *testing.T) {
+	srv := newRouteServer(&fakeService{}, alwaysUser(uuid.New()))
+
+	body := `{"base_url":"https://git.example","admin_token":"one-time","redirect_url":"https://evil.example/cb"}`
+	req := httptest.NewRequest(http.MethodPost,
+		"/v1/providers/gitlab/auto-provision", strings.NewReader(body))
+	req.Host = "cp.example"
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestRoutesSetupInfoRejectsForeignRedirect refuses a redirect URL that does
+// not name this control plane.
+func TestRoutesSetupInfoRejectsForeignRedirect(t *testing.T) {
+	srv := newRouteServer(&fakeService{}, alwaysUser(uuid.New()))
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/v1/providers/gitlab/setup-info?redirect_url=https%3A%2F%2Fevil.example%2Fcb", nil)
+	req.Host = "cp.example"
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }

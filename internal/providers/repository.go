@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store"
@@ -74,6 +75,9 @@ func (r *storeRepository) Create(ctx context.Context, p Provider) (Provider, err
 		Scopes:         p.Scopes,
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			return Provider{}, fmt.Errorf("%w: this provider is already connected", ErrConflict)
+		}
 		return Provider{}, fmt.Errorf("providers: create: %w", err)
 	}
 	return r.providerFromRow(row)
@@ -231,6 +235,13 @@ func repoFromRow(row sqlc.ReposCache) Repo {
 		SSHURL:        row.SshUrl,
 		HTMLURL:       row.HtmlUrl,
 	}
+}
+
+// isUniqueViolation reports whether err is a PostgreSQL unique violation
+// (a repeated create racing the pre-check, or a double submit).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // pgUUID converts a uuid.UUID to the pgx type (invalid for the nil UUID).

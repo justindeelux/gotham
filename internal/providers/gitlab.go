@@ -16,9 +16,11 @@ const (
 	gitLabDefaultBase = "https://gitlab.com"
 	gitLabAPIBase     = "https://gitlab.com/api/v4"
 
-	// gitLabDefaultScopes grants API access for repo listing and webhooks plus
-	// the read scopes a least-privilege manual application needs.
-	gitLabDefaultScopes = "api read_user read_repository"
+	// gitLabDefaultScopes grants API access for repo listing and webhooks.
+	// Existing manual applications keep authorizing with the scope they were
+	// registered with; wider scopes are requested only for applications
+	// Gotham provisions itself (see gitLabProvisionScopes).
+	gitLabDefaultScopes = "api"
 
 	// gitLabPageSize is GitLab's maximum per_page.
 	gitLabPageSize = 100

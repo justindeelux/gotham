@@ -96,6 +96,7 @@ const en = {
     login: "Sign in",
     register: "Create account",
     oauthCallback: "Signing in",
+    providerCallback: "Provider connected",
     dashboard: "Dashboard",
     servers: "Servers",
     serverDetail: "Server detail",

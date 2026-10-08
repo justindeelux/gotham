@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -138,7 +139,7 @@ func TestGitLabConnectFailsClosedWithoutVerifier(t *testing.T) {
 		},
 	})
 
-	state, err := svc.states.new(provider.UserID, provider.ID)
+	state, err := svc.states.new(provider.UserID, provider.ID, "")
 	if err != nil {
 		t.Fatalf("new state: %v", err)
 	}
@@ -152,9 +153,9 @@ func TestGitLabConnectFailsClosedWithoutVerifier(t *testing.T) {
 func TestConnectStateVerifierExpiry(t *testing.T) {
 	states := newConnectState()
 	user, provider := uuid.New(), uuid.New()
-	state, err := states.newPKCE(user, provider, "verifier")
+	state, err := states.new(user, provider, "verifier")
 	if err != nil {
-		t.Fatalf("newPKCE: %v", err)
+		t.Fatalf("new: %v", err)
 	}
 	states.now = func() time.Time { return time.Now().Add(connectStateTTL + time.Minute) }
 	if _, ok := states.redeem(state, user, provider); ok {
@@ -167,9 +168,9 @@ func TestConnectStateVerifierExpiry(t *testing.T) {
 func TestConnectStateVerifierRoundTrip(t *testing.T) {
 	states := newConnectState()
 	user, provider := uuid.New(), uuid.New()
-	state, err := states.newPKCE(user, provider, "verifier-abc")
+	state, err := states.new(user, provider, "verifier-abc")
 	if err != nil {
-		t.Fatalf("newPKCE: %v", err)
+		t.Fatalf("new: %v", err)
 	}
 	verifier, ok := states.redeem(state, user, provider)
 	if !ok || verifier != "verifier-abc" {
@@ -189,6 +190,10 @@ type fakeGitLab struct {
 	seenPayload  map[string]any
 	seenVerifier string
 	seenCode     string
+	// applications counts POST /api/v4/applications calls; deletedApp records
+	// the id of a DELETE /api/v4/applications/:id rollback.
+	applications int
+	deletedApp   int64
 
 	applicationStatus int
 	tokenStatus       int
@@ -205,6 +210,7 @@ func (f *fakeGitLab) handler() http.HandlerFunc {
 				return
 			}
 			f.seenPayload = payload
+			f.applications++
 			if f.applicationStatus != 0 {
 				http.Error(w, "denied", f.applicationStatus)
 				return
@@ -213,6 +219,14 @@ func (f *fakeGitLab) handler() http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": 7, "application_id": "gl-app-id", "secret": "gl-app-secret",
 			})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v4/applications/"):
+			id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/api/v4/applications/"), 10, 64)
+			if err != nil || id <= 0 {
+				http.Error(w, "bad id", http.StatusBadRequest)
+				return
+			}
+			f.deletedApp = id
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/oauth/token":
 			_ = r.ParseForm()
 			f.seenCode = r.Form.Get("code")
@@ -287,15 +301,15 @@ func TestAutoProvisionGitLab(t *testing.T) {
 	if provider.Connected() {
 		t.Fatal("provisioned provider must hold no tokens yet")
 	}
-	if provider.Scopes != gitLabProvisionScopes {
-		t.Fatalf("scopes = %q, want %q", provider.Scopes, gitLabProvisionScopes)
+	if provider.Scopes != gitLabDefaultProvisionScopes {
+		t.Fatalf("scopes = %q, want %q", provider.Scopes, gitLabDefaultProvisionScopes)
 	}
 	if fake.seenAuth != "Bearer one-time-admin" {
 		t.Fatalf("authorization = %q", fake.seenAuth)
 	}
 	if fake.seenPayload["redirect_uri"] != "https://cp.example/oauth/callback" ||
 		fake.seenPayload["confidential"] != true ||
-		fake.seenPayload["scopes"] != gitLabProvisionScopes {
+		fake.seenPayload["scopes"] != gitLabDefaultProvisionScopes {
 		t.Fatalf("payload = %v", fake.seenPayload)
 	}
 
@@ -380,7 +394,7 @@ func TestGitLabSetupInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GitLabSetupInfoFor: %v", err)
 	}
-	if info.BaseURL != "https://git.example" || info.RedirectURI != "https://cp.example/oauth/callback" || info.Scopes != gitLabProvisionScopes {
+	if info.BaseURL != "https://git.example" || info.RedirectURI != "https://cp.example/oauth/callback" || info.Scopes != gitLabDefaultProvisionScopes {
 		t.Fatalf("info = %+v", info)
 	}
 
@@ -391,7 +405,6 @@ func TestGitLabSetupInfo(t *testing.T) {
 	if empty.BaseURL != gitLabDefaultBase {
 		t.Fatalf("base = %q, want gitlab.com", empty.BaseURL)
 	}
-
 	if _, err := svc.GitLabSetupInfoFor("https://git.example", "/relative"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("bad redirect: error = %v, want ErrValidation", err)
 	}
@@ -544,5 +557,230 @@ func TestGitLabTransparentRefresh(t *testing.T) {
 	}
 	if stored.AccessToken != "rotated-access" || stored.RefreshToken != "rotated-refresh" {
 		t.Fatalf("stored = %q/%q, want the rotated pair", stored.AccessToken, stored.RefreshToken)
+	}
+}
+
+// TestAutoProvisionGitLabRefusesDuplicate proves a second provision for the
+// same normalized instance is refused before anything is created on GitLab.
+func TestAutoProvisionGitLabRefusesDuplicate(t *testing.T) {
+	fake := &fakeGitLab{t: t}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	repo := newFakeRepo()
+	userID := uuid.New()
+	if _, err := repo.Create(context.Background(), Provider{
+		ID: uuid.New(), UserID: userID, Name: NameGitLab, BaseURL: srv.URL + "/",
+		ClientID: "old", ClientSecret: "old",
+		RedirectURL: "https://cp.example/oauth/callback",
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	svc := NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
+
+	_, err := svc.AutoProvisionGitLab(context.Background(), userID, AutoProvisionGitLabInput{
+		BaseURL:     srv.URL + "/api/v4",
+		AdminToken:  "admin",
+		RedirectURL: "https://cp.example/oauth/callback",
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("error = %v, want ErrConflict", err)
+	}
+	if fake.applications != 0 {
+		t.Fatalf("provision calls = %d, want none before the duplicate check", fake.applications)
+	}
+}
+
+// TestAutoProvisionGitLabRemovesOrphanOnStoreFailure proves a row insert
+// failure after a successful POST deletes the just-created application again.
+func TestAutoProvisionGitLabRemovesOrphanOnStoreFailure(t *testing.T) {
+	fake := &fakeGitLab{t: t}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	repo := newFakeRepo()
+	repo.createErr = errors.New("store unavailable")
+	svc := NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
+
+	_, err := svc.AutoProvisionGitLab(context.Background(), uuid.New(), AutoProvisionGitLabInput{
+		BaseURL:     srv.URL,
+		AdminToken:  "admin",
+		RedirectURL: "https://cp.example/oauth/callback",
+	})
+	if err == nil || errors.Is(err, ErrConflict) {
+		t.Fatalf("error = %v, want the store failure", err)
+	}
+	if fake.deletedApp != 7 {
+		t.Fatalf("rolled back application = %d, want the just-created id 7", fake.deletedApp)
+	}
+}
+
+// TestAutoProvisionGitLabRequiresHTTPS proves the admin token is never sent
+// over plain HTTP outside tests.
+func TestAutoProvisionGitLabRequiresHTTPS(t *testing.T) {
+	fake := &fakeGitLab{t: t}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	svc := NewService(Config{Repository: newFakeRepo(), Logger: discardLogger()})
+	_, err := svc.AutoProvisionGitLab(context.Background(), uuid.New(), AutoProvisionGitLabInput{
+		BaseURL:     "http://git.example",
+		AdminToken:  "admin",
+		RedirectURL: "https://cp.example/oauth/callback",
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("error = %v, want ErrValidation", err)
+	}
+	if fake.applications != 0 {
+		t.Fatal("plain-http instance was contacted")
+	}
+}
+
+// TestAutoProvisionGitLabRejectsUnknownScopes proves a typo fails at the API.
+func TestAutoProvisionGitLabRejectsUnknownScopes(t *testing.T) {
+	fake := &fakeGitLab{t: t}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	svc := NewService(Config{Repository: newFakeRepo(), Logger: discardLogger(), AllowUnsafeBaseURL: true})
+	_, err := svc.AutoProvisionGitLab(context.Background(), uuid.New(), AutoProvisionGitLabInput{
+		BaseURL:     srv.URL,
+		AdminToken:  "admin",
+		RedirectURL: "https://cp.example/oauth/callback",
+		Scopes:      "api bogus",
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("error = %v, want ErrValidation", err)
+	}
+	if fake.applications != 0 {
+		t.Fatal("unknown scopes reached GitLab")
+	}
+}
+
+// TestServiceDeleteRefusesInUse proves a connection applications still
+// deploy through is refused naming them, while other hosts stay deletable.
+func TestServiceDeleteRefusesInUse(t *testing.T) {
+	repo := newFakeRepo()
+	userID := uuid.New()
+	connection, err := repo.Create(context.Background(), Provider{
+		ID: uuid.New(), UserID: userID, Name: NameGitLab, BaseURL: "https://git.example",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	other, err := repo.Create(context.Background(), Provider{
+		ID: uuid.New(), UserID: userID, Name: NameGitLab, BaseURL: "https://stale.example",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	svc := NewService(Config{
+		Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
+		ConnectionApplications: func(context.Context, uuid.UUID) ([]ConnectionApplication, error) {
+			return []ConnectionApplication{
+				{Name: "shop", Provider: NameGitLab, CloneURL: "https://git.example/acme/shop.git"},
+				{Name: "blog", Provider: NameGitLab, CloneURL: "git@other.example:acme/blog.git"},
+				{Name: "docs", Provider: NameGitHub, CloneURL: "https://github.com/acme/docs.git"},
+			}, nil
+		},
+	})
+
+	err = svc.Delete(context.Background(), userID, connection.ID)
+	if !errors.Is(err, ErrInUse) {
+		t.Fatalf("error = %v, want ErrInUse", err)
+	}
+	if !strings.Contains(err.Error(), "shop") {
+		t.Fatalf("error = %v, want the application name", err)
+	}
+	if _, err := repo.Get(context.Background(), connection.ID, userID); err != nil {
+		t.Fatalf("refused connection was deleted: %v", err)
+	}
+
+	if err := svc.Delete(context.Background(), userID, other.ID); err != nil {
+		t.Fatalf("other-host Delete: %v", err)
+	}
+	if _, err := repo.Get(context.Background(), other.ID, userID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("other-host row survived: %v", err)
+	}
+}
+
+// TestConnectCallback completes a connect from code and state alone: the
+// browser callback needs no session because the state binds both.
+func TestConnectCallback(t *testing.T) {
+	tokenSrv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSONTest(t, w, map[string]any{
+			"access_token": "cb-access", "refresh_token": "cb-refresh",
+			"token_type": "bearer", "expires_in": 7200,
+		})
+	})
+
+	repo := newFakeRepo()
+	userID := uuid.New()
+	provider, err := repo.Create(context.Background(), Provider{
+		ID: uuid.New(), UserID: userID, Name: NameGitLab,
+		ClientID: "id", ClientSecret: "secret",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	svc := NewService(Config{
+		Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true,
+		Factories: map[string]Factory{
+			NameGitLab: func(p Provider) (SourceProvider, error) {
+				s := newGitLabSource(p, true)
+				s.config.Endpoint.TokenURL = tokenSrv.URL
+				return s, nil
+			},
+		},
+	})
+
+	_, state, err := svc.Authorize(context.Background(), userID, provider.ID)
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	name, err := svc.ConnectCallback(context.Background(), "cb-code", state)
+	if err != nil {
+		t.Fatalf("ConnectCallback: %v", err)
+	}
+	if name != NameGitLab {
+		t.Fatalf("provider = %q, want gitlab", name)
+	}
+	stored, err := repo.Get(context.Background(), provider.ID, userID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.AccessToken != "cb-access" {
+		t.Fatalf("stored token = %q", stored.AccessToken)
+	}
+
+	if _, err := svc.ConnectCallback(context.Background(), "cb-code", state); !errors.Is(err, ErrValidation) {
+		t.Fatalf("replay error = %v, want ErrValidation", err)
+	}
+	if _, err := svc.ConnectCallback(context.Background(), "cb-code", "forged"); !errors.Is(err, ErrValidation) {
+		t.Fatalf("forged error = %v, want ErrValidation", err)
+	}
+	if _, err := svc.ConnectCallback(context.Background(), "", state); !errors.Is(err, ErrValidation) {
+		t.Fatalf("empty code error = %v, want ErrValidation", err)
+	}
+}
+
+// TestServiceCreateNormalizesGitLabBase proves the manual create stores the
+// instance root, so gitlab.com cannot be connected twice under two spellings.
+func TestServiceCreateNormalizesGitLabBase(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, CreateProviderInput{
+		Name: NameGitLab, BaseURL: "https://gitlab.com/api/v4",
+		ClientID: "id", ClientSecret: "secret",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.BaseURL != "" {
+		t.Fatalf("base = %q, want empty for gitlab.com", created.BaseURL)
 	}
 }

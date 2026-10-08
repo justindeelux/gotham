@@ -23,6 +23,14 @@
 - **Verify:** connect a dev GitHub app → list the test account's repos.
 - **Depends on:** Phase 1. Parallel with BE-4.2.
 
+### GitLab self-hosted limits (GS-6)
+
+- **TLS trust:** the instance must serve TLS the control plane trusts. Plain `http://` instance URLs are refused for OAuth application provisioning (and self-signed CAs fail the call); loopback `http://` stays allowed in tests only.
+- **Base URL root:** `base_url` must name the instance root (`https://git.example.com`, a pasted `/api/v4` suffix is trimmed); empty selects `gitlab.com` and is stored normalized, so one user cannot hold two connections for the same instance.
+- **Admin token scope:** automatic OAuth application creation (`POST /api/v4/applications`) needs a token with `api` scope on an administrator account. The token is one-time: it authenticates the provisioning call only and is never stored, logged or returned. Without it, register the application manually with the exact redirect URI and scopes from `GET /v1/providers/gitlab/setup-info` (`api read_user read_repository`).
+- **Redirect URL:** must be the exact public control-plane callback (`https://<cp-host>/api/v1/providers/gitlab/callback`); the API rejects a redirect naming any other host. After the provider redirects back, the control plane completes the connect (identity comes from the single-use PKCE state, no session needed) and lands the browser on `/providers/callback` with a result flag.
+- **Disconnect:** refused with 409 while applications still deploy through the connection (the error names them). Stored tokens are deleted, not revoked at the Git host: an issued token stays valid there until it expires. A hook forgotten with `?force=true` is the other residual: it stays on GitLab and must be removed by hand.
+
 ## BE-4.2 — Build engines — `ws/p4-builds`
 
 - **Context brief:** 4 engines per the README: **Dockerfile**, **Railpack** (replacing Nixpacks), **Buildpacks** (herokuish), **static**. Each engine implements the `BuildEngine` interface (Detect(repo, buildPack) → Build(ctx, opts) → image tag). Builds run **on the node (agent)** — the CP only orchestrates; images are pushed to an **internal registry** running on the node (`registry:2` container). Standardized output: image tag `gotham/{appID}:{deployID}`.

@@ -287,6 +287,14 @@ const en = {
     webhookOff: "Automatic deploys are off: {detail}",
     webhookOffDefault: "the provider hook could not be installed",
   },
+  providerCallback: {
+    connected: "{provider} connected",
+    connectedHint: "The connection is stored. Return to the wizard to pick a repository.",
+    failed: "Connection failed",
+    invalidHint: "The connection request expired or was already used. Start the connect flow again.",
+    failedHint: "The provider refused the exchange. Try again.",
+    back: "Back to projects",
+  },
   detail: {
     controlInProgress: "A deployment is in progress. Wait for it to finish.",
     controlNoContainer: "No container to control yet. Deploy the application first.",

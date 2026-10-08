@@ -37,6 +37,8 @@ type fakeRepo struct {
 	cached    map[uuid.UUID][]Repo
 	replaced  map[uuid.UUID][]Repo
 	replaceFn func(providerID uuid.UUID, repos []Repo) error
+	// createErr fails Create, so tests can drive post-create failures.
+	createErr error
 
 	updateTokenCalls int
 }
@@ -51,6 +53,9 @@ func newFakeRepo() *fakeRepo {
 }
 
 func (f *fakeRepo) Create(_ context.Context, p Provider) (Provider, error) {
+	if f.createErr != nil {
+		return Provider{}, f.createErr
+	}
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
 	}

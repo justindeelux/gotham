@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,8 +54,11 @@ type cloneRunner func(ctx context.Context, argv []string, env []string) ([]byte,
 // The result is a shallow, single-branch working tree that the build engines
 // consume directly (they exclude .git from the context themselves).
 //
-// An application that holds a deploy key is cloned through GIT_SSH_COMMAND
-// with an ephemeral 0600 key file; an application without one keeps the
+// An SSH remote is cloned through GIT_SSH_COMMAND with an ephemeral 0600 key
+// file verified against the pinned known_hosts (StrictHostKeyChecking=yes,
+// unless the documented dev flag re-enables accept-new); an HTTPS remote of
+// a git_private source uses the stored token through an ephemeral GIT_ASKPASS
+// helper, falling back to the deploy key (rewritten to SSH) and then to the
 // anonymous clone it has always had.
 type gitSource struct {
 	// keys opens the application's deploy private key; nil disables key
@@ -64,6 +67,9 @@ type gitSource struct {
 	// appTokens builds token-authenticated clone URLs for linked github_app
 	// sources; nil keeps every clone on the legacy path.
 	appTokens appTokenResolver
+	// creds opens the application's HTTPS git credential; nil disables
+	// credential lookup entirely (anonymous HTTPS clone).
+	creds gitCredentialResolver
 	// run executes git; nil selects the real binary.
 	run cloneRunner
 	// logger records host-key trust downgrades; nil selects slog.Default.
@@ -85,8 +91,8 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	if err := validateCloneURL(url); err != nil {
 		return err
 	}
-	// tokenClone marks the installation-token path for the log line: the
-	// token itself never appears (see RedactCloneURL).
+	// tokenClone marks the GS-5 installation-token path for the log line:
+	// the token itself never appears (see RedactCloneURL).
 	tokenClone := false
 	// The token path is explicit: the application must be linked to a GitHub
 	// App connection AND carry an http(s) clone URL. Anything else (legacy
@@ -109,27 +115,38 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 			return err
 		}
 	}
-	privatePEM, err := s.deployKeyPEM(ctx, app.ID)
-	if err != nil {
-		return err
+	var (
+		env     []string
+		cleanup func()
+		using   string
+	)
+	if tokenClone {
+		// The installation token already authenticates the https URL, so the
+		// URL is never rewritten to SSH (that would drop the token) and the
+		// GS-4 credential is never consulted (a linked github_app source
+		// cannot hold one).
+		var err error
+		env, cleanup, err = s.legacyKeyEnv(ctx, app.ID)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		using = "installation-token"
+	} else {
+		var err error
+		url, env, cleanup, using, err = s.cloneCredential(ctx, app, url)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
 	}
-	if privatePEM == "" && isSSHTransportURL(url) {
-		// A keyless clone runs ssh with the control plane's ambient
-		// identity: refuse, so an SSH URL on a credential-less source is a
-		// clear validation error instead of an authentication surprise.
-		return fmt.Errorf("%w: SSH clone URL %q needs a deploy key: use a public http(s) or git URL, or a private-git source",
-			ErrValidation, RedactCloneURL(url))
-	}
-	if privatePEM != "" && !tokenClone {
-		// A deploy key is an SSH credential: over http(s) it would
-		// authenticate nothing, so an http(s) URL is rewritten to its SSH
-		// shape first. Skipped on the token path: the token already
-		// authenticates the https URL, and rewriting would drop it while
-		// the log line claims token use. This is the fallback for rows that
-		// still carry an https URL (API clients, applications created
-		// before BE-4.4b); the wizard stores the provider's own ssh_url for
-		// private repositories, which passes through with its port intact.
-		url = sshCloneURL(url)
+	if using == "deploy-key" && devAcceptNewHostKeys() {
+		// A stray value in the service environment silently downgrades
+		// every keyed clone; make it visible on each clone.
+		s.log().Warn("deploy: keyed clone trusts unseen host keys",
+			"reason", devAcceptNewHostKeysEnv+" is set",
+			"risk", "the clone accepts any host key; disable this in production",
+		)
 	}
 	branch := strings.TrimSpace(app.Branch)
 	// A retried step re-enters Clone with the same directory: clear whatever
@@ -138,36 +155,11 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		return fmt.Errorf("git clone: clear %s: %w", dir, err)
 	}
 
-	// The child environment must be deterministic regardless of the ambient
-	// one: a CI runner (actions/checkout) or a developer shell may export
-	// GIT_SSH_COMMAND, and git would then use it for an anonymous clone or
-	// combine it with the deploy key one. Drop every inherited entry first;
-	// the keyed branch below adds back exactly one.
-	env := withoutEnv(os.Environ(), "GIT_SSH_COMMAND")
-	if privatePEM != "" {
-		if devAcceptNewHostKeys() {
-			// A stray value in the service environment silently downgrades
-			// every keyed clone; make it visible on each clone.
-			s.log().Warn("deploy: keyed clone trusts unseen host keys",
-				"reason", devAcceptNewHostKeysEnv+" is set",
-				"risk", "the clone accepts any host key; disable this in production",
-			)
-		}
-		files, err := newDeployKeyFiles(privatePEM, s.log())
-		if err != nil {
-			return err
-		}
-		defer files.remove()
-		env = files.sshEnv(env)
-	}
-
 	// An empty branch pins the remote's default via ls-remote (GS-3) instead
 	// of guessing "main". It runs with the clone environment, so a keyed SSH
-	// remote resolves through the same deploy key.
-	runner := s.run
-	if runner == nil {
-		runner = runGit
-	}
+	// remote (or an HTTPS remote with a stored token) resolves through the
+	// same credential.
+	runner := s.runOrDefault()
 	if branch == "" {
 		resolved, err := defaultBranchFor(ctx, runner, url, env)
 		if err != nil {
@@ -178,10 +170,13 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 
 	if log != nil {
 		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, RedactCloneURL(url))
-		if tokenClone {
+		switch using {
+		case "installation-token":
 			line += " (using a fresh installation token)"
-		} else if privatePEM != "" {
+		case "deploy-key":
 			line += " (using the application deploy key)"
+		case "https-credential":
+			line += " (using the stored HTTPS credential)"
 		}
 		log(line)
 	}
@@ -210,6 +205,34 @@ func (s gitSource) log() *slog.Logger {
 		return s.logger
 	}
 	return slog.Default()
+}
+
+// legacyKeyEnv builds the child environment for a clone whose URL already
+// carries its credential (the GS-5 installation token): the URL is used as
+// is, and a deploy key, when present, still materializes for the host-key
+// policy. It mirrors the pre-GS-4 keyed path, including the trust-downgrade
+// warning.
+func (s gitSource) legacyKeyEnv(ctx context.Context, appID uuid.UUID) (env []string, cleanup func(), err error) {
+	cleanup = func() {}
+	env = withoutEnv(os.Environ(), "GIT_SSH_COMMAND")
+	privatePEM, err := s.deployKeyPEM(ctx, appID)
+	if err != nil {
+		return nil, cleanup, err
+	}
+	if privatePEM == "" {
+		return env, cleanup, nil
+	}
+	if devAcceptNewHostKeys() {
+		s.log().Warn("deploy: keyed clone trusts unseen host keys",
+			"reason", devAcceptNewHostKeysEnv+" is set",
+			"risk", "the clone accepts any host key; disable this in production",
+		)
+	}
+	files, err := newDeployKeyFiles(privatePEM, s.log())
+	if err != nil {
+		return nil, cleanup, err
+	}
+	return files.sshEnv(env), files.remove, nil
 }
 
 // deployKeyPEM resolves the application's deploy private key, turning a
@@ -302,16 +325,32 @@ func withoutEnv(env []string, name string) []string {
 	return kept
 }
 
+// withoutEnvPrefix returns env with every entry whose name starts with the
+// prefix dropped. Git reads numbered GIT_CONFIG_* variables from the child
+// environment, so an inherited set must be removed before the askpass helper
+// installs exactly its own.
+func withoutEnvPrefix(env []string, prefix string) []string {
+	kept := make([]string, 0, len(env))
+	for _, entry := range env {
+		if name, _, ok := strings.Cut(entry, "="); ok && strings.HasPrefix(name, prefix) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
 // sshEnv returns env plus GIT_SSH_COMMAND: ssh offering only this key
 // (IdentitiesOnly), verifying against the pinned ephemeral known_hosts, and
 // refusing an unknown host key (StrictHostKeyChecking=yes) unless the explicit
 // dev flag re-enables accept-new — the control plane neither touches ~/.ssh nor
-// prompts during a clone.
+// prompts during a clone. -F /dev/null keeps the service user's ~/.ssh/config
+// (a ProxyCommand there would otherwise still apply) out of the clone.
 func (f *deployKeyFiles) sshEnv(env []string) []string {
 	// GlobalKnownHostsFile=/dev/null ignores the host-wide
 	// /etc/ssh/ssh_known_hosts and KnownHostsCommand, so the ephemeral pinned
 	// set (embedded + GOTHAM_KNOWN_HOSTS) is the only trust anchor.
-	command := "ssh -i " + shellQuote(f.keyPath) +
+	command := "ssh -F /dev/null -i " + shellQuote(f.keyPath) +
 		" -o IdentitiesOnly=yes" +
 		" -o UserKnownHostsFile=" + shellQuote(f.knownHostsPath) +
 		" -o GlobalKnownHostsFile=/dev/null" +
@@ -339,7 +378,7 @@ func shellQuote(value string) string {
 // listens on 22); an application that needs a non-default SSH port stores an
 // ssh:// clone URL of its own, which passes through verbatim.
 func sshCloneURL(raw string) string {
-	parsed, err := url.Parse(raw)
+	parsed, err := neturl.Parse(raw)
 	if err != nil {
 		return raw
 	}
@@ -351,9 +390,9 @@ func sshCloneURL(raw string) string {
 	if parsed.Hostname() == "" {
 		return raw
 	}
-	return (&url.URL{
+	return (&neturl.URL{
 		Scheme: "ssh",
-		User:   url.User("git"),
+		User:   neturl.User("git"),
 		Host:   parsed.Hostname(),
 		Path:   parsed.Path,
 	}).String()
@@ -373,18 +412,41 @@ func devLocalClone() bool {
 // validateCloneURL rejects values git would refuse anyway, so the deploy log
 // reports a clear validation error instead of a raw git usage message. Local
 // paths and file:// URLs are only accepted when GOTHAM_DEV_CLONE_LOCAL=true;
-// production allows remote http(s)/ssh/git URLs and scp-like git@host:path.
+// production allows remote http(s)/ssh/git URLs and scp-like [user@]host:path
+// (the same SSH shape ValidatePrivateGitURL accepts, so a created private
+// source always stays deployable).
 func validateCloneURL(url string) error {
 	if url == "" {
 		return fmt.Errorf("%w: application has no clone URL", ErrValidation)
+	}
+	if err := rejectLeadingDash("clone URL", url); err != nil {
+		return err
 	}
 	switch {
 	case strings.Contains(url, "://"):
 		if !hasAllowedScheme(url) {
 			return fmt.Errorf("%w: unsupported clone URL scheme", ErrValidation)
 		}
+		if parsed, err := neturl.Parse(url); err == nil {
+			if err := rejectLeadingDash("host", parsed.Hostname()); err != nil {
+				return err
+			}
+			if user := parsed.User.Username(); user != "" {
+				if err := rejectLeadingDash("user", user); err != nil {
+					return err
+				}
+			}
+		}
 		return nil
-	case strings.HasPrefix(url, "git@"):
+	case isSSHTransportURL(url):
+		if user, host := splitScpAuthority(url); user != "" || host != "" {
+			if err := rejectLeadingDash("user", user); err != nil {
+				return err
+			}
+			if err := rejectLeadingDash("host", host); err != nil {
+				return err
+			}
+		}
 		return nil
 	case strings.HasPrefix(url, "/"):
 		if !devLocalClone() {
@@ -441,12 +503,12 @@ func tail(s string, n int) string {
 // or returned to API clients: an operator-supplied URL may carry a token
 // (https://x-access-token:ghp_…@host/repo) and the realtime deploy log is
 // visible to the application's team. It never returns a credential-bearing
-// string raw: a URL url.Parse rejects falls back to the regex redaction, and a
+// string raw: a URL neturl.Parse rejects falls back to the regex redaction, and a
 // scp-like git@host:path (no userinfo to strip) is returned unchanged. The one
 // bound is whitespace, which cannot be part of a userinfo a git/curl client
 // could use (see userinfoPattern).
 func RedactCloneURL(raw string) string {
-	parsed, err := url.Parse(raw)
+	parsed, err := neturl.Parse(raw)
 	if err != nil {
 		// An unparseable URL can still be logged verbatim by callers, so
 		// redact it by pattern rather than trusting Parse to have validated

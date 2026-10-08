@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { NAlert, NButton, NModal, NText } from "naive-ui";
+import { NAlert, NButton, NModal, NSpace, NText } from "naive-ui";
 import { computed, toRef } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { Application } from "@/features/applications/api/applications";
 import WizardBuildPackStep from "@/features/applications/components/WizardBuildPackStep.vue";
 import WizardEnvStep from "@/features/applications/components/WizardEnvStep.vue";
+import WizardKeyStep from "@/features/applications/components/WizardKeyStep.vue";
 import WizardReviewStep from "@/features/applications/components/WizardReviewStep.vue";
 import WizardRuntimeStep from "@/features/applications/components/WizardRuntimeStep.vue";
 import WizardSourceStep from "@/features/applications/components/WizardSourceStep.vue";
@@ -88,14 +89,48 @@ const stepCounter = computed<string>(() =>
             {{ wizard.errorMessage.value }}
           </NAlert>
 
-          <WizardSourceStep v-if="wizard.step.value === 0" />
-          <WizardBuildPackStep v-else-if="wizard.step.value === 1" />
-          <WizardRuntimeStep v-else-if="wizard.step.value === 2" />
-          <WizardEnvStep v-else-if="wizard.step.value === 3" />
-          <WizardReviewStep v-else />
+          <NSpace v-if="wizard.keyRecovery.value" :size="8">
+            <NButton
+              type="primary"
+              size="small"
+              :loading="wizard.submitting.value"
+              @click="wizard.retryKeyCreation"
+            >
+              {{ t("applications.privateGit.retryKey") }}
+            </NButton>
+            <NButton
+              size="small"
+              :disabled="wizard.submitting.value"
+              @click="wizard.deleteRecoveryApp"
+            >
+              {{ t("applications.privateGit.deleteRecoveryApp") }}
+            </NButton>
+          </NSpace>
+
+          <WizardKeyStep v-if="wizard.createdKey.value" />
+          <template v-else>
+            <WizardSourceStep v-if="wizard.step.value === 0" />
+            <WizardBuildPackStep v-else-if="wizard.step.value === 1" />
+            <WizardRuntimeStep v-else-if="wizard.step.value === 2" />
+            <WizardEnvStep v-else-if="wizard.step.value === 3" />
+            <WizardReviewStep v-else />
+          </template>
         </div>
 
         <div class="wizard-foot">
+          <template v-if="wizard.createdKey.value">
+            <NButton @click="wizard.closeCreatedKey">{{ t("applications.wizard.cancel") }}</NButton>
+            <span class="grow" />
+            <NButton
+              type="primary"
+              :loading="wizard.keyDeploying.value"
+              :disabled="!wizard.canDeployCreated.value"
+              @click="wizard.deployCreatedKey"
+            >
+              {{ t("applications.privateGit.deployNow") }}
+            </NButton>
+          </template>
+          <template v-else>
           <NButton v-if="wizard.step.value > 0" tertiary @click="wizard.prevStep()">{{ t("applications.wizard.back") }}</NButton>
           <span class="step-counter">{{ stepCounter }}</span>
           <span class="grow" />
@@ -115,6 +150,7 @@ const stepCounter = computed<string>(() =>
             >
               {{ t("applications.wizard.create") }}
             </NButton>
+          </template>
           </template>
         </div>
       </div>

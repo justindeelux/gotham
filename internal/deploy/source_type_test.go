@@ -53,10 +53,10 @@ func TestValidSourceType(t *testing.T) {
 
 // TestValidateSourcePerType checks the per-type creation requirements: the
 // provider slug must agree with the type, git-backed types need a cloneable
-// URL (provider-backed ones also name the repository), the dockerfile type
-// needs pasted content with a FROM instruction, image sources need a
-// validated reference and no git fields, and git_private plus the Compose
-// source fail closed until their packages land.
+// URL (provider-backed ones also name the repository, git_private stays
+// provider-less), the dockerfile type needs pasted content with a FROM
+// instruction, image sources need a validated reference and no git fields,
+// and the Compose source fails closed until GS-8 lands.
 func TestValidateSourcePerType(t *testing.T) {
 	base := Application{
 		Name:      "demo",
@@ -89,7 +89,14 @@ func TestValidateSourcePerType(t *testing.T) {
 		{"github app without URL", SourceGitHubApp, "github", "acme/demo", "", "", ErrValidation},
 		{"gitlab app", SourceGitLabApp, "gitlab", "acme/demo", "git@gitlab.com:acme/demo.git", "", nil},
 		{"gitlab app with github provider", SourceGitLabApp, "github", "acme/demo", "git@gitlab.com:acme/demo.git", "", ErrValidation},
-		{"private git waits for GS-4", SourceGitPrivate, "", "", "git@github.com:acme/demo.git", "", ErrSourceNotImplemented},
+		{"private git over scp-like URL", SourceGitPrivate, "", "", "git@github.com:acme/demo.git", "", nil},
+		{"private git over ssh URL", SourceGitPrivate, "", "", "ssh://git@git.internal:2222/acme/demo.git", "", nil},
+		{"private git over https URL", SourceGitPrivate, "", "", "https://git.internal/acme/demo.git", "", nil},
+		{"private git over http URL", SourceGitPrivate, "", "", "http://git.internal/acme/demo.git", "", nil},
+		{"private git refuses a provider", SourceGitPrivate, "github", "acme/demo", "git@github.com:acme/demo.git", "", ErrValidation},
+		{"private git refuses embedded credentials", SourceGitPrivate, "", "", "https://user:token@git.internal/acme/demo.git", "", ErrValidation},
+		{"private git refuses public-only git scheme", SourceGitPrivate, "", "", "git://git.internal/acme/demo.git", "", ErrValidation},
+		{"private git without URL", SourceGitPrivate, "", "", "", "", ErrValidation},
 		{"dockerfile with content", SourceDockerfile, "", "", "", "FROM alpine:3.20\n", nil},
 		{"dockerfile without content", SourceDockerfile, "", "", "", "", ErrValidation},
 		{"dockerfile with provider", SourceDockerfile, "github", "", "", "FROM alpine:3.20\n", ErrValidation},
@@ -135,7 +142,7 @@ func TestCreateApplicationSourceType(t *testing.T) {
 	})
 
 	t.Run("unimplemented types are rejected", func(t *testing.T) {
-		for _, sourceType := range []string{SourceGitPrivate, SourceCompose} {
+		for _, sourceType := range []string{SourceCompose} {
 			repo := &fakeRepository{}
 			svc := newTestService(t, repo)
 			in := validCreateInput(uuid.New())
@@ -193,13 +200,12 @@ func TestCreateApplicationSourceType(t *testing.T) {
 }
 
 // TestServiceDeployRejectsUnimplementedSource pins the submit path behind
-// cloneSource: a stored git_private/compose app fails Deploy with
-// ErrSourceNotImplemented — not the clone-URL error — and queues nothing.
+// cloneSource: a stored compose app fails Deploy with ErrSourceNotImplemented
+// — not the clone-URL error — and queues nothing.
 // Dockerfile applications (GS-7) deploy from their stored text, and image
 // sources deploy since GS-9 (see TestServiceImageDeployQueues).
-// Dockerfile applications (GS-7) deploy from their stored text.
 func TestServiceDeployRejectsUnimplementedSource(t *testing.T) {
-	for _, sourceType := range []string{SourceGitPrivate, SourceCompose} {
+	for _, sourceType := range []string{SourceCompose} {
 		t.Run(sourceType, func(t *testing.T) {
 			userID := uuid.New()
 			app := testApplication(userID)
@@ -224,7 +230,7 @@ func TestServiceDeployRejectsUnimplementedSource(t *testing.T) {
 func TestCloneSourceBranching(t *testing.T) {
 	t.Run("implemented types clone", func(t *testing.T) {
 		for _, sourceType := range []string{
-			"", SourceGitPublic, SourceGitHubApp, SourceGitLabApp,
+			"", SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp,
 		} {
 			src := &fakeSource{}
 			o := newTestOrchestrator(Config{Source: src})
@@ -240,7 +246,7 @@ func TestCloneSourceBranching(t *testing.T) {
 	})
 
 	t.Run("unimplemented types fail closed", func(t *testing.T) {
-		for _, sourceType := range []string{SourceGitPrivate, SourceCompose} {
+		for _, sourceType := range []string{SourceCompose} {
 			src := &fakeSource{}
 			o := newTestOrchestrator(Config{Source: src})
 			app := testApplication(uuid.New())

@@ -105,7 +105,7 @@ describe("wizard gates match recorded outcomes", () => {
     const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
     const w = wiz!;
     const reset = {
-      sourceType: "git_public", providerId: "", publicCloneUrl: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
+      sourceType: "git_public", providerId: "", publicCloneUrl: "", privateCloneUrl: "", privateAuth: "ssh", httpsUsername: "", httpsToken: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
       buildPack: "", serverId: "", port: 3000, hostPort: null, baseDomain: "", env: [], storage: [],
     };
     const sourceCases: Array<{ name: string; patch: Record<string, unknown>; sourceValid: boolean }> = [
@@ -121,8 +121,15 @@ describe("wizard gates match recorded outcomes", () => {
       { name: "public-short-name", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "ab"}, sourceValid: false },
       { name: "public-blank-branch", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "  ", "name": "storefront"}, sourceValid: true },
       { name: "github-blank-branch", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "git@h:o/r.git", "branch": "  ", "name": "abc"}, sourceValid: false },
-      { name: "private-soon", patch: {"sourceType": "git_private", "branch": "main", "name": "abc"}, sourceValid: false },
-      { name: "private-soon-with-url", patch: {"sourceType": "git_private", "publicCloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "private-ssh", patch: {"sourceType": "git_private", "privateCloneUrl": "git@h:o/r.git", "privateAuth": "ssh", "branch": "main", "name": "abc"}, sourceValid: true },
+      { name: "private-ssh-url", patch: {"sourceType": "git_private", "privateCloneUrl": "ssh://git@h:2222/o/r.git", "privateAuth": "ssh", "branch": "main", "name": "abc"}, sourceValid: true },
+      { name: "private-https", patch: {"sourceType": "git_private", "privateCloneUrl": "https://h/o/r.git", "privateAuth": "https", "httpsToken": "tok", "branch": "main", "name": "abc"}, sourceValid: true },
+      { name: "private-https-blank-branch", patch: {"sourceType": "git_private", "privateCloneUrl": "https://h/o/r.git", "privateAuth": "ssh", "branch": "  ", "name": "abc"}, sourceValid: true },
+      { name: "private-no-url", patch: {"sourceType": "git_private", "privateCloneUrl": "  ", "privateAuth": "ssh", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "private-userinfo-url", patch: {"sourceType": "git_private", "privateCloneUrl": "https://u:tok@h/o/r.git", "privateAuth": "ssh", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "private-git-scheme", patch: {"sourceType": "git_private", "privateCloneUrl": "git://h/o/r.git", "privateAuth": "ssh", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "private-https-no-token", patch: {"sourceType": "git_private", "privateCloneUrl": "https://h/o/r.git", "privateAuth": "https", "httpsToken": "  ", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "private-https-ssh-url", patch: {"sourceType": "git_private", "privateCloneUrl": "git@h:o/r.git", "privateAuth": "https", "httpsToken": "tok", "branch": "main", "name": "abc"}, sourceValid: false },
       { name: "github-valid", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: true },
       { name: "github-no-clone", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "  ", "branch": "main", "name": "abc"}, sourceValid: false },
       { name: "github-no-repo", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: false },
@@ -214,6 +221,19 @@ describe("wizard create payload carries the source type", () => {
       clone_url: "git@github.com:o/r.git",
       source_type: "github_app",
     });
+
+    // git_private is provider-less: the clone URL doubles as the repo label.
+    Object.assign(w.form, {
+      sourceType: "git_private", providerId: "", publicCloneUrl: "", privateCloneUrl: "git@h:o/r.git",
+      privateAuth: "ssh", httpsUsername: "", httpsToken: "", repoFullName: "", cloneUrl: "",
+      branch: "main", name: "abc",
+    });
+    expect(w.buildPayload()).toMatchObject({
+      provider: "",
+      repo: "git@h:o/r.git",
+      clone_url: "git@h:o/r.git",
+      source_type: "git_private",
+    });
     wrapper.unmount();
   });
 
@@ -238,6 +258,21 @@ describe("wizard create payload carries the source type", () => {
       repoFullName: "",
       cloneUrl: "",
     });
+
+    // Private-git fields clear the same way, so a token can never leak
+    // into another type's payload.
+    Object.assign(w.form, {
+      sourceType: "git_private", privateCloneUrl: "git@h:o/r.git", privateAuth: "https",
+      httpsUsername: "bob", httpsToken: "s3cr3t",
+    });
+    w.form.sourceType = "git_public";
+    await nextTick();
+    expect({
+      privateCloneUrl: w.form.privateCloneUrl,
+      privateAuth: w.form.privateAuth,
+      httpsUsername: w.form.httpsUsername,
+      httpsToken: w.form.httpsToken,
+    }).toEqual({ privateCloneUrl: "", privateAuth: "ssh", httpsUsername: "", httpsToken: "" });
     wrapper.unmount();
   });
 
@@ -255,12 +290,12 @@ describe("wizard create payload carries the source type", () => {
     const options = Object.fromEntries(
       w.sourceTypeOptions.value.map((item) => [item.value, item.disabled === true]),
     );
-    // git_public, the connected-provider flows, pasted Dockerfiles and
-    // container images deploy; everything else stays disabled until its
-    // package lands (GS-4, GS-8).
+    // git_public, git_private, the connected-provider flows, pasted
+    // Dockerfiles and container images deploy; everything else stays
+    // disabled until its package lands (GS-8).
     expect(options).toEqual({
       git_public: false,
-      git_private: true,
+      git_private: false,
       github_app: false,
       gitlab_app: false,
       dockerfile: false,

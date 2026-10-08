@@ -62,6 +62,14 @@ type ApplicationDeployKey struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ApplicationGitCredential struct {
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Username      string             `json:"username"`
+	Ciphertext    string             `json:"ciphertext"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ApplicationWebhook struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

@@ -118,6 +118,26 @@ type Repository interface {
 	// cloner. An application without a key answers "" and no error, which is
 	// what keeps anonymous cloning the default.
 	DeployKeyPrivatePEM(ctx context.Context, appID uuid.UUID) (string, error)
+	// UpsertGitCredential stores (or rotates) an application's sealed HTTPS
+	// token for git_private sources (GS-4). The token arrives already sealed
+	// with providers.SealSecret.
+	UpsertGitCredential(ctx context.Context, appID uuid.UUID, username, sealedToken string) error
+	// GetGitCredential returns an application's HTTPS credential metadata, or
+	// ErrNotFound when none is set. The sealed token never leaves the store
+	// through this method.
+	GetGitCredential(ctx context.Context, appID uuid.UUID) (GitCredential, error)
+	// GitCredential opens an application's HTTPS git credential for the
+	// cloner and the connection test. An application without one answers ""
+	// and no error, which is what keeps anonymous cloning the default.
+	GitCredential(ctx context.Context, appID uuid.UUID) (username, token string, err error)
+	// DeleteGitCredential removes an application's HTTPS credential row. It
+	// answers ErrNotFound when none is set, so the service can report the
+	// idempotent outcome honestly.
+	DeleteGitCredential(ctx context.Context, appID uuid.UUID) error
+	// CopyGitCredential copies the sealed HTTPS credential row to a preview
+	// sibling (the preview inherits the token like it inherits the deploy
+	// key). An application without one is a success with nothing copied.
+	CopyGitCredential(ctx context.Context, baseID, previewID uuid.UUID) error
 	// GetCertificateIntent returns an application's certificate configuration,
 	// or ErrNotFound when it has none. The preview clone reads it to copy an
 	// enabled wildcard DNS-01 intent onto the sibling.
@@ -788,6 +808,82 @@ func (r *storeRepository) DeployKeyPrivatePEM(ctx context.Context, appID uuid.UU
 		return "", fmt.Errorf("deploy: open deploy private key: %w", err)
 	}
 	return privatePEM, nil
+}
+
+// UpsertGitCredential implements Repository: it stores the sealed HTTPS
+// token of a git_private application (sealed by the caller with
+// providers.SealSecret, mirroring CreateDeployKey).
+func (r *storeRepository) UpsertGitCredential(ctx context.Context, appID uuid.UUID, username, sealedToken string) error {
+	if _, err := r.store.UpsertApplicationGitCredential(ctx, pgUUID(appID), username, sealedToken); err != nil {
+		return fmt.Errorf("deploy: upsert git credential: %w", err)
+	}
+	return nil
+}
+
+// GetGitCredential implements Repository: the metadata callers may see. The
+// ciphertext stays in the row — only the connection test and the cloner open
+// it, through GitCredential below.
+func (r *storeRepository) GetGitCredential(ctx context.Context, appID uuid.UUID) (GitCredential, error) {
+	row, err := r.store.GetApplicationGitCredential(ctx, pgUUID(appID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GitCredential{}, ErrNotFound
+		}
+		return GitCredential{}, fmt.Errorf("deploy: get git credential: %w", err)
+	}
+	return GitCredential{Username: row.Username, UpdatedAt: timeFromPG(row.UpdatedAt)}, nil
+}
+
+// GitCredential implements Repository (and gitCredentialResolver): it opens
+// an application's HTTPS token for the cloner and the connection test. An
+// application without one answers empty strings and no error; a credential
+// that cannot be opened is an error, never a silent anonymous fallback.
+func (r *storeRepository) GitCredential(ctx context.Context, appID uuid.UUID) (string, string, error) {
+	row, err := r.store.GetApplicationGitCredential(ctx, pgUUID(appID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", nil
+		}
+		return "", "", fmt.Errorf("deploy: get git credential: %w", err)
+	}
+	token, err := providers.OpenSecret(r.secret, row.Ciphertext)
+	if err != nil {
+		return "", "", fmt.Errorf("deploy: open git credential: %w", err)
+	}
+	return row.Username, token, nil
+}
+
+// DeleteGitCredential implements Repository: it removes the row, answering
+// ErrNotFound when none is set.
+func (r *storeRepository) DeleteGitCredential(ctx context.Context, appID uuid.UUID) error {
+	if _, err := r.store.GetApplicationGitCredential(ctx, pgUUID(appID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("deploy: get git credential: %w", err)
+	}
+	if err := r.store.DeleteApplicationGitCredential(ctx, pgUUID(appID)); err != nil {
+		return fmt.Errorf("deploy: delete git credential: %w", err)
+	}
+	return nil
+}
+
+// CopyGitCredential implements Repository: the preview sibling inherits the
+// sealed row as is (re-sealing would need the plaintext, which never leaves
+// the sealed store). The delete cascade on the applications FK removes the
+// copy with the sibling.
+func (r *storeRepository) CopyGitCredential(ctx context.Context, baseID, previewID uuid.UUID) error {
+	row, err := r.store.GetApplicationGitCredential(ctx, pgUUID(baseID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("deploy: get git credential: %w", err)
+	}
+	if _, err := r.store.UpsertApplicationGitCredential(ctx, pgUUID(previewID), row.Username, row.Ciphertext); err != nil {
+		return fmt.Errorf("deploy: copy git credential: %w", err)
+	}
+	return nil
 }
 
 // GetCertificateIntent loads an application's certificate configuration, or

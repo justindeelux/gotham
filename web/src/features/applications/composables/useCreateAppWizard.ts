@@ -3,7 +3,11 @@ import { computed, inject, provide, reactive, ref, toValue, watch, type Injectio
 
 import {
   createApplication,
+  createDeployKey,
+  deleteApplication,
   describeApplicationError,
+  setGitCredential,
+  testConnection,
 } from "@/features/applications/api/applications";
 import type {
   Application,
@@ -31,6 +35,8 @@ import {
   dockerfileContentSchema,
   hostPortSchema,
   imageRefSchema,
+  isHttpsGitUrl,
+  privateCloneUrlSchema,
   providerSchema,
   publicCloneUrlSchema,
   repoSchema,
@@ -48,6 +54,12 @@ export interface WizardForm {
   sourceType: SourceType;
   providerId: string;
   publicCloneUrl: string;
+  /** GS-4 provider-less private source: the ssh/scp-like/https clone URL. */
+  privateCloneUrl: string;
+  /** GS-4 credential for the private URL: a generated deploy key or a token. */
+  privateAuth: "ssh" | "https";
+  httpsUsername: string;
+  httpsToken: string;
   repoFullName: string;
   cloneUrl: string;
   /** Pasted Dockerfile text for the dockerfile source type (GS-7). */
@@ -186,6 +198,30 @@ export function useCreateAppWizard(
   const noSshUrl = ref(false);
 
   /**
+   * createdKey holds the SSH post-create state (GS-4): the application row
+   * already exists and its deploy key is generated, but the operator has
+   * not registered the public half yet, so the first deploy must wait for
+   * an explicit Test + Deploy instead of queueing blindly.
+   */
+  const createdKey = ref<{ application: Application; publicKey: string } | null>(null);
+  /**
+   * keyRecovery parks the created application when its deploy key could not
+   * be generated: retrying the submit would hit a name conflict on the
+   * existing row, so the wizard offers key retry or rollback instead.
+   */
+  const keyRecovery = ref<{ application: Application } | null>(null);
+  const keyTesting = ref(false);
+  const keyTestPassed = ref(false);
+  const keyTestMessage = ref("");
+  const keyConfirmed = ref(false);
+  const keyDeploying = ref(false);
+
+  /** canDeployCreated gates Deploy on the key step: a passed test or an explicit confirm. */
+  const canDeployCreated = computed<boolean>(
+    () => createdKey.value !== null && (keyTestPassed.value || keyConfirmed.value),
+  );
+
+  /**
    * tr resolves one applications message in the current locale. Reading
    * activeLocale pins the calling computed to the language switch.
    */
@@ -252,6 +288,10 @@ export function useCreateAppWizard(
     sourceType: "git_public",
     providerId: "",
     publicCloneUrl: "",
+    privateCloneUrl: "",
+    privateAuth: "ssh",
+    httpsUsername: "",
+    httpsToken: "",
     repoFullName: "",
     cloneUrl: "",
     dockerfileContent: "",
@@ -295,6 +335,9 @@ export function useCreateAppWizard(
 
   const isPublicRepo = computed<boolean>(() => form.sourceType === "git_public");
 
+  /** isPrivateRepo covers the provider-less private-git source (GS-4). */
+  const isPrivateRepo = computed<boolean>(() => form.sourceType === "git_private");
+
   /** isProviderFlow covers the connected-provider types (existing flow). */
   const isProviderFlow = computed<boolean>(
     () => form.sourceType === "github_app" || form.sourceType === "gitlab_app",
@@ -313,7 +356,7 @@ export function useCreateAppWizard(
   /** sourceTypeOptions renders the GS-2 type selector in the current locale. */
   const sourceTypeOptions = computed<Array<{ label: string; value: string; disabled?: boolean }>>(() => [
     { label: tr("applications.wizard.sourceGitPublic"), value: "git_public" },
-    { label: tr("applications.wizard.sourceGitPrivate"), value: "git_private", disabled: true },
+    { label: tr("applications.wizard.sourceGitPrivate"), value: "git_private" },
     { label: tr("applications.wizard.sourceGithubApp"), value: "github_app" },
     { label: tr("applications.wizard.sourceGitlabApp"), value: "gitlab_app" },
     { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile" },
@@ -377,8 +420,8 @@ export function useCreateAppWizard(
     if (!sourceTypeSchema.safeParse(form.sourceType).success) {
       return false;
     }
-    // Unimplemented types (git_private until GS-4, Compose until GS-8)
-    // render a not-yet-available placeholder, so the step cannot continue.
+    // Unimplemented types (Compose until GS-8) render a
+    // not-yet-available placeholder, so the step cannot continue.
     if (!sourceTypeImplemented(form.sourceType)) {
       return false;
     }
@@ -390,6 +433,23 @@ export function useCreateAppWizard(
           return false;
         }
         break;
+      case "git_private": {
+        // Provider-less by definition: an ssh/scp-like/https URL with no
+        // embedded credentials. The token transport needs an https URL and
+        // a token; the deploy key works with any of the shapes.
+        if (!privateCloneUrlSchema.safeParse(form.privateCloneUrl).success) {
+          return false;
+        }
+        if (form.privateAuth === "https") {
+          if (!isHttpsGitUrl(form.privateCloneUrl)) {
+            return false;
+          }
+          if (form.httpsToken.trim() === "") {
+            return false;
+          }
+        }
+        break;
+      }
       case "dockerfile":
         // No repository: pasted text (FROM required, 64 KiB cap) plus
         // optional build args with non-empty keys.
@@ -431,7 +491,7 @@ export function useCreateAppWizard(
         break;
       }
     }
-    // A public repo with no branch pins the remote default at clone time
+    // A git source with no branch pins the remote default at clone time
     // (ls-remote); provider flows keep the required prefilled branch.
     // Dockerfile and image sources carry no branch at all (the field is
     // hidden).
@@ -440,7 +500,8 @@ export function useCreateAppWizard(
     }
     const branchOk =
       form.sourceType === "dockerfile" ||
-      (form.sourceType === "git_public" && form.branch.trim() === "")
+      ((form.sourceType === "git_public" || form.sourceType === "git_private") &&
+        form.branch.trim() === "")
         ? true
         : branchSchema.safeParse(form.branch).success;
     return branchOk && appNameSchema.safeParse(form.name).success;
@@ -538,7 +599,11 @@ export function useCreateAppWizard(
       return form.imageRef.trim();
     }
     const repo =
-      form.sourceType === "git_public" ? form.publicCloneUrl.trim() : form.repoFullName;
+      form.sourceType === "git_public"
+        ? form.publicCloneUrl.trim()
+        : form.sourceType === "git_private"
+          ? form.privateCloneUrl.trim()
+          : form.repoFullName;
     const branch = form.branch.trim();
     return `${repo} · ${branch === "" ? tr("applications.wizard.branchDefault") : branch}`;
   });
@@ -588,6 +653,10 @@ export function useCreateAppWizard(
     () => {
       form.providerId = "";
       form.publicCloneUrl = "";
+      form.privateCloneUrl = "";
+      form.privateAuth = "ssh";
+      form.httpsUsername = "";
+      form.httpsToken = "";
       form.repoFullName = "";
       form.cloneUrl = "";
       form.dockerfileContent = "";
@@ -690,12 +759,17 @@ export function useCreateAppWizard(
         storage: form.storage.filter((row) => row.name.trim() !== ""),
       };
     }
+    // git_private is provider-less: the clone URL doubles as the repo label,
+    // like the git_public shape (the backend agreement check refuses any
+    // provider on this type).
     const source =
       form.sourceType === "git_public"
         ? { repo: form.publicCloneUrl.trim(), cloneUrl: form.publicCloneUrl.trim() }
-        : form.sourceType === "dockerfile"
-          ? { repo: "", cloneUrl: "" }
-          : { repo: form.repoFullName, cloneUrl: form.cloneUrl };
+        : form.sourceType === "git_private"
+          ? { repo: form.privateCloneUrl.trim(), cloneUrl: form.privateCloneUrl.trim() }
+          : form.sourceType === "dockerfile"
+            ? { repo: "", cloneUrl: "" }
+            : { repo: form.repoFullName, cloneUrl: form.cloneUrl };
     return {
       name: form.name.trim(),
       environment_id: form.environmentId,
@@ -733,6 +807,38 @@ export function useCreateAppWizard(
     submitting.value = true;
     try {
       const { application, webhook } = await createApplication(buildPayload());
+      // A provider-less private SSH source stops here: the key is generated
+      // and shown on the key step, and the first deploy waits for the
+      // operator to register it (Test + Deploy). Queueing immediately would
+      // always fail with permission denied. The HTTPS token needs no
+      // operator action, so it seals and falls through to the auto-deploy.
+      if (form.sourceType === "git_private" && form.privateAuth === "ssh") {
+        try {
+          const key = await createDeployKey(application.id);
+          createdKey.value = { application, publicKey: key.public_key };
+        } catch (credError) {
+          // The application row already exists, so a plain retry of the
+          // submit would hit a name conflict: park the application for the
+          // recovery actions (retry the key, or delete and start over).
+          submitFailure.value = { kind: "error", error: credError };
+          keyRecovery.value = { application };
+        } finally {
+          submitting.value = false;
+        }
+        return;
+      }
+      if (form.sourceType === "git_private") {
+        try {
+          await setGitCredential(application.id, form.httpsUsername.trim(), form.httpsToken);
+        } catch (credError) {
+          message.warning(
+            tr("applications.privateGit.credentialFailed", {
+              error: describeApplicationError(credError),
+            }),
+            { duration: 8000 },
+          );
+        }
+      }
       // The create route only stores the row; "Create & deploy" must queue the
       // first deployment explicitly and surface whether it was queued.
       try {
@@ -774,16 +880,120 @@ export function useCreateAppWizard(
     resetWizard();
   }
 
+  /** runCreatedKeyTest probes the new SSH application with its stored key. */
+  async function runCreatedKeyTest(): Promise<void> {    if (!createdKey.value) {
+      return;
+    }
+    keyTesting.value = true;
+    keyTestMessage.value = "";
+    try {
+      const result = await testConnection(createdKey.value.application.id);
+      keyTestPassed.value = result.ok;
+      keyTestMessage.value = result.ok
+        ? tr("applications.privateGit.connected")
+        : result.message;
+    } catch (error) {
+      keyTestPassed.value = false;
+      keyTestMessage.value = describeApplicationError(error);
+    } finally {
+      keyTesting.value = false;
+    }
+  }
+
+  /** deployCreatedKey queues the first deploy of the SSH application. */
+  async function deployCreatedKey(): Promise<void> {
+    if (!createdKey.value) {
+      return;
+    }
+    keyDeploying.value = true;
+    try {
+      await appsStore.deploy(createdKey.value.application.id);
+      message.success(
+        tr("applications.wizard.createdQueued", { name: createdKey.value.application.name }),
+      );
+    } catch (deployError) {
+      message.warning(
+        tr("applications.wizard.createdDeployFailed", {
+          name: createdKey.value.application.name,
+          error: describeApplicationError(deployError),
+        }),
+        { duration: 8000 },
+      );
+    } finally {
+      keyDeploying.value = false;
+    }
+    const created = createdKey.value.application;
+    resetWizard();
+    emit("created", created);
+    emit("update:show", false);
+  }
+
+  /** closeCreatedKey leaves the key step for the detail page (same landing). */
+  function closeCreatedKey(): void {
+    if (!createdKey.value) {
+      return;
+    }
+    const created = createdKey.value.application;
+    resetWizard();
+    emit("created", created);
+    emit("update:show", false);
+  }
+
+  /** retryKeyCreation retries the deploy key for the parked application. */
+  async function retryKeyCreation(): Promise<void> {
+    if (!keyRecovery.value) {
+      return;
+    }
+    submitting.value = true;
+    try {
+      const key = await createDeployKey(keyRecovery.value.application.id);
+      createdKey.value = {
+        application: keyRecovery.value.application,
+        publicKey: key.public_key,
+      };
+      keyRecovery.value = null;
+      submitFailure.value = null;
+    } catch (credError) {
+      submitFailure.value = { kind: "error", error: credError };
+    } finally {
+      submitting.value = false;
+    }
+  }
+
+  /** deleteRecoveryApp rolls the parked application back and restarts. */
+  async function deleteRecoveryApp(): Promise<void> {
+    if (!keyRecovery.value) {
+      return;
+    }
+    submitting.value = true;
+    try {
+      await deleteApplication(keyRecovery.value.application.id);
+    } catch (error) {
+      submitFailure.value = { kind: "error", error };
+      submitting.value = false;
+      return;
+    }
+    resetWizard();
+  }
+
   /** seedScope copies the live route scope into the form. */
   function seedScope(): void {
     form.projectId = toValue(scope.projectId);
     form.environmentId = toValue(scope.environmentId);
   }
 
-  /** handleShowChange mirrors the modal visibility and resets when closing. */
+  /** handleShowChange mirrors the modal visibility and resets when closing.
+   * Closing from the key step still emits created: the application exists,
+   * and without the event the list behind the modal goes stale. */
   function handleShowChange(value: boolean): void {
     emit("update:show", value);
     if (!value) {
+      if (createdKey.value) {
+        const created = createdKey.value.application;
+        resetWizard();
+        emit("created", created);
+        return;
+      }
       resetWizard();
     }
   }
@@ -794,6 +1004,10 @@ export function useCreateAppWizard(
     form.sourceType = "git_public";
     form.providerId = "";
     form.publicCloneUrl = "";
+    form.privateCloneUrl = "";
+    form.privateAuth = "ssh";
+    form.httpsUsername = "";
+    form.httpsToken = "";
     form.repoFullName = "";
     form.cloneUrl = "";
     form.dockerfileContent = "";
@@ -814,6 +1028,13 @@ export function useCreateAppWizard(
     submitFailure.value = null;
     noSshUrl.value = false;
     submitting.value = false;
+    createdKey.value = null;
+    keyRecovery.value = null;
+    keyTesting.value = false;
+    keyTestPassed.value = false;
+    keyTestMessage.value = "";
+    keyConfirmed.value = false;
+    keyDeploying.value = false;
     // The provider store is a singleton: a stale repo error must not survive
     // into the next wizard with a Retry that no longer applies.
     providersStore.reposError = null;
@@ -834,6 +1055,7 @@ export function useCreateAppWizard(
     providerOptions,
     sourceTypeOptions,
     isPublicRepo,
+    isPrivateRepo,
     isProviderFlow,
     isGitHubAppFlow,
     isDockerfile,
@@ -862,6 +1084,19 @@ export function useCreateAppWizard(
     handleSubmit,
     closeWizard,
     handleShowChange,
+    createdKey,
+    keyRecovery,
+    keyTesting,
+    keyTestPassed,
+    keyTestMessage,
+    keyConfirmed,
+    keyDeploying,
+    canDeployCreated,
+    runCreatedKeyTest,
+    deployCreatedKey,
+    closeCreatedKey,
+    retryKeyCreation,
+    deleteRecoveryApp,
   };
 }
 

@@ -52,12 +52,26 @@ func NormalizeSourceType(sourceType, provider string) string {
 }
 
 // SourceTypeImplemented reports whether the deploy pipeline can fetch
-// the type yet: public git, the connected-provider flows, pasted
-// Dockerfiles (GS-7) and prebuilt container images (GS-9). git_private waits
-// for GS-4 (no key path exists yet), and Compose sources wait for GS-8.
+// the type yet: public and private git, the connected-provider flows,
+// pasted Dockerfiles (GS-7) and prebuilt container images (GS-9). Compose
+// sources wait for GS-8.
 func SourceTypeImplemented(s string) bool {
 	switch s {
-	case "", SourceGitPublic, SourceGitHubApp, SourceGitLabApp, SourceDockerfile, SourceImage:
+	case "", SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp, SourceDockerfile, SourceImage:
+		return true
+	default:
+		return false
+	}
+}
+
+// BranchDefaultsToRemote reports whether an empty branch resolves to the
+// remote default via ls-remote at clone time (public and private git)
+// instead of falling back to "main". Provider flows keep the "main"
+// fallback: their wizard always prefills a branch, and empty would break
+// push-branch matching.
+func BranchDefaultsToRemote(sourceType, provider string) bool {
+	switch NormalizeSourceType(sourceType, provider) {
+	case SourceGitPublic, SourceGitPrivate:
 		return true
 	default:
 		return false

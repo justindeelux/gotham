@@ -119,6 +119,10 @@ type fakeRepository struct {
 	// deployKeyErr fails every deploy-key write (tests the rollback with).
 	deployKeyErr error
 
+	// gitCreds holds one sealed HTTPS credential per application (GS-4),
+	// mirroring application_git_credentials; gitCredErr fails every write.
+	gitCreds   map[uuid.UUID]fakeGitCredential
+	gitCredErr error
 	// deleteDeployKeyErr fails the local deploy-key detach (tests the
 	// sealed-key orphan cleanup with).
 	deleteDeployKeyErr error
@@ -345,8 +349,10 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 	// Cascade the deploy-key mapping only: private_keys has no application FK
 	// (application_deploy_keys.private_key_id points at it), so the sealed
 	// row survives a bare application delete — the paths that must remove it
-	// call DeleteDeployKey explicitly.
+	// call DeleteDeployKey explicitly. The git credential row cascades with
+	// the application (its FK carries ON DELETE CASCADE).
 	delete(r.deployKeys, appID)
+	delete(r.gitCreds, appID)
 	certificates := make([]CertificateIntent, 0, len(r.certificates))
 	for _, cert := range r.certificates {
 		if cert.ApplicationID != appID {
@@ -853,6 +859,83 @@ func (r *fakeRepository) DeployKeyPrivatePEM(_ context.Context, appID uuid.UUID)
 		return "", nil
 	}
 	return r.privateKeys[stored.key.PrivateKeyID], nil
+}
+
+// fakeGitCredential is one row of application_git_credentials: the username
+// in plaintext and the token sealed with providers.SealSecret.
+type fakeGitCredential struct {
+	username string
+	sealed   string
+}
+
+// UpsertGitCredential implements Repository, storing the sealed token as
+// received (sealing is the service's job, covered by the service tests).
+func (r *fakeRepository) UpsertGitCredential(_ context.Context, appID uuid.UUID, username, sealedToken string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.gitCredErr != nil {
+		return r.gitCredErr
+	}
+	if r.gitCreds == nil {
+		r.gitCreds = make(map[uuid.UUID]fakeGitCredential)
+	}
+	r.gitCreds[appID] = fakeGitCredential{username: username, sealed: sealedToken}
+	return nil
+}
+
+// GetGitCredential implements Repository: metadata only, never the token.
+func (r *fakeRepository) GetGitCredential(_ context.Context, appID uuid.UUID) (GitCredential, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.gitCreds[appID]
+	if !ok {
+		return GitCredential{}, ErrNotFound
+	}
+	return GitCredential{Username: stored.username}, nil
+}
+
+// GitCredential implements Repository (and gitCredentialResolver), opening
+// the sealed token with the test secret the test services seal with.
+func (r *fakeRepository) GitCredential(_ context.Context, appID uuid.UUID) (string, string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.gitCreds[appID]
+	if !ok {
+		return "", "", nil
+	}
+	token, err := providers.OpenSecret(testSecretKey, stored.sealed)
+	if err != nil {
+		return "", "", err
+	}
+	return stored.username, token, nil
+}
+
+// DeleteGitCredential implements Repository, answering ErrNotFound when none
+// is set so the service can report the idempotent outcome honestly.
+func (r *fakeRepository) DeleteGitCredential(_ context.Context, appID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.gitCreds[appID]; !ok {
+		return ErrNotFound
+	}
+	delete(r.gitCreds, appID)
+	return nil
+}
+
+// CopyGitCredential implements Repository: the preview sibling inherits the
+// sealed row as is.
+func (r *fakeRepository) CopyGitCredential(_ context.Context, baseID, previewID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.gitCreds[baseID]
+	if !ok {
+		return nil
+	}
+	if r.gitCreds == nil {
+		r.gitCreds = make(map[uuid.UUID]fakeGitCredential)
+	}
+	r.gitCreds[previewID] = stored
+	return nil
 }
 
 // GetCertificateIntent implements Repository.

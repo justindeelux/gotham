@@ -14,6 +14,7 @@ import type { Application, Deployment } from "@/features/applications/api/applic
 import DeploymentHistoryTable from "@/features/applications/components/DeploymentHistoryTable.vue";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
 import DockerfileEditor from "@/features/applications/components/DockerfileEditor.vue";
+import GitPrivateSourcePanel from "@/features/applications/components/GitPrivateSourcePanel.vue";
 import type { PipelineStep } from "@/features/applications/utils/deployPipeline";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
 import { relativeTime } from "@/shared/utils/format";
@@ -58,6 +59,10 @@ const sourceLabel = computed<string>(() => {
 
 <template>
   <NSpace vertical :size="16" style="margin-top: 16px">
+    <GitPrivateSourcePanel
+      v-if="props.application?.source_type === 'git_private'"
+      :application-id="props.application.id"
+    />
     <NCard v-if="props.application" :title="t('applications.overview.title')">
       <NDescriptions :column="props.descColumns" bordered label-placement="left">
         <NDescriptionsItem :label="t('applications.overview.name')">

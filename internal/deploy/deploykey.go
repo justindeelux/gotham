@@ -106,9 +106,19 @@ func deployKeyTarget(app Application) providers.HookTarget {
 }
 
 // validateDeployKeyTarget rejects an application no deploy key can be
-// registered for: without a provider connection and a repository identifier
-// there is no API to call (a pasted public URL is cloned anonymously).
+// registered for. A provider-less git_private application (GS-4) needs no
+// provider API: its key is generated locally and the operator registers the
+// public half by hand, so a clone URL (or repository label) is enough. Every
+// other application needs a provider connection and a repository identifier
+// (a pasted public URL is cloned anonymously).
 func validateDeployKeyTarget(app Application) error {
+	if NormalizeSourceType(app.SourceType, app.Provider) == SourceGitPrivate &&
+		strings.TrimSpace(app.Provider) == "" {
+		if strings.TrimSpace(app.Repo) == "" && strings.TrimSpace(app.CloneURL) == "" {
+			return fmt.Errorf("%w: application has no repository", ErrValidation)
+		}
+		return nil
+	}
 	if !supportedSourceProvider(app.Provider) {
 		return fmt.Errorf("%w: application provider %q cannot register deploy keys", ErrValidation, app.Provider)
 	}
@@ -158,6 +168,13 @@ func (s *Service) CreateDeployKey(ctx context.Context, userID, appID uuid.UUID) 
 	case !errors.Is(err, ErrNotFound):
 		return DeployKey{}, err
 	}
+	if deployKeyLocalOnly(app) {
+		// Provider-less private source: no Git-host API exists, so the key
+		// is generated and stored locally; the operator registers the
+		// public half by hand (the detail page shows it with instructions).
+		// A nil registrar is fine on this path.
+		return s.storeLocalDeployKey(ctx, app)
+	}
 	if s.registrar == nil {
 		return DeployKey{}, errors.New("deploy: deploy key registrar is not configured")
 	}
@@ -189,6 +206,37 @@ func (s *Service) CreateDeployKey(ctx context.Context, userID, appID uuid.UUID) 
 		return DeployKey{}, err
 	}
 	return key, nil
+}
+
+// deployKeyLocalOnly reports whether an application's deploy key is managed
+// locally (GS-4): a provider-less git_private source has no Git-host API to
+// register with, so the key is generated, stored and shown for hand
+// registration instead.
+func deployKeyLocalOnly(app Application) bool {
+	return NormalizeSourceType(app.SourceType, app.Provider) == SourceGitPrivate &&
+		strings.TrimSpace(app.Provider) == ""
+}
+
+// storeLocalDeployKey generates an ed25519 keypair for a provider-less
+// application and stores it without touching a Git host. It is idempotent
+// through the caller: CreateDeployKey returns the existing row first, and the
+// unique index on the mapping turns a concurrent create into ErrConflict.
+func (s *Service) storeLocalDeployKey(ctx context.Context, app Application) (DeployKey, error) {
+	privatePEM, publicKey, fingerprint, err := generateDeployKeyPair(deployKeyComment(app.ID))
+	if err != nil {
+		return DeployKey{}, err
+	}
+	repo := strings.TrimSpace(app.Repo)
+	if repo == "" {
+		repo = strings.TrimSpace(app.CloneURL)
+	}
+	return s.repo.CreateDeployKey(ctx, DeployKey{
+		ApplicationID: app.ID,
+		Provider:      "",
+		Repo:          repo,
+		Fingerprint:   fingerprint,
+		PublicKey:     publicKey,
+	}, privatePEM)
 }
 
 // DeleteDeployKey removes the deploy key of an application, first on the Git

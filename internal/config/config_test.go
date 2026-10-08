@@ -434,6 +434,16 @@ func TestLoadDeployGitAllowPrivateHostsFromYAML(t *testing.T) {
 	if !cfg.Deploy.GitAllowPrivateHosts {
 		t.Error("Deploy.GitAllowPrivateHosts = false, want true from gotham.yaml")
 	}
+
+	// YAML 1 agrees with env "1": both readers map it to true.
+	writeConfig(t, dir, "deploy:\n  git_allow_private_hosts: 1\n")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Deploy.GitAllowPrivateHosts {
+		t.Error("Deploy.GitAllowPrivateHosts = false, want true from gotham.yaml value 1")
+	}
 }
 
 func TestLoadTrustedProxiesFromEnv(t *testing.T) {

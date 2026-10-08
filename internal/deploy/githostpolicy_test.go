@@ -4,8 +4,13 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -102,6 +107,8 @@ var gitHostPolicyTable = []gitHostPolicyRow{
 	{name: "carrier-grade nat", url: "http://100.64.0.1/acme/demo.git", wantPin: false},
 	{name: "benchmarking", url: "http://198.18.0.1/acme/demo.git", wantPin: false},
 	{name: "nat64", url: "http://[64:ff9b::7f00:1]/acme/demo.git", wantPin: false},
+	{name: "nat64 local-use", url: "http://[64:ff9b:1::7f00:1]/acme/demo.git", wantPin: false},
+	{name: "ipv4-compatible", url: "http://[::7f00:1]/acme/demo.git", wantPin: false},
 	{name: "6to4", url: "http://[2002:7f00:1::1]/acme/demo.git", wantPin: false},
 
 	// Credentials stay a creation refusal, never a dial-time surprise: the
@@ -130,6 +137,8 @@ var gitHostPolicyTable = []gitHostPolicyRow{
 	{name: "allow keeps unspecified denied", url: "http://0.0.0.0/acme/demo.git", allowPrivate: true, wantPin: false},
 	{name: "allow keeps multicast denied", url: "http://224.0.0.1/acme/demo.git", allowPrivate: true, wantPin: false},
 	{name: "allow keeps nat64 denied", url: "http://[64:ff9b::7f00:1]/acme/demo.git", allowPrivate: true, wantPin: false},
+	{name: "allow keeps nat64 local-use denied", url: "http://[64:ff9b:1::7f00:1]/acme/demo.git", allowPrivate: true, wantPin: false},
+	{name: "allow keeps ipv4-compatible denied", url: "http://[::7f00:1]/acme/demo.git", allowPrivate: true, wantPin: false},
 	{name: "allow keeps localhost denied", url: "http://localhost/acme/demo.git", allowPrivate: true, wantPin: false},
 }
 
@@ -207,6 +216,158 @@ func TestGitCloneRefusesBlockedHost(t *testing.T) {
 	}
 }
 
+// redirectFixture is a two-server redirect oracle for the HIGH finding:
+// the first answers every request with a 302 to the second, which records
+// every hit. A git run that refuses redirects fails at the first server and
+// never touches the second; a run that follows them (the bypass) hits both.
+type redirectFixture struct {
+	first  *httptest.Server
+	second *httptest.Server
+
+	mu         sync.Mutex
+	firstHits  int
+	secondHits int
+}
+
+// newRedirectFixture starts the oracle pair. Both serve on loopback, so
+// callers set the allow-private setting (the point under test is the
+// redirect, not the loopback block).
+func newRedirectFixture(t *testing.T) *redirectFixture {
+	t.Helper()
+	fix := &redirectFixture{}
+	fix.second = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fix.mu.Lock()
+		fix.secondHits++
+		fix.mu.Unlock()
+		http.Error(w, "must not be reached", http.StatusForbidden)
+	}))
+	t.Cleanup(fix.second.Close)
+	fix.first = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fix.mu.Lock()
+		fix.firstHits++
+		fix.mu.Unlock()
+		http.Redirect(w, r, fix.second.URL+r.URL.RequestURI(), http.StatusFound)
+	}))
+	t.Cleanup(fix.first.Close)
+	return fix
+}
+
+// hits returns the per-server request counts.
+func (f *redirectFixture) hits() (first, second int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.firstHits, f.secondHits
+}
+
+// requireRealGit skips the caller without a git binary: the redirect tests
+// prove the production git/curl behaviour, which a fake runner cannot.
+func requireRealGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git binary is not available")
+	}
+}
+
+// TestGitCloneRefusesRedirect pins the HIGH fix on the clone path: a public
+// URL answering 302 to an internal host fails at the redirector — the
+// second server never receives a request, and the error quotes the 302
+// (proving git reached the redirector) without the redirect target.
+func TestGitCloneRefusesRedirect(t *testing.T) {
+	requireRealGit(t)
+	t.Setenv(GitAllowPrivateHostsEnv, "true")
+	fix := newRedirectFixture(t)
+
+	app := testApplication(uuid.New())
+	app.SourceType = SourceGitPublic
+	app.Provider = ""
+	app.CloneURL = fix.first.URL + "/repo.git"
+	app.Branch = "main"
+	err := (gitSource{}).Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil)
+	if err == nil {
+		t.Fatal("Clone = nil, want the refused redirect to fail")
+	}
+	if !strings.Contains(err.Error(), "302") {
+		t.Errorf("err = %v, want it to quote the refused 302", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "redirecting to") {
+		t.Errorf("err leaked the redirect target: %v", err)
+	}
+	first, second := fix.hits()
+	if first == 0 {
+		t.Error("the redirector saw no request: the test proved nothing")
+	}
+	if second != 0 {
+		t.Errorf("the redirect target saw %d requests, want 0", second)
+	}
+}
+
+// TestGitLsRemoteRefusesRedirect pins the HIGH fix on the default-branch
+// resolution path: with no branch pinned, the ls-remote fails at the
+// redirector before any clone runs.
+func TestGitLsRemoteRefusesRedirect(t *testing.T) {
+	requireRealGit(t)
+	t.Setenv(GitAllowPrivateHostsEnv, "true")
+	fix := newRedirectFixture(t)
+
+	app := testApplication(uuid.New())
+	app.SourceType = SourceGitPublic
+	app.Provider = ""
+	app.CloneURL = fix.first.URL + "/repo.git"
+	app.Branch = ""
+	err := (gitSource{}).Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil)
+	if err == nil {
+		t.Fatal("Clone = nil, want the refused redirect to fail")
+	}
+	if !strings.HasPrefix(err.Error(), "git ls-remote:") {
+		t.Errorf("err = %v, want the ls-remote step to fail first", err)
+	}
+	if !strings.Contains(err.Error(), "302") {
+		t.Errorf("err = %v, want it to quote the refused 302", err)
+	}
+	first, second := fix.hits()
+	if first == 0 {
+		t.Error("the redirector saw no request: the test proved nothing")
+	}
+	if second != 0 {
+		t.Errorf("the redirect target saw %d requests, want 0", second)
+	}
+}
+
+// TestGitProbeRefusesRedirect pins the HIGH fix on the Test-connection
+// path: an anonymous https probe against a redirector fails without
+// touching the redirect target and without echoing its URL.
+func TestGitProbeRefusesRedirect(t *testing.T) {
+	requireRealGit(t)
+	t.Setenv(GitAllowPrivateHostsEnv, "true")
+	fix := newRedirectFixture(t)
+
+	userID := uuid.New()
+	app := privateTestApp(userID, fix.first.URL+"/repo.git")
+	repo := &fakeRepository{app: app}
+	svc := NewService(Config{Repository: repo, Secret: testSecretKey, Logger: discardLogger()})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	// The probe is throttled per caller+app; this service is fresh, so the
+	// single probe below always runs.
+	result, err := svc.TestGitConnection(context.Background(), userID, app.ID)
+	if err != nil {
+		t.Fatalf("TestGitConnection: %v", err)
+	}
+	if result.OK {
+		t.Errorf("result = %+v, want the refused redirect to fail", result)
+	}
+	if strings.Contains(strings.ToLower(result.Message), "redirecting to") {
+		t.Errorf("probe message leaked the redirect target: %q", result.Message)
+	}
+	first, second := fix.hits()
+	if first == 0 {
+		t.Error("the redirector saw no request: the test proved nothing")
+	}
+	if second != 0 {
+		t.Errorf("the redirect target saw %d requests, want 0", second)
+	}
+}
+
 // TestGitClonePinsPublicHost pins the TOCTOU mitigation: the ls-remote and
 // the clone both carry the resolved address via http.curloptResolve while
 // the log keeps the hostname.
@@ -247,9 +408,89 @@ func TestGitClonePinsPublicHost(t *testing.T) {
 		if !strings.Contains(joined, "git.example:443:203.0.113.10") {
 			t.Errorf("call %d env is missing the pinned address:\n%s", i, joined)
 		}
+		// The HIGH fix: every http(s) git invocation refuses redirects, on
+		// the keyless path as well as the credential path.
+		if value, ok := gitConfigValue(env, "http.followRedirects"); !ok || value != "false" {
+			t.Errorf("call %d env http.followRedirects = %q, want false:\n%s", i, value, joined)
+		}
 	}
 	if joined := strings.Join(lines, "\n"); !strings.Contains(joined, url) {
 		t.Errorf("log = %q, want the hostname still logged", joined)
+	}
+}
+
+// TestGitMixedARecordsRefused pins the any-denied refusal: one public and
+// one blocked answer deny the whole host, however the answers are ordered.
+func TestGitMixedARecordsRefused(t *testing.T) {
+	t.Setenv(GitAllowPrivateHostsEnv, "false")
+	mixed := func(context.Context, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("10.0.0.5")}, nil
+	}
+	if _, err := pinGitRemoteHost(context.Background(), mixed, "https://git.example/acme/demo.git", nil); !errors.Is(err, ErrValidation) {
+		t.Fatalf("pin = %v, want ErrValidation", err)
+	} else if err.Error() != errGitHostNotAllowed.Error() {
+		t.Errorf("err = %q, want the generic refusal", err)
+	}
+
+	ran := false
+	app := testApplication(uuid.New())
+	app.CloneURL = "https://git.example/acme/demo.git"
+	app.Branch = "main"
+	source := gitSource{
+		lookup: mixed,
+		run: func(context.Context, []string, []string) ([]byte, error) {
+			ran = true
+			return nil, nil
+		},
+	}
+	if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil); err == nil {
+		t.Fatal("Clone = nil, want the mixed-answer refusal")
+	}
+	if ran {
+		t.Error("git ran for a mixed-answer host")
+	}
+}
+
+// TestParseGitAllowPrivateHosts pins the single flag reader: it matches the
+// config-file path (viper/cast: ParseBool strings, nonzero numbers), so "1"
+// and "true" agree on both readers and anything else stays denied.
+func TestParseGitAllowPrivateHosts(t *testing.T) {
+	for _, truthy := range []string{"true", "TRUE", "True", "1", "t", "T", "  true  "} {
+		if !parseGitAllowPrivateHosts(truthy) {
+			t.Errorf("parseGitAllowPrivateHosts(%q) = false, want true", truthy)
+		}
+	}
+	for _, falsy := range []string{"", "false", "FALSE", "0", "f", "yes", "on", "2", "tru"} {
+		if parseGitAllowPrivateHosts(falsy) {
+			t.Errorf("parseGitAllowPrivateHosts(%q) = true, want false", falsy)
+		}
+	}
+}
+
+// TestParseGitVersion pins the `git --version` reader behind the pin
+// startup warning, including trailing platform text.
+func TestParseGitVersion(t *testing.T) {
+	cases := []struct {
+		in     string
+		major  int
+		minor  int
+		wantOK bool
+	}{
+		{"git version 2.43.0", 2, 43, true},
+		{"git version 2.37.1\n", 2, 37, true},
+		{"git version 1.8.3.1", 1, 8, true},
+		{"git version 2.43.0 (Apple Git-176)", 2, 43, true},
+		{"", 0, 0, false},
+		{"git version", 0, 0, false},
+		{"git version x.y", 0, 0, false},
+		{"not git at all", 0, 0, false},
+	}
+	for _, tc := range cases {
+		major, minor, ok := parseGitVersion(tc.in)
+		if ok != tc.wantOK || major != tc.major || minor != tc.minor {
+			t.Errorf("parseGitVersion(%q) = (%d, %d, %v), want (%d, %d, %v)",
+				tc.in, major, minor, ok, tc.major, tc.minor, tc.wantOK)
+		}
 	}
 }
 
@@ -308,8 +549,10 @@ func TestGitProbeRefusesBlockedHost(t *testing.T) {
 		if !errors.Is(err, ErrValidation) {
 			t.Fatalf("err = %v, want ErrValidation", err)
 		}
-		if !strings.Contains(err.Error(), "blocked") {
-			t.Errorf("err = %v, want it to name the block", err)
+		// The refusal reads exactly like every other policy denial: no
+		// category, no address, no resolution signal.
+		if err.Error() != errGitHostNotAllowed.Error() {
+			t.Errorf("err = %q, want the generic refusal %q", err, errGitHostNotAllowed)
 		}
 		if strings.Contains(err.Error(), "127.0.0.1") {
 			t.Errorf("err leaked the address: %v", err)
@@ -344,8 +587,10 @@ func TestGitProbeRefusesBlockedHost(t *testing.T) {
 		if result.OK {
 			t.Errorf("result = %+v, want a refused probe", result)
 		}
-		if !strings.Contains(result.Message, "blocked") {
-			t.Errorf("message = %q, want it to name the block", result.Message)
+		// Same generic text as the literal path above: a refused name reads
+		// exactly like an unresolvable one, so the message is no oracle.
+		if result.Message != errGitHostNotAllowed.Error() {
+			t.Errorf("message = %q, want the generic refusal %q", result.Message, errGitHostNotAllowed)
 		}
 		if strings.Contains(result.Message, "169.254.169.254") {
 			t.Errorf("message leaked the resolved address: %q", result.Message)
@@ -381,6 +626,33 @@ func TestGitProbeAllowsPrivateHostWithSetting(t *testing.T) {
 	if !ran {
 		t.Error("git never ran for an allowed probe host")
 	}
+}
+
+// gitConfigValue reads one GIT_CONFIG_KEY_n/VALUE_n pair out of env for
+// assertions: the index links the key to its value.
+func gitConfigValue(env []string, key string) (string, bool) {
+	index := -1
+	for _, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || !strings.HasPrefix(name, "GIT_CONFIG_KEY_") || value != key {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(name, "GIT_CONFIG_KEY_"))
+		if err != nil {
+			continue
+		}
+		index = n
+	}
+	if index < 0 {
+		return "", false
+	}
+	for _, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok && name == "GIT_CONFIG_VALUE_"+strconv.Itoa(index) {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 // TestScrubNetworkAddrs pins the deploy-log scrub: address literals in quoted

@@ -435,21 +435,23 @@ func validateCloneURL(url string) error {
 		if !hasAllowedScheme(url) {
 			return fmt.Errorf("%w: unsupported clone URL scheme", ErrValidation)
 		}
-		if parsed, err := neturl.Parse(url); err == nil {
-			if err := rejectLeadingDash("host", parsed.Hostname()); err != nil {
+		parsed, err := neturl.Parse(url)
+		if err != nil {
+			return fmt.Errorf("%w: unsupported clone URL", ErrValidation)
+		}
+		if err := rejectLeadingDash("host", parsed.Hostname()); err != nil {
+			return err
+		}
+		if user := parsed.User.Username(); user != "" {
+			if err := rejectLeadingDash("user", user); err != nil {
 				return err
 			}
-			if user := parsed.User.Username(); user != "" {
-				if err := rejectLeadingDash("user", user); err != nil {
-					return err
-				}
-			}
-			// The host policy judges the host, never an embedded credential:
-			// the GS-5 installation-token URL carries userinfo internally.
-			if parsed.Hostname() != "" && !strings.EqualFold(parsed.Scheme, "file") {
-				if err := checkGitHostLiteral(parsed.Hostname()); err != nil {
-					return err
-				}
+		}
+		// The host policy judges the host, never an embedded credential:
+		// the GS-5 installation-token URL carries userinfo internally.
+		if parsed.Hostname() != "" && !strings.EqualFold(parsed.Scheme, "file") {
+			if err := checkGitHostLiteral(parsed.Hostname()); err != nil {
+				return err
 			}
 		}
 		return nil

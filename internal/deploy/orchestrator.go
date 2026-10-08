@@ -163,6 +163,10 @@ func newOrchestrator(cfg Config) *Orchestrator {
 	}
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 
+	// The https pin needs git >= 2.37; older binaries get a startup warning
+	// (the policy still resolves and refuses everywhere).
+	checkGitVersionForPin(logger)
+
 	return &Orchestrator{
 		repo:          repo,
 		source:        source,

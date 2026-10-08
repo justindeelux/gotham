@@ -578,9 +578,6 @@ func (s *Service) TestGitConnection(ctx context.Context, userID, appID uuid.UUID
 // probeLookup returns the Service's git hostname resolver for the
 // connection probe: the orchestrator's test seam, nil (the system resolver)
 // in production.
-// probeLookup returns the Service's git hostname resolver for the
-// connection probe: the orchestrator's test seam, nil (the system resolver)
-// in production.
 func (s *Service) probeLookup() gitHostLookupFunc {
 	if s == nil || s.Orchestrator == nil {
 		return nil

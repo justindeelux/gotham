@@ -190,7 +190,8 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	// that omit the column; storing '' explicitly is allowed and round-trips
 	// unchanged. Provider flows keep the "main" fallback (their wizard
 	// always prefills a branch, and empty would break push-branch matching).
-	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic &&
+	// Image sources carry no branch at all.
+	if app.Branch == "" && !BranchDefaultsToRemote(app.SourceType, app.Provider) &&
 		NormalizeSourceType(app.SourceType, app.Provider) != SourceImage {
 		app.Branch = defaultBranch
 	}
@@ -520,8 +521,9 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	}
 	// Clearing the branch restores ls-remote default resolution for
 	// public-git sources (see the create path); provider flows fall back to
-	// "main" so push-branch matching keeps working.
-	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic &&
+	// "main" so push-branch matching keeps working. Image sources carry no
+	// branch at all.
+	if app.Branch == "" && !BranchDefaultsToRemote(app.SourceType, app.Provider) &&
 		NormalizeSourceType(app.SourceType, app.Provider) != SourceImage {
 		app.Branch = defaultBranch
 	}
@@ -1089,13 +1091,15 @@ func requireCompleteRegistryCredential(username string, hasPassword bool) error 
 // keyless http(s)/git URL; every other provider value ("", the legacy
 // "public" sentinel, gitea and friends) stays git_public, so existing apps
 // and their previews keep working with the provider-based hook and key
-// behavior they already have. The dockerfile type needs pasted content
-// (validated without executing anything) plus optional build args and no
-// repository. Image sources (GS-9) carry only a validated reference and an
-// optional credential — no repository, branch or build pack. git_private and
-// the Compose source fail closed until their packages land (GS-4, GS-8).
-// Image fields on any other type are refused, so a credential can never be
-// stored where no pull reads it.
+// behavior they already have. git_private is provider-less by definition (a
+// private repository on a connected provider uses that provider's type) and
+// takes an ssh/scp-like or https URL. The dockerfile type needs pasted
+// content (validated without executing anything) plus optional build args
+// and no repository. Image sources (GS-9) carry only a validated reference
+// and an optional credential — no repository, branch or build pack. The
+// Compose source fails closed until GS-8 lands. Image fields on any other
+// type are refused, so a credential can never be stored where no pull reads
+// it.
 func validateSource(app Application) error {
 	// A GitHub App link only makes sense on the github_app source: anything
 	// else never consults it, so linking there is a caller error.
@@ -1118,6 +1122,12 @@ func validateSource(app Application) error {
 		return validateProviderSource(app, "github")
 	case SourceGitLabApp:
 		return validateProviderSource(app, "gitlab")
+	case SourceGitPrivate:
+		if app.Provider != "" {
+			return fmt.Errorf("%w: source type %q takes no provider: use the %q_app type for repositories on a connected provider",
+				ErrValidation, SourceGitPrivate, app.Provider)
+		}
+		return ValidatePrivateGitURL(app.CloneURL)
 	case SourceDockerfile:
 		if strings.TrimSpace(app.Provider) != "" {
 			return fmt.Errorf("%w: source type %q requires an empty provider, got %q",
@@ -1141,7 +1151,7 @@ func validateSource(app Application) error {
 				ErrValidation, SourceImage)
 		}
 		return ValidateImageReference(app.ImageRef)
-	case SourceGitPrivate, SourceCompose:
+	case SourceCompose:
 		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
 	default:
 		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)

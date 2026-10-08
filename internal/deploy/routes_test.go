@@ -42,10 +42,19 @@ type fakeDeployService struct {
 	// deploy keys.
 	deployKey       DeployKey
 	createKeyErr    error
+	getKeyErr       error
 	deleteKeyErr    error
 	deletedKey      bool
 	deletedKeyCalls int
 	createdKeyFor   uuid.UUID
+
+	// git credentials and connection probes (GS-4).
+	gitCredState    GitCredentialState
+	gitCredErr      error
+	seenGitUsername string
+	seenGitToken    string
+	connResult      GitConnectionResult
+	connErr         error
 
 	// provider hook lifecycle (BE-4.4).
 	installAttempted bool
@@ -133,6 +142,43 @@ func (f *fakeDeployService) DeleteDeployKey(_ context.Context, userID, appID uui
 		return false, f.deleteKeyErr
 	}
 	return f.deletedKey, nil
+}
+
+// GetDeployKey implements DeployService.
+func (f *fakeDeployService) GetDeployKey(_ context.Context, userID, appID uuid.UUID) (DeployKey, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	if f.getKeyErr != nil {
+		return DeployKey{}, f.getKeyErr
+	}
+	return f.deployKey, nil
+}
+
+// SetGitCredential implements DeployService.
+func (f *fakeDeployService) SetGitCredential(_ context.Context, userID, appID uuid.UUID, username, token string) (GitCredentialState, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	f.seenGitUsername, f.seenGitToken = username, token
+	if f.gitCredErr != nil {
+		return GitCredentialState{}, f.gitCredErr
+	}
+	return f.gitCredState, nil
+}
+
+// GetGitCredential implements DeployService.
+func (f *fakeDeployService) GetGitCredential(_ context.Context, userID, appID uuid.UUID) (GitCredentialState, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	if f.gitCredErr != nil {
+		return GitCredentialState{}, f.gitCredErr
+	}
+	return f.gitCredState, nil
+}
+
+// TestGitConnection implements DeployService.
+func (f *fakeDeployService) TestGitConnection(_ context.Context, userID, appID uuid.UUID) (GitConnectionResult, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	if f.connErr != nil {
+		return GitConnectionResult{}, f.connErr
+	}
+	return f.connResult, nil
 }
 
 // GetEnv implements DeployService.

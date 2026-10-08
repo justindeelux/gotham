@@ -133,6 +133,48 @@ const latestTagWarn = computed<boolean>(
       </NFormItem>
     </div>
 
+    <div class="form-row" v-else-if="wizard.isPrivateRepo.value">
+      <NFormItem :label="t('applications.privateGit.url')">
+        <NInput
+          v-model:value="form.privateCloneUrl"
+          class="mono"
+          placeholder="git@github.com:owner/repo.git"
+        />
+        <span class="field-hint">{{ t("applications.privateGit.urlHint") }}</span>
+      </NFormItem>
+
+      <NFormItem :label="t('applications.privateGit.auth')">
+        <NSelect
+          v-model:value="form.privateAuth"
+          :options="[
+            { label: t('applications.privateGit.authSsh'), value: 'ssh' },
+            { label: t('applications.privateGit.authHttps'), value: 'https' },
+          ]"
+        />
+        <span class="field-hint">{{
+          form.privateAuth === "https"
+            ? t("applications.privateGit.authHttpsHint")
+            : t("applications.privateGit.authSshHint")
+        }}</span>
+      </NFormItem>
+
+      <template v-if="form.privateAuth === 'https'">
+        <NFormItem :label="t('applications.privateGit.username')">
+          <NInput v-model:value="form.httpsUsername" class="mono" autocomplete="off" />
+        </NFormItem>
+        <NFormItem :label="t('applications.privateGit.token')">
+          <NInput
+            v-model:value="form.httpsToken"
+            class="mono"
+            type="password"
+            show-password-on="click"
+            autocomplete="off"
+          />
+          <span class="field-hint">{{ t("applications.privateGit.tokenHint") }}</span>
+        </NFormItem>
+      </template>
+    </div>
+
     <NAlert v-else type="info" :show-icon="true">
       {{ t("applications.wizard.sourceUnavailable") }}
     </NAlert>

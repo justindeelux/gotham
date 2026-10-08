@@ -3,7 +3,9 @@ import { computed, inject, provide, reactive, ref, toValue, watch, type Injectio
 
 import {
   createApplication,
+  createDeployKey,
   describeApplicationError,
+  setGitCredential,
 } from "@/features/applications/api/applications";
 import type {
   Application,
@@ -31,6 +33,8 @@ import {
   dockerfileContentSchema,
   hostPortSchema,
   imageRefSchema,
+  isHttpsGitUrl,
+  privateCloneUrlSchema,
   providerSchema,
   publicCloneUrlSchema,
   repoSchema,
@@ -48,6 +52,12 @@ export interface WizardForm {
   sourceType: SourceType;
   providerId: string;
   publicCloneUrl: string;
+  /** GS-4 provider-less private source: the ssh/scp-like/https clone URL. */
+  privateCloneUrl: string;
+  /** GS-4 credential for the private URL: a generated deploy key or a token. */
+  privateAuth: "ssh" | "https";
+  httpsUsername: string;
+  httpsToken: string;
   repoFullName: string;
   cloneUrl: string;
   /** Pasted Dockerfile text for the dockerfile source type (GS-7). */
@@ -252,6 +262,10 @@ export function useCreateAppWizard(
     sourceType: "git_public",
     providerId: "",
     publicCloneUrl: "",
+    privateCloneUrl: "",
+    privateAuth: "ssh",
+    httpsUsername: "",
+    httpsToken: "",
     repoFullName: "",
     cloneUrl: "",
     dockerfileContent: "",
@@ -295,6 +309,9 @@ export function useCreateAppWizard(
 
   const isPublicRepo = computed<boolean>(() => form.sourceType === "git_public");
 
+  /** isPrivateRepo covers the provider-less private-git source (GS-4). */
+  const isPrivateRepo = computed<boolean>(() => form.sourceType === "git_private");
+
   /** isProviderFlow covers the connected-provider types (existing flow). */
   const isProviderFlow = computed<boolean>(
     () => form.sourceType === "github_app" || form.sourceType === "gitlab_app",
@@ -313,7 +330,7 @@ export function useCreateAppWizard(
   /** sourceTypeOptions renders the GS-2 type selector in the current locale. */
   const sourceTypeOptions = computed<Array<{ label: string; value: string; disabled?: boolean }>>(() => [
     { label: tr("applications.wizard.sourceGitPublic"), value: "git_public" },
-    { label: tr("applications.wizard.sourceGitPrivate"), value: "git_private", disabled: true },
+    { label: tr("applications.wizard.sourceGitPrivate"), value: "git_private" },
     { label: tr("applications.wizard.sourceGithubApp"), value: "github_app" },
     { label: tr("applications.wizard.sourceGitlabApp"), value: "gitlab_app" },
     { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile" },
@@ -377,8 +394,8 @@ export function useCreateAppWizard(
     if (!sourceTypeSchema.safeParse(form.sourceType).success) {
       return false;
     }
-    // Unimplemented types (git_private until GS-4, Compose until GS-8)
-    // render a not-yet-available placeholder, so the step cannot continue.
+    // Unimplemented types (Compose until GS-8) render a
+    // not-yet-available placeholder, so the step cannot continue.
     if (!sourceTypeImplemented(form.sourceType)) {
       return false;
     }
@@ -390,6 +407,23 @@ export function useCreateAppWizard(
           return false;
         }
         break;
+      case "git_private": {
+        // Provider-less by definition: an ssh/scp-like/https URL with no
+        // embedded credentials. The token transport needs an https URL and
+        // a token; the deploy key works with any of the shapes.
+        if (!privateCloneUrlSchema.safeParse(form.privateCloneUrl).success) {
+          return false;
+        }
+        if (form.privateAuth === "https") {
+          if (!isHttpsGitUrl(form.privateCloneUrl)) {
+            return false;
+          }
+          if (form.httpsToken.trim() === "") {
+            return false;
+          }
+        }
+        break;
+      }
       case "dockerfile":
         // No repository: pasted text (FROM required, 64 KiB cap) plus
         // optional build args with non-empty keys.
@@ -431,7 +465,7 @@ export function useCreateAppWizard(
         break;
       }
     }
-    // A public repo with no branch pins the remote default at clone time
+    // A git source with no branch pins the remote default at clone time
     // (ls-remote); provider flows keep the required prefilled branch.
     // Dockerfile and image sources carry no branch at all (the field is
     // hidden).
@@ -440,7 +474,8 @@ export function useCreateAppWizard(
     }
     const branchOk =
       form.sourceType === "dockerfile" ||
-      (form.sourceType === "git_public" && form.branch.trim() === "")
+      ((form.sourceType === "git_public" || form.sourceType === "git_private") &&
+        form.branch.trim() === "")
         ? true
         : branchSchema.safeParse(form.branch).success;
     return branchOk && appNameSchema.safeParse(form.name).success;
@@ -538,7 +573,11 @@ export function useCreateAppWizard(
       return form.imageRef.trim();
     }
     const repo =
-      form.sourceType === "git_public" ? form.publicCloneUrl.trim() : form.repoFullName;
+      form.sourceType === "git_public"
+        ? form.publicCloneUrl.trim()
+        : form.sourceType === "git_private"
+          ? form.privateCloneUrl.trim()
+          : form.repoFullName;
     const branch = form.branch.trim();
     return `${repo} · ${branch === "" ? tr("applications.wizard.branchDefault") : branch}`;
   });
@@ -588,6 +627,10 @@ export function useCreateAppWizard(
     () => {
       form.providerId = "";
       form.publicCloneUrl = "";
+      form.privateCloneUrl = "";
+      form.privateAuth = "ssh";
+      form.httpsUsername = "";
+      form.httpsToken = "";
       form.repoFullName = "";
       form.cloneUrl = "";
       form.dockerfileContent = "";
@@ -690,12 +733,17 @@ export function useCreateAppWizard(
         storage: form.storage.filter((row) => row.name.trim() !== ""),
       };
     }
+    // git_private is provider-less: the clone URL doubles as the repo label,
+    // like the git_public shape (the backend agreement check refuses any
+    // provider on this type).
     const source =
       form.sourceType === "git_public"
         ? { repo: form.publicCloneUrl.trim(), cloneUrl: form.publicCloneUrl.trim() }
-        : form.sourceType === "dockerfile"
-          ? { repo: "", cloneUrl: "" }
-          : { repo: form.repoFullName, cloneUrl: form.cloneUrl };
+        : form.sourceType === "git_private"
+          ? { repo: form.privateCloneUrl.trim(), cloneUrl: form.privateCloneUrl.trim() }
+          : form.sourceType === "dockerfile"
+            ? { repo: "", cloneUrl: "" }
+            : { repo: form.repoFullName, cloneUrl: form.cloneUrl };
     return {
       name: form.name.trim(),
       environment_id: form.environmentId,
@@ -733,6 +781,31 @@ export function useCreateAppWizard(
     submitting.value = true;
     try {
       const { application, webhook } = await createApplication(buildPayload());
+      // A provider-less private source stores its credential right after the
+      // row: an SSH key is generated locally (the detail page shows the
+      // public half with registration instructions), an HTTPS token is
+      // sealed. Both are best effort like the webhook install — the row is
+      // already committed, so a failure warns instead of failing the
+      // create, and the detail page remains the retry path.
+      if (form.sourceType === "git_private") {
+        try {
+          if (form.privateAuth === "https") {
+            await setGitCredential(application.id, form.httpsUsername.trim(), form.httpsToken);
+          } else {
+            await createDeployKey(application.id);
+          }
+        } catch (credError) {
+          message.warning(
+            tr(
+              form.privateAuth === "https"
+                ? "applications.privateGit.credentialFailed"
+                : "applications.privateGit.keyFailed",
+              { error: describeApplicationError(credError) },
+            ),
+            { duration: 8000 },
+          );
+        }
+      }
       // The create route only stores the row; "Create & deploy" must queue the
       // first deployment explicitly and surface whether it was queued.
       try {
@@ -794,6 +867,10 @@ export function useCreateAppWizard(
     form.sourceType = "git_public";
     form.providerId = "";
     form.publicCloneUrl = "";
+    form.privateCloneUrl = "";
+    form.privateAuth = "ssh";
+    form.httpsUsername = "";
+    form.httpsToken = "";
     form.repoFullName = "";
     form.cloneUrl = "";
     form.dockerfileContent = "";
@@ -834,6 +911,7 @@ export function useCreateAppWizard(
     providerOptions,
     sourceTypeOptions,
     isPublicRepo,
+    isPrivateRepo,
     isProviderFlow,
     isGitHubAppFlow,
     isDockerfile,

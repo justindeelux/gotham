@@ -79,8 +79,22 @@ type DeployService interface {
 	// Start restarts the container of the newest deployment.
 	Start(ctx context.Context, userID, appID uuid.UUID) (Deployment, error)
 	// CreateDeployKey generates and registers an SSH deploy key for a private
-	// repository; an application that already has one gets it back.
+	// repository; an application that already has one gets it back. A
+	// provider-less git_private application gets a locally managed key the
+	// operator registers by hand.
 	CreateDeployKey(ctx context.Context, userID, appID uuid.UUID) (DeployKey, error)
+	// GetDeployKey returns an application's deploy key (the public half
+	// only); an application without one answers ErrNotFound.
+	GetDeployKey(ctx context.Context, userID, appID uuid.UUID) (DeployKey, error)
+	// SetGitCredential stores (or rotates) an application's HTTPS token for
+	// git_private sources. The token is sealed and never returned.
+	SetGitCredential(ctx context.Context, userID, appID uuid.UUID, username, token string) (GitCredentialState, error)
+	// GetGitCredential reports whether an application's HTTPS credential is
+	// set and the username it carries. The token itself is never returned.
+	GetGitCredential(ctx context.Context, userID, appID uuid.UUID) (GitCredentialState, error)
+	// TestGitConnection probes an application's remote with git ls-remote
+	// and the stored credential, and classifies the outcome.
+	TestGitConnection(ctx context.Context, userID, appID uuid.UUID) (GitConnectionResult, error)
 	// DeleteDeployKey removes the deploy key from the Git host and the
 	// database; an application without one reports false.
 	DeleteDeployKey(ctx context.Context, userID, appID uuid.UUID) (bool, error)

@@ -94,10 +94,10 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	if app.Branch == "" {
 		app.Branch = base.Branch
 	}
-	// A preview of a public-git application with no branch inherits the
-	// empty value so the clone resolves the remote default (GS-3); every
-	// other source falls back to "main" like creation does.
-	if app.Branch == "" && NormalizeSourceType(base.SourceType, base.Provider) != SourceGitPublic {
+	// A preview of a git source with no branch inherits the empty value so
+	// the clone resolves the remote default (GS-3, GS-4); every other source
+	// falls back to "main" like creation does.
+	if app.Branch == "" && !BranchDefaultsToRemote(base.SourceType, base.Provider) {
 		app.Branch = defaultBranch
 	}
 	if err := validateApplication(app, true); err != nil {

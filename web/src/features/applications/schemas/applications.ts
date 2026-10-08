@@ -56,11 +56,12 @@ export const sourceTypeSchema = z.enum([
 export type SourceType = z.infer<typeof sourceTypeSchema>;
 
 /** sourceTypeImplemented gates the wizard Source step on scope: public
- * git, the connected-provider flows, pasted Dockerfiles (GS-7) and prebuilt
- * container images (GS-9). git_private waits for GS-4 and Compose for GS-8. */
+ * and private git, the connected-provider flows, pasted Dockerfiles (GS-7)
+ * and prebuilt container images (GS-9). Compose waits for GS-8. */
 export function sourceTypeImplemented(value: string): boolean {
   return (
     value === "git_public" ||
+    value === "git_private" ||
     value === "github_app" ||
     value === "gitlab_app" ||
     value === "dockerfile" ||
@@ -503,6 +504,90 @@ export function isLatestImageTag(value: string): boolean {
 
 /** imageRefSchema gates the image reference field. Gate-only. */
 export const imageRefSchema = z.string().trim().min(1).refine(isImageRef);
+
+/**
+ * isPrivateGitUrl mirrors ValidatePrivateGitURL
+ * (internal/deploy/gitprivate.go): a provider-less private source takes
+ * ssh://, scp-like [user@]host:path or http(s) with a host and no embedded
+ * credentials. Local paths exist only behind the backend dev flag, so the
+ * gate refuses them here.
+ */
+export function isPrivateGitUrl(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed === "" || /\s/.test(trimmed)) {
+    return false;
+  }
+  for (const ch of trimmed) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) {
+      return false;
+    }
+  }
+  if (!trimmed.includes("://")) {
+    if (trimmed.startsWith("/")) {
+      return false;
+    }
+    return isScpLikeUrl(trimmed);
+  }
+  const sep = trimmed.indexOf("://");
+  const afterScheme = sep < 0 ? "" : trimmed.slice(sep + 3);
+  if (afterScheme === "" || afterScheme.startsWith("/")) {
+    return false;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return false;
+  }
+  const scheme = parsed.protocol.toLowerCase();
+  if (scheme === "http:" || scheme === "https:") {
+    if (parsed.hostname === "") {
+      return false;
+    }
+    return parsed.username === "" && parsed.password === "";
+  }
+  if (scheme === "ssh:") {
+    // A user without a password is the ssh login name (git@host); a
+    // password is a credential smuggled into the stored URL.
+    return parsed.hostname !== "" && parsed.password === "";
+  }
+  return false;
+}
+
+/**
+ * isScpLikeUrl mirrors the backend scp shape: ssh://-less
+ * [user@]host:path (the git@host:path fast path plus the generic form).
+ */
+export function isScpLikeUrl(value: string): boolean {
+  if (value.startsWith("git@")) {
+    return true;
+  }
+  const at = value.indexOf("@");
+  if (at <= 0) {
+    return false;
+  }
+  const colon = value.indexOf(":");
+  const slash = value.indexOf("/");
+  return colon > at && (slash === -1 || slash > at);
+}
+
+/** privateCloneUrlSchema gates the git_private URL field. Gate-only. */
+export const privateCloneUrlSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine(isPrivateGitUrl);
+
+/** isHttpsGitUrl reports an http(s) clone URL (the token transport). */
+export function isHttpsGitUrl(value: string): boolean {
+  const sep = value.trim().indexOf("://");
+  if (sep < 0) {
+    return false;
+  }
+  const scheme = value.trim().slice(0, sep).toLowerCase();
+  return scheme === "http" || scheme === "https";
+}
 
 /** repoSchema replaces repoFullName === "" (a select output, never padded). */
 export const repoSchema = z.string().min(1);

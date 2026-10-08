@@ -1011,8 +1011,8 @@ func mustJSON(t *testing.T, body []byte, path ...string) []byte {
 
 // TestRoutesCreateApplicationSourceTypes posts source-typed payloads through
 // the real service: an unknown type is a 400, a not-yet-implemented type is
-// a 422, a provider/type mismatch is a 400, and a matching github_app
-// creates with the stored type.
+// a 422, a provider/type mismatch is a 400, a provider-less git_private
+// creates with the stored type, and a matching github_app creates too.
 func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 	body := func(sourceType, provider, repo, cloneURL string) string {
 		payload := map[string]any{
@@ -1043,9 +1043,11 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 		want       int
 	}{
 		{"unknown type", "tarball", "", http.StatusBadRequest},
-		{"private git waits for GS-4", SourceGitPrivate, "", http.StatusUnprocessableEntity},
+		{"private git creates", SourceGitPrivate, "", http.StatusCreated},
+		{"private git with github provider", SourceGitPrivate, "github", http.StatusBadRequest},
 		{"github app with gitlab provider", SourceGitHubApp, "gitlab", http.StatusBadRequest},
-		{"public git with github provider", SourceGitPublic, "github", http.StatusBadRequest}}
+		{"public git with github provider", SourceGitPublic, "github", http.StatusBadRequest},
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			userID := uuid.New()

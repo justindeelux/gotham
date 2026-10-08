@@ -279,6 +279,30 @@ type deleteKeyEnvelope struct {
 	Deleted bool `json:"deleted"`
 }
 
+// gitCredentialRequest is the PUT .../git-credential body: the HTTPS token
+// for a git_private source, with an optional username. The token is sealed
+// on write and never returned by any endpoint.
+type gitCredentialRequest struct {
+	Username string `json:"username"`
+	Token    string `json:"token"`
+}
+
+// gitCredentialResponse is the wire view of an application's HTTPS
+// credential: whether one is set and the username it carries.
+type gitCredentialResponse struct {
+	HasCredential bool   `json:"has_credential"`
+	Username      string `json:"username,omitempty"`
+}
+
+// gitConnectionResponse is the wire view of a connection probe: the
+// classified outcome. A failed probe is still a 200 — only request problems
+// answer with an error status.
+type gitConnectionResponse struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+	Host    string `json:"host,omitempty"`
+}
+
 // handler serves the application deploy routes for one DeployService.
 type handler struct {
 	svc    DeployService
@@ -303,7 +327,11 @@ type handler struct {
 //	GET    /v1/applications/{id}/deployments
 //	POST   /v1/applications/{id}/rollback
 //	POST   /v1/applications/{id}/deploy-key
+//	GET    /v1/applications/{id}/deploy-key
 //	DELETE /v1/applications/{id}/deploy-key
+//	PUT    /v1/applications/{id}/git-credential
+//	GET    /v1/applications/{id}/git-credential
+//	POST   /v1/applications/{id}/test-connection
 //
 // auth wraps the group (the server passes its RequireAuth); a nil svc or
 // FEATURE_APPLICATIONS=false mounts nothing, so the control plane can call
@@ -330,7 +358,11 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Get("/v1/applications/{id}/deployments", h.list)
 		protected.Post("/v1/applications/{id}/rollback", h.rollback)
 		protected.Post("/v1/applications/{id}/deploy-key", h.createDeployKey)
+		protected.Get("/v1/applications/{id}/deploy-key", h.getDeployKey)
 		protected.Delete("/v1/applications/{id}/deploy-key", h.deleteDeployKey)
+		protected.Put("/v1/applications/{id}/git-credential", h.putGitCredential)
+		protected.Get("/v1/applications/{id}/git-credential", h.getGitCredential)
+		protected.Post("/v1/applications/{id}/test-connection", h.testConnection)
 	})
 }
 
@@ -736,6 +768,73 @@ func (h *handler) createDeployKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, deployKeyEnvelope{DeployKey: newDeployKeyResponse(key)})
 }
 
+// getDeployKey serves GET .../deploy-key: the application's deploy key with
+// the public half only. An application without a key answers 404, so the
+// detail page knows to offer generation instead.
+func (h *handler) getDeployKey(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	key, err := h.svc.GetDeployKey(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deployKeyEnvelope{DeployKey: newDeployKeyResponse(key)})
+}
+
+// putGitCredential serves PUT .../git-credential: stores (or rotates) the
+// HTTPS token of a git_private source. The response confirms what is set,
+// never the token.
+func (h *handler) putGitCredential(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	var req gitCredentialRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	state, err := h.svc.SetGitCredential(r.Context(), userID, appID, req.Username, req.Token)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newGitCredentialResponse(state))
+}
+
+// getGitCredential serves GET .../git-credential: whether a token is set
+// and the username it carries.
+func (h *handler) getGitCredential(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	state, err := h.svc.GetGitCredential(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newGitCredentialResponse(state))
+}
+
+// testConnection serves POST .../test-connection: probes the application's
+// remote with git ls-remote and the stored credential, and answers the
+// classified outcome (a failed probe is still a 200).
+func (h *handler) testConnection(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.svc.TestGitConnection(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, newGitConnectionResponse(result))
+}
+
 // deleteDeployKey serves DELETE .../deploy-key: removes the key from the Git
 // host and then from the database. An application without a key answers 200
 // with deleted=false.
@@ -1055,6 +1154,17 @@ func newApplicationListItem(application Application) applicationListItem {
 		response.GitHubAppID = application.GitHubAppID.String()
 	}
 	return response
+}
+
+// newGitCredentialResponse maps a credential state to its wire view. The
+// token is never part of either shape, so it cannot leak here.
+func newGitCredentialResponse(state GitCredentialState) gitCredentialResponse {
+	return gitCredentialResponse(state)
+}
+
+// newGitConnectionResponse maps a probe outcome to its wire view.
+func newGitConnectionResponse(result GitConnectionResult) gitConnectionResponse {
+	return gitConnectionResponse(result)
 }
 
 // newDeployKeyResponse maps a stored deploy key to its wire representation.

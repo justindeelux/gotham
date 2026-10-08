@@ -21,6 +21,11 @@ import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers
  *   POST   /applications/{id}/deploy
  *   GET    /applications/{id}/deployments
  *   POST   /applications/{id}/rollback
+ *   POST   /applications/{id}/deploy-key
+ *   GET    /applications/{id}/deploy-key
+ *   PUT    /applications/{id}/git-credential
+ *   GET    /applications/{id}/git-credential
+ *   POST   /applications/{id}/test-connection
  *
  * Paths are relative to the shared axios instance (`baseURL: /api/v1`), so the
  * auth header and refresh-on-401 behaviour come from `./http` unchanged.
@@ -512,6 +517,119 @@ export async function stopApplication(appId: string): Promise<Deployment> {
     {},
   );
   return response.data.deployment;
+}
+
+/**
+ * DeployKey is an application's SSH deploy key as the API sees it
+ * (see deployKeyResponse in routes.go): the public half, its fingerprint
+ * and the provider's key id. The private half is sealed on the server and
+ * never appears here.
+ */
+export interface DeployKey {
+  id: string;
+  application_id: string;
+  provider: string;
+  repo: string;
+  provider_key_id?: string;
+  fingerprint: string;
+  public_key: string;
+  created_at: string;
+}
+
+/** Wire envelope for a single deploy key. */
+interface DeployKeyEnvelope {
+  deploy_key: DeployKey;
+}
+
+/**
+ * getDeployKey returns an application's deploy key (GET .../deploy-key →
+ * 200). An application without one answers 404, so the caller knows to
+ * offer generation instead.
+ */
+export async function getDeployKey(appId: string): Promise<DeployKey> {
+  const response = await http.get<DeployKeyEnvelope>(
+    `/applications/${appId}/deploy-key`,
+  );
+  return response.data.deploy_key;
+}
+
+/**
+ * createDeployKey generates the application's ed25519 keypair and returns
+ * the public half (POST .../deploy-key → 201). Repeating the call returns
+ * the key that already exists. For a provider-less git_private source no
+ * Git-host call happens: the operator registers the public half by hand.
+ */
+export async function createDeployKey(appId: string): Promise<DeployKey> {
+  const response = await http.post<DeployKeyEnvelope>(
+    `/applications/${appId}/deploy-key`,
+    {},
+  );
+  return response.data.deploy_key;
+}
+
+/**
+ * GitCredentialState is an application's HTTPS credential as the API sees
+ * it: whether a token is set and the username it carries. The token itself
+ * is never returned.
+ */
+export interface GitCredentialState {
+  has_credential: boolean;
+  username?: string;
+}
+
+/**
+ * getGitCredential reports whether an application's HTTPS token is set
+ * (GET .../git-credential → 200).
+ */
+export async function getGitCredential(
+  appId: string,
+): Promise<GitCredentialState> {
+  const response = await http.get<GitCredentialState>(
+    `/applications/${appId}/git-credential`,
+  );
+  return response.data;
+}
+
+/**
+ * setGitCredential stores (or rotates) an application's HTTPS token
+ * (PUT .../git-credential → 200). The answer confirms what is set, never
+ * the token.
+ */
+export async function setGitCredential(
+  appId: string,
+  username: string,
+  token: string,
+): Promise<GitCredentialState> {
+  const response = await http.put<GitCredentialState>(
+    `/applications/${appId}/git-credential`,
+    { username, token },
+  );
+  return response.data;
+}
+
+/**
+ * ConnectionResult is the classified outcome of probing an application's
+ * remote with git ls-remote and the stored credential
+ * (POST .../test-connection → 200, even when the probe failed).
+ */
+export interface ConnectionResult {
+  ok: boolean;
+  message: string;
+  host?: string;
+}
+
+/**
+ * testConnection probes an application's remote and answers the classified
+ * outcome (POST .../test-connection → 200).
+ */
+export async function testConnection(
+  appId: string,
+): Promise<ConnectionResult> {
+  const response = await http.post<ConnectionResult>(
+    `/applications/${appId}/test-connection`,
+    {},
+  );
+  return response.data;
 }
 
 /**

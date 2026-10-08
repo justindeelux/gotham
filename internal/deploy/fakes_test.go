@@ -119,6 +119,10 @@ type fakeRepository struct {
 	// deployKeyErr fails every deploy-key write (tests the rollback with).
 	deployKeyErr error
 
+	// gitCreds holds one sealed HTTPS credential per application (GS-4),
+	// mirroring application_git_credentials; gitCredErr fails every write.
+	gitCreds   map[uuid.UUID]fakeGitCredential
+	gitCredErr error
 	// deleteDeployKeyErr fails the local deploy-key detach (tests the
 	// sealed-key orphan cleanup with).
 	deleteDeployKeyErr error
@@ -853,6 +857,55 @@ func (r *fakeRepository) DeployKeyPrivatePEM(_ context.Context, appID uuid.UUID)
 		return "", nil
 	}
 	return r.privateKeys[stored.key.PrivateKeyID], nil
+}
+
+// fakeGitCredential is one row of application_git_credentials: the username
+// in plaintext and the token sealed with providers.SealSecret.
+type fakeGitCredential struct {
+	username string
+	sealed   string
+}
+
+// UpsertGitCredential implements Repository, storing the sealed token as
+// received (sealing is the service's job, covered by the service tests).
+func (r *fakeRepository) UpsertGitCredential(_ context.Context, appID uuid.UUID, username, sealedToken string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.gitCredErr != nil {
+		return r.gitCredErr
+	}
+	if r.gitCreds == nil {
+		r.gitCreds = make(map[uuid.UUID]fakeGitCredential)
+	}
+	r.gitCreds[appID] = fakeGitCredential{username: username, sealed: sealedToken}
+	return nil
+}
+
+// GetGitCredential implements Repository: metadata only, never the token.
+func (r *fakeRepository) GetGitCredential(_ context.Context, appID uuid.UUID) (GitCredential, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.gitCreds[appID]
+	if !ok {
+		return GitCredential{}, ErrNotFound
+	}
+	return GitCredential{Username: stored.username}, nil
+}
+
+// GitCredential implements Repository (and gitCredentialResolver), opening
+// the sealed token with the test secret the test services seal with.
+func (r *fakeRepository) GitCredential(_ context.Context, appID uuid.UUID) (string, string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.gitCreds[appID]
+	if !ok {
+		return "", "", nil
+	}
+	token, err := providers.OpenSecret(testSecretKey, stored.sealed)
+	if err != nil {
+		return "", "", err
+	}
+	return stored.username, token, nil
 }
 
 // GetCertificateIntent implements Repository.

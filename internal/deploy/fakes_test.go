@@ -1035,6 +1035,11 @@ type mockNode struct {
 	// contexts records the raw build context tarball of every Build call, so
 	// tests can assert what the node actually received.
 	contexts [][]byte
+	// pullImages/pullUsers/pullPasswords record PullWithAuth calls (the
+	// prebuilt-image pull); the counter above covers both pull spellings.
+	pullImages    []string
+	pullUsers     []string
+	pullPasswords []string
 }
 
 // Compile-time guarantee that mockNode satisfies the seam.
@@ -1086,6 +1091,21 @@ func (m *mockNode) Pull(_ context.Context, _ string) error {
 	defer m.mu.Unlock()
 	m.pullCalls++
 	return m.pullErr
+}
+
+// PullWithAuth implements Node, recording the pull for assertions and
+// answering the configured digest.
+func (m *mockNode) PullWithAuth(_ context.Context, image, username, password string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pullCalls++
+	m.pullImages = append(m.pullImages, image)
+	m.pullUsers = append(m.pullUsers, username)
+	m.pullPasswords = append(m.pullPasswords, password)
+	if m.pullErr != nil {
+		return "", m.pullErr
+	}
+	return m.digest, nil
 }
 
 // Run implements Node, recording the payload and "creating" a container that

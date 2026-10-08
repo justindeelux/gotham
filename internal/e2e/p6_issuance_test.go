@@ -219,7 +219,7 @@ func TestP6DNS01Issuance(t *testing.T) {
 	// A trivial backend for the domain and the application/deployment rows
 	// the routing state is built from.
 	pullCtx, pullCancel := context.WithTimeout(ctx, p6PullTimeout)
-	if err := engine.PullImage(pullCtx, p6NginxImage); err != nil {
+	if _, err := engine.PullImage(pullCtx, p6NginxImage, "", ""); err != nil {
 		pullCancel()
 		t.Fatalf("pull %s: %v", p6NginxImage, err)
 	}

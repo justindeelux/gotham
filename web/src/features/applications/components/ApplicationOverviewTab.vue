@@ -66,10 +66,13 @@ const sourceLabel = computed<string>(() => {
         <NDescriptionsItem :label="t('applications.overview.source')">
           <span class="mono">{{ sourceLabel }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem v-if="props.application.source_type !== 'dockerfile'" :label="t('applications.overview.branch')">
+        <NDescriptionsItem v-if="props.application.source_type === 'image'" :label="t('applications.image.ref')">
+          <span class="mono">{{ props.application.image_ref || "—" }}</span>
+        </NDescriptionsItem>
+        <NDescriptionsItem v-else-if="props.application.source_type !== 'dockerfile'" :label="t('applications.overview.branch')">
           <span class="mono">{{ props.application.branch || "—" }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem v-if="props.application.source_type !== 'dockerfile'" :label="t('applications.overview.buildPack')">
+        <NDescriptionsItem v-if="props.application.source_type !== 'dockerfile' && props.application.source_type !== 'image'" :label="t('applications.overview.buildPack')">
           <span class="mono">{{ props.application.build_pack || t("applications.overview.auto") }}</span>
         </NDescriptionsItem>
         <NDescriptionsItem :label="t('applications.overview.domain')">

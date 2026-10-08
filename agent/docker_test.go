@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -27,6 +28,7 @@ type fakeDockerState struct {
 	createName  string
 	createBody  dockerCreateBody
 	pullImage   string
+	pullAuth    string
 	logsQuery   string
 	versionHits int
 	// createdID is the id the create endpoint returns (default created123).
@@ -51,6 +53,7 @@ func (s *fakeDockerState) snapshot() fakeDockerState {
 		createName:  s.createName,
 		createBody:  s.createBody,
 		pullImage:   s.pullImage,
+		pullAuth:    s.pullAuth,
 		logsQuery:   s.logsQuery,
 		versionHits: s.versionHits,
 		createdID:   s.createdID,
@@ -109,6 +112,7 @@ func newFakeDockerServer(t *testing.T) (*httptest.Server, *fakeDockerState) {
 		image := r.URL.Query().Get("fromImage")
 		state.mu.Lock()
 		state.pullImage = image
+		state.pullAuth = r.Header.Get("X-Registry-Auth")
 		state.mu.Unlock()
 		if image == "missing:latest" {
 			_, _ = w.Write([]byte(`{"error":"manifest unknown"}`))
@@ -116,6 +120,19 @@ func newFakeDockerServer(t *testing.T) (*httptest.Server, *fakeDockerState) {
 		}
 		_, _ = w.Write([]byte(`{"status":"Pulling from library/alpine"}` + "\n"))
 		_, _ = w.Write([]byte(`{"status":"Download complete"}` + "\n"))
+	})
+
+	// Image inspect backing digest resolution after a pull. The decoy entry
+	// proves the client records the digest of the pulled repository, not
+	// just the first RepoDigests entry.
+	mux.HandleFunc("/images/", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, map[string]any{
+			"Id": "sha256:deadbeef",
+			"RepoDigests": []string{
+				"unrelated/other@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+				inspectRepoDigest + "@" + inspectDigest,
+			},
+		})
 	})
 
 	mux.HandleFunc("/containers/", func(w http.ResponseWriter, r *http.Request) {
@@ -306,11 +323,15 @@ func TestDockerClientPullImage(t *testing.T) {
 	server, state := newFakeDockerServer(t)
 	client := newFakeDockerClient(t, server.URL)
 
-	if err := client.PullImage(context.Background(), "alpine:latest"); err != nil {
+	digest, err := client.PullImage(context.Background(), "alpine:latest", "", "")
+	if err != nil {
 		t.Fatalf("PullImage: %v", err)
 	}
 	if got := state.snapshot().pullImage; got != "alpine:latest" {
 		t.Errorf("fromImage = %q; want alpine:latest", got)
+	}
+	if digest == "" {
+		t.Error("PullImage digest = empty; want the engine-reported digest")
 	}
 }
 
@@ -318,13 +339,141 @@ func TestDockerClientPullImageError(t *testing.T) {
 	server, _ := newFakeDockerServer(t)
 	client := newFakeDockerClient(t, server.URL)
 
-	err := client.PullImage(context.Background(), "missing:latest")
+	_, err := client.PullImage(context.Background(), "missing:latest", "", "")
 	if err == nil {
 		t.Fatal("PullImage(missing) = nil; want error")
 	}
 	if !strings.Contains(err.Error(), "manifest unknown") {
 		t.Errorf("error = %v; want it to mention manifest unknown", err)
 	}
+}
+
+// inspectRepoDigest/inspectDigest are the RepoDigest the fake engine reports.
+const (
+	inspectRepoDigest = "docker.io/library/alpine"
+	inspectDigest     = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+)
+
+// TestDockerClientPullImageAuth is the credential-scoping guard: a per-pull
+// credential is sent as the Docker auth config for the image's own registry
+// and the resolved digest is answered; an anonymous pull sends the anonymous
+// config instead of the node credential.
+func TestDockerClientPullImageAuth(t *testing.T) {
+	server, state := newFakeDockerServer(t)
+	client := newFakeDockerClient(t, server.URL)
+
+	digest, err := client.PullImage(context.Background(), "registry.example.com/team/app:1.2", "robot", "s3cret-token")
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if digest != "" {
+		t.Errorf("digest = %q; the fake engine reports no digest for this repository", digest)
+	}
+	auth := decodeRegistryAuth(t, state.snapshot().pullAuth)
+	if auth["username"] != "robot" || auth["password"] != "s3cret-token" {
+		t.Errorf("auth config = %v; want the per-pull credential", auth)
+	}
+	if auth["serveraddress"] != "registry.example.com" {
+		t.Errorf("serveraddress = %q; want the image registry host", auth["serveraddress"])
+	}
+
+	// The digest answered is the pulled repository's, not the first entry's:
+	// the fake lists an unrelated digest first.
+	digest, err = client.PullImage(context.Background(), "alpine:latest", "robot", "s3cret-token")
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if digest != inspectDigest {
+		t.Errorf("digest = %q; want %q", digest, inspectDigest)
+	}
+
+	if _, err := client.PullImage(context.Background(), "alpine:latest", "", ""); err != nil {
+		t.Fatalf("anonymous PullImage: %v", err)
+	}
+	if got := state.snapshot().pullAuth; got != anonymousRegistryAuth {
+		t.Errorf("anonymous pull auth = %q; want the anonymous config", got)
+	}
+}
+
+// TestDockerClientPullImageHubSpellings records digests across the Docker
+// Hub spellings: an explicit docker.io reference listed under its familiar
+// name, and a legacy index.docker.io reference listed under docker.io.
+func TestDockerClientPullImageHubSpellings(t *testing.T) {
+	const digestA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const digestB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const digestC = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/images/create", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok"}` + "\n"))
+	})
+	mux.HandleFunc("/images/", func(w http.ResponseWriter, r *http.Request) {
+		var digests []string
+		// The path carries the escaped reference; match the distinctive tail.
+		switch {
+		case strings.Contains(r.URL.Path, "alpine"):
+			digests = []string{"alpine@" + digestA}
+		case strings.Contains(r.URL.Path, "app"):
+			digests = []string{"docker.io/team/app@" + digestB}
+		case strings.Contains(r.URL.Path, "private"):
+			// A familiar-looking entry of another repository must not
+			// resolve a private pull; only the exact name counts.
+			digests = []string{"team/app@" + digestC, "registry.example.com/team/private@" + digestB}
+		}
+		writeJSON(t, w, map[string]any{"Id": "sha256:deadbeef", "RepoDigests": digests})
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	client := newFakeDockerClient(t, server.URL)
+
+	digest, err := client.PullImage(context.Background(), "docker.io/library/alpine:3.20", "", "")
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if digest != digestA {
+		t.Errorf("digest = %q; want the familiar-name entry %q", digest, digestA)
+	}
+	digest, err = client.PullImage(context.Background(), "index.docker.io/team/app:1", "", "")
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if digest != digestB {
+		t.Errorf("digest = %q; want the normalized entry %q", digest, digestB)
+	}
+	digest, err = client.PullImage(context.Background(), "registry.example.com/team/private:1", "", "")
+	if err != nil {
+		t.Fatalf("PullImage: %v", err)
+	}
+	if digest != digestB {
+		t.Errorf("digest = %q; want the exact-name entry, not the familiar %q", digest, digestB)
+	}
+}
+
+// TestDockerClientPullImageErrorRedactsCredential is the redaction guard: a}
+// failed pull with a credential never echoes it in the error.
+func TestDockerClientPullImageErrorRedactsCredential(t *testing.T) {
+	server, _ := newFakeDockerServer(t)
+	client := newFakeDockerClient(t, server.URL)
+
+	_, err := client.PullImage(context.Background(), "missing:latest", "robot", "s3cret-token")
+	if err == nil {
+		t.Fatal("PullImage(missing) = nil; want error")
+	}
+	if strings.Contains(err.Error(), "s3cret-token") || strings.Contains(err.Error(), "robot") {
+		t.Errorf("error = %v; must not carry the credential", err)
+	}
+}
+
+func decodeRegistryAuth(t *testing.T, header string) map[string]string {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(header)
+	if err != nil {
+		t.Fatalf("decode auth header: %v", err)
+	}
+	var auth map[string]string
+	if err := json.Unmarshal(raw, &auth); err != nil {
+		t.Fatalf("unmarshal auth config: %v", err)
+	}
+	return auth
 }
 
 // createContainerRequestForTest builds a request exercising every mapped field.
@@ -629,7 +778,7 @@ func TestDockerClientNotFoundTaxonomy(t *testing.T) {
 	if _, err := client.CreateContainer(ctx, &agentv1.CreateContainerRequest{Image: "nope:latest"}); !errors.Is(err, ErrDockerImageNotFound) {
 		t.Errorf("create with a missing image = %v; want ErrDockerImageNotFound", err)
 	}
-	if err := client.PullImage(ctx, "nope"); !errors.Is(err, ErrDockerImageNotFound) {
+	if _, err := client.PullImage(ctx, "nope", "", ""); !errors.Is(err, ErrDockerImageNotFound) {
 		t.Errorf("pull of a missing repository = %v; want ErrDockerImageNotFound", err)
 	}
 }

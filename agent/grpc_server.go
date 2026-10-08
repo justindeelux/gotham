@@ -40,7 +40,7 @@ type dockerClient interface {
 	Restart(ctx context.Context, id string) error
 	Remove(ctx context.Context, id string) error
 	RemoveVolume(ctx context.Context, name string) error
-	PullImage(ctx context.Context, image string) error
+	PullImage(ctx context.Context, image, username, password string) (string, error)
 	CreateContainer(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	RunImage(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	Logs(ctx context.Context, id string, follow bool, tail int64) (<-chan LogMessage, error)
@@ -160,15 +160,19 @@ func (s *DockerServer) RemoveVolume(ctx context.Context, req *agentv1.VolumeActi
 	return &agentv1.VolumeActionResponse{}, nil
 }
 
-// PullImage pulls an image onto the node.
+// PullImage pulls an image onto the node. A per-pull registry credential
+// travels only in this request: it is turned into the Docker auth header and
+// never persisted on the node. It answers the resolved image digest so the
+// control plane can record it on the deployment.
 func (s *DockerServer) PullImage(ctx context.Context, req *agentv1.PullImageRequest) (*agentv1.PullImageResponse, error) {
 	if req.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "image is required")
 	}
-	if err := s.docker.PullImage(ctx, req.GetImage()); err != nil {
+	digest, err := s.docker.PullImage(ctx, req.GetImage(), req.GetUsername(), req.GetPassword())
+	if err != nil {
 		return nil, dockerError("pull image", err)
 	}
-	return &agentv1.PullImageResponse{}, nil
+	return &agentv1.PullImageResponse{Digest: digest}, nil
 }
 
 // CreateContainer creates a container without starting it.

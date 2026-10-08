@@ -272,23 +272,25 @@ func (c *DockerClient) RemoveVolume(ctx context.Context, name string) error {
 
 // PullImage pulls image from its registry, consuming the progress stream. An
 // error reported inside the progress payload is returned as an error.
-func (c *DockerClient) PullImage(ctx context.Context, image string) error {
+// username/password carry one private-registry credential for this pull only:
+// the Docker X-Registry-Auth header is built from them and the credential is
+// never cached or persisted (empty means the node-local registry credential
+// for node-owned images, anonymous otherwise). It answers the resolved image
+// digest (sha256:...), "" when the engine reported none.
+func (c *DockerClient) PullImage(ctx context.Context, image, username, password string) (string, error) {
 	if strings.TrimSpace(image) == "" {
-		return errors.New("docker: image is required")
+		return "", errors.New("docker: image is required")
 	}
 	query := url.Values{}
 	query.Set("fromImage", image)
 
-	if err := c.ensureRegistryCredentialFor(ctx, image); err != nil {
-		return err
-	}
-	authHeader, err := c.registryAuthHeader(image)
+	authHeader, err := c.pullAuthHeader(ctx, image, username, password)
 	if err != nil {
-		return err
+		return "", err
 	}
 	response, err := c.doRegistryRequest(ctx, http.MethodPost, "/images/create?"+query.Encode(), authHeader)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = response.Body.Close() }()
 
@@ -299,13 +301,132 @@ func (c *DockerClient) PullImage(ctx context.Context, image string) error {
 		}
 		switch err := decoder.Decode(&message); {
 		case errors.Is(err, io.EOF):
-			return nil
+			return c.inspectImageDigest(ctx, image)
 		case err != nil:
-			return fmt.Errorf("docker: decode pull progress: %w", err)
+			return "", fmt.Errorf("docker: decode pull progress: %w", err)
 		case message.Error != "":
-			return fmt.Errorf("docker: pull %s: %s", image, message.Error)
+			return "", fmt.Errorf("docker: pull %s: %s", image, message.Error)
 		}
 	}
+}
+
+// pullAuthHeader returns the X-Registry-Auth value for one image pull. An
+// explicit per-pull credential wins and is scoped to the image's own registry
+// host; otherwise the node-local registry credential (or anonymous) applies.
+// The error text never carries the credential.
+func (c *DockerClient) pullAuthHeader(ctx context.Context, image, username, password string) (string, error) {
+	if strings.TrimSpace(username) != "" {
+		auth := registryAuth{
+			Address:  registryServerAddress(image),
+			Username: username,
+			Password: password,
+		}
+		return auth.header()
+	}
+	if err := c.ensureRegistryCredentialFor(ctx, image); err != nil {
+		return "", err
+	}
+	return c.registryAuthHeader(image)
+}
+
+// registryServerAddress derives the Docker serveraddress for an image pull:
+// the explicit registry host, or the Docker Hub default for bare names. It
+// feeds the X-Registry-Auth config only; it is never used to route the pull.
+func registryServerAddress(image string) string {
+	ref := strings.TrimSpace(image)
+	if host, _, ok := strings.Cut(ref, "/"); ok && (strings.Contains(host, ".") || strings.Contains(host, ":") || host == "localhost") {
+		return host
+	}
+	return "https://index.docker.io/v1/"
+}
+
+// inspectImageDigest reads the manifest digest the engine recorded for image.
+// Only a digest recorded under the pulled repository name (or its Docker Hub
+// expansion for bare names) is answered: the first RepoDigests entry may
+// belong to another repository sharing the image ID, and recording that would
+// pin a later rollback to the wrong bits. "" means the engine reported no
+// digest for this repository, never a failure of the pull itself.
+func (c *DockerClient) inspectImageDigest(ctx context.Context, image string) (string, error) {
+	var out struct {
+		RepoDigests []string `json:"RepoDigests"`
+	}
+	path := "/images/" + url.PathEscape(image) + "/json"
+	response, err := c.doRaw(ctx, http.MethodGet, path, nil, "")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if !dockerOK(response.StatusCode) {
+		return "", statusError(http.MethodGet, path, response)
+	}
+	if err := json.NewDecoder(response.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("docker: decode image inspect: %w", err)
+	}
+	for _, candidate := range digestRepoNames(image) {
+		for _, entry := range out.RepoDigests {
+			repo, digest, ok := strings.Cut(entry, "@")
+			if !ok || !strings.HasPrefix(digest, "sha256:") {
+				continue
+			}
+			if repo == candidate {
+				return digest, nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// digestRepoNames renders the repository names a pulled reference may appear
+// under in RepoDigests: the name as pulled, the familiar spelling for
+// explicit Hub references (docker.io/library/nginx is listed as nginx) and
+// the Hub expansions for bare names (nginx pulls as docker.io/library/nginx).
+// index.docker.io is the legacy Hub hostname the engine may normalize either
+// way, so both spellings are candidates.
+func digestRepoNames(image string) []string {
+	name := strings.TrimSpace(image)
+	if cut, _, ok := strings.Cut(name, "@"); ok {
+		name = cut
+	}
+	if index := strings.LastIndex(name, ":"); index >= 0 && index > strings.LastIndex(name, "/") {
+		name = name[:index]
+	}
+	names := []string{name}
+	head, tail, found := strings.Cut(name, "/")
+	switch {
+	case !found:
+		// Official image: nginx is docker.io/library/nginx on the Hub.
+		names = append(names, "docker.io/library/"+name)
+	case !isRegistryHostHead(head):
+		// Bare namespaced path: team/app is docker.io/team/app on the Hub.
+		names = append(names, "docker.io/"+name)
+	default:
+		// Explicit Hub spellings only: docker.io/library/nginx is listed
+		// as nginx, and index.docker.io is the legacy Hub hostname the
+		// engine may normalize either way. Any other registry keeps its
+		// exact name: a familiar-looking entry for another repository must
+		// never resolve a private pull.
+		lower := strings.ToLower(head)
+		if lower == "docker.io" || lower == "index.docker.io" {
+			familiar := tail
+			if stripped, ok := strings.CutPrefix(tail, "library/"); ok {
+				familiar = stripped
+			}
+			names = append(names, familiar)
+			if lower == "docker.io" {
+				names = append(names, "index.docker.io/"+tail)
+			} else {
+				names = append(names, "docker.io/"+tail)
+			}
+		}
+	}
+	return names
+}
+
+// isRegistryHostHead reports whether the first path component of a reference
+// names an explicit registry (a dot, a port or localhost), mirroring the
+// control plane's split rule without importing it.
+func isRegistryHostHead(head string) bool {
+	return strings.Contains(head, ".") || strings.Contains(head, ":") || strings.EqualFold(head, "localhost")
 }
 
 // CreateContainer creates a container from req and returns its id.

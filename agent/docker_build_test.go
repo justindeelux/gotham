@@ -493,6 +493,13 @@ func (e *registryTestEngine) handler(t *testing.T) http.Handler {
 			}
 			writeJSONStream(t, w, map[string]string{"status": "Pulling from library/" + registryImage})
 
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/images/") &&
+			strings.HasSuffix(r.URL.Path, "/json"):
+			writeJSONStream(t, w, map[string]any{
+				"Id":          "sha256:registry2",
+				"RepoDigests": []string{registryImage + "@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+			})
+
 		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
 			e.creates++
 			body, err := io.ReadAll(r.Body)

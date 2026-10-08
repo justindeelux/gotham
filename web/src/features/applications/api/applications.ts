@@ -53,6 +53,10 @@ export interface Application {
   build_args?: Record<string, string>;
   branch: string;
   build_pack: string;
+  /** Prebuilt reference of an image source (GS-9); empty otherwise. */
+  image_ref: string;
+  /** Whether a private-registry credential is stored (never the credential). */
+  has_registry_credential: boolean;
   base_domain: string;
   /** True when a legacy duplicate binding was disabled; an explicit domain update re-enables it. */
   base_domain_disabled: boolean;
@@ -137,6 +141,14 @@ export interface CreateApplicationInput {
   build_args?: Record<string, string>;
   branch: string;
   build_pack: string;
+  /** Prebuilt reference for image sources (GS-9). */
+  image_ref: string;
+  /**
+   * Private-registry credential for image sources, plaintext on the way in
+   * and sealed at rest. Never returned by the API.
+   */
+  registry_username?: string;
+  registry_password?: string;
   base_domain: string;
   port: number;
   host_port: number;
@@ -156,6 +168,14 @@ export interface UpdateApplicationInput {
   environment_id?: string;
   branch?: string;
   build_pack?: string;
+  /** Replacement prebuilt reference of an image source (GS-9). */
+  image_ref?: string;
+  /**
+   * Registry credential rotation of an image source; either half may be set
+   * independently and an empty value clears that half. Never returned.
+   */
+  registry_username?: string;
+  registry_password?: string;
   base_domain?: string;
   port?: number;
   host_port?: number;

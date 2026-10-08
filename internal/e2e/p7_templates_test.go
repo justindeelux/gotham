@@ -154,7 +154,7 @@ func TestP7TemplateWordPressProduction(t *testing.T) {
 	// 2. Pull first with a generous timeout: the deploy below runs compose up.
 	pullCtx, pullCancel := context.WithTimeout(ctx, 10*time.Minute)
 	for _, image := range []string{p7WordPressImage, "mysql:8.4"} {
-		if err := h.engine.PullImage(pullCtx, image); err != nil {
+		if _, err := h.engine.PullImage(pullCtx, image, "", ""); err != nil {
 			pullCancel()
 			t.Fatalf("pull %s: %v", image, err)
 		}

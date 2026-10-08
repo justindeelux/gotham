@@ -51,15 +51,22 @@ type CreateApplicationInput struct {
 	DockerfileContent string
 	// BuildArgs holds the optional --build-arg pairs for the dockerfile
 	// source type; ignored for every other type.
-	BuildArgs  map[string]string
-	Branch     string
-	BuildPack  string
-	BaseDomain string
-	Port       int32
-	HostPort   int32
-	ServerID   uuid.UUID
-	Env        []EnvEntry
-	Storage    []Storage
+	BuildArgs map[string]string
+	Branch    string
+	BuildPack string
+	// ImageRef is the prebuilt reference for image sources (GS-9).
+	ImageRef string
+	// RegistryUsername and RegistryPassword are the optional private-registry
+	// credential for image sources, plaintext on the way in and sealed at
+	// rest. They are never returned by the API.
+	RegistryUsername string
+	RegistryPassword string
+	BaseDomain       string
+	Port             int32
+	HostPort         int32
+	ServerID         uuid.UUID
+	Env              []EnvEntry
+	Storage          []Storage
 }
 
 // UpdateApplicationInput carries the mutable application fields. Every field is
@@ -68,14 +75,22 @@ type CreateApplicationInput struct {
 // rejected since PE-2 made the assignment required. EnvironmentID moves the
 // application to another environment of the same team.
 type UpdateApplicationInput struct {
-	Name          *string
-	Branch        *string
-	BuildPack     *string
-	BaseDomain    *string
-	Port          *int32
-	HostPort      *int32
-	ServerID      *uuid.UUID
-	EnvironmentID *uuid.UUID
+	Name      *string
+	Branch    *string
+	BuildPack *string
+	// ImageRef replaces the prebuilt reference of an image source (GS-9).
+	ImageRef *string
+	// RegistryUsername and RegistryPassword rotate the private-registry
+	// credential of an image source; either may be set independently, and an
+	// empty value clears that half. Plaintext on the way in, sealed at rest,
+	// never returned by the API.
+	RegistryUsername *string
+	RegistryPassword *string
+	BaseDomain       *string
+	Port             *int32
+	HostPort         *int32
+	ServerID         *uuid.UUID
+	EnvironmentID    *uuid.UUID
 	// GitHubAppID relinks the application: a value sets the connection (it
 	// must belong to the caller), an empty string clears it, absent leaves
 	// it unchanged.
@@ -101,6 +116,7 @@ type ApplicationFilter struct {
 // empty reports whether the update carries no field at all.
 func (in UpdateApplicationInput) empty() bool {
 	return in.Name == nil && in.Branch == nil && in.BuildPack == nil &&
+		in.ImageRef == nil && in.RegistryUsername == nil && in.RegistryPassword == nil &&
 		in.BaseDomain == nil && in.Port == nil && in.HostPort == nil &&
 		in.ServerID == nil && in.EnvironmentID == nil && in.GitHubAppID == nil &&
 		in.DockerfileContent == nil && in.BuildArgs == nil
@@ -121,17 +137,22 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		return Application{}, err
 	}
 	app := Application{
-		ID:                uuid.New(),
-		UserID:            userID,
-		TeamID:            teamID,
-		EnvironmentID:     in.EnvironmentID,
-		Name:              strings.TrimSpace(in.Name),
-		Provider:          strings.TrimSpace(in.Provider),
-		Repo:              strings.TrimSpace(in.Repo),
-		CloneURL:          strings.TrimSpace(in.CloneURL),
-		SourceType:        NormalizeSourceType(strings.TrimSpace(in.SourceType), strings.TrimSpace(in.Provider)),
-		Branch:            strings.TrimSpace(in.Branch),
-		BuildPack:         strings.TrimSpace(in.BuildPack),
+		ID:            uuid.New(),
+		UserID:        userID,
+		TeamID:        teamID,
+		EnvironmentID: in.EnvironmentID,
+		Name:          strings.TrimSpace(in.Name),
+		Provider:      strings.TrimSpace(in.Provider),
+		Repo:          strings.TrimSpace(in.Repo),
+		CloneURL:      strings.TrimSpace(in.CloneURL),
+		SourceType:    NormalizeSourceType(strings.TrimSpace(in.SourceType), strings.TrimSpace(in.Provider)),
+		Branch:        strings.TrimSpace(in.Branch),
+		BuildPack:     strings.TrimSpace(in.BuildPack),
+		ImageRef:      strings.TrimSpace(in.ImageRef),
+		// The username is an identifier, not a secret, but it is equally
+		// never returned by the API or logged; the password is sealed below.
+		// Both are validated together: a half credential is refused.
+		RegistryUsername:  strings.TrimSpace(in.RegistryUsername),
 		BaseDomain:        proxy.NormalizeDomain(in.BaseDomain),
 		Port:              in.Port,
 		HostPort:          in.HostPort,
@@ -139,6 +160,17 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		GitHubAppID:       in.GitHubAppID,
 		DockerfileContent: in.DockerfileContent,
 		BuildArgs:         normalizeBuildArgs(in.BuildArgs),
+	}
+	registryPassword := strings.TrimSpace(in.RegistryPassword)
+	if err := validateRegistryCredential(app.RegistryUsername, registryPassword); err != nil {
+		return Application{}, err
+	}
+	if registryPassword != "" {
+		sealed, err := providers.SealSecret(s.secret, registryPassword)
+		if err != nil {
+			return Application{}, fmt.Errorf("deploy: seal registry credential: %w", err)
+		}
+		app.RegistryPasswordCiphertext = sealed
 	}
 	// A dockerfile application carries no repository: the pasted text is the
 	// whole build context, so any repo fields a direct API caller sent are
@@ -158,7 +190,8 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	// that omit the column; storing '' explicitly is allowed and round-trips
 	// unchanged. Provider flows keep the "main" fallback (their wizard
 	// always prefills a branch, and empty would break push-branch matching).
-	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic {
+	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic &&
+		NormalizeSourceType(app.SourceType, app.Provider) != SourceImage {
 		app.Branch = defaultBranch
 	}
 	if err := validateApplication(app, true); err != nil {
@@ -339,6 +372,74 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if in.Name != nil {
 		app.Name = strings.TrimSpace(*in.Name)
 	}
+	// Image sources carry no branch or build pack; the reference and the
+	// private-registry credential are their only source fields. Neither
+	// half is ever returned by the API.
+	isImage := NormalizeSourceType(app.SourceType, app.Provider) == SourceImage
+	if in.ImageRef != nil || in.RegistryUsername != nil || in.RegistryPassword != nil {
+		if !isImage {
+			return Application{}, fmt.Errorf("%w: image fields need source type %q", ErrValidation, SourceImage)
+		}
+	}
+	if isImage {
+		if in.Branch != nil && strings.TrimSpace(*in.Branch) != "" {
+			return Application{}, fmt.Errorf("%w: source type %q carries no branch", ErrValidation, SourceImage)
+		}
+		if in.BuildPack != nil && strings.TrimSpace(*in.BuildPack) != "" {
+			return Application{}, fmt.Errorf("%w: source type %q carries no build pack", ErrValidation, SourceImage)
+		}
+	}
+	if in.ImageRef != nil {
+		ref := strings.TrimSpace(*in.ImageRef)
+		if err := ValidateImageReference(ref); err != nil {
+			return Application{}, err
+		}
+		// The credential is bound to the registry host it was entered for:
+		// moving the reference to another host without re-entering the
+		// password would send the stored secret to that host on the next
+		// pull, so the update is refused until the password is re-entered
+		// (or the credential is cleared explicitly in the same request).
+		hostChanged := RegistryHost(app.ImageRef) != RegistryHost(ref)
+		if hostChanged && app.RegistryPasswordCiphertext != "" && in.RegistryPassword == nil {
+			return Application{}, fmt.Errorf("%w: image reference moves to another registry host: re-enter the registry password or clear the credential",
+				ErrValidation)
+		}
+		if hostChanged && in.RegistryUsername == nil {
+			// The username is half of the bound credential: it must not
+			// follow the reference to the new host. Dropping it here forces
+			// the writer to supply both halves with the password (or clear
+			// both), per the pair rule below.
+			app.RegistryUsername = ""
+		}
+		app.ImageRef = ref
+	}
+	if in.RegistryUsername != nil {
+		app.RegistryUsername = strings.TrimSpace(*in.RegistryUsername)
+		if len(app.RegistryUsername) > maxRegistryUsernameLen {
+			return Application{}, fmt.Errorf("%w: registry username is too long", ErrValidation)
+		}
+	}
+	if in.RegistryPassword != nil {
+		password := strings.TrimSpace(*in.RegistryPassword)
+		if len(password) > maxRegistryPasswordLen {
+			return Application{}, fmt.Errorf("%w: registry password is too long", ErrValidation)
+		}
+		if password == "" {
+			app.RegistryPasswordCiphertext = ""
+		} else {
+			sealed, err := providers.SealSecret(s.secret, password)
+			if err != nil {
+				return Application{}, fmt.Errorf("deploy: seal registry credential: %w", err)
+			}
+			app.RegistryPasswordCiphertext = sealed
+		}
+	}
+	// The halves rotate independently, but the stored pair must stay whole:
+	// a username without a password (or the reverse) would pull anonymously
+	// while reporting a credential as configured.
+	if err := requireCompleteRegistryCredential(app.RegistryUsername, app.RegistryPasswordCiphertext != ""); err != nil {
+		return Application{}, err
+	}
 	if in.Branch != nil {
 		app.Branch = strings.TrimSpace(*in.Branch)
 	}
@@ -420,7 +521,8 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	// Clearing the branch restores ls-remote default resolution for
 	// public-git sources (see the create path); provider flows fall back to
 	// "main" so push-branch matching keeps working.
-	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic {
+	if app.Branch == "" && NormalizeSourceType(app.SourceType, app.Provider) != SourceGitPublic &&
+		NormalizeSourceType(app.SourceType, app.Provider) != SourceImage {
 		app.Branch = defaultBranch
 	}
 	// Legacy rows may predate normalization: normalize the resulting value so
@@ -945,6 +1047,40 @@ func validateApplication(app Application, checkSource bool) error {
 	return validatePort("host port", app.HostPort)
 }
 
+// Registry credential bounds: a username is an identifier, a password or
+// token is sealed at rest. Halves are refused on every write path, so a
+// stored credential is always a usable pair.
+const (
+	maxRegistryUsernameLen = 255
+	maxRegistryPasswordLen = 4096
+)
+
+// validateRegistryCredential checks a plaintext credential pair: both or
+// neither, within the length caps. The error never carries the values.
+func validateRegistryCredential(username, password string) error {
+	if err := requireCompleteRegistryCredential(username, password != ""); err != nil {
+		return err
+	}
+	if len(username) > maxRegistryUsernameLen {
+		return fmt.Errorf("%w: registry username is too long", ErrValidation)
+	}
+	if len(password) > maxRegistryPasswordLen {
+		return fmt.Errorf("%w: registry password is too long", ErrValidation)
+	}
+	return nil
+}
+
+// requireCompleteRegistryCredential refuses a half credential: a username
+// without a password would pull anonymously while the API reports a
+// credential as configured (and the reverse stores a secret no pull uses).
+func requireCompleteRegistryCredential(username string, hasPassword bool) error {
+	hasUser := username != ""
+	if (hasUser && !hasPassword) || (!hasUser && hasPassword) {
+		return fmt.Errorf("%w: registry credential needs both a username and a password", ErrValidation)
+	}
+	return nil
+}
+
 // validateSource checks the per-type source fields on creation. The provider
 // slug must agree with the type (github_app needs provider "github",
 // gitlab_app "gitlab"), so hook and deploy-key paths that key off Provider
@@ -955,14 +1091,21 @@ func validateApplication(app Application, checkSource bool) error {
 // and their previews keep working with the provider-based hook and key
 // behavior they already have. The dockerfile type needs pasted content
 // (validated without executing anything) plus optional build args and no
-// repository. git_private and the remaining container sources fail closed
-// until their packages land (GS-4, GS-8..GS-9).
+// repository. Image sources (GS-9) carry only a validated reference and an
+// optional credential — no repository, branch or build pack. git_private and
+// the Compose source fail closed until their packages land (GS-4, GS-8).
+// Image fields on any other type are refused, so a credential can never be
+// stored where no pull reads it.
 func validateSource(app Application) error {
 	// A GitHub App link only makes sense on the github_app source: anything
 	// else never consults it, so linking there is a caller error.
 	if app.GitHubAppID != uuid.Nil && app.SourceType != SourceGitHubApp {
 		return fmt.Errorf("%w: github_app_id needs source type %q",
 			ErrValidation, SourceGitHubApp)
+	}
+	if app.SourceType != SourceImage &&
+		(app.ImageRef != "" || app.RegistryUsername != "" || app.RegistryPasswordCiphertext != "") {
+		return fmt.Errorf("%w: image fields need source type %q", ErrValidation, SourceImage)
 	}
 	switch app.SourceType {
 	case "", SourceGitPublic:
@@ -984,7 +1127,21 @@ func validateSource(app Application) error {
 			return err
 		}
 		return ValidateBuildArgs(app.BuildArgs)
-	case SourceGitPrivate, SourceCompose, SourceImage:
+	case SourceImage:
+		if app.Provider != "" || app.Repo != "" || app.CloneURL != "" {
+			return fmt.Errorf("%w: source type %q carries no repository: provider, repo and clone URL must be empty",
+				ErrValidation, SourceImage)
+		}
+		if app.Branch != "" || app.BuildPack != "" {
+			return fmt.Errorf("%w: source type %q carries no branch or build pack",
+				ErrValidation, SourceImage)
+		}
+		if app.DockerfileContent != "" || len(app.BuildArgs) != 0 {
+			return fmt.Errorf("%w: source type %q carries no Dockerfile or build args",
+				ErrValidation, SourceImage)
+		}
+		return ValidateImageReference(app.ImageRef)
+	case SourceGitPrivate, SourceCompose:
 		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
 	default:
 		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)

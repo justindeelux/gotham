@@ -32,8 +32,8 @@ func (fakeBindDocker) Remove(context.Context, string) error  { return nil }
 func (fakeBindDocker) RemoveVolume(context.Context, string) error {
 	return nil
 }
-func (fakeBindDocker) PullImage(context.Context, string) error {
-	return nil
+func (fakeBindDocker) PullImage(context.Context, string, string, string) (string, error) {
+	return "", nil
 }
 func (fakeBindDocker) CreateContainer(context.Context, *agentv1.CreateContainerRequest) (string, error) {
 	return "created", nil

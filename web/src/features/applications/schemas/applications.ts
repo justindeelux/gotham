@@ -56,15 +56,15 @@ export const sourceTypeSchema = z.enum([
 export type SourceType = z.infer<typeof sourceTypeSchema>;
 
 /** sourceTypeImplemented gates the wizard Source step on scope: public
- * git, the connected-provider flows and pasted Dockerfiles (GS-7).
- * git_private waits for GS-4 and the remaining container sources for
- * GS-8..GS-9. */
+ * git, the connected-provider flows, pasted Dockerfiles (GS-7) and prebuilt
+ * container images (GS-9). git_private waits for GS-4 and Compose for GS-8. */
 export function sourceTypeImplemented(value: string): boolean {
   return (
     value === "git_public" ||
     value === "github_app" ||
     value === "gitlab_app" ||
-    value === "dockerfile"
+    value === "dockerfile" ||
+    value === "image"
   );
 }
 
@@ -175,6 +175,334 @@ export const publicCloneUrlSchema = z
   .trim()
   .min(1)
   .refine(isPublicGitUrl);
+
+/**
+ * isImageRef mirrors ValidateImageReference (internal/deploy/image.go):
+ * [host[:port]/]path[:tag][@sha256:hex], no whitespace, lowercase path
+ * components, a valid tag when present, and never a loopback registry host
+ * (the node-local registry scope). A bare `latest` tag stays valid: the
+ * wizard warns, it does not refuse.
+ */
+export function isImageRef(value: string): boolean {
+  const ref = value.trim();
+  if (ref === "" || ref.length > 255 || /\s/.test(ref)) {
+    return false;
+  }
+  for (const ch of ref) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) {
+      return false;
+    }
+  }
+  const at = ref.indexOf("@");
+  let repo = ref;
+  if (at >= 0) {
+    const digest = ref.slice(at + 1);
+    if (digest === "" || digest.includes("@") || !/^sha256:[0-9a-fA-F]{64}$/.test(digest)) {
+      return false;
+    }
+    repo = ref.slice(0, at);
+  }
+  const slash = repo.lastIndexOf("/");
+  const colon = repo.lastIndexOf(":");
+  let name = repo;
+  if (colon >= 0 && colon > slash) {
+    const tag = repo.slice(colon + 1);
+    if (tag === "" || !/^[\w][\w.-]{0,127}$/.test(tag)) {
+      return false;
+    }
+    name = repo.slice(0, colon);
+  }
+  if (name === "") {
+    return false;
+  }
+  const headEnd = name.indexOf("/");
+  if (headEnd >= 0) {
+    const head = name.slice(0, headEnd);
+    if (head.includes(".") || head.includes(":") || head.toLowerCase() === "localhost") {
+      if (!isPublicRegistryHost(head)) {
+        return false;
+      }
+      name = name.slice(headEnd + 1);
+    }
+  }
+  if (name === "") {
+    return false;
+  }
+  return name.split("/").every((component) => /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(component));
+}
+
+/**
+ * isPublicRegistryHost accepts a registry host that is not the node-local
+ * scope, mirroring checkRegistryHost (internal/deploy/image.go): bracketed
+ * IPv6 literals, host:port with port 1-65535, plain IPs (loopback and
+ * unspecified refused, including inet_aton shorthand), the localhost
+ * spellings, or dot-separated RFC 1123 labels.
+ */
+export function isPublicRegistryHost(host: string): boolean {
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end < 0) {
+      return false;
+    }
+    const inner = host.slice(1, end);
+    const kind = ipLiteralKind(inner);
+    if (kind === null || kind === "loopback" || kind === "unspecified") {
+      return false;
+    }
+    const rest = host.slice(end + 1);
+    if (rest === "") {
+      return true;
+    }
+    if (!rest.startsWith(":")) {
+      return false;
+    }
+    return isRegistryPort(rest.slice(1));
+  }
+  if (host.includes(":")) {
+    // Unbracketed IPv6 is not a valid registry host; a second colon is a
+    // malformed host:port.
+    if ((host.match(/:/g) ?? []).length !== 1) {
+      return false;
+    }
+    const colon = host.indexOf(":");
+    if (!isRegistryPort(host.slice(colon + 1))) {
+      return false;
+    }
+    return isRegistryName(host.slice(0, colon));
+  }
+  return isRegistryName(host);
+}
+
+/** isRegistryPort accepts the Docker registry port range 1-65535. */
+function isRegistryPort(port: string): boolean {
+  if (!/^\d{1,5}$/.test(port)) {
+    return false;
+  }
+  const value = Number(port);
+  return value >= 1 && value <= 65535;
+}
+
+/**
+ * isRegistryName validates a registry host without a port: an IP address
+ * (loopback and unspecified refused, including inet_aton shorthand), the
+ * localhost spellings, or dot-separated RFC 1123 labels.
+ */
+function isRegistryName(bare: string): boolean {
+  if (bare === "") {
+    return false;
+  }
+  const kind = ipLiteralKind(bare) ?? numericDotsKind(bare);
+  if (kind === "invalid") {
+    // Numeric but out of range (999.1.1.1): never a DNS name, mirroring Go.
+    return false;
+  }
+  if (kind === "loopback" || kind === "unspecified") {
+    return false;
+  }
+  if (kind === "address") {
+    return true;
+  }
+  const lower = bare.toLowerCase();
+  const dotted = lower.endsWith(".") ? lower.slice(0, -1) : lower;
+  if (dotted === "localhost" || dotted.endsWith(".localhost")) {
+    return false;
+  }
+  if (lower.endsWith(".")) {
+    return false;
+  }
+  return lower.split(".").every((label) => IMAGE_LABEL_PATTERN.test(label));
+}
+
+const IMAGE_LABEL_PATTERN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i;
+
+type IpKind = "loopback" | "unspecified" | "address";
+
+/**
+ * ipLiteralKind classifies a strict IP literal (dotted-quad IPv4 or IPv6):
+ * null when it is neither.
+ */
+function ipLiteralKind(host: string): IpKind | null {
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const parts = v4.slice(1).map(Number);
+    if (parts.some((part) => part > 255)) {
+      return null;
+    }
+    if (parts[0] === 127) {
+      return "loopback";
+    }
+    if (parts.every((part) => part === 0)) {
+      return "unspecified";
+    }
+    return "address";
+  }
+  if (!isIpv6Address(host)) {
+    return null;
+  }
+  return ipv6Kind(host);
+}
+
+/**
+ * ipv6Kind classifies a valid IPv6 literal: the all-zero address, the
+ * loopback address (including the expanded 0:0:0:0:0:0:0:1 spelling) and
+ * v4-mapped loopback/unspecified (::ffff:127.0.0.1), mirroring Go's
+ * IsLoopback/IsUnspecified.
+ */
+function ipv6Kind(host: string): IpKind {
+  const expanded = expandIpv6(host) ?? [];
+  if (expanded.every((value) => value === 0)) {
+    return "unspecified";
+  }
+  if (expanded.slice(0, 7).every((value) => value === 0) && expanded[7] === 1) {
+    return "loopback";
+  }
+  if (expanded.slice(0, 5).every((value) => value === 0) && expanded[5] === 0xffff) {
+    const low = [(expanded[6] ?? 0) >>> 8 & 0xff, (expanded[6] ?? 0) & 0xff, (expanded[7] ?? 0) >>> 8 & 0xff, (expanded[7] ?? 0) & 0xff];
+    if (low[0] === 127) {
+      return "loopback";
+    }
+    if (low.every((value) => value === 0)) {
+      return "unspecified";
+    }
+  }
+  return "address";
+}
+
+/**
+ * expandIpv6 renders a valid IPv6 literal as 8 hextets, honouring one ::
+ * compression and one dotted-quad tail (the ::ffff:1.2.3.4 form). Null when
+ * the literal is malformed.
+ */
+function expandIpv6(host: string): Array<number> | null {
+  let head = host;
+  let tail: Array<number> = [];
+  const lastColon = host.lastIndexOf(":");
+  const maybeV4 = host.slice(lastColon + 1);
+  if (maybeV4.includes(".")) {
+    const v4 = maybeV4.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!v4) {
+      return null;
+    }
+    const parts = v4.slice(1).map(Number);
+    if (parts.some((part) => part > 255)) {
+      return null;
+    }
+    tail = [(parts[0] ?? 0) * 256 + (parts[1] ?? 0), (parts[2] ?? 0) * 256 + (parts[3] ?? 0)];
+    head = host.slice(0, lastColon);
+  }
+  if (!/^[0-9a-fA-F:]*$/.test(head) || head.includes(":::")) {
+    return null;
+  }
+  const halves = head.split("::");
+  if (halves.length > 2) {
+    return null;
+  }
+  const isHextet = (group: string): boolean => /^[0-9a-fA-F]{1,4}$/.test(group);
+  const groups = (part: string): Array<string> => (part === "" ? [] : part.split(":"));
+  const left = groups(halves[0] ?? "");
+  const right = halves.length === 2 ? groups(halves[1] ?? "") : [];
+  if (!left.every(isHextet) || !right.every(isHextet)) {
+    return null;
+  }
+  const total = left.length + right.length + tail.length;
+  if (halves.length === 1 ? total !== 8 : total >= 8) {
+    return null;
+  }
+  const zeros = new Array<number>(8 - total).fill(0);
+  const parse = (group: string): number => Number.parseInt(group, 16);
+  return [...left.map(parse), ...zeros, ...right.map(parse), ...tail];
+}
+
+/** isIpv6Address accepts colon-separated hextets with one :: compression. */
+function isIpv6Address(host: string): boolean {
+  return expandIpv6(host) !== null;
+}
+
+/**
+ * numericDotsKind classifies classic dotted-decimal shorthand (a, a.b, a.b.c,
+ * a.b.c.d, decimal parts only): loopback for 127/8, unspecified for 0,
+ * address for any other value. Null when the host is not numeric at all (the
+ * DNS path owns it); "invalid" when it is numeric but out of range, which can
+ * never be a DNS name either — mirroring Go, which rejects it outright.
+ */
+function numericDotsKind(host: string): IpKind | "invalid" | null {
+  if (!/^[0-9.]+$/.test(host) || !host.includes(".")) {
+    return null;
+  }
+  const parts = host.split(".");
+  if (parts.length < 1 || parts.length > 4) {
+    return "invalid";
+  }
+  const nums: Array<number> = [];
+  for (const part of parts) {
+    if (part === "" || part.length > 10 || !/^\d+$/.test(part)) {
+      return "invalid";
+    }
+    const value = Number(part);
+    if (!Number.isSafeInteger(value) || value > 0xffffffff) {
+      return "invalid";
+    }
+    nums.push(value);
+  }
+  let value: number;
+  const get = (index: number): number => nums[index] ?? 0;
+  switch (nums.length) {
+    case 1:
+      value = get(0);
+      break;
+    case 2:
+      if (get(0) > 0xff || get(1) > 0xffffff) {
+        return "invalid";
+      }
+      value = get(0) * 0x1000000 + get(1);
+      break;
+    case 3:
+      if (get(0) > 0xff || get(1) > 0xff || get(2) > 0xffff) {
+        return "invalid";
+      }
+      value = get(0) * 0x1000000 + get(1) * 0x10000 + get(2);
+      break;
+    default:
+      if (nums.some((num) => num > 0xff)) {
+        return "invalid";
+      }
+      value = get(0) * 0x1000000 + get(1) * 0x10000 + get(2) * 0x100 + get(3);
+      break;
+  }
+  const unsigned = value >>> 0;
+  if (unsigned >>> 24 === 0x7f) {
+    return "loopback";
+  }
+  // A zero value arises only from all-zero parts here.
+  if (unsigned === 0) {
+    return "unspecified";
+  }
+  return "address";
+}
+
+/**
+ * isLatestImageTag reports a reference whose effective tag is `latest`
+ * (explicit or implied): the wizard warns that redeploys follow the moving
+ * tag, it does not block. A digest-pinned reference is frozen and never
+ * warns, even when its tag reads `latest`.
+ */
+export function isLatestImageTag(value: string): boolean {
+  const ref = value.trim();
+  const at = ref.indexOf("@");
+  if (at >= 0) {
+    return false;
+  }
+  const slash = ref.lastIndexOf("/");
+  const colon = ref.lastIndexOf(":");
+  if (colon >= 0 && colon > slash) {
+    return ref.slice(colon + 1).toLowerCase() === "latest";
+  }
+  return true;
+}
+
+/** imageRefSchema gates the image reference field. Gate-only. */
+export const imageRefSchema = z.string().trim().min(1).refine(isImageRef);
 
 /** repoSchema replaces repoFullName === "" (a select output, never padded). */
 export const repoSchema = z.string().min(1);

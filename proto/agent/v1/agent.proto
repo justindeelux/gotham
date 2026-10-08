@@ -347,12 +347,23 @@ message VolumeActionRequest {
 
 message VolumeActionResponse {}
 
-// PullImageRequest pulls an image from a registry.
+// PullImageRequest pulls an image from a registry. username/password carry
+// one private-registry credential for this pull only: the agent builds the
+// Docker X-Registry-Auth header from them and never persists them. Empty
+// means the node-local registry credential (for node-owned images) or an
+// anonymous pull.
 message PullImageRequest {
   string image = 1;
+  string username = 2;
+  string password = 3;
 }
 
-message PullImageResponse {}
+// PullImageResponse reports the resolved image digest (sha256:...) the node
+// pulled, so the control plane can record it on the deployment and pin
+// rollbacks to it. Empty when the engine reported no digest.
+message PullImageResponse {
+  string digest = 1;
+}
 
 // CreateContainerRequest describes a container to create and (for RunImage)
 // start immediately.

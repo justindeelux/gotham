@@ -55,6 +55,13 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	if err != nil {
 		return Application{}, err
 	}
+	// Previews are per-branch siblings: an image source has no branches, so
+	// it cannot be previewed. Fail closed with a message that names the
+	// reason instead of tripping the branch validation below.
+	if NormalizeSourceType(base.SourceType, base.Provider) == SourceImage {
+		return Application{}, fmt.Errorf("%w: source type %q has no branches to preview",
+			ErrValidation, SourceImage)
+	}
 
 	app := Application{
 		UserID:        base.UserID,

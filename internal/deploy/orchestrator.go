@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/builds"
+	"github.com/justindeelux/gotham/internal/providers"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -297,7 +298,7 @@ func (o *Orchestrator) syncProxyServer(ctx context.Context, serverID uuid.UUID) 
 // execute walks the deployment's steps, persisting each transition before the
 // step runs and stopping at the first failure.
 func (o *Orchestrator) execute(ctx context.Context, st *runState) error {
-	for _, step := range stepsFor(st.dep.Kind) {
+	for _, step := range stepsForApp(st.dep.Kind, st.app.SourceType, st.app.Provider) {
 		if err := o.transition(ctx, st, step); err != nil {
 			return err
 		}
@@ -340,7 +341,9 @@ func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) er
 // git/container partition lives in SourceTypeImplemented, so the switch here
 // cannot drift from the deploy gate: legacy rows with an empty type behave
 // as before, and anything unimplemented fails closed with
-// ErrSourceNotImplemented before any container is touched.
+// ErrSourceNotImplemented before any container is touched. Image sources pass
+// the gate but never reach this step: stepsForApp routes their deploys
+// straight to pushing, where the pull happens.
 func (o *Orchestrator) cloneSource(ctx context.Context, app Application, dir string, log func(string)) error {
 	if !ValidSourceType(app.SourceType) {
 		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
@@ -451,8 +454,12 @@ func (o *Orchestrator) build(ctx context.Context, st *runState) error {
 // container is retired. Every engine now builds through the node and returns a
 // registry reference, so a missing reference is a hard error: retiring the
 // previous container and only then discovering the image is absent would take
-// the application down with no replacement.
+// the application down with no replacement. Image sources pull the prebuilt
+// reference instead (there is nothing to build).
 func (o *Orchestrator) push(ctx context.Context, st *runState) error {
+	if NormalizeSourceType(st.app.SourceType, st.app.Provider) == SourceImage {
+		return o.pullImage(ctx, st)
+	}
 	if strings.TrimSpace(st.dep.RegistryImage) == "" {
 		return fmt.Errorf("%w: image %s was not pushed to the node registry; refusing to retire the running container",
 			ErrValidation, st.dep.ImageTag)
@@ -461,6 +468,79 @@ func (o *Orchestrator) push(ctx context.Context, st *runState) error {
 		return err
 	}
 	line := "image available in the node registry: " + st.dep.RegistryImage
+	if st.dep.Digest != "" {
+		line += " (" + st.dep.Digest + ")"
+	}
+	st.log(line)
+	return nil
+}
+
+// pullImage fetches the prebuilt reference of an image source on the target
+// node. A fresh deploy pulls the application's reference (the tag may have
+// moved since the last release); a rollback pulls the digest-pinned reference
+// the rollback seeded, so it redeploys the exact previous bits. The resolved
+// digest is recorded on the deployment. The registry credential travels per
+// pull and is never persisted on the node; log lines and errors carry the
+// reference only, never the credential.
+//
+// The credential is bound to the registry host it was entered for (see the
+// update path): it is sent only when the pull reference is on the same host
+// as the application's current reference. A rollback to a release recorded
+// on another host pulls anonymously and says so, so the secret can never
+// follow a moved tag or an old release to a foreign registry.
+func (o *Orchestrator) pullImage(ctx context.Context, st *runState) error {
+	ref := strings.TrimSpace(st.app.ImageRef)
+	if st.dep.Kind == KindRollback {
+		ref = strings.TrimSpace(st.dep.RegistryImage)
+	}
+	if ref == "" {
+		return fmt.Errorf("%w: image source has no reference to pull", ErrValidation)
+	}
+	var username, password string
+	if st.app.RegistryPasswordCiphertext != "" {
+		pullHost, appHost := RegistryHost(ref), RegistryHost(st.app.ImageRef)
+		if pullHost != "" && pullHost == appHost {
+			opened, err := providers.OpenSecret(o.secret, st.app.RegistryPasswordCiphertext)
+			if err != nil {
+				return fmt.Errorf("%w: open registry credential: %v", ErrValidation, err)
+			}
+			username, password = st.app.RegistryUsername, opened
+		} else {
+			st.log("registry credential not sent: " + ref + " is on another registry host")
+		}
+	}
+	st.log("pulling image " + ref)
+	digest, err := st.node.PullWithAuth(ctx, ref, username, password)
+	if err != nil {
+		return err
+	}
+	// A pinned reference must resolve to its pin: the engine enforces the pin
+	// on pull, and this asserts the recorded digest agrees with it.
+	if parsed, parseErr := ParseImageReference(ref); parseErr == nil && parsed.Pinned() &&
+		digest != "" && !strings.EqualFold(digest, parsed.Digest) {
+		return fmt.Errorf("%w: pulled digest %s does not match the pinned %s", ErrValidation, digest, parsed.Digest)
+	}
+	if st.dep.Kind != KindRollback {
+		st.dep.ImageTag = ref
+	}
+	st.dep.RegistryImage = ref
+	if digest != "" {
+		st.dep.Digest = digest
+	} else if st.dep.Kind == KindRollback {
+		// A rollback pulls its pinned reference, so a missing digest here
+		// means the node could not report one for the release being
+		// restored — never a silent fall-forward to another tag.
+		st.log("rollback pulled " + ref + " without a reported digest")
+	} else {
+		// No digest came back: the deployment still runs the pulled tag, but
+		// a rollback of this release would re-pull the moving tag, so the
+		// log says so while the release it describes is still a deploy.
+		st.log("image pulled without a recorded digest: a rollback of this release will re-pull the tag " + ref)
+	}
+	if _, err := o.repo.UpdateDeployment(ctx, st.dep); err != nil {
+		return fmt.Errorf("deploy: persist image reference: %w", err)
+	}
+	line := "image pulled: " + ref
 	if st.dep.Digest != "" {
 		line += " (" + st.dep.Digest + ")"
 	}

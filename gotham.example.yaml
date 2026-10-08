@@ -12,6 +12,9 @@
 #   GOTHAM_OAUTH_GITHUB_CLIENT_ID, GOTHAM_OAUTH_GITHUB_CLIENT_SECRET,
 #   GOTHAM_OAUTH_GITHUB_REDIRECT_URL,
 #   GOTHAM_GRPC_ADDR, GOTHAM_CA_DIR, GOTHAM_SECRET_KEY
+#   GOTHAM_GIT_ALLOW_PRIVATE_HOSTS  permit RFC1918/ULA/loopback git remotes
+#                          (default false; link-local and other dangerous
+#                          ranges stay denied)
 #   GOTHAM_GRPC_HOSTS     extra gRPC listener SAN hosts, comma-separated
 #   GOTHAM_MANAGED_VOLUME_ROOT  parent of application bind mounts (default
 #                          /var/lib/gotham/volumes); every application bind must
@@ -125,6 +128,17 @@ ca:
 # ephemeral secret is generated at startup and a warning is logged: encrypted
 # keys then do not survive a restart.
 # secret_key: <32+ random bytes, e.g. `openssl rand -base64 32`>
+
+# Git sources (SSRF host policy).
+deploy:
+  # Permit git clone/probe remotes on RFC1918, ULA and loopback addresses
+  # (self-hosted git servers). Default: false. The control plane otherwise
+  # refuses loopback, link-local (including the 169.254.169.254 cloud
+  # metadata address), unspecified, multicast, carrier-grade NAT,
+  # benchmarking, NAT64 and 6to4 remotes, plus numeric-IP tricks and IPv6
+  # zone ids; link-local and the other always-denied ranges stay denied even
+  # when this is true. Set from GOTHAM_GIT_ALLOW_PRIVATE_HOSTS.
+  # git_allow_private_hosts: false
 
 # Logging.
 log:

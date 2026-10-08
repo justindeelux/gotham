@@ -69,6 +69,9 @@ type gitSource struct {
 	creds gitCredentialResolver
 	// run executes git; nil selects the real binary.
 	run cloneRunner
+	// lookup resolves the remote host for the SSRF host policy (see
+	// pinGitRemoteHost); nil selects defaultGitHostLookup.
+	lookup gitHostLookupFunc
 	// logger records host-key trust downgrades; nil selects slog.Default.
 	logger *slog.Logger
 }
@@ -136,6 +139,15 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		}
 		defer cleanup()
 	}
+	// The clone dials an operator-supplied host: resolve, refuse blocked
+	// addresses and pin the answer before git runs (see pinGitRemoteHost).
+	// It runs on the final URL (after any SSH rewrite), so the pinned host
+	// is the one git actually dials.
+	pinnedEnv, err := pinGitRemoteHost(ctx, s.lookup, url, env)
+	if err != nil {
+		return err
+	}
+	env = pinnedEnv
 	if using == "deploy-key" && devAcceptNewHostKeys() {
 		// A stray value in the service environment silently downgrades
 		// every keyed clone; make it visible on each clone.
@@ -183,7 +195,7 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		return fmt.Errorf("git clone: %w", ctx.Err())
 	}
 	if err != nil {
-		quoted := tail(redactCloneError(string(output)), 400)
+		quoted := quoteGitOutput(string(output))
 		if hint := classifyGitFailure(string(output)); hint != "" {
 			return fmt.Errorf("git clone: %w: %s%s", err, quoted, hint)
 		}
@@ -423,14 +435,23 @@ func validateCloneURL(url string) error {
 		if !hasAllowedScheme(url) {
 			return fmt.Errorf("%w: unsupported clone URL scheme", ErrValidation)
 		}
-		if parsed, err := neturl.Parse(url); err == nil {
-			if err := rejectLeadingDash("host", parsed.Hostname()); err != nil {
+		parsed, err := neturl.Parse(url)
+		if err != nil {
+			return fmt.Errorf("%w: unsupported clone URL", ErrValidation)
+		}
+		if err := rejectLeadingDash("host", parsed.Hostname()); err != nil {
+			return err
+		}
+		if user := parsed.User.Username(); user != "" {
+			if err := rejectLeadingDash("user", user); err != nil {
 				return err
 			}
-			if user := parsed.User.Username(); user != "" {
-				if err := rejectLeadingDash("user", user); err != nil {
-					return err
-				}
+		}
+		// The host policy judges the host, never an embedded credential:
+		// the GS-5 installation-token URL carries userinfo internally.
+		if parsed.Hostname() != "" && !strings.EqualFold(parsed.Scheme, "file") {
+			if err := checkGitHostLiteral(parsed.Hostname()); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -440,6 +461,9 @@ func validateCloneURL(url string) error {
 				return err
 			}
 			if err := rejectLeadingDash("host", host); err != nil {
+				return err
+			}
+			if err := checkGitHostLiteral(host); err != nil {
 				return err
 			}
 		}

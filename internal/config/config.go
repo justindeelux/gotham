@@ -53,6 +53,12 @@ const (
 	EnvCADir        = "GOTHAM_CA_DIR"
 	EnvSecretKey    = "GOTHAM_SECRET_KEY"
 
+	// EnvDeployGitAllowPrivateHosts lifts the git SSRF host policy for
+	// RFC1918, ULA and loopback remotes (self-hosted git servers). Default
+	// false; link-local (including the cloud metadata address) and the
+	// other always-denied ranges stay denied.
+	EnvDeployGitAllowPrivateHosts = "GOTHAM_GIT_ALLOW_PRIVATE_HOSTS"
+
 	envPrefix = "GOTHAM"
 )
 
@@ -131,6 +137,16 @@ type CA struct {
 	Dir string
 }
 
+// Deploy holds git source settings.
+type Deploy struct {
+	// GitAllowPrivateHosts permits git clone/probe remotes on RFC1918, ULA
+	// and loopback addresses (self-hosted git servers). Default false.
+	// Link-local (including the cloud metadata address), unspecified,
+	// multicast, carrier-grade NAT, benchmarking, NAT64 and 6to4 ranges
+	// stay denied. Set from GOTHAM_GIT_ALLOW_PRIVATE_HOSTS.
+	GitAllowPrivateHosts bool `mapstructure:"git_allow_private_hosts"`
+}
+
 // Log holds logging settings.
 type Log struct {
 	Level  string
@@ -172,6 +188,7 @@ type Values struct {
 	Redis    Redis
 	GRPC     GRPC
 	CA       CA
+	Deploy   Deploy
 	Log      Log
 	Auth     Auth
 	OAuth    OAuth
@@ -322,21 +339,22 @@ func newViper() *viper.Viper {
 	// Explicit bindings document the supported variables and guarantee that
 	// Unmarshal sees environment-only values.
 	for key, env := range map[string]string{
-		"server.addr":               EnvServerAddr,
-		"server.port":               EnvServerPort,
-		"server.trusted_proxies":    EnvTrustedProxies,
-		"database.dsn":              EnvDatabaseDSN,
-		"redis.addr":                EnvRedisAddr,
-		"grpc.addr":                 EnvGRPCAddr,
-		"grpc.hosts":                EnvGRPCHosts,
-		"grpc.insecure":             EnvGRPCInsecure,
-		"ca.dir":                    EnvCADir,
-		"secret_key":                EnvSecretKey,
-		"log.level":                 EnvLogLevel,
-		"log.format":                EnvLogFormat,
-		"auth.jwt_private_key_path": EnvAuthJWTPrivateKeyPath,
-		"auth.jwt_public_key_path":  EnvAuthJWTPublicKeyPath,
-		"auth.allow_registration":   EnvAuthAllowRegistration,
+		"server.addr":                    EnvServerAddr,
+		"server.port":                    EnvServerPort,
+		"server.trusted_proxies":         EnvTrustedProxies,
+		"database.dsn":                   EnvDatabaseDSN,
+		"redis.addr":                     EnvRedisAddr,
+		"grpc.addr":                      EnvGRPCAddr,
+		"grpc.hosts":                     EnvGRPCHosts,
+		"grpc.insecure":                  EnvGRPCInsecure,
+		"ca.dir":                         EnvCADir,
+		"secret_key":                     EnvSecretKey,
+		"deploy.git_allow_private_hosts": EnvDeployGitAllowPrivateHosts,
+		"log.level":                      EnvLogLevel,
+		"log.format":                     EnvLogFormat,
+		"auth.jwt_private_key_path":      EnvAuthJWTPrivateKeyPath,
+		"auth.jwt_public_key_path":       EnvAuthJWTPublicKeyPath,
+		"auth.allow_registration":        EnvAuthAllowRegistration,
 
 		"oauth.github.client_id":     EnvOAuthGitHubClientID,
 		"oauth.github.client_secret": EnvOAuthGitHubClientSecret,

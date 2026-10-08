@@ -535,10 +535,11 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		return nil
 	}
 	cfg := deploy.Config{
-		Store:     s.persistence,
-		Secret:    s.secretKey,
-		RedisAddr: s.cfg.Snapshot().Redis.Addr,
-		Logger:    s.logger,
+		Store:                s.persistence,
+		Secret:               s.secretKey,
+		RedisAddr:            s.cfg.Snapshot().Redis.Addr,
+		Logger:               s.logger,
+		GitAllowPrivateHosts: s.cfg.Snapshot().Deploy.GitAllowPrivateHosts,
 	}
 	if githubAppSvc != nil {
 		cfg.AppTokens = githubAppTokenAdapter{svc: githubAppSvc}

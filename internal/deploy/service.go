@@ -165,6 +165,14 @@ type Config struct {
 	Notifier Notifier
 	// Source clones the repository; nil selects git on the control plane.
 	Source Source
+	// GitAllowPrivateHosts lifts the SSRF host policy for RFC1918, ULA and
+	// loopback git remotes (self-hosted git; see SetGitAllowPrivateHosts).
+	// It mirrors the deploy.git_allow_private_hosts config key. Zero keeps
+	// the default deny.
+	GitAllowPrivateHosts bool
+	// GitLookupHost resolves git remote hostnames for the SSRF host policy;
+	// nil selects the system resolver. Tests pin answers through it.
+	GitLookupHost gitHostLookupFunc
 	// AppTokens builds token-authenticated clone URLs for linked github_app
 	// applications (GS-5); nil keeps every clone on the legacy path.
 	AppTokens appTokenResolver

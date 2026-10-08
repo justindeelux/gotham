@@ -668,6 +668,8 @@ func TestConnectionProbeHTTPSAgainstSmartHTTPStub(t *testing.T) {
 	}
 	_ = git
 
+	// The stub serves on loopback, which the host policy denies by default.
+	t.Setenv(GitAllowPrivateHostsEnv, "true")
 	stub := &smartHTTPStub{t: t, username: "bob", token: "s3cr3t-token"}
 	server := httptest.NewTLSServer(http.HandlerFunc(stub.handler))
 	defer server.Close()
@@ -731,6 +733,8 @@ func TestConnectionProbeRefusesCrossHostRedirect(t *testing.T) {
 	}
 	_ = git
 
+	// Both stubs serve on loopback, which the host policy denies by default.
+	t.Setenv(GitAllowPrivateHostsEnv, "true")
 	var secondSawAuth, secondBody string
 	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		secondSawAuth = r.Header.Get("Authorization")

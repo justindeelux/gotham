@@ -29,6 +29,7 @@ var gothamEnvKeys = []string{
 	EnvGRPCAddr,
 	EnvCADir,
 	EnvSecretKey,
+	EnvDeployGitAllowPrivateHosts,
 }
 
 // chdir switches into dir for the duration of the test and restores the
@@ -398,6 +399,50 @@ func TestLoadGRPCInsecureFromEnv(t *testing.T) {
 	}
 	if !cfg.GRPC.Insecure {
 		t.Error("GRPC.Insecure = false, want true after GOTHAM_GRPC_INSECURE=true")
+	}
+}
+
+func TestLoadDeployGitAllowPrivateHosts(t *testing.T) {
+	clearGothamEnv(t)
+	chdir(t, t.TempDir())
+
+	if cfg, err := Load(); err != nil || cfg.Deploy.GitAllowPrivateHosts {
+		t.Fatalf("Load() = (%v, %v), want GitAllowPrivateHosts=false by default", cfg.Deploy.GitAllowPrivateHosts, err)
+	}
+
+	t.Setenv(EnvDeployGitAllowPrivateHosts, "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Deploy.GitAllowPrivateHosts {
+		t.Error("Deploy.GitAllowPrivateHosts = false, want true after GOTHAM_GIT_ALLOW_PRIVATE_HOSTS=true")
+	}
+}
+
+func TestLoadDeployGitAllowPrivateHostsFromYAML(t *testing.T) {
+	clearGothamEnv(t)
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "deploy:\n  git_allow_private_hosts: true\n")
+	chdir(t, dir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Deploy.GitAllowPrivateHosts {
+		t.Error("Deploy.GitAllowPrivateHosts = false, want true from gotham.yaml")
+	}
+
+	// YAML 1 agrees with env "1": both readers map it to true.
+	writeConfig(t, dir, "deploy:\n  git_allow_private_hosts: 1\n")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Deploy.GitAllowPrivateHosts {
+		t.Error("Deploy.GitAllowPrivateHosts = false, want true from gotham.yaml value 1")
 	}
 }
 

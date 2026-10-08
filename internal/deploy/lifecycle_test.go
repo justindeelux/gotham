@@ -404,6 +404,9 @@ func TestSubmitUsesFreshApplicationAfterMove(t *testing.T) {
 		Secret:     testSecretKey,
 		Logger:     discardLogger(),
 		Emitter:    NewEmitter(&recordPublisher{}),
+		// The move is what this test pins; the clone itself is a fake so no
+		// git binary, DNS or network is involved.
+		Source: &fakeSource{},
 		Dial: func(_ context.Context, serverID uuid.UUID) (Node, error) {
 			mu.Lock()
 			dialed = append(dialed, serverID)

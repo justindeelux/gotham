@@ -20,7 +20,6 @@ import type { SourceProvider } from "@/features/applications/api/providers";
 import { describeGitHubAppError } from "@/features/applications/api/githubApp";
 import { useGitHubAppStore } from "@/features/applications/stores/githubApp";
 import { useProvidersStore } from "@/features/applications/stores/providers";
-import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useTeamsStore } from "@/features/teams";
 import { isApiError } from "@/features/servers";
 
@@ -140,20 +139,23 @@ export interface DisconnectResult {
 export function useGitSourcesPage() {
   const githubAppStore = useGitHubAppStore();
   const providersStore = useProvidersStore();
-  const projectsStore = useProjectsStore();
   const teamsStore = useTeamsStore();
 
   const loading = ref(false);
   const error = ref<string | null>(null);
-  const errorRaw = ref<unknown>(null);
   const teamApps = ref<Application[]>([]);
-  const teamAppsLoading = ref(false);
+  /** usageState tracks the application list behind the usage names: a failed
+   * or pending lookup is "unknown", never "none". Connections are per-user
+   * while the lookup covers the active team, so even "known" is partial. */
+  const usageState = ref<"loading" | "known" | "unknown">("loading");
   /** Disconnect failure carrying the 409 application names, if any. */
   const disconnectError = ref<string | null>(null);
   const disconnectNames = ref<string[]>([]);
 
-  /** canMutate gates every mutating button on the team role. */
-  const canMutate = computed<boolean>(() => projectsStore.canWrite);
+  /** usageKnown reports whether the usage names are trustworthy. */
+  const usageKnown = computed<boolean>(() => usageState.value === "known");
+  /** usageLoading reports whether the usage lookup is still in flight. */
+  const usageLoading = computed<boolean>(() => usageState.value === "loading");
 
   const rows = computed<GitSourceRow[]>(() => {
     const github = githubAppStore.apps.map((app) =>
@@ -182,23 +184,21 @@ export function useGitSourcesPage() {
   async function refresh(): Promise<void> {
     loading.value = true;
     error.value = null;
-    errorRaw.value = null;
     try {
       await Promise.all([githubAppStore.fetchApps(), providersStore.fetchProviders()]);
     } catch (err) {
-      errorRaw.value = err;
       error.value = describeProviderError(err);
       return;
     } finally {
       loading.value = false;
     }
-    teamAppsLoading.value = true;
+    usageState.value = "loading";
     try {
       teamApps.value = await listApplications(teamsStore.activeTeamId);
+      usageState.value = "known";
     } catch {
       teamApps.value = [];
-    } finally {
-      teamAppsLoading.value = false;
+      usageState.value = "unknown";
     }
     const repos: Array<Promise<unknown>> = [];
     for (const app of githubAppStore.apps) {
@@ -236,17 +236,17 @@ export function useGitSourcesPage() {
     window.location.href = install.install_url;
   }
 
-  /** connectGitLabAuto provisions the OAuth app with a one-time admin token
-   * (write-only, never stored) and starts the PKCE connect. */
-  async function connectGitLabAuto(baseUrl: string, adminToken: string): Promise<void> {
+  /** provisionGitLabAuto provisions the OAuth app with a one-time admin
+   * token (write-only, never stored) and returns the saved connection. The
+   * caller starts the PKCE sign-in next. */
+  async function provisionGitLabAuto(baseUrl: string, adminToken: string): Promise<SourceProvider> {
     const created = await autoProvisionGitLab({
       base_url: baseUrl,
       admin_token: adminToken,
       redirect_url: gitlabCallbackUrl(),
     });
     await providersStore.fetchProviders().catch(() => undefined);
-    const auth = await authorizeProvider(created.id);
-    window.location.href = auth.url;
+    return created;
   }
 
   /** gitLabManualInfo returns the exact redirect URI and scopes for a
@@ -255,13 +255,14 @@ export function useGitSourcesPage() {
     return gitlabSetupInfo(baseUrl, gitlabCallbackUrl());
   }
 
-  /** connectGitLabManual stores the manual OAuth app and starts PKCE. */
-  async function connectGitLabManual(input: {
+  /** provisionGitLabManual stores the manual OAuth app and returns the saved
+   * connection. The caller starts the PKCE sign-in next. */
+  async function provisionGitLabManual(input: {
     baseUrl: string;
     clientId: string;
     clientSecret: string;
     scopes?: string;
-  }): Promise<void> {
+  }): Promise<SourceProvider> {
     const created = await createProvider({
       provider: "gitlab",
       base_url: input.baseUrl,
@@ -271,7 +272,13 @@ export function useGitSourcesPage() {
       scopes: input.scopes,
     });
     await providersStore.fetchProviders().catch(() => undefined);
-    const auth = await authorizeProvider(created.id);
+    return created;
+  }
+
+  /** startAuthorize starts the PKCE sign-in for a saved connection: the
+   * browser leaves for the Git host. */
+  async function startAuthorize(providerId: string): Promise<void> {
+    const auth = await authorizeProvider(providerId);
     window.location.href = auth.url;
   }
 
@@ -299,7 +306,13 @@ export function useGitSourcesPage() {
       }
       await deleteProvider(row.id);
       await providersStore.fetchProviders().catch(() => undefined);
-      teamApps.value = await listApplications(teamsStore.activeTeamId).catch(() => []);
+      try {
+        teamApps.value = await listApplications(teamsStore.activeTeamId);
+        usageState.value = "known";
+      } catch {
+        teamApps.value = [];
+        usageState.value = "unknown";
+      }
       return { applicationsUsing: 0 };
     } catch (err) {
       if (isApiError(err) && err.status === 409) {
@@ -315,19 +328,19 @@ export function useGitSourcesPage() {
     rows,
     loading,
     error,
-    errorRaw,
-    teamAppsLoading,
+    usageKnown,
+    usageLoading,
     disconnectError,
     disconnectNames,
-    canMutate,
     githubAppStore,
     providersStore,
     refresh,
     connectGitHub,
     installGitHubApp,
-    connectGitLabAuto,
+    provisionGitLabAuto,
     gitLabManualInfo,
-    connectGitLabManual,
+    provisionGitLabManual,
+    startAuthorize,
     reconnect,
     disconnect,
   };

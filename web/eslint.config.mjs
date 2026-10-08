@@ -51,6 +51,14 @@ export default [
     },
   },
   {
+    // GS-10 page tests listen for unhandled rejections and timers: Node
+    // globals only, so browser lib types never redeclare test-setup globals.
+    files: ["tests/git-sources-*.test.ts"],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
+  {
     files: ["**/*.ts", "**/*.mts"],
     languageOptions: {
       parser: tsParser,

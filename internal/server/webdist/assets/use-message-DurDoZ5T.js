@@ -1,0 +1,9 @@
+<<<<<<< HEAD:internal/server/webdist/assets/use-message-OgRXAb_0.js
+<<<<<<<< HEAD:internal/server/webdist/assets/use-message-tLNj_QOH.js
+import{b0 as s,V as o,eF as t}from"./index-C30QAacR.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+========
+import{b0 as s,V as o,eP as t}from"./index-Op3pifZq.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+>>>>>>>> 1d0bf7bc (JUS-66 (GS-10): Git sources management page):internal/server/webdist/assets/use-message-OgRXAb_0.js
+=======
+import{b0 as s,V as o,eP as t}from"./index-Fy-Wef3M.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+>>>>>>> ffc65084 (JUS-66 fix round 1: review findings on GS-10 Git sources page):internal/server/webdist/assets/use-message-DurDoZ5T.js

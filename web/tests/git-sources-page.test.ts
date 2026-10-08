@@ -11,7 +11,6 @@ vi.mock("@/shared/api/http", () => ({
 import GitLabConnectDialog from "@/features/applications/components/GitLabConnectDialog.vue";
 import {
   authorizeProvider,
-  connectProvider,
   createProvider,
   gitlabCallbackUrl,
 } from "@/features/applications/api/providers";
@@ -175,16 +174,13 @@ describe("provider connect clients", () => {
     expect(created.connected).toBe(false);
   });
 
-  it("starts the PKCE authorize and completes the connect", async () => {
+  it("starts the PKCE authorize", async () => {
     get.mockResolvedValueOnce({ data: { url: "https://git.example.com/oauth/authorize?x=1", state: "s" } });
     await expect(authorizeProvider("prov-1")).resolves.toEqual({
       url: "https://git.example.com/oauth/authorize?x=1",
       state: "s",
     });
     expect(get).toHaveBeenCalledWith("/providers/prov-1/authorize");
-    post.mockResolvedValueOnce({ data: gitlabProvider() });
-    await connectProvider("prov-1", "code", "s");
-    expect(post).toHaveBeenCalledWith("/providers/prov-1/connect", { code: "code", state: "s" });
   });
 
   it("points the OAuth redirect at this control plane", () => {
@@ -240,6 +236,19 @@ describe("disconnect 409 flow", () => {
     });
     expect(result.applicationsUsing).toBe(2);
   });
+
+  it("marks usage unknown when the application list fails", async () => {
+    get.mockImplementation((url: string) => {
+      if (url === "/applications") {
+        return Promise.reject({ status: 500, message: "boom" });
+      }
+      return Promise.resolve({ data: { apps: [], providers: [] } });
+    });
+    const page = useGitSourcesPage();
+    await page.refresh();
+    expect(page.usageKnown.value).toBe(false);
+    expect(page.usageLoading.value).toBe(false);
+  });
 });
 
 describe("GitLabConnectDialog secrets", () => {
@@ -252,7 +261,7 @@ describe("GitLabConnectDialog secrets", () => {
       global: { plugins: [i18n], stubs: { teleport: true } },
     });
     await flushPromises();
-    const token = wrapper.find("#gitlab-admin-token input");
+    const token = wrapper.find("input#gitlab-admin-token-input");
     await token.setValue("super-secret-admin-token");
     await wrapper.findAll("button").find((b) => b.text().includes("Provision"))?.trigger("click");
     await flushPromises();
@@ -262,5 +271,76 @@ describe("GitLabConnectDialog secrets", () => {
     );
     // The write-only token never survives the submit.
     expect((token.element as { value: string }).value).toBe("");
+  });
+
+  it("clears secrets on a failed submit and names the Reconnect action", async () => {
+    post.mockResolvedValueOnce({ data: gitlabProvider({ connected: false }) });
+    get.mockResolvedValueOnce({ data: { providers: [] } });
+    get.mockRejectedValueOnce({ status: 500, message: "authorize blew up" });
+    const wrapper = mount(GitLabConnectDialog, {
+      props: { show: true },
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    });
+    await flushPromises();
+    await wrapper.find("input#gitlab-admin-token-input").setValue("one-time-token");
+    await wrapper.findAll("button").find((b) => b.text().includes("Provision"))?.trigger("click");
+    await flushPromises();
+    expect((wrapper.find("input#gitlab-admin-token-input").element as { value: string }).value).toBe("");
+    expect(wrapper.text()).toContain("Reconnect");
+  });
+
+  it("rejects a whitespace-only admin token", async () => {
+    const wrapper = mount(GitLabConnectDialog, {
+      props: { show: true },
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    });
+    await flushPromises();
+    await wrapper.find("input#gitlab-admin-token-input").setValue("   ");
+    const provision = wrapper.findAll("button").find((b) => b.text().includes("Provision"));
+    expect(provision?.attributes("disabled")).not.toBeUndefined();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("associates every label with its input", async () => {
+    get.mockResolvedValueOnce({
+      data: {
+        base_url: "https://git.example.com",
+        redirect_uri: "https://cp.example/api/v1/providers/gitlab/callback",
+        scopes: "api read_api",
+      },
+    });
+    const wrapper = mount(GitLabConnectDialog, {
+      props: { show: true },
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    });
+    await flushPromises();
+    const autoLabels = wrapper.findAll("label").map((label) => label.attributes("for") ?? "");
+    expect(autoLabels).toContain("gitlab-instance-input");
+    expect(autoLabels).toContain("gitlab-admin-token-input");
+    for (const id of autoLabels) {
+      expect(wrapper.find(`input#${id}`).exists()).toBe(true);
+    }
+    await wrapper.findAll("button").find((b) => b.text().includes("manual"))?.trigger("click");
+    await flushPromises();
+    for (const id of ["gitlab-redirect-input", "gitlab-client-id-input", "gitlab-client-secret-input", "gitlab-scopes-input"]) {
+      expect(wrapper.find(`label[for="${id}"]`).exists()).toBe(true);
+      expect(wrapper.find(`input#${id}`).exists()).toBe(true);
+    }
+  });
+
+  it("blocks manual submit without a redirect URI", async () => {
+    get.mockRejectedValueOnce({ status: 500, message: "setup-info blew up" });
+    const wrapper = mount(GitLabConnectDialog, {
+      props: { show: true },
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    });
+    await flushPromises();
+    await wrapper.findAll("button").find((b) => b.text().includes("manual"))?.trigger("click");
+    await flushPromises();
+    await wrapper.find("input#gitlab-client-id-input").setValue("cid");
+    await wrapper.find("input#gitlab-client-secret-input").setValue("secret");
+    const save = wrapper.findAll("button").find((b) => b.text().includes("Save"));
+    expect(save?.attributes("disabled")).not.toBeUndefined();
+    expect(post).not.toHaveBeenCalled();
   });
 });

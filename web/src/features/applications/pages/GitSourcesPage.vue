@@ -15,6 +15,8 @@ import {
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
+import { describeGitHubAppError } from "@/features/applications/api/githubApp";
+import { describeProviderError } from "@/features/applications/api/providers";
 import GitLabConnectDialog from "@/features/applications/components/GitLabConnectDialog.vue";
 import GitSourceDisconnectDialog from "@/features/applications/components/GitSourceDisconnectDialog.vue";
 import {
@@ -28,8 +30,11 @@ import { formatDate } from "@/shared/utils/format";
  * Git sources management (GS-10, JUS-66): the Settings page listing every
  * connected Git source. GitHub App connections and GitLab connections are
  * managed here through the GS-5/GS-6 automatic flows; legacy OAuth rows list
- * read-only. Secrets never render: the admin token and client secrets are
- * write-only dialog fields, cleared on submit.
+ * read-only. Connections belong to the signed-in account and the API guards
+ * mutations by token scope, so the page shows its actions to every
+ * authenticated user instead of gating on team role. Secrets never render:
+ * the admin token and client secrets are write-only dialog fields, cleared
+ * on submit.
  */
 const { t } = useI18n();
 const message = useMessage();
@@ -47,11 +52,38 @@ const disconnectWorking = ref(false);
 /** githubNameValid gates the manifest start on a non-empty name. */
 const githubNameValid = computed<boolean>(() => githubName.value.trim() !== "");
 
+/** eyebrow shows the team name when one is selected. */
+const eyebrow = computed<string>(() => {
+  const team = teamsStore.activeTeam?.name ?? "";
+  return team === ""
+    ? t("applications.gitSources.eyebrow")
+    : t("applications.gitSources.eyebrowTeam", { team });
+});
+
+/** connectedCount/attentionCount summarize the table header. */
+const connectedCount = computed<number>(
+  () => page.rows.value.filter((row) => row.connected).length,
+);
+const attentionCount = computed<number>(
+  () => page.rows.value.length - connectedCount.value,
+);
+
 /** rowName renders the connection name for messages. */
 function rowName(row: GitSourceRow): string {
   return row.kind === "github-app"
     ? `${row.title} ${row.subtitle}`.trim()
     : `${row.title} ${row.account}`.trim();
+}
+
+/** appsCell renders the Applications column for the usage lookup state. */
+function appsCell(row: GitSourceRow): string {
+  if (page.usageLoading.value) {
+    return t("applications.gitSources.appsPending");
+  }
+  if (!page.usageKnown.value) {
+    return t("applications.gitSources.appsUnknown");
+  }
+  return row.apps.length === 0 ? t("applications.gitSources.appsNone") : String(row.apps.length);
 }
 
 onMounted(() => {
@@ -83,8 +115,7 @@ async function submitGitHub(): Promise<void> {
     await page.connectGitHub(githubName.value.trim());
     showGitHub.value = false;
   } catch (error) {
-    githubError.value =
-      error instanceof Error ? error.message : t("applications.gitSources.loadError");
+    githubError.value = describeGitHubAppError(error);
   } finally {
     githubWorking.value = false;
   }
@@ -96,7 +127,7 @@ async function reconnectRow(row: GitSourceRow): Promise<void> {
     await page.reconnect(row);
   } catch (error) {
     message.error(
-      error instanceof Error ? error.message : t("applications.gitSources.loadError"),
+      row.kind === "github-app" ? describeGitHubAppError(error) : describeProviderError(error),
     );
   }
 }
@@ -108,8 +139,9 @@ function askDisconnect(row: GitSourceRow): void {
   disconnectRow.value = row;
 }
 
-/** confirmDisconnect forgets the connection; a 409 keeps the dialog open
- * with the application names the server refused on. */
+/** confirmDisconnect forgets the connection. Failures (including the 409
+ * naming the applications) stay in page.disconnectError with the dialog
+ * open; the rejection is handled here, never unhandled. */
 async function confirmDisconnect(): Promise<void> {
   const row = disconnectRow.value;
   if (row === null || disconnectWorking.value) {
@@ -129,6 +161,8 @@ async function confirmDisconnect(): Promise<void> {
     } else {
       message.success(t("applications.gitSources.disconnected", { name: rowName(row) }));
     }
+  } catch {
+    // Surfaced through page.disconnectError inside the open dialog.
   } finally {
     disconnectWorking.value = false;
   }
@@ -139,11 +173,11 @@ async function confirmDisconnect(): Promise<void> {
   <div class="git-sources-page">
     <div class="page-head">
       <div>
-        <p class="eyebrow">{{ t("applications.gitSources.eyebrow") }}</p>
+        <p class="eyebrow">{{ eyebrow }}</p>
         <h1>{{ t("applications.gitSources.title") }}</h1>
         <p class="page-desc">{{ t("applications.gitSources.description") }}</p>
       </div>
-      <div v-if="page.canMutate.value" class="page-actions">
+      <div class="page-actions">
         <NButton type="primary" @click="openGitHub">
           {{ t("applications.gitSources.connectGitHub") }}
         </NButton>
@@ -172,7 +206,8 @@ async function confirmDisconnect(): Promise<void> {
         <NEmpty :description="t('applications.gitSources.emptyTitle')">
           <template #extra>
             <p class="empty-hint">{{ t("applications.gitSources.emptyHint") }}</p>
-            <NSpace v-if="page.canMutate.value" justify="center" :size="12">
+            <p class="empty-hint">{{ t("applications.gitSources.connectHint") }}</p>
+            <NSpace justify="center" :size="12">
               <NButton type="primary" @click="openGitHub">
                 {{ t("applications.gitSources.connectGitHub") }}
               </NButton>
@@ -184,72 +219,78 @@ async function confirmDisconnect(): Promise<void> {
         </NEmpty>
       </NCard>
 
-      <NTable
-        v-else-if="page.rows.value.length > 0"
-        :bordered="true"
-        :single-line="false"
-        data-testid="git-sources-table"
-      >
-        <thead>
-          <tr>
-            <th>{{ t("applications.gitSources.tableSource") }}</th>
-            <th>{{ t("applications.gitSources.tableStatus") }}</th>
-            <th>{{ t("applications.gitSources.tableAccount") }}</th>
-            <th>{{ t("applications.gitSources.tableInstallations") }}</th>
-            <th>{{ t("applications.gitSources.tableRepos") }}</th>
-            <th>{{ t("applications.gitSources.tableApps") }}</th>
-            <th>{{ t("applications.gitSources.tableConnected") }}</th>
-            <th>{{ t("applications.gitSources.tableActions") }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in page.rows.value" :key="`${row.kind}/${row.id}`">
-            <td>
-              <span class="cell-main">{{ row.title }}</span>
-              <span class="cell-sub">{{ row.subtitle }}</span>
-            </td>
-            <td>
-              <NTag :type="row.connected ? 'success' : 'warning'" size="small">
-                {{
-                  row.connected
-                    ? t("applications.gitSources.connected")
-                    : t("applications.gitSources.needsAttention")
-                }}
-              </NTag>
-              <span v-if="!row.connected && row.kind === 'github-app'" class="cell-sub">
-                {{ t("applications.gitSources.waitingInstall") }}
-              </span>
-            </td>
-            <td>
-              <span class="cell-main">{{ row.account }}</span>
-              <span class="cell-sub">{{ row.instance }}</span>
-            </td>
-            <td>{{ row.installations === null ? "—" : row.installations }}</td>
-            <td>{{ row.repos === null ? t("applications.gitSources.reposUnknown") : row.repos }}</td>
-            <td>{{ row.apps.length === 0 ? t("applications.gitSources.appsNone") : row.apps.length }}</td>
-            <td class="mono">{{ formatDate(row.createdAt) }}</td>
-            <td>
-              <NSpace v-if="!row.legacy && page.canMutate.value" :size="8" :wrap="true">
-                <NButton
-                  v-if="!row.connected"
-                  size="small"
-                  type="primary"
-                  @click="void reconnectRow(row)"
-                >
-                  {{ row.kind === "github-app" ? t("applications.gitSources.install") : t("applications.gitSources.reconnect") }}
-                </NButton>
-                <NButton v-else size="small" @click="void reconnectRow(row)">
-                  {{ t("applications.gitSources.reconnect") }}
-                </NButton>
-                <NButton size="small" type="error" @click="askDisconnect(row)">
-                  {{ t("applications.gitSources.disconnect") }}
-                </NButton>
-              </NSpace>
-              <span v-else class="cell-sub">{{ t("applications.gitSources.legacyManaged") }}</span>
-            </td>
-          </tr>
-        </tbody>
-      </NTable>
+      <div v-else-if="page.rows.value.length > 0" class="table-card" data-testid="git-sources-table">
+        <div class="table-head">
+          <h2>{{ t("applications.gitSources.connectionsTitle") }}</h2>
+          <span class="table-meta">{{
+            t("applications.gitSources.connectionsSummary", {
+              connected: connectedCount,
+              attention: attentionCount,
+            })
+          }}</span>
+        </div>
+        <NTable :bordered="true" :single-line="false">
+          <thead>
+            <tr>
+              <th>{{ t("applications.gitSources.tableSource") }}</th>
+              <th>{{ t("applications.gitSources.tableStatus") }}</th>
+              <th>{{ t("applications.gitSources.tableAccount") }}</th>
+              <th>{{ t("applications.gitSources.tableInstallations") }}</th>
+              <th>{{ t("applications.gitSources.tableRepos") }}</th>
+              <th>{{ t("applications.gitSources.tableApps") }}</th>
+              <th>{{ t("applications.gitSources.tableConnected") }}</th>
+              <th>{{ t("applications.gitSources.tableActions") }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in page.rows.value" :key="`${row.kind}/${row.id}`">
+              <td>
+                <span class="cell-main">{{ row.title }}</span>
+                <span class="cell-sub">{{ row.subtitle }}</span>
+              </td>
+              <td>
+                <NTag :type="row.connected ? 'success' : 'warning'" size="small">
+                  {{
+                    row.connected
+                      ? t("applications.gitSources.connected")
+                      : t("applications.gitSources.needsAttention")
+                  }}
+                </NTag>
+                <span v-if="!row.connected && row.kind === 'github-app'" class="cell-sub">
+                  {{ t("applications.gitSources.waitingInstall") }}
+                </span>
+              </td>
+              <td>
+                <span class="cell-main">{{ row.account }}</span>
+                <span class="cell-sub">{{ row.instance }}</span>
+              </td>
+              <td>{{ row.installations === null ? "—" : row.installations }}</td>
+              <td>{{ row.repos === null ? t("applications.gitSources.reposUnknown") : row.repos }}</td>
+              <td>{{ appsCell(row) }}</td>
+              <td class="mono">{{ formatDate(row.createdAt) }}</td>
+              <td>
+                <NSpace v-if="!row.legacy" :size="8" :wrap="true">
+                  <NButton
+                    v-if="!row.connected"
+                    size="small"
+                    type="primary"
+                    @click="void reconnectRow(row)"
+                  >
+                    {{ row.kind === "github-app" ? t("applications.gitSources.install") : t("applications.gitSources.reconnect") }}
+                  </NButton>
+                  <NButton v-else size="small" @click="void reconnectRow(row)">
+                    {{ t("applications.gitSources.reconnect") }}
+                  </NButton>
+                  <NButton size="small" type="error" @click="askDisconnect(row)">
+                    {{ t("applications.gitSources.disconnect") }}
+                  </NButton>
+                </NSpace>
+                <span v-else class="cell-sub">{{ t("applications.gitSources.legacyManaged") }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </NTable>
+      </div>
     </NSpin>
 
     <NModal
@@ -263,11 +304,11 @@ async function confirmDisconnect(): Promise<void> {
       <NSpace vertical :size="16">
         <p class="dialog-hint">{{ t("applications.gitSources.githubConnectHint") }}</p>
         <div class="form-row">
-          <label class="field-label" for="github-app-name">{{ t("applications.gitSources.githubName") }}</label>
+          <label class="field-label" for="github-app-name-input">{{ t("applications.gitSources.githubName") }}</label>
           <NInput
-            id="github-app-name"
             v-model:value="githubName"
             class="mono"
+            :input-props="{ id: 'github-app-name-input' }"
             :placeholder="t('applications.gitSources.githubNamePlaceholder')"
           />
           <span class="field-hint">{{ t("applications.gitSources.githubNameHint") }}</span>
@@ -295,6 +336,7 @@ async function confirmDisconnect(): Promise<void> {
       :show="disconnectRow !== null"
       :row="disconnectRow"
       :working="disconnectWorking"
+      :usage-known="page.usageKnown.value"
       :blocked-names="page.disconnectNames.value"
       :blocked-error="page.disconnectError.value ?? ''"
       @update:show="(value: boolean) => { if (!value) disconnectRow = null; }"
@@ -345,6 +387,30 @@ async function confirmDisconnect(): Promise<void> {
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
+}
+
+.table-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.table-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.table-head h2 {
+  font-size: var(--text-lg);
+  color: var(--fg-2);
+  margin: 0;
+}
+
+.table-meta {
+  font-size: var(--text-xs);
+  color: var(--meta);
 }
 
 .cell-main {

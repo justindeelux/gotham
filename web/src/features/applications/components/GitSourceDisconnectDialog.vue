@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { NAlert, NButton, NModal, NSpace } from "naive-ui";
+import { NAlert, NButton, NCheckbox, NModal, NSpace } from "naive-ui";
+import { ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { GitSourceRow } from "@/features/applications/composables/useGitSourcesPage";
@@ -8,6 +9,9 @@ const props = defineProps<{
   show: boolean;
   row: GitSourceRow | null;
   working: boolean;
+  /** False while the usage lookup is pending or failed: the list below is
+   * not trustworthy, so disconnecting needs an explicit acknowledgement. */
+  usageKnown: boolean;
   blockedNames: string[];
   blockedError: string;
 }>();
@@ -17,6 +21,17 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+/** acknowledged lets an unknown-usage disconnect through explicitly. */
+const acknowledged = ref(false);
+
+watch(
+  () => props.show,
+  (visible) => {
+    if (visible) {
+      acknowledged.value = false;
+    }
+  },
+);
 
 /** displayName names the connection in the confirmation. */
 function displayName(): string {
@@ -26,6 +41,11 @@ function displayName(): string {
   return props.row.kind === "github-app"
     ? `${props.row.title} ${props.row.subtitle}`.trim()
     : `${props.row.title} ${props.row.account}`.trim();
+}
+
+/** confirmBlocked disables the button until unknown usage is acknowledged. */
+function confirmBlocked(): boolean {
+  return props.row === null || (!props.usageKnown && !acknowledged.value);
 }
 </script>
 
@@ -40,7 +60,14 @@ function displayName(): string {
   >
     <NSpace vertical :size="16">
       <p class="lead">{{ t("applications.gitSources.disconnectLead", { name: displayName() }) }}</p>
-      <template v-if="props.row !== null && props.row.apps.length > 0">
+      <NAlert
+        v-if="props.row !== null && props.row.kind === 'github-app'"
+        type="warning"
+        :show-icon="true"
+      >
+        {{ t("applications.gitSources.disconnectGithubNote") }}
+      </NAlert>
+      <template v-if="props.usageKnown && props.row !== null && props.row.apps.length > 0">
         <p class="lead">
           {{
             t("applications.gitSources.disconnectApps", { count: props.row.apps.length })
@@ -50,7 +77,15 @@ function displayName(): string {
           <li v-for="name in props.row.apps" :key="name" class="mono">{{ name }}</li>
         </ul>
       </template>
-      <p v-else class="lead">{{ t("applications.gitSources.disconnectNoApps") }}</p>
+      <p v-else-if="props.usageKnown" class="lead">{{ t("applications.gitSources.disconnectNoApps") }}</p>
+      <template v-else>
+        <NAlert type="warning" :show-icon="true">
+          {{ t("applications.gitSources.disconnectUnknown") }}
+        </NAlert>
+        <NCheckbox v-model:checked="acknowledged">
+          {{ t("applications.gitSources.disconnectAcknowledge") }}
+        </NCheckbox>
+      </template>
       <NAlert v-if="props.blockedError" type="error" :show-icon="true">
         {{
           props.blockedNames.length > 0
@@ -62,7 +97,7 @@ function displayName(): string {
         <NButton
           type="error"
           :loading="props.working"
-          :disabled="props.row === null"
+          :disabled="confirmBlocked()"
           @click="emit('confirm')"
         >
           {{ t("applications.gitSources.disconnectConfirm") }}

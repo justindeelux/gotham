@@ -325,12 +325,15 @@ const en = {
   },
   gitSources: {
     eyebrow: "Settings",
+    eyebrowTeam: "Settings · {team}",
     title: "Git sources",
     description:
-      "Connected GitHub Apps and GitLab connections the application wizard deploys from. Connecting is automatic — no hand-copied client IDs, secrets or webhooks. Secrets are never shown here.",
+      "Connected GitHub Apps and GitLab connections the application wizard deploys from. Connecting is automatic — no hand-copied client IDs, secrets or webhooks. Secrets are never shown here. Connections belong to your account; protecting them is enforced by API-token scopes, not team roles.",
     connectGitHub: "Connect GitHub",
     connectGitLab: "Connect GitLab",
     connectHint: "Connect the source first, then pick its repositories in the application wizard.",
+    connectionsTitle: "Connections",
+    connectionsSummary: "{connected} connected · {attention} need attention",
     tableSource: "Source",
     tableStatus: "Status",
     tableAccount: "Account / instance",
@@ -344,6 +347,8 @@ const en = {
     waitingInstall: "Waiting for installation",
     reposUnknown: "—",
     appsNone: "—",
+    appsPending: "Checking…",
+    appsUnknown: "Unknown",
     legacyManaged: "Managed before Git sources",
     install: "Install",
     reconnect: "Reconnect",
@@ -357,7 +362,12 @@ const en = {
     disconnectTitle: "Disconnect this source?",
     disconnectLead: "Disconnect {name}? The stored credentials are forgotten.",
     disconnectApps: "{count} applications still deploy through it: | {count} application still deploys through it: | {count} applications still deploy through it:",
-    disconnectNoApps: "No application deploys through it.",
+    disconnectNoApps: "No application in this team deploys through it.",
+    disconnectUnknown:
+      "Could not check which applications use this connection. It may still be in use, including by applications in other teams.",
+    disconnectAcknowledge: "I understand, disconnect anyway",
+    disconnectGithubNote:
+      "Disconnecting a GitHub App always succeeds and only reports how many applications named it — this list is the only warning.",
     disconnectBlocked: "Applications still use this connection: {names}. Delete or move those applications first.",
     disconnectConfirm: "Disconnect",
     disconnected: "{name} disconnected.",
@@ -381,6 +391,8 @@ const en = {
     gitlabRedirectHint: "Register exactly this URI on the GitLab OAuth application.",
     gitlabScopes: "Scopes",
     gitlabStoreConnect: "Save & connect",
+    gitlabSavedReconnect:
+      "The connection was saved but the sign-in did not start. Use Reconnect on the new row to sign in.",
     gitlabManualHint: "Create the OAuth application on the instance first, then save its ID and secret here to start the sign-in.",
     wizardConnect: "Connect GitHub / GitLab",
     wizardConnectHint: "No connections yet — connect a source first.",

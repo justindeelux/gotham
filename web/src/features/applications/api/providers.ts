@@ -166,21 +166,6 @@ export async function authorizeProvider(providerId: string): Promise<ProviderAut
   return response.data;
 }
 
-/** connectProvider completes an OAuth connection from a code/state pair that
- * landed on the SPA route (used by tests and non-browser callers; the
- * browser GitLab flow finishes server-side at the API callback). */
-export async function connectProvider(
-  providerId: string,
-  code: string,
-  state: string,
-): Promise<SourceProvider> {
-  const response = await http.post<SourceProvider>(`/providers/${providerId}/connect`, {
-    code,
-    state,
-  });
-  return response.data;
-}
-
 /** gitlabCallbackUrl is the OAuth redirect URL of this control plane: the
  * API GitLab callback under the current origin. The backend rejects any
  * redirect_url naming another host. */

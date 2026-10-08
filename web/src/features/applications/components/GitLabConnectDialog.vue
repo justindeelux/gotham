@@ -24,6 +24,9 @@ const scopes = ref("");
 const redirectUri = ref("");
 const working = ref(false);
 const rawError = ref<unknown>(null);
+/** savedReconnect flags a provision/store that succeeded while the PKCE
+ * start that follows failed: the row exists with a Reconnect action. */
+const savedReconnect = ref(false);
 const loadError = computed<string>(() =>
   rawError.value === null ? "" : describeProviderError(rawError.value),
 );
@@ -38,15 +41,21 @@ const instanceValid = computed<boolean>(() => {
   }
 });
 
-/** canSubmit gates the active mode: a token for auto, id+secret for manual. */
+/** canSubmit gates the active mode: a token for auto, id+secret+redirect
+ * for manual. The redirect URI comes from setup-info: without it the manual
+ * OAuth app cannot be registered, so submit stays closed (fail-closed). */
 const canSubmit = computed<boolean>(() => {
   if (!instanceValid.value || working.value) {
     return false;
   }
   if (manual.value) {
-    return clientId.value.trim() !== "" && clientSecret.value !== "";
+    return (
+      clientId.value.trim() !== "" &&
+      clientSecret.value !== "" &&
+      redirectUri.value.trim() !== ""
+    );
   }
-  return adminToken.value !== "";
+  return adminToken.value.trim() !== "";
 });
 
 /** clearSecrets drops every write-only field, so nothing survives the dialog. */
@@ -72,6 +81,7 @@ watch(
       redirectUri.value = "";
       clearSecrets();
       rawError.value = null;
+      savedReconnect.value = false;
     }
   },
 );
@@ -95,30 +105,39 @@ async function toggleManual(): Promise<void> {
 }
 
 /** submit provisions (auto) or stores (manual), then starts the PKCE sign-in.
- * Secrets are cleared before leaving: the browser navigates away. */
+ * Secrets clear on every attempt, success or failure: the admin token is
+ * consumed by the single provisioning call either way. When the store
+ * succeeded but the sign-in start failed, the dialog names the Reconnect
+ * action instead of only the raw error. */
 async function submit(): Promise<void> {
   if (!canSubmit.value) {
     return;
   }
   working.value = true;
   rawError.value = null;
+  savedReconnect.value = false;
   try {
-    if (manual.value) {
-      await fns.connectGitLabManual({
-        baseUrl: baseUrl.value.trim(),
-        clientId: clientId.value.trim(),
-        clientSecret: clientSecret.value,
-        scopes: scopes.value.trim() === "" ? undefined : scopes.value.trim(),
-      });
-    } else {
-      await fns.connectGitLabAuto(baseUrl.value.trim(), adminToken.value);
+    const created = manual.value
+      ? await fns.provisionGitLabManual({
+          baseUrl: baseUrl.value.trim(),
+          clientId: clientId.value.trim(),
+          clientSecret: clientSecret.value,
+          scopes: scopes.value.trim() === "" ? undefined : scopes.value.trim(),
+        })
+      : await fns.provisionGitLabAuto(baseUrl.value.trim(), adminToken.value);
+    try {
+      await fns.startAuthorize(created.id);
+    } catch (error) {
+      savedReconnect.value = true;
+      rawError.value = error;
+      return;
     }
-    clearSecrets();
     emit("connected");
     emit("update:show", false);
   } catch (error) {
     rawError.value = error;
   } finally {
+    clearSecrets();
     working.value = false;
   }
 }
@@ -135,10 +154,10 @@ async function submit(): Promise<void> {
   >
     <NSpace vertical :size="16">
       <div class="form-row">
-        <label class="field-label" for="gitlab-instance">{{ t("applications.gitSources.gitlabInstance") }}</label>
+        <label class="field-label" for="gitlab-instance-input">{{ t("applications.gitSources.gitlabInstance") }}</label>
         <NInput
-          id="gitlab-instance"
           v-model:value="baseUrl"
+          :input-props="{ id: 'gitlab-instance-input' }"
           class="mono"
           placeholder="https://gitlab.com"
         />
@@ -147,10 +166,10 @@ async function submit(): Promise<void> {
 
       <template v-if="!manual">
         <div class="form-row">
-          <label class="field-label" for="gitlab-admin-token">{{ t("applications.gitSources.gitlabAdminToken") }}</label>
+          <label class="field-label" for="gitlab-admin-token-input">{{ t("applications.gitSources.gitlabAdminToken") }}</label>
           <NInput
-            id="gitlab-admin-token"
             v-model:value="adminToken"
+            :input-props="{ id: 'gitlab-admin-token-input' }"
             type="password"
             class="mono"
             autocomplete="off"
@@ -162,19 +181,19 @@ async function submit(): Promise<void> {
       <template v-else>
         <NAlert type="info" :show-icon="true">{{ t("applications.gitSources.gitlabManualHint") }}</NAlert>
         <div class="form-row">
-          <label class="field-label" for="gitlab-redirect">{{ t("applications.gitSources.gitlabRedirect") }}</label>
-          <NInput id="gitlab-redirect" :value="redirectUri" class="mono" readonly />
+          <label class="field-label" for="gitlab-redirect-input">{{ t("applications.gitSources.gitlabRedirect") }}</label>
+          <NInput :value="redirectUri" :input-props="{ id: 'gitlab-redirect-input' }" class="mono" readonly />
           <span class="field-hint">{{ t("applications.gitSources.gitlabRedirectHint") }}</span>
         </div>
         <div class="form-row">
-          <label class="field-label" for="gitlab-client-id">{{ t("applications.gitSources.gitlabClientId") }}</label>
-          <NInput id="gitlab-client-id" v-model:value="clientId" class="mono" autocomplete="off" />
+          <label class="field-label" for="gitlab-client-id-input">{{ t("applications.gitSources.gitlabClientId") }}</label>
+          <NInput v-model:value="clientId" :input-props="{ id: 'gitlab-client-id-input' }" class="mono" autocomplete="off" />
         </div>
         <div class="form-row">
-          <label class="field-label" for="gitlab-client-secret">{{ t("applications.gitSources.gitlabClientSecret") }}</label>
+          <label class="field-label" for="gitlab-client-secret-input">{{ t("applications.gitSources.gitlabClientSecret") }}</label>
           <NInput
-            id="gitlab-client-secret"
             v-model:value="clientSecret"
+            :input-props="{ id: 'gitlab-client-secret-input' }"
             type="password"
             class="mono"
             autocomplete="off"
@@ -182,11 +201,14 @@ async function submit(): Promise<void> {
           <span class="field-hint">{{ t("applications.gitSources.gitlabClientSecretHint") }}</span>
         </div>
         <div class="form-row">
-          <label class="field-label" for="gitlab-scopes">{{ t("applications.gitSources.gitlabScopes") }}</label>
-          <NInput id="gitlab-scopes" v-model:value="scopes" class="mono" />
+          <label class="field-label" for="gitlab-scopes-input">{{ t("applications.gitSources.gitlabScopes") }}</label>
+          <NInput v-model:value="scopes" :input-props="{ id: 'gitlab-scopes-input' }" class="mono" />
         </div>
       </template>
 
+      <NAlert v-if="savedReconnect" type="info" :show-icon="true">{{
+        t("applications.gitSources.gitlabSavedReconnect")
+      }}</NAlert>
       <NAlert v-if="loadError" type="error" :show-icon="true">{{ loadError }}</NAlert>
 
       <NSpace :size="12">

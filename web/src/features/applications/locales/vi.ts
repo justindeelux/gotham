@@ -325,12 +325,15 @@ const vi: ApplicationsMessages = {
   },
   gitSources: {
     eyebrow: "Cài đặt",
+    eyebrowTeam: "Cài đặt · {team}",
     title: "Nguồn Git",
     description:
-      "Các GitHub App và kết nối GitLab đã kết nối mà wizard ứng dụng dùng để triển khai. Kết nối là tự động — không sao chép client ID, secret hay webhook. Secret không bao giờ hiển thị ở đây.",
+      "Các GitHub App và kết nối GitLab đã kết nối mà wizard ứng dụng dùng để triển khai. Kết nối là tự động — không sao chép client ID, secret hay webhook. Secret không bao giờ hiển thị ở đây. Kết nối thuộc về tài khoản của bạn; việc bảo vệ chúng do phạm vi API token thực thi, không phải vai trò nhóm.",
     connectGitHub: "Kết nối GitHub",
     connectGitLab: "Kết nối GitLab",
     connectHint: "Hãy kết nối nguồn trước, rồi chọn kho của nó trong wizard ứng dụng.",
+    connectionsTitle: "Kết nối",
+    connectionsSummary: "{connected} đã kết nối · {attention} cần chú ý",
     tableSource: "Nguồn",
     tableStatus: "Trạng thái",
     tableAccount: "Tài khoản / máy chủ",
@@ -344,6 +347,8 @@ const vi: ApplicationsMessages = {
     waitingInstall: "Đang chờ cài đặt",
     reposUnknown: "—",
     appsNone: "—",
+    appsPending: "Đang kiểm tra…",
+    appsUnknown: "Không rõ",
     legacyManaged: "Quản lý trước khi có nguồn Git",
     install: "Cài đặt",
     reconnect: "Kết nối lại",
@@ -357,7 +362,12 @@ const vi: ApplicationsMessages = {
     disconnectTitle: "Ngắt kết nối nguồn này?",
     disconnectLead: "Ngắt kết nối {name}? Thông tin đăng nhập đã lưu sẽ bị quên.",
     disconnectApps: "Vẫn còn {count} ứng dụng triển khai qua nó: | Vẫn còn {count} ứng dụng triển khai qua nó: | Vẫn còn {count} ứng dụng triển khai qua nó:",
-    disconnectNoApps: "Không có ứng dụng nào triển khai qua nó.",
+    disconnectNoApps: "Không có ứng dụng nào trong nhóm này triển khai qua nó.",
+    disconnectUnknown:
+      "Không kiểm tra được ứng dụng nào đang dùng kết nối này. Nó có thể vẫn đang được dùng, kể cả bởi ứng dụng ở nhóm khác.",
+    disconnectAcknowledge: "Tôi đã hiểu, vẫn ngắt kết nối",
+    disconnectGithubNote:
+      "Ngắt kết nối GitHub App luôn thành công và chỉ báo có bao nhiêu ứng dụng từng ghi nó — danh sách này là cảnh báo duy nhất.",
     disconnectBlocked: "Vẫn còn ứng dụng dùng kết nối này: {names}. Hãy xóa hoặc chuyển các ứng dụng đó trước.",
     disconnectConfirm: "Ngắt kết nối",
     disconnected: "Đã ngắt kết nối {name}.",
@@ -381,6 +391,8 @@ const vi: ApplicationsMessages = {
     gitlabRedirectHint: "Hãy đăng ký đúng URI này trên OAuth application của GitLab.",
     gitlabScopes: "Phạm vi",
     gitlabStoreConnect: "Lưu & kết nối",
+    gitlabSavedReconnect:
+      "Đã lưu kết nối nhưng chưa bắt đầu đăng nhập. Hãy dùng Kết nối lại trên dòng mới để đăng nhập.",
     gitlabManualHint: "Hãy tạo OAuth application trên máy chủ trước, rồi lưu ID và secret của nó ở đây để bắt đầu đăng nhập.",
     wizardConnect: "Kết nối GitHub / GitLab",
     wizardConnectHint: "Chưa có kết nối nào — hãy kết nối nguồn trước.",

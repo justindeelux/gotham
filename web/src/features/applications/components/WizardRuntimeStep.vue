@@ -43,7 +43,11 @@ const { t } = useI18n();
           :max="65535"
           placeholder="0"
         />
-        <span class="field-hint">{{ t("applications.wizard.hostPortHint") }}</span>
+        <span class="field-hint">{{
+          wizard.isCompose.value
+            ? t("applications.wizard.hostPortComposeHint")
+            : t("applications.wizard.hostPortHint")
+        }}</span>
       </NFormItem>
     </div>
   </NSpace>

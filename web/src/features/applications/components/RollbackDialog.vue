@@ -11,6 +11,9 @@ interface Props {
   rollingBack: boolean;
   rollbackTarget: string;
   runningDeployments: Deployment[];
+  /** isCompose switches the copy: a compose rollback re-applies the stored
+   * file instead of an image tag. */
+  isCompose?: boolean;
 }
 
 const props = defineProps<Props>();
@@ -39,7 +42,7 @@ const confirmText = computed<string>(() =>
   >
     <NSpace vertical :size="12">
       <NText depth="3">
-        {{ t("applications.rollback.hint") }}
+        {{ t(props.isCompose ? "applications.rollback.hintCompose" : "applications.rollback.hint") }}
       </NText>
       <NRadioGroup :value="props.rollbackTarget" @update:value="emit('update:target', $event)">
         <NSpace vertical :size="8">
@@ -50,7 +53,8 @@ const confirmText = computed<string>(() =>
           >
             <span class="mono">{{ item.id.slice(0, 8) }}</span>
             ·
-            <span class="mono">{{ item.image_tag || t("applications.rollback.untagged") }}</span>
+            <span v-if="props.isCompose" class="mono">{{ t("applications.rollback.composeFile") }}</span>
+            <span v-else class="mono">{{ item.image_tag || t("applications.rollback.untagged") }}</span>
             · {{ relativeTime(item.created_at) }}
           </NRadio>
         </NSpace>

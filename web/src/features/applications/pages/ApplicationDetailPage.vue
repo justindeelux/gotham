@@ -85,6 +85,7 @@ const previewsTab = computed<string>(() =>
             :pipeline-steps="detail.pipelineSteps.value"
             :desc-columns="detail.descColumns.value"
             :acting="detail.appsStore.acting"
+            :can-write="detail.canWrite.value"
             @deploy="detail.handleDeploy"
             @view-all="detail.activeTab.value = 'deployments'"
             @show-logs="detail.showLogsFor"
@@ -100,6 +101,7 @@ const previewsTab = computed<string>(() =>
           <ApplicationDeploymentsTab
             :deployments="detail.deployments.value"
             :loading="detail.appsStore.loading"
+            :is-compose="detail.application.value?.source_type === 'compose'"
             @show-logs="detail.showLogsFor"
             @open-rollback="detail.openRollbackFor"
           />
@@ -190,6 +192,7 @@ const previewsTab = computed<string>(() =>
       :rolling-back="detail.rollingBack.value"
       :rollback-target="detail.rollbackTarget.value"
       :running-deployments="detail.runningDeployments.value"
+      :is-compose="detail.application.value?.source_type === 'compose'"
       @update:show="detail.rollbackOpen.value = $event"
       @update:target="detail.rollbackTarget.value = $event"
       @confirm="detail.handleRollback"

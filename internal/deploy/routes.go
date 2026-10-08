@@ -91,6 +91,13 @@ type applicationResponse struct {
 	// (never nil on the wire).
 	DockerfileContent string            `json:"dockerfile_content"`
 	BuildArgs         map[string]string `json:"build_args"`
+	// ComposeContent holds the pasted compose file text of a compose
+	// application (empty for repo-backed and other sources); ComposeFile the
+	// in-repo path of a repo-backed compose source, and ComposeService the
+	// routed web service.
+	ComposeContent string `json:"compose_content"`
+	ComposeFile    string `json:"compose_file"`
+	ComposeService string `json:"compose_service"`
 	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
 	// migration (legacy duplicate); the value is preserved and an explicit
 	// domain update re-enables it.
@@ -129,10 +136,12 @@ type applicationListEnvelope struct {
 
 // applicationListItem is the wire representation of an application in list
 // responses. It mirrors applicationResponse except the Dockerfile source
-// fields: pasted text and --build-arg values travel only on the detail
-// routes (get/create/update), so a list read never exposes them. ARG values
+// fields and the compose content: pasted text, --build-arg values and the
+// pasted compose document travel only on the detail routes
+// (get/create/update), so a list read never exposes them. ARG values
 // persist in image history on the node, so they must never be treated as
-// secrets — the UI warns next to the field instead.
+// secrets — the UI warns next to the field instead. The compose file path
+// and web service are routing metadata, not content, and stay on the list.
 type applicationListItem struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
@@ -154,6 +163,11 @@ type applicationListItem struct {
 	// is stored (never the credential itself).
 	HasRegistryCredential bool   `json:"has_registry_credential"`
 	BaseDomain            string `json:"base_domain"`
+	// ComposeFile is the in-repo path of a repo-backed compose source and
+	// ComposeService its routed web service (routing metadata, not content,
+	// so both stay on the list).
+	ComposeFile    string `json:"compose_file"`
+	ComposeService string `json:"compose_service"`
 	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
 	// migration (legacy duplicate); the value is preserved and an explicit
 	// domain update re-enables it.
@@ -223,6 +237,11 @@ type createApplicationRequest struct {
 	// source type (GS-7); BuildArgs holds its optional --build-arg pairs.
 	DockerfileContent string            `json:"dockerfile_content"`
 	BuildArgs         map[string]string `json:"build_args"`
+	// ComposeContent holds pasted compose text, ComposeFile the in-repo path
+	// and ComposeService the routed web service (compose sources, GS-8).
+	ComposeContent string `json:"compose_content"`
+	ComposeFile    string `json:"compose_file"`
+	ComposeService string `json:"compose_service"`
 }
 
 // updateApplicationRequest is the PUT /applications/{id} body. Fields are
@@ -248,6 +267,12 @@ type updateApplicationRequest struct {
 	// collection (absent leaves it unchanged).
 	DockerfileContent *string            `json:"dockerfile_content"`
 	BuildArgs         *map[string]string `json:"build_args"`
+	// ComposeContent replaces the stored compose text (setting it switches a
+	// repo-backed application to pasted mode); ComposeFile replaces the
+	// in-repo path; ComposeService replaces the routed web service.
+	ComposeContent *string `json:"compose_content"`
+	ComposeFile    *string `json:"compose_file"`
+	ComposeService *string `json:"compose_service"`
 }
 
 // errorBody is the JSON body returned for failures.
@@ -414,6 +439,9 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		Storage:           toStorages(req.Storage),
 		DockerfileContent: req.DockerfileContent,
 		BuildArgs:         req.BuildArgs,
+		ComposeContent:    req.ComposeContent,
+		ComposeFile:       req.ComposeFile,
+		ComposeService:    req.ComposeService,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -504,6 +532,9 @@ func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
 		GitHubAppID:       req.GitHubAppID,
 		DockerfileContent: req.DockerfileContent,
 		BuildArgs:         req.BuildArgs,
+		ComposeContent:    req.ComposeContent,
+		ComposeFile:       req.ComposeFile,
+		ComposeService:    req.ComposeService,
 	}
 	if req.ServerID != nil {
 		serverID, parsed := applicationServerID(w, *req.ServerID)
@@ -1116,6 +1147,11 @@ func newApplicationResponse(application Application) applicationResponse {
 		// stored, so the UI can show "configured" without seeing it.
 		HasRegistryCredential: application.RegistryUsername != "" ||
 			application.RegistryPasswordCiphertext != "",
+		// The pasted compose document travels only on the detail routes;
+		// the file path and web service are routing metadata.
+		ComposeContent:     application.ComposeContent,
+		ComposeFile:        application.ComposeFile,
+		ComposeService:     application.ComposeService,
 		BaseDomain:         application.BaseDomain,
 		BaseDomainDisabled: application.BaseDomainDisabled,
 		Port:               application.Port,
@@ -1154,6 +1190,10 @@ func newApplicationListItem(application Application) applicationListItem {
 		ImageRef:        application.ImageRef,
 		HasRegistryCredential: application.RegistryUsername != "" ||
 			application.RegistryPasswordCiphertext != "",
+		// ComposeFile/ComposeService are routing metadata, not content, so
+		// both stay on the list (the pasted document stays detail-only).
+		ComposeFile:        application.ComposeFile,
+		ComposeService:     application.ComposeService,
 		BaseDomain:         application.BaseDomain,
 		BaseDomainDisabled: application.BaseDomainDisabled,
 		Port:               application.Port,

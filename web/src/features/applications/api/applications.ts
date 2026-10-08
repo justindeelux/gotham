@@ -56,6 +56,12 @@ export interface Application {
   dockerfile_content?: string;
   /** Optional --build-arg pairs for dockerfile applications. Detail routes only; absent on lists. */
   build_args?: Record<string, string>;
+  /** Pasted compose text (compose sources, GS-8). Detail routes only; absent on lists. */
+  compose_content?: string;
+  /** In-repo compose file path of a repo-backed compose source. */
+  compose_file?: string;
+  /** Compose service the domain/port routing targets. */
+  compose_service?: string;
   branch: string;
   build_pack: string;
   /** Prebuilt reference of an image source (GS-9); empty otherwise. */
@@ -144,6 +150,12 @@ export interface CreateApplicationInput {
   dockerfile_content?: string;
   /** Optional --build-arg pairs for the dockerfile source type. */
   build_args?: Record<string, string>;
+  /** Pasted compose text for the compose source type (GS-8). */
+  compose_content?: string;
+  /** In-repo compose file path for a repo-backed compose source. */
+  compose_file?: string;
+  /** Compose service the domain/port routing targets. */
+  compose_service?: string;
   branch: string;
   build_pack: string;
   /** Prebuilt reference for image sources (GS-9). */
@@ -193,6 +205,12 @@ export interface UpdateApplicationInput {
   dockerfile_content?: string;
   /** Replaces the whole --build-arg collection (absent leaves it unchanged). */
   build_args?: Record<string, string>;
+  /** Replaces the stored compose text (compose applications only, GS-8). */
+  compose_content?: string;
+  /** Replaces the in-repo compose file path (absent leaves it unchanged). */
+  compose_file?: string;
+  /** Replaces the routed compose web service. */
+  compose_service?: string;
 }
 
 /** Optional body of POST .../rollback (see routes.go). */

@@ -151,7 +151,12 @@ func Interpolate(document string, env map[string]string) (string, error) {
 // interpolateNode walks a YAML node tree and substitutes every string scalar.
 // remaining is the rendered-size budget shared by every scalar; it is
 // decremented as values are rendered so a document of repeated references
-// stops at the document limit instead of expanding without bound.
+// stops at the document limit instead of expanding without bound. Every
+// scalar kind is interpolated (not just untagged and !!str): a tagged
+// scalar that skipped substitution would reach the node's compose with a
+// live ${...} reference and interpolate there, outside every budget and
+// redaction. Nulls stay null (an empty declaration such as `data:` must
+// survive the render). Interpolated scalars normalize to !!str.
 func interpolateNode(node *yaml.Node, env map[string]string, remaining *int) error {
 	switch node.Kind {
 	case yaml.DocumentNode, yaml.SequenceNode, yaml.MappingNode:
@@ -161,16 +166,17 @@ func interpolateNode(node *yaml.Node, env map[string]string, remaining *int) err
 			}
 		}
 	case yaml.ScalarNode:
-		if node.Tag == "" || node.Tag == "!!str" {
-			rendered, err := interpolateString(node.Value, env, *remaining)
-			if err != nil {
-				return err
-			}
-			*remaining -= len(rendered)
-			node.Value = rendered
-			node.Tag = "!!str"
-			node.Style = 0
+		if node.Tag == "!!null" {
+			return nil
 		}
+		rendered, err := interpolateString(node.Value, env, *remaining)
+		if err != nil {
+			return err
+		}
+		*remaining -= len(rendered)
+		node.Value = rendered
+		node.Tag = "!!str"
+		node.Style = 0
 	}
 	return nil
 }

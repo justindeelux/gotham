@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/justindeelux/gotham/composeguard"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -91,6 +92,11 @@ type ComposeServerConfig struct {
 	Binary string
 	// Timeout bounds one non-following command; default 10 minutes.
 	Timeout time.Duration
+	// VolumeRoot is the parent of every application bind mount the node
+	// accepts in a confined document (GOTHAM_AGENT_MANAGED_VOLUME_ROOT).
+	// Empty selects the node default; it must match the control plane's
+	// GOTHAM_MANAGED_VOLUME_ROOT, which derives the same paths.
+	VolumeRoot string
 	// Logger defaults to slog.Default.
 	Logger *slog.Logger
 }
@@ -114,6 +120,7 @@ type ComposeServer struct {
 	agentv1.UnimplementedComposeServiceServer
 
 	root       string
+	volumeRoot string
 	dockerHost string
 	binary     string
 	timeout    time.Duration
@@ -182,6 +189,10 @@ func NewComposeServer(cfg ComposeServerConfig) *ComposeServer {
 	if binary == "" {
 		binary = defaultComposeBinary
 	}
+	volumeRoot := strings.TrimSpace(cfg.VolumeRoot)
+	if volumeRoot == "" {
+		volumeRoot = defaultManagedVolumeRoot
+	}
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultComposeTimeout
@@ -192,6 +203,7 @@ func NewComposeServer(cfg ComposeServerConfig) *ComposeServer {
 	}
 	return &ComposeServer{
 		root:       root,
+		volumeRoot: volumeRoot,
 		dockerHost: normalizeDockerHost(cfg.DockerHost),
 		binary:     binary,
 		timeout:    timeout,
@@ -208,7 +220,7 @@ func NewComposeServer(cfg ComposeServerConfig) *ComposeServer {
 // request for the same project cannot replace the document between the write
 // and the CLI run.
 func (s *ComposeServer) ComposeValidate(ctx context.Context, req *agentv1.ComposeValidateRequest) (*agentv1.ComposeValidateResponse, error) {
-	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml())
+	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml(), req.GetUnconfined())
 	if err != nil {
 		return nil, err
 	}
@@ -225,14 +237,18 @@ func (s *ComposeServer) ComposeValidate(ctx context.Context, req *agentv1.Compos
 	if err != nil {
 		return nil, composeError("validate", err)
 	}
-	return &agentv1.ComposeValidateResponse{Services: services, Volumes: volumes}, nil
+	return &agentv1.ComposeValidateResponse{
+		Services:         services,
+		Volumes:          volumes,
+		ConfinedEnforced: !req.GetUnconfined(),
+	}, nil
 }
 
 // ComposeUp writes the compose file and starts the project. A restart request
 // runs `docker compose restart` instead of a create/recreate pass, restarting
 // only the project's existing containers.
 func (s *ComposeServer) ComposeUp(ctx context.Context, req *agentv1.ComposeUpRequest) (*agentv1.ComposeUpResponse, error) {
-	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml())
+	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml(), req.GetUnconfined())
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +278,7 @@ func (s *ComposeServer) ComposeUp(ctx context.Context, req *agentv1.ComposeUpReq
 // never passes --volumes: named volumes survive a down, so a stop is always
 // recoverable and data safety does not depend on the caller.
 func (s *ComposeServer) ComposeDown(ctx context.Context, req *agentv1.ComposeDownRequest) (*agentv1.ComposeDownResponse, error) {
-	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml())
+	project, release, err := s.prepare(ctx, req.GetProjectName(), req.GetComposeYaml(), req.GetUnconfined())
 	if err != nil {
 		return nil, err
 	}
@@ -465,8 +481,8 @@ func (s *ComposeServer) ComposePs(ctx context.Context, req *agentv1.ComposePsReq
 //
 // The file is mode 0600: a rendered compose document carries the service's
 // environment values.
-func (s *ComposeServer) prepare(ctx context.Context, projectName string, composeYAML []byte) (string, func(), error) {
-	project, composeYAML, err := validateComposeInput(ctx, projectName, composeYAML)
+func (s *ComposeServer) prepare(ctx context.Context, projectName string, composeYAML []byte, unconfined bool) (string, func(), error) {
+	project, composeYAML, err := s.validateComposeInput(ctx, projectName, composeYAML, unconfined)
 	if err != nil {
 		return "", nil, err
 	}
@@ -479,8 +495,13 @@ func (s *ComposeServer) prepare(ctx context.Context, projectName string, compose
 }
 
 // validateComposeInput validates the project name and the document bounds
-// without touching the filesystem or taking a lock.
-func validateComposeInput(ctx context.Context, projectName string, composeYAML []byte) (string, []byte, error) {
+// without touching the filesystem or taking a lock. Every document is
+// checked for sweep-label spoofing; unless the caller opts out with
+// unconfined (the Services surface), the document additionally passes the
+// confinement allowlist, so a stored row edited around the control plane
+// or a validator regression cannot reach `up`. The safe state is the zero
+// value: omitting the flag confines.
+func (s *ComposeServer) validateComposeInput(ctx context.Context, projectName string, composeYAML []byte, unconfined bool) (string, []byte, error) {
 	if err := ctx.Err(); err != nil {
 		return "", nil, status.FromContextError(err).Err()
 	}
@@ -493,6 +514,27 @@ func validateComposeInput(ctx context.Context, projectName string, composeYAML [
 	}
 	if len(composeYAML) > maxComposeYAML {
 		return "", nil, status.Errorf(codes.InvalidArgument, "compose document exceeds %d bytes", maxComposeYAML)
+	}
+	if err := composeguard.CheckSweepLabels(string(composeYAML)); err != nil {
+		return "", nil, status.Errorf(codes.InvalidArgument, "compose: %v", err)
+	}
+	if !unconfined {
+		// The project pattern guarantees the gotham-<uuid> shape, so the
+		// suffix is the application id that owns the managed binds.
+		appID := strings.TrimPrefix(project, "gotham-")
+		document := string(composeYAML)
+		if err := composeguard.Validate(document, composeguard.Options{
+			AppID:       appID,
+			ManagedRoot: s.volumeRoot,
+		}); err != nil {
+			return "", nil, status.Errorf(codes.InvalidArgument, "compose: confined document rejected: %v", err)
+		}
+		// The node runs exactly this document: it must carry no live
+		// reference, or compose would interpolate it here, after every
+		// check above.
+		if err := composeguard.CheckNoInterpolation(document); err != nil {
+			return "", nil, status.Errorf(codes.InvalidArgument, "compose: confined document rejected: %v", err)
+		}
 	}
 	return project, composeYAML, nil
 }

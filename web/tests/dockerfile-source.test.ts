@@ -35,7 +35,8 @@ describe("dockerfile schemas", () => {
     expect(sourceTypeImplemented("dockerfile")).toBe(true);
     // Private git deploys since GS-4 (merged after this test was written).
     expect(sourceTypeImplemented("git_private")).toBe(true);
-    expect(sourceTypeImplemented("compose")).toBe(false);
+    // Compose deploys since GS-8, last of the source types.
+    expect(sourceTypeImplemented("compose")).toBe(true);
     // Image sources deploy since GS-9.
     expect(sourceTypeImplemented("image")).toBe(true);
   });

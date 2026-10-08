@@ -15,6 +15,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/providers"
+	"github.com/justindeelux/gotham/internal/services"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -61,6 +62,17 @@ type runState struct {
 	repoDir  string
 	target   Target
 	log      func(string)
+	// composeRaw is the unresolved compose document of a compose run
+	// (stored text or the file read from the checkout); composeYAML is the
+	// rendered document with the port mapping injected, composeImages the
+	// image references it declares, composeCommit the repo commit it was
+	// read from ("" for pasted sources), and composeEnv the project
+	// environment it was rendered with (which redacts node errors).
+	composeRaw    string
+	composeYAML   string
+	composeImages []string
+	composeCommit string
+	composeEnv    map[string]string
 }
 
 // Orchestrator runs deployment state machines on a fixed worker pool. Each
@@ -232,6 +244,20 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 
 	st.log("deployment " + string(st.dep.Kind) + " accepted")
 
+	// A compose rollback carries its release's stored raw document: check it
+	// resolves before anything touches the node, so the run re-renders
+	// exactly what the target release ran, with the current environment.
+	if isComposeApp(j.app) && j.dep.Kind == KindRollback {
+		if strings.TrimSpace(j.dep.ComposeDocument) == "" {
+			o.fail(ctx, st, fmt.Errorf("%w: rollback has no stored compose document", ErrValidation))
+			return
+		}
+		if err := guardValidate(j.dep.ComposeDocument, j.app.ID); err != nil {
+			o.fail(ctx, st, err)
+			return
+		}
+	}
+
 	if err := o.attempt(ctx, st, "connect to node", func() error {
 		node, err := o.dialNode(ctx, j.app.ServerID)
 		if err != nil {
@@ -242,6 +268,16 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 	}); err != nil {
 		o.fail(ctx, st, err)
 		return
+	}
+
+	// A compose run proves the node enforces confinement before its first
+	// document reaches it. The check runs after the dial so an unreachable
+	// node keeps its retryable error.
+	if isComposeApp(j.app) {
+		if err := o.probeComposeConfinement(ctx, st.node, st.app); err != nil {
+			o.fail(ctx, st, err)
+			return
+		}
 	}
 
 	baseDir, err := os.MkdirTemp("", "gotham-deploy-*")
@@ -319,6 +355,20 @@ func (o *Orchestrator) execute(ctx context.Context, st *runState) error {
 
 // runStep dispatches one state-machine step.
 func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) error {
+	if isComposeApp(st.app) {
+		switch step {
+		case StateCloning:
+			return o.attempt(ctx, st, "clone", func() error { return o.cloneCompose(ctx, st) })
+		case StateBuilding:
+			return o.attempt(ctx, st, "build", func() error { return o.buildCompose(ctx, st) })
+		case StatePushing:
+			return o.attempt(ctx, st, "push", func() error { return o.pushCompose(ctx, st) })
+		case StateStarting:
+			return o.attempt(ctx, st, "start", func() error { return o.startCompose(ctx, st) })
+		default:
+			return fmt.Errorf("deploy: unexpected step %q", step)
+		}
+	}
 	switch step {
 	case StateCloning:
 		return o.attempt(ctx, st, "clone", func() error {
@@ -336,14 +386,49 @@ func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) er
 }
 
 // cloneSource selects the fetch step by application source type (GS-2,
-// GS-7). A pasted Dockerfile materializes as the build tree (no clone, no
-// build-pack detection); git-backed types share the deploy-key cloner. The
-// git/container partition lives in SourceTypeImplemented, so the switch here
-// cannot drift from the deploy gate: legacy rows with an empty type behave
-// as before, and anything unimplemented fails closed with
-// ErrSourceNotImplemented before any container is touched. Image sources pass
-// the gate but never reach this step: stepsForApp routes their deploys
-// straight to pushing, where the pull happens.
+// GS-7, GS-8). A pasted Dockerfile materializes as the build tree (no clone,
+// no build-pack detection); compose runs resolve through cloneCompose; the
+// remaining types share the deploy-key cloner. The git/container partition
+// lives in SourceTypeImplemented, so the switch here cannot drift from the
+// deploy gate: legacy rows with an empty type behave as before, and anything
+// unimplemented fails closed with ErrSourceNotImplemented before any
+// container is touched. Image sources pass the gate but never reach this
+// step: stepsForApp routes their deploys straight to pushing, where the pull
+// happens.
+// composeConfinementProbe is a minimal valid document the capability
+// probe validates: a node that enforces confinement answers success with
+// the enforcement flag set, while a pre-confinement node answers success
+// without it (its config check passes valid compose).
+const composeConfinementProbe = "services:\n  probe:\n    image: scratch\n"
+
+// probeComposeConfinement asks the node to validate a minimal valid
+// document and requires its explicit enforcement signal. It is shared by
+// the deploy run (which fails closed) and the best-effort teardown (which
+// logs and proceeds). The explicit signal — never the mere absence of an
+// error — is the version gate for mixed fleets: capability evidence, not
+// a version-string comparison.
+func (o *Orchestrator) probeComposeConfinement(ctx context.Context, node Node, app Application) error {
+	_, enforced, err := node.ComposeValidate(ctx, services.ProjectName(app.ID), []byte(composeConfinementProbe))
+	if err != nil {
+		return err
+	}
+	if !enforced {
+		return fmt.Errorf("%w: node does not enforce confined compose documents; upgrade the agent on the node",
+			ErrValidation)
+	}
+	return nil
+}
+
+// cloneSource selects the fetch step by application source type (GS-2,
+// GS-7, GS-8). A pasted Dockerfile materializes as the build tree (no clone,
+// no build-pack detection); compose runs resolve through cloneCompose; the
+// remaining types share the deploy-key cloner. The git/container partition
+// lives in SourceTypeImplemented, so the switch here cannot drift from the
+// deploy gate: legacy rows with an empty type behave as before, and anything
+// unimplemented fails closed with ErrSourceNotImplemented before any
+// container is touched. Image sources pass the gate but never reach this
+// step: stepsForApp routes their deploys straight to pushing, where the pull
+// happens.
 func (o *Orchestrator) cloneSource(ctx context.Context, app Application, dir string, log func(string)) error {
 	if !ValidSourceType(app.SourceType) {
 		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
@@ -362,6 +447,13 @@ func (o *Orchestrator) cloneSource(ctx context.Context, app Application, dir str
 			log("Dockerfile source materialized")
 		}
 		return nil
+	}
+	if isComposeApp(app) {
+		// Compose runs resolve through cloneCompose (which stashes the
+		// document in the run state); a direct call only resolves and
+		// validates, discarding the document.
+		_, _, err := o.resolveComposeContent(ctx, app, dir, log)
+		return err
 	}
 	return o.source.Clone(ctx, app, dir, log)
 }

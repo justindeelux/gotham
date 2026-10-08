@@ -118,6 +118,9 @@ exit 0
 	if strings.Join(response.GetVolumes(), ",") != "data" {
 		t.Errorf("volumes = %v", response.GetVolumes())
 	}
+	if !response.GetConfinedEnforced() {
+		t.Error("confined_enforced = false, want true for the default (confined) request")
+	}
 
 	file := filepath.Join(server.root, composeTestProject, "compose.yaml")
 	info, err := os.Stat(file)
@@ -1123,4 +1126,180 @@ func joinChunks(chunks [][]byte) []byte {
 		out = append(out, chunk...)
 	}
 	return out
+}
+
+// TestComposeConfinedEnforcesAllowlist pins the node-side defence in depth:
+// a confined (application) document outside the allowlist is refused with
+// InvalidArgument before anything is written or executed. The requests omit
+// the scope flag, proving the absent flag confines: the safe state is the
+// zero value. The fake docker call log must stay empty: validation precedes
+// execution.
+func TestComposeConfinedEnforcesAllowlist(t *testing.T) {
+	hostiles := map[string]string{
+		"privileged":        "services:\n  web:\n    image: x\n    privileged: true\n",
+		"driver opts bind":  "services:\n  web:\n    image: x\n    volumes:\n      - data:/mnt\nvolumes:\n  data:\n    driver_opts:\n      type: none\n      o: bind\n      device: /\n",
+		"secrets file":      "services:\n  web:\n    image: x\n    secrets:\n      - s\nsecrets:\n  s:\n    file: /etc/hostname\n",
+		"parent bind":       "services:\n  web:\n    image: x\n    volumes:\n      - ..:/mnt\n",
+		"cap prefix":        "services:\n  web:\n    image: x\n    cap_add:\n      - CAP_SYS_ADMIN\n",
+		"network container": "services:\n  web:\n    image: x\n    network_mode: container:other\n",
+		"security opt":      "services:\n  web:\n    image: x\n    security_opt:\n      - seccomp=unconfined\n",
+		"sweep label":       "services:\n  web:\n    image: x\n    labels:\n      gotham.app_id: 00000000-0000-0000-0000-000000000000\n",
+		"multi document":    "services:\n  web:\n    image: x\n---\nservices:\n  evil:\n    image: y\n",
+	}
+	for name, document := range hostiles {
+		t.Run(name, func(t *testing.T) {
+			logPath := fakeDockerCLI(t, "exit 0")
+			server := newTestComposeServer(t, ComposeServerConfig{})
+			_, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+				ProjectName: composeTestProject,
+				ComposeYaml: []byte(document),
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument (%v)", status.Code(err), err)
+			}
+			if calls := composeCalls(t, logPath); len(calls) != 0 {
+				t.Errorf("docker invocations = %v, want none before validation", calls)
+			}
+		})
+	}
+}
+
+// TestComposeConfinedRejectsTags pins N1 on the node: a tagged scalar that
+// would skip substitution and interpolate on the node is refused before
+// anything is written or executed, with the tag named.
+func TestComposeConfinedRejectsTags(t *testing.T) {
+	tagged := map[string]string{
+		"tagged env":  "services:\n  web:\n    image: x\n    environment:\n      LEAK: !x \"${AGENT_PROBE:-nothing}\"\n",
+		"tagged bind": "services:\n  web:\n    image: x\n    volumes:\n      - !x \"/tmp/${AGENT_PROBE:-nothing}:/mnt\"\n",
+	}
+	for name, document := range tagged {
+		t.Run(name, func(t *testing.T) {
+			logPath := fakeDockerCLI(t, "exit 0")
+			server := newTestComposeServer(t, ComposeServerConfig{})
+			_, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+				ProjectName: composeTestProject,
+				ComposeYaml: []byte(document),
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument (%v)", status.Code(err), err)
+			}
+			if calls := composeCalls(t, logPath); len(calls) != 0 {
+				t.Errorf("docker invocations = %v, want none before validation", calls)
+			}
+		})
+	}
+}
+
+// TestComposeConfinedAcceptsSafe pins that a confined realistic document
+// passes node input validation (the CLI itself is the fake's canned
+// answer, so this exercises the gate, not the daemon).
+func TestComposeConfinedAcceptsSafe(t *testing.T) {
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	if _, _, err := server.validateComposeInput(context.Background(), composeTestProject,
+		[]byte(composeTestDocument), true); err != nil {
+		t.Fatalf("validate confined safe document = %v, want nil", err)
+	}
+}
+
+// TestComposeSweepLabelsRejected pins the unconfined baseline: sweep labels
+// are refused on every document (Services documents legitimately use
+// gotham.domain for routing, which keeps passing when unconfined).
+func TestComposeSweepLabelsRejected(t *testing.T) {
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	spoofed := "services:\n  web:\n    image: x\n    labels:\n      gotham.app_id: 00000000-0000-0000-0000-000000000000\n"
+	if _, _, err := server.validateComposeInput(context.Background(), composeTestProject,
+		[]byte(spoofed), true); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("sweep label code = %v, want InvalidArgument", status.Code(err))
+	}
+	routed := "services:\n  web:\n    image: x\n    labels:\n      gotham.domain: example.com\n"
+	if _, _, err := server.validateComposeInput(context.Background(), composeTestProject,
+		[]byte(routed), true); err != nil {
+		t.Errorf("service routing label = %v, want nil (Services surface)", err)
+	}
+	if _, _, err := server.validateComposeInput(context.Background(), composeTestProject,
+		[]byte(routed), false); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("confined routing label code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+// TestComposeUnconfinedKeepsServicesWorking pins the inverted polarity's
+// other half: a Services document outside the application allowlist passes
+// input validation when the caller opts out explicitly.
+func TestComposeUnconfinedKeepsServicesWorking(t *testing.T) {
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	document := `services:
+  web:
+    image: nginx:1.23
+    privileged: true
+    labels:
+      gotham.domain: example.com
+    volumes:
+      - /srv/data:/data
+`
+	if _, _, err := server.validateComposeInput(context.Background(), composeTestProject,
+		[]byte(document), true); err != nil {
+		t.Errorf("unconfined services document = %v, want nil", err)
+	}
+	if _, _, err := server.validateComposeInput(context.Background(), composeTestProject,
+		[]byte(document), false); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("absent-flag code = %v, want InvalidArgument (confined by default)", status.Code(err))
+	}
+}
+
+// TestComposeValidateReportsEnforcement pins L1: the Validate response
+// carries the explicit enforcement signal the control-plane probe gates
+// on — true for a default (confined) request, false for an explicit
+// unconfined one. A regression to a constant would defeat the probe while
+// passing every allowlist test.
+func TestComposeValidateReportsEnforcement(t *testing.T) {
+	script := `
+case "$7" in
+  --services) printf 'web\n' ;;
+  --volumes) printf '\n' ;;
+esac
+exit 0
+`
+	document := "services:\n  web:\n    image: x\n"
+	t.Run("confined reports true", func(t *testing.T) {
+		fakeDockerCLI(t, script)
+		server := newTestComposeServer(t, ComposeServerConfig{})
+		response, err := server.ComposeValidate(context.Background(), &agentv1.ComposeValidateRequest{
+			ProjectName: composeTestProject,
+			ComposeYaml: []byte(document),
+		})
+		if err != nil {
+			t.Fatalf("ComposeValidate: %v", err)
+		}
+		if !response.GetConfinedEnforced() {
+			t.Error("confined_enforced = false, want true for the default request")
+		}
+	})
+	t.Run("unconfined reports false", func(t *testing.T) {
+		fakeDockerCLI(t, script)
+		server := newTestComposeServer(t, ComposeServerConfig{})
+		response, err := server.ComposeValidate(context.Background(), &agentv1.ComposeValidateRequest{
+			ProjectName: composeTestProject,
+			ComposeYaml: []byte(document),
+			Unconfined:  true,
+		})
+		if err != nil {
+			t.Fatalf("ComposeValidate: %v", err)
+		}
+		if response.GetConfinedEnforced() {
+			t.Error("confined_enforced = true, want false for the unconfined request")
+		}
+	})
+}
+
+// TestComposeVolumeRootDefaults pins the managed bind root the confined
+// validation enforces when the config leaves it empty.
+func TestComposeVolumeRootDefaults(t *testing.T) {
+	server := newTestComposeServer(t, ComposeServerConfig{})
+	if server.volumeRoot != defaultManagedVolumeRoot {
+		t.Errorf("volume root = %q, want the node default %q", server.volumeRoot, defaultManagedVolumeRoot)
+	}
+	custom := newTestComposeServer(t, ComposeServerConfig{VolumeRoot: "/data/volumes"})
+	if custom.volumeRoot != "/data/volumes" {
+		t.Errorf("volume root = %q, want the configured value", custom.volumeRoot)
+	}
 }

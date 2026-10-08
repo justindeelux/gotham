@@ -40,8 +40,10 @@ const envVolumesText = computed<string>(() =>
       <dd class="mono">{{ form.name }}</dd>
       <dt>{{ t("applications.wizard.reviewSource") }}</dt>
       <dd class="mono">{{ wizard.reviewSource.value }}</dd>
-      <dt>{{ t("applications.wizard.reviewBuildPack") }}</dt>
-      <dd>{{ wizard.buildPackLabel.value }}</dd>
+      <template v-if="!wizard.isComposePaste.value">
+        <dt>{{ t("applications.wizard.reviewBuildPack") }}</dt>
+        <dd>{{ wizard.buildPackLabel.value }}</dd>
+      </template>
       <dt>{{ t("applications.wizard.reviewPortDomain") }}</dt>
       <dd class="mono">{{ form.port ?? 3000 }} · {{ form.baseDomain || "—" }}</dd>
       <dt>{{ t("applications.wizard.reviewEnvVolumes") }}</dt>

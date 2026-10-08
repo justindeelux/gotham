@@ -35,6 +35,9 @@ const en = {
     source: "Source",
     branch: "Branch",
     buildPack: "Build pack",
+    composeService: "Web service",
+    composeFile: "Compose file",
+    composePasted: "pasted document",
     domain: "Domain",
     port: "Port",
     node: "Node",
@@ -59,6 +62,8 @@ const en = {
     noneRecorded: "No deployments recorded for this application.",
     footer:
       "Rollback only switches the image tag — the old image stays in the internal registry.",
+    footerCompose:
+      "Rollback re-applies the stored compose file (pull images + up -d) with the current environment and secrets.",
   },
   table: {
     deploy: "Deploy",
@@ -211,8 +216,24 @@ const en = {
   rollback: {
     title: "Rollback to a previous release",
     hint: "The control plane switches the image tag and restarts the container. Environment and volumes stay unchanged.",
+    hintCompose: "The control plane re-applies the stored compose file (pull images + up -d) with the current environment and secrets.",
+    composeFile: "stored compose file",
     confirm: "Roll back to {id}? The current container is kept for a roll-forward.",
     untagged: "untagged",
+  },
+  compose: {
+    title: "Compose source",
+    hint: "The compose document this application deploys. A redeploy pulls the images and runs up -d with the latest saved file.",
+    content: "Compose file",
+    placeholder: "services:",
+    file: "Compose file path",
+    filePlaceholder: "docker-compose.yml",
+    service: "Web service",
+    servicePlaceholder: "Select or type a service",
+    save: "Save compose source",
+    redeployHint: "Applies to the next deploy.",
+    secretsHint:
+      "Do not paste secrets into the document. Use environment variables or sealed secrets instead — they substitute as the compose project env at deploy time.",
   },
   wizard: {
     title: "Create application",
@@ -251,14 +272,14 @@ const en = {
     repoTruncatedHint: "The list hit the server bound — very large installations may miss repositories.",
     sourceType: "Source type",
     sourceTypePlaceholder: "Select a source type",
-    sourceTypeHint: "Public and private git, connected GitHub/GitLab, pasted Dockerfiles and container images deploy today; other sources land in later packages.",
+    sourceTypeHint: "Public and private git, connected GitHub/GitLab, pasted Dockerfiles, container images and Docker Compose deploy today.",
     sourceGitPublic: "Public git repository",
     sourceGitPrivate: "Private git repository",
     sourceGithubApp: "GitHub (connected)",
     sourceGitlabApp: "GitLab (connected)",
     sourceDockerfile: "Dockerfile",
-    sourceCompose: "Docker Compose (soon)",
     sourceImage: "Container image",
+    sourceCompose: "Docker Compose",
     sourceUnavailable:
       "This source type is not available yet — it lands in a later package.",
     imageRef: "Image reference",
@@ -272,6 +293,22 @@ const en = {
     imageLatestWarn:
       "This reference follows the moving latest tag: every redeploy pulls whatever the tag points at then. Pin a digest ({'@'}sha256:...) to freeze a release.",
     packImageNone: "No build (prebuilt image)",
+    composeMode: "Compose input",
+    composeModePaste: "Paste a compose file",
+    composeModeRepo: "Use a file from a repository",
+    composeModeHint: "Paste the document directly, or read it from a connected or public repository.",
+    composeContent: "Compose file",
+    composeContentHint: "The full compose document. Deploys pull its images and run up -d with it on the node.",
+    composeSecretsHint:
+      "Do not paste secrets into the document. Use environment variables or sealed secrets instead — they substitute as the compose project env at deploy time.",
+    composeRepoProviderHint: "Pick a connected provider for a private repository, or leave empty for a public URL.",
+    composeFile: "Compose file path",
+    composeFileHint: "Path inside the repository, e.g. docker-compose.yml.",
+    composeService: "Web service",
+    composeServiceHint: "The compose service the domain and port route to.",
+    composeServicePlaceholder: "Select or type a service",
+    composeNoBuildPack:
+      "Compose applications have no build pack: the document's images are pulled and started directly on the node.",
     branch: "Branch",
     branchPlaceholder: "Select a branch",
     branchHint: "Branches load from the selected repository — the default branch is prefilled.",
@@ -300,6 +337,7 @@ const en = {
     internalPortHint: "The port the app listens on inside the container.",
     hostPort: "Host port (0 = auto)",
     hostPortHint: "Leave empty to let the control plane assign one.",
+    hostPortComposeHint: "Auto-assign (0) or a port above 1023 — privileged host ports are reserved.",
     envTitle: "Environment variables",
     volumesTitle: "Volumes",
     envConvention:

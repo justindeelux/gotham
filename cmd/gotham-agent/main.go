@@ -156,6 +156,7 @@ func runServe() int {
 				agent.WithComposeService(agent.NewComposeServer(agent.ComposeServerConfig{
 					Root:       cfg.ComposeRoot,
 					DockerHost: cfg.DockerSock,
+					VolumeRoot: cfg.ManagedVolumeRoot,
 					Logger:     log,
 				})))
 			if err != nil {

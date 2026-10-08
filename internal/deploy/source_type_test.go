@@ -56,7 +56,8 @@ func TestValidSourceType(t *testing.T) {
 // URL (provider-backed ones also name the repository, git_private stays
 // provider-less), the dockerfile type needs pasted content with a FROM
 // instruction, image sources need a validated reference and no git fields,
-// and the Compose source fails closed until GS-8 lands.
+// and compose sources need pasted content or a repository with a compose
+// file plus the routed web service.
 func TestValidateSourcePerType(t *testing.T) {
 	base := Application{
 		Name:      "demo",
@@ -101,7 +102,7 @@ func TestValidateSourcePerType(t *testing.T) {
 		{"dockerfile without content", SourceDockerfile, "", "", "", "", ErrValidation},
 		{"dockerfile with provider", SourceDockerfile, "github", "", "", "FROM alpine:3.20\n", ErrValidation},
 		{"dockerfile without FROM", SourceDockerfile, "", "", "", "RUN echo hi\n", ErrValidation},
-		{"compose waits for GS-8", SourceCompose, "", "", "", "", ErrSourceNotImplemented},
+		{"compose without content or repo", SourceCompose, "", "", "", "", ErrValidation},
 		{"image with git fields is rejected", SourceImage, "", "", "", "", ErrValidation},
 		{"unknown type", "tarball", "", "", "", "", ErrValidation},
 	}
@@ -141,16 +142,13 @@ func TestCreateApplicationSourceType(t *testing.T) {
 		}
 	})
 
-	t.Run("unimplemented types are rejected", func(t *testing.T) {
-		for _, sourceType := range []string{SourceCompose} {
-			repo := &fakeRepository{}
-			svc := newTestService(t, repo)
-			in := validCreateInput(uuid.New())
-			in.SourceType = sourceType
-			in.Provider = ""
-			_, err := svc.CreateApplication(context.Background(), uuid.New(), in)
-			if !errors.Is(err, ErrSourceNotImplemented) {
-				t.Errorf("create(%q) = %v, want ErrSourceNotImplemented", sourceType, err)
+	t.Run("all known source types are implemented", func(t *testing.T) {
+		for _, sourceType := range []string{
+			"", SourceGitPublic, SourceGitPrivate, SourceGitHubApp,
+			SourceGitLabApp, SourceDockerfile, SourceImage, SourceCompose,
+		} {
+			if !SourceTypeImplemented(sourceType) {
+				t.Errorf("SourceTypeImplemented(%q) = false, want true", sourceType)
 			}
 		}
 	})
@@ -199,34 +197,11 @@ func TestCreateApplicationSourceType(t *testing.T) {
 	})
 }
 
-// TestServiceDeployRejectsUnimplementedSource pins the submit path behind
-// cloneSource: a stored compose app fails Deploy with ErrSourceNotImplemented
-// — not the clone-URL error — and queues nothing.
-// Dockerfile applications (GS-7) deploy from their stored text, and image
-// sources deploy since GS-9 (see TestServiceImageDeployQueues).
-func TestServiceDeployRejectsUnimplementedSource(t *testing.T) {
-	for _, sourceType := range []string{SourceCompose} {
-		t.Run(sourceType, func(t *testing.T) {
-			userID := uuid.New()
-			app := testApplication(userID)
-			app.SourceType = sourceType
-			repo := &fakeRepository{app: app}
-			svc := newTestService(t, repo)
-
-			_, err := svc.Deploy(context.Background(), userID, app.ID)
-			if !errors.Is(err, ErrSourceNotImplemented) {
-				t.Fatalf("err = %v, want ErrSourceNotImplemented", err)
-			}
-			if stored := listStored(t, repo, app.ID); len(stored) != 0 {
-				t.Errorf("queued %d deployments, want 0", len(stored))
-			}
-		})
-	}
-}
-
 // TestCloneSourceBranching pins the GS-2 orchestrator switch: implemented
-// types (and legacy empty rows) clone, not-yet-implemented types fail with
-// the typed error, and anything else is a validation error.
+// git types (and legacy empty rows) clone through the shared cloner, and
+// anything unknown is a validation error. Dockerfile, image and compose
+// sources take their own fetch paths (see dockerfile_test.go,
+// compose_test.go and the image deploy tests).
 func TestCloneSourceBranching(t *testing.T) {
 	t.Run("implemented types clone", func(t *testing.T) {
 		for _, sourceType := range []string{
@@ -241,22 +216,6 @@ func TestCloneSourceBranching(t *testing.T) {
 			}
 			if src.calls != 1 {
 				t.Errorf("cloneSource(%q): clone calls = %d, want 1", sourceType, src.calls)
-			}
-		}
-	})
-
-	t.Run("unimplemented types fail closed", func(t *testing.T) {
-		for _, sourceType := range []string{SourceCompose} {
-			src := &fakeSource{}
-			o := newTestOrchestrator(Config{Source: src})
-			app := testApplication(uuid.New())
-			app.SourceType = sourceType
-			err := o.cloneSource(context.Background(), app, t.TempDir(), nil)
-			if !errors.Is(err, ErrSourceNotImplemented) {
-				t.Errorf("cloneSource(%q) = %v, want ErrSourceNotImplemented", sourceType, err)
-			}
-			if src.calls != 0 {
-				t.Errorf("cloneSource(%q): clone calls = %d, want 0", sourceType, src.calls)
 			}
 		}
 	})

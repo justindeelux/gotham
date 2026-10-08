@@ -480,6 +480,13 @@ message ComposeValidateRequest {
   // compose_yaml is the complete compose document, capped at 1 MiB. Nothing
   // is started by a validate.
   bytes compose_yaml = 2;
+  // unconfined opts out of the application-scope confinement allowlist for
+  // the document (no host namespaces, devices, capabilities or binds
+  // outside the managed volumes). The Services surface sets it; application
+  // deploys leave it unset, so the safe state is the zero value and a
+  // caller that omits the field can never relax the node. Unknown fields
+  // are ignored by older agents, so the flag rolls out safely.
+  bool unconfined = 3;
 }
 
 // ComposeValidateResponse reports what a valid document declares.
@@ -488,6 +495,12 @@ message ComposeValidateResponse {
   repeated string services = 1;
   // volumes are the named volumes the document declares, sorted.
   repeated string volumes = 2;
+  // confined_enforced reports whether the node applied the
+  // application-scope confinement allowlist to this document. It is false
+  // for unconfined (Services) requests and for agents that predate the
+  // enforcement, so the control plane gates on this field — never on the
+  // mere absence of an error.
+  bool confined_enforced = 3;
 }
 
 // ComposeUpRequest starts (or restarts) a project's compose document.
@@ -502,6 +515,10 @@ message ComposeUpRequest {
   // containers instead of a `docker compose up -d` create/recreate pass. The
   // document is still written and validated first.
   bool restart = 3;
+  // unconfined opts out of the application-scope confinement allowlist,
+  // like ComposeValidateRequest.unconfined. The deploy control plane leaves
+  // it unset for application projects; service projects set it.
+  bool unconfined = 4;
 }
 
 // ComposeUpResponse is empty: the observable result of an up is the project's
@@ -516,6 +533,11 @@ message ComposeDownRequest {
   // deployed with, capped at 1 MiB. The CLI needs it to resolve the project;
   // the named volumes it declares are kept (down never passes --volumes).
   bytes compose_yaml = 2;
+  // unconfined opts out of the application-scope confinement allowlist,
+  // like ComposeValidateRequest.unconfined. Teardown runs no containers,
+  // but the document still replaces the on-disk project file, so the same
+  // scope rule applies.
+  bool unconfined = 3;
 }
 
 // ComposeDownResponse is empty.

@@ -182,3 +182,99 @@ were deferred by explicit owner decision:
   `TestCloneSourceDockerfile`, `TestBuildDockerfileSource`,
   `TestInlineDockerfileBuildE2E` (live Docker, `GOTHAM_E2E`-gated),
   `web/tests/dockerfile-source.test.ts`.
+## GS-8 — Docker Compose source (JUS-64)
+
+- **Context brief:** applications whose source type is `compose` deploy a
+  compose document through the existing Services compose runner
+  (`internal/services` interpolation plus the node's ComposeService RPCs).
+  The wizard takes either pasted document text or a repository (connected
+  provider or public git URL) with an in-repo file path; one compose
+  service is selected as the web service the application's domain/port
+  routing targets. The document, file path and web service are stored on
+  the application (`compose_content`, `compose_file`, `compose_service`)
+  and shown/edited on the detail overview. The orchestrator resolves the
+  document (stored text, or the file read from a fresh clone), renders it
+  against the merged project environment (app env and secrets are the
+  compose project env), injects the web service's port mapping, then runs
+  pull images + up -d on the node; the web container is the recorded
+  release, so proxy routing, health gating and manual stop/start work
+  unchanged. Each compose deployment records its raw document and
+  repo commit on the deployment row; a rollback re-renders the target
+  release's document with the current environment, so a bad edit can be
+  rolled back without resurrecting rotated secrets. Delete and node moves tear the project down best
+  effort (sidecars carry no gotham labels for the container sweep),
+  falling back to a minimal stub document when the stored one no longer
+  resolves. Previews inherit the document with managed binds rewritten to
+  the preview's own directory.
+- **Confinement:** every document passes the `composeguard` allowlist
+  (new neutral top-level package, imported by both sides): known-safe
+  service keys and top-level sections only, non-core YAML tags rejected
+  (a tagged scalar would skip substitution and interpolate on the node),
+  named volumes with the local driver and no driver_opts/external/name
+  overrides, published host ports outside the reserved band
+  (privileged 1-1023 and the Docker API ports; ephemeral and high ports
+  pass like ordinary applications), binds confined to direct children of
+  the application's managed directory (compose's own `.`/`/`/`~` path
+  rule, absolute targets, validated mount modes, symlink walks where the
+  filesystem is visible), no secrets/configs sections, no capabilities,
+  namespaces, devices, security options, sysctls, volumes_from,
+  extra_hosts, build inputs or gotham.-prefixed labels, NUL bytes rejected
+  in literals as well as raw text, single-document YAML with alias/depth
+  bombs rejected (decode errors never read as end-of-stream; genuinely
+  empty tails pass). Rendered documents carry no live reference (every `$`
+  is a `$$` escape, checked on the control plane and the node). The node
+  enforces the allowlist unless the caller opts out with `unconfined`
+  (the Services surface; the safe zero value confines) and rejects sweep
+  labels on all documents, so an edited row or a validator regression
+  cannot reach the runtime. The deploy probes confinement enforcement
+  before each compose run and refuses nodes that accept the canary.
+- **Secrets note:** the stored document travels only on the detail routes
+  (kept out of list responses); app env and secrets substitute into it at
+  deploy time and never reach a stored row, log line or error (render
+  failures and node errors are redacted of project values). A secret typed
+  inline into the document is the author's own content and out of scope,
+  like the Services surface. Previews inherit the document, file reference
+  and web service (their own project name keeps them isolated).
+- **Known gaps:** compose images pull anonymously (no per-app registry
+  credential — GS-9 covers image sources only); a pull failure is best
+  effort and the up still runs. Manual stop/start acts on the web
+  container only, not the sidecars. Custom networks are declarations-only;
+  repo-mode web-service membership is enforced at deploy time.
+- **Deliverables:** migration `00042_applications_compose.sql`
+  (application columns plus per-deployment raw document/commit),
+  `composeguard` validators (tag rejection, `$$` gate, allowlist), node
+  confined validation behind the safe-default `unconfined` flag plus the
+  deploy capability probe, orchestrator fetch/render/pull-up/health
+  branches, Node ComposeUp/ComposeValidate/ComposePs/ComposeDown, wizard
+  source option + `ComposeEditor`, detail `ComposeEditor`.
+- **Verify:** composeguard bypass table (100+ hostile payloads with
+  offending paths, incl. tagged scalars, drive letters, modes, targets,
+  hidden multi-document tails, published-port band) and realistic-app
+  positive test, `TestCheckNoInterpolation`, `TestValidateHiddenTail`,
+  `TestValidateEmptyTail`, `TestValidateComposeContent`,
+  `TestComposeImages`, `TestInjectComposeWebPorts` (ranges, loopback, IPv6),
+  `TestOrchestratorComposePastedHappyPath`,
+  `TestOrchestratorComposeRepoMode`,
+  `TestOrchestratorComposeRollbackReapplies` (raw v1 doc re-rendered),
+  `TestComposeDefaultEscapeRejected`,
+  `TestComposeNodeErrorsRedacted`, `TestComposeGuardErrorsRedacted`,
+  `TestComposeRollbackRedactsCurrentEnv`, `TestComposeCapabilityProbe`
+  (explicit enforcement flag; old agent refused),
+  `TestServiceDeleteComposeProbesUnverifiedNode`,
+  `TestServiceCreateComposeHostile`,
+  `TestPreviewComposeBinds`, `TestServiceCreateCompose`,
+  `TestServiceRollbackCompose`, `TestServiceDeleteComposeDown`,
+  `TestRoutesComposeFields`, `TestStoreApplicationComposeRoundtrip`,
+  agent `TestComposeConfinedEnforcesAllowlist` (absent flag confines),
+  `TestComposeConfinedRejectsTags`,
+  `TestComposeUnconfinedKeepsServicesWorking`,
+  `TestComposeValidateReportsEnforcement`, sweep labels, volume root,
+  e2e `TestGS8ComposeDeployRollbackDelete` and
+  `TestGS8ComposeHostileRejected` (incl. tagged live cases),
+  `web/tests/compose-source.test.ts`.
+- **Rollout:** upgrade the control plane before agents. A new control
+  plane refuses compose deploys to pre-confinement agents (the
+  capability probe fails closed: upgrade the agent); Services traffic
+  is unaffected either way. An old control plane against a new agent
+  breaks Services compose documents (the node confines by default),
+  so mixed fleets must move the control plane first.

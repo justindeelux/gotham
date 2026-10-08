@@ -47,6 +47,9 @@ type Application struct {
 	ImageRef                   string             `json:"image_ref"`
 	RegistryUsername           string             `json:"registry_username"`
 	RegistryPasswordCiphertext string             `json:"registry_password_ciphertext"`
+	ComposeContent             string             `json:"compose_content"`
+	ComposeFile                string             `json:"compose_file"`
+	ComposeService             string             `json:"compose_service"`
 }
 
 type ApplicationDeployKey struct {
@@ -158,21 +161,23 @@ type DatabaseSecret struct {
 }
 
 type Deployment struct {
-	ID            pgtype.UUID        `json:"id"`
-	ApplicationID pgtype.UUID        `json:"application_id"`
-	Kind          string             `json:"kind"`
-	State         string             `json:"state"`
-	ImageTag      string             `json:"image_tag"`
-	RegistryImage string             `json:"registry_image"`
-	Digest        string             `json:"digest"`
-	Error         string             `json:"error"`
-	Attempt       int32              `json:"attempt"`
-	ContainerID   string             `json:"container_id"`
-	RollbackFrom  pgtype.UUID        `json:"rollback_from"`
-	StartedAt     pgtype.Timestamptz `json:"started_at"`
-	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID              pgtype.UUID        `json:"id"`
+	ApplicationID   pgtype.UUID        `json:"application_id"`
+	Kind            string             `json:"kind"`
+	State           string             `json:"state"`
+	ImageTag        string             `json:"image_tag"`
+	RegistryImage   string             `json:"registry_image"`
+	Digest          string             `json:"digest"`
+	Error           string             `json:"error"`
+	Attempt         int32              `json:"attempt"`
+	ContainerID     string             `json:"container_id"`
+	RollbackFrom    pgtype.UUID        `json:"rollback_from"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ComposeDocument string             `json:"compose_document"`
+	ComposeCommit   string             `json:"compose_commit"`
 }
 
 type DnsProvider struct {

@@ -46,25 +46,29 @@ const applicationBody = `{
 
 // applicationWireKeys are the fields of the FE's `Application` interface plus
 // the additive `base_domain_disabled` visibility flag, the `github_app_id`
-// link and the GS-9 image fields; the envelope must carry exactly these, or
-// the SPA reads undefined values.
+// link, the GS-9 image fields and the GS-8 compose fields; the envelope must
+// carry exactly these, or the SPA reads undefined values.
 var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
 	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id",
-	"dockerfile_content", "build_args", "branch", "build_pack",
+	"dockerfile_content", "build_args",
+	"compose_content", "compose_file", "compose_service",
+	"branch", "build_pack",
 	"image_ref", "has_registry_credential",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
 }
 
 // applicationListWireKeys are the list-item fields: the Dockerfile source
-// text and --build-arg values travel on the detail routes only, so a list
-// read never exposes them. Every other detail key (including GS-5's
-// github_app_id) must appear here, or list readers see undefined values.
+// text, --build-arg values and the pasted compose document travel on the
+// detail routes only, so a list read never exposes them. Every other detail
+// key (including GS-5's github_app_id and the compose routing metadata)
+// must appear here, or list readers see undefined values.
 var applicationListWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
 	"project_name", "provider", "repo", "clone_url", "source_type",
 	"github_app_id",
+	"compose_file", "compose_service",
 	"branch", "build_pack",
 	"image_ref", "has_registry_credential",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",

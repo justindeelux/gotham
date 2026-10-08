@@ -119,7 +119,8 @@ INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
     branch, build_pack, base_domain, port, host_port, team_id, is_preview,
     source_type, github_app_id, dockerfile_content, build_args,
-    image_ref, registry_username, registry_password_ciphertext
+    image_ref, registry_username, registry_password_ciphertext,
+    compose_content, compose_file, compose_service
 )
 VALUES (
     COALESCE($1::uuid, gen_random_uuid()),
@@ -131,13 +132,16 @@ VALUES (
     -- The deploy repository normalizes the same way in Go.
     $15, COALESCE(NULLIF($16::text, ''), 'git_public'),
     $17::uuid,
-    -- Direct sqlc callers (fixtures, previews) predate the GS-7 columns;
+    -- Direct sqlc callers (fixtures, previews) predate the GS-7/GS-8 columns;
     -- COALESCE maps their zero values onto the column defaults.
     COALESCE($18::text, ''),
     COALESCE($19::jsonb, '{}'),
-    $20, $21, $22
+    $20, $21, $22,
+    COALESCE($23::text, ''),
+    COALESCE($24::text, ''),
+    COALESCE($25::text, '')
 )
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service
 `
 
 type CreateApplicationParams struct {
@@ -163,6 +167,9 @@ type CreateApplicationParams struct {
 	ImageRef                   string      `json:"image_ref"`
 	RegistryUsername           string      `json:"registry_username"`
 	RegistryPasswordCiphertext string      `json:"registry_password_ciphertext"`
+	ComposeContent             string      `json:"compose_content"`
+	ComposeFile                string      `json:"compose_file"`
+	ComposeService             string      `json:"compose_service"`
 }
 
 // The id is optional: a caller that must know the application id before the
@@ -193,6 +200,9 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		arg.ImageRef,
 		arg.RegistryUsername,
 		arg.RegistryPasswordCiphertext,
+		arg.ComposeContent,
+		arg.ComposeFile,
+		arg.ComposeService,
 	)
 	var i Application
 	err := row.Scan(
@@ -221,26 +231,35 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.ImageRef,
 		&i.RegistryUsername,
 		&i.RegistryPasswordCiphertext,
+		&i.ComposeContent,
+		&i.ComposeFile,
+		&i.ComposeService,
 	)
 	return i, err
 }
 
 const createDeployment = `-- name: CreateDeployment :one
 INSERT INTO deployments (
-    application_id, kind, state, image_tag, registry_image, digest, rollback_from
+    application_id, kind, state, image_tag, registry_image, digest, rollback_from,
+    compose_document, compose_commit
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at
+VALUES ($1, $2, $3, $4, $5, $6, $7,
+    COALESCE($8::text, ''),
+    COALESCE($9::text, '')
+)
+RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit
 `
 
 type CreateDeploymentParams struct {
-	ApplicationID pgtype.UUID `json:"application_id"`
-	Kind          string      `json:"kind"`
-	State         string      `json:"state"`
-	ImageTag      string      `json:"image_tag"`
-	RegistryImage string      `json:"registry_image"`
-	Digest        string      `json:"digest"`
-	RollbackFrom  pgtype.UUID `json:"rollback_from"`
+	ApplicationID   pgtype.UUID `json:"application_id"`
+	Kind            string      `json:"kind"`
+	State           string      `json:"state"`
+	ImageTag        string      `json:"image_tag"`
+	RegistryImage   string      `json:"registry_image"`
+	Digest          string      `json:"digest"`
+	RollbackFrom    pgtype.UUID `json:"rollback_from"`
+	ComposeDocument string      `json:"compose_document"`
+	ComposeCommit   string      `json:"compose_commit"`
 }
 
 func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error) {
@@ -252,6 +271,8 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		arg.RegistryImage,
 		arg.Digest,
 		arg.RollbackFrom,
+		arg.ComposeDocument,
+		arg.ComposeCommit,
 	)
 	var i Deployment
 	err := row.Scan(
@@ -270,6 +291,8 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.FinishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ComposeDocument,
+		&i.ComposeCommit,
 	)
 	return i, err
 }
@@ -306,7 +329,7 @@ func (q *Queries) FailStaleDeployments(ctx context.Context) (int64, error) {
 }
 
 const getActiveDeploymentByApp = `-- name: GetActiveDeploymentByApp :one
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit FROM deployments
 WHERE application_id = $1 AND state NOT IN ('running', 'failed')
 ORDER BY created_at DESC
 LIMIT 1
@@ -331,12 +354,14 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 		&i.FinishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ComposeDocument,
+		&i.ComposeCommit,
 	)
 	return i, err
 }
 
 const getApplication = `-- name: GetApplication :one
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext FROM applications WHERE id = $1
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications WHERE id = $1
 `
 
 func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Application, error) {
@@ -368,12 +393,15 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.ImageRef,
 		&i.RegistryUsername,
 		&i.RegistryPasswordCiphertext,
+		&i.ComposeContent,
+		&i.ComposeFile,
+		&i.ComposeService,
 	)
 	return i, err
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit FROM deployments
 WHERE id = $1 AND application_id = $2
 `
 
@@ -401,6 +429,8 @@ func (q *Queries) GetDeployment(ctx context.Context, arg GetDeploymentParams) (D
 		&i.FinishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ComposeDocument,
+		&i.ComposeCommit,
 	)
 	return i, err
 }
@@ -496,7 +526,7 @@ func (q *Queries) InsertStorage(ctx context.Context, arg InsertStorageParams) (S
 }
 
 const listApplicationsByEnvironment = `-- name: ListApplicationsByEnvironment :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
 WHERE environment_id = $1 AND (is_preview = false OR $2::bool = true)
 ORDER BY created_at DESC, id DESC
 `
@@ -543,6 +573,9 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 			&i.ImageRef,
 			&i.RegistryUsername,
 			&i.RegistryPasswordCiphertext,
+			&i.ComposeContent,
+			&i.ComposeFile,
+			&i.ComposeService,
 		); err != nil {
 			return nil, err
 		}
@@ -555,7 +588,7 @@ func (q *Queries) ListApplicationsByEnvironment(ctx context.Context, arg ListApp
 }
 
 const listApplicationsByProject = `-- name: ListApplicationsByProject :many
-SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.base_domain, a.port, a.host_port, a.created_at, a.updated_at, a.base_domain_disabled, a.team_id, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args, a.image_ref, a.registry_username, a.registry_password_ciphertext FROM applications a
+SELECT a.id, a.user_id, a.server_id, a.name, a.provider, a.repo, a.clone_url, a.branch, a.build_pack, a.base_domain, a.port, a.host_port, a.created_at, a.updated_at, a.base_domain_disabled, a.team_id, a.is_preview, a.environment_id, a.source_type, a.github_app_id, a.dockerfile_content, a.build_args, a.image_ref, a.registry_username, a.registry_password_ciphertext, a.compose_content, a.compose_file, a.compose_service FROM applications a
 JOIN environments e ON e.id = a.environment_id
 WHERE e.project_id = $1 AND (a.is_preview = false OR $2::bool = true)
 ORDER BY a.created_at DESC, a.id DESC
@@ -603,6 +636,9 @@ func (q *Queries) ListApplicationsByProject(ctx context.Context, arg ListApplica
 			&i.ImageRef,
 			&i.RegistryUsername,
 			&i.RegistryPasswordCiphertext,
+			&i.ComposeContent,
+			&i.ComposeFile,
+			&i.ComposeService,
 		); err != nil {
 			return nil, err
 		}
@@ -648,7 +684,7 @@ func (q *Queries) ListApplicationsByServer(ctx context.Context, serverID pgtype.
 }
 
 const listApplicationsByTeam = `-- name: ListApplicationsByTeam :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
 WHERE team_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
@@ -688,6 +724,9 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 			&i.ImageRef,
 			&i.RegistryUsername,
 			&i.RegistryPasswordCiphertext,
+			&i.ComposeContent,
+			&i.ComposeFile,
+			&i.ComposeService,
 		); err != nil {
 			return nil, err
 		}
@@ -700,7 +739,7 @@ func (q *Queries) ListApplicationsByTeam(ctx context.Context, teamID pgtype.UUID
 }
 
 const listApplicationsByUser = `-- name: ListApplicationsByUser :many
-SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext FROM applications
+SELECT id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service FROM applications
 WHERE user_id = $1 AND is_preview = false
 ORDER BY created_at DESC, id DESC
 `
@@ -740,6 +779,9 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 			&i.ImageRef,
 			&i.RegistryUsername,
 			&i.RegistryPasswordCiphertext,
+			&i.ComposeContent,
+			&i.ComposeFile,
+			&i.ComposeService,
 		); err != nil {
 			return nil, err
 		}
@@ -752,7 +794,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 }
 
 const listDeploymentsByApp = `-- name: ListDeploymentsByApp :many
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit FROM deployments
 WHERE application_id = $1
 ORDER BY created_at DESC, id DESC
 `
@@ -782,6 +824,8 @@ func (q *Queries) ListDeploymentsByApp(ctx context.Context, applicationID pgtype
 			&i.FinishedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ComposeDocument,
+			&i.ComposeCommit,
 		); err != nil {
 			return nil, err
 		}
@@ -794,7 +838,7 @@ func (q *Queries) ListDeploymentsByApp(ctx context.Context, applicationID pgtype
 }
 
 const listDeploymentsByAppLimit = `-- name: ListDeploymentsByAppLimit :many
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit FROM deployments
 WHERE application_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2
@@ -830,6 +874,8 @@ func (q *Queries) ListDeploymentsByAppLimit(ctx context.Context, arg ListDeploym
 			&i.FinishedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ComposeDocument,
+			&i.ComposeCommit,
 		); err != nil {
 			return nil, err
 		}
@@ -969,9 +1015,12 @@ SET name = $2,
     image_ref = $14,
     registry_username = $15,
     registry_password_ciphertext = $16,
+    compose_content = $17,
+    compose_file = $18,
+    compose_service = $19,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext
+RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type, github_app_id, dockerfile_content, build_args, image_ref, registry_username, registry_password_ciphertext, compose_content, compose_file, compose_service
 `
 
 type UpdateApplicationParams struct {
@@ -991,6 +1040,9 @@ type UpdateApplicationParams struct {
 	ImageRef                   string      `json:"image_ref"`
 	RegistryUsername           string      `json:"registry_username"`
 	RegistryPasswordCiphertext string      `json:"registry_password_ciphertext"`
+	ComposeContent             string      `json:"compose_content"`
+	ComposeFile                string      `json:"compose_file"`
+	ComposeService             string      `json:"compose_service"`
 }
 
 func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error) {
@@ -1011,6 +1063,9 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		arg.ImageRef,
 		arg.RegistryUsername,
 		arg.RegistryPasswordCiphertext,
+		arg.ComposeContent,
+		arg.ComposeFile,
+		arg.ComposeService,
 	)
 	var i Application
 	err := row.Scan(
@@ -1039,6 +1094,9 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		&i.ImageRef,
 		&i.RegistryUsername,
 		&i.RegistryPasswordCiphertext,
+		&i.ComposeContent,
+		&i.ComposeFile,
+		&i.ComposeService,
 	)
 	return i, err
 }
@@ -1054,22 +1112,26 @@ SET state = $2,
     container_id = $8,
     started_at = $9,
     finished_at = $10,
+    compose_document = $11,
+    compose_commit = $12,
     updated_at = now()
 WHERE id = $1
-RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at
+RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit
 `
 
 type UpdateDeploymentParams struct {
-	ID            pgtype.UUID        `json:"id"`
-	State         string             `json:"state"`
-	ImageTag      string             `json:"image_tag"`
-	RegistryImage string             `json:"registry_image"`
-	Digest        string             `json:"digest"`
-	Error         string             `json:"error"`
-	Attempt       int32              `json:"attempt"`
-	ContainerID   string             `json:"container_id"`
-	StartedAt     pgtype.Timestamptz `json:"started_at"`
-	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
+	ID              pgtype.UUID        `json:"id"`
+	State           string             `json:"state"`
+	ImageTag        string             `json:"image_tag"`
+	RegistryImage   string             `json:"registry_image"`
+	Digest          string             `json:"digest"`
+	Error           string             `json:"error"`
+	Attempt         int32              `json:"attempt"`
+	ContainerID     string             `json:"container_id"`
+	StartedAt       pgtype.Timestamptz `json:"started_at"`
+	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
+	ComposeDocument string             `json:"compose_document"`
+	ComposeCommit   string             `json:"compose_commit"`
 }
 
 func (q *Queries) UpdateDeployment(ctx context.Context, arg UpdateDeploymentParams) (Deployment, error) {
@@ -1084,6 +1146,8 @@ func (q *Queries) UpdateDeployment(ctx context.Context, arg UpdateDeploymentPara
 		arg.ContainerID,
 		arg.StartedAt,
 		arg.FinishedAt,
+		arg.ComposeDocument,
+		arg.ComposeCommit,
 	)
 	var i Deployment
 	err := row.Scan(
@@ -1102,6 +1166,8 @@ func (q *Queries) UpdateDeployment(ctx context.Context, arg UpdateDeploymentPara
 		&i.FinishedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ComposeDocument,
+		&i.ComposeCommit,
 	)
 	return i, err
 }

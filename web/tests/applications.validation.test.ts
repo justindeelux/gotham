@@ -106,6 +106,7 @@ describe("wizard gates match recorded outcomes", () => {
     const w = wiz!;
     const reset = {
       sourceType: "git_public", providerId: "", publicCloneUrl: "", privateCloneUrl: "", privateAuth: "ssh", httpsUsername: "", httpsToken: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
+      composeMode: "paste", composeContent: "", composeFile: "docker-compose.yml", composeService: "",
       buildPack: "", serverId: "", port: 3000, hostPort: null, baseDomain: "", env: [], storage: [],
     };
     const sourceCases: Array<{ name: string; patch: Record<string, unknown>; sourceValid: boolean }> = [
@@ -290,17 +291,16 @@ describe("wizard create payload carries the source type", () => {
     const options = Object.fromEntries(
       w.sourceTypeOptions.value.map((item) => [item.value, item.disabled === true]),
     );
-    // git_public, git_private, the connected-provider flows, pasted
-    // Dockerfiles and container images deploy; everything else stays
-    // disabled until its package lands (GS-8).
+    // Every known source type deploys (compose last, GS-8); unknown
+    // future types stay disabled until their package lands.
     expect(options).toEqual({
       git_public: false,
       git_private: false,
       github_app: false,
       gitlab_app: false,
       dockerfile: false,
-      compose: true,
       image: false,
+      compose: false,
     });
     wrapper.unmount();
   });

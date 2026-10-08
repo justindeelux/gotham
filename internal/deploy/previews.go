@@ -85,9 +85,18 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 		BuildArgs:         base.BuildArgs,
 		Branch:            strings.TrimSpace(in.Branch),
 		BuildPack:         base.BuildPack,
-		BaseDomain:        proxy.NormalizeDomain(in.BaseDomain),
-		IsPreview:         true,
-		Port:              base.Port,
+		// The preview id is assigned before validation so a pasted
+		// document's managed binds rewrite to the preview's own directory
+		// (never the base application's) before the scope check runs. The
+		// project name derives from the application id, so the preview's
+		// named volumes stay isolated too.
+		ID:             uuid.New(),
+		ComposeContent: base.ComposeContent,
+		ComposeFile:    base.ComposeFile,
+		ComposeService: base.ComposeService,
+		BaseDomain:     proxy.NormalizeDomain(in.BaseDomain),
+		IsPreview:      true,
+		Port:           base.Port,
 		// HostPort stays 0: the agent assigns a free port, so the preview
 		// never collides with the base application's binding.
 	}
@@ -96,9 +105,14 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	}
 	// A preview of a git source with no branch inherits the empty value so
 	// the clone resolves the remote default (GS-3, GS-4); every other source
-	// falls back to "main" like creation does.
+	// falls back to "main" like creation does. A pasted compose document has
+	// no branch at all (cleared below).
 	if app.Branch == "" && !BranchDefaultsToRemote(base.SourceType, base.Provider) {
 		app.Branch = defaultBranch
+	}
+	if app.SourceType == SourceCompose && strings.TrimSpace(app.ComposeContent) != "" {
+		app.Branch = ""
+		app.ComposeContent = rewriteManagedBindsForPreview(app.ComposeContent, managedVolumeRoot(), app.ID)
 	}
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err

@@ -8,9 +8,11 @@ import {
   NEmpty,
   NSpace,
 } from "naive-ui";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { Application, Deployment } from "@/features/applications/api/applications";
+import ComposeEditor from "@/features/applications/components/ComposeEditor.vue";
 import DeploymentHistoryTable from "@/features/applications/components/DeploymentHistoryTable.vue";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
 import DockerfileEditor from "@/features/applications/components/DockerfileEditor.vue";
@@ -18,7 +20,6 @@ import GitPrivateSourcePanel from "@/features/applications/components/GitPrivate
 import type { PipelineStep } from "@/features/applications/utils/deployPipeline";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
 import { relativeTime } from "@/shared/utils/format";
-import { computed } from "vue";
 
 interface Props {
   application: Application | null;
@@ -27,9 +28,11 @@ interface Props {
   pipelineSteps: PipelineStep[];
   descColumns: number;
   acting: boolean;
+  /** canWrite gates the compose editor: readers see it read-only. */
+  canWrite?: boolean;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { canWrite: false });
 
 const emit = defineEmits<{
   deploy: [];
@@ -51,10 +54,14 @@ const sourceLabels: Record<string, string> = {
   image: "applications.wizard.sourceImage",
 };
 
+/** sourceLabel renders the GS-2 source type with the wizard's labels. */
 const sourceLabel = computed<string>(() => {
   const key = props.application ? sourceLabels[props.application.source_type] : undefined;
   return key ? String(t(key)) : (props.application?.source_type ?? "—");
 });
+
+/** isCompose reports a compose application for the compose rows. */
+const isCompose = computed<boolean>(() => props.application?.source_type === "compose");
 </script>
 
 <template>
@@ -77,8 +84,14 @@ const sourceLabel = computed<string>(() => {
         <NDescriptionsItem v-else-if="props.application.source_type !== 'dockerfile'" :label="t('applications.overview.branch')">
           <span class="mono">{{ props.application.branch || "—" }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem v-if="props.application.source_type !== 'dockerfile' && props.application.source_type !== 'image'" :label="t('applications.overview.buildPack')">
+        <NDescriptionsItem v-if="props.application.source_type !== 'dockerfile' && props.application.source_type !== 'image' && !isCompose" :label="t('applications.overview.buildPack')">
           <span class="mono">{{ props.application.build_pack || t("applications.overview.auto") }}</span>
+        </NDescriptionsItem>
+        <NDescriptionsItem v-if="isCompose" :label="t('applications.overview.composeService')">
+          <span class="mono">{{ props.application.compose_service || "—" }}</span>
+        </NDescriptionsItem>
+        <NDescriptionsItem v-if="isCompose" :label="t('applications.overview.composeFile')">
+          <span class="mono">{{ props.application.compose_file || t("applications.overview.composePasted") }}</span>
         </NDescriptionsItem>
         <NDescriptionsItem :label="t('applications.overview.domain')">
           <span class="mono">{{ props.application.base_domain || "—" }}</span>
@@ -94,6 +107,12 @@ const sourceLabel = computed<string>(() => {
     <DockerfileEditor
       v-if="props.application && props.application.source_type === 'dockerfile'"
       :application="props.application"
+    />
+    <ComposeEditor
+      v-if="props.application && props.application.source_type === 'compose'"
+      :application="props.application"
+      :can-write="props.canWrite"
+    />
     />
     <NCard v-if="props.latest" :title="t('applications.overview.deployTitle', { id: props.latest.id.slice(0, 8) })">
       <template #header-extra>

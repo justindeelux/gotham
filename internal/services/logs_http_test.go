@@ -59,6 +59,9 @@ func TestLogsHTTPQuietFollowOpensBeforeOutput(t *testing.T) {
 	if _, err := composeServer.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
 		ProjectName: project,
 		ComposeYaml: []byte(testDocument),
+		// The seed models the Services surface, which opts out of the
+		// node's application-scope confinement (routing labels and all).
+		Unconfined: true,
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}

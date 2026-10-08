@@ -7,7 +7,8 @@ INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
     branch, build_pack, base_domain, port, host_port, team_id, is_preview,
     source_type, github_app_id, dockerfile_content, build_args,
-    image_ref, registry_username, registry_password_ciphertext
+    image_ref, registry_username, registry_password_ciphertext,
+    compose_content, compose_file, compose_service
 )
 VALUES (
     COALESCE(sqlc.arg(id)::uuid, gen_random_uuid()),
@@ -19,11 +20,14 @@ VALUES (
     -- The deploy repository normalizes the same way in Go.
     sqlc.arg(is_preview), COALESCE(NULLIF(sqlc.arg(source_type)::text, ''), 'git_public'),
     sqlc.arg(github_app_id)::uuid,
-    -- Direct sqlc callers (fixtures, previews) predate the GS-7 columns;
+    -- Direct sqlc callers (fixtures, previews) predate the GS-7/GS-8 columns;
     -- COALESCE maps their zero values onto the column defaults.
     COALESCE(sqlc.arg(dockerfile_content)::text, ''),
     COALESCE(sqlc.arg(build_args)::jsonb, '{}'),
-    sqlc.arg(image_ref), sqlc.arg(registry_username), sqlc.arg(registry_password_ciphertext)
+    sqlc.arg(image_ref), sqlc.arg(registry_username), sqlc.arg(registry_password_ciphertext),
+    COALESCE(sqlc.arg(compose_content)::text, ''),
+    COALESCE(sqlc.arg(compose_file)::text, ''),
+    COALESCE(sqlc.arg(compose_service)::text, '')
 )
 RETURNING *;
 
@@ -109,6 +113,9 @@ SET name = $2,
     image_ref = $14,
     registry_username = $15,
     registry_password_ciphertext = $16,
+    compose_content = $17,
+    compose_file = $18,
+    compose_service = $19,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -118,9 +125,13 @@ DELETE FROM applications WHERE id = $1;
 
 -- name: CreateDeployment :one
 INSERT INTO deployments (
-    application_id, kind, state, image_tag, registry_image, digest, rollback_from
+    application_id, kind, state, image_tag, registry_image, digest, rollback_from,
+    compose_document, compose_commit
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2, $3, $4, $5, $6, $7,
+    COALESCE(sqlc.arg(compose_document)::text, ''),
+    COALESCE(sqlc.arg(compose_commit)::text, '')
+)
 RETURNING *;
 
 -- name: GetDeployment :one
@@ -155,6 +166,8 @@ SET state = $2,
     container_id = $8,
     started_at = $9,
     finished_at = $10,
+    compose_document = $11,
+    compose_commit = $12,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

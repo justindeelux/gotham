@@ -56,8 +56,8 @@ export const sourceTypeSchema = z.enum([
 export type SourceType = z.infer<typeof sourceTypeSchema>;
 
 /** sourceTypeImplemented gates the wizard Source step on scope: public
- * and private git, the connected-provider flows, pasted Dockerfiles (GS-7)
- * and prebuilt container images (GS-9). Compose waits for GS-8. */
+ * and private git, the connected-provider flows, pasted Dockerfiles (GS-7),
+ * prebuilt container images (GS-9) and compose documents (GS-8, last). */
 export function sourceTypeImplemented(value: string): boolean {
   return (
     value === "git_public" ||
@@ -65,7 +65,8 @@ export function sourceTypeImplemented(value: string): boolean {
     value === "github_app" ||
     value === "gitlab_app" ||
     value === "dockerfile" ||
-    value === "image"
+    value === "image" ||
+    value === "compose"
   );
 }
 
@@ -590,9 +591,7 @@ export function isHttpsGitUrl(value: string): boolean {
 }
 
 /** repoSchema replaces repoFullName === "" (a select output, never padded). */
-export const repoSchema = z.string().min(1);
-
-/** serverSchema replaces serverId === "" (a select output, never padded). */
+export const repoSchema = z.string().min(1);/** serverSchema replaces serverId === "" (a select output, never padded). */
 export const serverSchema = z.string().min(1);
 
 /**
@@ -601,6 +600,19 @@ export const serverSchema = z.string().min(1);
  * port reuses the shared portSchema from primitives (same 1-65535 shape).
  */
 export const hostPortSchema = z.number().int().min(0).max(65535).nullable();
+
+/**
+ * composeHostPortSchema gates a compose application's host port: 0 (or
+ * null) auto-assigns, otherwise the port must sit above the privileged
+ * band the node reserves. Gate-only; the server re-validates.
+ */
+export const composeHostPortSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(65535)
+  .nullable()
+  .refine((value) => value === null || value === 0 || value > 1023);
 
 /**
  * wizardDomainSchema replaces `domain === "" || DOMAIN_PATTERN.test(domain)`
@@ -621,3 +633,53 @@ export const hostDomainSchema = z.string().refine(
   (value) => value === "" || (value.length <= 253 && HOST_PATTERN.test(value)),
   { message: applicationMessages.domain },
 );
+
+/** MAX_COMPOSE_BYTES mirrors MaxComposeBytes (GS-8): pasted text is capped
+ * at 256 KiB, measured in UTF-8 bytes like the server. */
+export const MAX_COMPOSE_BYTES = 256 * 1024;
+
+/** MAX_COMPOSE_FILE_PATH mirrors MaxComposeFilePathBytes (GS-8). */
+export const MAX_COMPOSE_FILE_PATH = 256;
+
+/** COMPOSE_SERVICE_PATTERN mirrors the Services service-name alphabet. */
+export const COMPOSE_SERVICE_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
+
+/** composeModeSchema selects the compose input: pasted text or a repo file. */
+export const composeModeSchema = z.enum(["paste", "repo"]);
+
+export type ComposeMode = z.infer<typeof composeModeSchema>;
+
+/**
+ * composeContentSchema gates pasted compose text: non-empty, within the byte
+ * budget, and declaring a top-level `services:` mapping. The server runs
+ * the full Services validation (images, scope, membership); the client only
+ * refuses what is structurally hopeless, so a valid document is never
+ * blocked here.
+ */
+export const composeContentSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => new TextEncoder().encode(value).length <= MAX_COMPOSE_BYTES)
+  .refine((value) => /^services\s*:/m.test(value));
+
+/** composeServiceSchema gates the routed web service name. Gate-only. */
+export const composeServiceSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .regex(COMPOSE_SERVICE_PATTERN);
+
+/**
+ * composeFileSchema gates the in-repo compose file path: a short relative
+ * reference that cannot escape the checkout. Gate-only; the server
+ * re-validates before the join. The length is mirrored in UTF-8 bytes like
+ * the server.
+ */
+export const composeFileSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => new TextEncoder().encode(value).length <= MAX_COMPOSE_FILE_PATH)
+  .refine((value) => !value.startsWith("/") && value !== "." && value !== "..")
+  .refine((value) => !/(^|\/)\.\.(\/|$)/.test(value));

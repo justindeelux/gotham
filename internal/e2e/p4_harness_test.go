@@ -73,12 +73,18 @@ type p4CreateApplication struct {
 	Provider      string `json:"provider"`
 	Repo          string `json:"repo"`
 	CloneURL      string `json:"clone_url"`
-	Branch        string `json:"branch"`
-	BuildPack     string `json:"build_pack"`
-	BaseDomain    string `json:"base_domain"`
-	Port          int32  `json:"port"`
-	HostPort      int32  `json:"host_port"`
-	ServerID      string `json:"server_id"`
+	SourceType    string `json:"source_type"`
+	// ComposeContent, ComposeFile and ComposeService carry the compose
+	// source (GS-8); every other source leaves them empty.
+	ComposeContent string `json:"compose_content"`
+	ComposeFile    string `json:"compose_file"`
+	ComposeService string `json:"compose_service"`
+	Branch         string `json:"branch"`
+	BuildPack      string `json:"build_pack"`
+	BaseDomain     string `json:"base_domain"`
+	Port           int32  `json:"port"`
+	HostPort       int32  `json:"host_port"`
+	ServerID       string `json:"server_id"`
 }
 
 // p4Application is the application half of the API wire format.
@@ -200,6 +206,14 @@ func (stubInstaller) DeleteWebhook(context.Context, providers.HookTarget, string
 // missing precondition fails the test instead of skipping it green.
 func newP4Harness(t *testing.T) *p4Harness {
 	t.Helper()
+	return newP4HarnessWithAgentOptions(t)
+}
+
+// newP4HarnessWithAgentOptions is newP4Harness with extra agent services,
+// such as the compose service a compose-application test needs. Existing
+// suites keep the DockerService + BuildService agent unchanged.
+func newP4HarnessWithAgentOptions(t *testing.T, options ...agent.ServerOption) *p4Harness {
+	t.Helper()
 	requireE2E(t)
 	// Register the dangling-image cleanup first: t.Cleanup is LIFO, so it runs
 	// after every per-application cleanup has dropped its build tags and the
@@ -254,12 +268,14 @@ func newP4Harness(t *testing.T) *p4Harness {
 			e2eRedisAddr(), pingErr)
 	}
 
-	// 4. The node: one agent serving DockerService and BuildService over mTLS.
-	// The agent outlives the setup context above — its lifetime is the test's.
+	// 4. The node: one agent serving DockerService and BuildService over mTLS,
+	// plus any extra services the caller registered (ComposeService for the
+	// compose-application suite). The agent outlives the setup context above
+	// — its lifetime is the test's.
 	nodeID := "p4-e2e-" + uuid.New().String()[:8]
 	agentCtx, agentCancel := context.WithCancel(context.Background())
 	t.Cleanup(agentCancel)
-	agentAddr, authority := startLocalAgent(t, agentCtx, engine, nodeID)
+	agentAddr, authority := startLocalAgentWithOptions(t, agentCtx, engine, nodeID, options...)
 
 	// 5. Rows: the caller, and the node the application will be assigned to.
 	user, err := st.CreateUser(ctx, fmt.Sprintf("p4-e2e-%d@example.com", time.Now().UnixNano()), nil)

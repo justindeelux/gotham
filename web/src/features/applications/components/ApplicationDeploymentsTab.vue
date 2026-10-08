@@ -8,6 +8,8 @@ import DeploymentHistoryTable from "@/features/applications/components/Deploymen
 interface Props {
   deployments: Deployment[];
   loading: boolean;
+  /** isCompose switches the footer: a compose rollback re-applies the file. */
+  isCompose?: boolean;
 }
 
 const props = defineProps<Props>();
@@ -33,7 +35,7 @@ const { t } = useI18n();
     <NEmpty v-else :description="t('applications.deploymentsTab.noneRecorded')" />
     <template #footer>
       <NText depth="3">
-        {{ t("applications.deploymentsTab.footer") }}
+        {{ t(props.isCompose ? "applications.deploymentsTab.footerCompose" : "applications.deploymentsTab.footer") }}
       </NText>
     </template>
   </NCard>

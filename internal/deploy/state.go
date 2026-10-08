@@ -75,11 +75,18 @@ func stepsFor(kind Kind) []State {
 	return stepsForApp(kind, "", "")
 }
 
-// stepsForApp narrows the walk to the single legal path for a run. Image
+// stepsForApp narrows the walk to the single legal path for a run. Compose
+// sources (GS-8) have no image to reuse, so both kinds walk the full path:
+// a fresh deploy resolves the live row (stored text or a fresh clone)
+// while a rollback resolves the target release's stored raw document, and
+// both render with the current environment before pull + up. Image
 // sources (GS-9) have no repository to clone and nothing to build, so their
 // deploys walk the rollback path (pushing, where the pull happens, then
 // starting); queued → pushing is a legal edge.
 func stepsForApp(kind Kind, sourceType, provider string) []State {
+	if NormalizeSourceType(sourceType, provider) == SourceCompose {
+		return []State{StateCloning, StateBuilding, StatePushing, StateStarting}
+	}
 	if kind == KindRollback || NormalizeSourceType(sourceType, provider) == SourceImage {
 		return []State{StatePushing, StateStarting}
 	}

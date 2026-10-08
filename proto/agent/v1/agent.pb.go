@@ -2217,7 +2217,14 @@ type ComposeValidateRequest struct {
 	ProjectName string `protobuf:"bytes,1,opt,name=project_name,json=projectName,proto3" json:"project_name,omitempty"`
 	// compose_yaml is the complete compose document, capped at 1 MiB. Nothing
 	// is started by a validate.
-	ComposeYaml   []byte `protobuf:"bytes,2,opt,name=compose_yaml,json=composeYaml,proto3" json:"compose_yaml,omitempty"`
+	ComposeYaml []byte `protobuf:"bytes,2,opt,name=compose_yaml,json=composeYaml,proto3" json:"compose_yaml,omitempty"`
+	// unconfined opts out of the application-scope confinement allowlist for
+	// the document (no host namespaces, devices, capabilities or binds
+	// outside the managed volumes). The Services surface sets it; application
+	// deploys leave it unset, so the safe state is the zero value and a
+	// caller that omits the field can never relax the node. Unknown fields
+	// are ignored by older agents, so the flag rolls out safely.
+	Unconfined    bool `protobuf:"varint,3,opt,name=unconfined,proto3" json:"unconfined,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2266,15 +2273,28 @@ func (x *ComposeValidateRequest) GetComposeYaml() []byte {
 	return nil
 }
 
+func (x *ComposeValidateRequest) GetUnconfined() bool {
+	if x != nil {
+		return x.Unconfined
+	}
+	return false
+}
+
 // ComposeValidateResponse reports what a valid document declares.
 type ComposeValidateResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// services are the compose service names, in the CLI's dependency order.
 	Services []string `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
 	// volumes are the named volumes the document declares, sorted.
-	Volumes       []string `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Volumes []string `protobuf:"bytes,2,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	// confined_enforced reports whether the node applied the
+	// application-scope confinement allowlist to this document. It is false
+	// for unconfined (Services) requests and for agents that predate the
+	// enforcement, so the control plane gates on this field — never on the
+	// mere absence of an error.
+	ConfinedEnforced bool `protobuf:"varint,3,opt,name=confined_enforced,json=confinedEnforced,proto3" json:"confined_enforced,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ComposeValidateResponse) Reset() {
@@ -2321,6 +2341,13 @@ func (x *ComposeValidateResponse) GetVolumes() []string {
 	return nil
 }
 
+func (x *ComposeValidateResponse) GetConfinedEnforced() bool {
+	if x != nil {
+		return x.ConfinedEnforced
+	}
+	return false
+}
+
 // ComposeUpRequest starts (or restarts) a project's compose document.
 type ComposeUpRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -2333,7 +2360,11 @@ type ComposeUpRequest struct {
 	// restart requests `docker compose restart` of the project's existing
 	// containers instead of a `docker compose up -d` create/recreate pass. The
 	// document is still written and validated first.
-	Restart       bool `protobuf:"varint,3,opt,name=restart,proto3" json:"restart,omitempty"`
+	Restart bool `protobuf:"varint,3,opt,name=restart,proto3" json:"restart,omitempty"`
+	// unconfined opts out of the application-scope confinement allowlist,
+	// like ComposeValidateRequest.unconfined. The deploy control plane leaves
+	// it unset for application projects; service projects set it.
+	Unconfined    bool `protobuf:"varint,4,opt,name=unconfined,proto3" json:"unconfined,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2389,6 +2420,13 @@ func (x *ComposeUpRequest) GetRestart() bool {
 	return false
 }
 
+func (x *ComposeUpRequest) GetUnconfined() bool {
+	if x != nil {
+		return x.Unconfined
+	}
+	return false
+}
+
 // ComposeUpResponse is empty: the observable result of an up is the project's
 // container list, read back with ComposePs.
 type ComposeUpResponse struct {
@@ -2435,7 +2473,12 @@ type ComposeDownRequest struct {
 	// compose_yaml is the rendered compose document the project was last
 	// deployed with, capped at 1 MiB. The CLI needs it to resolve the project;
 	// the named volumes it declares are kept (down never passes --volumes).
-	ComposeYaml   []byte `protobuf:"bytes,2,opt,name=compose_yaml,json=composeYaml,proto3" json:"compose_yaml,omitempty"`
+	ComposeYaml []byte `protobuf:"bytes,2,opt,name=compose_yaml,json=composeYaml,proto3" json:"compose_yaml,omitempty"`
+	// unconfined opts out of the application-scope confinement allowlist,
+	// like ComposeValidateRequest.unconfined. Teardown runs no containers,
+	// but the document still replaces the on-disk project file, so the same
+	// scope rule applies.
+	Unconfined    bool `protobuf:"varint,3,opt,name=unconfined,proto3" json:"unconfined,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2482,6 +2525,13 @@ func (x *ComposeDownRequest) GetComposeYaml() []byte {
 		return x.ComposeYaml
 	}
 	return nil
+}
+
+func (x *ComposeDownRequest) GetUnconfined() bool {
+	if x != nil {
+		return x.Unconfined
+	}
+	return false
 }
 
 // ComposeDownResponse is empty.
@@ -3032,21 +3082,31 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\timage_tag\x18\x01 \x01(\tR\bimageTag\x12%\n" +
 	"\x0eregistry_image\x18\x02 \x01(\tR\rregistryImage\x12\x16\n" +
 	"\x06digest\x18\x03 \x01(\tR\x06digest\x12#\n" +
-	"\rregistry_addr\x18\x04 \x01(\tR\fregistryAddr\"^\n" +
+	"\rregistry_addr\x18\x04 \x01(\tR\fregistryAddr\"~\n" +
 	"\x16ComposeValidateRequest\x12!\n" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12!\n" +
-	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\"O\n" +
+	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\x12\x1e\n" +
+	"\n" +
+	"unconfined\x18\x03 \x01(\bR\n" +
+	"unconfined\"|\n" +
 	"\x17ComposeValidateResponse\x12\x1a\n" +
 	"\bservices\x18\x01 \x03(\tR\bservices\x12\x18\n" +
-	"\avolumes\x18\x02 \x03(\tR\avolumes\"r\n" +
+	"\avolumes\x18\x02 \x03(\tR\avolumes\x12+\n" +
+	"\x11confined_enforced\x18\x03 \x01(\bR\x10confinedEnforced\"\x92\x01\n" +
 	"\x10ComposeUpRequest\x12!\n" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12!\n" +
 	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\x12\x18\n" +
-	"\arestart\x18\x03 \x01(\bR\arestart\"\x13\n" +
-	"\x11ComposeUpResponse\"Z\n" +
+	"\arestart\x18\x03 \x01(\bR\arestart\x12\x1e\n" +
+	"\n" +
+	"unconfined\x18\x04 \x01(\bR\n" +
+	"unconfined\"\x13\n" +
+	"\x11ComposeUpResponse\"z\n" +
 	"\x12ComposeDownRequest\x12!\n" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12!\n" +
-	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\"\x15\n" +
+	"\fcompose_yaml\x18\x02 \x01(\fR\vcomposeYaml\x12\x1e\n" +
+	"\n" +
+	"unconfined\x18\x03 \x01(\bR\n" +
+	"unconfined\"\x15\n" +
 	"\x13ComposeDownResponse\"}\n" +
 	"\x12ComposeLogsRequest\x12!\n" +
 	"\fproject_name\x18\x01 \x01(\tR\vprojectName\x12\x18\n" +

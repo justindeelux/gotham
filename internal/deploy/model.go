@@ -53,11 +53,11 @@ func NormalizeSourceType(sourceType, provider string) string {
 
 // SourceTypeImplemented reports whether the deploy pipeline can fetch
 // the type yet: public and private git, the connected-provider flows,
-// pasted Dockerfiles (GS-7) and prebuilt container images (GS-9). Compose
-// sources wait for GS-8.
+// pasted Dockerfiles (GS-7), prebuilt container images (GS-9) and pasted or
+// repo-backed compose documents (GS-8, last).
 func SourceTypeImplemented(s string) bool {
 	switch s {
-	case "", SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp, SourceDockerfile, SourceImage:
+	case "", SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp, SourceDockerfile, SourceImage, SourceCompose:
 		return true
 	default:
 		return false
@@ -118,7 +118,15 @@ type Application struct {
 	// logged.
 	RegistryUsername           string
 	RegistryPasswordCiphertext string
-	BaseDomain                 string
+	// ComposeContent holds the pasted compose file text of a compose
+	// application (empty for repo-backed ones and every other source type).
+	// ComposeFile holds the in-repo compose file path of a repo-backed
+	// compose application (empty for pasted ones). ComposeService names the
+	// compose service the application's domain/port routing targets.
+	ComposeContent string
+	ComposeFile    string
+	ComposeService string
+	BaseDomain     string
 	// BaseDomainDisabled marks a binding the domain-uniqueness migration had
 	// to disable because another application owned the domain first. The
 	// value is preserved; an explicit domain update re-enables it.
@@ -162,10 +170,17 @@ type Deployment struct {
 	Attempt       int32
 	ContainerID   string
 	RollbackFrom  uuid.UUID
-	StartedAt     time.Time
-	FinishedAt    time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// ComposeDocument is the raw uninterpolated compose document a compose
+	// run recorded; ComposeCommit is the repo commit it was read from (""
+	// for pasted sources). A compose rollback re-renders the target's
+	// document with the current environment. Secret values never reach the
+	// row (only ${VAR} references), which is never returned by the API.
+	ComposeDocument string
+	ComposeCommit   string
+	StartedAt       time.Time
+	FinishedAt      time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // EnvironmentRef is the slice of an environment row resource validation and

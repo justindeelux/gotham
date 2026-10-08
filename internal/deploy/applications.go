@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/proxy"
+	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
@@ -61,12 +63,20 @@ type CreateApplicationInput struct {
 	// rest. They are never returned by the API.
 	RegistryUsername string
 	RegistryPassword string
-	BaseDomain       string
-	Port             int32
-	HostPort         int32
-	ServerID         uuid.UUID
-	Env              []EnvEntry
-	Storage          []Storage
+	// ComposeContent holds the pasted compose file text of a compose
+	// application; ComposeFile the in-repo path of a repo-backed one (GS-8).
+	// Exactly one of the two is set for compose sources; both stay empty for
+	// every other type. ComposeService names the compose service the
+	// application's domain/port routing targets.
+	ComposeContent string
+	ComposeFile    string
+	ComposeService string
+	BaseDomain     string
+	Port           int32
+	HostPort       int32
+	ServerID       uuid.UUID
+	Env            []EnvEntry
+	Storage        []Storage
 }
 
 // UpdateApplicationInput carries the mutable application fields. Every field is
@@ -100,6 +110,14 @@ type UpdateApplicationInput struct {
 	// --build-arg collection (nil leaves it unchanged).
 	DockerfileContent *string
 	BuildArgs         *map[string]string
+	// ComposeContent replaces the stored compose file text of a compose
+	// application (setting it switches a repo-backed one to pasted mode and
+	// clears its repository); ComposeFile replaces the in-repo path (setting
+	// it needs a repository); ComposeService replaces the routed web service.
+	// Nil leaves the field unchanged.
+	ComposeContent *string
+	ComposeFile    *string
+	ComposeService *string
 }
 
 // ApplicationFilter scopes a list to one environment or one project of the
@@ -119,7 +137,8 @@ func (in UpdateApplicationInput) empty() bool {
 		in.ImageRef == nil && in.RegistryUsername == nil && in.RegistryPassword == nil &&
 		in.BaseDomain == nil && in.Port == nil && in.HostPort == nil &&
 		in.ServerID == nil && in.EnvironmentID == nil && in.GitHubAppID == nil &&
-		in.DockerfileContent == nil && in.BuildArgs == nil
+		in.DockerfileContent == nil && in.BuildArgs == nil &&
+		in.ComposeContent == nil && in.ComposeFile == nil && in.ComposeService == nil
 }
 
 // CreateApplication validates and stores a new application together with its
@@ -153,6 +172,9 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		// never returned by the API or logged; the password is sealed below.
 		// Both are validated together: a half credential is refused.
 		RegistryUsername:  strings.TrimSpace(in.RegistryUsername),
+		ComposeContent:    in.ComposeContent,
+		ComposeFile:       strings.TrimSpace(in.ComposeFile),
+		ComposeService:    strings.TrimSpace(in.ComposeService),
 		BaseDomain:        proxy.NormalizeDomain(in.BaseDomain),
 		Port:              in.Port,
 		HostPort:          in.HostPort,
@@ -184,6 +206,17 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 			return Application{}, err
 		}
 	}
+	// A pasted compose document is the whole source: any repo fields a direct
+	// API caller sent are cleared rather than stored as stale rows the deploy
+	// silently ignores. Compose applications never use build-pack detection.
+	if app.SourceType == SourceCompose {
+		app.BuildPack = ""
+		if strings.TrimSpace(app.ComposeContent) != "" {
+			app.Repo = ""
+			app.CloneURL = ""
+			app.ComposeFile = ""
+		}
+	}
 	// An empty branch stays empty for public-git sources: the clone resolves
 	// the remote default via ls-remote (GS-3) instead of guessing "main".
 	// The branch column is NOT NULL DEFAULT 'main', which only fills rows
@@ -194,6 +227,11 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if app.Branch == "" && !BranchDefaultsToRemote(app.SourceType, app.Provider) &&
 		NormalizeSourceType(app.SourceType, app.Provider) != SourceImage {
 		app.Branch = defaultBranch
+	}
+	// A pasted compose document has no branch: the provider fallback above
+	// must not fill one in.
+	if app.SourceType == SourceCompose && strings.TrimSpace(app.ComposeContent) != "" {
+		app.Branch = ""
 	}
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
@@ -484,6 +522,15 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if in.HostPort != nil {
 		app.HostPort = *in.HostPort
 	}
+	// Compose fields apply after the port updates: the compose validation
+	// reads the effective container port.
+	if in.ComposeContent != nil || in.ComposeFile != nil || in.ComposeService != nil {
+		var err error
+		app, err = applyComposeUpdate(app, in)
+		if err != nil {
+			return Application{}, err
+		}
+	}
 	if in.ServerID != nil {
 		if *in.ServerID == uuid.Nil {
 			return Application{}, fmt.Errorf("%w: server is required", ErrValidation)
@@ -522,16 +569,27 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	// Clearing the branch restores ls-remote default resolution for
 	// public-git sources (see the create path); provider flows fall back to
 	// "main" so push-branch matching keeps working. Image sources carry no
-	// branch at all.
+	// branch at all, and a pasted compose document has none either (cleared
+	// below).
 	if app.Branch == "" && !BranchDefaultsToRemote(app.SourceType, app.Provider) &&
 		NormalizeSourceType(app.SourceType, app.Provider) != SourceImage {
 		app.Branch = defaultBranch
+	}
+	if app.SourceType == SourceCompose && strings.TrimSpace(app.ComposeContent) != "" {
+		app.Branch = ""
 	}
 	// Legacy rows may predate normalization: normalize the resulting value so
 	// an unrelated update (rename, branch) never fails on stored casing, even
 	// with FEATURE_PROXY=false (BE-6.1 F8). An explicitly changed domain is
 	// still validated strictly below.
 	app.BaseDomain = proxy.NormalizeDomain(app.BaseDomain)
+	// A port-only update on a compose application must keep the deploy
+	// target valid: the compose gate reads the effective row.
+	if isComposeApp(app) {
+		if err := validateComposeTarget(app); err != nil {
+			return Application{}, err
+		}
+	}
 	// The clone URL is not part of the update payload, so it is left out of
 	// validation: an application created with a development-local source must
 	// still be renameable.
@@ -557,8 +615,11 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		// The application is now bound to another node; stop the container it
 		// left behind on the previous one (best effort — an unreachable node
 		// must not fail the move). Deployments do not record their node, so the
-		// newest recorded container is the one that ran there.
+		// newest recorded container is the one that ran there. A compose
+		// application also leaves a whole project behind: down removes the
+		// sidecars the container sweep cannot see.
 		s.stopContainerOnNode(ctx, previousServer, s.latestContainer(ctx, app.ID))
+		s.composeDownApp(ctx, previousServer, updated)
 	}
 	routingChanged := updated.BaseDomain != previousDomain || updated.Port != previousPort ||
 		updated.HostPort != previousHostPort
@@ -668,7 +729,9 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	// successful removal leaves no container behind (the accepted trade; the
 	// caller retries the delete). A container left on a previous node by a move
 	// is out of reach here — the move stopped it best effort and deployments do
-	// not record their node (see the report).
+	// not record their node (see the report). A compose project is torn down
+	// first for the same reason: its sidecars survive the container sweep.
+	s.composeDownApp(ctx, app.ServerID, app)
 	s.removeApplicationContainers(ctx, app)
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
 		return err
@@ -906,6 +969,69 @@ func (s *Service) latestContainer(ctx context.Context, appID uuid.UUID) string {
 // the application lock; it is not a retry budget.
 const containerCleanupTimeout = 15 * time.Second
 
+// composeCleanupTimeout bounds one best-effort compose teardown (resolving
+// the document, rendering it and running down on the node). A repo-backed
+// teardown clones first, so the budget covers a slow Git host; it is not a
+// retry budget.
+const composeCleanupTimeout = 2 * time.Minute
+
+// composeDownApp tears a compose application's project down on one node,
+// swallowing every failure: a delete or a move must not depend on the node
+// being reachable. The project's sidecars carry no gotham labels for the
+// container sweep to find, so down (which only ever touches this project's
+// containers and never its volumes) is what removes them.
+func (s *Service) composeDownApp(ctx context.Context, serverID uuid.UUID, app Application) {
+	if NormalizeSourceType(app.SourceType, app.Provider) != SourceCompose {
+		return
+	}
+	if serverID == uuid.Nil || s.dial == nil {
+		return
+	}
+	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), composeCleanupTimeout)
+	defer cancel()
+	dir, err := os.MkdirTemp("", "gotham-compose-down-*")
+	if err != nil {
+		s.logger.Warn("deploy: best-effort compose teardown skipped", "application_id", app.ID, "error", err)
+		return
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	content, _, err := s.resolveComposeContent(opCtx, app, dir, nil)
+	if err != nil {
+		// The stored document no longer resolves: fail loudly (an error,
+		// not a debug) and still tear the project down with a minimal
+		// document, so the sidecars are never silently left behind.
+		s.logger.Error("deploy: compose teardown cannot resolve the stored document; tearing down by project name",
+			"application_id", app.ID, "error", err)
+		content = teardownStubDocument()
+	} else if rendered, _, _, renderErr := s.renderComposeDocument(opCtx, app, content); renderErr == nil {
+		content = rendered
+	} else {
+		s.logger.Error("deploy: compose teardown cannot render the stored document; tearing down by project name",
+			"application_id", app.ID, "error", renderErr)
+		content = teardownStubDocument()
+	}
+	node, err := s.dialNode(opCtx, serverID)
+	if err != nil {
+		s.logger.Warn("deploy: best-effort compose teardown skipped", "application_id", app.ID, "error", err)
+		return
+	}
+	defer func() {
+		if err := node.Close(); err != nil {
+			s.logger.Debug("deploy: close agent connection", "error", err)
+		}
+	}()
+	// Teardown stays best effort: the probe never aborts it, but a node
+	// that does not report enforcement is logged loudly, so a fleet with
+	// old agents is visible instead of silently unconfined.
+	if err := s.probeComposeConfinement(opCtx, node, app); err != nil {
+		s.logger.Warn("deploy: compose teardown proceeds without verified confinement",
+			"application_id", app.ID, "error", err)
+	}
+	if err := node.ComposeDown(opCtx, services.ProjectName(app.ID), []byte(content)); err != nil {
+		s.logger.Warn("deploy: best-effort compose teardown failed", "application_id", app.ID, "error", err)
+	}
+}
+
 // stopContainerOnNode stops one container on one node, swallowing every
 // failure: a move must not depend on the previous node being reachable.
 func (s *Service) stopContainerOnNode(ctx context.Context, serverID uuid.UUID, containerID string) {
@@ -1015,6 +1141,39 @@ func (s *Service) validateServer(ctx context.Context, userID, serverID uuid.UUID
 	return nil
 }
 
+// applyComposeUpdate applies the compose field updates to a compose
+// application. Setting content switches a repo-backed application to pasted
+// mode and clears its repository (the pasted document is the whole source);
+// setting a file path needs the repository the path lives in. The web
+// service is validated against the effective document when one is available
+// (pasted content, new or stored); repo-backed applications check membership
+// at deploy time, once the file is read from the checkout.
+func applyComposeUpdate(app Application, in UpdateApplicationInput) (Application, error) {
+	if app.SourceType != SourceCompose {
+		return Application{}, fmt.Errorf("%w: compose fields are only valid for source type %q",
+			ErrValidation, SourceCompose)
+	}
+	if in.ComposeContent != nil {
+		app.ComposeContent = *in.ComposeContent
+		if strings.TrimSpace(app.ComposeContent) != "" {
+			app.Repo = ""
+			app.CloneURL = ""
+			app.Branch = ""
+			app.ComposeFile = ""
+		}
+	}
+	if in.ComposeFile != nil {
+		app.ComposeFile = strings.TrimSpace(*in.ComposeFile)
+	}
+	if in.ComposeService != nil {
+		app.ComposeService = strings.TrimSpace(*in.ComposeService)
+	}
+	if err := validateComposeSource(app); err != nil {
+		return Application{}, err
+	}
+	return app, nil
+}
+
 // validateApplication checks the fields every write path shares: a name, a
 // cloneable source (creation only), a known source type with its per-type
 // fields, a build pack builds.ParseEngineKind
@@ -1097,7 +1256,8 @@ func requireCompleteRegistryCredential(username string, hasPassword bool) error 
 // content (validated without executing anything) plus optional build args
 // and no repository. Image sources (GS-9) carry only a validated reference
 // and an optional credential — no repository, branch or build pack. The
-// Compose source fails closed until GS-8 lands. Image fields on any other
+// compose type (GS-8) takes either pasted content or a repository with an
+// in-repo file path, plus the routed web service. Image fields on any other
 // type are refused, so a credential can never be stored where no pull reads
 // it.
 func validateSource(app Application) error {
@@ -1152,10 +1312,83 @@ func validateSource(app Application) error {
 		}
 		return ValidateImageReference(app.ImageRef)
 	case SourceCompose:
-		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
+		return validateComposeSource(app)
 	default:
 		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
 	}
+}
+
+// composePrivilegedPortEnd is the end of the privileged host-port band.
+// Compose applications bind their web service's published port on the
+// node, and the proxy routes any host port to it — but ports below 1024
+// belong to the node itself (Traefik, SSH, the registry) and to other
+// tenants' mappings. A compose application pins HostPort 0 (an ephemeral
+// port the proxy discovers) or a high port; ordinary single-container
+// applications keep their existing range.
+const composePrivilegedPortEnd = 1023
+
+// validateComposePorts checks the application's port pair: a real container
+// port for the web service, and a host port that is either auto-assigned
+// or outside the privileged band.
+func validateComposePorts(port, hostPort int32) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("%w: compose source needs a container port between 1 and 65535", ErrValidation)
+	}
+	if hostPort != 0 && (hostPort < 1 || hostPort > 65535) {
+		return fmt.Errorf("%w: host port must be between 0 and 65535", ErrValidation)
+	}
+	if hostPort >= 1 && hostPort <= composePrivilegedPortEnd {
+		return fmt.Errorf("%w: compose source must not pin privileged host port %d (use 0 for auto-assign or a port above %d)",
+			ErrValidation, hostPort, composePrivilegedPortEnd)
+	}
+	return nil
+}
+
+// validateComposeSource checks a compose application: exactly one of pasted
+// content or a repository with an in-repo file path, plus the routed web
+// service. A pasted document carries no repository and is validated whole
+// (structure, application scope, service membership); a repo-backed one
+// reuses the matching git flow's repository rules and checks membership at
+// deploy time, once the file is read from the checkout.
+func validateComposeSource(app Application) error {
+	pasted := strings.TrimSpace(app.ComposeContent) != ""
+	repo := strings.TrimSpace(app.Repo) != "" || strings.TrimSpace(app.CloneURL) != "" ||
+		strings.TrimSpace(app.ComposeFile) != ""
+	if pasted == repo {
+		return fmt.Errorf("%w: compose source needs either pasted content or a repository with a compose file, not both",
+			ErrValidation)
+	}
+	if err := validateComposePorts(app.Port, app.HostPort); err != nil {
+		return err
+	}
+	if pasted {
+		if strings.TrimSpace(app.Provider) != "" {
+			return fmt.Errorf("%w: source type %q with pasted content requires an empty provider, got %q",
+				ErrValidation, app.SourceType, app.Provider)
+		}
+		if err := ValidateComposeContent(app.ComposeContent, app.ID); err != nil {
+			return err
+		}
+		return ValidateComposeService(app.ComposeContent, app.ComposeService)
+	}
+	switch app.Provider {
+	case "github":
+		if err := validateProviderSource(app, "github"); err != nil {
+			return err
+		}
+	case "gitlab":
+		if err := validateProviderSource(app, "gitlab"); err != nil {
+			return err
+		}
+	default:
+		if err := ValidatePublicGitURL(app.CloneURL); err != nil {
+			return err
+		}
+	}
+	if err := ValidateComposeFilePath(app.ComposeFile); err != nil {
+		return err
+	}
+	return ValidateComposeService("", app.ComposeService)
 }
 
 // validateProviderSource checks a provider-backed source: the slug must match
@@ -1209,6 +1442,9 @@ func (s *Service) prepareEnv(ctx context.Context, appID uuid.UUID, entries []Env
 		seen[key] = true
 
 		if !strings.HasPrefix(entry.Value, secretRefPrefix) {
+			if err := checkTextBytes(entry.Value, fmt.Sprintf("environment variable %q value", key)); err != nil {
+				return nil, nil, err
+			}
 			envVars = append(envVars, EnvVar{Key: key, Value: entry.Value})
 			continue
 		}
@@ -1228,6 +1464,9 @@ func (s *Service) prepareEnv(ctx context.Context, appID uuid.UUID, entries []Env
 		// re-sealing it would silently replace the secret with a UUID.
 		if _, err := uuid.Parse(reference); err == nil {
 			return nil, nil, fmt.Errorf("%w: unknown secret reference for %q", ErrValidation, key)
+		}
+		if err := checkTextBytes(reference, fmt.Sprintf("secret %q value", key)); err != nil {
+			return nil, nil, err
 		}
 		ciphertext, err := providers.SealSecret(s.secret, reference)
 		if err != nil {

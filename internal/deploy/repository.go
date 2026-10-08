@@ -375,6 +375,9 @@ func (r *storeRepository) CreateApplication(
 			ImageRef:                   app.ImageRef,
 			RegistryUsername:           app.RegistryUsername,
 			RegistryPasswordCiphertext: app.RegistryPasswordCiphertext,
+			ComposeContent:             app.ComposeContent,
+			ComposeFile:                app.ComposeFile,
+			ComposeService:             app.ComposeService,
 		},
 		envVarParams(envVars),
 		secretParams(secrets),
@@ -409,6 +412,9 @@ func (r *storeRepository) UpdateApplication(ctx context.Context, app Application
 		ImageRef:                   app.ImageRef,
 		RegistryUsername:           app.RegistryUsername,
 		RegistryPasswordCiphertext: app.RegistryPasswordCiphertext,
+		ComposeContent:             app.ComposeContent,
+		ComposeFile:                app.ComposeFile,
+		ComposeService:             app.ComposeService,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -515,6 +521,11 @@ func (r *storeRepository) CreateDeployment(ctx context.Context, dep Deployment) 
 		RegistryImage: dep.RegistryImage,
 		Digest:        dep.Digest,
 		RollbackFrom:  pgUUID(dep.RollbackFrom),
+		// The compose document travels only for compose rollbacks (see
+		// Rollback); every other deployment stores empty values through the
+		// COALESCE defaults.
+		ComposeDocument: dep.ComposeDocument,
+		ComposeCommit:   dep.ComposeCommit,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -593,6 +604,10 @@ func (r *storeRepository) UpdateDeployment(ctx context.Context, dep Deployment) 
 		ContainerID:   dep.ContainerID,
 		StartedAt:     pgTime(dep.StartedAt),
 		FinishedAt:    pgTime(dep.FinishedAt),
+		// The build step records the rendered compose document of a
+		// compose run here, so a rollback re-applies this release's file.
+		ComposeDocument: dep.ComposeDocument,
+		ComposeCommit:   dep.ComposeCommit,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -986,6 +1001,9 @@ func applicationFromRow(row sqlc.Application) Application {
 		ImageRef:                   row.ImageRef,
 		RegistryUsername:           row.RegistryUsername,
 		RegistryPasswordCiphertext: row.RegistryPasswordCiphertext,
+		ComposeContent:             row.ComposeContent,
+		ComposeFile:                row.ComposeFile,
+		ComposeService:             row.ComposeService,
 		BaseDomain:                 row.BaseDomain,
 		BaseDomainDisabled:         row.BaseDomainDisabled,
 		IsPreview:                  row.IsPreview,
@@ -1091,6 +1109,11 @@ func deploymentFromRow(row sqlc.Deployment) Deployment {
 		FinishedAt:    timeFromPG(row.FinishedAt),
 		CreatedAt:     timeFromPG(row.CreatedAt),
 		UpdatedAt:     timeFromPG(row.UpdatedAt),
+		// The rendered compose document of a compose run, empty for every
+		// other deployment. It may hold substituted secret values and is
+		// never returned by the API.
+		ComposeDocument: row.ComposeDocument,
+		ComposeCommit:   row.ComposeCommit,
 	}
 }
 

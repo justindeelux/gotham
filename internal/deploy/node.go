@@ -43,6 +43,15 @@ type BuildOutcome struct {
 	RegistryAddr  string
 }
 
+// ComposeContainer is one container of a compose project on the node: the
+// compose service it belongs to and the state the health gate reads.
+type ComposeContainer struct {
+	ID      string
+	Service string
+	State   string
+	Status  string
+}
+
 // Node is the subset of the node agent the orchestrator uses: build the
 // image, confirm it in the node registry, run the container and read its
 // state back for the healthcheck. Production is agentNode over the mTLS
@@ -57,6 +66,20 @@ type Node interface {
 	// credential for this pull only (never persisted on the node) and
 	// answers the resolved image digest, "" when the engine reported none.
 	PullWithAuth(ctx context.Context, image, username, password string) (string, error)
+	// ComposeUp writes the rendered compose document and runs
+	// `docker compose up -d --remove-orphans` on the node. Nothing executes
+	// on the control plane host.
+	ComposeUp(ctx context.Context, projectName string, composeYAML []byte) error
+	// ComposeValidate checks a document on the node without starting
+	// anything, answering the declared service names and whether the node
+	// applied the confinement allowlist. The orchestrator gates compose
+	// runs on the enforcement flag, never on the mere absence of an error.
+	ComposeValidate(ctx context.Context, projectName string, composeYAML []byte) (services []string, enforced bool, err error)
+	// ComposeDown stops and removes the project's containers on the node;
+	// named volumes stay, so a stop is always recoverable.
+	ComposeDown(ctx context.Context, projectName string, composeYAML []byte) error
+	// ComposePs lists the project's containers on the node.
+	ComposePs(ctx context.Context, projectName string) ([]ComposeContainer, error)
 	// Run creates and starts a container, returning its ID.
 	Run(ctx context.Context, req *agentv1.CreateContainerRequest) (string, error)
 	// Stop stops a running container (used to retire the previous release and
@@ -105,19 +128,23 @@ func AgentDial(dialer AgentDialer) DialFunc {
 
 // agentNode is the production Node over one mTLS agent connection.
 type agentNode struct {
-	docker *servers.DockerClient
-	build  agentv1.BuildServiceClient
+	docker  *servers.DockerClient
+	build   agentv1.BuildServiceClient
+	compose agentv1.ComposeServiceClient
 }
 
 // Compile-time guarantee that agentNode satisfies the Node seam.
 var _ Node = (*agentNode)(nil)
 
-// newAgentNode binds an open agent connection to both services it exposes:
-// DockerService (the eight container RPCs) and BuildService (BuildImage).
+// newAgentNode binds an open agent connection to every service it exposes:
+// DockerService (the eight container RPCs), BuildService (BuildImage) and
+// ComposeService (the compose project RPCs). All three ride the same
+// connection the dialer opened.
 func newAgentNode(client *servers.DockerClient) *agentNode {
 	return &agentNode{
-		docker: client,
-		build:  agentv1.NewBuildServiceClient(client.Conn()),
+		docker:  client,
+		build:   agentv1.NewBuildServiceClient(client.Conn()),
+		compose: agentv1.NewComposeServiceClient(client.Conn()),
 	}
 }
 
@@ -228,6 +255,91 @@ func (n *agentNode) PullWithAuth(ctx context.Context, image, username, password 
 		return "", mapRPCError(err)
 	}
 	return response.GetDigest(), nil
+}
+
+// ComposeUp implements Node: the rendered document replaces the project's
+// previous file on the node before `up` runs, so every deploy is versioned
+// by the file it ran. The compose text itself never reaches the deploy log.
+// The request leaves the node's application-scope allowlist on (the safe
+// zero value): the control plane validated the same document before
+// sending it, and the node enforces it again.
+func (n *agentNode) ComposeUp(ctx context.Context, projectName string, composeYAML []byte) error {
+	if strings.TrimSpace(projectName) == "" {
+		return fmt.Errorf("%w: compose project name is required", ErrValidation)
+	}
+	if len(composeYAML) == 0 {
+		return fmt.Errorf("%w: compose document is required", ErrValidation)
+	}
+	_, err := n.compose.ComposeUp(ctx, &agentv1.ComposeUpRequest{
+		ProjectName: projectName,
+		ComposeYaml: composeYAML,
+		Unconfined:  false,
+	})
+	if err != nil {
+		return mapRPCError(err)
+	}
+	return nil
+}
+
+// ComposePs implements Node.
+func (n *agentNode) ComposePs(ctx context.Context, projectName string) ([]ComposeContainer, error) {
+	if strings.TrimSpace(projectName) == "" {
+		return nil, fmt.Errorf("%w: compose project name is required", ErrValidation)
+	}
+	response, err := n.compose.ComposePs(ctx, &agentv1.ComposePsRequest{ProjectName: projectName})
+	if err != nil {
+		return nil, mapRPCError(err)
+	}
+	containers := make([]ComposeContainer, 0, len(response.GetContainers()))
+	for _, container := range response.GetContainers() {
+		containers = append(containers, ComposeContainer{
+			ID:      container.GetContainerId(),
+			Service: container.GetService(),
+			State:   container.GetState(),
+			Status:  container.GetStatus(),
+		})
+	}
+	return containers, nil
+}
+
+// ComposeValidate implements Node: the document is checked without
+// starting anything. The application path leaves the scope at its safe
+// zero value, so the node enforces the confinement allowlist.
+func (n *agentNode) ComposeValidate(ctx context.Context, projectName string, composeYAML []byte) ([]string, bool, error) {
+	if strings.TrimSpace(projectName) == "" {
+		return nil, false, fmt.Errorf("%w: compose project name is required", ErrValidation)
+	}
+	if len(composeYAML) == 0 {
+		return nil, false, fmt.Errorf("%w: compose document is required", ErrValidation)
+	}
+	response, err := n.compose.ComposeValidate(ctx, &agentv1.ComposeValidateRequest{
+		ProjectName: projectName,
+		ComposeYaml: composeYAML,
+		Unconfined:  false,
+	})
+	if err != nil {
+		return nil, false, mapRPCError(err)
+	}
+	return response.GetServices(), response.GetConfinedEnforced(), nil
+}
+
+// ComposeDown implements Node: the document resolves the project on the
+// node, like ComposeUp. Named volumes survive the down.
+func (n *agentNode) ComposeDown(ctx context.Context, projectName string, composeYAML []byte) error {
+	if strings.TrimSpace(projectName) == "" {
+		return fmt.Errorf("%w: compose project name is required", ErrValidation)
+	}
+	if len(composeYAML) == 0 {
+		return fmt.Errorf("%w: compose document is required", ErrValidation)
+	}
+	_, err := n.compose.ComposeDown(ctx, &agentv1.ComposeDownRequest{
+		ProjectName: projectName,
+		ComposeYaml: composeYAML,
+	})
+	if err != nil {
+		return mapRPCError(err)
+	}
+	return nil
 }
 
 // Run implements Node.

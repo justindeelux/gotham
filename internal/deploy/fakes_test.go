@@ -1087,6 +1087,26 @@ type mockNode struct {
 	registryAddr string
 	digest       string
 
+	// composeUpErr/composeDownErr/composePsErr script the compose RPCs;
+	// composeContainers seeds the ComposePs answer, and the compose* slices
+	// record every call for assertions. composeOldAgent makes
+	// ComposeValidate accept everything, emulating a pre-confinement agent
+	// for the capability probe test.
+	composeUpErr         error
+	composeDownErr       error
+	composePsErr         error
+	composeValidateErr   error
+	composeOldAgent      bool
+	composeContainers    []ComposeContainer
+	composeUpCalls       int
+	composeDownCalls     int
+	composePsCalls       int
+	composeValidateCalls int
+	composeProjects      []string
+	composeDocuments     []string
+	composeDownProjects  []string
+	composeDownDocuments []string
+
 	// healthState/healthStatus describe the container Run created.
 	containerID  string
 	healthState  string
@@ -1299,6 +1319,55 @@ func (m *mockNode) Close() error {
 	defer m.mu.Unlock()
 	m.closed++
 	return nil
+}
+
+// ComposeUp implements Node, recording the project and document of a compose
+// deploy for assertions.
+func (m *mockNode) ComposeUp(_ context.Context, projectName string, composeYAML []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.composeUpCalls++
+	m.composeProjects = append(m.composeProjects, projectName)
+	m.composeDocuments = append(m.composeDocuments, string(composeYAML))
+	return m.composeUpErr
+}
+
+// ComposeDown implements Node, recording the teardown for assertions.
+func (m *mockNode) ComposeDown(_ context.Context, projectName string, composeYAML []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.composeDownCalls++
+	m.composeDownProjects = append(m.composeDownProjects, projectName)
+	m.composeDownDocuments = append(m.composeDownDocuments, string(composeYAML))
+	return m.composeDownErr
+}
+
+// ComposePs implements Node, answering the seeded project containers.
+func (m *mockNode) ComposePs(_ context.Context, _ string) ([]ComposeContainer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.composePsCalls++
+	if m.composePsErr != nil {
+		return nil, m.composePsErr
+	}
+	return append([]ComposeContainer(nil), m.composeContainers...), nil
+}
+
+// ComposeValidate implements Node. By default it answers like a capable
+// node (the probe document accepted with enforcement reported);
+// composeOldAgent accepts everything without the enforcement flag,
+// emulating a pre-confinement agent.
+func (m *mockNode) ComposeValidate(_ context.Context, _ string, _ []byte) ([]string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.composeValidateCalls++
+	if m.composeOldAgent {
+		return []string{"probe"}, false, nil
+	}
+	if m.composeValidateErr != nil {
+		return nil, false, m.composeValidateErr
+	}
+	return []string{"probe"}, true, nil
 }
 
 // lastRequest returns the most recent Run payload.

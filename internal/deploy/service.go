@@ -431,6 +431,8 @@ func (s *Service) checkStoredTarget(ctx context.Context, app Application) error 
 // image reference is copied onto the new rollback row, which is what makes
 // "back to the old version" a normal state-machine run rather than a rewind.
 // An image source rolls back to the previous digest, not the moving tag.
+// A compose application has no built image: its rollback re-applies the
+// stored compose file (pull images + up -d), exactly like a redeploy.
 func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error) {
 	if !Enabled() {
 		return Deployment{}, ErrDisabled
@@ -442,6 +444,27 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 	target, err := s.rollbackTarget(ctx, app.ID, deploymentID)
 	if err != nil {
 		return Deployment{}, err
+	}
+	if NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose {
+		if target.State != StateRunning {
+			return Deployment{}, fmt.Errorf("%w: deployment %s is not a released compose deployment",
+				ErrValidation, target.ID)
+		}
+		// A compose rollback re-applies the target release's stored
+		// document, not the live row: the run ups exactly what that
+		// release ran. A target that recorded no document (it predates
+		// the snapshot, or never rendered one) cannot roll back.
+		if strings.TrimSpace(target.ComposeDocument) == "" {
+			return Deployment{}, fmt.Errorf("%w: deployment %s recorded no compose document to roll back to",
+				ErrValidation, target.ID)
+		}
+		return s.submit(ctx, app, Deployment{
+			Kind:            KindRollback,
+			State:           StateQueued,
+			ComposeDocument: target.ComposeDocument,
+			ComposeCommit:   target.ComposeCommit,
+			RollbackFrom:    target.ID,
+		})
 	}
 	if target.State != StateRunning || strings.TrimSpace(target.ImageTag) == "" {
 		return Deployment{}, fmt.Errorf("%w: deployment %s has no released image to roll back to",
@@ -538,7 +561,9 @@ func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, writ
 // validateDeployTarget rejects an application that cannot be deployed: no
 // server assigned, an unknown or not-yet-implemented source type, no
 // cloneable repository, or an unknown build pack. Image sources carry a
-// validated reference instead of a repository and build pack.
+// validated reference instead of a repository and build pack. Compose
+// applications carry a validated document (or a repository with an in-repo
+// file) and a routed web service instead of a repository and build pack.
 func validateDeployTarget(app Application) error {
 	if app.ServerID == uuid.Nil {
 		return fmt.Errorf("%w: application has no server assigned", ErrValidation)
@@ -558,6 +583,9 @@ func validateDeployTarget(app Application) error {
 		}
 		return ValidateBuildArgs(app.BuildArgs)
 	}
+	if NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose {
+		return validateComposeTarget(app)
+	}
 	if NormalizeSourceType(app.SourceType, app.Provider) == SourceImage {
 		return ValidateImageReference(app.ImageRef)
 	}
@@ -566,6 +594,29 @@ func validateDeployTarget(app Application) error {
 	}
 	if _, err := builds.ParseEngineKind(app.BuildPack); err != nil {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	return nil
+}
+
+// validateComposeTarget rejects a compose application that cannot be
+// deployed: no routed web service, no container port, or neither pasted
+// content nor a repository with an in-repo file path. The full document
+// validation ran at write time; the deploy re-validates without executing
+// anything, so a row edited around the API still fails before touching the
+// node.
+func validateComposeTarget(app Application) error {
+	if strings.TrimSpace(app.ComposeService) == "" {
+		return fmt.Errorf("%w: compose source needs a web service", ErrValidation)
+	}
+	if err := validateComposePorts(app.Port, app.HostPort); err != nil {
+		return err
+	}
+	pasted := strings.TrimSpace(app.ComposeContent) != ""
+	repo := strings.TrimSpace(app.ComposeFile) != "" &&
+		(strings.TrimSpace(app.Repo) != "" || strings.TrimSpace(app.CloneURL) != "")
+	if !pasted && !repo {
+		return fmt.Errorf("%w: compose source needs either pasted content or a repository with a compose file",
+			ErrValidation)
 	}
 	return nil
 }

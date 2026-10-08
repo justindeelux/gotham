@@ -90,11 +90,14 @@ func (a *GRPCComposeAgent) Close() error {
 	return err
 }
 
-// Validate implements ComposeAgent.
+// Validate implements ComposeAgent. Services projects opt out of the node's
+// application-scope confinement allowlist, which applies unless the caller
+// opts out.
 func (a *GRPCComposeAgent) Validate(ctx context.Context, projectName string, composeYAML []byte) ([]string, error) {
 	response, err := a.client.ComposeValidate(ctx, &agentv1.ComposeValidateRequest{
 		ProjectName: projectName,
 		ComposeYaml: composeYAML,
+		Unconfined:  true,
 	})
 	if err != nil {
 		return nil, mapAgentError("validate", err)
@@ -108,6 +111,7 @@ func (a *GRPCComposeAgent) Up(ctx context.Context, projectName string, composeYA
 		ProjectName: projectName,
 		ComposeYaml: composeYAML,
 		Restart:     restart,
+		Unconfined:  true,
 	})
 	return mapAgentError("up", err)
 }
@@ -117,6 +121,7 @@ func (a *GRPCComposeAgent) Down(ctx context.Context, projectName string, compose
 	_, err := a.client.ComposeDown(ctx, &agentv1.ComposeDownRequest{
 		ProjectName: projectName,
 		ComposeYaml: composeYAML,
+		Unconfined:  true,
 	})
 	return mapAgentError("down", err)
 }

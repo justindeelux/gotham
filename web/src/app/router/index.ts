@@ -153,6 +153,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/features/notifications/pages/NotificationsPage.vue"),
         meta: { titleKey: "titles.notifications", requiresAuth: true },
       },
+      {
+        path: "settings/git-sources",
+        name: "git-sources",
+        component: () => import("@/features/applications/pages/GitSourcesPage.vue"),
+        meta: { titleKey: "titles.gitSources", requiresAuth: true },
+      },
       // The bare settings path keeps landing on notifications now that the
       // settings section holds more than one page.
       { path: "settings", redirect: { name: "notifications" } },

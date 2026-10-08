@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -30,6 +31,7 @@ type appResponse struct {
 	Name          string                 `json:"name"`
 	BaseURL       string                 `json:"base_url"`
 	Connected     bool                   `json:"connected"`
+	CreatedAt     time.Time              `json:"created_at"`
 	Installations []installationResponse `json:"installations"`
 }
 
@@ -494,6 +496,7 @@ func newAppResponse(app GitHubApp) appResponse {
 		Name:          app.Name,
 		BaseURL:       app.BaseURL,
 		Connected:     len(app.Installations) > 0,
+		CreatedAt:     app.CreatedAt,
 		Installations: make([]installationResponse, 0, len(app.Installations)),
 	}
 	for _, inst := range app.Installations {

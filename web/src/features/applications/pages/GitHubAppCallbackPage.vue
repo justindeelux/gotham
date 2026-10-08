@@ -96,9 +96,10 @@ onMounted(async () => {
   }
 });
 
-/** backToProjects leaves the result page for the project list. */
-async function backToProjects(): Promise<void> {
-  await router.replace({ name: "projects" });
+/** backToGitSources leaves the result page for the Git sources page, which
+ * owns the Connect/Install/Disconnect controls (GS-10). */
+async function backToGitSources(): Promise<void> {
+  await router.replace({ name: "git-sources" });
 }
 </script>
 
@@ -122,7 +123,7 @@ async function backToProjects(): Promise<void> {
           {{ loadError || t("applications.githubAppCallback.failed") }}
         </NAlert>
         <NText depth="3">{{ t("applications.githubAppCallback.hint") }}</NText>
-        <NButton @click="void backToProjects()">{{
+        <NButton @click="void backToGitSources()">{{
           t("applications.githubAppCallback.back")
         }}</NButton>
       </NSpace>

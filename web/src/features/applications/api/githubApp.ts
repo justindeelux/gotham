@@ -27,6 +27,8 @@ export interface GitHubApp {
   name: string;
   base_url: string;
   connected: boolean;
+  /** When the connection was stored (GS-10 lists the connection age). */
+  created_at: string;
   installations: GitHubInstallation[];
 }
 

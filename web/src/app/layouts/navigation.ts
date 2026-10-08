@@ -48,6 +48,13 @@ export const navSections: NavSection[] = [
         icon: "bell",
         to: "notifications",
       },
+      {
+        key: "git-sources",
+        label: "Git sources",
+        labelKey: "nav.items.gitSources",
+        icon: "refresh",
+        to: "git-sources",
+      },
       { key: "tokens", label: "API tokens", labelKey: "nav.items.tokens", icon: "key" },
     ],
   },

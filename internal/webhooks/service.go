@@ -61,6 +61,29 @@ type Deployer interface {
 	DeploySystem(ctx context.Context, appID uuid.UUID) (deploy.Deployment, error)
 }
 
+// AppEventHandler verifies and handles GitHub App deliveries that carry no
+// per-hook secret: installation and installation_repositories events, signed
+// with the app webhook secret. VerifyDelivery returns the owning app; only
+// that app's installations are ever mutated.
+type AppEventHandler interface {
+	VerifyDelivery(header http.Header, body []byte) (uuid.UUID, bool)
+	HandleAppEvent(ctx context.Context, appID uuid.UUID, event string, body []byte) error
+}
+
+// AppPushTarget is one github_app application a verified app push may build.
+type AppPushTarget struct {
+	ApplicationID uuid.UUID
+	Branch        string
+}
+
+// AppPushHandler maps a verified app push delivery to deployments. VerifyPush
+// authenticates the body against the installation's app secret and returns
+// the owning app; PushTargets lists that app's applications watching repo.
+type AppPushHandler interface {
+	VerifyPush(header http.Header, body []byte) (uuid.UUID, bool)
+	PushTargets(ctx context.Context, appID uuid.UUID, repo string) ([]AppPushTarget, error)
+}
+
 // Delivery is the outcome of one webhook delivery, returned as the response
 // body so the Git host's delivery log shows why a push did or did not build.
 type Delivery struct {
@@ -94,6 +117,12 @@ type Config struct {
 	Commenter Commenter
 	// Secret is the key providers.SealSecret seals hook secrets with.
 	Secret string
+	// AppEvents handles GitHub App installation deliveries (GS-5). nil
+	// leaves installation events unauthorized; push handling is untouched.
+	AppEvents AppEventHandler
+	// AppPush routes verified GitHub App push deliveries to github_app
+	// applications (GS-5). nil leaves app-signed pushes unauthorized.
+	AppPush AppPushHandler
 	// Logger defaults to slog.Default.
 	Logger *slog.Logger
 	// Limit is the delivery refill rate per client IP, Burst its bucket size.
@@ -120,6 +149,8 @@ type Service struct {
 	deployer    Deployer
 	provisioner PreviewProvisioner
 	commenter   Commenter
+	appEvents   AppEventHandler
+	appPush     AppPushHandler
 	logger      *slog.Logger
 	limiter     *deliveryLimiter
 	trusted     []netip.Prefix
@@ -157,6 +188,8 @@ func NewService(cfg Config) *Service {
 		deployer:    cfg.Deployer,
 		provisioner: cfg.Provisioner,
 		commenter:   cfg.Commenter,
+		appEvents:   cfg.AppEvents,
+		appPush:     cfg.AppPush,
 		logger:      logger,
 		limiter:     newDeliveryLimiter(cfg.Limit, cfg.Burst),
 		trusted:     cfg.TrustedProxies,
@@ -392,6 +425,23 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	if err != nil {
 		return Delivery{}, err
 	}
+	// GitHub App installation deliveries carry no per-hook secret: they are
+	// signed with the app webhook secret and handled by the app service,
+	// which refreshes the repo cache. Push deliveries keep the hook-secret
+	// path below (with the app push fallback), which triggers the deploy.
+	if appEvent, ok := appDeliveryEvent(provider, r.Header); ok {
+		if s.appEvents == nil {
+			return Delivery{}, ErrUnauthorized
+		}
+		appID, ok := s.appEvents.VerifyDelivery(r.Header, body)
+		if !ok {
+			return Delivery{}, ErrUnauthorized
+		}
+		if err := s.appEvents.HandleAppEvent(ctx, appID, appEvent, body); err != nil {
+			return Delivery{}, err
+		}
+		return Delivery{Status: StatusIgnored, Reason: "event"}, nil
+	}
 	parsed, err := parseDelivery(provider, r.Header, body)
 	if err != nil {
 		return Delivery{}, err
@@ -401,14 +451,26 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	if err != nil {
 		return Delivery{}, err
 	}
-	if len(targets) == 0 {
-		return Delivery{}, ErrUnauthorized
-	}
 	target, ok := authorizedTarget(provider, r.Header, body, targets)
 	if !ok {
-		return Delivery{}, ErrUnauthorized
+		// GitHub App push fallback: the delivery is signed with the app
+		// webhook secret, not a per-hook secret, so the hook path above
+		// cannot verify it. A verified app push maps to the github_app
+		// applications watching the repository and deploys them.
+		appTarget, ok := s.appPushTarget(ctx, provider, r.Header, body, parsed)
+		if !ok {
+			return Delivery{}, ErrUnauthorized
+		}
+		target = appTarget
 	}
 
+	return s.deliverToTarget(ctx, provider, parsed, target)
+}
+
+// deliverToTarget turns one verified delivery for one application into a
+// deployment: pull requests fan out to previews, branch pushes claim the
+// commit and queue a deploy.
+func (s *Service) deliverToTarget(ctx context.Context, provider string, parsed signedDelivery, target Target) (Delivery, error) {
 	if isPullRequestEvent(provider, parsed.Event) {
 		return s.receivePullRequest(ctx, provider, target, parsed)
 	}
@@ -471,6 +533,59 @@ func (s *Service) Receive(ctx context.Context, provider string, r *http.Request)
 	}
 	s.linkClaim(ctx, event, deployment)
 	return Delivery{Status: StatusQueued, DeploymentID: deployment.ID.String()}, nil
+}
+
+// appPushTarget maps a verified GitHub App push delivery to the github_app
+// application watching the repository and branch. It applies only to pushes:
+// pull requests keep the hook path (previews need the OAuth-backed installer
+// and commenter). The first branch-matching application wins, mirroring the
+// hook path's first-verified-target semantics.
+func (s *Service) appPushTarget(ctx context.Context, provider string, header http.Header, body []byte, parsed signedDelivery) (Target, bool) {
+	if provider != providers.NameGitHub || s.appPush == nil {
+		return Target{}, false
+	}
+	if !isPushEvent(provider, parsed.Event) || parsed.Deleted {
+		return Target{}, false
+	}
+	branch := branchOf(parsed.Ref)
+	if branch == "" || parsed.Repository == "" {
+		return Target{}, false
+	}
+	appID, ok := s.appPush.VerifyPush(header, body)
+	if !ok {
+		return Target{}, false
+	}
+	targets, err := s.appPush.PushTargets(ctx, appID, parsed.Repository)
+	if err != nil || len(targets) == 0 {
+		return Target{}, false
+	}
+	for _, candidate := range targets {
+		// Branch names are case-sensitive, like the hook path.
+		if candidate.Branch == branch {
+			return Target{ApplicationID: candidate.ApplicationID, Branch: candidate.Branch}, true
+		}
+	}
+	// The repository is watched but not this branch: return the first target
+	// so the delivery is acknowledged as ignored (not unauthorized) by the
+	// branch check downstream, mirroring the hook path.
+	first := targets[0]
+	return Target{ApplicationID: first.ApplicationID, Branch: first.Branch}, true
+}
+
+// appDeliveryEvent reports whether a delivery is a GitHub App installation
+// event, which the app service verifies with its own secret instead of a
+// per-hook secret. Every other event flows through the hook-secret path.
+func appDeliveryEvent(provider string, header http.Header) (string, bool) {
+	if provider != providers.NameGitHub {
+		return "", false
+	}
+	event := strings.ToLower(strings.TrimSpace(header.Get(headerGitHubEvent)))
+	switch event {
+	case "installation", "installation_repositories":
+		return event, true
+	default:
+		return "", false
+	}
 }
 
 // authorizedTarget returns the hook whose secret authenticates the delivery.

@@ -227,6 +227,7 @@ const vi: ApplicationsMessages = {
     repository: "Kho mã",
     repositoryPlaceholder: "Chọn kho mã",
     repoHint: "Kho riêng triển khai bằng khóa SSH deploy key.",
+    repoTruncatedHint: "Danh sách chạm giới hạn máy chủ — installation rất lớn có thể thiếu kho.",
     sourceType: "Loại nguồn",
     sourceTypePlaceholder: "Chọn loại nguồn",
     sourceTypeHint: "Git công khai và GitHub/GitLab đã kết nối triển khai được ngay; các nguồn khác sẽ có trong gói sau.",
@@ -294,6 +295,13 @@ const vi: ApplicationsMessages = {
     invalidHint: "Yêu cầu kết nối đã hết hạn hoặc đã được dùng.",
     failedHint: "Nhà cung cấp từ chối trao đổi mã.",
     back: "Về projects",
+  },
+  githubAppCallback: {
+    connected: "Đã kết nối GitHub App. Hãy cài nó lên các kho để liệt kê trong wizard.",
+    installed: "Đã cài GitHub App. Các kho của nó đã có trong wizard tạo ứng dụng.",
+    failed: "Bước GitHub App chưa hoàn tất. Hãy bắt đầu lại từ luồng kết nối.",
+    hint: "Các nút Kết nối, Cài đặt và Ngắt kết nối nằm ở trang quản lý nguồn Git.",
+    back: "Về danh sách project",
   },
   detail: {
     controlInProgress: "Đợt triển khai đang chạy. Hãy chờ hoàn tất.",

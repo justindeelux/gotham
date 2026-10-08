@@ -43,14 +43,17 @@ type CreateApplicationInput struct {
 	// SourceType names how the application fetches its code (GS-2); empty
 	// normalizes from Provider so pre-GS-2 clients keep their behaviour.
 	SourceType string
-	Branch     string
-	BuildPack  string
-	BaseDomain string
-	Port       int32
-	HostPort   int32
-	ServerID   uuid.UUID
-	Env        []EnvEntry
-	Storage    []Storage
+	// GitHubAppID links the application to its GitHub App connection (GS-5);
+	// uuid.Nil leaves it unlinked. The connection must belong to the caller.
+	GitHubAppID uuid.UUID
+	Branch      string
+	BuildPack   string
+	BaseDomain  string
+	Port        int32
+	HostPort    int32
+	ServerID    uuid.UUID
+	Env         []EnvEntry
+	Storage     []Storage
 }
 
 // UpdateApplicationInput carries the mutable application fields. Every field is
@@ -67,6 +70,10 @@ type UpdateApplicationInput struct {
 	HostPort      *int32
 	ServerID      *uuid.UUID
 	EnvironmentID *uuid.UUID
+	// GitHubAppID relinks the application: a value sets the connection (it
+	// must belong to the caller), an empty string clears it, absent leaves
+	// it unchanged.
+	GitHubAppID *string
 }
 
 // ApplicationFilter scopes a list to one environment or one project of the
@@ -84,7 +91,7 @@ type ApplicationFilter struct {
 func (in UpdateApplicationInput) empty() bool {
 	return in.Name == nil && in.Branch == nil && in.BuildPack == nil &&
 		in.BaseDomain == nil && in.Port == nil && in.HostPort == nil &&
-		in.ServerID == nil && in.EnvironmentID == nil
+		in.ServerID == nil && in.EnvironmentID == nil && in.GitHubAppID == nil
 }
 
 // CreateApplication validates and stores a new application together with its
@@ -117,6 +124,7 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		Port:          in.Port,
 		HostPort:      in.HostPort,
 		ServerID:      in.ServerID,
+		GitHubAppID:   in.GitHubAppID,
 	}
 	// An empty branch stays empty for public-git sources: the clone resolves
 	// the remote default via ls-remote (GS-3) instead of guessing "main".
@@ -129,6 +137,17 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	}
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
+	}
+	// A link names a GitHub App connection the caller must own; a foreign
+	// id answers not-found, like any other foreign resource.
+	if app.GitHubAppID != uuid.Nil {
+		owned, err := s.repo.GitHubAppOwnedBy(ctx, app.GitHubAppID, userID)
+		if err != nil {
+			return Application{}, err
+		}
+		if !owned {
+			return Application{}, ErrNotFound
+		}
 	}
 	if err := s.validateServer(ctx, userID, app.ServerID); err != nil {
 		return Application{}, err
@@ -325,6 +344,32 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 			return Application{}, err
 		}
 		app.ServerID = *in.ServerID
+	}
+	// Relinking follows the create rules: a value sets the connection (it
+	// must belong to the caller), an empty string clears it, absent leaves
+	// it unchanged. The link only makes sense on the github_app source.
+	if in.GitHubAppID != nil {
+		raw := strings.TrimSpace(*in.GitHubAppID)
+		if raw == "" {
+			app.GitHubAppID = uuid.Nil
+		} else {
+			id, err := uuid.Parse(raw)
+			if err != nil {
+				return Application{}, fmt.Errorf("%w: github_app_id is not a UUID", ErrValidation)
+			}
+			owned, err := s.repo.GitHubAppOwnedBy(ctx, id, userID)
+			if err != nil {
+				return Application{}, err
+			}
+			if !owned {
+				return Application{}, ErrNotFound
+			}
+			app.GitHubAppID = id
+		}
+		if app.GitHubAppID != uuid.Nil && app.SourceType != SourceGitHubApp {
+			return Application{}, fmt.Errorf("%w: github_app_id needs source type %q",
+				ErrValidation, SourceGitHubApp)
+		}
 	}
 	// Clearing the branch restores ls-remote default resolution for
 	// public-git sources (see the create path); provider flows fall back to
@@ -865,6 +910,12 @@ func validateApplication(app Application, checkSource bool) error {
 // behavior they already have. git_private and the container sources fail
 // closed until their packages land (GS-4, GS-7..GS-9).
 func validateSource(app Application) error {
+	// A GitHub App link only makes sense on the github_app source: anything
+	// else never consults it, so linking there is a caller error.
+	if app.GitHubAppID != uuid.Nil && app.SourceType != SourceGitHubApp {
+		return fmt.Errorf("%w: github_app_id needs source type %q",
+			ErrValidation, SourceGitHubApp)
+	}
 	switch app.SourceType {
 	case "", SourceGitPublic:
 		if app.Provider == "github" || app.Provider == "gitlab" {

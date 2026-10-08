@@ -76,9 +76,11 @@ type applicationResponse struct {
 	Repo            string `json:"repo"`
 	CloneURL        string `json:"clone_url"`
 	SourceType      string `json:"source_type"`
-	Branch          string `json:"branch"`
-	BuildPack       string `json:"build_pack"`
-	BaseDomain      string `json:"base_domain"`
+	// GitHubAppID is the linked GitHub App connection, empty when unlinked.
+	GitHubAppID string `json:"github_app_id"`
+	Branch      string `json:"branch"`
+	BuildPack   string `json:"build_pack"`
+	BaseDomain  string `json:"base_domain"`
 	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
 	// migration (legacy duplicate); the value is preserved and an explicit
 	// domain update re-enables it.
@@ -145,20 +147,23 @@ type storageListEnvelope struct {
 // createApplicationRequest is the POST /applications body; it matches
 // CreateApplicationInput in web/src/features/applications/api/applications.ts.
 type createApplicationRequest struct {
-	Name          string            `json:"name"`
-	EnvironmentID string            `json:"environment_id"`
-	Provider      string            `json:"provider"`
-	Repo          string            `json:"repo"`
-	CloneURL      string            `json:"clone_url"`
-	SourceType    string            `json:"source_type"`
-	Branch        string            `json:"branch"`
-	BuildPack     string            `json:"build_pack"`
-	BaseDomain    string            `json:"base_domain"`
-	Port          int32             `json:"port"`
-	HostPort      int32             `json:"host_port"`
-	ServerID      string            `json:"server_id"`
-	Env           []envEntryRequest `json:"env"`
-	Storage       []storageRequest  `json:"storage"`
+	Name          string `json:"name"`
+	EnvironmentID string `json:"environment_id"`
+	Provider      string `json:"provider"`
+	Repo          string `json:"repo"`
+	CloneURL      string `json:"clone_url"`
+	SourceType    string `json:"source_type"`
+	// GitHubAppID links the application to its GitHub App connection (GS-5);
+	// empty leaves it unlinked.
+	GitHubAppID string            `json:"github_app_id"`
+	Branch      string            `json:"branch"`
+	BuildPack   string            `json:"build_pack"`
+	BaseDomain  string            `json:"base_domain"`
+	Port        int32             `json:"port"`
+	HostPort    int32             `json:"host_port"`
+	ServerID    string            `json:"server_id"`
+	Env         []envEntryRequest `json:"env"`
+	Storage     []storageRequest  `json:"storage"`
 }
 
 // updateApplicationRequest is the PUT /applications/{id} body. Fields are
@@ -173,6 +178,9 @@ type updateApplicationRequest struct {
 	Port          *int32  `json:"port"`
 	HostPort      *int32  `json:"host_port"`
 	ServerID      *string `json:"server_id"`
+	// GitHubAppID relinks the application: a UUID sets the connection, an
+	// empty string clears it, absent leaves it unchanged.
+	GitHubAppID *string `json:"github_app_id"`
 }
 
 // errorBody is the JSON body returned for failures.
@@ -279,6 +287,10 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	githubAppID, ok := optionalUUID(w, "github_app_id", req.GitHubAppID)
+	if !ok {
+		return
+	}
 
 	application, err := h.svc.CreateApplication(r.Context(), userID, CreateApplicationInput{
 		Name:          req.Name,
@@ -287,6 +299,7 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		Repo:          req.Repo,
 		CloneURL:      req.CloneURL,
 		SourceType:    req.SourceType,
+		GitHubAppID:   githubAppID,
 		Branch:        req.Branch,
 		BuildPack:     req.BuildPack,
 		BaseDomain:    req.BaseDomain,
@@ -373,12 +386,13 @@ func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := UpdateApplicationInput{
-		Name:       req.Name,
-		Branch:     req.Branch,
-		BuildPack:  req.BuildPack,
-		BaseDomain: req.BaseDomain,
-		Port:       req.Port,
-		HostPort:   req.HostPort,
+		Name:        req.Name,
+		Branch:      req.Branch,
+		BuildPack:   req.BuildPack,
+		BaseDomain:  req.BaseDomain,
+		Port:        req.Port,
+		HostPort:    req.HostPort,
+		GitHubAppID: req.GitHubAppID,
 	}
 	if req.ServerID != nil {
 		serverID, parsed := applicationServerID(w, *req.ServerID)
@@ -903,6 +917,10 @@ func newApplicationResponse(application Application) applicationResponse {
 	if application.ServerID != uuid.Nil {
 		serverID := application.ServerID.String()
 		response.ServerID = &serverID
+	}
+	// The link is empty (not the zero UUID) when the application has none.
+	if application.GitHubAppID != uuid.Nil {
+		response.GitHubAppID = application.GitHubAppID.String()
 	}
 	return response
 }

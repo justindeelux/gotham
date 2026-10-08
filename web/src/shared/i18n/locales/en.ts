@@ -97,6 +97,7 @@ const en = {
     register: "Create account",
     oauthCallback: "Signing in",
     providerCallback: "Provider connected",
+    githubAppCallback: "GitHub App",
     dashboard: "Dashboard",
     servers: "Servers",
     serverDetail: "Server detail",

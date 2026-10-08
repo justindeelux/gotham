@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/githubapp"
 )
 
 // Source prepares the build tree for a deployment: it checks the
@@ -32,6 +35,16 @@ type deployKeyResolver interface {
 	DeployKeyPrivatePEM(ctx context.Context, appID uuid.UUID) (string, error)
 }
 
+// appTokenResolver builds the token-authenticated clone URL for a github_app
+// application. Resolution is by repository grant (not by row id): the token
+// is minted for the installation that grants the repo, embedded only in the
+// returned URL, never persisted and never logged by callers.
+type appTokenResolver interface {
+	// TokenCloneURL returns cloneURL with a fresh installation token for the
+	// installation granting repo and owned by userID.
+	TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, cloneURL string) (string, error)
+}
+
 // cloneRunner executes git with an environment and returns its combined
 // output. Tests substitute one to assert the command line, the environment
 // and the ephemeral key file without a network or an sshd.
@@ -48,6 +61,9 @@ type gitSource struct {
 	// keys opens the application's deploy private key; nil disables key
 	// lookup entirely (anonymous clone).
 	keys deployKeyResolver
+	// appTokens builds token-authenticated clone URLs for linked github_app
+	// sources; nil keeps every clone on the legacy path.
+	appTokens appTokenResolver
 	// run executes git; nil selects the real binary.
 	run cloneRunner
 	// logger records host-key trust downgrades; nil selects slog.Default.
@@ -69,6 +85,30 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	if err := validateCloneURL(url); err != nil {
 		return err
 	}
+	// tokenClone marks the installation-token path for the log line: the
+	// token itself never appears (see RedactCloneURL).
+	tokenClone := false
+	// The token path is explicit: the application must be linked to a GitHub
+	// App connection AND carry an http(s) clone URL. Anything else (legacy
+	// provider=github rows, deploy keys, SSH URLs, local fixtures) never
+	// touches the resolver, so no GitHub API call happens for it.
+	if app.GitHubAppID != uuid.Nil && s.appTokens != nil && isHTTPCloneURL(url) {
+		tokenURL, err := s.appTokens.TokenCloneURL(ctx, app.UserID, app.Repo, url)
+		if err == nil {
+			url = tokenURL
+			tokenClone = true
+		} else if errors.Is(err, githubapp.ErrNoInstallationGrant) {
+			// The link exists but no installation grants the repo (revoked
+			// grant): the legacy path still applies, visibly. Anything
+			// else (host mismatch, mint failure, unverifiable grants)
+			// fails the clone instead of silently cloning anonymously.
+			if log != nil {
+				log(fmt.Sprintf("no GitHub App installation grants %q; cloning without an installation token", app.Repo))
+			}
+		} else {
+			return err
+		}
+	}
 	privatePEM, err := s.deployKeyPEM(ctx, app.ID)
 	if err != nil {
 		return err
@@ -80,13 +120,15 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		return fmt.Errorf("%w: SSH clone URL %q needs a deploy key: use a public http(s) or git URL, or a private-git source",
 			ErrValidation, RedactCloneURL(url))
 	}
-	if privatePEM != "" {
+	if privatePEM != "" && !tokenClone {
 		// A deploy key is an SSH credential: over http(s) it would
 		// authenticate nothing, so an http(s) URL is rewritten to its SSH
-		// shape first. This is the fallback for rows that still carry an
-		// https URL (API clients, applications created before BE-4.4b); the
-		// wizard stores the provider's own ssh_url for private repositories,
-		// which passes through with its port intact.
+		// shape first. Skipped on the token path: the token already
+		// authenticates the https URL, and rewriting would drop it while
+		// the log line claims token use. This is the fallback for rows that
+		// still carry an https URL (API clients, applications created
+		// before BE-4.4b); the wizard stores the provider's own ssh_url for
+		// private repositories, which passes through with its port intact.
 		url = sshCloneURL(url)
 	}
 	branch := strings.TrimSpace(app.Branch)
@@ -136,7 +178,9 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 
 	if log != nil {
 		line := fmt.Sprintf("git clone --depth 1 --branch %s %s", branch, RedactCloneURL(url))
-		if privatePEM != "" {
+		if tokenClone {
+			line += " (using a fresh installation token)"
+		} else if privatePEM != "" {
 			line += " (using the application deploy key)"
 		}
 		log(line)
@@ -349,6 +393,21 @@ func validateCloneURL(url string) error {
 		return nil
 	default:
 		return fmt.Errorf("%w: unsupported clone URL", ErrValidation)
+	}
+}
+
+// isHTTPCloneURL reports whether raw uses an http(s) scheme: the only shape
+// that can carry an installation token.
+func isHTTPCloneURL(raw string) bool {
+	scheme, _, ok := strings.Cut(strings.TrimSpace(raw), "://")
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
 	}
 }
 

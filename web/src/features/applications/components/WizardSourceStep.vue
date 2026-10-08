@@ -39,7 +39,7 @@ const { t } = useI18n();
         <NSelect
           v-model:value="form.providerId"
           :options="wizard.providerOptions.value"
-          :loading="wizard.providersStore.loading"
+          :loading="wizard.isGitHubAppFlow.value ? wizard.githubAppStore.loading : wizard.providersStore.loading"
           :placeholder="t('applications.wizard.providerPlaceholder')"
         />
         <span class="field-hint">{{ t("applications.wizard.providerHint") }}</span>
@@ -49,21 +49,24 @@ const { t } = useI18n();
         <NSelect
           v-model:value="form.repoFullName"
           :options="wizard.repoOptions.value"
-          :loading="wizard.providersStore.reposLoading"
+          :loading="wizard.isGitHubAppFlow.value ? wizard.githubAppStore.reposLoading : wizard.providersStore.reposLoading"
           :disabled="form.providerId === ''"
           :placeholder="t('applications.wizard.repositoryPlaceholder')"
           filterable
           @update:value="wizard.handleRepoSelect"
         />
         <span class="field-hint">{{ t("applications.wizard.repoHint") }}</span>
+        <span v-if="wizard.reposTruncated.value" class="field-hint">{{
+          t("applications.wizard.repoTruncatedHint")
+        }}</span>
         <NAlert
-          v-if="wizard.providersStore.reposError"
+          v-if="wizard.isGitHubAppFlow.value ? wizard.githubAppStore.reposError : wizard.providersStore.reposError"
           type="error"
           :show-icon="true"
           style="margin-top: 8px"
         >
           <NSpace align="center" :size="12" wrap>
-            <span>{{ wizard.providersStore.reposError }}</span>
+            <span>{{ wizard.isGitHubAppFlow.value ? wizard.githubAppStore.reposError : wizard.providersStore.reposError }}</span>
             <NButton size="small" @click="void wizard.loadRepos()">{{ t("common.actions.retry") }}</NButton>
           </NSpace>
         </NAlert>
@@ -84,7 +87,7 @@ const { t } = useI18n();
           v-if="wizard.branchOptions.value.length > 0"
           v-model:value="form.branch"
           :options="wizard.branchOptions.value"
-          :loading="wizard.providersStore.branchesLoading"
+          :loading="wizard.isGitHubAppFlow.value ? wizard.githubAppStore.branchesLoading : wizard.providersStore.branchesLoading"
           :placeholder="t('applications.wizard.branchPlaceholder')"
           filterable
           tag

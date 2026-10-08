@@ -16,12 +16,11 @@ import {
   type Session,
   type User,
 } from "@/shared/api/token";
-import { useApplicationsStore } from "@/features/applications";
+import { useApplicationsStore, useGitHubAppStore, useProvidersStore } from "@/features/applications";
 import { useBackupsStore } from "@/features/databases";
 import { useDatabasesStore } from "@/features/databases";
 import { useNotificationsStore } from "@/features/notifications";
 import { useProjectsStore } from "@/features/projects";
-import { useProvidersStore } from "@/features/applications";
 import { useProxyStore } from "@/features/domains";
 import { useServersStore } from "@/features/servers";
 import { useServicesStore } from "@/features/services";
@@ -148,6 +147,7 @@ export const useAuthStore = defineStore("auth", () => {
       () => useServicesStore().reset(),
       () => useBackupsStore().reset(),
       () => useProvidersStore().reset(),
+      () => useGitHubAppStore().reset(),
       () => useTemplatesStore().reset(),
       () => useProxyStore().reset(),
     ];

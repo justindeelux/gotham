@@ -24,6 +24,7 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/githubapp"
 	"github.com/justindeelux/gotham/internal/notifications"
 	"github.com/justindeelux/gotham/internal/projects"
 	"github.com/justindeelux/gotham/internal/providers"
@@ -426,6 +427,13 @@ func (s *Server) routes() (http.Handler, error) {
 			s.providerConnectionApplications)
 		providers.Mount(api, s.resourceScopeAuth, UserIDFromContext, providerSvc)
 
+		// GitHub App connections (GS-5): the manifest flow, installation
+		// step, and installation-token repo/branch listing. The service also
+		// verifies installation webhook deliveries, wired into the webhook
+		// service below so those events refresh the repo cache.
+		githubAppSvc := githubapp.NewDefaultService(s.persistence, s.secretKey, s.logger)
+		githubapp.Mount(api, s.resourceScopeAuth, UserIDFromContext, githubAppSvc)
+
 		// Application deploy orchestration (BE-4.3): a nil service (no
 		// database) or FEATURE_APPLICATIONS=false mounts nothing, so Phases
 		// 0–3 stay unaffected. The service is kept on the server so the
@@ -434,7 +442,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// a key on the Git host needs the same stored connection the webhook
 		// lifecycle uses. The proxy service (BE-6.1) receives a best-effort
 		// resync after application mutations and successful deployments.
-		s.deploy = s.deployService(providerSvc, s.proxy)
+		s.deploy = s.deployService(providerSvc, s.proxy, githubAppSvc)
 		deploy.Mount(api, s.withTeam(), UserIDFromContext, s.deploy)
 
 		// Push webhooks (BE-4.4) and preview deployments (BE-8.1): the public,
@@ -446,7 +454,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// remove a team application's hook. The preview surface (pull_request
 		// handling, the orphan sweep, the listing route) is gated by
 		// FEATURE_PREVIEWS; push deliveries are untouched by that flag.
-		s.webhooks = s.webhookService(providerSvc)
+		s.webhooks = s.webhookService(providerSvc, githubAppSvc)
 		webhooks.Mount(api, s.withTeam(), UserIDFromContext, s.webhooks)
 		s.webhooks.StartPreviews()
 
@@ -522,7 +530,7 @@ func (s *Server) baseMiddleware(r chi.Router) {
 // Tests pass a fake registry that cannot dial agents, which leaves the dialer
 // unwired instead of forcing a wider interface change. It returns nil (no
 // database, or FEATURE_APPLICATIONS=false) so deploy.Mount is a no-op.
-func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc proxy.ProxyService) deploy.DeployService {
+func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc proxy.ProxyService, githubAppSvc *githubapp.Service) deploy.DeployService {
 	if s.persistence == nil {
 		return nil
 	}
@@ -531,6 +539,9 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		Secret:    s.secretKey,
 		RedisAddr: s.cfg.Snapshot().Redis.Addr,
 		Logger:    s.logger,
+	}
+	if githubAppSvc != nil {
+		cfg.AppTokens = githubAppTokenAdapter{svc: githubAppSvc}
 	}
 	if providerSvc != nil {
 		if registrar, ok := providerSvc.(deploy.KeyRegistrar); ok {
@@ -650,7 +661,7 @@ func connectionApplicationsOf(applications []deploy.Application) []providers.Con
 // FEATURE_APPLICATIONS=false) and hook management needs a provider service
 // that can reach the Git host. Either missing, it returns nil so
 // webhooks.Mount registers nothing.
-func (s *Server) webhookService(providerSvc providers.ProviderService) *webhooks.Service {
+func (s *Server) webhookService(providerSvc providers.ProviderService, githubAppSvc *githubapp.Service) *webhooks.Service {
 	if s.deploy == nil || providerSvc == nil {
 		return nil
 	}
@@ -679,6 +690,13 @@ func (s *Server) webhookService(providerSvc providers.ProviderService) *webhooks
 	}
 	if commenter, ok := providerSvc.(webhooks.Commenter); ok {
 		cfg.Commenter = commenter
+	}
+	// GitHub App installation deliveries verify with the app webhook secret
+	// and refresh the repo cache (GS-5); a nil service leaves them
+	// unauthorized while push handling is untouched.
+	if githubAppSvc != nil {
+		cfg.AppEvents = githubAppSvc
+		cfg.AppPush = githubAppPushAdapter{svc: githubAppSvc}
 	}
 	return webhooks.NewDefaultService(cfg)
 }

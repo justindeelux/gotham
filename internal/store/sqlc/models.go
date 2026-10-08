@@ -41,6 +41,7 @@ type Application struct {
 	IsPreview          bool               `json:"is_preview"`
 	EnvironmentID      pgtype.UUID        `json:"environment_id"`
 	SourceType         string             `json:"source_type"`
+	GithubAppID        pgtype.UUID        `json:"github_app_id"`
 }
 
 type ApplicationDeployKey struct {
@@ -210,6 +211,44 @@ type Environment struct {
 	Name      string             `json:"name"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GithubApp struct {
+	ID                  pgtype.UUID        `json:"id"`
+	UserID              pgtype.UUID        `json:"user_id"`
+	AppID               int64              `json:"app_id"`
+	Slug                string             `json:"slug"`
+	Name                string             `json:"name"`
+	BaseUrl             string             `json:"base_url"`
+	ApiBaseUrl          string             `json:"api_base_url"`
+	ClientID            string             `json:"client_id"`
+	WebhookSecretCipher string             `json:"webhook_secret_cipher"`
+	PrivateKeyCipher    string             `json:"private_key_cipher"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GithubInstallation struct {
+	ID             pgtype.UUID        `json:"id"`
+	GithubAppID    pgtype.UUID        `json:"github_app_id"`
+	InstallationID int64              `json:"installation_id"`
+	Account        string             `json:"account"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type GithubRepoCache struct {
+	GithubAppID    pgtype.UUID        `json:"github_app_id"`
+	InstallationID int64              `json:"installation_id"`
+	ExternalID     string             `json:"external_id"`
+	Name           string             `json:"name"`
+	FullName       string             `json:"full_name"`
+	Private        bool               `json:"private"`
+	DefaultBranch  string             `json:"default_branch"`
+	CloneUrl       string             `json:"clone_url"`
+	SshUrl         string             `json:"ssh_url"`
+	HtmlUrl        string             `json:"html_url"`
+	CachedAt       pgtype.Timestamptz `json:"cached_at"`
 }
 
 type Invite struct {

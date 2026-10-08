@@ -98,6 +98,7 @@ const vi: CommonMessages = {
     register: "Tạo tài khoản",
     oauthCallback: "Đang đăng nhập",
     providerCallback: "Đã kết nối nhà cung cấp",
+    githubAppCallback: "GitHub App",
     dashboard: "Bảng điều khiển",
     servers: "Máy chủ",
     serverDetail: "Chi tiết máy chủ",

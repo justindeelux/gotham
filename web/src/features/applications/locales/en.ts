@@ -226,6 +226,7 @@ const en = {
     repository: "Repository",
     repositoryPlaceholder: "Select a repository",
     repoHint: "Private repos deploy with an SSH deploy key.",
+    repoTruncatedHint: "The list hit the server bound — very large installations may miss repositories.",
     sourceType: "Source type",
     sourceTypePlaceholder: "Select a source type",
     sourceTypeHint: "Public git and connected GitHub/GitLab sources deploy today; other sources land in later packages.",
@@ -293,6 +294,13 @@ const en = {
     failed: "Connection failed",
     invalidHint: "The connection request expired or was already used.",
     failedHint: "The provider refused the exchange.",
+    back: "Back to projects",
+  },
+  githubAppCallback: {
+    connected: "GitHub App connected. Install it on your repositories to list them in the wizard.",
+    installed: "GitHub App installed. Its repositories are now listed in the application wizard.",
+    failed: "The GitHub App step did not complete. Start again from the Connect flow.",
+    hint: "The Connect, Install and Disconnect controls live in the Git sources management page.",
     back: "Back to projects",
   },
   detail: {

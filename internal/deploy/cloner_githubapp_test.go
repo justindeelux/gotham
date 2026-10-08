@@ -44,6 +44,7 @@ func (r *staticTokenResolver) TokenCloneURL(_ context.Context, _ uuid.UUID, repo
 func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceGitHubApp
+	app.GitHubAppID = uuid.New()
 	app.Repo = "acme/private-web"
 	app.CloneURL = "https://github.com/acme/private-web.git"
 	dir := filepath.Join(t.TempDir(), "repo")
@@ -113,11 +114,11 @@ func TestGitSourceCloneGitHubAppWithoutResolverKeepsLegacy(t *testing.T) {
 	}
 }
 
-// TestGitSourceCloneGitHubAppFallsBackWithoutGrant proves the legacy
-// population keeps working: a provider=github application with an SSH clone
-// URL and a deploy key, holding no installation grant, clones through the
-// deploy-key path exactly as before GitHub App connections existed.
-func TestGitSourceCloneGitHubAppFallsBackWithoutGrant(t *testing.T) {
+// TestGitSourceCloneGitHubAppUnlinkedKeepsLegacy proves an unlinked
+// application never touches the resolver: a provider=github application with
+// an SSH clone URL and a deploy key clones through the deploy-key path
+// exactly as before GitHub App connections existed.
+func TestGitSourceCloneGitHubAppUnlinkedKeepsLegacy(t *testing.T) {
 	privatePEM, _, _, err := generateDeployKeyPair("gotham:deploy:test")
 	if err != nil {
 		t.Fatalf("generateDeployKeyPair: %v", err)
@@ -129,9 +130,10 @@ func TestGitSourceCloneGitHubAppFallsBackWithoutGrant(t *testing.T) {
 	app.CloneURL = "git@github.com:acme/legacy.git"
 
 	var gotArgv, gotEnv []string
+	resolver := &staticTokenResolver{err: githubapp.ErrNoInstallationGrant}
 	source := gitSource{
 		keys:      &staticKeyResolver{pem: privatePEM},
-		appTokens: &staticTokenResolver{err: githubapp.ErrNoInstallationGrant},
+		appTokens: resolver,
 		run: func(_ context.Context, argv, env []string) ([]byte, error) {
 			gotArgv = append([]string(nil), argv...)
 			gotEnv = append([]string(nil), env...)
@@ -141,15 +143,54 @@ func TestGitSourceCloneGitHubAppFallsBackWithoutGrant(t *testing.T) {
 	if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), nil); err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
+	if resolver.calls != 0 {
+		t.Errorf("resolver calls = %d, want 0 for an unlinked application", resolver.calls)
+	}
 	joined := strings.Join(gotArgv, " ")
 	if !strings.Contains(joined, "git@github.com:acme/legacy.git") {
 		t.Errorf("argv = %v, want the unchanged SSH clone URL", gotArgv)
 	}
 	if strings.Contains(joined, "x-access-token") {
-		t.Errorf("argv = %v, want no token without a grant", gotArgv)
+		t.Errorf("argv = %v, want no token without a link", gotArgv)
 	}
 	if !hasEntry(gotEnv, "GIT_SSH_COMMAND") {
 		t.Errorf("env = %v, want the deploy-key SSH command", gotEnv)
+	}
+}
+
+// TestGitSourceCloneLinkedWithoutGrantFallsBackVisibly proves a linked
+// application whose grant is gone still clones, with a deploy-log line
+// saying the token was skipped.
+func TestGitSourceCloneLinkedWithoutGrantFallsBackVisibly(t *testing.T) {
+	app := testApplication(uuid.New())
+	app.SourceType = SourceGitHubApp
+	app.GitHubAppID = uuid.New()
+	app.Repo = "acme/web"
+	app.CloneURL = "https://github.com/acme/web.git"
+
+	var gotArgv []string
+	var logged []string
+	source := gitSource{
+		appTokens: &staticTokenResolver{err: githubapp.ErrNoInstallationGrant},
+		run: func(_ context.Context, argv, _ []string) ([]byte, error) {
+			gotArgv = append([]string(nil), argv...)
+			return nil, nil
+		},
+	}
+	if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), func(line string) {
+		logged = append(logged, line)
+	}); err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	joined := strings.Join(append(gotArgv, logged...), "\n")
+	if !strings.Contains(joined, "https://github.com/acme/web.git") {
+		t.Errorf("argv = %v, want the plain clone URL", gotArgv)
+	}
+	if strings.Contains(joined, "x-access-token") {
+		t.Errorf("output mentions a token: %v", append(gotArgv, logged...))
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "without an installation token") {
+		t.Errorf("log lines = %v, want the fallback line", logged)
 	}
 }
 
@@ -159,6 +200,7 @@ func TestGitSourceCloneGitHubAppFallsBackWithoutGrant(t *testing.T) {
 func TestGitSourceCloneGitHubAppTokenFailureFails(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceGitHubApp
+	app.GitHubAppID = uuid.New()
 	app.CloneURL = "https://github.com/acme/web.git"
 	source := gitSource{
 		appTokens: &staticTokenResolver{err: errors.New("mint failed")},

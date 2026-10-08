@@ -67,6 +67,10 @@ type Repository interface {
 	// legacy shared node) and whether it exists. It backs the stored
 	// application→node invariant checked at the queue boundary.
 	ServerTeam(ctx context.Context, serverID uuid.UUID) (uuid.UUID, bool, error)
+	// GitHubAppOwnedBy reports whether the GitHub App connection belongs to
+	// the caller. A foreign id answers false, like a missing one, so
+	// connection IDs cannot be probed.
+	GitHubAppOwnedBy(ctx context.Context, id, userID uuid.UUID) (bool, error)
 	// CreateDeployment stores a new deployment row.
 	CreateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
 	// GetDeployment returns one deployment of an application, or ErrNotFound.
@@ -344,6 +348,7 @@ func (r *storeRepository) CreateApplication(
 			Port:          app.Port,
 			HostPort:      app.HostPort,
 			IsPreview:     app.IsPreview,
+			GithubAppID:   pgUUID(app.GitHubAppID),
 		},
 		envVarParams(envVars),
 		secretParams(secrets),
@@ -372,6 +377,7 @@ func (r *storeRepository) UpdateApplication(ctx context.Context, app Application
 		ServerID:           pgUUID(app.ServerID),
 		BaseDomainDisabled: app.BaseDomainDisabled,
 		EnvironmentID:      pgUUID(app.EnvironmentID),
+		GithubAppID:        pgUUID(app.GitHubAppID),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -445,6 +451,26 @@ func (r *storeRepository) ServerTeam(ctx context.Context, serverID uuid.UUID) (u
 		return uuid.Nil, false, fmt.Errorf("deploy: get server team: %w", err)
 	}
 	return uuidFromPG(row.TeamID), true, nil
+}
+
+// GitHubAppOwnedBy reports whether the GitHub App connection belongs to the
+// caller. A foreign or missing id answers false without distinguishing the
+// two, so connection IDs cannot be probed.
+func (r *storeRepository) GitHubAppOwnedBy(ctx context.Context, id, userID uuid.UUID) (bool, error) {
+	if id == uuid.Nil {
+		return false, nil
+	}
+	_, err := r.store.GetGitHubAppByIDAndUser(ctx, sqlc.GetGitHubAppByIDAndUserParams{
+		ID:     pgUUID(id),
+		UserID: pgUUID(userID),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("deploy: github app owner: %w", err)
+	}
+	return true, nil
 }
 
 // CreateDeployment stores a queued deployment. The partial unique index on
@@ -819,6 +845,7 @@ func applicationFromRow(row sqlc.Application) Application {
 		Repo:               row.Repo,
 		CloneURL:           row.CloneUrl,
 		SourceType:         row.SourceType,
+		GitHubAppID:        uuidFromPG(row.GithubAppID),
 		Branch:             row.Branch,
 		BuildPack:          row.BuildPack,
 		BaseDomain:         row.BaseDomain,

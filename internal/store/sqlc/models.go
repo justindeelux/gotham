@@ -41,6 +41,7 @@ type Application struct {
 	IsPreview          bool               `json:"is_preview"`
 	EnvironmentID      pgtype.UUID        `json:"environment_id"`
 	SourceType         string             `json:"source_type"`
+	GithubAppID        pgtype.UUID        `json:"github_app_id"`
 }
 
 type ApplicationDeployKey struct {

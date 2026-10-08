@@ -3,6 +3,13 @@
 -- flow plus its installations. Secrets (private key PEM, webhook secret) are
 -- AES-GCM sealed with providers.SealSecret before they reach these columns;
 -- the API never returns them.
+--
+-- applications.github_app_id links an application to the connection it
+-- deploys through. NULL (the default, including every legacy
+-- provider=github row) keeps the previous OAuth/deploy-key behaviour: only
+-- a linked application with an http(s) clone URL ever takes the
+-- installation-token clone path. Deleting the connection unlinks instead of
+-- deleting the application.
 CREATE TABLE github_apps (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -44,7 +51,11 @@ CREATE TABLE github_repo_cache (
     PRIMARY KEY (github_app_id, installation_id, external_id)
 );
 
+ALTER TABLE applications
+    ADD COLUMN github_app_id uuid NULL REFERENCES github_apps (id) ON DELETE SET NULL;
+
 -- +goose Down
+ALTER TABLE applications DROP COLUMN IF EXISTS github_app_id;
 DROP TABLE IF EXISTS github_repo_cache;
 DROP TABLE IF EXISTS github_installations;
 DROP TABLE IF EXISTS github_apps;

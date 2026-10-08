@@ -63,6 +63,9 @@ describe("github_app wizard flow", () => {
       provider: "github",
       repo: "acme/web",
       source_type: "github_app",
+      // The wizard links the application to its connection, so the clone
+      // takes the installation-token path.
+      github_app_id: "g1",
     });
     wrapper.unmount();
   });

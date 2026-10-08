@@ -69,11 +69,14 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 		// creation does: the preview is a new row and must pass the
 		// provider/source agreement check below.
 		SourceType: NormalizeSourceType(base.SourceType, base.Provider),
-		Branch:     strings.TrimSpace(in.Branch),
-		BuildPack:  base.BuildPack,
-		BaseDomain: proxy.NormalizeDomain(in.BaseDomain),
-		IsPreview:  true,
-		Port:       base.Port,
+		// The link travels with the preview: it clones the same repo through
+		// the same connection.
+		GitHubAppID: base.GitHubAppID,
+		Branch:      strings.TrimSpace(in.Branch),
+		BuildPack:   base.BuildPack,
+		BaseDomain:  proxy.NormalizeDomain(in.BaseDomain),
+		IsPreview:   true,
+		Port:        base.Port,
 		// HostPort stays 0: the agent assigns a free port, so the preview
 		// never collides with the base application's binding.
 	}

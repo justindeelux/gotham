@@ -20,13 +20,16 @@ import (
 // fakeAPI implements GitHubAPI without network access, recording how often
 // each method runs so tests can prove token caching.
 type fakeAPI struct {
-	mu            sync.Mutex
-	pem           string
-	tokenCalls    int
-	tokenFor      []int64
-	token         string
-	expiresAt     time.Time
-	repos         []Repo
+	mu         sync.Mutex
+	pem        string
+	tokenCalls int
+	tokenFor   []int64
+	token      string
+	expiresAt  time.Time
+	repos      []Repo
+	reposErr   error
+	// reposFor serves per-token listings when set (keyed by token).
+	reposFor      map[string][]Repo
 	branches      map[string][]Branch
 	conversionErr error
 	// installations is the fake's installation registry by id.
@@ -82,7 +85,16 @@ func (f *fakeAPI) GetInstallation(_ context.Context, installationID int64, _ str
 	return info, nil
 }
 
-func (f *fakeAPI) ListInstallationRepos(_ context.Context, _ string) ([]Repo, bool, error) {
+func (f *fakeAPI) ListInstallationRepos(_ context.Context, token string) ([]Repo, bool, error) {
+	if f.reposErr != nil {
+		return nil, false, f.reposErr
+	}
+	if f.reposFor != nil {
+		if repos, ok := f.reposFor[token]; ok {
+			return repos, false, nil
+		}
+		return nil, false, nil
+	}
 	return f.repos, false, nil
 }
 
@@ -616,8 +628,11 @@ func TestTokenCloneURLResolvesGrant(t *testing.T) {
 	ctx := context.Background()
 
 	app := connect(t, svc, userID)
-	// Installation 999 grants nothing; 1000 grants acme/web.
-	api.repos = nil
+	// Installation 999 grants nothing; 1000 grants acme/web. The fake serves
+	// per-token listings because the service always refreshes.
+	api.reposFor = map[string][]Repo{
+		"tok-1000": {{ExternalID: "2", Name: "web", FullName: "acme/web", CloneURL: "https://github.com/acme/web.git"}},
+	}
 	mintInstall := func(id int64) {
 		_, state, err := svc.InstallURL(ctx, userID, app.ID)
 		if err != nil {
@@ -629,7 +644,6 @@ func TestTokenCloneURLResolvesGrant(t *testing.T) {
 		}
 	}
 	mintInstall(999)
-	api.repos = []Repo{{ExternalID: "2", Name: "web", FullName: "acme/web", CloneURL: "https://github.com/acme/web.git"}}
 	mintInstall(1000)
 
 	mintsBefore := len(api.tokenFor)
@@ -660,6 +674,16 @@ func TestTokenCloneURLResolvesGrant(t *testing.T) {
 	if _, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://evil.example/acme/web.git"); err == nil {
 		t.Fatal("foreign-host clone url was accepted")
 	}
+	// A transient GitHub failure fails the lookup instead of the sentinel:
+	// the deploy must fail, never silently clone anonymously.
+	api.reposErr = errors.New("502 Bad Gateway")
+	if _, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://github.com/acme/web.git"); !errors.Is(err, ErrGrantsUnverifiable) {
+		t.Fatalf("transient failure err = %v, want ErrGrantsUnverifiable", err)
+	}
+	if _, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://github.com/acme/web.git"); errors.Is(err, ErrNoInstallationGrant) {
+		t.Fatal("transient failure degraded to the no-grant sentinel")
+	}
+	api.reposErr = nil
 	// An ungranted repo fails with the sentinel the cloner falls back on.
 	if _, err := svc.TokenCloneURL(ctx, userID, "acme/unknown", "https://github.com/acme/unknown.git"); !errors.Is(err, ErrNoInstallationGrant) {
 		t.Fatalf("ungranted repo err = %v, want ErrNoInstallationGrant", err)

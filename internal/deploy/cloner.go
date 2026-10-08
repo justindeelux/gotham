@@ -61,8 +61,8 @@ type gitSource struct {
 	// keys opens the application's deploy private key; nil disables key
 	// lookup entirely (anonymous clone).
 	keys deployKeyResolver
-	// appTokens mints installation tokens for github_app sources; nil fails
-	// those clones closed instead of silently cloning anonymously.
+	// appTokens builds token-authenticated clone URLs for linked github_app
+	// sources; nil keeps every clone on the legacy path.
 	appTokens appTokenResolver
 	// run executes git; nil selects the real binary.
 	run cloneRunner
@@ -88,20 +88,24 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 	// tokenClone marks the installation-token path for the log line: the
 	// token itself never appears (see RedactCloneURL).
 	tokenClone := false
-	if app.SourceType == SourceGitHubApp && s.appTokens != nil {
-		// A github_app application backed by a GitHub App connection clones
-		// with a fresh installation token for the installation granting its
-		// repo. Legacy provider=github applications (OAuth flow, deploy
-		// keys, local fixtures) hold no grant: the resolver reports
-		// ErrNoInstallationGrant and the clone keeps the previous
-		// deploy-key/anonymous behaviour. Any other token failure (host
-		// mismatch, mint failure) fails the clone instead of silently
-		// cloning anonymously. Without a resolver there is nothing to mint
-		// with, so the legacy path applies too.
-		if tokenURL, err := s.appTokens.TokenCloneURL(ctx, app.UserID, app.Repo, url); err == nil {
+	// The token path is explicit: the application must be linked to a GitHub
+	// App connection AND carry an http(s) clone URL. Anything else (legacy
+	// provider=github rows, deploy keys, SSH URLs, local fixtures) never
+	// touches the resolver, so no GitHub API call happens for it.
+	if app.GitHubAppID != uuid.Nil && s.appTokens != nil && isHTTPCloneURL(url) {
+		tokenURL, err := s.appTokens.TokenCloneURL(ctx, app.UserID, app.Repo, url)
+		if err == nil {
 			url = tokenURL
 			tokenClone = true
-		} else if !errors.Is(err, githubapp.ErrNoInstallationGrant) {
+		} else if errors.Is(err, githubapp.ErrNoInstallationGrant) {
+			// The link exists but no installation grants the repo (revoked
+			// grant): the legacy path still applies, visibly. Anything
+			// else (host mismatch, mint failure, unverifiable grants)
+			// fails the clone instead of silently cloning anonymously.
+			if log != nil {
+				log(fmt.Sprintf("no GitHub App installation grants %q; cloning without an installation token", app.Repo))
+			}
+		} else {
 			return err
 		}
 	}
@@ -116,13 +120,15 @@ func (s gitSource) Clone(ctx context.Context, app Application, dir string, log f
 		return fmt.Errorf("%w: SSH clone URL %q needs a deploy key: use a public http(s) or git URL, or a private-git source",
 			ErrValidation, RedactCloneURL(url))
 	}
-	if privatePEM != "" {
+	if privatePEM != "" && !tokenClone {
 		// A deploy key is an SSH credential: over http(s) it would
 		// authenticate nothing, so an http(s) URL is rewritten to its SSH
-		// shape first. This is the fallback for rows that still carry an
-		// https URL (API clients, applications created before BE-4.4b); the
-		// wizard stores the provider's own ssh_url for private repositories,
-		// which passes through with its port intact.
+		// shape first. Skipped on the token path: the token already
+		// authenticates the https URL, and rewriting would drop it while
+		// the log line claims token use. This is the fallback for rows that
+		// still carry an https URL (API clients, applications created
+		// before BE-4.4b); the wizard stores the provider's own ssh_url for
+		// private repositories, which passes through with its port intact.
 		url = sshCloneURL(url)
 	}
 	branch := strings.TrimSpace(app.Branch)
@@ -387,6 +393,21 @@ func validateCloneURL(url string) error {
 		return nil
 	default:
 		return fmt.Errorf("%w: unsupported clone URL", ErrValidation)
+	}
+}
+
+// isHTTPCloneURL reports whether raw uses an http(s) scheme: the only shape
+// that can carry an installation token.
+func isHTTPCloneURL(raw string) bool {
+	scheme, _, ok := strings.Cut(strings.TrimSpace(raw), "://")
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
 	}
 }
 

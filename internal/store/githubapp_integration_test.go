@@ -175,9 +175,9 @@ func TestGitHubAppPersistence(t *testing.T) {
 	}
 	var appID pgtype.UUID
 	if err := pool.QueryRow(ctx, `INSERT INTO applications
-		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, port, host_port)
-		VALUES ($1, $1, $2, $3, 'web', 'github', 'acme/web', 'https://github.com/acme/web.git', 'github_app', 'main', 'dockerfile', 3000, 0)
-		RETURNING id`, user.ID, serverID, envID).Scan(&appID); err != nil {
+		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, port, host_port, github_app_id)
+		VALUES ($1, $1, $2, $3, 'web', 'github', 'acme/web', 'https://github.com/acme/web.git', 'github_app', 'main', 'dockerfile', 3000, 0, $4)
+		RETURNING id`, user.ID, serverID, envID, app.ID).Scan(&appID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
 	t.Cleanup(func() {
@@ -198,14 +198,29 @@ func TestGitHubAppPersistence(t *testing.T) {
 		t.Fatalf("applications using = %d, want 1", n)
 	}
 	targets, err := st.ListGitHubAppPushTargets(ctx, sqlc.ListGitHubAppPushTargetsParams{
-		UserID: user.ID,
-		Repo:   "acme/web",
+		UserID:      user.ID,
+		GithubAppID: app.ID,
+		Repo:        "acme/web",
 	})
 	if err != nil {
 		t.Fatalf("ListGitHubAppPushTargets: %v", err)
 	}
 	if len(targets) != 1 || targets[0].Branch != "main" {
 		t.Fatalf("push targets = %+v", targets)
+	}
+	// Unlinked rows never deploy through the app, even watching the repo.
+	if _, err := pool.Exec(ctx, `INSERT INTO applications
+		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, port, host_port)
+		VALUES ($1, $1, $2, $3, 'legacy', 'github', 'acme/web', 'git@github.com:acme/web.git', 'github_app', 'main', 'dockerfile', 3000, 0)`,
+		user.ID, serverID, envID); err != nil {
+		t.Fatalf("seed legacy application: %v", err)
+	}
+	if targets, err := st.ListGitHubAppPushTargets(ctx, sqlc.ListGitHubAppPushTargetsParams{
+		UserID:      user.ID,
+		GithubAppID: app.ID,
+		Repo:        "acme/web",
+	}); err != nil || len(targets) != 1 {
+		t.Fatalf("targets with legacy row = %+v, %v", targets, err)
 	}
 	if targets, err := st.ListGitHubAppPushTargets(ctx, sqlc.ListGitHubAppPushTargetsParams{
 		UserID: other.ID,
@@ -220,6 +235,14 @@ func TestGitHubAppPersistence(t *testing.T) {
 		UserID: user.ID,
 	}); err != nil {
 		t.Fatalf("DeleteGitHubApp: %v", err)
+	}
+	// Deleting the connection unlinks instead of deleting the application.
+	var link pgtype.UUID
+	if err := pool.QueryRow(ctx, `SELECT github_app_id FROM applications WHERE id = $1`, appID).Scan(&link); err != nil {
+		t.Fatalf("link after delete: %v", err)
+	}
+	if link.Valid {
+		t.Fatal("application still linked after connection delete")
 	}
 	insts, err := st.ListGitHubInstallations(ctx, app.ID)
 	if err != nil {

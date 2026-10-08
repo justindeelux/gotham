@@ -45,11 +45,12 @@ const applicationBody = `{
 }`
 
 // applicationWireKeys are the fields of the FE's `Application` interface plus
-// the additive `base_domain_disabled` visibility flag; the envelope must carry
-// exactly these, or the SPA reads undefined values.
+// the additive `base_domain_disabled` visibility flag and the `github_app_id`
+// link; the envelope must carry exactly these, or the SPA reads undefined
+// values.
 var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
-	"project_name", "provider", "repo", "clone_url", "source_type", "branch", "build_pack",
+	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id", "branch", "build_pack",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
 }
@@ -495,7 +496,47 @@ func TestRoutesUpdateApplication(t *testing.T) {
 			t.Errorf("unpatched fields were sent: %+v", in)
 		}
 	})
+
+	// The link round-trips through the update body: a UUID sets it, an
+	// empty string clears it, absent leaves it alone.
+	t.Run("link set and clear", func(t *testing.T) {
+		linkID := uuid.NewString()
+		for _, tc := range []struct {
+			name string
+			body string
+			want *string
+		}{
+			{"set link", `{"github_app_id":"` + linkID + `"}`, &linkID},
+			{"clear link", `{"github_app_id":""}`, strPtr("")},
+			{"absent link", `{"name":"renamed"}`, nil},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				svc := &fakeDeployService{application: app}
+				srv := newRouteServer(svc, alwaysUser(userID))
+
+				rec := httptest.NewRecorder()
+				srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, applicationsPath+"/"+appID.String(),
+					strings.NewReader(tc.body)))
+
+				if rec.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+				}
+				got := svc.seenUpdate.GitHubAppID
+				if tc.want == nil {
+					if got != nil {
+						t.Errorf("link = %q, want unchanged (nil)", *got)
+					}
+					return
+				}
+				if got == nil || *got != *tc.want {
+					t.Errorf("link = %v, want %q", got, *tc.want)
+				}
+			})
+		}
+	})
 }
+
+func strPtr(s string) *string { return &s }
 
 func TestRoutesDeleteApplication(t *testing.T) {
 	userID, appID := uuid.New(), uuid.New()
@@ -949,7 +990,7 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 	// so any clone URL the cloner supports stays creatable. The token path
 	// applies at clone time only when an installation actually grants the
 	// repo.
-	t.Run("github app keeps ssh clone urls", func(t *testing.T) {
+	t.Run("github app with ssh clone url is created", func(t *testing.T) {
 		userID := uuid.New()
 		svc := newTestService(t, &fakeRepository{})
 		srv := newRouteServer(svc, alwaysUser(userID))
@@ -960,6 +1001,54 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+	})
+
+	// A linked create stores the connection id on the row; a foreign one is
+	// not-found so connection ids cannot be probed.
+	t.Run("github app link is owned", func(t *testing.T) {
+		userID := uuid.New()
+		owned := uuid.New()
+		svc := newTestService(t, &fakeRepository{ownedGitHubApps: map[uuid.UUID]bool{owned: true}})
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		linked := map[string]any{
+			"name": "demo app", "environment_id": uuid.New().String(),
+			"provider": "github", "repo": "acme/demo",
+			"clone_url": "https://github.com/acme/demo.git", "source_type": SourceGitHubApp,
+			"branch": "main", "build_pack": "dockerfile", "server_id": uuid.New().String(),
+			"github_app_id": owned.String(),
+		}
+		raw, err := json.Marshal(linked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath, strings.NewReader(string(raw))))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("linked status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+		var envelope struct {
+			Application struct {
+				GitHubAppID string `json:"github_app_id"`
+			} `json:"application"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Application.GitHubAppID != owned.String() {
+			t.Errorf("link = %q, want %q", envelope.Application.GitHubAppID, owned.String())
+		}
+
+		linked["github_app_id"] = uuid.NewString()
+		raw, err = json.Marshal(linked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec = httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath, strings.NewReader(string(raw))))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("foreign status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 		}
 	})
 }

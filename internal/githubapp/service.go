@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -516,16 +517,18 @@ func (s *Service) appJWTFromSealed(sealed SealedApp) (string, error) {
 }
 
 // TokenCloneURL mints a fresh installation token for the installation
-// granting repo and embeds it in cloneURL.
+// granting repo and embeds it in cloneURL. The cloner calls it only for
+// applications explicitly linked to a GitHub App connection; resolution
+// inside is by repository grant (one user may own several apps and
+// installations, so no app id is passed).
 //
-// Resolution is by repository grant, deliberately not by row id:
-// applications carry no github_apps foreign key, and one user may own
-// several apps and installations, so the cloner cannot pass an app id. The
-// installation whose cache holds repo (case-insensitive) is used, never
-// "the first installation". The stored clone URL must live on the app's own
-// host (github.com or the connected Enterprise origin), so a token can never
-// be embedded in an arbitrary https URL. The token authenticates one clone
-// attempt: it is never persisted and never logged.
+// Every installation is listed fresh: a listing failure fails the lookup
+// (never the sentinel), and the sentinel is returned only when every
+// installation listed successfully and none grants the repo. The stored
+// clone URL must live on the app's own host (github.com or the connected
+// Enterprise origin), so a token can never be embedded in an arbitrary
+// https URL. The token authenticates one clone attempt: it is never
+// persisted and never logged.
 func (s *Service) TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, cloneURL string) (string, error) {
 	if s.repo == nil {
 		return "", ErrNotFound
@@ -555,73 +558,51 @@ func (s *Service) TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, clo
 	return embedToken(cloneURL, token)
 }
 
-// installationGrantingRepo finds the app and installation whose repo cache
-// holds repo. A cache miss refreshes every installation once before failing,
-// so a newly granted repository resolves without a manual refresh.
+// installationGrantingRepo finds the app and installation whose repos grant
+// repo (case-insensitive), preferring the lowest app creation order and
+// installation id for determinism.
+//
+// Every installation is listed fresh from the API: a refresh or listing
+// failure on any installation fails the lookup instead of degrading to the
+// sentinel. The sentinel is returned only when every installation listed
+// successfully and none grants the repo — that is the only case the deploy
+// cloner may treat as "not backed by a GitHub App connection". Anything
+// else (transient GitHub failure, unreadable cache data) fails the deploy
+// with a clear error rather than a silent anonymous clone.
 func (s *Service) installationGrantingRepo(ctx context.Context, userID uuid.UUID, repo string) (GitHubApp, Installation, error) {
 	apps, err := s.repo.ListApps(ctx, userID)
 	if err != nil {
 		return GitHubApp{}, Installation{}, err
 	}
+	var verifyErr error
 	for _, app := range apps {
-		if inst, ok := findGrant(app, s.cachedRepos(ctx, app, false), repo); ok {
-			return app, inst, nil
+		sealed, err := s.sealed(ctx, app)
+		if err != nil {
+			verifyErr = errors.Join(verifyErr, err)
+			continue
 		}
-	}
-	// One refresh pass: the grant may be newer than every cache.
-	for _, app := range apps {
-		if inst, ok := findGrant(app, s.cachedRepos(ctx, app, true), repo); ok {
-			return app, inst, nil
+		insts, err := s.repo.ListInstallations(ctx, app.ID)
+		if err != nil {
+			verifyErr = errors.Join(verifyErr, err)
+			continue
 		}
-	}
-	return GitHubApp{}, Installation{}, fmt.Errorf("%w: %q", ErrNoInstallationGrant, repo)
-}
-
-// cachedRepos returns the merged repo caches of all installations, refreshing
-// them first when refresh is set. Failures fall back to cache per
-// installation; only a total miss fails the caller.
-func (s *Service) cachedRepos(ctx context.Context, app GitHubApp, refresh bool) map[int64][]Repo {
-	merged := make(map[int64][]Repo)
-	for _, inst := range app.Installations {
-		var repos []Repo
-		if refresh {
-			if refreshed, _, err := s.refreshReposForInstallation(ctx, app, inst.InstallationID); err == nil {
-				repos = refreshed
-			} else {
-				s.logger.Warn("githubapp: grant refresh failed", "app", app.AppID, "error", err)
-			}
-		}
-		if repos == nil {
-			cached, err := s.repo.ListRepoCache(ctx, app.ID, inst.InstallationID)
+		for _, inst := range insts {
+			repos, _, err := s.refreshReposFor(ctx, sealed, inst.InstallationID)
 			if err != nil {
+				verifyErr = errors.Join(verifyErr, err)
 				continue
 			}
-			repos = cached
-		}
-		merged[inst.InstallationID] = repos
-	}
-	return merged
-}
-
-// findGrant returns the installation whose repos hold repo (case-insensitive),
-// preferring the lowest installation id for determinism.
-func findGrant(app GitHubApp, byInstallation map[int64][]Repo, repo string) (Installation, bool) {
-	var best *Installation
-	for _, inst := range app.Installations {
-		for _, r := range byInstallation[inst.InstallationID] {
-			if strings.EqualFold(r.FullName, repo) {
-				if best == nil || inst.InstallationID < best.InstallationID {
-					candidate := inst
-					best = &candidate
+			for _, r := range repos {
+				if strings.EqualFold(strings.TrimSpace(r.FullName), repo) {
+					return app, inst, nil
 				}
-				break
 			}
 		}
 	}
-	if best == nil {
-		return Installation{}, false
+	if verifyErr != nil {
+		return GitHubApp{}, Installation{}, fmt.Errorf("%w: %v", ErrGrantsUnverifiable, verifyErr)
 	}
-	return *best, true
+	return GitHubApp{}, Installation{}, fmt.Errorf("%w: %q", ErrNoInstallationGrant, repo)
 }
 
 // checkCloneHost requires the stored clone URL to live on the app's own git
@@ -930,16 +911,6 @@ func (s *Service) ownsInstallation(ctx context.Context, appID uuid.UUID, install
 		}
 	}
 	return false, nil
-}
-
-// refreshReposForInstallation refreshes one installation when the app row is
-// already in hand.
-func (s *Service) refreshReposForInstallation(ctx context.Context, app GitHubApp, installationID int64) ([]Repo, bool, error) {
-	sealed, err := s.sealed(ctx, app)
-	if err != nil {
-		return nil, false, err
-	}
-	return s.refreshReposFor(ctx, sealed, installationID)
 }
 
 // refreshReposFor refreshes one installation when the sealed app row (with

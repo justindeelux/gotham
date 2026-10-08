@@ -45,6 +45,8 @@ export interface Application {
   clone_url: string;
   /** How the application fetches its code (GS-2 source model). */
   source_type: SourceType;
+  /** Linked GitHub App connection (GS-5), empty when unlinked. */
+  github_app_id: string;
   branch: string;
   build_pack: string;
   base_domain: string;
@@ -123,6 +125,8 @@ export interface CreateApplicationInput {
   clone_url: string;
   /** How the application fetches its code (GS-2 source model). */
   source_type: SourceType;
+  /** Links the application to its GitHub App connection (GS-5); omit to leave unlinked. */
+  github_app_id?: string;
   branch: string;
   build_pack: string;
   base_domain: string;

@@ -541,6 +541,10 @@ export function useCreateAppWizard(
       repo: source.repo,
       clone_url: source.cloneUrl,
       source_type: form.sourceType,
+      // The GitHub App flow links the application to its connection, so the
+      // clone takes the installation-token path; every other source stays
+      // unlinked on the legacy path.
+      github_app_id: isGitHubAppFlow.value ? form.providerId : undefined,
       branch: form.branch.trim(),
       build_pack: form.buildPack,
       base_domain: form.baseDomain.trim(),

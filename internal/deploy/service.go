@@ -148,8 +148,8 @@ type Config struct {
 	Notifier Notifier
 	// Source clones the repository; nil selects git on the control plane.
 	Source Source
-	// AppTokens mints installation tokens for github_app clones (GS-5); nil
-	// fails those clones closed instead of cloning anonymously.
+	// AppTokens builds token-authenticated clone URLs for linked github_app
+	// applications (GS-5); nil keeps every clone on the legacy path.
 	AppTokens appTokenResolver
 	// PreviewCleanup tears down resources that hang off an application
 	// outside the deploy schema before the application row is deleted

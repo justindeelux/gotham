@@ -240,12 +240,14 @@ func (r *storeRepository) CountApplicationsForApp(ctx context.Context, userID, a
 	return n, nil
 }
 
-// PushTargets returns the github_app applications of the app's owner watching
-// repo (lowercased owner/name), for webhook push routing.
+// PushTargets returns the applications linked to the app and watching repo
+// (lowercased owner/name), for webhook push routing. Only linked
+// applications deploy through the app: unlinked rows keep the per-hook flow.
 func (r *storeRepository) PushTargets(ctx context.Context, appID, userID uuid.UUID, repo string) ([]AppPushTarget, error) {
 	rows, err := r.store.ListGitHubAppPushTargets(ctx, sqlc.ListGitHubAppPushTargetsParams{
-		UserID: pgUUID(userID),
-		Repo:   repo,
+		UserID:      pgUUID(userID),
+		GithubAppID: pgUUID(appID),
+		Repo:        repo,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("githubapp: push targets: %w", err)

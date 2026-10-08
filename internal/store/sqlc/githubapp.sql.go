@@ -27,7 +27,7 @@ const countGitHubAppApplicationsForApp = `-- name: CountGitHubAppApplicationsFor
 SELECT count(*)::bigint FROM applications
 WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
 AND lower(repo) IN (
-    SELECT lower(full_name) FROM github_repo_cache WHERE github_app_id = $2
+    SELECT lower(full_name) FROM github_repo_cache WHERE github_repo_cache.github_app_id = $2
 )
 `
 
@@ -193,12 +193,13 @@ func (q *Queries) GetGitHubAppByIDAndUser(ctx context.Context, arg GetGitHubAppB
 const listGitHubAppPushTargets = `-- name: ListGitHubAppPushTargets :many
 SELECT id, branch FROM applications
 WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
-AND lower(repo) = $2
+AND github_app_id = $2 AND lower(repo) = $3
 `
 
 type ListGitHubAppPushTargetsParams struct {
-	UserID pgtype.UUID `json:"user_id"`
-	Repo   string      `json:"repo"`
+	UserID      pgtype.UUID `json:"user_id"`
+	GithubAppID pgtype.UUID `json:"github_app_id"`
+	Repo        string      `json:"repo"`
 }
 
 type ListGitHubAppPushTargetsRow struct {
@@ -207,7 +208,7 @@ type ListGitHubAppPushTargetsRow struct {
 }
 
 func (q *Queries) ListGitHubAppPushTargets(ctx context.Context, arg ListGitHubAppPushTargetsParams) ([]ListGitHubAppPushTargetsRow, error) {
-	rows, err := q.db.Query(ctx, listGitHubAppPushTargets, arg.UserID, arg.Repo)
+	rows, err := q.db.Query(ctx, listGitHubAppPushTargets, arg.UserID, arg.GithubAppID, arg.Repo)
 	if err != nil {
 		return nil, err
 	}

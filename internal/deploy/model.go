@@ -96,8 +96,13 @@ type Application struct {
 	// deleting one must never remove the key from the Git host; the marker is
 	// also what lets the orphan sweep find a preview whose binding is gone.
 	IsPreview bool
-	Port      int32
-	HostPort  int32
+	// GitHubAppID links the application to its GitHub App connection (GS-5,
+	// migration 00039). Only a linked application with an http(s) clone URL
+	// ever takes the installation-token clone path; uuid.Nil (every legacy
+	// row) keeps the previous OAuth/deploy-key behaviour.
+	GitHubAppID uuid.UUID
+	Port        int32
+	HostPort    int32
 	// EnvironmentName, ProjectID, ProjectName and ServerName enrich the list
 	// and get responses per the Phase 13 contract; they derive from
 	// EnvironmentID and ServerID and are never written directly.

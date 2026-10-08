@@ -79,6 +79,9 @@ type fakeRepository struct {
 	// serverTeams maps a registered server to its team; an entry without a
 	// team (missing or zero) is a legacy shared node.
 	serverTeams map[uuid.UUID]uuid.UUID
+	// ownedGitHubApps names the GitHub App connections GitHubAppOwnedBy
+	// reports as owned.
+	ownedGitHubApps map[uuid.UUID]bool
 
 	getErr       error
 	createErr    error
@@ -437,6 +440,14 @@ func (r *fakeRepository) ServerTeam(_ context.Context, serverID uuid.UUID) (uuid
 		return uuid.Nil, false, nil
 	}
 	return r.serverTeams[serverID], true, nil
+}
+
+// GitHubAppOwnedBy implements Repository: ids registered in ownedGitHubApps
+// belong to any caller, everything else is foreign.
+func (r *fakeRepository) GitHubAppOwnedBy(_ context.Context, id, _ uuid.UUID) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ownedGitHubApps[id], nil
 }
 
 // ListApplicationsByEnvironment implements Repository.

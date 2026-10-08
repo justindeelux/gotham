@@ -15,11 +15,15 @@ var (
 	// callback can tell "start over" from "something broke" without
 	// leaking details.
 	ErrExpiredState = errors.New("githubapp: invalid or expired state")
-	// ErrNoInstallationGrant is returned when no installation of the
-	// caller's apps grants a repository. The deploy cloner treats it as
-	// "not backed by a GitHub App connection" and keeps the legacy
+	// ErrNoInstallationGrant is returned when every installation listed
+	// successfully and none grants a repository. The deploy cloner treats it
+	// as "not backed by a GitHub App connection" and keeps the legacy
 	// deploy-key/anonymous behaviour for provider=github applications.
 	ErrNoInstallationGrant = errors.New("githubapp: no installation grants the repository")
+	// ErrGrantsUnverifiable is returned when an installation list or refresh
+	// failed before a grant was found: the grants could not be verified, so
+	// the deploy fails instead of degrading to a silent anonymous clone.
+	ErrGrantsUnverifiable = errors.New("githubapp: installation grants unverifiable")
 	// ErrUnauthorized is returned when a webhook delivery fails signature
 	// verification.
 	ErrUnauthorized = errors.New("githubapp: unauthorized")

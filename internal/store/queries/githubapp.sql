@@ -69,13 +69,13 @@ WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github';
 SELECT count(*)::bigint FROM applications
 WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
 AND lower(repo) IN (
-    SELECT lower(full_name) FROM github_repo_cache WHERE github_app_id = $2
+    SELECT lower(full_name) FROM github_repo_cache WHERE github_repo_cache.github_app_id = $2
 );
 
 -- name: ListGitHubAppPushTargets :many
 SELECT id, branch FROM applications
 WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
-AND lower(repo) = $2;
+AND github_app_id = $2 AND lower(repo) = $3;
 
 -- name: ListGitHubAppsByInstallationID :many
 SELECT g.* FROM github_apps g

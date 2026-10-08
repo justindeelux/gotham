@@ -147,6 +147,12 @@ const vi: ApplicationsMessages = {
     save: "Lưu Dockerfile",
     redeployHint: "Triển khai lại để build nội dung đã lưu.",
   },
+  buildArgs: {
+    secretWarning:
+      "Không đặt secrets ở đây — giá trị được lưu dưới dạng plaintext, mọi người xem được ứng dụng đều thấy, và tồn tại trong lịch sử image. Hãy dùng sealed secrets hoặc biến môi trường cho thông tin đăng nhập.",
+    add: "Thêm build arg",
+    remove: "Xóa",
+  },
   cert: {
     title: "Cấu hình chứng chỉ",
     edit: "Sửa",
@@ -265,6 +271,7 @@ const vi: ApplicationsMessages = {
     appNameHint: "Chữ thường, chữ số và gạch ngang (3-31 ký tự). Dùng cho container và tag image.",
     buildPackTitle: "Gói build",
     buildPackIntro: "Việc nhận diện chạy phía server khi build dựa trên cấu trúc kho — lựa chọn bên dưới chỉ là gợi ý, không phải phỏng đoán.",
+    buildPackDockerfileNote: "Nguồn Dockerfile luôn build bằng engine Dockerfile từ nội dung đã dán — không cần chọn gói build.",
     packAuto: "Tự nhận diện (khuyến nghị)",
     packAutoHint: "Control plane chọn Dockerfile, Railpack, Buildpacks hoặc static từ cấu trúc kho.",
     packRailpack: "Railpack",
@@ -290,6 +297,7 @@ const vi: ApplicationsMessages = {
     reviewTitle: "Tóm tắt",
     reviewApp: "Ứng dụng",
     reviewSource: "Nguồn",
+    reviewDockerfileArgs: "Dockerfile | Dockerfile · {count} đối số build | Dockerfile · {count} đối số build",
     reviewBuildPack: "Gói build",
     reviewPortDomain: "Cổng / tên miền",
     reviewEnvVolumes: "Môi trường / volume",

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // Dockerfile source limits (GS-7). The content travels as the build context
@@ -28,11 +29,27 @@ func ValidateDockerfileContent(content string) error {
 	if strings.TrimSpace(content) == "" {
 		return fmt.Errorf("%w: Dockerfile content is required", ErrValidation)
 	}
+	if err := checkTextBytes(content, "Dockerfile content"); err != nil {
+		return err
+	}
 	if len(content) > MaxDockerfileBytes {
 		return fmt.Errorf("%w: Dockerfile content exceeds %d bytes", ErrValidation, MaxDockerfileBytes)
 	}
 	if !hasFromInstruction(content) {
 		return fmt.Errorf("%w: Dockerfile must contain a FROM instruction", ErrValidation)
+	}
+	return nil
+}
+
+// checkTextBytes rejects what Postgres text/jsonb columns reject: NUL bytes
+// and invalid UTF-8. Without it a pasted value would travel to the database
+// and surface as a 500 instead of a 400.
+func checkTextBytes(s, what string) error {
+	if strings.ContainsRune(s, 0) {
+		return fmt.Errorf("%w: %s must not contain NUL bytes", ErrValidation, what)
+	}
+	if !utf8.ValidString(s) {
+		return fmt.Errorf("%w: %s must be valid UTF-8", ErrValidation, what)
 	}
 	return nil
 }
@@ -64,6 +81,9 @@ func ValidateBuildArgs(args map[string]string) error {
 	}
 	for key, value := range args {
 		if err := validateEnvKey(strings.TrimSpace(key)); err != nil {
+			return err
+		}
+		if err := checkTextBytes(value, fmt.Sprintf("build arg %q value", key)); err != nil {
 			return err
 		}
 		if len(value) > MaxBuildArgValueBytes {

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { NAlert, NButton, NDynamicInput, NFormItem, NInput, NSelect, NSpace } from "naive-ui";
+import { NAlert, NButton, NFormItem, NInput, NSelect, NSpace } from "naive-ui";
 import { useI18n } from "vue-i18n";
 
+import BuildArgsEditor from "@/features/applications/components/BuildArgsEditor.vue";
 import { useCreateWizardState } from "@/features/applications/composables/useCreateAppWizard";
 
 const wizard = useCreateWizardState();
@@ -47,12 +48,7 @@ const { t } = useI18n();
       </NFormItem>
 
       <NFormItem :label="t('applications.wizard.buildArgs')">
-        <NDynamicInput
-          v-model:value="form.buildArgs"
-          preset="pair"
-          :key-placeholder="t('applications.wizard.buildArgKey')"
-          :value-placeholder="t('applications.wizard.buildArgValue')"
-        />
+        <BuildArgsEditor v-model="form.buildArgs" />
         <span class="field-hint">{{ t("applications.wizard.buildArgsHint") }}</span>
       </NFormItem>
     </div>
@@ -105,7 +101,7 @@ const { t } = useI18n();
     </NAlert>
 
     <div class="form-row">
-      <NFormItem :label="t('applications.wizard.branch')">
+      <NFormItem v-if="!wizard.isDockerfile.value" :label="t('applications.wizard.branch')">
         <NSelect
           v-if="wizard.branchOptions.value.length > 0"
           v-model:value="form.branch"

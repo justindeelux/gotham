@@ -154,3 +154,31 @@ were deferred by explicit owner decision:
   `running` and answered HTTP 200 through their host ports, including env vars
   and a persistent `/data` mount. A network-gated optional test can be added
   with QA-4.1b.
+
+## GS-7 — Pasted-Dockerfile source (JUS-63)
+
+- **Context brief:** applications whose source type is `dockerfile` deploy
+  from Dockerfile text pasted in the wizard (monospace editor) plus an
+  optional build-args key/value list; no repository is needed. The text is
+  stored on the application (`dockerfile_content`, `build_args` on the row)
+  and shown/edited on the detail overview; a redeploy always builds the
+  latest saved text. The orchestrator materializes the text as the whole
+  build context (no clone, no build-pack detection) and builds it with the
+  Dockerfile engine through the node `BuildImage` path, like git builds.
+- **Limits:** content must be non-empty, valid UTF-8 without NUL bytes, fit
+  64 KiB and contain a `FROM` instruction; at most 64 build args with values
+  capped at 4 KiB each. The same gates run at creation, on edit and at
+  deploy time; anything deeper is the node builder's job.
+- **Secrets note:** build-arg values are stored in plaintext, returned on
+  the detail routes (kept out of list responses), visible to every app
+  reader and persisted in image history on the node. The UI warns next to
+  the field and masks values; credentials belong in sealed secrets or env
+  vars instead. Previews inherit the base text and args (build-time values,
+  not secrets, which stay excluded).
+- **Deliverables:** migration `00039_applications_dockerfile.sql`, validators
+  in `internal/deploy/dockerfile.go`, orchestrator fetch/build branches,
+  wizard source option + `BuildArgsEditor`, detail `DockerfileEditor`.
+- **Verify:** `TestValidateDockerfileContent`, `TestValidateBuildArgs`,
+  `TestCloneSourceDockerfile`, `TestBuildDockerfileSource`,
+  `TestInlineDockerfileBuildE2E` (live Docker, `GOTHAM_E2E`-gated),
+  `web/tests/dockerfile-source.test.ts`.

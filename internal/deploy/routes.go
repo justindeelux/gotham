@@ -119,7 +119,39 @@ type webhookOutcome struct {
 
 // applicationListEnvelope wraps an application list.
 type applicationListEnvelope struct {
-	Applications []applicationResponse `json:"applications"`
+	Applications []applicationListItem `json:"applications"`
+}
+
+// applicationListItem is the wire representation of an application in list
+// responses. It mirrors applicationResponse except the Dockerfile source
+// fields: pasted text and --build-arg values travel only on the detail
+// routes (get/create/update), so a list read never exposes them. ARG values
+// persist in image history on the node, so they must never be treated as
+// secrets — the UI warns next to the field instead.
+type applicationListItem struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	EnvironmentID   string `json:"environment_id"`
+	EnvironmentName string `json:"environment_name"`
+	ProjectID       string `json:"project_id"`
+	ProjectName     string `json:"project_name"`
+	Provider        string `json:"provider"`
+	Repo            string `json:"repo"`
+	CloneURL        string `json:"clone_url"`
+	SourceType      string `json:"source_type"`
+	Branch          string `json:"branch"`
+	BuildPack       string `json:"build_pack"`
+	BaseDomain      string `json:"base_domain"`
+	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
+	// migration (legacy duplicate); the value is preserved and an explicit
+	// domain update re-enables it.
+	BaseDomainDisabled bool      `json:"base_domain_disabled"`
+	Port               int32     `json:"port"`
+	HostPort           int32     `json:"host_port"`
+	ServerID           *string   `json:"server_id"`
+	ServerName         string    `json:"server_name"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // envEntryRequest is one environment row on the wire (`EnvVar` in the FE). A
@@ -369,9 +401,9 @@ func (h *handler) listApplications(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	response := make([]applicationResponse, 0, len(applications))
+	response := make([]applicationListItem, 0, len(applications))
 	for _, application := range applications {
-		response = append(response, newApplicationResponse(application))
+		response = append(response, newApplicationListItem(application))
 	}
 	writeJSON(w, http.StatusOK, applicationListEnvelope{Applications: response})
 }
@@ -950,6 +982,37 @@ func newApplicationResponse(application Application) applicationResponse {
 	// The link is empty (not the zero UUID) when the application has none.
 	if application.GitHubAppID != uuid.Nil {
 		response.GitHubAppID = application.GitHubAppID.String()
+	}
+	return response
+}
+
+// newApplicationListItem maps a domain application to its list representation
+// (detail fields excluded, see applicationListItem).
+func newApplicationListItem(application Application) applicationListItem {
+	response := applicationListItem{
+		ID:                 application.ID.String(),
+		Name:               application.Name,
+		EnvironmentID:      application.EnvironmentID.String(),
+		EnvironmentName:    application.EnvironmentName,
+		ProjectID:          application.ProjectID.String(),
+		ProjectName:        application.ProjectName,
+		Provider:           application.Provider,
+		Repo:               application.Repo,
+		CloneURL:           RedactCloneURL(application.CloneURL),
+		SourceType:         application.SourceType,
+		Branch:             application.Branch,
+		BuildPack:          application.BuildPack,
+		BaseDomain:         application.BaseDomain,
+		BaseDomainDisabled: application.BaseDomainDisabled,
+		Port:               application.Port,
+		HostPort:           application.HostPort,
+		ServerName:         application.ServerName,
+		CreatedAt:          application.CreatedAt,
+		UpdatedAt:          application.UpdatedAt,
+	}
+	if application.ServerID != uuid.Nil {
+		serverID := application.ServerID.String()
+		response.ServerID = &serverID
 	}
 	return response
 }

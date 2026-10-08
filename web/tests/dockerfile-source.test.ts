@@ -3,7 +3,7 @@ import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defineComponent, h, ref } from "vue";
+import { defineComponent, h, nextTick, ref } from "vue";
 
 import {
   buildArgKeySchema,
@@ -53,6 +53,14 @@ describe("dockerfile schemas", () => {
     expect(
       dockerfileContentSchema.safeParse(`FROM scratch\n${"x".repeat(64 * 1024)}`).success,
     ).toBe(false);
+    expect(dockerfileContentSchema.safeParse("FROM scratch\n").success).toBe(true);
+    // Multi-byte text: under 64K chars but over 64 KiB, matching the server.
+    expect(
+      dockerfileContentSchema.safeParse(`FROM scratch\n# ${"é".repeat(32 * 1024)}`).success,
+    ).toBe(false);
+    expect(
+      dockerfileContentSchema.safeParse(`FROM scratch\n# ${"é".repeat(100)}`).success,
+    ).toBe(true);
   });
 
   it("gates build arg keys and values", () => {
@@ -168,7 +176,35 @@ describe("wizard dockerfile source", () => {
       dockerfile_content: "FROM alpine:3.20\n",
       build_args: { APP_ENV: "production" },
     });
-    expect(w.reviewSource.value).toBe("Dockerfile · 1 build args");
+    expect(w.reviewSource.value).toBe("Dockerfile · 1 build arg");
+    wrapper.unmount();
+  });
+
+  it("renders the dockerfile review without args", () => {
+    const { w, wrapper } = mountWizard();
+    Object.assign(w.form, {
+      ...reset,
+      sourceType: "dockerfile",
+      dockerfileContent: "FROM alpine:3.20\n",
+      branch: "main",
+      name: "docker-demo",
+    });
+    expect(w.reviewSource.value).toBe("Dockerfile");
+    wrapper.unmount();
+  });
+
+  it("ignores branch and build pack for dockerfile sources", () => {
+    const { w, wrapper } = mountWizard();
+    Object.assign(w.form, {
+      ...reset,
+      sourceType: "dockerfile",
+      dockerfileContent: "FROM alpine:3.20\n",
+      branch: "  ",
+      buildPack: "railpack",
+      name: "docker-demo",
+    });
+    expect(w.sourceValid.value).toBe(true);
+    expect(w.buildPayload()).toMatchObject({ branch: "", build_pack: "" });
     wrapper.unmount();
   });
 
@@ -219,5 +255,41 @@ describe("detail dockerfile editor", () => {
         build_args: { APP_ENV: "production", EXTRA: "" },
       },
     ]);
+  });
+
+  it("keeps unsaved edits when the row updates underneath", async () => {
+    setActivePinia(createPinia());
+    const store = useApplicationsStore();
+    store.update = vi.fn(async () => ({} as never)) as never;
+
+    const app = ref({
+      id: "app-1",
+      source_type: "dockerfile",
+      dockerfile_content: "FROM alpine:3.20\n",
+      build_args: {},
+      updated_at: "2026-10-08T00:00:00Z",
+    } as never);
+    const editor = useDockerfileEditor(app);
+    expect(editor.isDirty.value).toBe(false);
+
+    // An unrelated row change (domain save, rename) bumps updated_at: a
+    // clean draft follows, a dirty draft survives.
+    app.value = {
+      ...app.value,
+      base_domain: "app.example.com",
+      updated_at: "2026-10-08T00:00:01Z",
+    } as never;
+    await nextTick();
+    expect(editor.content.value).toBe("FROM alpine:3.20\n");
+
+    editor.content.value = "FROM alpine:3.21\n";
+    expect(editor.isDirty.value).toBe(true);
+    app.value = {
+      ...app.value,
+      base_domain: "other.example.com",
+      updated_at: "2026-10-08T00:00:02Z",
+    } as never;
+    await nextTick();
+    expect(editor.content.value).toBe("FROM alpine:3.21\n");
   });
 });

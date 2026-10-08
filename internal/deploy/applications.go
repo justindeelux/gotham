@@ -140,6 +140,18 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		DockerfileContent: in.DockerfileContent,
 		BuildArgs:         normalizeBuildArgs(in.BuildArgs),
 	}
+	// A dockerfile application carries no repository: the pasted text is the
+	// whole build context, so any repo fields a direct API caller sent are
+	// cleared rather than stored as stale rows the build silently ignores.
+	// Build args are validated raw before normalization, exactly like the
+	// update path, so both write paths accept the same payloads.
+	if app.SourceType == SourceDockerfile {
+		app.Repo = ""
+		app.CloneURL = ""
+		if err := ValidateBuildArgs(in.BuildArgs); err != nil {
+			return Application{}, err
+		}
+	}
 	// An empty branch stays empty for public-git sources: the clone resolves
 	// the remote default via ls-remote (GS-3) instead of guessing "main".
 	// The branch column is NOT NULL DEFAULT 'main', which only fills rows

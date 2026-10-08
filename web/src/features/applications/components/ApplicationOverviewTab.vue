@@ -66,10 +66,10 @@ const sourceLabel = computed<string>(() => {
         <NDescriptionsItem :label="t('applications.overview.source')">
           <span class="mono">{{ sourceLabel }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem :label="t('applications.overview.branch')">
+        <NDescriptionsItem v-if="props.application.source_type !== 'dockerfile'" :label="t('applications.overview.branch')">
           <span class="mono">{{ props.application.branch || "—" }}</span>
         </NDescriptionsItem>
-        <NDescriptionsItem :label="t('applications.overview.buildPack')">
+        <NDescriptionsItem v-if="props.application.source_type !== 'dockerfile'" :label="t('applications.overview.buildPack')">
           <span class="mono">{{ props.application.build_pack || t("applications.overview.auto") }}</span>
         </NDescriptionsItem>
         <NDescriptionsItem :label="t('applications.overview.domain')">

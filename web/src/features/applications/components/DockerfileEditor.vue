@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NDynamicInput, NFormItem, NInput, NSpace, NText } from "naive-ui";
+import { NAlert, NButton, NCard, NFormItem, NInput, NSpace, NText } from "naive-ui";
 import { toRef } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { Application } from "@/features/applications/api/applications";
+import BuildArgsEditor from "@/features/applications/components/BuildArgsEditor.vue";
 import { useDockerfileEditor } from "@/features/applications/composables/useDockerfileEditor";
 
 interface Props {
@@ -41,12 +42,7 @@ const { t } = useI18n();
         />
       </NFormItem>
       <NFormItem :label="t('applications.dockerfile.buildArgs')">
-        <NDynamicInput
-          v-model:value="editor.args.value"
-          preset="pair"
-          :key-placeholder="t('applications.wizard.buildArgKey')"
-          :value-placeholder="t('applications.wizard.buildArgValue')"
-        />
+        <BuildArgsEditor v-model="editor.args.value" />
       </NFormItem>
       <NSpace align="center" :size="8" :wrap="false">
         <NButton

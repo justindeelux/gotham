@@ -32,6 +32,8 @@ func TestValidateDockerfileContent(t *testing.T) {
 		{"blank", "  \n # only a comment\n", ErrValidation},
 		{"no FROM", "RUN echo hi\nCOPY . /app\n", ErrValidation},
 		{"FROM as suffix does not count", "RUN ECHO FROM\n", ErrValidation},
+		{"nul byte", "FROM alpine:3.20\nRUN echo \x00\n", ErrValidation},
+		{"invalid utf-8", "FROM alpine:3.20\n# \xff\xfe\n", ErrValidation},
 		{"oversize", "FROM scratch\n" + strings.Repeat("x", MaxDockerfileBytes), ErrValidation},
 	}
 	for _, tc := range cases {
@@ -64,6 +66,12 @@ func TestValidateBuildArgs(t *testing.T) {
 	}
 	if err := ValidateBuildArgs(map[string]string{"A=B": "x"}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("bad key = %v, want ErrValidation", err)
+	}
+	if err := ValidateBuildArgs(map[string]string{"K": "a\x00b"}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("nul value = %v, want ErrValidation", err)
+	}
+	if err := ValidateBuildArgs(map[string]string{"K": "\xff\xfe"}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("invalid utf-8 value = %v, want ErrValidation", err)
 	}
 	if err := ValidateBuildArgs(map[string]string{"K": strings.Repeat("x", MaxBuildArgValueBytes+1)}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("oversize value = %v, want ErrValidation", err)
@@ -193,6 +201,47 @@ func TestBuildDockerfileSource(t *testing.T) {
 	}
 }
 
+// TestCreateApplicationDockerfileNormalizes pins finding-7 behavior: stale
+// repo fields are cleared for dockerfile rows, and raw build args are
+// validated before normalization, exactly like the update path.
+func TestCreateApplicationDockerfileNormalizes(t *testing.T) {
+	newInput := func() CreateApplicationInput {
+		in := validCreateInput(uuid.New())
+		in.SourceType = SourceDockerfile
+		in.Provider = ""
+		in.Repo = "acme/stale"
+		in.CloneURL = "https://github.com/acme/stale.git"
+		in.DockerfileContent = "FROM alpine:3.20\n"
+		in.BuildArgs = map[string]string{"APP_ENV": "production"}
+		return in
+	}
+
+	t.Run("clears stale repo fields", func(t *testing.T) {
+		repo := &fakeRepository{}
+		svc := newTestService(t, repo)
+		created, err := svc.CreateApplication(context.Background(), uuid.New(), newInput())
+		if err != nil {
+			t.Fatalf("create = %v, want nil", err)
+		}
+		if created.Repo != "" || created.CloneURL != "" {
+			t.Errorf("repo = %q, clone_url = %q, want both cleared", created.Repo, created.CloneURL)
+		}
+		if created.DockerfileContent != "FROM alpine:3.20\n" {
+			t.Errorf("content = %q, want the pasted text", created.DockerfileContent)
+		}
+	})
+
+	t.Run("rejects raw build args like update does", func(t *testing.T) {
+		repo := &fakeRepository{}
+		svc := newTestService(t, repo)
+		in := newInput()
+		in.BuildArgs = map[string]string{"": "x"}
+		if _, err := svc.CreateApplication(context.Background(), uuid.New(), in); !errors.Is(err, ErrValidation) {
+			t.Fatalf("create = %v, want ErrValidation", err)
+		}
+	})
+}
+
 // TestUpdateApplicationDockerfile pins the detail-page edit path: stored
 // text and args change together, other source types refuse both, and invalid
 // content is rejected without touching the row.
@@ -263,6 +312,40 @@ func TestUpdateApplicationDockerfile(t *testing.T) {
 	})
 }
 
+// TestPreviewCopiesDockerfileFields pins the intended inheritance: a preview
+// of a dockerfile base builds the same stored text with the same build args
+// (build-time values, not sealed secrets, which stay excluded).
+func TestPreviewCopiesDockerfileFields(t *testing.T) {
+	userID := uuid.New()
+	base := testApplication(userID)
+	base.TeamID = uuid.New()
+	base.SourceType = SourceDockerfile
+	base.Provider = ""
+	base.Repo = ""
+	base.CloneURL = ""
+	base.DockerfileContent = "FROM alpine:3.20\n"
+	base.BuildArgs = map[string]string{"APP_ENV": "production"}
+	repo := seedBaseForPreview(t, base)
+	svc := newTestService(t, repo)
+
+	created, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
+		Name:   "demo app-pr-7",
+		Branch: "feat/x",
+	})
+	if err != nil {
+		t.Fatalf("CreatePreviewApplication: %v", err)
+	}
+	if created.DockerfileContent != base.DockerfileContent {
+		t.Errorf("content = %q, want %q", created.DockerfileContent, base.DockerfileContent)
+	}
+	if created.BuildArgs["APP_ENV"] != "production" {
+		t.Errorf("build args = %v, want APP_ENV=production", created.BuildArgs)
+	}
+	if !created.IsPreview {
+		t.Error("the clone is not marked is_preview")
+	}
+}
+
 // TestValidateDeployTargetDockerfile pins the submit gate: a dockerfile app
 // deploys without any clone URL, and empty stored text fails the deploy
 // instead of the build.
@@ -277,6 +360,47 @@ func TestValidateDeployTargetDockerfile(t *testing.T) {
 	app.DockerfileContent = ""
 	if err := validateDeployTarget(app); !errors.Is(err, ErrValidation) {
 		t.Fatalf("validateDeployTarget = %v, want ErrValidation", err)
+	}
+}
+
+// TestRedeployAfterEditBuildsLatestText pins the detail-page contract: after
+// the stored text changes, the next deploy streams the new text to the node.
+func TestRedeployAfterEditBuildsLatestText(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	app.SourceType = SourceDockerfile
+	app.Provider = ""
+	app.Repo = ""
+	app.CloneURL = ""
+	app.DockerfileContent = "FROM alpine:3.20\n"
+	repo := &fakeRepository{app: app}
+	svc := newTestService(t, repo)
+	node := newMockNode()
+	o := newTestOrchestrator(Config{Repository: repo, Dial: dialAlways(node)})
+
+	first := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+	o.run(context.Background(), job{app: app, dep: first})
+
+	next := "FROM alpine:3.21\n"
+	updated, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{
+		DockerfileContent: &next,
+	})
+	if err != nil {
+		t.Fatalf("update = %v, want nil", err)
+	}
+	second := seedDeployment(t, repo, updated, Deployment{Kind: KindDeploy})
+	o.run(context.Background(), job{app: updated, dep: second})
+
+	if len(node.contexts) != 2 {
+		t.Fatalf("build contexts = %d, want 2", len(node.contexts))
+	}
+	_, contents := readTar(t, node.contexts[1])
+	if contents["Dockerfile"] != next {
+		t.Errorf("redeploy context = %q, want %q", contents["Dockerfile"], next)
+	}
+	stored, ok := repo.deployment(second.ID)
+	if !ok || stored.State != StateRunning {
+		t.Fatalf("second deploy state = %v, want running", stored.State)
 	}
 }
 

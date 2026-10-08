@@ -51,6 +51,10 @@ export interface Application {
   dockerfile_content: string;
   /** Optional --build-arg pairs for dockerfile applications. */
   build_args: Record<string, string>;
+  /** Pasted Dockerfile text for dockerfile applications (GS-7). Detail routes only; absent on lists. */
+  dockerfile_content?: string;
+  /** Optional --build-arg pairs for dockerfile applications. Detail routes only; absent on lists. */
+  build_args?: Record<string, string>;
   branch: string;
   build_pack: string;
   base_domain: string;

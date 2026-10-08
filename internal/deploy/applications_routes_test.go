@@ -52,7 +52,17 @@ var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
 	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id",
 	"dockerfile_content", "build_args", "branch", "build_pack",
-=======
+	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
+	"server_name", "created_at", "updated_at",
+}
+
+// applicationListWireKeys are the list-item fields: the Dockerfile source
+// text and --build-arg values travel on the detail routes only, so a list
+// read never exposes them.
+var applicationListWireKeys = []string{
+	"id", "name", "environment_id", "environment_name", "project_id",
+	"project_name", "provider", "repo", "clone_url", "source_type",
+	"branch", "build_pack",
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
 }
@@ -368,7 +378,7 @@ func TestRoutesListApplications(t *testing.T) {
 				t.Fatalf("applications = %d, want %d", len(body.Applications), len(tc.apps))
 			}
 			if len(tc.apps) == 1 {
-				assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "applications", "0"), applicationWireKeys...)
+				assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "applications", "0"), applicationListWireKeys...)
 				if body.Applications[0].ID != app.ID.String() {
 					t.Errorf("id = %q, want %q", body.Applications[0].ID, app.ID)
 				}
@@ -378,6 +388,34 @@ func TestRoutesListApplications(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("dockerfile fields stay on the detail routes", func(t *testing.T) {
+		dockerApp := sampleApplication()
+		dockerApp.UserID = userID
+		dockerApp.SourceType = SourceDockerfile
+		dockerApp.DockerfileContent = "FROM alpine:3.20\n"
+		dockerApp.BuildArgs = map[string]string{"APP_ENV": "production"}
+		svc := &fakeDeployService{listApps: []Application{dockerApp}}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, applicationsPath, nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		raw := mustJSON(t, rec.Body.Bytes(), "applications", "0")
+		var keys map[string]any
+		if err := json.Unmarshal(raw, &keys); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if _, ok := keys["dockerfile_content"]; ok {
+			t.Error("list response carries dockerfile_content, want it detail-only")
+		}
+		if _, ok := keys["build_args"]; ok {
+			t.Error("list response carries build_args, want them detail-only")
+		}
+	})
 }
 
 func TestRoutesGetApplication(t *testing.T) {
@@ -534,6 +572,26 @@ func TestRoutesUpdateApplication(t *testing.T) {
 					t.Errorf("link = %v, want %q", got, *tc.want)
 				}
 			})
+	t.Run("forwards dockerfile fields", func(t *testing.T) {
+		svc := &fakeDeployService{application: app}
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, applicationsPath+"/"+appID.String(),
+			strings.NewReader(`{"dockerfile_content":"FROM alpine:3.21\n","build_args":{"APP_ENV":"staging"}}`)))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		in := svc.seenUpdate
+		if in.DockerfileContent == nil || *in.DockerfileContent != "FROM alpine:3.21\n" {
+			t.Errorf("dockerfile content = %v, want the patched value", in.DockerfileContent)
+		}
+		if in.BuildArgs == nil || (*in.BuildArgs)["APP_ENV"] != "staging" {
+			t.Errorf("build args = %v, want APP_ENV=staging", in.BuildArgs)
+		}
+		if in.Name != nil || in.Branch != nil {
+			t.Errorf("unpatched fields were sent: %+v", in)
 		}
 	})
 }

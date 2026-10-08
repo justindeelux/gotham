@@ -40,6 +40,7 @@ import {
   type SourceType,
 } from "@/features/applications/schemas/applications";
 import { portSchema } from "@/shared/validation/primitives";
+import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
 
 export interface WizardForm {
   /** GS-2 source model: which fetcher the orchestrator uses. */
@@ -51,7 +52,7 @@ export interface WizardForm {
   /** Pasted Dockerfile text for the dockerfile source type (GS-7). */
   dockerfileContent: string;
   /** Optional --build-arg pairs for the dockerfile source type. */
-  buildArgs: Array<{ key: string; value: string }>;
+  buildArgs: BuildArgRow[];
   branch: string;
   name: string;
   buildPack: BuildPack;
@@ -105,7 +106,7 @@ export const BUILD_PACKS: BuildPackOption[] = [
 
 /** buildArgsValid gates --build-arg drafts: named rows need a valid key and
  * a bounded value; nameless rows are dropped on submit like env rows. */
-export function buildArgsValid(rows: Array<{ key: string; value: string }>): boolean {
+export function buildArgsValid(rows: BuildArgRow[]): boolean {
   if (rows.length > 64) {
     return false;
   }
@@ -120,7 +121,7 @@ export function buildArgsValid(rows: Array<{ key: string; value: string }>): boo
 
 /** buildArgsPayload drops nameless draft rows for the create payload. */
 export function buildArgsPayload(
-  rows: Array<{ key: string; value: string }>,
+  rows: BuildArgRow[],
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const row of rows) {
@@ -303,7 +304,7 @@ export function useCreateAppWizard(
     { label: tr("applications.wizard.sourceGitPrivate"), value: "git_private", disabled: true },
     { label: tr("applications.wizard.sourceGithubApp"), value: "github_app" },
     { label: tr("applications.wizard.sourceGitlabApp"), value: "gitlab_app" },
-    { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile", disabled: true },
+    { label: tr("applications.wizard.sourceDockerfile"), value: "dockerfile" },
     { label: tr("applications.wizard.sourceCompose"), value: "compose", disabled: true },
     { label: tr("applications.wizard.sourceImage"), value: "image", disabled: true },
   ]);
@@ -405,9 +406,11 @@ export function useCreateAppWizard(
       }
     }
     // A public repo with no branch pins the remote default at clone time
-    // (ls-remote); provider flows keep the required prefilled branch.
+    // (ls-remote); provider flows keep the required prefilled branch. A
+    // Dockerfile source has no branch at all (the field is hidden).
     const branchOk =
-      form.sourceType === "git_public" && form.branch.trim() === ""
+      form.sourceType === "dockerfile" ||
+      (form.sourceType === "git_public" && form.branch.trim() === "")
         ? true
         : branchSchema.safeParse(form.branch).success;
     return branchOk && appNameSchema.safeParse(form.name).success;
@@ -458,8 +461,10 @@ export function useCreateAppWizard(
   /** reviewSource renders the repo headline on the review step. */
   const reviewSource = computed<string>(() => {
     if (form.sourceType === "dockerfile") {
-      const args = Object.keys(buildArgsPayload(form.buildArgs)).length;
-      return args > 0 ? `Dockerfile · ${args} build args` : "Dockerfile";
+      const count = Object.keys(buildArgsPayload(form.buildArgs)).length;
+      return String(
+        i18n.global.t("applications.wizard.reviewDockerfileArgs", { count }, count),
+      );
     }
     const repo =
       form.sourceType === "git_public" ? form.publicCloneUrl.trim() : form.repoFullName;
@@ -607,7 +612,9 @@ export function useCreateAppWizard(
       dockerfile_content: form.sourceType === "dockerfile" ? form.dockerfileContent : undefined,
       build_args: form.sourceType === "dockerfile" ? buildArgsPayload(form.buildArgs) : undefined,
       branch: form.branch.trim(),
-      build_pack: form.buildPack,
+      // A Dockerfile source always builds with the Dockerfile engine; the
+      // build-pack choice is hidden and never sent.
+      build_pack: form.sourceType === "dockerfile" ? "" : form.buildPack,
       base_domain: form.baseDomain.trim(),
       port: form.port ?? 3000,
       host_port: form.hostPort ?? 0,

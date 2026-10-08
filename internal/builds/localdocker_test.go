@@ -201,8 +201,7 @@ func TestInlineDockerfileBuildE2E(t *testing.T) {
 	defer cancel()
 
 	dir := t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "Dockerfile"), "FROM scratch\nCOPY hello.txt /hello.txt\n")
-	writeTestFile(t, filepath.Join(dir, "hello.txt"), "hello gotham\n")
+	writeTestFile(t, filepath.Join(dir, "Dockerfile"), "FROM scratch\n")
 	contextTar, err := buildContextTar(contextSpec{root: dir})
 	if err != nil {
 		t.Fatalf("buildContextTar: %v", err)
@@ -220,6 +219,7 @@ func TestInlineDockerfileBuildE2E(t *testing.T) {
 	}
 }
 
+// TestLocalDockerBuilderDockerHost pins the endpoint handed to toolchain CLIs:
 // the toolchain runs with a stripped environment, so the builder must carry a
 // usable DOCKER_HOST itself.
 func TestLocalDockerBuilderDockerHost(t *testing.T) {

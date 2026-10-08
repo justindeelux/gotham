@@ -146,6 +146,12 @@ const en = {
     save: "Save Dockerfile",
     redeployHint: "Redeploy to build the saved text.",
   },
+  buildArgs: {
+    secretWarning:
+      "Do not put secrets here — values are stored in plaintext, visible to everyone who can view the app, and persist in image history. Use sealed secrets or env vars for credentials.",
+    add: "Add build arg",
+    remove: "Remove",
+  },
   cert: {
     title: "Certificate configuration",
     edit: "Edit",
@@ -265,6 +271,7 @@ const en = {
     appNameHint: "Lowercase, digits and dashes (3-31 chars). Used for the container and image tag.",
     buildPackTitle: "Build pack",
     buildPackIntro: "Detection runs server-side at build time from the repo layout — the choice below is a hint, never a guess.",
+    buildPackDockerfileNote: "Dockerfile sources always build with the Dockerfile engine from the pasted text — no build pack choice needed.",
     packAuto: "Auto-detect (recommended)",
     packAutoHint: "The control plane picks Dockerfile, Railpack, Buildpacks or static from the repo layout.",
     packRailpack: "Railpack",
@@ -290,6 +297,7 @@ const en = {
     reviewTitle: "Summary",
     reviewApp: "Application",
     reviewSource: "Source",
+    reviewDockerfileArgs: "Dockerfile | Dockerfile · {count} build arg | Dockerfile · {count} build args",
     reviewBuildPack: "Build pack",
     reviewPortDomain: "Port / domain",
     reviewEnvVolumes: "Env / volumes",

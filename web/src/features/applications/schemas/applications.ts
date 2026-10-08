@@ -76,16 +76,17 @@ export const maxDockerfileBytes = 64 * 1024;
 
 /**
  * dockerfileContentSchema replaces the GS-7 creation gate on the trimmed
- * value: non-empty, within the size limit, containing a FROM instruction
- * (comments and blank lines ignored, case-insensitive first word).
- * Gate-only: consumers read `.success`, deeper validation happens on the
- * node at build time.
+ * value: non-empty, containing a FROM instruction (comments and blank lines
+ * ignored, case-insensitive first word), and within the byte limit. Bytes
+ * are measured with TextEncoder so multi-byte text matches the server's
+ * len() check; deeper validation happens on the node at build time.
+ * Gate-only: consumers read `.success`.
  */
 export const dockerfileContentSchema = z
   .string()
   .trim()
   .min(1)
-  .max(maxDockerfileBytes)
+  .refine((value) => new TextEncoder().encode(value).length <= maxDockerfileBytes)
   .refine((value) =>
     value.split("\n").some((line) => {
       const trimmed = line.trim();

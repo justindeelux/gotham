@@ -24,6 +24,7 @@ exit criteria, work packages, dependencies, and rollback. Start with the
 | 12 — User profile management | [12-user-profile.md](plans/12-user-profile.md) |
 | 13 — Projects and environments | [13-projects-environments.md](plans/13-projects-environments.md) |
 | 14 — English/Vietnamese UI localization | [14-i18n.md](plans/14-i18n.md) |
+| 15 — Add resource flow & automatic Git sources | [15-add-resource-git-sources.md](plans/15-add-resource-git-sources.md) |
 
 Phase status and remaining work live only in [`TODO.md`](TODO.md).
 

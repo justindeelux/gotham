@@ -227,17 +227,17 @@ func (r *storeRepository) ListRepoCache(ctx context.Context, appID uuid.UUID, in
 	return repos, nil
 }
 
-// CountApplicationsForApp counts the caller's github_app applications whose
-// repo is granted to this connection's installations.
-func (r *storeRepository) CountApplicationsForApp(ctx context.Context, userID, appID uuid.UUID) (int64, error) {
-	n, err := r.store.CountGitHubAppApplicationsForApp(ctx, sqlc.CountGitHubAppApplicationsForAppParams{
+// ListApplicationNamesForApp names the caller's applications linked to one
+// connection, for the disconnect warning.
+func (r *storeRepository) ListApplicationNamesForApp(ctx context.Context, userID, appID uuid.UUID) ([]string, error) {
+	names, err := r.store.ListGitHubAppApplicationNames(ctx, sqlc.ListGitHubAppApplicationNamesParams{
 		UserID:      pgUUID(userID),
 		GithubAppID: pgUUID(appID),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("githubapp: count applications: %w", err)
+		return nil, fmt.Errorf("githubapp: list linked applications: %w", err)
 	}
-	return n, nil
+	return names, nil
 }
 
 // PushTargets returns the applications linked to the app and watching repo

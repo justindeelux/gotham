@@ -18,6 +18,7 @@ type staticTokenResolver struct {
 	tokenURL string
 	err      error
 	calls    int
+	gotAppID uuid.UUID
 	gotRepo  string
 	gotURL   string
 }
@@ -26,8 +27,9 @@ type staticTokenResolver struct {
 var _ appTokenResolver = (*staticTokenResolver)(nil)
 
 // TokenCloneURL implements appTokenResolver.
-func (r *staticTokenResolver) TokenCloneURL(_ context.Context, _ uuid.UUID, repo, cloneURL string) (string, error) {
+func (r *staticTokenResolver) TokenCloneURL(_ context.Context, _ uuid.UUID, appID uuid.UUID, repo, cloneURL string) (string, error) {
 	r.calls++
+	r.gotAppID = appID
 	r.gotRepo = repo
 	r.gotURL = cloneURL
 	if r.err != nil {
@@ -66,9 +68,12 @@ func TestGitSourceCloneGitHubAppUsesToken(t *testing.T) {
 	if resolver.calls != 1 {
 		t.Fatalf("token calls = %d, want 1 (fresh per attempt)", resolver.calls)
 	}
-	// The resolver receives the application repo and stored URL, not opaque
-	// ids: that is what lets the real service resolve the granting
-	// installation instead of assuming one.
+	// The resolver receives the linked connection, the application repo and
+	// stored URL: that is what lets the real service resolve the granting
+	// installation of that connection instead of assuming one.
+	if resolver.gotAppID != app.GitHubAppID {
+		t.Errorf("resolver app id = %v, want the linked connection %v", resolver.gotAppID, app.GitHubAppID)
+	}
 	if resolver.gotRepo != "acme/private-web" {
 		t.Errorf("resolver repo = %q, want the application repo", resolver.gotRepo)
 	}
@@ -158,39 +163,33 @@ func TestGitSourceCloneGitHubAppUnlinkedKeepsLegacy(t *testing.T) {
 	}
 }
 
-// TestGitSourceCloneLinkedWithoutGrantFallsBackVisibly proves a linked
-// application whose grant is gone still clones, with a deploy-log line
-// saying the token was skipped.
-func TestGitSourceCloneLinkedWithoutGrantFallsBackVisibly(t *testing.T) {
+// TestGitSourceCloneLinkedWithoutGrantFails proves a linked application
+// whose connection no longer grants the repo fails the deploy: no other
+// connection is consulted and no anonymous clone is attempted.
+func TestGitSourceCloneLinkedWithoutGrantFails(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.SourceType = SourceGitHubApp
 	app.GitHubAppID = uuid.New()
 	app.Repo = "acme/web"
 	app.CloneURL = "https://github.com/acme/web.git"
 
-	var gotArgv []string
-	var logged []string
+	ran := false
 	source := gitSource{
 		appTokens: &staticTokenResolver{err: githubapp.ErrNoInstallationGrant},
-		run: func(_ context.Context, argv, _ []string) ([]byte, error) {
-			gotArgv = append([]string(nil), argv...)
+		run: func(context.Context, []string, []string) ([]byte, error) {
+			ran = true
 			return nil, nil
 		},
 	}
-	if err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), func(line string) {
-		logged = append(logged, line)
-	}); err != nil {
-		t.Fatalf("Clone: %v", err)
+	err := source.Clone(context.Background(), app, filepath.Join(t.TempDir(), "repo"), func(string) {})
+	if err == nil {
+		t.Fatal("clone without a grant on the linked connection succeeded")
 	}
-	joined := strings.Join(append(gotArgv, logged...), "\n")
-	if !strings.Contains(joined, "https://github.com/acme/web.git") {
-		t.Errorf("argv = %v, want the plain clone URL", gotArgv)
+	if !errors.Is(err, githubapp.ErrNoInstallationGrant) {
+		t.Fatalf("clone err = %v, want ErrNoInstallationGrant", err)
 	}
-	if strings.Contains(joined, "x-access-token") {
-		t.Errorf("output mentions a token: %v", append(gotArgv, logged...))
-	}
-	if !strings.Contains(strings.Join(logged, "\n"), "without an installation token") {
-		t.Errorf("log lines = %v, want the fallback line", logged)
+	if ran {
+		t.Error("git ran despite the missing grant: no anonymous clone may be attempted")
 	}
 }
 

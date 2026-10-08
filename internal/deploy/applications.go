@@ -565,6 +565,11 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 			return Application{}, fmt.Errorf("%w: github_app_id needs source type %q",
 				ErrValidation, SourceGitHubApp)
 		}
+		// Relinking an http clone URL would embed the next installation
+		// token in plaintext: refuse, like creation does.
+		if err := validateLinkedCloneURL(app); err != nil {
+			return Application{}, err
+		}
 	}
 	// Clearing the branch restores ls-remote default resolution for
 	// public-git sources (see the create path); provider flows fall back to
@@ -1267,6 +1272,9 @@ func validateSource(app Application) error {
 		return fmt.Errorf("%w: github_app_id needs source type %q",
 			ErrValidation, SourceGitHubApp)
 	}
+	if err := validateLinkedCloneURL(app); err != nil {
+		return err
+	}
 	if app.SourceType != SourceImage &&
 		(app.ImageRef != "" || app.RegistryUsername != "" || app.RegistryPasswordCiphertext != "") {
 		return fmt.Errorf("%w: image fields need source type %q", ErrValidation, SourceImage)
@@ -1389,6 +1397,25 @@ func validateComposeSource(app Application) error {
 		return err
 	}
 	return ValidateComposeService("", app.ComposeService)
+}
+
+// validateLinkedCloneURL requires a linked application to carry an https
+// clone URL when it carries a URL with a scheme: an installation token must
+// never travel over plaintext http. SSH/scp-like URLs carry no scheme and
+// never take the token path, so they are unaffected.
+func validateLinkedCloneURL(app Application) error {
+	if app.GitHubAppID == uuid.Nil {
+		return nil
+	}
+	raw := strings.TrimSpace(app.CloneURL)
+	scheme, _, ok := strings.Cut(raw, "://")
+	if !ok {
+		return nil
+	}
+	if strings.EqualFold(scheme, "http") {
+		return fmt.Errorf("%w: a linked github_app application needs an https clone URL", ErrValidation)
+	}
+	return nil
 }
 
 // validateProviderSource checks a provider-backed source: the slug must match

@@ -22,11 +22,11 @@ type githubAppTokenAdapter struct {
 	svc *githubapp.Service
 }
 
-func (a githubAppTokenAdapter) TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, cloneURL string) (string, error) {
+func (a githubAppTokenAdapter) TokenCloneURL(ctx context.Context, userID, appID uuid.UUID, repo, cloneURL string) (string, error) {
 	if a.svc == nil {
 		return "", errGitHubAppUnavailable
 	}
-	return a.svc.TokenCloneURL(ctx, userID, repo, cloneURL)
+	return a.svc.TokenCloneURL(ctx, userID, appID, repo, cloneURL)
 }
 
 // githubAppPushAdapter routes verified GitHub App push deliveries to

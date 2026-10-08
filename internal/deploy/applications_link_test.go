@@ -107,3 +107,67 @@ func TestUpdateApplicationGitHubAppLink(t *testing.T) {
 		t.Fatalf("linked public app err = %v, want ErrValidation", err)
 	}
 }
+
+// TestCreateLinkedHTTPCloneURLRefused proves a linked application with a
+// plaintext http clone URL fails validation: no token may travel over
+// plaintext. An unlinked http row and a linked ssh row stay valid.
+func TestCreateLinkedHTTPCloneURLRefused(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	owned := uuid.New()
+	repo := &fakeRepository{ownedGitHubApps: map[uuid.UUID]bool{owned: true}}
+	svc := newTestService(t, repo)
+
+	base := CreateApplicationInput{
+		Name:          "linked",
+		EnvironmentID: uuid.New(),
+		Provider:      "github",
+		Repo:          "acme/web",
+		CloneURL:      "http://github.com/acme/web.git",
+		SourceType:    SourceGitHubApp,
+		Branch:        "main",
+		BuildPack:     "dockerfile",
+		ServerID:      uuid.New(),
+	}
+	httpIn := base
+	httpIn.GitHubAppID = owned
+	if _, err := svc.CreateApplication(ctx, userID, httpIn); !errors.Is(err, ErrValidation) {
+		t.Fatalf("linked http err = %v, want ErrValidation", err)
+	}
+
+	// Unlinked http rows keep their legacy behaviour.
+	unlinkedIn := base
+	unlinkedIn.Name = "plain-http"
+	if _, err := svc.CreateApplication(ctx, userID, unlinkedIn); err != nil {
+		t.Fatalf("unlinked http create: %v", err)
+	}
+
+	// A linked ssh row never takes the token path, so it stays valid.
+	sshIn := base
+	sshIn.Name = "linked-ssh"
+	sshIn.CloneURL = "git@github.com:acme/web.git"
+	sshIn.GitHubAppID = owned
+	if _, err := svc.CreateApplication(ctx, userID, sshIn); err != nil {
+		t.Fatalf("linked ssh create: %v", err)
+	}
+}
+
+// TestUpdateLinkHTTPCloneURLRefused proves relinking an http clone URL is
+// refused like creation.
+func TestUpdateLinkHTTPCloneURLRefused(t *testing.T) {
+	ctx := context.Background()
+	userID := uuid.New()
+	owned := uuid.New()
+	app := testApplication(userID)
+	app.SourceType = SourceGitHubApp
+	app.CloneURL = "http://github.com/acme/demo.git"
+	repo := &fakeRepository{app: app, ownedGitHubApps: map[uuid.UUID]bool{owned: true}}
+	svc := newTestService(t, repo)
+
+	id := owned.String()
+	if _, err := svc.UpdateApplication(ctx, userID, app.ID, UpdateApplicationInput{
+		GitHubAppID: &id,
+	}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("relink http err = %v, want ErrValidation", err)
+	}
+}

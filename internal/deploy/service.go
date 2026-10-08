@@ -592,6 +592,11 @@ func validateDeployTarget(app Application) error {
 	if err := validateCloneURL(strings.TrimSpace(app.CloneURL)); err != nil {
 		return err
 	}
+	// A linked row created before the https rule (or edited around the API)
+	// still fails the deploy instead of embedding a token in plaintext.
+	if err := validateLinkedCloneURL(app); err != nil {
+		return err
+	}
 	if _, err := builds.ParseEngineKind(app.BuildPack); err != nil {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	}

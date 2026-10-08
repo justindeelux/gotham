@@ -110,10 +110,12 @@ type branchListEnvelope struct {
 	Branches []branchResponse `json:"branches"`
 }
 
-// disconnectResponse reports a disconnect with the in-use warning count.
+// disconnectResponse reports a disconnect with the linked applications that
+// lose their connection.
 type disconnectResponse struct {
-	Deleted           bool  `json:"deleted"`
-	ApplicationsUsing int64 `json:"applications_using"`
+	Deleted           bool     `json:"deleted"`
+	ApplicationsUsing int64    `json:"applications_using"`
+	Applications      []string `json:"applications"`
 }
 
 // errorBody is the JSON body returned for failures.
@@ -402,7 +404,7 @@ func (h *handler) listBranches(w http.ResponseWriter, r *http.Request) {
 }
 
 // disconnect serves DELETE .../{id}: it deletes the stored credentials and
-// reports how many applications still use the github_app source.
+// reports the linked applications that lose their connection.
 func (h *handler) disconnect(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.currentUser(w, r)
 	if !ok {
@@ -417,7 +419,7 @@ func (h *handler) disconnect(w http.ResponseWriter, r *http.Request) {
 		h.writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, disconnectResponse{Deleted: true, ApplicationsUsing: using})
+	writeJSON(w, http.StatusOK, disconnectResponse{Deleted: true, ApplicationsUsing: using.ApplicationsUsing, Applications: using.Applications})
 }
 
 // stateUser resolves the owner of a pending manifest state without consuming

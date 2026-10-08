@@ -187,15 +187,18 @@ func TestGitHubAppPersistence(t *testing.T) {
 			t.Logf("cleanup application: %v", err)
 		}
 	})
-	n, err := st.CountGitHubAppApplicationsForApp(ctx, sqlc.CountGitHubAppApplicationsForAppParams{
+	// The disconnect warning names applications by link, like push routing
+	// and cloning: a linked row counts even when its grant was revoked, and
+	// an unlinked row never counts even when granted.
+	names, err := st.ListGitHubAppApplicationNames(ctx, sqlc.ListGitHubAppApplicationNamesParams{
 		UserID:      user.ID,
 		GithubAppID: app.ID,
 	})
 	if err != nil {
-		t.Fatalf("CountGitHubAppApplicationsForApp: %v", err)
+		t.Fatalf("ListGitHubAppApplicationNames: %v", err)
 	}
-	if n != 1 {
-		t.Fatalf("applications using = %d, want 1", n)
+	if len(names) != 1 || names[0] != "web" {
+		t.Fatalf("linked applications = %+v, want [web]", names)
 	}
 	targets, err := st.ListGitHubAppPushTargets(ctx, sqlc.ListGitHubAppPushTargetsParams{
 		UserID:      user.ID,
@@ -221,6 +224,31 @@ func TestGitHubAppPersistence(t *testing.T) {
 		Repo:        "acme/web",
 	}); err != nil || len(targets) != 1 {
 		t.Fatalf("targets with legacy row = %+v, %v", targets, err)
+	}
+	// The unlinked row watches a granted repo but is not linked: the
+	// disconnect warning ignores it.
+	if names, err := st.ListGitHubAppApplicationNames(ctx, sqlc.ListGitHubAppApplicationNamesParams{
+		UserID:      user.ID,
+		GithubAppID: app.ID,
+	}); err != nil || len(names) != 1 {
+		t.Fatalf("linked applications with legacy row = %+v, %v", names, err)
+	}
+	// A linked row whose grant was revoked still counts: the disconnect
+	// clears its link.
+	if _, err := pool.Exec(ctx, `INSERT INTO applications
+		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, port, host_port, github_app_id)
+		VALUES ($1, $1, $2, $3, 'stale', 'github', 'acme/gone', 'https://github.com/acme/gone.git', 'github_app', 'main', 'dockerfile', 3000, 0, $4)`,
+		user.ID, serverID, envID, app.ID); err != nil {
+		t.Fatalf("seed revoked application: %v", err)
+	}
+	if names, err := st.ListGitHubAppApplicationNames(ctx, sqlc.ListGitHubAppApplicationNamesParams{
+		UserID:      user.ID,
+		GithubAppID: app.ID,
+	}); err != nil || len(names) != 2 || names[0] != "stale" || names[1] != "web" {
+		t.Fatalf("linked applications with revoked row = %+v, %v", names, err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM applications WHERE name = 'stale' AND user_id = $1`, user.ID); err != nil {
+		t.Fatalf("cleanup revoked application: %v", err)
 	}
 	if targets, err := st.ListGitHubAppPushTargets(ctx, sqlc.ListGitHubAppPushTargetsParams{
 		UserID: other.ID,

@@ -79,9 +79,9 @@ type Repository interface {
 	AppsByInstallationID(ctx context.Context, installationID int64) ([]SealedApp, error)
 	ReplaceRepoCache(ctx context.Context, appID uuid.UUID, installationID int64, repos []Repo) error
 	ListRepoCache(ctx context.Context, appID uuid.UUID, installationID int64) ([]Repo, error)
-	// CountApplicationsForApp counts the caller's github_app applications
-	// whose repo is granted to this connection's installations.
-	CountApplicationsForApp(ctx context.Context, userID, appID uuid.UUID) (int64, error)
+	// ListApplicationNamesForApp names the caller's applications linked to
+	// this connection (by github_app_id, like push routing and cloning).
+	ListApplicationNamesForApp(ctx context.Context, userID, appID uuid.UUID) ([]string, error)
 	// PushTargets returns the github_app applications of the app's owner
 	// watching repo (lowercased owner/name).
 	PushTargets(ctx context.Context, appID, userID uuid.UUID, repo string) ([]AppPushTarget, error)
@@ -516,20 +516,18 @@ func (s *Service) appJWTFromSealed(sealed SealedApp) (string, error) {
 	return signAppJWT(sealed.AppID, []byte(key), time.Now())
 }
 
-// TokenCloneURL mints a fresh installation token for the installation
-// granting repo and embeds it in cloneURL. The cloner calls it only for
-// applications explicitly linked to a GitHub App connection; resolution
-// inside is by repository grant (one user may own several apps and
-// installations, so no app id is passed).
+// TokenCloneURL mints a fresh installation token for the installation of the
+// linked connection (appID) granting repo and embeds it in cloneURL. The
+// cloner calls it only for applications explicitly linked to a GitHub App
+// connection, passing that link: resolution never leaves the linked
+// connection, so a deploy can neither borrow another connection's grant nor
+// be broken by an unrelated dead installation.
 //
-// Every installation is listed fresh: a listing failure fails the lookup
-// (never the sentinel), and the sentinel is returned only when every
-// installation listed successfully and none grants the repo. The stored
-// clone URL must live on the app's own host (github.com or the connected
-// Enterprise origin), so a token can never be embedded in an arbitrary
-// https URL. The token authenticates one clone attempt: it is never
-// persisted and never logged.
-func (s *Service) TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, cloneURL string) (string, error) {
+// The stored clone URL must live on the app's own host (github.com or the
+// connected Enterprise origin) over https, so a token can never be embedded
+// in an arbitrary or plaintext URL. The token authenticates one clone
+// attempt: it is never persisted and never logged.
+func (s *Service) TokenCloneURL(ctx context.Context, userID, appID uuid.UUID, repo, cloneURL string) (string, error) {
 	if s.repo == nil {
 		return "", ErrNotFound
 	}
@@ -537,11 +535,20 @@ func (s *Service) TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, clo
 	if repo == "" {
 		return "", fmt.Errorf("%w: repository is required", ErrValidation)
 	}
-	app, installation, err := s.installationGrantingRepo(ctx, userID, repo)
+	if appID == uuid.Nil {
+		return "", fmt.Errorf("%w: github app connection is required", ErrValidation)
+	}
+	// A foreign id answers not-found, like any other foreign resource.
+	app, err := s.repo.GetApp(ctx, appID, userID)
 	if err != nil {
 		return "", err
 	}
+	// Refused before any token is minted and before any grant is listed.
 	if err := checkCloneHost(app, cloneURL); err != nil {
+		return "", err
+	}
+	installation, err := s.installationGrantingRepo(ctx, app, repo)
+	if err != nil {
 		return "", err
 	}
 	jwt, err := s.appJWT(ctx, app)
@@ -558,64 +565,56 @@ func (s *Service) TokenCloneURL(ctx context.Context, userID uuid.UUID, repo, clo
 	return embedToken(cloneURL, token)
 }
 
-// installationGrantingRepo finds the app and installation whose repos grant
-// repo (case-insensitive), preferring the lowest app creation order and
-// installation id for determinism.
+// installationGrantingRepo finds the installation of app whose repos grant
+// repo (case-insensitive), preferring the lowest installation id for
+// determinism. Only the linked connection is consulted: when it no longer
+// grants the repo the deploy fails instead of borrowing another connection.
 //
 // Every installation is listed fresh from the API: a refresh or listing
 // failure on any installation fails the lookup instead of degrading to the
 // sentinel. The sentinel is returned only when every installation listed
-// successfully and none grants the repo — that is the only case the deploy
-// cloner may treat as "not backed by a GitHub App connection". Anything
-// else (transient GitHub failure, unreadable cache data) fails the deploy
-// with a clear error rather than a silent anonymous clone.
-func (s *Service) installationGrantingRepo(ctx context.Context, userID uuid.UUID, repo string) (GitHubApp, Installation, error) {
-	apps, err := s.repo.ListApps(ctx, userID)
+// successfully and none grants the repo. Anything else (transient GitHub
+// failure, unreadable cache data) fails the deploy with a clear error rather
+// than a silent anonymous clone.
+func (s *Service) installationGrantingRepo(ctx context.Context, app GitHubApp, repo string) (Installation, error) {
+	sealed, err := s.sealed(ctx, app)
 	if err != nil {
-		return GitHubApp{}, Installation{}, err
+		return Installation{}, fmt.Errorf("%w: %v", ErrGrantsUnverifiable, err)
+	}
+	insts, err := s.repo.ListInstallations(ctx, app.ID)
+	if err != nil {
+		return Installation{}, fmt.Errorf("%w: %v", ErrGrantsUnverifiable, err)
 	}
 	var verifyErr error
-	for _, app := range apps {
-		sealed, err := s.sealed(ctx, app)
+	for _, inst := range insts {
+		repos, _, err := s.refreshReposFor(ctx, sealed, inst.InstallationID)
 		if err != nil {
 			verifyErr = errors.Join(verifyErr, err)
 			continue
 		}
-		insts, err := s.repo.ListInstallations(ctx, app.ID)
-		if err != nil {
-			verifyErr = errors.Join(verifyErr, err)
-			continue
-		}
-		for _, inst := range insts {
-			repos, _, err := s.refreshReposFor(ctx, sealed, inst.InstallationID)
-			if err != nil {
-				verifyErr = errors.Join(verifyErr, err)
-				continue
-			}
-			for _, r := range repos {
-				if strings.EqualFold(strings.TrimSpace(r.FullName), repo) {
-					return app, inst, nil
-				}
+		for _, r := range repos {
+			if strings.EqualFold(strings.TrimSpace(r.FullName), repo) {
+				return inst, nil
 			}
 		}
 	}
 	if verifyErr != nil {
-		return GitHubApp{}, Installation{}, fmt.Errorf("%w: %v", ErrGrantsUnverifiable, verifyErr)
+		return Installation{}, fmt.Errorf("%w: %v", ErrGrantsUnverifiable, verifyErr)
 	}
-	return GitHubApp{}, Installation{}, fmt.Errorf("%w: %q", ErrNoInstallationGrant, repo)
+	return Installation{}, fmt.Errorf("%w: %q", ErrNoInstallationGrant, repo)
 }
 
 // checkCloneHost requires the stored clone URL to live on the app's own git
-// host: github.com or the connected Enterprise origin. Anything else is
-// refused before a token is minted, so a token can never be embedded in an
-// arbitrary https URL.
+// host over https: github.com or the connected Enterprise origin. Anything
+// else is refused before a token is minted, so a token can never be embedded
+// in an arbitrary URL or travel over plaintext http.
 func checkCloneHost(app GitHubApp, cloneURL string) error {
 	parsed, err := url.Parse(strings.TrimSpace(cloneURL))
 	if err != nil || parsed.Hostname() == "" {
 		return fmt.Errorf("%w: clone url is not a URL", ErrValidation)
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("%w: installation token clone needs an http(s) url", ErrValidation)
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return fmt.Errorf("%w: installation token clone needs an https url", ErrValidation)
 	}
 	base, err := url.Parse(app.BaseURL)
 	if err != nil || base.Hostname() == "" {
@@ -654,22 +653,31 @@ func (s *Service) PushTargets(ctx context.Context, appID, userID uuid.UUID, repo
 	return s.repo.PushTargets(ctx, appID, userID, strings.ToLower(strings.TrimSpace(repo)))
 }
 
-// Disconnect deletes the stored credentials. It reports how many of the
-// caller's applications use this connection (repos granted to its
-// installations), so the UI can warn before deleting.
-func (s *Service) Disconnect(ctx context.Context, userID, appID uuid.UUID) (int64, error) {
+// DisconnectResult reports a disconnect: how many linked applications lose
+// their connection, and their names for the confirmation.
+type DisconnectResult struct {
+	ApplicationsUsing int64
+	Applications      []string
+}
+
+// Disconnect deletes the stored credentials. It names the caller's
+// applications linked to this connection (by github_app_id, the same link
+// cloning and push routing consult), so the UI can warn before deleting.
+// Deleting the connection unlinks those applications instead of deleting
+// them; their next deploy clones without an installation token.
+func (s *Service) Disconnect(ctx context.Context, userID, appID uuid.UUID) (DisconnectResult, error) {
 	if s.repo == nil {
-		return 0, ErrNotFound
+		return DisconnectResult{}, ErrNotFound
 	}
 	if _, err := s.repo.GetApp(ctx, appID, userID); err != nil {
-		return 0, err
+		return DisconnectResult{}, err
 	}
-	using, err := s.repo.CountApplicationsForApp(ctx, userID, appID)
+	names, err := s.repo.ListApplicationNamesForApp(ctx, userID, appID)
 	if err != nil {
-		return 0, err
+		return DisconnectResult{}, err
 	}
 	if err := s.repo.DeleteApp(ctx, appID, userID); err != nil {
-		return 0, err
+		return DisconnectResult{}, err
 	}
 	s.mu.Lock()
 	for id, cached := range s.tokens {
@@ -678,7 +686,7 @@ func (s *Service) Disconnect(ctx context.Context, userID, appID uuid.UUID) (int6
 		}
 	}
 	s.mu.Unlock()
-	return using, nil
+	return DisconnectResult{ApplicationsUsing: int64(len(names)), Applications: names}, nil
 }
 
 // installationToken mints (or reuses a cached) installation token.

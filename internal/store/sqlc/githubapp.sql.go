@@ -23,26 +23,6 @@ func (q *Queries) CountGitHubAppApplications(ctx context.Context, userID pgtype.
 	return column_1, err
 }
 
-const countGitHubAppApplicationsForApp = `-- name: CountGitHubAppApplicationsForApp :one
-SELECT count(*)::bigint FROM applications
-WHERE user_id = $1 AND source_type = 'github_app' AND provider = 'github'
-AND lower(repo) IN (
-    SELECT lower(full_name) FROM github_repo_cache WHERE github_repo_cache.github_app_id = $2
-)
-`
-
-type CountGitHubAppApplicationsForAppParams struct {
-	UserID      pgtype.UUID `json:"user_id"`
-	GithubAppID pgtype.UUID `json:"github_app_id"`
-}
-
-func (q *Queries) CountGitHubAppApplicationsForApp(ctx context.Context, arg CountGitHubAppApplicationsForAppParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countGitHubAppApplicationsForApp, arg.UserID, arg.GithubAppID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const createGitHubApp = `-- name: CreateGitHubApp :one
 INSERT INTO github_apps (
     user_id, app_id, slug, name, base_url, api_base_url, client_id,
@@ -188,6 +168,37 @@ func (q *Queries) GetGitHubAppByIDAndUser(ctx context.Context, arg GetGitHubAppB
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listGitHubAppApplicationNames = `-- name: ListGitHubAppApplicationNames :many
+SELECT name FROM applications
+WHERE user_id = $1 AND github_app_id = $2
+ORDER BY name ASC
+`
+
+type ListGitHubAppApplicationNamesParams struct {
+	UserID      pgtype.UUID `json:"user_id"`
+	GithubAppID pgtype.UUID `json:"github_app_id"`
+}
+
+func (q *Queries) ListGitHubAppApplicationNames(ctx context.Context, arg ListGitHubAppApplicationNamesParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listGitHubAppApplicationNames, arg.UserID, arg.GithubAppID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listGitHubAppPushTargets = `-- name: ListGitHubAppPushTargets :many

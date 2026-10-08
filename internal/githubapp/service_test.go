@@ -28,6 +28,9 @@ type fakeAPI struct {
 	expiresAt  time.Time
 	repos      []Repo
 	reposErr   error
+	// reposErrFor fails one installation's listing (keyed by token), so a
+	// test can break an unrelated connection while the linked one works.
+	reposErrFor map[string]error
 	// reposFor serves per-token listings when set (keyed by token).
 	reposFor      map[string][]Repo
 	branches      map[string][]Branch
@@ -89,6 +92,9 @@ func (f *fakeAPI) ListInstallationRepos(_ context.Context, token string) ([]Repo
 	if f.reposErr != nil {
 		return nil, false, f.reposErr
 	}
+	if err, ok := f.reposErrFor[token]; ok {
+		return nil, false, err
+	}
 	if f.reposFor != nil {
 		if repos, ok := f.reposFor[token]; ok {
 			return repos, false, nil
@@ -115,7 +121,7 @@ type memoryRepo struct {
 	insts     map[uuid.UUID][]Installation
 	byInstall map[int64][]uuid.UUID
 	cache     map[string][]Repo
-	appsUsing int64
+	appsUsing []string
 	// watched repos per app for PushTargets, keyed by lower(repo).
 	watched map[string][]AppPushTarget
 }
@@ -254,8 +260,8 @@ func (m *memoryRepo) ListRepoCache(_ context.Context, appID uuid.UUID, installat
 	return append([]Repo(nil), m.cache[cacheKey(appID, installationID)]...), nil
 }
 
-func (m *memoryRepo) CountApplicationsForApp(_ context.Context, _, _ uuid.UUID) (int64, error) {
-	return m.appsUsing, nil
+func (m *memoryRepo) ListApplicationNamesForApp(_ context.Context, _, _ uuid.UUID) ([]string, error) {
+	return append([]string(nil), m.appsUsing...), nil
 }
 
 // watch records that appID's owner watches repo (a github_app application).
@@ -647,7 +653,7 @@ func TestTokenCloneURLResolvesGrant(t *testing.T) {
 	mintInstall(1000)
 
 	mintsBefore := len(api.tokenFor)
-	tokenURL, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://github.com/acme/web.git")
+	tokenURL, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/web", "https://github.com/acme/web.git")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -671,22 +677,75 @@ func TestTokenCloneURLResolvesGrant(t *testing.T) {
 	}
 
 	// A foreign host is refused before minting.
-	if _, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://evil.example/acme/web.git"); err == nil {
+	if _, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/web", "https://evil.example/acme/web.git"); err == nil {
 		t.Fatal("foreign-host clone url was accepted")
 	}
 	// A transient GitHub failure fails the lookup instead of the sentinel:
 	// the deploy must fail, never silently clone anonymously.
 	api.reposErr = errors.New("502 Bad Gateway")
-	if _, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://github.com/acme/web.git"); !errors.Is(err, ErrGrantsUnverifiable) {
+	if _, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/web", "https://github.com/acme/web.git"); !errors.Is(err, ErrGrantsUnverifiable) {
 		t.Fatalf("transient failure err = %v, want ErrGrantsUnverifiable", err)
 	}
-	if _, err := svc.TokenCloneURL(ctx, userID, "acme/web", "https://github.com/acme/web.git"); errors.Is(err, ErrNoInstallationGrant) {
+	if _, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/web", "https://github.com/acme/web.git"); errors.Is(err, ErrNoInstallationGrant) {
 		t.Fatal("transient failure degraded to the no-grant sentinel")
 	}
 	api.reposErr = nil
-	// An ungranted repo fails with the sentinel the cloner falls back on.
-	if _, err := svc.TokenCloneURL(ctx, userID, "acme/unknown", "https://github.com/acme/unknown.git"); !errors.Is(err, ErrNoInstallationGrant) {
+	// An ungranted repo fails with the sentinel the cloner surfaces.
+	if _, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/unknown", "https://github.com/acme/unknown.git"); !errors.Is(err, ErrNoInstallationGrant) {
 		t.Fatalf("ungranted repo err = %v, want ErrNoInstallationGrant", err)
+	}
+	// A plaintext http URL is refused even though the host matches, before
+	// any grant is listed: with GitHub failing, the error stays the
+	// validation refusal, never the unverifiable-grants failure.
+	api.reposErr = errors.New("502 Bad Gateway")
+	if _, err := svc.TokenCloneURL(ctx, userID, app.ID, "acme/web", "http://github.com/acme/web.git"); !errors.Is(err, ErrValidation) {
+		t.Fatalf("http clone url err = %v, want ErrValidation", err)
+	}
+	api.reposErr = nil
+	// A foreign connection id answers not-found, so one user's link can
+	// never resolve through another user's connection.
+	if _, err := svc.TokenCloneURL(ctx, userID, uuid.New(), "acme/web", "https://github.com/acme/web.git"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign app id err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestTokenCloneURLUsesOnlyTheLinkedConnection proves resolution stays
+// inside the linked connection: two connections both grant acme/web, yet the
+// token comes from the linked connection's installation, and a broken
+// listing on the unrelated connection does not fail the lookup.
+func TestTokenCloneURLUsesOnlyTheLinkedConnection(t *testing.T) {
+	svc, _, api, userID := testFixture()
+	api.pem = testKeyPEM(t)
+	api.token = "" // per-installation tokens prove which installation minted
+	ctx := context.Background()
+
+	linked := connect(t, svc, userID)
+	other := connect(t, svc, userID)
+	web := Repo{ExternalID: "2", Name: "web", FullName: "acme/web", CloneURL: "https://github.com/acme/web.git"}
+	api.reposFor = map[string][]Repo{"tok-1000": {web}, "tok-2000": {web}}
+	record := func(app GitHubApp, id int64) {
+		t.Helper()
+		_, state, err := svc.InstallURL(ctx, userID, app.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		api.installations[id] = InstallationInfo{ID: id, Account: "acme", AppID: 123}
+		if _, err := svc.RecordInstallation(ctx, userID, app.ID, id, state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(linked, 1000)
+	record(other, 2000)
+
+	// The unrelated connection's listing breaks after recording: the linked
+	// lookup must not notice.
+	api.reposErrFor = map[string]error{"tok-2000": errors.New("500 Internal Server Error")}
+	tokenURL, err := svc.TokenCloneURL(ctx, userID, linked.ID, "acme/web", "https://github.com/acme/web.git")
+	if err != nil {
+		t.Fatalf("TokenCloneURL through the linked connection: %v", err)
+	}
+	if tokenURL != "https://x-access-token:tok-1000@github.com/acme/web.git" {
+		t.Fatalf("token url = %q, want the linked installation's token", tokenURL)
 	}
 }
 
@@ -708,15 +767,18 @@ func TestEmbedTokenShapes(t *testing.T) {
 
 func TestDisconnectReportsUsage(t *testing.T) {
 	svc, repo, _, userID := testFixture()
-	repo.appsUsing = 2
+	repo.appsUsing = []string{"api", "web"}
 
 	app := connect(t, svc, userID)
-	using, err := svc.Disconnect(context.Background(), userID, app.ID)
+	result, err := svc.Disconnect(context.Background(), userID, app.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if using != 2 {
-		t.Fatalf("applications using = %d, want 2", using)
+	if result.ApplicationsUsing != 2 {
+		t.Fatalf("applications using = %d, want 2", result.ApplicationsUsing)
+	}
+	if len(result.Applications) != 2 || result.Applications[0] != "api" || result.Applications[1] != "web" {
+		t.Fatalf("applications = %+v, want the linked names", result.Applications)
 	}
 	if _, err := svc.ListApps(context.Background(), userID); err != nil {
 		t.Fatal(err)

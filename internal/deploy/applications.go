@@ -845,24 +845,45 @@ func validateApplication(app Application, checkSource bool) error {
 	return validatePort("host port", app.HostPort)
 }
 
-// validateSource checks the per-type source fields on creation. Git-backed
-// types keep the existing requirement (a cloneable URL; provider-backed
-// types also name the repository), while Dockerfile, Compose and image
-// sources carry no fetch fields yet (GS-7..GS-9).
+// validateSource checks the per-type source fields on creation. The provider
+// slug must agree with the type (github_app needs provider "github",
+// gitlab_app "gitlab"), so hook and deploy-key paths that key off Provider
+// can never disagree with the orchestrator switch that keys off SourceType.
+// git_public refuses only the two slugs that own a dedicated type; every
+// other value ("", the legacy "public" sentinel, gitea and friends) passes,
+// so existing apps and their previews keep working with the provider-based
+// hook and key behavior they already have. git_private and the container
+// sources fail closed until their packages land (GS-4, GS-7..GS-9).
 func validateSource(app Application) error {
 	switch app.SourceType {
-	case "", SourceGitPublic, SourceGitPrivate:
-		return validateCloneURL(app.CloneURL)
-	case SourceGitHubApp, SourceGitLabApp:
-		if strings.TrimSpace(app.Repo) == "" {
-			return fmt.Errorf("%w: repository is required", ErrValidation)
+	case "", SourceGitPublic:
+		if app.Provider == "github" || app.Provider == "gitlab" {
+			return fmt.Errorf("%w: source type %q requires an empty provider, got %q",
+				ErrValidation, app.SourceType, app.Provider)
 		}
 		return validateCloneURL(app.CloneURL)
-	case SourceDockerfile, SourceCompose, SourceImage:
-		return nil
+	case SourceGitHubApp:
+		return validateProviderSource(app, "github")
+	case SourceGitLabApp:
+		return validateProviderSource(app, "gitlab")
+	case SourceGitPrivate, SourceDockerfile, SourceCompose, SourceImage:
+		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
 	default:
 		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
 	}
+}
+
+// validateProviderSource checks a provider-backed source: the slug must match
+// the type, and the repository and clone URL follow the existing flow.
+func validateProviderSource(app Application, provider string) error {
+	if app.Provider != provider {
+		return fmt.Errorf("%w: source type %q requires provider %q, got %q",
+			ErrValidation, app.SourceType, provider, app.Provider)
+	}
+	if strings.TrimSpace(app.Repo) == "" {
+		return fmt.Errorf("%w: repository is required", ErrValidation)
+	}
+	return validateCloneURL(app.CloneURL)
 }
 
 // validatePort rejects values the applications table CHECKs would refuse, so a

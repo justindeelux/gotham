@@ -51,10 +51,10 @@ func TestValidSourceType(t *testing.T) {
 	}
 }
 
-// TestValidateSourcePerType checks the per-type creation requirements:
-// git-backed types need a cloneable URL (provider-backed ones also name
-// the repository), while Dockerfile/Compose/image sources carry no fetch
-// fields until GS-7..GS-9.
+// TestValidateSourcePerType checks the per-type creation requirements: the
+// provider slug must agree with the type, git-backed types need a cloneable
+// URL (provider-backed ones also name the repository), and git_private plus
+// the container sources fail closed until their packages land.
 func TestValidateSourcePerType(t *testing.T) {
 	base := Application{
 		Name:      "demo",
@@ -64,51 +64,86 @@ func TestValidateSourcePerType(t *testing.T) {
 	cases := []struct {
 		name       string
 		sourceType string
+		provider   string
 		repo       string
 		cloneURL   string
-		wantErr    bool
+		wantErr    error
 	}{
-		{"public git", SourceGitPublic, "", "https://github.com/acme/demo.git", false},
-		{"legacy empty behaves like public git", "", "", "https://github.com/acme/demo.git", false},
-		{"public git without URL", SourceGitPublic, "", "", true},
-		{"private git", SourceGitPrivate, "", "git@github.com:acme/demo.git", false},
-		{"private git without URL", SourceGitPrivate, "", "", true},
-		{"github app", SourceGitHubApp, "acme/demo", "git@github.com:acme/demo.git", false},
-		{"github app without repo", SourceGitHubApp, "", "git@github.com:acme/demo.git", true},
-		{"github app without URL", SourceGitHubApp, "acme/demo", "", true},
-		{"gitlab app", SourceGitLabApp, "acme/demo", "git@gitlab.com:acme/demo.git", false},
-		{"dockerfile", SourceDockerfile, "", "", false},
-		{"compose", SourceCompose, "", "", false},
-		{"image", SourceImage, "", "", false},
-		{"unknown type", "tarball", "", "", true},
+		{"public git", SourceGitPublic, "", "", "https://github.com/acme/demo.git", nil},
+		{"legacy empty behaves like public git", "", "", "", "https://github.com/acme/demo.git", nil},
+		{"legacy public sentinel", SourceGitPublic, "public", "", "https://github.com/acme/demo.git", nil},
+		{"gitea-backed legacy app", SourceGitPublic, "gitea", "acme/demo", "https://gitea.example/acme/demo.git", nil},
+		{"public git with github provider", SourceGitPublic, "github", "", "https://github.com/acme/demo.git", ErrValidation},
+		{"public git with gitlab provider", SourceGitPublic, "gitlab", "", "https://github.com/acme/demo.git", ErrValidation},
+		{"public git without URL", SourceGitPublic, "", "", "", ErrValidation},
+		{"github app", SourceGitHubApp, "github", "acme/demo", "git@github.com:acme/demo.git", nil},
+		{"github app with gitlab provider", SourceGitHubApp, "gitlab", "acme/demo", "git@github.com:acme/demo.git", ErrValidation},
+		{"github app without provider", SourceGitHubApp, "", "acme/demo", "git@github.com:acme/demo.git", ErrValidation},
+		{"github app without repo", SourceGitHubApp, "github", "", "git@github.com:acme/demo.git", ErrValidation},
+		{"github app without URL", SourceGitHubApp, "github", "acme/demo", "", ErrValidation},
+		{"gitlab app", SourceGitLabApp, "gitlab", "acme/demo", "git@gitlab.com:acme/demo.git", nil},
+		{"gitlab app with github provider", SourceGitLabApp, "github", "acme/demo", "git@gitlab.com:acme/demo.git", ErrValidation},
+		{"private git waits for GS-4", SourceGitPrivate, "", "", "git@github.com:acme/demo.git", ErrSourceNotImplemented},
+		{"dockerfile waits for GS-7", SourceDockerfile, "", "", "", ErrSourceNotImplemented},
+		{"compose waits for GS-8", SourceCompose, "", "", "", ErrSourceNotImplemented},
+		{"image waits for GS-9", SourceImage, "", "", "", ErrSourceNotImplemented},
+		{"unknown type", "tarball", "", "", "", ErrValidation},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			app := base
 			app.SourceType = tc.sourceType
+			app.Provider = tc.provider
 			app.Repo = tc.repo
 			app.CloneURL = tc.cloneURL
 			err := validateApplication(app, true)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateApplication = %v, wantErr %v", err, tc.wantErr)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("validateApplication = %v, want nil", err)
+				}
+				return
 			}
-			if err != nil && !errors.Is(err, ErrValidation) {
-				t.Fatalf("err = %v, want it to wrap ErrValidation", err)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("validateApplication = %v, want %v", err, tc.wantErr)
 			}
 		})
 	}
 }
 
 // TestCreateApplicationSourceType covers the service boundary: an unknown
-// type is a 400, while a not-yet-implemented type stores fine (the
-// orchestrator fails its deploy closed) and an empty type normalizes from
-// the provider.
+// type is a 400, a not-yet-implemented type is a 422, and an empty type
+// normalizes from the provider.
 func TestCreateApplicationSourceType(t *testing.T) {
 	t.Run("unknown type is rejected", func(t *testing.T) {
 		repo := &fakeRepository{}
 		svc := newTestService(t, repo)
 		in := validCreateInput(uuid.New())
 		in.SourceType = "tarball"
+		if _, err := svc.CreateApplication(context.Background(), uuid.New(), in); !errors.Is(err, ErrValidation) {
+			t.Fatalf("err = %v, want ErrValidation", err)
+		}
+	})
+
+	t.Run("unimplemented types are rejected", func(t *testing.T) {
+		for _, sourceType := range []string{SourceGitPrivate, SourceDockerfile, SourceCompose, SourceImage} {
+			repo := &fakeRepository{}
+			svc := newTestService(t, repo)
+			in := validCreateInput(uuid.New())
+			in.SourceType = sourceType
+			in.Provider = ""
+			_, err := svc.CreateApplication(context.Background(), uuid.New(), in)
+			if !errors.Is(err, ErrSourceNotImplemented) {
+				t.Errorf("create(%q) = %v, want ErrSourceNotImplemented", sourceType, err)
+			}
+		}
+	})
+
+	t.Run("mismatched provider is rejected", func(t *testing.T) {
+		repo := &fakeRepository{}
+		svc := newTestService(t, repo)
+		in := validCreateInput(uuid.New())
+		in.SourceType = SourceGitLabApp
+		in.Provider = "github"
 		if _, err := svc.CreateApplication(context.Background(), uuid.New(), in); !errors.Is(err, ErrValidation) {
 			t.Fatalf("err = %v, want ErrValidation", err)
 		}
@@ -130,29 +165,54 @@ func TestCreateApplicationSourceType(t *testing.T) {
 		}
 	})
 
-	t.Run("unimplemented type stores and keeps its type", func(t *testing.T) {
+	t.Run("github app stores with matching provider", func(t *testing.T) {
 		repo := &fakeRepository{}
 		svc := newTestService(t, repo)
 		userID := uuid.New()
 		in := validCreateInput(uuid.New())
-		in.SourceType = SourceDockerfile
+		in.SourceType = SourceGitHubApp
+		in.Provider = "github"
 		created, err := svc.CreateApplication(context.Background(), userID, in)
 		if err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		if created.SourceType != SourceDockerfile {
-			t.Errorf("source type = %q, want %q", created.SourceType, SourceDockerfile)
+		if created.SourceType != SourceGitHubApp {
+			t.Errorf("source type = %q, want %q", created.SourceType, SourceGitHubApp)
 		}
 	})
 }
 
-// TestCloneSourceBranching pins the GS-2 orchestrator switch: git-backed
-// types (and legacy empty rows) clone, Dockerfile/Compose/image fail with
+// TestServiceDeployRejectsUnimplementedSource pins the submit path behind
+// cloneSource: a stored dockerfile/compose/image (or git_private) app fails
+// Deploy with ErrSourceNotImplemented — not the clone-URL error — and queues
+// nothing.
+func TestServiceDeployRejectsUnimplementedSource(t *testing.T) {
+	for _, sourceType := range []string{SourceGitPrivate, SourceDockerfile, SourceCompose, SourceImage} {
+		t.Run(sourceType, func(t *testing.T) {
+			userID := uuid.New()
+			app := testApplication(userID)
+			app.SourceType = sourceType
+			repo := &fakeRepository{app: app}
+			svc := newTestService(t, repo)
+
+			_, err := svc.Deploy(context.Background(), userID, app.ID)
+			if !errors.Is(err, ErrSourceNotImplemented) {
+				t.Fatalf("err = %v, want ErrSourceNotImplemented", err)
+			}
+			if stored := listStored(t, repo, app.ID); len(stored) != 0 {
+				t.Errorf("queued %d deployments, want 0", len(stored))
+			}
+		})
+	}
+}
+
+// TestCloneSourceBranching pins the GS-2 orchestrator switch: implemented
+// types (and legacy empty rows) clone, not-yet-implemented types fail with
 // the typed error, and anything else is a validation error.
 func TestCloneSourceBranching(t *testing.T) {
-	t.Run("git types clone", func(t *testing.T) {
+	t.Run("implemented types clone", func(t *testing.T) {
 		for _, sourceType := range []string{
-			"", SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp,
+			"", SourceGitPublic, SourceGitHubApp, SourceGitLabApp,
 		} {
 			src := &fakeSource{}
 			o := newTestOrchestrator(Config{Source: src})
@@ -168,7 +228,7 @@ func TestCloneSourceBranching(t *testing.T) {
 	})
 
 	t.Run("unimplemented types fail closed", func(t *testing.T) {
-		for _, sourceType := range []string{SourceDockerfile, SourceCompose, SourceImage} {
+		for _, sourceType := range []string{SourceGitPrivate, SourceDockerfile, SourceCompose, SourceImage} {
 			src := &fakeSource{}
 			o := newTestOrchestrator(Config{Source: src})
 			app := testApplication(uuid.New())
@@ -191,4 +251,33 @@ func TestCloneSourceBranching(t *testing.T) {
 			t.Errorf("cloneSource(tarball) = %v, want ErrValidation", err)
 		}
 	})
+}
+
+// TestPreviewOfLegacyProviderApp pins the no-behaviour-change rule: a legacy
+// base (empty type) with a provider that owns no dedicated type keeps its
+// preview flow, landing on git_public with the provider untouched.
+func TestPreviewOfLegacyProviderApp(t *testing.T) {
+	for _, provider := range []string{"gitea", "public", ""} {
+		t.Run("provider "+provider, func(t *testing.T) {
+			userID := uuid.New()
+			base := testApplication(userID)
+			base.TeamID = uuid.New()
+			base.Provider = provider
+			base.SourceType = ""
+			repo := seedBaseForPreview(t, base)
+			svc := newTestService(t, repo)
+
+			created, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{
+				Name:   "demo app-pr-1",
+				Branch: "feat/x",
+			})
+			if err != nil {
+				t.Fatalf("CreatePreviewApplication: %v", err)
+			}
+			if created.SourceType != SourceGitPublic || created.Provider != provider {
+				t.Errorf("preview source = (%q, %q), want (git_public, %q)",
+					created.SourceType, created.Provider, provider)
+			}
+		})
+	}
 }

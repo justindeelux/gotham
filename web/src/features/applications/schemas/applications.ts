@@ -55,11 +55,12 @@ export const sourceTypeSchema = z.enum([
 
 export type SourceType = z.infer<typeof sourceTypeSchema>;
 
-/** sourceTypeImplemented gates the wizard Source step on GS-2 scope. */
+/** sourceTypeImplemented gates the wizard Source step on GS-2 scope: public
+ * git and the connected-provider flows. git_private waits for GS-4 and the
+ * container sources for GS-7..GS-9. */
 export function sourceTypeImplemented(value: string): boolean {
   return (
     value === "git_public" ||
-    value === "git_private" ||
     value === "github_app" ||
     value === "gitlab_app"
   );

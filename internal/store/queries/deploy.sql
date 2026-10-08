@@ -16,7 +16,7 @@ VALUES (
     -- Direct sqlc callers (fixtures, previews) may pass an empty source
     -- type; COALESCE maps it onto the default so the CHECK never sees it.
     -- The deploy repository normalizes the same way in Go.
-    sqlc.arg(is_preview), COALESCE(NULLIF(sqlc.arg(source_type), ''), 'git_public')
+    sqlc.arg(is_preview), COALESCE(NULLIF(sqlc.arg(source_type)::text, ''), 'git_public')
 )
 RETURNING *;
 

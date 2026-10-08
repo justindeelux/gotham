@@ -684,6 +684,8 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusForbidden, errorBody{Message: "insufficient team role"})
 	case errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrSourceNotImplemented):
+		writeJSON(w, http.StatusUnprocessableEntity, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deployment is already in progress"})
 	case errors.Is(err, ErrDeployInFlight):

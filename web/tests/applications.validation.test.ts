@@ -5,7 +5,7 @@ import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it } from "vitest";
-import { defineComponent, h, ref } from "vue";
+import { defineComponent, h, nextTick, ref } from "vue";
 
 import {
   countDroppedEnvRows,
@@ -105,7 +105,7 @@ describe("wizard gates match recorded outcomes", () => {
     const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
     const w = wiz!;
     const reset = {
-      sourceType: "git_public", providerId: "", publicCloneUrl: "", privateCloneUrl: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
+      sourceType: "git_public", providerId: "", publicCloneUrl: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
       buildPack: "", serverId: "", port: 3000, hostPort: null, baseDomain: "", env: [], storage: [],
     };
     const sourceCases: Array<{ name: string; patch: Record<string, unknown>; sourceValid: boolean }> = [
@@ -115,8 +115,8 @@ describe("wizard gates match recorded outcomes", () => {
       { name: "public-bad-name", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "Bad_Name!"}, sourceValid: false },
       { name: "public-short-name", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "main", "name": "ab"}, sourceValid: false },
       { name: "public-blank-branch", patch: {"sourceType": "git_public", "publicCloneUrl": "https://github.com/o/r.git", "branch": "  ", "name": "storefront"}, sourceValid: false },
-      { name: "private-valid", patch: {"sourceType": "git_private", "privateCloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: true },
-      { name: "private-blank-url", patch: {"sourceType": "git_private", "privateCloneUrl": "  ", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "private-soon", patch: {"sourceType": "git_private", "branch": "main", "name": "abc"}, sourceValid: false },
+      { name: "private-soon-with-url", patch: {"sourceType": "git_private", "publicCloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: false },
       { name: "github-valid", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: true },
       { name: "github-no-clone", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "o/r", "cloneUrl": "  ", "branch": "main", "name": "abc"}, sourceValid: false },
       { name: "github-no-repo", patch: {"sourceType": "github_app", "providerId": "p1", "repoFullName": "", "cloneUrl": "git@h:o/r.git", "branch": "main", "name": "abc"}, sourceValid: false },
@@ -154,6 +154,80 @@ describe("wizard gates match recorded outcomes", () => {
       Object.assign(w.form, { serverId: "", port: 3000, hostPort: null, baseDomain: "" }, c.patch);
       expect({ name: c.name, actual: w.runtimeValid.value }).toEqual({ name: c.name, actual: c.runtimeValid });
     }
+    wrapper.unmount();
+  });
+});
+
+describe("wizard create payload carries the source type", () => {
+  it("maps each source type to its provider/repo/clone_url shape", () => {
+    setActivePinia(createPinia());
+    let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
+    const Harness = defineComponent({
+      setup() {
+        wiz = useCreateAppWizard(ref(false), (() => undefined) as never);
+        return () => h("div");
+      },
+    });
+    const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
+    const w = wiz!;
+    w.providersStore.providers = [
+      { id: "p1", provider: "github", base_url: "", connected: true, scopes: "", created_at: "", updated_at: "" },
+      { id: "p2", provider: "gitlab", base_url: "", connected: true, scopes: "", created_at: "", updated_at: "" },
+    ];
+
+    // Provider options follow the source type: no cross-provider selection.
+    Object.assign(w.form, { sourceType: "github_app" });
+    expect(w.providerOptions.value.map((item) => item.value)).toEqual(["p1"]);
+    Object.assign(w.form, { sourceType: "gitlab_app" });
+    expect(w.providerOptions.value.map((item) => item.value)).toEqual(["p2"]);
+
+    // git_public carries no provider.
+    Object.assign(w.form, {
+      sourceType: "git_public", providerId: "", publicCloneUrl: "https://github.com/o/r.git",
+      repoFullName: "", cloneUrl: "", branch: "main", name: "storefront",
+    });
+    expect(w.buildPayload()).toMatchObject({
+      provider: "",
+      repo: "https://github.com/o/r.git",
+      clone_url: "https://github.com/o/r.git",
+      source_type: "git_public",
+    });
+
+    // github_app carries the matching provider slug.
+    Object.assign(w.form, {
+      sourceType: "github_app", providerId: "p1", repoFullName: "o/r",
+      cloneUrl: "git@github.com:o/r.git", branch: "main", name: "abc",
+    });
+    expect(w.buildPayload()).toMatchObject({
+      provider: "github",
+      repo: "o/r",
+      clone_url: "git@github.com:o/r.git",
+      source_type: "github_app",
+    });
+    wrapper.unmount();
+  });
+
+  it("clears the previous type's fields on source type switch", async () => {
+    setActivePinia(createPinia());
+    let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
+    const Harness = defineComponent({
+      setup() {
+        wiz = useCreateAppWizard(ref(false), (() => undefined) as never);
+        return () => h("div");
+      },
+    });
+    const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
+    const w = wiz!;
+    Object.assign(w.form, {
+      sourceType: "github_app", providerId: "p1", repoFullName: "o/r", cloneUrl: "git@h:o/r.git",
+    });
+    w.form.sourceType = "gitlab_app";
+    await nextTick();
+    expect({ providerId: w.form.providerId, repoFullName: w.form.repoFullName, cloneUrl: w.form.cloneUrl }).toEqual({
+      providerId: "",
+      repoFullName: "",
+      cloneUrl: "",
+    });
     wrapper.unmount();
   });
 });

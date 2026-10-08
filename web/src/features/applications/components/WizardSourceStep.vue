@@ -34,17 +34,6 @@ const { t } = useI18n();
       </NFormItem>
     </div>
 
-    <div class="form-row" v-else-if="wizard.isPrivateRepo.value">
-      <NFormItem :label="t('applications.wizard.privateCloneUrl')">
-        <NInput
-          v-model:value="form.privateCloneUrl"
-          class="mono"
-          placeholder="git@github.com:owner/repo.git"
-        />
-        <span class="field-hint">{{ t("applications.wizard.privateCloneHint") }}</span>
-      </NFormItem>
-    </div>
-
     <div class="form-row" v-else-if="wizard.isProviderFlow.value">
       <NFormItem :label="t('applications.wizard.provider')" :show-feedback="true">
         <NSelect

@@ -335,19 +335,18 @@ func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) er
 }
 
 // cloneSource selects the fetch step by application source type (GS-2).
-// Git-backed types share the git clone path (the cloner keys off the
-// deploy key, so legacy rows with an empty type behave as before);
-// Dockerfile, Compose and image sources have no fetch step until GS-7..GS-9
-// and fail closed with ErrSourceNotImplemented.
+// The git/container partition lives in SourceTypeImplemented, so the switch
+// here cannot drift from the deploy gate: legacy rows with an empty type
+// behave as before, and anything GS-2 cannot fetch fails closed with
+// ErrSourceNotImplemented before any container is touched.
 func (o *Orchestrator) cloneSource(ctx context.Context, app Application, dir string, log func(string)) error {
-	switch app.SourceType {
-	case "", SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp:
-		return o.source.Clone(ctx, app, dir, log)
-	case SourceDockerfile, SourceCompose, SourceImage:
-		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
-	default:
+	if !ValidSourceType(app.SourceType) {
 		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
 	}
+	if !SourceTypeImplemented(app.SourceType) {
+		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
+	}
+	return o.source.Clone(ctx, app, dir, log)
 }
 
 // attempt runs op up to MaxAttempts times, retrying only ErrAgentUnavailable

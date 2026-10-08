@@ -499,10 +499,17 @@ func (s *Service) application(ctx context.Context, userID, appID uuid.UUID, writ
 }
 
 // validateDeployTarget rejects an application that cannot be deployed: no
-// server assigned, no cloneable repository, or an unknown build pack.
+// server assigned, an unknown or not-yet-implemented source type, no
+// cloneable repository, or an unknown build pack.
 func validateDeployTarget(app Application) error {
 	if app.ServerID == uuid.Nil {
 		return fmt.Errorf("%w: application has no server assigned", ErrValidation)
+	}
+	if !ValidSourceType(app.SourceType) {
+		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)
+	}
+	if !SourceTypeImplemented(app.SourceType) {
+		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
 	}
 	if err := validateCloneURL(strings.TrimSpace(app.CloneURL)); err != nil {
 		return err

@@ -50,11 +50,13 @@ func NormalizeSourceType(sourceType, provider string) string {
 	}
 }
 
-// SourceTypeImplemented reports whether the deploy orchestrator can fetch
-// the type yet: only git-backed sources in GS-2.
+// SourceTypeImplemented reports whether the deploy pipeline can fetch
+// the type yet: only public git and the connected-provider flows in GS-2.
+// git_private waits for GS-4 (no key path exists yet), and Dockerfile,
+// Compose and image sources wait for GS-7..GS-9.
 func SourceTypeImplemented(s string) bool {
 	switch s {
-	case "", SourceGitPublic, SourceGitPrivate, SourceGitHubApp, SourceGitLabApp:
+	case "", SourceGitPublic, SourceGitHubApp, SourceGitLabApp:
 		return true
 	default:
 		return false

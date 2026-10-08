@@ -14,6 +14,11 @@ ALTER TABLE applications
     ));
 UPDATE applications SET source_type = 'github_app' WHERE provider = 'github';
 UPDATE applications SET source_type = 'gitlab_app' WHERE provider = 'gitlab';
+-- Gitea rows stay git_public: there is no gitea_app value in GS-2, and the
+-- provider column is untouched, so the deploy-key and webhook flows that key
+-- off provider keep working exactly as before. source_type only drives the
+-- new wizard switch and the orchestrator fetch step, where every git-backed
+-- type shares the deploy-key cloner.
 
 -- +goose Down
 ALTER TABLE applications DROP CONSTRAINT IF EXISTS applications_source_type_check;

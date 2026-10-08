@@ -128,7 +128,7 @@ VALUES (
     -- Direct sqlc callers (fixtures, previews) may pass an empty source
     -- type; COALESCE maps it onto the default so the CHECK never sees it.
     -- The deploy repository normalizes the same way in Go.
-    $15, COALESCE(NULLIF($16, ''), 'git_public')
+    $15, COALESCE(NULLIF($16::text, ''), 'git_public')
 )
 RETURNING id, user_id, server_id, name, provider, repo, clone_url, branch, build_pack, base_domain, port, host_port, created_at, updated_at, base_domain_disabled, team_id, is_preview, environment_id, source_type
 `
@@ -149,7 +149,7 @@ type CreateApplicationParams struct {
 	HostPort      int32       `json:"host_port"`
 	TeamID        pgtype.UUID `json:"team_id"`
 	IsPreview     bool        `json:"is_preview"`
-	SourceType    interface{} `json:"source_type"`
+	SourceType    string      `json:"source_type"`
 }
 
 // The id is optional: a caller that must know the application id before the

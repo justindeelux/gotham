@@ -81,6 +81,11 @@ type applicationResponse struct {
 	Branch      string `json:"branch"`
 	BuildPack   string `json:"build_pack"`
 	BaseDomain  string `json:"base_domain"`
+	// DockerfileContent holds pasted Dockerfile text for dockerfile
+	// applications (empty otherwise); BuildArgs holds its --build-arg pairs
+	// (never nil on the wire).
+	DockerfileContent string            `json:"dockerfile_content"`
+	BuildArgs         map[string]string `json:"build_args"`
 	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
 	// migration (legacy duplicate); the value is preserved and an explicit
 	// domain update re-enables it.
@@ -164,6 +169,10 @@ type createApplicationRequest struct {
 	ServerID    string            `json:"server_id"`
 	Env         []envEntryRequest `json:"env"`
 	Storage     []storageRequest  `json:"storage"`
+	// DockerfileContent holds pasted Dockerfile text for the dockerfile
+	// source type (GS-7); BuildArgs holds its optional --build-arg pairs.
+	DockerfileContent string            `json:"dockerfile_content"`
+	BuildArgs         map[string]string `json:"build_args"`
 }
 
 // updateApplicationRequest is the PUT /applications/{id} body. Fields are
@@ -181,6 +190,11 @@ type updateApplicationRequest struct {
 	// GitHubAppID relinks the application: a UUID sets the connection, an
 	// empty string clears it, absent leaves it unchanged.
 	GitHubAppID *string `json:"github_app_id"`
+	// DockerfileContent replaces the stored Dockerfile text (dockerfile
+	// applications only); BuildArgs replaces the whole --build-arg
+	// collection (absent leaves it unchanged).
+	DockerfileContent *string            `json:"dockerfile_content"`
+	BuildArgs         *map[string]string `json:"build_args"`
 }
 
 // errorBody is the JSON body returned for failures.
@@ -293,21 +307,23 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 	}
 
 	application, err := h.svc.CreateApplication(r.Context(), userID, CreateApplicationInput{
-		Name:          req.Name,
-		EnvironmentID: environmentID,
-		Provider:      req.Provider,
-		Repo:          req.Repo,
-		CloneURL:      req.CloneURL,
-		SourceType:    req.SourceType,
-		GitHubAppID:   githubAppID,
-		Branch:        req.Branch,
-		BuildPack:     req.BuildPack,
-		BaseDomain:    req.BaseDomain,
-		Port:          req.Port,
-		HostPort:      req.HostPort,
-		ServerID:      serverID,
-		Env:           toEnvEntries(req.Env),
-		Storage:       toStorages(req.Storage),
+		Name:              req.Name,
+		EnvironmentID:     environmentID,
+		Provider:          req.Provider,
+		Repo:              req.Repo,
+		CloneURL:          req.CloneURL,
+		SourceType:        req.SourceType,
+		GitHubAppID:       githubAppID,
+		Branch:            req.Branch,
+		BuildPack:         req.BuildPack,
+		BaseDomain:        req.BaseDomain,
+		Port:              req.Port,
+		HostPort:          req.HostPort,
+		ServerID:          serverID,
+		Env:               toEnvEntries(req.Env),
+		Storage:           toStorages(req.Storage),
+		DockerfileContent: req.DockerfileContent,
+		BuildArgs:         req.BuildArgs,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -386,13 +402,15 @@ func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := UpdateApplicationInput{
-		Name:        req.Name,
-		Branch:      req.Branch,
-		BuildPack:   req.BuildPack,
-		BaseDomain:  req.BaseDomain,
-		Port:        req.Port,
-		HostPort:    req.HostPort,
-		GitHubAppID: req.GitHubAppID,
+		Name:              req.Name,
+		Branch:            req.Branch,
+		BuildPack:         req.BuildPack,
+		BaseDomain:        req.BaseDomain,
+		Port:              req.Port,
+		HostPort:          req.HostPort,
+		GitHubAppID:       req.GitHubAppID,
+		DockerfileContent: req.DockerfileContent,
+		BuildArgs:         req.BuildArgs,
 	}
 	if req.ServerID != nil {
 		serverID, parsed := applicationServerID(w, *req.ServerID)
@@ -888,6 +906,15 @@ func wireStorages(storages []Storage) []storageRequest {
 	return rows
 }
 
+// nonNilBuildArgs keeps the wire field a JSON object (never null) so the FE
+// reuses one shape for the editor draft.
+func nonNilBuildArgs(args map[string]string) map[string]string {
+	if args == nil {
+		return map[string]string{}
+	}
+	return args
+}
+
 // newApplicationResponse maps a domain application to its wire representation.
 func newApplicationResponse(application Application) applicationResponse {
 	response := applicationResponse{
@@ -904,6 +931,8 @@ func newApplicationResponse(application Application) applicationResponse {
 		// (creation validation already refuses userinfo on new rows).
 		CloneURL:           RedactCloneURL(application.CloneURL),
 		SourceType:         application.SourceType,
+		DockerfileContent:  application.DockerfileContent,
+		BuildArgs:          nonNilBuildArgs(application.BuildArgs),
 		Branch:             application.Branch,
 		BuildPack:          application.BuildPack,
 		BaseDomain:         application.BaseDomain,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NFormItem, NInput, NSelect, NSpace } from "naive-ui";
+import { NAlert, NButton, NDynamicInput, NFormItem, NInput, NSelect, NSpace } from "naive-ui";
 import { useI18n } from "vue-i18n";
 
 import { useCreateWizardState } from "@/features/applications/composables/useCreateAppWizard";
@@ -31,6 +31,29 @@ const { t } = useI18n();
           placeholder="https://github.com/owner/repo.git"
         />
         <span class="field-hint">{{ t("applications.wizard.cloneHint") }}</span>
+      </NFormItem>
+    </div>
+
+    <div class="form-row" v-else-if="wizard.isDockerfile.value">
+      <NFormItem :label="t('applications.wizard.dockerfileContent')">
+        <NInput
+          v-model:value="form.dockerfileContent"
+          type="textarea"
+          class="mono"
+          :rows="12"
+          placeholder="FROM alpine:3.20"
+        />
+        <span class="field-hint">{{ t("applications.wizard.dockerfileHint") }}</span>
+      </NFormItem>
+
+      <NFormItem :label="t('applications.wizard.buildArgs')">
+        <NDynamicInput
+          v-model:value="form.buildArgs"
+          preset="pair"
+          :key-placeholder="t('applications.wizard.buildArgKey')"
+          :value-placeholder="t('applications.wizard.buildArgValue')"
+        />
+        <span class="field-hint">{{ t("applications.wizard.buildArgsHint") }}</span>
       </NFormItem>
     </div>
 

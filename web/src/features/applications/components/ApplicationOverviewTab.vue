@@ -13,9 +13,11 @@ import { useI18n } from "vue-i18n";
 import type { Application, Deployment } from "@/features/applications/api/applications";
 import DeploymentHistoryTable from "@/features/applications/components/DeploymentHistoryTable.vue";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
+import DockerfileEditor from "@/features/applications/components/DockerfileEditor.vue";
 import type { PipelineStep } from "@/features/applications/utils/deployPipeline";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
 import { relativeTime } from "@/shared/utils/format";
+import { computed } from "vue";
 
 interface Props {
   application: Application | null;
@@ -36,6 +38,22 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+/** sourceLabel renders the GS-2 source type with the wizard's labels. */
+const sourceLabels: Record<string, string> = {
+  git_public: "applications.wizard.sourceGitPublic",
+  git_private: "applications.wizard.sourceGitPrivate",
+  github_app: "applications.wizard.sourceGithubApp",
+  gitlab_app: "applications.wizard.sourceGitlabApp",
+  dockerfile: "applications.wizard.sourceDockerfile",
+  compose: "applications.wizard.sourceCompose",
+  image: "applications.wizard.sourceImage",
+};
+
+const sourceLabel = computed<string>(() => {
+  const key = props.application ? sourceLabels[props.application.source_type] : undefined;
+  return key ? String(t(key)) : (props.application?.source_type ?? "—");
+});
 </script>
 
 <template>
@@ -44,6 +62,9 @@ const { t } = useI18n();
       <NDescriptions :column="props.descColumns" bordered label-placement="left">
         <NDescriptionsItem :label="t('applications.overview.name')">
           <span class="mono">{{ props.application.name }}</span>
+        </NDescriptionsItem>
+        <NDescriptionsItem :label="t('applications.overview.source')">
+          <span class="mono">{{ sourceLabel }}</span>
         </NDescriptionsItem>
         <NDescriptionsItem :label="t('applications.overview.branch')">
           <span class="mono">{{ props.application.branch || "—" }}</span>
@@ -62,6 +83,10 @@ const { t } = useI18n();
         </NDescriptionsItem>
       </NDescriptions>
     </NCard>
+    <DockerfileEditor
+      v-if="props.application && props.application.source_type === 'dockerfile'"
+      :application="props.application"
+    />
     <NCard v-if="props.latest" :title="t('applications.overview.deployTitle', { id: props.latest.id.slice(0, 8) })">
       <template #header-extra>
         <DeploymentStatusTag :state="props.latest.state" />

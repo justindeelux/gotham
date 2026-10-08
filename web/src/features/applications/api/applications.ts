@@ -47,6 +47,10 @@ export interface Application {
   source_type: SourceType;
   /** Linked GitHub App connection (GS-5), empty when unlinked. */
   github_app_id: string;
+  /** Pasted Dockerfile text for dockerfile applications (GS-7, empty otherwise). */
+  dockerfile_content: string;
+  /** Optional --build-arg pairs for dockerfile applications. */
+  build_args: Record<string, string>;
   branch: string;
   build_pack: string;
   base_domain: string;
@@ -127,6 +131,10 @@ export interface CreateApplicationInput {
   source_type: SourceType;
   /** Links the application to its GitHub App connection (GS-5); omit to leave unlinked. */
   github_app_id?: string;
+  /** Pasted Dockerfile text for the dockerfile source type (GS-7). */
+  dockerfile_content?: string;
+  /** Optional --build-arg pairs for the dockerfile source type. */
+  build_args?: Record<string, string>;
   branch: string;
   build_pack: string;
   base_domain: string;
@@ -156,6 +164,10 @@ export interface UpdateApplicationInput {
    * assignment; omit the field to leave it unchanged.
    */
   server_id?: string;
+  /** Replaces the stored Dockerfile text (dockerfile applications only). */
+  dockerfile_content?: string;
+  /** Replaces the whole --build-arg collection (absent leaves it unchanged). */
+  build_args?: Record<string, string>;
 }
 
 /** Optional body of POST .../rollback (see routes.go). */

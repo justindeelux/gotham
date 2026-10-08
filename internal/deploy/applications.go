@@ -46,14 +46,20 @@ type CreateApplicationInput struct {
 	// GitHubAppID links the application to its GitHub App connection (GS-5);
 	// uuid.Nil leaves it unlinked. The connection must belong to the caller.
 	GitHubAppID uuid.UUID
-	Branch      string
-	BuildPack   string
-	BaseDomain  string
-	Port        int32
-	HostPort    int32
-	ServerID    uuid.UUID
-	Env         []EnvEntry
-	Storage     []Storage
+	// DockerfileContent holds pasted Dockerfile text for the dockerfile
+	// source type (GS-7); ignored for every other type.
+	DockerfileContent string
+	// BuildArgs holds the optional --build-arg pairs for the dockerfile
+	// source type; ignored for every other type.
+	BuildArgs  map[string]string
+	Branch     string
+	BuildPack  string
+	BaseDomain string
+	Port       int32
+	HostPort   int32
+	ServerID   uuid.UUID
+	Env        []EnvEntry
+	Storage    []Storage
 }
 
 // UpdateApplicationInput carries the mutable application fields. Every field is
@@ -74,6 +80,11 @@ type UpdateApplicationInput struct {
 	// must belong to the caller), an empty string clears it, absent leaves
 	// it unchanged.
 	GitHubAppID *string
+	// DockerfileContent replaces the stored Dockerfile text for dockerfile
+	// applications (validated like creation); BuildArgs replaces the whole
+	// --build-arg collection (nil leaves it unchanged).
+	DockerfileContent *string
+	BuildArgs         *map[string]string
 }
 
 // ApplicationFilter scopes a list to one environment or one project of the
@@ -91,7 +102,8 @@ type ApplicationFilter struct {
 func (in UpdateApplicationInput) empty() bool {
 	return in.Name == nil && in.Branch == nil && in.BuildPack == nil &&
 		in.BaseDomain == nil && in.Port == nil && in.HostPort == nil &&
-		in.ServerID == nil && in.EnvironmentID == nil && in.GitHubAppID == nil
+		in.ServerID == nil && in.EnvironmentID == nil && in.GitHubAppID == nil &&
+		in.DockerfileContent == nil && in.BuildArgs == nil
 }
 
 // CreateApplication validates and stores a new application together with its
@@ -109,22 +121,24 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		return Application{}, err
 	}
 	app := Application{
-		ID:            uuid.New(),
-		UserID:        userID,
-		TeamID:        teamID,
-		EnvironmentID: in.EnvironmentID,
-		Name:          strings.TrimSpace(in.Name),
-		Provider:      strings.TrimSpace(in.Provider),
-		Repo:          strings.TrimSpace(in.Repo),
-		CloneURL:      strings.TrimSpace(in.CloneURL),
-		SourceType:    NormalizeSourceType(strings.TrimSpace(in.SourceType), strings.TrimSpace(in.Provider)),
-		Branch:        strings.TrimSpace(in.Branch),
-		BuildPack:     strings.TrimSpace(in.BuildPack),
-		BaseDomain:    proxy.NormalizeDomain(in.BaseDomain),
-		Port:          in.Port,
-		HostPort:      in.HostPort,
-		ServerID:      in.ServerID,
-		GitHubAppID:   in.GitHubAppID,
+		ID:                uuid.New(),
+		UserID:            userID,
+		TeamID:            teamID,
+		EnvironmentID:     in.EnvironmentID,
+		Name:              strings.TrimSpace(in.Name),
+		Provider:          strings.TrimSpace(in.Provider),
+		Repo:              strings.TrimSpace(in.Repo),
+		CloneURL:          strings.TrimSpace(in.CloneURL),
+		SourceType:        NormalizeSourceType(strings.TrimSpace(in.SourceType), strings.TrimSpace(in.Provider)),
+		Branch:            strings.TrimSpace(in.Branch),
+		BuildPack:         strings.TrimSpace(in.BuildPack),
+		BaseDomain:        proxy.NormalizeDomain(in.BaseDomain),
+		Port:              in.Port,
+		HostPort:          in.HostPort,
+		ServerID:          in.ServerID,
+		GitHubAppID:       in.GitHubAppID,
+		DockerfileContent: in.DockerfileContent,
+		BuildArgs:         normalizeBuildArgs(in.BuildArgs),
 	}
 	// An empty branch stays empty for public-git sources: the clone resolves
 	// the remote default via ls-remote (GS-3) instead of guessing "main".
@@ -318,6 +332,26 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	}
 	if in.BuildPack != nil {
 		app.BuildPack = strings.TrimSpace(*in.BuildPack)
+	}
+	if in.DockerfileContent != nil {
+		if app.SourceType != SourceDockerfile {
+			return Application{}, fmt.Errorf("%w: dockerfile content is only valid for source type %q",
+				ErrValidation, SourceDockerfile)
+		}
+		if err := ValidateDockerfileContent(*in.DockerfileContent); err != nil {
+			return Application{}, err
+		}
+		app.DockerfileContent = *in.DockerfileContent
+	}
+	if in.BuildArgs != nil {
+		if app.SourceType != SourceDockerfile {
+			return Application{}, fmt.Errorf("%w: build args are only valid for source type %q",
+				ErrValidation, SourceDockerfile)
+		}
+		if err := ValidateBuildArgs(*in.BuildArgs); err != nil {
+			return Application{}, err
+		}
+		app.BuildArgs = normalizeBuildArgs(*in.BuildArgs)
 	}
 	if in.BaseDomain != nil {
 		next := proxy.NormalizeDomain(*in.BaseDomain)
@@ -907,8 +941,10 @@ func validateApplication(app Application, checkSource bool) error {
 // keyless http(s)/git URL; every other provider value ("", the legacy
 // "public" sentinel, gitea and friends) stays git_public, so existing apps
 // and their previews keep working with the provider-based hook and key
-// behavior they already have. git_private and the container sources fail
-// closed until their packages land (GS-4, GS-7..GS-9).
+// behavior they already have. The dockerfile type needs pasted content
+// (validated without executing anything) plus optional build args and no
+// repository. git_private and the remaining container sources fail closed
+// until their packages land (GS-4, GS-8..GS-9).
 func validateSource(app Application) error {
 	// A GitHub App link only makes sense on the github_app source: anything
 	// else never consults it, so linking there is a caller error.
@@ -927,7 +963,16 @@ func validateSource(app Application) error {
 		return validateProviderSource(app, "github")
 	case SourceGitLabApp:
 		return validateProviderSource(app, "gitlab")
-	case SourceGitPrivate, SourceDockerfile, SourceCompose, SourceImage:
+	case SourceDockerfile:
+		if strings.TrimSpace(app.Provider) != "" {
+			return fmt.Errorf("%w: source type %q requires an empty provider, got %q",
+				ErrValidation, app.SourceType, app.Provider)
+		}
+		if err := ValidateDockerfileContent(app.DockerfileContent); err != nil {
+			return err
+		}
+		return ValidateBuildArgs(app.BuildArgs)
+	case SourceGitPrivate, SourceCompose, SourceImage:
 		return fmt.Errorf("%w: source type %q", ErrSourceNotImplemented, app.SourceType)
 	default:
 		return fmt.Errorf("%w: unknown source type %q", ErrValidation, app.SourceType)

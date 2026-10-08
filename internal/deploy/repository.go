@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -332,23 +333,25 @@ func (r *storeRepository) CreateApplication(
 ) (Application, error) {
 	row, err := r.store.CreateApplicationWithConfig(ctx,
 		sqlc.CreateApplicationParams{
-			ID:            pgUUID(app.ID),
-			UserID:        pgUUID(app.UserID),
-			TeamID:        pgUUID(app.TeamID),
-			ServerID:      pgUUID(app.ServerID),
-			EnvironmentID: pgUUID(app.EnvironmentID),
-			Name:          app.Name,
-			Provider:      app.Provider,
-			Repo:          app.Repo,
-			CloneUrl:      app.CloneURL,
-			Branch:        app.Branch,
-			BuildPack:     app.BuildPack,
-			BaseDomain:    app.BaseDomain,
-			SourceType:    NormalizeSourceType(app.SourceType, app.Provider),
-			Port:          app.Port,
-			HostPort:      app.HostPort,
-			IsPreview:     app.IsPreview,
-			GithubAppID:   pgUUID(app.GitHubAppID),
+			ID:                pgUUID(app.ID),
+			UserID:            pgUUID(app.UserID),
+			TeamID:            pgUUID(app.TeamID),
+			ServerID:          pgUUID(app.ServerID),
+			EnvironmentID:     pgUUID(app.EnvironmentID),
+			Name:              app.Name,
+			Provider:          app.Provider,
+			Repo:              app.Repo,
+			CloneUrl:          app.CloneURL,
+			Branch:            app.Branch,
+			BuildPack:         app.BuildPack,
+			BaseDomain:        app.BaseDomain,
+			SourceType:        NormalizeSourceType(app.SourceType, app.Provider),
+			Port:              app.Port,
+			HostPort:          app.HostPort,
+			IsPreview:         app.IsPreview,
+			GithubAppID:       pgUUID(app.GitHubAppID),
+			DockerfileContent: app.DockerfileContent,
+			BuildArgs:         marshalBuildArgs(app.BuildArgs),
 		},
 		envVarParams(envVars),
 		secretParams(secrets),
@@ -378,6 +381,8 @@ func (r *storeRepository) UpdateApplication(ctx context.Context, app Application
 		BaseDomainDisabled: app.BaseDomainDisabled,
 		EnvironmentID:      pgUUID(app.EnvironmentID),
 		GithubAppID:        pgUUID(app.GitHubAppID),
+		DockerfileContent:  app.DockerfileContent,
+		BuildArgs:          marshalBuildArgs(app.BuildArgs),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -832,6 +837,32 @@ func (r *storeRepository) CreateCertificateIntent(ctx context.Context, in Certif
 	return nil
 }
 
+// marshalBuildArgs encodes the --build-arg pairs for the build_args jsonb
+// column. An empty collection stores '{}', never NULL or JSON null.
+func marshalBuildArgs(args map[string]string) []byte {
+	if len(args) == 0 {
+		return []byte("{}")
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		return []byte("{}")
+	}
+	return data
+}
+
+// unmarshalBuildArgs decodes the build_args jsonb column. Empty or corrupt
+// values decode to nil, which the API renders as an empty object.
+func unmarshalBuildArgs(data []byte) map[string]string {
+	if len(data) == 0 {
+		return nil
+	}
+	var args map[string]string
+	if err := json.Unmarshal(data, &args); err != nil {
+		return nil
+	}
+	return args
+}
+
 // applicationFromRow maps a sqlc row to the domain model.
 func applicationFromRow(row sqlc.Application) Application {
 	return Application{
@@ -846,6 +877,8 @@ func applicationFromRow(row sqlc.Application) Application {
 		CloneURL:           row.CloneUrl,
 		SourceType:         row.SourceType,
 		GitHubAppID:        uuidFromPG(row.GithubAppID),
+		DockerfileContent:  row.DockerfileContent,
+		BuildArgs:          unmarshalBuildArgs(row.BuildArgs),
 		Branch:             row.Branch,
 		BuildPack:          row.BuildPack,
 		BaseDomain:         row.BaseDomain,

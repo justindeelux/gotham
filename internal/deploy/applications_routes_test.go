@@ -50,7 +50,9 @@ const applicationBody = `{
 // values.
 var applicationWireKeys = []string{
 	"id", "name", "environment_id", "environment_name", "project_id",
-	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id", "branch", "build_pack",
+	"project_name", "provider", "repo", "clone_url", "source_type", "github_app_id",
+	"dockerfile_content", "build_args", "branch", "build_pack",
+=======
 	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
 	"server_name", "created_at", "updated_at",
 }
@@ -925,6 +927,10 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 			"build_pack":     "dockerfile",
 			"server_id":      uuid.New().String(),
 		}
+		if sourceType == SourceDockerfile {
+			payload["dockerfile_content"] = "FROM alpine:3.20\n"
+			payload["build_args"] = map[string]string{"APP_ENV": "production"}
+		}
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			t.Fatalf("encode payload: %v", err)
@@ -938,7 +944,6 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 		want       int
 	}{
 		{"unknown type", "tarball", "", http.StatusBadRequest},
-		{"dockerfile waits for GS-7", SourceDockerfile, "", http.StatusUnprocessableEntity},
 		{"private git waits for GS-4", SourceGitPrivate, "", http.StatusUnprocessableEntity},
 		{"github app with gitlab provider", SourceGitHubApp, "gitlab", http.StatusBadRequest},
 		{"public git with github provider", SourceGitPublic, "github", http.StatusBadRequest}}
@@ -957,6 +962,40 @@ func TestRoutesCreateApplicationSourceTypes(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("dockerfile app creates with content and build args", func(t *testing.T) {
+		userID := uuid.New()
+		repo := &fakeRepository{}
+		svc := newTestService(t, repo)
+		srv := newRouteServer(svc, alwaysUser(userID))
+
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, applicationsPath,
+			strings.NewReader(body(SourceDockerfile, "", "", ""))))
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+		}
+		var envelope struct {
+			Application struct {
+				SourceType        string            `json:"source_type"`
+				DockerfileContent string            `json:"dockerfile_content"`
+				BuildArgs         map[string]string `json:"build_args"`
+			} `json:"application"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if envelope.Application.SourceType != SourceDockerfile {
+			t.Errorf("source type = %q, want %q", envelope.Application.SourceType, SourceDockerfile)
+		}
+		if !strings.Contains(envelope.Application.DockerfileContent, "FROM") {
+			t.Errorf("dockerfile content = %q, want the pasted text", envelope.Application.DockerfileContent)
+		}
+		if envelope.Application.BuildArgs["APP_ENV"] != "production" {
+			t.Errorf("build args = %v, want APP_ENV=production", envelope.Application.BuildArgs)
+		}
+	})
 
 	t.Run("matching github app creates", func(t *testing.T) {
 		userID := uuid.New()

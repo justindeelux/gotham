@@ -6,7 +6,7 @@
 INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
     branch, build_pack, base_domain, port, host_port, team_id, is_preview,
-    source_type, github_app_id
+    source_type, github_app_id, dockerfile_content, build_args
 )
 VALUES (
     COALESCE(sqlc.arg(id)::uuid, gen_random_uuid()),
@@ -17,7 +17,11 @@ VALUES (
     -- type; COALESCE maps it onto the default so the CHECK never sees it.
     -- The deploy repository normalizes the same way in Go.
     sqlc.arg(is_preview), COALESCE(NULLIF(sqlc.arg(source_type)::text, ''), 'git_public'),
-    sqlc.arg(github_app_id)::uuid
+    sqlc.arg(github_app_id)::uuid,
+    -- Direct sqlc callers (fixtures, previews) predate the GS-7 columns;
+    -- COALESCE maps their zero values onto the column defaults.
+    COALESCE(sqlc.arg(dockerfile_content)::text, ''),
+    COALESCE(sqlc.arg(build_args)::jsonb, '{}')
 )
 RETURNING *;
 
@@ -98,6 +102,8 @@ SET name = $2,
     base_domain_disabled = $9,
     environment_id = $10,
     github_app_id = $11,
+    dockerfile_content = $12,
+    build_args = $13,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

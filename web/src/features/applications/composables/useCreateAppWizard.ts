@@ -25,7 +25,10 @@ import {
 import {
   appNameSchema,
   branchSchema,
+  buildArgKeySchema,
+  buildArgValueSchema,
   cloneUrlSchema,
+  dockerfileContentSchema,
   hostPortSchema,
   providerSchema,
   publicCloneUrlSchema,
@@ -45,6 +48,10 @@ export interface WizardForm {
   publicCloneUrl: string;
   repoFullName: string;
   cloneUrl: string;
+  /** Pasted Dockerfile text for the dockerfile source type (GS-7). */
+  dockerfileContent: string;
+  /** Optional --build-arg pairs for the dockerfile source type. */
+  buildArgs: Array<{ key: string; value: string }>;
   branch: string;
   name: string;
   buildPack: BuildPack;
@@ -95,6 +102,35 @@ export const BUILD_PACKS: BuildPackOption[] = [
     hint: "Builds a static directory and serves it via Traefik. No process runs.",
   },
 ];
+
+/** buildArgsValid gates --build-arg drafts: named rows need a valid key and
+ * a bounded value; nameless rows are dropped on submit like env rows. */
+export function buildArgsValid(rows: Array<{ key: string; value: string }>): boolean {
+  if (rows.length > 64) {
+    return false;
+  }
+  return rows
+    .filter((row) => row.key.trim() !== "" || row.value !== "")
+    .every(
+      (row) =>
+        buildArgKeySchema.safeParse(row.key).success &&
+        buildArgValueSchema.safeParse(row.value).success,
+    );
+}
+
+/** buildArgsPayload drops nameless draft rows for the create payload. */
+export function buildArgsPayload(
+  rows: Array<{ key: string; value: string }>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (key !== "") {
+      out[key] = row.value;
+    }
+  }
+  return out;
+}
 
 /** WizardEvents mirrors the shell's emits for the composable. */
 export interface WizardEvents {
@@ -211,6 +247,8 @@ export function useCreateAppWizard(
     publicCloneUrl: "",
     repoFullName: "",
     cloneUrl: "",
+    dockerfileContent: "",
+    buildArgs: [],
     branch: "main",
     name: "",
     buildPack: "",
@@ -255,6 +293,9 @@ export function useCreateAppWizard(
   /** isGitHubAppFlow covers the GitHub App type (GS-5): repos and branches
    * come from the installation, not the OAuth provider list. */
   const isGitHubAppFlow = computed<boolean>(() => form.sourceType === "github_app");
+
+  /** isDockerfile covers the pasted-Dockerfile type (no repository, GS-7). */
+  const isDockerfile = computed<boolean>(() => form.sourceType === "dockerfile");
 
   /** sourceTypeOptions renders the GS-2 type selector in the current locale. */
   const sourceTypeOptions = computed<Array<{ label: string; value: string; disabled?: boolean }>>(() => [
@@ -323,7 +364,7 @@ export function useCreateAppWizard(
     if (!sourceTypeSchema.safeParse(form.sourceType).success) {
       return false;
     }
-    // Unimplemented types (git_private until GS-4, containers until GS-7..9)
+    // Unimplemented types (git_private until GS-4, containers until GS-8..9)
     // render a not-yet-available placeholder, so the step cannot continue.
     if (!sourceTypeImplemented(form.sourceType)) {
       return false;
@@ -333,6 +374,16 @@ export function useCreateAppWizard(
         // Keyless by definition: only the anonymous http(s)/git schemes pass,
         // so an SSH URL can never reach a clone on ambient credentials.
         if (!publicCloneUrlSchema.safeParse(form.publicCloneUrl).success) {
+          return false;
+        }
+        break;
+      case "dockerfile":
+        // No repository: pasted text (FROM required, 64 KiB cap) plus
+        // optional build args with non-empty keys.
+        if (!dockerfileContentSchema.safeParse(form.dockerfileContent).success) {
+          return false;
+        }
+        if (!buildArgsValid(form.buildArgs)) {
           return false;
         }
         break;
@@ -406,6 +457,10 @@ export function useCreateAppWizard(
 
   /** reviewSource renders the repo headline on the review step. */
   const reviewSource = computed<string>(() => {
+    if (form.sourceType === "dockerfile") {
+      const args = Object.keys(buildArgsPayload(form.buildArgs)).length;
+      return args > 0 ? `Dockerfile · ${args} build args` : "Dockerfile";
+    }
     const repo =
       form.sourceType === "git_public" ? form.publicCloneUrl.trim() : form.repoFullName;
     const branch = form.branch.trim();
@@ -459,6 +514,8 @@ export function useCreateAppWizard(
       form.publicCloneUrl = "";
       form.repoFullName = "";
       form.cloneUrl = "";
+      form.dockerfileContent = "";
+      form.buildArgs = [];
       noSshUrl.value = false;
       if (form.sourceType === "github_app") {
         void githubAppStore.fetchApps().catch(() => undefined);
@@ -533,7 +590,9 @@ export function useCreateAppWizard(
     const source =
       form.sourceType === "git_public"
         ? { repo: form.publicCloneUrl.trim(), cloneUrl: form.publicCloneUrl.trim() }
-        : { repo: form.repoFullName, cloneUrl: form.cloneUrl };
+        : form.sourceType === "dockerfile"
+          ? { repo: "", cloneUrl: "" }
+          : { repo: form.repoFullName, cloneUrl: form.cloneUrl };
     return {
       name: form.name.trim(),
       environment_id: form.environmentId,
@@ -545,6 +604,8 @@ export function useCreateAppWizard(
       // clone takes the installation-token path; every other source stays
       // unlinked on the legacy path.
       github_app_id: isGitHubAppFlow.value ? form.providerId : undefined,
+      dockerfile_content: form.sourceType === "dockerfile" ? form.dockerfileContent : undefined,
+      build_args: form.sourceType === "dockerfile" ? buildArgsPayload(form.buildArgs) : undefined,
       branch: form.branch.trim(),
       build_pack: form.buildPack,
       base_domain: form.baseDomain.trim(),
@@ -629,6 +690,8 @@ export function useCreateAppWizard(
     form.publicCloneUrl = "";
     form.repoFullName = "";
     form.cloneUrl = "";
+    form.dockerfileContent = "";
+    form.buildArgs = [];
     form.branch = "main";
     form.name = "";
     form.buildPack = "";
@@ -664,6 +727,7 @@ export function useCreateAppWizard(
     isPublicRepo,
     isProviderFlow,
     isGitHubAppFlow,
+    isDockerfile,
     repoOptions,
     branchOptions,
     reposTruncated,

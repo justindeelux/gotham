@@ -72,11 +72,15 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 		// The link travels with the preview: it clones the same repo through
 		// the same connection.
 		GitHubAppID: base.GitHubAppID,
-		Branch:      strings.TrimSpace(in.Branch),
-		BuildPack:   base.BuildPack,
-		BaseDomain:  proxy.NormalizeDomain(in.BaseDomain),
-		IsPreview:   true,
-		Port:        base.Port,
+		// A dockerfile base deploys from its stored text: the preview
+		// builds the same content, so it copies both fields.
+		DockerfileContent: base.DockerfileContent,
+		BuildArgs:         base.BuildArgs,
+		Branch:            strings.TrimSpace(in.Branch),
+		BuildPack:         base.BuildPack,
+		BaseDomain:        proxy.NormalizeDomain(in.BaseDomain),
+		IsPreview:         true,
+		Port:              base.Port,
 		// HostPort stays 0: the agent assigns a free port, so the preview
 		// never collides with the base application's binding.
 	}

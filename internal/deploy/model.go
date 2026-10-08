@@ -6,9 +6,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// Application source types (GS-2). Git-backed types share the deploy-key
-// cloner; Dockerfile, Compose and image sources land in GS-7..GS-9 and fail
-// closed in the orchestrator until then.
+// Application source types (GS-2, GS-7). Git-backed types share the deploy-key
+// cloner; pasted Dockerfiles materialize as the build context. Compose and
+// image sources land in GS-8..GS-9 and fail closed in the orchestrator
+// until then.
 const (
 	SourceGitPublic  = "git_public"
 	SourceGitPrivate = "git_private"
@@ -51,12 +52,12 @@ func NormalizeSourceType(sourceType, provider string) string {
 }
 
 // SourceTypeImplemented reports whether the deploy pipeline can fetch
-// the type yet: only public git and the connected-provider flows in GS-2.
-// git_private waits for GS-4 (no key path exists yet), and Dockerfile,
-// Compose and image sources wait for GS-7..GS-9.
+// the type yet: public git, the connected-provider flows and pasted
+// Dockerfiles (GS-7). git_private waits for GS-4, and Compose and image
+// sources wait for GS-8..GS-9.
 func SourceTypeImplemented(s string) bool {
 	switch s {
-	case "", SourceGitPublic, SourceGitHubApp, SourceGitLabApp:
+	case "", SourceGitPublic, SourceGitHubApp, SourceGitLabApp, SourceDockerfile:
 		return true
 	default:
 		return false
@@ -84,6 +85,13 @@ type Application struct {
 	// type from the provider (github/gitlab keep their provider flow,
 	// everything else behaves like SourceGitPublic).
 	SourceType string
+	// DockerfileContent holds pasted Dockerfile text for SourceDockerfile
+	// applications (GS-7); empty for every other source type. Redeploys
+	// always build the latest stored text.
+	DockerfileContent string
+	// BuildArgs holds the optional --build-arg pairs for SourceDockerfile
+	// applications, sent with the build context to the node.
+	BuildArgs  map[string]string
 	Branch     string
 	BuildPack  string
 	BaseDomain string

@@ -55,16 +55,60 @@ export const sourceTypeSchema = z.enum([
 
 export type SourceType = z.infer<typeof sourceTypeSchema>;
 
-/** sourceTypeImplemented gates the wizard Source step on GS-2 scope: public
- * git and the connected-provider flows. git_private waits for GS-4 and the
- * container sources for GS-7..GS-9. */
+/** sourceTypeImplemented gates the wizard Source step on scope: public
+ * git, the connected-provider flows and pasted Dockerfiles (GS-7).
+ * git_private waits for GS-4 and the remaining container sources for
+ * GS-8..GS-9. */
 export function sourceTypeImplemented(value: string): boolean {
   return (
     value === "git_public" ||
     value === "github_app" ||
-    value === "gitlab_app"
+    value === "gitlab_app" ||
+    value === "dockerfile"
   );
 }
+
+/**
+ * maxDockerfileBytes caps pasted Dockerfile text at 64 KiB, matching
+ * MaxDockerfileBytes in internal/deploy/dockerfile.go.
+ */
+export const maxDockerfileBytes = 64 * 1024;
+
+/**
+ * dockerfileContentSchema replaces the GS-7 creation gate on the trimmed
+ * value: non-empty, within the size limit, containing a FROM instruction
+ * (comments and blank lines ignored, case-insensitive first word).
+ * Gate-only: consumers read `.success`, deeper validation happens on the
+ * node at build time.
+ */
+export const dockerfileContentSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(maxDockerfileBytes)
+  .refine((value) =>
+    value.split("\n").some((line) => {
+      const trimmed = line.trim();
+      if (trimmed === "" || trimmed.startsWith("#")) {
+        return false;
+      }
+      const [first] = trimmed.split(/\s+/);
+      return first?.toUpperCase() === "FROM";
+    }),
+  );
+
+/** buildArgKeySchema replaces the key check for one --build-arg pair: the
+ * same container-variable shape the API enforces (no spaces, '=' or NUL,
+ * 128 chars max). Gate-only. */
+export const buildArgKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .refine((value) => !/[= \t\r\n\0]/.test(value));
+
+/** buildArgValueSchema bounds one --build-arg value at 4 KiB. Gate-only. */
+export const buildArgValueSchema = z.string().max(4 * 1024);
 
 /** cloneUrlSchema replaces cloneUrl.trim() !== "". Gate-only. */
 export const cloneUrlSchema = z.string().trim().min(1);

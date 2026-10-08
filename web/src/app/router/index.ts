@@ -126,6 +126,12 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.addResource", requiresAuth: true },
       },
       {
+        path: "providers/callback",
+        name: "provider-callback",
+        component: () => import("@/features/applications/pages/ProviderCallbackPage.vue"),
+        meta: { titleKey: "titles.providerCallback", requiresAuth: true },
+      },
+      {
         path: "teams",
         name: "teams",
         component: () => import("@/features/teams/pages/TeamsPage.vue"),

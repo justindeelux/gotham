@@ -6,7 +6,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -82,6 +85,38 @@ type connectProviderRequest struct {
 	State string `json:"state"`
 }
 
+// autoProvisionGitLabRequest is the body of
+// POST /v1/providers/gitlab/auto-provision: a one-time admin token creates
+// the GitLab OAuth application, and only the resulting client id/secret are
+// stored (sealed). The admin token is never stored, logged or returned.
+type autoProvisionGitLabRequest struct {
+	BaseURL     string `json:"base_url"`
+	AdminToken  string `json:"admin_token"`
+	Name        string `json:"name"`
+	RedirectURL string `json:"redirect_url"`
+	Scopes      string `json:"scopes"`
+}
+
+// gitLabSetupInfoResponse answers GET /v1/providers/gitlab/setup-info: the
+// exact redirect URI and scopes for a manually created OAuth application.
+type gitLabSetupInfoResponse struct {
+	BaseURL     string `json:"base_url"`
+	RedirectURI string `json:"redirect_uri"`
+	Scopes      string `json:"scopes"`
+}
+
+// branchResponse is the wire representation of a repository branch.
+type branchResponse struct {
+	Name      string `json:"name"`
+	Commit    string `json:"commit"`
+	Protected bool   `json:"protected"`
+}
+
+// branchListEnvelope wraps the branch list.
+type branchListEnvelope struct {
+	Branches []branchResponse `json:"branches"`
+}
+
 // handler serves the provider routes for one ProviderService.
 type handler struct {
 	svc    ProviderService
@@ -91,11 +126,15 @@ type handler struct {
 
 // Mount registers the authenticated provider endpoints on r:
 //
-//	GET  /v1/providers
-//	POST /v1/providers
-//	GET  /v1/providers/{id}/authorize
-//	POST /v1/providers/{id}/connect
-//	GET  /v1/providers/{id}/repos
+//	GET    /v1/providers
+//	POST   /v1/providers
+//	DELETE /v1/providers/{id}
+//	GET    /v1/providers/{id}/authorize
+//	POST   /v1/providers/{id}/connect
+//	GET    /v1/providers/{id}/repos
+//	GET    /v1/providers/{id}/branches?repo=<full-name>
+//	POST   /v1/providers/gitlab/auto-provision
+//	GET    /v1/providers/gitlab/setup-info
 //
 // auth wraps the group; the server passes its method-based resource scope
 // boundary (read for GET/HEAD, deploy for the create/connect mutations). A nil
@@ -105,13 +144,23 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		return
 	}
 	h := &handler{svc: svc, userID: userID, logger: slog.Default()}
+
+	// The GitLab browser callback is public like a webhook delivery: the
+	// single-use OAuth state identifies the user and connection, so no
+	// session is needed (or usable) when the provider redirects back.
+	r.Get("/v1/providers/gitlab/callback", h.gitLabCallback)
+
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Get("/v1/providers", h.list)
 		protected.Post("/v1/providers", h.create)
+		protected.Delete("/v1/providers/{id}", h.delete)
 		protected.Get("/v1/providers/{id}/authorize", h.authorize)
 		protected.Post("/v1/providers/{id}/connect", h.connect)
 		protected.Get("/v1/providers/{id}/repos", h.listRepos)
+		protected.Get("/v1/providers/{id}/branches", h.listBranches)
+		protected.Post("/v1/providers/gitlab/auto-provision", h.gitLabAutoProvision)
+		protected.Get("/v1/providers/gitlab/setup-info", h.gitLabSetupInfo)
 	})
 }
 
@@ -233,6 +282,168 @@ func (h *handler) listRepos(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, repoListEnvelope{Repos: response})
 }
 
+// deleteEnvelope reports an idempotent delete.
+type deleteEnvelope struct {
+	Deleted bool `json:"deleted"`
+}
+
+// delete serves DELETE /v1/providers/{id}: it forgets the stored connection,
+// its credentials and its cached repositories. Deleting twice is a success.
+// A connection applications still deploy through is refused with 409 naming
+// them: delete those applications (or move them) first.
+func (h *handler) delete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+
+	providerID, ok := h.providerID(w, r)
+	if !ok {
+		return
+	}
+
+	if err := h.svc.Delete(r.Context(), userID, providerID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deleteEnvelope{Deleted: true})
+}
+
+// listBranches serves GET /v1/providers/{id}/branches?repo=<full-name>.
+func (h *handler) listBranches(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+
+	providerID, ok := h.providerID(w, r)
+	if !ok {
+		return
+	}
+
+	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if repo == "" {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "repo is required"})
+		return
+	}
+
+	branches, err := h.svc.ListBranches(r.Context(), userID, providerID, repo)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	response := make([]branchResponse, 0, len(branches))
+	for _, branch := range branches {
+		response = append(response, branchResponse(branch))
+	}
+	writeJSON(w, http.StatusOK, branchListEnvelope{Branches: response})
+}
+
+// gitLabAutoProvision serves POST /v1/providers/gitlab/auto-provision: it
+// creates the GitLab OAuth application from the one-time admin token and
+// stores the connection. The response never carries credentials. The redirect
+// URL must name this control plane's host.
+func (h *handler) gitLabAutoProvision(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+
+	var req autoProvisionGitLabRequest
+	if !h.decodeJSON(w, r, &req) {
+		return
+	}
+	if !redirectMatchesOrigin(r, req.RedirectURL) {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "redirect_url must name this control plane's host"})
+		return
+	}
+
+	provider, err := h.svc.AutoProvisionGitLab(r.Context(), userID, AutoProvisionGitLabInput(req))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, newProviderResponse(provider))
+}
+
+// gitLabSetupInfo serves GET /v1/providers/gitlab/setup-info: the exact
+// redirect URI and scopes for a manually created GitLab OAuth application.
+// The redirect URL must name this control plane's host.
+func (h *handler) gitLabSetupInfo(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.currentUser(w, r); !ok {
+		return
+	}
+
+	redirectURL := strings.TrimSpace(r.URL.Query().Get("redirect_url"))
+	if !redirectMatchesOrigin(r, redirectURL) {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "redirect_url must name this control plane's host"})
+		return
+	}
+	info, err := h.svc.GitLabSetupInfoFor(
+		strings.TrimSpace(r.URL.Query().Get("base_url")),
+		redirectURL,
+	)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gitLabSetupInfoResponse(info))
+}
+
+// gitLabCallback serves GET /v1/providers/gitlab/callback: the browser
+// landing of the GitLab OAuth flow. The single-use state identifies the user
+// and connection, so the endpoint needs no session. It completes the connect
+// and redirects to the SPA result page with a fixed result flag; failures
+// carry fixed reason codes, never provider detail.
+func (h *handler) gitLabCallback(w http.ResponseWriter, r *http.Request) {
+	name, err := h.svc.ConnectCallback(r.Context(),
+		strings.TrimSpace(r.URL.Query().Get("code")),
+		strings.TrimSpace(r.URL.Query().Get("state")),
+	)
+	if err != nil {
+		http.Redirect(w, r, "/providers/callback?status=error&reason="+callbackReason(err), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/providers/callback?status=ok&provider="+url.QueryEscape(name), http.StatusFound)
+}
+
+// callbackReason maps a connect failure to a fixed result code for the SPA.
+func callbackReason(err error) string {
+	if errors.Is(err, ErrValidation) {
+		return "invalid"
+	}
+	return "failed"
+}
+
+// redirectMatchesOrigin reports whether redirectURL names the host serving
+// this request: the OAuth redirect must be the public control-plane callback,
+// so a value pointing anywhere else is rejected before anything is stored or
+// registered. Hosts compare without ports: the API and the public origin may
+// listen on different ones.
+func redirectMatchesOrigin(r *http.Request, redirectURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(redirectURL))
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	host := r.Host
+	if name, _, splitErr := net.SplitHostPort(host); splitErr == nil {
+		host = name
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	return strings.EqualFold(parsed.Hostname(), host)
+}
+
+// inUseNames extracts the application names from an ErrInUse error for the
+// curated 409 body. It falls back to the full text when the shape is
+// unexpected, so the names are never silently dropped.
+func inUseNames(err error) string {
+	if names, ok := strings.CutPrefix(err.Error(), ErrInUse.Error()+": "); ok {
+		return names
+	}
+	return err.Error()
+}
+
 // providerID parses the {id} path parameter, answering 400 when it is not a
 // UUID.
 func (h *handler) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -283,6 +494,10 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "provider not found"})
 	case errors.Is(err, ErrNotConnected):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "provider is not connected"})
+	case errors.Is(err, ErrConflict):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "this provider is already connected"})
+	case errors.Is(err, ErrInUse):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "applications still use this connection: " + inUseNames(err)})
 	case errors.Is(err, ErrUnsupported), errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrTooManyRequests):

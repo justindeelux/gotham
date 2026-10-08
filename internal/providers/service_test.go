@@ -721,47 +721,47 @@ func TestConnectStatePerUserCapAndRedeem(t *testing.T) {
 	provider := uuid.New()
 
 	// A foreign user or provider cannot redeem its own guess.
-	foreignUser, err := states.new(user, provider)
+	foreignUser, err := states.new(user, provider, "")
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	if states.redeem(foreignUser, uuid.New(), provider) {
+	if _, ok := states.redeem(foreignUser, uuid.New(), provider); ok {
 		t.Error("redeem with a foreign user returned true")
 	}
-	foreignProvider, err := states.new(user, provider)
+	foreignProvider, err := states.new(user, provider, "")
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	if states.redeem(foreignProvider, user, uuid.New()) {
+	if _, ok := states.redeem(foreignProvider, user, uuid.New()); ok {
 		t.Error("redeem with a foreign provider returned true")
 	}
 
 	// Fill to the per-user cap.
 	var last string
 	for i := 0; i < connectStatePerUser; i++ {
-		state, err := states.new(user, provider)
+		state, err := states.new(user, provider, "")
 		if err != nil {
 			t.Fatalf("new #%d: %v", i, err)
 		}
 		last = state
 	}
-	if _, err := states.new(user, provider); !errors.Is(err, ErrTooManyRequests) {
+	if _, err := states.new(user, provider, ""); !errors.Is(err, ErrTooManyRequests) {
 		t.Fatalf("over-cap new: error = %v, want ErrTooManyRequests", err)
 	}
 
 	// The correct pair redeems once and frees a slot.
-	if !states.redeem(last, user, provider) {
+	if _, ok := states.redeem(last, user, provider); !ok {
 		t.Fatal("redeem with the bound pair returned false")
 	}
-	if states.redeem(last, user, provider) {
+	if _, ok := states.redeem(last, user, provider); ok {
 		t.Error("replaying a redeemed state returned true")
 	}
-	if _, err := states.new(user, provider); err != nil {
+	if _, err := states.new(user, provider, ""); err != nil {
 		t.Fatalf("new after redeem: %v", err)
 	}
 
 	// Another user is unaffected by the first user's cap.
-	if _, err := states.new(uuid.New(), uuid.New()); err != nil {
+	if _, err := states.new(uuid.New(), uuid.New(), ""); err != nil {
 		t.Fatalf("new for another user: %v", err)
 	}
 }

@@ -320,3 +320,89 @@ func TestStoreRepositoryReplaceReposSerializes(t *testing.T) {
 		t.Fatalf("cached = %+v, want only B's replacement", cached)
 	}
 }
+
+// TestStoreRepositoryDelete disconnects a connection: the row goes, its
+// cached repositories cascade, a repeat is a success, and another user's row
+// is untouched. It skips when no database is reachable.
+func TestStoreRepositoryDelete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	st := store.New(pool)
+
+	newUser := func(tag string) uuid.UUID {
+		email := fmt.Sprintf("gs6-delete-%s-%d@example.com", tag, time.Now().UnixNano())
+		user, err := st.CreateUser(ctx, email, nil)
+		if err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+				t.Logf("cleanup delete: %v", err)
+			}
+		})
+		return uuid.UUID(user.ID.Bytes)
+	}
+
+	repo := newStoreRepository(st, newSecretCipher("integration-secret"))
+	userID, foreignID := newUser("owner"), newUser("foreign")
+	provider, err := repo.Create(ctx, Provider{
+		UserID: userID, Name: NameGitLab, BaseURL: "https://git.example",
+		ClientID: "id", ClientSecret: "secret",
+		AccessToken: "access", RefreshToken: "refresh",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := repo.ReplaceRepos(ctx, provider.ID, []Repo{{ExternalID: "1", FullName: "acme/demo"}}); err != nil {
+		t.Fatalf("ReplaceRepos: %v", err)
+	}
+	foreign, err := repo.Create(ctx, Provider{
+		UserID: foreignID, Name: NameGitLab, ClientID: "id", ClientSecret: "secret",
+	})
+	if err != nil {
+		t.Fatalf("Create foreign: %v", err)
+	}
+
+	// Another user cannot disconnect this connection.
+	if err := repo.Delete(ctx, provider.ID, foreignID); err != nil {
+		t.Fatalf("foreign Delete: %v", err)
+	}
+	if _, err := repo.Get(ctx, provider.ID, userID); err != nil {
+		t.Fatalf("foreign delete removed the row: %v", err)
+	}
+
+	if err := repo.Delete(ctx, provider.ID, userID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := repo.Get(ctx, provider.ID, userID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get after delete = %v, want ErrNotFound", err)
+	}
+	if cached, err := repo.ListCachedRepos(ctx, provider.ID); err != nil || len(cached) != 0 {
+		t.Fatalf("cached = %+v/%v, want the cascade to clear it", cached, err)
+	}
+	if err := repo.Delete(ctx, provider.ID, userID); err != nil {
+		t.Fatalf("second Delete: %v", err)
+	}
+	if _, err := repo.Get(ctx, foreign.ID, foreignID); err != nil {
+		t.Fatalf("foreign row did not survive: %v", err)
+	}
+}

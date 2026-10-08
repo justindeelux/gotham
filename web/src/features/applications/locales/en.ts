@@ -239,9 +239,11 @@ const en = {
     sourceUnavailable:
       "This source type is not available yet — it lands in a later package.",
     branch: "Branch",
-    branchHint: "Branch listing is not exposed by the API yet — the default branch is prefilled.",
+    branchPlaceholder: "Select a branch",
+    branchHint: "Branches load from the selected repository — the default branch is prefilled.",
     branchAutoHint: "Leave empty to use the repository default branch.",
     branchDefault: "(default branch)",
+    protectedSuffix: " (protected)",
     appName: "Application name",
     appNameHint: "Lowercase, digits and dashes (3-31 chars). Used for the container and image tag.",
     buildPackTitle: "Build pack",
@@ -284,6 +286,14 @@ const en = {
     createdDeployFailed: "Application {name} was created, but the first deploy could not be queued: {error}",
     webhookOff: "Automatic deploys are off: {detail}",
     webhookOffDefault: "the provider hook could not be installed",
+  },
+  providerCallback: {
+    connected: "{provider} connected",
+    connectedHint: "The connection was stored.",
+    failed: "Connection failed",
+    invalidHint: "The connection request expired or was already used.",
+    failedHint: "The provider refused the exchange.",
+    back: "Back to projects",
   },
   detail: {
     controlInProgress: "A deployment is in progress. Wait for it to finish.",

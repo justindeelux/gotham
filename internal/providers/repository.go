@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store"
@@ -26,6 +27,9 @@ type Repository interface {
 	List(ctx context.Context, userID uuid.UUID) ([]Provider, error)
 	// UpdateToken replaces the stored access/refresh tokens.
 	UpdateToken(ctx context.Context, id uuid.UUID, accessToken, refreshToken string, expiresAt *time.Time) (Provider, error)
+	// Delete removes the provider with id when it is owned by userID. A
+	// missing row is a success, so disconnecting twice is idempotent.
+	Delete(ctx context.Context, id, userID uuid.UUID) error
 	// ReplaceRepos overwrites the cached repository list of a provider.
 	ReplaceRepos(ctx context.Context, providerID uuid.UUID, repos []Repo) error
 	// ListCachedRepos returns the cached repository list of a provider.
@@ -71,6 +75,9 @@ func (r *storeRepository) Create(ctx context.Context, p Provider) (Provider, err
 		Scopes:         p.Scopes,
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			return Provider{}, fmt.Errorf("%w: this provider is already connected", ErrConflict)
+		}
 		return Provider{}, fmt.Errorf("providers: create: %w", err)
 	}
 	return r.providerFromRow(row)
@@ -133,6 +140,17 @@ func (r *storeRepository) UpdateToken(ctx context.Context, id uuid.UUID, accessT
 		return Provider{}, fmt.Errorf("providers: update token: %w", err)
 	}
 	return r.providerFromRow(row)
+}
+
+// Delete removes one provider owned by userID; a missing row is a success.
+func (r *storeRepository) Delete(ctx context.Context, id, userID uuid.UUID) error {
+	if err := r.store.DeleteProviderByIDAndUser(ctx, sqlc.DeleteProviderByIDAndUserParams{
+		ID:     pgUUID(id),
+		UserID: pgUUID(userID),
+	}); err != nil {
+		return fmt.Errorf("providers: delete: %w", err)
+	}
+	return nil
 }
 
 // ReplaceRepos swaps the cached repository list of a provider. The new list is
@@ -217,6 +235,13 @@ func repoFromRow(row sqlc.ReposCache) Repo {
 		SSHURL:        row.SshUrl,
 		HTMLURL:       row.HtmlUrl,
 	}
+}
+
+// isUniqueViolation reports whether err is a PostgreSQL unique violation
+// (a repeated create racing the pre-check, or a double submit).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // pgUUID converts a uuid.UUID to the pgx type (invalid for the nil UUID).

@@ -65,6 +65,20 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 	return i, err
 }
 
+const deleteProviderByIDAndUser = `-- name: DeleteProviderByIDAndUser :exec
+DELETE FROM providers WHERE id = $1 AND user_id = $2
+`
+
+type DeleteProviderByIDAndUserParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) DeleteProviderByIDAndUser(ctx context.Context, arg DeleteProviderByIDAndUserParams) error {
+	_, err := q.db.Exec(ctx, deleteProviderByIDAndUser, arg.ID, arg.UserID)
+	return err
+}
+
 const deleteRepoCacheByProvider = `-- name: DeleteRepoCacheByProvider :exec
 DELETE FROM repos_cache WHERE provider_id = $1
 `

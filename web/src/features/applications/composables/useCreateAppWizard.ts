@@ -263,6 +263,18 @@ export function useCreateAppWizard(
     })),
   );
 
+  /** branchOptions lists the branches of the selected provider repository, so
+   * the Source step offers them instead of free text once loaded. */
+  const branchOptions = computed<Array<{ label: string; value: string }>>(() => {
+    const suffix = tr("applications.wizard.protectedSuffix");
+    return providersStore
+      .branchesOf(form.providerId, form.repoFullName)
+      .map((branch) => ({
+        label: branch.protected ? `${branch.name}${suffix}` : branch.name,
+        value: branch.name,
+      }));
+  });
+
   const serverOptions = computed<Array<{ label: string; value: string }>>(() =>
     serversStore.servers.map((server) => ({
       label: `${server.name} · ${server.ip}`,
@@ -433,6 +445,17 @@ export function useCreateAppWizard(
     await providersStore.fetchRepos(form.providerId).catch(() => undefined);
   }
 
+  /** loadBranches fetches the selected repository's branches; failures keep
+   * the free-text branch input (the store exposes the error). */
+  async function loadBranches(): Promise<void> {
+    if (form.providerId === "" || form.repoFullName === "") {
+      return;
+    }
+    await providersStore
+      .fetchBranches(form.providerId, form.repoFullName)
+      .catch(() => undefined);
+  }
+
   /** handleRepoSelect prefills branch, clone URL and a name from the repo. */
   function handleRepoSelect(fullName: string): void {
     const repo = providersStore.reposOf(form.providerId).find((item) => item.full_name === fullName);
@@ -450,6 +473,7 @@ export function useCreateAppWizard(
     if (form.name.trim() === "") {
       form.name = suggestAppName(repo.name);
     }
+    void loadBranches();
   }
 
   /** buildPayload assembles the create-application body from the wizard state. */
@@ -582,6 +606,7 @@ export function useCreateAppWizard(
     isPublicRepo,
     isProviderFlow,
     repoOptions,
+    branchOptions,
     serverOptions,
     sourceValid,
     runtimeValid,
@@ -593,6 +618,7 @@ export function useCreateAppWizard(
     reviewSource,
     buildPayload,
     loadRepos,
+    loadBranches,
     handleRepoSelect,
     handleSubmit,
     closeWizard,

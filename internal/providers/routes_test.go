@@ -40,6 +40,22 @@ type fakeService struct {
 	deletedHookID string
 	commentNumber int
 	commentBody   string
+
+	branches    []Branch
+	branchesErr error
+	branchRepo  string
+
+	deletedProviderID uuid.UUID
+	deleteErr         error
+
+	provisioned   Provider
+	provisionErr  error
+	provisionSeen AutoProvisionGitLabInput
+
+	setupInfo   GitLabSetupInfo
+	setupErr    error
+	setupBase   string
+	setupReturn string
 }
 
 func (f *fakeService) List(context.Context, uuid.UUID) ([]Provider, error) {
@@ -69,8 +85,47 @@ func (f *fakeService) Connect(_ context.Context, _, _ uuid.UUID, code, state str
 	return f.connected, nil
 }
 
+// ConnectCallback implements ProviderService.
+func (f *fakeService) ConnectCallback(_ context.Context, code, state string) (string, error) {
+	f.connectCode, f.connectState = code, state
+	if f.connectErr != nil {
+		return "", f.connectErr
+	}
+	return f.connected.Name, nil
+}
+
 func (f *fakeService) ListRepos(context.Context, uuid.UUID, uuid.UUID) ([]Repo, error) {
 	return f.repos, f.reposErr
+}
+
+// Delete implements ProviderService.
+func (f *fakeService) Delete(_ context.Context, _ uuid.UUID, providerID uuid.UUID) error {
+	f.deletedProviderID = providerID
+	return f.deleteErr
+}
+
+// ListBranches implements ProviderService.
+func (f *fakeService) ListBranches(_ context.Context, _ uuid.UUID, _ uuid.UUID, repo string) ([]Branch, error) {
+	f.branchRepo = repo
+	return f.branches, f.branchesErr
+}
+
+// AutoProvisionGitLab implements ProviderService.
+func (f *fakeService) AutoProvisionGitLab(_ context.Context, _ uuid.UUID, input AutoProvisionGitLabInput) (Provider, error) {
+	f.provisionSeen = input
+	if f.provisionErr != nil {
+		return Provider{}, f.provisionErr
+	}
+	return f.provisioned, nil
+}
+
+// GitLabSetupInfoFor implements ProviderService.
+func (f *fakeService) GitLabSetupInfoFor(baseURL, redirectURL string) (GitLabSetupInfo, error) {
+	f.setupBase, f.setupReturn = baseURL, redirectURL
+	if f.setupErr != nil {
+		return GitLabSetupInfo{}, f.setupErr
+	}
+	return f.setupInfo, nil
 }
 
 // CreateWebhook implements ProviderService. The webhook tests drive the real

@@ -47,3 +47,6 @@ ORDER BY full_name ASC;
 
 -- name: DeleteRepoCacheByProvider :exec
 DELETE FROM repos_cache WHERE provider_id = $1;
+
+-- name: DeleteProviderByIDAndUser :exec
+DELETE FROM providers WHERE id = $1 AND user_id = $2;

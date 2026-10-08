@@ -419,8 +419,11 @@ func (s *Server) routes() (http.Handler, error) {
 		// Source providers (GitHub/GitLab/Gitea): list connections and repos,
 		// plus create/connect. The method-based scope boundary keeps reads on
 		// the read scope and the create/connect mutations on the deploy scope,
-		// so a read-only API token cannot add a connection.
-		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger)
+		// so a read-only API token cannot add a connection. The deploy service
+		// feeds the disconnect in-use check, so a connection applications
+		// still deploy through is refused instead of stranding their hooks.
+		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger,
+			s.providerConnectionApplications)
 		providers.Mount(api, s.resourceScopeAuth, UserIDFromContext, providerSvc)
 
 		// Application deploy orchestration (BE-4.3): a nil service (no
@@ -609,6 +612,36 @@ func (n deployNotifier) DeployFinished(ctx context.Context, result deploy.Deploy
 	if n.preview != nil {
 		n.preview(result)
 	}
+}
+
+// providerConnectionApplications feeds the provider disconnect in-use check
+// from the deploy service: the applications the caller may deploy, reduced
+// to the connection identity (provider slug and clone URL) each uses. A nil
+// deploy service lists nothing, so the check stays permissive where
+// applications are disabled.
+func (s *Server) providerConnectionApplications(ctx context.Context, userID uuid.UUID) ([]providers.ConnectionApplication, error) {
+	if s.deploy == nil {
+		return nil, nil
+	}
+	applications, err := s.deploy.ListApplications(ctx, userID, deploy.ApplicationFilter{})
+	if err != nil {
+		return nil, err
+	}
+	return connectionApplicationsOf(applications), nil
+}
+
+// connectionApplicationsOf reduces applications to the connection identity
+// each deploys through.
+func connectionApplicationsOf(applications []deploy.Application) []providers.ConnectionApplication {
+	out := make([]providers.ConnectionApplication, 0, len(applications))
+	for _, app := range applications {
+		out = append(out, providers.ConnectionApplication{
+			Name:     app.Name,
+			Provider: app.Provider,
+			CloneURL: app.CloneURL,
+		})
+	}
+	return out
 }
 
 // webhookService builds the webhook domain service for the HTTP wiring from

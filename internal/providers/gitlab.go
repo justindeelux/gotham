@@ -17,6 +17,9 @@ const (
 	gitLabAPIBase     = "https://gitlab.com/api/v4"
 
 	// gitLabDefaultScopes grants API access for repo listing and webhooks.
+	// Existing manual applications keep authorizing with the scope they were
+	// registered with; wider scopes are requested only for applications
+	// Gotham provisions itself (see gitLabProvisionScopes).
 	gitLabDefaultScopes = "api"
 
 	// gitLabPageSize is GitLab's maximum per_page.
@@ -92,6 +95,27 @@ func (p *gitLabSource) ExchangeToken(ctx context.Context, code string) (*oauth2.
 // authorizer seam used by the connect flow.
 func (p *gitLabSource) AuthCodeURL(state string) string {
 	return p.config.AuthCodeURL(state)
+}
+
+// AuthCodeURLWithPKCE builds the authorization URL for state with the S256
+// PKCE challenge, so the code the browser receives is bound to a verifier
+// the browser never sees.
+func (p *gitLabSource) AuthCodeURLWithPKCE(state, challenge string) string {
+	return p.config.AuthCodeURL(state,
+		oauth2.SetAuthURLParam("code_challenge", challenge),
+		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
+	)
+}
+
+// ExchangeTokenWithVerifier completes the OAuth2 flow with GitLab, proving
+// possession of the PKCE verifier minted for this authorization.
+func (p *gitLabSource) ExchangeTokenWithVerifier(ctx context.Context, code, verifier string) (*oauth2.Token, error) {
+	if verifier == "" {
+		return nil, fmt.Errorf("%w: pkce verifier is empty", ErrValidation)
+	}
+	ctx, cancel := withProviderTimeout(p.exchangeContext(ctx))
+	defer cancel()
+	return p.config.Exchange(ctx, code, oauth2.SetAuthURLParam("code_verifier", verifier))
 }
 
 // ListRepos returns the projects the token's user is a member of, including

@@ -32,6 +32,8 @@ interface Props {
   projectId?: string;
   /** Environment the database is created in (the route's, changeable). */
   environmentId?: string;
+  /** Engine preselected by the caller (the Add-resource card, else postgres). */
+  engine?: string;
 }
 
 interface Emits {
@@ -39,7 +41,7 @@ interface Emits {
   created: [created: CreatedDatabase];
 }
 
-const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "" });
+const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "", engine: "" });
 const emit = defineEmits<Emits>();
 
 const wizard = useCreateDatabaseWizard({
@@ -48,6 +50,7 @@ const wizard = useCreateDatabaseWizard({
   onUpdateShow: (value) => emit("update:show", value),
   projectId: toRef(props, "projectId"),
   environmentId: toRef(props, "environmentId"),
+  engine: toRef(props, "engine"),
 });
 
 import { i18n } from "@/shared/i18n";

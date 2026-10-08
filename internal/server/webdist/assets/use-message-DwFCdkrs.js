@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/use-message-BVIC0lf9.js
+import{b0 as s,V as o,eN as t}from"./index-BIJkYB3R.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+========
+import{b0 as s,V as o,eP as t}from"./index-DIyvUrSq.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+>>>>>>>> 02141533 (JUS-66 merge-prep: rebase GS-10 onto main (GS-7 Dockerfile merged)):internal/server/webdist/assets/use-message-DwFCdkrs.js

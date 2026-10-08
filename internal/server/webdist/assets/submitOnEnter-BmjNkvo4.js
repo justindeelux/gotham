@@ -1,9 +1,0 @@
-<<<<<<< HEAD:internal/server/webdist/assets/submitOnEnter-B2Jzkzqy.js
-<<<<<<<< HEAD:internal/server/webdist/assets/submitOnEnter-CY0vXBgB.js
-import{bh as i,g as a,p as l,M as s,b5 as c}from"./index-C30QAacR.js";function v(){const e=l(null),n=a(()=>{if(e.value!==null)return s.value,String(c.global.t("projects.conflict.nameTaken"))}),r=a(()=>e.value===null?void 0:"error");function u(){e.value=null}function o(t){return i(t)?(e.value=t,!0):!1}return{feedback:n,status:r,clear:u,take:o}}function m(e,n){e.isComposing||e.repeat||(e.preventDefault(),n())}export{m as s,v as u};
-========
-import{bh as i,g as a,p as l,M as s,b5 as c}from"./index-Op3pifZq.js";function v(){const e=l(null),n=a(()=>{if(e.value!==null)return s.value,String(c.global.t("projects.conflict.nameTaken"))}),r=a(()=>e.value===null?void 0:"error");function u(){e.value=null}function o(t){return i(t)?(e.value=t,!0):!1}return{feedback:n,status:r,clear:u,take:o}}function m(e,n){e.isComposing||e.repeat||(e.preventDefault(),n())}export{m as s,v as u};
->>>>>>>> 1d0bf7bc (JUS-66 (GS-10): Git sources management page):internal/server/webdist/assets/submitOnEnter-B2Jzkzqy.js
-=======
-import{bh as i,g as a,p as l,M as s,b5 as c}from"./index-Fy-Wef3M.js";function v(){const e=l(null),n=a(()=>{if(e.value!==null)return s.value,String(c.global.t("projects.conflict.nameTaken"))}),r=a(()=>e.value===null?void 0:"error");function u(){e.value=null}function o(t){return i(t)?(e.value=t,!0):!1}return{feedback:n,status:r,clear:u,take:o}}function m(e,n){e.isComposing||e.repeat||(e.preventDefault(),n())}export{m as s,v as u};
->>>>>>> ffc65084 (JUS-66 fix round 1: review findings on GS-10 Git sources page):internal/server/webdist/assets/submitOnEnter-BmjNkvo4.js

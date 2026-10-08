@@ -355,6 +355,9 @@ func TestAutoProvisionGitLabValidation(t *testing.T) {
 		"relative redirect":   {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "/oauth/callback"},
 		"userinfo redirect":   {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "https://user@cp.example/cb"},
 		"login callback":      {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "https://cp.example/oauth/callback"},
+		"query redirect":      {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback?x=1"},
+		"fragment redirect":   {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback#frag"},
+		"encoded redirect":    {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "https://cp.example/api/v1/providers/gitlab%2Fcallback"},
 		"comma scopes":        {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback", Scopes: "api,read_user"},
 	} {
 		if _, err := svc.AutoProvisionGitLab(context.Background(), userID, input); !errors.Is(err, ErrValidation) {

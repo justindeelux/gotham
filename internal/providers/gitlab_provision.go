@@ -341,7 +341,9 @@ const gitLabCallbackPath = "/api/v1/providers/gitlab/callback"
 // validateRedirectURL accepts only the exact control-plane callback over
 // absolute http(s) without userinfo: GitLab matches the redirect exactly, so
 // any other path (including the login /oauth/callback) could never complete
-// the provider flow.
+// the provider flow. Query, fragment and encoded-path forms are refused for
+// the same reason: neither GitLab nor the router would match them back to
+// the callback.
 func validateRedirectURL(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -350,7 +352,7 @@ func validateRedirectURL(raw string) error {
 	if parsed.User != nil {
 		return fmt.Errorf("%w: redirect_url must not contain userinfo", ErrValidation)
 	}
-	if parsed.Path != gitLabCallbackPath {
+	if parsed.Path != gitLabCallbackPath || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
 		return fmt.Errorf("%w: redirect_url must be the provider callback %q", ErrValidation, gitLabCallbackPath)
 	}
 	return nil

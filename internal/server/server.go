@@ -614,12 +614,6 @@ func (n deployNotifier) DeployFinished(ctx context.Context, result deploy.Deploy
 	}
 }
 
-// webhookService builds the webhook domain service for the HTTP wiring from
-// the deploy and provider services routes() already built: a delivery needs a
-// deploy service to queue with (nil when there is no database or
-// FEATURE_APPLICATIONS=false) and hook management needs a provider service
-// that can reach the Git host. Either missing, it returns nil so
-// webhooks.Mount registers nothing.
 // providerConnectionApplications feeds the provider disconnect in-use check
 // from the deploy service: the applications the caller may deploy, reduced
 // to the connection identity (provider slug and clone URL) each uses. A nil
@@ -650,6 +644,12 @@ func connectionApplicationsOf(applications []deploy.Application) []providers.Con
 	return out
 }
 
+// webhookService builds the webhook domain service for the HTTP wiring from
+// the deploy and provider services routes() already built: a delivery needs a
+// deploy service to queue with (nil when there is no database or
+// FEATURE_APPLICATIONS=false) and hook management needs a provider service
+// that can reach the Git host. Either missing, it returns nil so
+// webhooks.Mount registers nothing.
 func (s *Server) webhookService(providerSvc providers.ProviderService) *webhooks.Service {
 	if s.deploy == nil || providerSvc == nil {
 		return nil

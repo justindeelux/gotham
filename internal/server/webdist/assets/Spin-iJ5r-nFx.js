@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/Spin-iJ5r-nFx.js
 import{$ as g,a0 as a,aT as $,as as b,d as w,eV as T,a1 as k,o as d,c as u,a3 as p,al as i,a as z,ak as m,x as B,dc as V,f as R,aG as N,a4 as P,au as W,aL as _,g as y,p as E,eW as I,a7 as L,a6 as O}from"./index-CmV1hNxG.js";import{u as j}from"./use-compitable-BNQSb3yG.js";var D=g([g("@keyframes spin-rotate",`
+========
+import{$ as g,a0 as a,aT as $,as as b,d as w,eO as T,a1 as k,o as d,c as u,a3 as p,al as i,a as z,ak as m,x as B,d5 as P,f as R,aG as V,a4 as N,au as O,aL as W,g as y,p as _,eP as E,a7 as I,a6 as L}from"./index-CaTGnH17.js";import{u as j}from"./use-compitable-Di0IeVHq.js";var D=g([g("@keyframes spin-rotate",`
+>>>>>>>> 979ef1a2 (JUS-63 GS-7 fix round 2: reviewer findings):internal/server/webdist/assets/Spin-BqNAlA3r.js
  from {
  transform: rotate(0);
  }

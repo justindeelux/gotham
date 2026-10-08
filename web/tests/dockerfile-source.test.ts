@@ -61,6 +61,10 @@ describe("dockerfile schemas", () => {
     expect(
       dockerfileContentSchema.safeParse(`FROM scratch\n# ${"é".repeat(100)}`).success,
     ).toBe(true);
+    // Trailing whitespace counts: the server measures raw bytes.
+    expect(
+      dockerfileContentSchema.safeParse(`FROM scratch\n${" ".repeat(64 * 1024)}`).success,
+    ).toBe(false);
   });
 
   it("gates build arg keys and values", () => {
@@ -68,6 +72,11 @@ describe("dockerfile schemas", () => {
     expect(buildArgKeySchema.safeParse("  ").success).toBe(false);
     expect(buildArgValueSchema.safeParse("production").success).toBe(true);
     expect(buildArgValueSchema.safeParse("x".repeat(4 * 1024 + 1)).success).toBe(false);
+    // Multi-byte values are measured in bytes, like the server.
+    expect(buildArgValueSchema.safeParse("é".repeat(2 * 1024)).success).toBe(true);
+    expect(buildArgValueSchema.safeParse("é".repeat(2 * 1024 + 1)).success).toBe(false);
+    // NUL is refused: Postgres jsonb rejects it with a 500 otherwise.
+    expect(buildArgValueSchema.safeParse("a\0b").success).toBe(false);
     expect(buildArgsValid([{ key: "A", value: "1" }])).toBe(true);
     expect(buildArgsValid([{ key: "", value: "" }])).toBe(true);
     expect(buildArgsValid([{ key: "", value: "dropped" }])).toBe(false);
@@ -208,6 +217,37 @@ describe("wizard dockerfile source", () => {
     wrapper.unmount();
   });
 
+  it("skips the build pack step for dockerfile sources", () => {
+    const { w, wrapper } = mountWizard();
+    Object.assign(w.form, {
+      ...reset,
+      sourceType: "dockerfile",
+      dockerfileContent: "FROM alpine:3.20\n",
+      branch: "main",
+      name: "docker-demo",
+    });
+    expect(w.buildPackSkipped.value).toBe(true);
+    expect(w.buildPackLabel.value).toBe("Dockerfile");
+    expect([w.stepTotal.value, w.stepPosition.value]).toEqual([4, 1]);
+    w.nextStep();
+    expect(w.step.value).toBe(2);
+    expect(w.stepPosition.value).toBe(2);
+    w.prevStep();
+    expect(w.step.value).toBe(0);
+    wrapper.unmount();
+  });
+
+  it("keeps every step for git sources", () => {
+    const { w, wrapper } = mountWizard();
+    Object.assign(w.form, { ...reset, sourceType: "git_public" });
+    expect(w.buildPackSkipped.value).toBe(false);
+    expect([w.stepTotal.value, w.stepPosition.value]).toEqual([5, 1]);
+    w.nextStep();
+    expect(w.step.value).toBe(1);
+    expect(w.buildPackLabel.value).toBe("Auto-detect (recommended)");
+    wrapper.unmount();
+  });
+
   it("exposes the dockerfile source option as enabled", () => {
     const { w, wrapper } = mountWizard();
     const option = w.sourceTypeOptions.value.find((item) => item.value === "dockerfile");
@@ -276,20 +316,60 @@ describe("detail dockerfile editor", () => {
     // clean draft follows, a dirty draft survives.
     app.value = {
       ...app.value,
+      dockerfile_content: "FROM alpine:3.22\n",
       base_domain: "app.example.com",
       updated_at: "2026-10-08T00:00:01Z",
     } as never;
     await nextTick();
-    expect(editor.content.value).toBe("FROM alpine:3.20\n");
+    expect(editor.content.value).toBe("FROM alpine:3.22\n");
 
     editor.content.value = "FROM alpine:3.21\n";
     expect(editor.isDirty.value).toBe(true);
     app.value = {
       ...app.value,
+      dockerfile_content: "FROM alpine:3.23\n",
       base_domain: "other.example.com",
       updated_at: "2026-10-08T00:00:02Z",
     } as never;
     await nextTick();
     expect(editor.content.value).toBe("FROM alpine:3.21\n");
+  });
+
+  it("re-seeds when navigating to another application", async () => {
+    setActivePinia(createPinia());
+    const store = useApplicationsStore();
+    const seen: Array<{ id: string; input: Record<string, unknown> }> = [];
+    store.update = vi.fn(async (id: string, input: Record<string, unknown>) => {
+      seen.push({ id, input });
+      return {} as never;
+    }) as never;
+
+    const appA = {
+      id: "app-a",
+      source_type: "dockerfile",
+      dockerfile_content: "FROM a\n",
+      build_args: {},
+      updated_at: "2026-10-08T00:00:00Z",
+    };
+    const appB = {
+      id: "app-b",
+      source_type: "dockerfile",
+      dockerfile_content: "FROM b\n",
+      build_args: {},
+      updated_at: "2026-10-08T00:00:00Z",
+    };
+    const app = ref(appA as never);
+    const editor = useDockerfileEditor(app);
+    expect(editor.content.value).toBe("FROM a\n");
+
+    // An unsaved draft of A must not survive the navigation to B, and
+    // saving afterwards writes B's text, never A's draft.
+    editor.content.value = "FROM a-edited\n";
+    app.value = { ...appB } as never;
+    await nextTick();
+    expect(editor.content.value).toBe("FROM b\n");
+    expect(editor.isDirty.value).toBe(false);
+    await editor.handleSave();
+    expect(seen).toEqual([{ id: "app-b", input: { dockerfile_content: "FROM b\n", build_args: {} } }]);
   });
 });

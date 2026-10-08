@@ -75,17 +75,17 @@ export function sourceTypeImplemented(value: string): boolean {
 export const maxDockerfileBytes = 64 * 1024;
 
 /**
- * dockerfileContentSchema replaces the GS-7 creation gate on the trimmed
- * value: non-empty, containing a FROM instruction (comments and blank lines
- * ignored, case-insensitive first word), and within the byte limit. Bytes
- * are measured with TextEncoder so multi-byte text matches the server's
- * len() check; deeper validation happens on the node at build time.
+ * dockerfileContentSchema replaces the GS-7 creation gate: the trimmed value
+ * must be non-empty with a FROM instruction (comments and blank lines
+ * ignored, case-insensitive first word), while the size cap applies to the
+ * raw bytes, exactly like the server's len() check — trailing whitespace
+ * counts. Bytes are measured with TextEncoder so multi-byte text matches;
+ * deeper validation happens on the node at build time.
  * Gate-only: consumers read `.success`.
  */
 export const dockerfileContentSchema = z
   .string()
-  .trim()
-  .min(1)
+  .refine((value) => value.trim().length > 0)
   .refine((value) => new TextEncoder().encode(value).length <= maxDockerfileBytes)
   .refine((value) =>
     value.split("\n").some((line) => {
@@ -108,8 +108,18 @@ export const buildArgKeySchema = z
   .max(128)
   .refine((value) => !/[= \t\r\n\0]/.test(value));
 
-/** buildArgValueSchema bounds one --build-arg value at 4 KiB. Gate-only. */
-export const buildArgValueSchema = z.string().max(4 * 1024);
+/**
+ * maxBuildArgValueBytes caps one --build-arg value at 4 KiB, matching
+ * MaxBuildArgValueBytes in internal/deploy/dockerfile.go.
+ */
+export const maxBuildArgValueBytes = 4 * 1024;
+
+/** buildArgValueSchema bounds one --build-arg value in bytes (TextEncoder,
+ * like the server) and rejects NUL, which Postgres jsonb refuses. Gate-only. */
+export const buildArgValueSchema = z
+  .string()
+  .refine((value) => new TextEncoder().encode(value).length <= maxBuildArgValueBytes)
+  .refine((value) => !value.includes("\0"));
 
 /** cloneUrlSchema replaces cloneUrl.trim() !== "". Gate-only. */
 export const cloneUrlSchema = z.string().trim().min(1);

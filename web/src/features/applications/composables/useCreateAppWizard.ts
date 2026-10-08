@@ -454,9 +454,41 @@ export function useCreateAppWizard(
     }
   });
 
-  const buildPackLabel = computed<string>(
-    () => buildPacks.value.find((item) => item.value === form.buildPack)?.label ?? tr("applications.wizard.packAuto"),
+  const buildPackLabel = computed<string>(() => {
+    // A Dockerfile source always builds with the Dockerfile engine; the
+    // review names the source instead of the hidden auto-detect choice.
+    if (form.sourceType === "dockerfile") {
+      return tr("applications.wizard.sourceDockerfile");
+    }
+    return buildPacks.value.find((item) => item.value === form.buildPack)?.label ?? tr("applications.wizard.packAuto");
+  });
+
+  /** buildPackSkipped hides the build-pack step for Dockerfile sources. */
+  const buildPackSkipped = computed<boolean>(() => form.sourceType === "dockerfile");
+
+  /** nextStep advances, jumping over the hidden build-pack step. */
+  function nextStep(): void {
+    step.value += 1;
+    if (step.value === 1 && buildPackSkipped.value) {
+      step.value += 1;
+    }
+  }
+
+  /** prevStep goes back, jumping over the hidden build-pack step. */
+  function prevStep(): void {
+    step.value -= 1;
+    if (step.value === 1 && buildPackSkipped.value) {
+      step.value -= 1;
+    }
+  }
+
+  /** stepPosition renders the 1-based position among visited steps. */
+  const stepPosition = computed<number>(() =>
+    buildPackSkipped.value && step.value > 1 ? step.value : step.value + 1,
   );
+
+  /** stepTotal renders the visited step count (4 without build pack). */
+  const stepTotal = computed<number>(() => (buildPackSkipped.value ? 4 : 5));
 
   /** reviewSource renders the repo headline on the review step. */
   const reviewSource = computed<string>(() => {
@@ -746,6 +778,11 @@ export function useCreateAppWizard(
     droppedEnvRows,
     canContinue,
     buildPackLabel,
+    buildPackSkipped,
+    stepPosition,
+    stepTotal,
+    nextStep,
+    prevStep,
     reviewSource,
     buildPayload,
     loadRepos,

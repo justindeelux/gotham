@@ -57,9 +57,13 @@ export function useDockerfileEditor(source: Ref<Application | null> | Applicatio
   });
 
   watch(
-    () => toValue(source)?.updated_at,
-    () => {
-      if (!isDirty.value) {
+    () => [toValue(source)?.id, toValue(source)?.updated_at] as const,
+    ([id], prev) => {
+      // A different application always re-seeds: a dirty draft of app A
+      // must never be shown for, or saved onto, app B. Same-app updates
+      // re-seed only while the draft is clean. prev is undefined on the
+      // immediate first run, which always seeds.
+      if (prev === undefined || id !== prev[0] || !isDirty.value) {
         seed();
       }
     },

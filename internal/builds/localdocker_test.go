@@ -201,7 +201,10 @@ func TestInlineDockerfileBuildE2E(t *testing.T) {
 	defer cancel()
 
 	dir := t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "Dockerfile"), "FROM scratch\n")
+	// A bare FROM scratch produces no image layer on the builder, so the
+	// context carries an ARG (also consumed, silencing the unused-arg
+	// warning) and a LABEL to give the image content.
+	writeTestFile(t, filepath.Join(dir, "Dockerfile"), "FROM scratch\nARG APP_ENV\nLABEL gotham.e2e=inline\n")
 	contextTar, err := buildContextTar(contextSpec{root: dir})
 	if err != nil {
 		t.Fatalf("buildContextTar: %v", err)

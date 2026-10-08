@@ -289,10 +289,10 @@ const vi: ApplicationsMessages = {
   },
   providerCallback: {
     connected: "Đã kết nối {provider}",
-    connectedHint: "Kết nối đã được lưu. Quay lại wizard để chọn kho mã.",
+    connectedHint: "Kết nối đã được lưu.",
     failed: "Kết nối thất bại",
-    invalidHint: "Yêu cầu kết nối đã hết hạn hoặc đã được dùng. Hãy bắt đầu lại.",
-    failedHint: "Nhà cung cấp từ chối trao đổi mã. Hãy thử lại.",
+    invalidHint: "Yêu cầu kết nối đã hết hạn hoặc đã được dùng.",
+    failedHint: "Nhà cung cấp từ chối trao đổi mã.",
     back: "Về projects",
   },
   detail: {

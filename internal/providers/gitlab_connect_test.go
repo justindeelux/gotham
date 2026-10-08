@@ -77,7 +77,7 @@ func TestGitLabAuthorizeConnectPKCE(t *testing.T) {
 	provider, err := repo.Create(context.Background(), Provider{
 		ID: uuid.New(), UserID: userID, Name: NameGitLab,
 		ClientID: "gl-client", ClientSecret: "gl-secret",
-		RedirectURL: "https://cp.example/oauth/callback",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -287,7 +287,7 @@ func TestAutoProvisionGitLab(t *testing.T) {
 	provider, err := svc.AutoProvisionGitLab(context.Background(), userID, AutoProvisionGitLabInput{
 		BaseURL:     srv.URL,
 		AdminToken:  "one-time-admin",
-		RedirectURL: "https://cp.example/oauth/callback",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
 	})
 	if err != nil {
 		t.Fatalf("AutoProvisionGitLab: %v", err)
@@ -307,7 +307,7 @@ func TestAutoProvisionGitLab(t *testing.T) {
 	if fake.seenAuth != "Bearer one-time-admin" {
 		t.Fatalf("authorization = %q", fake.seenAuth)
 	}
-	if fake.seenPayload["redirect_uri"] != "https://cp.example/oauth/callback" ||
+	if fake.seenPayload["redirect_uri"] != "https://cp.example/api/v1/providers/gitlab/callback" ||
 		fake.seenPayload["confidential"] != true ||
 		fake.seenPayload["scopes"] != gitLabDefaultProvisionScopes {
 		t.Fatalf("payload = %v", fake.seenPayload)
@@ -351,9 +351,11 @@ func TestAutoProvisionGitLabValidation(t *testing.T) {
 	userID := uuid.New()
 
 	for name, input := range map[string]AutoProvisionGitLabInput{
-		"missing admin token": {BaseURL: "https://git.example", RedirectURL: "https://cp.example/oauth/callback"},
+		"missing admin token": {BaseURL: "https://git.example", RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback"},
 		"relative redirect":   {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "/oauth/callback"},
 		"userinfo redirect":   {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "https://user@cp.example/cb"},
+		"login callback":      {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "https://cp.example/oauth/callback"},
+		"comma scopes":        {BaseURL: "https://git.example", AdminToken: "a", RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback", Scopes: "api,read_user"},
 	} {
 		if _, err := svc.AutoProvisionGitLab(context.Background(), userID, input); !errors.Is(err, ErrValidation) {
 			t.Errorf("%s: error = %v, want ErrValidation", name, err)
@@ -361,6 +363,33 @@ func TestAutoProvisionGitLabValidation(t *testing.T) {
 	}
 	if len(repo.providers) != 0 {
 		t.Fatal("a rejected provision stored a row")
+	}
+}
+
+// TestAutoProvisionGitLabNormalizesScopes proves repeated and padded scopes
+// are stored and registered in canonical space-joined form.
+func TestAutoProvisionGitLabNormalizesScopes(t *testing.T) {
+	fake := &fakeGitLab{t: t}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+
+	repo := newFakeRepo()
+	svc := NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
+
+	provider, err := svc.AutoProvisionGitLab(context.Background(), uuid.New(), AutoProvisionGitLabInput{
+		BaseURL:     srv.URL,
+		AdminToken:  "admin",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
+		Scopes:      "api  read_user api",
+	})
+	if err != nil {
+		t.Fatalf("AutoProvisionGitLab: %v", err)
+	}
+	if provider.Scopes != "api read_user" {
+		t.Fatalf("scopes = %q, want canonical form", provider.Scopes)
+	}
+	if fake.seenPayload["scopes"] != "api read_user" {
+		t.Fatalf("registered scopes = %v, want canonical form", fake.seenPayload["scopes"])
 	}
 }
 
@@ -375,7 +404,7 @@ func TestAutoProvisionGitLabRejectsBadAdminToken(t *testing.T) {
 	svc := NewService(Config{Repository: repo, Logger: discardLogger(), AllowUnsafeBaseURL: true})
 
 	_, err := svc.AutoProvisionGitLab(context.Background(), uuid.New(), AutoProvisionGitLabInput{
-		BaseURL: srv.URL, AdminToken: "wrong-token", RedirectURL: "https://cp.example/oauth/callback",
+		BaseURL: srv.URL, AdminToken: "wrong-token", RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
 	})
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("error = %v, want ErrValidation", err)
@@ -390,15 +419,15 @@ func TestAutoProvisionGitLabRejectsBadAdminToken(t *testing.T) {
 func TestGitLabSetupInfo(t *testing.T) {
 	svc := NewService(Config{Repository: newFakeRepo(), Logger: discardLogger(), AllowUnsafeBaseURL: true})
 
-	info, err := svc.GitLabSetupInfoFor("https://git.example/", "https://cp.example/oauth/callback")
+	info, err := svc.GitLabSetupInfoFor("https://git.example/", "https://cp.example/api/v1/providers/gitlab/callback")
 	if err != nil {
 		t.Fatalf("GitLabSetupInfoFor: %v", err)
 	}
-	if info.BaseURL != "https://git.example" || info.RedirectURI != "https://cp.example/oauth/callback" || info.Scopes != gitLabDefaultProvisionScopes {
+	if info.BaseURL != "https://git.example" || info.RedirectURI != "https://cp.example/api/v1/providers/gitlab/callback" || info.Scopes != gitLabDefaultProvisionScopes {
 		t.Fatalf("info = %+v", info)
 	}
 
-	empty, err := svc.GitLabSetupInfoFor("", "https://cp.example/oauth/callback")
+	empty, err := svc.GitLabSetupInfoFor("", "https://cp.example/api/v1/providers/gitlab/callback")
 	if err != nil {
 		t.Fatalf("GitLabSetupInfoFor: %v", err)
 	}
@@ -572,7 +601,7 @@ func TestAutoProvisionGitLabRefusesDuplicate(t *testing.T) {
 	if _, err := repo.Create(context.Background(), Provider{
 		ID: uuid.New(), UserID: userID, Name: NameGitLab, BaseURL: srv.URL + "/",
 		ClientID: "old", ClientSecret: "old",
-		RedirectURL: "https://cp.example/oauth/callback",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
 	}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -581,7 +610,7 @@ func TestAutoProvisionGitLabRefusesDuplicate(t *testing.T) {
 	_, err := svc.AutoProvisionGitLab(context.Background(), userID, AutoProvisionGitLabInput{
 		BaseURL:     srv.URL + "/api/v4",
 		AdminToken:  "admin",
-		RedirectURL: "https://cp.example/oauth/callback",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
 	})
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("error = %v, want ErrConflict", err)
@@ -605,7 +634,7 @@ func TestAutoProvisionGitLabRemovesOrphanOnStoreFailure(t *testing.T) {
 	_, err := svc.AutoProvisionGitLab(context.Background(), uuid.New(), AutoProvisionGitLabInput{
 		BaseURL:     srv.URL,
 		AdminToken:  "admin",
-		RedirectURL: "https://cp.example/oauth/callback",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
 	})
 	if err == nil || errors.Is(err, ErrConflict) {
 		t.Fatalf("error = %v, want the store failure", err)
@@ -626,7 +655,7 @@ func TestAutoProvisionGitLabRequiresHTTPS(t *testing.T) {
 	_, err := svc.AutoProvisionGitLab(context.Background(), uuid.New(), AutoProvisionGitLabInput{
 		BaseURL:     "http://git.example",
 		AdminToken:  "admin",
-		RedirectURL: "https://cp.example/oauth/callback",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
 	})
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("error = %v, want ErrValidation", err)
@@ -646,7 +675,7 @@ func TestAutoProvisionGitLabRejectsUnknownScopes(t *testing.T) {
 	_, err := svc.AutoProvisionGitLab(context.Background(), uuid.New(), AutoProvisionGitLabInput{
 		BaseURL:     srv.URL,
 		AdminToken:  "admin",
-		RedirectURL: "https://cp.example/oauth/callback",
+		RedirectURL: "https://cp.example/api/v1/providers/gitlab/callback",
 		Scopes:      "api bogus",
 	})
 	if !errors.Is(err, ErrValidation) {

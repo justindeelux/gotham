@@ -289,10 +289,10 @@ const en = {
   },
   providerCallback: {
     connected: "{provider} connected",
-    connectedHint: "The connection is stored. Return to the wizard to pick a repository.",
+    connectedHint: "The connection was stored.",
     failed: "Connection failed",
-    invalidHint: "The connection request expired or was already used. Start the connect flow again.",
-    failedHint: "The provider refused the exchange. Try again.",
+    invalidHint: "The connection request expired or was already used.",
+    failedHint: "The provider refused the exchange.",
     back: "Back to projects",
   },
   detail: {

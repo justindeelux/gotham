@@ -147,18 +147,29 @@ func (s *Service) gitLabConnected(ctx context.Context, userID uuid.UUID, base st
 }
 
 // gitLabProvisionScopes resolves the scope set of a provisioned application:
-// the default when empty, otherwise every requested token must be one Gotham
-// knows, so a typo fails here instead of a confusing GitLab rejection later.
+// the default when empty, otherwise every whitespace-separated token must be
+// one Gotham knows, so a typo (or a comma-joined "api,read_user", which
+// GitLab would only reject late) fails here instead. The result is deduped
+// and space-joined, the shape the GitLab applications API expects.
 func gitLabProvisionScopes(scopes string) (string, error) {
-	if scopes == "" {
+	if strings.TrimSpace(scopes) == "" {
 		return gitLabDefaultProvisionScopes, nil
 	}
-	for _, scope := range splitScopes(scopes, "") {
+	var out []string
+	seen := make(map[string]bool)
+	for _, scope := range strings.Fields(scopes) {
 		if !gitLabAllowedScopes[scope] {
 			return "", fmt.Errorf("%w: unknown gitlab scope %q", ErrValidation, scope)
 		}
+		if !seen[scope] {
+			seen[scope] = true
+			out = append(out, scope)
+		}
 	}
-	return scopes, nil
+	if len(out) == 0 {
+		return gitLabDefaultProvisionScopes, nil
+	}
+	return strings.Join(out, " "), nil
 }
 
 // GitLabSetupInfoFor returns the manual-application fallback for baseURL: the
@@ -323,9 +334,14 @@ func gitLabInstanceBase(raw string) string {
 	return strings.TrimRight(base, "/")
 }
 
-// validateRedirectURL accepts only absolute http(s) callback URLs without
-// userinfo: GitLab matches the redirect exactly, so a relative or
-// non-http(s) value could never complete the flow.
+// gitLabCallbackPath is the exact control-plane callback a GitLab OAuth
+// application must register: the browser landing that completes the connect.
+const gitLabCallbackPath = "/api/v1/providers/gitlab/callback"
+
+// validateRedirectURL accepts only the exact control-plane callback over
+// absolute http(s) without userinfo: GitLab matches the redirect exactly, so
+// any other path (including the login /oauth/callback) could never complete
+// the provider flow.
 func validateRedirectURL(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -333,6 +349,9 @@ func validateRedirectURL(raw string) error {
 	}
 	if parsed.User != nil {
 		return fmt.Errorf("%w: redirect_url must not contain userinfo", ErrValidation)
+	}
+	if parsed.Path != gitLabCallbackPath {
+		return fmt.Errorf("%w: redirect_url must be the provider callback %q", ErrValidation, gitLabCallbackPath)
 	}
 	return nil
 }

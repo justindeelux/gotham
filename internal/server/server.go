@@ -423,24 +423,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// feeds the disconnect in-use check, so a connection applications
 		// still deploy through is refused instead of stranding their hooks.
 		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger,
-			func(ctx context.Context, userID uuid.UUID) ([]providers.ConnectionApplication, error) {
-				if s.deploy == nil {
-					return nil, nil
-				}
-				applications, err := s.deploy.ListApplications(ctx, userID, deploy.ApplicationFilter{})
-				if err != nil {
-					return nil, err
-				}
-				out := make([]providers.ConnectionApplication, 0, len(applications))
-				for _, app := range applications {
-					out = append(out, providers.ConnectionApplication{
-						Name:     app.Name,
-						Provider: app.Provider,
-						CloneURL: app.CloneURL,
-					})
-				}
-				return out, nil
-			})
+			s.providerConnectionApplications)
 		providers.Mount(api, s.resourceScopeAuth, UserIDFromContext, providerSvc)
 
 		// Application deploy orchestration (BE-4.3): a nil service (no
@@ -637,6 +620,36 @@ func (n deployNotifier) DeployFinished(ctx context.Context, result deploy.Deploy
 // FEATURE_APPLICATIONS=false) and hook management needs a provider service
 // that can reach the Git host. Either missing, it returns nil so
 // webhooks.Mount registers nothing.
+// providerConnectionApplications feeds the provider disconnect in-use check
+// from the deploy service: the applications the caller may deploy, reduced
+// to the connection identity (provider slug and clone URL) each uses. A nil
+// deploy service lists nothing, so the check stays permissive where
+// applications are disabled.
+func (s *Server) providerConnectionApplications(ctx context.Context, userID uuid.UUID) ([]providers.ConnectionApplication, error) {
+	if s.deploy == nil {
+		return nil, nil
+	}
+	applications, err := s.deploy.ListApplications(ctx, userID, deploy.ApplicationFilter{})
+	if err != nil {
+		return nil, err
+	}
+	return connectionApplicationsOf(applications), nil
+}
+
+// connectionApplicationsOf reduces applications to the connection identity
+// each deploys through.
+func connectionApplicationsOf(applications []deploy.Application) []providers.ConnectionApplication {
+	out := make([]providers.ConnectionApplication, 0, len(applications))
+	for _, app := range applications {
+		out = append(out, providers.ConnectionApplication{
+			Name:     app.Name,
+			Provider: app.Provider,
+			CloneURL: app.CloneURL,
+		})
+	}
+	return out
+}
+
 func (s *Server) webhookService(providerSvc providers.ProviderService) *webhooks.Service {
 	if s.deploy == nil || providerSvc == nil {
 		return nil

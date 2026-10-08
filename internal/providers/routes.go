@@ -434,6 +434,16 @@ func redirectMatchesOrigin(r *http.Request, redirectURL string) bool {
 	return strings.EqualFold(parsed.Hostname(), host)
 }
 
+// inUseNames extracts the application names from an ErrInUse error for the
+// curated 409 body. It falls back to the full text when the shape is
+// unexpected, so the names are never silently dropped.
+func inUseNames(err error) string {
+	if names, ok := strings.CutPrefix(err.Error(), ErrInUse.Error()+": "); ok {
+		return names
+	}
+	return err.Error()
+}
+
 // providerID parses the {id} path parameter, answering 400 when it is not a
 // UUID.
 func (h *handler) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
@@ -484,8 +494,10 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "provider not found"})
 	case errors.Is(err, ErrNotConnected):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "provider is not connected"})
-	case errors.Is(err, ErrConflict), errors.Is(err, ErrInUse):
-		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
+	case errors.Is(err, ErrConflict):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "this provider is already connected"})
+	case errors.Is(err, ErrInUse):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "applications still use this connection: " + inUseNames(err)})
 	case errors.Is(err, ErrUnsupported), errors.Is(err, ErrValidation):
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrTooManyRequests):

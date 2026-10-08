@@ -572,6 +572,8 @@ func TestRoutesUpdateApplication(t *testing.T) {
 					t.Errorf("link = %v, want %q", got, *tc.want)
 				}
 			})
+		}
+	})
 	t.Run("forwards dockerfile fields", func(t *testing.T) {
 		svc := &fakeDeployService{application: app}
 		srv := newRouteServer(svc, alwaysUser(userID))

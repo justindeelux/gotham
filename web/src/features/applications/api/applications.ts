@@ -47,10 +47,6 @@ export interface Application {
   source_type: SourceType;
   /** Linked GitHub App connection (GS-5), empty when unlinked. */
   github_app_id: string;
-  /** Pasted Dockerfile text for dockerfile applications (GS-7, empty otherwise). */
-  dockerfile_content: string;
-  /** Optional --build-arg pairs for dockerfile applications. */
-  build_args: Record<string, string>;
   /** Pasted Dockerfile text for dockerfile applications (GS-7). Detail routes only; absent on lists. */
   dockerfile_content?: string;
   /** Optional --build-arg pairs for dockerfile applications. Detail routes only; absent on lists. */

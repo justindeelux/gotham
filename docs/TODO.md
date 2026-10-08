@@ -39,6 +39,19 @@ Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
   (I18N-9, JUS-50). Parent [JUS-41](https://linear.app/justin-deelux/issue/JUS-41/gotham-englishvietnamese-ui-localization-i18n)
   tracks delivery; per-package evidence lives in each PR and the plan §11 appendix.
 
+## Add resource flow & automatic Git sources
+
+- [x] **Complete 2026-10-09.** [`plans/15-add-resource-git-sources.md`](plans/15-add-resource-git-sources.md):
+  Add-resource picker (GS-1, JUS-57, #202), `source_type` model (GS-2, JUS-58, #203),
+  public git (GS-3, JUS-59, #204), GitLab connect (GS-6, JUS-62, #205), GitHub App (GS-5,
+  JUS-61, #206), Dockerfile (GS-7, JUS-63, #207), private git (GS-4, JUS-60, #208), Docker
+  image (GS-9, JUS-65, #209), Compose (GS-8, JUS-64, #210), Git sources page (GS-10,
+  JUS-66, #211). Parent JUS-56 stays open for the follow-ups below.
+- [ ] **JUS-67** host deny-list (SSRF) for keyless git clone and `ls-remote`.
+- [ ] **JUS-68** GitHub App clone hardening residuals (https-only token URLs, resolver
+  honours `github_app_id`, disconnect usage count by link).
+- [ ] Live verification against real GitHub, GitLab and a private registry (tests use fakes).
+
 ## Phase 13 residuals (from the PE-2/PE-5/PE-6 reviews; none blocking)
 
 - [ ] **PE-2 R2 — `PATCH /services/{id}` can wait up to the deploy timeout**

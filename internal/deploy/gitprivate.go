@@ -46,7 +46,10 @@ func ValidatePrivateGitURL(raw string) error {
 			if err := rejectLeadingDash("user", user); err != nil {
 				return err
 			}
-			return rejectLeadingDash("host", host)
+			if err := rejectLeadingDash("host", host); err != nil {
+				return err
+			}
+			return checkGitHostLiteral(host)
 		}
 		if strings.HasPrefix(url, "/") {
 			if devLocalClone() {
@@ -71,7 +74,7 @@ func ValidatePrivateGitURL(raw string) error {
 		if parsed.User != nil {
 			return fmt.Errorf("%w: clone URL must not embed credentials: store the token as the HTTPS credential instead", ErrValidation)
 		}
-		return nil
+		return checkGitHostLiteral(parsed.Hostname())
 	case "ssh":
 		if parsed.Hostname() == "" {
 			return fmt.Errorf("%w: clone URL has no host", ErrValidation)
@@ -87,7 +90,7 @@ func ValidatePrivateGitURL(raw string) error {
 		if parsed.User != nil && strings.Contains(parsed.User.String(), ":") {
 			return fmt.Errorf("%w: clone URL must not embed credentials", ErrValidation)
 		}
-		return nil
+		return checkGitHostLiteral(parsed.Hostname())
 	case "file":
 		if devLocalClone() {
 			return nil
@@ -530,7 +533,7 @@ func (s *Service) TestGitConnection(ctx context.Context, userID, appID uuid.UUID
 			Message: "a connection test ran recently; wait a moment and retry",
 		}, nil
 	}
-	src := gitSource{keys: s.repo, creds: s.repo, logger: s.logger, run: s.testRunner()}
+	src := gitSource{keys: s.repo, creds: s.repo, logger: s.logger, run: s.testRunner(), lookup: s.probeLookup()}
 	url, env, cleanup, _, err := src.cloneCredential(ctx, app, rawURL)
 	if err != nil {
 		// A missing deploy key is a test outcome, not a request failure:
@@ -543,6 +546,13 @@ func (s *Service) TestGitConnection(ctx context.Context, userID, appID uuid.UUID
 	defer cleanup()
 	probeCtx, cancel := context.WithTimeout(ctx, gitTestTimeout)
 	defer cancel()
+	// The probe dials an operator-supplied host: resolve, refuse blocked
+	// addresses and pin the answer before git runs (see pinGitRemoteHost).
+	pinnedEnv, err := pinGitRemoteHost(probeCtx, s.probeLookup(), url, env)
+	if err != nil {
+		return GitConnectionResult{Host: privateGitHost(rawURL), Message: err.Error()}, nil
+	}
+	env = pinnedEnv
 	argv := []string{"git", "ls-remote", "--", url, "HEAD"}
 	output, err := src.runOrDefault()(probeCtx, argv, env)
 	if probeCtx.Err() != nil {
@@ -553,7 +563,7 @@ func (s *Service) TestGitConnection(ctx context.Context, userID, appID uuid.UUID
 	}
 	if err != nil {
 		msg := fmt.Sprintf("git ls-remote of %s failed", RedactCloneURL(rawURL))
-		if quoted := tail(redactCloneError(string(output)), 400); quoted != "" {
+		if quoted := quoteGitOutput(string(output)); quoted != "" {
 			msg += ": " + quoted
 		}
 		msg += classifyGitFailure(string(output))
@@ -563,6 +573,19 @@ func (s *Service) TestGitConnection(ctx context.Context, userID, appID uuid.UUID
 		return GitConnectionResult{Host: privateGitHost(rawURL), Message: msg}, nil
 	}
 	return GitConnectionResult{OK: true, Host: privateGitHost(rawURL), Message: "connection succeeded"}, nil
+}
+
+// probeLookup returns the Service's git hostname resolver for the
+// connection probe: the orchestrator's test seam, nil (the system resolver)
+// in production.
+// probeLookup returns the Service's git hostname resolver for the
+// connection probe: the orchestrator's test seam, nil (the system resolver)
+// in production.
+func (s *Service) probeLookup() gitHostLookupFunc {
+	if s == nil || s.Orchestrator == nil {
+		return nil
+	}
+	return s.gitLookup
 }
 
 // testRunner returns the Service's git runner for the connection probe: the

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,7 +27,22 @@ import (
 // surface enabled; individual tests override it with t.Setenv.
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv(FeatureEnv)
+	// The SSRF host policy resolves every remote hostname at clone/probe
+	// time. The stub answers test hostnames with a public TEST-NET-3
+	// address, so unit tests never touch real DNS (and stay hermetic
+	// offline); tests covering resolution itself pass an explicit lookup.
+	defaultGitHostLookup = stubGitHostLookup
 	os.Exit(m.Run())
+}
+
+// stubGitHostLookup answers any hostname with a public documentation-range
+// address the host policy allows. "fail.invalid" fails like an unresolvable
+// name for the tests that pin the refusal.
+func stubGitHostLookup(_ context.Context, host string) ([]net.IP, error) {
+	if host == "fail.invalid" {
+		return nil, errors.New("stub: no such host")
+	}
+	return []net.IP{net.ParseIP("203.0.113.10")}, nil
 }
 
 // discardLogger keeps the orchestrator's operational logging out of the test

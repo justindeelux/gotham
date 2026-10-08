@@ -85,6 +85,33 @@ An operator who runs `gotham serve` directly without a CA gets the development
 fallback (plaintext gRPC, logged as a warning); the installer never leaves a
 production host in that state.
 
+### Git sources and the SSRF host policy
+
+Application clone URLs are operator-supplied, and the control plane dials
+them with `git` at deploy time (default-branch resolution) and on the
+Test-connection button. Every such dial passes the SSRF host policy
+(`internal/deploy/githostpolicy.go`): loopback, link-local (including the
+`169.254.169.254` cloud metadata address), unspecified, multicast,
+carrier-grade NAT, benchmarking, NAT64 and 6to4 remotes are always refused,
+as are numeric-IP tricks (`2130706433`, `0x7f.0.0.1`), userinfo and IPv6 zone
+ids. RFC1918, ULA and loopback remotes are refused too, unless the operator
+allows private hosts for a self-hosted git server:
+
+```yaml
+# gotham.yaml
+deploy:
+  git_allow_private_hosts: true
+```
+
+or `GOTHAM_GIT_ALLOW_PRIVATE_HOSTS=true` in the service environment.
+Link-local and the other always-denied ranges stay denied. The host is
+resolved twice and a changed answer (DNS rebinding) refuses the dial; `https`
+remotes are pinned to the resolved address (`http.curloptResolve`), while
+`ssh`/`git` remotes rely on the double resolution (documented residual).
+Deploy-log errors carry the classified hint only — never resolved internal
+addresses. Local paths and `file://` URLs stay behind `GOTHAM_DEV_CLONE_LOCAL`
+(development fixtures only).
+
 ### Upgrading an existing control plane
 
 Re-running `deploy/install.sh` on a host that was installed before this change

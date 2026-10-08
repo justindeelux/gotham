@@ -53,6 +53,9 @@ func ValidatePublicGitURL(raw string) error {
 		if parsed.User != nil {
 			return fmt.Errorf("%w: clone URL must not embed credentials: use a clean public URL", ErrValidation)
 		}
+		if err := checkGitHostLiteral(parsed.Hostname()); err != nil {
+			return err
+		}
 		return nil
 	case "ssh":
 		return errPublicSSH
@@ -124,7 +127,7 @@ func defaultBranchFor(ctx context.Context, run cloneRunner, rawURL string, env [
 	if err != nil {
 		msg := fmt.Sprintf("git ls-remote: resolve the default branch of %s",
 			RedactCloneURL(rawURL))
-		if quoted := tail(redactCloneError(string(output)), 400); quoted != "" {
+		if quoted := quoteGitOutput(string(output)); quoted != "" {
 			msg += ": " + quoted
 		}
 		return "", fmt.Errorf("%s: %w%s", msg, err, classifyGitFailure(string(output)))

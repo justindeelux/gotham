@@ -222,6 +222,10 @@ func newP4HarnessWithAgentOptions(t *testing.T, options ...agent.ServerOption) *
 	// The fixture repository is a directory on this machine; production keeps
 	// local clone sources disabled (see deploy.devLocalClone).
 	t.Setenv(cloneLocalEnv, "true")
+	// The private-repo suite clones through its ssh stand-in over loopback;
+	// the SSRF host policy denies loopback by default, so the harness opts
+	// into private hosts the way a self-hosted operator would.
+	t.Setenv(deploy.GitAllowPrivateHostsEnv, "true")
 	// The applications surface must be on, whatever the ambient environment says.
 	t.Setenv(deploy.FeatureEnv, "")
 

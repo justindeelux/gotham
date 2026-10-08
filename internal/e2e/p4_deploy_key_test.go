@@ -102,12 +102,14 @@ func TestP4DeployPrivateRepoOverSSH(t *testing.T) {
 		Name:          "p4-private-" + suffix,
 		Provider:      "github",
 		Repo:          fixture.repo,
-		CloneURL:      "ssh://git@fixture.invalid" + filepath.ToSlash(fixture.dir),
-		Branch:        "main",
-		BuildPack:     "dockerfile",
-		Port:          p4ContainerPort,
-		HostPort:      hostPort,
-		ServerID:      h.serverID.String(),
+		// Loopback through the ssh stand-in below (no network, no sshd, no
+		// host keys): the harness allows private git hosts for this.
+		CloneURL:  "ssh://git@127.0.0.1" + filepath.ToSlash(fixture.dir),
+		Branch:    "main",
+		BuildPack: "dockerfile",
+		Port:      p4ContainerPort,
+		HostPort:  hostPort,
+		ServerID:  h.serverID.String(),
 	})
 	// The create route installed the push hook through the production seam:
 	// the harness wires cfg.Hooks to the real webhook service (with a stub

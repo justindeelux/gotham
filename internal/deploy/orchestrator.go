@@ -88,6 +88,9 @@ type Orchestrator struct {
 	secret   string
 	logger   *slog.Logger
 	proxy    ProxySync
+	// gitLookup resolves git remote hostnames for the SSRF host policy
+	// (see pinGitRemoteHost); nil selects the system resolver.
+	gitLookup gitHostLookupFunc
 
 	queue         chan job
 	workers       int
@@ -117,7 +120,14 @@ func newOrchestrator(cfg Config) *Orchestrator {
 	repo := cfg.repository()
 	source := cfg.Source
 	if source == nil {
-		source = gitSource{keys: repo, appTokens: cfg.AppTokens, creds: repo, logger: logger}
+		source = gitSource{keys: repo, appTokens: cfg.AppTokens, creds: repo, logger: logger, lookup: cfg.GitLookupHost}
+	}
+	// The allow-private setting is process-wide (creation validators are
+	// free functions): installing it here covers every service built from
+	// config. It is only ever enabled, never cleared, so a test default
+	// cannot switch a configured allow back off.
+	if cfg.GitAllowPrivateHosts {
+		SetGitAllowPrivateHosts(true)
 	}
 	emitter := cfg.Emitter
 	if emitter == nil {
@@ -162,6 +172,7 @@ func newOrchestrator(cfg Config) *Orchestrator {
 		secret:        cfg.Secret,
 		logger:        logger,
 		proxy:         cfg.Proxy,
+		gitLookup:     cfg.GitLookupHost,
 		queue:         make(chan job, queueSize),
 		workers:       workers,
 		maxAttempts:   maxAttempts,

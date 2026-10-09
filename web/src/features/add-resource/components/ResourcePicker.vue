@@ -21,12 +21,14 @@ import { brandFor, templateBrand } from "../utils/brands";
 /**
  * Add-resource picker (GS-1, ported from docs/design/add-resource.html), shown
  * inside a modal on the environment page: three groups — Application (one
- * card), Service (one card per template from the templates API), Database (one
- * card per supported engine). Each card shows an inline-SVG brand mark, the
- * name and a one-line description; selecting a card opens the matching
- * existing create wizard in the project/environment the modal was opened for.
- * After a resource is created the picker emits `created` and navigates to the
- * new resource's detail page.
+ * card per wizard source type), Service (one card per template from the
+ * templates API), Database (one card per supported engine). Each card shows
+ * an inline-SVG brand mark, the name and a one-line description; selecting a
+ * card opens the matching existing create wizard in the project/environment
+ * the modal was opened for, with the picked item preselected (the wizard
+ * hides its own selector behind a read-only summary). After a resource is
+ * created the picker emits `created` and navigates to the new resource's
+ * detail page.
  */
 const props = defineProps<{
   projectId: string;
@@ -66,6 +68,34 @@ const filteredTemplates = computed<TemplateSummary[]>(() => {
   });
 });
 
+/** sourceLabelKey maps a wizard source value to its selector label. */
+const SOURCE_LABEL_KEYS: Record<string, string> = {
+  git_public: "applications.wizard.sourceGitPublic",
+  git_private: "applications.wizard.sourceGitPrivate",
+  github_app: "applications.wizard.sourceGithubApp",
+  gitlab_app: "applications.wizard.sourceGitlabApp",
+  dockerfile: "applications.wizard.sourceDockerfile",
+  image: "applications.wizard.sourceImage",
+  compose: "applications.wizard.sourceCompose",
+};
+
+/** sourceValues lists every wizard source type as its own picker card. */
+const sourceValues = Object.keys(SOURCE_LABEL_KEYS);
+
+/** sourceLabel renders the wizard's own label for one source value. */
+function sourceLabel(value: string): string {
+  return t(SOURCE_LABEL_KEYS[value] ?? value);
+}
+
+/** sourceDescription renders the one-line catalog copy for one source. */
+function sourceDescription(value: string): string {
+  const key = `add-resource.sources.${value}`;
+  if (i18n.global.te(key)) {
+    return String(i18n.global.t(key));
+  }
+  return value;
+}
+
 /** engineDescription renders the one-line catalog copy for one engine. */
 function engineDescription(value: string): string {
   const key = `add-resource.engines.${value}`;
@@ -81,14 +111,16 @@ function engineImage(value: string): string {
   return `${engine.repo}:${engine.defaultVersion}`;
 }
 
+const appSource = ref("");
 const appOpen = ref(false);
 const templateSlug = ref("");
 const templateOpen = ref(false);
 const databaseEngine = ref("postgres");
 const databaseOpen = ref(false);
 
-/** openApplication opens the existing application wizard. */
-function openApplication(): void {
+/** openApplication opens the application wizard with one source preselected. */
+function openApplication(sourceType: string): void {
+  appSource.value = sourceType;
   appOpen.value = true;
 }
 
@@ -169,16 +201,21 @@ onMounted(() => {
     <section :aria-label="t('add-resource.groups.application')">
       <div class="section-title">
         <h2>{{ t("add-resource.groups.application") }}</h2>
-        <span class="meta">{{ t("add-resource.groups.applicationMeta") }}</span>
       </div>
       <div class="res-grid" @keydown="handleGroupKey">
-        <button type="button" class="res-card" @click="openApplication">
+        <button
+          v-for="source in sourceValues"
+          :key="source"
+          type="button"
+          class="res-card"
+          :data-source="source"
+          @click="openApplication(source)"
+        >
           <span class="res-head">
-            <BrandIcon v-bind="brandFor('application', t('add-resource.applicationCard.name'))" />
-            <span class="res-name">{{ t("add-resource.applicationCard.name") }}</span>
+            <BrandIcon v-bind="brandFor(source, sourceLabel(source))" />
+            <span class="res-name">{{ sourceLabel(source) }}</span>
           </span>
-          <span class="res-desc">{{ t("add-resource.applicationCard.description") }}</span>
-          <span class="res-meta"><span class="tag">{{ t("add-resource.applicationCard.tag") }}</span></span>
+          <span class="res-desc">{{ sourceDescription(source) }}</span>
         </button>
       </div>
     </section>
@@ -186,9 +223,7 @@ onMounted(() => {
     <section :aria-label="t('add-resource.groups.service')">
       <div class="section-title">
         <h2>{{ t("add-resource.groups.service") }}</h2>
-        <span class="meta">{{ t("add-resource.groups.serviceMeta") }}</span>
       </div>
-      <p class="page-desc">{{ t("add-resource.groups.serviceHint") }}</p>
       <div class="toolbar">
         <NInput
           v-model:value="serviceQuery"
@@ -223,7 +258,6 @@ onMounted(() => {
             <span class="res-name">{{ template.name }}</span>
           </span>
           <span class="res-desc">{{ templateOverlayDescription(template) }}</span>
-          <span class="res-meta"><span class="tag">{{ t("add-resource.serviceCard.tag") }}</span></span>
         </button>
       </div>
       <NEmpty v-else :description="t(serviceQuery.trim() === '' ? 'add-resource.search.emptyCatalog' : 'add-resource.search.empty')" />
@@ -232,9 +266,7 @@ onMounted(() => {
     <section :aria-label="t('add-resource.groups.database')">
       <div class="section-title">
         <h2>{{ t("add-resource.groups.database") }}</h2>
-        <span class="meta">{{ t("add-resource.groups.databaseMeta") }}</span>
       </div>
-      <p class="page-desc">{{ t("add-resource.groups.databaseHint") }}</p>
       <div
         class="res-grid"
         @keydown="handleGroupKey"
@@ -260,12 +292,11 @@ onMounted(() => {
       </div>
     </section>
 
-    <p class="small muted">{{ t("add-resource.keyboardHint") }}</p>
-
     <CreateAppWizard
       v-model:show="appOpen"
       :project-id="scopeProjectId"
       :environment-id="scopeEnvironmentId"
+      :source-type="appSource"
       @created="afterApplicationCreate"
     />
     <TemplateWizard
@@ -291,12 +322,6 @@ onMounted(() => {
   gap: var(--space-5);
 }
 
-.page-desc {
-  color: var(--muted);
-  margin: 0;
-  max-width: 72ch;
-}
-
 section {
   display: flex;
   flex-direction: column;
@@ -314,12 +339,6 @@ section {
   font-size: var(--text-xl);
   color: var(--fg-2);
   margin: 0;
-}
-
-.section-title .meta {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--muted);
 }
 
 .toolbar {

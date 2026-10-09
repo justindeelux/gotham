@@ -21,9 +21,11 @@ interface Props {  show: boolean;
   projectId?: string;
   /** Environment the application is created in (the route's, changeable). */
   environmentId?: string;
+  /** Source type preselected by the caller (an Add-resource card); empty keeps the selector. */
+  sourceType?: string;
 }
 
-const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "" });
+const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "", sourceType: "" });
 const emit = defineEmits<{
   "update:show": [value: boolean];
   created: [application: Application];
@@ -32,6 +34,7 @@ const emit = defineEmits<{
 const wizard = useCreateAppWizard(toRef(props, "show"), emit, {
   projectId: toRef(props, "projectId"),
   environmentId: toRef(props, "environmentId"),
+  sourceType: toRef(props, "sourceType"),
 });
 provideCreateWizard(wizard);
 

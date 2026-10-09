@@ -97,7 +97,14 @@ provide(wizardFormKey, wizard.form);
       />
 
       <template v-if="wizard.step.value === 0">
-        <NFormItem :label="t('databases.wizard.engineStep.engine')" :show-feedback="false">
+        <!-- Preselected by the picker: read-only summary, Change goes back to the picker. -->
+        <div v-if="wizard.engineLocked.value" class="preselected">
+          <span>{{ t("databases.wizard.engineStep.preselected", { engine: wizard.selectedEngine.value.label }) }}</span>
+          <NButton size="small" quaternary @click="wizard.handleClose(false)">
+            {{ t("databases.wizard.engineStep.change") }}
+          </NButton>
+        </div>
+        <NFormItem v-else :label="t('databases.wizard.engineStep.engine')" :show-feedback="false">
           <NRadioGroup v-model:value="wizard.form.engine">
             <NSpace vertical :size="8">
               <NRadio
@@ -169,5 +176,13 @@ provide(wizardFormKey, wizard.form);
 <style scoped>
 .mono {
   font-family: var(--font-mono);
+}
+
+.preselected {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg-2);
 }
 </style>

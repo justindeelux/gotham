@@ -282,6 +282,8 @@ const en = {
     sourceCompose: "Docker Compose",
     sourceUnavailable:
       "This source type is not available yet — it lands in a later package.",
+    sourcePreselected: "Source: {source}",
+    sourceChange: "Change",
     imageRef: "Image reference",
     imageRefHint: "registry/repo:tag, optionally pinned with {'@'}sha256:.... Redeploys pull the tag again; rollbacks use the recorded digest.",
     registryUsername: "Registry username",

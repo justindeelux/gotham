@@ -176,6 +176,8 @@ export interface WizardEvents {
 export interface WizardScope {
   projectId: string | Ref<string>;
   environmentId: string | Ref<string>;
+  /** Source type preselected by the caller (an Add-resource card); empty keeps the selector. */
+  sourceType?: string | Ref<string>;
 }
 
 /**
@@ -299,6 +301,26 @@ export function useCreateAppWizard(
     },
   ]);
 
+  /**
+   * preselectedSourceType is the caller's valid preselect (an Add-resource
+   * card), else empty: an unknown value falls back to the free selector.
+   */
+  const preselectedSourceType = computed<string>(() => {
+    const raw = toValue(scope.sourceType ?? "");
+    return sourceTypeSchema.safeParse(raw).success ? raw : "";
+  });
+
+  /** sourceTypeLocked hides the type selector behind a read-only summary. */
+  const sourceTypeLocked = computed<boolean>(() => preselectedSourceType.value !== "");
+
+  /** seedSource copies the preselected type into the form. */
+  function seedSource(): void {
+    form.sourceType =
+      preselectedSourceType.value === ""
+        ? "git_public"
+        : (preselectedSourceType.value as SourceType);
+  }
+
   const form = reactive<WizardForm>({
     sourceType: "git_public",
     providerId: "",
@@ -330,6 +352,7 @@ export function useCreateAppWizard(
     env: [{ key: "NODE_ENV", value: "production" }],
     storage: [],
   });
+  seedSource();
 
   const providerOptions = computed<Array<{ label: string; value: string }>>(() => {
     // The provider list follows the source type, so a gitlab connection can
@@ -395,6 +418,15 @@ export function useCreateAppWizard(
     { label: tr("applications.wizard.sourceImage"), value: "image" },
     { label: tr("applications.wizard.sourceCompose"), value: "compose" },
   ]);
+
+  /**
+   * lockedSourceLabel names the preselected type in the read-only summary.
+   */
+  const lockedSourceLabel = computed<string>(
+    () =>
+      sourceTypeOptions.value.find((item) => item.value === form.sourceType)?.label ??
+      form.sourceType,
+  );
 
   /** composeModeOptions renders the paste/repo choice in the current locale. */
   const composeModeOptions = computed<Array<{ label: string; value: string }>>(() => [
@@ -721,6 +753,7 @@ export function useCreateAppWizard(
         // wizard was closed (or mounted), and reset-on-close alone would keep
         // the stale environment for the next open.
         seedScope();
+        seedSource();
         void providersStore.fetchProviders().catch(() => undefined);
         void serversStore.fetchServers().catch(() => undefined);
       } else {
@@ -1140,7 +1173,7 @@ export function useCreateAppWizard(
   /** resetWizard returns every field to its initial value. */
   function resetWizard(): void {
     step.value = 0;
-    form.sourceType = "git_public";
+    seedSource();
     form.providerId = "";
     form.publicCloneUrl = "";
     form.privateCloneUrl = "";
@@ -1197,6 +1230,8 @@ export function useCreateAppWizard(
     githubAppStore,
     providerOptions,
     sourceTypeOptions,
+    sourceTypeLocked,
+    lockedSourceLabel,
     composeModeOptions,
     composeServiceOptions,
     isPublicRepo,

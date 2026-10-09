@@ -14,23 +14,17 @@ const vi: typeof en = {
   },
   groups: {
     application: "Ứng dụng",
-    applicationMeta: "wizard · kho git",
     service: "Service",
-    serviceMeta: "một thẻ mỗi template",
-    serviceHint:
-      "Một thẻ cho mỗi template trong danh mục. Chọn thẻ sẽ mở wizard deploy template với template đã chọn sẵn.",
     database: "Cơ sở dữ liệu",
-    databaseMeta: "một thẻ mỗi engine",
-    databaseHint:
-      "Một thẻ cho mỗi engine được hỗ trợ. Chọn thẻ sẽ mở wizard cơ sở dữ liệu với engine đã chọn sẵn.",
   },
-  applicationCard: {
-    name: "Ứng dụng",
-    description: "Build và deploy từ kho Git.",
-    tag: "wizard mã nguồn",
-  },
-  serviceCard: {
-    tag: "template",
+  sources: {
+    git_public: "Triển khai kho công khai bằng URL, không cần kết nối.",
+    git_private: "Triển khai kho riêng bằng deploy key hoặc token.",
+    github_app: "Triển khai từ tài khoản GitHub đã kết nối.",
+    gitlab_app: "Triển khai từ tài khoản GitLab đã kết nối.",
+    dockerfile: "Build từ nội dung Dockerfile dán sẵn, không cần kho.",
+    image: "Chạy container image dựng sẵn từ registry bất kỳ.",
+    compose: "Chạy service từ file Docker Compose.",
   },
   engines: {
     postgres: "Cơ sở dữ liệu quan hệ tin cậy cho dữ liệu ứng dụng.",
@@ -39,8 +33,6 @@ const vi: typeof en = {
     mongodb: "Cơ sở dữ liệu tài liệu cho dữ liệu linh hoạt kiểu JSON.",
     redis: "Cache và hàng đợi trong bộ nhớ, có thể lưu bền vững.",
   },
-  keyboardHint:
-    "Bàn phím: Tab di chuyển giữa các thẻ, phím mũi tên di chuyển trong nhóm, Enter mở luồng tạo.",
 };
 
 export default vi;

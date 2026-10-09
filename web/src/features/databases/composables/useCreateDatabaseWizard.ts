@@ -113,6 +113,13 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
 
   const selectedEngine = computed(() => engineByValue(form.engine));
 
+  /**
+   * engineLocked hides the engine radio group behind a read-only summary
+   * when the caller preselected an engine (an Add-resource card). Without a
+   * preselect the radio group stays as today.
+   */
+  const engineLocked = computed<boolean>(() => toValue(options.engine ?? "") !== "");
+
   const versionOptions = computed(() => versionOptionsFor(selectedEngine.value));
 
   const effectiveVersion = computed<string>(() =>
@@ -320,6 +327,7 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
     created,
     form,
     selectedEngine,
+    engineLocked,
     versionOptions,
     effectiveVersion,
     imagePreview,

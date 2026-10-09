@@ -13,23 +13,17 @@ const en = {
   },
   groups: {
     application: "Application",
-    applicationMeta: "wizard · git repository",
     service: "Service",
-    serviceMeta: "one card per template",
-    serviceHint:
-      "One card per template from the template catalog. Selecting a card opens the template deploy wizard with the template preselected.",
     database: "Database",
-    databaseMeta: "one card per engine",
-    databaseHint:
-      "One card per supported engine. Selecting a card opens the database wizard with the engine preselected.",
   },
-  applicationCard: {
-    name: "Application",
-    description: "Build and deploy from a Git repository.",
-    tag: "source wizard",
-  },
-  serviceCard: {
-    tag: "template",
+  sources: {
+    git_public: "Deploy a public repository by URL, no connection needed.",
+    git_private: "Deploy a private repository with a deploy key or token.",
+    github_app: "Deploy from a connected GitHub account.",
+    gitlab_app: "Deploy from a connected GitLab account.",
+    dockerfile: "Build from pasted Dockerfile text, no repository needed.",
+    image: "Run a prebuilt container image from any registry.",
+    compose: "Run services from a Docker Compose file.",
   },
   engines: {
     postgres: "Reliable relational database for application data.",
@@ -38,8 +32,5 @@ const en = {
     mongodb: "Document database for flexible JSON-like data.",
     redis: "In-memory cache and queue with optional persistence.",
   },
-  keyboardHint:
-    "Keyboard: Tab moves between cards, arrow keys move inside a group, Enter opens the create flow.",
 };
-
 export default en;

@@ -282,6 +282,8 @@ const vi: ApplicationsMessages = {
     sourceImage: "Container image",
     sourceCompose: "Docker Compose",
     sourceUnavailable: "Loại nguồn này chưa khả dụng — sẽ có trong gói sau.",
+    sourcePreselected: "Nguồn: {source}",
+    sourceChange: "Đổi",
     imageRef: "Tham chiếu image",
     imageRefHint: "registry/repo:tag, có thể ghim bằng {'@'}sha256:.... Triển khai lại sẽ pull lại tag; rollback dùng digest đã ghi.",
     registryUsername: "Tên đăng nhập registry",

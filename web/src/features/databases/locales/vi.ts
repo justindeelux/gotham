@@ -242,6 +242,8 @@ const vi: typeof en = {
     },
     engineStep: {
       engine: "Engine",
+      preselected: "Engine: {engine}",
+      change: "Đổi",
       version: "Phiên bản",
       defaultVersion: "Mặc định: {version}",
       node: "Node",

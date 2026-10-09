@@ -22,7 +22,11 @@ const latestTagWarn = computed<boolean>(
 <template>
   <NSpace vertical :size="16">
     <div class="form-row">
-      <NFormItem :label="t('applications.wizard.sourceType')" :show-feedback="true">
+      <NFormItem
+        v-if="!wizard.sourceTypeLocked.value"
+        :label="t('applications.wizard.sourceType')"
+        :show-feedback="true"
+      >
         <NSelect
           v-model:value="form.sourceType"
           :options="wizard.sourceTypeOptions.value"
@@ -30,6 +34,13 @@ const latestTagWarn = computed<boolean>(
         />
         <span class="field-hint">{{ t("applications.wizard.sourceTypeHint") }}</span>
       </NFormItem>
+      <!-- Preselected by the picker: read-only summary, Change goes back to the picker. -->
+      <div v-else class="preselected">
+        <span>{{ t("applications.wizard.sourcePreselected", { source: wizard.lockedSourceLabel.value }) }}</span>
+        <NButton size="small" quaternary @click="wizard.closeWizard()">
+          {{ t("applications.wizard.sourceChange") }}
+        </NButton>
+      </div>
     </div>
 
     <div class="form-row" v-if="wizard.isPublicRepo.value">
@@ -326,6 +337,14 @@ const latestTagWarn = computed<boolean>(
 .field-hint {
   font-size: var(--text-xs);
   color: var(--meta);
+}
+
+.preselected {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg-2);
 }
 
 .mono {

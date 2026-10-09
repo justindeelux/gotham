@@ -304,10 +304,18 @@ a {
   width: 100%;
 }
 
-/* Modal dialogs (add/edit server wizards) must scroll their content
- * when taller than the viewport instead of overflowing it: cap the card at
- * the viewport height and let the content area take the scroll. Scoped to the
- * server modals so no other modal in the app changes size or behavior. */
+/* Modal scroll contract (JUS-69, mirrors the Modals rule in
+ * docs/design/README.md): every card modal is bounded to the viewport and
+ * only its body scrolls — the header (title/close) and any footer actions
+ * stay pinned. Naive renders preset="card" as .n-card-header +
+ * .n-card-content + .n-card__footer/.n-card__action siblings with no height
+ * bound (the .n-modal-scroll-content wrapper only centers), so without this
+ * a tall modal overflows the viewport and the header scrolls away over the
+ * content. New card modals reuse .app-modal; the wizard and edit modals
+ * share the same shell. Plain card modals scroll .n-card-content directly;
+ * wizard modals pin their own .wizard-foot, so the card content is a fixed
+ * flex column and only .wizard-body scrolls. */
+.app-modal.n-modal.n-card,
 .wizard-modal.n-modal.n-card,
 .edit-server-modal.n-modal.n-card {
   max-height: calc(100vh - 64px);
@@ -315,9 +323,44 @@ a {
   flex-direction: column;
 }
 
-.wizard-modal.n-modal.n-card > .n-card-content,
+.app-modal.n-modal.n-card > .n-card-header,
+.app-modal.n-modal.n-card > .n-card__footer,
+.app-modal.n-modal.n-card > .n-card__action,
+.wizard-modal.n-modal.n-card > .n-card-header,
+.edit-server-modal.n-modal.n-card > .n-card-header,
+.edit-server-modal.n-modal.n-card > .n-card__footer,
+.edit-server-modal.n-modal.n-card > .n-card__action {
+  flex: 0 0 auto;
+}
+
+/* Plain card modals (Add resource, edit server) scroll the card body. The
+ * edit modal keeps its component-local flex column on .n-card-content
+ * (EditServerModal.vue); the scroll and bounds here compose with it. */
+.app-modal.n-modal.n-card > .n-card-content,
 .edit-server-modal.n-modal.n-card > .n-card-content {
+  flex: 1 1 auto;
   overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Wizard modals (create application, add server) keep their own footer: the
+ * card body is a fixed flex column and only the step body scrolls, so
+ * Back/Continue/Create never leave the viewport on tall steps (Dockerfile
+ * and Docker Compose editors). This supersedes the component-scoped
+ * n-card-content scroll rules (lower specificity), which scrolled the footer
+ * away with the step. */
+.wizard-modal.n-modal.n-card > .n-card-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+  max-height: none;
+}
+
+.wizard-modal.n-modal.n-card > .n-card-content > .wizard {
+  flex: 1 1 auto;
   min-height: 0;
 }
 

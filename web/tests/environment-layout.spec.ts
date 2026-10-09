@@ -450,3 +450,115 @@ test("resource rows stay inside the viewport at 480px", async ({ page }) => {
     expect(box!.x + box!.width).toBeLessThanOrEqual(480);
   }
 });
+
+test("JUS-69 add resource modal pins its header and scrolls only the body", async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await mockApi(page);
+    await page.route("**/api/v1/templates", async (route) => {
+      await route.fulfill({ json: { templates: [] } });
+    });
+    await page.goto(`${baseURL}/projects/${envPath}`);
+    await page.locator(".resource-table").waitFor();
+    await page.getByRole("button", { name: "Add resource" }).click();
+    const dialog = page.locator(".n-modal.app-modal");
+    await expect(dialog.getByRole("heading", { name: "Add resource", exact: true })).toBeVisible();
+    // The card never exceeds the viewport even with the full picker inside.
+    const cardBox = await dialog.boundingBox();
+    expect(cardBox, "modal has a box").not.toBeNull();
+    expect(cardBox!.y).toBeGreaterThanOrEqual(0);
+    expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(viewport.height);
+    // Only the body scrolls: it overflows while the header stays put.
+    const scroller = dialog.locator(".n-card-content");
+    expect(await scroller.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
+      await scroller.evaluate((element) => element.clientHeight),
+    );
+    // Wait out the modal enter transition so the header position is settled.
+    await expect
+      .poll(async () => {
+        const first = (await dialog.locator(".n-card-header").boundingBox())!.y;
+        await page.waitForTimeout(150);
+        return first - (await dialog.locator(".n-card-header").boundingBox())!.y;
+      })
+      .toBe(0);
+    const headerBox = await dialog.locator(".n-card-header").boundingBox();
+    await scroller.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    const headerAfter = await dialog.locator(".n-card-header").boundingBox();
+    expect(headerAfter!.y).toBeCloseTo(headerBox!.y, 0);
+    await page.keyboard.press("Escape");
+  }
+});
+
+test("JUS-69 add server wizard keeps its footer visible at a 520px height", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers`);
+  await page.locator(".servers-page").waitFor();
+  await page.getByRole("button", { name: "Add server" }).first().click();
+  const wizard = page.locator(".n-modal.wizard-modal");
+  await expect(wizard.getByRole("heading", { name: "Add server", exact: true })).toBeVisible();
+  // The 420px floor is gone: the card fits the short viewport instead of
+  // clipping the footer, and the step body takes the scroll.
+  const cardBox = await wizard.boundingBox();
+  expect(cardBox, "wizard card has a box").not.toBeNull();
+  expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(520);
+  for (const name of ["Cancel", "Create & continue"]) {
+    const action = wizard.locator(".wizard-foot").getByRole("button", { name });
+    await expect(action, `${name} visible`).toBeVisible();
+    const box = await action.boundingBox();
+    expect(box, `${name} has a box`).not.toBeNull();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(520);
+  }
+});
+
+test("JUS-69 create application modal keeps its footer visible on Dockerfile and Compose steps", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 640 });
+  await mockApi(page);
+  await page.route("**/api/v1/templates", async (route) => {
+    await route.fulfill({ json: { templates: [] } });
+  });
+  // The picker preselects the source, so each tall editor step opens from
+  // its own card instead of switching a type selector in the wizard.
+  for (const source of ["Dockerfile", "Docker Compose"]) {
+    await page.goto(`${baseURL}/projects/${envPath}`);
+    await page.locator(".resource-table").waitFor();
+    await page.getByRole("button", { name: "Add resource" }).click();
+    const picker = page.locator(".n-modal.app-modal");
+    await expect(picker.getByRole("heading", { name: "Application" })).toBeVisible();
+    await picker.locator("button.res-card").filter({ hasText: source }).first().click();
+    const wizard = page.locator(".n-modal.wizard-modal");
+    await expect(wizard.getByRole("heading", { name: "Create application", exact: true })).toBeVisible();
+    // The tall editor step must not push the card or its footer out.
+    const cardBox = await wizard.boundingBox();
+    expect(cardBox, `${source} card has a box`).not.toBeNull();
+    expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(640);
+    const cont = wizard.locator(".wizard-foot").getByRole("button", { name: "Continue" });
+    await expect(cont, `${source} footer action visible`).toBeVisible();
+    const footBox = await cont.boundingBox();
+    expect(footBox, `${source} footer has a box`).not.toBeNull();
+    expect(footBox!.y + footBox!.height).toBeLessThanOrEqual(640);
+    // The step body is the element that scrolls; the card body itself never does.
+    const stepBody = wizard.locator(".wizard-body");
+    expect(
+      await stepBody.evaluate((element) => element.scrollHeight),
+      `${source} step body overflows`,
+    ).toBeGreaterThan(await stepBody.evaluate((element) => element.clientHeight));
+    const cardContent = wizard.locator(".n-card-content");
+    expect(
+      await cardContent.evaluate((element) => element.scrollHeight),
+      `${source} card body does not scroll`,
+    ).toBeLessThanOrEqual(await cardContent.evaluate((element) => element.clientHeight));
+    await page.keyboard.press("Escape");
+  }
+});

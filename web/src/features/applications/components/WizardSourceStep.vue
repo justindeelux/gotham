@@ -22,7 +22,11 @@ const latestTagWarn = computed<boolean>(
 <template>
   <NSpace vertical :size="16">
     <div class="form-row">
-      <NFormItem :label="t('applications.wizard.sourceType')" :show-feedback="true">
+      <NFormItem
+        v-if="!wizard.sourceTypeLocked.value"
+        :label="t('applications.wizard.sourceType')"
+        :show-feedback="true"
+      >
         <NSelect
           v-model:value="form.sourceType"
           :options="wizard.sourceTypeOptions.value"
@@ -30,6 +34,13 @@ const latestTagWarn = computed<boolean>(
         />
         <span class="field-hint">{{ t("applications.wizard.sourceTypeHint") }}</span>
       </NFormItem>
+      <!-- Preselected by the picker: read-only summary, Change goes back to the picker. -->
+      <div v-else class="preselected">
+        <span>{{ t("applications.wizard.sourcePreselected", { source: wizard.lockedSourceLabel.value }) }}</span>
+        <NButton size="small" quaternary @click="wizard.closeWizard()">
+          {{ t("applications.wizard.sourceChange") }}
+        </NButton>
+      </div>
     </div>
 
     <div class="form-row" v-if="wizard.isPublicRepo.value">
@@ -43,57 +54,64 @@ const latestTagWarn = computed<boolean>(
       </NFormItem>
     </div>
 
-    <div class="form-row" v-else-if="wizard.isDockerfile.value">
-      <NFormItem :label="t('applications.wizard.dockerfileContent')">
-        <NInput
-          v-model:value="form.dockerfileContent"
-          type="textarea"
-          class="mono"
-          :rows="12"
-          placeholder="FROM alpine:3.20"
-        />
-        <span class="field-hint">{{ t("applications.wizard.dockerfileHint") }}</span>
-      </NFormItem>
+    <template v-else-if="wizard.isDockerfile.value">
+      <div class="form-row">
+        <NFormItem :label="t('applications.wizard.dockerfileContent')">
+          <NInput
+            v-model:value="form.dockerfileContent"
+            type="textarea"
+            class="mono"
+            :rows="12"
+            placeholder="FROM alpine:3.20"
+          />
+          <span class="field-hint">{{ t("applications.wizard.dockerfileHint") }}</span>
+        </NFormItem>
+      </div>
 
-      <NFormItem :label="t('applications.wizard.buildArgs')">
-        <BuildArgsEditor v-model="form.buildArgs" />
-        <span class="field-hint">{{ t("applications.wizard.buildArgsHint") }}</span>
-      </NFormItem>
-    </div>
+      <div class="form-row">
+        <NFormItem :label="t('applications.wizard.buildArgs')">
+          <BuildArgsEditor v-model="form.buildArgs" />
+          <span class="field-hint">{{ t("applications.wizard.buildArgsHint") }}</span>
+        </NFormItem>
+      </div>
+    </template>
 
-    <div class="form-row" v-else-if="wizard.isImage.value">
-      <NFormItem :label="t('applications.wizard.imageRef')">
-        <NInput
-          v-model:value="form.imageRef"
-          class="mono"
-          placeholder="registry.example.com/team/app:1.2"
-        />
-        <span class="field-hint">{{ t("applications.wizard.imageRefHint") }}</span>
-      </NFormItem>
+    <template v-else-if="wizard.isImage.value">
+      <div class="form-row">
+        <NFormItem :label="t('applications.wizard.imageRef')">
+          <NInput
+            v-model:value="form.imageRef"
+            class="mono"
+            placeholder="registry.example.com/team/app:1.2"
+          />
+          <span class="field-hint">{{ t("applications.wizard.imageRefHint") }}</span>
+          <NAlert v-if="latestTagWarn" class="field-alert" type="warning" :show-icon="false" :bordered="false">
+            {{ t("applications.wizard.imageLatestWarn") }}
+          </NAlert>
+        </NFormItem>
+      </div>
 
-      <NFormItem :label="t('applications.wizard.registryUsername')">
-        <NInput
-          v-model:value="form.registryUsername"
-          class="mono"
-          :placeholder="t('applications.wizard.registryUsernamePlaceholder')"
-        />
-        <span class="field-hint">{{ t("applications.wizard.registryUsernameHint") }}</span>
-      </NFormItem>
+      <div class="form-row">
+        <NFormItem :label="t('applications.wizard.registryUsername')">
+          <NInput
+            v-model:value="form.registryUsername"
+            class="mono"
+            :placeholder="t('applications.wizard.registryUsernamePlaceholder')"
+          />
+          <span class="field-hint">{{ t("applications.wizard.registryUsernameHint") }}</span>
+        </NFormItem>
 
-      <NFormItem :label="t('applications.wizard.registryPassword')">
-        <NInput
-          v-model:value="form.registryPassword"
-          type="password"
-          show-password-on="click"
-          :placeholder="t('applications.wizard.registryPasswordPlaceholder')"
-        />
-        <span class="field-hint">{{ t("applications.wizard.registryPasswordHint") }}</span>
-      </NFormItem>
-
-      <NAlert v-if="latestTagWarn" type="warning" :show-icon="true">
-        {{ t("applications.wizard.imageLatestWarn") }}
-      </NAlert>
-    </div>
+        <NFormItem :label="t('applications.wizard.registryPassword')">
+          <NInput
+            v-model:value="form.registryPassword"
+            type="password"
+            show-password-on="click"
+            :placeholder="t('applications.wizard.registryPasswordPlaceholder')"
+          />
+          <span class="field-hint">{{ t("applications.wizard.registryPasswordHint") }}</span>
+        </NFormItem>
+      </div>
+    </template>
 
     <div class="form-row" v-else-if="wizard.isProviderFlow.value">
       <NAlert
@@ -189,104 +207,114 @@ const latestTagWarn = computed<boolean>(
       </template>
     </div>
 
-    <div class="form-row" v-else-if="wizard.isCompose.value">
-      <NFormItem :label="t('applications.wizard.composeMode')">
-        <NRadioGroup v-model:value="form.composeMode">
-          <NSpace :size="12">
-            <NRadio
-              v-for="mode in wizard.composeModeOptions.value"
-              :key="mode.value"
-              :value="mode.value"
-            >
-              {{ mode.label }}
-            </NRadio>
-          </NSpace>
-        </NRadioGroup>
-        <span class="field-hint">{{ t("applications.wizard.composeModeHint") }}</span>
-      </NFormItem>
+    <template v-else-if="wizard.isCompose.value">
+      <div class="form-row">
+        <NFormItem :label="t('applications.wizard.composeMode')">
+          <NRadioGroup v-model:value="form.composeMode">
+            <NSpace :size="12">
+              <NRadio
+                v-for="mode in wizard.composeModeOptions.value"
+                :key="mode.value"
+                :value="mode.value"
+              >
+                {{ mode.label }}
+              </NRadio>
+            </NSpace>
+          </NRadioGroup>
+          <span class="field-hint">{{ t("applications.wizard.composeModeHint") }}</span>
+        </NFormItem>
+      </div>
 
       <template v-if="wizard.isComposePaste.value">
-        <NFormItem :label="t('applications.wizard.composeContent')">
-          <NInput
-            v-model:value="form.composeContent"
-            type="textarea"
-            class="mono"
-            :rows="12"
-            placeholder="services:"
-          />
-          <span class="field-hint">{{ t("applications.wizard.composeContentHint") }}</span>
-        </NFormItem>
-        <NAlert type="warning" :show-icon="false">
-          {{ t("applications.wizard.composeSecretsHint") }}
-        </NAlert>
+        <div class="form-row">
+          <NFormItem :label="t('applications.wizard.composeContent')">
+            <NInput
+              v-model:value="form.composeContent"
+              type="textarea"
+              class="mono"
+              :rows="10"
+              placeholder="services:"
+            />
+            <span class="field-hint">{{ t("applications.wizard.composeContentHint") }}</span>
+            <NAlert class="field-alert" type="warning" :show-icon="false" :bordered="false">
+              {{ t("applications.wizard.composeSecretsHint") }}
+            </NAlert>
+          </NFormItem>
+        </div>
       </template>
 
       <template v-else>
-        <NFormItem :label="t('applications.wizard.provider')">
-          <NSelect
-            v-model:value="form.providerId"
-            :options="wizard.providerOptions.value"
-            :loading="wizard.providersStore.loading"
-            :placeholder="t('applications.wizard.providerPlaceholder')"
-            clearable
-          />
-          <span class="field-hint">{{ t("applications.wizard.composeRepoProviderHint") }}</span>
-          <NAlert
-            v-if="wizard.providersStore.reposError"
-            type="error"
-            :show-icon="true"
-            style="margin-top: 8px"
-          >
-            <NSpace align="center" :size="12" wrap>
-              <span>{{ wizard.providersStore.reposError }}</span>
-              <NButton size="small" @click="void wizard.loadRepos()">{{ t("common.actions.retry") }}</NButton>
-            </NSpace>
-          </NAlert>
-        </NFormItem>
+        <div class="form-row">
+          <NFormItem :label="t('applications.wizard.provider')">
+            <NSelect
+              v-model:value="form.providerId"
+              :options="wizard.providerOptions.value"
+              :loading="wizard.providersStore.loading"
+              :placeholder="t('applications.wizard.providerPlaceholder')"
+              clearable
+            />
+            <span class="field-hint">{{ t("applications.wizard.composeRepoProviderHint") }}</span>
+            <NAlert
+              v-if="wizard.providersStore.reposError"
+              type="error"
+              :show-icon="true"
+              style="margin-top: 8px"
+            >
+              <NSpace align="center" :size="12" wrap>
+                <span>{{ wizard.providersStore.reposError }}</span>
+                <NButton size="small" @click="void wizard.loadRepos()">{{ t("common.actions.retry") }}</NButton>
+              </NSpace>
+            </NAlert>
+          </NFormItem>
+        </div>
 
-        <NFormItem v-if="form.providerId !== ''" :label="t('applications.wizard.repository')">
-          <NSelect
-            v-model:value="form.repoFullName"
-            :options="wizard.repoOptions.value"
-            :loading="wizard.providersStore.reposLoading"
-            :disabled="form.providerId === ''"
-            :placeholder="t('applications.wizard.repositoryPlaceholder')"
-            filterable
-            @update:value="wizard.handleRepoSelect"
-          />
-          <span class="field-hint">{{ t("applications.wizard.repoHint") }}</span>
-        </NFormItem>
+        <div class="form-row">
+          <NFormItem v-if="form.providerId !== ''" :label="t('applications.wizard.repository')">
+            <NSelect
+              v-model:value="form.repoFullName"
+              :options="wizard.repoOptions.value"
+              :loading="wizard.providersStore.reposLoading"
+              :disabled="form.providerId === ''"
+              :placeholder="t('applications.wizard.repositoryPlaceholder')"
+              filterable
+              @update:value="wizard.handleRepoSelect"
+            />
+            <span class="field-hint">{{ t("applications.wizard.repoHint") }}</span>
+          </NFormItem>
 
-        <NFormItem v-else :label="t('applications.wizard.cloneUrl')">
-          <NInput
-            v-model:value="form.publicCloneUrl"
-            class="mono"
-            placeholder="https://github.com/owner/repo.git"
-          />
-          <span class="field-hint">{{ t("applications.wizard.cloneHint") }}</span>
-        </NFormItem>
+          <NFormItem v-else :label="t('applications.wizard.cloneUrl')">
+            <NInput
+              v-model:value="form.publicCloneUrl"
+              class="mono"
+              placeholder="https://github.com/owner/repo.git"
+            />
+            <span class="field-hint">{{ t("applications.wizard.cloneHint") }}</span>
+          </NFormItem>
 
-        <NFormItem :label="t('applications.wizard.composeFile')">
-          <NInput
-            v-model:value="form.composeFile"
-            class="mono"
-            placeholder="docker-compose.yml"
-          />
-          <span class="field-hint">{{ t("applications.wizard.composeFileHint") }}</span>
-        </NFormItem>
+          <NFormItem :label="t('applications.wizard.composeFile')">
+            <NInput
+              v-model:value="form.composeFile"
+              class="mono"
+              placeholder="docker-compose.yml"
+            />
+            <span class="field-hint">{{ t("applications.wizard.composeFileHint") }}</span>
+          </NFormItem>
+        </div>
       </template>
 
-      <NFormItem :label="t('applications.wizard.composeService')">
-        <NSelect
-          v-model:value="form.composeService"
-          :options="wizard.composeServiceOptions.value"
-          :placeholder="t('applications.wizard.composeServicePlaceholder')"
-          filterable
-          tag
-        />
-        <span class="field-hint">{{ t("applications.wizard.composeServiceHint") }}</span>
-      </NFormItem>
-    </div>
+      <div class="form-row">
+        <NFormItem :label="t('applications.wizard.composeService')">
+          <NSelect
+            v-model:value="form.composeService"
+            :options="wizard.composeServiceOptions.value"
+            :placeholder="t('applications.wizard.composeServicePlaceholder')"
+            filterable
+            tag
+          />
+          <span class="field-hint">{{ t("applications.wizard.composeServiceHint") }}</span>
+        </NFormItem>
+      </div>
+    </template>
 
     <NAlert v-else type="info" :show-icon="true">
       {{ t("applications.wizard.sourceUnavailable") }}
@@ -326,6 +354,29 @@ const latestTagWarn = computed<boolean>(
 .field-hint {
   font-size: var(--text-xs);
   color: var(--meta);
+}
+
+/* Inline field notices sit on their own line below the input + hint inside
+ * Naive's wrapping .n-form-item-blank row. NAlert has no size prop: the
+ * light inline look overrides its theme vars (subtle tint, tight padding,
+ * 13px text) and swaps the filled border box for a left accent bar. */
+.field-alert {
+  --n-color: var(--warn-soft) !important;
+  --n-padding: 8px 12px !important;
+  --n-font-size: 13px !important;
+  --n-line-height: 1.5 !important;
+  flex-basis: 100%;
+  margin-top: var(--space-2);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+}
+
+.preselected {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg-2);
 }
 
 .mono {

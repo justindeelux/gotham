@@ -21,9 +21,11 @@ interface Props {  show: boolean;
   projectId?: string;
   /** Environment the application is created in (the route's, changeable). */
   environmentId?: string;
+  /** Source type preselected by the caller (an Add-resource card); empty keeps the selector. */
+  sourceType?: string;
 }
 
-const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "" });
+const props = withDefaults(defineProps<Props>(), { projectId: "", environmentId: "", sourceType: "" });
 const emit = defineEmits<{
   "update:show": [value: boolean];
   created: [application: Application];
@@ -32,6 +34,7 @@ const emit = defineEmits<{
 const wizard = useCreateAppWizard(toRef(props, "show"), emit, {
   projectId: toRef(props, "projectId"),
   environmentId: toRef(props, "environmentId"),
+  sourceType: toRef(props, "sourceType"),
 });
 provideCreateWizard(wizard);
 
@@ -68,11 +71,11 @@ const stepCounter = computed<string>(() =>
       <div class="wizard-rail">
         <ol>
           <li
-            v-for="(label, index) in wizard.stepNames.value"
+            v-for="(label, index) in wizard.visibleStepNames.value"
             :key="label"
             :class="{
-              'is-active': wizard.step.value === index,
-              'is-done': wizard.step.value > index,
+              'is-active': wizard.visibleStepIndex.value === index,
+              'is-done': wizard.visibleStepIndex.value > index,
             }"
           >
             <span class="idx">{{ index + 1 }}</span>{{ label }}
@@ -162,7 +165,11 @@ const stepCounter = computed<string>(() =>
 .wizard {
   display: grid;
   grid-template-columns: 208px minmax(0, 1fr);
-  min-height: 420px;
+  /* No min-height floor: the card is bounded to the viewport by the shared
+   * modal scroll contract (shared/styles/main.css, which also flexes .wizard)
+   * and the step body scrolls, so a floor would push the footer out on short
+   * viewports. */
+  min-height: 0;
   margin-top: var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -269,11 +276,6 @@ const stepCounter = computed<string>(() =>
 .grow {
   flex: 1;
   min-width: 0;
-}
-
-.wizard-modal :deep(.n-card-content) {
-  max-height: 72vh;
-  overflow-y: auto;
 }
 
 @media (max-width: 720px) {

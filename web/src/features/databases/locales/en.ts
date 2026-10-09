@@ -239,6 +239,8 @@ const en = {
     },
     engineStep: {
       engine: "Engine",
+      preselected: "Engine: {engine}",
+      change: "Change",
       version: "Version",
       defaultVersion: "Default: {version}",
       node: "Node",

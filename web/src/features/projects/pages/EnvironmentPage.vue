@@ -13,7 +13,7 @@ import {
   NTag,
   NText,
 } from "naive-ui";
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
 import ResourcePicker from "@/features/add-resource/components/ResourcePicker.vue";
@@ -162,6 +162,15 @@ function openImport(): void {
   page.addOpen.value = false;
   page.importOpen.value = true;
 }
+
+/**
+ * wizardOpen hides the picker modal while one of its wizards is on top:
+ * the wizards teleport to the body, so without this their cards bleed
+ * through at the edges (modal-on-modal). The picker stays mounted
+ * (display-directive below), so its filter and scroll position survive,
+ * and closing the wizard restores it through this same flag.
+ */
+const wizardOpen = ref(false);
 
 /** afterServiceCreate reloads and opens the nested service page. */
 function afterServiceCreate(service: Service): void {
@@ -357,12 +366,19 @@ function afterServiceCreate(service: Service): void {
       </section>
     </template>
 
-    <!-- Add resource -->
+    <!-- Add resource: header stays pinned, only the picker scrolls
+      (shared scroll contract in shared/styles/main.css). Hidden (not
+      unmounted) while a wizard is open, so no card bleeds through behind
+      it; the wizard's close restores the picker. -->
     <NModal
-      v-model:show="page.addOpen.value"
+      :show="page.addOpen.value && !wizardOpen"
       preset="card"
       :title="t('projects.environment.addResource')"
+      :segmented="true"
+      display-directive="show"
+      class="app-modal"
       style="width: 1040px; max-width: 96vw"
+      @update:show="(value: boolean) => (page.addOpen.value = value)"
     >
       <NSpace vertical :size="12">
         <NText depth="3">
@@ -372,6 +388,7 @@ function afterServiceCreate(service: Service): void {
           :project-id="page.projectId.value"
           :environment-id="page.environmentId.value"
           @created="page.addOpen.value = false"
+          @wizard-open="wizardOpen = $event"
         />
         <NText depth="3">
           {{ t("projects.environment.composeHintPrefix") }}

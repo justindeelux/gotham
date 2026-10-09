@@ -6,12 +6,16 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
   testMatch: [
+    "create-app-polish.spec.ts",
+    "add-resource-picker.spec.ts",
     "environment-layout.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",
+    "git-connect-modals-layout.spec.ts",
     "i18n-account-layout.spec.ts",
     "i18n-settings-layout.spec.ts",
     "i18n-settings-live.spec.ts",
+    "modal-scroll.spec.ts",
     "profile-layout.spec.ts",
     "projects-layout.spec.ts",
     "services-templates-layout.spec.ts",

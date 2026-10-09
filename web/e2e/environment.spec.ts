@@ -123,18 +123,15 @@ test.describe("environment page", () => {
 
     // ── Add resource: the app wizard takes the route scope ───────────────
     await page.getByRole("button", { name: "Add resource" }).click();
-    await page.locator(".n-modal button.res-card", { hasText: "Build and deploy from a Git repository." }).click();
+    await page.locator(".n-modal button.res-card", { hasText: "Public git repository" }).click();
     const wizard = page.locator(".wizard-modal");
     await expect(wizard).toBeVisible();
     await expect(wizard).toContainText(`${projectName} / production`);
+    // The picked source stays preselected: a read-only summary, no type select.
+    await expect(wizard).toContainText("Source: Public git repository");
 
     // Public git source: no provider round-trip, nothing is cloned here.
     const wizardAppName = `ui-e2e-wiz-${suffix}`.slice(0, 31);
-    await wizard.locator(".n-select").first().click();
-    await page
-      .locator(".n-base-select-option")
-      .filter({ hasText: "Public git repository" })
-      .click();
     await wizard.locator("input[placeholder='https://github.com/owner/repo.git']").fill(cloneURL);
     await wizard.locator("input[placeholder='storefront']").fill(wizardAppName);
     await wizard.getByRole("button", { name: "Continue" }).click();

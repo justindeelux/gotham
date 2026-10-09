@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Modal scroll harness (JUS-69)</title>
+<!-- The real global stylesheet under test. -->
+<link rel="stylesheet" href="../src/shared/styles/main.css">
+<style>
+/* Minimal staging for the Naive modal overlay and card shell and the wizard
+ * inner layout so the contract can be measured without the app bundle. The
+ * authoritative declarations live in the Naive modal/card cssr (fixed overlay
+ * wrapper, centered card, flex column shell) and in the wizard SFC scoped
+ * styles (.wizard-main flex column, .wizard-body scrolls, .wizard-foot
+ * pinned); the vitest suite locks those in place. */
+.n-modal-body-wrapper { position: fixed; inset: 0; }
+.n-modal-scroll-content { min-height: 100%; display: flex; position: relative; }
+.n-modal-scroll-content > .n-modal { margin: auto; }
+.n-card-header { padding: 16px; font-weight: 600; }
+.n-card-content { padding: 0 16px 16px; }
+.n-card__footer { padding: 12px 16px; border-top: 1px solid #333; }
+.wizard { display: grid; grid-template-columns: 208px minmax(0, 1fr); border: 1px solid #333; overflow: hidden; }
+.wizard-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.wizard-body { padding: 16px; overflow-y: auto; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.wizard-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid #333; flex: 0 0 auto; }
+</style>
+</head>
+<body>
+  <!-- Plain card modal shaped like the Add resource dialog: header plus a
+    body far taller than any viewport. Each modal gets its own fixed overlay
+    wrapper, mirroring the Naive modal DOM, so both center independently. -->
+  <div class="n-modal-body-wrapper"><div class="n-modal-scroll-content">
+  <div id="add-modal" class="n-modal n-card app-modal" style="width: 1040px; max-width: 96vw;">
+    <div class="n-card-header" id="add-header"><div>Add resource</div></div>
+    <div class="n-card-content" id="add-body">
+      <div style="height: 2000px;">tall picker stand-in</div>
+    </div>
+  </div>
+  </div></div>
+
+  <!-- Wizard modal shaped like CreateAppWizard on a Dockerfile step: intro,
+    rail, a step body far taller than any viewport, and a pinned footer. -->
+  <div class="n-modal-body-wrapper"><div class="n-modal-scroll-content">
+  <div id="wizard-modal" class="n-modal n-card wizard-modal" style="width: 880px; max-width: 96vw;">
+    <div class="n-card-header" id="wizard-header"><div>Create application</div></div>
+    <div class="n-card-content">
+      <div class="wizard" id="wizard">
+        <div class="wizard-rail"><ol><li>Source</li></ol></div>
+        <div class="wizard-main">
+          <div class="wizard-body" id="wizard-body">
+            <div style="height: 2000px; flex: 0 0 auto;">tall Dockerfile step stand-in</div>
+          </div>
+          <div class="wizard-foot" id="wizard-foot"><button type="button" id="wizard-create">Create</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div></div>
+</body>
+</html>

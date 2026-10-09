@@ -77,6 +77,7 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
   (`language.names`) consumed by `LanguageSelect.vue`. Code/docs stay English-only
   per Language below.
 - Mockups for future-phase pages (applications, databases, domains, services, files, team-settings) are references only — implement them when their phase lands, not before.
+- Modals: header and footer stay fixed, only the content region scrolls, max-height is bounded to the viewport and a modal never exceeds it — see the Modals rule in `docs/design/README.md` (shared `.app-modal`/`.wizard-modal` contract in `web/src/shared/styles/main.css`).
 - Rebuilt `internal/server/webdist` stays committed; the CI dist-drift check must pass.
 
 ## Language

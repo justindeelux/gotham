@@ -96,7 +96,7 @@ const en = {
     runtimeEmpty: "No running container for this application yet.",
     runtimeNodeHint: "Runtime logs stream from the application node, not the selected node.",
     streaming: "Streaming: {id}",
-    hint: "Logs default to the application node and fall back to the first known one — they stream on {channel}.",
+    hint: "Shows the build output of the selected deployment.",
   },
   commit: {
     title: "Commit",

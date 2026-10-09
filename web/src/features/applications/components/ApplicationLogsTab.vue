@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NCard, NEmpty, NSelect, NSpace, NTabPane, NTabs, NText } from "naive-ui";
 import { computed, ref } from "vue";
-import { useI18n, I18nT } from "vue-i18n";
+import { useI18n } from "vue-i18n";
 
 import type { Application, Deployment } from "@/features/applications/api/applications";
 import DeployLogs from "@/features/applications/components/DeployLogs.vue";
@@ -92,9 +92,7 @@ const runtimeTitle = computed<string>(() =>
             :clone-url="props.application?.clone_url ?? ''"
           />
           <NText depth="3">
-            <i18n-t keypath="applications.logsTab.hint" tag="span">
-              <template #channel><span class="mono">logs:{node}:{deployment}</span></template>
-            </i18n-t>
+            {{ t("applications.logsTab.hint") }}
           </NText>
           <DeployLogs
             :server-id="props.effectiveLogServerId"
@@ -130,8 +128,3 @@ const runtimeTitle = computed<string>(() =>
   </NCard>
 </template>
 
-<style scoped>
-.mono {
-  font-family: var(--font-mono);
-}
-</style>

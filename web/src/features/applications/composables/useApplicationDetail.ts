@@ -208,14 +208,21 @@ export function useApplicationDetail() {
     () => deployments.value.find((item) => item.id === logDeploymentId.value) ?? active.value ?? latest.value,
   );
 
-  /** effectiveLogServerId prefers the application's node, then the selection. */
-  const effectiveLogServerId = computed<string>(
-    () =>
-      logServerId.value ||
-      application.value?.server_id ||
-      serversStore.servers[0]?.id ||
-      "",
-  );
+  /** effectiveLogServerId streams the explicit pick, else the app node, else the first node. */
+  const effectiveLogServerId = computed<string>(() => {
+    const servers = serversStore.servers;
+    if (
+      logServerId.value !== "" &&
+      servers.some((server) => server.id === logServerId.value)
+    ) {
+      return logServerId.value;
+    }
+    const appServer = application.value?.server_id ?? "";
+    if (appServer !== "") {
+      return appServer;
+    }
+    return servers[0]?.id ?? "";
+  });
 
   const serverOptions = computed<Array<{ label: string; value: string }>>(() =>
     serversStore.servers.map((server) => ({
@@ -229,6 +236,42 @@ export function useApplicationDetail() {
       label: `${item.id.slice(0, 8)} · ${item.kind} · ${tr(`applications.status.${item.state}`)}`,
       value: item.id,
     })),
+  );
+
+  /**
+   * Logs tab picks stay explicit-only: an empty id means "follow the
+   * default", so the tab keeps tracking the active/latest deployment and the
+   * application node without default-writing watchers (no ordering bugs, no
+   * stale pins, warm caches and late arrivals just work).
+   */
+  const defaultLogDeploymentId = computed<string>(
+    () => active.value?.id ?? latest.value?.id ?? "",
+  );
+
+  /** displayedLogDeploymentId shows the explicit pick while listed, else the default. */
+  const displayedLogDeploymentId = computed<string>(() =>
+    logDeploymentId.value !== "" &&
+    deployments.value.some((item) => item.id === logDeploymentId.value)
+      ? logDeploymentId.value
+      : defaultLogDeploymentId.value,
+  );
+
+  /** defaultLogServerId prefers the application node when known, else the first node. */
+  const defaultLogServerId = computed<string>(() => {
+    const servers = serversStore.servers;
+    const appServer = application.value?.server_id ?? "";
+    if (appServer !== "" && servers.some((server) => server.id === appServer)) {
+      return appServer;
+    }
+    return servers[0]?.id ?? "";
+  });
+
+  /** displayedLogServerId shows the explicit pick while listed, else the default. */
+  const displayedLogServerId = computed<string>(() =>
+    logServerId.value !== "" &&
+    serversStore.servers.some((server) => server.id === logServerId.value)
+      ? logServerId.value
+      : defaultLogServerId.value,
   );
 
   /** pipelineSteps maps the latest deployment onto done/active/todo/failed. */
@@ -744,6 +787,8 @@ export function useApplicationDetail() {
     pipelineSteps,
     logDeploymentId,
     logServerId,
+    displayedLogDeploymentId,
+    displayedLogServerId,
     logTarget,
     effectiveLogServerId,
     serverOptions,

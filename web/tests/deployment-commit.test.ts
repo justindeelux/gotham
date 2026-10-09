@@ -105,6 +105,46 @@ describe("deploymentCommit helpers", () => {
     expect(repoPath("owner/repo.git", "")).toBe("owner/repo");
   });
 
+  it("ignores the repo fallback for non-GitHub remotes", () => {
+    expect(commitUrl("owner/repo", "https://gitlab.com/owner/repo.git", "abc1234")).toBe("");
+    expect(commitUrl("owner/repo", "https://notgithub.com/owner/repo.git", "abc1234")).toBe("");
+    expect(commitUrl("owner/repo", "https://example.com/github.com/owner/repo", "abc1234")).toBe("");
+    expect(repoPath("owner/repo", "https://gitlab.com/owner/repo.git")).toBe("");
+  });
+
+  it("rejects lookalike github.com hosts", () => {
+    expect(repoPath("", "https://notgithub.com/owner/repo.git")).toBe("");
+    expect(repoPath("", "https://github.com.evil.com/owner/repo.git")).toBe("");
+    expect(repoPath("", "https://example.com/github.com/owner/repo")).toBe("");
+    expect(repoPath("", "https://example.com/a/b")).toBe("");
+    expect(commitUrl("", "https://notgithub.com/owner/repo.git", "abc1234")).toBe("");
+  });
+
+  it("accepts www and credentialed github.com remotes", () => {
+    const linked = "https://github.com/owner/repo/commit/abc1234";
+    expect(commitUrl("", "https://www.github.com/owner/repo", "abc1234")).toBe(linked);
+    expect(commitUrl("", "https://user:pass@github.com/owner/repo.git", "abc1234")).toBe(linked);
+    expect(commitUrl("", "ssh://git@github.com/owner/repo.git", "abc1234")).toBe(linked);
+    expect(repoPath("", "github.com/owner/repo")).toBe("owner/repo");
+  });
+
+  it("rejects non-hex and malformed shas", () => {
+    expect(commitUrl("owner/repo", "", "x?y")).toBe("");
+    expect(commitUrl("owner/repo", "", "../abc1234")).toBe("");
+    expect(commitUrl("owner/repo", "", "javascript:alert(1)")).toBe("");
+    expect(commitUrl("owner/repo", "", "abc")).toBe("");
+    expect(commitUrl("owner/repo", "", "0".repeat(65))).toBe("");
+    expect(commitUrl("owner/repo", "", "zzzzz00")).toBe("");
+    expect(commitUrl("owner/repo", "", "ABCDEF1234567")).toBe(
+      "https://github.com/owner/repo/commit/ABCDEF1234567",
+    );
+  });
+
+  it("treats whitespace-only shas as empty", () => {
+    expect(hasCommitSha("   ")).toBe(false);
+    expect(hasCommitSha("  \n ")).toBe(false);
+  });
+
   it("keeps en/vi commit keys in parity", () => {
     expect(checkCatalogParity(en, viCatalog)).toEqual([]);
   });
@@ -114,6 +154,36 @@ describe("DeploymentCommitCard", () => {
   it("hides the card when commit_sha is empty", () => {
     const wrapper = mountCard(deployment({ commit_sha: "" }));
     expect(wrapper.find('[data-testid="commit-card"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("hides the card for whitespace-only shas", () => {
+    const wrapper = mountCard(deployment({ commit_sha: "   " }));
+    expect(wrapper.find('[data-testid="commit-card"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("renders script and javascript: payloads as inert text", () => {
+    const wrapper = mountCard(
+      deployment({ commit_message: "<script>alert(1)</script>\njavascript:alert(1)" }),
+    );
+    const card = wrapper.find('[data-testid="commit-card"]');
+    expect(card.exists()).toBe(true);
+    expect(card.text()).toContain("<script>alert(1)</script>");
+    expect(card.text()).toContain("javascript:alert(1)");
+    expect(wrapper.find("script").exists()).toBe(false);
+    expect(card.html()).toContain("&lt;script&gt;");
+    const hrefs = wrapper.findAll("a").map((link) => link.attributes("href") ?? "");
+    expect(hrefs.length).toBeGreaterThan(0);
+    expect(hrefs.every((href) => href.startsWith("https://github.com/"))).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("caps long commit bodies behind a scrollable message block", () => {
+    const wrapper = mountCard(deployment({ commit_message: `line 1\n${"body\n".repeat(200)}` }));
+    const message = wrapper.find('[data-testid="commit-message"]');
+    expect(message.exists()).toBe(true);
+    expect(message.classes()).toContain("commit-message");
     wrapper.unmount();
   });
 
@@ -151,7 +221,7 @@ describe("DeploymentCommitCard", () => {
 
 describe("ApplicationLogsTab", () => {
   /** mountLogs renders the tab with stubbed log viewers. */
-  function mountLogs(row: Deployment | null) {
+  function mountLogs(row: Deployment | null, overrides: Record<string, unknown> = {}) {
     return mount(ApplicationLogsTab, {
       props: {
         logServerId: "srv-1",
@@ -169,6 +239,7 @@ describe("ApplicationLogsTab", () => {
           clone_url: "https://github.com/owner/repo.git",
         } as never,
         runtimeDeployment: row,
+        ...overrides,
       },
       global: {
         plugins: [i18n],
@@ -185,6 +256,73 @@ describe("ApplicationLogsTab", () => {
     const tabs = wrapper.findAll(".n-tabs-tab");
     await tabs[1].trigger("click");
     expect(wrapper.html()).toContain("log-viewer-stub");
+    wrapper.unmount();
+  });
+
+  it("unmounts the runtime viewer when switching back to deployment", async () => {
+    const wrapper = mountLogs(deployment());
+    const tabs = wrapper.findAll(".n-tabs-tab");
+    await tabs[1].trigger("click");
+    expect(wrapper.html()).toContain("log-viewer-stub");
+    await tabs[0].trigger("click");
+    expect(wrapper.html()).not.toContain("log-viewer-stub");
+    expect(wrapper.html()).toContain("deploy-logs-stub");
+    wrapper.unmount();
+  });
+
+  it("streams runtime from the application node with a hint on mismatch", async () => {
+    const probe = {
+      name: "LogViewer",
+      props: ["serverId", "containerId"],
+      template: '<div class="log-viewer-probe" :data-server="serverId"></div>',
+    };
+    const row = deployment();
+    const wrapper = mount(ApplicationLogsTab, {
+      props: {
+        logServerId: "srv-other",
+        logDeploymentId: row.id,
+        serverOptions: [
+          { label: "node-app", value: "srv-app" },
+          { label: "node-other", value: "srv-other" },
+        ],
+        deploymentOptions: [{ label: "deploy", value: row.id }],
+        activeDeploymentId: "",
+        logTarget: row,
+        effectiveLogServerId: "srv-other",
+        application: {
+          id: "app-1",
+          repo: "owner/repo",
+          clone_url: "",
+          server_id: "srv-app",
+        } as never,
+        runtimeDeployment: row,
+      },
+      global: {
+        plugins: [i18n],
+        stubs: { DeployLogs: true, LogViewer: probe },
+      },
+    });
+    const tabs = wrapper.findAll(".n-tabs-tab");
+    await tabs[1].trigger("click");
+    expect(wrapper.find(".log-viewer-probe").attributes("data-server")).toBe("srv-app");
+    expect(wrapper.find('[data-testid="runtime-node-hint"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("hides the node hint when the selection matches the application node", async () => {
+    const wrapper = mountLogs(deployment(), {
+      logServerId: "srv-1",
+      effectiveLogServerId: "srv-1",
+      application: {
+        id: "app-1",
+        repo: "owner/repo",
+        clone_url: "",
+        server_id: "srv-1",
+      } as never,
+    });
+    const tabs = wrapper.findAll(".n-tabs-tab");
+    await tabs[1].trigger("click");
+    expect(wrapper.find('[data-testid="runtime-node-hint"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

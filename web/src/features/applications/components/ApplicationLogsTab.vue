@@ -41,6 +41,23 @@ const deploymentPlaceholder = computed<string>(() =>
 /** runtimeContainerId streams the running deployment's container, if any. */
 const runtimeContainerId = computed<string>(() => props.runtimeDeployment?.container_id ?? "");
 
+/**
+ * runtimeServerId streams from the application node, never the shared Logs
+ * pick: the container runs on the application's own node.
+ */
+const runtimeServerId = computed<string>(
+  () => props.application?.server_id || props.effectiveLogServerId,
+);
+
+/** runtimeNodeMismatch hints when the shared node pick is not the app node. */
+const runtimeNodeMismatch = computed<boolean>(() =>
+  Boolean(
+    props.application?.server_id &&
+      props.logServerId &&
+      props.logServerId !== props.application.server_id,
+  ),
+);
+
 const runtimeTitle = computed<string>(() =>
   props.runtimeDeployment
     ? String(t("applications.logsTab.streaming", { id: props.runtimeDeployment.id.slice(0, 8) }))
@@ -94,10 +111,13 @@ const runtimeTitle = computed<string>(() =>
             style="width: 260px"
             @update:value="emit('update:logServerId', $event)"
           />
+          <NText v-if="runtimeNodeMismatch" depth="3" data-testid="runtime-node-hint">
+            {{ t("applications.logsTab.runtimeNodeHint") }}
+          </NText>
           <LogViewer
-            v-if="props.runtimeDeployment && props.effectiveLogServerId && runtimeContainerId"
+            v-if="logTab === 'runtime' && props.runtimeDeployment && runtimeServerId && runtimeContainerId"
             :key="runtimeContainerId"
-            :server-id="props.effectiveLogServerId"
+            :server-id="runtimeServerId"
             :container-id="runtimeContainerId"
             :auto-start-stream="true"
             :title="runtimeTitle"

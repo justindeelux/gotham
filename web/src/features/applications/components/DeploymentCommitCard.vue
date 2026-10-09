@@ -67,7 +67,7 @@ function copySha(): void {
           {{ t("applications.commit.copySha") }}
         </NButton>
       </NSpace>
-      <NText v-if="props.deployment?.commit_message">{{ props.deployment.commit_message }}</NText>
+      <NText v-if="props.deployment?.commit_message" class="commit-message" data-testid="commit-message">{{ props.deployment.commit_message }}</NText>
       <NText depth="3">
         <span v-if="props.deployment?.commit_author">{{ props.deployment.commit_author }} · </span>
         <span :title="absolute">{{ relative }}</span>
@@ -79,5 +79,14 @@ function copySha(): void {
 <style scoped>
 .mono {
   font-family: var(--font-mono);
+}
+
+/** commit-message caps long bodies so the card never stretches. */
+.commit-message {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
 }
 </style>

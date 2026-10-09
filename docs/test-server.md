@@ -272,9 +272,9 @@ surfaces (credential versioning, server host-key fingerprint, restores,
 
 Environment prerequisites installed for the current feature set:
 
-- `railpack` 0.40 on PATH and a `buildkit` container with
-  `BUILDKIT_HOST=docker-container://buildkit` in
-  `/etc/systemd/system/gotham.service.d/buildkit.conf` (Railpack apps).
+- `railpack` 0.40 on PATH (Railpack apps). BuildKit needs no setup (JUS-78): with
+  `BUILDKIT_HOST` unset, the toolchain starts a privileged `buildkit` container
+  through the node Docker itself. The old `buildkit.conf` drop-in only sets it for the CP.
 - `docker-compose-plugin` (Compose v2+) on the node's PATH: the agent shells
   out to `docker compose` for Phase 7 services and writes each project's
   compose file under `GOTHAM_AGENT_COMPOSE_ROOT` (default

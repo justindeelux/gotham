@@ -4,8 +4,71 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// secretKeyFile is the durable fallback key kept beside the CA material.
+const secretKeyFile = "secret.key"
+
+// ephemeralKey is the one fallback key per process: the CLI wiring and
+// server.New both resolve, and an unwritable directory must not hand them two
+// different keys.
+var (
+	ephemeralMu  sync.Mutex
+	ephemeralKey string
+)
+
+// ResolveSecretKey is ensureSecretKey with a durable fallback: when no secret
+// is configured it reuses (or creates, mode 0600, exclusively) dir/secret.key,
+// so stored credentials survive a restart. persisted reports that file was
+// used; only when it cannot be read or written does it fall back to an
+// ephemeral key (generated=true), shared by every call in this process.
+func ResolveSecretKey(configured, dir string) (secret string, generated, persisted bool) {
+	if strings.TrimSpace(configured) != "" {
+		return configured, false, false
+	}
+	if strings.TrimSpace(dir) == "" {
+		return sharedEphemeralKey(), true, false
+	}
+	path := filepath.Join(dir, secretKeyFile)
+	read := func() string {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(b))
+	}
+	if key := read(); key != "" {
+		return key, false, true
+	}
+	if os.MkdirAll(dir, 0o700) == nil {
+		key, _ := ensureSecretKey("")
+		// O_EXCL: of two processes starting together exactly one creates it.
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			_, werr := f.WriteString(key + "\n")
+			if cerr := f.Close(); werr == nil && cerr == nil {
+				return key, false, true
+			}
+			_ = os.Remove(path)
+		} else if existing := read(); existing != "" {
+			return existing, false, true
+		}
+	}
+	return sharedEphemeralKey(), true, false
+}
+
+func sharedEphemeralKey() string {
+	ephemeralMu.Lock()
+	defer ephemeralMu.Unlock()
+	if ephemeralKey == "" {
+		ephemeralKey, _ = ensureSecretKey("")
+	}
+	return ephemeralKey
+}
 
 // ensureSecretKey resolves the credential-encryption secret once at startup.
 //

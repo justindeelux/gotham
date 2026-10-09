@@ -113,7 +113,6 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
       :application="props.application"
       :can-write="props.canWrite"
     />
-    />
     <NCard v-if="props.latest" :title="t('applications.overview.deployTitle', { id: props.latest.id.slice(0, 8) })">
       <template #header-extra>
         <DeploymentStatusTag :state="props.latest.state" />

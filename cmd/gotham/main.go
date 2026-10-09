@@ -147,10 +147,13 @@ func runServe() int {
 		logger.Info("certificate authority loaded", "ca_dir", snap.CA.Dir)
 	}
 
+	// Same durable fallback key the server resolves, so SSH keys sealed by the
+	// servers service survive a restart too.
+	serverSecret, _, _ := server.ResolveSecretKey(snap.SecretKey, snap.CA.Dir)
 	serverService := servers.NewService(servers.Config{
 		Store:     authStore,
 		Authority: authority,
-		Secret:    snap.SecretKey,
+		Secret:    serverSecret,
 		Version:   version,
 		Logger:    logger,
 		Updater:   agentUpdater(logger),

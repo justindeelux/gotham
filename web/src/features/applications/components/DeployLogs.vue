@@ -90,10 +90,10 @@ function justFinished(selected: Deployment): boolean {
 
 /** Loads the stored log whenever a finished deployment is selected. */
 watch(
-  () => [
-    props.deployment ? `${props.deployment.id}:${props.deployment.state}` : "",
-    retryNonce.value,
-  ],
+  // Array-of-sources form: each element is compared, so a re-polled but equal
+  // deployment does not reset storedLog (which collapsed the page and jumped
+  // the scroll position to the top).
+  [() => (props.deployment ? `${props.deployment.id}:${props.deployment.state}` : ""), retryNonce],
   async () => {
     const selected = props.deployment;
     const seq = ++readSeq;

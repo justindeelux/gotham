@@ -275,6 +275,11 @@ Environment prerequisites installed for the current feature set:
 - `railpack` 0.40 on PATH (Railpack apps). BuildKit needs no setup (JUS-78): with
   `BUILDKIT_HOST` unset, the toolchain starts a privileged `buildkit` container
   through the node Docker itself. The old `buildkit.conf` drop-in only sets it for the CP.
+  The `gotham-agent` system user has no writable home, so the toolchain runs
+  with `HOME=<state-dir>/toolchain-home` when `$HOME` is missing or unwritable
+  (JUS-86); no reinstall is needed for boxes installed before this. The
+  control-plane dev path (no state dir) uses a per-process directory under
+  `TMPDIR` instead; the fallback is logged to the deploy log.
 - `docker-compose-plugin` (Compose v2+) on the node's PATH: the agent shells
   out to `docker compose` for Phase 7 services and writes each project's
   compose file under `GOTHAM_AGENT_COMPOSE_ROOT` (default

@@ -226,7 +226,11 @@ async function copyInstallCommand(): Promise<void> {
 .wizard {
   display: grid;
   grid-template-columns: 208px minmax(0, 1fr);
-  min-height: 420px;
+  /* No min-height floor: the card is bounded to the viewport by the shared
+   * modal scroll contract (shared/styles/main.css, which also flexes .wizard)
+   * and the step body scrolls, so a floor would push the footer out on short
+   * viewports. */
+  min-height: 0;
   margin-top: var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -346,11 +350,6 @@ async function copyInstallCommand(): Promise<void> {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--leading-body);
-}
-
-.wizard-modal :deep(.n-card-content) {
-  max-height: 72vh;
-  overflow-y: auto;
 }
 
 @media (max-width: 720px) {

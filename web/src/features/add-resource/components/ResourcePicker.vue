@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NButton, NEmpty, NInput, NSpin } from "naive-ui";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import CreateAppWizard from "@/features/applications/components/CreateAppWizard.vue";
@@ -26,16 +26,17 @@ import { brandFor, templateBrand } from "../utils/brands";
  * an inline-SVG brand mark, the name and a one-line description; selecting a
  * card opens the matching existing create wizard in the project/environment
  * the modal was opened for, with the picked item preselected (the wizard
- * hides its own selector behind a read-only summary). After a resource is
- * created the picker emits `created` and navigates to the new resource's
- * detail page.
+ * hides its own selector behind a read-only summary). While a wizard is
+ * open the picker reports `wizardOpen` so the host hides its modal behind
+ * the wizard. After a resource is created the picker emits `created` and
+ * navigates to the new resource's detail page.
  */
 const props = defineProps<{
   projectId: string;
   environmentId: string;
 }>();
 
-const emit = defineEmits<{ created: [] }>();
+const emit = defineEmits<{ created: []; wizardOpen: [value: boolean] }>();
 
 const router = useRouter();
 const templatesStore = useTemplatesStore();
@@ -117,6 +118,16 @@ const templateSlug = ref("");
 const templateOpen = ref(false);
 const databaseEngine = ref("postgres");
 const databaseOpen = ref(false);
+
+/**
+ * wizardOpen is true while any create wizard covers the picker; the host
+ * hides the picker modal behind it (the picker stays mounted).
+ */
+const wizardOpen = computed<boolean>(
+  () => appOpen.value || templateOpen.value || databaseOpen.value,
+);
+
+watch(wizardOpen, (open) => emit("wizardOpen", open));
 
 /** openApplication opens the application wizard with one source preselected. */
 function openApplication(sourceType: string): void {

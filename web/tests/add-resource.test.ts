@@ -530,6 +530,35 @@ describe("database wizard engine preselect", () => {
   });
 });
 
+describe("picker marks and wizard overlay", () => {
+  it("gives every source an explicit mark distinct from the engines", () => {
+    const sources = [
+      "git_public",
+      "git_private",
+      "github_app",
+      "gitlab_app",
+      "dockerfile",
+      "image",
+      "compose",
+    ].map((value) => brandFor(value, "").letters);
+    expect(sources).toEqual(["GIT", "KEY", "GH", "GL", "DF", "IMG", "DC"]);
+    const engines = ENGINES.map((engine) => brandFor(engine.value, engine.label).letters);
+    expect(new Set([...sources, ...engines]).size).toBe(sources.length + engines.length);
+  });
+
+  it("reports wizardOpen while a wizard covers the picker", async () => {
+    const wrapper = await mountPage(TEMPLATES);
+    const picker = wrapper.findComponent(ResourcePicker);
+    await wrapper.find('button[data-source="dockerfile"]').trigger("click");
+    expect(picker.emitted("wizardOpen")).toEqual([[true]]);
+    await wrapper.findComponent(WizardSourceStep).find(".preselected button").trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(picker.emitted("wizardOpen")).toEqual([[true], [false]]);
+    wrapper.unmount();
+  });
+});
+
 describe("preselect fix round 1", () => {
   /** stubNetwork keeps wizard-open fetches hermetic. */
   function stubNetwork() {

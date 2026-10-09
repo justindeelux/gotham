@@ -6,6 +6,7 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: ".",
   testMatch: [
+    "add-resource-picker.spec.ts",
     "environment-layout.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",

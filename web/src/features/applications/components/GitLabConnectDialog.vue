@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NInput, NModal, NSpace } from "naive-ui";
+import { NAlert, NButton, NForm, NFormItem, NInput, NModal, NSpace } from "naive-ui";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -148,49 +148,67 @@ async function submit(): Promise<void> {
     :show="props.show"
     preset="card"
     :title="t('applications.gitSources.gitlabTitle')"
-    class="dialog-card"
+    class="dialog-card connect-modal"
+    style="width: 520px; max-width: 94vw"
     :mask-closable="false"
     @update:show="(value: boolean) => { if (!value) close(); }"
   >
-    <NSpace vertical :size="16">
-      <div class="form-row">
-        <label class="field-label" for="gitlab-instance-input">{{ t("applications.gitSources.gitlabInstance") }}</label>
+    <NForm label-placement="top">
+      <NFormItem
+        :label="t('applications.gitSources.gitlabInstance')"
+        :label-props="{ for: 'gitlab-instance-input' }"
+      >
         <NInput
           v-model:value="baseUrl"
           :input-props="{ id: 'gitlab-instance-input' }"
           class="mono"
           placeholder="https://gitlab.com"
         />
-        <span class="field-hint">{{ t("applications.gitSources.gitlabInstanceHint") }}</span>
-      </div>
+        <template #feedback>
+          <span class="field-hint">{{ t("applications.gitSources.gitlabInstanceHint") }}</span>
+        </template>
+      </NFormItem>
 
       <template v-if="!manual">
-        <div class="form-row">
-          <label class="field-label" for="gitlab-admin-token-input">{{ t("applications.gitSources.gitlabAdminToken") }}</label>
+        <NFormItem
+          :label="t('applications.gitSources.gitlabAdminToken')"
+          :label-props="{ for: 'gitlab-admin-token-input' }"
+        >
           <NInput
             v-model:value="adminToken"
             :input-props="{ id: 'gitlab-admin-token-input' }"
             type="password"
             class="mono"
             autocomplete="off"
+            :placeholder="t('applications.gitSources.gitlabAdminTokenPlaceholder')"
           />
-          <span class="field-hint">{{ t("applications.gitSources.gitlabAdminTokenHint") }}</span>
-        </div>
+          <template #feedback>
+            <span class="field-hint">{{ t("applications.gitSources.gitlabAdminTokenHint") }}</span>
+          </template>
+        </NFormItem>
       </template>
 
       <template v-else>
         <NAlert type="info" :show-icon="true">{{ t("applications.gitSources.gitlabManualHint") }}</NAlert>
-        <div class="form-row">
-          <label class="field-label" for="gitlab-redirect-input">{{ t("applications.gitSources.gitlabRedirect") }}</label>
+        <NFormItem
+          :label="t('applications.gitSources.gitlabRedirect')"
+          :label-props="{ for: 'gitlab-redirect-input' }"
+        >
           <NInput :value="redirectUri" :input-props="{ id: 'gitlab-redirect-input' }" class="mono" readonly />
-          <span class="field-hint">{{ t("applications.gitSources.gitlabRedirectHint") }}</span>
-        </div>
-        <div class="form-row">
-          <label class="field-label" for="gitlab-client-id-input">{{ t("applications.gitSources.gitlabClientId") }}</label>
+          <template #feedback>
+            <span class="field-hint">{{ t("applications.gitSources.gitlabRedirectHint") }}</span>
+          </template>
+        </NFormItem>
+        <NFormItem
+          :label="t('applications.gitSources.gitlabClientId')"
+          :label-props="{ for: 'gitlab-client-id-input' }"
+        >
           <NInput v-model:value="clientId" :input-props="{ id: 'gitlab-client-id-input' }" class="mono" autocomplete="off" />
-        </div>
-        <div class="form-row">
-          <label class="field-label" for="gitlab-client-secret-input">{{ t("applications.gitSources.gitlabClientSecret") }}</label>
+        </NFormItem>
+        <NFormItem
+          :label="t('applications.gitSources.gitlabClientSecret')"
+          :label-props="{ for: 'gitlab-client-secret-input' }"
+        >
           <NInput
             v-model:value="clientSecret"
             :input-props="{ id: 'gitlab-client-secret-input' }"
@@ -198,53 +216,75 @@ async function submit(): Promise<void> {
             class="mono"
             autocomplete="off"
           />
-          <span class="field-hint">{{ t("applications.gitSources.gitlabClientSecretHint") }}</span>
-        </div>
-        <div class="form-row">
-          <label class="field-label" for="gitlab-scopes-input">{{ t("applications.gitSources.gitlabScopes") }}</label>
+          <template #feedback>
+            <span class="field-hint">{{ t("applications.gitSources.gitlabClientSecretHint") }}</span>
+          </template>
+        </NFormItem>
+        <NFormItem
+          :label="t('applications.gitSources.gitlabScopes')"
+          :label-props="{ for: 'gitlab-scopes-input' }"
+        >
           <NInput v-model:value="scopes" :input-props="{ id: 'gitlab-scopes-input' }" class="mono" />
-        </div>
+        </NFormItem>
       </template>
 
       <NAlert v-if="savedReconnect" type="info" :show-icon="true">{{
         t("applications.gitSources.gitlabSavedReconnect")
       }}</NAlert>
       <NAlert v-if="loadError" type="error" :show-icon="true">{{ loadError }}</NAlert>
-
-      <NSpace :size="12">
-        <NButton type="primary" :disabled="!canSubmit" :loading="working" @click="void submit()">
-          {{ manual ? t("applications.gitSources.gitlabStoreConnect") : t("applications.gitSources.gitlabProvision") }}
-        </NButton>
-        <NButton :disabled="working" @click="void toggleManual()">
+    </NForm>
+    <template #footer>
+      <div class="connect-footer">
+        <NButton quaternary :disabled="working" @click="void toggleManual()">
           {{ manual ? t("applications.gitSources.gitlabAutoToggle") : t("applications.gitSources.gitlabManualToggle") }}
         </NButton>
-        <NButton :disabled="working" @click="close">{{ t("applications.gitSources.cancel") }}</NButton>
-      </NSpace>
-    </NSpace>
+        <NSpace :size="8">
+          <NButton :disabled="working" @click="close">{{ t("applications.gitSources.cancel") }}</NButton>
+          <NButton type="primary" :disabled="!canSubmit" :loading="working" @click="void submit()">
+            {{ manual ? t("applications.gitSources.gitlabStoreConnect") : t("applications.gitSources.gitlabProvision") }}
+          </NButton>
+        </NSpace>
+      </div>
+    </template>
   </NModal>
 </template>
 
 <style scoped>
-.dialog-card {
-  max-width: 560px;
-}
-
-.form-row {
-  display: grid;
-  gap: 4px;
-}
-
-.field-label {
-  font-size: var(--text-xs);
-  color: var(--meta);
-}
-
-.field-hint {
-  font-size: var(--text-xs);
-  color: var(--meta);
+.connect-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
 
 .mono {
   font-family: var(--font-mono);
+}
+</style>
+
+<!--
+  Unscoped on purpose: NModal teleports the card to <body>, so scoped
+  selectors (which compile to a [data-v] ancestor match) never reach it.
+  Every rule stays behind the .connect-modal class owned by this dialog.
+-->
+<style>
+.connect-modal.n-modal.n-card {
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+}
+
+.connect-modal.n-modal.n-card > .n-card-content {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.connect-modal .n-form-item-blank {
+  display: block;
+}
+
+.connect-modal .n-form-item-blank > .n-input {
+  width: 100%;
 }
 </style>

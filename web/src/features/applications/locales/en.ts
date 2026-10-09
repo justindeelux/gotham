@@ -419,6 +419,7 @@ const en = {
     gitlabInstance: "Instance URL",
     gitlabInstanceHint: "gitlab.com or a self-hosted instance.",
     gitlabAdminToken: "Admin token (one-time, never stored)",
+    gitlabAdminTokenPlaceholder: "glpat-…",
     gitlabAdminTokenHint: "The token authenticates a single provisioning call and is cleared on submit. It is never stored, logged or shown again.",
     gitlabProvision: "Provision & connect",
     gitlabManualToggle: "Use manual app fields instead",

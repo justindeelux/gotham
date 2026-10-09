@@ -12,7 +12,7 @@ import { defineComponent, h, nextTick, ref } from "vue";
 import { useCreateDatabaseWizard } from "@/features/databases/composables/useCreateDatabaseWizard";
 import { ENGINES } from "@/features/databases/utils/databaseEngines";
 import CreateDatabaseWizard from "@/features/databases/components/CreateDatabaseWizard.vue";
-import AddResourcePage from "@/features/add-resource/pages/AddResourcePage.vue";
+import ResourcePicker from "@/features/add-resource/components/ResourcePicker.vue";
 import addResourceEn from "@/features/add-resource/locales/en";
 import addResourceVi from "@/features/add-resource/locales/vi";
 import { brandFor, initialsOf, templateBrand } from "@/features/add-resource/utils/brands";
@@ -24,7 +24,6 @@ import {
   resetLocaleState,
   syncComposerLocale,
 } from "@/shared/i18n";
-import { useProjectsStore } from "@/features/projects/stores/projects";
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useTemplatesStore } from "@/features/templates/stores/templates";
 
@@ -177,43 +176,25 @@ const TEMPLATES = [
   { slug: "nextcloud", name: "Nextcloud", icon: "nextcloud", description: "nc" },
 ];
 
-/** mountPage mounts the picker with stubbed wizards and catalog data. */
-async function mountPage(query: Record<string, string>, templates: typeof TEMPLATES) {
+/** mountPage mounts the picker with stubbed catalog data and a project scope. */
+async function mountPage(_query: Record<string, string>, templates: typeof TEMPLATES) {
   const templatesStore = useTemplatesStore();
   vi.spyOn(templatesStore, "fetchTemplates").mockResolvedValue(undefined);
-  const projectsStore = useProjectsStore();
-  vi.spyOn(projectsStore, "fetchDetail").mockImplementation(async (projectId: string) => {
-    projectsStore.detail = {
-      id: projectId,
-      name: "Acme",
-      description: "",
-      created_at: "",
-      updated_at: "",
-      environment_count: 1,
-      resource_counts: {},
-    } as never;
-    projectsStore.environments = [
-      {
-        id: "env-1",
-        project_id: projectId,
-        name: "production",
-        created_at: "",
-        updated_at: "",
-        resource_counts: {},
-      },
-    ] as never;
-  });
   templatesStore.templates = templates as never;
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: "/add-resource", name: "add-resource", component: { template: "<div />" } }],
+    routes: [{ path: "/", name: "home", component: { template: "<div />" } }],
   });
-  await router.push({ path: "/add-resource", query });
+  await router.push("/");
   await router.isReady();
-  // The embedded wizards call useMessage, so the page mounts under the
+  // The embedded wizards call useMessage, so the picker mounts under the
   // Naive message provider exactly as the real App shell provides it.
   const Parent = defineComponent({
-    render: () => h(NMessageProvider, null, { default: () => h(AddResourcePage as never) }),
+    render: () =>
+      h(NMessageProvider, null, {
+        default: () =>
+          h(ResourcePicker as never, { projectId: "proj-1", environmentId: "env-1" }),
+      }),
   });
   const wrapper = mount(Parent, {
     attachTo: globalThis.document.body,
@@ -224,10 +205,12 @@ async function mountPage(query: Record<string, string>, templates: typeof TEMPLA
   return wrapper;
 }
 
-describe("AddResourcePage", () => {
-  it("shows scope names from the projects store with id fallback", async () => {
-    const wrapper = await mountPage({ projectId: "proj-1", environmentId: "env-1" }, TEMPLATES);
-    expect(wrapper.find(".page-head .small.muted").text()).toContain("Acme · production");
+describe("ResourcePicker", () => {
+  it("passes the project and environment scope to the wizards", async () => {
+    const wrapper = await mountPage({}, TEMPLATES);
+    const wizard = wrapper.findComponent(CreateDatabaseWizard);
+    expect(wizard.props("projectId")).toBe("proj-1");
+    expect(wizard.props("environmentId")).toBe("env-1");
     wrapper.unmount();
   });
 

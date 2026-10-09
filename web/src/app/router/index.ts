@@ -130,12 +130,6 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.templates", requiresAuth: true },
       },
       {
-        path: "add-resource",
-        name: "add-resource",
-        component: () => import("@/features/add-resource/pages/AddResourcePage.vue"),
-        meta: { titleKey: "titles.addResource", requiresAuth: true },
-      },
-      {
         path: "providers/callback",
         name: "provider-callback",
         component: () => import("@/features/applications/pages/ProviderCallbackPage.vue"),

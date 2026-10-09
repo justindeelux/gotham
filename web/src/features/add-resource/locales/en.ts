@@ -5,14 +5,6 @@
  * the templates overlay with fallback to provider metadata.
  */
 const en = {
-  page: {
-    eyebrow: "Operations · new resource",
-    title: "Add resource",
-    description:
-      "Pick what to create. An application builds and deploys from source, a service deploys a one-click template, a database provisions a managed engine. Each card opens the existing create flow.",
-    scopeIn: "Creating in {project} · {environment} — the wizards keep this scope.",
-    scopeGlobal: "Pick the project and environment inside the wizard.",
-  },
   search: {
     label: "Filter services",
     placeholder: "Filter services…",

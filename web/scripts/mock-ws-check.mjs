@@ -358,6 +358,7 @@ async function loadStoreModule() {
     export async function stopApplication() { throw new Error("unused"); }
     export async function triggerDeploy() { throw new Error("unused"); }
     export async function updateApplication() { throw new Error("unused"); }
+    export async function deleteApplication() { throw new Error("unused"); }
   `;
   await build({
     entryPoints: [

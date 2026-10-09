@@ -357,11 +357,14 @@ function afterServiceCreate(service: Service): void {
       </section>
     </template>
 
-    <!-- Add resource -->
+    <!-- Add resource: header stays pinned, only the picker scrolls
+      (shared .app-modal scroll contract in shared/styles/main.css). -->
     <NModal
       v-model:show="page.addOpen.value"
       preset="card"
       :title="t('projects.environment.addResource')"
+      :segmented="true"
+      class="app-modal"
       style="width: 1040px; max-width: 96vw"
     >
       <NSpace vertical :size="12">

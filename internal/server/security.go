@@ -17,8 +17,11 @@ import (
 // avatar always renders under this policy.
 // base-uri/object-src/form-action/frame-ancestors close the injected-base-tag,
 // plugin-content, form-hijack and framing vectors; form-action does not fall
-// back to default-src, so it is stated explicitly.
-var contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: " + strings.Join(auth.AvatarImgSources(), " ") + "; base-uri 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'"
+// back to default-src, so it is stated explicitly. github.com is allowed so the
+// GitHub App manifest flow can POST its form to github.com/settings/apps/new.
+// ponytail: GitHub Enterprise hosts are dynamic and not listed; the manifest
+// POST to an Enterprise host stays blocked until form-action is made per-host.
+var contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: " + strings.Join(auth.AvatarImgSources(), " ") + "; base-uri 'self'; object-src 'none'; form-action 'self' https://github.com; frame-ancestors 'none'"
 
 // hstsHeader pins browsers to HTTPS. It is emitted only on secure requests
 // (direct TLS or a trusted proxy's X-Forwarded-Proto: https); a direct-HTTP

@@ -4,8 +4,33 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 )
+
+// secretKeyFile is the durable fallback key kept beside the CA material.
+const secretKeyFile = "secret.key"
+
+// resolveSecretKey is ensureSecretKey with a durable fallback: when no secret
+// is configured it reuses (or creates, mode 0600) dir/secret.key, so stored
+// credentials survive a restart. persisted reports that file was used; only
+// when it cannot be read or written does it fall back to an ephemeral key
+// (generated=true).
+func resolveSecretKey(configured, dir string) (secret string, generated, persisted bool) {
+	if strings.TrimSpace(configured) != "" {
+		return configured, false, false
+	}
+	path := filepath.Join(dir, secretKeyFile)
+	if b, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(b)) != "" {
+		return strings.TrimSpace(string(b)), false, true
+	}
+	secret, _ = ensureSecretKey("")
+	if dir == "" || os.MkdirAll(dir, 0o700) != nil || os.WriteFile(path, []byte(secret+"\n"), 0o600) != nil {
+		return secret, true, false
+	}
+	return secret, false, true
+}
 
 // ensureSecretKey resolves the credential-encryption secret once at startup.
 //

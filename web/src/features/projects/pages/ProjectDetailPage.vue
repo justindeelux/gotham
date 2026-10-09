@@ -207,7 +207,16 @@ function t(key: string, params?: Record<string, string | number>): string {
               </thead>
               <tbody>
                 <tr v-for="environment in projectsStore.environments" :key="environment.id">
-                  <td class="mono env-name" :data-label="t('projects.detail.table.environment')" :title="environment.name">{{ environment.name }}</td>
+                  <td class="mono env-name" :data-label="t('projects.detail.table.environment')" :title="environment.name"><RouterLink
+                    class="env-link"
+                    :to="{
+                      name: 'environment-detail',
+                      params: {
+                        projectId: projectsStore.detail.id,
+                        environmentId: environment.id,
+                      },
+                    }"
+                  >{{ environment.name }}</RouterLink></td>
                   <td class="num" :data-label="t('projects.detail.table.applications')">{{ environment.resource_counts.applications }}</td>
                   <td class="num" :data-label="t('projects.detail.table.services')">{{ environment.resource_counts.services }}</td>
                   <td class="num" :data-label="t('projects.detail.table.databases')">{{ environment.resource_counts.databases }}</td>
@@ -559,6 +568,14 @@ function t(key: string, params?: Record<string, string | number>): string {
 
 .env-table .num {
   font-family: var(--font-mono);
+}
+
+/* Environment names link to the environment page (same target as Open):
+   the global `a` rule supplies the link color and the :focus-visible
+   outline; the underline on hover matches docs/design .link:hover. */
+.env-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .env-table .actions {

@@ -367,6 +367,24 @@ describe("project detail page states", () => {
     wrapper.unmount();
   });
 
+  it("links each environment name to the environment page (JUS-70)", async () => {
+    setActivePinia(createPinia());
+    seedTeams();
+    vi.mocked(getProject).mockResolvedValue({
+      project: projectRow(),
+      environments: [environmentRow()],
+    });
+
+    const { wrapper } = await mountDetail(id);
+    // The name cell renders a real anchor to the same target as Open.
+    const nameLink = wrapper.find(
+      ".env-table td.env-name a[href=\"/projects/11111111-1111-4111-8111-111111111111/environments/22222222-2222-4222-8222-222222222222\"]",
+    );
+    expect(nameLink.exists()).toBe(true);
+    expect(nameLink.text()).toBe("production");
+    wrapper.unmount();
+  });
+
   it("explains the blocked project delete in an openable dialog", async () => {
     setActivePinia(createPinia());
     seedTeams();

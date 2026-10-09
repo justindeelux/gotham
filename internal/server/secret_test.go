@@ -32,17 +32,17 @@ func TestEnsureSecretKey(t *testing.T) {
 // the second resolution reads back the file the first one wrote.
 func TestResolveSecretKeyPersists(t *testing.T) {
 	dir := t.TempDir()
-	first, generated, persisted := resolveSecretKey("", dir)
+	first, generated, persisted := ResolveSecretKey("", dir)
 	if generated || !persisted || first == "" {
 		t.Fatalf("first = (%q, %v, %v), want a persisted key", first, generated, persisted)
 	}
-	if second, _, _ := resolveSecretKey("", dir); second != first {
+	if second, _, _ := ResolveSecretKey("", dir); second != first {
 		t.Fatalf("second key %q != first %q after restart", second, first)
 	}
-	if got, _, persisted := resolveSecretKey("configured", dir); got != "configured" || persisted {
+	if got, _, persisted := ResolveSecretKey("configured", dir); got != "configured" || persisted {
 		t.Fatalf("configured key not preferred: (%q, %v)", got, persisted)
 	}
-	if _, generated, _ := resolveSecretKey("", ""); !generated {
+	if _, generated, _ := ResolveSecretKey("", ""); !generated {
 		t.Fatal("no directory should fall back to an ephemeral key")
 	}
 }

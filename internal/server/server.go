@@ -135,7 +135,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 	}
 
 	snap := cfg.Snapshot()
-	secretKey, generatedSecret, persistedSecret := resolveSecretKey(snap.SecretKey, snap.CA.Dir)
+	secretKey, generatedSecret, persistedSecret := ResolveSecretKey(snap.SecretKey, snap.CA.Dir)
 	if persistedSecret {
 		logger.Warn("GOTHAM_SECRET_KEY is empty; using the credential-encryption key stored in the CA directory. Set GOTHAM_SECRET_KEY in production.")
 	}

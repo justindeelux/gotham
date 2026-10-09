@@ -12,12 +12,12 @@ import (
 // secretKeyFile is the durable fallback key kept beside the CA material.
 const secretKeyFile = "secret.key"
 
-// resolveSecretKey is ensureSecretKey with a durable fallback: when no secret
+// ResolveSecretKey is ensureSecretKey with a durable fallback: when no secret
 // is configured it reuses (or creates, mode 0600) dir/secret.key, so stored
 // credentials survive a restart. persisted reports that file was used; only
 // when it cannot be read or written does it fall back to an ephemeral key
 // (generated=true).
-func resolveSecretKey(configured, dir string) (secret string, generated, persisted bool) {
+func ResolveSecretKey(configured, dir string) (secret string, generated, persisted bool) {
 	if strings.TrimSpace(configured) != "" {
 		return configured, false, false
 	}

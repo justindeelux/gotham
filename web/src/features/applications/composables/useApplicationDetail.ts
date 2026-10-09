@@ -231,6 +231,26 @@ export function useApplicationDetail() {
     })),
   );
 
+  // Default the Logs tab picks once their option lists arrive: logTarget
+  // already falls back to the newest deployment, but an empty NSelect value
+  // matches no option and renders blank. Keep an explicit user pick.
+  watch([deployments, active, latest], () => {
+    if (
+      logDeploymentId.value !== "" &&
+      deployments.value.some((item) => item.id === logDeploymentId.value)
+    ) {
+      return;
+    }
+    logDeploymentId.value = active.value?.id ?? latest.value?.id ?? "";
+  });
+  watch([() => application.value?.server_id, () => serversStore.servers], () => {
+    if (logServerId.value !== "") {
+      return;
+    }
+    logServerId.value =
+      application.value?.server_id ?? serversStore.servers[0]?.id ?? "";
+  });
+
   /** pipelineSteps maps the latest deployment onto done/active/todo/failed. */
   const pipelineSteps = computed(() => pipelineStepsFor(latest.value));
 

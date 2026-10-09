@@ -97,7 +97,7 @@ const vi: ApplicationsMessages = {
     runtimeEmpty: "Ứng dụng này chưa có container đang chạy.",
     runtimeNodeHint: "Nhật ký runtime lấy từ node của ứng dụng, không phải node đang chọn.",
     streaming: "Đang truyền: {id}",
-    hint: "Nhật ký mặc định lấy theo node của ứng dụng và dùng node đã biết đầu tiên — chúng được truyền trên {channel}.",
+    hint: "Hiển thị nhật ký build của đợt triển khai đã chọn.",
   },
   commit: {
     title: "Commit",

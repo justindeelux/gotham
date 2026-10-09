@@ -4,6 +4,8 @@ import {
   NButton,
   NCard,
   NEmpty,
+  NForm,
+  NFormItem,
   NInput,
   NModal,
   NSpace,
@@ -297,14 +299,17 @@ async function confirmDisconnect(): Promise<void> {
       :show="showGitHub"
       preset="card"
       :title="t('applications.gitSources.connectGitHub')"
-      class="dialog-card"
+      class="dialog-card connect-modal"
+      style="width: 520px; max-width: 94vw"
       :mask-closable="false"
       @update:show="(value: boolean) => { showGitHub = value; }"
     >
-      <NSpace vertical :size="16">
-        <p class="dialog-hint">{{ t("applications.gitSources.githubConnectHint") }}</p>
-        <div class="form-row">
-          <label class="field-label" for="github-app-name-input">{{ t("applications.gitSources.githubName") }}</label>
+      <p class="dialog-hint">{{ t("applications.gitSources.githubConnectHint") }}</p>
+      <NForm label-placement="top">
+        <NFormItem
+          :label="t('applications.gitSources.githubName')"
+          :label-props="{ for: 'github-app-name-input' }"
+        >
           <NInput
             v-model:value="githubName"
             class="mono"
@@ -312,9 +317,14 @@ async function confirmDisconnect(): Promise<void> {
             :placeholder="t('applications.gitSources.githubNamePlaceholder')"
           />
           <span class="field-hint">{{ t("applications.gitSources.githubNameHint") }}</span>
-        </div>
+        </NFormItem>
         <NAlert v-if="githubError" type="error" :show-icon="true">{{ githubError }}</NAlert>
-        <NSpace :size="12">
+      </NForm>
+      <template #footer>
+        <NSpace :size="12" justify="end">
+          <NButton :disabled="githubWorking" @click="showGitHub = false">
+            {{ t("applications.gitSources.cancel") }}
+          </NButton>
           <NButton
             type="primary"
             :disabled="!githubNameValid"
@@ -323,11 +333,8 @@ async function confirmDisconnect(): Promise<void> {
           >
             {{ t("applications.gitSources.connectGitHub") }}
           </NButton>
-          <NButton :disabled="githubWorking" @click="showGitHub = false">
-            {{ t("applications.gitSources.cancel") }}
-          </NButton>
         </NSpace>
-      </NSpace>
+      </template>
     </NModal>
 
     <GitLabConnectDialog v-model:show="showGitLab" @connected="() => void page.refresh()" />
@@ -439,23 +446,23 @@ async function confirmDisconnect(): Promise<void> {
 }
 
 .dialog-hint {
-  margin: 0;
+  margin: 0 0 var(--space-3);
   color: var(--muted);
 }
 
-.form-row {
-  display: grid;
-  gap: 4px;
+:deep(.connect-modal.n-modal.n-card) {
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
 }
 
-.field-label {
-  font-size: var(--text-xs);
-  color: var(--meta);
+:deep(.connect-modal.n-modal.n-card > .n-card-content) {
+  overflow-y: auto;
+  min-height: 0;
 }
 
-.field-hint {
-  font-size: var(--text-xs);
-  color: var(--meta);
+:deep(.connect-modal .n-form-item-blank) {
+  flex-wrap: wrap;
 }
 
 @media (max-width: 860px) {

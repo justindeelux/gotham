@@ -501,12 +501,12 @@ test("JUS-69 create application modal keeps its footer visible on Dockerfile and
   await page.getByRole("button", { name: "Add resource" }).click();
   const picker = page.locator(".n-modal.app-modal");
   await expect(picker.getByRole("heading", { name: "Application" })).toBeVisible();
-  await picker.locator("button.res-card").first().click();
-  const wizard = page.locator(".n-modal.wizard-modal");
-  await expect(wizard.getByRole("heading", { name: "Create application", exact: true })).toBeVisible();
   for (const source of ["Dockerfile", "Docker Compose"]) {
-    await wizard.locator(".n-select").first().click();
-    await page.locator(".n-base-select-option").filter({ hasText: source }).first().click();
+    // Each card opens the wizard with that source preselected (no type
+    // select): Change closes back to the picker for the next source.
+    await picker.locator("button.res-card", { hasText: source }).click();
+    const wizard = page.locator(".n-modal.wizard-modal");
+    await expect(wizard.getByRole("heading", { name: "Create application", exact: true })).toBeVisible();
     // The tall editor step must not push the card or its footer out.
     const cardBox = await wizard.boundingBox();
     expect(cardBox, `${source} card has a box`).not.toBeNull();
@@ -516,5 +516,6 @@ test("JUS-69 create application modal keeps its footer visible on Dockerfile and
     const footBox = await cont.boundingBox();
     expect(footBox, `${source} footer has a box`).not.toBeNull();
     expect(footBox!.y + footBox!.height).toBeLessThanOrEqual(640);
+    await wizard.locator(".preselected button").click();
   }
 });

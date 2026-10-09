@@ -4,8 +4,8 @@
 // JUS-71/72/76: one card per application source type with the wizard
 // preselected and its selector hidden, engine preselect without a radio
 // group, and no implementation-speak copy in the picker.
-/* global document, HTMLElement: readonly */
-import { flushPromises, mount } from "@vue/test-utils";
+/* global document, Element, HTMLElement: readonly */
+import { DOMWrapper, flushPromises, mount } from "@vue/test-utils";
 import { NEmpty, NMessageProvider, NRadio, NSelect } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,6 +32,8 @@ import {
 } from "@/shared/i18n";
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useTemplatesStore } from "@/features/templates/stores/templates";
+import { useGitHubAppStore } from "@/features/applications/stores/githubApp";
+import { useProvidersStore } from "@/features/applications/stores/providers";
 
 registerDiscoveredCatalogs();
 
@@ -205,7 +207,11 @@ async function mountPage(templates: typeof TEMPLATES) {
   templatesStore.templates = templates as never;
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: "/", name: "home", component: { template: "<div />" } }],
+    routes: [
+      { path: "/", name: "home", component: { template: "<div />" } },
+      // The provider-flow alert links to the git sources page.
+      { path: "/git-sources", name: "git-sources", component: { template: "<div />" } },
+    ],
   });
   await router.push("/");
   await router.isReady();
@@ -501,4 +507,101 @@ describe("database wizard engine preselect", () => {
     expect(globalThis.document.body.textContent ?? "").toContain("Engine: PostgreSQL");
     wrapper.unmount();
   });
+
+  it("keeps the radio group for an unknown engine value", () => {
+    const show = ref(false);
+    let wiz: ReturnType<typeof useCreateDatabaseWizard> | null = null;
+    const Harness = defineComponent({
+      setup() {
+        wiz = useCreateDatabaseWizard({
+          show,
+          engine: "nope",
+          projectId: "proj-a",
+          environmentId: "env-a",
+          onCreated: () => undefined,
+          onUpdateShow: () => undefined,
+        });
+        return () => h("div");
+      },
+    });
+    const wrapper = shell(Harness);
+    expect(wiz!.engineLocked.value).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+describe("preselect fix round 1", () => {
+  /** stubNetwork keeps wizard-open fetches hermetic. */
+  function stubNetwork() {
+    vi.spyOn(useGitHubAppStore(), "fetchApps").mockResolvedValue(undefined);
+    vi.spyOn(useProvidersStore(), "fetchProviders").mockResolvedValue(undefined);
+    vi.spyOn(useServersStore(), "fetchServers").mockResolvedValue(undefined);
+  }
+
+  it("Change in the app summary closes the wizard back to the picker", async () => {
+    const wrapper = await mountPage(TEMPLATES);
+    await wrapper.find('button[data-source="dockerfile"]').trigger("click");
+    await flushPromises();
+    const step = wrapper.findComponent(WizardSourceStep);
+    expect(step.text()).toContain("Source: Dockerfile");
+    expect(step.findAllComponents(NSelect).length).toBe(0);
+    await step.find(".preselected button").trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.findComponent(CreateAppWizard).props("show")).toBe(false);
+    expect(wrapper.find('button[data-source="dockerfile"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("Change in the database summary closes the wizard back to the picker", async () => {
+    const wrapper = await mountPage(TEMPLATES);
+    await wrapper.find('button[data-engine="postgres"]').trigger("click");
+    await flushPromises();
+    await nextTick();
+    // The modal teleports to the body, so its DOM reads off the document.
+    const change = globalThis.document.body.querySelector(".preselected button");
+    expect(change?.textContent ?? "").toContain("Change");
+    expect(globalThis.document.body.textContent ?? "").toContain("Engine: PostgreSQL");
+    await new DOMWrapper(change as Element).trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.findComponent(CreateDatabaseWizard).props("show")).toBe(false);
+    expect(wrapper.find('button[data-engine="postgres"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("reopening the same GitHub card refetches the connections", async () => {
+    stubNetwork();
+    const fetchApps = vi.spyOn(useGitHubAppStore(), "fetchApps").mockResolvedValue(undefined);
+    const wrapper = await mountPage(TEMPLATES);
+    await wrapper.find('button[data-source="github_app"]').trigger("click");
+    await flushPromises();
+    await nextTick();
+    const afterFirst = fetchApps.mock.calls.length;
+    expect(afterFirst).toBeGreaterThan(0);
+    await wrapper.findComponent(WizardSourceStep).find(".preselected button").trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.findComponent(CreateAppWizard).props("show")).toBe(false);
+    await wrapper.find('button[data-source="github_app"]').trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(fetchApps.mock.calls.length).toBe(afterFirst + 1);
+    wrapper.unmount();
+  });
+
+  it.each(["github_app", "gitlab_app"])(
+    "preselected %s still renders the empty-connections alert",
+    async (source) => {
+      stubNetwork();
+      const wrapper = await mountPage(TEMPLATES);
+      await wrapper.find(`button[data-source="${source}"]`).trigger("click");
+      await flushPromises();
+      await nextTick();
+      expect(wrapper.findComponent(WizardSourceStep).text()).toContain(
+        "No connections yet",
+      );
+      wrapper.unmount();
+    },
+  );
 });

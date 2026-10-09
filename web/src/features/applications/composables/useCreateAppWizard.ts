@@ -755,6 +755,12 @@ export function useCreateAppWizard(
         seedScope();
         seedSource();
         void providersStore.fetchProviders().catch(() => undefined);
+        // Same fetch as the source-type watcher below: reopening the same
+        // GitHub card leaves sourceType unchanged, so the watcher never
+        // fires and the connection list would go stale.
+        if (form.sourceType === "github_app") {
+          void githubAppStore.fetchApps().catch(() => undefined);
+        }
         void serversStore.fetchServers().catch(() => undefined);
       } else {
         resetWizard();

@@ -143,6 +143,14 @@ RETURNING *;
 SELECT * FROM deployments
 WHERE id = $1 AND application_id = $2;
 
+-- name: UpdateDeploymentBuildLog :exec
+-- Persists the capped build log of a finished deployment (JUS-84). It runs
+-- outside the state-machine writes so a transition can never clobber it.
+UPDATE deployments
+SET build_log = $2,
+    updated_at = now()
+WHERE id = $1;
+
 -- name: ListDeploymentsByApp :many
 SELECT * FROM deployments
 WHERE application_id = $1
@@ -235,10 +243,13 @@ RETURNING *;
 -- control plane process can never resume, and its row would keep blocking the
 -- active-deployment partial unique index. Mark those rows failed so the index
 -- unblocks. Running deployments are left alone (their container is the state),
--- and the worker pool is empty when this runs at service construction.
+-- and the worker pool is empty when this runs at service construction. Rows
+-- with no recorded output get the reason as their stored log (JUS-84) so the
+-- row is never a silent empty; a partial log from a previous persist is kept.
 UPDATE deployments
 SET state = 'failed',
     error = 'control plane restarted before the deployment finished',
+    build_log = CASE WHEN build_log = '' THEN 'control plane restarted before the deployment finished' ELSE build_log END,
     finished_at = now(),
     updated_at = now()
 WHERE state NOT IN ('running', 'failed');

@@ -356,6 +356,7 @@ type handler struct {
 //	POST   /v1/applications/{id}/start
 //	POST   /v1/applications/{id}/deploy
 //	GET    /v1/applications/{id}/deployments
+//	GET    /v1/applications/{id}/deployments/{deployment_id}/logs
 //	POST   /v1/applications/{id}/rollback
 //	POST   /v1/applications/{id}/deploy-key
 //	GET    /v1/applications/{id}/deploy-key
@@ -388,6 +389,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/applications/{id}/start", h.start)
 		protected.Post("/v1/applications/{id}/deploy", h.deploy)
 		protected.Get("/v1/applications/{id}/deployments", h.list)
+		protected.Get("/v1/applications/{id}/deployments/{deployment_id}/logs", h.getDeploymentLog)
 		protected.Post("/v1/applications/{id}/rollback", h.rollback)
 		protected.Post("/v1/applications/{id}/deploy-key", h.createDeployKey)
 		protected.Get("/v1/applications/{id}/deploy-key", h.getDeployKey)
@@ -732,6 +734,43 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		response = append(response, newDeploymentResponse(deployment))
 	}
 	writeJSON(w, http.StatusOK, deploymentListEnvelope{Deployments: response})
+}
+
+// deploymentLogEnvelope wraps one persisted build log (JUS-84). The log is
+// the capped output stored when the run reached a terminal state, exactly as
+// streamed; it is empty while the run is in flight.
+type deploymentLogEnvelope struct {
+	Log string `json:"log"`
+}
+
+// getDeploymentLog serves GET .../deployments/{deployment_id}/logs. Ownership
+// mirrors the sibling deployment reads: another user's deployment answers
+// 404, so IDs cannot be probed.
+func (h *handler) getDeploymentLog(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	appID, ok := applicationIDParam(w, r)
+	if !ok {
+		return
+	}
+	deploymentID, err := uuid.Parse(chi.URLParam(r, "deployment_id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid deployment id"})
+		return
+	}
+	log, err := h.svc.GetDeploymentBuildLog(r.Context(), userID, appID, deploymentID)
+	if err != nil {
+		// An unset deployment id is a caller error, not a missing row.
+		if errors.Is(err, ErrValidation) {
+			writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
+			return
+		}
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deploymentLogEnvelope{Log: log})
 }
 
 // limitParam parses the ?limit= page size of a listing. An absent value

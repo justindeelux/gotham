@@ -109,6 +109,10 @@ type DeployService interface {
 	// deployments (clamped server-side), so latest-state readers never pull
 	// the full history.
 	ListDeploymentsLimit(ctx context.Context, userID, appID uuid.UUID, limit int) ([]Deployment, error)
+	// GetDeploymentBuildLog returns the persisted build log of one
+	// deployment (JUS-84). Same ownership as the deployment reads: a foreign
+	// deployment answers ErrNotFound. Empty while the run is in flight.
+	GetDeploymentBuildLog(ctx context.Context, userID, appID, deploymentID uuid.UUID) (string, error)
 	// Rollback queues a deployment of a previous release's image. A zero
 	// deploymentID selects the previous successful deployment automatically.
 	Rollback(ctx context.Context, userID, appID, deploymentID uuid.UUID) (Deployment, error)
@@ -550,6 +554,23 @@ func (s *Service) ListDeploymentsLimit(ctx context.Context, userID, appID uuid.U
 		return []Deployment{}, nil
 	}
 	return deployments, nil
+}
+
+// GetDeploymentBuildLog returns the persisted build log of one deployment.
+// Ownership mirrors the deployment reads: a foreign deployment answers
+// ErrNotFound, so deployment IDs cannot be probed.
+func (s *Service) GetDeploymentBuildLog(ctx context.Context, userID, appID, deploymentID uuid.UUID) (string, error) {
+	if _, err := s.application(ctx, userID, appID, false); err != nil {
+		return "", err
+	}
+	if deploymentID == uuid.Nil {
+		return "", fmt.Errorf("%w: invalid deployment id", ErrValidation)
+	}
+	deployment, err := s.repo.GetDeployment(ctx, appID, deploymentID)
+	if err != nil {
+		return "", err
+	}
+	return deployment.BuildLog, nil
 }
 
 // application loads an application of the caller's active team, mapping a row

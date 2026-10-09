@@ -349,6 +349,7 @@ async function loadStoreModule() {
     export function describeApplicationError(e) { return String((e && e.message) || e); }
     export async function listDeployments(appId) { return globalThis.__fx14a.listDeployments(appId); }
     export async function getApplication() { throw new Error("unused"); }
+    export async function getDeploymentBuildLog() { throw new Error("unused"); }
     export async function getEnv() { throw new Error("unused"); }
     export async function getStorages() { throw new Error("unused"); }
     export async function replaceEnv() { throw new Error("unused"); }

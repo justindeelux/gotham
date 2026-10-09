@@ -1041,6 +1041,7 @@ async function main() {
       "@/features/applications/api/applications": [
         "export const describeApplicationError = (e) => String((e && e.message) || e);",
         "export const getApplication = async () => { throw new Error('unused'); };",
+        "export const getDeploymentBuildLog = async () => '';",
         "export const getEnv = async () => [];",
         "export const getStorages = async () => [];",
         "export const isActiveDeployment = () => false;",

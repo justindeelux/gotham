@@ -185,10 +185,13 @@ type Deployment struct {
 	CommitMessage string
 	CommitAuthor  string
 	CommittedAt   string
-	StartedAt     time.Time
-	FinishedAt    time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// BuildLog is the capped build output stored when the run reached a
+	// terminal state (JUS-84), exactly as streamed. Empty while in flight.
+	BuildLog   string
+	StartedAt  time.Time
+	FinishedAt time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // EnvironmentRef is the slice of an environment row resource validation and

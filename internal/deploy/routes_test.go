@@ -68,10 +68,13 @@ type fakeDeployService struct {
 	seenLimit       int
 	seenRollback    uuid.UUID
 	seenRollbackSet bool
-	seenCreate      CreateApplicationInput
-	seenUpdate      UpdateApplicationInput
-	seenEntries     []EnvEntry
-	seenStorages    []Storage
+	// persisted build log (JUS-84): seenRollback carries the deployment id.
+	buildLog     string
+	buildLogErr  error
+	seenCreate   CreateApplicationInput
+	seenUpdate   UpdateApplicationInput
+	seenEntries  []EnvEntry
+	seenStorages []Storage
 }
 
 // Compile-time guarantee that fakeDeployService satisfies the route seam.
@@ -275,6 +278,13 @@ func (f *fakeDeployService) Rollback(_ context.Context, userID, appID, deploymen
 	f.seenUser, f.seenApplication = userID, appID
 	f.seenRollback, f.seenRollbackSet = deploymentID, true
 	return f.rollback, f.rollbackErr
+}
+
+// GetDeploymentBuildLog implements DeployService.
+func (f *fakeDeployService) GetDeploymentBuildLog(_ context.Context, userID, appID, deploymentID uuid.UUID) (string, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	f.seenRollback, f.seenRollbackSet = deploymentID, true
+	return f.buildLog, f.buildLogErr
 }
 
 // newRouteServer mounts the deploy routes with a no-op auth middleware.

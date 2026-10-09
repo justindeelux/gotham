@@ -62,6 +62,8 @@ type runState struct {
 	repoDir  string
 	target   Target
 	log      func(string)
+	// rec tees every emitted line for the persisted build log (JUS-84).
+	rec *logRecorder
 	// composeRaw is the unresolved compose document of a compose run
 	// (stored text or the file read from the checkout); composeYAML is the
 	// rendered document with the port mapping injected, composeImages the
@@ -250,8 +252,10 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 		dep:      j.dep,
 		previous: j.previous,
 		target:   Target{ServerID: j.app.ServerID, DeploymentID: j.dep.ID},
+		rec:      &logRecorder{},
 	}
 	st.log = func(line string) {
+		st.rec.record(line)
 		o.emitter.Log(ctx, st.target, line)
 	}
 	defer func() {
@@ -923,11 +927,32 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 		return fmt.Errorf("deploy: persist state %s: %w", to, err)
 	}
 	st.dep = updated
+	// The stored log must be readable the moment the terminal event lands:
+	// persist before publishing, so a UI fetch on the state flip never sees
+	// an empty log. Still warn-only on failure (see persistBuildLog).
+	if to.Terminal() {
+		st.rec.record(stateLine(from, to))
+		o.persistBuildLog(ctx, st)
+	}
 	o.emitter.State(ctx, st.target, from, to)
 	if to.Terminal() {
 		o.notify(ctx, st, to)
 	}
 	return nil
+}
+
+// persistBuildLog stores the run's teed lines on the deployment row. Best
+// effort: a failure is logged and never fails the run it records.
+func (o *Orchestrator) persistBuildLog(ctx context.Context, st *runState) {
+	if o.repo == nil {
+		return
+	}
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := o.repo.UpdateDeploymentBuildLog(persistCtx, st.dep.ID, st.rec.finalize()); err != nil {
+		o.logger.Warn("deploy: could not persist build log",
+			"deployment_id", st.dep.ID, "error", err)
+	}
 }
 
 // fail records the terminal failure: the error text on the row, the failed
@@ -944,12 +969,14 @@ func (o *Orchestrator) fail(ctx context.Context, st *runState, cause error) {
 
 	fresh, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
+	// The final line is part of the stored log, so it is recorded before the
+	// terminal write below persists it (and before its state event).
+	st.log("deployment failed: " + st.dep.Error)
 	if err := o.forceFail(fresh, st); err != nil {
 		o.logger.Error("deploy: could not persist failed state",
 			"deployment_id", st.dep.ID, "error", err)
 		return
 	}
-	st.log("deployment failed: " + st.dep.Error)
 }
 
 // forceFail writes the terminal failed state unconditionally, emitting the
@@ -961,6 +988,9 @@ func (o *Orchestrator) forceFail(ctx context.Context, st *runState) error {
 	from := st.dep.State
 	if current, err := o.repo.GetDeployment(ctx, st.dep.ApplicationID, st.dep.ID); err == nil && current.State.Terminal() {
 		st.dep = current
+		// Best effort: the outcome is committed, but this run's lines may
+		// not be stored yet.
+		o.persistBuildLog(ctx, st)
 		return nil
 	}
 	next := st.dep
@@ -977,6 +1007,10 @@ func (o *Orchestrator) forceFail(ctx context.Context, st *runState) error {
 	}
 	st.dep = updated
 	if from != StateFailed {
+		// Persist before the terminal event (see transition): a UI fetch on
+		// the state flip must see the log, not an empty row.
+		st.rec.record(stateLine(from, StateFailed))
+		o.persistBuildLog(ctx, st)
 		o.emitter.State(ctx, st.target, from, StateFailed)
 		o.notify(ctx, st, StateFailed)
 	}

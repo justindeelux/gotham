@@ -51,6 +51,8 @@ export function useApplicationDetail() {
   const rollbackOpen = ref(false);
   const rollbackTarget = ref<string>("");
   const rollingBack = ref(false);
+  const deleteOpen = ref(false);
+  const deleting = ref(false);
   const envDraft = ref<EnvVar[]>([]);
   const envLoading = ref(false);
   /**
@@ -599,6 +601,42 @@ export function useApplicationDetail() {
   }
 
   /**
+   * handleDelete removes the application and returns to its environment. The
+   * store drops the cached row, the projects refresh converges the counts,
+   * and the environment page reloads its resource list on mount, so the row
+   * disappears. The navigation is identity-guarded like the move above.
+   */
+  async function handleDelete(): Promise<void> {
+    const current = application.value;
+    const targetId = appId.value;
+    if (!current || targetId === "") {
+      return;
+    }
+    deleting.value = true;
+    try {
+      await appsStore.remove(targetId);
+      message.success(tr("applications.detail.deleted", { name: current.name }));
+      deleteOpen.value = false;
+      await refreshProjectCounts([current.project_id]);
+      if (targetId !== appId.value) {
+        return;
+      }
+      await router.push({
+        name: "environment-detail",
+        params: { projectId: current.project_id, environmentId: current.environment_id },
+      });
+    } catch (error) {
+      if (targetId === appId.value) {
+        message.error(describeApplicationError(error));
+      }
+    } finally {
+      if (targetId === appId.value) {
+        deleting.value = false;
+      }
+    }
+  }
+
+  /**
    * refreshProjectCounts invalidates the projects store after a move, so
    * project/environment counts converge without relying on a remount.
    */
@@ -630,6 +668,8 @@ export function useApplicationDetail() {
     logServerId.value = "";
     moveSaving.value = false;
     moveErrorRaw.value = null;
+    deleteOpen.value = false;
+    deleting.value = false;
     envDraft.value = [];
     envErrorRaw.value = null;
     envLoadedFor.value = "";
@@ -702,6 +742,8 @@ export function useApplicationDetail() {
     rollbackOpen,
     rollbackTarget,
     rollingBack,
+    deleteOpen,
+    deleting,
     envDraft,
     envLoading,
     envError,
@@ -727,6 +769,7 @@ export function useApplicationDetail() {
     handleSaveStorages,
     handleDeploy,
     handleRollback,
+    handleDelete,
     handleStop,
     handleStart,
     openRollback,

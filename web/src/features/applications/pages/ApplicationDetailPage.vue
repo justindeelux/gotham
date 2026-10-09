@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { NAlert, NCard, NEmpty, NSpace, NSpin, NTabPane, NTabs } from "naive-ui";
+import { NAlert, NButton, NCard, NEmpty, NSpace, NSpin, NTabPane, NTabs } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
+
+import ApplicationDeleteDialog from "@/features/applications/components/ApplicationDeleteDialog.vue";
 
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
@@ -174,15 +176,27 @@ const previewsTab = computed<string>(() =>
         </NTabPane>
 
         <NTabPane v-if="detail.canWrite.value" name="settings" :tab="t('applications.tabs.settings')">
-          <ResourceMoveCard
-            v-if="detail.application.value"
-            :project-id="detail.application.value.project_id"
-            :environment-id="detail.application.value.environment_id"
-            :server-id="detail.application.value.server_id ?? ''"
-            :saving="detail.moveSaving.value"
-            :error="detail.moveError.value"
-            @save="detail.handleMove"
-          />
+          <NSpace vertical :size="16">
+            <ResourceMoveCard
+              v-if="detail.application.value"
+              :project-id="detail.application.value.project_id"
+              :environment-id="detail.application.value.environment_id"
+              :server-id="detail.application.value.server_id ?? ''"
+              :saving="detail.moveSaving.value"
+              :error="detail.moveError.value"
+              @save="detail.handleMove"
+            />
+            <NCard v-if="detail.application.value" :title="t('applications.delete.title')">
+              <NSpace vertical :size="12">
+                <span>{{ t("applications.delete.hint") }}</span>
+                <NSpace>
+                  <NButton type="error" ghost @click="detail.deleteOpen.value = true">
+                    {{ t("applications.delete.button") }}
+                  </NButton>
+                </NSpace>
+              </NSpace>
+            </NCard>
+          </NSpace>
         </NTabPane>
       </NTabs>
     </NSpin>
@@ -196,6 +210,13 @@ const previewsTab = computed<string>(() =>
       @update:show="detail.rollbackOpen.value = $event"
       @update:target="detail.rollbackTarget.value = $event"
       @confirm="detail.handleRollback"
+    />
+    <ApplicationDeleteDialog
+      :show="detail.deleteOpen.value"
+      :app-name="detail.application.value?.name ?? ''"
+      :deleting="detail.deleting.value"
+      @update:show="detail.deleteOpen.value = $event"
+      @confirm="detail.handleDelete"
     />
   </NSpace>
 </template>

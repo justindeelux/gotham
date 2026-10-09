@@ -1052,6 +1052,7 @@ async function main() {
         "export const stopApplication = async () => { throw new Error('unused'); };",
         "export const triggerDeploy = async () => { throw new Error('unused'); };",
         "export const updateApplication = async () => { throw new Error('unused'); };",
+        "export const deleteApplication = async () => { throw new Error('unused'); };",
       ].join("\n"),
     });
     const databasesHarness = await loadStoreHarness("../src/features/databases/stores", "databases", "useDatabasesStore", {

@@ -131,8 +131,8 @@ func TestRunStartsBuildKitWhenUnset(t *testing.T) {
 	envFile := filepath.Join(dir, "env")
 	dockerLog := filepath.Join(dir, "docker")
 	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
-	// inspect fails (no container yet), so Run must `docker run` it.
-	fakeCLI(t, "docker", fmt.Sprintf(`echo "$@" >> '%s'; [ "$1" != inspect ]`, dockerLog))
+	// inspect reports no container yet, so Run must `docker run` it and wait for exec.
+	fakeCLI(t, "docker", fmt.Sprintf(`echo "$@" >> '%s'; if [ "$1" = inspect ]; then echo "Error: No such object: buildkit"; exit 1; fi`, dockerLog))
 	t.Setenv("BUILDKIT_HOST", "")
 
 	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep"}); err != nil {

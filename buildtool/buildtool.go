@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Engine identifies a toolchain. It mirrors the control plane's EngineKind for
@@ -194,32 +196,65 @@ func toolchainEnv(dockerHost, buildKitHost string) []string {
 // buildKitContainer is the container ensureBuildKit creates on the node.
 const buildKitContainer = "buildkit"
 
+// buildKitMu serialises ensureBuildKit inside one process so two first builds
+// never both try to create the container.
+var buildKitMu sync.Mutex
+
 // ensureBuildKit returns the BUILDKIT_HOST Railpack should use. An address the
 // operator exported wins; otherwise it starts (or creates) a privileged
 // moby/buildkit container through the node's Docker so no manual setup is
-// needed. The container restarts with Docker, so this is a one-time cost.
+// needed, and waits until the daemon answers. The container restarts with
+// Docker, so this is a one-time cost.
+// ponytail: unpinned moby/buildkit image; pin a tag/digest for reproducibility.
 func ensureBuildKit(ctx context.Context, opts Options) (string, error) {
 	if host := strings.TrimSpace(os.Getenv("BUILDKIT_HOST")); host != "" {
 		return host, nil
 	}
-	docker := func(args ...string) ([]byte, error) {
+	buildKitMu.Lock()
+	defer buildKitMu.Unlock()
+	docker := func(args ...string) (string, error) {
 		command := exec.CommandContext(ctx, "docker", args...)
 		command.Env = toolchainEnv(opts.DockerHost, "")
-		return command.CombinedOutput()
+		out, err := command.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	fail := func(err error, out string) (string, error) {
+		return "", fmt.Errorf("%w: start BuildKit container: %v: %s", ErrCLIMissing, err, out)
 	}
 	out, err := docker("inspect", "-f", "{{.State.Running}}", buildKitContainer)
 	switch {
+	case err != nil && !strings.Contains(out, "No such object"):
+		return fail(err, out) // daemon down or permission denied: do not try to create
 	case err != nil:
 		out, err = docker("run", "-d", "--privileged", "--restart", "unless-stopped",
 			"--name", buildKitContainer, "moby/buildkit")
-	case strings.TrimSpace(string(out)) != "true":
+		if err != nil { // another process may have created it first
+			if state, inspectErr := docker("inspect", "-f", "{{.State.Running}}", buildKitContainer); inspectErr != nil {
+				return fail(err, out)
+			} else if state != "true" {
+				out, err = docker("start", buildKitContainer)
+			} else {
+				err = nil
+			}
+		}
+	case out != "true":
 		out, err = docker("start", buildKitContainer)
 	}
 	if err != nil {
-		return "", fmt.Errorf("%w: start BuildKit container: %v: %s",
-			ErrCLIMissing, err, strings.TrimSpace(string(out)))
+		return fail(err, out)
 	}
-	return "docker-container://" + buildKitContainer, nil
+	// The daemon needs a moment after create/start before it accepts builds.
+	for i := 0; i < 30; i++ {
+		if _, err = docker("exec", buildKitContainer, "buildctl", "debug", "workers"); err == nil {
+			return "docker-container://" + buildKitContainer, nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return fail(err, "BuildKit did not become ready within 30s")
 }
 
 // buildEnvFlags renders build arguments as sorted `--env KEY=VALUE` flag pairs.

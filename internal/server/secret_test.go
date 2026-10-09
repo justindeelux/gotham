@@ -46,3 +46,13 @@ func TestResolveSecretKeyPersists(t *testing.T) {
 		t.Fatal("no directory should fall back to an ephemeral key")
 	}
 }
+
+// TestResolveSecretKeyEphemeralIsShared pins that an unwritable directory still
+// yields one key per process, so the CLI wiring and server.New agree.
+func TestResolveSecretKeyEphemeralIsShared(t *testing.T) {
+	a, genA, _ := ResolveSecretKey("", "")
+	b, genB, _ := ResolveSecretKey("", "")
+	if !genA || !genB || a != b {
+		t.Fatalf("ephemeral keys differ: %q vs %q", a, b)
+	}
+}

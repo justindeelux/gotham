@@ -1,6 +1,9 @@
 package server
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 // TestEnsureSecretKey pins the startup resolution: a configured secret is used
 // verbatim, an empty one yields a fresh non-empty ephemeral key (never the
@@ -54,5 +57,17 @@ func TestResolveSecretKeyEphemeralIsShared(t *testing.T) {
 	b, genB, _ := ResolveSecretKey("", "")
 	if !genA || !genB || a != b {
 		t.Fatalf("ephemeral keys differ: %q vs %q", a, b)
+	}
+}
+
+// TestResolveSecretKeyIgnoresCWDFile pins that an empty directory never reads a
+// stray secret.key from the working directory.
+func TestResolveSecretKeyIgnoresCWDFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.WriteFile("secret.key", []byte("stray\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, generated, _ := ResolveSecretKey("", ""); got == "stray" || !generated {
+		t.Fatalf("adopted the working-directory file: (%q, %v)", got, generated)
 	}
 }

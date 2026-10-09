@@ -30,6 +30,9 @@ func ResolveSecretKey(configured, dir string) (secret string, generated, persist
 	if strings.TrimSpace(configured) != "" {
 		return configured, false, false
 	}
+	if strings.TrimSpace(dir) == "" {
+		return sharedEphemeralKey(), true, false
+	}
 	path := filepath.Join(dir, secretKeyFile)
 	read := func() string {
 		b, err := os.ReadFile(path)
@@ -41,7 +44,7 @@ func ResolveSecretKey(configured, dir string) (secret string, generated, persist
 	if key := read(); key != "" {
 		return key, false, true
 	}
-	if dir != "" && os.MkdirAll(dir, 0o700) == nil {
+	if os.MkdirAll(dir, 0o700) == nil {
 		key, _ := ensureSecretKey("")
 		// O_EXCL: of two processes starting together exactly one creates it.
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -55,12 +58,16 @@ func ResolveSecretKey(configured, dir string) (secret string, generated, persist
 			return existing, false, true
 		}
 	}
+	return sharedEphemeralKey(), true, false
+}
+
+func sharedEphemeralKey() string {
 	ephemeralMu.Lock()
 	defer ephemeralMu.Unlock()
 	if ephemeralKey == "" {
 		ephemeralKey, _ = ensureSecretKey("")
 	}
-	return ephemeralKey, true, false
+	return ephemeralKey
 }
 
 // ensureSecretKey resolves the credential-encryption secret once at startup.

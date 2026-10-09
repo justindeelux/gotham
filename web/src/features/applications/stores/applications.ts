@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 
 import {
+  deleteApplication,
   describeApplicationError,
   getApplication,
   getEnv,
@@ -288,6 +289,24 @@ export const useApplicationsStore = defineStore("applications", () => {
     savingStorages.value = false;
   }
 
+  /**
+   * remove deletes an application and drops its cached collections, so the
+   * environment table converges without relying on a remount.
+   */
+  async function remove(appId: string): Promise<void> {
+    acting.value = true;
+    try {
+      await deleteApplication(appId);
+      delete applicationsById.value[appId];
+      delete deploymentsByApp.value[appId];
+      delete envByApp.value[appId];
+      delete storagesByApp.value[appId];
+      stopPolling(appId);
+    } finally {
+      acting.value = false;
+    }
+  }
+
   /** deploy queues a deployment of the application's current revision. */
   async function deploy(appId: string): Promise<Deployment> {
     acting.value = true;
@@ -364,6 +383,7 @@ export const useApplicationsStore = defineStore("applications", () => {
     storagesOf,
     fetchApplication,
     update,
+    remove,
     fetchDeployments,
     refreshDeployments,
     fetchEnv,

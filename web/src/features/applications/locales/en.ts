@@ -521,6 +521,16 @@ const en = {
     certCreated: "Certificate configuration created.",
     certRerecorded: "Certificate re-recorded the current application domain.",
     certDeleted: "Certificate configuration deleted. The route stays HTTP-only.",
+    deleted: "Application {name} deleted.",
+  },
+  delete: {
+    title: "Danger zone",
+    hint: "Deleting removes the application, its containers and its stored configuration. This cannot be undone.",
+    button: "Delete application",
+    modalTitle: "Delete application",
+    modalHint: "Type {name} to confirm. This cannot be undone.",
+    placeholder: "Application name",
+    confirm: "Delete",
   },
   errors: {
     sessionExpired: "Your session expired. Please sign in again.",

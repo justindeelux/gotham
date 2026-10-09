@@ -521,6 +521,16 @@ const vi: ApplicationsMessages = {
     certCreated: "Đã tạo cấu hình chứng chỉ.",
     certRerecorded: "Đã ghi nhận lại tên miền hiện tại của ứng dụng.",
     certDeleted: "Đã xóa cấu hình chứng chỉ. Tuyến vẫn chỉ dùng HTTP.",
+    deleted: "Đã xóa ứng dụng {name}.",
+  },
+  delete: {
+    title: "Vùng nguy hiểm",
+    hint: "Xóa sẽ gỡ ứng dụng, các container và cấu hình đã lưu của nó. Thao tác này không thể hoàn tác.",
+    button: "Xóa ứng dụng",
+    modalTitle: "Xóa ứng dụng",
+    modalHint: "Nhập {name} để xác nhận. Thao tác này không thể hoàn tác.",
+    placeholder: "Tên ứng dụng",
+    confirm: "Xóa",
   },
   errors: {
     sessionExpired: "Phiên đã hết hạn. Vui lòng đăng nhập lại.",

@@ -478,6 +478,14 @@ test("JUS-69 add resource modal pins its header and scrolls only the body", asyn
     expect(await scroller.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
       await scroller.evaluate((element) => element.clientHeight),
     );
+    // Wait out the modal enter transition so the header position is settled.
+    await expect
+      .poll(async () => {
+        const first = (await dialog.locator(".n-card-header").boundingBox())!.y;
+        await page.waitForTimeout(150);
+        return first - (await dialog.locator(".n-card-header").boundingBox())!.y;
+      })
+      .toBe(0);
     const headerBox = await dialog.locator(".n-card-header").boundingBox();
     await scroller.evaluate((element) => {
       element.scrollTop = element.scrollHeight;

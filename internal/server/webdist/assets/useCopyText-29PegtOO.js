@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-29PegtOO.js
-import{a as i}from"./index-BLXEBDXt.js";import{u as n}from"./use-message-IF2J_9uZ.js";import{b5 as e}from"./index-fJXU00zj.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
-========
-import{a as i}from"./index-CcxQFKc1.js";import{u as n}from"./use-message-DP3K7vC2.js";import{b5 as e}from"./index-BTt6aOWT.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
->>>>>>>> feat/jus74-connect-modals:internal/server/webdist/assets/useCopyText-DKj9zKMA.js

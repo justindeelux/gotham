@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-LS7_CCir.js
-import{a as i}from"./index-B86OtBZ6.js";import{u as n}from"./use-message-BHEdJ_VE.js";import{b5 as e}from"./index-De9orRk0.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
-========
-import{a as i}from"./index-CslOTpvP.js";import{u as n}from"./use-message-DhRWRxSh.js";import{b5 as e}from"./index-Cy-4-TeX.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
->>>>>>>> feat/jus69-modal-scroll:internal/server/webdist/assets/useCopyText-kwnnK2c4.js

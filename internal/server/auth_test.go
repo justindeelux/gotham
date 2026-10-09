@@ -555,7 +555,7 @@ func TestContentSecurityPolicyAvatarAllowlist(t *testing.T) {
 
 	rec := doRequest(t, s, http.MethodGet, "/healthz", "", "")
 	got := rec.Header().Get("Content-Security-Policy")
-	want := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; base-uri 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'"
+	want := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; base-uri 'self'; object-src 'none'; form-action 'self' https://github.com; frame-ancestors 'none'"
 	if got != want {
 		t.Fatalf("Content-Security-Policy = %q, want %q", got, want)
 	}

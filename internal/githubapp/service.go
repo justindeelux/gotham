@@ -197,7 +197,8 @@ type Manifest struct {
 // host, which redirects back with a code the callback exchanges. origin is
 // the control-plane public origin (scheme + host), used for the hook URL and
 // the browser callback URLs: redirect_url is the public API callback the
-// browser lands on (identified by the state, no bearer token), and setup_url
+// browser lands on (GitHub appends ?code=...&state=... itself, so the stored
+// URL carries no query), and setup_url
 // is the SPA route that completes the installation. The chosen GitHub base
 // URL is bound to the state, so the callback exchanges the code against the
 // same host (github.com or Enterprise).
@@ -224,7 +225,7 @@ func (s *Service) StartManifest(ctx context.Context, userID uuid.UUID, baseURL, 
 	manifest := map[string]any{
 		"name":          name,
 		"url":           origin,
-		"redirect_url":  origin + "/api/v1/providers/github-app/callback?state=" + state,
+		"redirect_url":  origin + "/api/v1/providers/github-app/callback",
 		"setup_url":     origin + "/applications/github-app/callback",
 		"callback_urls": []string{origin + "/applications/github-app/callback"},
 		"hook_attributes": map[string]any{
@@ -239,9 +240,11 @@ func (s *Service) StartManifest(ctx context.Context, userID uuid.UUID, baseURL, 
 		},
 		// pull_request is subscribed only once previews support app-signed
 		// deliveries: until then app-signed PR events would 401 in GitHub's
-		// delivery log, so the manifest subscribes to push (deploy) and the
-		// installation lifecycle (cache) only.
-		"default_events": []string{"push", "installation", "installation_repositories"},
+		// delivery log, so the manifest subscribes to push (deploy) only. The
+		// installation and installation_repositories lifecycle events (cache)
+		// are delivered to every GitHub App automatically and are rejected in
+		// default_events ("not supported by permissions").
+		"default_events": []string{"push"},
 	}
 	return Manifest{
 		ActionURL: strings.TrimRight(webBase, "/") + "/settings/apps/new?state=" + state,

@@ -164,7 +164,7 @@ func TestToolchainHomeMissingUsesStateDir(t *testing.T) {
 	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	home := childEnvValue(t, envFile, "HOME")
+	home := childHome(t, envFile)
 	if want := filepath.Join(stateDir, "toolchain-home"); home != want {
 		t.Errorf("child HOME = %q; want %q", home, want)
 	}
@@ -203,7 +203,7 @@ func TestToolchainHomeUnwritableFallsBack(t *testing.T) {
 	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if home := childEnvValue(t, envFile, "HOME"); home != filepath.Join(stateDir, "toolchain-home") {
+	if home := childHome(t, envFile); home != filepath.Join(stateDir, "toolchain-home") {
 		t.Errorf("child HOME = %q; want the state-dir fallback", home)
 	}
 }
@@ -222,7 +222,7 @@ func TestToolchainHomeValidIsKept(t *testing.T) {
 	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := childEnvValue(t, envFile, "HOME"); got != home {
+	if got := childHome(t, envFile); got != home {
 		t.Errorf("child HOME = %q; want the valid HOME %q kept", got, home)
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "toolchain-home")); !os.IsNotExist(err) {
@@ -245,7 +245,7 @@ func TestToolchainHomeTempFallback(t *testing.T) {
 	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep"}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	home := childEnvValue(t, envFile, "HOME")
+	home := childHome(t, envFile)
 	if home == "" || !strings.HasPrefix(home, tmp) {
 		t.Errorf("child HOME = %q; want a fallback under %q", home, tmp)
 	}
@@ -267,7 +267,7 @@ func TestToolchainHomeEmpty(t *testing.T) {
 	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if home := childEnvValue(t, envFile, "HOME"); home != filepath.Join(stateDir, "toolchain-home") {
+	if home := childHome(t, envFile); home != filepath.Join(stateDir, "toolchain-home") {
 		t.Errorf("child HOME = %q; want the state-dir fallback", home)
 	}
 }
@@ -294,7 +294,7 @@ func TestToolchainHomeReadOnly(t *testing.T) {
 	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := childEnvValue(t, envFile, "HOME"); got != filepath.Join(stateDir, "toolchain-home") {
+	if got := childHome(t, envFile); got != filepath.Join(stateDir, "toolchain-home") {
 		t.Errorf("child HOME = %q; want the state-dir fallback", got)
 	}
 }
@@ -313,7 +313,7 @@ func TestToolchainHomeRelativeRejected(t *testing.T) {
 	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got := childEnvValue(t, envFile, "HOME"); got != filepath.Join(stateDir, "toolchain-home") {
+	if got := childHome(t, envFile); got != filepath.Join(stateDir, "toolchain-home") {
 		t.Errorf("child HOME = %q; want the state-dir fallback", got)
 	}
 }
@@ -334,7 +334,7 @@ func TestToolchainHomeUnusableStateDirFallsToTemp(t *testing.T) {
 	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: file}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	home := childEnvValue(t, envFile, "HOME")
+	home := childHome(t, envFile)
 	if home == "" || !strings.HasPrefix(home, tmp) {
 		t.Errorf("child HOME = %q; want a temp fallback under %q", home, tmp)
 	}
@@ -409,8 +409,9 @@ func TestToolchainEnvDoesNotTouchDisk(t *testing.T) {
 	}
 }
 
-// childEnvValue returns the value of key in a child's `env` dump.
-func childEnvValue(t *testing.T, envFile, key string) string {
+// childHome returns the HOME value in a child's `env` dump.
+func childHome(t *testing.T, envFile string) string {
+	const key = "HOME"
 	t.Helper()
 	for _, line := range strings.Split(readFile(t, envFile), "\n") {
 		if value, found := strings.CutPrefix(line, key+"="); found {

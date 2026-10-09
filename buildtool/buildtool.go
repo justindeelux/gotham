@@ -284,6 +284,7 @@ func (t *outputTail) push(raw string) {
 	for _, secret := range t.masks {
 		line = strings.ReplaceAll(line, secret, "***")
 	}
+	line = strings.ToValidUTF8(line, "\uFFFD") // the tail is stored in a text column
 	if len(line) > tailMaxBytes {
 		line = line[len(line)-tailMaxBytes:]
 		for len(line) > 0 && line[0] >= 0x80 && line[0] < 0xC0 {

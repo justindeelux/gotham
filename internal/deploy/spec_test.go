@@ -345,3 +345,12 @@ func equalStrings(got, want []string) bool {
 	}
 	return true
 }
+
+// TestTruncateErrorInvalidUTF8 pins that invalid bytes are replaced instead of
+// persisted, and that a bad byte early in the message does not discard the rest.
+func TestTruncateErrorInvalidUTF8(t *testing.T) {
+	got := truncateError(errors.New("hdr\n\xff bin\n" + strings.Repeat("x", 5000)))
+	if !utf8.ValidString(got) || len(got) < 4000 {
+		t.Errorf("truncateError = %d bytes valid=%v; want valid UTF-8 near the limit", len(got), utf8.ValidString(got))
+	}
+}

@@ -308,11 +308,13 @@ func truncateError(err error) string {
 		return ""
 	}
 	const limit = 4096
-	message := strings.TrimSpace(err.Error())
+	// Postgres rejects invalid UTF-8 in text columns, and toolchain output is
+	// untrusted bytes, so sanitize before measuring.
+	message := strings.ToValidUTF8(strings.TrimSpace(err.Error()), "\uFFFD")
 	if len(message) > limit {
 		cut := message[:limit]
 		for len(cut) > 0 && !utf8.ValidString(cut) {
-			cut = cut[:len(cut)-1]
+			cut = cut[:len(cut)-1] // drop only a trailing partial rune
 		}
 		return cut + "…"
 	}

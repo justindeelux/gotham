@@ -389,3 +389,13 @@ func TestRedactedCommandLine(t *testing.T) {
 		})
 	}
 }
+
+// TestOutputTailInvalidUTF8 is the round-3 regression: toolchain bytes that are
+// not UTF-8 never reach the stored error (Postgres rejects them in text).
+func TestOutputTailInvalidUTF8(t *testing.T) {
+	tail := newOutputTail(nil)
+	_, _ = tail.Write([]byte("\xff\xfe binary\n"))
+	if got := tail.String(); !utf8.ValidString(got) || !strings.Contains(got, "binary") {
+		t.Errorf("tail = %q; want valid UTF-8 keeping the text", got)
+	}
+}

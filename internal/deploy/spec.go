@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -298,15 +299,24 @@ func containerName(app Application, dep Deployment) string {
 }
 
 // truncateError bounds the message persisted on the deployments row so one
-// runaway build log cannot bloat the table.
+// runaway build log cannot bloat the table. The limit fits the ~3 KiB
+// toolchain failure tail buildtool appends to build errors, prefix included.
+// The cut is rune-safe: a trailing partial UTF-8 sequence is dropped rather
+// than storing invalid UTF-8.
 func truncateError(err error) string {
 	if err == nil {
 		return ""
 	}
-	const limit = 1000
-	message := strings.TrimSpace(err.Error())
+	const limit = 4096
+	// Postgres rejects invalid UTF-8 in text columns, and toolchain output is
+	// untrusted bytes, so sanitize before measuring.
+	message := strings.ToValidUTF8(strings.TrimSpace(err.Error()), "\uFFFD")
 	if len(message) > limit {
-		return message[:limit] + "…"
+		cut := message[:limit]
+		for len(cut) > 0 && !utf8.ValidString(cut) {
+			cut = cut[:len(cut)-1] // drop only a trailing partial rune
+		}
+		return cut + "…"
 	}
 	return message
 }

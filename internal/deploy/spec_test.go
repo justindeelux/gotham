@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -307,9 +308,28 @@ func TestTruncateError(t *testing.T) {
 	if short != "boom" {
 		t.Errorf("truncateError = %q, want boom", short)
 	}
-	long := truncateError(errors.New(strings.Repeat("x", 4000)))
-	if len([]rune(long)) > 1001 {
+	long := truncateError(errors.New(strings.Repeat("x", 8000)))
+	if len([]rune(long)) > 4097 {
 		t.Errorf("long error was not truncated: %d runes", len([]rune(long)))
+	}
+	if got := truncateError(errors.New(strings.Repeat("y", 4096))); len(got) != 4096 {
+		t.Errorf("truncateError kept %d runes of a 4 KiB error; want it intact", len([]rune(got)))
+	}
+}
+
+// TestTruncateErrorRuneSafe is the JUS-81 round-2 regression: cutting a
+// multi-byte message at the byte limit must not store invalid UTF-8.
+func TestTruncateErrorRuneSafe(t *testing.T) {
+	message := strings.Repeat("x", 4095) + "日本語" + strings.Repeat("y", 100)
+	got := truncateError(errors.New(message))
+	if !utf8.ValidString(got) {
+		t.Errorf("truncateError = %q; want valid UTF-8", got)
+	}
+	if strings.Contains(got, "日") {
+		t.Errorf("truncateError = %q; want the cut before the split rune", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("truncateError = %q; want the truncation marker", got)
 	}
 }
 
@@ -324,4 +344,13 @@ func equalStrings(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// TestTruncateErrorInvalidUTF8 pins that invalid bytes are replaced instead of
+// persisted, and that a bad byte early in the message does not discard the rest.
+func TestTruncateErrorInvalidUTF8(t *testing.T) {
+	got := truncateError(errors.New("hdr\n\xff bin\n" + strings.Repeat("x", 5000)))
+	if !utf8.ValidString(got) || len(got) < 4000 {
+		t.Errorf("truncateError = %d bytes valid=%v; want valid UTF-8 near the limit", len(got), utf8.ValidString(got))
+	}
 }

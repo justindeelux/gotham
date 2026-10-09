@@ -154,6 +154,7 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
         v-if="props.latest.error"
         type="error"
         :show-icon="true"
+        class="mono error-prewrap"
         style="margin-top: 12px"
       >
         {{ props.latest.error }}
@@ -198,6 +199,11 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
 <style scoped>
 .mono {
   font-family: var(--font-mono);
+}
+
+.error-prewrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .pipeline {

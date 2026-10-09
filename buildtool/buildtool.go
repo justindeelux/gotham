@@ -41,7 +41,7 @@ const (
 // so the deploy log is actionable.
 const (
 	railpackInstallHint   = "install it with `curl -sSL https://railpack.com/install.sh | sh` (https://railpack.com/installation)"
-	railpackBuildKitHint  = "start BuildKit and export its address: `docker run --rm --privileged -d --name buildkit moby/buildkit` then `export BUILDKIT_HOST=docker-container://buildkit`"
+	railpackBuildKitHint  = "install Docker so Gotham can start its BuildKit container, or export BUILDKIT_HOST to a running BuildKit daemon (`docker run --rm --privileged -d --name buildkit moby/buildkit`, `export BUILDKIT_HOST=docker-container://buildkit`)"
 	buildpacksInstallHint = "install it with `brew install buildpacks/pack/pack` or from https://github.com/buildpacks/pack/releases (https://buildpacks.io/docs/install-pack/)"
 )
 
@@ -65,6 +65,9 @@ type Options struct {
 	// node agent sets its daemon endpoint; the control plane leaves it empty so
 	// the CLI inherits the process environment.
 	DockerHost string
+
+	// buildKitHost is the BUILDKIT_HOST exported to Railpack; Run fills it.
+	buildKitHost string
 }
 
 // Available reports whether the toolchain can run at all, returning an
@@ -77,8 +80,10 @@ func Available(engine Engine) error {
 			return fmt.Errorf("%w: %q is not on PATH; %s", ErrCLIMissing, RailpackCLI, railpackInstallHint)
 		}
 		if strings.TrimSpace(os.Getenv("BUILDKIT_HOST")) == "" {
-			return fmt.Errorf("%w: %s also needs a running BuildKit daemon: %s",
-				ErrCLIMissing, RailpackCLI, railpackBuildKitHint)
+			if _, err := exec.LookPath("docker"); err != nil {
+				return fmt.Errorf("%w: %s also needs a running BuildKit daemon: %s",
+					ErrCLIMissing, RailpackCLI, railpackBuildKitHint)
+			}
 		}
 		return nil
 	case Buildpacks:
@@ -109,6 +114,11 @@ func Run(ctx context.Context, engine Engine, opts Options) error {
 	var args []string
 	switch engine {
 	case Railpack:
+		host, err := ensureBuildKit(ctx, opts)
+		if err != nil {
+			return err
+		}
+		opts.buildKitHost = host
 		name = RailpackCLI
 		args = []string{"build", "--name", opts.Tag, "--progress", "plain"}
 		args = append(args, buildEnvFlags(opts.BuildArgs)...)
@@ -140,7 +150,7 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 	// process also reads). A toolchain compromise still means node compromise
 	// because it runs as the agent user; dedicated-user/userns sandboxing is a
 	// tracked follow-up.
-	command.Env = toolchainEnv(opts.DockerHost)
+	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost)
 	// The same writer on both streams keeps the tool's output together;
 	// os/exec serialises the writes when Stdout and Stderr are equal.
 	command.Stdout = sink
@@ -161,9 +171,16 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 // every other variable — in particular agent/control-plane secrets — is
 // stripped. Env is never nil, so the child does not inherit the parent's
 // environment by default.
-func toolchainEnv(dockerHost string) []string {
+func toolchainEnv(dockerHost, buildKitHost string) []string {
 	env := make([]string, 0, 5)
-	for _, key := range []string{"PATH", "HOME", "TMPDIR", "BUILDKIT_HOST"} {
+	if buildKitHost != "" {
+		env = append(env, "BUILDKIT_HOST="+buildKitHost)
+	}
+	keys := []string{"PATH", "HOME", "TMPDIR"}
+	if buildKitHost == "" {
+		keys = append(keys, "BUILDKIT_HOST")
+	}
+	for _, key := range keys {
 		if value := os.Getenv(key); value != "" {
 			env = append(env, key+"="+value)
 		}
@@ -172,6 +189,37 @@ func toolchainEnv(dockerHost string) []string {
 		env = append(env, "DOCKER_HOST="+dockerHost)
 	}
 	return env
+}
+
+// buildKitContainer is the container ensureBuildKit creates on the node.
+const buildKitContainer = "buildkit"
+
+// ensureBuildKit returns the BUILDKIT_HOST Railpack should use. An address the
+// operator exported wins; otherwise it starts (or creates) a privileged
+// moby/buildkit container through the node's Docker so no manual setup is
+// needed. The container restarts with Docker, so this is a one-time cost.
+func ensureBuildKit(ctx context.Context, opts Options) (string, error) {
+	if host := strings.TrimSpace(os.Getenv("BUILDKIT_HOST")); host != "" {
+		return host, nil
+	}
+	docker := func(args ...string) ([]byte, error) {
+		command := exec.CommandContext(ctx, "docker", args...)
+		command.Env = toolchainEnv(opts.DockerHost, "")
+		return command.CombinedOutput()
+	}
+	out, err := docker("inspect", "-f", "{{.State.Running}}", buildKitContainer)
+	switch {
+	case err != nil:
+		out, err = docker("run", "-d", "--privileged", "--restart", "unless-stopped",
+			"--name", buildKitContainer, "moby/buildkit")
+	case strings.TrimSpace(string(out)) != "true":
+		out, err = docker("start", buildKitContainer)
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: start BuildKit container: %v: %s",
+			ErrCLIMissing, err, strings.TrimSpace(string(out)))
+	}
+	return "docker-container://" + buildKitContainer, nil
 }
 
 // buildEnvFlags renders build arguments as sorted `--env KEY=VALUE` flag pairs.

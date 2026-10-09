@@ -123,6 +123,29 @@ func TestRunStripsInheritedSecrets(t *testing.T) {
 	}
 }
 
+// TestRunStartsBuildKitWhenUnset checks Railpack needs no manual BuildKit setup:
+// with BUILDKIT_HOST unset, Run creates the container through docker and
+// points Railpack at it.
+func TestRunStartsBuildKitWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	dockerLog := filepath.Join(dir, "docker")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	// inspect fails (no container yet), so Run must `docker run` it.
+	fakeCLI(t, "docker", fmt.Sprintf(`echo "$@" >> '%s'; [ "$1" != inspect ]`, dockerLog))
+	t.Setenv("BUILDKIT_HOST", "")
+
+	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := readFile(t, dockerLog); !strings.Contains(got, "run -d --privileged --restart unless-stopped --name buildkit moby/buildkit") {
+		t.Errorf("docker calls = %q; want a buildkit run", got)
+	}
+	if env := readFile(t, envFile); !strings.Contains(env, "BUILDKIT_HOST=docker-container://buildkit") {
+		t.Errorf("child env missing BUILDKIT_HOST:\n%s", env)
+	}
+}
+
 // fakeCLI writes an executable shell stub named name and prepends its directory
 // to PATH for the test.
 func fakeCLI(t *testing.T, name, body string) {

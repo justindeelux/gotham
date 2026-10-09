@@ -118,11 +118,22 @@ echo "railpack: start command missing" >&2
 	assertSameDir(t, readFakeCLI(t, cwdFile), repoDir)
 }
 
+func mustLookPath(t *testing.T, name string) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	if err != nil {
+		t.Fatalf("LookPath %s: %v", name, err)
+	}
+	return path
+}
+
 func TestRailpackBuildRequiresBuildKit(t *testing.T) {
 	repoDir := railpackMarkerRepo(t)
 	ranFile := filepath.Join(t.TempDir(), "ran")
 	fakeCLI(t, railpackCLI, fmt.Sprintf(`echo ran > '%s'`, ranFile))
 	t.Setenv("BUILDKIT_HOST", "")
+	// Only the fake railpack on PATH: with no docker either, BuildKit cannot start.
+	t.Setenv("PATH", filepath.Dir(mustLookPath(t, railpackCLI)))
 
 	builder := &mockBuilder{}
 	_, err := NewRegistry(nil).Build(context.Background(), testOptions(repoDir))

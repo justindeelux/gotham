@@ -177,7 +177,7 @@ const TEMPLATES = [
 ];
 
 /** mountPage mounts the picker with stubbed catalog data and a project scope. */
-async function mountPage(_query: Record<string, string>, templates: typeof TEMPLATES) {
+async function mountPage(templates: typeof TEMPLATES) {
   const templatesStore = useTemplatesStore();
   vi.spyOn(templatesStore, "fetchTemplates").mockResolvedValue(undefined);
   templatesStore.templates = templates as never;
@@ -207,7 +207,7 @@ async function mountPage(_query: Record<string, string>, templates: typeof TEMPL
 
 describe("ResourcePicker", () => {
   it("passes the project and environment scope to the wizards", async () => {
-    const wrapper = await mountPage({}, TEMPLATES);
+    const wrapper = await mountPage(TEMPLATES);
     const wizard = wrapper.findComponent(CreateDatabaseWizard);
     expect(wizard.props("projectId")).toBe("proj-1");
     expect(wizard.props("environmentId")).toBe("env-1");
@@ -215,7 +215,7 @@ describe("ResourcePicker", () => {
   });
 
   it("moves focus inside a group with the arrow keys", async () => {
-    const wrapper = await mountPage({}, TEMPLATES);
+    const wrapper = await mountPage(TEMPLATES);
     const cards = wrapper.findAll('button[data-engine]');
     expect(cards.length).toBe(ENGINES.length);
     const grids = wrapper.findAll(".res-grid");
@@ -229,7 +229,7 @@ describe("ResourcePicker", () => {
   });
 
   it("opens the database wizard with the card engine preselected", async () => {
-    const wrapper = await mountPage({}, TEMPLATES);
+    const wrapper = await mountPage(TEMPLATES);
     await wrapper.find('button[data-engine="redis"]').trigger("click");
     const wizard = wrapper.findComponent(CreateDatabaseWizard);
     expect(wizard.props("show")).toBe(true);
@@ -238,13 +238,13 @@ describe("ResourcePicker", () => {
   });
 
   it("branches the empty copy on catalog-empty versus filter-no-match", async () => {
-    const emptyCatalog = await mountPage({}, []);
+    const emptyCatalog = await mountPage([]);
     expect(emptyCatalog.findComponent(NEmpty).props("description")).toBe(
       "No templates in the catalog.",
     );
     emptyCatalog.unmount();
 
-    const filtered = await mountPage({}, TEMPLATES);
+    const filtered = await mountPage(TEMPLATES);
     await filtered.find("input").setValue("zzz-no-match");
     await nextTick();
     expect(filtered.findComponent(NEmpty).props("description")).toBe(

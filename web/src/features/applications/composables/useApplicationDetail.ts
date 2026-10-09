@@ -208,8 +208,21 @@ export function useApplicationDetail() {
     () => deployments.value.find((item) => item.id === logDeploymentId.value) ?? active.value ?? latest.value,
   );
 
-  /** effectiveLogServerId streams the displayed node pick (explicit or default). */
-  const effectiveLogServerId = computed<string>(() => displayedLogServerId.value);
+  /** effectiveLogServerId streams the explicit pick, else the app node, else the first node. */
+  const effectiveLogServerId = computed<string>(() => {
+    const servers = serversStore.servers;
+    if (
+      logServerId.value !== "" &&
+      servers.some((server) => server.id === logServerId.value)
+    ) {
+      return logServerId.value;
+    }
+    const appServer = application.value?.server_id ?? "";
+    if (appServer !== "") {
+      return appServer;
+    }
+    return servers[0]?.id ?? "";
+  });
 
   const serverOptions = computed<Array<{ label: string; value: string }>>(() =>
     serversStore.servers.map((server) => ({

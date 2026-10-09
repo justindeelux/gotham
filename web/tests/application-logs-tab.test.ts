@@ -29,6 +29,7 @@ interface LogProbe {
   apps: Application[];
   deployments: Record<string, Deployment[]>;
   servers: Server[];
+  serversError?: unknown;
 }
 
 /** logProbe holds the canned API answers driving the detail composable. */
@@ -52,7 +53,15 @@ vi.mock("@/features/applications/api/applications", async (importOriginal) => {
 vi.mock("@/features/servers/api/servers", async (importOriginal) => {
   const original =
     await importOriginal<typeof import("@/features/servers/api/servers")>();
-  return { ...original, listServers: async () => [...logProbe().servers] };
+  return {
+    ...original,
+    listServers: async () => {
+      if (logProbe().serversError !== undefined && logProbe().serversError !== null) {
+        throw logProbe().serversError;
+      }
+      return [...logProbe().servers];
+    },
+  };
 });
 
 vi.mock("@/features/applications/api/previews", async (importOriginal) => {
@@ -158,6 +167,7 @@ beforeEach(() => {
   probe.apps = [];
   probe.deployments = {};
   probe.servers = [];
+  probe.serversError = null;
 });
 
 /** props builds tab props with a selected node and deployment. */
@@ -370,7 +380,7 @@ describe("useApplicationDetail Logs tab derived defaults", () => {
     }
   });
 
-  it("falls back to the first node when the application node is unknown", async () => {
+  it("streams the application node when it is missing from the server list", async () => {
     probe.apps = [app("app-1", "ghost-node")];
     probe.deployments = { "app-1": [dep("deploy-1", "failed")] };
     probe.servers = [srv("server-1"), srv("server-2")];
@@ -378,6 +388,37 @@ describe("useApplicationDetail Logs tab derived defaults", () => {
     try {
       expect(detail.logServerId.value).toBe("");
       expect(detail.displayedLogServerId.value).toBe("server-1");
+      expect(detail.effectiveLogServerId.value).toBe("ghost-node");
+    } finally {
+      stopTimers();
+      wrapper.unmount();
+    }
+  });
+
+  it("streams the application node while the server list has not loaded yet", async () => {
+    probe.apps = [app("app-1", "server-1")];
+    probe.deployments = { "app-1": [dep("deploy-1", "failed")] };
+    probe.servers = [];
+    const { wrapper, detail } = await mountDetail("app-1");
+    try {
+      expect(useServersStore().servers).toHaveLength(0);
+      expect(detail.displayedLogServerId.value).toBe("");
+      expect(detail.effectiveLogServerId.value).toBe("server-1");
+    } finally {
+      stopTimers();
+      wrapper.unmount();
+    }
+  });
+
+  it("keeps streaming the application node when the server list fetch fails", async () => {
+    probe.apps = [app("app-1", "server-1")];
+    probe.deployments = { "app-1": [dep("deploy-1", "failed")] };
+    probe.servers = [];
+    probe.serversError = new Error("nodes unreachable");
+    const { wrapper, detail } = await mountDetail("app-1");
+    try {
+      expect(useServersStore().servers).toHaveLength(0);
+      expect(detail.displayedLogServerId.value).toBe("");
       expect(detail.effectiveLogServerId.value).toBe("server-1");
     } finally {
       stopTimers();

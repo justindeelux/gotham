@@ -252,7 +252,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7,
     COALESCE($12::text, ''),
     COALESCE($13::text, '')
 )
-RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at
+RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at, build_log
 `
 
 type CreateDeploymentParams struct {
@@ -310,6 +310,7 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.CommitMessage,
 		&i.CommitAuthor,
 		&i.CommittedAt,
+		&i.BuildLog,
 	)
 	return i, err
 }
@@ -346,7 +347,7 @@ func (q *Queries) FailStaleDeployments(ctx context.Context) (int64, error) {
 }
 
 const getActiveDeploymentByApp = `-- name: GetActiveDeploymentByApp :one
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at, build_log FROM deployments
 WHERE application_id = $1 AND state NOT IN ('running', 'failed')
 ORDER BY created_at DESC
 LIMIT 1
@@ -377,6 +378,7 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 		&i.CommitMessage,
 		&i.CommitAuthor,
 		&i.CommittedAt,
+		&i.BuildLog,
 	)
 	return i, err
 }
@@ -422,7 +424,7 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at, build_log FROM deployments
 WHERE id = $1 AND application_id = $2
 `
 
@@ -456,6 +458,7 @@ func (q *Queries) GetDeployment(ctx context.Context, arg GetDeploymentParams) (D
 		&i.CommitMessage,
 		&i.CommitAuthor,
 		&i.CommittedAt,
+		&i.BuildLog,
 	)
 	return i, err
 }
@@ -819,7 +822,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 }
 
 const listDeploymentsByApp = `-- name: ListDeploymentsByApp :many
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at, build_log FROM deployments
 WHERE application_id = $1
 ORDER BY created_at DESC, id DESC
 `
@@ -855,6 +858,7 @@ func (q *Queries) ListDeploymentsByApp(ctx context.Context, applicationID pgtype
 			&i.CommitMessage,
 			&i.CommitAuthor,
 			&i.CommittedAt,
+			&i.BuildLog,
 		); err != nil {
 			return nil, err
 		}
@@ -867,7 +871,7 @@ func (q *Queries) ListDeploymentsByApp(ctx context.Context, applicationID pgtype
 }
 
 const listDeploymentsByAppLimit = `-- name: ListDeploymentsByAppLimit :many
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at, build_log FROM deployments
 WHERE application_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2
@@ -909,6 +913,7 @@ func (q *Queries) ListDeploymentsByAppLimit(ctx context.Context, arg ListDeploym
 			&i.CommitMessage,
 			&i.CommitAuthor,
 			&i.CommittedAt,
+			&i.BuildLog,
 		); err != nil {
 			return nil, err
 		}
@@ -1153,7 +1158,7 @@ SET state = $2,
     committed_at = $16,
     updated_at = now()
 WHERE id = $1
-RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at
+RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at, build_log
 `
 
 type UpdateDeploymentParams struct {
@@ -1217,6 +1222,26 @@ func (q *Queries) UpdateDeployment(ctx context.Context, arg UpdateDeploymentPara
 		&i.CommitMessage,
 		&i.CommitAuthor,
 		&i.CommittedAt,
+		&i.BuildLog,
 	)
 	return i, err
+}
+
+const updateDeploymentBuildLog = `-- name: UpdateDeploymentBuildLog :exec
+UPDATE deployments
+SET build_log = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type UpdateDeploymentBuildLogParams struct {
+	ID       pgtype.UUID `json:"id"`
+	BuildLog string      `json:"build_log"`
+}
+
+// Persists the capped build log of a finished deployment (JUS-84). It runs
+// outside the state-machine writes so a transition can never clobber it.
+func (q *Queries) UpdateDeploymentBuildLog(ctx context.Context, arg UpdateDeploymentBuildLogParams) error {
+	_, err := q.db.Exec(ctx, updateDeploymentBuildLog, arg.ID, arg.BuildLog)
+	return err
 }

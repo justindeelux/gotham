@@ -87,6 +87,10 @@ type Repository interface {
 	FailStaleDeployments(ctx context.Context) (int64, error)
 	// UpdateDeployment persists the mutable deployment fields.
 	UpdateDeployment(ctx context.Context, dep Deployment) (Deployment, error)
+	// UpdateDeploymentBuildLog persists the capped build log of a finished
+	// deployment (JUS-84). Best effort: a failure must only warn, never fail
+	// the run it records.
+	UpdateDeploymentBuildLog(ctx context.Context, id uuid.UUID, log string) error
 	// ListEnvVars returns the application's plain environment variables.
 	ListEnvVars(ctx context.Context, appID uuid.UUID) ([]EnvVar, error)
 	// ListSecrets returns the application's sealed secrets.
@@ -628,6 +632,19 @@ func (r *storeRepository) UpdateDeployment(ctx context.Context, dep Deployment) 
 	return deploymentFromRow(row), nil
 }
 
+// UpdateDeploymentBuildLog persists the capped build log of a finished
+// deployment (JUS-84). It runs outside the state-machine writes so a
+// transition can never clobber it.
+func (r *storeRepository) UpdateDeploymentBuildLog(ctx context.Context, id uuid.UUID, log string) error {
+	if err := r.store.UpdateDeploymentBuildLog(ctx, sqlc.UpdateDeploymentBuildLogParams{
+		ID:       pgUUID(id),
+		BuildLog: log,
+	}); err != nil {
+		return fmt.Errorf("deploy: update deployment build log: %w", err)
+	}
+	return nil
+}
+
 // ListEnvVars loads the application's plain environment variables.
 func (r *storeRepository) ListEnvVars(ctx context.Context, appID uuid.UUID) ([]EnvVar, error) {
 	rows, err := r.store.ListEnvVarsByApp(ctx, pgUUID(appID))
@@ -1130,6 +1147,8 @@ func deploymentFromRow(row sqlc.Deployment) Deployment {
 		CommitMessage: row.CommitMessage,
 		CommitAuthor:  row.CommitAuthor,
 		CommittedAt:   row.CommittedAt,
+		// The capped build log stored at the terminal state (JUS-84).
+		BuildLog: row.BuildLog,
 	}
 }
 

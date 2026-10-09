@@ -260,6 +260,12 @@ func (s *Store) UpdateDeployment(ctx context.Context, params sqlc.UpdateDeployme
 	return s.queries.UpdateDeployment(ctx, params)
 }
 
+// UpdateDeploymentBuildLog persists the capped build log of a finished
+// deployment (JUS-84).
+func (s *Store) UpdateDeploymentBuildLog(ctx context.Context, params sqlc.UpdateDeploymentBuildLogParams) error {
+	return s.queries.UpdateDeploymentBuildLog(ctx, params)
+}
+
 // ListEnvVarsByApp returns an application's plain environment variables, sorted
 // by key.
 func (s *Store) ListEnvVarsByApp(ctx context.Context, applicationID pgtype.UUID) ([]sqlc.EnvVar, error) {

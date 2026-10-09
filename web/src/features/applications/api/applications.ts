@@ -20,6 +20,7 @@ import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers
  *   POST   /applications/{id}/start
  *   POST   /applications/{id}/deploy
  *   GET    /applications/{id}/deployments
+ *   GET    /applications/{id}/deployments/{deploymentId}/logs
  *   POST   /applications/{id}/rollback
  *   POST   /applications/{id}/deploy-key
  *   GET    /applications/{id}/deploy-key
@@ -329,6 +330,27 @@ export async function listDeployments(
     limit > 0 ? { params: { limit } } : undefined,
   );
   return response.data.deployments ?? [];
+}
+
+/** Wire envelope for one persisted build log (see deploymentLogEnvelope). */
+interface DeploymentLogEnvelope {
+  log: string;
+}
+
+/**
+ * getDeploymentBuildLog returns the build log stored when the deployment
+ * reached a terminal state (GET .../deployments/{deploymentId}/logs → 200).
+ * It is empty while the run is in flight, when the caller should stream the
+ * realtime channel instead.
+ */
+export async function getDeploymentBuildLog(
+  appId: string,
+  deploymentId: string,
+): Promise<string> {
+  const response = await http.get<DeploymentLogEnvelope>(
+    `/applications/${appId}/deployments/${deploymentId}/logs`,
+  );
+  return response.data.log ?? "";
 }
 
 /**

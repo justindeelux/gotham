@@ -107,6 +107,7 @@ const en = {
     title: "deploy {id} · build log",
     buildLog: "Build log",
     empty: "Select a deployment to stream its logs.",
+    storedEmpty: "No stored log for this deployment.",
   },
   envTab: {
     title: "Environment variables",

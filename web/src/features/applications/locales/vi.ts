@@ -108,6 +108,7 @@ const vi: ApplicationsMessages = {
     title: "triển khai {id} · nhật ký build",
     buildLog: "Nhật ký build",
     empty: "Chọn một đợt triển khai để xem nhật ký trực tiếp.",
+    storedEmpty: "Đợt triển khai này chưa có nhật ký lưu trữ.",
   },
   envTab: {
     title: "Biến môi trường",

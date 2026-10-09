@@ -143,6 +143,14 @@ RETURNING *;
 SELECT * FROM deployments
 WHERE id = $1 AND application_id = $2;
 
+-- name: UpdateDeploymentBuildLog :exec
+-- Persists the capped build log of a finished deployment (JUS-84). It runs
+-- outside the state-machine writes so a transition can never clobber it.
+UPDATE deployments
+SET build_log = $2,
+    updated_at = now()
+WHERE id = $1;
+
 -- name: ListDeploymentsByApp :many
 SELECT * FROM deployments
 WHERE application_id = $1

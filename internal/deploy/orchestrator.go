@@ -62,6 +62,8 @@ type runState struct {
 	repoDir  string
 	target   Target
 	log      func(string)
+	// rec tees every emitted line for the persisted build log (JUS-84).
+	rec *logRecorder
 	// composeRaw is the unresolved compose document of a compose run
 	// (stored text or the file read from the checkout); composeYAML is the
 	// rendered document with the port mapping injected, composeImages the
@@ -250,8 +252,10 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 		dep:      j.dep,
 		previous: j.previous,
 		target:   Target{ServerID: j.app.ServerID, DeploymentID: j.dep.ID},
+		rec:      &logRecorder{},
 	}
 	st.log = func(line string) {
+		st.rec.record(line)
 		o.emitter.Log(ctx, st.target, line)
 	}
 	defer func() {
@@ -925,9 +929,24 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 	st.dep = updated
 	o.emitter.State(ctx, st.target, from, to)
 	if to.Terminal() {
+		o.persistBuildLog(ctx, st)
 		o.notify(ctx, st, to)
 	}
 	return nil
+}
+
+// persistBuildLog stores the run's teed lines on the deployment row. Best
+// effort: a failure is logged and never fails the run it records.
+func (o *Orchestrator) persistBuildLog(ctx context.Context, st *runState) {
+	if o.repo == nil {
+		return
+	}
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := o.repo.UpdateDeploymentBuildLog(persistCtx, st.dep.ID, st.rec.finalize()); err != nil {
+		o.logger.Warn("deploy: could not persist build log",
+			"deployment_id", st.dep.ID, "error", err)
+	}
 }
 
 // fail records the terminal failure: the error text on the row, the failed
@@ -950,6 +969,8 @@ func (o *Orchestrator) fail(ctx context.Context, st *runState, cause error) {
 		return
 	}
 	st.log("deployment failed: " + st.dep.Error)
+	// The final line above is part of the stored log, so persist after it.
+	o.persistBuildLog(fresh, st)
 }
 
 // forceFail writes the terminal failed state unconditionally, emitting the

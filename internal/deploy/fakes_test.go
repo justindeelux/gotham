@@ -709,6 +709,21 @@ func (r *fakeRepository) UpdateDeployment(_ context.Context, dep Deployment) (De
 	return Deployment{}, ErrNotFound
 }
 
+// UpdateDeploymentBuildLog implements Repository: it stores the log on the
+// matching row, exactly like the production query.
+func (r *fakeRepository) UpdateDeploymentBuildLog(_ context.Context, id uuid.UUID, log string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, existing := range r.deployments {
+		if existing.ID == id {
+			existing.BuildLog = log
+			r.deployments[i] = existing
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 // ListEnvVars implements Repository, scoped to the application (a fixture row
 // without an application id belongs to whichever application is asked for).
 func (r *fakeRepository) ListEnvVars(_ context.Context, appID uuid.UUID) ([]EnvVar, error) {

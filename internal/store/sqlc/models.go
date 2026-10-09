@@ -182,6 +182,7 @@ type Deployment struct {
 	CommitMessage   string             `json:"commit_message"`
 	CommitAuthor    string             `json:"commit_author"`
 	CommittedAt     string             `json:"committed_at"`
+	BuildLog        string             `json:"build_log"`
 }
 
 type DnsProvider struct {

@@ -488,6 +488,30 @@ test("JUS-69 add resource modal pins its header and scrolls only the body", asyn
   }
 });
 
+test("JUS-69 add server wizard keeps its footer visible at a 520px height", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 520 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers`);
+  await page.locator(".servers-page").waitFor();
+  await page.getByRole("button", { name: "Add server" }).first().click();
+  const wizard = page.locator(".n-modal.wizard-modal");
+  await expect(wizard.getByRole("heading", { name: "Add server", exact: true })).toBeVisible();
+  // The 420px floor is gone: the card fits the short viewport instead of
+  // clipping the footer, and the step body takes the scroll.
+  const cardBox = await wizard.boundingBox();
+  expect(cardBox, "wizard card has a box").not.toBeNull();
+  expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(520);
+  for (const name of ["Cancel", "Create & continue"]) {
+    const action = wizard.locator(".wizard-foot").getByRole("button", { name });
+    await expect(action, `${name} visible`).toBeVisible();
+    const box = await action.boundingBox();
+    expect(box, `${name} has a box`).not.toBeNull();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(520);
+  }
+});
+
 test("JUS-69 create application modal keeps its footer visible on Dockerfile and Compose steps", async ({
   page,
 }) => {
@@ -516,6 +540,17 @@ test("JUS-69 create application modal keeps its footer visible on Dockerfile and
     const footBox = await cont.boundingBox();
     expect(footBox, `${source} footer has a box`).not.toBeNull();
     expect(footBox!.y + footBox!.height).toBeLessThanOrEqual(640);
+    // The step body is the element that scrolls; the card body itself never does.
+    const stepBody = wizard.locator(".wizard-body");
+    expect(
+      await stepBody.evaluate((element) => element.scrollHeight),
+      `${source} step body overflows`,
+    ).toBeGreaterThan(await stepBody.evaluate((element) => element.clientHeight));
+    const cardContent = wizard.locator(".n-card-content");
+    expect(
+      await cardContent.evaluate((element) => element.scrollHeight),
+      `${source} card body does not scroll`,
+    ).toBeLessThanOrEqual(await cardContent.evaluate((element) => element.clientHeight));
     await page.keyboard.press("Escape");
   }
 });

@@ -333,7 +333,9 @@ a {
   flex: 0 0 auto;
 }
 
-/* Plain card modals (Add resource, edit server) scroll the card body. */
+/* Plain card modals (Add resource, edit server) scroll the card body. The
+ * edit modal keeps its component-local flex column on .n-card-content
+ * (EditServerModal.vue); the scroll and bounds here compose with it. */
 .app-modal.n-modal.n-card > .n-card-content,
 .edit-server-modal.n-modal.n-card > .n-card-content {
   flex: 1 1 auto;

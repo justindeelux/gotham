@@ -111,8 +111,8 @@ const previewsTab = computed<string>(() =>
 
         <NTabPane name="logs" :tab="t('applications.tabs.logs')">
           <ApplicationLogsTab
-            :log-server-id="detail.logServerId.value"
-            :log-deployment-id="detail.logDeploymentId.value"
+            :log-server-id="detail.displayedLogServerId.value"
+            :log-deployment-id="detail.displayedLogDeploymentId.value"
             :server-options="detail.serverOptions.value"
             :deployment-options="detail.deploymentOptions.value"
             :active-deployment-id="detail.active.value?.id ?? ''"

@@ -208,14 +208,8 @@ export function useApplicationDetail() {
     () => deployments.value.find((item) => item.id === logDeploymentId.value) ?? active.value ?? latest.value,
   );
 
-  /** effectiveLogServerId prefers the application's node, then the selection. */
-  const effectiveLogServerId = computed<string>(
-    () =>
-      logServerId.value ||
-      application.value?.server_id ||
-      serversStore.servers[0]?.id ||
-      "",
-  );
+  /** effectiveLogServerId streams the displayed node pick (explicit or default). */
+  const effectiveLogServerId = computed<string>(() => displayedLogServerId.value);
 
   const serverOptions = computed<Array<{ label: string; value: string }>>(() =>
     serversStore.servers.map((server) => ({
@@ -231,25 +225,41 @@ export function useApplicationDetail() {
     })),
   );
 
-  // Default the Logs tab picks once their option lists arrive: logTarget
-  // already falls back to the newest deployment, but an empty NSelect value
-  // matches no option and renders blank. Keep an explicit user pick.
-  watch([deployments, active, latest], () => {
-    if (
-      logDeploymentId.value !== "" &&
-      deployments.value.some((item) => item.id === logDeploymentId.value)
-    ) {
-      return;
+  /**
+   * Logs tab picks stay explicit-only: an empty id means "follow the
+   * default", so the tab keeps tracking the active/latest deployment and the
+   * application node without default-writing watchers (no ordering bugs, no
+   * stale pins, warm caches and late arrivals just work).
+   */
+  const defaultLogDeploymentId = computed<string>(
+    () => active.value?.id ?? latest.value?.id ?? "",
+  );
+
+  /** displayedLogDeploymentId shows the explicit pick while listed, else the default. */
+  const displayedLogDeploymentId = computed<string>(() =>
+    logDeploymentId.value !== "" &&
+    deployments.value.some((item) => item.id === logDeploymentId.value)
+      ? logDeploymentId.value
+      : defaultLogDeploymentId.value,
+  );
+
+  /** defaultLogServerId prefers the application node when known, else the first node. */
+  const defaultLogServerId = computed<string>(() => {
+    const servers = serversStore.servers;
+    const appServer = application.value?.server_id ?? "";
+    if (appServer !== "" && servers.some((server) => server.id === appServer)) {
+      return appServer;
     }
-    logDeploymentId.value = active.value?.id ?? latest.value?.id ?? "";
+    return servers[0]?.id ?? "";
   });
-  watch([() => application.value?.server_id, () => serversStore.servers], () => {
-    if (logServerId.value !== "") {
-      return;
-    }
-    logServerId.value =
-      application.value?.server_id ?? serversStore.servers[0]?.id ?? "";
-  });
+
+  /** displayedLogServerId shows the explicit pick while listed, else the default. */
+  const displayedLogServerId = computed<string>(() =>
+    logServerId.value !== "" &&
+    serversStore.servers.some((server) => server.id === logServerId.value)
+      ? logServerId.value
+      : defaultLogServerId.value,
+  );
 
   /** pipelineSteps maps the latest deployment onto done/active/todo/failed. */
   const pipelineSteps = computed(() => pipelineStepsFor(latest.value));
@@ -764,6 +774,8 @@ export function useApplicationDetail() {
     pipelineSteps,
     logDeploymentId,
     logServerId,
+    displayedLogDeploymentId,
+    displayedLogServerId,
     logTarget,
     effectiveLogServerId,
     serverOptions,

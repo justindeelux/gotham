@@ -49,9 +49,6 @@ function removeRow(index: number): void {
 
 <template>
   <NSpace vertical :size="8">
-    <NAlert type="warning" :show-icon="true">
-      {{ t("applications.buildArgs.secretWarning") }}
-    </NAlert>
     <div v-for="(row, index) in props.modelValue" :key="index" class="arg-row">
       <NInput
         :value="row.key"
@@ -76,6 +73,9 @@ function removeRow(index: number): void {
     <NButton dashed size="small" @click="addRow">
       {{ t("applications.buildArgs.add") }}
     </NButton>
+    <NAlert class="arg-alert" type="warning" :show-icon="false">
+      {{ t("applications.buildArgs.secretWarning") }}
+    </NAlert>
   </NSpace>
 </template>
 
@@ -85,5 +85,11 @@ function removeRow(index: number): void {
   grid-template-columns: 1fr 1fr auto;
   gap: var(--space-2);
   align-items: center;
+}
+
+/* NAlert has no size prop: the compact inline look is tighter padding. */
+.arg-alert {
+  padding: 6px 10px;
+  font-size: var(--text-xs);
 }
 </style>

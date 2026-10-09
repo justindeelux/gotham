@@ -237,8 +237,7 @@ const en = {
   },
   wizard: {
     title: "Create application",
-    intro:
-      "Pick a source, build pack, port and domain, then deploy. Source, build pack and runtime are fixed once created; environment variables, volumes and domains can be changed afterwards.",
+    intro: "Source, build pack and runtime are fixed after creation.",
     railNote: "The webhook is created automatically after the first deploy.",
     steps: {
       source: "Source",
@@ -272,7 +271,7 @@ const en = {
     repoTruncatedHint: "The list hit the server bound — very large installations may miss repositories.",
     sourceType: "Source type",
     sourceTypePlaceholder: "Select a source type",
-    sourceTypeHint: "Public and private git, connected GitHub/GitLab, pasted Dockerfiles, container images and Docker Compose deploy today.",
+    sourceTypeHint: "Choose how the application source is provided.",
     sourceGitPublic: "Public git repository",
     sourceGitPrivate: "Private git repository",
     sourceGithubApp: "GitHub (connected)",
@@ -287,10 +286,10 @@ const en = {
     imageRef: "Image reference",
     imageRefHint: "registry/repo:tag, optionally pinned with {'@'}sha256:.... Redeploys pull the tag again; rollbacks use the recorded digest.",
     registryUsername: "Registry username",
-    registryUsernamePlaceholder: "Only needed for a private registry",
+    registryUsernamePlaceholder: "Optional",
     registryUsernameHint: "Optional. Stored on the server and never shown again.",
     registryPassword: "Registry password or token",
-    registryPasswordPlaceholder: "Only needed for a private registry",
+    registryPasswordPlaceholder: "Optional",
     registryPasswordHint: "Optional. Sealed at rest and never shown again.",
     imageLatestWarn:
       "This reference follows the moving latest tag: every redeploy pulls whatever the tag points at then. Pin a digest ({'@'}sha256:...) to freeze a release.",

@@ -713,6 +713,22 @@ export function useCreateAppWizard(
     buildPackSkipped.value && step.value > 1 ? step.value : step.value + 1,
   );
 
+  /**
+   * visibleStepNames derives the rail from the same visited list as the
+   * counter: a skipped build pack hides its rail entry, so the rail length
+   * always equals stepTotal.
+   */
+  const visibleStepNames = computed<string[]>(() =>
+    buildPackSkipped.value
+      ? [stepNames.value[0], stepNames.value[2], stepNames.value[3], stepNames.value[4]]
+      : stepNames.value,
+  );
+
+  /** visibleStepIndex maps the raw step onto its rail position. */
+  const visibleStepIndex = computed<number>(() =>
+    buildPackSkipped.value && step.value > 1 ? step.value - 1 : step.value,
+  );
+
   /** stepTotal renders the visited step count (4 without build pack). */
   const stepTotal = computed<number>(() => (buildPackSkipped.value ? 4 : 5));
 
@@ -1256,6 +1272,8 @@ export function useCreateAppWizard(
     buildPackSkipped,
     stepPosition,
     stepTotal,
+    visibleStepNames,
+    visibleStepIndex,
     nextStep,
     prevStep,
     reviewSource,

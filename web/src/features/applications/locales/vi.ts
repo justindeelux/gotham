@@ -238,8 +238,7 @@ const vi: ApplicationsMessages = {
   },
   wizard: {
     title: "Tạo ứng dụng",
-    intro:
-      "Chọn nguồn, gói build, cổng và tên miền, rồi triển khai. Nguồn, gói build và runtime cố định sau khi tạo; biến môi trường, volume và tên miền có thể đổi sau.",
+    intro: "Nguồn, gói build và runtime sẽ cố định sau khi tạo.",
     railNote: "Webhook được tạo tự động sau đợt triển khai đầu tiên.",
     steps: {
       source: "Nguồn",
@@ -273,7 +272,7 @@ const vi: ApplicationsMessages = {
     repoTruncatedHint: "Danh sách chạm giới hạn máy chủ — installation rất lớn có thể thiếu kho.",
     sourceType: "Loại nguồn",
     sourceTypePlaceholder: "Chọn loại nguồn",
-    sourceTypeHint: "Git công khai/riêng tư, GitHub/GitLab đã kết nối, Dockerfile dán sẵn, container image và Docker Compose triển khai được ngay.",
+    sourceTypeHint: "Chọn cách cung cấp nguồn của ứng dụng.",
     sourceGitPublic: "Kho git công khai",
     sourceGitPrivate: "Kho git riêng tư",
     sourceGithubApp: "GitHub (đã kết nối)",
@@ -287,10 +286,10 @@ const vi: ApplicationsMessages = {
     imageRef: "Tham chiếu image",
     imageRefHint: "registry/repo:tag, có thể ghim bằng {'@'}sha256:.... Triển khai lại sẽ pull lại tag; rollback dùng digest đã ghi.",
     registryUsername: "Tên đăng nhập registry",
-    registryUsernamePlaceholder: "Chỉ cần cho registry riêng",
+    registryUsernamePlaceholder: "Tùy chọn",
     registryUsernameHint: "Tùy chọn. Lưu trên server và không hiển thị lại.",
     registryPassword: "Mật khẩu hoặc token registry",
-    registryPasswordPlaceholder: "Chỉ cần cho registry riêng",
+    registryPasswordPlaceholder: "Tùy chọn",
     registryPasswordHint: "Tùy chọn. Lưu mã hóa và không hiển thị lại.",
     imageLatestWarn:
       "Tham chiếu này bám theo tag latest luôn trôi: mỗi lần triển khai lại pull đúng nội dung tag lúc đó. Ghim digest ({'@'}sha256:...) để cố định bản phát hành.",

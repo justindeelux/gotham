@@ -71,11 +71,11 @@ const stepCounter = computed<string>(() =>
       <div class="wizard-rail">
         <ol>
           <li
-            v-for="(label, index) in wizard.stepNames.value"
+            v-for="(label, index) in wizard.visibleStepNames.value"
             :key="label"
             :class="{
-              'is-active': wizard.step.value === index,
-              'is-done': wizard.step.value > index,
+              'is-active': wizard.visibleStepIndex.value === index,
+              'is-done': wizard.visibleStepIndex.value > index,
             }"
           >
             <span class="idx">{{ index + 1 }}</span>{{ label }}

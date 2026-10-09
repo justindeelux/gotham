@@ -58,6 +58,9 @@ const { t } = useI18n();
           :status="editor.fileValid.value ? undefined : 'error'"
         />
       </NFormItem>
+      <NAlert class="notice-inline" type="warning" :show-icon="false">
+        {{ t("applications.compose.secretsHint") }}
+      </NAlert>
       <NFormItem :label="t('applications.compose.service')">
         <NSelect
           v-model:value="editor.service.value"
@@ -68,9 +71,6 @@ const { t } = useI18n();
           tag
         />
       </NFormItem>
-      <NAlert type="warning" :show-icon="false">
-        {{ t("applications.compose.secretsHint") }}
-      </NAlert>
       <NSpace v-if="props.canWrite" align="center" :size="8" :wrap="false">
         <NButton
           type="primary"
@@ -90,6 +90,12 @@ const { t } = useI18n();
 
 <style scoped>
 .small {
+  font-size: var(--text-xs);
+}
+
+/* NAlert has no size prop: the compact inline look is tighter padding. */
+.notice-inline {
+  padding: 6px 10px;
   font-size: var(--text-xs);
 }
 </style>

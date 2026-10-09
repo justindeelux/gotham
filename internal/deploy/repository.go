@@ -523,9 +523,14 @@ func (r *storeRepository) CreateDeployment(ctx context.Context, dep Deployment) 
 		RollbackFrom:  pgUUID(dep.RollbackFrom),
 		// The compose document travels only for compose rollbacks (see
 		// Rollback); every other deployment stores empty values through the
-		// COALESCE defaults.
+		// COALESCE defaults. The commit metadata travels the same way: a
+		// fresh clone records it, a rollback copies the target's.
 		ComposeDocument: dep.ComposeDocument,
 		ComposeCommit:   dep.ComposeCommit,
+		CommitSha:       dep.CommitSHA,
+		CommitMessage:   dep.CommitMessage,
+		CommitAuthor:    dep.CommitAuthor,
+		CommittedAt:     dep.CommittedAt,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -608,6 +613,11 @@ func (r *storeRepository) UpdateDeployment(ctx context.Context, dep Deployment) 
 		// compose run here, so a rollback re-applies this release's file.
 		ComposeDocument: dep.ComposeDocument,
 		ComposeCommit:   dep.ComposeCommit,
+		// The clone step records the commit it checked out here.
+		CommitSha:     dep.CommitSHA,
+		CommitMessage: dep.CommitMessage,
+		CommitAuthor:  dep.CommitAuthor,
+		CommittedAt:   dep.CommittedAt,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1114,6 +1124,12 @@ func deploymentFromRow(row sqlc.Deployment) Deployment {
 		// never returned by the API.
 		ComposeDocument: row.ComposeDocument,
 		ComposeCommit:   row.ComposeCommit,
+		// The git commit the deployment cloned, empty for sources that
+		// never clone. The author is the name without the email.
+		CommitSHA:     row.CommitSha,
+		CommitMessage: row.CommitMessage,
+		CommitAuthor:  row.CommitAuthor,
+		CommittedAt:   row.CommittedAt,
 	}
 }
 

@@ -126,11 +126,16 @@ DELETE FROM applications WHERE id = $1;
 -- name: CreateDeployment :one
 INSERT INTO deployments (
     application_id, kind, state, image_tag, registry_image, digest, rollback_from,
-    compose_document, compose_commit
+    compose_document, compose_commit,
+    commit_sha, commit_message, commit_author, committed_at
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7,
     COALESCE(sqlc.arg(compose_document)::text, ''),
-    COALESCE(sqlc.arg(compose_commit)::text, '')
+    COALESCE(sqlc.arg(compose_commit)::text, ''),
+    COALESCE(sqlc.arg(commit_sha)::text, ''),
+    COALESCE(sqlc.arg(commit_message)::text, ''),
+    COALESCE(sqlc.arg(commit_author)::text, ''),
+    COALESCE(sqlc.arg(committed_at)::text, '')
 )
 RETURNING *;
 
@@ -168,6 +173,10 @@ SET state = $2,
     finished_at = $10,
     compose_document = $11,
     compose_commit = $12,
+    commit_sha = $13,
+    commit_message = $14,
+    commit_author = $15,
+    committed_at = $16,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

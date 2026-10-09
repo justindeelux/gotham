@@ -178,6 +178,10 @@ type Deployment struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 	ComposeDocument string             `json:"compose_document"`
 	ComposeCommit   string             `json:"compose_commit"`
+	CommitSha       string             `json:"commit_sha"`
+	CommitMessage   string             `json:"commit_message"`
+	CommitAuthor    string             `json:"commit_author"`
+	CommittedAt     string             `json:"committed_at"`
 }
 
 type DnsProvider struct {

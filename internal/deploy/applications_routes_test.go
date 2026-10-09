@@ -838,6 +838,7 @@ func TestRoutesStopStart(t *testing.T) {
 		// are the keys every answer has.
 		assertJSONKeys(t, mustJSON(t, rec.Body.Bytes(), "deployment"),
 			"id", "application_id", "kind", "state", "attempt", "container_id",
+			"commit_sha", "commit_message", "commit_author", "committed_at",
 			"created_at", "updated_at")
 		if svc.seenApplication != appID {
 			t.Errorf("service saw application %s, want %s", svc.seenApplication, appID)

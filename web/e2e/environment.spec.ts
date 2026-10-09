@@ -123,7 +123,7 @@ test.describe("environment page", () => {
 
     // ── Add resource: the app wizard takes the route scope ───────────────
     await page.getByRole("button", { name: "Add resource" }).click();
-    await page.locator(".kind-card", { hasText: "Application" }).click();
+    await page.locator(".n-modal button.res-card", { hasText: "Build and deploy from a Git repository." }).click();
     const wizard = page.locator(".wizard-modal");
     await expect(wizard).toBeVisible();
     await expect(wizard).toContainText(`${projectName} / production`);

@@ -307,9 +307,12 @@ func TestTruncateError(t *testing.T) {
 	if short != "boom" {
 		t.Errorf("truncateError = %q, want boom", short)
 	}
-	long := truncateError(errors.New(strings.Repeat("x", 4000)))
-	if len([]rune(long)) > 1001 {
+	long := truncateError(errors.New(strings.Repeat("x", 8000)))
+	if len([]rune(long)) > 4097 {
 		t.Errorf("long error was not truncated: %d runes", len([]rune(long)))
+	}
+	if got := truncateError(errors.New(strings.Repeat("y", 4096))); len(got) != 4096 {
+		t.Errorf("truncateError kept %d runes of a 4 KiB error; want it intact", len([]rune(got)))
 	}
 }
 

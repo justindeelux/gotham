@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -138,12 +139,15 @@ func Run(ctx context.Context, engine Engine, opts Options) error {
 // run executes the CLI in its working directory and streams stdout and stderr
 // to opts.LogWriter as they are produced, prefixed with the command line so the
 // deploy log shows what ran. A cancelled context stops the tool and reports the
-// context error.
+// context error. A failed tool reports the last lines of its output in the
+// error so the deploy row keeps the cause after the live log is gone.
 func run(ctx context.Context, name string, args []string, opts Options) error {
 	sink := opts.LogWriter
 	if sink == nil {
 		sink = io.Discard
 	}
+	tail := newOutputTail(buildArgValues(opts.BuildArgs))
+	tee := io.MultiWriter(sink, tail)
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = opts.Dir
 	// The toolchain is tenant-influenced, so it runs with a stripped
@@ -155,16 +159,117 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost)
 	// The same writer on both streams keeps the tool's output together;
 	// os/exec serialises the writes when Stdout and Stderr are equal.
-	command.Stdout = sink
-	command.Stderr = sink
+	command.Stdout = tee
+	command.Stderr = tee
 	_, _ = io.WriteString(sink, redactedCommandLine(name, args)+"\n")
 	if err := command.Run(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return fmt.Errorf("%s build: %w", name, ctxErr)
 		}
+		if last := tail.String(); last != "" {
+			return fmt.Errorf("%s build: %w\n--- last output ---\n%s", name, err, last)
+		}
 		return fmt.Errorf("%s build: %w", name, err)
 	}
 	return nil
+}
+
+// tailMaxLines and tailMaxBytes bound the failure tail kept from a toolchain's
+// combined output: the last lines, capped so one runaway log cannot bloat the
+// deployments row it ends up on.
+const (
+	tailMaxLines = 20
+	tailMaxBytes = 4 << 10
+)
+
+// ansiEscape strips terminal colour and cursor sequences from captured output
+// so the persisted tail is plain text.
+var ansiEscape = regexp.MustCompile("\x1b\\[[0-9;?]*[a-zA-Z]")
+
+// outputTail keeps the last lines written to it. It is not safe for concurrent
+// use; run shares one instance across both child streams so os/exec serialises
+// the writes.
+type outputTail struct {
+	lines   []string
+	pending strings.Builder
+	size    int
+	masks   []string
+}
+
+// newOutputTail returns a tail that masks every non-empty value in secrets.
+func newOutputTail(secrets []string) *outputTail {
+	masks := make([]string, 0, len(secrets))
+	for _, secret := range secrets {
+		if secret != "" {
+			masks = append(masks, secret)
+		}
+	}
+	return &outputTail{masks: masks}
+}
+
+// Write buffers p, splitting complete lines into the bounded tail.
+func (t *outputTail) Write(p []byte) (int, error) {
+	t.pending.Write(p)
+	for {
+		line, ok := cutLine(&t.pending)
+		if !ok {
+			break
+		}
+		t.push(line)
+	}
+	return len(p), nil
+}
+
+// String flushes a trailing partial line and returns the kept tail.
+func (t *outputTail) String() string {
+	if rest := t.pending.String(); rest != "" {
+		t.push(rest)
+		t.pending.Reset()
+	}
+	return strings.Join(t.lines, "\n")
+}
+
+// push cleans one raw line (ANSI stripped, secrets masked) and keeps the tail
+// within its line and byte bounds, dropping the oldest lines first.
+func (t *outputTail) push(raw string) {
+	line := ansiEscape.ReplaceAllString(strings.TrimSuffix(raw, "\r"), "")
+	for _, secret := range t.masks {
+		line = strings.ReplaceAll(line, secret, "***")
+	}
+	t.lines = append(t.lines, line)
+	t.size += len(line)
+	for len(t.lines) > tailMaxLines || t.size > tailMaxBytes {
+		t.size -= len(t.lines[0])
+		t.lines = t.lines[1:]
+	}
+}
+
+// cutLine removes the first newline-terminated line from b, reporting false
+// when no complete line is buffered.
+func cutLine(b *strings.Builder) (string, bool) {
+	s := b.String()
+	i := strings.IndexByte(s, '\n')
+	if i < 0 {
+		return "", false
+	}
+	line := s[:i]
+	b.Reset()
+	b.WriteString(s[i+1:])
+	return line, true
+}
+
+// buildArgValues returns the secret values a toolchain may echo back: build
+// args travel as --env KEY=VALUE, so KEY=VALUE lines in the tool's own output
+// can carry them.
+func buildArgValues(args map[string]string) []string {
+	values := make([]string, 0, len(args))
+	for _, value := range args {
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	sort.Strings(values)
+	return values
 }
 
 // toolchainEnv builds the minimal environment passed to a toolchain process.

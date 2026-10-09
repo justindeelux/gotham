@@ -298,12 +298,13 @@ func containerName(app Application, dep Deployment) string {
 }
 
 // truncateError bounds the message persisted on the deployments row so one
-// runaway build log cannot bloat the table.
+// runaway build log cannot bloat the table. The limit fits the ~4 KiB
+// toolchain failure tail buildtool appends to build errors.
 func truncateError(err error) string {
 	if err == nil {
 		return ""
 	}
-	const limit = 1000
+	const limit = 4096
 	message := strings.TrimSpace(err.Error())
 	if len(message) > limit {
 		return message[:limit] + "…"

@@ -191,6 +191,78 @@ func TestRunRedactsBuildArgValues(t *testing.T) {
 	}
 }
 
+// TestRunFailureIncludesOutputTail is the JUS-81 regression: a failing
+// toolchain must report the last lines of its output in the error, so the
+// deploy row keeps the cause after the live log is gone.
+func TestRunFailureIncludesOutputTail(t *testing.T) {
+	dir := t.TempDir()
+	var body strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&body, "echo 'line %02d'\n", i)
+	}
+	body.WriteString("printf '\\033[31mERROR pnpm install failed\\033[0m\\n'\n")
+	body.WriteString("echo 'API_TOKEN=s3cr3t-value'\n")
+	body.WriteString("exit 1\n")
+	fakeCLI(t, RailpackCLI, body.String())
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+
+	var logs bytes.Buffer
+	err := Run(context.Background(), Railpack, Options{
+		Dir:       dir,
+		Tag:       "gotham/app:dep",
+		BuildArgs: map[string]string{"API_TOKEN": "s3cr3t-value"},
+		LogWriter: &logs,
+	})
+	if err == nil {
+		t.Fatal("Run succeeded; want the toolchain failure")
+	}
+	if errors.Is(err, ErrCLIMissing) {
+		t.Fatalf("Run error = %v; a failing CLI is not a missing toolchain", err)
+	}
+	message := err.Error()
+	if !strings.HasPrefix(message, "railpack build: ") {
+		t.Errorf("error = %q; want the existing `railpack build:` prefix", message)
+	}
+	marker := strings.Index(message, "--- last output ---")
+	if marker < 0 {
+		t.Fatalf("error = %q; want the `--- last output ---` section", message)
+	}
+	section := message[marker:]
+	for _, want := range []string{"line 30", "ERROR pnpm install failed", "API_TOKEN=***"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("tail = %q; want it to contain %q", section, want)
+		}
+	}
+	if strings.Contains(section, "line 01") {
+		t.Errorf("tail = %q; want only the last lines kept", section)
+	}
+	if strings.Contains(message, "\x1b[") {
+		t.Errorf("error = %q; want ANSI escape codes stripped", message)
+	}
+	if strings.Contains(message, "s3cr3t-value") {
+		t.Errorf("error = %q; want the build-arg value masked", message)
+	}
+	if len(section) > tailMaxBytes+len("--- last output ---\n")+1 {
+		t.Errorf("tail section is %d bytes; want it bounded near %d", len(section), tailMaxBytes)
+	}
+}
+
+// TestRunFailureWithoutOutput keeps the plain error when the tool fails
+// silently: no tail section is appended to an empty tail.
+func TestRunFailureWithoutOutput(t *testing.T) {
+	dir := t.TempDir()
+	fakeCLI(t, RailpackCLI, "exit 1")
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+
+	err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep"})
+	if err == nil {
+		t.Fatal("Run succeeded; want the toolchain failure")
+	}
+	if strings.Contains(err.Error(), "--- last output ---") {
+		t.Errorf("error = %q; want no tail section for empty output", err)
+	}
+}
+
 func TestRedactedCommandLine(t *testing.T) {
 	tests := []struct {
 		name string

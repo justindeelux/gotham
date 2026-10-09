@@ -241,13 +241,18 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 const createDeployment = `-- name: CreateDeployment :one
 INSERT INTO deployments (
     application_id, kind, state, image_tag, registry_image, digest, rollback_from,
-    compose_document, compose_commit
+    compose_document, compose_commit,
+    commit_sha, commit_message, commit_author, committed_at
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7,
     COALESCE($8::text, ''),
-    COALESCE($9::text, '')
+    COALESCE($9::text, ''),
+    COALESCE($10::text, ''),
+    COALESCE($11::text, ''),
+    COALESCE($12::text, ''),
+    COALESCE($13::text, '')
 )
-RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit
+RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at
 `
 
 type CreateDeploymentParams struct {
@@ -260,6 +265,10 @@ type CreateDeploymentParams struct {
 	RollbackFrom    pgtype.UUID `json:"rollback_from"`
 	ComposeDocument string      `json:"compose_document"`
 	ComposeCommit   string      `json:"compose_commit"`
+	CommitSha       string      `json:"commit_sha"`
+	CommitMessage   string      `json:"commit_message"`
+	CommitAuthor    string      `json:"commit_author"`
+	CommittedAt     string      `json:"committed_at"`
 }
 
 func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error) {
@@ -273,6 +282,10 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		arg.RollbackFrom,
 		arg.ComposeDocument,
 		arg.ComposeCommit,
+		arg.CommitSha,
+		arg.CommitMessage,
+		arg.CommitAuthor,
+		arg.CommittedAt,
 	)
 	var i Deployment
 	err := row.Scan(
@@ -293,6 +306,10 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.UpdatedAt,
 		&i.ComposeDocument,
 		&i.ComposeCommit,
+		&i.CommitSha,
+		&i.CommitMessage,
+		&i.CommitAuthor,
+		&i.CommittedAt,
 	)
 	return i, err
 }
@@ -329,7 +346,7 @@ func (q *Queries) FailStaleDeployments(ctx context.Context) (int64, error) {
 }
 
 const getActiveDeploymentByApp = `-- name: GetActiveDeploymentByApp :one
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at FROM deployments
 WHERE application_id = $1 AND state NOT IN ('running', 'failed')
 ORDER BY created_at DESC
 LIMIT 1
@@ -356,6 +373,10 @@ func (q *Queries) GetActiveDeploymentByApp(ctx context.Context, applicationID pg
 		&i.UpdatedAt,
 		&i.ComposeDocument,
 		&i.ComposeCommit,
+		&i.CommitSha,
+		&i.CommitMessage,
+		&i.CommitAuthor,
+		&i.CommittedAt,
 	)
 	return i, err
 }
@@ -401,7 +422,7 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at FROM deployments
 WHERE id = $1 AND application_id = $2
 `
 
@@ -431,6 +452,10 @@ func (q *Queries) GetDeployment(ctx context.Context, arg GetDeploymentParams) (D
 		&i.UpdatedAt,
 		&i.ComposeDocument,
 		&i.ComposeCommit,
+		&i.CommitSha,
+		&i.CommitMessage,
+		&i.CommitAuthor,
+		&i.CommittedAt,
 	)
 	return i, err
 }
@@ -794,7 +819,7 @@ func (q *Queries) ListApplicationsByUser(ctx context.Context, userID pgtype.UUID
 }
 
 const listDeploymentsByApp = `-- name: ListDeploymentsByApp :many
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at FROM deployments
 WHERE application_id = $1
 ORDER BY created_at DESC, id DESC
 `
@@ -826,6 +851,10 @@ func (q *Queries) ListDeploymentsByApp(ctx context.Context, applicationID pgtype
 			&i.UpdatedAt,
 			&i.ComposeDocument,
 			&i.ComposeCommit,
+			&i.CommitSha,
+			&i.CommitMessage,
+			&i.CommitAuthor,
+			&i.CommittedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -838,7 +867,7 @@ func (q *Queries) ListDeploymentsByApp(ctx context.Context, applicationID pgtype
 }
 
 const listDeploymentsByAppLimit = `-- name: ListDeploymentsByAppLimit :many
-SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit FROM deployments
+SELECT id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at FROM deployments
 WHERE application_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2
@@ -876,6 +905,10 @@ func (q *Queries) ListDeploymentsByAppLimit(ctx context.Context, arg ListDeploym
 			&i.UpdatedAt,
 			&i.ComposeDocument,
 			&i.ComposeCommit,
+			&i.CommitSha,
+			&i.CommitMessage,
+			&i.CommitAuthor,
+			&i.CommittedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1114,9 +1147,13 @@ SET state = $2,
     finished_at = $10,
     compose_document = $11,
     compose_commit = $12,
+    commit_sha = $13,
+    commit_message = $14,
+    commit_author = $15,
+    committed_at = $16,
     updated_at = now()
 WHERE id = $1
-RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit
+RETURNING id, application_id, kind, state, image_tag, registry_image, digest, error, attempt, container_id, rollback_from, started_at, finished_at, created_at, updated_at, compose_document, compose_commit, commit_sha, commit_message, commit_author, committed_at
 `
 
 type UpdateDeploymentParams struct {
@@ -1132,6 +1169,10 @@ type UpdateDeploymentParams struct {
 	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
 	ComposeDocument string             `json:"compose_document"`
 	ComposeCommit   string             `json:"compose_commit"`
+	CommitSha       string             `json:"commit_sha"`
+	CommitMessage   string             `json:"commit_message"`
+	CommitAuthor    string             `json:"commit_author"`
+	CommittedAt     string             `json:"committed_at"`
 }
 
 func (q *Queries) UpdateDeployment(ctx context.Context, arg UpdateDeploymentParams) (Deployment, error) {
@@ -1148,6 +1189,10 @@ func (q *Queries) UpdateDeployment(ctx context.Context, arg UpdateDeploymentPara
 		arg.FinishedAt,
 		arg.ComposeDocument,
 		arg.ComposeCommit,
+		arg.CommitSha,
+		arg.CommitMessage,
+		arg.CommitAuthor,
+		arg.CommittedAt,
 	)
 	var i Deployment
 	err := row.Scan(
@@ -1168,6 +1213,10 @@ func (q *Queries) UpdateDeployment(ctx context.Context, arg UpdateDeploymentPara
 		&i.UpdatedAt,
 		&i.ComposeDocument,
 		&i.ComposeCommit,
+		&i.CommitSha,
+		&i.CommitMessage,
+		&i.CommitAuthor,
+		&i.CommittedAt,
 	)
 	return i, err
 }

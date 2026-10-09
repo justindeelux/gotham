@@ -471,6 +471,10 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 			State:           StateQueued,
 			ComposeDocument: target.ComposeDocument,
 			ComposeCommit:   target.ComposeCommit,
+			CommitSHA:       target.CommitSHA,
+			CommitMessage:   target.CommitMessage,
+			CommitAuthor:    target.CommitAuthor,
+			CommittedAt:     target.CommittedAt,
 			RollbackFrom:    target.ID,
 		})
 	}
@@ -496,6 +500,12 @@ func (s *Service) Rollback(ctx context.Context, userID, appID, deploymentID uuid
 		ImageTag:      target.ImageTag,
 		RegistryImage: registryImage,
 		Digest:        target.Digest,
+		// A rollback redeploys the target's bits, so it keeps the
+		// target's commit as well: there is no fresh clone to read.
+		CommitSHA:     target.CommitSHA,
+		CommitMessage: target.CommitMessage,
+		CommitAuthor:  target.CommitAuthor,
+		CommittedAt:   target.CommittedAt,
 		RollbackFrom:  target.ID,
 	})
 }

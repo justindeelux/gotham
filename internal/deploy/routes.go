@@ -29,17 +29,23 @@ type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 // deploymentResponse is the wire representation of a deployment. Sealed
 // secrets never appear here — only image references, state and error text.
 type deploymentResponse struct {
-	ID            string     `json:"id"`
-	ApplicationID string     `json:"application_id"`
-	Kind          Kind       `json:"kind"`
-	State         State      `json:"state"`
-	ImageTag      string     `json:"image_tag,omitempty"`
-	RegistryImage string     `json:"registry_image,omitempty"`
-	Digest        string     `json:"digest,omitempty"`
-	Error         string     `json:"error,omitempty"`
-	Attempt       int32      `json:"attempt"`
-	ContainerID   string     `json:"container_id,omitempty"`
-	RollbackFrom  string     `json:"rollback_from,omitempty"`
+	ID            string `json:"id"`
+	ApplicationID string `json:"application_id"`
+	Kind          Kind   `json:"kind"`
+	State         State  `json:"state"`
+	ImageTag      string `json:"image_tag,omitempty"`
+	RegistryImage string `json:"registry_image,omitempty"`
+	Digest        string `json:"digest,omitempty"`
+	Error         string `json:"error,omitempty"`
+	Attempt       int32  `json:"attempt"`
+	ContainerID   string `json:"container_id,omitempty"`
+	RollbackFrom  string `json:"rollback_from,omitempty"`
+	// CommitSHA, CommitMessage, CommitAuthor and CommittedAt are the git
+	// commit the deployment cloned (empty strings when none applies).
+	CommitSHA     string     `json:"commit_sha"`
+	CommitMessage string     `json:"commit_message"`
+	CommitAuthor  string     `json:"commit_author"`
+	CommittedAt   string     `json:"committed_at"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
 	FinishedAt    *time.Time `json:"finished_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
@@ -1253,6 +1259,10 @@ func newDeploymentResponse(d Deployment) deploymentResponse {
 		Error:         d.Error,
 		Attempt:       d.Attempt,
 		ContainerID:   d.ContainerID,
+		CommitSHA:     d.CommitSHA,
+		CommitMessage: d.CommitMessage,
+		CommitAuthor:  d.CommitAuthor,
+		CommittedAt:   d.CommittedAt,
 		CreatedAt:     d.CreatedAt,
 		UpdatedAt:     d.UpdatedAt,
 	}

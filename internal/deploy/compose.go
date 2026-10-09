@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -118,7 +116,7 @@ func (o *Orchestrator) resolveComposeContent(ctx context.Context, app Applicatio
 	if err != nil {
 		return "", "", err
 	}
-	commit = headCommit(dir)
+	commit = readCommit(dir).SHA
 	if app.IsPreview {
 		content = rewriteManagedBindsForPreview(content, managedVolumeRoot(), app.ID)
 	}
@@ -132,21 +130,6 @@ func (o *Orchestrator) resolveComposeContent(ctx context.Context, app Applicatio
 		log("compose file " + strings.TrimSpace(app.ComposeFile) + " read from the repository")
 	}
 	return content, commit, nil
-}
-
-// headCommit resolves the checked-out commit of a repo directory for the
-// deployment record. It shells out to the same git binary the cloner uses;
-// a failure (a fake source in tests) records an empty commit rather than
-// failing the deploy, because the rollback re-applies the stored document
-// and treats the commit as provenance only.
-func headCommit(dir string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // readComposeFile reads the referenced compose file out of a checkout,

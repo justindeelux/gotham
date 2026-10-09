@@ -373,7 +373,12 @@ func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) er
 	if isComposeApp(st.app) {
 		switch step {
 		case StateCloning:
-			return o.attempt(ctx, st, "clone", func() error { return o.cloneCompose(ctx, st) })
+			return o.attempt(ctx, st, "clone", func() error {
+				if err := o.cloneCompose(ctx, st); err != nil {
+					return err
+				}
+				return o.recordCommit(ctx, st)
+			})
 		case StateBuilding:
 			return o.attempt(ctx, st, "build", func() error { return o.buildCompose(ctx, st) })
 		case StatePushing:
@@ -387,7 +392,10 @@ func (o *Orchestrator) runStep(ctx context.Context, st *runState, step State) er
 	switch step {
 	case StateCloning:
 		return o.attempt(ctx, st, "clone", func() error {
-			return o.cloneSource(ctx, st.app, st.repoDir, st.log)
+			if err := o.cloneSource(ctx, st.app, st.repoDir, st.log); err != nil {
+				return err
+			}
+			return o.recordCommit(ctx, st)
 		})
 	case StateBuilding:
 		return o.attempt(ctx, st, "build", func() error { return o.build(ctx, st) })

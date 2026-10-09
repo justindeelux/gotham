@@ -177,10 +177,18 @@ type Deployment struct {
 	// row (only ${VAR} references), which is never returned by the API.
 	ComposeDocument string
 	ComposeCommit   string
-	StartedAt       time.Time
-	FinishedAt      time.Time
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// CommitSHA, CommitMessage, CommitAuthor and CommittedAt record the git
+	// commit a deployment cloned ("" when the source never clones). The
+	// message is the subject line only, sanitised and truncated; the author
+	// is the name without the email; the date is RFC3339 or "".
+	CommitSHA     string
+	CommitMessage string
+	CommitAuthor  string
+	CommittedAt   string
+	StartedAt     time.Time
+	FinishedAt    time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // EnvironmentRef is the slice of an environment row resource validation and

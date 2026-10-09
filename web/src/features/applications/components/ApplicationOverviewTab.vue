@@ -18,6 +18,7 @@ import DeploymentStatusTag from "@/features/applications/components/DeploymentSt
 import DockerfileEditor from "@/features/applications/components/DockerfileEditor.vue";
 import GitPrivateSourcePanel from "@/features/applications/components/GitPrivateSourcePanel.vue";
 import type { PipelineStep } from "@/features/applications/utils/deployPipeline";
+import { commitSubject, shortCommitSha } from "@/features/applications/utils/deploymentCommit";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
 import { relativeTime } from "@/shared/utils/format";
 
@@ -58,6 +59,16 @@ const sourceLabels: Record<string, string> = {
 const sourceLabel = computed<string>(() => {
   const key = props.application ? sourceLabels[props.application.source_type] : undefined;
   return key ? String(t(key)) : (props.application?.source_type ?? "—");
+});
+
+/** commitLine renders the short hash plus the message subject, or a dash. */
+const commitLine = computed<string>(() => {
+  const sha = props.latest?.commit_sha ?? "";
+  if (!sha) {
+    return "—";
+  }
+  const subject = commitSubject(props.latest?.commit_message);
+  return subject ? `${shortCommitSha(sha)} ${subject}` : shortCommitSha(sha);
 });
 
 /** isCompose reports a compose application for the compose rows. */
@@ -142,6 +153,9 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
         </NDescriptionsItem>
         <NDescriptionsItem :label="t('applications.overview.container')">
           <span class="mono">{{ props.latest.container_id || "—" }}</span>
+        </NDescriptionsItem>
+        <NDescriptionsItem :label="t('applications.overview.commit')">
+          <span class="mono" :title="props.latest.commit_sha ?? ''">{{ commitLine }}</span>
         </NDescriptionsItem>
         <NDescriptionsItem :label="t('applications.overview.duration')">
           {{ durationText(props.latest) }}

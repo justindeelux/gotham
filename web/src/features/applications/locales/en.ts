@@ -49,6 +49,7 @@ const en = {
     image: "Image",
     registryImage: "Registry image",
     container: "Container",
+    commit: "Commit",
     duration: "Duration",
     created: "Created",
     emptyTitle: "No deployments yet",
@@ -68,6 +69,7 @@ const en = {
   table: {
     deploy: "Deploy",
     kind: "Kind",
+    commit: "Commit",
     image: "Image",
     duration: "Duration",
     state: "State",
@@ -89,8 +91,16 @@ const en = {
   logsTab: {
     selectNode: "Select node",
     selectDeployment: "Select deployment",
+    deployment: "Deployment log",
+    runtime: "Runtime log",
+    runtimeEmpty: "No running container for this application yet.",
     streaming: "Streaming: {id}",
     hint: "Logs default to the application node and fall back to the first known one — they stream on {channel}.",
+  },
+  commit: {
+    title: "Commit",
+    sha: "Commit",
+    copySha: "Copy commit SHA",
   },
   deployLogs: {
     title: "deploy {id} · build log",

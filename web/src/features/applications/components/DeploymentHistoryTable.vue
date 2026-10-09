@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
+import { commitSubject, shortCommitSha } from "@/features/applications/utils/deploymentCommit";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
 import { relativeTime } from "@/shared/utils/format";
 
@@ -29,6 +30,17 @@ function errorText(deployment: Deployment): VNode {
     return h(NText, { depth: 3 }, { default: () => "—" });
   }
   return h("span", { class: "mono error-text" }, deployment.error);
+}
+
+/** commitText renders the short hash plus the message subject. */
+function commitText(deployment: Deployment): VNode {
+  if (!deployment.commit_sha) {
+    return h(NText, { depth: 3 }, { default: () => "—" });
+  }
+  const subject = commitSubject(deployment.commit_message);
+  const text = subject ? `${shortCommitSha(deployment.commit_sha)} ${subject}` : shortCommitSha(deployment.commit_sha);
+  const full = subject ? `${deployment.commit_sha} ${deployment.commit_message}` : deployment.commit_sha;
+  return h("span", { class: "mono", title: full }, text);
 }
 
 /** actionsCell renders per-row Logs / Rollback controls. */
@@ -86,6 +98,13 @@ const columns = computed<DataTableColumns<Deployment>>(() => [
       row.image_tag
         ? h("span", { class: "mono" }, row.image_tag)
         : h(NText, { depth: 3 }, { default: () => "—" }),
+  },
+  {
+    title: String(t("applications.table.commit")),
+    key: "commit",
+    minWidth: 140,
+    ellipsis: { tooltip: true },
+    render: (row) => commitText(row),
   },
   {
     title: String(t("applications.table.duration")),

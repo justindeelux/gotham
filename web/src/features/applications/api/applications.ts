@@ -108,6 +108,14 @@ export interface Deployment {
   attempt: number;
   container_id: string;
   rollback_from: string;
+  /** Built commit the deployment was built from (JUS-82); empty when unknown. */
+  commit_sha?: string;
+  /** First-line subject plus body of the built commit; empty when unknown. */
+  commit_message?: string;
+  /** Author of the built commit; empty when unknown. */
+  commit_author?: string;
+  /** Commit timestamp (ISO); empty when unknown. */
+  committed_at?: string;
   started_at: string | null;
   finished_at: string | null;
   created_at: string;

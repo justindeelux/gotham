@@ -50,6 +50,7 @@ const vi: ApplicationsMessages = {
     image: "Image",
     registryImage: "Image registry",
     container: "Container",
+    commit: "Commit",
     duration: "Thời lượng",
     created: "Đã tạo",
     emptyTitle: "Chưa có đợt triển khai nào",
@@ -69,6 +70,7 @@ const vi: ApplicationsMessages = {
   table: {
     deploy: "Đợt triển khai",
     kind: "Loại",
+    commit: "Commit",
     image: "Image",
     duration: "Thời lượng",
     state: "Trạng thái",
@@ -90,8 +92,16 @@ const vi: ApplicationsMessages = {
   logsTab: {
     selectNode: "Chọn node",
     selectDeployment: "Chọn đợt triển khai",
+    deployment: "Nhật ký triển khai",
+    runtime: "Nhật ký runtime",
+    runtimeEmpty: "Ứng dụng này chưa có container đang chạy.",
     streaming: "Đang truyền: {id}",
     hint: "Nhật ký mặc định lấy theo node của ứng dụng và dùng node đã biết đầu tiên — chúng được truyền trên {channel}.",
+  },
+  commit: {
+    title: "Commit",
+    sha: "Commit",
+    copySha: "Sao chép SHA commit",
   },
   deployLogs: {
     title: "triển khai {id} · nhật ký build",

@@ -195,6 +195,14 @@ export function useApplicationDetail() {
     deployments.value.filter((item) => item.state === "running"),
   );
 
+  /** runtimeDeployment streams the newest running deployment's container. */
+  const runtimeDeployment = computed<Deployment | null>(
+    () =>
+      deployments.value.find(
+        (item) => item.state === "running" && item.container_id !== "",
+      ) ?? null,
+  );
+
   /** logTarget resolves the deployment selected in the Logs tab. */
   const logTarget = computed<Deployment | null>(
     () => deployments.value.find((item) => item.id === logDeploymentId.value) ?? active.value ?? latest.value,
@@ -729,6 +737,7 @@ export function useApplicationDetail() {
     latest,
     active,
     runningDeployments,
+    runtimeDeployment,
     controlHint,
     containerStopped,
     containerIsRunning,

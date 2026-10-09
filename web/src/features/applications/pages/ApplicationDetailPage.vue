@@ -118,6 +118,8 @@ const previewsTab = computed<string>(() =>
             :active-deployment-id="detail.active.value?.id ?? ''"
             :log-target="detail.logTarget.value"
             :effective-log-server-id="detail.effectiveLogServerId.value"
+            :application="detail.application.value"
+            :runtime-deployment="detail.runtimeDeployment.value"
             @update:log-server-id="detail.logServerId.value = $event"
             @update:log-deployment-id="detail.logDeploymentId.value = $event"
           />

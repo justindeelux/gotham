@@ -63,7 +63,6 @@ const vi: CommonMessages = {
     items: {
       dashboard: "Bảng điều khiển",
       projects: "Dự án",
-      addResource: "Thêm tài nguyên",
       files: "Quản lý tệp",
       templates: "Thư viện mẫu",
       servers: "Máy chủ",
@@ -112,7 +111,6 @@ const vi: CommonMessages = {
     domains: "Tên miền & SSL",
     serviceDetail: "Chi tiết dịch vụ",
     templates: "Thư viện mẫu",
-    addResource: "Thêm tài nguyên",
     teams: "Nhóm",
     notifications: "Kênh thông báo",
     gitSources: "Nguồn Git",

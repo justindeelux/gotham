@@ -408,7 +408,7 @@ test("wrong project in the URL replaces it with the canonical one", async ({
   await expect(page.locator('nav[aria-label="Breadcrumb"]')).toContainText("storefront");
 });
 
-test("add resource dialog lists the three kinds at both widths", async ({
+test("add resource dialog shows the picker groups at both widths", async ({
   page,
 }) => {
   for (const width of [1280, 480]) {
@@ -418,19 +418,19 @@ test("add resource dialog lists the three kinds at both widths", async ({
     await page.locator(".resource-table").waitFor();
     await page.getByRole("button", { name: "Add resource" }).click();
     const dialog = page.locator(".n-modal");
-    await expect(dialog).toContainText("Application");
-    await expect(dialog).toContainText("Service");
-    await expect(dialog).toContainText("Database");
+    await expect(dialog.getByRole("heading", { name: "Application" })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "Service" })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "Database" })).toBeVisible();
     await expect(dialog).toContainText("storefront / production");
-    // The kind cards stay inside the viewport at phone width.
-    for (const kind of ["Application", "Service", "Database"]) {
-      const card = dialog.locator(".kind-card", { hasText: kind });
-      await expect(card).toBeVisible();
-      const box = await card.boundingBox();
-      expect(box, `${kind} has a box`).not.toBeNull();
-      expect(box!.x).toBeGreaterThanOrEqual(0);
-      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
-    }
+    // The brand cards stay inside the viewport horizontally at phone width.
+    const cards = dialog.locator("button.res-card");
+    expect(await cards.count()).toBeGreaterThan(1);
+    const first = cards.first();
+    await expect(first).toBeVisible();
+    const box = await first.boundingBox();
+    expect(box, "first card has a box").not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width);
     await page.keyboard.press("Escape");
   }
 });

@@ -270,9 +270,7 @@ export function useEnvironmentPage() {
   const showPreviews = ref(false);
   const search = ref("");
   const addOpen = ref(false);
-  const appWizardOpen = ref(false);
   const importOpen = ref(false);
-  const dbWizardOpen = ref(false);
 
   // Invalidates in-flight reloads when the route or the preview switch
   // moves on, so a slow response for the previous environment can never
@@ -442,9 +440,7 @@ export function useEnvironmentPage() {
     showPreviews,
     search,
     addOpen,
-    appWizardOpen,
     importOpen,
-    dbWizardOpen,
     rows,
     visibleRows,
     counts,

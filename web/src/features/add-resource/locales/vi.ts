@@ -6,14 +6,6 @@ import type en from "./en";
  * image tags and ports stay untranslated by design.
  */
 const vi: typeof en = {
-  page: {
-    eyebrow: "Vận hành · tài nguyên mới",
-    title: "Thêm tài nguyên",
-    description:
-      "Chọn loại cần tạo. Ứng dụng build và deploy từ mã nguồn, service deploy template một chạm, cơ sở dữ liệu cấp phát một engine được quản lý. Mỗi thẻ mở luồng tạo hiện có.",
-    scopeIn: "Đang tạo trong {project} · {environment} — các wizard giữ phạm vi này.",
-    scopeGlobal: "Chọn dự án và môi trường bên trong wizard.",
-  },
   search: {
     label: "Lọc service",
     placeholder: "Lọc service…",

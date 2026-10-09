@@ -16,10 +16,7 @@ import {
 import { computed } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
-import CreateAppWizard from "@/features/applications/components/CreateAppWizard.vue";
-import type { Application } from "@/features/applications/api/applications";
-import CreateDatabaseWizard from "@/features/databases/components/CreateDatabaseWizard.vue";
-import type { CreatedDatabase } from "@/features/databases/api/databases";
+import ResourcePicker from "@/features/add-resource/components/ResourcePicker.vue";
 import ImportComposeDialog from "@/features/services/components/ImportComposeDialog.vue";
 import type { Service } from "@/features/services/api/services";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
@@ -160,30 +157,10 @@ const emptyHint = computed<string>(() =>
     : t("projects.environment.emptyFiltered"),
 );
 
-/** openCreate opens one create wizard from the Add resource dialog. */
-function openCreate(kind: "application" | "service" | "database"): void {
+/** openImport closes the picker and opens the compose import dialog. */
+function openImport(): void {
   page.addOpen.value = false;
-  if (kind === "application") {
-    page.appWizardOpen.value = true;
-  } else if (kind === "service") {
-    page.importOpen.value = true;
-  } else {
-    page.dbWizardOpen.value = true;
-  }
-}
-
-/** afterApplicationCreate reloads and opens the nested application page. */
-function afterApplicationCreate(application: Application): void {
-  page.appWizardOpen.value = false;
-  void page.reload();
-  void router.push({
-    name: "application-detail",
-    params: {
-      projectId: page.projectId.value,
-      environmentId: page.environmentId.value,
-      id: application.id,
-    },
-  });
+  page.importOpen.value = true;
 }
 
 /** afterServiceCreate reloads and opens the nested service page. */
@@ -200,19 +177,6 @@ function afterServiceCreate(service: Service): void {
   });
 }
 
-/** afterDatabaseCreate reloads and opens the nested database page. */
-function afterDatabaseCreate(created: CreatedDatabase): void {
-  page.dbWizardOpen.value = false;
-  void page.reload();
-  void router.push({
-    name: "database-detail",
-    params: {
-      projectId: page.projectId.value,
-      environmentId: page.environmentId.value,
-      id: created.database.id,
-    },
-  });
-}
 </script>
 
 <template>
@@ -398,59 +362,30 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
       v-model:show="page.addOpen.value"
       preset="card"
       :title="t('projects.environment.addResource')"
-      style="width: 640px; max-width: 94vw"
+      style="width: 1040px; max-width: 96vw"
     >
       <NSpace vertical :size="12">
         <NText depth="3">
           {{ t("projects.environment.creatingIn", { project: page.resources.value?.project.name ?? "", environment: page.resources.value?.environment.name ?? "" }) }}
         </NText>
-        <div class="kind-grid">
-          <button type="button" class="kind-card" @click="openCreate('application')">
-            <span class="kind-title">{{ t("projects.environment.kindCards.applicationTitle") }}</span>
-            <span class="small muted">{{ t("projects.environment.kindCards.applicationHint") }}</span>
-          </button>
-          <button type="button" class="kind-card" @click="openCreate('service')">
-            <span class="kind-title">{{ t("projects.environment.kindCards.serviceTitle") }}</span>
-            <span class="small muted">{{ t("projects.environment.kindCards.serviceHint") }}</span>
-          </button>
-          <button type="button" class="kind-card" @click="openCreate('database')">
-            <span class="kind-title">{{ t("projects.environment.kindCards.databaseTitle") }}</span>
-            <span class="small muted">{{ t("projects.environment.kindCards.databaseHint") }}</span>
-          </button>
-        </div>
+        <ResourcePicker
+          :project-id="page.projectId.value"
+          :environment-id="page.environmentId.value"
+          @created="page.addOpen.value = false"
+        />
         <NText depth="3">
-          {{ t("projects.environment.templateHintPrefix") }}
-          <RouterLink
-            :to="{
-              name: 'templates',
-              query: {
-                projectId: page.projectId.value,
-                environmentId: page.environmentId.value,
-              },
-            }"
-          >{{ t("projects.environment.templateHintLink") }}</RouterLink>
-          {{ t("projects.environment.templateHintSuffix") }}
+          {{ t("projects.environment.composeHintPrefix") }}
+          <a href="#" @click.prevent="openImport">{{ t("projects.environment.composeHintLink") }}</a>
+          {{ t("projects.environment.composeHintSuffix") }}
         </NText>
       </NSpace>
     </NModal>
 
-    <CreateAppWizard
-      v-model:show="page.appWizardOpen.value"
-      :project-id="page.projectId.value"
-      :environment-id="page.environmentId.value"
-      @created="afterApplicationCreate"
-    />
     <ImportComposeDialog
       v-model:show="page.importOpen.value"
       :project-id="page.projectId.value"
       :environment-id="page.environmentId.value"
       @created="afterServiceCreate"
-    />
-    <CreateDatabaseWizard
-      v-model:show="page.dbWizardOpen.value"
-      :project-id="page.projectId.value"
-      :environment-id="page.environmentId.value"
-      @created="afterDatabaseCreate"
     />
   </div>
 </template>
@@ -652,35 +587,6 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
   clip: rect(0, 0, 0, 0);
 }
 
-.kind-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-
-.kind-card {
-  appearance: none;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  align-items: flex-start;
-  text-align: left;
-  cursor: pointer;
-}
-
-.kind-card:hover {
-  border-color: var(--accent);
-}
-
-.kind-title {
-  font-weight: 600;
-  color: var(--fg-2);
-}
-
 @container (max-width: 560px) {
   .page-actions {
     margin-left: 0;
@@ -742,10 +648,6 @@ function afterDatabaseCreate(created: CreatedDatabase): void {
 
   .resource-table .actions {
     text-align: left;
-  }
-
-  .kind-grid {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

@@ -120,17 +120,9 @@ const vi = {
     previewNote:
       "Các bản triển khai xem trước của một ứng dụng chạy trong môi trường này trên cùng máy chủ; bật công tắc để liệt kê chúng lồng dưới ứng dụng gốc.",
     creatingIn: "Đang tạo trong {project} / {environment}.",
-    kindCards: {
-      applicationTitle: "Ứng dụng",
-      applicationHint: "Từ kho Git",
-      serviceTitle: "Dịch vụ",
-      serviceHint: "Compose hoặc mẫu",
-      databaseTitle: "Cơ sở dữ liệu",
-      databaseHint: "PostgreSQL, MySQL, Redis…",
-    },
-    templateHintPrefix: "Muốn dùng mẫu một chạm?",
-    templateHintLink: "Mở thư viện mẫu",
-    templateHintSuffix: "— trình hướng dẫn dùng cùng dự án và môi trường.",
+    composeHintPrefix: "Có sẵn tệp Docker Compose? ",
+    composeHintLink: "Nhập tệp compose",
+    composeHintSuffix: ". Các dịch vụ trong thư viện được liệt kê ở trên.",
     status: {
       unknown: "không rõ",
       notDeployed: "chưa triển khai",

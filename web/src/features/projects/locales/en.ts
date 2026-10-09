@@ -121,17 +121,9 @@ const en = {
     previewNote:
       "Preview deployments of an application run in this environment on the same server; flip the switch to list them nested under their base.",
     creatingIn: "Creating in {project} / {environment}.",
-    kindCards: {
-      applicationTitle: "Application",
-      applicationHint: "From a Git repository",
-      serviceTitle: "Service",
-      serviceHint: "Compose or template",
-      databaseTitle: "Database",
-      databaseHint: "PostgreSQL, MySQL, Redis…",
-    },
-    templateHintPrefix: "Prefer a one-click template?",
-    templateHintLink: "Open the template library",
-    templateHintSuffix: "— its wizard takes the same project and environment.",
+    composeHintPrefix: "Have a Docker Compose file? ",
+    composeHintLink: "Import a compose file",
+    composeHintSuffix: ". Services from the library are listed above.",
     status: {
       unknown: "unknown",
       notDeployed: "not deployed",

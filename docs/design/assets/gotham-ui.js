@@ -99,7 +99,6 @@
       items: [
         { nav: "dashboard", label: "Tổng quan", icon: "i-grid", href: "dashboard.html" },
         { nav: "projects", label: "Projects", icon: "i-layers", href: "projects.html", count: 3 },
-        { nav: "add-resource", label: "Thêm tài nguyên", icon: "i-plus", href: "add-resource.html" },
         { nav: "files", label: "Quản lý file", icon: "i-folder", href: "files.html" },
         { nav: "templates", label: "Thư viện template", icon: "i-rocket", href: "services.html#templates" },
         { nav: "servers", label: "Máy chủ", icon: "i-server", href: "servers.html", count: 4 },

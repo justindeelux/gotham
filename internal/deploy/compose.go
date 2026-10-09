@@ -70,66 +70,72 @@ func (o *Orchestrator) cloneCompose(ctx context.Context, st *runState) error {
 		}
 		st.composeRaw = st.dep.ComposeDocument
 		st.composeCommit = st.dep.ComposeCommit
+		// No clone happens here, so there is nothing for recordCommit to
+		// read: mark it done and keep the target's commit copied at creation.
+		st.commitDone = true
 		return nil
 	}
-	content, commit, err := o.resolveComposeContent(ctx, st.app, st.repoDir, st.log)
+	content, info, err := o.resolveComposeContent(ctx, st.app, st.repoDir, st.log)
 	if err != nil {
 		return err
 	}
 	st.composeRaw = content
-	st.composeCommit = commit
+	st.composeCommit = info.SHA
+	// The commit was just read: recordCommit reuses it, no second git read.
+	st.commitInfo = info
+	st.commitDone = true
 	return nil
 }
 
 // resolveComposeContent returns the raw compose document of an application
-// and, for repo-backed sources, the resolved commit: the stored text for
-// pasted sources (validated, never logged), or the referenced file of a
+// and, for repo-backed sources, the commit it was read from: the stored text
+// for pasted sources (validated, never logged), or the referenced file of a
 // repo-backed source cloned into dir. A preview inherits the base
 // document's shape with its managed binds rewritten to its own directory,
 // so it can never mount (or write) the base application's data. It is
 // shared by the deploy run and the best-effort teardown, so both resolve
 // the same file.
-func (o *Orchestrator) resolveComposeContent(ctx context.Context, app Application, dir string, log func(string)) (content, commit string, err error) {
+func (o *Orchestrator) resolveComposeContent(ctx context.Context, app Application, dir string, log func(string)) (content string, info CommitInfo, err error) {
 	if strings.TrimSpace(app.ComposeContent) != "" {
 		content = app.ComposeContent
 		if app.IsPreview {
 			content = rewriteManagedBindsForPreview(content, managedVolumeRoot(), app.ID)
 		}
 		if err := ValidateComposeContent(content, app.ID); err != nil {
-			return "", "", err
+			return "", CommitInfo{}, err
 		}
 		if err := ValidateComposeService(content, app.ComposeService); err != nil {
-			return "", "", err
+			return "", CommitInfo{}, err
 		}
 		if log != nil {
 			log("compose source materialized")
 		}
-		return content, "", nil
+		return content, CommitInfo{}, nil
 	}
 	if err := ValidateComposeFilePath(app.ComposeFile); err != nil {
-		return "", "", err
+		return "", CommitInfo{}, err
 	}
 	if err := o.source.Clone(ctx, app, dir, log); err != nil {
-		return "", "", err
+		return "", CommitInfo{}, err
 	}
 	content, err = readComposeFile(dir, app.ComposeFile)
 	if err != nil {
-		return "", "", err
+		return "", CommitInfo{}, err
 	}
-	commit = readCommit(dir).SHA
+	info = readCommit(dir)
 	if app.IsPreview {
 		content = rewriteManagedBindsForPreview(content, managedVolumeRoot(), app.ID)
 	}
 	if err := ValidateComposeContent(content, app.ID); err != nil {
-		return "", "", err
+		return "", CommitInfo{}, err
 	}
 	if err := ValidateComposeService(content, app.ComposeService); err != nil {
-		return "", "", err
+		return "", CommitInfo{}, err
 	}
 	if log != nil {
 		log("compose file " + strings.TrimSpace(app.ComposeFile) + " read from the repository")
 	}
-	return content, commit, nil
+	return content, info, nil
 }
 
 // readComposeFile reads the referenced compose file out of a checkout,

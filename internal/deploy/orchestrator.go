@@ -73,6 +73,11 @@ type runState struct {
 	composeImages []string
 	composeCommit string
 	composeEnv    map[string]string
+	// commitInfo is the clone commit resolveComposeContent already read (a
+	// compose run); commitDone marks it final so recordCommit reuses it
+	// instead of forking git again.
+	commitInfo CommitInfo
+	commitDone bool
 }
 
 // Orchestrator runs deployment state machines on a fixed worker pool. Each

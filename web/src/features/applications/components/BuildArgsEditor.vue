@@ -73,7 +73,7 @@ function removeRow(index: number): void {
     <NButton dashed size="small" @click="addRow">
       {{ t("applications.buildArgs.add") }}
     </NButton>
-    <NAlert class="arg-alert" type="warning" :show-icon="false">
+    <NAlert class="arg-alert" type="warning" :show-icon="false" :bordered="false">
       {{ t("applications.buildArgs.secretWarning") }}
     </NAlert>
   </NSpace>
@@ -87,9 +87,15 @@ function removeRow(index: number): void {
   align-items: center;
 }
 
-/* NAlert has no size prop: the compact inline look is tighter padding. */
+/* NAlert has no size prop: the light inline look overrides its theme vars
+ * (subtle tint, tight padding, 13px text) and swaps the filled border box
+ * for a left accent bar. */
 .arg-alert {
-  padding: 6px 10px;
-  font-size: var(--text-xs);
+  --n-color: var(--warn-soft) !important;
+  --n-padding: 8px 12px !important;
+  --n-font-size: 13px !important;
+  --n-line-height: 1.5 !important;
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
 }
 </style>

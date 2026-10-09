@@ -85,7 +85,7 @@ const latestTagWarn = computed<boolean>(
             placeholder="registry.example.com/team/app:1.2"
           />
           <span class="field-hint">{{ t("applications.wizard.imageRefHint") }}</span>
-          <NAlert v-if="latestTagWarn" class="field-alert" type="warning" :show-icon="false">
+          <NAlert v-if="latestTagWarn" class="field-alert" type="warning" :show-icon="false" :bordered="false">
             {{ t("applications.wizard.imageLatestWarn") }}
           </NAlert>
         </NFormItem>
@@ -232,11 +232,11 @@ const latestTagWarn = computed<boolean>(
               v-model:value="form.composeContent"
               type="textarea"
               class="mono"
-              :rows="12"
+              :rows="10"
               placeholder="services:"
             />
             <span class="field-hint">{{ t("applications.wizard.composeContentHint") }}</span>
-            <NAlert class="field-alert" type="warning" :show-icon="false">
+            <NAlert class="field-alert" type="warning" :show-icon="false" :bordered="false">
               {{ t("applications.wizard.composeSecretsHint") }}
             </NAlert>
           </NFormItem>
@@ -357,13 +357,18 @@ const latestTagWarn = computed<boolean>(
 }
 
 /* Inline field notices sit on their own line below the input + hint inside
- * Naive's wrapping .n-form-item-blank row. NAlert has no size prop, so the
- * compact inline look is a smaller font and tighter padding. */
+ * Naive's wrapping .n-form-item-blank row. NAlert has no size prop: the
+ * light inline look overrides its theme vars (subtle tint, tight padding,
+ * 13px text) and swaps the filled border box for a left accent bar. */
 .field-alert {
+  --n-color: var(--warn-soft) !important;
+  --n-padding: 8px 12px !important;
+  --n-font-size: 13px !important;
+  --n-line-height: 1.5 !important;
   flex-basis: 100%;
   margin-top: var(--space-2);
-  padding: 6px 10px;
-  font-size: var(--text-xs);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
 }
 
 .preselected {

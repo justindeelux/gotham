@@ -142,7 +142,7 @@ const vi = {
   scope: {
     creatingIn: "Đang tạo trong",
     locatedIn: "Đặt tại",
-    change: "Thay đổi",
+    change: "Đổi phạm vi",
     done: "Xong",
     projectPlaceholder: "Chọn một dự án",
     projectAria: "Dự án",

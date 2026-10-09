@@ -58,7 +58,7 @@ const { t } = useI18n();
           :status="editor.fileValid.value ? undefined : 'error'"
         />
       </NFormItem>
-      <NAlert class="notice-inline" type="warning" :show-icon="false">
+      <NAlert class="notice-inline" type="warning" :show-icon="false" :bordered="false">
         {{ t("applications.compose.secretsHint") }}
       </NAlert>
       <NFormItem :label="t('applications.compose.service')">
@@ -93,9 +93,15 @@ const { t } = useI18n();
   font-size: var(--text-xs);
 }
 
-/* NAlert has no size prop: the compact inline look is tighter padding. */
+/* NAlert has no size prop: the light inline look overrides its theme vars
+ * (subtle tint, tight padding, 13px text) and swaps the filled border box
+ * for a left accent bar. */
 .notice-inline {
-  padding: 6px 10px;
-  font-size: var(--text-xs);
+  --n-color: var(--warn-soft) !important;
+  --n-padding: 8px 12px !important;
+  --n-font-size: 13px !important;
+  --n-line-height: 1.5 !important;
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
 }
 </style>

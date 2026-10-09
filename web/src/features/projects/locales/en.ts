@@ -143,7 +143,7 @@ const en = {
   scope: {
     creatingIn: "Creating in",
     locatedIn: "Located in",
-    change: "Change",
+    change: "Change scope",
     done: "Done",
     projectPlaceholder: "Select a project",
     projectAria: "Project",

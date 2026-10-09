@@ -26,8 +26,8 @@ const emit = defineEmits<{
 /**
  * Read-only project/environment summary with a change link, shared by every
  * create flow and the resource move card (PE-5, Linear JUS-34). The first
- * step of each creation shows where the resource lands; Change swaps the
- * summary for project and environment selects.
+ * step of each creation shows where the resource lands; Change scope swaps
+ * the summary for project and environment selects.
  */
 const options = useEnvironmentOptions();
 

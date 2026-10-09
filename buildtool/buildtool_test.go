@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // writeTar builds an uncompressed tar from name -> contents.
@@ -260,6 +261,101 @@ func TestRunFailureWithoutOutput(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "--- last output ---") {
 		t.Errorf("error = %q; want no tail section for empty output", err)
+	}
+}
+
+// TestOutputTailOverlappingSecrets is the round-2 finding 1 regression: a
+// shorter value prefixing a longer one must not leak the longer one's suffix.
+func TestOutputTailOverlappingSecrets(t *testing.T) {
+	tail := newOutputTail([]string{"abc", "abcdef"})
+	_, _ = tail.Write([]byte("key=abcdef\n"))
+	if got := tail.String(); got != "key=***" {
+		t.Errorf("tail = %q; want the longer value masked first", got)
+	}
+}
+
+// TestOutputTailMultilineSecret is the round-2 finding 2 regression: each
+// non-empty line of a PEM-like value is masked even though the full value
+// never appears on one output line.
+func TestOutputTailMultilineSecret(t *testing.T) {
+	tail := newOutputTail([]string{"-----BEGIN KEY-----\nsecret-body\n-----END KEY-----"})
+	_, _ = tail.Write([]byte("-----BEGIN KEY-----\nleaked secret-body here\n-----END KEY-----\n"))
+	got := tail.String()
+	for _, leaked := range []string{"BEGIN KEY", "secret-body", "END KEY"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("tail = %q; want no line of the multi-line secret", got)
+		}
+	}
+}
+
+// TestOutputTailOversizedSingleLine is the round-2 finding 4 regression: one
+// line over the cap keeps its end instead of emptying the tail.
+func TestOutputTailOversizedSingleLine(t *testing.T) {
+	tail := newOutputTail(nil)
+	_, _ = tail.Write([]byte(strings.Repeat("a", tailMaxBytes+100) + "CAUSE\n"))
+	got := tail.String()
+	if got == "" {
+		t.Fatal("tail is empty; want the newest line kept truncated")
+	}
+	if !strings.HasSuffix(got, "CAUSE") {
+		t.Errorf("tail = %q; want the line end kept", got)
+	}
+	if len(got) > tailMaxBytes {
+		t.Errorf("tail is %d bytes; want it within %d", len(got), tailMaxBytes)
+	}
+}
+
+// TestOutputTailTrailingPartial keeps output without a trailing newline.
+func TestOutputTailTrailingPartial(t *testing.T) {
+	tail := newOutputTail(nil)
+	_, _ = tail.Write([]byte("cause without newline"))
+	if got := tail.String(); got != "cause without newline" {
+		t.Errorf("tail = %q; want the partial line flushed", got)
+	}
+}
+
+// TestOutputTailCarriageReturn is the round-2 finding 5 regression: \r ends a
+// line so progress bars that overwrite in place still advance the tail.
+func TestOutputTailCarriageReturn(t *testing.T) {
+	tail := newOutputTail(nil)
+	_, _ = tail.Write([]byte("10%\r20%\r30%\n"))
+	if got := tail.String(); got != "10%\n20%\n30%" {
+		t.Errorf("tail = %q; want \\r to split lines", got)
+	}
+}
+
+// TestOutputTailPendingBounded is the round-2 finding 5 regression: a
+// newline-less flood cannot grow the pending buffer without limit, and the
+// newest bytes still survive.
+func TestOutputTailPendingBounded(t *testing.T) {
+	tail := newOutputTail(nil)
+	_, _ = tail.Write([]byte(strings.Repeat("x", pendingMaxBytes+1000)))
+	if tail.pending.Len() > pendingMaxBytes {
+		t.Errorf("pending is %d bytes; want it capped at %d", tail.pending.Len(), pendingMaxBytes)
+	}
+	_, _ = tail.Write([]byte("end\n"))
+	if got := tail.String(); !strings.HasSuffix(got, "end") {
+		t.Errorf("tail = %q; want the newest bytes kept", got)
+	}
+}
+
+// TestFailureTailFitsTruncateLimit is the round-2 finding 3 regression: a full
+// tail plus the run error prefix stays within truncateError's 4 KiB limit and
+// stays valid UTF-8, so the cause lines survive persistence.
+func TestFailureTailFitsTruncateLimit(t *testing.T) {
+	tail := newOutputTail(nil)
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(tail, "line %d %s\n", i, strings.Repeat("é", 50))
+	}
+	message := "railpack build: exit status 1\n--- last output ---\n" + tail.String()
+	if len(message) > 4096 {
+		t.Errorf("message is %d bytes; want prefix+tail within 4096", len(message))
+	}
+	if !utf8.ValidString(message) {
+		t.Error("message is not valid UTF-8")
+	}
+	if !strings.Contains(message, "line 99") {
+		t.Errorf("message = %q; want the newest lines kept", message)
 	}
 }
 

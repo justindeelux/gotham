@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -298,8 +299,10 @@ func containerName(app Application, dep Deployment) string {
 }
 
 // truncateError bounds the message persisted on the deployments row so one
-// runaway build log cannot bloat the table. The limit fits the ~4 KiB
-// toolchain failure tail buildtool appends to build errors.
+// runaway build log cannot bloat the table. The limit fits the ~3 KiB
+// toolchain failure tail buildtool appends to build errors, prefix included.
+// The cut is rune-safe: a trailing partial UTF-8 sequence is dropped rather
+// than storing invalid UTF-8.
 func truncateError(err error) string {
 	if err == nil {
 		return ""
@@ -307,7 +310,11 @@ func truncateError(err error) string {
 	const limit = 4096
 	message := strings.TrimSpace(err.Error())
 	if len(message) > limit {
-		return message[:limit] + "…"
+		cut := message[:limit]
+		for len(cut) > 0 && !utf8.ValidString(cut) {
+			cut = cut[:len(cut)-1]
+		}
+		return cut + "…"
 	}
 	return message
 }

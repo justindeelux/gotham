@@ -147,7 +147,7 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 		sink = io.Discard
 	}
 	tail := newOutputTail(buildArgValues(opts.BuildArgs))
-	tee := io.MultiWriter(sink, tail)
+	tee := io.MultiWriter(tail, sink)
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = opts.Dir
 	// The toolchain is tenant-influenced, so it runs with a stripped
@@ -176,15 +176,27 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 
 // tailMaxLines and tailMaxBytes bound the failure tail kept from a toolchain's
 // combined output: the last lines, capped so one runaway log cannot bloat the
-// deployments row it ends up on.
+// deployments row it ends up on. The byte cap stays well under truncateError's
+// 4 KiB limit so the `name build: …\n--- last output ---\n` prefix plus a full
+// tail always fit without cutting the cause lines off the end.
 const (
 	tailMaxLines = 20
-	tailMaxBytes = 4 << 10
+	tailMaxBytes = 3 << 10
 )
 
+// pendingMaxBytes bounds the unprocessed bytes held between line breaks, so
+// newline-less output (progress bars, binary) cannot grow memory without
+// limit. Past the cap the oldest bytes are dropped; they are a partial line
+// fragment at worst, and the tail still keeps the newest output.
+const pendingMaxBytes = 8 << 10
+
 // ansiEscape strips terminal colour and cursor sequences from captured output
-// so the persisted tail is plain text.
-var ansiEscape = regexp.MustCompile("\x1b\\[[0-9;?]*[a-zA-Z]")
+// so the persisted tail is plain text. oscEscape strips OSC sequences
+// (hyperlinks) terminated by BEL or ST, which the CSI pattern misses.
+var (
+	ansiEscape = regexp.MustCompile("\x1b\\[[0-9;?]*[a-zA-Z]")
+	oscEscape  = regexp.MustCompile("\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
+)
 
 // outputTail keeps the last lines written to it. It is not safe for concurrent
 // use; run shares one instance across both child streams so os/exec serialises
@@ -196,26 +208,60 @@ type outputTail struct {
 	masks   []string
 }
 
-// newOutputTail returns a tail that masks every non-empty value in secrets.
+// newOutputTail returns a tail that masks every non-empty value in secrets,
+// longest first so an overlapping shorter value cannot leak a longer one's
+// suffix. Each non-empty line of a multi-line value (a PEM key, for example)
+// is masked too, since masking runs per output line. Very short values mask
+// everywhere they appear (a value like "1" garbles the tail); that is accepted
+// as safe-but-noisy rather than adding matching rules.
 func newOutputTail(secrets []string) *outputTail {
 	masks := make([]string, 0, len(secrets))
 	for _, secret := range secrets {
-		if secret != "" {
-			masks = append(masks, secret)
+		for line := range strings.Lines(strings.ReplaceAll(secret, "\r", "\n")) {
+			if strings.TrimSpace(line) != "" {
+				masks = append(masks, strings.TrimRight(line, "\n"))
+			}
 		}
 	}
+	sort.Slice(masks, func(i, j int) bool { return len(masks[i]) > len(masks[j]) })
 	return &outputTail{masks: masks}
 }
 
-// Write buffers p, splitting complete lines into the bounded tail.
+// Write buffers p, splitting complete lines into the bounded tail. Both \n
+// and \r end a line so progress bars that overwrite with \r still advance the
+// tail; a \r\n pair counts as one break. The pending buffer is capped at
+// pendingMaxBytes (oldest bytes dropped) and scanned in one pass.
 func (t *outputTail) Write(p []byte) (int, error) {
 	t.pending.Write(p)
-	for {
-		line, ok := cutLine(&t.pending)
-		if !ok {
-			break
+	if t.pending.Len() > pendingMaxBytes {
+		s := t.pending.String()
+		s = s[len(s)-pendingMaxBytes:]
+		for len(s) > 0 && s[0] >= 0x80 && s[0] < 0xC0 {
+			s = s[1:]
 		}
-		t.push(line)
+		t.pending.Reset()
+		t.pending.WriteString(s)
+	}
+	s := t.pending.String()
+	start := 0
+	i := 0
+	for i < len(s) {
+		if s[i] != '\n' && s[i] != '\r' {
+			i++
+			continue
+		}
+		t.push(s[start:i])
+		first := s[i]
+		i++
+		if i < len(s) && (s[i] == '\n' || s[i] == '\r') && s[i] != first {
+			i++
+		}
+		start = i
+	}
+	if start > 0 {
+		rest := s[start:]
+		t.pending.Reset()
+		t.pending.WriteString(rest)
 	}
 	return len(p), nil
 }
@@ -230,11 +276,19 @@ func (t *outputTail) String() string {
 }
 
 // push cleans one raw line (ANSI stripped, secrets masked) and keeps the tail
-// within its line and byte bounds, dropping the oldest lines first.
+// within its line and byte bounds, dropping the oldest lines first. A single
+// line longer than the cap is kept truncated to its end rather than emptying
+// the tail.
 func (t *outputTail) push(raw string) {
-	line := ansiEscape.ReplaceAllString(strings.TrimSuffix(raw, "\r"), "")
+	line := oscEscape.ReplaceAllString(ansiEscape.ReplaceAllString(strings.TrimSuffix(raw, "\r"), ""), "")
 	for _, secret := range t.masks {
 		line = strings.ReplaceAll(line, secret, "***")
+	}
+	if len(line) > tailMaxBytes {
+		line = line[len(line)-tailMaxBytes:]
+		for len(line) > 0 && line[0] >= 0x80 && line[0] < 0xC0 {
+			line = line[1:]
+		}
 	}
 	t.lines = append(t.lines, line)
 	t.size += len(line)
@@ -242,20 +296,6 @@ func (t *outputTail) push(raw string) {
 		t.size -= len(t.lines[0])
 		t.lines = t.lines[1:]
 	}
-}
-
-// cutLine removes the first newline-terminated line from b, reporting false
-// when no complete line is buffered.
-func cutLine(b *strings.Builder) (string, bool) {
-	s := b.String()
-	i := strings.IndexByte(s, '\n')
-	if i < 0 {
-		return "", false
-	}
-	line := s[:i]
-	b.Reset()
-	b.WriteString(s[i+1:])
-	return line, true
 }
 
 // buildArgValues returns the secret values a toolchain may echo back: build
@@ -268,7 +308,7 @@ func buildArgValues(args map[string]string) []string {
 			values = append(values, value)
 		}
 	}
-	sort.Strings(values)
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
 	return values
 }
 

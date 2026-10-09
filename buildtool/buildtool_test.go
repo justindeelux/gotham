@@ -231,8 +231,11 @@ func TestToolchainHomeValidIsKept(t *testing.T) {
 }
 
 // TestToolchainHomeTempFallback checks the control-plane dev path (no state
-// dir): a missing HOME falls back under os.TempDir instead of failing.
+// dir): a missing HOME falls back to a per-process directory under TMPDIR
+// instead of failing.
 func TestToolchainHomeTempFallback(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, "env")
 	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
@@ -243,11 +246,166 @@ func TestToolchainHomeTempFallback(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	home := childEnvValue(t, envFile, "HOME")
-	if home == "" || !strings.HasPrefix(home, os.TempDir()) {
-		t.Errorf("child HOME = %q; want a fallback under %q", home, os.TempDir())
+	if home == "" || !strings.HasPrefix(home, tmp) {
+		t.Errorf("child HOME = %q; want a fallback under %q", home, tmp)
 	}
-	if info, err := os.Stat(home); err != nil || !info.IsDir() {
-		t.Errorf("fallback home %q was not created: %v", home, err)
+	if info, err := os.Lstat(home); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("fallback home %q was not created as a real dir: %v", home, err)
+	} else if info.Mode().Perm() != 0o700 {
+		t.Errorf("fallback home mode = %o; want 700", info.Mode().Perm())
+	}
+}
+
+func TestToolchainHomeEmpty(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+	t.Setenv("HOME", "")
+	stateDir := t.TempDir()
+
+	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if home := childEnvValue(t, envFile, "HOME"); home != filepath.Join(stateDir, "toolchain-home") {
+		t.Errorf("child HOME = %q; want the state-dir fallback", home)
+	}
+}
+
+func TestToolchainHomeReadOnly(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write anywhere; probe cannot fail")
+	}
+	home := t.TempDir()
+	if err := os.Chmod(home, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(home, 0o700) })
+	t.Setenv("HOME", home)
+	if homeUsable(home) {
+		t.Fatalf("read-only dir %q probed usable", home)
+	}
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+	stateDir := t.TempDir()
+
+	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := childEnvValue(t, envFile, "HOME"); got != filepath.Join(stateDir, "toolchain-home") {
+		t.Errorf("child HOME = %q; want the state-dir fallback", got)
+	}
+}
+
+func TestToolchainHomeRelativeRejected(t *testing.T) {
+	if homeUsable(".") {
+		t.Error("relative HOME probed usable; want it rejected")
+	}
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+	t.Setenv("HOME", ".")
+	stateDir := t.TempDir()
+
+	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := childEnvValue(t, envFile, "HOME"); got != filepath.Join(stateDir, "toolchain-home") {
+		t.Errorf("child HOME = %q; want the state-dir fallback", got)
+	}
+}
+
+func TestToolchainHomeUnusableStateDirFallsToTemp(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "no-such-home"))
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: file}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	home := childEnvValue(t, envFile, "HOME")
+	if home == "" || !strings.HasPrefix(home, tmp) {
+		t.Errorf("child HOME = %q; want a temp fallback under %q", home, tmp)
+	}
+}
+
+func TestToolchainHomeConcurrent(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "no-such-home"))
+	stateDir := t.TempDir()
+	const n = 8
+	got := make([]string, n)
+	done := make(chan int, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			got[i] = toolchainHome(stateDir)
+			done <- i
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		<-done
+	}
+	for i := 1; i < n; i++ {
+		if got[i] != got[0] {
+			t.Fatalf("concurrent homes differ: %q vs %q", got[0], got[i])
+		}
+	}
+	if want := filepath.Join(stateDir, "toolchain-home"); got[0] != want {
+		t.Errorf("home = %q; want %q", got[0], want)
+	}
+}
+
+func TestToolchainHomeRejectsSymlinkAndTightensMode(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "no-such-home"))
+	stateDir := t.TempDir()
+	linkDir := filepath.Join(stateDir, "toolchain-home")
+	target := t.TempDir()
+	if err := os.Symlink(target, linkDir); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if got := toolchainHome(stateDir); got == linkDir {
+		t.Errorf("symlinked fallback %q accepted", got)
+	}
+	if err := os.Remove(linkDir); err != nil {
+		t.Fatalf("remove symlink: %v", err)
+	}
+	loose := t.TempDir()
+	if err := os.Chmod(loose, 0o777); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if got := toolchainHomeUnder(loose); got != loose {
+		t.Fatalf("toolchainHomeUnder = %q; want %q", got, loose)
+	}
+	if info, err := os.Lstat(loose); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("loose dir mode = %v; want tightened to 700", info.Mode())
+	}
+}
+
+func TestToolchainEnvDoesNotTouchDisk(t *testing.T) {
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "no-such-home"))
+	stateDir := filepath.Join(t.TempDir(), "no-such-state")
+	env := toolchainEnv("", "docker-container://buildkit", "")
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "HOME=") {
+			t.Errorf("toolchainEnv set HOME=%q without a resolved home", kv)
+		}
+	}
+	env = toolchainEnv("", "docker-container://buildkit", filepath.Join(stateDir, "x"))
+	if !strings.Contains(strings.Join(env, "\n"), "HOME="+filepath.Join(stateDir, "x")) {
+		t.Errorf("toolchainEnv did not pass the resolved home through: %q", env)
+	}
+	if _, err := os.Stat(stateDir); !os.IsNotExist(err) {
+		t.Errorf("toolchainEnv touched disk at %q", stateDir)
 	}
 }
 

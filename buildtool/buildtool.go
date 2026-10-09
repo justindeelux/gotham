@@ -121,9 +121,11 @@ func Run(ctx context.Context, engine Engine, opts Options) error {
 
 	var name string
 	var args []string
+	home := toolchainHome(opts.StateDir)
+	logToolchainHomeFallback(opts.LogWriter, os.Getenv("HOME"), home)
 	switch engine {
 	case Railpack:
-		host, err := ensureBuildKit(ctx, opts)
+		host, err := ensureBuildKit(ctx, opts, home)
 		if err != nil {
 			return err
 		}
@@ -139,7 +141,7 @@ func Run(ctx context.Context, engine Engine, opts Options) error {
 	default:
 		return fmt.Errorf("%w: unknown engine %q", ErrCLIMissing, engine)
 	}
-	return run(ctx, name, args, opts)
+	return run(ctx, name, args, opts, home)
 }
 
 // run executes the CLI in its working directory and streams stdout and stderr
@@ -147,7 +149,7 @@ func Run(ctx context.Context, engine Engine, opts Options) error {
 // deploy log shows what ran. A cancelled context stops the tool and reports the
 // context error. A failed tool reports the last lines of its output in the
 // error so the deploy row keeps the cause after the live log is gone.
-func run(ctx context.Context, name string, args []string, opts Options) error {
+func run(ctx context.Context, name string, args []string, opts Options, home string) error {
 	sink := opts.LogWriter
 	if sink == nil {
 		sink = io.Discard
@@ -162,7 +164,7 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 	// process also reads). A toolchain compromise still means node compromise
 	// because it runs as the agent user; dedicated-user/userns sandboxing is a
 	// tracked follow-up.
-	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost, opts.StateDir)
+	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost, home)
 	// The same writer on both streams keeps the tool's output together;
 	// os/exec serialises the writes when Stdout and Stderr are equal.
 	command.Stdout = tee
@@ -324,13 +326,14 @@ func buildArgValues(args map[string]string) []string {
 // BuildKit address Railpack needs, and the explicit Docker host are inherited;
 // every other variable — in particular agent/control-plane secrets — is
 // stripped. Env is never nil, so the child does not inherit the parent's
-// environment by default.
+// environment by default. home is the already-resolved toolchain home
+// (see toolchainHome); toolchainEnv does no disk I/O itself.
 //
 // HOME is the process HOME when it exists and is writable; otherwise the
 // toolchain gets its own home (see toolchainHome) because the Railpack/BuildKit
 // client must write cache under $HOME and the gotham-agent system user has no
 // writable home (/home/gotham-agent does not exist).
-func toolchainEnv(dockerHost, buildKitHost, stateDir string) []string {
+func toolchainEnv(dockerHost, buildKitHost, home string) []string {
 	env := make([]string, 0, 6)
 	if buildKitHost != "" {
 		env = append(env, "BUILDKIT_HOST="+buildKitHost)
@@ -344,7 +347,7 @@ func toolchainEnv(dockerHost, buildKitHost, stateDir string) []string {
 			env = append(env, key+"="+value)
 		}
 	}
-	if home := toolchainHome(stateDir); home != "" {
+	if home != "" {
 		env = append(env, "HOME="+home)
 	}
 	if strings.TrimSpace(dockerHost) != "" {
@@ -356,43 +359,82 @@ func toolchainEnv(dockerHost, buildKitHost, stateDir string) []string {
 // toolchainHome returns a writable HOME for the toolchain: the process HOME
 // when it exists and is writable, otherwise a toolchain-owned directory under
 // the agent state dir (<stateDir>/toolchain-home, mode 0700, next to — never
-// inside — the agent's cert/credential files), falling back to a stable
+// inside — the agent's cert/credential files), falling back to a per-process
 // directory under os.TempDir when no state dir is configured or usable. It
 // returns "" only when HOME is empty and no fallback could be created, in
 // which case the child simply gets no HOME.
 func toolchainHome(stateDir string) string {
-	if homeUsable(os.Getenv("HOME")) {
-		return os.Getenv("HOME")
+	if home := os.Getenv("HOME"); homeUsable(home) {
+		return home
 	}
 	if stateDir = strings.TrimSpace(stateDir); stateDir != "" {
 		if dir := toolchainHomeUnder(filepath.Join(stateDir, "toolchain-home")); dir != "" {
 			return dir
 		}
 	}
-	if dir := toolchainHomeUnder(filepath.Join(os.TempDir(), "gotham-toolchain-home")); dir != "" {
-		return dir
-	}
-	return ""
+	return tempFallbackHome()
 }
 
-// toolchainHomeUnder creates dir with mode 0700 and returns it, or "" when it
-// cannot be created. An empty dir selects nothing (the caller tries the next
-// fallback).
+// tempFallback caches one MkdirTemp directory per process (keyed by TMPDIR so
+// tests isolating TMPDIR get a fresh dir). A fresh unique directory cannot be
+// pre-planted by another user, unlike a stable os.TempDir() child path.
+var (
+	tempFallbackMu  sync.Mutex
+	tempFallbackDir string
+	tempFallbackTmp string
+)
+
+func tempFallbackHome() string {
+	tempFallbackMu.Lock()
+	defer tempFallbackMu.Unlock()
+	tmp := os.TempDir()
+	if tempFallbackDir != "" && tempFallbackTmp == tmp {
+		if info, err := os.Lstat(tempFallbackDir); err == nil &&
+			info.Mode()&os.ModeSymlink == 0 && info.IsDir() {
+			return tempFallbackDir
+		}
+	}
+	dir, err := os.MkdirTemp(tmp, "gotham-toolchain-home-*")
+	if err != nil {
+		return ""
+	}
+	tempFallbackDir, tempFallbackTmp = dir, tmp
+	return dir
+}
+
+// toolchainHomeUnder ensures dir exists as a toolchain-owned directory with
+// mode 0700 and returns it, or "" when it cannot be used. A pre-existing
+// symlink or non-directory is rejected, and an existing directory is
+// tightened to 0700 (MkdirAll alone neither follows that nor changes it).
 func toolchainHomeUnder(dir string) string {
 	if strings.TrimSpace(dir) == "" {
 		return ""
 	}
+	if info, err := os.Lstat(dir); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return ""
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return ""
+		}
+		return dir
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return ""
 	}
 	return dir
 }
 
-// homeUsable reports whether home is an existing directory the process can
-// write to, probed with a temp file so read-only mounts and permission bits
-// are both honoured (a stat-only check would miss them).
+// homeUsable reports whether home is an existing absolute directory the
+// process can write to, probed with a temp file so read-only mounts and
+// permission bits are both honoured (a stat-only check would miss them). A
+// relative HOME is unusable: the probe would resolve against the agent's
+// working directory while the child runs with command.Dir = opts.Dir.
 func homeUsable(home string) bool {
-	if strings.TrimSpace(home) == "" {
+	if strings.TrimSpace(home) == "" || !filepath.IsAbs(home) {
 		return false
 	}
 	info, err := os.Stat(home)
@@ -408,6 +450,16 @@ func homeUsable(home string) bool {
 	return true
 }
 
+// logToolchainHomeFallback logs the HOME fallback once per Run so an operator
+// can tell which HOME the toolchain used. It stays silent when the process
+// HOME was kept or no writer is configured.
+func logToolchainHomeFallback(w io.Writer, processHome, home string) {
+	if w == nil || home == "" || home == processHome {
+		return
+	}
+	_, _ = io.WriteString(w, "toolchain HOME="+home+" (process HOME unusable, using fallback)\n")
+}
+
 // buildKitContainer is the container ensureBuildKit creates on the node.
 const buildKitContainer = "buildkit"
 
@@ -421,15 +473,16 @@ var buildKitMu sync.Mutex
 // needed, and waits until the daemon answers. The container restarts with
 // Docker, so this is a one-time cost.
 // ponytail: unpinned moby/buildkit image; pin a tag/digest for reproducibility.
-func ensureBuildKit(ctx context.Context, opts Options) (string, error) {
+func ensureBuildKit(ctx context.Context, opts Options, home string) (string, error) {
 	if host := strings.TrimSpace(os.Getenv("BUILDKIT_HOST")); host != "" {
 		return host, nil
 	}
 	buildKitMu.Lock()
 	defer buildKitMu.Unlock()
+	toolEnv := toolchainEnv(opts.DockerHost, "", home)
 	docker := func(args ...string) (string, error) {
 		command := exec.CommandContext(ctx, "docker", args...)
-		command.Env = toolchainEnv(opts.DockerHost, "", opts.StateDir)
+		command.Env = toolEnv
 		out, err := command.CombinedOutput()
 		return strings.TrimSpace(string(out)), err
 	}

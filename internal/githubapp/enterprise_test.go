@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -189,7 +190,7 @@ func TestManifestSetupURL(t *testing.T) {
 		t.Fatalf("setup_url = %v", manifest.Manifest["setup_url"])
 	}
 	redirect, _ := manifest.Manifest["redirect_url"].(string)
-	if !strings.HasPrefix(redirect, "https://gotham.example/api/v1/providers/github-app/callback?state=") {
+	if redirect != "https://gotham.example/api/v1/providers/github-app/callback" {
 		t.Fatalf("redirect_url = %v", manifest.Manifest["redirect_url"])
 	}
 	// pull_request stays unsubscribed until previews support app-signed
@@ -203,6 +204,36 @@ func TestManifestSetupURL(t *testing.T) {
 	for i := range want {
 		if events[i] != want[i] {
 			t.Fatalf("default_events = %v, want %v", events, want)
+		}
+	}
+}
+
+// TestManifestURLsHaveNoQuery proves every URL in the manifest parses and
+// carries no query string: GitHub rejects a redirect_url with a query.
+func TestManifestURLsHaveNoQuery(t *testing.T) {
+	svc, _, _, userID := testFixture()
+	manifest, err := svc.StartManifest(context.Background(), userID, "", "gotham", "https://gotham.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var urls []string
+	for _, key := range []string{"url", "redirect_url", "setup_url"} {
+		s, _ := manifest.Manifest[key].(string)
+		urls = append(urls, s)
+	}
+	urls = append(urls, manifest.Manifest["callback_urls"].([]string)...)
+	if hooks, ok := manifest.Manifest["hook_attributes"].(map[string]any); ok {
+		if s, _ := hooks["url"].(string); s != "" {
+			urls = append(urls, s)
+		}
+	}
+	for _, raw := range urls {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			t.Fatalf("manifest url %q is not a URL: %v", raw, err)
+		}
+		if parsed.RawQuery != "" {
+			t.Fatalf("manifest url %q carries a query string", raw)
 		}
 	}
 }

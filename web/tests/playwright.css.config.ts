@@ -7,6 +7,7 @@ export default defineConfig({
   testDir: ".",
   testMatch: [
     "create-app-polish.spec.ts",
+    "add-resource-picker.spec.ts",
     "environment-layout.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",

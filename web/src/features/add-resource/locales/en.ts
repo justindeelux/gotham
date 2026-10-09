@@ -33,4 +33,5 @@ const en = {
     redis: "In-memory cache and queue with optional persistence.",
   },
 };
+
 export default en;

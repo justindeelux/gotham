@@ -26,6 +26,18 @@ const TEMPLATE_COLORS: Record<string, string> = {
 
 const MARKS: Record<string, BrandMark> = {
   application: { letters: "</>", color: "#5865f2" },
+  // Application source types: explicit marks, never derived from the label
+  // (initials of "Public/Private git repository" collide with each other
+  // and with PostgreSQL, and "GitHub (connected)" renders as "G(").
+  // Every text below is unique across the picker's sources, engines and
+  // single-letter template marks. GitHub/GitLab use the provider hues.
+  git_public: { letters: "GIT", color: "#5865f2" },
+  git_private: { letters: "KEY", color: "#8250df" },
+  github_app: { letters: "GH", color: "#24292f" },
+  gitlab_app: { letters: "GL", color: "#fc6d26" },
+  dockerfile: { letters: "DF", color: "#2496ed" },
+  image: { letters: "IMG", color: "#6e7681" },
+  compose: { letters: "DC", color: "#0b7285" },
   postgres: { letters: "PG", color: "#336791" },
   mysql: { letters: "MY", color: "#00758f" },
   mariadb: { letters: "MD", color: "#c0765a" },
@@ -54,8 +66,9 @@ export function templateBrand(icon: string, name: string): BrandMark {
 }
 
 /**
- * brandFor resolves the mark for an engine value or the application card,
- * falling back to initials on the accent hue for unknown keys.
+ * brandFor resolves the mark for a source value, an engine value or the
+ * legacy application card, falling back to initials on the accent hue for
+ * unknown keys.
  */
 export function brandFor(key: string, name: string): BrandMark {
   return MARKS[key] ?? { letters: initialsOf(name), color: BRAND_ACCENT };

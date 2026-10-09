@@ -19,6 +19,7 @@ import type {
 import {
   effectiveVersionFor,
   engineByValue,
+  ENGINES,
   imagePreviewFor,
   versionOptionsFor,
 } from "@/features/databases/utils/databaseEngines";
@@ -115,10 +116,12 @@ export function useCreateDatabaseWizard(options: WizardOptions) {
 
   /**
    * engineLocked hides the engine radio group behind a read-only summary
-   * when the caller preselected an engine (an Add-resource card). Without a
-   * preselect the radio group stays as today.
+   * when the caller preselected a known engine (an Add-resource card).
+   * An unknown value keeps the radio group, so no fallback engine is shown.
    */
-  const engineLocked = computed<boolean>(() => toValue(options.engine ?? "") !== "");
+  const engineLocked = computed<boolean>(() =>
+    ENGINES.some((engine) => engine.value === toValue(options.engine ?? "")),
+  );
 
   const versionOptions = computed(() => versionOptionsFor(selectedEngine.value));
 

@@ -92,6 +92,19 @@ describe("DeployLogs", () => {
     wrapper.unmount();
   });
 
+  it("keeps the stored log mounted when polling replaces the same deployment object", async () => {
+    const wrapper = mountLogs(deployment("failed"));
+    await flushPromises();
+    const stored = wrapper.find(".deploy-logs__stored").element;
+    mockedBuildLog.mockClear();
+    // The detail page re-polls deployments: same id and state, new object.
+    await wrapper.setProps({ deployment: { ...deployment("failed"), updated_at: "later" } });
+    await flushPromises();
+    expect(mockedBuildLog).not.toHaveBeenCalled();
+    expect(wrapper.find(".deploy-logs__stored").element).toBe(stored);
+    wrapper.unmount();
+  });
+
   it("names the missing stored log instead of streaming nothing", async () => {
     mockedBuildLog.mockResolvedValue("");
     const hourAgo = new Date(Date.now() - 3_600_000).toISOString();

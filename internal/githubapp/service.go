@@ -240,9 +240,11 @@ func (s *Service) StartManifest(ctx context.Context, userID uuid.UUID, baseURL, 
 		},
 		// pull_request is subscribed only once previews support app-signed
 		// deliveries: until then app-signed PR events would 401 in GitHub's
-		// delivery log, so the manifest subscribes to push (deploy) and the
-		// installation lifecycle (cache) only.
-		"default_events": []string{"push", "installation", "installation_repositories"},
+		// delivery log, so the manifest subscribes to push (deploy) only. The
+		// installation and installation_repositories lifecycle events (cache)
+		// are delivered to every GitHub App automatically and are rejected in
+		// default_events ("not supported by permissions").
+		"default_events": []string{"push"},
 	}
 	return Manifest{
 		ActionURL: strings.TrimRight(webBase, "/") + "/settings/apps/new?state=" + state,

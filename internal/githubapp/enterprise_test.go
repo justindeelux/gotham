@@ -197,7 +197,7 @@ func TestManifestSetupURL(t *testing.T) {
 	// deliveries; push drives deploys and the installation events refresh
 	// the cache.
 	events, _ := manifest.Manifest["default_events"].([]string)
-	want := []string{"push", "installation", "installation_repositories"}
+	want := []string{"push"}
 	if len(events) != len(want) {
 		t.Fatalf("default_events = %v, want %v", events, want)
 	}

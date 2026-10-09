@@ -150,6 +150,7 @@ func (c *DockerClient) RunToolchain(ctx context.Context, engine string, contextT
 		Tag:        tag,
 		BuildArgs:  buildArgs,
 		DockerHost: c.dockerHost,
+		StateDir:   c.registryStateDir,
 	}
 	if emit != nil {
 		options.LogWriter = emitWriter(emit)

@@ -147,6 +147,122 @@ func TestRunStartsBuildKitWhenUnset(t *testing.T) {
 	}
 }
 
+// TestToolchainHomeMissingUsesStateDir is the JUS-86 regression: the
+// gotham-agent system user has no writable home (/home/gotham-agent does not
+// exist), and Railpack/BuildKit must write cache under $HOME, so a missing
+// HOME falls back to <StateDir>/toolchain-home instead of failing with
+// `mkdir /home/gotham-agent: permission denied`.
+func TestToolchainHomeMissingUsesStateDir(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+	t.Setenv("GOTHAM_SECRET_SENTINEL", "leak-me")
+	stateDir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "no-such-home"))
+
+	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	home := childEnvValue(t, envFile, "HOME")
+	if want := filepath.Join(stateDir, "toolchain-home"); home != want {
+		t.Errorf("child HOME = %q; want %q", home, want)
+	}
+	if info, err := os.Stat(home); err != nil || !info.IsDir() {
+		t.Errorf("fallback home %q was not created: %v", home, err)
+	} else if info.Mode().Perm() != 0o700 {
+		t.Errorf("fallback home mode = %o; want 700", info.Mode().Perm())
+	}
+	if env := readFile(t, envFile); strings.Contains(env, "GOTHAM_SECRET_SENTINEL") {
+		t.Error("toolchain inherited a parent secret")
+	}
+	// The fallback home sits next to the agent's cert/credential files, never
+	// inside them: nothing secret-adjacent may appear under it on creation.
+	if entries, err := os.ReadDir(home); err != nil {
+		t.Fatalf("read fallback home: %v", err)
+	} else if len(entries) != 0 {
+		t.Errorf("fallback home holds %d entries; want it empty", len(entries))
+	}
+}
+
+// TestToolchainHomeUnwritableFallsBack is the JUS-86 sibling: a HOME that
+// exists but cannot serve as a directory (here a regular file, so the check
+// holds even for root) is replaced the same way.
+func TestToolchainHomeUnwritableFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write HOME file: %v", err)
+	}
+	t.Setenv("HOME", file)
+	stateDir := t.TempDir()
+
+	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if home := childEnvValue(t, envFile, "HOME"); home != filepath.Join(stateDir, "toolchain-home") {
+		t.Errorf("child HOME = %q; want the state-dir fallback", home)
+	}
+}
+
+// TestToolchainHomeValidIsKept checks a usable HOME is passed through
+// untouched and no fallback directory is created.
+func TestToolchainHomeValidIsKept(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stateDir := t.TempDir()
+
+	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep", StateDir: stateDir}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := childEnvValue(t, envFile, "HOME"); got != home {
+		t.Errorf("child HOME = %q; want the valid HOME %q kept", got, home)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "toolchain-home")); !os.IsNotExist(err) {
+		t.Errorf("fallback home was created for a valid HOME")
+	}
+}
+
+// TestToolchainHomeTempFallback checks the control-plane dev path (no state
+// dir): a missing HOME falls back under os.TempDir instead of failing.
+func TestToolchainHomeTempFallback(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	fakeCLI(t, RailpackCLI, fmt.Sprintf(`env > '%s'`, envFile))
+	t.Setenv("BUILDKIT_HOST", "docker-container://buildkit")
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "no-such-home"))
+
+	if err := Run(context.Background(), Railpack, Options{Dir: dir, Tag: "gotham/app:dep"}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	home := childEnvValue(t, envFile, "HOME")
+	if home == "" || !strings.HasPrefix(home, os.TempDir()) {
+		t.Errorf("child HOME = %q; want a fallback under %q", home, os.TempDir())
+	}
+	if info, err := os.Stat(home); err != nil || !info.IsDir() {
+		t.Errorf("fallback home %q was not created: %v", home, err)
+	}
+}
+
+// childEnvValue returns the value of key in a child's `env` dump.
+func childEnvValue(t *testing.T, envFile, key string) string {
+	t.Helper()
+	for _, line := range strings.Split(readFile(t, envFile), "\n") {
+		if value, found := strings.CutPrefix(line, key+"="); found {
+			return value
+		}
+	}
+	t.Fatalf("child env has no %s:\n%s", key, readFile(t, envFile))
+	return ""
+}
+
 // fakeCLI writes an executable shell stub named name and prepends its directory
 // to PATH for the test.
 func fakeCLI(t *testing.T, name, body string) {

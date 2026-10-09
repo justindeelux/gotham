@@ -68,6 +68,12 @@ type Options struct {
 	// node agent sets its daemon endpoint; the control plane leaves it empty so
 	// the CLI inherits the process environment.
 	DockerHost string
+	// StateDir is the agent state directory (GOTHAM_AGENT_CERT_DIR). When the
+	// process HOME is missing or not writable (the gotham-agent system user
+	// has no home), the toolchain runs with HOME pointed at
+	// <StateDir>/toolchain-home (mode 0700) instead. Empty selects a fallback
+	// under os.TempDir; the control-plane dev path leaves it empty.
+	StateDir string
 
 	// buildKitHost is the BUILDKIT_HOST exported to Railpack; Run fills it.
 	buildKitHost string
@@ -156,7 +162,7 @@ func run(ctx context.Context, name string, args []string, opts Options) error {
 	// process also reads). A toolchain compromise still means node compromise
 	// because it runs as the agent user; dedicated-user/userns sandboxing is a
 	// tracked follow-up.
-	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost)
+	command.Env = toolchainEnv(opts.DockerHost, opts.buildKitHost, opts.StateDir)
 	// The same writer on both streams keeps the tool's output together;
 	// os/exec serialises the writes when Stdout and Stderr are equal.
 	command.Stdout = tee
@@ -319,12 +325,17 @@ func buildArgValues(args map[string]string) []string {
 // every other variable — in particular agent/control-plane secrets — is
 // stripped. Env is never nil, so the child does not inherit the parent's
 // environment by default.
-func toolchainEnv(dockerHost, buildKitHost string) []string {
-	env := make([]string, 0, 5)
+//
+// HOME is the process HOME when it exists and is writable; otherwise the
+// toolchain gets its own home (see toolchainHome) because the Railpack/BuildKit
+// client must write cache under $HOME and the gotham-agent system user has no
+// writable home (/home/gotham-agent does not exist).
+func toolchainEnv(dockerHost, buildKitHost, stateDir string) []string {
+	env := make([]string, 0, 6)
 	if buildKitHost != "" {
 		env = append(env, "BUILDKIT_HOST="+buildKitHost)
 	}
-	keys := []string{"PATH", "HOME", "TMPDIR"}
+	keys := []string{"PATH", "TMPDIR"}
 	if buildKitHost == "" {
 		keys = append(keys, "BUILDKIT_HOST")
 	}
@@ -333,10 +344,68 @@ func toolchainEnv(dockerHost, buildKitHost string) []string {
 			env = append(env, key+"="+value)
 		}
 	}
+	if home := toolchainHome(stateDir); home != "" {
+		env = append(env, "HOME="+home)
+	}
 	if strings.TrimSpace(dockerHost) != "" {
 		env = append(env, "DOCKER_HOST="+dockerHost)
 	}
 	return env
+}
+
+// toolchainHome returns a writable HOME for the toolchain: the process HOME
+// when it exists and is writable, otherwise a toolchain-owned directory under
+// the agent state dir (<stateDir>/toolchain-home, mode 0700, next to — never
+// inside — the agent's cert/credential files), falling back to a stable
+// directory under os.TempDir when no state dir is configured or usable. It
+// returns "" only when HOME is empty and no fallback could be created, in
+// which case the child simply gets no HOME.
+func toolchainHome(stateDir string) string {
+	if homeUsable(os.Getenv("HOME")) {
+		return os.Getenv("HOME")
+	}
+	if stateDir = strings.TrimSpace(stateDir); stateDir != "" {
+		if dir := toolchainHomeUnder(filepath.Join(stateDir, "toolchain-home")); dir != "" {
+			return dir
+		}
+	}
+	if dir := toolchainHomeUnder(filepath.Join(os.TempDir(), "gotham-toolchain-home")); dir != "" {
+		return dir
+	}
+	return ""
+}
+
+// toolchainHomeUnder creates dir with mode 0700 and returns it, or "" when it
+// cannot be created. An empty dir selects nothing (the caller tries the next
+// fallback).
+func toolchainHomeUnder(dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	return dir
+}
+
+// homeUsable reports whether home is an existing directory the process can
+// write to, probed with a temp file so read-only mounts and permission bits
+// are both honoured (a stat-only check would miss them).
+func homeUsable(home string) bool {
+	if strings.TrimSpace(home) == "" {
+		return false
+	}
+	info, err := os.Stat(home)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	probe, err := os.CreateTemp(home, ".gotham-home-probe-*")
+	if err != nil {
+		return false
+	}
+	_ = probe.Close()
+	_ = os.Remove(probe.Name())
+	return true
 }
 
 // buildKitContainer is the container ensureBuildKit creates on the node.
@@ -360,7 +429,7 @@ func ensureBuildKit(ctx context.Context, opts Options) (string, error) {
 	defer buildKitMu.Unlock()
 	docker := func(args ...string) (string, error) {
 		command := exec.CommandContext(ctx, "docker", args...)
-		command.Env = toolchainEnv(opts.DockerHost, "")
+		command.Env = toolchainEnv(opts.DockerHost, "", opts.StateDir)
 		out, err := command.CombinedOutput()
 		return strings.TrimSpace(string(out)), err
 	}

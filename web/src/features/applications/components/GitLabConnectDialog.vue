@@ -164,7 +164,9 @@ async function submit(): Promise<void> {
           class="mono"
           placeholder="https://gitlab.com"
         />
-        <span class="field-hint">{{ t("applications.gitSources.gitlabInstanceHint") }}</span>
+        <template #feedback>
+          <span class="field-hint">{{ t("applications.gitSources.gitlabInstanceHint") }}</span>
+        </template>
       </NFormItem>
 
       <template v-if="!manual">
@@ -178,8 +180,11 @@ async function submit(): Promise<void> {
             type="password"
             class="mono"
             autocomplete="off"
+            :placeholder="t('applications.gitSources.gitlabAdminTokenPlaceholder')"
           />
-          <span class="field-hint">{{ t("applications.gitSources.gitlabAdminTokenHint") }}</span>
+          <template #feedback>
+            <span class="field-hint">{{ t("applications.gitSources.gitlabAdminTokenHint") }}</span>
+          </template>
         </NFormItem>
       </template>
 
@@ -190,7 +195,9 @@ async function submit(): Promise<void> {
           :label-props="{ for: 'gitlab-redirect-input' }"
         >
           <NInput :value="redirectUri" :input-props="{ id: 'gitlab-redirect-input' }" class="mono" readonly />
-          <span class="field-hint">{{ t("applications.gitSources.gitlabRedirectHint") }}</span>
+          <template #feedback>
+            <span class="field-hint">{{ t("applications.gitSources.gitlabRedirectHint") }}</span>
+          </template>
         </NFormItem>
         <NFormItem
           :label="t('applications.gitSources.gitlabClientId')"
@@ -209,7 +216,9 @@ async function submit(): Promise<void> {
             class="mono"
             autocomplete="off"
           />
-          <span class="field-hint">{{ t("applications.gitSources.gitlabClientSecretHint") }}</span>
+          <template #feedback>
+            <span class="field-hint">{{ t("applications.gitSources.gitlabClientSecretHint") }}</span>
+          </template>
         </NFormItem>
         <NFormItem
           :label="t('applications.gitSources.gitlabScopes')"
@@ -225,36 +234,57 @@ async function submit(): Promise<void> {
       <NAlert v-if="loadError" type="error" :show-icon="true">{{ loadError }}</NAlert>
     </NForm>
     <template #footer>
-      <NSpace :size="12" justify="end">
-        <NButton :disabled="working" @click="void toggleManual()">
+      <div class="connect-footer">
+        <NButton quaternary :disabled="working" @click="void toggleManual()">
           {{ manual ? t("applications.gitSources.gitlabAutoToggle") : t("applications.gitSources.gitlabManualToggle") }}
         </NButton>
-        <NButton :disabled="working" @click="close">{{ t("applications.gitSources.cancel") }}</NButton>
-        <NButton type="primary" :disabled="!canSubmit" :loading="working" @click="void submit()">
-          {{ manual ? t("applications.gitSources.gitlabStoreConnect") : t("applications.gitSources.gitlabProvision") }}
-        </NButton>
-      </NSpace>
+        <NSpace :size="8">
+          <NButton :disabled="working" @click="close">{{ t("applications.gitSources.cancel") }}</NButton>
+          <NButton type="primary" :disabled="!canSubmit" :loading="working" @click="void submit()">
+            {{ manual ? t("applications.gitSources.gitlabStoreConnect") : t("applications.gitSources.gitlabProvision") }}
+          </NButton>
+        </NSpace>
+      </div>
     </template>
   </NModal>
 </template>
 
 <style scoped>
-:deep(.connect-modal.n-modal.n-card) {
-  max-height: calc(100vh - 64px);
+.connect-footer {
   display: flex;
-  flex-direction: column;
-}
-
-:deep(.connect-modal.n-modal.n-card > .n-card-content) {
-  overflow-y: auto;
-  min-height: 0;
-}
-
-:deep(.connect-modal .n-form-item-blank) {
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
 .mono {
   font-family: var(--font-mono);
+}
+</style>
+
+<!--
+  Unscoped on purpose: NModal teleports the card to <body>, so scoped
+  selectors (which compile to a [data-v] ancestor match) never reach it.
+  Every rule stays behind the .connect-modal class owned by this dialog.
+-->
+<style>
+.connect-modal.n-modal.n-card {
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+}
+
+.connect-modal.n-modal.n-card > .n-card-content {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.connect-modal .n-form-item-blank {
+  display: block;
+}
+
+.connect-modal .n-form-item-blank > .n-input {
+  width: 100%;
 }
 </style>

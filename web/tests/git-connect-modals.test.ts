@@ -98,12 +98,26 @@ describe("JUS-74 connect modal width", () => {
     expect(width).toBeGreaterThanOrEqual(480);
   });
 
-  it("stacks labels above inputs with a right-aligned footer", () => {
+  it("stacks labels above inputs with a footer", () => {
     for (const source of [gitHubSource, gitLabSource]) {
       expect(source).toContain('label-placement="top"');
       expect(source).toContain("#footer");
-      expect(source).toContain('justify="end"');
     }
+    expect(gitHubSource).toContain('justify="end"');
+  });
+
+  it("renders hints in the form item feedback slot, below the input", () => {
+    for (const source of [gitHubSource, gitLabSource]) {
+      expect(source).toContain("#feedback");
+      // No hint may sit directly after an input: the default slot feeds
+      // .n-form-item-blank, a flex row that would squeeze the input.
+      expect(source).not.toMatch(/\/>\s*<span class="field-hint"/);
+    }
+  });
+
+  it("gives the admin token a real placeholder from the locales", () => {
+    expect(gitLabSource).toContain("gitlabAdminTokenPlaceholder");
+    expect(applicationsEn.gitSources.gitlabAdminTokenPlaceholder).toBe("glpat-…");
   });
 
   it("keeps header/footer fixed with only the body scrolling", () => {

@@ -316,7 +316,9 @@ async function confirmDisconnect(): Promise<void> {
             :input-props="{ id: 'github-app-name-input' }"
             :placeholder="t('applications.gitSources.githubNamePlaceholder')"
           />
-          <span class="field-hint">{{ t("applications.gitSources.githubNameHint") }}</span>
+          <template #feedback>
+            <span class="field-hint">{{ t("applications.gitSources.githubNameHint") }}</span>
+          </template>
         </NFormItem>
         <NAlert v-if="githubError" type="error" :show-icon="true">{{ githubError }}</NAlert>
       </NForm>
@@ -441,33 +443,40 @@ async function confirmDisconnect(): Promise<void> {
   margin: 0 0 var(--space-3);
 }
 
-.dialog-card {
-  max-width: 520px;
-}
-
 .dialog-hint {
   margin: 0 0 var(--space-3);
   color: var(--muted);
-}
-
-:deep(.connect-modal.n-modal.n-card) {
-  max-height: calc(100vh - 64px);
-  display: flex;
-  flex-direction: column;
-}
-
-:deep(.connect-modal.n-modal.n-card > .n-card-content) {
-  overflow-y: auto;
-  min-height: 0;
-}
-
-:deep(.connect-modal .n-form-item-blank) {
-  flex-wrap: wrap;
 }
 
 @media (max-width: 860px) {
   .page-actions {
     margin-left: 0;
   }
+}
+</style>
+
+<!--
+  Unscoped on purpose: NModal teleports the card to <body>, so scoped
+  selectors (which compile to a [data-v] ancestor match) never reach it.
+  Every rule stays behind the .connect-modal class owned by this dialog.
+-->
+<style>
+.connect-modal.n-modal.n-card {
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+}
+
+.connect-modal.n-modal.n-card > .n-card-content {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.connect-modal .n-form-item-blank {
+  display: block;
+}
+
+.connect-modal .n-form-item-blank > .n-input {
+  width: 100%;
 }
 </style>

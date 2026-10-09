@@ -418,6 +418,7 @@ const vi: ApplicationsMessages = {
     gitlabInstance: "URL máy chủ",
     gitlabInstanceHint: "gitlab.com hoặc máy chủ tự quản.",
     gitlabAdminToken: "Token admin (dùng một lần, không lưu)",
+    gitlabAdminTokenPlaceholder: "glpat-…",
     gitlabAdminTokenHint: "Token chỉ xác thực một lệnh tạo duy nhất và bị xóa khi gửi. Nó không bao giờ được lưu, ghi log hay hiển thị lại.",
     gitlabProvision: "Tạo & kết nối",
     gitlabManualToggle: "Dùng trường app thủ công",

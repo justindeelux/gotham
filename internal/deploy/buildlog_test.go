@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -77,6 +78,86 @@ func TestLogRecorderNilSafe(t *testing.T) {
 	rec.record("dropped")
 	if got := rec.finalize(); got != "" {
 		t.Errorf("nil finalize = %q, want empty", got)
+	}
+}
+
+func TestLogRecorderBoundsMemory(t *testing.T) {
+	var rec logRecorder
+	line := strings.Repeat("x", 100)
+	const lines = 10000 // ~1 MiB of input against a 256 KiB cap
+	for i := 0; i < lines; i++ {
+		rec.record(line)
+	}
+	got := rec.finalize()
+	if len(got) > maxBuildLogBytes {
+		t.Errorf("len = %d, want at most %d", len(got), maxBuildLogBytes)
+	}
+	if !strings.HasSuffix(got, line) {
+		t.Error("bounded log does not keep the tail")
+	}
+	rec.mu.Lock()
+	held := len(rec.lines)
+	rec.mu.Unlock()
+	// ~256 KiB / 101 B per line ≈ 2600 lines held; anything near 10000
+	// means the cap only applies at finalize.
+	if held > 4000 {
+		t.Errorf("held lines = %d, want a bounded tail", held)
+	}
+}
+
+// orderPublisher reports whether the stored log was already on the row when
+// a terminal state line was published.
+type orderPublisher struct {
+	mu                   sync.Mutex
+	repo                 *fakeRepository
+	id                   uuid.UUID
+	sawTerminal          bool
+	storedBeforeTerminal bool
+}
+
+func (p *orderPublisher) Publish(_ context.Context, _, payload string) error {
+	if !strings.Contains(payload, "→ failed") && !strings.Contains(payload, "→ running") {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sawTerminal = true
+	if dep, ok := p.repo.deployment(p.id); ok && dep.BuildLog != "" {
+		p.storedBeforeTerminal = true
+	}
+	return nil
+}
+
+func TestOrchestratorPersistsLogBeforeTerminalEvent(t *testing.T) {
+	app := testApplication(uuid.New())
+	repo := &fakeRepository{app: app}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+	pub := &orderPublisher{repo: repo, id: dep.ID}
+
+	node := newMockNode()
+	node.stopErr = errors.New("stop refused")
+	node.listed = []*agentv1.ContainerInfo{{Id: "old-container-id", State: "running", Status: "Up 1 minute"}}
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+		Emitter:    NewEmitter(pub),
+	})
+
+	o.run(context.Background(), job{app: app, dep: dep, previous: "old-container-id"})
+
+	if !pub.sawTerminal {
+		t.Fatal("no terminal state line published")
+	}
+	pub.mu.Lock()
+	storedFirst := pub.storedBeforeTerminal
+	pub.mu.Unlock()
+	if !storedFirst {
+		t.Error("terminal state event was published before the build log was persisted")
+	}
+	stored, _ := repo.deployment(dep.ID)
+	if !strings.Contains(stored.BuildLog, "→") {
+		t.Errorf("stored log = %q, want the state-change lines too", stored.BuildLog)
 	}
 }
 

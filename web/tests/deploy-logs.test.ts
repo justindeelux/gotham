@@ -26,7 +26,7 @@ const mockedBuildLog = vi.mocked(getDeploymentBuildLog);
 
 const LiveStub = { template: "<div data-testid='live-stream' />" };
 
-function deployment(state: Deployment["state"]): Deployment {
+function deployment(state: Deployment["state"], finishedAt: string | null = null): Deployment {
   return {
     id: "11111111-2222-3333-4444-555555555555",
     application_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
@@ -40,7 +40,7 @@ function deployment(state: Deployment["state"]): Deployment {
     container_id: "",
     rollback_from: "",
     started_at: null,
-    finished_at: null,
+    finished_at: finishedAt,
     created_at: "",
     updated_at: "",
   };
@@ -50,11 +50,13 @@ beforeEach(() => {
   registerDiscoveredCatalogs();
   resetLocaleState();
   syncComposerLocale("en");
+  vi.useFakeTimers();
   mockedBuildLog.mockResolvedValue("line one\nline two");
 });
 
 afterEach(() => {
   globalThis.document.body.innerHTML = "";
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -92,7 +94,8 @@ describe("DeployLogs", () => {
 
   it("names the missing stored log instead of streaming nothing", async () => {
     mockedBuildLog.mockResolvedValue("");
-    const wrapper = mountLogs(deployment("running"));
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const wrapper = mountLogs(deployment("running", hourAgo));
     await flushPromises();
     expect(wrapper.find("[data-testid='live-stream']").exists()).toBe(false);
     expect(wrapper.find(".deploy-logs__stored").text()).toContain(
@@ -101,13 +104,64 @@ describe("DeployLogs", () => {
     wrapper.unmount();
   });
 
-  it("falls back to the missing-log copy when the read fails", async () => {
-    mockedBuildLog.mockRejectedValue(new Error("gone"));
+  it("shows a loading state while the stored log is being read", async () => {
+    let resolve!: (_value: string) => void;
+    mockedBuildLog.mockReturnValue(
+      new Promise<string>((res) => {
+        resolve = res;
+      }),
+    );
     const wrapper = mountLogs(deployment("failed"));
+    await flushPromises();
+    // Loading, not the generic empty copy and not the missing-log copy.
+    expect(wrapper.text()).toContain("Loading the stored log");
+    expect(wrapper.find(".deploy-logs__stored").exists()).toBe(false);
+    resolve("late lines");
+    await flushPromises();
+    expect(wrapper.find(".deploy-logs__stored").text()).toContain("late lines");
+    wrapper.unmount();
+  });
+
+  it("retries an empty read of a just-finished deployment before settling", async () => {
+    mockedBuildLog.mockResolvedValue("");
+    const wrapper = mountLogs(deployment("failed"));
+    await flushPromises();
+    expect(wrapper.text()).toContain("Loading the stored log");
+    await vi.advanceTimersByTimeAsync(500);
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(500);
     await flushPromises();
     expect(wrapper.find(".deploy-logs__stored").text()).toContain(
       "No stored log for this deployment.",
     );
+    expect(mockedBuildLog).toHaveBeenCalledTimes(3);
+    wrapper.unmount();
+  });
+
+  it("reads an old deployment's empty log once without retrying", async () => {
+    mockedBuildLog.mockResolvedValue("");
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const wrapper = mountLogs(deployment("failed", hourAgo));
+    await flushPromises();
+    expect(wrapper.find(".deploy-logs__stored").text()).toContain(
+      "No stored log for this deployment.",
+    );
+    expect(mockedBuildLog).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("shows an error state with a retry button when the read fails", async () => {
+    mockedBuildLog.mockRejectedValueOnce(new Error("gone"));
+    const wrapper = mountLogs(deployment("failed"));
+    await flushPromises();
+    expect(wrapper.find(".deploy-logs__error").text()).toContain(
+      "Could not load the stored log.",
+    );
+    const retry = wrapper.find(".deploy-logs__retry");
+    expect(retry.exists()).toBe(true);
+    await retry.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".deploy-logs__stored").text()).toContain("line one");
     wrapper.unmount();
   });
 });

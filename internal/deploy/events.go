@@ -57,7 +57,12 @@ func (e *Emitter) Log(ctx context.Context, t Target, line string) {
 	_ = e.pub.Publish(ctx, ch, string(payload))
 }
 
+// stateLine formats the synthetic transition marker Emitter.State publishes.
+func stateLine(from, to State) string {
+	return time.Now().UTC().Format(time.RFC3339) + " " + string(from) + " → " + string(to)
+}
+
 // State publishes a synthetic log line marking a state transition.
 func (e *Emitter) State(ctx context.Context, t Target, from, to State) {
-	e.Log(ctx, t, time.Now().UTC().Format(time.RFC3339)+" "+string(from)+" → "+string(to))
+	e.Log(ctx, t, stateLine(from, to))
 }

@@ -108,6 +108,9 @@ const en = {
     buildLog: "Build log",
     empty: "Select a deployment to stream its logs.",
     storedEmpty: "No stored log for this deployment.",
+    loading: "Loading the stored log…",
+    loadError: "Could not load the stored log.",
+    retry: "Retry",
   },
   envTab: {
     title: "Environment variables",

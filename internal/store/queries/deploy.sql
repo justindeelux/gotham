@@ -243,10 +243,13 @@ RETURNING *;
 -- control plane process can never resume, and its row would keep blocking the
 -- active-deployment partial unique index. Mark those rows failed so the index
 -- unblocks. Running deployments are left alone (their container is the state),
--- and the worker pool is empty when this runs at service construction.
+-- and the worker pool is empty when this runs at service construction. Rows
+-- with no recorded output get the reason as their stored log (JUS-84) so the
+-- row is never a silent empty; a partial log from a previous persist is kept.
 UPDATE deployments
 SET state = 'failed',
     error = 'control plane restarted before the deployment finished',
+    build_log = CASE WHEN build_log = '' THEN 'control plane restarted before the deployment finished' ELSE build_log END,
     finished_at = now(),
     updated_at = now()
 WHERE state NOT IN ('running', 'failed');

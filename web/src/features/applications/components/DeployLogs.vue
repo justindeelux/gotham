@@ -35,6 +35,15 @@ const { t } = useI18n();
 /** Stored log of a finished deployment (null while streaming or unloaded). */
 const storedLog = ref<string | null>(null);
 
+/** True when the stored-log read failed (distinct from a genuinely empty log). */
+const loadFailed = ref(false);
+
+/** Monotonic read id: a slow read must not overwrite a newer selection. */
+let readSeq = 0;
+
+/** Manual retry trigger for the error state's retry button. */
+const retryNonce = ref(0);
+
 const streaming = computed<boolean>(
   () => props.deployment !== null && isActiveDeployment(props.deployment),
 );
@@ -58,30 +67,77 @@ const subtitle = computed<string>(() =>
     : "",
 );
 
+/** True while a finished deployment's stored log is being read. */
+const loadingStored = computed<boolean>(
+  () => !streaming.value && !!props.deployment && !!props.serverId && storedLog.value === null && !loadFailed.value,
+);
+
+/**
+ * A deployment counts as just finished when its clock is missing or recent:
+ * only then is an empty stored log worth re-reading (the persist may still
+ * be landing). Older rows with no log predate log persistence (JUS-84).
+ */
+function justFinished(selected: Deployment): boolean {
+  if (!selected.finished_at) {
+    return true;
+  }
+  const finished = Date.parse(selected.finished_at);
+  if (Number.isNaN(finished)) {
+    return true;
+  }
+  return Date.now() - finished < 60_000;
+}
+
 /** Loads the stored log whenever a finished deployment is selected. */
 watch(
-  () => (props.deployment ? `${props.deployment.id}:${props.deployment.state}` : ""),
+  () => [
+    props.deployment ? `${props.deployment.id}:${props.deployment.state}` : "",
+    retryNonce.value,
+  ],
   async () => {
     const selected = props.deployment;
+    const seq = ++readSeq;
     storedLog.value = null;
+    loadFailed.value = false;
     if (!selected || isActiveDeployment(selected)) {
       return;
     }
-    let log: string;
-    try {
-      // A deployment that finished before the log existed (or whose log never
-      // persisted) answers with an empty string, rendered as storedEmpty.
-      log = await getDeploymentBuildLog(selected.application_id, selected.id);
-    } catch {
-      log = "";
-    }
-    // A newer selection wins: a slow read must not overwrite it.
-    if (props.deployment?.id === selected.id) {
-      storedLog.value = log;
+    const fresh = () => seq === readSeq && props.deployment?.id === selected.id;
+    // An empty read right after the terminal event can precede the persist;
+    // retry briefly before settling on storedEmpty.
+    const attempts = justFinished(selected) ? 3 : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      if (!fresh()) {
+        return;
+      }
+      try {
+        const log = await getDeploymentBuildLog(selected.application_id, selected.id);
+        if (!fresh()) {
+          return;
+        }
+        if (log !== "" || attempt + 1 >= attempts) {
+          storedLog.value = log;
+          return;
+        }
+      } catch {
+        if (!fresh()) {
+          return;
+        }
+        loadFailed.value = true;
+        return;
+      }
     }
   },
   { immediate: true },
 );
+
+/** Re-reads the stored log after a failed read. */
+function retryLoad(): void {
+  retryNonce.value += 1;
+}
 </script>
 
 <template>
@@ -101,6 +157,15 @@ watch(
     tabindex="0"
     :aria-label="title"
   >{{ storedLog || t("applications.deployLogs.storedEmpty") }}</pre>
+  <p v-else-if="deployment && serverId && loadFailed" class="deploy-logs__error" role="alert">
+    {{ t("applications.deployLogs.loadError") }}
+    <button type="button" class="deploy-logs__retry" @click="retryLoad">
+      {{ t("applications.deployLogs.retry") }}
+    </button>
+  </p>
+  <p v-else-if="loadingStored" class="deploy-logs__empty">
+    {{ t("applications.deployLogs.loading") }}
+  </p>
   <p v-else class="deploy-logs__empty">{{ t("applications.deployLogs.empty") }}</p>
 </template>
 
@@ -109,6 +174,19 @@ watch(
   margin: 0;
   color: var(--muted);
   font-size: var(--text-sm);
+}
+
+.deploy-logs__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.deploy-logs__retry {
+  cursor: pointer;
 }
 
 .deploy-logs__stored {

@@ -109,6 +109,9 @@ const vi: ApplicationsMessages = {
     buildLog: "Nhật ký build",
     empty: "Chọn một đợt triển khai để xem nhật ký trực tiếp.",
     storedEmpty: "Đợt triển khai này chưa có nhật ký lưu trữ.",
+    loading: "Đang tải nhật ký đã lưu…",
+    loadError: "Không tải được nhật ký đã lưu.",
+    retry: "Thử lại",
   },
   envTab: {
     title: "Biến môi trường",

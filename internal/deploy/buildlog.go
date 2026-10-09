@@ -12,13 +12,16 @@ const maxBuildLogBytes = 256 << 10 // 256 KiB
 
 // logRecorder tees streamed lines for persistence. Lines are stored exactly
 // as emitted, so the stored log carries the same redaction the call sites
-// already applied to the stream (compose secrets, clone credentials).
+// already applied to the stream (compose secrets, clone credentials). The
+// buffer is a rolling tail: old lines are dropped while recording, so a noisy
+// build cannot grow memory without bound (finalize only re-caps the tail cut).
 type logRecorder struct {
 	mu    sync.Mutex
 	lines []string
+	size  int // bytes held, counting one separator per line
 }
 
-// record appends one emitted line.
+// record appends one emitted line, dropping the oldest lines past the cap.
 func (r *logRecorder) record(line string) {
 	if r == nil {
 		return
@@ -26,6 +29,12 @@ func (r *logRecorder) record(line string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lines = append(r.lines, line)
+	r.size += len(line) + 1
+	// ponytail: whole lines are dropped, so the cut is rune-safe by construction.
+	for len(r.lines) > 1 && r.size > maxBuildLogBytes {
+		r.size -= len(r.lines[0]) + 1
+		r.lines = r.lines[1:]
+	}
 }
 
 // finalize joins the recorded lines and caps the result for storage.

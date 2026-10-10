@@ -78,7 +78,7 @@ function hostCell(router: ProxyRouter): VNode {
   return h("div", { class: "cell-main" }, [
     h("span", { class: "mono cell-name" }, router.host),
     router.target
-      ? h("span", { class: "cell-sub", style: "display:block" }, `→ ${router.target}`)
+      ? h("span", { class: "cell-sub" }, `→ ${router.target}`)
       : null,
   ]);
 }
@@ -182,6 +182,7 @@ const emptyText = computed(() => proxyText("domains.routers.empty", "No routers 
       <NSpin v-if="proxyStore.routersLoading && proxyStore.routers.length === 0" />
       <NDataTable
         v-else
+        class="router-table"
         :columns="columns"
         :data="filteredRouters"
         :bordered="false"
@@ -202,6 +203,30 @@ const emptyText = computed(() => proxyText("domains.routers.empty", "No routers 
 </template>
 
 <style scoped>
+/* Router-list cell stack (local to this panel: the certificate table owns
+   its own pair in JUS-88, so this rule stays scoped here). Every multi-line
+   cell stacks its lines with the shared 4px step, matching the other
+   tables' cell-name/cell-sub pairs. The :deep span is load-bearing: column
+   bodies render through NDataTable render callbacks, so the inner divs
+   never carry this component's scope attribute. */
+.router-table :deep(.cell-main) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.router-table :deep(.cell-name) {
+  color: var(--fg-2);
+  font-weight: 600;
+}
+
+.router-table :deep(.cell-sub) {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
 .empty-hint {
   color: var(--muted);
   font-size: var(--text-sm);

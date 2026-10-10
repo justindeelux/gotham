@@ -22,6 +22,7 @@ export default defineConfig({
     "services-templates-layout.spec.ts",
     "sessions-layout.spec.ts",
     "shared-variables-layout.spec.ts",
+    "tasks-progress-layout.spec.ts",
   ],
   workers: 1,
   timeout: 30_000,

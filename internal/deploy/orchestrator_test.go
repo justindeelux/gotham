@@ -181,6 +181,11 @@ func TestOrchestratorHappyPath(t *testing.T) {
 	wantChannel := DeployChannel(app.ServerID, dep.ID)
 	var sawTransition, sawImage, sawStop bool
 	for _, event := range pub.payloads() {
+		// Task lifecycle frames (JUS-91) share the publisher on
+		// tasks:{teamID}; only log events belong to this assertion.
+		if strings.HasPrefix(event.Channel, "tasks:") {
+			continue
+		}
 		if event.Channel != wantChannel {
 			t.Errorf("channel = %q, want %q", event.Channel, wantChannel)
 		}

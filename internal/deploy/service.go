@@ -15,6 +15,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/taskevents"
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
@@ -200,6 +201,10 @@ type Config struct {
 	HookTimeout time.Duration
 	// Emitter overrides the publisher-based realtime emitter (tests).
 	Emitter *Emitter
+	// Tasks tracks running background tasks for the progress card snapshot;
+	// nil selects a private tracker. The server reads it back through
+	// TaskTracker to replay running tasks on WebSocket (re)subscribe.
+	Tasks *taskevents.Tracker
 	// Logger defaults to slog.Default.
 	Logger *slog.Logger
 	// Workers is the pool size, QueueSize the job buffer.
@@ -726,12 +731,18 @@ func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (
 	if err != nil {
 		return Deployment{}, err
 	}
+	// The run is queued: surface it on the progress card BEFORE the worker
+	// can publish anything, including webhook-triggered (DeploySystem) runs
+	// that share this boundary. Publishing first keeps every task's frames
+	// monotonic (queued is sequence 1); a fast terminal run can never land
+	// before its queued frame and leave a ghost queued card behind.
+	s.publishTask(ctx, app, created, taskevents.StatusQueued, "", 0, "")
 	if err := s.enqueue(ctx, job{
 		app:      app,
 		dep:      created,
 		previous: previous,
 	}); err != nil {
-		s.abandon(created, err)
+		s.abandon(app, created, err)
 		return Deployment{}, err
 	}
 	return created, nil
@@ -766,14 +777,17 @@ func (s *Service) createDeployment(ctx context.Context, app Application, dep Dep
 		// an empty previous would let the worker's pre-Run reconcile remove
 		// the live release as if it were an orphan. Fail the freshly created
 		// row here (it has not run) rather than hand the worker a blind job.
-		s.abandon(created, fmt.Errorf("deploy: resolve previous container: %w", err))
+		s.abandon(app, created, fmt.Errorf("deploy: resolve previous container: %w", err))
 		return Application{}, Deployment{}, "", fmt.Errorf("deploy: resolve previous container: %w", err)
 	}
 	return app, created, previous, nil
 }
 
-// abandon marks a deployment that never started running as failed.
-func (s *Service) abandon(created Deployment, cause error) {
+// abandon marks a deployment that never started running as failed. The queued
+// card was already published by submit, so abandon always publishes the
+// terminal failed frame from the passed application (never a re-read that
+// could fail and strand the card).
+func (s *Service) abandon(app Application, created Deployment, cause error) {
 	fresh, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	created.State = StateFailed
@@ -783,4 +797,5 @@ func (s *Service) abandon(created Deployment, cause error) {
 		s.logger.Error("deploy: could not mark deployment failed",
 			"deployment_id", created.ID, "error", err)
 	}
+	s.publishTask(fresh, app, created, taskevents.StatusFailed, "", 0, created.Error)
 }

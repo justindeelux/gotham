@@ -125,6 +125,25 @@ func (s *Server) authorizeLogSubscription(ctx context.Context, serverID, userID 
 	return nil
 }
 
+// authorizeTaskSubscription authorizes one WebSocket background-task
+// subscription: the caller must be a member of the channel's team, so one
+// team's deploy progress never leaks to another. A nil team service (no
+// database) leaves the subscription open, like the other pre-teams
+// compatibility paths.
+func (s *Server) authorizeTaskSubscription(ctx context.Context, teamID string, userID uuid.UUID) error {
+	if s.teamService == nil {
+		return nil
+	}
+	teamUUID, err := uuid.Parse(teamID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.teamService.Membership(ctx, teamUUID, userID); err != nil {
+		return err
+	}
+	return nil
+}
+
 // withTeam builds the middleware chain of a team-scoped resource group:
 // authentication, the API-token scope boundary (reads need read, mutations
 // need deploy), active-team resolution, and the owner/admin gate for mutating

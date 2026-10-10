@@ -33,6 +33,7 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/taskevents"
 	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/templates"
 	"github.com/justindeelux/gotham/internal/updates"
@@ -451,6 +452,14 @@ func (s *Server) routes() (http.Handler, error) {
 		s.deploy = s.deployService(providerSvc, s.proxy, githubAppSvc)
 		deploy.Mount(api, s.withTeam(), UserIDFromContext, s.deploy)
 
+		// Background-task progress (JUS-91): the deploy worker publishes
+		// queued/running/succeeded/failed events on tasks:{teamID}, and every
+		// (re)subscribe replays the running snapshot so the progress card
+		// restores without user action, including webhook-triggered runs.
+		if s.realtime != nil {
+			s.realtime.SetTaskFeed(s.authorizeTaskSubscription, s.taskSnapshot)
+		}
+
 		// Push webhooks (BE-4.4) and preview deployments (BE-8.1): the public,
 		// signature-verified delivery endpoint plus authenticated hook and
 		// preview listing. It reuses the deploy service instance above so both
@@ -630,6 +639,18 @@ func (n deployNotifier) DeployFinished(ctx context.Context, result deploy.Deploy
 	if n.preview != nil {
 		n.preview(result)
 	}
+}
+
+// taskSnapshot replays the team's running background tasks as realtime
+// frames, closed by a task_snapshot marker. The WebSocket handler sends it
+// after every task-channel join, so the progress card restores on mount,
+// navigation and reconnect.
+func (s *Server) taskSnapshot(teamID string) []string {
+	tracker, ok := s.deploy.(interface{ TaskTracker() *taskevents.Tracker })
+	if !ok || tracker == nil {
+		return taskevents.NewTracker().SnapshotFrames(teamID)
+	}
+	return tracker.TaskTracker().SnapshotFrames(teamID)
 }
 
 // providerConnectionApplications feeds the provider disconnect in-use check

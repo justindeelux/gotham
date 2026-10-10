@@ -56,6 +56,8 @@ type Realtime struct {
 	rdb *redis.Client
 	pub Publisher
 
+	handler *Handler
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -105,8 +107,19 @@ func Mount(api chi.Router, verifier TokenVerifier, redisAddr string, logger *slo
 	}
 
 	handler := NewHandler(hub, verifier, logger, authorize)
+	rt.handler = handler
 	api.Get("/v1/ws", handler.ServeHTTP)
 	return rt
+}
+
+// SetTaskFeed wires background-task subscriptions (tasks:{teamID} rooms with
+// a running-task replay on every join). It is a setter so Mount keeps its
+// signature and existing callers stay untouched.
+func (rt *Realtime) SetTaskFeed(authorize TaskAuthorizer, snapshot func(teamID string) []string) {
+	if rt == nil || rt.handler == nil {
+		return
+	}
+	rt.handler.SetTaskFeed(authorize, snapshot)
 }
 
 // ActiveStreams reports how many agent log streams the manager is running.

@@ -110,40 +110,44 @@ const hasCards = computed<boolean>(() => tasksStore.visible.length > 0);
         </NButton>
       </div>
       <template v-if="!card.collapsed">
-        <div
-          v-if="card.event.step"
-          class="task-step"
-        >
-          {{ stepLabel(card.event.step) }}
-        </div>
-        <div
-          v-if="card.event.status === 'failed' && card.event.error"
-          class="task-error"
-        >
-          {{ card.event.error }}
-        </div>
-        <NProgress
-          type="line"
-          :percentage="progressOf(card.event.status, card.event.progress)"
-          :show-indicator="false"
-          :status="card.event.status === 'failed' ? 'error' : undefined"
-        />
-        <div class="task-foot">
-          <RouterLink
-            v-if="hasLogLink(card.event)"
-            class="task-logs"
-            :to="{
-              name: 'application-detail',
-              params: {
-                projectId: card.event.projectId,
-                environmentId: card.event.environmentId,
-                id: card.event.appId,
-              },
-              query: { logs: card.event.deploymentId },
-            }"
+        <div class="task-body">
+          <div
+            v-if="card.event.step"
+            class="task-step"
           >
-            {{ t("tasks.card.viewLogs") }}
-          </RouterLink>
+            {{ stepLabel(card.event.step) }}
+          </div>
+          <div
+            v-if="card.event.status === 'failed' && card.event.error"
+            class="task-error"
+          >
+            {{ card.event.error }}
+          </div>
+          <NProgress
+            type="line"
+            :percentage="progressOf(card.event.status, card.event.progress)"
+            :show-indicator="false"
+            :status="card.event.status === 'failed' ? 'error' : undefined"
+          />
+          <div
+            v-if="hasLogLink(card.event)"
+            class="task-foot"
+          >
+            <RouterLink
+              class="task-logs"
+              :to="{
+                name: 'application-detail',
+                params: {
+                  projectId: card.event.projectId,
+                  environmentId: card.event.environmentId,
+                  id: card.event.appId,
+                },
+                query: { logs: card.event.deploymentId },
+              }"
+            >
+              {{ t("tasks.card.viewLogs") }}
+            </RouterLink>
+          </div>
         </div>
       </template>
     </NCard>
@@ -172,7 +176,7 @@ const hasCards = computed<boolean>(() => tasksStore.visible.length > 0);
 .task-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
 .task-name {
@@ -184,14 +188,19 @@ const hasCards = computed<boolean>(() => tasksStore.visible.length > 0);
   white-space: nowrap;
 }
 
+.task-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
 .task-step {
-  margin-top: var(--space-1);
   color: var(--muted);
   font-size: 12px;
 }
 
 .task-error {
-  margin-top: var(--space-1);
   color: var(--danger-ink);
   font-size: 12px;
   word-break: break-word;
@@ -200,7 +209,6 @@ const hasCards = computed<boolean>(() => tasksStore.visible.length > 0);
 .task-foot {
   display: flex;
   justify-content: flex-end;
-  margin-top: var(--space-1);
 }
 
 .task-logs {

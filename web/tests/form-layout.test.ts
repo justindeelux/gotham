@@ -151,11 +151,6 @@ export function mediaBlocksMentioning(source: string, selector: string): string[
   }
 }
 
-/** rowTexts returns the text of each .form-row in DOM order. */
-function rowTexts(wrapper: VueWrapper): string[] {
-  return wrapper.findAll(".form-row").map((row) => row.text());
-}
-
 describe("JUS-19 shared .form-row utility", () => {
   it("lays out two equal columns that collapse per container below 480px", () => {
     expect(mainCss).toContain(".form-container");
@@ -200,7 +195,7 @@ describe("JUS-19 shared .form-row utility", () => {
   });
 });
 
-describe("JUS-19 CertificateForm rows", () => {
+describe("JUS-88 CertificateForm single column", () => {
   const draft: CertificateDraft = {
     application_id: "",
     challenge: "http-01",
@@ -217,18 +212,13 @@ describe("JUS-19 CertificateForm rows", () => {
     });
   }
 
-  it("pairs Application|Domain, Challenge|DNS provider, Wildcard|Enabled", () => {
-    const rows = rowTexts(mountForm());
-    expect(rows).toHaveLength(3);
-    expect(rows[0]).toContain("Application");
-    expect(rows[0]).toContain("Domain");
-    expect(rows[1]).toContain("Challenge");
-    expect(rows[1]).toContain("DNS provider");
-    expect(rows[2]).toContain("Wildcard");
-    expect(rows[2]).toContain("Enabled");
+  it("stacks every field in one column (no .form-row)", () => {
+    const wrapper = mountForm();
+    expect(wrapper.findAll(".form-row")).toHaveLength(0);
+    expect(wrapper.findAll(".n-form-item")).toHaveLength(6);
   });
 
-  it("keeps labels visible and the tab order left to right, top to bottom", () => {
+  it("keeps labels visible and the tab order top to bottom", () => {
     const wrapper = mountForm();
     const labels = wrapper.findAll(".n-form-item-label").map((node) => node.text());
     expect(labels).toEqual([
@@ -241,7 +231,7 @@ describe("JUS-19 CertificateForm rows", () => {
     ]);
   });
 
-  it("establishes its own container so 560px modals collapse", () => {
+  it("establishes its own container so the 560px modal never overflows", () => {
     expect(mountForm().find("form").classes()).toContain("form-container");
   });
 });

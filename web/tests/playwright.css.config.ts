@@ -12,6 +12,7 @@ export default defineConfig({
     "form-feedback.spec.ts",
     "form-layout.spec.ts",
     "git-connect-modals-layout.spec.ts",
+    "jus88-polish-layout.spec.ts",
     "i18n-account-layout.spec.ts",
     "i18n-settings-layout.spec.ts",
     "i18n-settings-live.spec.ts",

@@ -31,7 +31,7 @@ function handleSelect(locale: string | number): void {
     trigger="click"
     :options="options"
     :value="activeLocale"
-    :menu-props="() => ({ role: 'menu', 'aria-label': t('language.label') })"
+    :menu-props="() => ({ role: 'menu', 'aria-label': t('language.label'), class: 'language-menu' })"
     @select="handleSelect"
   >
     <NButton
@@ -49,3 +49,13 @@ function handleSelect(locale: string | number): void {
     </NButton>
   </NDropdown>
 </template>
+
+<style scoped>
+/* The two locale options breathe: Naive stacks them flush, so add one token
+ * of gap. Scoped :global keeps the rule on this teleported menu only. */
+:global(.language-menu.n-dropdown-menu) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+</style>

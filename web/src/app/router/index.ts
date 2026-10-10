@@ -154,6 +154,12 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.gitSources", requiresAuth: true },
       },
       {
+        path: "settings/instance",
+        name: "instance",
+        component: () => import("@/features/instance-settings/pages/InstanceSettingsPage.vue"),
+        meta: { titleKey: "titles.instance", requiresAuth: true },
+      },
+      {
         path: "settings/updates",
         name: "updates",
         component: () => import("@/features/updates/pages/UpdatesPage.vue"),

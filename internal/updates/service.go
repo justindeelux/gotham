@@ -88,6 +88,9 @@ type Config struct {
 	// Schedules persists the operator's check / auto-apply schedule. Nil keeps
 	// the schedule in memory only (env defaults, lost on restart).
 	Schedules ScheduleStore
+	// Timezone returns the instance IANA timezone that daily/weekly schedule
+	// times are evaluated in. Nil or an unknown name means UTC.
+	Timezone func() string
 	// GOARCH pins the asset architecture (tests); empty means the running one.
 	GOARCH string
 
@@ -109,6 +112,7 @@ type service struct {
 	interval time.Duration
 
 	schedules ScheduleStore
+	timezone  func() string
 	reload    chan struct{}
 	mu        sync.Mutex // guards the fields below
 	sched     Schedule
@@ -201,6 +205,7 @@ func NewService(cfg Config) (Service, error) {
 		interval: interval,
 
 		schedules: cfg.Schedules,
+		timezone:  cfg.Timezone,
 		reload:    make(chan struct{}, 1),
 		sched:     defaultSchedule(cfg, interval),
 	}

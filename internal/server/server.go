@@ -25,6 +25,7 @@ import (
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/githubapp"
+	"github.com/justindeelux/gotham/internal/instance"
 	"github.com/justindeelux/gotham/internal/notifications"
 	"github.com/justindeelux/gotham/internal/projects"
 	"github.com/justindeelux/gotham/internal/providers"
@@ -85,6 +86,8 @@ type Server struct {
 	tokens      TokenService
 	servers     ServerService
 	persistence *store.Store
+	// instanceSvc backs instance settings (JUS-92); nil without a database.
+	instanceSvc *instance.Service
 	teamService teams.TeamService
 	// invites is the teams-domain slice backing invite registration (P-A2);
 	// it is the same object as teamService, typed for the auth seam.
@@ -391,6 +394,17 @@ func (s *Server) routes() (http.Handler, error) {
 		}
 		platformOnly := func(next http.Handler) http.Handler {
 			return s.RequireAuth(s.RequirePlatformAdmin(next))
+		}
+		// Instance settings (JUS-92): platform operators only; a nil service
+		// (no database) mounts nothing. A network change left unconfirmed
+		// across a restart is settled here.
+		if s.persistence != nil {
+			instanceSvc := instance.NewService(instance.NewStoreRepository(s.persistence), instance.NewSudoApplier(), s.logger)
+			if err := instanceSvc.Reconcile(context.Background()); err != nil {
+				s.logger.Warn("instance settings reconcile failed", "error", err)
+			}
+			s.instanceSvc = instanceSvc
+			instance.Mount(api, platformOnly, UserIDFromContext, instanceSvc)
 		}
 		proxy.Mount(api, s.withTeam(), platformOnly, s.proxy,
 			proxy.NewDefaultProviderService(sslConfig),
@@ -931,6 +945,15 @@ func (s *Server) updatesService() updates.Service {
 	config, err := updates.FromEnv(current, s.logger)
 	if s.persistence != nil {
 		config.Schedules = updates.NewStoreSchedule(s.persistence)
+	}
+	if s.instanceSvc != nil {
+		config.Timezone = func() string {
+			st, err := s.instanceSvc.Get(context.Background())
+			if err != nil {
+				return ""
+			}
+			return st.General.Timezone.Value
+		}
 	}
 	if err != nil {
 		s.logger.Info("updates: release public key not configured; apply disabled", "reason", err)

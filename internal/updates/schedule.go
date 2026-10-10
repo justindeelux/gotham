@@ -26,10 +26,6 @@ const (
 	maxIntervalMinutes = 43200
 )
 
-// ScheduleTimezone is the zone daily/weekly times are evaluated in. No instance
-// timezone setting exists yet, so schedules run in UTC.
-const ScheduleTimezone = "UTC"
-
 var atTimePattern = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
 // Schedule is the operator-controlled check / auto-apply schedule.
@@ -41,7 +37,7 @@ type Schedule struct {
 	// IntervalMinutes is used by the interval frequency. Zero (env defaults
 	// only) means "use the service's configured interval".
 	IntervalMinutes int `json:"interval_minutes"`
-	// AtTime is HH:MM in ScheduleTimezone for daily/weekly.
+	// AtTime is HH:MM in the instance timezone for daily/weekly.
 	AtTime string `json:"at_time"`
 	// Weekday is 0 (Sunday) .. 6 for weekly.
 	Weekday int `json:"weekday"`
@@ -86,8 +82,9 @@ func (sc Schedule) Validate() error {
 
 // nextRun returns the next time the scheduler should fire after from.
 // fallback is the interval used when IntervalMinutes is unset.
-func (sc Schedule) nextRun(from time.Time, fallback time.Duration) time.Time {
-	from = from.UTC()
+// Daily/weekly times are evaluated in loc.
+func (sc Schedule) nextRun(from time.Time, fallback time.Duration, loc *time.Location) time.Time {
+	from = from.In(loc)
 	if sc.Frequency == FrequencyInterval {
 		d := time.Duration(sc.IntervalMinutes) * time.Minute
 		if d <= 0 {
@@ -97,7 +94,7 @@ func (sc Schedule) nextRun(from time.Time, fallback time.Duration) time.Time {
 	}
 	var hour, minute int
 	_, _ = fmt.Sscanf(sc.AtTime, "%d:%d", &hour, &minute)
-	next := time.Date(from.Year(), from.Month(), from.Day(), hour, minute, 0, 0, time.UTC)
+	next := time.Date(from.Year(), from.Month(), from.Day(), hour, minute, 0, 0, loc)
 	if sc.Frequency == FrequencyWeekly {
 		next = next.AddDate(0, 0, (sc.Weekday-int(next.Weekday())+7)%7)
 	}

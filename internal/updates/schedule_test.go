@@ -59,14 +59,14 @@ func TestScheduleValidate(t *testing.T) {
 func TestScheduleNextRun(t *testing.T) {
 	from := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC) // a Saturday
 	daily := Schedule{Frequency: FrequencyDaily, AtTime: "03:30"}
-	if got, want := daily.nextRun(from, time.Hour), time.Date(2026, 10, 11, 3, 30, 0, 0, time.UTC); !got.Equal(want) {
+	if got, want := daily.nextRun(from, time.Hour, time.UTC), time.Date(2026, 10, 11, 3, 30, 0, 0, time.UTC); !got.Equal(want) {
 		t.Errorf("daily = %v, want %v", got, want)
 	}
 	weekly := Schedule{Frequency: FrequencyWeekly, AtTime: "05:00", Weekday: 1} // Monday
-	if got, want := weekly.nextRun(from, time.Hour), time.Date(2026, 10, 12, 5, 0, 0, 0, time.UTC); !got.Equal(want) {
+	if got, want := weekly.nextRun(from, time.Hour, time.UTC), time.Date(2026, 10, 12, 5, 0, 0, 0, time.UTC); !got.Equal(want) {
 		t.Errorf("weekly = %v, want %v", got, want)
 	}
-	if got, want := (Schedule{Frequency: FrequencyInterval, IntervalMinutes: 90}).nextRun(from, time.Hour), from.Add(90*time.Minute); !got.Equal(want) {
+	if got, want := (Schedule{Frequency: FrequencyInterval, IntervalMinutes: 90}).nextRun(from, time.Hour, time.UTC), from.Add(90*time.Minute); !got.Equal(want) {
 		t.Errorf("interval = %v, want %v", got, want)
 	}
 }
@@ -130,5 +130,30 @@ func TestScheduleRoutes(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/updates/schedule", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"frequency":"weekly"`) {
 		t.Errorf("get = %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestScheduleNextRunInstanceTimezone(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := time.Date(2026, 10, 10, 4, 0, 0, 0, time.UTC) // 06:00 in Berlin (CEST)
+	daily := Schedule{Frequency: FrequencyDaily, AtTime: "03:30"}
+	if got, want := daily.nextRun(from, time.Hour, berlin), time.Date(2026, 10, 11, 1, 30, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("berlin daily next = %v, want %v", got, want)
+	}
+	svc := &service{timezone: func() string { return "Europe/Berlin" }}
+	if got := svc.location().String(); got != "Europe/Berlin" {
+		t.Fatalf("location = %q", got)
+	}
+	for _, tz := range []string{"", "Not/AZone"} {
+		svc.timezone = func() string { return tz }
+		if got := svc.location(); got != time.UTC {
+			t.Fatalf("timezone %q should fall back to UTC, got %v", tz, got)
+		}
+	}
+	if got := (&service{}).location(); got != time.UTC {
+		t.Fatalf("nil timezone should be UTC, got %v", got)
 	}
 }

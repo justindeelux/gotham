@@ -80,10 +80,21 @@ func (s *service) recordCheck(err error) {
 	}
 }
 
+// location is the instance timezone, falling back to UTC when it is unset or
+// unknown.
+func (s *service) location() *time.Location {
+	if s.timezone != nil {
+		if loc, err := time.LoadLocation(s.timezone()); err == nil {
+			return loc
+		}
+	}
+	return time.UTC
+}
+
 // ScheduleState implements Scheduler.
 func (s *service) ScheduleState() ScheduleState {
 	s.mu.Lock()
-	state := ScheduleState{Schedule: s.sched, Timezone: ScheduleTimezone, LastCheckError: s.checkErr}
+	state := ScheduleState{Schedule: s.sched, Timezone: s.location().String(), LastCheckError: s.checkErr}
 	if !s.nextAt.IsZero() && s.sched.CheckEnabled {
 		next := s.nextAt
 		state.NextRunAt = &next
@@ -112,7 +123,7 @@ func (s *service) SetSchedule(ctx context.Context, sc Schedule) (ScheduleState, 
 	}
 	s.mu.Lock()
 	s.sched = sc
-	s.nextAt = sc.nextRun(time.Now(), s.interval)
+	s.nextAt = sc.nextRun(time.Now(), s.interval, s.location())
 	s.mu.Unlock()
 	select {
 	case s.reload <- struct{}{}:
@@ -131,7 +142,7 @@ func (s *service) StartAuto(ctx context.Context) {
 			var fire <-chan time.Time
 			var timer *time.Timer
 			if sc.CheckEnabled {
-				next := sc.nextRun(time.Now(), s.interval)
+				next := sc.nextRun(time.Now(), s.interval, s.location())
 				s.mu.Lock()
 				s.nextAt = next
 				s.mu.Unlock()

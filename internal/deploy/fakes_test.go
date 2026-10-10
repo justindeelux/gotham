@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -83,12 +84,14 @@ type fakeRepository struct {
 	deployKeys  map[uuid.UUID]fakeDeployKey
 	privateKeys map[uuid.UUID]string
 
-	// certificates mirrors domain_certificates (one intent per application);
+	// certificates mirrors domain_certificates (one intent per domain);
 	// dnsProviders mirrors the provider rows the preview clone validates
 	// against. certErr fails every certificate write (the best-effort test).
 	certificates []CertificateIntent
 	dnsProviders map[uuid.UUID]DNSProviderInfo
 	certErr      error
+	// domains mirrors application_domains for the JUS-89 domain tests.
+	domains []ApplicationDomain
 
 	// unknownServers names servers ServerExists must report as missing.
 	unknownServers map[uuid.UUID]bool
@@ -275,6 +278,17 @@ func (r *fakeRepository) CreateApplication(_ context.Context, app Application, e
 	}
 	app.CreatedAt = now
 	app.UpdatedAt = now
+	// The primary domain row joins the create atomically, like production:
+	// a conflicting host fails the create without storing the application.
+	if app.BaseDomain != "" {
+		if _, err := r.insertDomain(ApplicationDomain{
+			ApplicationID: app.ID,
+			Domain:        app.BaseDomain,
+			IsPrimary:     true,
+		}); err != nil {
+			return Application{}, err
+		}
+	}
 	r.apps = append(r.apps, app)
 	for _, v := range envVars {
 		v.ApplicationID = app.ID
@@ -376,6 +390,14 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 		}
 	}
 	r.certificates = certificates
+	// Domain rows cascade with the application (ON DELETE CASCADE).
+	kept := make([]ApplicationDomain, 0, len(r.domains))
+	for _, domain := range r.domains {
+		if domain.ApplicationID != appID {
+			kept = append(kept, domain)
+		}
+	}
+	r.domains = kept
 	return nil
 }
 
@@ -969,15 +991,25 @@ func (r *fakeRepository) CopyGitCredential(_ context.Context, baseID, previewID 
 	return nil
 }
 
-// GetCertificateIntent implements Repository.
+// GetCertificateIntent implements Repository: the intent recorded for the
+// application's primary domain, like the production query.
 func (r *fakeRepository) GetCertificateIntent(_ context.Context, appID uuid.UUID) (CertificateIntent, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.getErr != nil {
 		return CertificateIntent{}, r.getErr
 	}
+	primary := ""
+	if r.app.ID == appID {
+		primary = r.app.BaseDomain
+	}
+	for _, existing := range r.apps {
+		if existing.ID == appID {
+			primary = existing.BaseDomain
+		}
+	}
 	for _, cert := range r.certificates {
-		if cert.ApplicationID == appID {
+		if cert.ApplicationID == appID && (primary == "" || cert.Domain == primary) {
 			return cert, nil
 		}
 	}
@@ -998,8 +1030,8 @@ func (r *fakeRepository) GetDNSProviderInfo(_ context.Context, providerID uuid.U
 	return DNSProviderInfo{Zones: append([]string{}, info.Zones...), Enabled: info.Enabled}, nil
 }
 
-// CreateCertificateIntent implements Repository with the one-intent-per-
-// application unique index.
+// CreateCertificateIntent implements Repository with the per-domain unique
+// index.
 func (r *fakeRepository) CreateCertificateIntent(_ context.Context, in CertificateIntent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1007,12 +1039,149 @@ func (r *fakeRepository) CreateCertificateIntent(_ context.Context, in Certifica
 		return r.certErr
 	}
 	for _, cert := range r.certificates {
-		if cert.ApplicationID == in.ApplicationID {
-			return fmt.Errorf("%w: the application already has a certificate configuration", ErrConflict)
+		if cert.ApplicationID == in.ApplicationID && cert.Domain == in.Domain {
+			return fmt.Errorf("%w: the application already has a certificate configuration for that domain", ErrConflict)
 		}
 	}
 	r.certificates = append(r.certificates, in)
 	return nil
+}
+
+// ListApplicationDomains implements Repository: primary first, then oldest
+// first.
+func (r *fakeRepository) ListApplicationDomains(_ context.Context, appID uuid.UUID) ([]ApplicationDomain, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []ApplicationDomain{}
+	for _, domain := range r.domains {
+		if domain.ApplicationID == appID {
+			out = append(out, domain)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IsPrimary != out[j].IsPrimary {
+			return out[i].IsPrimary
+		}
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.Before(out[j].CreatedAt)
+		}
+		return out[i].ID.String() < out[j].ID.String()
+	})
+	return out, nil
+}
+
+// CreateApplicationDomain implements Repository with both unique indexes.
+func (r *fakeRepository) CreateApplicationDomain(_ context.Context, domain ApplicationDomain) (ApplicationDomain, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.insertDomain(domain)
+}
+
+// insertDomain stores one domain row with the production uniqueness rules.
+// The caller holds r.mu.
+func (r *fakeRepository) insertDomain(domain ApplicationDomain) (ApplicationDomain, error) {
+	for _, existing := range r.domains {
+		if strings.EqualFold(existing.Domain, domain.Domain) && !existing.Disabled && !domain.Disabled {
+			if existing.ApplicationID == domain.ApplicationID {
+				return ApplicationDomain{}, fmt.Errorf("%w: the domain is already attached to this application", ErrValidation)
+			}
+			return ApplicationDomain{}, ErrDomainConflict
+		}
+		if existing.ApplicationID == domain.ApplicationID && strings.EqualFold(existing.Domain, domain.Domain) {
+			return ApplicationDomain{}, fmt.Errorf("%w: the domain is already attached to this application", ErrValidation)
+		}
+		if existing.ApplicationID == domain.ApplicationID && existing.IsPrimary && domain.IsPrimary {
+			return ApplicationDomain{}, fmt.Errorf("%w: the application already has a primary domain", ErrValidation)
+		}
+	}
+	if domain.ID == uuid.Nil {
+		domain.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	domain.CreatedAt = now
+	domain.UpdatedAt = now
+	r.domains = append(r.domains, domain)
+	return domain, nil
+}
+
+// UpdateApplicationDomain implements Repository.
+func (r *fakeRepository) UpdateApplicationDomain(_ context.Context, domain ApplicationDomain) (ApplicationDomain, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, existing := range r.domains {
+		if existing.ID != domain.ID {
+			continue
+		}
+		domain.CreatedAt = existing.CreatedAt
+		domain.UpdatedAt = time.Now().UTC()
+		r.domains[i] = domain
+		return domain, nil
+	}
+	return ApplicationDomain{}, ErrNotFound
+}
+
+// ClearPrimaryApplicationDomains implements Repository.
+func (r *fakeRepository) ClearPrimaryApplicationDomains(_ context.Context, appID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.domains {
+		if r.domains[i].ApplicationID == appID {
+			r.domains[i].IsPrimary = false
+		}
+	}
+	return nil
+}
+
+// InTx implements Repository: the fake serializes on r.mu per method, so a
+// multi-step test sequence runs fn directly without holding the lock across
+// calls (holding it would deadlock the nested method locks).
+func (r *fakeRepository) InTx(_ context.Context, fn func(tx Repository) error) error {
+	return fn(r)
+}
+
+// DeleteApplicationDomain implements Repository.
+func (r *fakeRepository) DeleteApplicationDomain(_ context.Context, appID, domainID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, domain := range r.domains {
+		if domain.ID == domainID && domain.ApplicationID == appID {
+			r.domains = append(r.domains[:i], r.domains[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+// DeleteApplicationDomains implements Repository.
+func (r *fakeRepository) DeleteApplicationDomains(_ context.Context, appID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := make([]ApplicationDomain, 0, len(r.domains))
+	for _, domain := range r.domains {
+		if domain.ApplicationID != appID {
+			kept = append(kept, domain)
+		}
+	}
+	r.domains = kept
+	return nil
+}
+
+// DomainClaim implements Repository.
+func (r *fakeRepository) DomainClaim(_ context.Context, domain string) (ApplicationDomain, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, existing := range r.domains {
+		if strings.EqualFold(existing.Domain, domain) {
+			return existing, nil
+		}
+	}
+	return ApplicationDomain{}, ErrNotFound
+}
+
+// ListRedirectSources implements Repository: the fake holds no redirect
+// rules, so no source is ever shadowed.
+func (r *fakeRepository) ListRedirectSources(_ context.Context) ([]string, error) {
+	return []string{}, nil
 }
 
 // certificateIntent returns the stored intent of an application (test helper).

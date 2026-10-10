@@ -47,9 +47,11 @@ const (
 // service domain: the router name comes from Name (or the application
 // convention when empty), the rule from Domain, and the backend from Target.
 type Route struct {
-	// Name is the Traefik router/service base name. Empty keeps the
-	// application convention "app-<AppID>"; compose service routes set
-	// "svc-<id>-<n>" because one service can declare several hosts.
+	// Name is the Traefik router base name. Empty keeps the application
+	// convention "app-<AppID>"; alias domains of a multi-domain application
+	// (JUS-89) set "app-<AppID>-<domain>" through AliasRouteName, and compose
+	// service routes set "svc-<id>-<n>" because one service can declare
+	// several hosts.
 	Name string
 	// AppID identifies the owning row (an application or a compose service;
 	// stays in generated names for traceability).
@@ -58,6 +60,12 @@ type Route struct {
 	Domain string
 	// Target is the backend URL, e.g. http://172.17.0.1:3000.
 	Target string
+	// Service, when set, names the shared backend service this router
+	// forwards to. Empty keeps the legacy behavior of serving through a
+	// service named like the router. Alias domains of one application share
+	// the application's service: they are the same backend behind more
+	// names, not more backends.
+	Service string
 	// Certificate, when non-nil, activates the HTTPS router and the
 	// HTTP→HTTPS redirect for this route. It is resolved from the
 	// application's certificate configuration during generation, never from
@@ -214,14 +222,18 @@ func BuildConfig(routes []Route, redirects []Redirect, providers []DNSProvider, 
 		if name == "" {
 			name = serviceName(route.AppID)
 		}
-		cfg.Services[name] = Service{
+		service := route.Service
+		if service == "" {
+			service = name
+		}
+		cfg.Services[service] = Service{
 			LoadBalancer: LoadBalancer{
 				Servers: []Backend{{URL: route.Target}},
 			},
 		}
 		web := Router{
 			Rule:        fmt.Sprintf("Host(`%s`)", route.Domain),
-			Service:     name,
+			Service:     service,
 			EntryPoints: []string{EntryPointWeb},
 		}
 		if route.Certificate != nil {
@@ -241,7 +253,7 @@ func BuildConfig(routes []Route, redirects []Redirect, providers []DNSProvider, 
 			}
 			cfg.Routers[name+"-websecure"] = Router{
 				Rule:        fmt.Sprintf("Host(`%s`)", route.Domain),
-				Service:     name,
+				Service:     service,
 				EntryPoints: []string{EntryPointWebSecure},
 				TLS:         tls,
 			}
@@ -327,6 +339,17 @@ func RedirectReplacement(target string, preservePath bool) string {
 // router and service.
 func serviceName(id uuid.UUID) string {
 	return "app-" + id.String()
+}
+
+// AliasRouteName is the deterministic Traefik router base name of one alias
+// domain of a multi-domain application (JUS-89). It derives from the owning
+// application and the domain itself — never from the alias position — so
+// adding or removing a sibling never renames the surviving routers: removing
+// a domain deletes only its own routers. The primary domain keeps the legacy
+// serviceName, so single-domain applications render byte-identical
+// configuration before and after the change.
+func AliasRouteName(id uuid.UUID, domain string) string {
+	return "app-" + id.String() + "-" + domain
 }
 
 // NormalizeDomain trims and lowercases a stored base_domain before validation

@@ -75,6 +75,13 @@ type fakeDeployService struct {
 	seenUpdate   UpdateApplicationInput
 	seenEntries  []EnvEntry
 	seenStorages []Storage
+	// domains (JUS-89).
+	domains        []ApplicationDomain
+	domainsErr     error
+	domain         ApplicationDomain
+	domainErr      error
+	seenDomain     string
+	applicationErr error
 }
 
 // Compile-time guarantee that fakeDeployService satisfies the route seam.
@@ -285,6 +292,31 @@ func (f *fakeDeployService) GetDeploymentBuildLog(_ context.Context, userID, app
 	f.seenUser, f.seenApplication = userID, appID
 	f.seenRollback, f.seenRollbackSet = deploymentID, true
 	return f.buildLog, f.buildLogErr
+}
+
+// ListDomains implements DeployService.
+func (f *fakeDeployService) ListDomains(_ context.Context, userID, appID uuid.UUID) ([]ApplicationDomain, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	return f.domains, f.domainsErr
+}
+
+// AddDomain implements DeployService.
+func (f *fakeDeployService) AddDomain(_ context.Context, userID, appID uuid.UUID, domain string) (ApplicationDomain, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	f.seenDomain = domain
+	return f.domain, f.domainErr
+}
+
+// RemoveDomain implements DeployService.
+func (f *fakeDeployService) RemoveDomain(_ context.Context, userID, appID, domainID uuid.UUID) (Application, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	return f.application, f.applicationErr
+}
+
+// SetPrimaryDomain implements DeployService.
+func (f *fakeDeployService) SetPrimaryDomain(_ context.Context, userID, appID, domainID uuid.UUID) (Application, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	return f.application, f.applicationErr
 }
 
 // newRouteServer mounts the deploy routes with a no-op auth middleware.
@@ -574,6 +606,73 @@ func TestRoutesServiceErrors(t *testing.T) {
 				t.Errorf("response leaked an internal error: %s", rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestRoutesDomains(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	domainID := uuid.New()
+	svc := &fakeDeployService{
+		domains: []ApplicationDomain{{
+			ID: domainID, ApplicationID: appID, Domain: "app.example.com", IsPrimary: true,
+		}},
+		domain: ApplicationDomain{
+			ID: domainID, ApplicationID: appID, Domain: "app.example.com", IsPrimary: true,
+		},
+	}
+	srv := newRouteServer(svc, alwaysUser(userID))
+	base := "/v1/applications/" + appID.String() + "/domains"
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, base, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "app.example.com") {
+		t.Fatalf("list body = %s, want the domain", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, base, strings.NewReader(`{"domain":"www.example.com"}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("add status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	if svc.seenDomain != "www.example.com" {
+		t.Fatalf("seen domain = %q", svc.seenDomain)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, base+"/"+domainID.String(), nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("remove status = %d, want 204", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, base+"/"+domainID.String()+"/primary", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("primary status = %d, want 204", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, base+"/not-a-uuid", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bad id status = %d, want 400", rec.Code)
+	}
+}
+
+func TestRoutesAddDomainConflict(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{domainErr: ErrDomainConflict}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
+		"/v1/applications/"+appID.String()+"/domains", strings.NewReader(`{"domain":"taken.example.com"}`)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "already in use by another application") {
+		t.Fatalf("body = %s, want the clear duplicate message", rec.Body.String())
 	}
 }
 

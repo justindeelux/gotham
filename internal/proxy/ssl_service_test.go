@@ -199,8 +199,8 @@ func (f *fakeSSLStore) CreateCertificate(_ context.Context, in CertificateWrite)
 	}
 	f.lastCertWrite = in
 	for _, cert := range f.certificates {
-		if cert.ApplicationID == in.ApplicationID {
-			return DomainCertificate{}, fmt.Errorf("%w: domain_certificates_application_unique", ErrConflict)
+		if cert.ApplicationID == in.ApplicationID && cert.Domain == in.Domain {
+			return DomainCertificate{}, fmt.Errorf("%w: domain_certificates_app_domain_unique", ErrConflict)
 		}
 	}
 	certificate := DomainCertificate{
@@ -227,15 +227,16 @@ func (f *fakeSSLStore) GetCertificate(_ context.Context, id uuid.UUID) (DomainCe
 	return DomainCertificate{}, ErrNotFound
 }
 
-func (f *fakeSSLStore) GetCertificateByApplication(_ context.Context, applicationID uuid.UUID) (DomainCertificate, error) {
+func (f *fakeSSLStore) ListCertificatesByApplication(_ context.Context, applicationID uuid.UUID) ([]DomainCertificate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	out := []DomainCertificate{}
 	for _, cert := range f.certificates {
 		if cert.ApplicationID == applicationID {
-			return cert, nil
+			out = append(out, cert)
 		}
 	}
-	return DomainCertificate{}, ErrNotFound
+	return out, nil
 }
 
 func (f *fakeSSLStore) ListCertificates(context.Context) ([]DomainCertificate, error) {
@@ -826,15 +827,22 @@ func TestCertificateUpdateReRecordsDomainAndValidates(t *testing.T) {
 		t.Fatalf("CreateCertificate: %v", err)
 	}
 
-	// The deploy API changes the application domain: the stored config is
-	// stale until an explicit update.
+	// The deploy API changes the application domain: the stored config stays
+	// put until an explicit re-target, and any other edit is rejected while
+	// the recorded host is detached.
 	store.applications[appID] = ApplicationInfo{ID: appID, BaseDomain: "new.example.com"}
-	updated, err := service.UpdateCertificate(context.Background(), certificate.ID, UpdateCertificateInput{Enabled: ptr(true)})
+	if _, err := service.UpdateCertificate(context.Background(), certificate.ID, UpdateCertificateInput{Enabled: ptr(true)}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("UpdateCertificate on a detached domain err = %v, want ErrValidation", err)
+	}
+	updated, err := service.UpdateCertificate(context.Background(), certificate.ID, UpdateCertificateInput{
+		Domain:  ptr("new.example.com"),
+		Enabled: ptr(true),
+	})
 	if err != nil {
 		t.Fatalf("UpdateCertificate: %v", err)
 	}
 	if updated.Domain != "new.example.com" {
-		t.Fatalf("recorded domain = %q, want the refreshed application domain", updated.Domain)
+		t.Fatalf("recorded domain = %q, want the re-targeted application domain", updated.Domain)
 	}
 
 	// Switching to dns-01 without a provider is rejected; switching back to

@@ -9,9 +9,9 @@ import (
 	"github.com/justindeelux/gotham/internal/store"
 )
 
-// ProxiedApplication is one routing input row: an application that declares a
-// base domain, together with the node it runs on and the endpoint of its
-// newest running deployment.
+// ProxiedApplication is one routing input row: an application that declares
+// at least one domain, together with the node it runs on and the endpoint of
+// its newest running deployment.
 type ProxiedApplication struct {
 	// ID identifies the application (kept in generated names for traceability).
 	ID uuid.UUID
@@ -19,9 +19,15 @@ type ProxiedApplication struct {
 	Name string
 	// ServerID is the node hosting the application; uuid.Nil means unassigned.
 	ServerID uuid.UUID
-	// BaseDomain is the raw stored domain, normalized and validated during
-	// generation.
+	// BaseDomain is the primary domain mirror (applications.base_domain),
+	// normalized and validated during generation. It is the first entry of
+	// Domains and stays so that single-domain callers keep working.
 	BaseDomain string
+	// Domains lists every domain row attached to the application, normalized,
+	// primary first, then oldest first (JUS-89). Empty in unit tests that only
+	// set BaseDomain; generation then falls back to the single BaseDomain so
+	// existing construction sites keep routing exactly one host.
+	Domains []string
 	// Disabled marks a legacy duplicate binding disabled by migration 00012:
 	// the value is preserved but never routed until its owner resolves the
 	// conflict.
@@ -36,8 +42,13 @@ type ProxiedApplication struct {
 	ContainerID string
 	// Certificate is the application's certificate intent, nil when none is
 	// configured. It is a raw join of the stored state: activation is decided
-	// during generation against the routable domain and the provider.
+	// during generation against the routable domain and the provider. It
+	// covers the primary domain; Certificates carries every intent (JUS-89).
 	Certificate *CertificateIntent
+	// Certificates carries every certificate intent of the application, one
+	// per domain (JUS-89). Nil in unit tests that only set Certificate; the
+	// generator then resolves the single legacy intent.
+	Certificates []*CertificateIntent
 }
 
 // CertificateIntent is the stored certificate configuration joined onto a
@@ -157,13 +168,48 @@ type storeSource struct {
 }
 
 // ListProxiedApplications maps the stored application rows to routing input.
+// Domain rows (JUS-89) and certificate intents (one per domain) fan out per
+// application, so they are read by the dedicated queries and grouped here;
+// the primary domain stays first.
 func (s storeSource) ListProxiedApplications(ctx context.Context) ([]ProxiedApplication, error) {
 	rows, err := s.store.ListProxiedApplications(ctx)
 	if err != nil {
 		return nil, err
 	}
+	domains, err := s.store.ListProxiedApplicationDomains(ctx)
+	if err != nil {
+		return nil, err
+	}
+	intents, err := s.store.ListProxiedCertificates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	domainsByApp := make(map[pgtype.UUID][]string)
+	anyDisabledByApp := make(map[pgtype.UUID]bool)
+	for _, domain := range domains {
+		if domain.Domain == "" {
+			continue
+		}
+		key := domain.ApplicationID
+		if domain.Disabled {
+			anyDisabledByApp[key] = true
+			continue
+		}
+		domainsByApp[key] = append(domainsByApp[key], domain.Domain)
+	}
+	intentsByApp := make(map[pgtype.UUID][]*CertificateIntent)
+	for _, intent := range intents {
+		intentsByApp[intent.ApplicationID] = append(intentsByApp[intent.ApplicationID], &CertificateIntent{
+			Domain:        intent.Domain,
+			Enabled:       intent.Enabled,
+			Challenge:     ChallengeMode(intent.Challenge),
+			Wildcard:      intent.Wildcard,
+			DNSProviderID: uuidFromPG(intent.DnsProviderID),
+		})
+	}
 	apps := make([]ProxiedApplication, 0, len(rows))
 	for _, row := range rows {
+		key := row.ID
 		app := ProxiedApplication{
 			ID:          uuidFromPG(row.ID),
 			ServerID:    uuidFromPG(row.ServerID),
@@ -174,13 +220,24 @@ func (s storeSource) ListProxiedApplications(ctx context.Context) ([]ProxiedAppl
 			HostPort:    row.HostPort,
 			ContainerID: row.ContainerID,
 		}
-		if row.CertificateConfigured {
-			app.Certificate = &CertificateIntent{
-				Domain:        row.CertificateDomain,
-				Enabled:       row.CertificateEnabled,
-				Challenge:     ChallengeMode(row.CertificateChallenge),
-				Wildcard:      row.CertificateWildcard,
-				DNSProviderID: uuidFromPG(row.CertificateDnsProviderID),
+		if owned, ok := domainsByApp[key]; ok {
+			app.Domains = owned
+		} else if anyDisabledByApp[key] {
+			// Every attached row is held back by a uniqueness conflict: keep
+			// the legacy disabled disposition so the generator reports it
+			// instead of silently dropping the application.
+			app.Disabled = true
+		}
+		if configured, ok := intentsByApp[key]; ok {
+			app.Certificates = configured
+			for _, intent := range configured {
+				if intent.Domain == NormalizeDomain(row.BaseDomain) {
+					app.Certificate = intent
+					break
+				}
+			}
+			if app.Certificate == nil {
+				app.Certificate = configured[0]
 			}
 		}
 		apps = append(apps, app)

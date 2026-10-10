@@ -2,17 +2,19 @@ package proxy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 )
 
 // CreateCertificateInput is the validated input of a new certificate config.
-// The recorded domain always comes from the application's current
-// base_domain; callers never supply it.
+// The recorded domain defaults to the application's primary domain; Domain
+// selects one of the application's other attached domains instead (JUS-89).
+// Callers never invent a host: it must be attached to the application.
 type CreateCertificateInput struct {
 	ApplicationID uuid.UUID
+	// Domain selects the certified host; empty selects the primary domain.
+	Domain string
 	// Enabled defaults to true when nil.
 	Enabled *bool
 	// Challenge defaults to http-01 when empty.
@@ -24,10 +26,12 @@ type CreateCertificateInput struct {
 	Wildcard bool
 }
 
-// UpdateCertificateInput is a partial update: nil fields stay unchanged. Any
-// update re-records the application's current base_domain, so an intentional
-// reconfiguration clears a stale-host divergence.
+// UpdateCertificateInput is a partial update: nil fields stay unchanged,
+// including the recorded domain. Domain re-targets the intent onto another
+// attached host (the explicit re-record path); it must stay attached to the
+// application.
 type UpdateCertificateInput struct {
+	Domain        *string
 	Enabled       *bool
 	Challenge     *ChallengeMode
 	DNSProviderID *uuid.UUID
@@ -70,9 +74,19 @@ func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificate
 		if err := authorizeApp(ctx, app.TeamID, true); err != nil {
 			return err
 		}
-		domain, err := certificateDomain(app)
-		if err != nil {
-			return err
+		domain := NormalizeDomain(in.Domain)
+		if domain == "" {
+			domain, err = certificateDomain(app)
+			if err != nil {
+				return err
+			}
+		} else {
+			if err := ValidateDomain(domain); err != nil {
+				return fmt.Errorf("%w: invalid certificate domain: %v", ErrValidation, err)
+			}
+			if !app.HasDomain(domain) {
+				return fmt.Errorf("%w: %q is not attached to the application", ErrValidation, domain)
+			}
 		}
 
 		draft := certificateDraft{
@@ -92,10 +106,14 @@ func (s *sslService) CreateCertificate(ctx context.Context, in CreateCertificate
 		if err := s.validateCertificate(ctx, draft); err != nil {
 			return err
 		}
-		if _, err := s.store.GetCertificateByApplication(ctx, draft.applicationID); err == nil {
-			return fmt.Errorf("%w: the application already has a certificate configuration", ErrConflict)
-		} else if !errors.Is(err, ErrNotFound) {
+		existing, err := s.store.ListCertificatesByApplication(ctx, draft.applicationID)
+		if err != nil {
 			return err
+		}
+		for _, certificate := range existing {
+			if certificate.Domain == draft.domain {
+				return fmt.Errorf("%w: the application already has a certificate configuration for that domain", ErrConflict)
+			}
 		}
 
 		created, err := s.store.CreateCertificate(ctx, CertificateWrite{
@@ -156,11 +174,12 @@ func (s *sslService) GetCertificate(ctx context.Context, id uuid.UUID) (DomainCe
 }
 
 // Update applies a partial update inside the shared mutation boundary. The
-// application is re-read so the recorded domain always matches the
-// application's current base_domain; a domain change made through the deploy
-// API therefore re-targets the certificate on the next explicit update
-// instead of issuing for a stale host. Enabling a config is one critical
-// section with the provider guards.
+// recorded domain stays put unless Domain re-targets it onto another
+// attached host, so editing one domain's intent never steals or drops its
+// siblings; a domain change made through the application API therefore
+// surfaces through the generator's stale-host diagnostic until an explicit
+// re-record. Enabling a config is one critical section with the provider
+// guards.
 func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in UpdateCertificateInput) (DomainCertificate, error) {
 	if id == uuid.Nil {
 		return DomainCertificate{}, fmt.Errorf("%w: certificate id is required", ErrValidation)
@@ -178,9 +197,16 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 		if err := authorizeApp(ctx, app.TeamID, true); err != nil {
 			return err
 		}
-		domain, err := certificateDomain(app)
-		if err != nil {
-			return err
+
+		domain := existing.Domain
+		if in.Domain != nil {
+			domain = NormalizeDomain(*in.Domain)
+			if err := ValidateDomain(domain); err != nil {
+				return fmt.Errorf("%w: invalid certificate domain: %v", ErrValidation, err)
+			}
+		}
+		if !app.HasDomain(domain) {
+			return fmt.Errorf("%w: %q is not attached to the application", ErrValidation, domain)
 		}
 
 		draft := certificateDraft{
@@ -211,6 +237,17 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 		}
 		if err := s.validateCertificate(ctx, draft); err != nil {
 			return err
+		}
+		if draft.domain != existing.Domain {
+			siblings, err := s.store.ListCertificatesByApplication(ctx, draft.applicationID)
+			if err != nil {
+				return err
+			}
+			for _, sibling := range siblings {
+				if sibling.ID != id && sibling.Domain == draft.domain {
+					return fmt.Errorf("%w: the application already has a certificate configuration for that domain", ErrConflict)
+				}
+			}
 		}
 
 		updated, err := s.store.UpdateCertificate(ctx, id, CertificateWrite{
@@ -312,13 +349,13 @@ func (s *sslService) validateCertificate(ctx context.Context, draft certificateD
 	return nil
 }
 
-// certificateDomain resolves the domain a certificate config records, from
-// the application's current base_domain.
+// certificateDomain resolves the domain a certificate config records by
+// default: the application's primary domain.
 func certificateDomain(app ApplicationInfo) (string, error) {
 	if app.DomainDisabled {
 		return "", fmt.Errorf("%w: the application's domain is disabled; resolve the duplicate-domain conflict first", ErrValidation)
 	}
-	domain := NormalizeDomain(app.BaseDomain)
+	domain := NormalizeDomain(app.PrimaryDomain())
 	if err := ValidateDomain(domain); err != nil {
 		return "", fmt.Errorf("%w: the application has no valid base domain to certify", ErrValidation)
 	}

@@ -183,7 +183,7 @@ func TestSSLCertificateStorage(t *testing.T) {
 		t.Fatalf("enabled count = %d (%v), want 1", count, err)
 	}
 
-	// The routing query carries the certificate intent for the application.
+	// The routing queries carry the certificate intent for the application.
 	rows, err := st.ListProxiedApplications(ctx)
 	if err != nil {
 		t.Fatalf("list proxied applications: %v", err)
@@ -194,14 +194,27 @@ func TestSSLCertificateStorage(t *testing.T) {
 			continue
 		}
 		found = true
-		if !row.CertificateConfigured || row.CertificateDomain != "app.example.com" ||
-			row.CertificateChallenge != "dns-01" || !row.CertificateWildcard ||
-			uuidFromPGType(row.CertificateDnsProviderID) != uuidFromPGType(provider.ID) {
-			t.Fatalf("certificate columns = %#v", row)
-		}
 	}
 	if !found {
 		t.Fatal("proxied application row missing")
+	}
+	intents, err := st.ListProxiedCertificates(ctx)
+	if err != nil {
+		t.Fatalf("list proxied certificates: %v", err)
+	}
+	var intentFound bool
+	for _, intent := range intents {
+		if uuidFromPGType(intent.ApplicationID) != uuidFromPGType(app.ID) {
+			continue
+		}
+		intentFound = true
+		if intent.Domain != "app.example.com" || intent.Challenge != "dns-01" ||
+			!intent.Wildcard || uuidFromPGType(intent.DnsProviderID) != uuidFromPGType(provider.ID) {
+			t.Fatalf("certificate intent = %#v", intent)
+		}
+	}
+	if !intentFound {
+		t.Fatal("proxied certificate intent missing")
 	}
 
 	// Deleting the application cascades the certificate config, which then

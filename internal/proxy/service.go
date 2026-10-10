@@ -586,21 +586,37 @@ func (s *SyncService) listServices(ctx context.Context) ([]ProxiedService, error
 	return services, nil
 }
 
-// applicationHosts returns every application base domain claimed on the node,
+// applicationHosts returns every application domain claimed on the node,
 // normalized, mirroring the redirect generator's node-domain set: the wider
 // claim (not only routable rows) is what keeps two routers from ever matching
-// the same host.
+// the same host. Since JUS-89 this is every domain row, not just the primary.
 func applicationHosts(apps []ProxiedApplication, serverID uuid.UUID) map[string]bool {
 	hosts := make(map[string]bool, len(apps))
 	for _, app := range apps {
 		if app.ServerID != serverID {
 			continue
 		}
-		if domain := NormalizeDomain(app.BaseDomain); domain != "" {
-			hosts[domain] = true
+		for _, domain := range appDomains(app) {
+			if domain != "" {
+				hosts[domain] = true
+			}
 		}
 	}
 	return hosts
+}
+
+// appDomains returns the normalized domains an application claims: every
+// domain row when present (JUS-89), otherwise the single legacy BaseDomain so
+// unit-test construction sites keep routing exactly one host.
+func appDomains(app ProxiedApplication) []string {
+	if len(app.Domains) == 0 {
+		return []string{NormalizeDomain(app.BaseDomain)}
+	}
+	domains := make([]string, 0, len(app.Domains))
+	for _, domain := range app.Domains {
+		domains = append(domains, NormalizeDomain(domain))
+	}
+	return domains
 }
 
 // serviceRouteName is the deterministic Traefik name of one compose service
@@ -728,6 +744,14 @@ func resolveServiceEndpoint(container *containers.Container, port int32) (int32,
 // held back: row order does not prove ownership, and the unique index already
 // prevents new active duplicates (R1).
 //
+// Since JUS-89 one application emits one route per domain: the primary keeps
+// the legacy "app-<id>" router and service names (single-domain nodes render
+// byte-identical configuration), while every alias gets its own
+// "app-<id>-<domain>" routers sharing the application's service — one router
+// per domain, because each domain may need its own TLS resolver. Removing a
+// domain therefore removes only its routers; the survivors keep their names.
+// Aliases of a domain-disabled application are held back with it.
+//
 // Certificate activation (BE-6.2) is resolved per route: a route whose
 // certificate configuration is active gets an HTTPS route and the redirect,
 // while a configured-but-inactive one stays plain HTTP exactly as in BE-6.1
@@ -739,65 +763,93 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 	byID := indexNodeContainers(nodeContainers)
 
 	// Count active normalized duplicates per node before routing anything.
+	// Invalid hosts are excluded: they are reported as invalid, never as
+	// duplicates.
 	domainCounts := make(map[string]int, len(apps))
 	for _, app := range apps {
 		if app.ServerID != serverID || app.Disabled {
 			continue
 		}
-		domainCounts[NormalizeDomain(app.BaseDomain)]++
+		for _, domain := range appDomains(app) {
+			if ValidateDomain(domain) == nil {
+				domainCounts[domain]++
+			}
+		}
 	}
 
 	for _, app := range apps {
 		if app.ServerID != serverID {
 			continue
 		}
-		domain := NormalizeDomain(app.BaseDomain)
-		diagnostic := Diagnostic{ApplicationID: app.ID, Domain: domain}
-
-		switch {
-		case app.Disabled:
+		if app.Disabled {
+			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: NormalizeDomain(app.BaseDomain)}
 			diagnostic.Reason = "domain disabled by the uniqueness migration; set a new domain to re-enable it"
 			diagnostics = append(diagnostics, diagnostic)
 			continue
-		case ValidateDomain(domain) != nil:
-			diagnostic.Reason = "invalid domain"
-			diagnostics = append(diagnostics, diagnostic)
-			continue
 		}
-		if domainCounts[domain] > 1 {
-			diagnostic.Reason = "duplicate domain on this node; all conflicting bindings are held back"
-			diagnostics = append(diagnostics, diagnostic)
+		// Invalid hosts are reported before any endpoint state, exactly like
+		// the single-domain path: a malformed domain is never a pending
+		// deployment.
+		domains := make([]string, 0, len(appDomains(app)))
+		for _, domain := range appDomains(app) {
+			if ValidateDomain(domain) != nil {
+				diagnostics = append(diagnostics, Diagnostic{
+					ApplicationID: app.ID,
+					Domain:        domain,
+					Reason:        "invalid domain",
+				})
+				continue
+			}
+			domains = append(domains, domain)
+		}
+		if len(domains) == 0 {
 			continue
 		}
 		if app.Port <= 0 {
+			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: domains[0]}
 			diagnostic.Reason = "application declares no container port"
 			diagnostics = append(diagnostics, diagnostic)
 			continue
 		}
 		if app.ContainerID == "" {
+			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: domains[0]}
 			diagnostic.Reason = "no running deployment yet"
 			diagnostics = append(diagnostics, diagnostic)
 			continue
 		}
-
 		hostPort, reason := resolveEndpoint(app, findContainer(byID, app.ContainerID))
 		if reason != "" {
+			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: domains[0]}
 			diagnostic.Reason = reason
 			diagnostics = append(diagnostics, diagnostic)
 			continue
 		}
-		route := Route{
-			AppID:  app.ID,
-			Domain: domain,
-			Target: fmt.Sprintf("http://%s:%d", backendHost, hostPort),
+		target := fmt.Sprintf("http://%s:%d", backendHost, hostPort)
+		primary := NormalizeDomain(app.BaseDomain)
+		for _, domain := range domains {
+			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: domain}
+			if domainCounts[domain] > 1 {
+				diagnostic.Reason = "duplicate domain on this node; all conflicting bindings are held back"
+				diagnostics = append(diagnostics, diagnostic)
+				continue
+			}
+			route := Route{
+				AppID:  app.ID,
+				Domain: domain,
+				Target: target,
+			}
+			if domain != primary {
+				route.Name = AliasRouteName(app.ID, domain)
+				route.Service = serviceName(app.ID)
+			}
+			certificate, certReason := resolveRouteCertificate(app, domain, providers)
+			route.Certificate = certificate
+			if certReason != "" {
+				diagnostic.Reason = certReason
+				diagnostics = append(diagnostics, diagnostic)
+			}
+			routes = append(routes, route)
 		}
-		certificate, certReason := resolveRouteCertificate(app, domain, providers)
-		route.Certificate = certificate
-		if certReason != "" {
-			diagnostic.Reason = certReason
-			diagnostics = append(diagnostics, diagnostic)
-		}
-		routes = append(routes, route)
 	}
 	return routes, diagnostics
 }
@@ -831,8 +883,10 @@ func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverI
 		if app.ServerID != serverID {
 			continue
 		}
-		if domain := NormalizeDomain(app.BaseDomain); domain != "" {
-			nodeDomains[domain] = true
+		for _, domain := range appDomains(app) {
+			if domain != "" {
+				nodeDomains[domain] = true
+			}
 		}
 	}
 	for _, domain := range extraDomains {
@@ -945,18 +999,77 @@ func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverI
 // cannot be activated (the route then stays plain HTTP). An explicitly
 // disabled configuration activates nothing and is not a diagnostic: it is
 // operator intent, not a failure.
+//
+// Since JUS-89 the intent is matched per domain: an intent recorded for the
+// routed host activates it directly, and an enabled wildcard intent whose SAN
+// covers the routed host is reused instead of demanding a second order for
+// the sibling (the generated request still names the routed host as main,
+// with the shared wildcard base as SAN).
 func resolveRouteCertificate(app ProxiedApplication, domain string, providers map[uuid.UUID]providerAccess) (*RouteCertificate, string) {
-	intent := app.Certificate
-	if intent == nil || !intent.Enabled {
-		return nil, ""
+	intents := app.Certificates
+	if intents == nil && app.Certificate != nil {
+		intents = []*CertificateIntent{app.Certificate}
 	}
-	// The recorded host guards against issuing for a stale domain: changing
-	// the application's base_domain never silently re-targets the
-	// certificate; the configuration must be updated explicitly.
-	if intent.Domain != domain {
+	var exact, wildcard *CertificateIntent
+	for _, intent := range intents {
+		if intent == nil || !intent.Enabled {
+			continue
+		}
+		if intent.Domain == domain {
+			exact = intent
+			break
+		}
+		if intent.Wildcard && wildcard == nil && wildcardCovers(intent, domain, providers) {
+			wildcard = intent
+		}
+	}
+	switch {
+	case exact != nil:
+		return activateCertificate(exact, domain, providers)
+	case wildcard != nil:
+		return activateCertificate(wildcard, domain, providers)
+	}
+	for _, intent := range intents {
+		if intent == nil || !intent.Enabled {
+			continue
+		}
+		// The recorded host guards against issuing for a stale domain: changing
+		// the application's domains never silently re-targets the
+		// certificate; the configuration must be updated explicitly.
 		return nil, fmt.Sprintf("certificate configuration is recorded for %q; update it to certify %q", intent.Domain, domain)
 	}
+	return nil, ""
+}
 
+// wildcardCovers reports whether an enabled wildcard intent's SAN covers the
+// routed host: the generated request for the intent is main=intent host plus
+// `*.base`, so a sibling one label under the same base reuses the resolver
+// without its own order. The routed host must additionally sit under one of
+// the provider's zones, like any DNS-01 activation.
+func wildcardCovers(intent *CertificateIntent, domain string, providers map[uuid.UUID]providerAccess) bool {
+	if domain == intent.Domain {
+		return true
+	}
+	access, ok := providers[intent.DNSProviderID]
+	if !ok || !access.provider.Enabled || access.err != nil {
+		return false
+	}
+	base, ok := WildcardBase(intent.Domain, access.provider.Zones)
+	if !ok {
+		return false
+	}
+	if MatchZone(access.provider.Zones, domain) == "" {
+		return false
+	}
+	labels := strings.Split(domain, ".")
+	baseLabels := strings.Split(base, ".")
+	return len(labels) == len(baseLabels)+1 && strings.HasSuffix(domain, "."+base)
+}
+
+// activateCertificate resolves one matched intent into the route's TLS
+// section, or nil plus a diagnostic reason when the intent cannot be
+// activated (the route then stays plain HTTP).
+func activateCertificate(intent *CertificateIntent, domain string, providers map[uuid.UUID]providerAccess) (*RouteCertificate, string) {
 	switch intent.Challenge {
 	case ChallengeHTTP01:
 		if intent.Wildcard {

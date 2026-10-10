@@ -27,6 +27,10 @@ import { conflictDetail, isApiError, stripErrorPrefix } from "@/features/servers
  *   PUT    /applications/{id}/git-credential
  *   GET    /applications/{id}/git-credential
  *   POST   /applications/{id}/test-connection
+ *   GET    /applications/{id}/domains
+ *   POST   /applications/{id}/domains
+ *   DELETE /applications/{id}/domains/{domainId}
+ *   POST   /applications/{id}/domains/{domainId}/primary
  *
  * Paths are relative to the shared axios instance (`baseURL: /api/v1`), so the
  * auth header and refresh-on-401 behaviour come from `./http` unchanged.
@@ -225,6 +229,80 @@ export interface UpdateApplicationInput {
 /** Optional body of POST .../rollback (see routes.go). */
 export interface RollbackInput {
   deployment_id?: string;
+}
+
+/** Wire envelope for a domain list. */
+interface DomainListEnvelope {
+  domains: ApplicationDomain[];
+}
+
+/** Wire envelope for a single domain. */
+interface DomainEnvelope {
+  domain: ApplicationDomain;
+}
+
+/**
+ * One hostname an application serves (JUS-89, see `internal/deploy/domains.go`):
+ * exactly one row per application is primary, and `base_domain` mirrors it.
+ */
+export interface ApplicationDomain {
+  id: string;
+  application_id: string;
+  domain: string;
+  is_primary: boolean;
+  disabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * listDomains returns one application's domains, primary first, then oldest
+ * first (GET .../domains → 200).
+ */
+export async function listDomains(appId: string): Promise<ApplicationDomain[]> {
+  const response = await http.get<DomainListEnvelope>(
+    `/applications/${appId}/domains`,
+  );
+  return response.data.domains ?? [];
+}
+
+/**
+ * addDomain attaches one more hostname to an application (POST .../domains →
+ * 201). A host another application owns answers 409; a malformed host or one
+ * already attached answers 400.
+ */
+export async function addDomain(
+  appId: string,
+  domain: string,
+): Promise<ApplicationDomain> {
+  const response = await http.post<DomainEnvelope>(
+    `/applications/${appId}/domains`,
+    { domain },
+  );
+  return response.data.domain;
+}
+
+/**
+ * removeDomain detaches one hostname (DELETE .../domains/{domainId} → 204).
+ * Removing the primary promotes the oldest remaining domain; removing the
+ * last one clears the application domain.
+ */
+export async function removeDomain(
+  appId: string,
+  domainId: string,
+): Promise<void> {
+  await http.delete(`/applications/${appId}/domains/${domainId}`);
+}
+
+/**
+ * setPrimaryDomain makes one attached hostname the primary
+ * (POST .../domains/{domainId}/primary → 204).
+ */
+export async function setPrimaryDomain(
+  appId: string,
+  domainId: string,
+): Promise<void> {
+  await http.post(`/applications/${appId}/domains/${domainId}/primary`, {});
 }
 
 /** Wire envelope for a single deployment. */

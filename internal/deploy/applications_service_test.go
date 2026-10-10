@@ -21,8 +21,14 @@ import (
 
 // validCreateInput returns a payload every creation test starts from: a known
 // server, a cloneable repository and one plain variable plus one sealed secret.
+// Domains are platform-wide unique (JUS-89), so each call mints its own host;
+// tests that need a fixed domain override BaseDomain after.
+var validCreateInputCounter int64
+
 func validCreateInput(serverID uuid.UUID) CreateApplicationInput {
+	validCreateInputCounter++
 	return CreateApplicationInput{
+		// server, a cloneable repository and one plain variable plus one sealed secret.
 		// The fake repository resolves any environment permissively; tests
 		// that need a seeded or shared environment override the ID after.
 		EnvironmentID: uuid.New(),
@@ -32,7 +38,7 @@ func validCreateInput(serverID uuid.UUID) CreateApplicationInput {
 		CloneURL:      "https://github.com/acme/demo.git",
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		BaseDomain:    "demo.example.com",
+		BaseDomain:    fmt.Sprintf("demo-%d.example.com", validCreateInputCounter),
 		Port:          3000,
 		HostPort:      8080,
 		ServerID:      serverID,

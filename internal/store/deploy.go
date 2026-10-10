@@ -114,6 +114,64 @@ func (s *Store) CreateApplicationWithConfig(
 
 	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
 	queries := s.queries.WithTx(tx)
+	app, err := createApplicationWithConfigTx(ctx, queries, params, envVars, secrets, storages)
+	if err != nil {
+		return sqlc.Application{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.Application{}, err
+	}
+	return app, nil
+}
+
+// CreateApplicationWithConfigAndDomain stores an application with its
+// configuration plus its primary domain row in one transaction (JUS-89): a
+// conflicting host rolls back the application row too, so no application
+// exists without its routing state. A nil domain skips the row insert and
+// behaves exactly like CreateApplicationWithConfig.
+func (s *Store) CreateApplicationWithConfigAndDomain(
+	ctx context.Context,
+	params sqlc.CreateApplicationParams,
+	envVars []sqlc.InsertEnvVarParams,
+	secrets []sqlc.InsertSecretParams,
+	storages []sqlc.InsertStorageParams,
+	domain *sqlc.CreateApplicationDomainParams,
+) (sqlc.Application, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return sqlc.Application{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	params.TeamID = personalTeamOrDefault(params.TeamID, params.UserID)
+	queries := s.queries.WithTx(tx)
+	app, err := createApplicationWithConfigTx(ctx, queries, params, envVars, secrets, storages)
+	if err != nil {
+		return sqlc.Application{}, err
+	}
+	if domain != nil {
+		row := *domain
+		row.ApplicationID = app.ID
+		if _, err := queries.CreateApplicationDomain(ctx, row); err != nil {
+			return sqlc.Application{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sqlc.Application{}, err
+	}
+	return app, nil
+}
+
+// createApplicationWithConfigTx is the shared core of the two creation
+// transactions above, running on an already-open transaction.
+func createApplicationWithConfigTx(
+	ctx context.Context,
+	queries *sqlc.Queries,
+	params sqlc.CreateApplicationParams,
+	envVars []sqlc.InsertEnvVarParams,
+	secrets []sqlc.InsertSecretParams,
+	storages []sqlc.InsertStorageParams,
+) (sqlc.Application, error) {
 	app, err := queries.CreateApplication(ctx, params)
 	if err != nil {
 		return sqlc.Application{}, err
@@ -135,9 +193,6 @@ func (s *Store) CreateApplicationWithConfig(
 		if _, err := queries.InsertStorage(ctx, row); err != nil {
 			return sqlc.Application{}, err
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return sqlc.Application{}, err
 	}
 	return app, nil
 }

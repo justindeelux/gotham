@@ -89,9 +89,11 @@ type certificateListEnvelope struct {
 }
 
 // createCertificateRequest is the body of POST /v1/proxy/certificates. The
-// recorded domain always comes from the application, never from the body.
+// recorded domain defaults to the application's primary domain; domain
+// selects one of its other attached domains (JUS-89).
 type createCertificateRequest struct {
 	ApplicationID string `json:"application_id"`
+	Domain        string `json:"domain,omitempty"`
 	Enabled       *bool  `json:"enabled,omitempty"`
 	Challenge     string `json:"challenge,omitempty"`
 	DNSProviderID string `json:"dns_provider_id,omitempty"`
@@ -99,7 +101,9 @@ type createCertificateRequest struct {
 }
 
 // updateCertificateRequest is the body of PATCH /v1/proxy/certificates/{id}.
+// Domain re-targets the intent onto another attached host.
 type updateCertificateRequest struct {
+	Domain        *string `json:"domain,omitempty"`
 	Enabled       *bool   `json:"enabled,omitempty"`
 	Challenge     *string `json:"challenge,omitempty"`
 	DNSProviderID *string `json:"dns_provider_id,omitempty"`
@@ -207,6 +211,7 @@ func (h *handler) createCertificate(w http.ResponseWriter, r *http.Request) {
 	}
 	certificate, err := h.certs.CreateCertificate(r.Context(), CreateCertificateInput{
 		ApplicationID: applicationID,
+		Domain:        strings.TrimSpace(req.Domain),
 		Enabled:       req.Enabled,
 		Challenge:     ChallengeMode(strings.TrimSpace(req.Challenge)),
 		DNSProviderID: providerID,
@@ -262,7 +267,7 @@ func (h *handler) updateCertificate(w http.ResponseWriter, r *http.Request) {
 	if !decodeRequiredBody(w, r, &req) {
 		return
 	}
-	in := UpdateCertificateInput{Enabled: req.Enabled, Wildcard: req.Wildcard}
+	in := UpdateCertificateInput{Domain: req.Domain, Enabled: req.Enabled, Wildcard: req.Wildcard}
 	if req.Challenge != nil {
 		mode := ChallengeMode(strings.TrimSpace(*req.Challenge))
 		in.Challenge = &mode

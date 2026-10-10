@@ -250,27 +250,6 @@ func (q *Queries) GetDomainCertificate(ctx context.Context, id pgtype.UUID) (Dom
 	return i, err
 }
 
-const getDomainCertificateByApplication = `-- name: GetDomainCertificateByApplication :one
-SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates WHERE application_id = $1
-`
-
-func (q *Queries) GetDomainCertificateByApplication(ctx context.Context, applicationID pgtype.UUID) (DomainCertificate, error) {
-	row := q.db.QueryRow(ctx, getDomainCertificateByApplication, applicationID)
-	var i DomainCertificate
-	err := row.Scan(
-		&i.ID,
-		&i.ApplicationID,
-		&i.Domain,
-		&i.Enabled,
-		&i.Challenge,
-		&i.DnsProviderID,
-		&i.Wildcard,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getDomainRedirect = `-- name: GetDomainRedirect :one
 SELECT id, application_id, source_domain, target_domain, code, preserve_path, enabled, created_at, updated_at FROM domain_redirects WHERE id = $1
 `
@@ -345,6 +324,8 @@ func (q *Queries) InsertPendingProxyConfigVersion(ctx context.Context, arg Inser
 
 const listApplicationBaseDomains = `-- name: ListApplicationBaseDomains :many
 SELECT id, base_domain FROM applications WHERE base_domain <> ''
+UNION
+SELECT application_id AS id, domain AS base_domain FROM application_domains
 `
 
 type ListApplicationBaseDomainsRow struct {
@@ -353,10 +334,15 @@ type ListApplicationBaseDomainsRow struct {
 }
 
 // ListApplicationBaseDomains feeds the redirect ownership guard: a redirect
-// source must not shadow any application's base domain (on any node), so the
-// two routers must not match the same host. The guard reads committed state,
-// so a racing write can still pass against an old domain set; the generator
-// then holds the shadowing source back per committed snapshot.
+// source must not shadow any application's domain (on any node), so the
+// two routers must not match the same host. Since JUS-89 the claim set is
+// every row of application_domains (primary and aliases alike; disabled rows
+// keep their claim paused), unioned with the applications.base_domain mirror:
+// raw store writers may lag the rows, and the guard must see the wider claim
+// either way. The guard reads
+// committed state, so a racing write can still pass against an old domain
+// set; the generator then holds the shadowing source back per committed
+// snapshot.
 func (q *Queries) ListApplicationBaseDomains(ctx context.Context) ([]ListApplicationBaseDomainsRow, error) {
 	rows, err := q.db.Query(ctx, listApplicationBaseDomains)
 	if err != nil {
@@ -458,6 +444,44 @@ ORDER BY created_at DESC, id DESC
 
 func (q *Queries) ListDomainCertificates(ctx context.Context) ([]DomainCertificate, error) {
 	rows, err := q.db.Query(ctx, listDomainCertificates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DomainCertificate{}
+	for rows.Next() {
+		var i DomainCertificate
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.Domain,
+			&i.Enabled,
+			&i.Challenge,
+			&i.DnsProviderID,
+			&i.Wildcard,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDomainCertificatesByApplication = `-- name: ListDomainCertificatesByApplication :many
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates
+WHERE application_id = $1
+ORDER BY created_at, id
+`
+
+// ListDomainCertificatesByApplication returns one application's certificate
+// intents, oldest first (JUS-89: one intent per domain).
+func (q *Queries) ListDomainCertificatesByApplication(ctx context.Context, applicationID pgtype.UUID) ([]DomainCertificate, error) {
+	rows, err := q.db.Query(ctx, listDomainCertificatesByApplication, applicationID)
 	if err != nil {
 		return nil, err
 	}
@@ -636,15 +660,8 @@ func (q *Queries) ListEnabledRedirects(ctx context.Context) ([]ListEnabledRedire
 
 const listProxiedApplications = `-- name: ListProxiedApplications :many
 SELECT a.id, a.server_id, a.name, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
-       COALESCE(d.container_id, '')::text AS container_id,
-       (c.id IS NOT NULL)::boolean AS certificate_configured,
-       COALESCE(c.domain, '')::text AS certificate_domain,
-       COALESCE(c.enabled, false) AS certificate_enabled,
-       COALESCE(c.challenge, '')::text AS certificate_challenge,
-       COALESCE(c.wildcard, false) AS certificate_wildcard,
-       c.dns_provider_id AS certificate_dns_provider_id
+       COALESCE(d.container_id, '')::text AS container_id
 FROM applications a
-LEFT JOIN domain_certificates c ON c.application_id = a.id
 LEFT JOIN LATERAL (
     SELECT container_id FROM deployments
     WHERE application_id = a.id AND state = 'running' AND container_id <> ''
@@ -656,20 +673,14 @@ ORDER BY a.created_at, a.id
 `
 
 type ListProxiedApplicationsRow struct {
-	ID                       pgtype.UUID `json:"id"`
-	ServerID                 pgtype.UUID `json:"server_id"`
-	Name                     string      `json:"name"`
-	BaseDomain               string      `json:"base_domain"`
-	BaseDomainDisabled       bool        `json:"base_domain_disabled"`
-	Port                     int32       `json:"port"`
-	HostPort                 int32       `json:"host_port"`
-	ContainerID              string      `json:"container_id"`
-	CertificateConfigured    bool        `json:"certificate_configured"`
-	CertificateDomain        string      `json:"certificate_domain"`
-	CertificateEnabled       bool        `json:"certificate_enabled"`
-	CertificateChallenge     string      `json:"certificate_challenge"`
-	CertificateWildcard      bool        `json:"certificate_wildcard"`
-	CertificateDnsProviderID pgtype.UUID `json:"certificate_dns_provider_id"`
+	ID                 pgtype.UUID `json:"id"`
+	ServerID           pgtype.UUID `json:"server_id"`
+	Name               string      `json:"name"`
+	BaseDomain         string      `json:"base_domain"`
+	BaseDomainDisabled bool        `json:"base_domain_disabled"`
+	Port               int32       `json:"port"`
+	HostPort           int32       `json:"host_port"`
+	ContainerID        string      `json:"container_id"`
 }
 
 // ProxiedApplications feeds the Traefik config generator (Phase 6, BE-6.1):
@@ -678,10 +689,10 @@ type ListProxiedApplicationsRow struct {
 // ordered by creation time so duplicate-domain dispositions and generation
 // input stay deterministic.
 //
-// The certificate columns (BE-6.2) carry the per-application certificate
-// intent. They are NULL-joined as empty values: certificate_configured tells
-// the generator whether an intent exists at all, and the recorded domain
-// lets it refuse to activate a certificate whose host no longer matches.
+// The domain rows (JUS-89) and the certificate intents (BE-6.2, one row per
+// domain since JUS-89) fan out per application, so they are read by the
+// dedicated ListProxiedApplicationDomains and ListProxiedCertificates
+// queries and grouped in Go: joining them here would multiply the rows.
 func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApplicationsRow, error) {
 	rows, err := q.db.Query(ctx, listProxiedApplications)
 	if err != nil {
@@ -700,12 +711,50 @@ func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApp
 			&i.Port,
 			&i.HostPort,
 			&i.ContainerID,
-			&i.CertificateConfigured,
-			&i.CertificateDomain,
-			&i.CertificateEnabled,
-			&i.CertificateChallenge,
-			&i.CertificateWildcard,
-			&i.CertificateDnsProviderID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProxiedCertificates = `-- name: ListProxiedCertificates :many
+SELECT application_id, domain, enabled, challenge, wildcard, dns_provider_id
+FROM domain_certificates
+ORDER BY application_id, created_at, id
+`
+
+type ListProxiedCertificatesRow struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Domain        string      `json:"domain"`
+	Enabled       bool        `json:"enabled"`
+	Challenge     string      `json:"challenge"`
+	Wildcard      bool        `json:"wildcard"`
+	DnsProviderID pgtype.UUID `json:"dns_provider_id"`
+}
+
+// ListProxiedCertificates feeds the Traefik generator (JUS-89): every
+// certificate intent, grouped onto its routing row in Go.
+func (q *Queries) ListProxiedCertificates(ctx context.Context) ([]ListProxiedCertificatesRow, error) {
+	rows, err := q.db.Query(ctx, listProxiedCertificates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProxiedCertificatesRow{}
+	for rows.Next() {
+		var i ListProxiedCertificatesRow
+		if err := rows.Scan(
+			&i.ApplicationID,
+			&i.Domain,
+			&i.Enabled,
+			&i.Challenge,
+			&i.Wildcard,
+			&i.DnsProviderID,
 		); err != nil {
 			return nil, err
 		}

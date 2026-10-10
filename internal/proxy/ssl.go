@@ -186,9 +186,36 @@ type ApplicationInfo struct {
 	TeamID         uuid.UUID
 	BaseDomain     string
 	DomainDisabled bool
+	// Domains lists every non-disabled domain attached to the application,
+	// primary first (JUS-89). A per-domain intent must name one of them.
+	Domains []string
 	// ServerID is the node hosting the application; uuid.Nil when none is
 	// assigned (a redirect rule cannot be generated then).
 	ServerID uuid.UUID
+}
+
+// PrimaryDomain returns the application's primary domain: the first attached
+// domain when present, otherwise the legacy base_domain mirror.
+func (a ApplicationInfo) PrimaryDomain() string {
+	if len(a.Domains) > 0 {
+		return a.Domains[0]
+	}
+	return a.BaseDomain
+}
+
+// HasDomain reports whether domain (already normalized) is attached to the
+// application, falling back to the base_domain mirror for callers without a
+// domain list.
+func (a ApplicationInfo) HasDomain(domain string) bool {
+	if len(a.Domains) == 0 {
+		return NormalizeDomain(a.BaseDomain) == domain
+	}
+	for _, owned := range a.Domains {
+		if owned == domain {
+			return true
+		}
+	}
+	return false
 }
 
 // DNSProviderWrite is the repository-level provider write shape.
@@ -229,7 +256,7 @@ type SSLStore interface {
 
 	CreateCertificate(ctx context.Context, in CertificateWrite) (DomainCertificate, error)
 	GetCertificate(ctx context.Context, id uuid.UUID) (DomainCertificate, error)
-	GetCertificateByApplication(ctx context.Context, applicationID uuid.UUID) (DomainCertificate, error)
+	ListCertificatesByApplication(ctx context.Context, applicationID uuid.UUID) ([]DomainCertificate, error)
 	ListCertificates(ctx context.Context) ([]DomainCertificate, error)
 	UpdateCertificate(ctx context.Context, id uuid.UUID, in CertificateWrite) (DomainCertificate, error)
 	DeleteCertificate(ctx context.Context, id uuid.UUID) error
@@ -376,14 +403,18 @@ func (s storeSSL) GetCertificate(ctx context.Context, id uuid.UUID) (DomainCerti
 	return certificateFromRow(row), nil
 }
 
-// GetCertificateByApplication returns the certificate config of an
-// application, or ErrNotFound.
-func (s storeSSL) GetCertificateByApplication(ctx context.Context, applicationID uuid.UUID) (DomainCertificate, error) {
-	row, err := s.store.GetDomainCertificateByApplication(ctx, pgUUID(applicationID))
+// ListCertificatesByApplication returns one application's certificate
+// intents, oldest first (JUS-89: one intent per domain), or an empty slice.
+func (s storeSSL) ListCertificatesByApplication(ctx context.Context, applicationID uuid.UUID) ([]DomainCertificate, error) {
+	rows, err := s.store.ListDomainCertificatesByApplication(ctx, pgUUID(applicationID))
 	if err != nil {
-		return DomainCertificate{}, mapSSLReadError(err)
+		return nil, err
 	}
-	return certificateFromRow(row), nil
+	out := make([]DomainCertificate, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, certificateFromRow(row))
+	}
+	return out, nil
 }
 
 // ListCertificates returns every certificate config, newest first.
@@ -424,13 +455,24 @@ func (s storeSSL) DeleteCertificate(ctx context.Context, id uuid.UUID) error {
 }
 
 // GetApplication returns the application a certificate config targets, or
-// ErrNotFound.
+// ErrNotFound. Domains carries every attached domain, primary first, so the
+// service can validate a per-domain intent against the application's hosts.
 func (s storeSSL) GetApplication(ctx context.Context, id uuid.UUID) (ApplicationInfo, error) {
 	row, err := s.store.GetApplication(ctx, pgUUID(id))
 	if err != nil {
 		return ApplicationInfo{}, mapSSLReadError(err)
 	}
-	return applicationInfoFromRow(row), nil
+	info := applicationInfoFromRow(row)
+	domains, err := s.store.ListApplicationDomainsByApplication(ctx, pgUUID(id))
+	if err != nil {
+		return ApplicationInfo{}, err
+	}
+	for _, domain := range domains {
+		if !domain.Disabled {
+			info.Domains = append(info.Domains, domain.Domain)
+		}
+	}
+	return info, nil
 }
 
 // applicationInfoFromRow maps a stored application row into the validation
@@ -493,10 +535,10 @@ func mapSSLReadError(err error) error {
 }
 
 // mapSSLWriteError turns unique and foreign-key violations into ErrConflict:
-// the enabled-provider-per-type index, the one-certificate-per-application
-// index and the provider reference all surface as actionable conflicts
-// instead of a 500 (the service pre-checks cover the common paths; these
-// mappings catch the races).
+// the enabled-provider-per-type index, the per-domain certificate index and
+// the provider reference all surface as actionable conflicts instead of a
+// 500 (the service pre-checks cover the common paths; these mappings catch
+// the races).
 func mapSSLWriteError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
@@ -505,8 +547,8 @@ func mapSSLWriteError(err error) error {
 			switch pgErr.ConstraintName {
 			case "dns_providers_enabled_type_idx":
 				return fmt.Errorf("%w: an enabled DNS provider of that type already exists", ErrConflict)
-			case "domain_certificates_application_unique":
-				return fmt.Errorf("%w: the application already has a certificate configuration", ErrConflict)
+			case "domain_certificates_app_domain_unique", "domain_certificates_application_unique":
+				return fmt.Errorf("%w: the application already has a certificate configuration for that domain", ErrConflict)
 			}
 			return fmt.Errorf("%w: the write conflicts with existing state", ErrConflict)
 		case "23503":

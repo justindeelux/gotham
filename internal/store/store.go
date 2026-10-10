@@ -71,6 +71,23 @@ func New(pool *pgxpool.Pool) *Store {
 	}
 }
 
+// InTx runs fn with a transaction-scoped Store: every Store method called on
+// tx shares one snapshot and commits atomically. A fn error (or a commit
+// failure) rolls everything back, so multi-step mutations such as a domain
+// row write plus its base_domain mirror update can never drift apart (JUS-89).
+func (s *Store) InTx(ctx context.Context, fn func(tx *Store) error) error {
+	dbTx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dbTx.Rollback(ctx) }()
+	tx := &Store{DB: s.DB, queries: s.queries.WithTx(dbTx)}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return dbTx.Commit(ctx)
+}
+
 // GetUserByEmail returns the user with the given email. The lookup is
 // case-insensitive, backed by the users_email_lower_idx functional index.
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (sqlc.User, error) {

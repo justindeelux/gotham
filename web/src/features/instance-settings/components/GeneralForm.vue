@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NForm, NFormItem, NInput } from "naive-ui";
+import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSelect } from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { saveGeneral } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
+import { timezoneOptions } from "@/features/instance-settings/composables/useTimezoneOptions";
 import { useSectionForm } from "@/features/instance-settings/composables/useSectionForm";
 import {
   controlPlaneUrlSchema,
@@ -21,6 +22,7 @@ const { t } = useI18n();
 const formRef = ref<FormInst | null>(null);
 const form = reactive({ url: "", name: "", timezone: "" });
 const general = computed(() => props.state.general);
+const zoneOptions = computed(() => timezoneOptions(form.timezone));
 
 watch(
   general,
@@ -65,7 +67,7 @@ function status(path: string): "error" | undefined {
 
 <template>
   <NCard :title="t('instance-settings.general.title')">
-    <NAlert v-if="errorMessage" type="error" :show-icon="true">{{ errorMessage }}</NAlert>
+    <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert">{{ errorMessage }}</NAlert>
     <NForm ref="formRef" :model="form" :rules="rules" class="instance-form" @submit.prevent="handleSubmit">
       <NFormItem
         path="url"
@@ -104,7 +106,12 @@ function status(path: string): "error" | undefined {
         :validation-status="status('timezone')"
         :feedback="serverErrors.timezone"
       >
-        <NInput v-model:value="form.timezone" :disabled="general.timezone.locked" placeholder="Europe/Berlin" />
+        <NSelect
+          v-model:value="form.timezone"
+          filterable
+          :options="zoneOptions"
+          :disabled="general.timezone.locked"
+        />
         <template #feedback v-if="!serverErrors.timezone">
           {{ t("instance-settings.general.timezoneHint") }}
         </template>

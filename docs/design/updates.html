@@ -15,7 +15,9 @@
   /* Local page: new pg- classes only, no shared-class redefinitions. */
   .pg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-4); }
   .pg-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
-  .pg-form { display: grid; gap: var(--space-4); max-width: 560px; }
+  .pg-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: var(--space-4) var(--space-8); max-width: 960px; align-items: start; }
+  .pg-form > .pg-span, .pg-form > .switch-row { grid-column: 1 / -1; }
+  .pg-actions { display: flex; justify-content: flex-end; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
   .pg-notes { white-space: pre-wrap; font-size: var(--text-sm); color: var(--fg); max-height: 160px; overflow: auto; }
   .pg-alert { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); border: 1px solid color-mix(in oklab, var(--danger) 34%, transparent); background: var(--danger-soft); color: var(--danger-ink); font-size: var(--text-sm); }
   .pg-alert--warn { border-color: color-mix(in oklab, var(--warn) 34%, transparent); background: var(--warn-soft); color: var(--warn-ink); }
@@ -36,16 +38,18 @@
             <h1>Updates</h1>
             <p class="page-desc">Check for new Gotham releases, update the control plane and choose when Gotham checks and applies updates automatically. Schedules run in UTC.</p>
           </div>
-          <div class="page-actions">
-            <button class="btn btn-secondary" type="button">Check for updates</button>
-            <button class="btn btn-primary" type="button">Update now</button>
-          </div>
         </div>
 
-        <div class="pg-grid" data-od-id="updates-stats">
-          <div class="stat"><div class="stat-label">Current version</div><div class="stat-value">v0.4.2</div><div class="stat-sub"><span class="tag">stable</span></div></div>
-          <div class="stat"><div class="stat-label">Latest available</div><div class="stat-value">v0.5.0</div><div class="stat-sub"><span class="tag tag--accent">Update available</span> Oct 9, 2026</div></div>
-          <div class="stat"><div class="stat-label">Last checked</div><div class="stat-value" style="font-size:var(--text-xl)">12 min ago</div><div class="stat-sub">Next check Oct 10, 21:00 UTC</div></div>
+        <div class="card" data-od-id="updates-stats">
+          <div class="pg-grid">
+            <div><div class="stat-label">Current version</div><div class="stat-value">v0.4.2</div><div class="stat-sub"><span class="tag">stable</span></div></div>
+            <div><div class="stat-label">Latest available</div><div class="stat-value">v0.5.0</div><div class="stat-sub"><span class="tag tag--accent">Update available</span> Oct 9, 2026</div></div>
+            <div><div class="stat-label">Last checked</div><div class="stat-value">12 min ago</div><div class="stat-sub">Next check Oct 10, 21:00 UTC</div></div>
+          </div>
+          <div class="pg-actions">
+            <button class="btn btn-secondary" type="button"><svg aria-hidden="true" width="14" height="14"><use href="#i-refresh"></use></svg>Check for updates</button>
+            <button class="btn btn-primary" type="button"><svg aria-hidden="true" width="14" height="14"><use href="#i-download"></use></svg>Update now</button>
+          </div>
         </div>
 
         <div class="card mt-5" data-od-id="release-notes">
@@ -72,10 +76,10 @@
             <div class="switch-row"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="Check for updates automatically"></button><div><strong>Check for updates automatically</strong><p class="field-hint">Gotham looks for a new release on the schedule below.</p></div></div>
             <div class="switch-row"><button class="switch" type="button" role="switch" aria-checked="false" aria-label="Apply updates automatically"></button><div><strong>Apply updates automatically</strong><p class="field-hint">Install a found release without confirmation. Off by default.</p></div></div>
             <div class="field"><label class="field-label" for="pg-channel">Channel</label><select id="pg-channel" class="select"><option>Stable</option><option>Beta</option></select></div>
-            <div class="field"><span class="field-label">Frequency</span><div class="segmented"><button type="button">Every N hours</button><button type="button" class="is-active">Daily</button><button type="button">Weekly</button></div></div>
+            <div class="field pg-span"><span class="field-label">Frequency</span><div class="segmented"><button type="button">Every N hours</button><button type="button" class="is-active">Daily</button><button type="button">Weekly</button></div></div>
             <div class="field"><label class="field-label" for="pg-time">Time (UTC)</label><input id="pg-time" class="input mono" value="03:00" /><span class="field-hint">Weekly adds a day-of-week selector; interval mode shows an hours field (1–720).</span></div>
             <div class="field has-error"><label class="field-label" for="pg-interval">Interval (hours)</label><input id="pg-interval" class="input mono" value="0" /><span class="field-error">Enter between 1 and 720 hours.</span></div>
-            <div><button class="btn btn-primary" type="button">Save schedule</button> <button class="btn btn-ghost" type="button">Reset</button></div>
+            <div class="pg-span"><button class="btn btn-primary" type="button">Save schedule</button> <button class="btn btn-ghost" type="button">Reset</button></div>
           </div>
         </div>
 

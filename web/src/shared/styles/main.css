@@ -394,3 +394,39 @@ a {
   width: 100%;
   max-width: 400px;
 }
+
+/* Settings page head (JUS-97): eyebrow → title → description with one shared
+ * 8px rhythm, mirroring .page-head in docs/design/assets/gotham-ui.css. Pages
+ * with their own scoped .page-head styles keep them. */
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+  margin-bottom: var(--space-6);
+  flex-wrap: wrap;
+}
+
+.page-head .eyebrow {
+  margin-bottom: var(--space-2);
+}
+
+.page-head h1 {
+  margin-bottom: var(--space-2);
+}
+
+.page-desc {
+  color: var(--muted);
+  max-width: 74ch;
+}
+
+/* An alert above a form (JUS-97): keep a token gap before the first field. */
+.form-alert {
+  margin-bottom: var(--space-4);
+}
+
+/* Switch beside its label/description (JUS-98), mirroring .switch-row. */
+.switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}

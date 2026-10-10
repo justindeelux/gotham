@@ -63,10 +63,10 @@ function status(path: string): "error" | undefined {
 
 <template>
   <NCard :title="t('instance-settings.system.title')">
-    <NAlert v-if="!state.capabilities.system" type="info" :show-icon="true">
+    <NAlert v-if="!state.capabilities.system" type="info" :show-icon="true" class="form-alert">
       {{ t("instance-settings.unsupported") }}
     </NAlert>
-    <NAlert v-if="errorMessage" type="error" :show-icon="true">{{ errorMessage }}</NAlert>
+    <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert">{{ errorMessage }}</NAlert>
     <NForm ref="formRef" :model="form" :rules="rules" class="instance-form" @submit.prevent="handleSubmit">
       <NFormItem
         path="hostname"

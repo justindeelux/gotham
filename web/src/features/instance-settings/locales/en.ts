@@ -21,7 +21,8 @@ const en = {
     urlHint: "Public base URL used for agent enrollment, OAuth redirects and webhooks.",
     name: "Instance name",
     timezone: "Timezone",
-    timezoneHint: "IANA zone. Applied to schedules, log display and backups.",
+    timezoneHint:
+      "Searchable list of IANA zones with the current UTC offset. Applied to schedules, log display and backups. Disabled when locked by the environment.",
     submit: "Save general settings",
     saved: "General settings saved.",
   },
@@ -58,7 +59,7 @@ const en = {
   validation: {
     url: "Enter an http(s) URL with a host, without credentials, query or fragment.",
     name: "The name must be 1-64 characters.",
-    timezone: "Enter an IANA timezone such as Europe/Berlin.",
+    timezone: "Select an IANA timezone such as Europe/Berlin.",
     dns: "Enter up to 3 distinct IPv4 or IPv6 addresses.",
     ipv4Address: "Enter an IPv4 address in CIDR notation, e.g. 192.168.1.10/24.",
     ipv4Gateway: "Enter a valid IPv4 gateway.",

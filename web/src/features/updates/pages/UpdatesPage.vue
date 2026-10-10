@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NEmpty, NProgress, NSpace, NSpin, NTag, useDialog } from "naive-ui";
+import { NAlert, NButton, NCard, NEmpty, NIcon, NProgress, NSpace, NSpin, NTag, useDialog } from "naive-ui";
+import { Download, RefreshCw } from "@lucide/vue";
 import { computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -65,19 +66,6 @@ onMounted(() => {
         <h1>{{ t("updates.page.title") }}</h1>
         <p class="page-desc">{{ t("updates.page.description") }}</p>
       </div>
-      <div v-if="u.isAdmin.value && !u.unavailable.value" class="page-actions">
-        <NButton :loading="u.checking.value" :disabled="u.awaitingRestart.value" @click="u.runCheck()">
-          {{ t("updates.actions.check") }}
-        </NButton>
-        <NButton
-          type="primary"
-          :disabled="!latest || u.applying.value || u.awaitingRestart.value"
-          data-testid="update-now"
-          @click="confirmUpdate"
-        >
-          {{ t("updates.actions.update") }}
-        </NButton>
-      </div>
     </div>
 
     <NCard v-if="u.unavailable.value">
@@ -93,30 +81,47 @@ onMounted(() => {
           {{ t("updates.errors.apply", { message: u.applyError.value }) }}
         </NAlert>
 
-        <div v-if="u.check.value" class="stat-grid" data-testid="update-stats">
-          <div class="stat">
-            <div class="stat-label">{{ t("updates.stats.current") }}</div>
-            <div class="stat-value">{{ u.check.value.current }}</div>
-            <div class="stat-sub"><NTag size="small">{{ t(`updates.stats.channel.${channel}`) }}</NTag></div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">{{ t("updates.stats.latest") }}</div>
-            <div class="stat-value">{{ latest ?? u.check.value.current }}</div>
-            <div class="stat-sub">
-              <NTag size="small" :type="latest ? 'info' : 'success'">
-                {{ latest ? t("updates.stats.updateAvailable") : t("updates.stats.upToDate") }}
-              </NTag>
-              <span v-if="u.check.value.published_at">{{ formatDate(u.check.value.published_at) }}</span>
+        <NCard v-if="u.check.value" data-testid="update-stats">
+          <div class="stat-grid">
+            <div class="stat">
+              <div class="stat-label">{{ t("updates.stats.current") }}</div>
+              <div class="stat-value">{{ u.check.value.current }}</div>
+              <div class="stat-sub"><NTag size="small">{{ t(`updates.stats.channel.${channel}`) }}</NTag></div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">{{ t("updates.stats.latest") }}</div>
+              <div class="stat-value">{{ latest ?? u.check.value.current }}</div>
+              <div class="stat-sub">
+                <NTag size="small" :type="latest ? 'info' : 'success'">
+                  {{ latest ? t("updates.stats.updateAvailable") : t("updates.stats.upToDate") }}
+                </NTag>
+                <span v-if="u.check.value.published_at">{{ formatDate(u.check.value.published_at) }}</span>
+              </div>
+            </div>
+            <div class="stat">
+              <div class="stat-label">{{ t("updates.stats.lastChecked") }}</div>
+              <div class="stat-value">
+                {{ u.state.value?.last_checked_at ? relativeTime(u.state.value.last_checked_at) : t("updates.stats.notChecked") }}
+              </div>
+              <div class="stat-sub">{{ nextCheck }}</div>
             </div>
           </div>
-          <div class="stat">
-            <div class="stat-label">{{ t("updates.stats.lastChecked") }}</div>
-            <div class="stat-value stat-value--sm">
-              {{ u.state.value?.last_checked_at ? relativeTime(u.state.value.last_checked_at) : t("updates.stats.notChecked") }}
-            </div>
-            <div class="stat-sub">{{ nextCheck }}</div>
+          <div v-if="u.isAdmin.value" class="stat-actions">
+            <NButton :loading="u.checking.value" :disabled="u.awaitingRestart.value" @click="u.runCheck()">
+              <template #icon><NIcon><RefreshCw /></NIcon></template>
+              {{ t("updates.actions.check") }}
+            </NButton>
+            <NButton
+              type="primary"
+              :disabled="!latest || u.applying.value || u.awaitingRestart.value"
+              data-testid="update-now"
+              @click="confirmUpdate"
+            >
+              <template #icon><NIcon><Download /></NIcon></template>
+              {{ t("updates.actions.update") }}
+            </NButton>
           </div>
-        </div>
+        </NCard>
 
         <NCard v-if="u.awaitingRestart.value" :title="t('updates.progress.title')" data-testid="update-progress">
           <template #header-extra>
@@ -178,8 +183,41 @@ onMounted(() => {
   gap: var(--space-4);
 }
 
-.stat-value--sm {
-  font-size: var(--text-xl);
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.stat-value {
+  margin-top: 6px;
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--fg-2);
+}
+
+.stat-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.stat-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
 
 .notes {

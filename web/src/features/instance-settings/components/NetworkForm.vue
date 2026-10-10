@@ -97,13 +97,13 @@ const disabled = (): boolean => !props.state.capabilities.network || props.state
 
 <template>
   <NCard :title="t('instance-settings.network.title')">
-    <NAlert v-if="!state.capabilities.network" type="info" :show-icon="true">
+    <NAlert v-if="!state.capabilities.network" type="info" :show-icon="true" class="form-alert">
       {{ t("instance-settings.unsupported") }}
     </NAlert>
-    <NAlert v-else-if="state.pending" type="warning" :show-icon="true">
+    <NAlert v-else-if="state.pending" type="warning" :show-icon="true" class="form-alert">
       {{ t("instance-settings.network.pendingNote") }}
     </NAlert>
-    <NAlert v-if="errorMessage" type="error" :show-icon="true">{{ errorMessage }}</NAlert>
+    <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert">{{ errorMessage }}</NAlert>
     <NForm ref="formRef" :model="form" :rules="rules" class="instance-form" @submit.prevent="handleSubmit">
       <NFormItem
         path="dns"

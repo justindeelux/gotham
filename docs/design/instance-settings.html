@@ -60,8 +60,8 @@
             </div>
             <div class="field">
               <label class="field-label" for="pg-tz">Timezone</label>
-              <input id="pg-tz" class="input mono" value="Europe/Berlin" />
-              <span class="field-hint">IANA zone. Applied to schedules, log display and backups.</span>
+              <select id="pg-tz" class="select mono"><option>UTC (UTC+00:00)</option><option selected>Europe/Berlin (UTC+02:00)</option><option>America/New_York (UTC-04:00)</option><option>Asia/Ho_Chi_Minh (UTC+07:00)</option></select>
+              <span class="field-hint">Searchable list of IANA zones with current UTC offset. Applied to schedules, log display and backups. Disabled when locked by environment.</span>
             </div>
             <div><button class="btn btn-primary" type="button">Save general settings</button></div>
           </div>

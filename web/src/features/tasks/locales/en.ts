@@ -15,6 +15,15 @@ const en = {
       succeeded: "Succeeded",
       failed: "Failed",
     },
+    steps: {
+      queued: "Queued",
+      cloning: "Cloning",
+      building: "Building",
+      pushing: "Pushing",
+      starting: "Starting",
+      running: "Running",
+      failed: "Failed",
+    },
   },
 };
 

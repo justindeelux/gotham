@@ -18,6 +18,8 @@ export interface TaskEvent {
   status: TaskStatus;
   step: string;
   progress: number;
+  /** Monotonic per-task sequence; 0 means the sender did not number frames. */
+  seq: number;
   appId: string;
   deploymentId: string;
   serverId: string;
@@ -96,6 +98,10 @@ export function parseTaskFrame(raw: string): TaskEvent | null {
     typeof event.progress === "number" && Number.isFinite(event.progress)
       ? Math.min(100, Math.max(0, Math.round(event.progress)))
       : 0;
+  const seq =
+    typeof event.seq === "number" && Number.isFinite(event.seq) && event.seq > 0
+      ? Math.floor(event.seq)
+      : 0;
   return {
     taskId,
     kind: asString(event.kind),
@@ -103,6 +109,7 @@ export function parseTaskFrame(raw: string): TaskEvent | null {
     status,
     step: asString(event.step),
     progress,
+    seq,
     appId: asString(event.app_id),
     deploymentId: asString(event.deployment_id),
     serverId: asString(event.server_id),

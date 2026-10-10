@@ -9,6 +9,7 @@ package taskevents
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"sync"
 )
 
@@ -32,12 +33,16 @@ const KindDeploy = "deploy"
 
 // Event is one task lifecycle transition.
 type Event struct {
-	TaskID        string `json:"task_id"`
-	Kind          string `json:"kind"`
-	Name          string `json:"name"`
-	Status        Status `json:"status"`
-	Step          string `json:"step,omitempty"`
-	Progress      int    `json:"progress,omitempty"` // 0-100
+	TaskID   string `json:"task_id"`
+	Kind     string `json:"kind"`
+	Name     string `json:"name"`
+	Status   Status `json:"status"`
+	Step     string `json:"step,omitempty"`
+	Progress int    `json:"progress,omitempty"` // 0-100
+	// Seq orders a task's events: queued is 1 and every later publish takes
+	// the next number, so a client that receives frames out of order (a live
+	// event racing the subscribe replay) ignores anything stale.
+	Seq           uint64 `json:"seq,omitempty"`
 	AppID         string `json:"app_id,omitempty"`
 	DeploymentID  string `json:"deployment_id,omitempty"`
 	ServerID      string `json:"server_id,omitempty"`
@@ -52,14 +57,6 @@ type Event struct {
 // subscribe once in the app shell, so webhook-triggered runs surface without
 // user action, and every (re)subscribe replays the running snapshot.
 func Channel(teamID string) string { return "tasks:" + teamID }
-
-// TeamOf reports whether channel is a task room and returns its team ID.
-func TeamOf(channel string) (string, bool) {
-	if len(channel) <= 6 || channel[:6] != "tasks:" {
-		return "", false
-	}
-	return channel[6:], true
-}
 
 // Publisher abstracts the realtime fan-out (Redis in production, hub direct
 // in tests). It mirrors the deploy Publisher seam so either satisfies it.
@@ -106,14 +103,31 @@ func (e *Emitter) Emit(ctx context.Context, ev Event) {
 }
 
 // Tracker keeps the currently running tasks per team so a fresh subscriber
-// (initial mount, navigation, WebSocket reconnect) restores them.
+// (initial mount, navigation, WebSocket reconnect) restores them. It also
+// hands out each task's sequence numbers, so publishes stay monotonic even
+// when a fast terminal run races an earlier frame.
 type Tracker struct {
 	mu    sync.Mutex
 	tasks map[string]Event // by task ID
+	seq   map[string]uint64
 }
 
 // NewTracker returns an empty Tracker.
-func NewTracker() *Tracker { return &Tracker{tasks: make(map[string]Event)} }
+func NewTracker() *Tracker {
+	return &Tracker{tasks: make(map[string]Event), seq: make(map[string]uint64)}
+}
+
+// Next returns the next sequence number of one task. The first call for a
+// task returns 1, so the queued publish (which always goes first) takes it.
+func (t *Tracker) Next(taskID string) uint64 {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.seq[taskID]++
+	return t.seq[taskID]
+}
 
 // Set records ev as running. Terminal events remove the task instead.
 func (t *Tracker) Set(ev Event) {
@@ -129,7 +143,8 @@ func (t *Tracker) Set(ev Event) {
 	t.tasks[ev.TaskID] = ev
 }
 
-// Snapshot returns the running tasks of one team, oldest task ID first.
+// Snapshot returns the running tasks of one team, sorted by task ID so the
+// replay order is deterministic.
 func (t *Tracker) Snapshot(teamID string) []Event {
 	if t == nil {
 		return nil
@@ -142,6 +157,7 @@ func (t *Tracker) Snapshot(teamID string) []Event {
 			out = append(out, ev)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TaskID < out[j].TaskID })
 	return out
 }
 

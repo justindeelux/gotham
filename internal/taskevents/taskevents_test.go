@@ -18,13 +18,9 @@ func (m *memPub) Publish(_ context.Context, channel, payload string) error {
 	return nil
 }
 
-func TestChannelRoundTrip(t *testing.T) {
-	team, ok := TeamOf(Channel("team-1"))
-	if !ok || team != "team-1" {
-		t.Fatalf("TeamOf(Channel()) = %q, %v", team, ok)
-	}
-	if _, ok := TeamOf("logs:server:container"); ok {
-		t.Fatal("TeamOf accepted a log channel")
+func TestChannelShape(t *testing.T) {
+	if Channel("team-1") != "tasks:team-1" {
+		t.Fatalf("Channel() = %q", Channel("team-1"))
 	}
 }
 
@@ -83,5 +79,26 @@ func TestTrackerSnapshotPerTeam(t *testing.T) {
 	var nilTracker *Tracker
 	if nilTracker.Snapshot("t") != nil || len(nilTracker.SnapshotFrames("t")) != 1 {
 		t.Fatal("nil tracker should behave as empty")
+	}
+	if nilTracker.Next("x") != 0 {
+		t.Fatal("nil tracker Next should be zero")
+	}
+}
+
+func TestNextIsMonotonicPerTask(t *testing.T) {
+	tr := NewTracker()
+	if got := []uint64{tr.Next("a"), tr.Next("a"), tr.Next("b"), tr.Next("a")}; got[0] != 1 || got[1] != 2 || got[2] != 1 || got[3] != 3 {
+		t.Fatalf("Next() = %v, want [1 2 1 3]", got)
+	}
+}
+
+func TestSnapshotIsSortedByTaskID(t *testing.T) {
+	tr := NewTracker()
+	for _, id := range []string{"c", "a", "b"} {
+		tr.Set(Event{TaskID: id, TeamID: "t1", Status: StatusRunning})
+	}
+	got := tr.Snapshot("t1")
+	if len(got) != 3 || got[0].TaskID != "a" || got[1].TaskID != "b" || got[2].TaskID != "c" {
+		t.Fatalf("unordered snapshot %v", got)
 	}
 }

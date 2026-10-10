@@ -267,6 +267,17 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 		st.rec.record(line)
 		o.emitter.Log(ctx, st.target, line)
 	}
+	// A panic anywhere in the run must still leave a terminal row and card
+	// behind: without this a panicking step wedges the active-deployment
+	// index (no fail() runs) and replays a stuck running card forever. The
+	// panic still propagates after the best-effort record, preserving the
+	// crash semantics.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			o.panicFail(st, recovered)
+			panic(recovered)
+		}
+	}()
 	defer func() {
 		if st.node != nil {
 			if err := st.node.Close(); err != nil {
@@ -981,32 +992,43 @@ func (o *Orchestrator) fail(ctx context.Context, st *runState, cause error) {
 	o.logger.Error("deploy: deployment failed",
 		"deployment_id", st.dep.ID, "application_id", st.app.ID, "state", st.dep.State, "error", cause)
 
-	fresh, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	// Detached so a cancelled run (shutdown, step timeout) still leaves a
+	// terminal row behind — otherwise the partial unique index would block
+	// every future deploy of the application — and still publishes its
+	// terminal card, so no stuck running card is replayed on reconnect.
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	// The final line is part of the stored log, so it is recorded before the
 	// terminal write below persists it (and before its state event).
 	st.log("deployment failed: " + st.dep.Error)
-	if err := o.forceFail(fresh, st); err != nil {
+	adopted, err := o.forceFail(detached, st)
+	if err != nil {
 		o.logger.Error("deploy: could not persist failed state",
 			"deployment_id", st.dep.ID, "error", err)
-		return
 	}
-	o.publishTask(ctx, st.app, st.dep, taskevents.StatusFailed, "", 0, st.dep.Error)
+	// An adopted row already reached its terminal state (and its card) on
+	// another write: publishing failed here would flip a live card. Any other
+	// outcome — committed or not — publishes, so the tracker always drains.
+	if !adopted {
+		o.publishTask(detached, st.app, st.dep, taskevents.StatusFailed, "", 0, st.dep.Error)
+	}
 }
 
 // forceFail writes the terminal failed state unconditionally, emitting the
 // transition event only when it is a real edge. It is the failure-path
 // counterpart of transition: it must succeed even when the in-memory state no
 // longer admits a legal edge to failed. It refuses to downgrade a row that a
-// previous ambiguous write already committed terminal (running or failed).
-func (o *Orchestrator) forceFail(ctx context.Context, st *runState) error {
+// previous ambiguous write already committed terminal (running or failed),
+// reporting adopted=true so the caller skips the failed card for a run that
+// already has its terminal state.
+func (o *Orchestrator) forceFail(ctx context.Context, st *runState) (bool, error) {
 	from := st.dep.State
 	if current, err := o.repo.GetDeployment(ctx, st.dep.ApplicationID, st.dep.ID); err == nil && current.State.Terminal() {
 		st.dep = current
 		// Best effort: the outcome is committed, but this run's lines may
 		// not be stored yet.
 		o.persistBuildLog(ctx, st)
-		return nil
+		return true, nil
 	}
 	next := st.dep
 	next.State = StateFailed
@@ -1018,7 +1040,7 @@ func (o *Orchestrator) forceFail(ctx context.Context, st *runState) error {
 	}
 	updated, err := o.repo.UpdateDeployment(ctx, next)
 	if err != nil {
-		return err
+		return false, err
 	}
 	st.dep = updated
 	if from != StateFailed {
@@ -1029,7 +1051,7 @@ func (o *Orchestrator) forceFail(ctx context.Context, st *runState) error {
 		o.emitter.State(ctx, st.target, from, StateFailed)
 		o.notify(ctx, st, StateFailed)
 	}
-	return nil
+	return false, nil
 }
 
 // dialNode opens the agent of the deployment's server.
@@ -1062,6 +1084,7 @@ func (o *Orchestrator) publishTask(ctx context.Context, app Application, dep Dep
 		Status:        status,
 		Step:          string(step),
 		Progress:      progress,
+		Seq:           o.tasks.Next(dep.ID.String()),
 		AppID:         app.ID.String(),
 		DeploymentID:  dep.ID.String(),
 		ServerID:      app.ServerID.String(),
@@ -1083,6 +1106,29 @@ func (s *Service) TaskTracker() *taskevents.Tracker {
 		return nil
 	}
 	return s.tasks
+}
+
+// panicFail records a panicking run as failed on a detached context and
+// publishes its terminal card. It runs from run's recovery defer, so it must
+// never panic itself: every step is best-effort.
+func (o *Orchestrator) panicFail(st *runState, recovered any) {
+	if o == nil || st == nil {
+		return
+	}
+	func() {
+		defer func() { _ = recover() }()
+		st.dep.Error = truncateError(fmt.Errorf("deploy: panic: %v", recovered))
+		detached, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		adopted, err := o.forceFail(detached, st)
+		if err != nil {
+			o.logger.Error("deploy: could not persist failed state after panic",
+				"deployment_id", st.dep.ID, "error", err)
+		}
+		if !adopted {
+			o.publishTask(detached, st.app, st.dep, taskevents.StatusFailed, "", 0, st.dep.Error)
+		}
+	}()
 }
 
 // lineLog accumulates streamed output and forwards complete lines to the

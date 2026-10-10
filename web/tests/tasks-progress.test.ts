@@ -26,6 +26,7 @@ function runningEvent(overrides: Record<string, unknown> = {}): Record<string, u
     status: "running",
     step: "building",
     progress: 50,
+    seq: 2,
     app_id: "app-1",
     deployment_id: "dep-1",
     server_id: "srv-1",
@@ -56,6 +57,7 @@ describe("parseTaskFrame", () => {
     expect(event?.taskId).toBe("dep-1");
     expect(event?.step).toBe("building");
     expect(event?.progress).toBe(50);
+    expect(event?.seq).toBe(2);
   });
 
   it("clamps progress into range", () => {
@@ -112,6 +114,19 @@ describe("useTasksStore", () => {
     store.toggleCollapse("dep-1");
     expect(store.visible[0].collapsed).toBe(true);
   });
+
+  it("ignores stale frames older than the applied sequence", () => {
+    const store = useTasksStore();
+    // A live terminal event races ahead of its own snapshot replay: the late
+    // queued frame must not resurrect the finished card.
+    store.applyEvent(parseTaskFrame(frameOf(runningEvent({ status: "succeeded", seq: 5 })))!);
+    store.applyEvent(parseTaskFrame(frameOf(runningEvent({ status: "queued", step: "", seq: 1 })))!);
+    expect(store.visible).toHaveLength(1);
+    expect(store.visible[0].event.status).toBe("succeeded");
+    // Unnumbered legacy frames still apply.
+    store.applyEvent(parseTaskFrame(frameOf(runningEvent({ status: "running", step: "building", seq: 0 })))!);
+    expect(store.visible[0].event.status).toBe("running");
+  });
 });
 
 describe("TaskProgressCards", () => {
@@ -141,7 +156,7 @@ describe("TaskProgressCards", () => {
     return wrapper.vm.$nextTick().then(() => {
       expect(wrapper.find('[data-task-id="dep-1"]').exists()).toBe(true);
       expect(wrapper.text()).toContain("web");
-      expect(wrapper.text()).toContain("building");
+      expect(wrapper.text()).toContain("Building");
       expect(wrapper.text()).toContain("View logs");
     });
   });

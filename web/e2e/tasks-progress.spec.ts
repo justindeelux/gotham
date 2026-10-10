@@ -56,7 +56,7 @@ test.describe("background task progress card", () => {
     const card = page.locator('[data-task-id="dep-1"]');
     await expect(card).toBeVisible();
     await expect(card).toContainText("web");
-    await expect(card).toContainText("building");
+    await expect(card).toContainText("Building");
     await expect(card).toContainText("Running");
     await expect(card.getByRole("link", { name: "View logs" })).toBeVisible();
 

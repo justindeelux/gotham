@@ -7,7 +7,7 @@ import { useTasksStore } from "@/features/tasks/stores/tasks";
 import type { TaskStatus } from "@/features/tasks/api/tasks";
 
 const tasksStore = useTasksStore();
-const { t } = useI18n();
+const { t, te } = useI18n();
 
 onMounted(() => {
   tasksStore.connect();
@@ -36,6 +36,13 @@ function progressOf(status: TaskStatus, progress: number): number {
     return 100;
   }
   return progress;
+}
+
+/** stepLabel renders the raw deploy step through the catalog, falling back
+ * to the streamed text for steps this client does not know. */
+function stepLabel(step: string): string {
+  const key = `tasks.card.steps.${step}`;
+  return te(key) ? String(t(key)) : step;
 }
 
 /** hasLogLink reports whether the card can deep-link to the deploy logs. */
@@ -95,7 +102,7 @@ const hasCards = computed<boolean>(() => tasksStore.visible.length > 0);
           v-if="card.event.step"
           class="task-step"
         >
-          {{ card.event.step }}
+          {{ stepLabel(card.event.step) }}
         </div>
         <div
           v-if="card.event.status === 'failed' && card.event.error"

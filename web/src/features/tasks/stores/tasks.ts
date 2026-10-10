@@ -35,6 +35,8 @@ export const useTasksStore = defineStore("tasks", () => {
   let socket: ReturnType<typeof useWebSocket> | null = null;
   let subscribedTeam = "";
   const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Highest sequence applied per task; older frames are stale replays. */
+  const appliedSeq = new Map<string, number>();
 
   function clearDismissTimer(taskId: string): void {
     const timer = dismissTimers.get(taskId);
@@ -44,8 +46,15 @@ export const useTasksStore = defineStore("tasks", () => {
     }
   }
 
-  /** applyEvent upserts the card for one lifecycle event. */
+  /** applyEvent upserts the card for one lifecycle event, ignoring frames
+   * older than what the card already shows (a live event racing the
+   * subscribe replay must never be overwritten by its own snapshot). */
   function applyEvent(event: TaskEvent): void {
+    const known = appliedSeq.get(event.taskId) ?? 0;
+    if (event.seq > 0 && event.seq < known) {
+      return;
+    }
+    appliedSeq.set(event.taskId, Math.max(known, event.seq));
     clearDismissTimer(event.taskId);
     const existing = cards.value[event.taskId];
     cards.value[event.taskId] = {
@@ -124,6 +133,7 @@ export const useTasksStore = defineStore("tasks", () => {
     for (const taskId of dismissTimers.keys()) {
       clearDismissTimer(taskId);
     }
+    appliedSeq.clear();
     cards.value = {};
   }
 

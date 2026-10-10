@@ -539,3 +539,9 @@ sudo deploy/install-hostctl-sudoers.sh gotham
   `timesyncd.conf.d/05-gotham.conf`; other hosts report the sections as unsupported.
 - A network change is tentative: a systemd timer reverts it after 120 s unless the
   operator confirms in the UI, so a wrong address cannot lock them out.
+- The helper always rewrites the interface file for the default-route interface,
+  so never apply `ipv4_mode=dhcp` (or a different static address/gateway) on the
+  interface you are connected through: the host drops its current address as soon
+  as networkd reconfigures, and only the revert timer brings it back. Verify DNS,
+  hostname and NTP first; exercise address changes from the console. `revert_after`
+  accepts 30–600 s (the control plane passes 120 s).

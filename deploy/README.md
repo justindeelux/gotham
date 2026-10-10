@@ -545,10 +545,16 @@ sudo deploy/install-hostctl-sudoers.sh gotham
   Network form from it, so the form shows the host truth instead of the stored
   `dhcp` defaults.
 - A DNS-only change (`dns_only=true`, sent by the control plane when the
-  interface fields match the host) writes only `resolved.conf.d/05-gotham.conf`
-  and never touches the interface `.network` file; neither apply nor revert
-  reconfigures the interface in that path. Revert restores only the files the
-  apply snapshotted, so a DNS-only revert cannot delete a pre-existing
+  interface fields match the host) writes `resolved.conf.d/05-gotham.conf`,
+  a DNS-only networkd drop-in on the winning `.network` file
+  (`<name>.network.d/05-gotham.conf` with `DNS=` only, never
+  `Address`/`Gateway`/`[Route]`) and sets the link DNS at runtime
+  (`resolvectl dns`), so per-link DNS from a netplan-generated file no
+  longer shadows the change; `networkctl reload` (never `reconfigure`) picks
+  up the drop-in, so addresses/routes stay untouched. Neither apply nor
+  revert reconfigures the interface in that path. Revert restores the link
+  drop-in and the runtime link DNS exactly as snapshotted, plus the files
+  the apply snapshotted, so a DNS-only revert cannot delete a pre-existing
   interface file.
 - The control plane refuses server-side any apply that would disturb the
   active interface (static-to-DHCP, a different address/gateway) unless the
@@ -574,3 +580,15 @@ DNS-only apply path, server-side confirmation guard, form warning); covered by
 `deploy/hostctl_test.go` (`TestHostctlStatusReportsHostTruth`,
 `TestHostctlDNSOnlyLeavesInterfaceAlone`), `internal/instance` service tests
 and `web/tests/network-guard.test.ts`.
+
+### JUS-101 postscript (2026-10-11): a DNS-only change was ignored with per-link DNS
+
+On the same box the JUS-100 fix was safe but ineffective: the new servers
+landed in the global drop-in while `Link 2 (ens160)` kept `8.8.8.8 8.8.4.4`
+from `/run/systemd/network/10-netplan-ens160.network`, and resolved prefers
+per-link DNS, so `resolvectl query` kept using the old servers. Fixed by
+also writing a DNS-only networkd drop-in on the winning `.network` file and
+setting the link DNS at runtime in the DNS-only path (revert restores both
+exactly; `status` already reported the link DNS as the effective list);
+covered by `TestHostctlDNSOnlyOverridesLinkDNS` and
+`TestGetReportsEffectiveLinkDNS`.

@@ -29,8 +29,9 @@ func runHostctlEnv(t *testing.T, root, stdin, verb string, extra []string) (stri
 }
 
 // stubProbes writes fake `ip`/`resolvectl` binaries reporting a static host
-// (JUS-100: netplan-owned 103.176.22.225/24 via 103.176.22.1) and returns a
-// PATH entry for them plus the netplan fixture.
+// (JUS-100: netplan-owned 103.176.22.225/24 via 103.176.22.1; JUS-101: the
+// netplan file lives in /run like the real generator and carries per-link
+// DNS 8.8.8.8 8.8.4.4) and returns a PATH entry for them.
 func stubProbes(t *testing.T, root string) []string {
 	t.Helper()
 	bin := filepath.Join(root, "bin")
@@ -40,17 +41,20 @@ func stubProbes(t *testing.T, root string) []string {
 	if err := os.MkdirAll(filepath.Join(root, "etc/systemd/network"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "run/systemd/network"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	ip := "#!/bin/sh\n" +
 		"if [ \"$2\" = \"-4\" ] && [ \"$3\" = \"addr\" ]; then echo \"2: eth0 inet 103.176.22.225/24 brd x scope global eth0\"; fi\n" +
 		"if [ \"$2\" = \"-4\" ] && [ \"$3\" = \"route\" ]; then echo \"default via 103.176.22.1 dev eth0 proto static\"; fi\n"
-	resolvectl := "#!/bin/sh\necho \"Link 2 (eth0): 1.1.1.1 8.8.8.8\"\n"
+	resolvectl := "#!/bin/sh\necho \"Link 2 (eth0): 8.8.8.8 8.8.4.4\"\n"
 	for name, body := range map[string]string{"ip": ip, "resolvectl": resolvectl} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	netplan := "[Match]\nName=eth0\n\n[Network]\nDHCP=no\nAddress=103.176.22.225/24\n\n[Route]\nGateway=103.176.22.1\n"
-	if err := os.WriteFile(filepath.Join(root, "etc/systemd/network/10-netplan-eth0.network"), []byte(netplan), 0o644); err != nil {
+	netplan := "[Match]\nName=eth0\n\n[Network]\nDHCP=no\nAddress=103.176.22.225/24\nDNS=8.8.8.8 8.8.4.4\n\n[Route]\nGateway=103.176.22.1\n"
+	if err := os.WriteFile(filepath.Join(root, "run/systemd/network/10-netplan-eth0.network"), []byte(netplan), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return []string{"PATH=" + bin + ":" + os.Getenv("PATH")}
@@ -104,11 +108,105 @@ func TestHostctlStatusReportsHostTruth(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"interface":"eth0"`, `"mode":"static"`, `"address":"103.176.22.225/24"`,
-		`"gateway":"103.176.22.1"`, `"dns_servers":["1.1.1.1","8.8.8.8"]`,
+		`"gateway":"103.176.22.1"`, `"dns_servers":["8.8.8.8","8.8.4.4"]`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status misses %s:\n%s", want, out)
 		}
+	}
+}
+
+// TestHostctlDNSOnlyOverridesLinkDNS is the JUS-101 regression test: on a
+// netplan-style host with per-link DNS the DNS-only apply must set the link
+// DNS too (global drop-in + DNS-only networkd drop-in + runtime resolvectl),
+// without touching Address/Gateway/routes, and revert must restore the link
+// and global DNS exactly.
+func TestHostctlDNSOnlyOverridesLinkDNS(t *testing.T) {
+	root := t.TempDir()
+	extra := stubProbes(t, root)
+	dropin := filepath.Join(root, "etc/systemd/network/10-netplan-eth0.network.d/05-gotham.conf")
+	resFile := filepath.Join(root, "etc/systemd/resolved.conf.d/05-gotham.conf")
+	dnsOnly := "dns=1.1.1.1,1.0.0.1\nipv4_mode=dhcp\nipv4_address=\nipv4_gateway=\n" +
+		"ipv6_enabled=false\nipv6_mode=dhcp\nipv6_address=\nipv6_gateway=\nrevert_after=120\ndns_only=true\n"
+	out, err := runHostctlEnv(t, root, dnsOnly, "apply-network", extra)
+	if err != nil {
+		t.Fatalf("dns-only apply failed: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(dropin)
+	if err != nil || !strings.Contains(string(data), "DNS=1.1.1.1 1.0.0.1") {
+		t.Fatalf("link drop-in: %v %s", err, data)
+	}
+	for _, bad := range []string{"Address=", "Gateway=", "[Route]"} {
+		if strings.Contains(string(data), bad) {
+			t.Fatalf("link drop-in must carry DNS only, found %q:\n%s", bad, data)
+		}
+	}
+	if data, err := os.ReadFile(resFile); err != nil || !strings.Contains(string(data), "DNS=1.1.1.1 1.0.0.1") {
+		t.Fatalf("resolved drop-in: %v %s", err, data)
+	}
+	for _, want := range []string{"networkctl reload", "resolvectl dns eth0 1.1.1.1 1.0.0.1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("apply misses %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "reconfigure") {
+		t.Errorf("dns-only apply must not reconfigure the interface:\n%s", out)
+	}
+
+	out, err = runHostctlEnv(t, root, "", "revert-network", extra)
+	if err != nil {
+		t.Fatalf("revert failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(dropin); !os.IsNotExist(err) {
+		t.Fatal("revert must remove a link drop-in that did not exist before")
+	}
+	if _, err := os.Stat(resFile); !os.IsNotExist(err) {
+		t.Fatal("revert must remove a drop-in that did not exist before")
+	}
+	for _, want := range []string{"networkctl reload", "resolvectl dns eth0 8.8.8.8 8.8.4.4"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("revert misses %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "reconfigure") {
+		t.Errorf("dns-only revert must not reconfigure the interface:\n%s", out)
+	}
+
+	// A pre-existing link drop-in is restored byte for byte.
+	old := "[Network]\nDNS=8.8.8.8 8.8.4.4\n"
+	if err := os.MkdirAll(filepath.Dir(dropin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dropin, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runHostctlEnv(t, root, dnsOnly, "apply-network", extra); err != nil {
+		t.Fatalf("dns-only apply failed: %v\n%s", err, out)
+	}
+	if _, err := runHostctlEnv(t, root, "", "revert-network", extra); err != nil {
+		t.Fatalf("revert failed: %v\n%s", err, out)
+	}
+	if data, err := os.ReadFile(dropin); err != nil || string(data) != old {
+		t.Fatalf("revert altered the link drop-in: %v %q", err, data)
+	}
+
+	// Clearing the servers removes the link drop-in and reverts the runtime.
+	clear := strings.Replace(dnsOnly, "dns=1.1.1.1,1.0.0.1", "dns=", 1)
+	out, err = runHostctlEnv(t, root, clear, "apply-network", extra)
+	if err != nil {
+		t.Fatalf("dns-clear apply failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(dropin); !os.IsNotExist(err) {
+		t.Fatal("clearing DNS must remove the link drop-in")
+	}
+	if !strings.Contains(out, "resolvectl revert eth0") {
+		t.Errorf("clear misses runtime revert:\n%s", out)
+	}
+	if _, err := runHostctlEnv(t, root, "", "revert-network", extra); err != nil {
+		t.Fatalf("revert failed: %v\n%s", err, out)
+	}
+	if data, err := os.ReadFile(dropin); err != nil || string(data) != old {
+		t.Fatalf("revert after clear altered the link drop-in: %v %q", err, data)
 	}
 }
 

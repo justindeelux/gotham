@@ -275,6 +275,27 @@ func TestGetReportsHostTruth(t *testing.T) {
 	}
 }
 
+func TestGetReportsEffectiveLinkDNS(t *testing.T) {
+	// JUS-101: the helper reports the link DNS as the effective resolvers
+	// (resolved prefers per-link over global), so Get must surface them
+	// instead of the stored servers.
+	host := &fakeHost{caps: Capabilities{Network: true, System: true}, hasLive: true}
+	host.live, _ = staticLive()
+	host.live.DNSServers = []string{"8.8.8.8", "8.8.4.4"}
+	_, stored := staticLive()
+	repo := &fakeRepo{rec: stored}
+	svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc.lookup = func(string) string { return "" }
+	st, err := svc.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Network.DNSServers) != 2 || st.Network.DNSServers[0] != "8.8.8.8" ||
+		st.Network.DNSServers[1] != "8.8.4.4" {
+		t.Fatalf("form would show shadowed servers: %+v", st.Network.DNSServers)
+	}
+}
+
 func TestUnsupportedHostAndHelperFailure(t *testing.T) {
 	host := &fakeHost{}
 	svc, _ := newSvc(host)

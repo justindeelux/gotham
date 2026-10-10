@@ -137,7 +137,7 @@ function setChallenge(challenge: string): void {
           patch({ dns_provider_id: value === null ? '' : String(value) })
         "
       />
-      <NText v-if="!isDns01" depth="3" class="hint">
+      <NText v-if="!isDns01" depth="3" class="field-hint">
         {{ $t("domains.certificateForm.httpNoProvider") }}
       </NText>
     </NFormItem>
@@ -148,8 +148,8 @@ function setChallenge(challenge: string): void {
         :aria-label="$t('domains.certificateForm.wildcardAria')"
         @update:value="(value: boolean) => patch({ wildcard: value })"
       />
-      <NTag v-if="modelValue.wildcard" size="small" class="hint">{{ $t("domains.certificateForm.wildcardRequested") }}</NTag>
-      <NText v-else depth="3" class="hint">
+      <NTag v-if="modelValue.wildcard" size="small" class="field-hint">{{ $t("domains.certificateForm.wildcardRequested") }}</NTag>
+      <NText v-else depth="3" class="field-hint">
         {{ $t("domains.certificateForm.wildcardRequires") }}
       </NText>
     </NFormItem>
@@ -164,8 +164,10 @@ function setChallenge(challenge: string): void {
 </template>
 
 <style scoped>
-.hint {
-  margin-left: var(--space-2);
-  font-size: var(--text-xs);
+/* Hints render below their field: Naive lays an NFormItem default slot out as
+ * a flex row, so without wrapping the hint would sit beside the control (same
+ * .field-hint pattern as the wizard and edit-server modals in main.css). */
+.certificate-form :deep(.n-form-item-blank) {
+  flex-wrap: wrap;
 }
 </style>

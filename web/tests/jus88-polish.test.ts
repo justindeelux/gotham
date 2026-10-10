@@ -65,13 +65,60 @@ describe("JUS-88 certificate configurations table keeps four columns", () => {
   });
 });
 
-describe("JUS-88 sidebar footer user info is left-aligned", () => {
+describe("JUS-88 follow-up certificate hints render below their field", () => {
+  const source = readSfc("src/features/domains/components/CertificateForm.vue");
+
+  it("uses the shared .field-hint pattern, never a side-by-side .hint", () => {
+    expect(source).not.toMatch(/class="hint"/);
+    expect(source).toContain("field-hint");
+  });
+
+  it("wraps the Naive input row so hints drop below the control", () => {
+    expect(source).toMatch(/\.certificate-form\s*:deep\(\.n-form-item-blank\)\s*\{[^}]*flex-wrap:\s*wrap/);
+  });
+});
+
+describe("JUS-88 follow-up certificate cells stack with a gap", () => {
+  const source = readSfc("src/features/domains/components/CertificatesPanel.vue");
+
+  it("lays out two-line cells inline: column flex with a token gap", () => {
+    // The cells render via h() inside a computed, outside the scoped-style
+    // scope, so the layout must ride inline (regression: scoped .cell-main
+    // never matched and the lines rendered glued together).
+    expect(source).toContain("cellStackStyle");
+    expect(source).toMatch(/flexDirection:\s*"column"/);
+    expect(source).toMatch(/gap:\s*"var\(--space-1\)"/);
+    expect(source).not.toContain(".cell-main {");
+  });
+});
+
+describe("JUS-88 follow-up footer chevron is right-aligned", () => {
   const source = readSfc("src/app/layouts/AccountMenu.vue");
 
-  it("pins the trigger content to the start, not the center", () => {
+  it("keeps the trigger content left-aligned", () => {
     expect(source).toMatch(/\.me-card\s*\{[^}]*justify-content:\s*flex-start/);
     expect(source).toMatch(/\.me-card\s*\{[^}]*text-align:\s*left/);
     expect(source).toMatch(/\.me-meta\s*\{[^}]*text-align:\s*left/);
     expect(source).toMatch(/\.me-meta\s*\{[^}]*align-items:\s*flex-start/);
+  });
+
+  it("renders NSpace children as direct flex items and pushes the chevron right", () => {
+    // NSpace wraps children in anonymous divs by default, which swallowed
+    // the inner flex rules (regression: the chevron sat after the name).
+    expect(source).toContain(':wrap-item="false"');
+    expect(source).toMatch(/\.me-chevron\s*\{[^}]*margin-left:\s*auto/);
+  });
+});
+
+describe("JUS-88 follow-up menus breathe with a spacing token", () => {
+  it("gaps sidebar entries with a token", () => {
+    const source = readSfc("src/app/layouts/AppSidebar.vue");
+    expect(source).toMatch(/\.sidebar-body\s*\{[^}]*gap:\s*var\(--space-1\)/);
+  });
+
+  it("gaps language options with a token on that menu only", () => {
+    const source = readSfc("src/shared/ui/LanguageSelect.vue");
+    expect(source).toContain("language-menu");
+    expect(source).toMatch(/\.language-menu\.n-dropdown-menu\)?\s*\{[^}]*gap:\s*var\(--space-1\)/);
   });
 });

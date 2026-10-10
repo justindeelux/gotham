@@ -31,14 +31,37 @@ const { openCertificateCreate, openCertificateEdit, handleDeleteCertificate } =
   useCertificates();
 const { applicationName, applicationDomain } = useDomainLabels();
 
+/**
+ * cellStack lays out a two-line cell with a token gap. These VNodes are built
+ * inside a computed, outside the component's scoped-style scope, so the
+ * layout rides inline (scoped classes never match here); colors and type
+ * still come from design tokens.
+ */
+const cellStackStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-1)",
+  minWidth: "0",
+} as const;
+
+const cellNameStyle = {
+  color: "var(--fg-2)",
+  fontWeight: 600,
+} as const;
+
+const cellSubStyle = {
+  fontSize: "var(--text-xs)",
+  color: "var(--muted)",
+} as const;
+
 /** domainCell renders the recorded domain with its application. */
 function domainCell(certificate: Certificate): VNode {
   const domain = applicationDomain(certificate);
-  return h("div", { class: "cell-main" }, [
-    h("span", { class: "mono cell-name" }, certificate.domain),
+  return h("div", { style: cellStackStyle }, [
+    h("span", { class: "mono", style: cellNameStyle }, certificate.domain),
     h(
       "span",
-      { class: "cell-sub" },
+      { style: cellSubStyle },
       domain && domain !== certificate.domain
         ? proxyText(
             "domains.certificates.baseDomainChanged",
@@ -83,9 +106,9 @@ function expiryCell(certificate: Certificate): VNode {
       },
     );
   }
-  return h("div", { class: "cell-main" }, [
+  return h("div", { style: cellStackStyle }, [
     h("span", { class: "mono" }, formatDate(certificate.not_after)),
-    h("span", { class: "cell-sub" }, expiryLabel(certificate.not_after)),
+    h("span", { style: cellSubStyle }, expiryLabel(certificate.not_after)),
   ]);
 }
 
@@ -211,10 +234,6 @@ function certificateRowKey(row: Certificate): string {
 </template>
 
 <style scoped>
-.mono {
-  font-family: var(--font-mono);
-}
-
 .embed {
   border-left: 4px solid var(--accent);
   background: var(--surface);

@@ -87,7 +87,7 @@
             </div>
             <div class="field">
               <label class="field-label" for="pg-dns2">Alternate DNS server <span class="meta">(optional)</span></label>
-              <input id="pg-dns2" class="input mono" value="2606:4700:4700::1111" />
+              <input id="pg-dns2" class="input mono" value="1.0.0.1" />
               <span class="field-hint">Primary required, alternate optional. <button class="pg-addlink" type="button">Add DNS server</button> for a third resolver.</span>
             </div>
             <div class="pg-fam">
@@ -111,7 +111,7 @@
           <div class="card-head"><h3>Keep these network changes?</h3><span class="meta">Awaiting confirmation</span></div>
           <p>The new configuration is live. If you cannot reach Gotham at the new address, do nothing: the host restores the previous configuration in</p>
           <p class="pg-countdown" aria-live="polite">01:42</p>
-          <dl class="kv"><dt>DNS</dt><dd class="mono">1.1.1.1 → 1.1.1.1, 2606:4700:4700::1111</dd><dt>IPv4</dt><dd class="mono">dhcp → 10.0.0.5/24 via 10.0.0.1</dd></dl>
+          <dl class="kv"><dt>DNS</dt><dd class="mono">1.1.1.1 → 1.1.1.1, 1.0.0.1</dd><dt>IPv4</dt><dd class="mono">dhcp → 10.0.0.5/24 via 10.0.0.1</dd></dl>
           <div class="mt-3"><button class="btn btn-primary" type="button">Keep changes</button> <button class="btn btn-ghost" type="button">Revert now</button></div>
         </div>
 

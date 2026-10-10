@@ -138,7 +138,7 @@ const disabled = (): boolean => !props.state.capabilities.network || props.state
         path="dns1"
         :label="`${t('instance-settings.network.dnsAlternate')} (${t('instance-settings.network.optional')})`"
       >
-        <NInput v-model:value="form.dns1" :disabled="disabled()" placeholder="2606:4700:4700::1111" />
+        <NInput v-model:value="form.dns1" :disabled="disabled()" placeholder="1.0.0.1" />
         <span class="field-hint">
           {{ t("instance-settings.network.dnsHint") }}
           <NButton

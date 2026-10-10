@@ -96,82 +96,78 @@ function setChallenge(challenge: string): void {
 
 <template>
   <NForm label-placement="top" :show-feedback="false" class="certificate-form form-container">
-    <div class="form-row">
-      <NFormItem :label="$t('domains.certificateForm.application')" class="field-application">
-        <NSelect
-          :value="modelValue.application_id"
-          :options="applicationOptions"
-          :disabled="lockApplication"
-          :placeholder="$t('domains.certificateForm.selectApplication')"
-          :aria-label="$t('domains.certificateForm.applicationAria')"
-          @update:value="(value: string) => patch({ application_id: value })"
-        />
-      </NFormItem>
-      <NFormItem :label="$t('domains.certificateForm.domainFromApp')">
-        <NText v-if="domainPreview" class="mono">{{ domainPreview }}</NText>
-        <NText v-else depth="3">
-          {{ $t("domains.certificateForm.noBaseDomain") }}
-        </NText>
-      </NFormItem>
-    </div>
-    <div class="form-row">
-      <NFormItem :label="$t('domains.certificateForm.challenge')">
-        <NRadioGroup
-          :value="modelValue.challenge"
-          @update:value="(value: string | number) => setChallenge(String(value))"
-        >
-          <NRadio value="http-01">
-            <span class="mono">http-01</span> {{ $t("domains.certificateForm.httpHint") }}
-          </NRadio>
-          <NRadio value="dns-01">
-            <span class="mono">dns-01</span> {{ $t("domains.certificateForm.dnsHint") }}
-          </NRadio>
-        </NRadioGroup>
-      </NFormItem>
-      <NFormItem :label="$t('domains.certificateForm.dnsProvider')" class="field-provider-select">
-        <NSelect
-          :value="modelValue.dns_provider_id"
-          :options="providerOptions"
-          :disabled="!isDns01"
-          :placeholder="$t('domains.certificateForm.selectProvider')"
-          :aria-label="$t('domains.certificateForm.dnsProviderAria')"
-          clearable
-          @update:value="(value: string | number | null) =>
-            patch({ dns_provider_id: value === null ? '' : String(value) })
-          "
-        />
-        <NText v-if="!isDns01" depth="3" class="hint">
-          {{ $t("domains.certificateForm.httpNoProvider") }}
-        </NText>
-      </NFormItem>
-    </div>
-    <div class="form-row">
-      <NFormItem :label="$t('domains.certificateForm.wildcard')">
-        <NSwitch
-          :value="modelValue.wildcard"
-          :disabled="!isDns01"
-          :aria-label="$t('domains.certificateForm.wildcardAria')"
-          @update:value="(value: boolean) => patch({ wildcard: value })"
-        />
-        <NTag v-if="modelValue.wildcard" size="small" class="hint">{{ $t("domains.certificateForm.wildcardRequested") }}</NTag>
-        <NText v-else depth="3" class="hint">
-          {{ $t("domains.certificateForm.wildcardRequires") }}
-        </NText>
-      </NFormItem>
-      <NFormItem :label="$t('domains.certificateForm.enabled')">
-        <NSwitch
-          :value="modelValue.enabled"
-          :aria-label="$t('domains.certificateForm.enabledAria')"
-          @update:value="(value: boolean) => patch({ enabled: value })"
-        />
-      </NFormItem>
-    </div>
+    <NFormItem :label="$t('domains.certificateForm.application')" class="field-application">
+      <NSelect
+        :value="modelValue.application_id"
+        :options="applicationOptions"
+        :disabled="lockApplication"
+        :placeholder="$t('domains.certificateForm.selectApplication')"
+        :aria-label="$t('domains.certificateForm.applicationAria')"
+        @update:value="(value: string) => patch({ application_id: value })"
+      />
+    </NFormItem>
+    <NFormItem :label="$t('domains.certificateForm.domainFromApp')">
+      <NText v-if="domainPreview" class="mono">{{ domainPreview }}</NText>
+      <NText v-else depth="3">
+        {{ $t("domains.certificateForm.noBaseDomain") }}
+      </NText>
+    </NFormItem>
+    <NFormItem :label="$t('domains.certificateForm.challenge')">
+      <NRadioGroup
+        :value="modelValue.challenge"
+        @update:value="(value: string | number) => setChallenge(String(value))"
+      >
+        <NRadio value="http-01">
+          <span class="mono">http-01</span> {{ $t("domains.certificateForm.httpHint") }}
+        </NRadio>
+        <NRadio value="dns-01">
+          <span class="mono">dns-01</span> {{ $t("domains.certificateForm.dnsHint") }}
+        </NRadio>
+      </NRadioGroup>
+    </NFormItem>
+    <NFormItem :label="$t('domains.certificateForm.dnsProvider')" class="field-provider-select">
+      <NSelect
+        :value="modelValue.dns_provider_id"
+        :options="providerOptions"
+        :disabled="!isDns01"
+        :placeholder="$t('domains.certificateForm.selectProvider')"
+        :aria-label="$t('domains.certificateForm.dnsProviderAria')"
+        clearable
+        @update:value="(value: string | number | null) =>
+          patch({ dns_provider_id: value === null ? '' : String(value) })
+        "
+      />
+      <NText v-if="!isDns01" depth="3" class="field-hint">
+        {{ $t("domains.certificateForm.httpNoProvider") }}
+      </NText>
+    </NFormItem>
+    <NFormItem :label="$t('domains.certificateForm.wildcard')">
+      <NSwitch
+        :value="modelValue.wildcard"
+        :disabled="!isDns01"
+        :aria-label="$t('domains.certificateForm.wildcardAria')"
+        @update:value="(value: boolean) => patch({ wildcard: value })"
+      />
+      <NTag v-if="modelValue.wildcard" size="small" class="field-hint">{{ $t("domains.certificateForm.wildcardRequested") }}</NTag>
+      <NText v-else depth="3" class="field-hint">
+        {{ $t("domains.certificateForm.wildcardRequires") }}
+      </NText>
+    </NFormItem>
+    <NFormItem :label="$t('domains.certificateForm.enabled')">
+      <NSwitch
+        :value="modelValue.enabled"
+        :aria-label="$t('domains.certificateForm.enabledAria')"
+        @update:value="(value: boolean) => patch({ enabled: value })"
+      />
+    </NFormItem>
   </NForm>
 </template>
 
 <style scoped>
-.hint {
-  margin-left: var(--space-2);
-  font-size: var(--text-xs);
+/* Hints render below their field: Naive lays an NFormItem default slot out as
+ * a flex row, so without wrapping the hint would sit beside the control (same
+ * .field-hint pattern as the wizard and edit-server modals in main.css). */
+.certificate-form :deep(.n-form-item-blank) {
+  flex-wrap: wrap;
 }
 </style>

@@ -169,7 +169,7 @@ async function handleSelect(key: string | number): Promise<void> {
       </template>
     </NButton>
     <NButton v-else quaternary class="me-card" :aria-label="t('shell.account')" aria-haspopup="menu">
-      <NSpace align="center" :size="8" :wrap="false" class="me-card-inner">
+      <NSpace align="center" :size="8" :wrap="false" :wrap-item="false" class="me-card-inner">
         <NAvatar round :size="24" :src="authStore.user?.avatar">
           <template v-if="!authStore.user?.avatar">{{ userInitial }}</template>
           <template #fallback>{{ userInitial }}</template>
@@ -224,6 +224,13 @@ async function handleSelect(key: string | number): Promise<void> {
   height: auto;
   padding: 5px 6px;
   border-radius: var(--radius-sm);
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.me-card :deep(.n-button__content) {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .me-card:hover {
@@ -233,6 +240,7 @@ async function handleSelect(key: string | number): Promise<void> {
 .me-card-inner {
   width: 100%;
   flex-wrap: nowrap;
+  justify-content: flex-start;
 }
 
 .me-meta {
@@ -261,6 +269,7 @@ async function handleSelect(key: string | number): Promise<void> {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
+  margin-left: auto;
   color: var(--muted);
 }
 </style>

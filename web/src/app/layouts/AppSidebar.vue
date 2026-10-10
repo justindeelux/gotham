@@ -135,6 +135,9 @@ const activeKey = computed<string>(() => activeNavKey(route.path));
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: var(--space-3) var(--space-2) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 .nav-label {

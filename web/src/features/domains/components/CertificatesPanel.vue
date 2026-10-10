@@ -24,21 +24,44 @@ import type { Certificate } from "@/features/domains/api/proxy";
 import { useCertificates } from "@/features/domains/composables/useCertificates";
 import { useDomainLabels } from "@/features/domains/composables/useDomainLabels";
 import { useProxyStore } from "@/features/domains/stores/proxy";
-import { expiryLabel, formatDate, relativeTime } from "@/shared/utils/format";
+import { expiryLabel, formatDate } from "@/shared/utils/format";
 
 const proxyStore = useProxyStore();
 const { openCertificateCreate, openCertificateEdit, handleDeleteCertificate } =
   useCertificates();
-const { providerName, applicationName, applicationDomain } = useDomainLabels();
+const { applicationName, applicationDomain } = useDomainLabels();
+
+/**
+ * cellStack lays out a two-line cell with a token gap. These VNodes are built
+ * inside a computed, outside the component's scoped-style scope, so the
+ * layout rides inline (scoped classes never match here); colors and type
+ * still come from design tokens.
+ */
+const cellStackStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-1)",
+  minWidth: "0",
+} as const;
+
+const cellNameStyle = {
+  color: "var(--fg-2)",
+  fontWeight: 600,
+} as const;
+
+const cellSubStyle = {
+  fontSize: "var(--text-xs)",
+  color: "var(--muted)",
+} as const;
 
 /** domainCell renders the recorded domain with its application. */
 function domainCell(certificate: Certificate): VNode {
   const domain = applicationDomain(certificate);
-  return h("div", { class: "cell-main" }, [
-    h("span", { class: "mono cell-name" }, certificate.domain),
+  return h("div", { style: cellStackStyle }, [
+    h("span", { class: "mono", style: cellNameStyle }, certificate.domain),
     h(
       "span",
-      { class: "cell-sub" },
+      { style: cellSubStyle },
       domain && domain !== certificate.domain
         ? proxyText(
             "domains.certificates.baseDomainChanged",
@@ -83,9 +106,9 @@ function expiryCell(certificate: Certificate): VNode {
       },
     );
   }
-  return h("div", { class: "cell-main" }, [
+  return h("div", { style: cellStackStyle }, [
     h("span", { class: "mono" }, formatDate(certificate.not_after)),
-    h("span", { class: "cell-sub" }, expiryLabel(certificate.not_after)),
+    h("span", { style: cellSubStyle }, expiryLabel(certificate.not_after)),
   ]);
 }
 
@@ -129,63 +152,15 @@ function certificateActions(certificate: Certificate): VNode {
   });
 }
 
+/** certificateColumns keeps the high-signal columns only: domain (name),
+ * status, expiry and actions. Challenge, DNS provider, wildcard, enabled and
+ * updated move to the edit dialog / detail view. */
 const certificateColumns = computed<DataTableColumns<Certificate>>(() => [
   {
     title: proxyText("domains.certificates.domain", "Domain"),
     key: "domain",
     minWidth: 240,
     render: (row) => domainCell(row),
-  },
-  {
-    title: proxyText("domains.certificates.challenge", "Challenge"),
-    key: "challenge",
-    width: 110,
-    render: (row) => h("span", { class: "mono" }, row.challenge),
-  },
-  {
-    title: proxyText("domains.certificates.dnsProvider", "DNS provider"),
-    key: "dns_provider_id",
-    minWidth: 160,
-    render: (row) => h("span", { class: "mono" }, providerName(row.dns_provider_id)),
-  },
-  {
-    title: proxyText("domains.certificates.wildcard", "Wildcard"),
-    key: "wildcard",
-    width: 110,
-    render: (row) =>
-      row.wildcard
-        ? h(
-            NTag,
-            { size: "small" },
-            {
-              default: () =>
-                proxyText(
-                  "domains.certificates.wildcardTag",
-                  "wildcard",
-                ),
-            },
-          )
-        : h(
-            NText,
-            { depth: 3 },
-            { default: () => proxyText("domains.certificates.no", "no") },
-          ),
-  },
-  {
-    title: proxyText("domains.certificates.enabled", "Enabled"),
-    key: "enabled",
-    width: 110,
-    render: (row) =>
-      h(
-        NTag,
-        { size: "small", type: row.enabled ? "success" : "default" },
-        {
-          default: () =>
-            row.enabled
-              ? proxyText("domains.certificates.enabledTag", "enabled")
-              : proxyText("domains.certificates.disabledTag", "disabled"),
-        },
-      ),
   },
   {
     title: proxyText("domains.certificates.status", "Status"),
@@ -198,12 +173,6 @@ const certificateColumns = computed<DataTableColumns<Certificate>>(() => [
     key: "not_after",
     minWidth: 180,
     render: (row) => expiryCell(row),
-  },
-  {
-    title: proxyText("domains.certificates.updated", "Updated"),
-    key: "updated_at",
-    width: 120,
-    render: (row) => relativeTime(row.updated_at),
   },
   {
     title: proxyText("domains.certificates.actions", "Actions"),
@@ -239,7 +208,7 @@ function certificateRowKey(row: Certificate): string {
         :loading="proxyStore.certificatesLoading"
         :row-key="certificateRowKey"
         :bordered="false"
-        :scroll-x="1000"
+        :scroll-x="720"
         :pagination="{ pageSize: 10 }"
       />
       <NEmpty v-else :description="$t('domains.certificates.empty')">
@@ -265,10 +234,6 @@ function certificateRowKey(row: Certificate): string {
 </template>
 
 <style scoped>
-.mono {
-  font-family: var(--font-mono);
-}
-
 .embed {
   border-left: 4px solid var(--accent);
   background: var(--surface);

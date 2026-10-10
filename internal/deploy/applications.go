@@ -262,15 +262,6 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err != nil {
 		return Application{}, err
 	}
-	// The domain rows (JUS-89) mirror the primary: a failure here removes the
-	// just-created row so no application exists without its routing state.
-	if err := s.reconcilePrimaryRow(ctx, created.ID, created.BaseDomain); err != nil {
-		if deleteErr := s.repo.DeleteApplication(ctx, created.ID); deleteErr != nil {
-			s.logger.Warn("deploy: could not remove application after domain row failure",
-				"application_id", created.ID, "error", deleteErr)
-		}
-		return Application{}, err
-	}
 	// A new domain starts routing as soon as it is stored; the node may not
 	// have Traefik yet, in which case the sync bootstraps it.
 	if created.BaseDomain != "" {
@@ -612,23 +603,44 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	}
 	// A base_domain write reconciles the domain rows first: the rows enforce
 	// the platform-wide uniqueness, so a conflicting host fails here before
-	// the application row is touched. Unrelated updates skip the rows
-	// entirely.
+	// the application row is touched. Clearing the primary while aliases
+	// exist is rejected: it would silently delete every alias (use the
+	// domain endpoints to remove them explicitly). Unrelated updates skip
+	// the rows entirely. Both writes run in one transaction.
+	var updated Application
+	var updateErr error
 	if in.BaseDomain != nil {
-		if err := s.reconcilePrimaryRow(ctx, app.ID, app.BaseDomain); err != nil {
-			return Application{}, err
+		if app.BaseDomain == "" {
+			rows, err := s.repo.ListApplicationDomains(ctx, app.ID)
+			if err != nil {
+				return Application{}, err
+			}
+			for _, row := range rows {
+				if !row.IsPrimary {
+					return Application{}, fmt.Errorf("%w: remove the additional domains before clearing the primary domain", ErrValidation)
+				}
+			}
 		}
+		updateErr = s.repo.InTx(ctx, func(tx Repository) error {
+			if err := s.reconcilePrimaryRow(ctx, tx, app.ID, app.BaseDomain); err != nil {
+				return err
+			}
+			var err error
+			updated, err = tx.UpdateApplication(ctx, app)
+			return err
+		})
+	} else {
+		updated, updateErr = s.repo.UpdateApplication(ctx, app)
 	}
-	updated, err := s.repo.UpdateApplication(ctx, app)
-	if err != nil {
+	if updateErr != nil {
 		// A concurrent create or move that committed past the pre-check trips
 		// the unique index instead: still a 409, with the move message.
-		if movedEnvironment && errors.Is(err, ErrValidation) &&
-			strings.Contains(err.Error(), "already exists") {
+		if movedEnvironment && errors.Is(updateErr, ErrValidation) &&
+			strings.Contains(updateErr.Error(), "already exists") {
 			return Application{}, fmt.Errorf("%w: an application named %q already exists in the target environment",
 				ErrNameConflict, app.Name)
 		}
-		return Application{}, err
+		return Application{}, updateErr
 	}
 	// Routing input changed: refresh the hosting node's configuration. A node
 	// whose route may have disappeared (a move, a changed domain, a cleared

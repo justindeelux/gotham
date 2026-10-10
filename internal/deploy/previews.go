@@ -127,10 +127,6 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	if err != nil {
 		return Application{}, err
 	}
-	if err := s.reconcilePrimaryRow(ctx, created.ID, created.BaseDomain); err != nil {
-		s.logger.Warn("deploy: preview domain row not recorded; the sibling stays on its mirror",
-			"application_id", created.ID, "error", err)
-	}
 	s.copyDeployKey(ctx, base, created)
 	s.copyGitCredential(ctx, base, created)
 	s.cloneWildcardCertificate(ctx, base, created)

@@ -7,24 +7,6 @@ SELECT * FROM application_domains
 WHERE application_id = $1
 ORDER BY is_primary DESC, created_at, id;
 
--- name: GetApplicationDomain :one
-SELECT * FROM application_domains WHERE id = $1;
-
--- name: GetPrimaryApplicationDomain :one
--- GetPrimaryApplicationDomain returns the primary row mirrored by
--- applications.base_domain, or no rows when the application is domainless.
-SELECT * FROM application_domains
-WHERE application_id = $1 AND is_primary
-LIMIT 1;
-
--- name: GetApplicationDomainByName :one
--- GetApplicationDomainByName resolves one application's row for a host,
--- case-insensitively. Domains are stored normalized, but the lookup stays
--- case-insensitive so direct writes can never hide a duplicate.
-SELECT * FROM application_domains
-WHERE application_id = $1 AND lower(domain) = lower($2)
-LIMIT 1;
-
 -- name: GetApplicationDomainByNameAnyApp :one
 -- GetApplicationDomainByNameAnyApp resolves the platform-wide claim on a
 -- host for the uniqueness guard (JUS-89): any application's row, including
@@ -54,15 +36,6 @@ RETURNING *;
 UPDATE application_domains
 SET is_primary = false, updated_at = now()
 WHERE application_id = $1 AND is_primary;
-
--- name: SetPrimaryApplicationDomain :many
--- SetPrimaryApplicationDomain promotes one domain row to primary and demotes
--- every sibling in a single statement, so a concurrent proxy sync never
--- observes a transient zero- or two-primary state and renames no router.
-UPDATE application_domains
-SET is_primary = (id = $2), updated_at = now()
-WHERE application_id = $1
-RETURNING *;
 
 -- name: DeleteApplicationDomain :exec
 DELETE FROM application_domains WHERE id = $1 AND application_id = $2;

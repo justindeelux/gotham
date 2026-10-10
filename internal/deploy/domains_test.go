@@ -207,6 +207,25 @@ func TestSetPrimaryDomainFollowsMirror(t *testing.T) {
 	}
 }
 
+func TestUpdateApplicationRejectsClearingWithAliases(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	svc := newTestService(t, repo)
+
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, "www.example.com"); err != nil {
+		t.Fatalf("add alias: %v", err)
+	}
+	cleared := ""
+	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{BaseDomain: &cleared}); !errors.Is(err, ErrValidation) {
+		t.Fatalf("clear with aliases err = %v, want ErrValidation", err)
+	}
+	domains, err := svc.ListDomains(context.Background(), userID, app.ID)
+	if err != nil || len(domains) != 2 {
+		t.Fatalf("domains = %#v (%v), want both rows kept", domains, err)
+	}
+}
+
 func TestUpdateApplicationReconcilesPrimaryRow(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}

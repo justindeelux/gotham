@@ -15,6 +15,9 @@ ALTER TABLE domain_certificates
     ADD CONSTRAINT domain_certificates_app_domain_unique UNIQUE (application_id, domain);
 
 -- +goose Down
+-- Rolling back re-adds UNIQUE(application_id): it fails while any
+-- application holds more than one intent. Delete the extra intents first
+-- when a downgrade must proceed.
 ALTER TABLE domain_certificates
     DROP CONSTRAINT domain_certificates_app_domain_unique;
 

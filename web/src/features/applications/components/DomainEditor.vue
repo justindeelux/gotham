@@ -4,6 +4,7 @@ import { NSpace } from "naive-ui";
 import type { Application } from "@/features/applications/api/applications";
 import ApplicationDomainPanel from "@/features/applications/components/ApplicationDomainPanel.vue";
 import CertificatePanel from "@/features/applications/components/CertificatePanel.vue";
+import { provideDomainsRefresh } from "@/features/applications/composables/domainRefresh";
 
 /**
  * Domain and certificate editor of one application (the Domains tab of the
@@ -19,6 +20,12 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+
+/**
+ * domainsTick is bumped by the alias panel after every mutation so the
+ * certificate panel reloads its attached-domain list without a page reload.
+ */
+provideDomainsRefresh();
 </script>
 
 <template>

@@ -16,6 +16,12 @@
 -- operator re-enabling it must still resolve the conflict explicitly).
 -- One primary per application is a partial unique index.
 --
+-- Honest limit, stated deliberately: the write path is stricter than the
+-- index. The global index covers enabled rows only, so a direct database
+-- writer could still insert an enabled duplicate of a disabled row; every
+-- application-level write goes through the deploy service guards, and the
+-- generator holds back any duplicate that reaches it per committed snapshot.
+--
 -- The backfill is data-safe: every stored base_domain becomes the primary
 -- row, and when several applications claim the same host (allowed across
 -- nodes before this change) only the oldest binding stays enabled — row age

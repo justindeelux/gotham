@@ -96,9 +96,6 @@ onMounted(() => {
 
     <NCard :title="t('applications.domain.aliasTitle')">
       <NSpace vertical :size="12">
-        <NText depth="3">
-          {{ t("applications.domain.aliasHint") }}
-        </NText>
         <NAlert
           v-if="aliases.domainsError.value"
           type="error"
@@ -132,6 +129,9 @@ onMounted(() => {
           >
             {{ aliases.addError.value }}
           </NAlert>
+          <NText depth="3">
+            {{ t("applications.domain.aliasHint") }}
+          </NText>
         </NSpace>
         <NSpin :show="aliases.loadingDomains.value">
           <NSpace
@@ -155,9 +155,16 @@ onMounted(() => {
               >
                 {{ certificateStatusLabel(certOf(row.domain)?.status) }}
               </NTag>
-              <NText v-else depth="3" class="small">
-                {{ t("applications.domain.noCert") }}
-              </NText>
+              <NButton
+                v-else
+                size="small"
+                ghost
+                :disabled="row.disabled"
+                :loading="aliases.busyDomainId.value === row.id"
+                @click="aliases.handleSecureDomain(row)"
+              >
+                {{ t("applications.domain.secure") }}
+              </NButton>
               <span class="domain-actions">
                 <NButton
                   size="small"

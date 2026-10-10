@@ -57,29 +57,40 @@ func (s *Service) AddDomain(ctx context.Context, userID, appID uuid.UUID, domain
 	if err != nil {
 		return ApplicationDomain{}, err
 	}
-	created, err := s.repo.CreateApplicationDomain(ctx, ApplicationDomain{
-		ApplicationID: app.ID,
-		Domain:        next,
-		IsPrimary:     len(existing) == 0,
+	var created ApplicationDomain
+	err = s.repo.InTx(ctx, func(tx Repository) error {
+		row, err := tx.CreateApplicationDomain(ctx, ApplicationDomain{
+			ApplicationID: app.ID,
+			Domain:        next,
+			IsPrimary:     len(existing) == 0,
+		})
+		if err != nil {
+			return err
+		}
+		created = row
+		if created.IsPrimary {
+			app.BaseDomain = next
+			app.BaseDomainDisabled = false
+			_, err = tx.UpdateApplication(ctx, app)
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return ApplicationDomain{}, err
-	}
-	if created.IsPrimary {
-		app.BaseDomain = next
-		app.BaseDomainDisabled = false
-		if _, err := s.repo.UpdateApplication(ctx, app); err != nil {
-			return ApplicationDomain{}, err
-		}
 	}
 	s.syncProxy(ctx, app)
 	return created, nil
 }
 
 // RemoveDomain detaches one hostname from an application (JUS-89). Removing
-// the primary promotes the oldest remaining row deterministically
-// (created_at, id) and mirrors it onto base_domain; removing the last domain
-// clears the mirror. Only the removed domain's routers disappear.
+// the primary promotes the oldest remaining ENABLED row deterministically
+// (created_at, id) and mirrors it onto base_domain; when every remaining row
+// is disabled the oldest of those is promoted instead (mirrored disabled, so
+// the conflict stays visible exactly like a legacy disabled binding);
+// removing the last domain clears the mirror. Only the removed domain's
+// routers disappear. The row delete, the promotion and the mirror update run
+// in one transaction.
 func (s *Service) RemoveDomain(ctx context.Context, userID, appID, domainID uuid.UUID) (Application, error) {
 	if !Enabled() {
 		return Application{}, ErrDisabled
@@ -110,37 +121,47 @@ func (s *Service) RemoveDomain(ctx context.Context, userID, appID, domainID uuid
 	if target == nil {
 		return Application{}, ErrNotFound
 	}
-	if err := s.repo.DeleteApplicationDomain(ctx, app.ID, target.ID); err != nil {
-		return Application{}, err
-	}
-	if target.IsPrimary {
-		remaining := make([]ApplicationDomain, 0, len(domains)-1)
-		for _, domain := range domains {
-			if domain.ID != target.ID {
-				remaining = append(remaining, domain)
-			}
+	var updated Application
+	err = s.repo.InTx(ctx, func(tx Repository) error {
+		if err := tx.DeleteApplicationDomain(ctx, app.ID, target.ID); err != nil {
+			return err
 		}
-		if len(remaining) == 0 {
-			app.BaseDomain = ""
-			app.BaseDomainDisabled = false
-		} else {
-			promoted, err := s.repo.SetPrimaryApplicationDomain(ctx, app.ID, remaining[0].ID)
-			if err != nil {
-				return Application{}, err
-			}
-			for _, domain := range promoted {
-				if domain.IsPrimary {
-					app.BaseDomain = domain.Domain
-					app.BaseDomainDisabled = domain.Disabled
+		if !target.IsPrimary {
+			updated = app
+			return nil
+		}
+		remaining, err := tx.ListApplicationDomains(ctx, app.ID)
+		if err != nil {
+			return err
+		}
+		app.BaseDomain = ""
+		app.BaseDomainDisabled = false
+		if len(remaining) > 0 {
+			promote := remaining[0]
+			for _, domain := range remaining {
+				if !domain.Disabled {
+					promote = domain
+					break
 				}
 			}
+			if err := tx.ClearPrimaryApplicationDomains(ctx, app.ID); err != nil {
+				return err
+			}
+			promote.IsPrimary = true
+			if _, err := tx.UpdateApplicationDomain(ctx, promote); err != nil {
+				return err
+			}
+			app.BaseDomain = promote.Domain
+			app.BaseDomainDisabled = promote.Disabled
 		}
-		if _, err := s.repo.UpdateApplication(ctx, app); err != nil {
-			return Application{}, err
-		}
+		updated, err = tx.UpdateApplication(ctx, app)
+		return err
+	})
+	if err != nil {
+		return Application{}, err
 	}
-	s.syncProxy(ctx, app)
-	return app, nil
+	s.syncProxy(ctx, updated)
+	return updated, nil
 }
 
 // SetPrimaryDomain makes one attached hostname the application's primary
@@ -183,17 +204,21 @@ func (s *Service) SetPrimaryDomain(ctx context.Context, userID, appID, domainID 
 	if target.IsPrimary {
 		return app, nil
 	}
-	promoted, err := s.repo.SetPrimaryApplicationDomain(ctx, app.ID, target.ID)
-	if err != nil {
-		return Application{}, err
-	}
-	for _, domain := range promoted {
-		if domain.IsPrimary {
-			app.BaseDomain = domain.Domain
-			app.BaseDomainDisabled = domain.Disabled
+	var updated Application
+	err = s.repo.InTx(ctx, func(tx Repository) error {
+		if err := tx.ClearPrimaryApplicationDomains(ctx, app.ID); err != nil {
+			return err
 		}
-	}
-	updated, err := s.repo.UpdateApplication(ctx, app)
+		target.IsPrimary = true
+		if _, err := tx.UpdateApplicationDomain(ctx, *target); err != nil {
+			return err
+		}
+		app.BaseDomain = target.Domain
+		app.BaseDomainDisabled = target.Disabled
+		var err error
+		updated, err = tx.UpdateApplication(ctx, app)
+		return err
+	})
 	if err != nil {
 		return Application{}, err
 	}
@@ -232,12 +257,13 @@ func (s *Service) checkDomainClaim(ctx context.Context, appID uuid.UUID, domain 
 // is created when the application had none. A conflicting host surfaces as
 // ErrDomainConflict before the application row is touched. When the value
 // names an existing alias the rows swap: the alias is promoted (re-enabled)
-// and the old primary row is dropped, so replace-semantics hold.
-func (s *Service) reconcilePrimaryRow(ctx context.Context, appID uuid.UUID, primary string) error {
+// and the old primary row is dropped, so replace-semantics hold. Every step
+// runs on repo, which the base_domain update path scopes to its transaction.
+func (s *Service) reconcilePrimaryRow(ctx context.Context, repo Repository, appID uuid.UUID, primary string) error {
 	if primary == "" {
-		return s.repo.DeleteApplicationDomains(ctx, appID)
+		return repo.DeleteApplicationDomains(ctx, appID)
 	}
-	domains, err := s.repo.ListApplicationDomains(ctx, appID)
+	domains, err := repo.ListApplicationDomains(ctx, appID)
 	if err != nil {
 		return err
 	}
@@ -246,22 +272,21 @@ func (s *Service) reconcilePrimaryRow(ctx context.Context, appID uuid.UUID, prim
 			continue
 		}
 		if domain.Disabled {
-			if _, err := s.repo.UpdateApplicationDomain(ctx, ApplicationDomain{
-				ID:            domain.ID,
-				ApplicationID: appID,
-				Domain:        domain.Domain,
-				IsPrimary:     domain.IsPrimary,
-				Disabled:      false,
-			}); err != nil {
+			domain.Disabled = false
+			if _, err := repo.UpdateApplicationDomain(ctx, domain); err != nil {
 				return err
 			}
 		}
-		if _, err := s.repo.SetPrimaryApplicationDomain(ctx, appID, domain.ID); err != nil {
+		if err := repo.ClearPrimaryApplicationDomains(ctx, appID); err != nil {
+			return err
+		}
+		domain.IsPrimary = true
+		if _, err := repo.UpdateApplicationDomain(ctx, domain); err != nil {
 			return err
 		}
 		for _, old := range domains {
 			if old.IsPrimary {
-				if err := s.repo.DeleteApplicationDomain(ctx, appID, old.ID); err != nil {
+				if err := repo.DeleteApplicationDomain(ctx, appID, old.ID); err != nil {
 					return err
 				}
 			}
@@ -273,17 +298,13 @@ func (s *Service) reconcilePrimaryRow(ctx context.Context, appID uuid.UUID, prim
 			if domain.Domain == primary {
 				return nil
 			}
-			_, err := s.repo.UpdateApplicationDomain(ctx, ApplicationDomain{
-				ID:            domain.ID,
-				ApplicationID: appID,
-				Domain:        primary,
-				IsPrimary:     true,
-				Disabled:      false,
-			})
+			domain.Domain = primary
+			domain.Disabled = false
+			_, err := repo.UpdateApplicationDomain(ctx, domain)
 			return err
 		}
 	}
-	_, err = s.repo.CreateApplicationDomain(ctx, ApplicationDomain{
+	_, err = repo.CreateApplicationDomain(ctx, ApplicationDomain{
 		ApplicationID: appID,
 		Domain:        primary,
 		IsPrimary:     true,

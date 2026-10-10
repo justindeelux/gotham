@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch, type Ref } from "vue";
 
 import type { Application } from "@/features/applications/api/applications";
 import { listDomains } from "@/features/applications/api/applications";
+import { useDomainsRefresh } from "@/features/applications/composables/domainRefresh";
 import {
   describeProxyError,
   draftFromCertificate,
@@ -67,6 +68,18 @@ export function useCertificateConfig(application: Ref<Application>) {
 
   /** attachedDomains lists the hostnames currently attached to the app. */
   const attachedDomains = ref<string[]>([]);
+
+  /** loadDomains refreshes the attached hostnames the banner compares. */
+  async function loadDomains(): Promise<void> {
+    try {
+      const rows = await listDomains(application.value.id);
+      attachedDomains.value = rows.map((row) => row.domain);
+    } catch {
+      attachedDomains.value = [application.value.base_domain].filter(
+        (domain) => domain !== "",
+      );
+    }
+  }
 
   /** recordedDomainDiffers flags an intent recorded for a detached host. */
   const recordedDomainDiffers = computed<boolean>(() => {
@@ -173,16 +186,11 @@ export function useCertificateConfig(application: Ref<Application>) {
 
   /** load refreshes the providers, certificates and attached domains. */
   async function load(): Promise<void> {
-    const results = await Promise.allSettled([
+    await Promise.allSettled([
       proxyStore.fetchProviders(),
       proxyStore.fetchCertificates(),
-      listDomains(application.value.id),
+      loadDomains(),
     ]);
-    const domains = results[2];
-    attachedDomains.value =
-      domains.status === "fulfilled"
-        ? domains.value.map((row) => row.domain)
-        : [application.value.base_domain].filter((domain) => domain !== "");
   }
 
   watch(
@@ -192,6 +200,25 @@ export function useCertificateConfig(application: Ref<Application>) {
       void load();
     },
   );
+
+  /**
+   * A same-page base-domain save keeps the application id but changes the
+   * mirror: reload the rows so the re-record banner appears immediately.
+   * Alias mutations bump the shared tick instead (the mirror may not move).
+   */
+  watch(
+    () => application.value.base_domain,
+    () => {
+      void loadDomains();
+    },
+  );
+
+  const domainsTick = useDomainsRefresh();
+  if (domainsTick !== null) {
+    watch(domainsTick, () => {
+      void loadDomains();
+    });
+  }
 
   onMounted(() => {
     void load();

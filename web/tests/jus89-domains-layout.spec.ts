@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global URL, document, window:readonly */
+/* global URL, window:readonly */
 // JUS-89 layout proof: the multi-domain editor on the application detail
 // page renders the primary card unchanged plus the aliases card, alias rows
 // never overlap, the add hint sits below its field, row actions stay
@@ -240,7 +240,13 @@ async function openDomainsTab(page: Page): Promise<Locator> {
   await page.goto(`${baseURL}/projects/proj-1/environments/env-1/applications/app-1`);
   const tab = page.locator(".n-tabs-tab").filter({ hasText: "Domains" });
   await tab.click();
-  const card = page.locator(".n-card").filter({ hasText: "Additional domains" }).first();
+  // Match the card by its header title: body copy may mention the same words.
+  const card = page
+    .locator(".n-card")
+    .filter({
+      has: page.locator(".n-card-header__main", { hasText: "Additional domains" }),
+    })
+    .first();
   await expect(card).toBeVisible();
   return card;
 }
@@ -292,13 +298,15 @@ for (const width of [1280, 480]) {
     const card = await openDomainsTab(page);
     const input = card.getByPlaceholder("www.example.com");
     await expect(input).toBeVisible();
-    const note = card.getByText(
-      "Removing the primary promotes the oldest remaining domain.",
+    const hint = card.getByText(
+      "One application can serve several hostnames at once.",
     );
-    await expect(note).toBeVisible();
+    await expect(hint).toBeVisible();
     const inputBox = await boxOf(input, "alias input");
-    const noteBox = await boxOf(note, "alias note");
-    expect(noteBox.y, "note below the add field").toBeGreaterThanOrEqual(inputBox.y + inputBox.height - 0.5);
+    const hintBox = await boxOf(hint, "alias hint");
+    expect(hintBox.y, "hint below the add field").toBeGreaterThanOrEqual(
+      inputBox.y + inputBox.height - 0.5,
+    );
   });
 
   test(`primary editor keeps its single-domain shape at ${width}px`, async ({ page }) => {
@@ -306,7 +314,12 @@ for (const width of [1280, 480]) {
     await mockApi(page);
     await page.goto(`${baseURL}/projects/proj-1/environments/env-1/applications/app-1`);
     await page.locator(".n-tabs-tab").filter({ hasText: "Domains" }).click();
-    const primary = page.locator(".n-card").filter({ hasText: "Application domain" }).first();
+    const primary = page
+      .locator(".n-card")
+      .filter({
+        has: page.locator(".n-card-header__main", { hasText: "Application domain" }),
+      })
+      .first();
     await expect(primary.locator("input").first()).toHaveValue("shop.example.com");
     await expect(primary.getByRole("button", { name: "Save domain" })).toBeVisible();
   });

@@ -232,26 +232,6 @@ func (s *Store) ListApplicationDomainsByApplication(ctx context.Context, applica
 	return s.queries.ListApplicationDomainsByApplication(ctx, applicationID)
 }
 
-// GetApplicationDomain returns one domain row, or pgx.ErrNoRows.
-func (s *Store) GetApplicationDomain(ctx context.Context, id pgtype.UUID) (sqlc.ApplicationDomain, error) {
-	return s.queries.GetApplicationDomain(ctx, id)
-}
-
-// GetPrimaryApplicationDomain returns the primary domain row of an
-// application, or pgx.ErrNoRows when it is domainless.
-func (s *Store) GetPrimaryApplicationDomain(ctx context.Context, applicationID pgtype.UUID) (sqlc.ApplicationDomain, error) {
-	return s.queries.GetPrimaryApplicationDomain(ctx, applicationID)
-}
-
-// GetApplicationDomainByName resolves one application's row for a host,
-// or pgx.ErrNoRows.
-func (s *Store) GetApplicationDomainByName(ctx context.Context, applicationID pgtype.UUID, domain string) (sqlc.ApplicationDomain, error) {
-	return s.queries.GetApplicationDomainByName(ctx, sqlc.GetApplicationDomainByNameParams{
-		ApplicationID: applicationID,
-		Lower:         domain,
-	})
-}
-
 // GetApplicationDomainByNameAnyApp resolves the platform-wide claim on a
 // host, or pgx.ErrNoRows.
 func (s *Store) GetApplicationDomainByNameAnyApp(ctx context.Context, domain string) (sqlc.ApplicationDomain, error) {
@@ -273,15 +253,6 @@ func (s *Store) UpdateApplicationDomain(ctx context.Context, params sqlc.UpdateA
 // before a promotion.
 func (s *Store) ClearPrimaryApplicationDomains(ctx context.Context, applicationID pgtype.UUID) error {
 	return s.queries.ClearPrimaryApplicationDomains(ctx, applicationID)
-}
-
-// SetPrimaryApplicationDomain promotes one domain row to primary and demotes
-// every sibling in a single statement.
-func (s *Store) SetPrimaryApplicationDomain(ctx context.Context, applicationID, domainID pgtype.UUID) ([]sqlc.ApplicationDomain, error) {
-	return s.queries.SetPrimaryApplicationDomain(ctx, sqlc.SetPrimaryApplicationDomainParams{
-		ApplicationID: applicationID,
-		ID:            domainID,
-	})
 }
 
 // DeleteApplicationDomain removes one domain row of an application.

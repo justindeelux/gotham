@@ -278,6 +278,17 @@ func (r *fakeRepository) CreateApplication(_ context.Context, app Application, e
 	}
 	app.CreatedAt = now
 	app.UpdatedAt = now
+	// The primary domain row joins the create atomically, like production:
+	// a conflicting host fails the create without storing the application.
+	if app.BaseDomain != "" {
+		if _, err := r.insertDomain(ApplicationDomain{
+			ApplicationID: app.ID,
+			Domain:        app.BaseDomain,
+			IsPrimary:     true,
+		}); err != nil {
+			return Application{}, err
+		}
+	}
 	r.apps = append(r.apps, app)
 	for _, v := range envVars {
 		v.ApplicationID = app.ID
@@ -379,6 +390,14 @@ func (r *fakeRepository) DeleteApplication(_ context.Context, appID uuid.UUID) e
 		}
 	}
 	r.certificates = certificates
+	// Domain rows cascade with the application (ON DELETE CASCADE).
+	kept := make([]ApplicationDomain, 0, len(r.domains))
+	for _, domain := range r.domains {
+		if domain.ApplicationID != appID {
+			kept = append(kept, domain)
+		}
+	}
+	r.domains = kept
 	return nil
 }
 
@@ -1055,6 +1074,12 @@ func (r *fakeRepository) ListApplicationDomains(_ context.Context, appID uuid.UU
 func (r *fakeRepository) CreateApplicationDomain(_ context.Context, domain ApplicationDomain) (ApplicationDomain, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.insertDomain(domain)
+}
+
+// insertDomain stores one domain row with the production uniqueness rules.
+// The caller holds r.mu.
+func (r *fakeRepository) insertDomain(domain ApplicationDomain) (ApplicationDomain, error) {
 	for _, existing := range r.domains {
 		if strings.EqualFold(existing.Domain, domain.Domain) && !existing.Disabled && !domain.Disabled {
 			if existing.ApplicationID == domain.ApplicationID {
@@ -1095,23 +1120,23 @@ func (r *fakeRepository) UpdateApplicationDomain(_ context.Context, domain Appli
 	return ApplicationDomain{}, ErrNotFound
 }
 
-// SetPrimaryApplicationDomain implements Repository.
-func (r *fakeRepository) SetPrimaryApplicationDomain(_ context.Context, appID, domainID uuid.UUID) ([]ApplicationDomain, error) {
+// ClearPrimaryApplicationDomains implements Repository.
+func (r *fakeRepository) ClearPrimaryApplicationDomains(_ context.Context, appID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.domains {
 		if r.domains[i].ApplicationID == appID {
-			r.domains[i].IsPrimary = r.domains[i].ID == domainID
-			r.domains[i].UpdatedAt = time.Now().UTC()
+			r.domains[i].IsPrimary = false
 		}
 	}
-	out := []ApplicationDomain{}
-	for _, domain := range r.domains {
-		if domain.ApplicationID == appID {
-			out = append(out, domain)
-		}
-	}
-	return out, nil
+	return nil
+}
+
+// InTx implements Repository: the fake serializes on r.mu per method, so a
+// multi-step test sequence runs fn directly without holding the lock across
+// calls (holding it would deadlock the nested method locks).
+func (r *fakeRepository) InTx(_ context.Context, fn func(tx Repository) error) error {
+	return fn(r)
 }
 
 // DeleteApplicationDomain implements Repository.

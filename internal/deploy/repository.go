@@ -166,9 +166,15 @@ type Repository interface {
 	CreateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error)
 	// UpdateApplicationDomain persists the mutable domain fields.
 	UpdateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error)
-	// SetPrimaryApplicationDomain promotes one domain row to primary and
-	// demotes every sibling in a single statement, returning every row.
-	SetPrimaryApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) ([]ApplicationDomain, error)
+	// ClearPrimaryApplicationDomains drops the primary flag of an application
+	// (the demote half of a promotion; the promote half follows in the same
+	// transaction so the partial unique index never sees two primaries).
+	ClearPrimaryApplicationDomains(ctx context.Context, appID uuid.UUID) error
+	// InTx runs fn with a transaction-scoped Repository: every Repository
+	// method called on tx shares one snapshot and commits atomically, so a
+	// domain row write and its base_domain mirror update can never drift
+	// apart (JUS-89 fix round 1).
+	InTx(ctx context.Context, fn func(tx Repository) error) error
 	// DeleteApplicationDomain removes one domain row of an application, or
 	// ErrNotFound.
 	DeleteApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) error
@@ -194,6 +200,22 @@ type storeRepository struct {
 // at read time, so it comes from the service Config either way.
 func newStoreRepository(st *store.Store, secret string) *storeRepository {
 	return &storeRepository{store: st, secret: secret}
+}
+
+// InTx runs fn with a transaction-scoped Repository over one store
+// transaction.
+func (r *storeRepository) InTx(ctx context.Context, fn func(tx Repository) error) error {
+	return r.store.InTx(ctx, func(tx *store.Store) error {
+		return fn(&storeRepository{store: tx, secret: r.secret})
+	})
+}
+
+// ClearPrimaryApplicationDomains drops the primary flag of an application.
+func (r *storeRepository) ClearPrimaryApplicationDomains(ctx context.Context, appID uuid.UUID) error {
+	if err := r.store.ClearPrimaryApplicationDomains(ctx, pgUUID(appID)); err != nil {
+		return fmt.Errorf("deploy: clear primary application domains: %w", err)
+	}
+	return nil
 }
 
 // GetApplication loads one application, mapping a missing row to ErrNotFound.
@@ -370,7 +392,9 @@ func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Application) (
 
 // CreateApplication stores the application row and its configuration in a
 // single transaction, so a rejected child row (a duplicate key, a bad storage
-// name) never leaves an application without its settings behind.
+// name) never leaves an application without its settings behind. The primary
+// domain row joins the same transaction (JUS-89): a conflicting host rolls
+// back the application row too.
 func (r *storeRepository) CreateApplication(
 	ctx context.Context,
 	app Application,
@@ -378,37 +402,46 @@ func (r *storeRepository) CreateApplication(
 	secrets []Secret,
 	storages []Storage,
 ) (Application, error) {
-	row, err := r.store.CreateApplicationWithConfig(ctx,
-		sqlc.CreateApplicationParams{
-			ID:                         pgUUID(app.ID),
-			UserID:                     pgUUID(app.UserID),
-			TeamID:                     pgUUID(app.TeamID),
-			ServerID:                   pgUUID(app.ServerID),
-			EnvironmentID:              pgUUID(app.EnvironmentID),
-			Name:                       app.Name,
-			Provider:                   app.Provider,
-			Repo:                       app.Repo,
-			CloneUrl:                   app.CloneURL,
-			Branch:                     app.Branch,
-			BuildPack:                  app.BuildPack,
-			BaseDomain:                 app.BaseDomain,
-			SourceType:                 NormalizeSourceType(app.SourceType, app.Provider),
-			Port:                       app.Port,
-			HostPort:                   app.HostPort,
-			IsPreview:                  app.IsPreview,
-			GithubAppID:                pgUUID(app.GitHubAppID),
-			DockerfileContent:          app.DockerfileContent,
-			BuildArgs:                  marshalBuildArgs(app.BuildArgs),
-			ImageRef:                   app.ImageRef,
-			RegistryUsername:           app.RegistryUsername,
-			RegistryPasswordCiphertext: app.RegistryPasswordCiphertext,
-			ComposeContent:             app.ComposeContent,
-			ComposeFile:                app.ComposeFile,
-			ComposeService:             app.ComposeService,
-		},
+	appParams := sqlc.CreateApplicationParams{
+		ID:                         pgUUID(app.ID),
+		UserID:                     pgUUID(app.UserID),
+		TeamID:                     pgUUID(app.TeamID),
+		ServerID:                   pgUUID(app.ServerID),
+		EnvironmentID:              pgUUID(app.EnvironmentID),
+		Name:                       app.Name,
+		Provider:                   app.Provider,
+		Repo:                       app.Repo,
+		CloneUrl:                   app.CloneURL,
+		Branch:                     app.Branch,
+		BuildPack:                  app.BuildPack,
+		BaseDomain:                 app.BaseDomain,
+		SourceType:                 NormalizeSourceType(app.SourceType, app.Provider),
+		Port:                       app.Port,
+		HostPort:                   app.HostPort,
+		IsPreview:                  app.IsPreview,
+		GithubAppID:                pgUUID(app.GitHubAppID),
+		DockerfileContent:          app.DockerfileContent,
+		BuildArgs:                  marshalBuildArgs(app.BuildArgs),
+		ImageRef:                   app.ImageRef,
+		RegistryUsername:           app.RegistryUsername,
+		RegistryPasswordCiphertext: app.RegistryPasswordCiphertext,
+		ComposeContent:             app.ComposeContent,
+		ComposeFile:                app.ComposeFile,
+		ComposeService:             app.ComposeService,
+	}
+	var domainParams *sqlc.CreateApplicationDomainParams
+	if app.BaseDomain != "" {
+		domainParams = &sqlc.CreateApplicationDomainParams{
+			Domain:    app.BaseDomain,
+			IsPrimary: true,
+		}
+	}
+	row, err := r.store.CreateApplicationWithConfigAndDomain(ctx,
+		appParams,
 		envVarParams(envVars),
 		secretParams(secrets),
 		storageParams(storages),
+		domainParams,
 	)
 	if err != nil {
 		return Application{}, applicationWriteError(err, app.Name)
@@ -1084,20 +1117,6 @@ func (r *storeRepository) UpdateApplicationDomain(ctx context.Context, domain Ap
 	return applicationDomainFromRow(row), nil
 }
 
-// SetPrimaryApplicationDomain promotes one domain row to primary and demotes
-// every sibling in a single statement, returning every row.
-func (r *storeRepository) SetPrimaryApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) ([]ApplicationDomain, error) {
-	rows, err := r.store.SetPrimaryApplicationDomain(ctx, pgUUID(appID), pgUUID(domainID))
-	if err != nil {
-		return nil, fmt.Errorf("deploy: set primary application domain: %w", err)
-	}
-	domains := make([]ApplicationDomain, 0, len(rows))
-	for _, row := range rows {
-		domains = append(domains, applicationDomainFromRow(row))
-	}
-	return domains, nil
-}
-
 // DeleteApplicationDomain removes one domain row of an application.
 func (r *storeRepository) DeleteApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) error {
 	if err := r.store.DeleteApplicationDomain(ctx, pgUUID(domainID), pgUUID(appID)); err != nil {
@@ -1283,7 +1302,10 @@ func storageParams(storages []Storage) []sqlc.InsertStorageParams {
 // every other failure is wrapped for the log.
 func applicationWriteError(err error, name string) error {
 	if pgErr := uniqueViolation(err); pgErr != nil {
-		if pgErr.ConstraintName == "applications_server_domain_idx" {
+		switch pgErr.ConstraintName {
+		case "applications_server_domain_idx",
+			"application_domains_global_domain_idx",
+			"application_domains_app_domain_idx":
 			return ErrDomainConflict
 		}
 		return fmt.Errorf("%w: an application named %q already exists", ErrValidation, name)

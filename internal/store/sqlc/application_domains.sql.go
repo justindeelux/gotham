@@ -80,54 +80,6 @@ func (q *Queries) DeleteApplicationDomainsByApplication(ctx context.Context, app
 	return err
 }
 
-const getApplicationDomain = `-- name: GetApplicationDomain :one
-SELECT id, application_id, domain, is_primary, disabled, created_at, updated_at FROM application_domains WHERE id = $1
-`
-
-func (q *Queries) GetApplicationDomain(ctx context.Context, id pgtype.UUID) (ApplicationDomain, error) {
-	row := q.db.QueryRow(ctx, getApplicationDomain, id)
-	var i ApplicationDomain
-	err := row.Scan(
-		&i.ID,
-		&i.ApplicationID,
-		&i.Domain,
-		&i.IsPrimary,
-		&i.Disabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getApplicationDomainByName = `-- name: GetApplicationDomainByName :one
-SELECT id, application_id, domain, is_primary, disabled, created_at, updated_at FROM application_domains
-WHERE application_id = $1 AND lower(domain) = lower($2)
-LIMIT 1
-`
-
-type GetApplicationDomainByNameParams struct {
-	ApplicationID pgtype.UUID `json:"application_id"`
-	Lower         string      `json:"lower"`
-}
-
-// GetApplicationDomainByName resolves one application's row for a host,
-// case-insensitively. Domains are stored normalized, but the lookup stays
-// case-insensitive so direct writes can never hide a duplicate.
-func (q *Queries) GetApplicationDomainByName(ctx context.Context, arg GetApplicationDomainByNameParams) (ApplicationDomain, error) {
-	row := q.db.QueryRow(ctx, getApplicationDomainByName, arg.ApplicationID, arg.Lower)
-	var i ApplicationDomain
-	err := row.Scan(
-		&i.ID,
-		&i.ApplicationID,
-		&i.Domain,
-		&i.IsPrimary,
-		&i.Disabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getApplicationDomainByNameAnyApp = `-- name: GetApplicationDomainByNameAnyApp :one
 SELECT id, application_id, domain, is_primary, disabled, created_at, updated_at FROM application_domains
 WHERE lower(domain) = lower($1)
@@ -140,29 +92,6 @@ LIMIT 1
 // disabled ones, keeps its claim paused rather than released.
 func (q *Queries) GetApplicationDomainByNameAnyApp(ctx context.Context, lower string) (ApplicationDomain, error) {
 	row := q.db.QueryRow(ctx, getApplicationDomainByNameAnyApp, lower)
-	var i ApplicationDomain
-	err := row.Scan(
-		&i.ID,
-		&i.ApplicationID,
-		&i.Domain,
-		&i.IsPrimary,
-		&i.Disabled,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getPrimaryApplicationDomain = `-- name: GetPrimaryApplicationDomain :one
-SELECT id, application_id, domain, is_primary, disabled, created_at, updated_at FROM application_domains
-WHERE application_id = $1 AND is_primary
-LIMIT 1
-`
-
-// GetPrimaryApplicationDomain returns the primary row mirrored by
-// applications.base_domain, or no rows when the application is domainless.
-func (q *Queries) GetPrimaryApplicationDomain(ctx context.Context, applicationID pgtype.UUID) (ApplicationDomain, error) {
-	row := q.db.QueryRow(ctx, getPrimaryApplicationDomain, applicationID)
 	var i ApplicationDomain
 	err := row.Scan(
 		&i.ID,
@@ -253,49 +182,6 @@ func (q *Queries) ListProxiedApplicationDomains(ctx context.Context) ([]ListProx
 			&i.Disabled,
 			&i.CreatedAt,
 			&i.ID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const setPrimaryApplicationDomain = `-- name: SetPrimaryApplicationDomain :many
-UPDATE application_domains
-SET is_primary = (id = $2), updated_at = now()
-WHERE application_id = $1
-RETURNING id, application_id, domain, is_primary, disabled, created_at, updated_at
-`
-
-type SetPrimaryApplicationDomainParams struct {
-	ApplicationID pgtype.UUID `json:"application_id"`
-	ID            pgtype.UUID `json:"id"`
-}
-
-// SetPrimaryApplicationDomain promotes one domain row to primary and demotes
-// every sibling in a single statement, so a concurrent proxy sync never
-// observes a transient zero- or two-primary state and renames no router.
-func (q *Queries) SetPrimaryApplicationDomain(ctx context.Context, arg SetPrimaryApplicationDomainParams) ([]ApplicationDomain, error) {
-	rows, err := q.db.Query(ctx, setPrimaryApplicationDomain, arg.ApplicationID, arg.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ApplicationDomain{}
-	for rows.Next() {
-		var i ApplicationDomain
-		if err := rows.Scan(
-			&i.ID,
-			&i.ApplicationID,
-			&i.Domain,
-			&i.IsPrimary,
-			&i.Disabled,
-			&i.CreatedAt,
-			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

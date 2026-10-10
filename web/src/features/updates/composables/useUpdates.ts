@@ -3,11 +3,12 @@ import { computed, onUnmounted, ref } from "vue";
 import { useAuthStore } from "@/features/auth";
 import {
   applyUpdate,
+  getUpdateChangelog,
   getUpdateCheck,
   getUpdateSchedule,
   saveUpdateSchedule,
 } from "@/features/updates/api/updates";
-import type { ScheduleState, UpdateCheck, UpdateSchedule } from "@/features/updates/schemas/updates";
+import type { ScheduleState, UpdateChangelog, UpdateCheck, UpdateSchedule } from "@/features/updates/schemas/updates";
 
 const pollIntervalMs = 3000;
 const pollTimeoutMs = 5 * 60 * 1000;
@@ -33,6 +34,8 @@ export function useUpdates() {
   );
 
   const check = ref<UpdateCheck | null>(null);
+  const changelog = ref<UpdateChangelog | null>(null);
+  const changelogLoading = ref(false);
   const state = ref<ScheduleState | null>(null);
   const checking = ref(false);
   const checkError = ref("");
@@ -77,6 +80,9 @@ export function useUpdates() {
     } finally {
       checking.value = false;
       await loadSchedule();
+      if (isAdmin.value) {
+        await loadChangelog();
+      }
     }
   }
 
@@ -84,6 +90,23 @@ export function useUpdates() {
     // The persisted account can predate a PLATFORM_ADMINS change, so refresh the
     // operator bit the admin controls depend on (App.vue only fetches when empty).
     await Promise.all([authStore.fetchMe().catch(() => {}), runCheck(), loadSchedule()]);
+    // The changelog is admin-gated (notes come only from the read endpoint for
+    // operators); non-admins never need it.
+    if (isAdmin.value) {
+      await loadChangelog();
+    }
+  }
+
+  /** loadChangelog fetches the viewer changelog; empty (not an error) for dev builds. */
+  async function loadChangelog(): Promise<void> {
+    changelogLoading.value = true;
+    try {
+      changelog.value = await getUpdateChangelog();
+    } catch {
+      changelog.value = null;
+    } finally {
+      changelogLoading.value = false;
+    }
   }
 
   async function startUpdate(): Promise<void> {
@@ -146,6 +169,9 @@ export function useUpdates() {
   return {
     isAdmin,
     check,
+    changelog,
+    changelogLoading,
+    loadChangelog,
     state,
     checking,
     checkError,

@@ -23,11 +23,31 @@ type checkResponse struct {
 	Version     string     `json:"version,omitempty"`
 	Channel     string     `json:"channel,omitempty"`
 	Notes       string     `json:"notes,omitempty"`
+	HTMLURL     string     `json:"html_url,omitempty"`
 	Asset       string     `json:"asset,omitempty"`
 	PublishedAt *time.Time `json:"published_at,omitempty"`
 	// LastUpdate is the durable outcome of the most recent update attempt, so a
 	// failed or rolled-back update is visible instead of silently "successful".
 	LastUpdate *Status `json:"last_update,omitempty"`
+}
+
+// changelogEntryBody is one entry of the GET /v1/updates/changelog body. Notes
+// and the release link stay admin-gated like check notes; non-admins get the
+// version metadata only.
+type changelogEntryBody struct {
+	Version     string     `json:"version"`
+	Channel     string     `json:"channel,omitempty"`
+	Notes       string     `json:"notes,omitempty"`
+	HTMLURL     string     `json:"html_url,omitempty"`
+	PublishedAt *time.Time `json:"published_at,omitempty"`
+}
+
+// changelogResponse is the GET /v1/updates/changelog body: every release newer
+// than current newest-first (bounded), the running version's own entry when up
+// to date, or an empty list for an unknown current version.
+type changelogResponse struct {
+	Current string               `json:"current"`
+	Entries []changelogEntryBody `json:"entries"`
 }
 
 // applyRequest is the optional POST /v1/updates/apply body.
@@ -60,6 +80,7 @@ type handler struct {
 // Mount registers the self-update endpoints on r:
 //
 //	GET  /v1/updates/check   (any authenticated caller)
+//	GET  /v1/updates/changelog (any authenticated caller; notes admin-gated)
 //	POST /v1/updates/apply   (platform operator only)
 //	GET  /v1/updates/schedule (any authenticated caller)
 //	PUT  /v1/updates/schedule (platform operator only)
@@ -84,6 +105,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, adminAuth func(ht
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Get("/v1/updates/check", h.check)
+		protected.Get("/v1/updates/changelog", h.changelog)
 		if h.sched != nil {
 			protected.Get("/v1/updates/schedule", h.getSchedule)
 		}
@@ -119,6 +141,7 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 	admin := h.isAdmin(r)
 	if release != nil && admin {
 		response.Notes = release.Notes
+		response.HTMLURL = httpsLink(release.HTMLURL)
 	}
 	if last != nil {
 		status := *last
@@ -128,6 +151,34 @@ func (h *handler) check(w http.ResponseWriter, r *http.Request) {
 			status.Detail = ""
 		}
 		response.LastUpdate = &status
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// changelog serves GET /v1/updates/changelog. Release bodies and links stay
+// admin-gated like check notes; everyone else gets version metadata only. An
+// unknown current version (dev builds) yields an empty list, not an error.
+func (h *handler) changelog(w http.ResponseWriter, r *http.Request) {
+	entries, err := h.svc.Changelog(r.Context())
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	admin := h.isAdmin(r)
+	response := changelogResponse{Current: h.svc.Current(), Entries: []changelogEntryBody{}}
+	for _, entry := range entries {
+		body := changelogEntryBody{Version: entry.Version, Channel: entry.Channel}
+		if entry.PublishedAt.IsZero() {
+			// Omit the zero time so the viewer does not render year-1 dates.
+		} else {
+			published := entry.PublishedAt
+			body.PublishedAt = &published
+		}
+		if admin {
+			body.Notes = entry.Notes
+			body.HTMLURL = httpsLink(entry.HTMLURL)
+		}
+		response.Entries = append(response.Entries, body)
 	}
 	writeJSON(w, http.StatusOK, response)
 }

@@ -14,17 +14,23 @@ import (
 
 // fakeService is a deterministic Service for route tests.
 type fakeService struct {
-	release    *Release
-	checkErr   error
-	applied    []Channel
-	applyErr   error
-	lastStatus *Status
-	resets     int
+	release      *Release
+	checkErr     error
+	changelog    []ChangelogEntry
+	changelogErr error
+	applied      []Channel
+	applyErr     error
+	lastStatus   *Status
+	resets       int
 }
 
 func (f *fakeService) Current() string { return "v1.0.0" }
 
 func (f *fakeService) Check(context.Context) (*Release, error) { return f.release, f.checkErr }
+
+func (f *fakeService) Changelog(context.Context) ([]ChangelogEntry, error) {
+	return f.changelog, f.changelogErr
+}
 
 func (f *fakeService) Apply(_ context.Context, channel Channel) (*ApplyResult, error) {
 	f.applied = append(f.applied, channel)

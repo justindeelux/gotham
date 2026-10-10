@@ -30,6 +30,13 @@ const en = {
     channel: { stable: "stable", beta: "beta" },
   },
   notes: { title: "Release notes · {version}", empty: "This release has no notes." },
+  changelog: {
+    title: "Changelog",
+    currentTitle: "What's new in {version}",
+    github: "View on GitHub",
+    empty: "No release notes found for this version.",
+    loadError: "Could not load the changelog.",
+  },
   confirm: {
     title: "Update Gotham to {version}?",
     body: "Gotham downloads and verifies the release, then restarts. The dashboard is unavailable for a short time and reconnects automatically. A failed health check restores the previous version.",

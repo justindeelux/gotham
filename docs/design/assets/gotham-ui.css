@@ -398,6 +398,12 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 0; }
 .btn-danger:hover { background: color-mix(in oklab, var(--danger) 84%, black); }
 .btn-danger-ghost { background: transparent; border-color: color-mix(in oklab, var(--danger) 45%, transparent); color: var(--danger-ink); }
 .btn-danger-ghost:hover { background: var(--danger-soft); color: var(--fg-2); }
+.btn-primary-ghost { background: transparent; border-color: color-mix(in oklab, var(--accent) 55%, transparent); color: var(--accent-ink); }
+.btn-primary-ghost:hover { background: var(--accent-soft); color: var(--fg-2); }
+.btn-warning-ghost { background: transparent; border-color: color-mix(in oklab, var(--warn) 45%, transparent); color: var(--warn-ink); }
+.btn-warning-ghost:hover { background: var(--warn-soft); color: var(--fg-2); }
+.btn-success-ghost { background: transparent; border-color: color-mix(in oklab, var(--success) 45%, transparent); color: var(--success-ink); }
+.btn-success-ghost:hover { background: var(--success-soft); color: var(--fg-2); }
 .btn-sm { height: 26px; padding: 0 10px; font-size: var(--text-xs); }
 .btn-sm svg { width: 14px; height: 14px; }
 .btn-icon { width: 32px; padding: 0; flex: 0 0 auto; }

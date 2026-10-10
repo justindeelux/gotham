@@ -298,7 +298,6 @@ function afterServiceCreate(service: Service): void {
                 <th scope="col">{{ t("projects.environment.table.type") }}</th>
                 <th scope="col">{{ t("projects.environment.table.server") }}</th>
                 <th scope="col">{{ t("projects.environment.table.status") }}</th>
-                <th scope="col"><span class="sr-only">{{ t("projects.environment.table.actions") }}</span></th>
               </tr>
             </thead>
             <tbody>
@@ -306,10 +305,13 @@ function afterServiceCreate(service: Service): void {
                 v-for="row in page.visibleRows.value"
                 :key="`${row.kind}:${row.id}`"
                 :class="{ 'preview-row': row.preview }"
+                class="resource-row"
               >
                 <td :data-label="t('projects.environment.table.name')">
-                  <span class="resource-name">{{ row.name }}</span>
-                  <span class="cell-sub mono">{{ row.subtitle }}</span>
+                  <RouterLink :to="row.to" class="resource-link">
+                    <span class="resource-name">{{ row.name }}</span>
+                    <span class="cell-sub mono">{{ row.subtitle }}</span>
+                  </RouterLink>
                 </td>
                 <td :data-label="t('projects.environment.table.type')">
                   <NSpace :size="4" align="center">
@@ -320,11 +322,6 @@ function afterServiceCreate(service: Service): void {
                 <td :data-label="t('projects.environment.table.server')" class="mono muted">{{ row.serverName }}</td>
                 <td :data-label="t('projects.environment.table.status')">
                   <NTag size="small" :type="row.statusTag">{{ row.statusText }}</NTag>
-                </td>
-                <td :data-label="t('projects.environment.table.actions')" class="actions">
-                  <RouterLink :to="row.to">
-                    <NButton size="small">{{ t("projects.detail.open") }}</NButton>
-                  </RouterLink>
                 </td>
               </tr>
             </tbody>
@@ -547,6 +544,44 @@ function afterServiceCreate(service: Service): void {
   color: var(--muted);
 }
 
+/* The name cell links to the resource detail page; the link stretches
+   over the whole row, so there is no separate Open button. Native link
+   semantics keep table navigation, keyboard focus, middle-click and
+   open-in-new-tab. Future inner controls need .row-action to stay above
+   the stretched overlay instead of navigating. */
+.resource-row {
+  position: relative;
+}
+
+.resource-table tbody .resource-row:hover {
+  background: var(--hover-row);
+}
+
+.resource-link {
+  color: inherit;
+  display: block;
+}
+
+.resource-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.resource-link:focus-visible {
+  outline: none;
+}
+
+.resource-row:focus-within .resource-link::after {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: -2px;
+}
+
+.resource-row .row-action {
+  position: relative;
+  z-index: 1;
+}
+
 .resource-name {
   color: var(--fg-2);
   display: block;
@@ -575,11 +610,6 @@ function afterServiceCreate(service: Service): void {
   text-overflow: ellipsis;
 }
 
-.resource-table .actions {
-  text-align: right;
-  white-space: normal;
-}
-
 .mono {
   font-family: var(--font-mono);
 }
@@ -596,14 +626,6 @@ function afterServiceCreate(service: Service): void {
   scroll-margin-top: var(--space-4);
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-}
-
 @container (max-width: 560px) {
   .page-actions {
     margin-left: 0;
@@ -618,8 +640,8 @@ function afterServiceCreate(service: Service): void {
     margin-left: 0;
   }
 
-  /* Narrow: each resource becomes a stacked card so Open stays reachable
-     without horizontal scrolling. */
+  /* Narrow: each resource becomes a stacked card, still opened by
+     tapping the card itself, without horizontal scrolling. */
   .resource-table thead {
     position: absolute;
     width: 1px;
@@ -661,10 +683,6 @@ function afterServiceCreate(service: Service): void {
     letter-spacing: 0.07em;
     text-transform: uppercase;
     color: var(--muted);
-  }
-
-  .resource-table .actions {
-    text-align: left;
   }
 }
 </style>

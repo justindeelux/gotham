@@ -228,6 +228,16 @@ describe("ApplicationLogsTab selects", () => {
     wrapper.unmount();
   });
 
+  it("lays the commit card on the picks row with the selects stacked", () => {
+    const wrapper = mountTab(props());
+    const head = wrapper.find(".deploy-log-head");
+    expect(head.exists()).toBe(true);
+    expect(head.find(".deploy-log-picks").exists()).toBe(true);
+    expect(head.findAllComponents(NSelect)).toHaveLength(2);
+    expect(head.find(".deploy-log-commit").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it("keeps the hint short with no channel pattern, in both locales", () => {
     for (const locale of ["en", "vi"] as const) {
       setLocale(locale);

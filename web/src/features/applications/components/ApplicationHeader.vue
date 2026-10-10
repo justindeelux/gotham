@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { NAvatar, NButton, NSpace, NTag, NText, NTooltip } from "naive-ui";
+import { NAvatar, NButton, NIcon, NSpace, NTag, NText, NTooltip } from "naive-ui";
 import { useI18n } from "vue-i18n";
 
 import type { Deployment } from "@/features/applications/api/applications";
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
+import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
 interface Props {
   displayName: string;
@@ -50,25 +51,40 @@ const { t } = useI18n();
     </div>
     <NSpace class="page-head__actions" align="center" :size="8">
       <NButton
+        type="primary"
+        ghost
         :loading="props.acting"
         :disabled="props.activeDeploying"
         @click="emit('deploy')"
       >
+        <template #icon>
+          <NIcon><GothamIcon name="refresh" /></NIcon>
+        </template>
         {{ props.activeDeploying ? t("applications.header.deploying") : t("applications.header.redeploy") }}
       </NButton>
       <NButton
+        type="warning"
+        ghost
         :disabled="!props.canRollback || props.acting"
         @click="emit('rollback')"
       >
+        <template #icon>
+          <NIcon><GothamIcon name="history" /></NIcon>
+        </template>
         {{ t("applications.header.rollback") }}
       </NButton>
       <NTooltip trigger="hover" :disabled="props.controlHint === null">
         <template #trigger>
           <NButton
+            type="error"
+            ghost
             :loading="props.acting"
             :disabled="props.acting || props.controlHint !== null || !props.containerIsRunning"
             @click="emit('stop')"
           >
+            <template #icon>
+              <NIcon><GothamIcon name="stop" /></NIcon>
+            </template>
             {{ t("applications.header.stop") }}
           </NButton>
         </template>
@@ -77,10 +93,15 @@ const { t } = useI18n();
       <NTooltip trigger="hover" :disabled="props.controlHint === null">
         <template #trigger>
           <NButton
+            type="success"
+            ghost
             :loading="props.acting"
             :disabled="props.acting || props.controlHint !== null || props.containerIsRunning"
             @click="emit('start')"
           >
+            <template #icon>
+              <NIcon><GothamIcon name="play" /></NIcon>
+            </template>
             {{ t("applications.header.start") }}
           </NButton>
         </template>

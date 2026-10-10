@@ -9,9 +9,11 @@ import {
   FileText,
   Folder,
   Globe,
+  History,
   KeyRound,
   Layers,
   LayoutGrid,
+  Play,
   Plus,
   RefreshCw,
   Rocket,
@@ -19,11 +21,12 @@ import {
   Server,
   Settings,
   ShieldCheck,
+  Square,
   Trash2,
   Users,
 } from "@lucide/vue";
 
-// Thin adapter over @lucide/vue: call sites keep using the 19 Gotham
+// Thin adapter over @lucide/vue: call sites keep using the 22 Gotham
 // names with no changes. Per-icon imports keep tree-shaking intact — never
 // import the whole library here.
 export type IconName =
@@ -45,7 +48,10 @@ export type IconName =
   | "key"
   | "plus"
   | "trash"
-  | "chevron-down";
+  | "chevron-down"
+  | "history"
+  | "play"
+  | "stop";
 
 interface Props {
   name: IconName;
@@ -73,6 +79,9 @@ const components: Record<IconName, Component> = {
   plus: Plus,
   trash: Trash2,
   "chevron-down": ChevronDown,
+  history: History,
+  play: Play,
+  stop: Square,
 };
 
 const component = computed<Component>(() => components[props.name]);

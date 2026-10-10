@@ -70,27 +70,30 @@ const runtimeTitle = computed<string>(() =>
     <NTabs v-model:value="logTab" type="line" animated>
       <NTabPane name="deployment" :tab="t('applications.logsTab.deployment')">
         <NSpace vertical :size="12">
-          <NSpace :size="12">
-            <NSelect
-              :value="props.logServerId"
-              :options="props.serverOptions"
-              :placeholder="t('applications.logsTab.selectNode')"
-              style="width: 260px"
-              @update:value="emit('update:logServerId', $event)"
+          <div class="deploy-log-head">
+            <div class="deploy-log-picks">
+              <NSelect
+                :value="props.logServerId"
+                :options="props.serverOptions"
+                :placeholder="t('applications.logsTab.selectNode')"
+                :aria-label="t('applications.logsTab.selectNode')"
+                @update:value="emit('update:logServerId', $event)"
+              />
+              <NSelect
+                :value="props.logDeploymentId"
+                :options="props.deploymentOptions"
+                :placeholder="deploymentPlaceholder"
+                :aria-label="t('applications.logsTab.deployment')"
+                @update:value="emit('update:logDeploymentId', $event)"
+              />
+            </div>
+            <DeploymentCommitCard
+              class="deploy-log-commit"
+              :deployment="props.logTarget"
+              :repo="props.application?.repo ?? ''"
+              :clone-url="props.application?.clone_url ?? ''"
             />
-            <NSelect
-              :value="props.logDeploymentId"
-              :options="props.deploymentOptions"
-              :placeholder="deploymentPlaceholder"
-              style="width: 280px"
-              @update:value="emit('update:logDeploymentId', $event)"
-            />
-          </NSpace>
-          <DeploymentCommitCard
-            :deployment="props.logTarget"
-            :repo="props.application?.repo ?? ''"
-            :clone-url="props.application?.clone_url ?? ''"
-          />
+          </div>
           <NText depth="3">
             {{ t("applications.logsTab.hint") }}
           </NText>
@@ -127,4 +130,29 @@ const runtimeTitle = computed<string>(() =>
     </NTabs>
   </NCard>
 </template>
+
+<style scoped>
+/* Commit info sits on the same row as the picks; the picks stack
+   vertically. Wraps to one column on narrow widths. */
+.deploy-log-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.deploy-log-picks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 0 1 280px;
+  min-width: min(100%, 240px);
+}
+
+.deploy-log-commit {
+  flex: 1 1 280px;
+  min-width: min(100%, 280px);
+  margin: 0;
+}
+</style>
 

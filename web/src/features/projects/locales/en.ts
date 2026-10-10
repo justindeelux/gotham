@@ -107,7 +107,6 @@ const en = {
       type: "Type",
       server: "Server",
       status: "Status",
-      actions: "Actions",
     },
     kinds: {
       application: "Application",
@@ -160,7 +159,6 @@ const en = {
     label: "Node",
     aria: "Node",
     placeholder: "Select a node",
-    runsHere: "The resource runs on this node.",
     emptyPrefix: "No node is registered yet.",
     emptyLink: "Add a server",
     emptySuffix: "before creating a resource.",

@@ -104,7 +104,7 @@ test.describe("environment page", () => {
     await page.locator(".tabs").getByRole("tab", { name: /All/ }).click();
 
     // ── Open leads to the nested detail with the full breadcrumb ─────────
-    await appRow.getByRole("button", { name: "Open" }).click();
+    await appRow.locator("a.resource-link").click();
     await expect(page).toHaveURL(
       nestedURL(projectId, environmentId, "applications", application.id),
     );
@@ -115,7 +115,9 @@ test.describe("environment page", () => {
     await expect(page.locator(".resource-table")).toBeVisible();
 
     // ── the service opens nested too ─────────────────────────────────────
-    await serviceRow.getByRole("button", { name: "Open" }).click();
+    // Keyboard path: focusing the row link and pressing Enter navigates.
+    await serviceRow.locator("a.resource-link").focus();
+    await page.keyboard.press("Enter");
     await expect(page).toHaveURL(
       nestedURL(projectId, environmentId, "services", service.id),
     );

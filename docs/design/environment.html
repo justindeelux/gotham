@@ -8,6 +8,13 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
 <link rel="stylesheet" href="assets/gotham-ui.css" />
 <link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+.clickable-row { position: relative; }
+.row-link { display: block; }
+.row-link::after { content: ""; position: absolute; inset: 0; }
+.row-link:focus-visible { outline: none; }
+.clickable-row:focus-within .row-link::after { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
+</style>
 </head>
 <body data-page="environment" data-nav="projects">
 <div class="app">
@@ -39,14 +46,14 @@
           </div>
           <div class="tab-panel mt-4" data-panel="all">
             <div class="card"><div class="table-wrap"><table class="table">
-              <thead><tr><th>Name</th><th>Type</th><th>Server</th><th>Status</th><th class="actions">Actions</th></tr></thead>
+              <thead><tr><th>Name</th><th>Type</th><th>Server</th><th>Status</th></tr></thead>
               <tbody>
-                <tr><td><span class="fg-2">storefront</span><span class="cell-sub mono" style="display:block">medusajs/medusa · main</span></td><td><span class="tag">Application</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--online"></span>running</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="application-detail.html">Open</a></div></td></tr>
-                <tr><td><span class="fg-2">api-core</span><span class="cell-sub mono" style="display:block">justindeelux/gotham · main</span></td><td><span class="tag">Application</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--dnd"></span>failed</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="application-detail.html#logs">Logs</a></div></td></tr>
-                <tr><td><span class="fg-2">worker-queue</span></td><td><span class="tag">Application</span></td><td class="mono muted">build-02</td><td><span class="dot dot--online"></span>running</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="application-detail.html">Open</a></div></td></tr>
-                <tr><td><span class="fg-2">plausible</span><span class="cell-sub" style="display:block">Template service</span></td><td><span class="tag">Service</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--online"></span>running</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="services.html">Open</a></div></td></tr>
-                <tr><td><span class="fg-2">pg-orders</span><span class="cell-sub" style="display:block">PostgreSQL 16</span></td><td><span class="tag">Database</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--online"></span>running</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="databases.html">Open</a></div></td></tr>
-                <tr><td><span class="fg-2">redis-cache</span><span class="cell-sub" style="display:block">Redis 7</span></td><td><span class="tag">Database</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--idle"></span>stopped</td><td class="actions"><div class="row-actions"><a class="btn btn-sm btn-outline" href="databases.html">Open</a></div></td></tr>
+                <tr class="clickable-row"><td><a class="row-link" href="application-detail.html"><span class="fg-2">storefront</span><span class="cell-sub mono" style="display:block">medusajs/medusa · main</span></a></td><td><span class="tag">Application</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--online"></span>running</td></tr>
+                <tr class="clickable-row"><td><a class="row-link" href="application-detail.html#logs"><span class="fg-2">api-core</span><span class="cell-sub mono" style="display:block">justindeelux/gotham · main</span></a></td><td><span class="tag">Application</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--dnd"></span>failed</td></tr>
+                <tr class="clickable-row"><td><a class="row-link" href="application-detail.html"><span class="fg-2">worker-queue</span></a></td><td><span class="tag">Application</span></td><td class="mono muted">build-02</td><td><span class="dot dot--online"></span>running</td></tr>
+                <tr class="clickable-row"><td><a class="row-link" href="services.html"><span class="fg-2">plausible</span><span class="cell-sub" style="display:block">Template service</span></a></td><td><span class="tag">Service</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--online"></span>running</td></tr>
+                <tr class="clickable-row"><td><a class="row-link" href="databases.html"><span class="fg-2">pg-orders</span><span class="cell-sub" style="display:block">PostgreSQL 16</span></a></td><td><span class="tag">Database</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--online"></span>running</td></tr>
+                <tr class="clickable-row"><td><a class="row-link" href="databases.html"><span class="fg-2">redis-cache</span><span class="cell-sub" style="display:block">Redis 7</span></a></td><td><span class="tag">Database</span></td><td class="mono muted">prod-01</td><td><span class="dot dot--idle"></span>stopped</td></tr>
               </tbody>
             </table></div></div>
             <p class="small muted mt-3">Preview deployments of an application appear under it in this list when expanded; they run in this environment on the same server.</p>

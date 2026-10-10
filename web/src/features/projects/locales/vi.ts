@@ -106,7 +106,6 @@ const vi = {
       type: "Loại",
       server: "Máy chủ",
       status: "Trạng thái",
-      actions: "Thao tác",
     },
     kinds: {
       application: "Ứng dụng",
@@ -159,7 +158,6 @@ const vi = {
     label: "Máy chủ",
     aria: "Máy chủ",
     placeholder: "Chọn một máy chủ",
-    runsHere: "Tài nguyên chạy trên máy chủ này.",
     emptyPrefix: "Chưa có máy chủ nào.",
     emptyLink: "Thêm máy chủ",
     emptySuffix: "trước khi tạo tài nguyên.",

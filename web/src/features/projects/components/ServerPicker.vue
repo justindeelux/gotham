@@ -113,8 +113,5 @@ onMounted(() => {
     <template v-else-if="blockedHint">
       <NText depth="3">{{ blockedHint }} {{ t("projects.server.cannotHost") }}</NText>
     </template>
-    <template v-else>
-      <NText depth="3">{{ t("projects.server.runsHere") }}</NText>
-    </template>
   </NFormItem>
 </template>

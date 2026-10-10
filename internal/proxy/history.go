@@ -59,6 +59,11 @@ type HistoryStore interface {
 	// pending push exists the node may already serve it, so the actual prior
 	// is the active version, never an older superseded one (R2).
 	PreviousConfigVersion(ctx context.Context, serverID uuid.UUID) (ConfigVersion, error)
+	// ActiveConfigVersion returns the version the node is believed to serve:
+	// the pending record while a push is unconfirmed, else the newest active
+	// version. It answers ErrVersionNotFound when the node was never synced.
+	// Read surfaces (the router list sync status) compare against it.
+	ActiveConfigVersion(ctx context.Context, serverID uuid.UUID) (ConfigVersion, error)
 }
 
 // storeHistory adapts the shared store to the history seam.
@@ -92,6 +97,27 @@ func (h storeHistory) PromoteConfigVersion(ctx context.Context, serverID, versio
 // AbortConfigVersion drops a pending record.
 func (h storeHistory) AbortConfigVersion(ctx context.Context, serverID, versionID uuid.UUID) error {
 	return h.store.AbortProxyConfigVersion(ctx, pgUUID(serverID), pgUUID(versionID))
+}
+
+// ActiveConfigVersion resolves the version the node is believed to serve: a
+// pending push may already be live, so it wins over the newest active
+// version; otherwise the active version, then ErrVersionNotFound.
+func (h storeHistory) ActiveConfigVersion(ctx context.Context, serverID uuid.UUID) (ConfigVersion, error) {
+	pending, err := h.store.PendingProxyConfigVersion(ctx, pgUUID(serverID))
+	if err == nil && pending.Pending {
+		return configVersionFromRow(pending)
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return ConfigVersion{}, err
+	}
+	active, err := h.store.NewestActiveProxyConfigVersion(ctx, pgUUID(serverID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ConfigVersion{}, ErrVersionNotFound
+		}
+		return ConfigVersion{}, err
+	}
+	return configVersionFromRow(active)
 }
 
 // PreviousConfigVersion resolves the revert target: a pending push means the

@@ -105,6 +105,53 @@ export function dnsServersValid(list: string[]): boolean {
   return items.length <= 3 && new Set(items).size === items.length && items.every(isIP);
 }
 
+/** InterfaceConfig is the interface half of a network configuration (DNS
+ * excluded). NetworkSettings satisfies it structurally. */
+export interface InterfaceConfig {
+  ipv4: { mode: string; address: string; gateway: string };
+  ipv6: { enabled: boolean; mode: string; address: string; gateway: string };
+}
+
+/** sameInterface ignores DNS: only the interface configuration counts. The
+ * server applies such a change DNS-only, without touching the interface file. */
+export function sameInterface(a: InterfaceConfig, b: InterfaceConfig): boolean {
+  return (
+    a.ipv4.mode === b.ipv4.mode &&
+    a.ipv4.address === b.ipv4.address &&
+    a.ipv4.gateway === b.ipv4.gateway &&
+    a.ipv6.enabled === b.ipv6.enabled &&
+    a.ipv6.mode === b.ipv6.mode &&
+    a.ipv6.address === b.ipv6.address &&
+    a.ipv6.gateway === b.ipv6.gateway
+  );
+}
+
+/** isRiskyInterfaceChange mirrors the server guard (JUS-100): touching a
+ * live static family's mode/address/gateway needs an explicit confirmation,
+ * otherwise a DNS edit can drop the host's address. */
+export function isRiskyInterfaceChange(prev: InterfaceConfig, next: InterfaceConfig): boolean {
+  if (prev.ipv4.mode === "static" && prev.ipv4.address !== "") {
+    if (
+      next.ipv4.mode !== "static" ||
+      next.ipv4.address !== prev.ipv4.address ||
+      next.ipv4.gateway !== prev.ipv4.gateway
+    ) {
+      return true;
+    }
+  }
+  if (prev.ipv6.enabled && prev.ipv6.mode === "static" && prev.ipv6.address !== "") {
+    if (
+      !next.ipv6.enabled ||
+      next.ipv6.mode !== "static" ||
+      next.ipv6.address !== prev.ipv6.address ||
+      next.ipv6.gateway !== prev.ipv6.gateway
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export const ipv4AddressSchema = z
   .string()
   .trim()

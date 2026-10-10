@@ -12,14 +12,29 @@ import (
 	"time"
 )
 
+// HostNetwork is the live host truth for the default-route interface, as
+// reported by `gotham-hostctl status` (addresses/gateways from `ip`, modes
+// from the winning .network file, effective DNS from resolvectl).
+type HostNetwork struct {
+	Interface  string     `json:"interface"`
+	DNSServers []string   `json:"dns_servers"`
+	IPv4       IPConfig   `json:"ipv4"`
+	IPv6       IPv6Config `json:"ipv6"`
+}
+
 // HostApplier applies network and system settings to the host.
 type HostApplier interface {
 	// Capabilities reports what the host can apply; it never fails (an
 	// unusable helper reports no capability).
 	Capabilities(ctx context.Context) Capabilities
+	// HostNetwork reports the live addresses of the default-route
+	// interface; ok is false when the helper is missing or the probe fails.
+	HostNetwork(ctx context.Context) (live HostNetwork, ok bool)
 	// ApplyNetwork applies net tentatively; the host reverts it by itself
-	// unless ConfirmNetwork runs within revertAfter.
-	ApplyNetwork(ctx context.Context, net Network, revertAfter time.Duration) error
+	// unless ConfirmNetwork runs within revertAfter. dnsOnly writes only
+	// the resolver drop-in and never touches the interface file, so a DNS
+	// change on a static host cannot drop its address.
+	ApplyNetwork(ctx context.Context, net Network, revertAfter time.Duration, dnsOnly bool) error
 	// ConfirmNetwork keeps the applied network change.
 	ConfirmNetwork(ctx context.Context) error
 	// RevertNetwork restores the pre-change network configuration now.
@@ -67,18 +82,45 @@ func (a *sudoApplier) Capabilities(ctx context.Context) Capabilities {
 	if _, err := os.Stat(a.path); err != nil {
 		return Capabilities{}
 	}
-	out, err := a.run(ctx, "status", "")
-	if err != nil {
+	p, ok := a.fetchStatus(ctx)
+	if !ok {
 		return Capabilities{}
 	}
-	var caps Capabilities
-	if json.Unmarshal([]byte(strings.TrimSpace(out)), &caps) != nil {
-		return Capabilities{}
-	}
-	return caps
+	return p.Capabilities
 }
 
-func (a *sudoApplier) ApplyNetwork(ctx context.Context, n Network, revertAfter time.Duration) error {
+// statusPayload mirrors the helper's status JSON; host_network is null when
+// the default-route interface cannot be probed.
+type statusPayload struct {
+	Capabilities
+	HostNetwork *HostNetwork `json:"host_network"`
+}
+
+func (a *sudoApplier) fetchStatus(ctx context.Context) (*statusPayload, bool) {
+	out, err := a.run(ctx, "status", "")
+	if err != nil {
+		return nil, false
+	}
+	var p statusPayload
+	if json.Unmarshal([]byte(strings.TrimSpace(out)), &p) != nil {
+		return nil, false
+	}
+	return &p, true
+}
+
+// HostNetwork reports the live host configuration (see fetchStatus).
+func (a *sudoApplier) HostNetwork(ctx context.Context) (HostNetwork, bool) {
+	if _, err := os.Stat(a.path); err != nil {
+		return HostNetwork{}, false
+	}
+	p, ok := a.fetchStatus(ctx)
+	if !ok || p.HostNetwork == nil || p.HostNetwork.Interface == "" {
+		return HostNetwork{}, false
+	}
+	return *p.HostNetwork, true
+}
+
+func (a *sudoApplier) ApplyNetwork(ctx context.Context, n Network, revertAfter time.Duration, dnsOnly bool) error {
 	var b strings.Builder
 	line := func(k, v string) { b.WriteString(k + "=" + v + "\n") }
 	line("dns", strings.Join(n.DNSServers, ","))
@@ -90,6 +132,7 @@ func (a *sudoApplier) ApplyNetwork(ctx context.Context, n Network, revertAfter t
 	line("ipv6_address", n.IPv6.Address)
 	line("ipv6_gateway", n.IPv6.Gateway)
 	line("revert_after", strconv.Itoa(int(revertAfter.Seconds())))
+	line("dns_only", strconv.FormatBool(dnsOnly))
 	_, err := a.run(ctx, "apply-network", b.String())
 	return err
 }

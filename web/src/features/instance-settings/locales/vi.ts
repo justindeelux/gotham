@@ -43,6 +43,11 @@ const vi: typeof en = {
     submit: "Áp dụng thay đổi mạng",
     applied: "Đã áp dụng thay đổi mạng. Hãy xác nhận trước khi đếm ngược kết thúc.",
     pendingNote: "Đang có thay đổi mạng chờ xác nhận. Hãy xử lý trước khi thay đổi tiếp.",
+    dnsOnlyNote: "Chỉ đổi máy chủ DNS: cấu hình interface được giữ nguyên.",
+    riskyWarning:
+      "Thay đổi này can thiệp vào địa chỉ của interface bạn đang kết nối. Máy chủ có thể mất kết nối cho đến khi bạn xác nhận hoặc hoàn tác.",
+    confirmLabel: "Tôi hiểu thay đổi này có thể làm gián đoạn kết nối",
+    confirmRequired: "Hãy tích vào ô xác nhận để áp dụng thay đổi này.",
   },
   confirm: {
     title: "Giữ các thay đổi mạng này?",

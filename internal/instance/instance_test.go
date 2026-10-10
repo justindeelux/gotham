@@ -29,13 +29,20 @@ func (f *fakeRepo) Save(_ context.Context, _ uuid.UUID, section string, rec Stor
 
 type fakeHost struct {
 	caps                        Capabilities
+	live                        HostNetwork
+	hasLive                     bool
 	applied, confirmed, reverts int
+	dnsOnlys                    []bool
 	err                         error
 }
 
 func (h *fakeHost) Capabilities(context.Context) Capabilities { return h.caps }
-func (h *fakeHost) ApplyNetwork(context.Context, Network, time.Duration) error {
+func (h *fakeHost) HostNetwork(context.Context) (HostNetwork, bool) {
+	return h.live, h.hasLive
+}
+func (h *fakeHost) ApplyNetwork(_ context.Context, _ Network, _ time.Duration, dnsOnly bool) error {
 	h.applied++
+	h.dnsOnlys = append(h.dnsOnlys, dnsOnly)
 	return h.err
 }
 func (h *fakeHost) ConfirmNetwork(context.Context) error      { h.confirmed++; return nil }
@@ -118,11 +125,11 @@ func TestNetworkConfirmAndRevert(t *testing.T) {
 	now := time.Now()
 	svc.now = func() time.Time { return now }
 
-	st, err := svc.UpdateNetwork(ctx, uuid.Nil, goodNet())
+	st, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: goodNet()})
 	if err != nil || st.Pending == nil || host.applied != 1 {
 		t.Fatalf("apply: %+v %v", st, err)
 	}
-	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, goodNet()); !errors.Is(err, ErrPending) {
+	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: goodNet()}); !errors.Is(err, ErrPending) {
 		t.Fatalf("second change while pending: %v", err)
 	}
 	if st, err = svc.ConfirmNetwork(ctx, uuid.Nil); err != nil || st.Pending != nil || host.confirmed != 1 {
@@ -135,7 +142,7 @@ func TestNetworkConfirmAndRevert(t *testing.T) {
 	// Unconfirmed change: the deadline passes and the desired state reverts.
 	next := goodNet()
 	next.IPv4.Address = "10.0.0.6/24"
-	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, next); err != nil {
+	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: next}); err != nil {
 		t.Fatal(err)
 	}
 	svc.now = func() time.Time { return now.Add(NetworkConfirmWindow + time.Second) }
@@ -146,7 +153,7 @@ func TestNetworkConfirmAndRevert(t *testing.T) {
 
 	// Manual revert.
 	svc.now = func() time.Time { return now }
-	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, next); err != nil {
+	if _, err := svc.UpdateNetwork(ctx, uuid.Nil, NetworkInput{Network: next}); err != nil {
 		t.Fatal(err)
 	}
 	if st, err = svc.RevertNetwork(ctx, uuid.Nil); err != nil || st.Network.IPv4.Address != "10.0.0.5/24" || host.reverts != 1 {
@@ -157,10 +164,121 @@ func TestNetworkConfirmAndRevert(t *testing.T) {
 	}
 }
 
+// staticLive is the JUS-100 scene: the host is static but the stored record
+// still carries the DHCP defaults, so a DNS-only change must apply minimally
+// and a static-to-DHCP switch must need an explicit confirmation.
+func staticLive() (HostNetwork, Stored) {
+	live := HostNetwork{
+		Interface:  "ens160",
+		DNSServers: []string{"1.1.1.1"},
+		IPv4:       IPConfig{Mode: ModeStatic, Address: "103.176.22.225/24", Gateway: "103.176.22.1"},
+		IPv6:       IPv6Config{Enabled: false, Mode: ModeDHCP},
+	}
+	stored := Stored{Network: Network{
+		DNSServers: []string{"1.1.1.1"},
+		IPv4:       IPConfig{Mode: ModeDHCP}, IPv6: IPv6Config{Enabled: false, Mode: ModeDHCP},
+	}}
+	return live, stored
+}
+
+func liveNet(live HostNetwork, dns ...string) Network {
+	if len(dns) > 0 {
+		live.DNSServers = dns
+	}
+	return Network{DNSServers: live.DNSServers, IPv4: live.IPv4, IPv6: live.IPv6}
+}
+
+func TestNetworkDNSOnlyOnStaticHost(t *testing.T) {
+	host := &fakeHost{caps: Capabilities{Network: true, System: true}, hasLive: true}
+	host.live, _ = staticLive()
+	_, stored := staticLive()
+	repo := &fakeRepo{rec: stored}
+	svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc.lookup = func(string) string { return "" }
+
+	// The incident request: only the resolvers differ from the host truth.
+	req := liveNet(host.live, "9.9.9.9")
+	st, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: req})
+	if err != nil || st.Pending == nil {
+		t.Fatalf("dns-only apply: %+v %v", st, err)
+	}
+	if len(host.dnsOnlys) != 1 || !host.dnsOnlys[0] {
+		t.Fatalf("dns-only change must take the minimal path: %v", host.dnsOnlys)
+	}
+	if st.Network.IPv4.Mode != ModeStatic || st.Network.IPv4.Address != "103.176.22.225/24" {
+		t.Fatalf("desired state lost the static address: %+v", st.Network.IPv4)
+	}
+}
+
+func TestNetworkRiskyChangeNeedsConfirmation(t *testing.T) {
+	host := &fakeHost{caps: Capabilities{Network: true, System: true}, hasLive: true}
+	host.live, _ = staticLive()
+	newSvcLive := func() *Service {
+		_, stored := staticLive()
+		repo := &fakeRepo{rec: stored}
+		svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		svc.lookup = func(string) string { return "" }
+		return svc
+	}
+
+	// Static-to-DHCP on the active interface without the flag is refused.
+	svc := newSvcLive()
+	risky := liveNet(host.live)
+	risky.IPv4 = IPConfig{Mode: ModeDHCP}
+	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: risky}); !errors.Is(err, ErrRiskyNetwork) {
+		t.Fatalf("static->dhcp without confirmation: %v", err)
+	}
+	if host.applied != 0 {
+		t.Fatal("refused change reached the host")
+	}
+
+	// A changed static address is equally risky.
+	svc = newSvcLive()
+	moved := liveNet(host.live)
+	moved.IPv4.Address = "103.176.22.99/24"
+	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: moved}); !errors.Is(err, ErrRiskyNetwork) {
+		t.Fatalf("address change without confirmation: %v", err)
+	}
+
+	// With the flag the same change applies through the full path.
+	svc = newSvcLive()
+	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: risky, ConfirmInterfaceChange: true}); err != nil {
+		t.Fatalf("confirmed change rejected: %v", err)
+	}
+	if len(host.dnsOnlys) == 0 || host.dnsOnlys[len(host.dnsOnlys)-1] {
+		t.Fatalf("interface change must take the full path: %v", host.dnsOnlys)
+	}
+}
+
+func TestGetReportsHostTruth(t *testing.T) {
+	host := &fakeHost{caps: Capabilities{Network: true, System: true}, hasLive: true}
+	host.live, _ = staticLive()
+	_, stored := staticLive()
+	repo := &fakeRepo{rec: stored}
+	svc := NewService(repo, host, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc.lookup = func(string) string { return "" }
+	st, err := svc.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Network.IPv4.Mode != ModeStatic || st.Network.IPv4.Address != "103.176.22.225/24" ||
+		st.Network.IPv4.Gateway != "103.176.22.1" {
+		t.Fatalf("form would show stale defaults: %+v", st.Network.IPv4)
+	}
+	// While a change is pending the desired (not live) values are shown.
+	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: liveNet(host.live, "9.9.9.9")}); err != nil {
+		t.Fatal(err)
+	}
+	st, _ = svc.Get(context.Background())
+	if len(st.Network.DNSServers) != 1 || st.Network.DNSServers[0] != "9.9.9.9" {
+		t.Fatalf("pending desired state hidden: %+v", st.Network.DNSServers)
+	}
+}
+
 func TestUnsupportedHostAndHelperFailure(t *testing.T) {
 	host := &fakeHost{}
 	svc, _ := newSvc(host)
-	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, goodNet()); !errors.Is(err, ErrUnsupported) {
+	if _, err := svc.UpdateNetwork(context.Background(), uuid.Nil, NetworkInput{Network: goodNet()}); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("want unsupported: %v", err)
 	}
 	host.caps, host.err = Capabilities{Network: true, System: true}, ErrHost

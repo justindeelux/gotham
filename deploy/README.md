@@ -539,9 +539,38 @@ sudo deploy/install-hostctl-sudoers.sh gotham
   `timesyncd.conf.d/05-gotham.conf`; other hosts report the sections as unsupported.
 - A network change is tentative: a systemd timer reverts it after 120 s unless the
   operator confirms in the UI, so a wrong address cannot lock them out.
-- The helper always rewrites the interface file for the default-route interface,
-  so never apply `ipv4_mode=dhcp` (or a different static address/gateway) on the
-  interface you are connected through: the host drops its current address as soon
-  as networkd reconfigures, and only the revert timer brings it back. Verify DNS,
-  hostname and NTP first; exercise address changes from the console. `revert_after`
-  accepts 30–600 s (the control plane passes 120 s).
+- `status` also reports `host_network`: the default-route interface as the
+  host sees it (live addresses/gateways from `ip`, modes from the winning
+  `.network` file, effective DNS from resolvectl). The control plane seeds the
+  Network form from it, so the form shows the host truth instead of the stored
+  `dhcp` defaults.
+- A DNS-only change (`dns_only=true`, sent by the control plane when the
+  interface fields match the host) writes only `resolved.conf.d/05-gotham.conf`
+  and never touches the interface `.network` file; neither apply nor revert
+  reconfigures the interface in that path. Revert restores only the files the
+  apply snapshotted, so a DNS-only revert cannot delete a pre-existing
+  interface file.
+- The control plane refuses server-side any apply that would disturb the
+  active interface (static-to-DHCP, a different address/gateway) unless the
+  request carries `confirm_interface_change=true`; the UI shows a warning and
+  a confirmation checkbox for exactly those changes.
+- Never apply `ipv4_mode=dhcp` (or a different static address/gateway) on the
+  interface you are connected through without that confirmation: the host drops
+  its current address as soon as networkd reconfigures, and only the revert
+  timer brings it back. Verify DNS, hostname and NTP first; exercise address
+  changes from the console. `revert_after` accepts 30–600 s (the control plane
+  passes 120 s).
+
+### JUS-100 postscript (2026-10-10): a DNS-only change dropped the static IPv4
+
+On the shared test box (static IPv4 via netplan, `dhcp4: no`) changing only
+the DNS servers cut the box off the network until the 120 s auto-revert fired.
+Root cause, all three at once: the form showed the stored `dhcp` default
+instead of the host's static config, so Apply sent `ipv4_mode=dhcp` with the
+new DNS; `apply-network` unconditionally rewrote the whole `05-gotham.network`
+(`DHCP=ipv4`, no `Address`/`Gateway`); nothing refused a static-to-DHCP switch
+on the active interface. Fixed by the four bullets above (host-truth status,
+DNS-only apply path, server-side confirmation guard, form warning); covered by
+`deploy/hostctl_test.go` (`TestHostctlStatusReportsHostTruth`,
+`TestHostctlDNSOnlyLeavesInterfaceAlone`), `internal/instance` service tests
+and `web/tests/network-guard.test.ts`.

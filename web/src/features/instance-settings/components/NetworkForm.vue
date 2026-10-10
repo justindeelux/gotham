@@ -1,7 +1,18 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NRadioButton, NRadioGroup, NSwitch } from "naive-ui";
+import {
+  NAlert,
+  NButton,
+  NCard,
+  NCheckbox,
+  NForm,
+  NFormItem,
+  NInput,
+  NRadioButton,
+  NRadioGroup,
+  NSwitch,
+} from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { saveNetwork } from "@/features/instance-settings/api/instance";
@@ -15,7 +26,10 @@ import {
   ipv4GatewaySchema,
   ipv6AddressSchema,
   ipv6GatewaySchema,
+  isRiskyInterfaceChange,
+  sameInterface,
 } from "@/features/instance-settings/schemas/instance";
+import type { InterfaceConfig } from "@/features/instance-settings/schemas/instance";
 import { ruleFrom } from "@/shared/validation/naiveAdapter";
 
 const props = defineProps<{ state: InstanceState }>();
@@ -24,6 +38,10 @@ const { t } = useI18n();
 
 const formRef = ref<FormInst | null>(null);
 const dnsExtra = ref(false);
+// baseline is the loaded host configuration the risky-change guard compares
+// against (JUS-100): the server reports the host truth, not stored defaults.
+const baseline = ref<InterfaceConfig>(snapshot(props.state.network));
+const confirmChecked = ref(false);
 const form = reactive({
   dns0: "",
   dns1: "",
@@ -53,6 +71,8 @@ watch(
     form.v6Mode = n.ipv6.mode;
     form.v6Address = n.ipv6.address;
     form.v6Gateway = n.ipv6.gateway;
+    baseline.value = snapshot(n);
+    confirmChecked.value = false;
   },
   { immediate: true },
 );
@@ -85,10 +105,44 @@ const { submitting, serverErrors, errorMessage, submit } = useSectionForm(
         address: v6Static() ? form.v6Address.trim() : "",
         gateway: v6Static() ? form.v6Gateway.trim() : "",
       },
+      confirm_interface_change: confirmChecked.value,
     }),
   (next) => emit("saved", next),
   () => t("instance-settings.network.applied"),
 );
+
+/** snapshot reads the interface half of a network configuration. */
+function snapshot(n: InterfaceConfig): InterfaceConfig {
+  return {
+    ipv4: { mode: n.ipv4.mode, address: n.ipv4.address, gateway: n.ipv4.gateway },
+    ipv6: {
+      enabled: n.ipv6.enabled,
+      mode: n.ipv6.mode,
+      address: n.ipv6.address,
+      gateway: n.ipv6.gateway,
+    },
+  };
+}
+
+/** current reads the interface half of the form as the submit payload would. */
+function current(): InterfaceConfig {
+  return {
+    ipv4: {
+      mode: form.v4Mode,
+      address: v4Static() ? form.v4Address.trim() : "",
+      gateway: v4Static() ? form.v4Gateway.trim() : "",
+    },
+    ipv6: {
+      enabled: form.v6Enabled,
+      mode: form.v6Enabled ? form.v6Mode : "dhcp",
+      address: v6Static() ? form.v6Address.trim() : "",
+      gateway: v6Static() ? form.v6Gateway.trim() : "",
+    },
+  };
+}
+
+const risky = computed<boolean>(() => isRiskyInterfaceChange(baseline.value, current()));
+const dnsOnly = computed<boolean>(() => !risky.value && sameInterface(baseline.value, current()));
 
 /** dnsServers collects the visible resolver inputs, dropping empties. */
 function dnsServers(): string[] {
@@ -104,6 +158,10 @@ async function handleSubmit(): Promise<void> {
   }
   if (!dnsServersValid(dnsServers())) {
     errorMessage.value = t("instance-settings.validation.dns");
+    return;
+  }
+  if (risky.value && !confirmChecked.value) {
+    errorMessage.value = t("instance-settings.network.confirmRequired");
     return;
   }
   await submit();
@@ -221,6 +279,15 @@ const disabled = (): boolean => !props.state.capabilities.network || props.state
       <NButton type="primary" :loading="submitting" :disabled="disabled()" @click="handleSubmit">
         {{ t("instance-settings.network.submit") }}
       </NButton>
+      <NAlert v-if="dnsOnly" type="info" :show-icon="true" class="form-alert">
+        {{ t("instance-settings.network.dnsOnlyNote") }}
+      </NAlert>
+      <NAlert v-if="risky" type="warning" :show-icon="true" class="form-alert">
+        {{ t("instance-settings.network.riskyWarning") }}
+      </NAlert>
+      <NCheckbox v-if="risky" v-model:checked="confirmChecked" :disabled="disabled()">
+        {{ t("instance-settings.network.confirmLabel") }}
+      </NCheckbox>
     </NForm>
   </NCard>
 </template>

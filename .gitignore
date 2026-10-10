@@ -54,3 +54,6 @@ docs/ORCHESTRATION.md
 
 # i18n discovery probe staged temporarily by web/tests/i18n-discovery-global-setup.ts
 web/src/features/__i18n_probe__/
+
+# Local test-box notes (credentials live here, never commit)
+docs/test-server.md

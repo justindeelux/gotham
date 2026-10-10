@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -84,6 +85,12 @@ type Config struct {
 	Logger       *slog.Logger
 	Auto         bool
 	AutoInterval time.Duration
+	// Schedules persists the operator's check / auto-apply schedule. Nil keeps
+	// the schedule in memory only (env defaults, lost on restart).
+	Schedules ScheduleStore
+	// Timezone returns the instance IANA timezone that daily/weekly schedule
+	// times are evaluated in. Nil or an unknown name means UTC.
+	Timezone func() string
 	// GOARCH pins the asset architecture (tests); empty means the running one.
 	GOARCH string
 
@@ -102,8 +109,16 @@ type service struct {
 	pending  *StatusStore
 	backoff  *updateBackoff
 	logger   *slog.Logger
-	auto     bool
 	interval time.Duration
+
+	schedules ScheduleStore
+	timezone  func() string
+	reload    chan struct{}
+	mu        sync.Mutex // guards the fields below
+	sched     Schedule
+	nextAt    time.Time
+	checkedAt time.Time
+	checkErr  string
 }
 
 // NewService builds a self-update Service. It does not fail when no public key
@@ -187,9 +202,14 @@ func NewService(cfg Config) (Service, error) {
 		pending:  pending,
 		backoff:  newUpdateBackoff(backoffStore, logger),
 		logger:   logger,
-		auto:     cfg.Auto,
 		interval: interval,
+
+		schedules: cfg.Schedules,
+		timezone:  cfg.Timezone,
+		reload:    make(chan struct{}, 1),
+		sched:     defaultSchedule(cfg, interval),
 	}
+	svc.loadSchedule()
 	// Seed the persisted backoff from the durable status so a restart after a
 	// rollback does not immediately re-apply the same release (LOW-2).
 	svc.backoff.seedFromStatus(last, svc.current)
@@ -199,19 +219,29 @@ func NewService(cfg Config) (Service, error) {
 // Current returns the running version.
 func (s *service) Current() string { return s.current }
 
-// Check resolves the newest available release, or nil when up to date.
+// Check resolves the newest available release on the scheduled channel, or nil
+// when up to date.
 func (s *service) Check(ctx context.Context) (*Release, error) {
-	return s.checker.Check(ctx, s.current)
+	return s.checkOn(ctx, "")
 }
 
-// Apply checks the requested channel (defaulting to the configured one) and
-// applies the resolved release.
-func (s *service) Apply(ctx context.Context, channel Channel) (*ApplyResult, error) {
+// checkOn checks channel (defaulting to the scheduled one) and records the
+// outcome for the status view.
+func (s *service) checkOn(ctx context.Context, channel Channel) (*Release, error) {
 	checker := *s.checker
-	if channel != "" {
-		checker.Channel = channel
+	checker.Channel = channel
+	if channel == "" {
+		checker.Channel = s.schedule().Channel
 	}
 	release, err := checker.Check(ctx, s.current)
+	s.recordCheck(err)
+	return release, err
+}
+
+// Apply checks the requested channel (defaulting to the scheduled one) and
+// applies the resolved release.
+func (s *service) Apply(ctx context.Context, channel Channel) (*ApplyResult, error) {
+	release, err := s.checkOn(ctx, channel)
 	if err != nil {
 		return nil, err
 	}
@@ -298,35 +328,6 @@ func lastStatusOf(pending, status *StatusStore) (*Status, error) {
 		}
 	}
 	return status.Read()
-}
-
-// StartAuto runs the scheduled check/apply loop until ctx is cancelled. It is
-// a no-op unless auto-update is enabled.
-func (s *service) StartAuto(ctx context.Context) {
-	if !s.auto || !AutoUpdateEnabled() {
-		return
-	}
-	s.logger.Info("updates: auto-update enabled", "interval", s.interval.String())
-	go func() {
-		ticker := time.NewTicker(s.interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				version, applied, err := s.applyAutoUpdate(ctx)
-				switch {
-				case err != nil:
-					s.logger.Warn("updates: auto-update failed", "error", err)
-				case applied:
-					s.logger.Info("updates: auto-update staged", "version", version)
-				default:
-					s.logger.Debug("updates: no auto-update available", "current", s.current)
-				}
-			}
-		}
-	}()
 }
 
 // defaultRestart runs the fixed, root-owned wrapper through sudo and returns a

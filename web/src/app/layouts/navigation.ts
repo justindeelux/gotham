@@ -62,7 +62,7 @@ export const navSections: NavSection[] = [
     labelKey: "nav.sections.system",
     items: [
       { key: "instance", label: "Instance", labelKey: "nav.items.instance", icon: "gear", to: "instance" },
-      { key: "updates", label: "Updates & settings", labelKey: "nav.items.updates", icon: "gear" },
+      { key: "updates", label: "Updates & settings", labelKey: "nav.items.updates", icon: "gear", to: "updates" },
     ],
   },
 ];

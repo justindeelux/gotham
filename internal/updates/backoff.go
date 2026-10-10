@@ -161,3 +161,23 @@ func newerVersion(offered, current string) bool {
 	}
 	return o.Compare(c) > 0
 }
+
+// active returns the version currently held back and when its window ends.
+func (b *updateBackoff) active() (version string, until time.Time, ok bool) {
+	if b == nil || b.store == nil {
+		return "", time.Time{}, false
+	}
+	status, err := b.store.Read()
+	if err != nil || status == nil || status.At.IsZero() {
+		return "", time.Time{}, false
+	}
+	count, convErr := strconv.Atoi(strings.TrimSpace(status.Detail))
+	if convErr != nil || count < 1 {
+		return "", time.Time{}, false
+	}
+	until = status.At.Add(backoffDelay(count))
+	if !time.Now().Before(until) {
+		return "", time.Time{}, false
+	}
+	return status.Version, until, true
+}

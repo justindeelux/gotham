@@ -82,6 +82,7 @@ async function mountShell(): Promise<ReturnType<typeof mount>> {
           { path: "notifications", name: "notifications", component: stub },
           { path: "git-sources", name: "git-sources", component: stub },
           { path: "instance", name: "instance", component: stub },
+          { path: "updates", name: "updates", component: stub },
           { path: "servers/:id", name: "server-detail", component: stub },
         ],
       },

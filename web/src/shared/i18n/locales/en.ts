@@ -116,6 +116,7 @@ const en = {
     instance: "Instance settings",
     gitSources: "Git sources",
     profile: "Profile",
+    updates: "Updates",
     inviteAccept: "Team invite",
   },
   time: {

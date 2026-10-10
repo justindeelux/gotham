@@ -159,6 +159,12 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/features/instance-settings/pages/InstanceSettingsPage.vue"),
         meta: { titleKey: "titles.instance", requiresAuth: true },
       },
+      {
+        path: "settings/updates",
+        name: "updates",
+        component: () => import("@/features/updates/pages/UpdatesPage.vue"),
+        meta: { titleKey: "titles.updates", requiresAuth: true },
+      },
       // The bare settings path keeps landing on notifications now that the
       // settings section holds more than one page.
       { path: "settings", redirect: { name: "notifications" } },

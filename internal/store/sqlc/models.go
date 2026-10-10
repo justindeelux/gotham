@@ -556,6 +556,18 @@ type TeamMember struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type UpdateSchedule struct {
+	ID              bool               `json:"id"`
+	CheckEnabled    bool               `json:"check_enabled"`
+	AutoApply       bool               `json:"auto_apply"`
+	Channel         string             `json:"channel"`
+	Frequency       string             `json:"frequency"`
+	IntervalMinutes int32              `json:"interval_minutes"`
+	AtTime          string             `json:"at_time"`
+	Weekday         int16              `json:"weekday"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
 type User struct {
 	ID                pgtype.UUID        `json:"id"`
 	Email             string             `json:"email"`

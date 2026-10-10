@@ -86,6 +86,8 @@ type Server struct {
 	tokens      TokenService
 	servers     ServerService
 	persistence *store.Store
+	// instanceSvc backs instance settings (JUS-92); nil without a database.
+	instanceSvc *instance.Service
 	teamService teams.TeamService
 	// invites is the teams-domain slice backing invite registration (P-A2);
 	// it is the same object as teamService, typed for the auth seam.
@@ -401,6 +403,7 @@ func (s *Server) routes() (http.Handler, error) {
 			if err := instanceSvc.Reconcile(context.Background()); err != nil {
 				s.logger.Warn("instance settings reconcile failed", "error", err)
 			}
+			s.instanceSvc = instanceSvc
 			instance.Mount(api, platformOnly, UserIDFromContext, instanceSvc)
 		}
 		proxy.Mount(api, s.withTeam(), platformOnly, s.proxy,
@@ -940,6 +943,18 @@ func (s *Server) updatesService() updates.Service {
 		}
 	}
 	config, err := updates.FromEnv(current, s.logger)
+	if s.persistence != nil {
+		config.Schedules = updates.NewStoreSchedule(s.persistence)
+	}
+	if s.instanceSvc != nil {
+		config.Timezone = func() string {
+			st, err := s.instanceSvc.Get(context.Background())
+			if err != nil {
+				return ""
+			}
+			return st.General.Timezone.Value
+		}
+	}
 	if err != nil {
 		s.logger.Info("updates: release public key not configured; apply disabled", "reason", err)
 	}

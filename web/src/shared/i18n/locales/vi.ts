@@ -117,6 +117,7 @@ const vi: CommonMessages = {
     instance: "Cài đặt instance",
     gitSources: "Nguồn Git",
     profile: "Hồ sơ",
+    updates: "Cập nhật",
     inviteAccept: "Lời mời vào nhóm",
   },
   time: {

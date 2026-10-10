@@ -52,6 +52,7 @@ type errorBody struct {
 // handler serves the self-update routes for one Service.
 type handler struct {
 	svc     Service
+	sched   Scheduler // nil when svc has no schedule surface
 	isAdmin func(*http.Request) bool
 	logger  *slog.Logger
 }
@@ -60,6 +61,8 @@ type handler struct {
 //
 //	GET  /v1/updates/check   (any authenticated caller)
 //	POST /v1/updates/apply   (platform operator only)
+//	GET  /v1/updates/schedule (any authenticated caller)
+//	PUT  /v1/updates/schedule (platform operator only)
 //
 // auth is the server's RequireAuth + read-scope chain (the check is a read);
 // adminAuth is the server's RequireAuth + RequirePlatformAdmin chain, because
@@ -77,13 +80,20 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, adminAuth func(ht
 		isAdmin = func(*http.Request) bool { return false }
 	}
 	h := &handler{svc: svc, isAdmin: isAdmin, logger: slog.Default()}
+	h.sched, _ = svc.(Scheduler)
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
 		protected.Get("/v1/updates/check", h.check)
+		if h.sched != nil {
+			protected.Get("/v1/updates/schedule", h.getSchedule)
+		}
 	})
 	r.Group(func(admin chi.Router) {
 		admin.Use(adminAuth)
 		admin.Post("/v1/updates/apply", h.apply)
+		if h.sched != nil {
+			admin.Put("/v1/updates/schedule", h.putSchedule)
+		}
 	})
 }
 
@@ -141,6 +151,45 @@ func (h *handler) apply(w http.ResponseWriter, r *http.Request) {
 		Staged:  result.Staged,
 		Restart: result.Restart,
 	})
+}
+
+// getSchedule serves GET /v1/updates/schedule. The raw check error is
+// operator-only because it can carry release-server detail.
+func (h *handler) getSchedule(w http.ResponseWriter, r *http.Request) {
+	state := h.sched.ScheduleState()
+	if !h.isAdmin(r) {
+		state.LastCheckError = ""
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+// putSchedule serves PUT /v1/updates/schedule.
+func (h *handler) putSchedule(w http.ResponseWriter, r *http.Request) {
+	var schedule Schedule
+	decoder := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&schedule); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request body"})
+		return
+	}
+	state, err := h.sched.SetSchedule(r.Context(), schedule)
+	var invalid *ScheduleError
+	if errors.As(err, &invalid) {
+		writeJSON(w, http.StatusUnprocessableEntity, validationBody{Message: "invalid update schedule", Fields: invalid.Fields})
+		return
+	}
+	if err != nil {
+		h.logger.Error("updates: could not save the schedule", "error", err)
+		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
+}
+
+// validationBody is the 422 body for an invalid schedule.
+type validationBody struct {
+	Message string            `json:"message"`
+	Fields  map[string]string `json:"fields"`
 }
 
 // writeServiceError maps update sentinels to HTTP responses.

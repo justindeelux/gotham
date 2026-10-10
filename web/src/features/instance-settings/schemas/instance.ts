@@ -87,6 +87,24 @@ export const dnsListSchema = z.string().refine((value) => {
   return items.length <= 3 && new Set(items).size === items.length && items.every(isIP);
 }, m("dns"));
 
+/** dnsServerSchema validates one optional resolver input (Primary/Alternate). */
+export const dnsServerSchema = z
+  .string()
+  .trim()
+  .refine((value) => value === "" || isIP(value), m("dnsSingle"));
+
+/** dnsPrimaryServerSchema validates the required Primary resolver input. */
+export const dnsPrimaryServerSchema = z
+  .string()
+  .trim()
+  .refine(isIP, m("dnsSingle"));
+
+/** dnsServersValid checks the combined resolver list (distinct, at most 3). */
+export function dnsServersValid(list: string[]): boolean {
+  const items = list.map((item) => item.trim()).filter((item) => item !== "");
+  return items.length <= 3 && new Set(items).size === items.length && items.every(isIP);
+}
+
 export const ipv4AddressSchema = z
   .string()
   .trim()

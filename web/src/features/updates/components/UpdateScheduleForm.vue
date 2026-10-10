@@ -197,7 +197,7 @@ async function onSubmit(): Promise<void> {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   grid-auto-flow: row dense;
-  column-gap: var(--space-8);
+  gap: var(--form-item-gap) var(--space-8);
   align-items: start;
   max-width: 960px;
 }
@@ -222,7 +222,6 @@ async function onSubmit(): Promise<void> {
 .schedule-actions {
   display: flex;
   gap: var(--space-2);
-  margin-top: var(--space-3);
 }
 
 .field-hint {

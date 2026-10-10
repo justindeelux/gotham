@@ -194,7 +194,7 @@ onMounted(() => {
 .stat-value {
   margin-top: 6px;
   font-family: var(--font-display);
-  font-size: var(--text-3xl);
+  font-size: var(--text-2xl);
   font-weight: 700;
   line-height: 1.1;
   letter-spacing: -0.02em;

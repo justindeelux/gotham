@@ -81,7 +81,9 @@ export function useUpdates() {
   }
 
   async function load(): Promise<void> {
-    await Promise.all([runCheck(), loadSchedule()]);
+    // The persisted account can predate a PLATFORM_ADMINS change, so refresh the
+    // operator bit the admin controls depend on (App.vue only fetches when empty).
+    await Promise.all([authStore.fetchMe().catch(() => {}), runCheck(), loadSchedule()]);
   }
 
   async function startUpdate(): Promise<void> {

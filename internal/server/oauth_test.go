@@ -17,8 +17,11 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/google/uuid"
+
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/config"
+	"github.com/justindeelux/gotham/internal/instance"
 )
 
 // fakeOAuthService is a deterministic OAuthService for handler tests.
@@ -941,5 +944,56 @@ func TestOAuthEmptyRedirectBaseRequiresHTTPS(t *testing.T) {
 	}
 	if loc := secure.Header().Get("Location"); loc == oauthFailureRedirect {
 		t.Fatalf("secure login was rejected with the empty base: %s", loc)
+	}
+}
+
+// stubInstanceRepo is an empty instance store for control-plane URL tests;
+// the effective URL comes from the environment (see instance.Service).
+type stubInstanceRepo struct{}
+
+func (stubInstanceRepo) Load(context.Context) (instance.Stored, error) {
+	return instance.Stored{}, nil
+}
+
+func (stubInstanceRepo) Save(context.Context, uuid.UUID, string, instance.Stored, any) error {
+	return nil
+}
+
+// TestOAuthRedirectBaseControlPlaneURL pins the post-login origin precedence:
+// the explicit GitHub redirect env wins when set, otherwise the instance
+// control-plane URL names the origin, and empty keeps today's behavior.
+func TestOAuthRedirectBaseControlPlaneURL(t *testing.T) {
+	newServerWithInstance := func(t *testing.T, redirectURL string) *Server {
+		t.Helper()
+		cfg := &config.Config{
+			Values: config.Values{
+				Server: config.Server{Addr: "127.0.0.1", Port: 0},
+				OAuth:  config.OAuth{GitHub: config.OAuthGitHub{RedirectURL: redirectURL}},
+			},
+		}
+		s := newOAuthTestServer(t, cfg, &fakeOAuthService{})
+		s.instanceSvc = instance.NewService(stubInstanceRepo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		return s
+	}
+
+	t.Setenv(instance.EnvPublicURL, "https://cp.example")
+
+	if got := newServerWithInstance(t, "https://login.example/api/v1/auth/oauth/github/callback").oauthRedirectBase(); got != "https://login.example" {
+		t.Errorf("explicit oauthRedirectBase = %q, want https://login.example", got)
+	}
+	if got := newServerWithInstance(t, "").oauthRedirectBase(); got != "https://cp.example" {
+		t.Errorf("derived oauthRedirectBase = %q, want https://cp.example", got)
+	}
+
+	t.Setenv(instance.EnvPublicURL, "")
+	if got := newServerWithInstance(t, "").oauthRedirectBase(); got != "" {
+		t.Errorf("empty oauthRedirectBase = %q, want empty", got)
+	}
+
+	cfg := &config.Config{
+		Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}},
+	}
+	if got := newOAuthTestServer(t, cfg, &fakeOAuthService{}).oauthRedirectBase(); got != "" {
+		t.Errorf("nil-service oauthRedirectBase = %q, want empty", got)
 	}
 }

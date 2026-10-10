@@ -405,6 +405,12 @@ func (s *Server) routes() (http.Handler, error) {
 			}
 			s.instanceSvc = instanceSvc
 			instance.Mount(api, platformOnly, UserIDFromContext, instanceSvc)
+			// The GitHub OAuth redirect derives from the instance control-plane
+			// URL when the explicit redirect env is unset; the provider resolves
+			// it per call so a later settings change needs no restart.
+			if setter, ok := s.oauth.(interface{ SetGitHubControlPlaneURLSource(func() string) }); ok {
+				setter.SetGitHubControlPlaneURLSource(s.controlPlaneURL)
+			}
 		}
 		proxy.Mount(api, s.withTeam(), platformOnly, s.proxy,
 			proxy.NewDefaultProviderService(sslConfig),
@@ -446,14 +452,14 @@ func (s *Server) routes() (http.Handler, error) {
 		// still deploy through is refused instead of stranding their hooks.
 		providerSvc := providers.NewDefaultService(s.persistence, s.secretKey, s.logger,
 			s.providerConnectionApplications)
-		providers.Mount(api, s.resourceScopeAuth, UserIDFromContext, providerSvc)
+		providers.MountWithControlPlaneURL(api, s.resourceScopeAuth, UserIDFromContext, providerSvc, s.controlPlaneURLSource())
 
 		// GitHub App connections (GS-5): the manifest flow, installation
 		// step, and installation-token repo/branch listing. The service also
 		// verifies installation webhook deliveries, wired into the webhook
 		// service below so those events refresh the repo cache.
 		githubAppSvc := githubapp.NewDefaultService(s.persistence, s.secretKey, s.logger)
-		githubapp.Mount(api, s.resourceScopeAuth, UserIDFromContext, githubAppSvc)
+		githubapp.MountWithControlPlaneURL(api, s.resourceScopeAuth, UserIDFromContext, githubAppSvc, s.controlPlaneURLSource())
 
 		// Application deploy orchestration (BE-4.3): a nil service (no
 		// database) or FEATURE_APPLICATIONS=false mounts nothing, so Phases
@@ -716,12 +722,13 @@ func (s *Server) webhookService(providerSvc providers.ProviderService, githubApp
 		return nil
 	}
 	cfg := webhooks.Config{
-		Store:          s.persistence,
-		Installer:      installer,
-		Deployer:       deployer,
-		Secret:         s.secretKey,
-		Logger:         s.logger,
-		TrustedProxies: s.trustedProxies,
+		Store:           s.persistence,
+		Installer:       installer,
+		Deployer:        deployer,
+		Secret:          s.secretKey,
+		Logger:          s.logger,
+		TrustedProxies:  s.trustedProxies,
+		ControlPlaneURL: s.controlPlaneURLSource(),
 	}
 	// Preview siblings are provisioned through the deploy service (clone +
 	// system delete) and the badge comment through the provider service. Both

@@ -13,8 +13,8 @@ import {
   createProvider,
   deleteProvider,
   describeProviderError,
-  gitlabCallbackUrl,
   gitlabSetupInfo,
+  resolveGitlabCallbackUrl,
 } from "@/features/applications/api/providers";
 import type { SourceProvider } from "@/features/applications/api/providers";
 import { describeGitHubAppError } from "@/features/applications/api/githubApp";
@@ -243,7 +243,7 @@ export function useGitSourcesPage() {
     const created = await autoProvisionGitLab({
       base_url: baseUrl,
       admin_token: adminToken,
-      redirect_url: gitlabCallbackUrl(),
+      redirect_url: await resolveGitlabCallbackUrl(),
     });
     await providersStore.fetchProviders().catch(() => undefined);
     return created;
@@ -251,8 +251,8 @@ export function useGitSourcesPage() {
 
   /** gitLabManualInfo returns the exact redirect URI and scopes for a
    * manually created GitLab OAuth application. */
-  function gitLabManualInfo(baseUrl: string) {
-    return gitlabSetupInfo(baseUrl, gitlabCallbackUrl());
+  async function gitLabManualInfo(baseUrl: string) {
+    return gitlabSetupInfo(baseUrl, await resolveGitlabCallbackUrl());
   }
 
   /** provisionGitLabManual stores the manual OAuth app and returns the saved
@@ -268,7 +268,7 @@ export function useGitSourcesPage() {
       base_url: input.baseUrl,
       client_id: input.clientId,
       client_secret: input.clientSecret,
-      redirect_url: gitlabCallbackUrl(),
+      redirect_url: await resolveGitlabCallbackUrl(),
       scopes: input.scopes,
     });
     await providersStore.fetchProviders().catch(() => undefined);

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -128,6 +129,10 @@ type handler struct {
 	svc    *Service
 	userID UserIDFunc
 	logger *slog.Logger
+	// controlPlaneURL resolves the effective instance control-plane base URL
+	// ("" when unset). The server injects the instance service accessor, so
+	// this package never imports the HTTP server.
+	controlPlaneURL func(ctx context.Context) string
 }
 
 // Mount registers the GitHub App endpoints on r:
@@ -143,10 +148,18 @@ type handler struct {
 // auth wraps the authenticated group with the server's scope boundary. A nil
 // svc mounts nothing, so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc *Service) {
+	MountWithControlPlaneURL(r, auth, userID, svc, nil)
+}
+
+// MountWithControlPlaneURL registers the same endpoints as Mount, but the
+// manifest hook and redirect URLs use the instance control-plane URL when it
+// is set (falling back to the request origin). A nil source keeps today's
+// behavior.
+func MountWithControlPlaneURL(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc *Service, controlPlaneURL func(ctx context.Context) string) {
 	if svc == nil {
 		return
 	}
-	h := &handler{svc: svc, userID: userID, logger: slog.Default()}
+	h := &handler{svc: svc, userID: userID, logger: slog.Default(), controlPlaneURL: controlPlaneURL}
 	// The manifest browser redirect lands here as a plain navigation (no
 	// bearer header): the single-use, expiring, user-bound state parameter
 	// is the identity, and the handler finishes with a redirect to the SPA
@@ -177,7 +190,7 @@ func (h *handler) manifest(w http.ResponseWriter, r *http.Request) {
 	if !h.decodeJSON(w, r, &req) {
 		return
 	}
-	manifest, err := h.svc.StartManifest(r.Context(), userID, req.BaseURL, req.Name, originOf(r))
+	manifest, err := h.svc.StartManifest(r.Context(), userID, req.BaseURL, req.Name, h.origin(r))
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -509,6 +522,21 @@ func newAppResponse(app GitHubApp) appResponse {
 		})
 	}
 	return response
+}
+
+// origin derives the control-plane public origin: the instance
+// control-plane URL when it is set, otherwise the request origin (see
+// originOf), so the manifest hook and redirect URLs point back at this
+// server.
+func (h *handler) origin(r *http.Request) string {
+	if h.controlPlaneURL != nil {
+		if base := strings.TrimSpace(h.controlPlaneURL(r.Context())); base != "" {
+			if control, err := url.Parse(base); err == nil && control.Scheme != "" && control.Host != "" {
+				return control.Scheme + "://" + control.Host
+			}
+		}
+	}
+	return originOf(r)
 }
 
 // originOf derives the control-plane public origin from the request, so the

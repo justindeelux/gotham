@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"golang.org/x/oauth2"
 )
@@ -35,11 +36,35 @@ type gitHubEmail struct {
 	Verified bool   `json:"verified"`
 }
 
+// GitHubCallbackPath is the control-plane callback GitHub redirects to after
+// authorization. Combined with the control-plane base URL it forms the
+// redirect URL registered with the GitHub OAuth app.
+const GitHubCallbackPath = "/api/v1/auth/oauth/github/callback"
+
+// ResolveGitHubRedirectURL returns the effective GitHub OAuth redirect URL.
+// The explicit redirect URL (GOTHAM_OAUTH_GITHUB_REDIRECT_URL) wins when set;
+// otherwise the control-plane base URL names the callback path. Empty when
+// neither is set, which keeps today's behavior.
+func ResolveGitHubRedirectURL(explicit, controlPlaneBase string) string {
+	if v := strings.TrimSpace(explicit); v != "" {
+		return v
+	}
+	if base := strings.TrimSpace(controlPlaneBase); base != "" {
+		return strings.TrimRight(base, "/") + GitHubCallbackPath
+	}
+	return ""
+}
+
 // GitHubProvider implements OAuthProvider against GitHub. It is safe for
 // concurrent use.
 type GitHubProvider struct {
 	config  *oauth2.Config
 	apiBase string
+	// explicitRedirect is the configured redirect URL (possibly empty).
+	explicitRedirect string
+	// controlPlaneBase supplies the effective control-plane base URL when the
+	// explicit redirect is unset. Nil keeps today's behavior.
+	controlPlaneBase func() string
 }
 
 // NewGitHubProvider builds a GitHub provider. It returns nil when clientID or
@@ -59,8 +84,28 @@ func NewGitHubProvider(clientID, clientSecret, redirectURL string) OAuthProvider
 				TokenURL: gitHubTokenURL,
 			},
 		},
-		apiBase: gitHubAPIBase,
+		apiBase:          gitHubAPIBase,
+		explicitRedirect: redirectURL,
 	}
+}
+
+// SetControlPlaneURLSource supplies the effective control-plane base URL
+// ("" when unset) used to derive the redirect URL when the explicit one is
+// empty. A nil source keeps today's behavior.
+func (p *GitHubProvider) SetControlPlaneURLSource(src func() string) {
+	p.controlPlaneBase = src
+}
+
+// resolved returns the OAuth2 config with the effective redirect URL: the
+// explicit value wins, otherwise the control-plane base names the callback.
+// The config is copied so concurrent callers never race on the shared one.
+func (p *GitHubProvider) resolved() *oauth2.Config {
+	if p.controlPlaneBase == nil {
+		return p.config
+	}
+	cfg := *p.config
+	cfg.RedirectURL = ResolveGitHubRedirectURL(p.explicitRedirect, p.controlPlaneBase())
+	return &cfg
 }
 
 // Name identifies the provider.
@@ -68,12 +113,12 @@ func (p *GitHubProvider) Name() string { return "github" }
 
 // AuthCodeURL returns GitHub's authorization URL.
 func (p *GitHubProvider) AuthCodeURL(state string) string {
-	return p.config.AuthCodeURL(state)
+	return p.resolved().AuthCodeURL(state)
 }
 
 // Exchange swaps the authorization code for an access token.
 func (p *GitHubProvider) Exchange(ctx context.Context, code string) (*oauth2.Token, error) {
-	return p.config.Exchange(ctx, code)
+	return p.resolved().Exchange(ctx, code)
 }
 
 // Identity reads the user profile and email list, preferring the primary

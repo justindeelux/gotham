@@ -223,11 +223,15 @@ func (s *Server) oauthSuccessLocation(code string) string {
 	return s.oauthRedirectBase() + oauthCallbackPath + "?code=" + url.QueryEscape(code)
 }
 
-// oauthRedirectBase derives the post-login origin from the configured GitHub
-// callback URL (scheme and host only). It returns "" when unconfigured, which
-// makes the success redirect relative to the current origin.
+// oauthRedirectBase derives the post-login origin: the explicit GitHub
+// callback URL (scheme and host only) wins when set, otherwise the instance
+// control-plane URL names the origin. It returns "" when neither is usable,
+// which makes the success redirect relative to the current origin.
 func (s *Server) oauthRedirectBase() string {
-	raw := s.cfg.Snapshot().OAuth.GitHub.RedirectURL
+	raw := strings.TrimSpace(s.cfg.Snapshot().OAuth.GitHub.RedirectURL)
+	if raw == "" {
+		raw = s.controlPlaneURL()
+	}
 	if raw == "" {
 		return ""
 	}
@@ -237,6 +241,35 @@ func (s *Server) oauthRedirectBase() string {
 		return ""
 	}
 	return parsed.Scheme + "://" + parsed.Host
+}
+
+// controlPlaneURL returns the effective instance control-plane URL (""
+// when unset or unreadable, which keeps today's behavior).
+func (s *Server) controlPlaneURL() string {
+	if s.instanceSvc == nil {
+		return ""
+	}
+	cp, err := s.instanceSvc.ControlPlaneURL(context.Background())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(cp)
+}
+
+// controlPlaneURLSource adapts the instance control-plane URL to the
+// context-scoped resolver the domain packages accept. Nil when no instance
+// service exists, which keeps today's behavior everywhere.
+func (s *Server) controlPlaneURLSource() func(context.Context) string {
+	if s.instanceSvc == nil {
+		return nil
+	}
+	return func(ctx context.Context) string {
+		cp, err := s.instanceSvc.ControlPlaneURL(ctx)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(cp)
+	}
 }
 
 // redirectOAuthFailure clears both OAuth cookies and redirects to the login

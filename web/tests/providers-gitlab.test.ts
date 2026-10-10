@@ -12,7 +12,10 @@ import {
   autoProvisionGitLab,
   deleteProvider,
   gitlabSetupInfo,
+  gitlabCallbackUrl,
   listBranches,
+  resetControlPlaneUrlCache,
+  resolveGitlabCallbackUrl,
 } from "@/features/applications/api/providers";
 import { useProvidersStore } from "@/features/applications/stores/providers";
 
@@ -23,6 +26,7 @@ const remove = vi.mocked(http.delete);
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+  resetControlPlaneUrlCache();
 });
 
 describe("provider branches API", () => {
@@ -133,5 +137,29 @@ describe("providers store gitlab actions", () => {
     get.mockResolvedValueOnce({ data: info });
     const store = useProvidersStore();
     expect(await store.fetchSetupInfo("", "https://cp.example/x")).toEqual(info);
+  });
+});
+
+describe("resolveGitlabCallbackUrl", () => {
+  it("uses the control-plane URL from the API when set", async () => {
+    get.mockResolvedValueOnce({
+      data: { settings: { general: { control_plane_url: { value: "https://cp.example/" } } } },
+    });
+    await expect(resolveGitlabCallbackUrl()).resolves.toBe(
+      "https://cp.example/api/v1/providers/gitlab/callback",
+    );
+    expect(get).toHaveBeenCalledWith("/instance/settings");
+  });
+
+  it("falls back to the current origin when unset", async () => {
+    get.mockResolvedValueOnce({
+      data: { settings: { general: { control_plane_url: { value: "" } } } },
+    });
+    await expect(resolveGitlabCallbackUrl()).resolves.toBe(gitlabCallbackUrl());
+  });
+
+  it("falls back to the current origin on API failure", async () => {
+    get.mockRejectedValueOnce({ status: 403, message: "forbidden" });
+    await expect(resolveGitlabCallbackUrl()).resolves.toBe(gitlabCallbackUrl());
   });
 });

@@ -201,6 +201,7 @@ confirm-network)
 revert-network)
     # Idempotent: the timer may fire after a confirm race.
     [ -e "${PENDING}" ] || exit 0
+    run systemctl stop "${TIMER}.timer" 2>/dev/null
     for f in "${NETFILE}" "${RESFILE}"; do
         b="${BACKUP}/$(basename "${f}")"
         if [ -e "${b}" ]; then cp -p "${b}" "${f}"; else rm -f "${f}"; fi

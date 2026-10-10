@@ -166,11 +166,64 @@ export async function authorizeProvider(providerId: string): Promise<ProviderAut
   return response.data;
 }
 
+/** gitlabCallbackPath is the API GitLab callback under the control-plane
+ * origin. The backend rejects any redirect_url naming another host. */
+const gitlabCallbackPath = "/api/v1/providers/gitlab/callback";
+
 /** gitlabCallbackUrl is the OAuth redirect URL of this control plane: the
- * API GitLab callback under the current origin. The backend rejects any
- * redirect_url naming another host. */
+ * API GitLab callback under the current origin. Prefer
+ * resolveGitlabCallbackUrl, which uses the configured control-plane URL when
+ * the API reports one. */
 export function gitlabCallbackUrl(): string {
-  return `${window.location.origin}/api/v1/providers/gitlab/callback`;
+  return `${window.location.origin}${gitlabCallbackPath}`;
+}
+
+/** Instance-settings shape this module reads: only the control-plane URL.
+ * The endpoint is platform-operator only, so any failure (403 for other
+ * roles, network error) falls back to the current origin. */
+interface ControlPlaneUrlSettings {
+  settings?: {
+    general?: {
+      control_plane_url?: { value?: string };
+    };
+  };
+}
+
+/** Cached control-plane base URL ("" when the API reports none or refuses).
+ * One fetch per page load: every GitLab connect action reuses it. */
+let cachedControlPlaneBase: string | undefined;
+
+/** resetControlPlaneUrlCache clears the cached control-plane base URL. Tests
+ * call it between cases so each resolves against its own mocks. */
+export function resetControlPlaneUrlCache(): void {
+  cachedControlPlaneBase = undefined;
+}
+
+/** controlPlaneBase returns the configured control-plane base URL ("" when
+ * the API reports none or refuses, e.g. 403 for non-operators). */
+async function controlPlaneBase(): Promise<string> {
+  if (cachedControlPlaneBase === undefined) {
+    try {
+      const response = await http.get<ControlPlaneUrlSettings>("/instance/settings");
+      cachedControlPlaneBase =
+        response.data?.settings?.general?.control_plane_url?.value?.trim() ?? "";
+    } catch {
+      cachedControlPlaneBase = "";
+    }
+  }
+  return cachedControlPlaneBase;
+}
+
+/** resolveGitlabCallbackUrl is the OAuth redirect URL of this control plane:
+ * the API GitLab callback under the configured control-plane URL when the
+ * API reports one, otherwise under the current origin (see
+ * gitlabCallbackUrl). */
+export async function resolveGitlabCallbackUrl(): Promise<string> {
+  const base = await controlPlaneBase();
+  if (base) {
+    return `${base.replace(/\/+$/, "")}${gitlabCallbackPath}`;
+  }
+  return gitlabCallbackUrl();
 }
 
 /** describeProviderError maps a thrown error to a user-facing message. */

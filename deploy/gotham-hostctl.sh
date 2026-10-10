@@ -18,13 +18,17 @@
 #   /etc/systemd/network/05-gotham.network
 #   /etc/systemd/resolved.conf.d/05-gotham.conf
 #   /etc/systemd/timesyncd.conf.d/05-gotham.conf
+#   /etc/systemd/network/<winning>.network.d/05-gotham.conf (DNS-only link
+#     override; a [Network] section with DNS= only, never Address/Gateway)
 #
 # `status` also reports the default-route interface as the host sees it
 # (`host_network`: live addresses/gateways from `ip`, the address modes from
 # the winning .network file, effective DNS from resolvectl), so callers can
 # seed forms with the host truth instead of stored defaults. A DNS-only
-# apply (`dns_only=true`) writes only the resolved drop-in and never touches
-# the interface file, so a resolver change cannot drop a static address.
+# apply (`dns_only=true`) writes only the resolved drop-in plus a DNS-only
+# networkd drop-in on the winning .network file and sets the link DNS at
+# runtime, and never touches the interface file, so a resolver change cannot
+# drop a static address and is not shadowed by per-link DNS (JUS-101).
 #
 # Network changes are tentative: apply-network snapshots the owned files, applies
 # the change and arms a systemd timer that runs "revert-network" after
@@ -195,7 +199,9 @@ collect_ips() { # candidates... : validated IPs joined with commas.
 }
 
 cur_dns() { # iface: effective resolvers (at most 3, comma separated).
-    dns="$(collect_ips $(resolvectl --no-pager dns "$1" 2>/dev/null | sed -n 's/^[^:]*:[[:space:]]*//p' | head -n 1))"
+    # Link DNS first: systemd-resolved prefers per-link DNS over the global
+    # drop-in, so the link list is what the host really uses (JUS-101).
+    dns="$(link_dns "$1")"
     if [ -z "${dns}" ] && [ -e "${RESFILE}" ]; then
         dns="$(collect_ips $(sed -n 's/^[[:space:]]*DNS[[:space:]]*=[[:space:]]*//p' "${RESFILE}" 2>/dev/null | head -n 1))"
     fi
@@ -204,6 +210,12 @@ cur_dns() { # iface: effective resolvers (at most 3, comma separated).
     fi
     dns="$(printf '%s' "${dns}" | cut -d, -f1-3)"
     all_ips "${dns}" 3 && printf '%s' "${dns}"
+    return 0
+}
+
+link_dns() { # iface: link DNS from resolvectl only (no file fallback).
+    dns="$(collect_ips $(resolvectl --no-pager dns "$1" 2>/dev/null | sed -n 's/^[^:]*:[[:space:]]*//p' | head -n 1))"
+    printf '%s' "${dns}" | cut -d, -f1-3
     return 0
 }
 
@@ -298,9 +310,32 @@ apply-network)
     }
     if [ "${K_dns_only}" = "true" ]; then
         # Resolver change only: the interface file is never touched, so a
-        # static address cannot be dropped by a DNS edit.
+        # static address cannot be dropped by a DNS edit. The global drop-in
+        # alone is shadowed by per-link DNS (netplan hosts), so the new
+        # servers also go into a DNS-only drop-in on the winning .network
+        # file plus a runtime `resolvectl dns` (JUS-101). Both carry DNS=
+        # only, never Address/Gateway/routes.
         snap "${RESFILE}"
+        LINKDNS="$(link_dns "${IFACE}")"
+        printf '%s' "${LINKDNS}" >"${BACKUP}/link-dns"
+        DROPIN=""
+        WFILE="$(winning_file "${IFACE}")"
+        if [ -n "${WFILE}" ]; then
+            DROPIN="${NETD}/$(basename "${WFILE}").d/05-gotham.conf"
+            printf '%s' "${DROPIN}" >"${BACKUP}/dropin-path"
+            if [ -e "${DROPIN}" ]; then cp -p "${DROPIN}" "${BACKUP}/link-dns-dropin.conf"
+            else : >"${BACKUP}/link-dns-dropin.conf.absent"; fi
+        fi
         write_resolved
+        if [ -n "${DROPIN}" ]; then
+            if [ -n "${K_dns}" ]; then
+                mkdir -p "$(dirname "${DROPIN}")" || die "cannot prepare link drop-in directory"
+                { echo "# Managed by Gotham (gotham-hostctl). DNS override only; addresses/routes untouched."; echo "[Network]"; echo "DNS=$(printf '%s' "${K_dns}" | tr ',' ' ')"; } >"${DROPIN}.new" \
+                    && mv -f "${DROPIN}.new" "${DROPIN}" || die "cannot write link drop-in"
+            else
+                rm -f "${DROPIN}"; rmdir "$(dirname "${DROPIN}")" 2>/dev/null
+            fi
+        fi
     else
         snap "${NETFILE}"; snap "${RESFILE}"
 
@@ -325,7 +360,15 @@ apply-network)
     run systemd-run --quiet --unit="${TIMER}" --on-active="${K_revert_after}s" "${SELF}" revert-network \
         || { rm -f "${PENDING}"; "$0" revert-network 2>/dev/null; die "cannot arm revert timer"; }
     if [ "${K_dns_only}" = "true" ]; then
+        # reload (not reconfigure) keeps addresses/routes; the runtime set
+        # runs after the resolved restart so the restart cannot wipe it.
+        run networkctl reload
         run systemctl restart systemd-resolved
+        if [ -n "${K_dns}" ]; then
+            run resolvectl dns "${IFACE}" $(printf '%s' "${K_dns}" | tr ',' ' ')
+        else
+            run resolvectl revert "${IFACE}"
+        fi
     else
         run networkctl reload
         run networkctl reconfigure "${IFACE}"
@@ -351,13 +394,40 @@ revert-network)
         if [ -e "${b}" ]; then cp -p "${b}" "${f}"
         elif [ -e "${b}.absent" ]; then rm -f "${f}"; fi
     done
+    if [ -e "${BACKUP}/link-dns" ]; then
+        # DNS-only apply: restore the link drop-in and the runtime link DNS
+        # exactly; the interface file above is untouched either way.
+        if [ -e "${BACKUP}/dropin-path" ]; then
+            DROPIN="$(cat "${BACKUP}/dropin-path" 2>/dev/null)"
+            case "${DROPIN}" in
+                "${NETD}/"*.d/05-gotham.conf)
+                    b="${BACKUP}/link-dns-dropin.conf"
+                    if [ -e "${b}" ]; then
+                        mkdir -p "$(dirname "${DROPIN}")" 2>/dev/null
+                        cp -p "${b}" "${DROPIN}"
+                    elif [ -e "${b}.absent" ]; then
+                        rm -f "${DROPIN}"; rmdir "$(dirname "${DROPIN}")" 2>/dev/null
+                    fi
+                    run networkctl reload
+                    ;;
+            esac
+        fi
+        SAVED="$(cat "${BACKUP}/link-dns" 2>/dev/null)"
+        IFACE_R="$(default_iface)"
+        if [ -n "${SAVED}" ] && [ -n "${IFACE_R}" ]; then
+            run resolvectl dns "${IFACE_R}" $(printf '%s' "${SAVED}" | tr ',' ' ')
+        elif [ -n "${IFACE_R}" ]; then
+            run resolvectl revert "${IFACE_R}"
+        fi
+    fi
     if [ "${iface_touched}" = "true" ]; then
         run networkctl reload
         IFACE="$(default_iface)"
         [ -n "${IFACE}" ] && run networkctl reconfigure "${IFACE}"
     fi
     # A DNS-only change never touched the interface file: restoring the
-    # resolver drop-in above is enough, reconfiguring would only flap the link.
+    # resolver drop-in, the link drop-in and the runtime link DNS above is
+    # enough, reconfiguring would only flap the link.
     run systemctl restart systemd-resolved
     rm -f "${PENDING}"; rm -rf "${BACKUP}"
     ;;

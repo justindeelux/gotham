@@ -22,10 +22,7 @@ import type { Service } from "@/features/services/api/services";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import SharedVariablesEditor from "@/features/projects/components/SharedVariablesEditor.vue";
 import { useEnvironmentPage } from "@/features/projects/composables/useEnvironmentPage";
-import type {
-  EnvironmentResourceTab,
-  EnvironmentRow,
-} from "@/features/projects/composables/useEnvironmentPage";
+import type { EnvironmentResourceTab } from "@/features/projects/composables/useEnvironmentPage";
 import { useSharedVariables } from "@/features/projects/composables/useSharedVariables";
 import type { InheritedVariable } from "@/features/projects/schemas/variables";
 import { activeLocale, i18n } from "@/shared/i18n";
@@ -164,23 +161,6 @@ const emptyHint = computed<string>(() =>
 function openImport(): void {
   page.addOpen.value = false;
   page.importOpen.value = true;
-}
-
-/**
- * openResource navigates to the resource detail page. The whole table row
- * is the link (no separate Open button); inner interactive controls stop
- * propagation so they never trigger it.
- */
-function openResource(row: EnvironmentRow): void {
-  void router.push(row.to);
-}
-
-/** openResourceKey activates the focused row from the keyboard. */
-function openResourceKey(event: KeyboardEvent, row: EnvironmentRow): void {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    openResource(row);
-  }
 }
 
 /**
@@ -326,15 +306,12 @@ function afterServiceCreate(service: Service): void {
                 :key="`${row.kind}:${row.id}`"
                 :class="{ 'preview-row': row.preview }"
                 class="resource-row"
-                role="link"
-                tabindex="0"
-                :aria-label="row.name"
-                @click="openResource(row)"
-                @keydown="openResourceKey($event, row)"
               >
                 <td :data-label="t('projects.environment.table.name')">
-                  <span class="resource-name">{{ row.name }}</span>
-                  <span class="cell-sub mono">{{ row.subtitle }}</span>
+                  <RouterLink :to="row.to" class="resource-link">
+                    <span class="resource-name">{{ row.name }}</span>
+                    <span class="cell-sub mono">{{ row.subtitle }}</span>
+                  </RouterLink>
                 </td>
                 <td :data-label="t('projects.environment.table.type')">
                   <NSpace :size="4" align="center">
@@ -567,18 +544,42 @@ function afterServiceCreate(service: Service): void {
   color: var(--muted);
 }
 
-/* The whole row is the link to the resource detail page. */
+/* The name cell links to the resource detail page; the link stretches
+   over the whole row, so there is no separate Open button. Native link
+   semantics keep table navigation, keyboard focus, middle-click and
+   open-in-new-tab. Future inner controls need .row-action to stay above
+   the stretched overlay instead of navigating. */
 .resource-row {
-  cursor: pointer;
+  position: relative;
 }
 
 .resource-table tbody .resource-row:hover {
   background: var(--hover-row);
 }
 
-.resource-row:focus-visible {
+.resource-link {
+  color: inherit;
+  display: block;
+}
+
+.resource-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.resource-link:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring);
+}
+
+.resource-row:focus-within .resource-link::after {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: -2px;
+}
+
+.resource-row .row-action {
+  position: relative;
+  z-index: 1;
 }
 
 .resource-name {
@@ -623,14 +624,6 @@ function afterServiceCreate(service: Service): void {
 
 .variables-section {
   scroll-margin-top: var(--space-4);
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
 }
 
 @container (max-width: 560px) {

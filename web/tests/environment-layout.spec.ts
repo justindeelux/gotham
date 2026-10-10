@@ -440,11 +440,12 @@ test("resource rows stay inside the viewport at 480px", async ({ page }) => {
   await mockApi(page);
   await page.goto(`${baseURL}/projects/${envPath}`);
   await page.locator(".resource-table").waitFor();
-  // Narrow rows stack into cards: every Open needs no horizontal scroll.
-  const opens = page.locator(".resource-table tbody tr a");
-  expect(await opens.count()).toBe(3);
+  // Narrow rows stack into cards: every resource row (opened through its
+  // stretched name link) needs no horizontal scroll.
+  const rows = page.locator(".resource-table tbody tr.resource-row");
+  expect(await rows.count()).toBe(3);
   for (let index = 0; index < 3; index += 1) {
-    const box = await opens.nth(index).boundingBox();
+    const box = await rows.nth(index).boundingBox();
     expect(box, `row ${index} has a box`).not.toBeNull();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(480);

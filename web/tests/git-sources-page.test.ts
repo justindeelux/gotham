@@ -13,6 +13,7 @@ import {
   authorizeProvider,
   createProvider,
   gitlabCallbackUrl,
+  resetControlPlaneUrlCache,
 } from "@/features/applications/api/providers";
 import {
   appsForGitHubApp,
@@ -79,6 +80,7 @@ beforeEach(() => {
   i18n.global.mergeLocaleMessage("vi", { applications: applicationsVi });
   syncComposerLocale("en");
   vi.clearAllMocks();
+  resetControlPlaneUrlCache();
 });
 
 describe("hostOf", () => {
@@ -253,6 +255,7 @@ describe("disconnect 409 flow", () => {
 
 describe("GitLabConnectDialog secrets", () => {
   it("clears the one-time admin token on submit", async () => {
+    get.mockResolvedValueOnce({ data: { settings: { general: { control_plane_url: { value: "" } } } } });
     post.mockResolvedValueOnce({ data: gitlabProvider({ connected: false }) });
     get.mockResolvedValueOnce({ data: { providers: [] } });
     get.mockResolvedValueOnce({ data: { url: "https://git.example.com/oauth/x", state: "s" } });
@@ -274,6 +277,7 @@ describe("GitLabConnectDialog secrets", () => {
   });
 
   it("clears secrets on a failed submit and names the Reconnect action", async () => {
+    get.mockResolvedValueOnce({ data: { settings: { general: { control_plane_url: { value: "" } } } } });
     post.mockResolvedValueOnce({ data: gitlabProvider({ connected: false }) });
     get.mockResolvedValueOnce({ data: { providers: [] } });
     get.mockRejectedValueOnce({ status: 500, message: "authorize blew up" });
@@ -302,6 +306,7 @@ describe("GitLabConnectDialog secrets", () => {
   });
 
   it("associates every label with its input", async () => {
+    get.mockResolvedValueOnce({ data: { settings: { general: { control_plane_url: { value: "" } } } } });
     get.mockResolvedValueOnce({
       data: {
         base_url: "https://git.example.com",
@@ -329,6 +334,7 @@ describe("GitLabConnectDialog secrets", () => {
   });
 
   it("blocks manual submit without a redirect URI", async () => {
+    get.mockResolvedValueOnce({ data: { settings: { general: { control_plane_url: { value: "" } } } } });
     get.mockRejectedValueOnce({ status: 500, message: "setup-info blew up" });
     const wrapper = mount(GitLabConnectDialog, {
       props: { show: true },

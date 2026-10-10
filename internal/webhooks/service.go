@@ -132,6 +132,10 @@ type Config struct {
 	// keying the delivery limiter. Empty trusts no peer, so deliveries key on
 	// the direct connection.
 	TrustedProxies []netip.Prefix
+	// ControlPlaneURL resolves the effective instance control-plane base URL
+	// ("" when unset). The server injects the instance service accessor, so
+	// this package never imports the HTTP server. Nil keeps today's behavior.
+	ControlPlaneURL func(ctx context.Context) string
 	// Now overrides the clock (tests). Defaults to time.Now.
 	Now func() time.Time
 	// SweepInterval is the orphan sweep period. Zero selects
@@ -144,18 +148,19 @@ type Config struct {
 // turns verified push deliveries into deployments. It is safe for concurrent
 // use.
 type Service struct {
-	repo        Repository
-	installer   Installer
-	deployer    Deployer
-	provisioner PreviewProvisioner
-	commenter   Commenter
-	appEvents   AppEventHandler
-	appPush     AppPushHandler
-	logger      *slog.Logger
-	limiter     *deliveryLimiter
-	trusted     []netip.Prefix
-	now         func() time.Time
-	sweepEvery  time.Duration
+	repo            Repository
+	installer       Installer
+	deployer        Deployer
+	provisioner     PreviewProvisioner
+	commenter       Commenter
+	appEvents       AppEventHandler
+	appPush         AppPushHandler
+	logger          *slog.Logger
+	limiter         *deliveryLimiter
+	trusted         []netip.Prefix
+	controlPlaneURL func(ctx context.Context) string
+	now             func() time.Time
+	sweepEvery      time.Duration
 
 	// Sweep lifecycle (StartPreviews/Close).
 	sweepOnce sync.Once
@@ -183,18 +188,19 @@ func NewService(cfg Config) *Service {
 		interval = defaultPreviewSweepInterval
 	}
 	return &Service{
-		repo:        repo,
-		installer:   cfg.Installer,
-		deployer:    cfg.Deployer,
-		provisioner: cfg.Provisioner,
-		commenter:   cfg.Commenter,
-		appEvents:   cfg.AppEvents,
-		appPush:     cfg.AppPush,
-		logger:      logger,
-		limiter:     newDeliveryLimiter(cfg.Limit, cfg.Burst),
-		trusted:     cfg.TrustedProxies,
-		now:         now,
-		sweepEvery:  interval,
+		repo:            repo,
+		installer:       cfg.Installer,
+		deployer:        cfg.Deployer,
+		provisioner:     cfg.Provisioner,
+		commenter:       cfg.Commenter,
+		appEvents:       cfg.AppEvents,
+		appPush:         cfg.AppPush,
+		logger:          logger,
+		limiter:         newDeliveryLimiter(cfg.Limit, cfg.Burst),
+		trusted:         cfg.TrustedProxies,
+		controlPlaneURL: cfg.ControlPlaneURL,
+		now:             now,
+		sweepEvery:      interval,
 	}
 }
 

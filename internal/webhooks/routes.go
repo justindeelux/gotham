@@ -222,13 +222,19 @@ func (h *handler) listPreviews(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, previewListEnvelope{Previews: response})
 }
 
-// callbackBaseURL derives the public origin of the delivery route from the
-// management request: scheme from the trusted proxy's X-Forwarded-Proto (or
-// direct TLS), host from the request. Forwarded scheme headers from an
-// untrusted peer are ignored, so a client cannot redirect the callback to
-// http. A proxy that drops X-Forwarded-Proto yields http, which the host then
-// rejects loudly instead of silently mis-routing deliveries.
+// callbackBaseURL derives the public origin of the delivery route: the
+// instance control-plane URL when it is set, otherwise the management
+// request (scheme from the trusted proxy's X-Forwarded-Proto or direct TLS,
+// host from the request). Forwarded scheme headers from an untrusted peer
+// are ignored, so a client cannot redirect the callback to http. A proxy
+// that drops X-Forwarded-Proto yields http, which the host then rejects
+// loudly instead of silently mis-routing deliveries.
 func (s *Service) callbackBaseURL(r *http.Request) string {
+	if s.controlPlaneURL != nil {
+		if base := strings.TrimSpace(s.controlPlaneURL(r.Context())); base != "" {
+			return strings.TrimRight(base, "/") + deliveryPathPrefix
+		}
+	}
 	scheme := "http"
 	if clientip.IsSecure(r, s.trusted) {
 		scheme = "https"

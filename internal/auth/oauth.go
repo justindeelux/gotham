@@ -103,6 +103,18 @@ func NewOAuthService(auth *Service, logger *slog.Logger, providers ...OAuthProvi
 	}
 }
 
+// SetGitHubControlPlaneURLSource gives the GitHub provider the effective
+// control-plane base URL ("" when unset) used to derive its redirect URL when
+// the explicit one is empty. Providers without the seam are skipped, so this
+// is safe to call unconditionally.
+func (s *OAuthService) SetGitHubControlPlaneURLSource(src func() string) {
+	for _, provider := range s.providers {
+		if g, ok := provider.(interface{ SetControlPlaneURLSource(func() string) }); ok {
+			g.SetControlPlaneURLSource(src)
+		}
+	}
+}
+
 // Begin starts an authorization flow. It returns the provider URL to redirect
 // the browser to and the freshly minted state that must be bound to the browser
 // (as the state cookie) and echoed back by the provider. An unknown or disabled

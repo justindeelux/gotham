@@ -24,6 +24,11 @@ const maxRequestBodyBytes = 1 << 20 // 1 MiB
 // HTTP server.
 type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 
+// ControlPlaneURLSource resolves the effective instance control-plane base
+// URL ("" when unset). The server injects the instance service accessor, so
+// this package never imports the HTTP server either.
+type ControlPlaneURLSource func(ctx context.Context) string
+
 // providerResponse is the wire representation of a provider, without
 // credentials.
 type providerResponse struct {
@@ -119,9 +124,10 @@ type branchListEnvelope struct {
 
 // handler serves the provider routes for one ProviderService.
 type handler struct {
-	svc    ProviderService
-	userID UserIDFunc
-	logger *slog.Logger
+	svc             ProviderService
+	userID          UserIDFunc
+	logger          *slog.Logger
+	controlPlaneURL ControlPlaneURLSource
 }
 
 // Mount registers the authenticated provider endpoints on r:
@@ -140,10 +146,18 @@ type handler struct {
 // boundary (read for GET/HEAD, deploy for the create/connect mutations). A nil
 // svc is a no-op so the control plane can call Mount unconditionally.
 func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc ProviderService) {
+	MountWithControlPlaneURL(r, auth, userID, svc, nil)
+}
+
+// MountWithControlPlaneURL registers the same endpoints as Mount, but the
+// redirect-host check compares against the instance control-plane URL host
+// when it is set (falling back to the request host). A nil source keeps
+// today's behavior.
+func MountWithControlPlaneURL(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc, svc ProviderService, src ControlPlaneURLSource) {
 	if svc == nil {
 		return
 	}
-	h := &handler{svc: svc, userID: userID, logger: slog.Default()}
+	h := &handler{svc: svc, userID: userID, logger: slog.Default(), controlPlaneURL: src}
 
 	// The GitLab browser callback is public like a webhook delivery: the
 	// single-use OAuth state identifies the user and connection, so no
@@ -354,7 +368,7 @@ func (h *handler) gitLabAutoProvision(w http.ResponseWriter, r *http.Request) {
 	if !h.decodeJSON(w, r, &req) {
 		return
 	}
-	if !redirectMatchesOrigin(r, req.RedirectURL) {
+	if !h.redirectMatches(r, req.RedirectURL) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "redirect_url must name this control plane's host"})
 		return
 	}
@@ -376,7 +390,7 @@ func (h *handler) gitLabSetupInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	redirectURL := strings.TrimSpace(r.URL.Query().Get("redirect_url"))
-	if !redirectMatchesOrigin(r, redirectURL) {
+	if !h.redirectMatches(r, redirectURL) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "redirect_url must name this control plane's host"})
 		return
 	}
@@ -414,6 +428,24 @@ func callbackReason(err error) string {
 		return "invalid"
 	}
 	return "failed"
+}
+
+// redirectMatches reports whether redirectURL names this control plane: the
+// control-plane URL host when it is set, otherwise the host serving this
+// request (see redirectMatchesOrigin).
+func (h *handler) redirectMatches(r *http.Request, redirectURL string) bool {
+	if h.controlPlaneURL != nil {
+		if base := strings.TrimSpace(h.controlPlaneURL(r.Context())); base != "" {
+			if control, err := url.Parse(base); err == nil && control.Hostname() != "" {
+				parsed, err := url.Parse(strings.TrimSpace(redirectURL))
+				if err != nil || parsed.Hostname() == "" {
+					return false
+				}
+				return strings.EqualFold(parsed.Hostname(), control.Hostname())
+			}
+		}
+	}
+	return redirectMatchesOrigin(r, redirectURL)
 }
 
 // redirectMatchesOrigin reports whether redirectURL names the host serving

@@ -25,7 +25,7 @@ const props = defineProps<{
   canEdit: boolean;
   saving: boolean;
   error: string;
-  save: (schedule: UpdateSchedule) => Promise<boolean>;
+  save: (_schedule: UpdateSchedule) => Promise<boolean>;
 }>();
 
 const { t } = useI18n();

@@ -54,6 +54,14 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
 - Phase gate: after each phase meets its exit criteria, STOP and ask the project owner before starting the next phase.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
+## Linear Issues
+
+When creating an issue (via `orca-linear`), always set all of these:
+
+- Team `JUS`, project `gotham`, assignee `me` (Justin Nguyen).
+- Exactly one label matching the work: `Bug` (broken behavior), `Improvement` (UI/UX polish or enhancement of existing behavior), `Feature` (new capability).
+- English title and body: Summary, Changes (numbered), Acceptance criteria (include the relevant invariants from Development Workflow).
+
 ## Code Style
 
 - Vue SFC blocks: **always** `<script>` → `<template>` → `<style>` (omit unused blocks; when present, keep this order)

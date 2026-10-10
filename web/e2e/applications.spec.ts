@@ -103,7 +103,12 @@ test.describe("applications", () => {
         response.url().endsWith("/api/v1/servers"),
       ),
     ]);
-    await row.getByRole("button", { name: "Open" }).click();
+    // The whole row opens the resource: the name link stretches over it,
+    // so a pointer click on a plain cell (here the server cell) lands on
+    // the overlay and navigates. Playwright's hit-target check flags that
+    // interception by design, hence force: the event still goes through
+    // the overlay to the link.
+    await row.locator("td").nth(2).click({ force: true });
     await expect(page).toHaveURL(
       nestedURL(projectId, environmentId, "applications", application.id),
     );

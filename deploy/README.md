@@ -519,3 +519,23 @@ it, and a tampered **digest** is rejected at the agent before the swap, so those
 two paths are covered by the `internal/updates` and `agent` unit tests
 (`TestAgentUpdaterRejectsTamperedManifest`, `TestAgentUpdaterRejectsDigestMismatch`)
 and by NEG1 end to end; the wrapper rollback status is covered by NEG2.
+
+## Instance settings host helper (JUS-92)
+
+`Settings → Instance` applies network (DNS, IPv4/IPv6) and system (hostname, NTP)
+settings through `gotham-hostctl.sh`, a fixed root-owned helper with the same
+privilege model as the update wrapper. It is optional: without it the General
+section still works and the host sections are read-only.
+
+```sh
+sudo install -D -m 0755 -o root -g root deploy/gotham-hostctl.sh /usr/libexec/gotham/gotham-hostctl
+sudo deploy/install-hostctl-sudoers.sh gotham
+```
+
+- sudoers grants exactly five verbs (`status`, `apply-network`, `confirm-network`,
+  `revert-network`, `apply-system`); values arrive on stdin and are re-validated.
+- Supported stack: systemd-networkd + systemd-resolved + systemd-timesyncd. Gotham
+  owns only `05-gotham.network`, `resolved.conf.d/05-gotham.conf` and
+  `timesyncd.conf.d/05-gotham.conf`; other hosts report the sections as unsupported.
+- A network change is tentative: a systemd timer reverts it after 120 s unless the
+  operator confirms in the UI, so a wrong address cannot lock them out.

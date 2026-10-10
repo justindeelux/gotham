@@ -25,6 +25,7 @@ import (
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
 	"github.com/justindeelux/gotham/internal/githubapp"
+	"github.com/justindeelux/gotham/internal/instance"
 	"github.com/justindeelux/gotham/internal/notifications"
 	"github.com/justindeelux/gotham/internal/projects"
 	"github.com/justindeelux/gotham/internal/providers"
@@ -391,6 +392,16 @@ func (s *Server) routes() (http.Handler, error) {
 		}
 		platformOnly := func(next http.Handler) http.Handler {
 			return s.RequireAuth(s.RequirePlatformAdmin(next))
+		}
+		// Instance settings (JUS-92): platform operators only; a nil service
+		// (no database) mounts nothing. A network change left unconfirmed
+		// across a restart is settled here.
+		if s.persistence != nil {
+			instanceSvc := instance.NewService(instance.NewStoreRepository(s.persistence), instance.NewSudoApplier(), s.logger)
+			if err := instanceSvc.Reconcile(context.Background()); err != nil {
+				s.logger.Warn("instance settings reconcile failed", "error", err)
+			}
+			instance.Mount(api, platformOnly, UserIDFromContext, instanceSvc)
 		}
 		proxy.Mount(api, s.withTeam(), platformOnly, s.proxy,
 			proxy.NewDefaultProviderService(sslConfig),

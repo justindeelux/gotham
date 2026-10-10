@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Instance settings · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* Local page: new pg- classes only, no shared-class redefinitions. */
+  .pg-form { display: grid; gap: var(--space-4); max-width: 640px; }
+  .pg-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+  .pg-lock { font-size: var(--text-xs); color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+  .pg-fam { border-top: 1px solid var(--border); padding-top: var(--space-4); display: grid; gap: var(--space-3); }
+  .pg-countdown { font-family: var(--font-mono); font-size: var(--text-lg); }
+  @media (max-width: 640px) { .pg-row2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body data-page="instance-settings" data-nav="settings">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Managed servers"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Settings · Platform operators</p>
+            <h1>Instance</h1>
+            <p class="page-desc">Configure the Gotham instance itself: its public address, name and timezone, the host network and a few Linux system options. Visible to platform operators only.</p>
+          </div>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="Instance settings">
+          <button class="tab" role="tab" aria-selected="true" type="button">General</button>
+          <button class="tab" role="tab" aria-selected="false" type="button">Network</button>
+          <button class="tab" role="tab" aria-selected="false" type="button">System</button>
+        </div>
+
+        <div class="card mt-4" data-od-id="instance-general">
+          <div class="card-head"><h3>General</h3><span class="meta">Precedence: environment &gt; saved value &gt; default</span></div>
+          <div class="pg-form">
+            <div class="field has-error">
+              <label class="field-label" for="pg-url">Control-plane URL</label>
+              <input id="pg-url" class="input mono" value="gotham.example.com" />
+              <span class="field-hint">Public base URL used for agent enrollment, OAuth redirects and webhooks.</span>
+              <span class="field-error">Must be an http(s) URL with a host, e.g. https://gotham.example.com</span>
+            </div>
+            <div class="field">
+              <label class="field-label" for="pg-name">Instance name</label>
+              <input id="pg-name" class="input" value="gotham" disabled />
+              <span class="pg-lock"><svg aria-hidden="true" width="12" height="12"><use href="#i-lock"></use></svg>Locked by environment variable <span class="mono">GOTHAM_INSTANCE_NAME</span></span>
+            </div>
+            <div class="field">
+              <label class="field-label" for="pg-tz">Timezone</label>
+              <input id="pg-tz" class="input mono" value="Europe/Berlin" />
+              <span class="field-hint">IANA zone. Applied to schedules, log display and backups.</span>
+            </div>
+            <div><button class="btn btn-primary" type="button">Save general settings</button></div>
+          </div>
+        </div>
+
+        <div class="callout mt-4" data-od-id="instance-network-unsupported">
+          <svg aria-hidden="true"><use href="#i-lock"></use></svg>
+          <div>
+            <h4>Host changes are not available on this machine</h4>
+            <p>The host helper is not installed or the host does not use systemd-networkd. Network and system values are shown read-only. See <span class="mono">deploy/README.md</span>.</p>
+          </div>
+        </div>
+
+        <div class="card mt-4" data-od-id="instance-network">
+          <div class="card-head"><h3>Network</h3><span class="meta">Changes need confirmation and revert automatically</span></div>
+          <div class="pg-form">
+            <div class="field">
+              <label class="field-label" for="pg-dns">DNS servers</label>
+              <input id="pg-dns" class="input mono" value="1.1.1.1, 2606:4700:4700::1111" />
+              <span class="field-hint">Up to 3 resolvers, comma separated.</span>
+            </div>
+            <div class="pg-fam">
+              <h4>IPv4</h4>
+              <div class="field"><label class="field-label" for="pg-v4mode">Mode</label><select id="pg-v4mode" class="select"><option>DHCP</option><option selected>Static</option></select></div>
+              <div class="pg-row2">
+                <div class="field"><label class="field-label" for="pg-v4addr">Address (CIDR)</label><input id="pg-v4addr" class="input mono" value="10.0.0.5/24" /></div>
+                <div class="field"><label class="field-label" for="pg-v4gw">Gateway</label><input id="pg-v4gw" class="input mono" value="10.0.0.1" /></div>
+              </div>
+            </div>
+            <div class="pg-fam">
+              <h4>IPv6</h4>
+              <div class="switch-row"><button class="switch" role="switch" aria-checked="true" aria-label="Enable IPv6" type="button"></button><span>Enable IPv6</span></div>
+              <div class="field"><label class="field-label" for="pg-v6mode">Mode</label><select id="pg-v6mode" class="select"><option selected>DHCP / router advertisement</option><option>Static</option></select></div>
+            </div>
+            <div><button class="btn btn-primary" type="button">Apply network changes</button></div>
+          </div>
+        </div>
+
+        <div class="card mt-4" data-od-id="instance-network-confirm">
+          <div class="card-head"><h3>Keep these network changes?</h3><span class="meta">Awaiting confirmation</span></div>
+          <p>The new configuration is live. If you cannot reach Gotham at the new address, do nothing: the host restores the previous configuration in</p>
+          <p class="pg-countdown" aria-live="polite">01:42</p>
+          <dl class="kv"><dt>DNS</dt><dd class="mono">1.1.1.1 → 1.1.1.1, 2606:4700:4700::1111</dd><dt>IPv4</dt><dd class="mono">dhcp → 10.0.0.5/24 via 10.0.0.1</dd></dl>
+          <div class="mt-3"><button class="btn btn-primary" type="button">Keep changes</button> <button class="btn btn-ghost" type="button">Revert now</button></div>
+        </div>
+
+        <div class="card mt-4" data-od-id="instance-system">
+          <div class="card-head"><h3>System</h3><span class="meta">Applied through the root-owned host helper</span></div>
+          <div class="pg-form">
+            <div class="field"><label class="field-label" for="pg-host">Hostname</label><input id="pg-host" class="input mono" value="gotham-1" /><span class="field-hint">Letters, digits and hyphens; dots separate labels.</span></div>
+            <div class="switch-row"><button class="switch" role="switch" aria-checked="true" aria-label="Time synchronization" type="button"></button><span>Synchronize time (NTP)</span></div>
+            <div class="field"><label class="field-label" for="pg-ntp">NTP servers</label><input id="pg-ntp" class="input mono" value="pool.ntp.org, time.cloudflare.com" /><span class="field-hint">Up to 4, comma separated. Leave empty for the system defaults.</span></div>
+            <div><button class="btn btn-primary" type="button">Save system settings</button></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+<script src="assets/gotham-ui.js"></script>
+</body>
+</html>

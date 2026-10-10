@@ -3,6 +3,7 @@ import { activeLocale, i18n } from "@/shared/i18n";
 import { computed, onMounted, ref, watch, type Ref } from "vue";
 
 import type { Application } from "@/features/applications/api/applications";
+import { listDomains } from "@/features/applications/api/applications";
 import {
   describeProxyError,
   draftFromCertificate,
@@ -13,9 +14,10 @@ import {
 import type { Certificate, CertificateDraft, DNSProvider } from "@/features/domains";
 
 /**
- * Certificate-configuration editing behind the Domains tab. The certificate's
- * recorded domain always comes from the application's current base_domain, so
- * a domain change is flagged until the configuration is saved again.
+ * Certificate-configuration editing behind the Domains tab. One intent
+ * exists per domain (JUS-89): this editor manages the primary domain's
+ * intent, while an intent recorded for a detached host is flagged until it
+ * is explicitly re-recorded onto the primary domain.
  */
 export function useCertificateConfig(application: Ref<Application>) {
   const message = useMessage();
@@ -47,16 +49,33 @@ export function useCertificateConfig(application: Ref<Application>) {
     enabled: true,
   });
 
-  const certificate = computed<Certificate | null>(() =>
-    proxyStore.certificateOf(application.value.id),
-  );
+  /**
+   * certificate prefers the primary domain's intent; a stale intent recorded
+   * for a detached host is shown (with the re-record banner) when no primary
+   * intent exists.
+   */
+  const certificate = computed<Certificate | null>(() => {
+    const configs = proxyStore.certificates.filter(
+      (item) => item.application_id === application.value.id,
+    );
+    return (
+      configs.find((item) => item.domain === application.value.base_domain) ??
+      configs[0] ??
+      null
+    );
+  });
 
-  /** recordedDomainDiffers flags a base domain changed after the last save. */
-  const recordedDomainDiffers = computed<boolean>(
-    () =>
-      certificate.value !== null &&
-      certificate.value.domain !== application.value.base_domain,
-  );
+  /** attachedDomains lists the hostnames currently attached to the app. */
+  const attachedDomains = ref<string[]>([]);
+
+  /** recordedDomainDiffers flags an intent recorded for a detached host. */
+  const recordedDomainDiffers = computed<boolean>(() => {
+    const current = certificate.value;
+    if (current === null || attachedDomains.value.length === 0) {
+      return false;
+    }
+    return !attachedDomains.value.includes(current.domain);
+  });
 
   /** providerName resolves a stored provider id to its display label. */
   function providerName(providerId: string): string {
@@ -111,7 +130,7 @@ export function useCertificateConfig(application: Ref<Application>) {
     }
   }
 
-  /** handleRerecordDomain re-saves the configuration to record the new domain. */
+  /** handleRerecordDomain re-targets a detached intent onto the primary domain. */
   async function handleRerecordDomain(): Promise<void> {
     const existing = certificate.value;
     if (!existing) {
@@ -119,7 +138,10 @@ export function useCertificateConfig(application: Ref<Application>) {
     }
     certificateErrorRaw.value = null;
     try {
-      await proxyStore.updateCertificateConfig(existing.id, {});
+      await proxyStore.updateCertificateConfig(existing.id, {
+        domain: application.value.base_domain,
+      });
+      await load();
       message.success(tr("applications.detail.certRerecorded"));
     } catch (error) {
       message.error(describeProxyError(error));
@@ -149,12 +171,18 @@ export function useCertificateConfig(application: Ref<Application>) {
     return String(i18n.global.t(key));
   }
 
-  /** load refreshes the providers and certificates the editor depends on. */
+  /** load refreshes the providers, certificates and attached domains. */
   async function load(): Promise<void> {
-    await Promise.allSettled([
+    const results = await Promise.allSettled([
       proxyStore.fetchProviders(),
       proxyStore.fetchCertificates(),
+      listDomains(application.value.id),
     ]);
+    const domains = results[2];
+    attachedDomains.value =
+      domains.status === "fulfilled"
+        ? domains.value.map((row) => row.domain)
+        : [application.value.base_domain].filter((domain) => domain !== "");
   }
 
   watch(

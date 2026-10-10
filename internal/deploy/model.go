@@ -154,6 +154,22 @@ type Application struct {
 	UpdatedAt       time.Time
 }
 
+// ApplicationDomain is one hostname an application serves (JUS-89).
+// applications.base_domain mirrors the primary row so every caller that only
+// needs one host keeps working unchanged.
+type ApplicationDomain struct {
+	ID            uuid.UUID
+	ApplicationID uuid.UUID
+	Domain        string
+	IsPrimary     bool
+	// Disabled marks a binding held back from routing: a backfill loser of a
+	// legacy cross-node conflict, never deleted, until its owner removes it
+	// or claims a fresh host.
+	Disabled  bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 // Deployment is one attempt to run an application revision (kind "deploy" or
 // "rollback"), walking the state machine queued → cloning → building →
 // pushing → starting → running | failed. The image reference built for the

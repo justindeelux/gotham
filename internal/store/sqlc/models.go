@@ -65,6 +65,16 @@ type ApplicationDeployKey struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ApplicationDomain struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Domain        string             `json:"domain"`
+	IsPrimary     bool               `json:"is_primary"`
+	Disabled      bool               `json:"disabled"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ApplicationGitCredential struct {
 	ApplicationID pgtype.UUID        `json:"application_id"`
 	Username      string             `json:"username"`

@@ -25,6 +25,7 @@ vi.mock("@/features/domains", async () => {
     toCertificateInput: (draft: unknown) => draft,
     useProxyStore: () => ({
       certificateOf: () => null,
+      certificates: [],
       providerOf: () => null,
       fetchProviders: async () => undefined,
       fetchCertificates: async () => undefined,

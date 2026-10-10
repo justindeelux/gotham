@@ -157,6 +157,29 @@ type Repository interface {
 	// CreateCertificateIntent stores one application's certificate
 	// configuration. The per-application unique index is a conflict.
 	CreateCertificateIntent(ctx context.Context, in CertificateIntent) error
+	// ListApplicationDomains returns one application's domains, primary
+	// first, then oldest first (JUS-89).
+	ListApplicationDomains(ctx context.Context, appID uuid.UUID) ([]ApplicationDomain, error)
+	// CreateApplicationDomain stores one domain row for an application. A
+	// host claimed by any row is a conflict (ErrDomainConflict for another
+	// application's claim, ErrValidation when already attached to this one).
+	CreateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error)
+	// UpdateApplicationDomain persists the mutable domain fields.
+	UpdateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error)
+	// SetPrimaryApplicationDomain promotes one domain row to primary and
+	// demotes every sibling in a single statement, returning every row.
+	SetPrimaryApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) ([]ApplicationDomain, error)
+	// DeleteApplicationDomain removes one domain row of an application, or
+	// ErrNotFound.
+	DeleteApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) error
+	// DeleteApplicationDomains removes every domain row of an application.
+	DeleteApplicationDomains(ctx context.Context, appID uuid.UUID) error
+	// DomainClaim returns the row claiming host, or ErrNotFound. Disabled
+	// rows keep their claim paused, so they are returned too.
+	DomainClaim(ctx context.Context, domain string) (ApplicationDomain, error)
+	// ListRedirectSources returns every enabled redirect source host, so a
+	// new domain cannot shadow a redirect router.
+	ListRedirectSources(ctx context.Context) ([]string, error)
 }
 
 // storeRepository adapts *store.Store to Repository. secret opens sealed
@@ -928,24 +951,37 @@ func (r *storeRepository) CopyGitCredential(ctx context.Context, baseID, preview
 	return nil
 }
 
-// GetCertificateIntent loads an application's certificate configuration, or
-// ErrNotFound.
+// GetCertificateIntent loads the certificate configuration recorded for an
+// application's primary domain, or ErrNotFound. The preview wildcard clone
+// resolves the base intent through it; per-domain intents are listed through
+// the proxy surface.
 func (r *storeRepository) GetCertificateIntent(ctx context.Context, appID uuid.UUID) (CertificateIntent, error) {
-	row, err := r.store.GetDomainCertificateByApplication(ctx, pgUUID(appID))
+	rows, err := r.store.ListDomainCertificatesByApplication(ctx, pgUUID(appID))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return CertificateIntent{}, ErrNotFound
-		}
 		return CertificateIntent{}, fmt.Errorf("deploy: get certificate intent: %w", err)
 	}
-	return CertificateIntent{
-		ApplicationID: uuidFromPG(row.ApplicationID),
-		Domain:        row.Domain,
-		Enabled:       row.Enabled,
-		Challenge:     row.Challenge,
-		DNSProviderID: uuidFromPG(row.DnsProviderID),
-		Wildcard:      row.Wildcard,
-	}, nil
+	if len(rows) == 0 {
+		return CertificateIntent{}, ErrNotFound
+	}
+	primary := ""
+	if app, err := r.store.GetApplication(ctx, pgUUID(appID)); err == nil {
+		primary = app.BaseDomain
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return CertificateIntent{}, fmt.Errorf("deploy: get certificate intent: %w", err)
+	}
+	for _, row := range rows {
+		if primary == "" || row.Domain == primary {
+			return CertificateIntent{
+				ApplicationID: uuidFromPG(row.ApplicationID),
+				Domain:        row.Domain,
+				Enabled:       row.Enabled,
+				Challenge:     row.Challenge,
+				DNSProviderID: uuidFromPG(row.DnsProviderID),
+				Wildcard:      row.Wildcard,
+			}, nil
+		}
+	}
+	return CertificateIntent{}, ErrNotFound
 }
 
 // GetDNSProviderInfo loads the zones and usability of one DNS provider, or
@@ -962,7 +998,7 @@ func (r *storeRepository) GetDNSProviderInfo(ctx context.Context, providerID uui
 }
 
 // CreateCertificateIntent stores one application's certificate configuration.
-// The one-certificate-per-application index surfaces as ErrConflict.
+// The per-domain unique index surfaces as ErrConflict.
 func (r *storeRepository) CreateCertificateIntent(ctx context.Context, in CertificateIntent) error {
 	_, err := r.store.CreateDomainCertificate(ctx, sqlc.CreateDomainCertificateParams{
 		ApplicationID: pgUUID(in.ApplicationID),
@@ -979,6 +1015,147 @@ func (r *storeRepository) CreateCertificateIntent(ctx context.Context, in Certif
 		return fmt.Errorf("deploy: create certificate intent: %w", err)
 	}
 	return nil
+}
+
+// ListApplicationDomains returns one application's domain rows, primary
+// first, then oldest first (JUS-89).
+func (r *storeRepository) ListApplicationDomains(ctx context.Context, appID uuid.UUID) ([]ApplicationDomain, error) {
+	rows, err := r.store.ListApplicationDomainsByApplication(ctx, pgUUID(appID))
+	if err != nil {
+		return nil, fmt.Errorf("deploy: list application domains: %w", err)
+	}
+	domains := make([]ApplicationDomain, 0, len(rows))
+	for _, row := range rows {
+		domains = append(domains, applicationDomainFromRow(row))
+	}
+	return domains, nil
+}
+
+// CreateApplicationDomain stores one domain row. A host claimed by another
+// application's row surfaces as ErrDomainConflict; a host already attached
+// to this application surfaces as ErrValidation (the per-app index fired).
+func (r *storeRepository) CreateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error) {
+	row, err := r.store.CreateApplicationDomain(ctx, sqlc.CreateApplicationDomainParams{
+		ApplicationID: pgUUID(domain.ApplicationID),
+		Domain:        domain.Domain,
+		IsPrimary:     domain.IsPrimary,
+		Disabled:      domain.Disabled,
+	})
+	if err != nil {
+		if pgErr := uniqueViolation(err); pgErr != nil {
+			switch pgErr.ConstraintName {
+			case "application_domains_global_domain_idx":
+				return ApplicationDomain{}, ErrDomainConflict
+			case "application_domains_app_domain_idx":
+				return ApplicationDomain{}, fmt.Errorf("%w: the domain is already attached to this application", ErrValidation)
+			case "application_domains_app_primary_idx":
+				return ApplicationDomain{}, fmt.Errorf("%w: the application already has a primary domain", ErrValidation)
+			}
+		}
+		return ApplicationDomain{}, fmt.Errorf("deploy: create application domain: %w", err)
+	}
+	return applicationDomainFromRow(row), nil
+}
+
+// UpdateApplicationDomain persists the mutable domain fields.
+func (r *storeRepository) UpdateApplicationDomain(ctx context.Context, domain ApplicationDomain) (ApplicationDomain, error) {
+	row, err := r.store.UpdateApplicationDomain(ctx, sqlc.UpdateApplicationDomainParams{
+		ID:        pgUUID(domain.ID),
+		Domain:    domain.Domain,
+		IsPrimary: domain.IsPrimary,
+		Disabled:  domain.Disabled,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ApplicationDomain{}, ErrNotFound
+		}
+		if pgErr := uniqueViolation(err); pgErr != nil {
+			switch pgErr.ConstraintName {
+			case "application_domains_global_domain_idx":
+				return ApplicationDomain{}, ErrDomainConflict
+			case "application_domains_app_domain_idx":
+				return ApplicationDomain{}, fmt.Errorf("%w: the domain is already attached to this application", ErrValidation)
+			case "application_domains_app_primary_idx":
+				return ApplicationDomain{}, fmt.Errorf("%w: the application already has a primary domain", ErrValidation)
+			}
+		}
+		return ApplicationDomain{}, fmt.Errorf("deploy: update application domain: %w", err)
+	}
+	return applicationDomainFromRow(row), nil
+}
+
+// SetPrimaryApplicationDomain promotes one domain row to primary and demotes
+// every sibling in a single statement, returning every row.
+func (r *storeRepository) SetPrimaryApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) ([]ApplicationDomain, error) {
+	rows, err := r.store.SetPrimaryApplicationDomain(ctx, pgUUID(appID), pgUUID(domainID))
+	if err != nil {
+		return nil, fmt.Errorf("deploy: set primary application domain: %w", err)
+	}
+	domains := make([]ApplicationDomain, 0, len(rows))
+	for _, row := range rows {
+		domains = append(domains, applicationDomainFromRow(row))
+	}
+	return domains, nil
+}
+
+// DeleteApplicationDomain removes one domain row of an application.
+func (r *storeRepository) DeleteApplicationDomain(ctx context.Context, appID, domainID uuid.UUID) error {
+	if err := r.store.DeleteApplicationDomain(ctx, pgUUID(domainID), pgUUID(appID)); err != nil {
+		return fmt.Errorf("deploy: delete application domain: %w", err)
+	}
+	return nil
+}
+
+// DeleteApplicationDomains removes every domain row of an application.
+func (r *storeRepository) DeleteApplicationDomains(ctx context.Context, appID uuid.UUID) error {
+	if err := r.store.DeleteApplicationDomainsByApplication(ctx, pgUUID(appID)); err != nil {
+		return fmt.Errorf("deploy: delete application domains: %w", err)
+	}
+	return nil
+}
+
+// DomainClaim returns the row claiming host, or ErrNotFound.
+func (r *storeRepository) DomainClaim(ctx context.Context, domain string) (ApplicationDomain, error) {
+	row, err := r.store.GetApplicationDomainByNameAnyApp(ctx, domain)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ApplicationDomain{}, ErrNotFound
+		}
+		return ApplicationDomain{}, fmt.Errorf("deploy: resolve domain claim: %w", err)
+	}
+	return applicationDomainFromRow(row), nil
+}
+
+// ListRedirectSources returns every enabled redirect source host, so a new
+// domain cannot shadow a redirect router.
+func (r *storeRepository) ListRedirectSources(ctx context.Context) ([]string, error) {
+	rows, err := r.store.ListEnabledRedirects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("deploy: list redirect sources: %w", err)
+	}
+	sources := make([]string, 0, len(rows))
+	for _, row := range rows {
+		sources = append(sources, row.SourceDomain)
+	}
+	return sources, nil
+}
+
+// applicationDomainFromRow maps a stored domain row into the domain model.
+func applicationDomainFromRow(row sqlc.ApplicationDomain) ApplicationDomain {
+	domain := ApplicationDomain{
+		ID:            uuidFromPG(row.ID),
+		ApplicationID: uuidFromPG(row.ApplicationID),
+		Domain:        row.Domain,
+		IsPrimary:     row.IsPrimary,
+		Disabled:      row.Disabled,
+	}
+	if row.CreatedAt.Valid {
+		domain.CreatedAt = row.CreatedAt.Time
+	}
+	if row.UpdatedAt.Valid {
+		domain.UpdatedAt = row.UpdatedAt.Time
+	}
+	return domain
 }
 
 // marshalBuildArgs encodes the --build-arg pairs for the build_args jsonb

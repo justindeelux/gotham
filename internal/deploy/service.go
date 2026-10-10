@@ -64,6 +64,19 @@ type DeployService interface {
 	GetApplication(ctx context.Context, userID, appID uuid.UUID) (Application, error)
 	// UpdateApplication applies a partial update to the mutable fields.
 	UpdateApplication(ctx context.Context, userID, appID uuid.UUID, in UpdateApplicationInput) (Application, error)
+	// ListDomains returns one application's domains, primary first, then
+	// oldest first (JUS-89).
+	ListDomains(ctx context.Context, userID, appID uuid.UUID) ([]ApplicationDomain, error)
+	// AddDomain attaches one more hostname to an application: a host another
+	// application owns answers ErrDomainConflict, a host already attached
+	// answers ErrValidation.
+	AddDomain(ctx context.Context, userID, appID uuid.UUID, domain string) (ApplicationDomain, error)
+	// RemoveDomain detaches one hostname, promoting the oldest remaining row
+	// when the primary is removed, and returns the updated application.
+	RemoveDomain(ctx context.Context, userID, appID, domainID uuid.UUID) (Application, error)
+	// SetPrimaryDomain makes one attached hostname the primary and returns
+	// the updated application.
+	SetPrimaryDomain(ctx context.Context, userID, appID, domainID uuid.UUID) (Application, error)
 	// DeleteApplication stops the current container best effort and deletes
 	// the application; its configuration cascades.
 	DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error

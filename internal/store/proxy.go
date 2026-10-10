@@ -208,10 +208,94 @@ func (s *Store) GetDomainCertificate(ctx context.Context, id pgtype.UUID) (sqlc.
 	return s.queries.GetDomainCertificate(ctx, id)
 }
 
-// GetDomainCertificateByApplication returns the certificate config of an
-// application, or pgx.ErrNoRows.
-func (s *Store) GetDomainCertificateByApplication(ctx context.Context, applicationID pgtype.UUID) (sqlc.DomainCertificate, error) {
-	return s.queries.GetDomainCertificateByApplication(ctx, applicationID)
+// ListDomainCertificatesByApplication returns one application's certificate
+// intents, oldest first (JUS-89: one intent per domain).
+func (s *Store) ListDomainCertificatesByApplication(ctx context.Context, applicationID pgtype.UUID) ([]sqlc.DomainCertificate, error) {
+	return s.queries.ListDomainCertificatesByApplication(ctx, applicationID)
+}
+
+// ListProxiedCertificates returns every certificate intent for the Traefik
+// generator (JUS-89).
+func (s *Store) ListProxiedCertificates(ctx context.Context) ([]sqlc.ListProxiedCertificatesRow, error) {
+	return s.queries.ListProxiedCertificates(ctx)
+}
+
+// ListProxiedApplicationDomains returns every domain row joined to its
+// application's node for the Traefik generator (JUS-89).
+func (s *Store) ListProxiedApplicationDomains(ctx context.Context) ([]sqlc.ListProxiedApplicationDomainsRow, error) {
+	return s.queries.ListProxiedApplicationDomains(ctx)
+}
+
+// ListApplicationDomainsByApplication returns one application's domain rows,
+// primary first, then oldest first (JUS-89).
+func (s *Store) ListApplicationDomainsByApplication(ctx context.Context, applicationID pgtype.UUID) ([]sqlc.ApplicationDomain, error) {
+	return s.queries.ListApplicationDomainsByApplication(ctx, applicationID)
+}
+
+// GetApplicationDomain returns one domain row, or pgx.ErrNoRows.
+func (s *Store) GetApplicationDomain(ctx context.Context, id pgtype.UUID) (sqlc.ApplicationDomain, error) {
+	return s.queries.GetApplicationDomain(ctx, id)
+}
+
+// GetPrimaryApplicationDomain returns the primary domain row of an
+// application, or pgx.ErrNoRows when it is domainless.
+func (s *Store) GetPrimaryApplicationDomain(ctx context.Context, applicationID pgtype.UUID) (sqlc.ApplicationDomain, error) {
+	return s.queries.GetPrimaryApplicationDomain(ctx, applicationID)
+}
+
+// GetApplicationDomainByName resolves one application's row for a host,
+// or pgx.ErrNoRows.
+func (s *Store) GetApplicationDomainByName(ctx context.Context, applicationID pgtype.UUID, domain string) (sqlc.ApplicationDomain, error) {
+	return s.queries.GetApplicationDomainByName(ctx, sqlc.GetApplicationDomainByNameParams{
+		ApplicationID: applicationID,
+		Lower:         domain,
+	})
+}
+
+// GetApplicationDomainByNameAnyApp resolves the platform-wide claim on a
+// host, or pgx.ErrNoRows.
+func (s *Store) GetApplicationDomainByNameAnyApp(ctx context.Context, domain string) (sqlc.ApplicationDomain, error) {
+	return s.queries.GetApplicationDomainByNameAnyApp(ctx, domain)
+}
+
+// CreateApplicationDomain stores one domain row.
+func (s *Store) CreateApplicationDomain(ctx context.Context, params sqlc.CreateApplicationDomainParams) (sqlc.ApplicationDomain, error) {
+	return s.queries.CreateApplicationDomain(ctx, params)
+}
+
+// UpdateApplicationDomain persists the mutable domain fields and returns the
+// row.
+func (s *Store) UpdateApplicationDomain(ctx context.Context, params sqlc.UpdateApplicationDomainParams) (sqlc.ApplicationDomain, error) {
+	return s.queries.UpdateApplicationDomain(ctx, params)
+}
+
+// ClearPrimaryApplicationDomains drops the primary flag of an application
+// before a promotion.
+func (s *Store) ClearPrimaryApplicationDomains(ctx context.Context, applicationID pgtype.UUID) error {
+	return s.queries.ClearPrimaryApplicationDomains(ctx, applicationID)
+}
+
+// SetPrimaryApplicationDomain promotes one domain row to primary and demotes
+// every sibling in a single statement.
+func (s *Store) SetPrimaryApplicationDomain(ctx context.Context, applicationID, domainID pgtype.UUID) ([]sqlc.ApplicationDomain, error) {
+	return s.queries.SetPrimaryApplicationDomain(ctx, sqlc.SetPrimaryApplicationDomainParams{
+		ApplicationID: applicationID,
+		ID:            domainID,
+	})
+}
+
+// DeleteApplicationDomain removes one domain row of an application.
+func (s *Store) DeleteApplicationDomain(ctx context.Context, id, applicationID pgtype.UUID) error {
+	return s.queries.DeleteApplicationDomain(ctx, sqlc.DeleteApplicationDomainParams{
+		ID:            id,
+		ApplicationID: applicationID,
+	})
+}
+
+// DeleteApplicationDomainsByApplication removes every domain row of an
+// application.
+func (s *Store) DeleteApplicationDomainsByApplication(ctx context.Context, applicationID pgtype.UUID) error {
+	return s.queries.DeleteApplicationDomainsByApplication(ctx, applicationID)
 }
 
 // ListDomainCertificates returns every certificate config, newest first.

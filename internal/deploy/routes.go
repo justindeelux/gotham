@@ -365,6 +365,10 @@ type handler struct {
 //	GET    /v1/applications/{id}/git-credential
 //	DELETE /v1/applications/{id}/git-credential
 //	POST   /v1/applications/{id}/test-connection
+//	GET    /v1/applications/{id}/domains
+//	POST   /v1/applications/{id}/domains
+//	DELETE /v1/applications/{id}/domains/{domainId}
+//	POST   /v1/applications/{id}/domains/{domainId}/primary
 //
 // auth wraps the group (the server passes its RequireAuth); a nil svc or
 // FEATURE_APPLICATIONS=false mounts nothing, so the control plane can call
@@ -398,6 +402,10 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Get("/v1/applications/{id}/git-credential", h.getGitCredential)
 		protected.Delete("/v1/applications/{id}/git-credential", h.deleteGitCredential)
 		protected.Post("/v1/applications/{id}/test-connection", h.testConnection)
+		protected.Get("/v1/applications/{id}/domains", h.listDomains)
+		protected.Post("/v1/applications/{id}/domains", h.addDomain)
+		protected.Delete("/v1/applications/{id}/domains/{domainId}", h.removeDomain)
+		protected.Post("/v1/applications/{id}/domains/{domainId}/primary", h.setPrimaryDomain)
 	})
 }
 
@@ -929,6 +937,118 @@ func (h *handler) testConnection(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, newGitConnectionResponse(result))
 }
 
+// applicationDomainResponse is the wire representation of one attached
+// hostname (JUS-89).
+type applicationDomainResponse struct {
+	ID            string    `json:"id"`
+	ApplicationID string    `json:"application_id"`
+	Domain        string    `json:"domain"`
+	IsPrimary     bool      `json:"is_primary"`
+	Disabled      bool      `json:"disabled"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// domainListEnvelope wraps a domain list.
+type domainListEnvelope struct {
+	Domains []applicationDomainResponse `json:"domains"`
+}
+
+// domainEnvelope wraps a single domain.
+type domainEnvelope struct {
+	Domain applicationDomainResponse `json:"domain"`
+}
+
+// addDomainRequest is the body of POST /v1/applications/{id}/domains.
+type addDomainRequest struct {
+	Domain string `json:"domain"`
+}
+
+// newApplicationDomainResponse maps a domain onto its wire shape.
+func newApplicationDomainResponse(domain ApplicationDomain) applicationDomainResponse {
+	return applicationDomainResponse{
+		ID:            domain.ID.String(),
+		ApplicationID: domain.ApplicationID.String(),
+		Domain:        domain.Domain,
+		IsPrimary:     domain.IsPrimary,
+		Disabled:      domain.Disabled,
+		CreatedAt:     domain.CreatedAt,
+		UpdatedAt:     domain.UpdatedAt,
+	}
+}
+
+// listDomains serves GET /v1/applications/{id}/domains.
+func (h *handler) listDomains(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	domains, err := h.svc.ListDomains(r.Context(), userID, appID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	response := make([]applicationDomainResponse, 0, len(domains))
+	for _, domain := range domains {
+		response = append(response, newApplicationDomainResponse(domain))
+	}
+	writeJSON(w, http.StatusOK, domainListEnvelope{Domains: response})
+}
+
+// addDomain serves POST /v1/applications/{id}/domains.
+func (h *handler) addDomain(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	var req addDomainRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	domain, err := h.svc.AddDomain(r.Context(), userID, appID, req.Domain)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, domainEnvelope{Domain: newApplicationDomainResponse(domain)})
+}
+
+// removeDomain serves DELETE /v1/applications/{id}/domains/{domainId}.
+func (h *handler) removeDomain(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	domainID, err := uuid.Parse(chi.URLParam(r, "domainId"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid domain id"})
+		return
+	}
+	if _, err := h.svc.RemoveDomain(r.Context(), userID, appID, domainID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// setPrimaryDomain serves POST /v1/applications/{id}/domains/{domainId}/primary.
+func (h *handler) setPrimaryDomain(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	domainID, err := uuid.Parse(chi.URLParam(r, "domainId"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid domain id"})
+		return
+	}
+	if _, err := h.svc.SetPrimaryDomain(r.Context(), userID, appID, domainID); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // deleteDeployKey serves DELETE .../deploy-key: removes the key from the Git
 // host and then from the database. An application without a key answers 200
 // with deleted=false.
@@ -975,7 +1095,7 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrDeployInFlight):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "a deploy is in progress"})
 	case errors.Is(err, ErrDomainConflict):
-		writeJSON(w, http.StatusConflict, errorBody{Message: "domain already in use on the target server"})
+		writeJSON(w, http.StatusConflict, errorBody{Message: "domain already in use by another application"})
 	case errors.Is(err, ErrPreviewsOpen):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "close the open previews first"})
 	case errors.Is(err, ErrNameConflict):

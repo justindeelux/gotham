@@ -5,20 +5,13 @@
 -- ordered by creation time so duplicate-domain dispositions and generation
 -- input stay deterministic.
 --
--- The certificate columns (BE-6.2) carry the per-application certificate
--- intent. They are NULL-joined as empty values: certificate_configured tells
--- the generator whether an intent exists at all, and the recorded domain
--- lets it refuse to activate a certificate whose host no longer matches.
+-- The domain rows (JUS-89) and the certificate intents (BE-6.2, one row per
+-- domain since JUS-89) fan out per application, so they are read by the
+-- dedicated ListProxiedApplicationDomains and ListProxiedCertificates
+-- queries and grouped in Go: joining them here would multiply the rows.
 SELECT a.id, a.server_id, a.name, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
-       COALESCE(d.container_id, '')::text AS container_id,
-       (c.id IS NOT NULL)::boolean AS certificate_configured,
-       COALESCE(c.domain, '')::text AS certificate_domain,
-       COALESCE(c.enabled, false) AS certificate_enabled,
-       COALESCE(c.challenge, '')::text AS certificate_challenge,
-       COALESCE(c.wildcard, false) AS certificate_wildcard,
-       c.dns_provider_id AS certificate_dns_provider_id
+       COALESCE(d.container_id, '')::text AS container_id
 FROM applications a
-LEFT JOIN domain_certificates c ON c.application_id = a.id
 LEFT JOIN LATERAL (
     SELECT container_id FROM deployments
     WHERE application_id = a.id AND state = 'running' AND container_id <> ''
@@ -154,8 +147,19 @@ ORDER BY created_at DESC, id DESC;
 -- name: GetDomainCertificate :one
 SELECT * FROM domain_certificates WHERE id = $1;
 
--- name: GetDomainCertificateByApplication :one
-SELECT * FROM domain_certificates WHERE application_id = $1;
+-- name: ListDomainCertificatesByApplication :many
+-- ListDomainCertificatesByApplication returns one application's certificate
+-- intents, oldest first (JUS-89: one intent per domain).
+SELECT * FROM domain_certificates
+WHERE application_id = $1
+ORDER BY created_at, id;
+
+-- name: ListProxiedCertificates :many
+-- ListProxiedCertificates feeds the Traefik generator (JUS-89): every
+-- certificate intent, grouped onto its routing row in Go.
+SELECT application_id, domain, enabled, challenge, wildcard, dns_provider_id
+FROM domain_certificates
+ORDER BY application_id, created_at, id;
 
 -- name: CreateDomainCertificate :one
 INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
@@ -216,11 +220,18 @@ DELETE FROM domain_redirects WHERE id = $1;
 
 -- name: ListApplicationBaseDomains :many
 -- ListApplicationBaseDomains feeds the redirect ownership guard: a redirect
--- source must not shadow any application's base domain (on any node), so the
--- two routers must not match the same host. The guard reads committed state,
--- so a racing write can still pass against an old domain set; the generator
--- then holds the shadowing source back per committed snapshot.
-SELECT id, base_domain FROM applications WHERE base_domain <> '';
+-- source must not shadow any application's domain (on any node), so the
+-- two routers must not match the same host. Since JUS-89 the claim set is
+-- every row of application_domains (primary and aliases alike; disabled rows
+-- keep their claim paused), unioned with the applications.base_domain mirror:
+-- raw store writers may lag the rows, and the guard must see the wider claim
+-- either way. The guard reads
+-- committed state, so a racing write can still pass against an old domain
+-- set; the generator then holds the shadowing source back per committed
+-- snapshot.
+SELECT id, base_domain FROM applications WHERE base_domain <> ''
+UNION
+SELECT application_id AS id, domain AS base_domain FROM application_domains;
 
 -- name: ListEnabledRedirects :many
 -- ListEnabledRedirects returns the endpoints of every enabled redirect rule.

@@ -262,6 +262,15 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err != nil {
 		return Application{}, err
 	}
+	// The domain rows (JUS-89) mirror the primary: a failure here removes the
+	// just-created row so no application exists without its routing state.
+	if err := s.reconcilePrimaryRow(ctx, created.ID, created.BaseDomain); err != nil {
+		if deleteErr := s.repo.DeleteApplication(ctx, created.ID); deleteErr != nil {
+			s.logger.Warn("deploy: could not remove application after domain row failure",
+				"application_id", created.ID, "error", deleteErr)
+		}
+		return Application{}, err
+	}
 	// A new domain starts routing as soon as it is stored; the node may not
 	// have Traefik yet, in which case the sync bootstraps it.
 	if created.BaseDomain != "" {
@@ -600,6 +609,15 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	// still be renameable.
 	if err := validateApplication(app, false); err != nil {
 		return Application{}, err
+	}
+	// A base_domain write reconciles the domain rows first: the rows enforce
+	// the platform-wide uniqueness, so a conflicting host fails here before
+	// the application row is touched. Unrelated updates skip the rows
+	// entirely.
+	if in.BaseDomain != nil {
+		if err := s.reconcilePrimaryRow(ctx, app.ID, app.BaseDomain); err != nil {
+			return Application{}, err
+		}
 	}
 	updated, err := s.repo.UpdateApplication(ctx, app)
 	if err != nil {

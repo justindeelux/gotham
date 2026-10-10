@@ -121,7 +121,7 @@ export type CertificateStatus = "present" | "absent" | "unknown";
 export interface Certificate {
   id: string;
   application_id: string;
-  /** Recorded host, copied from the application's base_domain at write time. */
+  /** Recorded host: the primary domain by default, or one attached domain. */
   domain: string;
   enabled: boolean;
   challenge: ChallengeMode;
@@ -137,19 +137,25 @@ export interface Certificate {
 }
 
 /**
- * Body of POST /proxy/certificates. The recorded domain always comes from the
- * application's base_domain, never from the body.
+ * Body of POST /proxy/certificates. The recorded domain defaults to the
+ * application's primary domain; `domain` selects one of its other attached
+ * domains instead (JUS-89).
  */
 export interface CreateCertificateInput {
   application_id: string;
+  domain?: string;
   enabled?: boolean;
   challenge?: ChallengeMode;
   dns_provider_id?: string;
   wildcard?: boolean;
 }
 
-/** Body of PATCH /proxy/certificates/{id}. Omitted fields stay unchanged. */
+/**
+ * Body of PATCH /proxy/certificates/{id}. Omitted fields stay unchanged;
+ * `domain` re-targets the intent onto another attached host.
+ */
 export interface UpdateCertificateInput {
+  domain?: string;
   enabled?: boolean;
   challenge?: ChallengeMode;
   dns_provider_id?: string;

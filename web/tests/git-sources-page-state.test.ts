@@ -131,7 +131,7 @@ beforeEach(() => {
 /** dialogConfirm finds the disconnect dialog confirm button (row buttons
  * share its label, so scope to the open dialog). */
 function dialogConfirm(wrapper: VueWrapper) {
-  const cards = wrapper.findAll(".dialog-card");
+  const cards = wrapper.findAll(".app-modal");
   for (const card of cards) {
     const found = card.findAll("button").find((b) => b.text() === "Disconnect");
     if (found !== undefined) {

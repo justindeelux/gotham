@@ -54,7 +54,8 @@ function confirmBlocked(): boolean {
     :show="props.show"
     preset="card"
     :title="t('applications.gitSources.disconnectTitle')"
-    class="dialog-card"
+    class="app-modal"
+    style="width: 400px; max-width: 94vw"
     :mask-closable="false"
     @update:show="(value: boolean) => emit('update:show', value)"
   >
@@ -93,7 +94,12 @@ function confirmBlocked(): boolean {
             : props.blockedError
         }}
       </NAlert>
-      <NSpace :size="12">
+    </NSpace>
+    <template #footer>
+      <NSpace justify="end" :size="12">
+        <NButton :disabled="props.working" @click="emit('update:show', false)">
+          {{ t("applications.gitSources.cancel") }}
+        </NButton>
         <NButton
           type="error"
           :loading="props.working"
@@ -102,28 +108,24 @@ function confirmBlocked(): boolean {
         >
           {{ t("applications.gitSources.disconnectConfirm") }}
         </NButton>
-        <NButton :disabled="props.working" @click="emit('update:show', false)">
-          {{ t("applications.gitSources.cancel") }}
-        </NButton>
       </NSpace>
-    </NSpace>
+    </template>
   </NModal>
 </template>
 
 <style scoped>
-.dialog-card {
-  max-width: 520px;
-}
-
-.lead {
-  margin: 0;
-}
-
 .app-list {
   margin: 0;
   padding-left: 20px;
   display: grid;
   gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.lead {
+  margin: 0;
 }
 
 .mono {

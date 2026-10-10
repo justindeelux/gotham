@@ -224,6 +224,13 @@ async function handleSelect(key: string | number): Promise<void> {
   height: auto;
   padding: 5px 6px;
   border-radius: var(--radius-sm);
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.me-card :deep(.n-button__content) {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .me-card:hover {
@@ -233,6 +240,7 @@ async function handleSelect(key: string | number): Promise<void> {
 .me-card-inner {
   width: 100%;
   flex-wrap: nowrap;
+  justify-content: flex-start;
 }
 
 .me-meta {

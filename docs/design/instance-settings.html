@@ -18,6 +18,9 @@
   .pg-lock { font-size: var(--text-xs); color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
   .pg-fam { border-top: 1px solid var(--border); padding-top: var(--space-4); display: grid; gap: var(--space-3); }
   .pg-countdown { font-family: var(--font-mono); font-size: var(--text-lg); }
+  /* JUS-99: inline "add another resolver" action inside the DNS hint. */
+  .pg-addlink { padding: 0; border: 0; background: none; color: var(--link); font: inherit; cursor: pointer; }
+  .pg-addlink:hover { color: var(--accent-ink-hover); text-decoration: underline; text-underline-offset: 2px; }
   @media (max-width: 640px) { .pg-row2 { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -79,9 +82,13 @@
           <div class="card-head"><h3>Network</h3><span class="meta">Changes need confirmation and revert automatically</span></div>
           <div class="pg-form">
             <div class="field">
-              <label class="field-label" for="pg-dns">DNS servers</label>
-              <input id="pg-dns" class="input mono" value="1.1.1.1, 2606:4700:4700::1111" />
-              <span class="field-hint">Up to 3 resolvers, comma separated.</span>
+              <label class="field-label" for="pg-dns1">Primary DNS server</label>
+              <input id="pg-dns1" class="input mono" value="1.1.1.1" />
+            </div>
+            <div class="field">
+              <label class="field-label" for="pg-dns2">Alternate DNS server <span class="meta">(optional)</span></label>
+              <input id="pg-dns2" class="input mono" value="2606:4700:4700::1111" />
+              <span class="field-hint">Primary required, alternate optional. <button class="pg-addlink" type="button">Add DNS server</button> for a third resolver.</span>
             </div>
             <div class="pg-fam">
               <h4>IPv4</h4>

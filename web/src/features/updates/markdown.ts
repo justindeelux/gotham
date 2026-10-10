@@ -73,9 +73,28 @@ function renderInline(escaped: string, repoBase: string): string {
     return `${linkAttrs(escapeHtml(raw))}${text}</a>`;
   });
   if (repoBase) {
-    out = out.replace(/(^|\s)#(\d{1,6})\b/g, (_match, prefix: string, num: string) => {
-      return `${prefix}${linkAttrs(`${repoBase}/issues/${num}`)}#${num}</a>`;
-    });
+    // Only link issue refs in text nodes: never inside a tag (an href value can
+    // hold " #1") and never inside an existing link (no nested anchors).
+    let inLink = false;
+    out = out
+      .split(/(<[^>]*>)/)
+      .map((part) => {
+        if (part.startsWith("<")) {
+          if (/^<a\s/i.test(part)) {
+            inLink = true;
+          } else if (/^<\/a>/i.test(part)) {
+            inLink = false;
+          }
+          return part;
+        }
+        if (inLink) {
+          return part;
+        }
+        return part.replace(/(^|\s)#(\d{1,6})\b/g, (_match, prefix: string, num: string) => {
+          return `${prefix}${linkAttrs(`${repoBase}/issues/${num}`)}#${num}</a>`;
+        });
+      })
+      .join("");
   }
   out = out.replace(/\uE000(\d+)\uE001/g, (_m, index: string) => codes[Number(index)] ?? "");
   return out;

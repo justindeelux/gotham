@@ -85,6 +85,16 @@ describe("updates changelog schema", () => {
 });
 
 describe("updates changelog locales", () => {
+  it("never links issue refs inside a tag or an existing link", () => {
+    const release = "https://github.com/o/r/releases/tag/v1.0.0";
+    const inHref = renderMarkdown("[t](https://e.com/ #1)", release);
+    expect(inHref).toBe(
+      '<p><a href="https://e.com/ #1" target="_blank" rel="noopener noreferrer">t</a></p>',
+    );
+    const inText = renderMarkdown("[fix #2](https://e.com/x)", release);
+    expect(inText.match(/<a /g)).toHaveLength(1);
+  });
+
   it("keeps en/vi keys in sync", () => {
     expect(Object.keys(en.changelog).sort()).toEqual(Object.keys(vi.changelog).sort());
     for (const key of Object.keys(en.changelog) as (keyof typeof en.changelog)[]) {

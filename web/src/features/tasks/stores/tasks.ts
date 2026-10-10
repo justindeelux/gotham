@@ -2,6 +2,8 @@ import { defineStore } from "pinia";
 import { computed, ref, watch } from "vue";
 
 import {
+  isTaskSnapshotMarker,
+  isTerminalStatus,
   parseTaskFrame,
   taskChannel,
 } from "@/features/tasks/api/tasks";
@@ -17,6 +19,12 @@ export const successDismissMs = 8000;
 export interface TaskCard {
   event: TaskEvent;
   collapsed: boolean;
+  /**
+   * True when the task vanished from a snapshot replay: it finished while
+   * the socket was down, so the outcome is unknown. The card stays (with
+   * its log link) instead of lying about success or failure.
+   */
+  unknown: boolean;
 }
 
 /**
@@ -37,6 +45,11 @@ export const useTasksStore = defineStore("tasks", () => {
   const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Highest sequence applied per task; older frames are stale replays. */
   const appliedSeq = new Map<string, number>();
+  /**
+   * Task IDs seen since the previous snapshot marker: the replay batch the
+   * next marker closes. Cleared on every marker and team switch.
+   */
+  const snapshotBatch = new Set<string>();
 
   function clearDismissTimer(taskId: string): void {
     const timer = dismissTimers.get(taskId);
@@ -55,15 +68,18 @@ export const useTasksStore = defineStore("tasks", () => {
       return;
     }
     appliedSeq.set(event.taskId, Math.max(known, event.seq));
+    snapshotBatch.add(event.taskId);
     clearDismissTimer(event.taskId);
     const existing = cards.value[event.taskId];
     cards.value[event.taskId] = {
       event,
       collapsed: existing?.collapsed ?? false,
+      unknown: false,
     };
     if (event.status === "succeeded") {
       const timer = setTimeout(() => {
         dismissTimers.delete(event.taskId);
+        appliedSeq.delete(event.taskId);
         delete cards.value[event.taskId];
       }, successDismissMs);
       dismissTimers.set(event.taskId, timer);
@@ -73,6 +89,7 @@ export const useTasksStore = defineStore("tasks", () => {
   /** dismiss closes one card, cancelling its auto-dismiss timer. */
   function dismiss(taskId: string): void {
     clearDismissTimer(taskId);
+    appliedSeq.delete(taskId);
     delete cards.value[taskId];
   }
 
@@ -84,6 +101,26 @@ export const useTasksStore = defineStore("tasks", () => {
     }
   }
 
+  /**
+   * reconcileSnapshot closes one snapshot batch: every non-terminal card
+   * absent from the batch finished while the socket was down, so it is
+   * marked unknown instead of stuck on running forever. Terminal cards and
+   * freshly seen tasks are untouched.
+   */
+  function reconcileSnapshot(): void {
+    for (const [taskId, card] of Object.entries(cards.value)) {
+      if (!isTerminalStatus(card.event.status) && !snapshotBatch.has(taskId)) {
+        card.unknown = true;
+      }
+    }
+    snapshotBatch.clear();
+  }
+
+  /** trackedSequences reports the sequence-table size (bounded by cards). */
+  function trackedSequences(): number {
+    return appliedSeq.size;
+  }
+
   function subscribeTeam(teamId: string): void {
     if (!socket || teamId === subscribedTeam) {
       return;
@@ -92,6 +129,8 @@ export const useTasksStore = defineStore("tasks", () => {
       socket.unsubscribe(taskChannel(subscribedTeam));
     }
     subscribedTeam = teamId;
+    // A new subscription brings a fresh snapshot batch.
+    snapshotBatch.clear();
     if (teamId !== "") {
       socket.subscribe(taskChannel(teamId));
     }
@@ -110,9 +149,23 @@ export const useTasksStore = defineStore("tasks", () => {
       token: getAccessToken,
       autoConnect: true,
       onMessage: (message) => {
+        // The snapshot end marker closes the replay batch: reconcile first,
+        // but only for our own team room.
+        if (message.channel === taskChannel(subscribedTeam) && isTaskSnapshotMarker(message.raw)) {
+          reconcileSnapshot();
+          return;
+        }
         const event = parseTaskFrame(message.raw);
         if (event) {
           applyEvent(event);
+        }
+      },
+      onStatusChange: (status) => {
+        // A fresh connection always triggers a server replay on
+        // resubscribe, so pre-disconnect frames must not linger in the
+        // batch the next marker closes.
+        if (status === "open") {
+          snapshotBatch.clear();
         }
       },
     });
@@ -134,8 +187,9 @@ export const useTasksStore = defineStore("tasks", () => {
       clearDismissTimer(taskId);
     }
     appliedSeq.clear();
+    snapshotBatch.clear();
     cards.value = {};
   }
 
-  return { cards, visible, applyEvent, dismiss, toggleCollapse, connect, reset };
+  return { cards, visible, applyEvent, dismiss, toggleCollapse, connect, reconcileSnapshot, reset, trackedSequences };
 });

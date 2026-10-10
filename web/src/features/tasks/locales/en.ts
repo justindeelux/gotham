@@ -14,15 +14,13 @@ const en = {
       running: "Running",
       succeeded: "Succeeded",
       failed: "Failed",
+      unknown: "Finished",
     },
     steps: {
-      queued: "Queued",
       cloning: "Cloning",
       building: "Building",
       pushing: "Pushing",
       starting: "Starting",
-      running: "Running",
-      failed: "Failed",
     },
   },
 };

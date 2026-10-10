@@ -271,11 +271,6 @@ func TestCancelledRunStillPublishesTerminal(t *testing.T) {
 	if len(frames) == 0 || frames[len(frames)-1].Status != taskevents.StatusFailed {
 		t.Fatalf("no terminal failed frame on a cancelled run: %v", statusesOf(frames))
 	}
-	var terminalLive bool
-	for _, ev := range frames {
-		_ = ev
-	}
-	_ = terminalLive
 	live, cancelledCount := pub.counts()
 	if live == 0 {
 		t.Errorf("no task publish ran on a live context (live=%d cancelled=%d)", live, cancelledCount)

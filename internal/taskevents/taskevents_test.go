@@ -92,6 +92,25 @@ func TestNextIsMonotonicPerTask(t *testing.T) {
 	}
 }
 
+func TestTerminalSetPrunesSequenceCounters(t *testing.T) {
+	tr := NewTracker()
+	for i := 0; i < 50; i++ {
+		id := "task-" + string(rune('a'+i%26)) + string(rune('0'+i/26))
+		tr.Next(id)
+		tr.Set(Event{TaskID: id, TeamID: "t1", Status: StatusRunning})
+		tr.Set(Event{TaskID: id, TeamID: "t1", Status: StatusSucceeded})
+	}
+	tr.mu.Lock()
+	tasks, seqs := len(tr.tasks), len(tr.seq)
+	tr.mu.Unlock()
+	if tasks != 0 || seqs != 0 {
+		t.Fatalf("tracker holds %d tasks and %d seq counters after all-terminal traffic, want none", tasks, seqs)
+	}
+	if tr.Next("task-a0") != 1 {
+		t.Fatal("a pruned task must restart its sequence")
+	}
+}
+
 func TestSnapshotIsSortedByTaskID(t *testing.T) {
 	tr := NewTracker()
 	for _, id := range []string{"c", "a", "b"} {

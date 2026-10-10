@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 
 import {
+  isTaskSnapshotMarker,
   isTerminalStatus,
   parseTaskFrame,
   taskChannel,
@@ -71,6 +72,12 @@ describe("parseTaskFrame", () => {
     expect(parseTaskFrame("not json")).toBeNull();
     expect(parseTaskFrame(JSON.stringify({ channel: "c", type: "task", data: "{}" }))).toBeNull();
   });
+
+  it("recognises the snapshot end marker", () => {
+    expect(isTaskSnapshotMarker(JSON.stringify({ channel: "tasks:t1", type: "task_snapshot" }))).toBe(true);
+    expect(isTaskSnapshotMarker(JSON.stringify({ channel: "tasks:t1", type: "task", data: "{}" }))).toBe(false);
+    expect(isTaskSnapshotMarker("not json")).toBe(false);
+  });
 });
 
 describe("tasks locales", () => {
@@ -127,6 +134,45 @@ describe("useTasksStore", () => {
     store.applyEvent(parseTaskFrame(frameOf(runningEvent({ status: "running", step: "building", seq: 0 })))!);
     expect(store.visible[0].event.status).toBe("running");
   });
+
+  it("marks cards missing from the snapshot as unknown instead of stuck", () => {
+    const store = useTasksStore();
+    // Both tasks run; a marker closes the pre-disconnect batch (nothing to
+    // reconcile yet) and clears it, like a reconnect does on open.
+    store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: "dep-1", seq: 2 })))!);
+    store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: "dep-2", seq: 3 })))!);
+    store.reconcileSnapshot();
+    expect(store.visible.every((card) => !card.unknown)).toBe(true);
+    // Reconnect replay mentions only dep-1: dep-2 finished while the socket
+    // was down, so the closing marker flags it instead of leaving it stuck.
+    store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: "dep-1", seq: 4 })))!);
+    store.reconcileSnapshot();
+    const byId = Object.fromEntries(store.visible.map((card) => [card.event.taskId, card]));
+    expect(byId["dep-1"].unknown).toBe(false);
+    expect(byId["dep-2"].unknown).toBe(true);
+    expect(byId["dep-2"].event.status).toBe("running");
+    // Terminal cards are never reconciled, and each marker resets the batch.
+    store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: "dep-3", status: "failed", seq: 1 })))!);
+    store.reconcileSnapshot();
+    expect(store.visible.find((card) => card.event.taskId === "dep-3")?.unknown).toBe(false);
+  });
+
+  it("prunes the sequence table with the cards", () => {
+    const store = useTasksStore();
+    for (let i = 0; i < 25; i++) {
+      store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: `ok-${i}`, status: "succeeded", seq: i + 1 })))!);
+      store.applyEvent(parseTaskFrame(frameOf(runningEvent({ task_id: `no-${i}`, status: "failed", seq: i + 1 })))!);
+    }
+    expect(store.trackedSequences()).toBe(50);
+    vi.advanceTimersByTime(8000);
+    expect(store.visible.every((card) => card.event.status === "failed")).toBe(true);
+    expect(store.trackedSequences()).toBe(25);
+    for (const card of [...store.visible]) {
+      store.dismiss(card.event.taskId);
+    }
+    expect(store.visible).toHaveLength(0);
+    expect(store.trackedSequences()).toBe(0);
+  });
 });
 
 describe("TaskProgressCards", () => {
@@ -168,6 +214,20 @@ describe("TaskProgressCards", () => {
     return wrapper.vm.$nextTick().then(() => {
       expect(wrapper.find('[data-task-status="failed"]').exists()).toBe(true);
       expect(wrapper.text()).toContain("boom");
+    });
+  });
+
+  it("flags cards finished while the socket was down as finished", () => {
+    const wrapper = mountCards();
+    const store = useTasksStore();
+    store.applyEvent(parseTaskFrame(frameOf(runningEvent()))!);
+    store.reconcileSnapshot();
+    store.reconcileSnapshot();
+    return wrapper.vm.$nextTick().then(() => {
+      // First marker closes the pre-disconnect batch; the second finds the
+      // still-running card absent and marks it finished instead of stuck.
+      expect(wrapper.find('[data-task-unknown="true"]').exists()).toBe(true);
+      expect(wrapper.text()).toContain("Finished");
     });
   });
 });

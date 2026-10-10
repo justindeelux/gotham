@@ -14,7 +14,10 @@ onMounted(() => {
 });
 
 /** tagType maps a task status to its Naive UI tag. */
-function tagType(status: TaskStatus): "default" | "info" | "success" | "error" {
+function tagType(status: TaskStatus, unknown: boolean): "default" | "info" | "success" | "error" | "warning" {
+  if (unknown) {
+    return "warning";
+  }
   switch (status) {
     case "queued":
       return "default";
@@ -25,6 +28,14 @@ function tagType(status: TaskStatus): "default" | "info" | "success" | "error" {
     case "failed":
       return "error";
   }
+}
+
+/** statusLabel names the card state, flagging tasks whose outcome is unknown. */
+function statusLabel(card: { event: { status: TaskStatus }; unknown: boolean }): string {
+  if (card.unknown) {
+    return t("tasks.card.status.unknown");
+  }
+  return String(t(`tasks.card.status.${card.event.status}`));
 }
 
 /** progressOf shows queued work at zero; terminal work is complete. */
@@ -68,14 +79,15 @@ const hasCards = computed<boolean>(() => tasksStore.visible.length > 0);
       size="small"
       :data-task-id="card.event.taskId"
       :data-task-status="card.event.status"
+      :data-task-unknown="card.unknown ? 'true' : 'false'"
     >
       <div class="task-head">
         <NTag
-          :type="tagType(card.event.status)"
+          :type="tagType(card.event.status, card.unknown)"
           size="small"
           round
         >
-          {{ t(`tasks.card.status.${card.event.status}`) }}
+          {{ statusLabel(card) }}
         </NTag>
         <span class="task-name">{{ card.event.name }}</span>
         <NButton

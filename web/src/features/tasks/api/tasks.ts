@@ -39,6 +39,23 @@ export function isTerminalStatus(status: TaskStatus): boolean {
   return status === "succeeded" || status === "failed";
 }
 
+/**
+ * isTaskSnapshotMarker reports whether a raw frame is the snapshot end
+ * marker closing a running-task replay batch.
+ */
+export function isTaskSnapshotMarker(raw: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return (
+      isRecord(parsed) &&
+      parsed.type === "task_snapshot" &&
+      typeof parsed.channel === "string"
+    );
+  } catch {
+    return false;
+  }
+}
+
 interface TaskFrame {
   channel?: unknown;
   type?: unknown;

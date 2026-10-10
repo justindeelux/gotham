@@ -16,15 +16,13 @@ const vi: TasksMessages = {
       running: "Đang chạy",
       succeeded: "Hoàn tất",
       failed: "Thất bại",
+      unknown: "Đã xong",
     },
     steps: {
-      queued: "Đang chờ",
       cloning: "Đang tải mã nguồn",
       building: "Đang build",
       pushing: "Đang đẩy image",
       starting: "Đang khởi động",
-      running: "Đang chạy",
-      failed: "Thất bại",
     },
   },
 };

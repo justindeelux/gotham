@@ -129,7 +129,8 @@ func (t *Tracker) Next(taskID string) uint64 {
 	return t.seq[taskID]
 }
 
-// Set records ev as running. Terminal events remove the task instead.
+// Set records ev as running. Terminal events remove the task — and its
+// sequence counter, since task IDs are never reused — instead.
 func (t *Tracker) Set(ev Event) {
 	if t == nil {
 		return
@@ -138,6 +139,7 @@ func (t *Tracker) Set(ev Event) {
 	defer t.mu.Unlock()
 	if ev.Status.Terminal() {
 		delete(t.tasks, ev.TaskID)
+		delete(t.seq, ev.TaskID)
 		return
 	}
 	t.tasks[ev.TaskID] = ev

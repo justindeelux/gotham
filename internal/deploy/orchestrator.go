@@ -960,7 +960,11 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 	if to.Terminal() {
 		o.notify(ctx, st, to)
 		if to == StateRunning {
-			o.publishTask(ctx, st.app, st.dep, taskevents.StatusSucceeded, "", 100, "")
+			// Detached like the failure path: a cancel landing right
+			// after the terminal write must not drop the card flip.
+			detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			o.publishTask(detached, st.app, st.dep, taskevents.StatusSucceeded, "", 100, "")
+			cancel()
 		}
 	}
 	return nil

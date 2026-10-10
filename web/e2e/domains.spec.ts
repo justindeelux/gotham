@@ -31,10 +31,11 @@ function tab(page: Page, name: string) {
  * rotation, delete), certificate configuration create/edit/delete, the live
  * certificate status/expiry rendering (observed node states), the redirect
  * rule lifecycle (create, toggle, edit, conflict error, delete), the
- * application base-domain edit with certificate re-record, and the API
- * validation error path. The router list has no API and stays a labeled
- * stub. No ACME issuance is triggered: certificate rows are intent records
- * and no node consumes them in this run.
+ * application base-domain edit with certificate re-record, the generated
+ * router list read (reported per node, with the unreachable seeded node
+ * shown as an error rather than invented rows), and the API validation
+ * error path. No ACME issuance is triggered: certificate rows are intent
+ * records and no node consumes them in this run.
  */
 test.describe("domains", () => {
   // The single scenario drives the whole Domains & SSL surface against a real
@@ -154,10 +155,13 @@ test.describe("domains", () => {
       page.getByRole("heading", { name: "Domains & SSL", level: 1 }),
     ).toBeVisible();
 
-    // The router list is the only surface left without an API (BE-6.3 added
-    // no router-list endpoint); certificates and redirects render live data.
+    // The router list is generated state on read (JUS-90): the seeded node
+    // is unreachable and the application has no running deployment, so the
+    // tab reports the node error instead of invented rows and the table
+    // stays empty; certificates and redirects render live data.
     await tab(page, "Routers").click();
-    await expect(page.getByText(/not exposed by the API yet/i)).toBeVisible();
+    await expect(page.getByText(/agent unavailable/i).first()).toBeVisible();
+    await expect(page.getByText("No routers generated yet.")).toBeVisible();
     await tab(page, "Certificates").click();
     await expect(
       page.getByText("No certificate configurations yet."),

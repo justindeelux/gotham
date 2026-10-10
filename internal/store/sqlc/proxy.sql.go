@@ -635,7 +635,7 @@ func (q *Queries) ListEnabledRedirects(ctx context.Context) ([]ListEnabledRedire
 }
 
 const listProxiedApplications = `-- name: ListProxiedApplications :many
-SELECT a.id, a.server_id, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
+SELECT a.id, a.server_id, a.name, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
        COALESCE(d.container_id, '')::text AS container_id,
        (c.id IS NOT NULL)::boolean AS certificate_configured,
        COALESCE(c.domain, '')::text AS certificate_domain,
@@ -658,6 +658,7 @@ ORDER BY a.created_at, a.id
 type ListProxiedApplicationsRow struct {
 	ID                       pgtype.UUID `json:"id"`
 	ServerID                 pgtype.UUID `json:"server_id"`
+	Name                     string      `json:"name"`
 	BaseDomain               string      `json:"base_domain"`
 	BaseDomainDisabled       bool        `json:"base_domain_disabled"`
 	Port                     int32       `json:"port"`
@@ -693,6 +694,7 @@ func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApp
 		if err := rows.Scan(
 			&i.ID,
 			&i.ServerID,
+			&i.Name,
 			&i.BaseDomain,
 			&i.BaseDomainDisabled,
 			&i.Port,

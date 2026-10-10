@@ -10,7 +10,7 @@ import ProviderDialog from "@/features/domains/components/ProviderDialog.vue";
 import RedirectCreateCard from "@/features/domains/components/RedirectCreateCard.vue";
 import RedirectEditDialog from "@/features/domains/components/RedirectEditDialog.vue";
 import RedirectRulesPanel from "@/features/domains/components/RedirectRulesPanel.vue";
-import RoutersStubPanel from "@/features/domains/components/RoutersStubPanel.vue";
+import RoutersPanel from "@/features/domains/components/RoutersPanel.vue";
 import { provideCertificates } from "@/features/domains/composables/useCertificates";
 import { provideDomainsOverview } from "@/features/domains/composables/useDomainsOverview";
 import { provideProviders } from "@/features/domains/composables/useProviders";
@@ -18,11 +18,11 @@ import { provideRedirects } from "@/features/domains/composables/useRedirects";
 import { useProxyStore } from "@/features/domains/stores/proxy";
 
 /**
- * Domains & SSL page: DNS provider credentials, certificate configurations
- * and domain redirect rules, all backed by the proxy API. Certificate
- * status/expiry is observed live from the owning node; a router listing still
- * has no API and is rendered as an explicitly labeled stub — never with
- * invented data.
+ * Domains & SSL page: DNS provider credentials, certificate configurations,
+ * domain redirect rules and the generated Traefik router list, all backed by
+ * the proxy API. Certificate status/expiry is observed live from the owning
+ * node; the router list is regenerated from control-plane state on read and
+ * an unreadable node is reported, never invented.
  *
  * Thin route component: the tab shell, page head and KPI tiles live here;
  * every section (panels, dialogs, state) lives in its own component or
@@ -77,7 +77,7 @@ onMounted(() => {
 
     <NTabs v-model:value="activeTab" type="line" animated class="tabs">
       <NTabPane name="routers" :tab="$t('domains.tabs.routers')">
-        <RoutersStubPanel />
+        <RoutersPanel />
       </NTabPane>
 
       <NTabPane name="certificates" :tab="$t('domains.tabs.certificates')">

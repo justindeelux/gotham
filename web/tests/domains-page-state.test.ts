@@ -19,6 +19,7 @@ vi.mock("@/features/domains/api/proxy", async (importOriginal) => {
     listDNSProviders: vi.fn(),
     listCertificates: vi.fn(),
     listRedirects: vi.fn(),
+    listRouters: vi.fn(),
     createDNSProvider: vi.fn(),
     updateDNSProvider: vi.fn(),
     createRedirect: vi.fn(),
@@ -34,6 +35,7 @@ import {
   listCertificates,
   listDNSProviders,
   listRedirects,
+  listRouters,
   updateDNSProvider,
 } from "@/features/domains/api/proxy";
 import domainsEn from "@/features/domains/locales/en";
@@ -150,6 +152,7 @@ describe("domains page instance state", () => {
     vi.mocked(listDNSProviders).mockResolvedValue([]);
     vi.mocked(listCertificates).mockResolvedValue([]);
     vi.mocked(listRedirects).mockResolvedValue([]);
+    vi.mocked(listRouters).mockResolvedValue({ routers: [], nodes: [] } as never);
     vi.mocked(listApps).mockResolvedValue([]);
 
     let wrapper = await mountPage();
@@ -176,6 +179,7 @@ describe("domains page instance state", () => {
     vi.mocked(listDNSProviders).mockReturnValue(never());
     vi.mocked(listCertificates).mockReturnValue(never());
     vi.mocked(listRedirects).mockReturnValue(never());
+    vi.mocked(listRouters).mockReturnValue(never());
     vi.mocked(listApps).mockReturnValue(never());
 
     let wrapper = await mountPage();

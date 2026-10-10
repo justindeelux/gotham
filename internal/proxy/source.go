@@ -15,6 +15,8 @@ import (
 type ProxiedApplication struct {
 	// ID identifies the application (kept in generated names for traceability).
 	ID uuid.UUID
+	// Name is the user-facing application name, used in read surfaces.
+	Name string
 	// ServerID is the node hosting the application; uuid.Nil means unassigned.
 	ServerID uuid.UUID
 	// BaseDomain is the raw stored domain, normalized and validated during
@@ -165,6 +167,7 @@ func (s storeSource) ListProxiedApplications(ctx context.Context) ([]ProxiedAppl
 		app := ProxiedApplication{
 			ID:          uuidFromPG(row.ID),
 			ServerID:    uuidFromPG(row.ServerID),
+			Name:        row.Name,
 			BaseDomain:  row.BaseDomain,
 			Disabled:    row.BaseDomainDisabled,
 			Port:        row.Port,

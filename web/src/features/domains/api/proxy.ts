@@ -339,6 +339,66 @@ export async function deleteRedirect(id: string): Promise<void> {
 }
 
 /**
+ * One generated Traefik router as reported by GET /v1/proxy/routers (see
+ * internal/proxy/routers.go): the host rule, the backend service, the
+ * entrypoints, the TLS resolver (empty for plain HTTP) and the owning
+ * control-plane row (an application, a compose service, or a redirect rule).
+ */
+export type RouterKind = "application" | "service" | "redirect";
+
+/** Node sync state observed on read (generated vs last synced version). */
+export type RouterSyncStatus = "synced" | "pending" | "unknown";
+
+export interface ProxyRouter {
+  host: string;
+  rule: string;
+  service: string;
+  target?: string;
+  entrypoints: string[];
+  middlewares?: string[];
+  tls_resolver?: string;
+  kind: RouterKind;
+  owner_id: string;
+  owner_name?: string;
+  server_id: string;
+  server_name?: string;
+}
+
+/** One node's router read outcome; error means the node could not be read. */
+export interface RouterNodeState {
+  server_id: string;
+  server_name?: string;
+  sync_status: RouterSyncStatus;
+  error?: string;
+  diagnostics?: Array<{
+    application_id: string;
+    kind?: string;
+    domain?: string;
+    reason: string;
+  }>;
+}
+
+interface RouterListEnvelope {
+  routers: ProxyRouter[];
+  nodes: RouterNodeState[];
+}
+
+/**
+ * listRouters returns the generated Traefik routers of one node, or every
+ * node when serverId is omitted. An unreachable node is reported on its node
+ * entry (or answers 502 for a single-node read) — never as invented rows.
+ */
+export async function listRouters(serverId?: string): Promise<RouterListEnvelope> {
+  const response = await http.get<RouterListEnvelope>("/proxy/routers", {
+    params: serverId ? { server_id: serverId } : undefined,
+  });
+  return {
+    routers: response.data.routers ?? [],
+    nodes: response.data.nodes ?? [],
+  };
+}
+
+/**
  * toCertificateInput maps a draft onto the wire body. http-01 never names a
  * provider and never asks for a wildcard; dns-01 always names one.
  */

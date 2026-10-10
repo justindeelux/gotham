@@ -496,6 +496,29 @@ test.describe("domains", () => {
     ).toHaveCount(0);
     await expect(page.getByText(rotatedName)).toBeVisible();
 
+    // ── application detail: an alias attaches with no error ─────────────
+    // Regression for the fix-round-2 live bug (inject() after an await
+    // reported success as "Something went wrong ... Cannot read
+    // properties"): the row appears, no error banner shows, and removal
+    // cleans up.
+    const aliasCard = page
+      .locator(".n-card")
+      .filter({
+        has: page.locator(".n-card-header__main", { hasText: "Additional domains" }),
+      })
+      .first();
+    const aliasDomain = `www.${zone}`;
+    await aliasCard.getByPlaceholder("www.example.com").fill(aliasDomain);
+    await aliasCard.getByRole("button", { name: "Add domain", exact: true }).click();
+    const aliasRow = aliasCard.locator(".alias-row").filter({ hasText: aliasDomain });
+    await expect(aliasRow).toHaveCount(1);
+    await expect(aliasCard.getByText(/something went wrong/i)).toHaveCount(0);
+    await expect(aliasCard.getByText(/cannot read properties/i)).toHaveCount(0);
+    await aliasRow.getByRole("button", { name: "Remove" }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
+    await expect(aliasRow).toHaveCount(0);
+    await expect(aliasCard.getByText(/something went wrong/i)).toHaveCount(0);
+
     // ── delete certificate, then the now-unreferenced provider ───────────
     await page.goto("/domains");
     await tab(page, "Certificates").click();

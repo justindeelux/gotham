@@ -214,7 +214,7 @@ export function useCertificateConfig(application: Ref<Application>) {
   );
 
   const domainsTick = useDomainsRefresh();
-  if (domainsTick !== null) {
+  if (domainsTick != null) {
     watch(domainsTick, () => {
       void loadDomains();
     });

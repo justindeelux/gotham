@@ -12,7 +12,10 @@ import {
 } from "@/features/applications/api/applications";
 import { hostDomainSchema } from "@/features/applications/schemas/applications";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
-import { bumpDomainsRefresh } from "@/features/applications/composables/domainRefresh";
+import {
+  bumpDomainsRefresh,
+  useDomainsRefresh,
+} from "@/features/applications/composables/domainRefresh";
 import { describeProxyError, useProxyStore } from "@/features/domains";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
@@ -27,6 +30,12 @@ export function useApplicationDomains(application: Ref<Application>) {
   const message = useMessage();
   const appsStore = useApplicationsStore();
   const proxyStore = useProxyStore();
+  /**
+   * refreshTick is captured once during setup: inject() has no active
+   * component instance after an await, so the async handlers below close
+   * over this instead of calling inject() themselves.
+   */
+  const refreshTick = useDomainsRefresh();
 
   const domains = ref<ApplicationDomain[]>([]);
   const loadingDomains = ref(false);
@@ -55,6 +64,15 @@ export function useApplicationDomains(application: Ref<Application>) {
     return String(i18n.global.t(key));
   }
 
+  /** clearErrors drops every stale banner before a fresh attempt. */
+  function clearErrors(): void {
+    addError.value = null;
+    addServerError.value = null;
+    rowErrorId.value = null;
+    rowError.value = null;
+    rowErrorIsProxy.value = false;
+    rowServerError.value = null;
+  }
   /** refresh reloads the domain rows of the current application. */
   async function refresh(silent = false): Promise<void> {
     if (!silent) {
@@ -72,22 +90,20 @@ export function useApplicationDomains(application: Ref<Application>) {
 
   /** handleAddDomain validates locally, then attaches the hostname. */
   async function handleAddDomain(): Promise<void> {
+    clearErrors();
     const next = newDomain.value.trim().toLowerCase();
     const issues = fieldErrors(hostDomainSchema, next);
     if (issues.length > 0) {
-      addServerError.value = null;
       addError.value = issues[0];
       return;
     }
-    addError.value = null;
-    addServerError.value = null;
     addingDomain.value = true;
     try {
       await addDomain(application.value.id, next);
       newDomain.value = "";
       await refresh(true);
       await appsStore.fetchApplication(application.value.id);
-      bumpDomainsRefresh();
+      bumpDomainsRefresh(refreshTick);
       message.success(tr("applications.detail.domainAdded"));
     } catch (error) {
       addServerError.value = error;
@@ -99,16 +115,13 @@ export function useApplicationDomains(application: Ref<Application>) {
 
   /** handleRemoveDomain detaches one hostname after confirmation. */
   async function handleRemoveDomain(domain: ApplicationDomain): Promise<void> {
+    clearErrors();
     busyDomainId.value = domain.id;
-    rowErrorId.value = null;
-    rowError.value = null;
-    rowErrorIsProxy.value = false;
-    rowServerError.value = null;
     try {
       await removeDomain(application.value.id, domain.id);
       await refresh(true);
       await appsStore.fetchApplication(application.value.id);
-      bumpDomainsRefresh();
+      bumpDomainsRefresh(refreshTick);
       message.success(tr("applications.detail.domainRemoved"));
     } catch (error) {
       rowServerError.value = error;
@@ -121,17 +134,14 @@ export function useApplicationDomains(application: Ref<Application>) {
 
   /** handleSecureDomain creates an http-01 intent for one alias (N2). */
   async function handleSecureDomain(domain: ApplicationDomain): Promise<void> {
+    clearErrors();
     busyDomainId.value = domain.id;
-    rowErrorId.value = null;
-    rowError.value = null;
-    rowErrorIsProxy.value = false;
-    rowServerError.value = null;
     try {
       await proxyStore.createCertificateConfig({
         application_id: application.value.id,
         domain: domain.domain,
       });
-      bumpDomainsRefresh();
+      bumpDomainsRefresh(refreshTick);
       message.success(tr("applications.detail.certCreated"));
     } catch (error) {
       rowServerError.value = error;
@@ -144,16 +154,13 @@ export function useApplicationDomains(application: Ref<Application>) {
   }
   /** handleSetPrimary promotes one attached hostname to primary. */
   async function handleSetPrimary(domain: ApplicationDomain): Promise<void> {
+    clearErrors();
     busyDomainId.value = domain.id;
-    rowErrorId.value = null;
-    rowError.value = null;
-    rowErrorIsProxy.value = false;
-    rowServerError.value = null;
     try {
       await setPrimaryDomain(application.value.id, domain.id);
       await refresh(true);
       await appsStore.fetchApplication(application.value.id);
-      bumpDomainsRefresh();
+      bumpDomainsRefresh(refreshTick);
       message.success(tr("applications.detail.primaryChanged"));
     } catch (error) {
       rowServerError.value = error;

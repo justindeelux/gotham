@@ -158,7 +158,7 @@ const emptyText = computed(() => proxyText("domains.routers.empty", "No routers 
         <NInput
           v-model:value="query"
           clearable
-          style="max-width: 260px"
+          style="max-width: 320px"
           :placeholder="$t('domains.routers.searchPlaceholder')"
           :aria-label="$t('domains.routers.searchAria')"
         />

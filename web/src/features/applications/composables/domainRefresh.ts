@@ -14,15 +14,23 @@ export function provideDomainsRefresh(): Ref<number> {
   return tick;
 }
 
-/** useDomainsRefresh returns the shared tick, or null outside DomainEditor. */
+/**
+ * useDomainsRefresh returns the shared tick, or null outside DomainEditor.
+ * Must be called synchronously during setup: inject() has no active
+ * component instance after an await, so never call this inside async code —
+ * capture the tick once and close over it.
+ */
 export function useDomainsRefresh(): Ref<number> | null {
   return inject<Ref<number> | null>(DomainsRefreshKey, null);
 }
 
-/** bumpDomainsRefresh notifies the certificate panel that the rows changed. */
-export function bumpDomainsRefresh(): void {
-  const tick = useDomainsRefresh();
-  if (tick !== null) {
+/**
+ * bumpDomainsRefresh notifies the certificate panel that the rows changed.
+ * Takes the tick captured during setup (null outside DomainEditor renders it
+ * a no-op); it never calls inject() itself.
+ */
+export function bumpDomainsRefresh(tick: Ref<number> | null | undefined): void {
+  if (tick != null) {
     tick.value += 1;
   }
 }

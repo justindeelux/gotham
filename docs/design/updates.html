@@ -20,7 +20,15 @@
   .pg-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: var(--space-4) var(--space-8); max-width: 960px; align-items: start; }
   .pg-form > .pg-span, .pg-form > .switch-row { grid-column: 1 / -1; }
   .pg-actions { display: flex; justify-content: flex-end; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
-  .pg-notes { white-space: pre-wrap; font-size: var(--text-sm); color: var(--fg); max-height: 160px; overflow: auto; }
+  .pg-notes { font-size: var(--text-sm); color: var(--fg); max-height: 320px; overflow: auto; }
+  .pg-notes h4 { margin: 0 0 var(--space-2); font-size: var(--text-sm); }
+  .pg-notes ul { margin: 0 0 var(--space-3); padding-left: 20px; }
+  .pg-notes li { margin: 2px 0; }
+  .pg-notes code { font-family: var(--font-mono); font-size: 12px; background: var(--muted-soft); padding: 0 4px; border-radius: 4px; }
+  .pg-notes a { color: var(--accent); }
+  .pg-entry { border-top: 1px solid var(--border); padding-top: var(--space-3); margin-top: var(--space-3); }
+  .pg-entry:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+  .pg-entry-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
   .pg-alert { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); border: 1px solid color-mix(in oklab, var(--danger) 34%, transparent); background: var(--danger-soft); color: var(--danger-ink); font-size: var(--text-sm); }
   .pg-alert--warn { border-color: color-mix(in oklab, var(--warn) 34%, transparent); background: var(--warn-soft); color: var(--warn-ink); }
 </style>
@@ -55,10 +63,29 @@
         </div>
 
         <div class="card mt-5" data-od-id="release-notes">
-          <div class="card-head"><h3>Release notes · v0.5.0</h3><span class="meta">stable channel</span></div>
-          <div class="pg-notes">- Multiple domains per application
-- Router list in the proxy settings
-- Fixes for build log streaming</div>
+          <div class="card-head"><h3>Changelog</h3><span class="meta">newest first · admin only</span></div>
+          <div class="pg-notes">
+            <div class="pg-entry">
+              <div class="pg-entry-head"><h4>v0.5.0</h4><a href="https://github.com/justindeelux/gotham/releases/tag/v0.5.0" target="_blank" rel="noopener noreferrer">View on GitHub</a></div>
+              <h4>Highlights</h4>
+              <ul><li>Multiple domains per application</li><li>Router list in the proxy settings</li></ul>
+              <p>See <a href="https://github.com/justindeelux/gotham/pull/42" target="_blank" rel="noopener noreferrer">#42</a> and run <code>gotham update</code>.</p>
+            </div>
+            <div class="pg-entry">
+              <div class="pg-entry-head"><h4>v0.4.3</h4><a href="https://github.com/justindeelux/gotham/releases/tag/v0.4.3" target="_blank" rel="noopener noreferrer">View on GitHub</a></div>
+              <ul><li>Fixes for build log streaming</li></ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="card mt-5" data-od-id="release-notes-current">
+          <div class="card-head"><h3>What&#8217;s new in v0.5.0</h3><span class="meta">running version</span></div>
+          <div class="pg-notes"><ul><li>Multiple domains per application</li></ul></div>
+        </div>
+
+        <div class="card mt-5" data-od-id="release-notes-empty">
+          <div class="card-head"><h3>Changelog</h3></div>
+          <p class="meta">No release notes found for this version (dev builds have no GitHub release).</p>
         </div>
 
         <div class="card mt-5" data-od-id="update-progress">

@@ -30,6 +30,10 @@ type Release struct {
 	ManifestURL          string
 	ManifestSignatureURL string
 	AssetSize            int64
+	// HTMLURL is the human release page (the Releases API html_url), used for
+	// the "View on GitHub" link. It is display-only: never fetched, and only
+	// kept when it is a valid https URL.
+	HTMLURL string
 	// SHA256 is the artifact digest carried by the signed manifest. It is
 	// optional in a locally built Release but always set by the CP offer, so the
 	// agent can bind the offer to the manifest it verifies.

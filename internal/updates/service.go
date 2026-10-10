@@ -43,6 +43,12 @@ type Service interface {
 	Current() string
 	// Check resolves the newest available release, or nil when up to date.
 	Check(ctx context.Context) (*Release, error)
+	// Changelog lists the changelogs of every release newer than the running
+	// version (newest first, bounded), falling back to the running version's
+	// own entry when up to date and to an empty list when the running release
+	// cannot be found (e.g. dev builds). It never fails for an unknown
+	// current version — only an unreachable release API is an error.
+	Changelog(ctx context.Context) ([]ChangelogEntry, error)
 	// Apply checks the channel and applies the resolved release.
 	Apply(ctx context.Context, channel Channel) (*ApplyResult, error)
 	// Rollback restores the retained previous binary.
@@ -119,6 +125,11 @@ type service struct {
 	nextAt    time.Time
 	checkedAt time.Time
 	checkErr  string
+	// changelog caches the viewer changelog for the offer-cache TTL so the
+	// GitHub API load stays bounded; it is keyed by channel+current.
+	changelogKey     string
+	changelogEntries []ChangelogEntry
+	changelogUntil   time.Time
 }
 
 // NewService builds a self-update Service. It does not fail when no public key
@@ -236,6 +247,45 @@ func (s *service) checkOn(ctx context.Context, channel Channel) (*Release, error
 	release, err := checker.Check(ctx, s.current)
 	s.recordCheck(err)
 	return release, err
+}
+
+// Changelog lists newer-than-current changelogs newest-first, the running
+// version's own entry when up to date, or an empty list for an unknown current
+// version. Results are cached for the agent-offer TTL
+// (OfferCacheTTLFromEnv, default 10m) so the GitHub API load stays bounded and
+// a configured mirror (GOTHAM_UPDATE_BASE_URL) keeps working through the same
+// checker.
+func (s *service) Changelog(ctx context.Context) ([]ChangelogEntry, error) {
+	channel := s.schedule().Channel
+	key := string(channel) + "\x00" + s.current
+	s.mu.Lock()
+	if key == s.changelogKey && time.Now().Before(s.changelogUntil) {
+		cached := append([]ChangelogEntry(nil), s.changelogEntries...)
+		s.mu.Unlock()
+		return cached, nil
+	}
+	s.mu.Unlock()
+
+	checker := *s.checker
+	checker.Channel = channel
+	entries, err := checker.Changelog(ctx, s.current)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		if current, cerr := checker.CurrentChangelog(ctx, s.current); cerr != nil {
+			return nil, cerr
+		} else if current != nil {
+			entries = []ChangelogEntry{*current}
+		}
+	}
+
+	s.mu.Lock()
+	s.changelogKey = key
+	s.changelogEntries = append([]ChangelogEntry(nil), entries...)
+	s.changelogUntil = time.Now().Add(OfferCacheTTLFromEnv())
+	s.mu.Unlock()
+	return entries, nil
 }
 
 // Apply checks the requested channel (defaulting to the scheduled one) and

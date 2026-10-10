@@ -29,6 +29,13 @@ const vi = {
     channel: { stable: "ổn định", beta: "beta" },
   },
   notes: { title: "Ghi chú phát hành · {version}", empty: "Bản phát hành này không có ghi chú." },
+  changelog: {
+    title: "Nhật ký thay đổi",
+    currentTitle: "Điểm mới trong {version}",
+    github: "Xem trên GitHub",
+    empty: "Không tìm thấy ghi chú phát hành cho phiên bản này.",
+    loadError: "Không thể tải nhật ký thay đổi.",
+  },
   confirm: {
     title: "Cập nhật Gotham lên {version}?",
     body: "Gotham tải và xác minh bản phát hành rồi khởi động lại. Bảng điều khiển tạm thời không truy cập được và sẽ tự kết nối lại. Nếu kiểm tra sức khỏe thất bại, phiên bản trước sẽ được khôi phục.",

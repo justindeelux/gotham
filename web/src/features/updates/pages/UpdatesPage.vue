@@ -1,18 +1,22 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NEmpty, NIcon, NProgress, NSpace, NSpin, NTag, useDialog } from "naive-ui";
+import { NAlert, NButton, NCard, NCollapse, NCollapseItem, NEmpty, NIcon, NProgress, NSpace, NSpin, NTag, useDialog } from "naive-ui";
 import { Download, RefreshCw } from "@lucide/vue";
 import { computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { useUpdates } from "@/features/updates/composables/useUpdates";
 import UpdateScheduleForm from "@/features/updates/components/UpdateScheduleForm.vue";
+import { renderMarkdown } from "@/features/updates/markdown";
+import type { ChangelogEntry } from "@/features/updates/schemas/updates";
 import { formatDate, relativeTime } from "@/shared/utils/format";
 
 /**
- * Settings → Updates (JUS-93): version / channel / latest release, check and
- * update actions with progress and failure state, and the persisted
- * check / auto-apply schedule. Mockup: docs/design/updates.html. Non-admins
- * see status only.
+ * Settings → Updates (JUS-93, changelog JUS-102): version / channel / latest
+ * release, check and update actions with progress and failure state, the
+ * persisted check / auto-apply schedule, and the admin-gated changelog viewer
+ * (sanitized markdown, GitHub link, intermediate versions newest first, the
+ * running version's entry when up to date, empty state for dev builds).
+ * Mockup: docs/design/updates.html. Non-admins see status only.
  */
 const { t } = useI18n();
 const dialog = useDialog();
@@ -40,6 +44,23 @@ const backoffNote = computed(() => {
     time: `${formatDate(backoff.until)} ${new Date(backoff.until).toLocaleTimeString()}`,
   });
 });
+
+/** Changelog entries newest first (the API already orders them). */
+const changelogEntries = computed(() => u.changelog.value?.entries ?? []);
+const expandedChangelog = computed(() =>
+  changelogEntries.value.length > 0 ? [changelogEntries.value[0].version] : [],
+);
+/** Single entry matching the running version means "up to date": title it so. */
+function entryTitle(entry: ChangelogEntry): string {
+  if (changelogEntries.value.length === 1 && entry.version === u.check.value?.current) {
+    return t("updates.changelog.currentTitle", { version: entry.version });
+  }
+  return entry.version;
+}
+/** Sanitized HTML for one release body (renderMarkdown escapes raw HTML). */
+function renderedNotes(entry: ChangelogEntry): string {
+  return renderMarkdown(entry.notes ?? "", entry.html_url ?? "");
+}
 
 function confirmUpdate(): void {
   dialog.warning({
@@ -149,12 +170,42 @@ onMounted(() => {
         </NCard>
 
         <NCard
-          v-if="latest"
-          :title="t('updates.notes.title', { version: latest })"
-          data-testid="release-notes"
+          v-if="u.isAdmin.value && (u.changelog.value || u.changelogLoading.value)"
+          :title="t('updates.changelog.title')"
+          data-testid="changelog"
         >
-          <pre v-if="u.check.value?.notes" class="notes">{{ u.check.value.notes }}</pre>
-          <NEmpty v-else :description="t('updates.notes.empty')" />
+          <NSpin :show="u.changelogLoading.value && !u.changelog.value">
+            <NEmpty
+              v-if="u.changelog.value && changelogEntries.length === 0"
+              :description="t('updates.changelog.empty')"
+            />
+            <NCollapse
+              v-else-if="changelogEntries.length > 0"
+              :default-expanded-names="expandedChangelog"
+            >
+              <NCollapseItem
+                v-for="entry in changelogEntries"
+                :key="entry.version"
+                :name="entry.version"
+                :title="entryTitle(entry)"
+              >
+                <template #header-extra>
+                  <a
+                    v-if="entry.html_url"
+                    :href="entry.html_url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    @click.stop
+                  >
+                    {{ t("updates.changelog.github") }}
+                  </a>
+                </template>
+                <div v-if="entry.notes" class="notes-rendered" v-html="renderedNotes(entry)" />
+                <NEmpty v-else :description="t('updates.notes.empty')" />
+                <p v-if="entry.published_at" class="meta">{{ formatDate(entry.published_at) }}</p>
+              </NCollapseItem>
+            </NCollapse>
+          </NSpin>
         </NCard>
 
         <UpdateScheduleForm
@@ -220,13 +271,25 @@ onMounted(() => {
   border-top: 1px solid var(--border);
 }
 
-.notes {
-  margin: 0;
-  white-space: pre-wrap;
-  max-height: 240px;
-  overflow: auto;
-  font-family: var(--font-body);
+.notes-rendered {
   font-size: var(--text-sm);
+  max-height: 320px;
+  overflow: auto;
+}
+
+.notes-rendered :is(h4, h5, h6) {
+  margin: 0 0 6px;
+}
+
+.notes-rendered ul,
+.notes-rendered ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.notes-rendered code {
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .backoff {

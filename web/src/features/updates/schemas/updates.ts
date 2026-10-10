@@ -38,10 +38,27 @@ export const checkSchema = z.object({
   version: z.string().optional(),
   channel: z.string().optional(),
   notes: z.string().optional(),
+  html_url: z.string().optional(),
+  asset: z.string().optional(),
   published_at: z.string().optional(),
   last_update: lastUpdateSchema.optional(),
 });
 export type UpdateCheck = z.infer<typeof checkSchema>;
+
+export const changelogEntrySchema = z.object({
+  version: z.string(),
+  channel: z.string().optional(),
+  notes: z.string().optional(),
+  html_url: z.string().optional(),
+  published_at: z.string().optional(),
+});
+export type ChangelogEntry = z.infer<typeof changelogEntrySchema>;
+
+export const changelogSchema = z.object({
+  current: z.string(),
+  entries: z.array(changelogEntrySchema),
+});
+export type UpdateChangelog = z.infer<typeof changelogSchema>;
 
 export const scheduleSchema = z.object({
   check_enabled: z.boolean(),

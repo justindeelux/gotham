@@ -41,6 +41,9 @@ func (f *fakeUpdatesService) Current() string { return "v1.0.0" }
 func (f *fakeUpdatesService) Check(context.Context) (*updates.Release, error) {
 	return f.release, f.err
 }
+func (f *fakeUpdatesService) Changelog(context.Context) ([]updates.ChangelogEntry, error) {
+	return nil, nil
+}
 func (f *fakeUpdatesService) Apply(context.Context, updates.Channel) (*updates.ApplyResult, error) {
 	return nil, nil
 }

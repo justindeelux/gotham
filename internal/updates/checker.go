@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +28,11 @@ const (
 	defaultTimeout = 10 * time.Second
 	// maxReleases caps how many releases are decoded from the API response.
 	maxReleases = 200
+	// maxChangelogEntries bounds the changelog response so a long release
+	// history stays a single small payload.
+	maxChangelogEntries = 20
+	// maxNoteBytes bounds one stored release body; longer bodies are truncated.
+	maxNoteBytes = 32 << 10
 )
 
 // Channel selects which releases are eligible.
@@ -82,10 +89,25 @@ type ghRelease struct {
 	TagName     string    `json:"tag_name"`
 	Name        string    `json:"name"`
 	Body        string    `json:"body"`
+	HTMLURL     string    `json:"html_url"`
 	Draft       bool      `json:"draft"`
 	Prerelease  bool      `json:"prerelease"`
 	PublishedAt time.Time `json:"published_at"`
 	Assets      []ghAsset `json:"assets"`
+}
+
+// ChangelogEntry is one release's viewer-facing changelog: version metadata
+// plus the bounded body and the validated release-page link. It carries no
+// asset URLs, so it is safe to serve to any authenticated caller (the body
+// itself stays admin-gated at the HTTP layer like check notes).
+type ChangelogEntry struct {
+	Version     string
+	Tag         string
+	Channel     string
+	Prerelease  bool
+	Notes       string
+	PublishedAt time.Time
+	HTMLURL     string
 }
 
 // ghAsset mirrors a release asset.
@@ -104,24 +126,9 @@ func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 		return nil, err
 	}
 
-	base := strings.TrimRight(defaultString(c.BaseURL, DefaultBaseURL), "/")
-	if err := updatecore.ValidateURL(base); err != nil {
-		return nil, fmt.Errorf("%w: base url %q", err, base)
-	}
-	repo := strings.Trim(strings.TrimSpace(c.Repo), "/")
-	if repo == "" {
-		repo = DefaultRepo
-	}
-
-	endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", base, repo, maxReleases)
-	body, err := c.get(ctx, endpoint, 4<<20)
+	releases, err := c.fetchReleases(ctx)
 	if err != nil {
 		return nil, err
-	}
-
-	var releases []ghRelease
-	if err := json.Unmarshal(body, &releases); err != nil {
-		return nil, fmt.Errorf("%w: decode releases: %v", ErrHTTP, err)
 	}
 	if len(releases) == 0 {
 		return nil, ErrNoRelease
@@ -163,6 +170,162 @@ func (c *Checker) Check(ctx context.Context, current string) (*Release, error) {
 	return candidate, nil
 }
 
+// fetchReleases returns the raw Releases API listing for the configured repo.
+func (c *Checker) fetchReleases(ctx context.Context) ([]ghRelease, error) {
+	base := strings.TrimRight(defaultString(c.BaseURL, DefaultBaseURL), "/")
+	if err := updatecore.ValidateURL(base); err != nil {
+		return nil, fmt.Errorf("%w: base url %q", err, base)
+	}
+	repo := strings.Trim(strings.TrimSpace(c.Repo), "/")
+	if repo == "" {
+		repo = DefaultRepo
+	}
+
+	endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=%d", base, repo, maxReleases)
+	body, err := c.get(ctx, endpoint, 4<<20)
+	if err != nil {
+		return nil, err
+	}
+
+	var releases []ghRelease
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return nil, fmt.Errorf("%w: decode releases: %v", ErrHTTP, err)
+	}
+	return releases, nil
+}
+
+// Changelog lists every eligible release newer than current, newest first,
+// bounded to maxChangelogEntries with each body truncated to maxNoteBytes. A
+// dev/unknown current version is not an error: it yields no entries and the
+// caller falls back to the running-version entry (CurrentChangelog) or an
+// empty state.
+func (c *Checker) Changelog(ctx context.Context, current string) ([]ChangelogEntry, error) {
+	releases, err := c.fetchReleases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	currentVersion, err := updatecore.ParseVersion(current)
+	if err != nil {
+		return nil, nil
+	}
+	channel := c.channel()
+	var rankedList []rankedChangelog
+	for _, release := range releases {
+		if release.Draft || release.TagName == "" {
+			continue
+		}
+		if channel == ChannelStable && release.Prerelease {
+			continue
+		}
+		version, parseErr := updatecore.ParseVersion(release.TagName)
+		if parseErr != nil {
+			continue
+		}
+		if version.Compare(currentVersion) <= 0 {
+			continue
+		}
+		releaseChannel := ChannelStable
+		if release.Prerelease {
+			releaseChannel = ChannelBeta
+		}
+		rankedList = append(rankedList, rankedChangelog{
+			entry: ChangelogEntry{
+				Version:     version.String(),
+				Tag:         release.TagName,
+				Channel:     string(releaseChannel),
+				Prerelease:  release.Prerelease,
+				Notes:       truncateNotes(release.Body),
+				PublishedAt: release.PublishedAt,
+				HTMLURL:     httpsLink(release.HTMLURL),
+			},
+			version: version,
+		})
+	}
+	sortChangelog(rankedList)
+	entries := make([]ChangelogEntry, 0, min(len(rankedList), maxChangelogEntries))
+	for i := range rankedList {
+		if len(entries) >= maxChangelogEntries {
+			break
+		}
+		entries = append(entries, rankedList[i].entry)
+	}
+	return entries, nil
+}
+
+// CurrentChangelog returns the changelog entry for the running version itself
+// ("What's new in this version"), or (nil, nil) when the release cannot be
+// found — e.g. dev builds such as 0.2.x-dev that have no GitHub release.
+func (c *Checker) CurrentChangelog(ctx context.Context, current string) (*ChangelogEntry, error) {
+	currentVersion, err := updatecore.ParseVersion(current)
+	if err != nil {
+		return nil, nil
+	}
+	releases, err := c.fetchReleases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, release := range releases {
+		if release.Draft || release.TagName == "" {
+			continue
+		}
+		version, parseErr := updatecore.ParseVersion(release.TagName)
+		if parseErr != nil || version.Compare(currentVersion) != 0 {
+			continue
+		}
+		releaseChannel := ChannelStable
+		if release.Prerelease {
+			releaseChannel = ChannelBeta
+		}
+		entry := &ChangelogEntry{
+			Version:     version.String(),
+			Tag:         release.TagName,
+			Channel:     string(releaseChannel),
+			Prerelease:  release.Prerelease,
+			Notes:       truncateNotes(release.Body),
+			PublishedAt: release.PublishedAt,
+			HTMLURL:     httpsLink(release.HTMLURL),
+		}
+		return entry, nil
+	}
+	return nil, nil
+}
+
+// rankedChangelog pairs an entry with its parsed version for newest-first
+// sorting.
+type rankedChangelog struct {
+	entry   ChangelogEntry
+	version updatecore.Version
+}
+
+// sortChangelog orders entries newest first.
+func sortChangelog(rankedList []rankedChangelog) {
+	sort.Slice(rankedList, func(i, j int) bool {
+		return rankedList[i].version.Compare(rankedList[j].version) > 0
+	})
+}
+
+// truncateNotes bounds one release body.
+func truncateNotes(body string) string {
+	if len(body) <= maxNoteBytes {
+		return body
+	}
+	return body[:maxNoteBytes] + "\n\n…(truncated)"
+}
+
+// httpsLink keeps raw only when it is an absolute https URL; anything else
+// (javascript:, http, relative, unparsable) is dropped so the "View on
+// GitHub" link can be rendered without further checks.
+func httpsLink(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	if parsed.Scheme != "https" {
+		return ""
+	}
+	return parsed.String()
+}
+
 // resolve maps a chosen release onto the platform asset, its signed manifest
 // and the manifest signature. The offer carries the release's own channel (the
 // signed manifest records stable for a full release and beta for a prerelease),
@@ -183,6 +346,7 @@ func (c *Checker) resolve(release ghRelease, version updatecore.Version, arch st
 		Channel:     string(releaseChannel),
 		Prerelease:  release.Prerelease,
 		Notes:       release.Body,
+		HTMLURL:     httpsLink(release.HTMLURL),
 		PublishedAt: release.PublishedAt,
 		Arch:        arch,
 		AssetName:   assetName,

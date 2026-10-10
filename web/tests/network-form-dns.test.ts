@@ -55,7 +55,7 @@ async function mountForm(state: InstanceState) {
 }
 
 function dnsInputs(wrapper: ReturnType<typeof mount>) {
-  return wrapper.findAll('input[placeholder="1.1.1.1"], input[placeholder^="2606"], input[placeholder="9.9.9.9"]');
+  return wrapper.findAll('input[placeholder="1.1.1.1"], input[placeholder="1.0.0.1"], input[placeholder="9.9.9.9"]');
 }
 
 beforeEach(() => {

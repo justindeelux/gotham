@@ -19,7 +19,8 @@ const vi: typeof en = {
     urlHint: "URL công khai dùng cho đăng ký agent, OAuth redirect và webhook.",
     name: "Tên instance",
     timezone: "Múi giờ",
-    timezoneHint: "Múi giờ IANA. Áp dụng cho lịch chạy, hiển thị log và sao lưu.",
+    timezoneHint:
+      "Danh sách IANA có thể tìm kiếm, kèm độ lệch UTC hiện tại. Áp dụng cho lịch chạy, hiển thị log và sao lưu. Bị vô hiệu khi khóa bởi môi trường.",
     submit: "Lưu cài đặt chung",
     saved: "Đã lưu cài đặt chung.",
   },
@@ -56,7 +57,7 @@ const vi: typeof en = {
   validation: {
     url: "Nhập URL http(s) có tên máy chủ, không kèm thông tin đăng nhập, query hay fragment.",
     name: "Tên phải dài 1-64 ký tự.",
-    timezone: "Nhập múi giờ IANA, ví dụ Europe/Berlin.",
+    timezone: "Chọn múi giờ IANA, ví dụ Europe/Berlin.",
     dns: "Nhập tối đa 3 địa chỉ IPv4 hoặc IPv6 khác nhau.",
     ipv4Address: "Nhập địa chỉ IPv4 dạng CIDR, ví dụ 192.168.1.10/24.",
     ipv4Gateway: "Nhập gateway IPv4 hợp lệ.",

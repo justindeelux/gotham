@@ -195,8 +195,24 @@ async function onSubmit(): Promise<void> {
 <style scoped>
 .schedule-form {
   display: grid;
-  gap: var(--space-2);
-  max-width: 560px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  grid-auto-flow: row dense;
+  column-gap: var(--space-8);
+  align-items: start;
+  max-width: 960px;
+}
+
+/* Grid rows own the vertical rhythm; drop the global stacked-item margin. */
+.n-form.schedule-form > * {
+  margin-top: 0;
+}
+
+/* Switch rows, frequency, hints and actions span both columns. */
+.schedule-form > .n-form-item:has(.switch-row),
+.schedule-form > .n-form-item:has(.n-radio-group),
+.schedule-form > .field-hint,
+.schedule-form > .schedule-actions {
+  grid-column: 1 / -1;
 }
 
 .schedule-note {

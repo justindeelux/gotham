@@ -71,7 +71,7 @@ describe("NetworkForm DNS inputs", () => {
     const wrapper = await mountForm(stateWith(["1.1.1.1", "8.8.8.8", "9.9.9.9"]));
     const inputs = dnsInputs(wrapper);
     expect(inputs).toHaveLength(3);
-    expect((inputs[2].element as HTMLInputElement).value).toBe("9.9.9.9");
+    expect((inputs[2].element as { value: string }).value).toBe("9.9.9.9");
     expect(wrapper.text()).not.toContain("Add DNS server");
     wrapper.unmount();
   });

@@ -113,10 +113,14 @@ describe("ApplicationHeader", () => {
       buttons.find((button) => button.text() === label);
     // Intent colors come from the Gotham-mapped Naive theme (JUS-87): one
     // distinct type per control, so they read apart in light and dark.
+    // Outline style (ghost): transparent background, colored border/text.
     expect(byLabel("Redeploy")?.props("type")).toBe("primary");
     expect(byLabel("Rollback")?.props("type")).toBe("warning");
     expect(byLabel("Stop")?.props("type")).toBe("error");
     expect(byLabel("Start")?.props("type")).toBe("success");
+    for (const label of ["Redeploy", "Rollback", "Stop", "Start"]) {
+      expect(byLabel(label)?.props("ghost")).toBe(true);
+    }
     const icons = wrapper.findAllComponents(GothamIcon).map((icon) => icon.props("name"));
     expect(icons).toEqual(expect.arrayContaining(["refresh", "history", "stop", "play"]));
   });

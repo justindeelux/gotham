@@ -52,6 +52,7 @@ const { t } = useI18n();
     <NSpace class="page-head__actions" align="center" :size="8">
       <NButton
         type="primary"
+        ghost
         :loading="props.acting"
         :disabled="props.activeDeploying"
         @click="emit('deploy')"
@@ -63,6 +64,7 @@ const { t } = useI18n();
       </NButton>
       <NButton
         type="warning"
+        ghost
         :disabled="!props.canRollback || props.acting"
         @click="emit('rollback')"
       >
@@ -75,6 +77,7 @@ const { t } = useI18n();
         <template #trigger>
           <NButton
             type="error"
+            ghost
             :loading="props.acting"
             :disabled="props.acting || props.controlHint !== null || !props.containerIsRunning"
             @click="emit('stop')"
@@ -91,6 +94,7 @@ const { t } = useI18n();
         <template #trigger>
           <NButton
             type="success"
+            ghost
             :loading="props.acting"
             :disabled="props.acting || props.controlHint !== null || props.containerIsRunning"
             @click="emit('start')"

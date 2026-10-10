@@ -9,7 +9,7 @@
 -- intent. They are NULL-joined as empty values: certificate_configured tells
 -- the generator whether an intent exists at all, and the recorded domain
 -- lets it refuse to activate a certificate whose host no longer matches.
-SELECT a.id, a.server_id, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
+SELECT a.id, a.server_id, a.name, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
        COALESCE(d.container_id, '')::text AS container_id,
        (c.id IS NOT NULL)::boolean AS certificate_configured,
        COALESCE(c.domain, '')::text AS certificate_domain,

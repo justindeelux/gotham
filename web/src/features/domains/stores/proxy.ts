@@ -15,6 +15,7 @@ import {
   listCertificates,
   listDNSProviders,
   listRedirects,
+  listRouters,
   updateCertificate,
   updateDNSProvider,
   updateRedirect,
@@ -26,6 +27,8 @@ import type {
   CreateRedirectInput,
   DNSProvider,
   DomainRedirect,
+  ProxyRouter,
+  RouterNodeState,
   UpdateCertificateInput,
   UpdateDNSProviderInput,
   UpdateRedirectInput,
@@ -35,10 +38,13 @@ export const useProxyStore = defineStore("proxy", () => {
   const providers = ref<DNSProvider[]>([]);
   const certificates = ref<Certificate[]>([]);
   const redirects = ref<DomainRedirect[]>([]);
+  const routers = ref<ProxyRouter[]>([]);
+  const routerNodes = ref<RouterNodeState[]>([]);
   const applications = ref<Application[]>([]);
   const loading = ref(false);
   const certificatesLoading = ref(false);
   const redirectsLoading = ref(false);
+  const routersLoading = ref(false);
   /**
    * Raw failures behind the page alerts. The display strings below derive
    * from these plus the current locale, so a language switch refreshes a
@@ -48,6 +54,7 @@ export const useProxyStore = defineStore("proxy", () => {
   const errorRaw = ref<unknown>(null);
   const certificatesErrorRaw = ref<unknown>(null);
   const redirectsErrorRaw = ref<unknown>(null);
+  const routersErrorRaw = ref<unknown>(null);
   const error = computed<string | null>(() => {
     void activeLocale.value;
     return errorRaw.value === null ? null : describeProxyError(errorRaw.value);
@@ -63,6 +70,12 @@ export const useProxyStore = defineStore("proxy", () => {
     return redirectsErrorRaw.value === null
       ? null
       : describeProxyError(redirectsErrorRaw.value);
+  });
+  const routersError = computed<string | null>(() => {
+    void activeLocale.value;
+    return routersErrorRaw.value === null
+      ? null
+      : describeProxyError(routersErrorRaw.value);
   });
 
   /** fetchProviders loads every DNS provider (credentials never returned). */
@@ -117,6 +130,21 @@ export const useProxyStore = defineStore("proxy", () => {
     }
   }
 
+  /** fetchRouters loads the generated Traefik routers of every node. */
+  async function fetchRouters(): Promise<void> {
+    routersLoading.value = true;
+    routersErrorRaw.value = null;
+    try {
+      const envelope = await listRouters();
+      routers.value = envelope.routers;
+      routerNodes.value = envelope.nodes;
+    } catch (err) {
+      routersErrorRaw.value = err;
+      throw err;
+    } finally {
+      routersLoading.value = false;
+    }
+  }
   /** providerOf returns one provider from the cache, if loaded. */
   function providerOf(providerId: string): DNSProvider | null {
     return providers.value.find((item) => item.id === providerId) ?? null;
@@ -218,29 +246,38 @@ export const useProxyStore = defineStore("proxy", () => {
     providers.value = [];
     certificates.value = [];
     redirects.value = [];
+    routers.value = [];
+    routerNodes.value = [];
     applications.value = [];
     loading.value = false;
     certificatesLoading.value = false;
     redirectsLoading.value = false;
+    routersLoading.value = false;
     errorRaw.value = null;
     certificatesErrorRaw.value = null;
     redirectsErrorRaw.value = null;
+    routersErrorRaw.value = null;
   }
 
   return {
     providers,
     certificates,
     redirects,
+    routers,
+    routerNodes,
     applications,
     loading,
     certificatesLoading,
     redirectsLoading,
+    routersLoading,
     error,
     certificatesError,
     redirectsError,
+    routersError,
     fetchProviders,
     fetchCertificates,
     fetchRedirects,
+    fetchRouters,
     fetchApplications,
     providerOf,
     certificateOf,

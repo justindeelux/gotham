@@ -52,13 +52,14 @@ function createDomainsOverviewState() {
     return statsBlocked.value ? "—" : String(count);
   }
 
-  /** load refreshes providers, certificates, redirects and the name map. */
+  /** load refreshes providers, certificates, redirects, routers and the name map. */
   async function load(): Promise<void> {
     try {
       await Promise.allSettled([
         proxyStore.fetchProviders(),
         proxyStore.fetchCertificates(),
         proxyStore.fetchRedirects(),
+        proxyStore.fetchRouters(),
         proxyStore.fetchApplications(),
       ]);
     } finally {

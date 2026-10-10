@@ -167,6 +167,20 @@ func (f *fakeHistory) PreviousConfigVersion(context.Context, uuid.UUID) (ConfigV
 	return ConfigVersion{}, ErrVersionNotFound
 }
 
+// ActiveConfigVersion mirrors the read rule: a pending push may already be
+// live, so it wins over the newest active version.
+func (f *fakeHistory) ActiveConfigVersion(context.Context, uuid.UUID) (ConfigVersion, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pending != nil {
+		return *f.pending, nil
+	}
+	if f.active != nil {
+		return *f.active, nil
+	}
+	return ConfigVersion{}, ErrVersionNotFound
+}
+
 // activeHash returns the active content hash (test helper).
 func (f *fakeHistory) activeHash() string {
 	f.mu.Lock()

@@ -136,6 +136,12 @@ Plan: [`plans/00-roadmap.md`](plans/00-roadmap.md).
 - [x] FE-6.1 domains UI: `/domains` page (DNS provider + certificate CRUD),
   domain editor in app detail, honest backend-pending stubs for router list,
   redirects and cert status/expiry (in review, `feat/p6-domains-ui`).
+- [x] JUS-90 router list: `GET /v1/proxy/routers` (generated routers read
+  back from the generator + per-node sync status; unreachable nodes report
+  an error, never invented rows) and the routers tab rendering it
+  (`feat/jus90-router-list`). Live per-router Traefik API state stays a
+  follow-up (needs a new agent RPC); sync status compares against the last
+  synced history version.
 
 ## Phase 9 residuals
 

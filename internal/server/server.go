@@ -396,6 +396,9 @@ func (s *Server) routes() (http.Handler, error) {
 			proxy.NewDefaultCertificateService(sslConfig),
 			proxy.NewDefaultRedirectService(redirectConfig),
 			proxy.NewDefaultCertificateStatusService(statusConfig))
+		// Router list (JUS-90): read-only view of the generated Traefik
+		// routers, same platform-global scope as the sync surface.
+		MountProxyRouters(api, platformOnly, proxy.AsRouterService(s.proxy))
 
 		// Self-update (BE-9.1): the check route is available to any
 		// authenticated caller, while apply requires a platform operator

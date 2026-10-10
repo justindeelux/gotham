@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RouterView } from "vue-router";
 
+import { TaskProgressCards } from "@/features/tasks";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
@@ -34,6 +35,8 @@ const { mobileNavOpen, closeMobileNav } = provideMobileNav();
       aria-hidden="true"
       @click="closeMobileNav"
     ></div>
+
+    <TaskProgressCards />
   </div>
 </template>
 

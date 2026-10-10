@@ -761,7 +761,14 @@ export function useApplicationDetail() {
   );
 
   onMounted(() => {
-    void fetchAll();
+    // A progress-card "View logs" link lands here with ?logs=<deploymentId>
+    // (JUS-91): jump straight to the Logs tab with that deployment selected.
+    void fetchAll().then(() => {
+      const logs = route.query.logs;
+      if (typeof logs === "string" && logs !== "") {
+        showLogsFor(logs);
+      }
+    });
   });
 
   onUnmounted(() => {

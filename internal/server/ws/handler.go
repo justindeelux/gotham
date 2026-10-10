@@ -52,12 +52,24 @@ const (
 // behavior for tests and non-DB builds.
 type SubscriptionAuthorizer func(ctx context.Context, serverID, userID uuid.UUID) error
 
+// TaskAuthorizer authorizes one background-task subscription for the
+// authenticated user: teamID is the team suffix of a tasks:{teamID} channel.
+// A nil authorizer allows everything, matching the pre-teams compatibility
+// paths elsewhere.
+type TaskAuthorizer func(ctx context.Context, teamID string, userID uuid.UUID) error
+
 // Handler serves the WS /api/v1/ws endpoint.
 type Handler struct {
 	hub       *Hub
 	verify    TokenVerifier
 	authorize SubscriptionAuthorizer
 	logger    *slog.Logger
+
+	// taskAuthorize gates tasks:{teamID} subscriptions; taskSnapshot replays
+	// the team's running tasks right after the join, so a fresh mount and a
+	// reconnect restore state. Both are optional and set via SetTaskFeed.
+	taskAuthorize TaskAuthorizer
+	taskSnapshot  func(teamID string) []string
 
 	// writeWait, pingPeriod and authCacheTTL are fields so tests can shorten
 	// them; NewHandler sets the production defaults.
@@ -82,6 +94,14 @@ func NewHandler(hub *Hub, verifier TokenVerifier, logger *slog.Logger, authorize
 		pingPeriod:   pingPeriod,
 		authCacheTTL: authCacheTTL,
 	}
+}
+
+// SetTaskFeed wires background-task subscriptions: authorize gates
+// tasks:{teamID} joins, snapshot replays the team's running tasks after each
+// join (initial mount, navigation, reconnect). Either may be nil.
+func (h *Handler) SetTaskFeed(authorize TaskAuthorizer, snapshot func(teamID string) []string) {
+	h.taskAuthorize = authorize
+	h.taskSnapshot = snapshot
 }
 
 // ServeHTTP authenticates the query token, then upgrades to WebSocket.
@@ -217,6 +237,14 @@ func (h *Handler) subscribeChannel(conn *websocket.Conn, client *Client, channel
 	}
 	h.hub.subscribe(client, channel)
 	subs[channel] = true
+	// A task join replays the running snapshot so the progress card restores
+	// after mount and reconnect. The frames go direct (not via the hub), so
+	// only the joining client sees them.
+	if teamID, ok := taskChannelTeamID(channel); ok && h.taskSnapshot != nil {
+		for _, frame := range h.taskSnapshot(teamID) {
+			_ = h.writeFrame(conn, []byte(frame))
+		}
+	}
 	_ = h.writeMessage(conn, Message{Channel: channel, Type: TypeSubscribed})
 }
 
@@ -294,6 +322,17 @@ func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uui
 	if h.authorize == nil {
 		return true
 	}
+	if teamID, ok := taskChannelTeamID(channel); ok {
+		if h.taskAuthorize == nil {
+			return true
+		}
+		if err := h.taskAuthorize(ctx, teamID, userID); err != nil {
+			h.logger.Debug("ws: task subscription denied",
+				"channel", channel, "user_id", userID.String(), "error", err)
+			return false
+		}
+		return true
+	}
 	serverID, ok := logChannelServerID(channel)
 	if !ok {
 		return true
@@ -309,6 +348,19 @@ func (h *Handler) channelAllowed(ctx context.Context, channel string, userID uui
 	}
 	authorized[serverID] = authDecision{allowed: true, expiry: time.Now().Add(h.authCacheTTL)}
 	return true
+}
+
+// taskChannelTeamID extracts the team ID from a tasks:{teamID} channel.
+// Channels of any other shape are not task rooms.
+func taskChannelTeamID(channel string) (string, bool) {
+	if !strings.HasPrefix(channel, "tasks:") {
+		return "", false
+	}
+	teamID := strings.TrimSpace(strings.TrimPrefix(channel, "tasks:"))
+	if teamID == "" {
+		return "", false
+	}
+	return teamID, true
 }
 
 // logChannelServerID extracts the server ID from a logs:{serverID}:{containerID}

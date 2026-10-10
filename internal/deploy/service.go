@@ -15,6 +15,7 @@ import (
 
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/store"
+	"github.com/justindeelux/gotham/internal/taskevents"
 	"github.com/justindeelux/gotham/internal/teams"
 )
 
@@ -200,6 +201,10 @@ type Config struct {
 	HookTimeout time.Duration
 	// Emitter overrides the publisher-based realtime emitter (tests).
 	Emitter *Emitter
+	// Tasks tracks running background tasks for the progress card snapshot;
+	// nil selects a private tracker. The server reads it back through
+	// TaskTracker to replay running tasks on WebSocket (re)subscribe.
+	Tasks *taskevents.Tracker
 	// Logger defaults to slog.Default.
 	Logger *slog.Logger
 	// Workers is the pool size, QueueSize the job buffer.
@@ -734,6 +739,9 @@ func (s *Service) submit(ctx context.Context, app Application, dep Deployment) (
 		s.abandon(created, err)
 		return Deployment{}, err
 	}
+	// The run is queued: surface it on the progress card, including
+	// webhook-triggered (DeploySystem) runs that share this boundary.
+	s.publishTask(ctx, app, created, taskevents.StatusQueued, "", 0, "")
 	return created, nil
 }
 
@@ -782,5 +790,9 @@ func (s *Service) abandon(created Deployment, cause error) {
 	if _, err := s.repo.UpdateDeployment(fresh, created); err != nil {
 		s.logger.Error("deploy: could not mark deployment failed",
 			"deployment_id", created.ID, "error", err)
+	}
+	// A queued card must not linger for a run that never starts.
+	if app, err := s.repo.GetApplication(fresh, created.ApplicationID); err == nil {
+		s.publishTask(fresh, app, created, taskevents.StatusFailed, "", 0, created.Error)
 	}
 }

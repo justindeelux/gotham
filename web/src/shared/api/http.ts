@@ -380,6 +380,12 @@ async function rotateRefreshToken(
     if (getRefreshToken() !== refreshToken) {
       throw new StaleRefreshError();
     }
+    // A non-JSON answer (a static fallback page, a captive portal) must never
+    // become the session: without a usable access token the rotation failed
+    // and the stored session stays untouched.
+    if (typeof response.data?.access_token !== "string" || response.data.access_token === "") {
+      throw new Error("refresh did not return an access token");
+    }
     setSession({
       user: response.data.user ?? null,
       accessToken: response.data.access_token,

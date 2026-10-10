@@ -16,6 +16,7 @@ import (
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/providers"
 	"github.com/justindeelux/gotham/internal/services"
+	"github.com/justindeelux/gotham/internal/taskevents"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -91,6 +92,8 @@ type Orchestrator struct {
 	source   Source
 	dial     DialFunc
 	emitter  *Emitter
+	tasks    *taskevents.Tracker
+	taskEmit *taskevents.Emitter
 	notifier Notifier
 	secret   string
 	logger   *slog.Logger
@@ -140,6 +143,10 @@ func newOrchestrator(cfg Config) *Orchestrator {
 	if emitter == nil {
 		emitter = NewEmitter(defaultPublisher(cfg))
 	}
+	tasks := cfg.Tasks
+	if tasks == nil {
+		tasks = taskevents.NewTracker()
+	}
 	workers := cfg.Workers
 	if workers <= 0 {
 		workers = defaultWorkers
@@ -179,6 +186,8 @@ func newOrchestrator(cfg Config) *Orchestrator {
 		source:        source,
 		dial:          cfg.Dial,
 		emitter:       emitter,
+		tasks:         tasks,
+		taskEmit:      taskevents.NewEmitter(emitter.pub),
 		notifier:      cfg.Notifier,
 		secret:        cfg.Secret,
 		logger:        logger,
@@ -358,7 +367,9 @@ func (o *Orchestrator) syncProxyServer(ctx context.Context, serverID uuid.UUID) 
 // execute walks the deployment's steps, persisting each transition before the
 // step runs and stopping at the first failure.
 func (o *Orchestrator) execute(ctx context.Context, st *runState) error {
-	for _, step := range stepsForApp(st.dep.Kind, st.app.SourceType, st.app.Provider) {
+	steps := stepsForApp(st.dep.Kind, st.app.SourceType, st.app.Provider)
+	for i, step := range steps {
+		o.publishTask(ctx, st.app, st.dep, taskevents.StatusRunning, step, i*100/len(steps), "")
 		if err := o.transition(ctx, st, step); err != nil {
 			return err
 		}
@@ -937,6 +948,9 @@ func (o *Orchestrator) transition(ctx context.Context, st *runState, to State) e
 	o.emitter.State(ctx, st.target, from, to)
 	if to.Terminal() {
 		o.notify(ctx, st, to)
+		if to == StateRunning {
+			o.publishTask(ctx, st.app, st.dep, taskevents.StatusSucceeded, "", 100, "")
+		}
 	}
 	return nil
 }
@@ -977,6 +991,7 @@ func (o *Orchestrator) fail(ctx context.Context, st *runState, cause error) {
 			"deployment_id", st.dep.ID, "error", err)
 		return
 	}
+	o.publishTask(ctx, st.app, st.dep, taskevents.StatusFailed, "", 0, st.dep.Error)
 }
 
 // forceFail writes the terminal failed state unconditionally, emitting the
@@ -1030,6 +1045,44 @@ func (o *Orchestrator) dialNode(ctx context.Context, serverID uuid.UUID) (Node, 
 		return nil, fmt.Errorf("%w: dial returned no node", ErrAgentUnavailable)
 	}
 	return node, nil
+}
+
+// publishTask records one task lifecycle event in the running-task tracker
+// and fans it out on the application team's task channel. Terminal statuses
+// leave the tracker; the card auto-dismisses on success and stays on failure.
+// Realtime updates are best-effort and never fail the run they describe.
+func (o *Orchestrator) publishTask(ctx context.Context, app Application, dep Deployment, status taskevents.Status, step State, progress int, errMsg string) {
+	if o == nil || o.tasks == nil {
+		return
+	}
+	ev := taskevents.Event{
+		TaskID:        dep.ID.String(),
+		Kind:          taskevents.KindDeploy,
+		Name:          app.Name,
+		Status:        status,
+		Step:          string(step),
+		Progress:      progress,
+		AppID:         app.ID.String(),
+		DeploymentID:  dep.ID.String(),
+		ServerID:      app.ServerID.String(),
+		ProjectID:     app.ProjectID.String(),
+		EnvironmentID: app.EnvironmentID.String(),
+		TeamID:        app.TeamID.String(),
+		Error:         errMsg,
+	}
+	o.tasks.Set(ev)
+	if o.taskEmit != nil {
+		o.taskEmit.Emit(ctx, ev)
+	}
+}
+
+// TaskTracker returns the running-task tracker feeding the progress card
+// snapshot. The server replays it on every task-channel (re)subscribe.
+func (s *Service) TaskTracker() *taskevents.Tracker {
+	if s == nil || s.Orchestrator == nil {
+		return nil
+	}
+	return s.tasks
 }
 
 // lineLog accumulates streamed output and forwards complete lines to the

@@ -24,6 +24,9 @@ const (
 // logPattern matches every container/deploy log channel.
 const logPattern = "logs:*:*"
 
+// taskPattern matches every background-task channel (tasks:{teamID}).
+const taskPattern = "tasks:*"
+
 // LogChannel is the Redis channel carrying the logs of one container.
 func LogChannel(serverID, containerID string) string {
 	return "logs:" + serverID + ":" + containerID
@@ -173,9 +176,10 @@ func NewBridge(hub *Hub, rdb *redis.Client, logger *slog.Logger) *Bridge {
 	return b
 }
 
-// redisSubscribe opens the production pattern subscription.
+// redisSubscribe opens the production pattern subscription: log channels
+// plus the background-task channels, so one bridge serves both.
 func (b *Bridge) redisSubscribe(ctx context.Context) (messageStream, error) {
-	sub := b.rdb.PSubscribe(ctx, logPattern)
+	sub := b.rdb.PSubscribe(ctx, logPattern, taskPattern)
 	if _, err := sub.Receive(ctx); err != nil {
 		_ = sub.Close()
 		return messageStream{}, fmt.Errorf("ws: redis subscribe: %w", err)

@@ -2,11 +2,13 @@
 // (F2-applications). Each case pins the user-visible copy, roles and emitted
 // events the monoliths rendered before the split.
 
+import { NButton } from "naive-ui";
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import ApplicationHeader from "../src/features/applications/components/ApplicationHeader.vue";
 import ApplicationOverviewTab from "../src/features/applications/components/ApplicationOverviewTab.vue";
+import GothamIcon from "../src/shared/ui/GothamIcon.vue";
 import type { Deployment } from "../src/features/applications/api/applications";
 import {
   i18n,
@@ -102,6 +104,21 @@ describe("ApplicationHeader", () => {
     const start = wrapper.findAll("button").find((button) => button.text() === "Start");
     await start?.trigger("click");
     expect(wrapper.emitted("start")).toHaveLength(1);
+  });
+
+  it("gives each control its own icon and intent color", () => {
+    const wrapper = mountHeader();
+    const buttons = wrapper.findAllComponents(NButton);
+    const byLabel = (label: string) =>
+      buttons.find((button) => button.text() === label);
+    // Intent colors come from the Gotham-mapped Naive theme (JUS-87): one
+    // distinct type per control, so they read apart in light and dark.
+    expect(byLabel("Redeploy")?.props("type")).toBe("primary");
+    expect(byLabel("Rollback")?.props("type")).toBe("warning");
+    expect(byLabel("Stop")?.props("type")).toBe("error");
+    expect(byLabel("Start")?.props("type")).toBe("success");
+    const icons = wrapper.findAllComponents(GothamIcon).map((icon) => icon.props("name"));
+    expect(icons).toEqual(expect.arrayContaining(["refresh", "history", "stop", "play"]));
   });
 });
 

@@ -22,7 +22,10 @@ import type { Service } from "@/features/services/api/services";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import SharedVariablesEditor from "@/features/projects/components/SharedVariablesEditor.vue";
 import { useEnvironmentPage } from "@/features/projects/composables/useEnvironmentPage";
-import type { EnvironmentResourceTab } from "@/features/projects/composables/useEnvironmentPage";
+import type {
+  EnvironmentResourceTab,
+  EnvironmentRow,
+} from "@/features/projects/composables/useEnvironmentPage";
 import { useSharedVariables } from "@/features/projects/composables/useSharedVariables";
 import type { InheritedVariable } from "@/features/projects/schemas/variables";
 import { activeLocale, i18n } from "@/shared/i18n";
@@ -164,6 +167,23 @@ function openImport(): void {
 }
 
 /**
+ * openResource navigates to the resource detail page. The whole table row
+ * is the link (no separate Open button); inner interactive controls stop
+ * propagation so they never trigger it.
+ */
+function openResource(row: EnvironmentRow): void {
+  void router.push(row.to);
+}
+
+/** openResourceKey activates the focused row from the keyboard. */
+function openResourceKey(event: KeyboardEvent, row: EnvironmentRow): void {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    openResource(row);
+  }
+}
+
+/**
  * wizardOpen hides the picker modal while one of its wizards is on top:
  * the wizards teleport to the body, so without this their cards bleed
  * through at the edges (modal-on-modal). The picker stays mounted
@@ -298,7 +318,6 @@ function afterServiceCreate(service: Service): void {
                 <th scope="col">{{ t("projects.environment.table.type") }}</th>
                 <th scope="col">{{ t("projects.environment.table.server") }}</th>
                 <th scope="col">{{ t("projects.environment.table.status") }}</th>
-                <th scope="col"><span class="sr-only">{{ t("projects.environment.table.actions") }}</span></th>
               </tr>
             </thead>
             <tbody>
@@ -306,6 +325,12 @@ function afterServiceCreate(service: Service): void {
                 v-for="row in page.visibleRows.value"
                 :key="`${row.kind}:${row.id}`"
                 :class="{ 'preview-row': row.preview }"
+                class="resource-row"
+                role="link"
+                tabindex="0"
+                :aria-label="row.name"
+                @click="openResource(row)"
+                @keydown="openResourceKey($event, row)"
               >
                 <td :data-label="t('projects.environment.table.name')">
                   <span class="resource-name">{{ row.name }}</span>
@@ -320,11 +345,6 @@ function afterServiceCreate(service: Service): void {
                 <td :data-label="t('projects.environment.table.server')" class="mono muted">{{ row.serverName }}</td>
                 <td :data-label="t('projects.environment.table.status')">
                   <NTag size="small" :type="row.statusTag">{{ row.statusText }}</NTag>
-                </td>
-                <td :data-label="t('projects.environment.table.actions')" class="actions">
-                  <RouterLink :to="row.to">
-                    <NButton size="small">{{ t("projects.detail.open") }}</NButton>
-                  </RouterLink>
                 </td>
               </tr>
             </tbody>
@@ -547,6 +567,20 @@ function afterServiceCreate(service: Service): void {
   color: var(--muted);
 }
 
+/* The whole row is the link to the resource detail page. */
+.resource-row {
+  cursor: pointer;
+}
+
+.resource-table tbody .resource-row:hover {
+  background: var(--hover-row);
+}
+
+.resource-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .resource-name {
   color: var(--fg-2);
   display: block;
@@ -573,11 +607,6 @@ function afterServiceCreate(service: Service): void {
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.resource-table .actions {
-  text-align: right;
-  white-space: normal;
 }
 
 .mono {
@@ -618,8 +647,8 @@ function afterServiceCreate(service: Service): void {
     margin-left: 0;
   }
 
-  /* Narrow: each resource becomes a stacked card so Open stays reachable
-     without horizontal scrolling. */
+  /* Narrow: each resource becomes a stacked card, still opened by
+     tapping the card itself, without horizontal scrolling. */
   .resource-table thead {
     position: absolute;
     width: 1px;
@@ -661,10 +690,6 @@ function afterServiceCreate(service: Service): void {
     letter-spacing: 0.07em;
     text-transform: uppercase;
     color: var(--muted);
-  }
-
-  .resource-table .actions {
-    text-align: left;
   }
 }
 </style>

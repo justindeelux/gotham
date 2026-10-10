@@ -929,6 +929,9 @@ func (s *Server) updatesService() updates.Service {
 		}
 	}
 	config, err := updates.FromEnv(current, s.logger)
+	if s.persistence != nil {
+		config.Schedules = updates.NewStoreSchedule(s.persistence)
+	}
 	if err != nil {
 		s.logger.Info("updates: release public key not configured; apply disabled", "reason", err)
 	}

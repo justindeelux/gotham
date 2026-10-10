@@ -25,6 +25,7 @@ exit criteria, work packages, dependencies, and rollback. Start with the
 | 13 — Projects and environments | [13-projects-environments.md](plans/13-projects-environments.md) |
 | 14 — English/Vietnamese UI localization | [14-i18n.md](plans/14-i18n.md) |
 | 15 — Add resource flow & automatic Git sources | [15-add-resource-git-sources.md](plans/15-add-resource-git-sources.md) |
+| 17 — Update settings | [17-update-settings.md](plans/17-update-settings.md) |
 
 Phase status and remaining work live only in [`TODO.md`](TODO.md).
 

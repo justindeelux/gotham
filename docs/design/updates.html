@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%235865f2'/%3E%3Cpath d='M5 19V11a7 7 0 0114 0v8M9.5 19v-6.5a2.5 2.5 0 015 0V19' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E" />
+<title>Updates · Gotham</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" />
+<link rel="stylesheet" href="assets/gotham-ui.css" />
+<link rel="stylesheet" href="assets/gotham-views.css" />
+<style>
+  /* Local page: new pg- classes only, no shared-class redefinitions. */
+  .pg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-4); }
+  .pg-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+  .pg-form { display: grid; gap: var(--space-4); max-width: 560px; }
+  .pg-notes { white-space: pre-wrap; font-size: var(--text-sm); color: var(--fg); max-height: 160px; overflow: auto; }
+  .pg-alert { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); border: 1px solid color-mix(in oklab, var(--danger) 34%, transparent); background: var(--danger-soft); color: var(--danger-ink); font-size: var(--text-sm); }
+  .pg-alert--warn { border-color: color-mix(in oklab, var(--warn) 34%, transparent); background: var(--warn-soft); color: var(--warn-ink); }
+</style>
+</head>
+<body data-page="updates" data-nav="settings">
+<div class="app">
+  <nav class="rail" id="rail" aria-label="Managed servers"></nav>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main">
+    <header class="topbar" id="topbar"></header>
+    <div class="view">
+      <div class="page">
+
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Settings · System</p>
+            <h1>Updates</h1>
+            <p class="page-desc">Check for new Gotham releases, update the control plane and choose when Gotham checks and applies updates automatically. Schedules run in UTC.</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-secondary" type="button">Check for updates</button>
+            <button class="btn btn-primary" type="button">Update now</button>
+          </div>
+        </div>
+
+        <div class="pg-grid" data-od-id="updates-stats">
+          <div class="stat"><div class="stat-label">Current version</div><div class="stat-value">v0.4.2</div><div class="stat-sub"><span class="tag">stable</span></div></div>
+          <div class="stat"><div class="stat-label">Latest available</div><div class="stat-value">v0.5.0</div><div class="stat-sub"><span class="tag tag--accent">Update available</span> Oct 9, 2026</div></div>
+          <div class="stat"><div class="stat-label">Last checked</div><div class="stat-value" style="font-size:var(--text-xl)">12 min ago</div><div class="stat-sub">Next check Oct 10, 21:00 UTC</div></div>
+        </div>
+
+        <div class="card mt-5" data-od-id="release-notes">
+          <div class="card-head"><h3>Release notes · v0.5.0</h3><span class="meta">stable channel</span></div>
+          <div class="pg-notes">- Multiple domains per application
+- Router list in the proxy settings
+- Fixes for build log streaming</div>
+        </div>
+
+        <div class="card mt-5" data-od-id="update-progress">
+          <div class="card-head"><h3>Update in progress</h3><span class="meta">Installing v0.5.0</span></div>
+          <div class="progress"><div class="meter bar"><div class="meter-fill" style="width:60%"></div></div><span class="meta">Restarting — this page reconnects automatically</span></div>
+        </div>
+
+        <div class="card mt-5" data-od-id="update-failed">
+          <div class="card-head"><h3>Last update</h3><span class="tag tag--danger">Rolled back</span></div>
+          <div class="pg-alert" role="alert"><span>The health check failed after installing v0.5.0 and Gotham restored v0.4.2. Detail: health check timed out after 60s.</span></div>
+          <div class="pg-alert pg-alert--warn mt-5"><span>Automatic updates skip v0.5.0 until Oct 10, 2026, 23:00 UTC (backoff after the failure). “Update now” can still retry.</span></div>
+        </div>
+
+        <div class="card mt-5" data-od-id="update-schedule">
+          <div class="card-head"><h3>Update schedule</h3><span class="meta">Saved changes apply immediately — no restart</span></div>
+          <div class="pg-form">
+            <div class="switch-row"><button class="switch" type="button" role="switch" aria-checked="true" aria-label="Check for updates automatically"></button><div><strong>Check for updates automatically</strong><p class="field-hint">Gotham looks for a new release on the schedule below.</p></div></div>
+            <div class="switch-row"><button class="switch" type="button" role="switch" aria-checked="false" aria-label="Apply updates automatically"></button><div><strong>Apply updates automatically</strong><p class="field-hint">Install a found release without confirmation. Off by default.</p></div></div>
+            <div class="field"><label class="field-label" for="pg-channel">Channel</label><select id="pg-channel" class="select"><option>Stable</option><option>Beta</option></select></div>
+            <div class="field"><span class="field-label">Frequency</span><div class="segmented"><button type="button">Every N hours</button><button type="button" class="is-active">Daily</button><button type="button">Weekly</button></div></div>
+            <div class="field"><label class="field-label" for="pg-time">Time (UTC)</label><input id="pg-time" class="input mono" value="03:00" /><span class="field-hint">Weekly adds a day-of-week selector; interval mode shows an hours field (1–720).</span></div>
+            <div class="field has-error"><label class="field-label" for="pg-interval">Interval (hours)</label><input id="pg-interval" class="input mono" value="0" /><span class="field-error">Enter between 1 and 720 hours.</span></div>
+            <div><button class="btn btn-primary" type="button">Save schedule</button> <button class="btn btn-ghost" type="button">Reset</button></div>
+          </div>
+        </div>
+
+        <div class="card mt-5" data-od-id="update-confirm">
+          <div class="card-head"><h3>Update Gotham to v0.5.0?</h3></div>
+          <p>Gotham will download and verify the release, then restart. The dashboard is unavailable for a short time and reconnects automatically. A failed health check restores the previous version.</p>
+          <div><button class="btn btn-primary" type="button">Update now</button> <button class="btn btn-ghost" type="button">Cancel</button></div>
+        </div>
+
+        <div class="card mt-5" data-od-id="non-admin">
+          <div class="card-head"><h3>Read-only view</h3></div>
+          <p class="meta">Only platform administrators can check, update or change the schedule. Non-admins see the version status above without action buttons.</p>
+        </div>
+
+      </div>
+    </div>
+  </main>
+</div>
+<script src="assets/gotham-ui.js"></script>
+</body>
+</html>

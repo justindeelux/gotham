@@ -18,6 +18,10 @@ var (
 	ErrNoPending = errors.New("instance: no network change is awaiting confirmation")
 	// ErrHost — the host helper failed; the change was not applied (502).
 	ErrHost = errors.New("instance: host helper failed")
+	// ErrRiskyNetwork — the change would disturb the active interface's
+	// addresses (removing its address/gateway or switching it from static
+	// to DHCP) without an explicit confirmation (409).
+	ErrRiskyNetwork = errors.New("instance: this change touches the active interface; confirm it explicitly")
 )
 
 // FieldErrors maps a field path to a user-facing message. It is the error
@@ -97,6 +101,15 @@ type Network struct {
 	DNSServers []string   `json:"dns_servers"`
 	IPv4       IPConfig   `json:"ipv4"`
 	IPv6       IPv6Config `json:"ipv6"`
+}
+
+// NetworkInput is the writable network section: the desired configuration
+// plus the explicit confirmation for a change that would disturb the active
+// interface (static-to-DHCP or a different address/gateway). The flag is
+// never stored; it only gates the apply.
+type NetworkInput struct {
+	Network
+	ConfirmInterfaceChange bool `json:"confirm_interface_change"`
 }
 
 // System is the Linux system section.

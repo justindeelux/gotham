@@ -89,7 +89,7 @@ func (h *handler) putSystem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) putNetwork(w http.ResponseWriter, r *http.Request) {
-	var in Network
+	var in NetworkInput
 	if !decode(w, r, &in) {
 		return
 	}
@@ -116,7 +116,7 @@ func (h *handler) reply(w http.ResponseWriter, st State, err error) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "validation failed", Errors: fe})
 	case errors.Is(err, ErrUnsupported):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "this host does not support applying these settings from Gotham"})
-	case errors.Is(err, ErrPending), errors.Is(err, ErrNoPending):
+	case errors.Is(err, ErrPending), errors.Is(err, ErrNoPending), errors.Is(err, ErrRiskyNetwork):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrHost):
 		h.logger.Error("instance host helper failed", "error", err)

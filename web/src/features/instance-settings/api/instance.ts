@@ -50,6 +50,10 @@ export interface NetworkSettings {
   dns_servers: string[];
   ipv4: IPv4Settings;
   ipv6: IPv6Settings;
+  /** Explicit confirmation for a change that would disturb the active
+   * interface (static-to-DHCP or a different address/gateway). The server
+   * refuses such a change without it; omitted (false) otherwise. */
+  confirm_interface_change?: boolean;
 }
 
 export interface SystemSettings {

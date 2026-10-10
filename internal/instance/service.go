@@ -67,15 +67,72 @@ func (s *Service) capabilities(ctx context.Context) Capabilities {
 }
 
 // Get returns the full state, first reconciling an expired network change.
+// The network section reports the host's live configuration (the source of
+// truth) whenever no change is pending and the helper can probe it, so the
+// form never offers stale stored defaults such as DHCP on a static host.
 func (s *Service) Get(ctx context.Context) (State, error) {
 	rec, err := s.reconcile(ctx)
 	if err != nil {
 		return State{}, err
 	}
+	if rec.Pending == nil {
+		if live, ok := s.hostLive(ctx); ok {
+			rec.Network.IPv4, rec.Network.IPv6 = live.IPv4, live.IPv6
+			// An empty live resolver list means unconfigured, not "no
+			// DNS": keep the stored servers so the form stays submittable.
+			if len(live.DNSServers) > 0 {
+				rec.Network.DNSServers = live.DNSServers
+			}
+		}
+	}
 	return State{
 		General: s.general(rec), Network: rec.Network, System: rec.System,
 		Capabilities: s.capabilities(ctx), Pending: rec.Pending,
 	}, nil
+}
+
+// hostLive returns the helper's live network configuration. It reports
+// nothing when there is no host applier or the probe fails, in which case
+// callers fall back to the stored values.
+func (s *Service) hostLive(ctx context.Context) (Network, bool) {
+	if s.host == nil {
+		return Network{}, false
+	}
+	live, ok := s.host.HostNetwork(ctx)
+	if !ok {
+		return Network{}, false
+	}
+	net := Network{IPv4: live.IPv4, IPv6: live.IPv6, DNSServers: live.DNSServers}
+	if net.DNSServers == nil {
+		net.DNSServers = []string{}
+	}
+	return net, true
+}
+
+// sameInterface reports whether req leaves the interface configuration of
+// live untouched (DNS excluded: a resolver-only change needs no interface
+// rewrite and no risky-change confirmation).
+func sameInterface(live HostNetwork, req Network) bool {
+	return live.IPv4 == req.IPv4 && live.IPv6 == req.IPv6
+}
+
+// riskyInterfaceChange reports whether req would disturb the live addresses
+// of the active interface: switching it from static to DHCP, disabling the
+// family, or changing its address/gateway.
+func riskyInterfaceChange(live HostNetwork, req Network) bool {
+	if live.IPv4.Mode == ModeStatic && live.IPv4.Address != "" {
+		if req.IPv4.Mode != ModeStatic || req.IPv4.Address != live.IPv4.Address ||
+			req.IPv4.Gateway != live.IPv4.Gateway {
+			return true
+		}
+	}
+	if live.IPv6.Enabled && live.IPv6.Mode == ModeStatic && live.IPv6.Address != "" {
+		if !req.IPv6.Enabled || req.IPv6.Mode != ModeStatic ||
+			req.IPv6.Address != live.IPv6.Address || req.IPv6.Gateway != live.IPv6.Gateway {
+			return true
+		}
+	}
+	return false
 }
 
 // Reconcile settles an expired pending network change; call it at startup.
@@ -181,8 +238,12 @@ func (s *Service) UpdateSystem(ctx context.Context, actor uuid.UUID, in System) 
 
 // UpdateNetwork validates and tentatively applies a network change; it stays
 // pending until ConfirmNetwork, and the host reverts it after the deadline.
-func (s *Service) UpdateNetwork(ctx context.Context, actor uuid.UUID, in Network) (State, error) {
-	in, errs := normalizeNetwork(in)
+// A resolver-only change on a static host is applied DNS-only (the interface
+// file is never rewritten); a change that would disturb the active
+// interface's addresses needs ConfirmInterfaceChange and is refused without
+// it, server-side.
+func (s *Service) UpdateNetwork(ctx context.Context, actor uuid.UUID, in NetworkInput) (State, error) {
+	net, errs := normalizeNetwork(in.Network)
 	if errs != nil {
 		return State{}, errs
 	}
@@ -201,12 +262,23 @@ func (s *Service) UpdateNetwork(ctx context.Context, actor uuid.UUID, in Network
 	if rec.Pending != nil {
 		return State{}, ErrPending
 	}
-	if err := s.host.ApplyNetwork(ctx, in, NetworkConfirmWindow); err != nil {
+	dnsOnly := false
+	if s.host != nil {
+		if live, ok := s.host.HostNetwork(ctx); ok {
+			switch {
+			case sameInterface(live, net):
+				dnsOnly = true
+			case riskyInterfaceChange(live, net) && !in.ConfirmInterfaceChange:
+				return State{}, ErrRiskyNetwork
+			}
+		}
+	}
+	if err := s.host.ApplyNetwork(ctx, net, NetworkConfirmWindow, dnsOnly); err != nil {
 		return State{}, err
 	}
-	changes := diff(rec.Network, in)
-	rec.Pending = &Pending{Previous: rec.Network, Proposed: in, Deadline: s.now().Add(NetworkConfirmWindow)}
-	rec.Network = in
+	changes := diff(rec.Network, net)
+	rec.Pending = &Pending{Previous: rec.Network, Proposed: net, Deadline: s.now().Add(NetworkConfirmWindow)}
+	rec.Network = net
 	if err := s.repo.Save(ctx, actor, SectionNetwork, rec, changes); err != nil {
 		// Without a stored deadline nobody could confirm: undo on the host.
 		if rerr := s.host.RevertNetwork(ctx); rerr != nil {

@@ -45,6 +45,11 @@ const en = {
     submit: "Apply network changes",
     applied: "Network changes applied. Confirm them before the countdown ends.",
     pendingNote: "A network change is awaiting confirmation. Settle it before making another.",
+    dnsOnlyNote: "Only the DNS servers changed: the interface configuration is left untouched.",
+    riskyWarning:
+      "This changes the address of the interface you are connected through. The host may become unreachable until the change is confirmed or reverted.",
+    confirmLabel: "I understand this may interrupt the connection",
+    confirmRequired: "Tick the confirmation box to apply this change.",
   },
   confirm: {
     title: "Keep these network changes?",

@@ -12,9 +12,9 @@
 Out of scope: wiring every existing consumer (agent enrollment, OAuth redirects, webhooks) to the stored control-plane URL — they keep reading `gotham.yaml` until a follow-up swaps them to `Service.ControlPlaneURL(ctx)`; per-NIC/bonding/VLAN configuration; non-systemd hosts.
 
 ## Config precedence
-`env > DB > file defaults`, per field of the General section.
+`env > DB > default`, per field of the General section.
 
-- env: `GOTHAM_PUBLIC_URL`, `GOTHAM_INSTANCE_NAME`, `GOTHAM_TIMEZONE` (also `instance.public_url|name|timezone` in `gotham.yaml`, which is the "file default" layer).
+- env: `GOTHAM_PUBLIC_URL`, `GOTHAM_INSTANCE_NAME`, `GOTHAM_TIMEZONE`. The lowest layer is the built-in default (`""`, `gotham`, `UTC`); a `gotham.yaml` layer was deliberately not added so `internal/config` (shared, HIGH blast radius) stays untouched — a follow-up can feed file values in as the default.
 - The API reports each field as `{value, source: env|db|default, locked}`. A field whose source is `env` is **locked**: a write to it is a field error (`locked by environment variable`), the UI renders it read-only with the variable name.
 - Network and system values have no env/file layer: they describe the host, so the DB row is the desired state and the helper is the applier.
 

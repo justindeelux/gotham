@@ -1,0 +1,237 @@
+// Files schemas, pure formatting helpers and the HTTP status -> i18n key
+// mapping (P18 step 6). The catalog parity check keeps en/vi in step.
+import { describe, expect, it } from "vitest";
+
+import { filesErrorKey } from "@/features/files/api/files";
+import en from "@/features/files/locales/en";
+import vi from "@/features/files/locales/vi";
+import {
+  filesContentSchema,
+  filesEntrySchema,
+  filesListingSchema,
+  filesRootListSchema,
+} from "@/features/files/schemas/files";
+import type { FilesEntry } from "@/features/files/schemas/files";
+import {
+  breadcrumbSegments,
+  countByKind,
+  entryIconKind,
+  entryMatchesQuery,
+  entryTypeLabel,
+  formatMode,
+  formatTimestamp,
+  isSelectable,
+  joinPath,
+  parentPath,
+  sortEntries,
+} from "@/features/files/utils/files";
+import { checkCatalogParity } from "@/shared/i18n/catalog";
+
+/** entry builds one row for the helper assertions. */
+function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
+  return {
+    kind: "file",
+    size: 0,
+    mode: 0o100644,
+    modified_at: "2026-10-12T09:02:00Z",
+    etag: '"1"',
+    ...overrides,
+  };
+}
+
+describe("files response schemas", () => {
+  it("accepts the roots envelope", () => {
+    const parsed = filesRootListSchema.safeParse({
+      roots: [
+        { name: "volumes", path: "/var/lib/gotham/volumes", writable: true, free_bytes: 10 },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts a listing and rejects an unknown kind", () => {
+    expect(
+      filesListingSchema.safeParse({
+        entries: [
+          { name: "app.yaml", kind: "file", size: 2, mode: 33188, modified_at: "2026-10-12T09:02:00Z", etag: '"a"' },
+        ],
+        truncated: false,
+      }).success,
+    ).toBe(true);
+    expect(
+      filesEntrySchema.safeParse({
+        name: "x",
+        kind: "wormhole",
+        size: 0,
+        mode: 0,
+        modified_at: "2026-10-12T09:02:00Z",
+        etag: '"a"',
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires every content field", () => {
+    expect(
+      filesContentSchema.safeParse({
+        content: "a",
+        etag: '"a"',
+        sha256: "x",
+        size: 1,
+        mode: 33188,
+      }).success,
+    ).toBe(true);
+    expect(filesContentSchema.safeParse({ content: "a" }).success).toBe(false);
+  });
+});
+
+describe("filesErrorKey maps every status to a curated key", () => {
+  it("covers the error contract", () => {
+    const cases: Array<[number, string]> = [
+      [400, "files.errors.invalid"],
+      [401, "files.errors.sessionExpired"],
+      [403, "files.errors.forbidden"],
+      [404, "files.errors.notFound"],
+      [409, "files.errors.conflict"],
+      [413, "files.errors.tooLarge"],
+      [415, "files.errors.notEditable"],
+      [428, "files.errors.precondition"],
+      [429, "files.errors.busy"],
+      [500, "common.errors.unexpected"],
+      [501, "files.errors.agentOutdated"],
+      [502, "files.errors.agentUnavailable"],
+      [503, "files.errors.disabled"],
+    ];
+    for (const [status, key] of cases) {
+      expect(filesErrorKey({ message: "server text", status })).toBe(key);
+    }
+    expect(filesErrorKey(new Error("plain"))).toBeNull();
+    expect(filesErrorKey({ message: "odd", status: 418 })).toBeNull();
+  });
+});
+
+describe("files catalog parity", () => {
+  it("keeps en and vi in step", () => {
+    expect(checkCatalogParity(en, vi)).toEqual([]);
+  });
+});
+
+describe("formatMode", () => {
+  it("renders regular files, directories and symlinks", () => {
+    expect(formatMode(0o100644)).toBe("-rw-r--r--");
+    expect(formatMode(0o040755)).toBe("drwxr-xr-x");
+    expect(formatMode(0o120777)).toBe("lrwxrwxrwx");
+    expect(formatMode(0o140777)).toBe("srwxrwxrwx");
+  });
+});
+
+describe("formatTimestamp", () => {
+  it("renders a stable UTC timestamp and an em dash for junk", () => {
+    expect(formatTimestamp("2026-10-12T09:02:14Z")).toBe("2026-10-12 09:02");
+    expect(formatTimestamp("")).toBe("—");
+    expect(formatTimestamp(null)).toBe("—");
+    expect(formatTimestamp("not-a-date")).toBe("—");
+  });
+});
+
+describe("breadcrumbs and paths", () => {
+  it("builds root -> dirs crumbs", () => {
+    expect(breadcrumbSegments("volumes", "")).toEqual([
+      { name: "volumes", path: "", isRoot: true },
+    ]);
+    expect(breadcrumbSegments("volumes", "a/b")).toEqual([
+      { name: "volumes", path: "", isRoot: true },
+      { name: "a", path: "a", isRoot: false },
+      { name: "b", path: "a/b", isRoot: false },
+    ]);
+  });
+
+  it("joins and strips paths", () => {
+    expect(joinPath("", "x")).toBe("x");
+    expect(joinPath("a", "b")).toBe("a/b");
+    expect(parentPath("")).toBe("");
+    expect(parentPath("a")).toBe("");
+    expect(parentPath("a/b/c")).toBe("a/b");
+  });
+});
+
+describe("sortEntries", () => {
+  const rows = [
+    entry({ name: "b.txt", size: 30 }),
+    entry({ name: "a.txt", size: 10 }),
+    entry({ name: "dir", kind: "directory", size: 0, mode: 0o040755 }),
+    entry({ name: "link", kind: "symlink", size: 0, mode: 0o120777 }),
+  ];
+
+  it("leads with directories then files and symlinks", () => {
+    expect(sortEntries(rows, "name", "asc").map((r) => r.name)).toEqual([
+      "dir",
+      "a.txt",
+      "b.txt",
+      "link",
+    ]);
+  });
+
+  it("honours the key and direction within a group", () => {
+    expect(sortEntries(rows, "size", "desc").map((r) => r.name)).toEqual([
+      "dir",
+      "b.txt",
+      "a.txt",
+      "link",
+    ]);
+  });
+
+  it("does not mutate the input", () => {
+    const copy = [...rows];
+    sortEntries(rows, "name", "asc");
+    expect(rows).toEqual(copy);
+  });
+});
+
+describe("entry predicates and labels", () => {
+  it("marks folders and files selectable", () => {
+    expect(isSelectable(entry({ name: "d", kind: "directory" }))).toBe(true);
+    expect(isSelectable(entry({ name: "f" }))).toBe(true);
+    expect(isSelectable(entry({ name: "l", kind: "symlink" }))).toBe(false);
+    expect(isSelectable(entry({ name: "s", kind: "special" }))).toBe(false);
+  });
+
+  it("filters by name case-insensitively", () => {
+    expect(entryMatchesQuery(entry({ name: "App.yaml" }), "app")).toBe(true);
+    expect(entryMatchesQuery(entry({ name: "App.yaml" }), "")).toBe(true);
+    expect(entryMatchesQuery(entry({ name: "App.yaml" }), "z")).toBe(false);
+  });
+
+  it("labels types in the active locale", () => {
+    expect(entryTypeLabel(entry({ name: "d", kind: "directory" }), "en")).toBe("Folder");
+    expect(entryTypeLabel(entry({ name: "d", kind: "directory" }), "vi")).toBe("Thư mục");
+    expect(entryTypeLabel(entry({ name: "app.yaml" }), "en")).toBe("YAML");
+    expect(entryTypeLabel(entry({ name: "logo.png" }), "en")).toBe("Image");
+    expect(entryTypeLabel(entry({ name: "logo.png" }), "vi")).toBe("Ảnh");
+    expect(entryTypeLabel(entry({ name: "backup.tar.gz" }), "en")).toBe("Archive");
+    expect(entryTypeLabel(entry({ name: "run.sock", kind: "special", mode: 0o140777 }), "en")).toBe("Socket");
+  });
+
+  it("picks an icon family per entry", () => {
+    expect(entryIconKind(entry({ name: "d", kind: "directory" }))).toBe("folder");
+    expect(entryIconKind(entry({ name: "logo.png" }))).toBe("image");
+    expect(entryIconKind(entry({ name: "backup.tar.gz" }))).toBe("archive");
+    expect(entryIconKind(entry({ name: "server.log" }))).toBe("terminal");
+    expect(entryIconKind(entry({ name: "current", kind: "symlink" }))).toBe("link");
+    expect(entryIconKind(entry({ name: "app.yaml" }))).toBe("doc");
+  });
+
+  it("counts by kind", () => {
+    const counts = countByKind([
+      entry({ name: "d", kind: "directory" }),
+      entry({ name: "f" }),
+      entry({ name: "l", kind: "symlink" }),
+      entry({ name: "s", kind: "special" }),
+    ]);
+    expect(counts).toMatchObject({
+      directory: 1,
+      file: 1,
+      symlink: 1,
+      special: 1,
+    });
+  });
+});

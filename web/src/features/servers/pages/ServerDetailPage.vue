@@ -202,6 +202,28 @@ onMounted(() => {
             </NCard>
           </NTabPane>
 
+          <NTabPane name="files" :tab="$t('servers.detail.tabFiles')">
+            <NCard style="margin-top: 16px">
+              <NEmpty :description="$t('servers.detail.filesEmpty')">
+                <template #extra>
+                  <RouterLink
+                    :to="{
+                      name: 'server-files',
+                      params: { id: server.id },
+                    }"
+                    custom
+                  >
+                    <template #default="{ navigate }">
+                      <NButton type="primary" @click="navigate">
+                        {{ $t("servers.detail.openFiles") }}
+                      </NButton>
+                    </template>
+                  </RouterLink>
+                </template>
+              </NEmpty>
+            </NCard>
+          </NTabPane>
+
           <NTabPane name="metrics" :tab="$t('servers.detail.tabMetrics')">
             <ServerMetricsTab />
           </NTabPane>

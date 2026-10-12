@@ -103,6 +103,8 @@ const en = {
     servers: "Servers",
     serverDetail: "Server detail",
     serverContainers: "Containers",
+    serverFiles: "Files",
+    files: "File manager",
     projects: "Projects",
     projectDetail: "Project detail",
     environmentDetail: "Environment detail",

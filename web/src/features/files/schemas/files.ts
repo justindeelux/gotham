@@ -79,3 +79,24 @@ export const downloadTicketSchema = z.object({
   ticket: z.string(),
 });
 export type DownloadTicket = z.infer<typeof downloadTicketSchema>;
+
+/**
+ * uploadResultSchema validates one file's outcome in a multipart upload
+ * (POST /upload -> { results: [...] }). A success carries `entry`; a failure
+ * carries a stable `error` token (never raw agent text) that the browser maps
+ * to a catalog message. `name`/`path` are always present so a partial failure
+ * still names the file it failed on.
+ */
+export const filesUploadResultSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  entry: filesEntrySchema.optional(),
+  error: z.string().optional(),
+});
+export type FilesUploadResult = z.infer<typeof filesUploadResultSchema>;
+
+/** uploadEnvelopeSchema validates POST /upload. */
+export const filesUploadEnvelopeSchema = z.object({
+  results: z.array(filesUploadResultSchema),
+});
+export type FilesUploadEnvelope = z.infer<typeof filesUploadEnvelopeSchema>;

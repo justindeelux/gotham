@@ -110,6 +110,50 @@ export function isSelectable(entry: FilesEntry): boolean {
   return entry.kind === "file" || entry.kind === "directory";
 }
 
+/**
+ * MAX_NAME_BYTES is the maximum UTF-8 byte length the server accepts for a
+ * single path segment (an entry name). The boundary is bytes, not code points,
+ * so a multi-byte name can be shorter in characters and still fail.
+ */
+export const MAX_NAME_BYTES = 255;
+
+/** NameKind distinguishes the create dialogs (an empty file or a folder). */
+export type NameKind = "file" | "directory";
+
+/**
+ * validateEntryName returns null when name is a legal path segment, otherwise
+ * the files catalog key of the first rule it breaks. It mirrors the server's
+ * rules: the name is trimmed, must be non-empty, must not be "." or "..", must
+ * not contain "/", "\" or NUL, and must be at most 255 bytes. The accepted
+ * value is the trimmed string; callers submit {@link normalizeEntryName}.
+ */
+export function validateEntryName(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed === "") {
+    return "files.name.required";
+  }
+  if (trimmed === "." || trimmed === "..") {
+    return "files.name.reserved";
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
+    return "files.name.invalid";
+  }
+  if (new TextEncoder().encode(trimmed).length > MAX_NAME_BYTES) {
+    return "files.name.tooLong";
+  }
+  return null;
+}
+
+/** normalizeEntryName returns the trimmed name the dialogs submit. */
+export function normalizeEntryName(name: string): string {
+  return name.trim();
+}
+
+/** isSamePath reports whether two relative paths address the same entry. */
+export function isSamePath(a: string, b: string): boolean {
+  return a.replace(/^\/+|\/+$/g, "") === b.replace(/^\/+|\/+$/g, "");
+}
+
 /** joinPath appends one entry name to a relative path. */
 export function joinPath(base: string, name: string): string {
   return base === "" ? name : `${base}/${name}`;

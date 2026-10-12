@@ -2,21 +2,31 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import {
+  copyEntry,
+  createFile,
+  createFolder,
+  deleteEntry,
   describeFilesError,
+  filesErrorKey,
+  isConflictError,
   isFilesDisabled,
   listEntries,
   listRoots,
+  moveEntry,
+  renameEntry,
 } from "@/features/files/api/files";
 import type {
   FilesEntry,
   FilesRoot,
 } from "@/features/files/schemas/files";
+import type { NameKind } from "@/features/files/utils/files";
 import {
   breadcrumbSegments,
   countByKind,
   entryMatchesQuery,
   isSelectable,
   joinPath,
+  normalizeEntryName,
   parentPath,
   sortEntries,
 } from "@/features/files/utils/files";
@@ -28,17 +38,43 @@ import type {
 } from "@/features/files/utils/files";
 import { useTeamsStore } from "@/features/teams";
 
+/** FilesClipboard is a pending copy/cut of named entries from one directory. */
+export interface FilesClipboard {
+  mode: "copy" | "cut";
+  root: string;
+  path: string;
+  names: string[];
+}
+
+/** ConflictPrompt waits for the user to replace or skip 409'd names. */
+export interface ConflictPrompt {
+  op: "copy" | "move";
+  source: string;
+  destination: string;
+  names: string[];
+  /** cutClipboard clears the clipboard for a cut once the prompt resolves. */
+  cutClipboard: boolean;
+}
+
+/** TransferSummary reports one batch move/copy/delete outcome. */
+export interface TransferSummary {
+  done: string[];
+  conflicts: string[];
+  failed: Array<{ name: string; error: string }>;
+}
+
 /**
- * Files browser store (P18 step 6, read-only). Holds one server's browsable
- * roots plus the current directory page, the selection, the sort/filter and
- * the view mode. Every read is team-scoped: the active team is read from the
- * teams store and sent as `X-Team-Id`.
+ * Files browser store. Holds one server's browsable roots plus the current
+ * directory page, the selection, the sort/filter, the view mode and the step-7
+ * write surface (create, rename, delete, move/copy, clipboard, upload). Every
+ * read and every write is team-scoped: the active team is read from the teams
+ * store and sent as `X-Team-Id`.
  *
  * Concurrency: a single generation counter drops a response that lost to a
  * newer navigation or server switch, so a slow listing can never overwrite the
- * directory the user just opened. Content/download require the owner or admin
- * role — a read_only member still lists, but the privileged affordances are
- * hidden by `canReadContent`.
+ * directory the user just opened. Reads are open to any member; content,
+ * download and every mutation require the owner or admin role, enforced a
+ * second time by the control plane.
  */
 export const useFilesStore = defineStore("files", () => {
   const serverId = ref("");
@@ -58,6 +94,17 @@ export const useFilesStore = defineStore("files", () => {
   const sortDir = ref<FilesSortDirection>("asc");
   const query = ref("");
   const selected = ref<Set<string>>(new Set());
+
+  // ── Write state (P18 step 7) ──────────────────────────────────────────
+  // The write surface mirrors the read gates: canWrite needs both a
+  // write-capable role and a writable root. A read_only member or a
+  // read-only root hides every mutation affordance and every mutating call
+  // is refused by the control plane regardless.
+  const acting = ref(false);
+  const permissionDenied = ref(false);
+  const clipboard = ref<FilesClipboard | null>(null);
+  /** conflictPrompt is set when a transfer met 409s and awaits replace/skip. */
+  const conflictPrompt = ref<ConflictPrompt | null>(null);
 
   // Bumped by every navigation/server switch. A response whose generation is
   // stale is discarded (see the plan's navigation race guard).
@@ -142,15 +189,40 @@ export const useFilesStore = defineStore("files", () => {
     return role === "owner" || role === "admin";
   });
 
+  /**
+   * canWrite gates every mutation: the caller must be able to write (owner or
+   * admin) and the selected root must be writable (a compose root is not). It
+   * is the single source of truth for hiding create/rename/delete/move/upload
+   * affordances; the control plane refuses the call regardless.
+   */
+  const canWrite = computed<boolean>(() => canReadContent.value && writable.value);
+
+  /** hasClipboard reports a non-empty clipboard for the paste action. */
+  const hasClipboard = computed<boolean>(
+    () => (clipboard.value?.names.length ?? 0) > 0,
+  );
+
+  /** clipboardMode reads the pending clipboard operation ("copy"/"cut"). */
+  const clipboardMode = computed<"copy" | "cut" | null>(
+    () => clipboard.value?.mode ?? null,
+  );
+
   /** teamId reads the active team the requests are scoped to. */
   function teamId(): string {
     return useTeamsStore().activeTeamId;
   }
 
-  /** applyError records a read failure; a 503 flips the disabled state. */
+  /** applyError records a read failure; a 503 flips the disabled state and a
+   * 403 the distinct permission-denied state. */
   function applyError(err: unknown): void {
     if (isFilesDisabled(err)) {
       disabled.value = true;
+      errorRaw.value = null;
+      permissionDenied.value = false;
+      return;
+    }
+    if (filesErrorKey(err) === "files.errors.forbidden") {
+      permissionDenied.value = true;
       errorRaw.value = null;
       return;
     }
@@ -164,6 +236,7 @@ export const useFilesStore = defineStore("files", () => {
     truncated.value = isTruncated;
     loaded.value = true;
     disabled.value = false;
+    permissionDenied.value = false;
     lastLoadedPath = path.value;
   }
 
@@ -318,9 +391,230 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
+  // ── Write actions (P18 step 7) ────────────────────────────────────────
+  // Every mutation runs under `acting` (so the dialogs can disable their
+  // confirm button and spin), refreshes the current directory on success, and
+  // rethrows so the caller owns the localized error toast. A batch operation
+  // reports a per-name outcome instead of aborting on the first failure.
+
+  /** runMutation wraps one write in the acting flag. */
+  async function runMutation<T>(task: () => Promise<T>): Promise<T> {
+    acting.value = true;
+    try {
+      return await task();
+    } finally {
+      acting.value = false;
+    }
+  }
+
+  /** createEntry creates an empty file or a folder in the current directory. */
+  async function createEntry(name: string, kind: NameKind): Promise<FilesEntry> {
+    const target = joinPath(path.value, normalizeEntryName(name));
+    return runMutation(async () => {
+      const created =
+        kind === "directory"
+          ? await createFolder(serverId.value, teamId(), {
+              root: rootName.value,
+              path: target,
+            })
+          : await createFile(serverId.value, teamId(), {
+              root: rootName.value,
+              path: target,
+            });
+      await loadEntries();
+      return created;
+    });
+  }
+
+  /** rename changes one entry's name inside the current directory. */
+  async function rename(entry: FilesEntry, nextName: string): Promise<void> {
+    await runMutation(async () => {
+      await renameEntry(serverId.value, teamId(), {
+        root: rootName.value,
+        source: joinPath(path.value, entry.name),
+        destination: joinPath(path.value, normalizeEntryName(nextName)),
+      });
+      await loadEntries();
+    });
+  }
+
+  /** isDirectory reports whether one entry needs a recursive delete. */
+  function isDirectory(entry: FilesEntry): boolean {
+    return entry.kind === "directory";
+  }
+
+  /**
+   * remove deletes entries, recursing into folders. It never aborts on one
+   * failure: the summary reports the names that were deleted and the ones that
+   * failed, so a partial batch still shows feedback for every entry.
+   */
+  async function remove(entries: FilesEntry[]): Promise<TransferSummary> {
+    return runMutation(async () => {
+      const summary: TransferSummary = { done: [], conflicts: [], failed: [] };
+      for (const entry of entries) {
+        try {
+          await deleteEntry(
+            serverId.value,
+            teamId(),
+            rootName.value,
+            joinPath(path.value, entry.name),
+            isDirectory(entry),
+          );
+          summary.done.push(entry.name);
+        } catch (err) {
+          summary.failed.push({ name: entry.name, error: describeFilesError(err) });
+        }
+      }
+      await loadEntries();
+      return summary;
+    });
+  }
+
+  /**
+   * runTransfer copies or moves names from source into destination (same root),
+   * one entry at a time so a single 409 or failure does not hide the rest. It
+   * does not prompt: callers that want the replace/skip flow call
+   * {@link promptTransfer}.
+   */
+  async function runTransfer(
+    op: "copy" | "move",
+    source: string,
+    destination: string,
+    names: string[],
+    overwrite: boolean,
+  ): Promise<TransferSummary> {
+    const summary: TransferSummary = { done: [], conflicts: [], failed: [] };
+    const call = op === "copy" ? copyEntry : moveEntry;
+    for (const name of names) {
+      try {
+        await call(serverId.value, teamId(), {
+          root: rootName.value,
+          source: joinPath(source, name),
+          destination: joinPath(destination, name),
+          overwrite,
+        });
+        summary.done.push(name);
+      } catch (err) {
+        if (isConflictError(err)) {
+          summary.conflicts.push(name);
+        } else {
+          summary.failed.push({ name, error: describeFilesError(err) });
+        }
+      }
+    }
+    await loadEntries();
+    return summary;
+  }
+
+  /**
+   * promptTransfer runs a transfer with overwrite=false and, when names clash,
+   * opens the replace/skip prompt instead of silently failing them. cutClipboard
+   * marks a clipboard cut so resolving the prompt consumes the clipboard.
+   */
+  async function promptTransfer(
+    op: "copy" | "move",
+    source: string,
+    destination: string,
+    names: string[],
+    cutClipboard = false,
+  ): Promise<TransferSummary> {
+    const summary = await runMutation(() =>
+      runTransfer(op, source, destination, names, false),
+    );
+    conflictPrompt.value =
+      summary.conflicts.length > 0
+        ? { op, source, destination, names: [...summary.conflicts], cutClipboard }
+        : null;
+    if (summary.conflicts.length === 0 && cutClipboard) {
+      clearClipboard();
+    }
+    return summary;
+  }
+
+  /** resolveConflictPrompt retries the 409'd names, or drops them (skip). */
+  async function resolveConflictPrompt(overwrite: boolean): Promise<TransferSummary> {
+    const prompt = conflictPrompt.value;
+    conflictPrompt.value = null;
+    if (!prompt) {
+      return { done: [], conflicts: [], failed: [] };
+    }
+    if (!overwrite) {
+      if (prompt.cutClipboard) {
+        clearClipboard();
+      }
+      return { done: [], conflicts: prompt.names, failed: [] };
+    }
+    const summary = await runMutation(() =>
+      runTransfer(prompt.op, prompt.source, prompt.destination, prompt.names, true),
+    );
+    if (prompt.cutClipboard) {
+      clearClipboard();
+    }
+    return summary;
+  }
+
+  /** copySelection copy-marks the current selection. */
+  function copySelection(): void {
+    const names = selectedNames.value;
+    if (names.length === 0) {
+      return;
+    }
+    clipboard.value = { mode: "copy", root: rootName.value, path: path.value, names };
+  }
+
+  /** cutSelection cut-marks the current selection. */
+  function cutSelection(): void {
+    const names = selectedNames.value;
+    if (names.length === 0) {
+      return;
+    }
+    clipboard.value = { mode: "cut", root: rootName.value, path: path.value, names };
+  }
+
+  /** clearClipboard drops any pending copy/cut. */
+  function clearClipboard(): void {
+    clipboard.value = null;
+  }
+
+  /**
+   * paste applies the clipboard into the current directory. A cross-root paste
+   * is refused (the API is single-root); a name clash opens the replace/skip
+   * prompt. The clipboard survives a copy paste and is consumed by a cut paste
+   * once every entry has landed.
+   */
+  async function paste(): Promise<TransferSummary> {
+    const clip = clipboard.value;
+    if (!clip || clip.root !== rootName.value) {
+      return { done: [], conflicts: [], failed: [] };
+    }
+    return promptTransfer(
+      clip.mode === "copy" ? "copy" : "move",
+      clip.path,
+      path.value,
+      clip.names,
+      clip.mode === "cut",
+    );
+  }
+
+  /** reload re-reads roots and the listing (a team switch changes both). */
+  async function reload(): Promise<void> {
+    roots.value = [];
+    rootName.value = "";
+    path.value = "";
+    entries.value = [];
+    cursor.value = "";
+    truncated.value = false;
+    loaded.value = false;
+    errorRaw.value = null;
+    permissionDenied.value = false;
+    clearSelection();
+    clearClipboard();
+    conflictPrompt.value = null;
+    await loadAll();
+  }
+
   /** setRoot switches the browsable root and returns to its top level. */
-  async function setRoot(name: string): Promise<void> {
-    if (name === rootName.value) {
+  async function setRoot(name: string): Promise<void> {    if (name === rootName.value) {
       return;
     }
     rootName.value = name;
@@ -424,6 +718,10 @@ export const useFilesStore = defineStore("files", () => {
     loaded.value = false;
     disabled.value = false;
     errorRaw.value = null;
+    permissionDenied.value = false;
+    acting.value = false;
+    clipboard.value = null;
+    conflictPrompt.value = null;
     viewMode.value = "list";
     sortKey.value = "name";
     sortDir.value = "asc";
@@ -455,6 +753,11 @@ export const useFilesStore = defineStore("files", () => {
     loadingMore,
     loaded,
     disabled,
+    permissionDenied,
+    acting,
+    clipboard,
+    clipboardMode,
+    conflictPrompt,
     viewMode,
     sortKey,
     sortDir,
@@ -474,10 +777,13 @@ export const useFilesStore = defineStore("files", () => {
     allVisibleSelected,
     someVisibleSelected,
     canReadContent,
+    canWrite,
+    hasClipboard,
     // actions
     init,
     refresh,
     retry,
+    reload,
     loadMore,
     setRoot,
     openDirectory,
@@ -490,6 +796,15 @@ export const useFilesStore = defineStore("files", () => {
     toggleSelection,
     toggleSelectAll,
     clearSelection,
+    createEntry,
+    rename,
+    remove,
+    promptTransfer,
+    resolveConflictPrompt,
+    copySelection,
+    cutSelection,
+    clearClipboard,
+    paste,
     reset,
   };
 });

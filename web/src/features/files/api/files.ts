@@ -8,6 +8,7 @@ import type {
   FilesEntry,
   FilesListing,
   FilesRoot,
+  FilesUploadResult,
 } from "@/features/files/schemas/files";
 import {
   downloadTicketSchema,
@@ -15,11 +16,12 @@ import {
   filesListingSchema,
   filesRootListSchema,
   filesStatSchema,
+  filesUploadEnvelopeSchema,
 } from "@/features/files/schemas/files";
 
 /**
- * Typed read-only client for the file routes served by `internal/files`
- * (see routes.go for the contract):
+ * Typed client for the file routes served by `internal/files`
+ * (see routes.go, write_routes.go for the contract):
  *
  *   GET  /servers/{id}/files/roots           any member
  *   GET  /servers/{id}/files/list            any member
@@ -27,16 +29,25 @@ import {
  *   GET  /servers/{id}/files/content         owner/admin
  *   POST /servers/{id}/files/download-ticket owner/admin -> single-use ticket
  *   GET  /servers/{id}/files/download?ticket ticket (native browser download)
+ *   POST /servers/{id}/files/mkdir|/create   owner/admin, exclusive create
+ *   POST /servers/{id}/files/rename|/move|/copy owner/admin, 409 on conflict
+ *   DELETE /servers/{id}/files/entry?recursive= owner/admin
+ *   POST /servers/{id}/files/upload          owner/admin, multipart, per-file result
  *
  * The routes are team-scoped: the control plane resolves the active team from
  * the optional `X-Team-Id` header (the caller's personal team when absent) and
  * 404s a foreign or team-less server, so every call carries the team the UI
  * selected. FEATURE_FILES=false answers 503 on every route; the browser hides
  * its surface behind the disabled state instead of rendering it as an error.
- *
- * Write endpoints (upload, rename, delete, chmod) are not exposed here — this
- * module is the read-only foundation (P18 step 6).
  */
+
+/**
+ * fileTransferTimeoutMs disables the axios 15 s default for write transfers.
+ * An upload or a large copy can run for minutes; the control plane bounds the
+ * body (FILES_MAX_UPLOAD_BYTES) and extends its own read deadline, so the
+ * client must not cut a healthy transfer short. 0 means "no client timeout".
+ */
+export const fileTransferTimeoutMs = 0;
 
 /** listRoots returns the agent's browsable roots for one server. */
 export async function listRoots(
@@ -136,7 +147,7 @@ export async function issueDownloadTicket(
   const data = parseWith(downloadTicketSchema, response.data, {
     context: "DownloadTicket",
   });
-  return typeof data.ticket === "string" ? data.ticket : "";
+  return data.ticket;
 }
 
 /**
@@ -155,6 +166,221 @@ export function filesErrorKey(error: unknown): string | null {
   }
   return null;
 }
+
+/** isConflictError reports a 409 (an entry already exists / changed). */
+export function isConflictError(error: unknown): boolean {
+  return filesErrorKey(error) === "files.errors.conflict";
+}
+
+/** isCanceledError reports a request the caller aborted (never an error toast). */
+export function isCanceledError(error: unknown): boolean {
+  if (isApiError(error)) {
+    return error.status === null && /cancel/i.test(error.message);
+  }
+  return error instanceof Error && error.name === "CanceledError";
+}
+
+/** CreateEntryOptions configures an exclusive create of a file or folder. */
+export interface CreateEntryOptions {
+  root: string;
+  path: string;
+  /** POSIX mode; the server applies its own default when omitted. */
+  mode?: number;
+}
+
+/** parseEntry unwraps the { entry } envelope shared by the write responses. */
+function parseEntry(data: unknown, context: string): FilesEntry {
+  const parsed = parseWith(filesStatSchema, data, { context });
+  return parsed.entry;
+}
+
+/** createFolder creates one directory, exclusively (409 if it exists). */
+export async function createFolder(
+  serverId: string,
+  teamId: string,
+  options: CreateEntryOptions,
+): Promise<FilesEntry> {
+  const response = await http.post(
+    `/servers/${serverId}/files/mkdir`,
+    { root: options.root, path: options.path, mode: options.mode ?? 0o755 },
+    { headers: teamHeaders(teamId) },
+  );
+  return parseEntry(response.data, "FilesMkdir");
+}
+
+/** createFile creates one empty file, exclusively (409 if it exists). */
+export async function createFile(
+  serverId: string,
+  teamId: string,
+  options: CreateEntryOptions,
+): Promise<FilesEntry> {
+  const response = await http.post(
+    `/servers/${serverId}/files/create`,
+    { root: options.root, path: options.path, mode: options.mode ?? 0o644 },
+    { headers: teamHeaders(teamId) },
+  );
+  return parseEntry(response.data, "FilesCreate");
+}
+
+/** LocationOptions addresses a single-root rename, move or copy. */
+export interface LocationOptions {
+  root: string;
+  source: string;
+  destination: string;
+  /** overwrite replaces an existing destination; default false (409). */
+  overwrite?: boolean;
+}
+
+/** locationRequest posts one rename/move/copy body and returns the entry. */
+async function postLocation(
+  route: "rename" | "move" | "copy",
+  context: string,
+  serverId: string,
+  teamId: string,
+  options: LocationOptions,
+): Promise<FilesEntry> {
+  const response = await http.post(
+    `/servers/${serverId}/files/${route}`,
+    {
+      root: options.root,
+      source: options.source,
+      destination: options.destination,
+      overwrite: options.overwrite === true,
+    },
+    { headers: teamHeaders(teamId) },
+  );
+  return parseEntry(response.data, context);
+}
+
+/** renameEntry renames one entry inside the current root. */
+export async function renameEntry(
+  serverId: string,
+  teamId: string,
+  options: LocationOptions,
+): Promise<FilesEntry> {
+  return postLocation("rename", "FilesRename", serverId, teamId, options);
+}
+
+/** moveEntry moves one entry inside the current root. */
+export async function moveEntry(
+  serverId: string,
+  teamId: string,
+  options: LocationOptions,
+): Promise<FilesEntry> {
+  return postLocation("move", "FilesMove", serverId, teamId, options);
+}
+
+/** copyEntry copies one entry inside the current root. */
+export async function copyEntry(
+  serverId: string,
+  teamId: string,
+  options: LocationOptions,
+): Promise<FilesEntry> {
+  return postLocation("copy", "FilesCopy", serverId, teamId, options);
+}
+
+/** deleteEntry permanently removes one entry (recursive for a folder). */
+export async function deleteEntry(
+  serverId: string,
+  teamId: string,
+  root: string,
+  path: string,
+  recursive: boolean,
+): Promise<void> {
+  await http.delete(`/servers/${serverId}/files/entry`, {
+    params: { root, path, recursive: recursive ? "true" : "false" },
+    headers: teamHeaders(teamId),
+  });
+}
+
+/** UploadProgress is one upload's transferred bytes. */
+export interface UploadProgress {
+  loaded: number;
+  total: number;
+}
+
+/** UploadFilesOptions configures a multipart upload into one directory. */
+export interface UploadFilesOptions {
+  root: string;
+  path: string;
+  /** overwrite replaces existing names; default false reports a conflict. */
+  overwrite?: boolean;
+  onProgress?: (_progress: UploadProgress) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * uploadFiles streams files to POST /upload as one multipart request and
+ * returns the server's per-file result array. The request timeout is disabled
+ * (see {@link fileTransferTimeoutMs}) because a large body outlives the 15 s
+ * default; the server bounds the body and reports a per-file outcome for every
+ * part, so one file's failure never hides the rest.
+ */
+export async function uploadFiles(
+  serverId: string,
+  teamId: string,
+  files: File[],
+  options: UploadFilesOptions,
+): Promise<FilesUploadResult[]> {
+  const form = new FormData();
+  for (const file of files) {
+    form.append("files", file, file.name);
+  }
+  const response = await http.post(
+    `/servers/${serverId}/files/upload`,
+    form,
+    {
+      params: {
+        root: options.root,
+        path: options.path ?? "",
+        overwrite: options.overwrite === true ? "true" : "false",
+      },
+      headers: teamHeaders(teamId),
+      timeout: fileTransferTimeoutMs,
+      signal: options.signal,
+      onUploadProgress: options.onProgress
+        ? (event) => {
+            const total = event.total ?? event.loaded;
+            options.onProgress?.({ loaded: event.loaded, total });
+          }
+        : undefined,
+    },
+  );
+  const data = parseWith(filesUploadEnvelopeSchema, response.data, {
+    context: "FilesUpload",
+  });
+  return Array.isArray(data.results) ? data.results : [];
+}
+
+/**
+ * uploadErrorKey maps one per-file upload error token (write_routes.go
+ * publicError) onto its catalog key.
+ */
+export function uploadErrorKey(token: string): string {
+  return uploadErrorKeys[token] ?? "common.errors.unexpected";
+}
+
+/** describeUploadError renders one per-file upload error in the locale. */
+export function describeUploadError(token: string): string {
+  const t = i18n.global.t.bind(i18n.global);
+  return String(t(uploadErrorKey(token)));
+}
+
+/** uploadErrorKeys maps the server's stable error tokens onto catalog keys. */
+const uploadErrorKeys: Record<string, string> = {
+  not_found: "files.errors.notFound",
+  forbidden: "files.errors.forbidden",
+  conflict: "files.errors.conflict",
+  too_large: "files.errors.tooLarge",
+  invalid: "files.name.invalid",
+  busy: "files.errors.busy",
+  insufficient_storage: "files.errors.insufficientStorage",
+  agent_outdated: "files.errors.agentOutdated",
+  agent_unavailable: "files.errors.agentUnavailable",
+  disabled: "files.errors.disabled",
+  truncated: "files.upload.truncated",
+  error: "common.errors.unexpected",
+};
 
 /**
  * describeFilesError renders a failure in the active locale. Classification

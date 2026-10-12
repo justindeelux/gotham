@@ -4,23 +4,45 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  Copy,
   Download,
+  FilePlus2,
   Folder,
+  FolderPlus,
   HardDrive,
   LayoutGrid,
   List,
   Lock,
+  MoreVertical,
+  Pencil,
   RefreshCw,
+  Scissors,
   Search,
+  Trash2,
+  Upload,
 } from "@lucide/vue";
-import { NButton, NCard, NCheckbox, NInput, NSelect } from "naive-ui";
-import { computed, onMounted, watch } from "vue";
+import {
+  NButton,
+  NCard,
+  NCheckbox,
+  NDropdown,
+  NInput,
+  NSelect,
+} from "naive-ui";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
+import ConflictDialog from "@/features/files/components/ConflictDialog.vue";
+import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue";
+import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
+import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
+import TransferDialog from "@/features/files/components/TransferDialog.vue";
+import UploadDialog from "@/features/files/components/UploadDialog.vue";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
-import { useFilesStore } from "@/features/files/stores/files";
 import type { FilesEntry } from "@/features/files/schemas/files";
+import { useFilesStore } from "@/features/files/stores/files";
+import type { NameKind } from "@/features/files/utils/files";
 import {
   entryIconKind,
   entryTypeLabel,
@@ -46,7 +68,27 @@ watch(
   () => props.serverId,
   (next) => void files.init(next),
 );
+// A team switch changes the caller's role and the server's visibility, so the
+// listing must reload rather than keep the previous team's directory.
+watch(
+  () => teams.activeTeamId,
+  () => void files.reload(),
+);
 onMounted(() => void files.init(props.serverId));
+
+// ── Dialog state ──────────────────────────────────────────────────────────
+const createOpen = ref(false);
+const createKind = ref<NameKind>("directory");
+const renameOpen = ref(false);
+const renameTarget = ref<FilesEntry | null>(null);
+const deleteOpen = ref(false);
+const transferOpen = ref(false);
+const transferMode = ref<"move" | "copy">("move");
+const uploadOpen = ref(false);
+const droppedFiles = ref<File[]>([]);
+const dragActive = ref(false);
+/** actionTargets are the entries the delete/transfer dialogs act on. */
+const actionTargets = ref<FilesEntry[]>([]);
 
 /** filterModel binds the NInput to the store's client-side filter. */
 const filterModel = computed<string>({
@@ -71,6 +113,11 @@ const selectedRoot = computed<string>({
 /** hasSelectedFiles gates the bulk download action. */
 const hasSelectedFiles = computed<boolean>(() =>
   files.selectedEntries.some((entry) => entry.kind === "file"),
+);
+
+/** selection is the current selection reduced to writable-safe entries. */
+const selection = computed<FilesEntry[]>(() =>
+  files.selectedEntries.filter(isSelectable),
 );
 
 /** footSummary is the "12 entries · 4 folders · 6 files…" footer line. */
@@ -163,10 +210,107 @@ async function downloadSelected(): Promise<void> {
     );
   }
 }
+
+// ── Dialog openers ────────────────────────────────────────────────────────
+function openCreate(kind: NameKind): void {
+  createKind.value = kind;
+  createOpen.value = true;
+}
+
+function openRename(entry: FilesEntry): void {
+  renameTarget.value = entry;
+  renameOpen.value = true;
+}
+
+function openDelete(entries: FilesEntry[]): void {
+  actionTargets.value = entries;
+  deleteOpen.value = true;
+}
+
+function openTransfer(mode: "move" | "copy", entries: FilesEntry[]): void {
+  transferMode.value = mode;
+  actionTargets.value = entries;
+  transferOpen.value = true;
+}
+
+function openUpload(dropped: File[] = []): void {
+  droppedFiles.value = dropped;
+  uploadOpen.value = true;
+}
+
+/** onDrop opens the upload dialog queued with the dropped files. */
+function onDrop(event: DragEvent): void {
+  dragActive.value = false;
+  const list = event.dataTransfer?.files;
+  if (list && list.length > 0) {
+    openUpload(Array.from(list));
+  }
+}
+
+/** pasteAction applies the clipboard into the current directory. */
+async function pasteAction(): Promise<void> {
+  await files.paste();
+}
+
+/** rowMenu builds the per-row actions menu. */
+function rowMenu(entry: FilesEntry): Array<{ label: string; key: string; disabled?: boolean }> {
+  const options: Array<{ label: string; key: string; disabled?: boolean }> = [];
+  if (entry.kind === "directory") {
+    options.push({ label: String(t("files.menu.open")), key: "open" });
+  } else if (entry.kind === "file") {
+    options.push({
+      label: String(t("files.menu.download")),
+      key: "download",
+      disabled: !files.canReadContent,
+    });
+  }
+  options.push(
+    { label: String(t("files.actions.rename")), key: "rename", disabled: !files.canWrite },
+    { label: String(t("files.actions.move")), key: "move", disabled: !files.canWrite },
+    { label: String(t("files.actions.copy")), key: "copy", disabled: !files.canWrite },
+    { label: String(t("files.actions.cut")), key: "cut", disabled: !files.canWrite },
+    { label: String(t("common.actions.delete")), key: "delete", disabled: !files.canWrite },
+  );
+  return options;
+}
+
+/** onRowMenu dispatches one row action. */
+function onRowMenu(key: string, entry: FilesEntry): void {
+  switch (key) {
+    case "open":
+      void files.openDirectory(entry.name);
+      break;
+    case "download":
+      void startDownload(entry);
+      break;
+    case "rename":
+      openRename(entry);
+      break;
+    case "move":
+      openTransfer("move", [entry]);
+      break;
+    case "copy":
+      openTransfer("copy", [entry]);
+      break;
+    case "cut":
+      files.toggleSelection(entry.name);
+      files.cutSelection();
+      break;
+    case "delete":
+      openDelete([entry]);
+      break;
+  }
+}
 </script>
 
 <template>
-  <NCard class="files-browser">
+  <NCard
+    class="files-browser"
+    :class="{ 'is-dragging': dragActive }"
+    @dragover.prevent="dragActive = true"
+    @dragleave.prevent="dragActive = false"
+    @drop.prevent="onDrop"
+  >
     <template #header>
       <div class="fm-card-head">
         <h3 class="fm-card-title">{{ $t("files.browser.heading") }}</h3>
@@ -206,6 +350,43 @@ async function downloadSelected(): Promise<void> {
         </div>
       </div>
     </template>
+
+    <div v-if="files.canWrite" class="fm-toolbar">
+      <NButton size="small" secondary :disabled="files.acting" @click="openCreate('file')">
+        <template #icon>
+          <FilePlus2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.actions.newFile") }}
+      </NButton>
+      <NButton size="small" secondary :disabled="files.acting" @click="openCreate('directory')">
+        <template #icon>
+          <FolderPlus :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.actions.newFolder") }}
+      </NButton>
+      <NButton size="small" type="primary" :disabled="files.acting" @click="openUpload()">
+        <template #icon>
+          <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.actions.upload") }}
+      </NButton>
+      <NButton
+        v-if="files.hasClipboard"
+        size="small"
+        secondary
+        :disabled="files.acting"
+        @click="() => void pasteAction()"
+      >
+        <template #icon>
+          <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.actions.paste") }}
+        <span class="muted">({{ files.clipboard?.names.length ?? 0 }})</span>
+      </NButton>
+      <span v-if="files.hasClipboard" class="small muted clipboard-hint">
+        {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
+      </span>
+    </div>
 
     <div class="fm-bar">
       <nav class="fm-path" :aria-label="$t('files.browser.parent')">
@@ -271,8 +452,37 @@ async function downloadSelected(): Promise<void> {
           :title="files.canReadContent ? '' : $t('files.browser.fileNeedsRole')"
           @click="downloadSelected()"
         >
+          <template #icon>
+            <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
           {{ $t("files.browser.downloadSelected") }}
         </NButton>
+        <template v-if="files.canWrite">
+          <NButton size="small" secondary :disabled="files.acting" @click="openTransfer('move', selection)">
+            <template #icon>
+              <Folder :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ $t("files.actions.move") }}
+          </NButton>
+          <NButton size="small" secondary :disabled="files.acting" @click="openTransfer('copy', selection)">
+            <template #icon>
+              <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ $t("files.actions.copy") }}
+          </NButton>
+          <NButton size="small" secondary :disabled="files.acting" @click="files.cutSelection()">
+            <template #icon>
+              <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ $t("files.actions.cut") }}
+          </NButton>
+          <NButton size="small" type="error" secondary :disabled="files.acting" @click="openDelete(selection)">
+            <template #icon>
+              <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ $t("common.actions.delete") }}
+          </NButton>
+        </template>
         <NButton size="small" quaternary @click="files.clearSelection()">
           {{ $t("files.browser.clear") }}
         </NButton>
@@ -293,7 +503,16 @@ async function downloadSelected(): Promise<void> {
       <h4>{{ $t("files.browser.loading") }}</h4>
     </div>
 
-    <div v-else-if="files.error" class="empty fm-state">
+    <div v-else-if="files.permissionDenied" class="empty fm-state">
+      <Lock :size="26" :stroke-width="1.6" aria-hidden="true" />
+      <h4>{{ $t("files.browser.permissionTitle") }}</h4>
+      <p class="small">{{ $t("files.browser.permissionHint") }}</p>
+      <NButton size="small" secondary class="fm-state-action" @click="files.retry()">
+        {{ $t("common.actions.retry") }}
+      </NButton>
+    </div>
+
+    <div v-else-if="files.error && files.entries.length === 0" class="empty fm-state">
       <CircleAlert class="fm-danger" :size="26" :stroke-width="1.6" aria-hidden="true" />
       <h4 class="fm-danger">{{ $t("files.browser.errorTitle") }}</h4>
       <p class="small">{{ files.error }}</p>
@@ -309,6 +528,16 @@ async function downloadSelected(): Promise<void> {
     </div>
 
     <template v-else>
+      <div v-if="files.error" class="callout fm-inline-error" role="status">
+        <CircleAlert class="fm-danger" :size="18" :stroke-width="1.8" aria-hidden="true" />
+        <div class="grow">
+          <p class="small">{{ files.error }}</p>
+        </div>
+        <NButton size="tiny" secondary @click="files.retry()">
+          {{ $t("common.actions.retry") }}
+        </NButton>
+      </div>
+
       <div v-if="files.loaded && !files.writable && files.rootName !== ''" class="callout fm-readonly">
         <Lock :size="18" :stroke-width="1.8" aria-hidden="true" />
         <div>
@@ -414,6 +643,44 @@ async function downloadSelected(): Promise<void> {
                   <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </template>
               </NButton>
+              <NButton
+                v-if="files.canWrite && isSelectable(entry)"
+                size="tiny"
+                quaternary
+                :aria-label="$t('files.actions.rename')"
+                @click="openRename(entry)"
+              >
+                <template #icon>
+                  <Pencil :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+              </NButton>
+              <NButton
+                v-if="files.canWrite && isSelectable(entry)"
+                size="tiny"
+                quaternary
+                :aria-label="$t('files.browser.deleteEntry', { name: entry.name })"
+                @click="openDelete([entry])"
+              >
+                <template #icon>
+                  <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+              </NButton>
+              <NDropdown
+                trigger="click"
+                placement="bottom-end"
+                :options="rowMenu(entry)"
+                @select="(key: string) => onRowMenu(key, entry)"
+              >
+                <NButton
+                  size="tiny"
+                  quaternary
+                  :aria-label="$t('files.browser.moreActions', { name: entry.name })"
+                >
+                  <template #icon>
+                    <MoreVertical :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                </NButton>
+              </NDropdown>
             </div>
           </div>
         </div>
@@ -465,12 +732,32 @@ async function downloadSelected(): Promise<void> {
         <span>{{ $t("files.browser.freeSpace", { free: formatBytes(files.freeBytes) }) }}</span>
       </div>
     </template>
+
+    <div v-if="dragActive" class="fm-drop-overlay" aria-hidden="true">
+      <Upload :size="26" :stroke-width="1.6" />
+      <span>{{ $t("files.dialogs.uploadDrop") }}</span>
+    </div>
+
+    <CreateEntryDialog v-model:show="createOpen" :kind="createKind" />
+    <RenameEntryDialog v-model:show="renameOpen" :entry="renameTarget" />
+    <DeleteEntriesDialog v-model:show="deleteOpen" :entries="actionTargets" />
+    <TransferDialog
+      v-model:show="transferOpen"
+      :mode="transferMode"
+      :entries="actionTargets"
+    />
+    <UploadDialog v-model:show="uploadOpen" :initial-files="droppedFiles" />
+    <ConflictDialog />
   </NCard>
 </template>
 
 <style scoped>
 /* Ported from docs/design/assets/gotham-views.css (FILE MANAGER section) and
  * docs/design/files.html; only tokens from styles/tokens.css are used. */
+.files-browser {
+  position: relative;
+}
+
 .fm-card-head {
   display: flex;
   align-items: center;
@@ -494,6 +781,18 @@ async function downloadSelected(): Promise<void> {
 
 .fm-root-select {
   width: 220px;
+}
+
+.fm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.clipboard-hint {
+  margin-left: var(--space-1);
 }
 
 .segmented {
@@ -634,6 +933,19 @@ async function downloadSelected(): Promise<void> {
   margin-bottom: var(--space-3);
 }
 
+.fm-inline-error {
+  margin-bottom: var(--space-3);
+  align-items: center;
+}
+
+.fm-inline-error .grow {
+  flex: 1 1 auto;
+}
+
+.fm-inline-error p {
+  margin: 0;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -645,7 +957,7 @@ async function downloadSelected(): Promise<void> {
 .fm-row {
   display: grid;
   /* Leading checkbox column, then the type icon beside the name. */
-  grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 124px;
+  grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 168px;
   gap: var(--space-3);
   align-items: center;
   padding: 7px var(--space-3);
@@ -902,6 +1214,23 @@ async function downloadSelected(): Promise<void> {
 
 .fm-foot .grow {
   flex: 1 1 auto;
+}
+
+.fm-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--surface) 82%, transparent);
+  color: var(--accent-ink);
+  font-weight: 500;
+  pointer-events: none;
 }
 
 @media (hover: none) {

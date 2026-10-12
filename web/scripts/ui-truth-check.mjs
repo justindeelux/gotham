@@ -386,6 +386,7 @@ async function main() {
   const databases = await loadModule("../src/features/databases/api/databases.ts");
   const applications = await loadModule("../src/features/applications/api/applications.ts");
   const dashboard = await loadModule("../src/features/dashboard/utils/dashboard.ts");
+  const filesUtils = await loadModule("../src/features/files/utils/files.ts");
 
   console.log("shared usage thresholds (JUS-10)");
   await check("warn at 60 and danger at 80", () => {
@@ -1303,6 +1304,32 @@ async function main() {
   await databases.cleanup();
   await applications.cleanup();
   await dashboard.cleanup();
+
+  console.log("files name rules (P18 step 7)");
+  await check("accepts a plain trimmed segment and rejects the unsafe ones", () => {
+    const { validateEntryName, normalizeEntryName, MAX_NAME_BYTES } =
+      filesUtils.module;
+    assert(validateEntryName("app.yaml") === null, "plain name accepted");
+    assert(validateEntryName("  uploads  ") === null, "trimmed name accepted");
+    assert(normalizeEntryName("  uploads  ") === "uploads", "name trims");
+    assert(validateEntryName("") === "files.name.required", "empty rejected");
+    assert(validateEntryName("   ") === "files.name.required", "blank rejected");
+    assert(validateEntryName(".") === "files.name.reserved", "dot rejected");
+    assert(validateEntryName("..") === "files.name.reserved", "dotdot rejected");
+    assert(validateEntryName("a/b") === "files.name.invalid", "slash rejected");
+    assert(validateEntryName("a\\b") === "files.name.invalid", "backslash rejected");
+    assert(validateEntryName("a\u0000b") === "files.name.invalid", "NUL rejected");
+    assert(
+      validateEntryName("a".repeat(MAX_NAME_BYTES)) === null,
+      "255 bytes accepted",
+    );
+    assert(
+      validateEntryName("a".repeat(MAX_NAME_BYTES + 1)) === "files.name.tooLong",
+      "256 bytes rejected",
+    );
+  });
+
+  await filesUtils.cleanup();
 
   const failed = results.filter((r) => !r.ok);
   console.log(

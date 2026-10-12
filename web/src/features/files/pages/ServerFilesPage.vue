@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NSpace } from "naive-ui";
-import { computed, onMounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 
@@ -17,29 +17,35 @@ const serverId = computed<string>(() => String(route.params.id ?? ""));
 const server = ref<Server | null>(null);
 
 /**
- * serverName prefers the cached list row and falls back to one detail read, so
- * the breadcrumb and the file browser never block on the server header.
+ * serverName prefers a detail row for the *current* server id, then the cached
+ * list row, then the raw id. It is keyed on serverId so a route-param change
+ * can never reuse the previous server's name.
  */
 const serverName = computed<string>(() => {
-  if (server.value) {
+  if (server.value && server.value.id === serverId.value) {
     return server.value.name;
   }
   const cached = serversStore.servers.find((item) => item.id === serverId.value);
   return cached?.name ?? serverId.value;
 });
 
-onMounted(async () => {
+/** loadServer resolves the current server's name as the route param changes. */
+async function loadServer(): Promise<void> {
   const cached = serversStore.servers.find((item) => item.id === serverId.value);
   if (cached) {
     server.value = cached;
     return;
   }
+  server.value = null;
   try {
     server.value = await getServer(serverId.value);
   } catch {
     // The browser surfaces its own errors; the crumb just shows the id.
+    server.value = null;
   }
-});
+}
+
+watch(serverId, () => void loadServer(), { immediate: true });
 </script>
 
 <template>

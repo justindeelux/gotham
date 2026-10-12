@@ -22,8 +22,11 @@ import {
   formatTimestamp,
   isSelectable,
   joinPath,
+  MAX_NAME_BYTES,
+  normalizeEntryName,
   parentPath,
   sortEntries,
+  validateEntryName,
 } from "@/features/files/utils/files";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
 
@@ -233,5 +236,38 @@ describe("entry predicates and labels", () => {
       symlink: 1,
       special: 1,
     });
+  });
+});
+
+describe("validateEntryName", () => {
+  it("accepts a plain name and trims surrounding whitespace", () => {
+    expect(validateEntryName("app.yaml")).toBeNull();
+    expect(validateEntryName("  uploads  ")).toBeNull();
+    expect(normalizeEntryName("  uploads  ")).toBe("uploads");
+  });
+
+  it("rejects empty and whitespace-only names", () => {
+    expect(validateEntryName("")).toBe("files.name.required");
+    expect(validateEntryName("   ")).toBe("files.name.required");
+  });
+
+  it("rejects the dot segments", () => {
+    expect(validateEntryName(".")).toBe("files.name.reserved");
+    expect(validateEntryName("..")).toBe("files.name.reserved");
+  });
+
+  it("rejects slashes, backslashes and NUL", () => {
+    expect(validateEntryName("a/b")).toBe("files.name.invalid");
+    expect(validateEntryName("a\\b")).toBe("files.name.invalid");
+    expect(validateEntryName("a\u0000b")).toBe("files.name.invalid");
+  });
+
+  it("rejects a name over the 255-byte ceiling", () => {
+    expect(validateEntryName("a".repeat(MAX_NAME_BYTES))).toBeNull();
+    expect(validateEntryName("a".repeat(MAX_NAME_BYTES + 1))).toBe(
+      "files.name.tooLong",
+    );
+    // Bytes, not code points: a 4-byte emoji overflows sooner.
+    expect(validateEntryName("😀".repeat(64))).toBe("files.name.tooLong");
   });
 });

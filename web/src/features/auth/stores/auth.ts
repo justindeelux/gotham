@@ -19,6 +19,7 @@ import {
 import { useApplicationsStore, useGitHubAppStore, useProvidersStore } from "@/features/applications";
 import { useBackupsStore } from "@/features/databases";
 import { useDatabasesStore } from "@/features/databases";
+import { useFilesStore } from "@/features/files";
 import { useNotificationsStore } from "@/features/notifications";
 import { useProjectsStore } from "@/features/projects";
 import { useProxyStore } from "@/features/domains";
@@ -114,7 +115,7 @@ export const useAuthStore = defineStore("auth", () => {
   /**
    * clearSession forgets the session in memory and in localStorage, and
    * drops every user-scoped Pinia cache (teams, servers, applications,
-   * databases, notifications, services, backups, providers, templates,
+   * databases, files, notifications, services, backups, providers, templates,
    * proxy) so the next sign-in cannot render the previous account's data —
    * notably the sidebar role, which the teams store would otherwise keep
    * serving from its loaded cache.
@@ -142,6 +143,7 @@ export const useAuthStore = defineStore("auth", () => {
       () => useServersStore().reset(),
       () => useApplicationsStore().reset(),
       () => useDatabasesStore().reset(),
+      () => useFilesStore().reset(),
       () => useNotificationsStore().reset(),
       () => useProjectsStore().reset(),
       () => useServicesStore().reset(),

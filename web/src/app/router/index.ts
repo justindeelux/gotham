@@ -65,6 +65,18 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.serverContainers", requiresAuth: true },
       },
       {
+        path: "files",
+        name: "files",
+        component: () => import("@/features/files/pages/FilesPage.vue"),
+        meta: { titleKey: "titles.files", requiresAuth: true },
+      },
+      {
+        path: "servers/:id/files",
+        name: "server-files",
+        component: () => import("@/features/files/pages/ServerFilesPage.vue"),
+        meta: { titleKey: "titles.serverFiles", requiresAuth: true },
+      },
+      {
         path: "projects",
         name: "projects",
         component: () => import("@/features/projects/pages/ProjectsPage.vue"),

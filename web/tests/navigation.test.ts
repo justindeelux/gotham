@@ -19,6 +19,18 @@ describe("activeNavKey", () => {
     expect(activeNavKey("/settings/notifications")).toBe("notifications");
   });
 
+  it("highlights File manager on both file routes (JUS-110)", () => {
+    expect(activeNavKey("/files")).toBe("files");
+    expect(activeNavKey("/servers/abc/files")).toBe("files");
+    // The rest of a server's pages stay on the Servers entry.
+    expect(activeNavKey("/servers/abc")).toBe("servers");
+    expect(activeNavKey("/servers/abc/containers")).toBe("servers");
+    const files = navSections
+      .flatMap((section) => section.items)
+      .find((item) => item.key === "files");
+    expect(files?.to).toBe("files");
+  });
+
   it("highlights nothing on profile: no sidebar entry exists", () => {
     // Profile is reached from the MeCard menu; the key matches no nav item,
     // so AppSidebar renders no is-active entry instead of the wrong one.

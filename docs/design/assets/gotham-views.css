@@ -210,10 +210,10 @@
 .fm-tile:hover { border-color: var(--accent); }
 .fm-tile.is-selected { border-color: var(--accent); background: var(--accent-soft); }
 .fm-tile .fm-mark { width: 34px; height: 34px; }
-/* Nhãn trong ô lưới xếp hai dòng như trong hàng danh sách. */
+/* Grid tile labels stack on two lines, mirroring the list rows. */
 .fm-tile .fm-label { display: block; }
 .fm-tile .fm-label b { display: block; font-weight: 500; color: var(--fg); font-size: var(--text-xs); }
-.fm-tile .fm-label span { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+.fm-tile .fm-label span { display: block; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); }
 .fm-tile .fm-actions {
   position: absolute; right: 6px; top: 6px; padding: 2px;
   background: var(--float); border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -245,13 +245,13 @@
 }
 .fm-preview svg { width: 30px; height: 30px; color: var(--meta); margin: 0 auto var(--space-2); }
 .fm-bar .search { min-width: 200px; }
-/* Hộp thư mục trống / đang tải / lỗi dùng .empty có sẵn. */
+/* Empty / loading / error boxes reuse the existing .empty component. */
 .fm-spinner {
   width: 22px; height: 22px; border-radius: var(--radius-pill);
   border: 2px solid var(--border-soft); border-top-color: var(--accent);
   animation: spin 700ms linear infinite;
 }
-/* Menu ngữ cảnh của một hàng: mở bằng chuột phải hoặc nút ⋯. */
+/* Row context menu: opened by the ⋯ button. */
 .fm-demo { position: relative; }
 .fm-menu {
   position: absolute; top: 46px; right: 8px; z-index: 40; min-width: 190px;

@@ -20,13 +20,21 @@ import (
 //	})
 //
 // Declaring the interface locally keeps this package testable with a mock and
-// independently mergeable, exactly like containers.DockerClient. The write
-// RPCs (Write, Copy, Delete, Mkdir, Rename, Chmod) join it in step 4.
+// independently mergeable, exactly like containers.DockerClient. Chmod is
+// deliberately absent: it stays Unimplemented on the agent until step 9a.
 type FileClient interface {
 	ListRoots(ctx context.Context, in *agentv1.ListRootsRequest, opts ...grpc.CallOption) (*agentv1.ListRootsResponse, error)
 	List(ctx context.Context, in *agentv1.ListRequest, opts ...grpc.CallOption) (*agentv1.ListResponse, error)
 	Stat(ctx context.Context, in *agentv1.StatRequest, opts ...grpc.CallOption) (*agentv1.StatResponse, error)
 	Read(ctx context.Context, in *agentv1.ReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ReadChunk], error)
+	// Write is a client stream: the first message is the header (path, size,
+	// expect_etag, overwrite, mode), the following messages carry the body in
+	// bounded chunks, and Write produces the committed entry.
+	Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[agentv1.WriteRequest, agentv1.WriteResponse], error)
+	Copy(ctx context.Context, in *agentv1.CopyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error)
+	Delete(ctx context.Context, in *agentv1.DeleteRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error)
+	Mkdir(ctx context.Context, in *agentv1.MkdirRequest, opts ...grpc.CallOption) (*agentv1.MkdirResponse, error)
+	Rename(ctx context.Context, in *agentv1.RenameRequest, opts ...grpc.CallOption) (*agentv1.RenameResponse, error)
 }
 
 // Compile-time assertion that the generated client satisfies the local

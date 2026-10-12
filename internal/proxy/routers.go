@@ -199,7 +199,7 @@ func (s *SyncService) listNodeRouters(ctx context.Context, apps []ProxiedApplica
 	diagnostics = append(diagnostics, serviceDiagnostics...)
 	redirects, redirectDiagnostics := redirectsForServer(apps, rules, serverID, serviceHosts...)
 	diagnostics = append(diagnostics, redirectDiagnostics...)
-	cfg := BuildConfig(routes, redirects, providers, s.acmeEmail, s.caServer)
+	cfg := s.buildConfig(routes, redirects, providers)
 	files, err := Generate(cfg, s.format)
 	if err != nil {
 		return nil, state, err

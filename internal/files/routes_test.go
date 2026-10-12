@@ -33,12 +33,41 @@ type fakeService struct {
 	download    *Download
 	downloadErr error
 	calls       []string
+
+	writeResult  WriteResult
+	writeErr     error
+	writeHook    func(WriteRequest) (WriteResult, error)
+	seenWrite    *WriteRequest
+	writeBody    []byte
+	authorizeErr error
+	mkdirEntry   Entry
+	mkdirErr     error
+	createEntry  Entry
+	createErr    error
+	renameEntry  Entry
+	renameErr    error
+	copyEntry    Entry
+	copyErr      error
+	deleteErr    error
 }
 
 func (f *fakeService) record(call string) {
 	f.mu.Lock()
 	f.calls = append(f.calls, call)
 	f.mu.Unlock()
+}
+
+// wrote reports whether the service's Write was called, safe to read after a
+// handler ran on another goroutine.
+func (f *fakeService) wrote() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, call := range f.calls {
+		if call == "write" {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeService) Roots(_ context.Context, _ uuid.UUID) ([]Root, error) {
@@ -69,6 +98,53 @@ func (f *fakeService) IssueDownloadTicket(_ context.Context, _ uuid.UUID, _, _ s
 func (f *fakeService) Download(_ context.Context, _ uuid.UUID, _ string) (*Download, error) {
 	f.record("download")
 	return f.download, f.downloadErr
+}
+
+func (f *fakeService) AuthorizeWrite(_ context.Context, _ uuid.UUID) error {
+	f.record("authorize")
+	return f.authorizeErr
+}
+
+func (f *fakeService) Write(_ context.Context, _ uuid.UUID, req WriteRequest, body io.Reader) (WriteResult, error) {
+	f.record("write")
+	f.mu.Lock()
+	f.seenWrite = &req
+	f.mu.Unlock()
+	if body != nil {
+		data, _ := io.ReadAll(body)
+		f.mu.Lock()
+		f.writeBody = data
+		f.mu.Unlock()
+	}
+	if f.writeHook != nil {
+		return f.writeHook(req)
+	}
+	return f.writeResult, f.writeErr
+}
+
+func (f *fakeService) Mkdir(_ context.Context, _ uuid.UUID, _, _ string, _ uint32) (Entry, error) {
+	f.record("mkdir")
+	return f.mkdirEntry, f.mkdirErr
+}
+
+func (f *fakeService) Create(_ context.Context, _ uuid.UUID, _, _ string, _ uint32) (Entry, error) {
+	f.record("create")
+	return f.createEntry, f.createErr
+}
+
+func (f *fakeService) Rename(_ context.Context, _ uuid.UUID, _, _, _ string, _ bool) (Entry, error) {
+	f.record("rename")
+	return f.renameEntry, f.renameErr
+}
+
+func (f *fakeService) Copy(_ context.Context, _ uuid.UUID, _, _, _ string, _ bool) (Entry, error) {
+	f.record("copy")
+	return f.copyEntry, f.copyErr
+}
+
+func (f *fakeService) Delete(_ context.Context, _ uuid.UUID, _, _ string, _ bool) error {
+	f.record("delete")
+	return f.deleteErr
 }
 
 // passthroughAuth stands in for RequireAuth in route tests.

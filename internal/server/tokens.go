@@ -310,6 +310,12 @@ var sensitiveReadSuffixes = []string{"/credentials", "/files/content"}
 // needs the deploy scope, and secret-bearing reads need deploy too. It sits
 // between RequireAuth (which stores the token's scopes) and the team chain, and
 // a JWT session holds every scope, so the SPA is unaffected.
+//
+// The method rule is the mutating gate: every file-manager write route (PUT
+// /files/content, POST /files/upload|mkdir|create|rename|move|copy, DELETE
+// /files/entry) is a non-GET method, so a read-scoped API token is refused with
+// 403 before the handler runs. There is no path-based bypass to defend against,
+// because the decision is the method, not the path.
 func requireResourceScopes(next http.Handler) http.Handler {
 	read := RequireScopes(auth.ScopeRead)(next)
 	deploy := RequireScopes(auth.ScopeDeploy)(next)

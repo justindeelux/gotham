@@ -233,6 +233,24 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 		// The ticket mint is deploy-gated by method.
 		"read cannot mint download ticket": {http.MethodPost, "/api/v1/servers/x/files/download-ticket", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"deploy mints download ticket":     {http.MethodPost, "/api/v1/servers/x/files/download-ticket", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		// Every file write route is deploy-gated by method (JUS-108).
+		"read cannot put file content": {http.MethodPut, "/api/v1/servers/x/files/content", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy puts file content":     {http.MethodPut, "/api/v1/servers/x/files/content", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"jwt puts file content":        {http.MethodPut, "/api/v1/servers/x/files/content", nil, false, http.StatusOK},
+		"read cannot upload":           {http.MethodPost, "/api/v1/servers/x/files/upload", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy uploads":               {http.MethodPost, "/api/v1/servers/x/files/upload", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"read cannot mkdir":            {http.MethodPost, "/api/v1/servers/x/files/mkdir", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot create":           {http.MethodPost, "/api/v1/servers/x/files/create", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot rename":           {http.MethodPost, "/api/v1/servers/x/files/rename", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot move":             {http.MethodPost, "/api/v1/servers/x/files/move", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot copy":             {http.MethodPost, "/api/v1/servers/x/files/copy", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot delete entry":     {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy deletes entry":         {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		// Bypass variants: the method decides, so a trailing slash, a doubled
+		// slash or a query string cannot downgrade a write to the read scope.
+		"read cannot mkdir trailing slash": {http.MethodPost, "/api/v1/servers/x/files/mkdir/", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot mkdir with query":     {http.MethodPost, "/api/v1/servers/x/files/mkdir?root=r&path=p", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot upload double slash":  {http.MethodPost, "/api/v1/servers/x/files//upload", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"jwt mutates":                      {http.MethodPost, "/api/v1/servers", nil, false, http.StatusOK},
 	}
 
@@ -279,6 +297,54 @@ func TestFilesContentScopeGate(t *testing.T) {
 	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+deployToken)
 	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
 		t.Fatalf("deploy token content = %d, want the scope gate to pass", rec.Code)
+	}
+}
+
+// TestFilesWriteScopeGate proves the real mounted chain deploy-gates every file
+// write route: a read-scoped API token is refused with "insufficient scope",
+// while a deploy token passes the scope gate.
+func TestFilesWriteScopeGate(t *testing.T) {
+	s, tokens := newScopeTestServer(t)
+	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
+	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	id := uuid.New()
+	base := "/api/v1/servers/" + id.String() + "/files/"
+
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"put content", http.MethodPut, base + "content?root=volumes&path=a", ""},
+		{"upload", http.MethodPost, base + "upload?root=volumes&path=", ""},
+		{"mkdir", http.MethodPost, base + "mkdir", `{"root":"volumes","path":"d"}`},
+		{"create", http.MethodPost, base + "create", `{"root":"volumes","path":"a"}`},
+		{"rename", http.MethodPost, base + "rename", `{"root":"volumes","source":"a","destination":"b"}`},
+		{"move", http.MethodPost, base + "move", `{"root":"volumes","source":"a","destination":"b"}`},
+		{"copy", http.MethodPost, base + "copy", `{"root":"volumes","source":"a","destination":"b"}`},
+		{"delete", http.MethodDelete, base + "entry?root=volumes&path=a", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+readToken)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("read token = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+			}
+			var body apiError
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body: %v", err)
+			}
+			if body.Message != "insufficient scope" {
+				t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
+			}
+			// The deploy token passes the scope gate; the unwired fake agent
+			// then fails downstream, which is any status other than a refusal.
+			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+deployToken)
+			if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+				t.Fatalf("deploy token = %d, want the scope gate to pass (body %s)", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

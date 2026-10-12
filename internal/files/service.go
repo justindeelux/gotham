@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,20 @@ const FeatureEnv = "FEATURE_FILES"
 // file bodies by accident.
 func Enabled() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv(FeatureEnv)), "true")
+}
+
+// MaxUploadEnv optionally overrides the write/upload body ceiling in bytes; an
+// unset or invalid value keeps DefaultMaxUploadBytes. It is a control-plane
+// guard, independent of the agent's own GOTHAM_AGENT_FILE_MAX_UPLOAD.
+const MaxUploadEnv = "FILES_MAX_UPLOAD_BYTES"
+
+// maxUploadFromEnv parses MaxUploadEnv; 0 lets NewService apply the default.
+func maxUploadFromEnv() int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(os.Getenv(MaxUploadEnv)), 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
 }
 
 const (
@@ -121,6 +136,25 @@ type FileService interface {
 	// download route (a native browser download cannot send the bearer token).
 	IssueDownloadTicket(ctx context.Context, serverID uuid.UUID, root, path string) (string, error)
 	Download(ctx context.Context, serverID uuid.UUID, ticket string) (*Download, error)
+
+	// Write creates or replaces one file. The caller declares the exact body
+	// size; body must yield exactly that many bytes, or the call fails without
+	// committing anything (a truncated upload never replaces the target).
+	Write(ctx context.Context, serverID uuid.UUID, req WriteRequest, body io.Reader) (WriteResult, error)
+	// AuthorizeWrite checks the caller may mutate the server before a streamed
+	// upload begins, so a forbidden caller is refused once (403) instead of
+	// once per file.
+	AuthorizeWrite(ctx context.Context, serverID uuid.UUID) error
+	// Mkdir creates one directory (exclusive: an existing name is a conflict).
+	Mkdir(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (Entry, error)
+	// Create creates an empty file exclusively (an existing name is a conflict).
+	Create(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (Entry, error)
+	// Rename renames or moves one entry within a single root.
+	Rename(ctx context.Context, serverID uuid.UUID, root, source, destination string, overwrite bool) (Entry, error)
+	// Copy copies one entry within a single root and returns the new entry.
+	Copy(ctx context.Context, serverID uuid.UUID, root, source, destination string, overwrite bool) (Entry, error)
+	// Delete removes one entry, recursively when requested.
+	Delete(ctx context.Context, serverID uuid.UUID, root, path string, recursive bool) error
 }
 
 // Config wires a Service. Registry is required; Dial may be nil until the mTLS
@@ -134,6 +168,9 @@ type Config struct {
 	TicketTTL       time.Duration
 	// MaxContentBytes overrides the editor ceiling; 0 keeps MaxContentBytes.
 	MaxContentBytes int64
+	// MaxUploadBytes overrides the request-body ceiling for writes and uploads
+	// (413 above it); 0 keeps DefaultMaxUploadBytes.
+	MaxUploadBytes int64
 	// Now overrides the clock the ticket store uses; nil uses time.Now.
 	Now func() time.Time
 }
@@ -147,6 +184,7 @@ type Service struct {
 	rpcTimeout      time.Duration
 	transferTimeout time.Duration
 	maxContentBytes int64
+	maxUploadBytes  int64
 	tickets         *ticketStore
 }
 
@@ -168,6 +206,10 @@ func NewService(cfg Config) *Service {
 	if maxContent <= 0 {
 		maxContent = MaxContentBytes
 	}
+	maxUpload := cfg.MaxUploadBytes
+	if maxUpload <= 0 {
+		maxUpload = DefaultMaxUploadBytes
+	}
 	ttl := cfg.TicketTTL
 	if ttl <= 0 {
 		ttl = defaultTicketTTL
@@ -179,17 +221,21 @@ func NewService(cfg Config) *Service {
 		rpcTimeout:      rpcTimeout,
 		transferTimeout: transferTimeout,
 		maxContentBytes: maxContent,
+		maxUploadBytes:  maxUpload,
 		tickets:         newTicketStore(ttl, cfg.Now),
 	}
 }
 
 // NewDefaultService builds the production Service for the HTTP wiring. It
 // returns nil when registry is nil so callers can skip mounting the routes.
-func NewDefaultService(registry Registry) *Service {
+// logger is the control plane's configured logger; nil falls back to
+// slog.Default, so the file audit trail is written through the same logger as
+// the rest of the server instead of the process default.
+func NewDefaultService(registry Registry, logger *slog.Logger) *Service {
 	if registry == nil {
 		return nil
 	}
-	return NewService(Config{Registry: registry})
+	return NewService(Config{Registry: registry, Logger: logger, MaxUploadBytes: maxUploadFromEnv()})
 }
 
 // SetDial installs (or replaces) the agent dialer. It is the merge-time seam
@@ -198,6 +244,18 @@ func (s *Service) SetDial(dial DialFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dial = dial
+}
+
+// MaxUploadBytes reports the write/upload body ceiling, so the HTTP layer can
+// bound a request body to match the service.
+func (s *Service) MaxUploadBytes() int64 {
+	return s.maxUploadBytes
+}
+
+// TransferTimeout reports the budget for a long transfer, so the HTTP layer can
+// extend the connection read deadline to match it.
+func (s *Service) TransferTimeout() time.Duration {
+	return s.transferTimeout
 }
 
 // Roots returns the node's allow-listed roots. Any team member may read them.
@@ -231,7 +289,7 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID, root, path, curs
 	if err := validateRoot(root); err != nil {
 		return Listing{}, err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return Listing{}, err
 	}
 	if err := validateFileArg("cursor", cursor); err != nil {
@@ -263,7 +321,7 @@ func (s *Service) Stat(ctx context.Context, serverID uuid.UUID, root, path strin
 	if err := validateRoot(root); err != nil {
 		return Entry{}, err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return Entry{}, err
 	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, false)
@@ -288,14 +346,15 @@ func (s *Service) Stat(ctx context.Context, serverID uuid.UUID, root, path strin
 // hold secrets such as 0600 compose environment files. A file larger than the
 // editor ceiling answers ErrTooLarge (413) and a binary/invalid-UTF-8 body
 // answers ErrNotEditable (415); both should be offered as a download instead.
-func (s *Service) Content(ctx context.Context, serverID uuid.UUID, root, path string) (Content, error) {
+func (s *Service) Content(ctx context.Context, serverID uuid.UUID, root, path string) (content Content, err error) {
+	defer func() { s.audit(ctx, serverID, "read_content", root, path, err) }()
 	if !Enabled() {
 		return Content{}, ErrDisabled
 	}
 	if err := validateRoot(root); err != nil {
 		return Content{}, err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return Content{}, err
 	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, true)
@@ -349,7 +408,7 @@ func (s *Service) IssueDownloadTicket(ctx context.Context, serverID uuid.UUID, r
 	if err := validateRoot(root); err != nil {
 		return "", err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return "", err
 	}
 	server, err := s.resolve(ctx, serverID, true)
@@ -371,7 +430,7 @@ func (s *Service) IssueDownloadTicket(ctx context.Context, serverID uuid.UUID, r
 // one (server, root, path). A missing, expired or already-consumed ticket, or a
 // ticket for a different server, answers ErrNotFound; a wrong-server request
 // leaves the ticket intact rather than burning it.
-func (s *Service) Download(ctx context.Context, serverID uuid.UUID, ticketID string) (*Download, error) {
+func (s *Service) Download(ctx context.Context, serverID uuid.UUID, ticketID string) (download *Download, err error) {
 	if !Enabled() {
 		return nil, ErrDisabled
 	}
@@ -379,6 +438,7 @@ func (s *Service) Download(ctx context.Context, serverID uuid.UUID, ticketID str
 	if !ok {
 		return nil, ErrNotFound
 	}
+	defer func() { s.auditActor(t.UserID, t.TeamID, serverID, "download", t.Root, t.Path, err) }()
 	server, err := s.server(ctx, serverID)
 	if err != nil {
 		return nil, err
@@ -504,12 +564,14 @@ func (s *Service) rpc(ctx context.Context, serverID uuid.UUID, write bool) (cont
 	server, err := s.resolve(ctx, serverID, write)
 	if err != nil {
 		cancel()
-		return nil, nil, nil, err
+		// Return the (canceled) ctx, never nil: a deferred audit still needs the
+		// request's team/user scope, which survives cancellation.
+		return ctx, nil, nil, err
 	}
 	client, err := s.dialClient(ctx, server)
 	if err != nil {
 		cancel()
-		return nil, nil, nil, err
+		return ctx, nil, nil, err
 	}
 	return ctx, client, cancel, nil
 }
@@ -552,7 +614,23 @@ func validateRoot(root string) error {
 	if strings.TrimSpace(root) == "" {
 		return fmt.Errorf("%w: root is required", ErrValidation)
 	}
-	return validateFileArg("root", root)
+	return validatePathArg("root", root)
+}
+
+// validatePathArg validates a path-like argument (path/source/destination/root)
+// and additionally rejects a ".." segment. The agent's fsroot confines every
+// open, so this is not the security boundary; it is a cheap pre-dial check that
+// answers 400 for an obviously traversal-shaped path instead of a round trip.
+func validatePathArg(name, value string) error {
+	if err := validateFileArg(name, value); err != nil {
+		return err
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == ".." {
+			return fmt.Errorf("%w: %s must not contain a parent segment", ErrValidation, name)
+		}
+	}
+	return nil
 }
 
 // validateFileArg rejects a root/path/cursor value the agent gRPC layer cannot
@@ -649,10 +727,13 @@ func mapRPCError(err error) error {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	case codes.PermissionDenied:
 		return fmt.Errorf("%w: %v", ErrForbidden, err)
-	case codes.FailedPrecondition:
+	case codes.FailedPrecondition, codes.AlreadyExists, codes.Aborted:
+		// FailedPrecondition is the agent's etag/type conflict, AlreadyExists an
+		// exclusive create or no-overwrite rename/copy hitting an existing name,
+		// and Aborted a target that changed during the upload. All are 409.
 		return fmt.Errorf("%w: %v", ErrConflict, err)
 	case codes.ResourceExhausted:
-		return fmt.Errorf("%w: %v", ErrBusy, err)
+		return classifyResourceExhausted(err)
 	case codes.Unimplemented:
 		return fmt.Errorf("%w: %v", ErrAgentOutdated, err)
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
@@ -660,6 +741,101 @@ func mapRPCError(err error) error {
 	default:
 		return err
 	}
+}
+
+// classifyResourceExhausted splits the agent's single ResourceExhausted code
+// into the three distinct conditions the proto message prefixes already
+// distinguish (agent/files_write.go), so a caller is not told "the node is
+// busy" when the real problem is a full disk or a body over the node's limit:
+//
+//   - a body over the node's upload limit is ErrTooLarge (413);
+//   - low free space or an exhausted quota is ErrInsufficientStorage (507);
+//   - the per-node transfer semaphore being full is ErrBusy (429).
+//
+// An unrecognised message keeps the historical ErrBusy mapping.
+func classifyResourceExhausted(err error) error {
+	message := strings.ToLower(status.Convert(err).Message())
+	switch {
+	case strings.Contains(message, "upload limit"), strings.Contains(message, "too large"):
+		return fmt.Errorf("%w: %v", ErrTooLarge, err)
+	case strings.Contains(message, "low on free space"),
+		strings.Contains(message, "do not fit"),
+		strings.Contains(message, "quota"),
+		strings.Contains(message, "no space left"),
+		strings.Contains(message, "disk full"):
+		return fmt.Errorf("%w: %v", ErrInsufficientStorage, err)
+	default:
+		return fmt.Errorf("%w: %v", ErrBusy, err)
+	}
+}
+
+// auditResult renders a service error for the audit log as a small stable
+// token, so the log records the outcome without echoing raw agent text.
+func auditResult(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, ErrNotFound):
+		return "not_found"
+	case errors.Is(err, ErrForbidden):
+		return "forbidden"
+	case errors.Is(err, ErrValidation):
+		return "invalid"
+	case errors.Is(err, ErrConflict):
+		return "conflict"
+	case errors.Is(err, ErrTooLarge):
+		return "too_large"
+	case errors.Is(err, ErrNotEditable):
+		return "not_editable"
+	case errors.Is(err, ErrBusy):
+		return "busy"
+	case errors.Is(err, ErrInsufficientStorage):
+		return "insufficient_storage"
+	case errors.Is(err, ErrAgentOutdated):
+		return "agent_outdated"
+	case errors.Is(err, ErrAgentUnavailable):
+		return "agent_unavailable"
+	case errors.Is(err, ErrDisabled):
+		return "disabled"
+	default:
+		return "error"
+	}
+}
+
+// audit logs one file operation for the actor in ctx. It records the actor,
+// target and outcome but never the file body, a token or the download ticket:
+// file bodies hold secrets, so only the (root, relpath) addressing them is
+// recorded. extra appends op-specific fields (e.g. a rename destination).
+func (s *Service) audit(ctx context.Context, serverID uuid.UUID, op, root, relpath string, err error, extra ...any) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	scope := teams.ScopeFor(ctx, uuid.Nil)
+	s.auditActor(scope.UserID, scope.TeamID, serverID, op, root, relpath, err, extra...)
+}
+
+// auditActor is audit for a caller whose actor is not in ctx (the download
+// route carries its actor in the ticket, not a team scope).
+func (s *Service) auditActor(userID, teamID, serverID uuid.UUID, op, root, relpath string, err error, extra ...any) {
+	args := []any{
+		"op", op,
+		"result", auditResult(err),
+		"actor_user_id", scopeID(userID),
+		"actor_team_id", scopeID(teamID),
+		"server_id", serverID.String(),
+		"root", root,
+		"relpath", relpath,
+	}
+	s.logger.Info("files: audit", append(args, extra...)...)
+}
+
+// scopeID renders a scope UUID for audit logs, leaving it empty when the caller
+// had no team/user scope, so logs never show the zero UUID as an actor.
+func scopeID(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 // ticket is one download grant: single-use, short-lived, and bound to the

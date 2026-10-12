@@ -10,16 +10,14 @@ import (
 )
 
 // fileMessageBytes bounds a single gRPC message on a FileService connection.
-// Read chunks are 256 KiB and the control plane never sends a body through this
-// dialer (the upload path reuses the plain HTTP handler, not this connection),
-// so 4 MiB is the generated default made explicit: a future chunk-size change
-// cannot silently exceed an implicit limit.
+// Read and write chunks are 256 KiB, so 4 MiB is the generated default made
+// explicit: a future chunk-size change cannot silently exceed an implicit limit.
 const fileMessageBytes = 4 << 20
 
 // FileClient is a FileService client bound to its connection. It embeds
-// agentv1.FileServiceClient, so every read RPC is exposed directly. Close
-// releases the connection when the caller is done; Conn exposes the raw
-// connection for health checks.
+// agentv1.FileServiceClient, so every RPC is exposed directly. Close releases
+// the connection when the caller is done; Conn exposes the raw connection for
+// health checks.
 type FileClient struct {
 	agentv1.FileServiceClient
 	conn *grpc.ClientConn

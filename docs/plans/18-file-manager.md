@@ -120,6 +120,19 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 - **Exit:** read API works against a real agent; foreign team = 404.
 - **Rollback:** flag off or revert.
 
+**Accepted deviations (round 1 review):**
+- The RBAC decision above allows a platform admin to bypass the team requirement; the shipped
+  `resolve` implements only the team-required path. A legacy team-less server (created before
+  teams existed) is therefore **not browsable** — every file read answers 404 — until it is
+  assigned to a team. This keeps file bodies from being shared with every authenticated caller,
+  matching the plan's "team required, foreign/missing = 404" contract. The platform-admin bypass
+  is deferred to step 4/step 10, which revisit content-read RBAC and audit every mutation.
+- `GET /files/content` is deploy-gated for API tokens (added to `sensitiveReadSuffixes` next to
+  `/credentials`): a read-scoped token cannot read file bodies that hold secrets such as 0600
+  compose environment files. `roots`/`list`/`stat` stay read-scoped, and `POST /download-ticket`
+  remains deploy-gated by method. The suffix match cleans the path first, so a trailing slash or
+  encoded separator cannot bypass it (the query string is not part of `URL.Path`).
+
 ### Step 4 — CP write side
 - **Brief:** step 2 and 3 merged; audit precedent `internal/servers/service.go:662-671`; error map from step 3.
 - **Tasks:** write routes, `If-Match` ↔ `expect_etag` (428), `overwrite`; upload via `MultipartReader` streaming per part with ceiling and `SetReadDeadline` extension; body-read error cancels the stream; audit `slog` for all mutations and content/download reads; revisit content-read RBAC decision.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -298,9 +299,11 @@ func RequireScopes(required ...string) func(http.Handler) http.Handler {
 
 // sensitiveReadSuffixes are read routes that return secrets and therefore need
 // the deploy scope instead of the plain read scope: the decrypted database
-// credentials endpoint (database + root passwords in plaintext). Application
-// env values stay read-scoped by design (the SPA reads them on every app page).
-var sensitiveReadSuffixes = []string{"/credentials"}
+// credentials endpoint (database + root passwords in plaintext) and the file
+// content endpoint (file bodies hold secrets such as 0600 compose environment
+// files; the plan gates content like /credentials). Application env values stay
+// read-scoped by design (the SPA reads them on every app page).
+var sensitiveReadSuffixes = []string{"/credentials", "/files/content"}
 
 // requireResourceScopes enforces the API-token containment boundary on the
 // resource surface: reads (GET/HEAD) need the read scope, every other method
@@ -320,10 +323,14 @@ func requireResourceScopes(next http.Handler) http.Handler {
 }
 
 // sensitiveRead reports whether a read path returns secrets and must be
-// deploy-gated.
-func sensitiveRead(path string) bool {
+// deploy-gated. The path is cleaned first so a trailing slash, a redundant
+// "/./" or an encoded separator inside the final segment cannot smuggle a
+// secret-bearing read past the gate; the query string is not part of URL.Path,
+// so a query (e.g. ?ticket=) never affects the match.
+func sensitiveRead(rawPath string) bool {
+	cleaned := path.Clean(rawPath)
 	for _, suffix := range sensitiveReadSuffixes {
-		if strings.HasSuffix(path, suffix) {
+		if strings.HasSuffix(cleaned, suffix) {
 			return true
 		}
 	}

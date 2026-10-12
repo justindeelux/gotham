@@ -25,6 +25,7 @@ exit criteria, work packages, dependencies, and rollback. Start with the
 | 13 — Projects and environments | [13-projects-environments.md](plans/13-projects-environments.md) |
 | 14 — English/Vietnamese UI localization | [14-i18n.md](plans/14-i18n.md) |
 | 15 — Add resource flow & automatic Git sources | [15-add-resource-git-sources.md](plans/15-add-resource-git-sources.md) |
+| 16 — Instance settings | [16-instance-settings.md](plans/16-instance-settings.md) |
 | 17 — Update settings | [17-update-settings.md](plans/17-update-settings.md) |
 
 Phase status and remaining work live only in [`TODO.md`](TODO.md).
@@ -35,7 +36,6 @@ Phase status and remaining work live only in [`TODO.md`](TODO.md).
 |---|---|
 | [`plans/`](plans/) | Medium to large features and phases: goal, scope, backend + web design, work packages, risks |
 | [`sub-plans/`](sub-plans/) | Small, focused work: one UI fix or a single work package |
-| [`design-plans/`](design-plans/) | UI only: what each screen must let a user do, for the design agent; no backend or delivery detail |
 
 ## How we work
 

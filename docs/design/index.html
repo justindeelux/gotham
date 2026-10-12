@@ -133,14 +133,6 @@
             </span>
           </a>
 
-          <a class="screen-card" href="files.html" data-od-id="screen-files">
-            <span class="thumb"><span class="thumb-rail"><i></i><i></i><i></i></span><span class="thumb-side"><i></i><i class="on"></i><i></i></span><span class="thumb-main"><span class="bar w60"></span><span class="bar"></span><span class="bar"></span><span class="bar w80"></span><span class="bar w40"></span></span></span>
-            <span class="body">
-              <span class="fg-2 bold">Quản lý file</span>
-              <span class="small muted">Duyệt volume của ứng dụng: nhiều cột, sắp xếp, tick chọn nhiều, và cụm nút chức năng hiện ra khi hover từng mục.</span>
-              <span class="foot"><span class="tag">Volume</span><span class="tag">Hover actions</span></span>
-            </span>
-          </a>
 
           <a class="screen-card" href="servers.html" data-od-id="screen-servers">
             <span class="thumb"><span class="thumb-rail"><i class="on"></i><i></i><i></i></span><span class="thumb-side"><i></i><i></i><i class="on"></i></span><span class="thumb-main"><span class="tiles"><i></i><i></i><i class="on"></i></span><span class="bar w80"></span><span class="bar w40"></span></span></span>
@@ -279,7 +271,7 @@
                 <tr><td class="ph">0 · Foundation</td><td>Binary, config, store, SPA nhúng</td><td><a class="link" href="login.html">login.html</a>, <a class="link" href="team-settings.html#update">team-settings.html</a></td><td>Phiên đăng nhập, phiên bản CP, healthcheck nền</td></tr>
                 <tr><td class="ph">1 · Auth</td><td>JWT 15 phút + refresh 30 ngày, OAuth GitHub, API token theo scope</td><td><a class="link" href="login.html">login.html</a>, <a class="link" href="team-settings.html#tokens">team-settings.html</a></td><td>Kiểm tra form, độ mạnh mật khẩu, token chỉ hiện một lần</td></tr>
                 <tr><td class="ph">2 · Server + agent</td><td>gRPC mTLS, registry node, SSH validate</td><td><a class="link" href="servers.html">servers.html</a>, <a class="link" href="server-detail.html">server-detail.html</a></td><td>Wizard 4 bước, 5 probe, heartbeat 10 giây, chứng chỉ agent</td></tr>
-                <tr><td class="ph">3 · Docker core</td><td>List/start/stop/restart, log realtime, duyệt volume</td><td><a class="link" href="server-detail.html#containers">server-detail.html</a>, <a class="link" href="files.html">files.html</a></td><td>Bảng container, drawer log, chỉ báo WebSocket, trình quản lý file có hover actions</td></tr>
+                <tr><td class="ph">3 · Docker core</td><td>List/start/stop/restart, log realtime, </td><td><a class="link" href="server-detail.html#containers">server-detail.html</a></td><td>Bảng container, drawer log, chỉ báo WebSocket</td></tr>
                 <tr><td class="ph">4 · Applications</td><td>Provider, 4 build engine, state machine deploy, webhook</td><td><a class="link" href="applications.html">applications.html</a>, <a class="link" href="application-detail.html">application-detail.html</a></td><td>Wizard 5 bước, pipeline 6 pha, log build, rollback</td></tr>
                 <tr><td class="ph">5 · Databases</td><td>5 engine, backup/restore, lịch cron, S3</td><td><a class="link" href="databases.html">databases.html</a></td><td>Credentials, public port, phục hồi có xác nhận, đích lưu trữ</td></tr>
                 <tr><td class="ph">6 · Proxy &amp; SSL</td><td>Traefik file provider, HTTP-01 + DNS-01</td><td><a class="link" href="domains.html">domains.html</a></td><td>Router, vòng đời cert, wildcard, nhà cung cấp DNS, redirect</td></tr>
@@ -309,7 +301,7 @@
             <div class="card-body">
               <div class="token-grid">
                 <div class="token-cell"><p class="t-name">Khung &amp; hệ thống</p><p class="t-val">assets/gotham-ui.css<br />assets/gotham-views.css<br />assets/gotham-ui.js</p></div>
-                <div class="token-cell"><p class="t-name">Màn hình</p><p class="t-val">index · dashboard<br />projects · project-detail · environment<br />applications · application-detail<br />services · databases · files<br />servers · server-detail<br />domains · team-settings<br />login</p></div>
+                <div class="token-cell"><p class="t-name">Màn hình</p><p class="t-val">index · dashboard<br />projects · project-detail · environment<br />applications · application-detail<br />services · databases<br />servers · server-detail<br />domains · team-settings<br />login</p></div>
               </div>
               <p class="small muted mt-3">Mở bất kỳ tệp nào trong trình duyệt. Nhấn <span class="kbd">⌘K</span> để mở bảng lệnh, điều hướng chéo giữa các màn hình bằng rail bên trái (máy chủ) và sidebar (nhóm chức năng).</p>
             </div>

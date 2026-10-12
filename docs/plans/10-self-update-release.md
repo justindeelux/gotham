@@ -93,5 +93,5 @@ Pending (the coordinator tags `v0.1.1` next):
 
 The non-blocking residual register (M4 beta-channel binding, LOW-4 mutual agent
 channel, key rotation/revocation, I5, the
-`GOTHAM_UPDATE_CURRENT` pin) is tracked in `docs/TODO.md` → Phase 9 residuals and
+`GOTHAM_UPDATE_CURRENT` pin) is tracked in `docs/TODO.md` → Security / design decisions (LOW-4) and
 `deploy/README.md` → Known residuals.

@@ -10,21 +10,21 @@ Overall plan for building Gotham, a self-hosted PaaS (Coolify clone) using the t
 
 ## 1. Phase overview
 
-| Phase | File | Contents | Milestone (exit criteria) | Week* |
-|---|---|---|---|---|
-| 0 | [01-foundation.md](01-foundation.md) | Repo skeleton, config, store, web | Binaries start, `/healthz` returns 200, migrations run, SPA embedded, CI green | W1 |
-| 1 | [02-auth-users.md](02-auth-users.md) | Auth JWT + GitHub OAuth + API tokens | Sign up / sign in via UI, refresh token works | W2 |
-| 2 | [03-server-agent.md](03-server-agent.md) | gRPC contract, agent, server registry | Add server via wizard, agent heartbeat shown in UI | W3–W4 |
-| 3 | [04-docker-core.md](04-docker-core.md) | Docker engine core + realtime logs | List/start/stop containers, realtime logs via WebSocket | W5 |
-| 4 | [05-applications.md](05-applications.md) | Deploy from Git (providers, builds, orchestration) | Deploy app from public GitHub repo, auto-deploy via webhook | W6–W8 |
-| 5 | [06-databases-backups.md](06-databases-backups.md) | Managed databases + backups | Create DB, S3 backup, restore | W8–W9 |
-| 6 | [07-proxy-domains.md](07-proxy-domains.md) | Traefik, domains, SSL | Custom domain + automatic Let's Encrypt HTTPS | W8–W9 |
-| 7 | [08-services-templates.md](08-services-templates.md) | Compose services + template gallery | 1-click WordPress deploy from gallery | W10 |
-| 8 | [09-advanced.md](09-advanced.md) | Previews, teams, notifications, metrics | Full core Coolify feature set | W11–W12 |
-| 9 | [10-self-update-release.md](10-self-update-release.md) | Self-update + release pipeline | Signed `update` (Ed25519), releases on GitHub Releases | W13 |
+Phases 0–9 are the original roadmap. Later side tracks (11 UI alignment, 12 user profile, 13 projects/environments, 14 i18n, 15 add-resource/Git sources, 16 instance settings, 17 update settings) have their own plan files in this folder. All phases are complete; see [`../TODO.md`](../TODO.md).
 
-\* Relative week (dev-week) from the start, assuming 1 coordinator + 3–4 subagents running in parallel in an orca workspace.
-With more agents, weeks can shrink; there is no hard deadline.
+| Phase | File | Contents | Milestone (exit criteria) |
+|---|---|---|---|
+| 0 | [01-foundation.md](01-foundation.md) | Repo skeleton, config, store, web | Binaries start, `/healthz` returns 200, migrations run, SPA embedded, CI green |
+| 1 | [02-auth-users.md](02-auth-users.md) | Auth JWT + GitHub OAuth + API tokens | Sign up / sign in via UI, refresh token works |
+| 2 | [03-server-agent.md](03-server-agent.md) | gRPC contract, agent, server registry | Add server via wizard, agent heartbeat shown in UI |
+| 3 | [04-docker-core.md](04-docker-core.md) | Docker engine core + realtime logs | List/start/stop containers, realtime logs via WebSocket |
+| 4 | [05-applications.md](05-applications.md) | Deploy from Git (providers, builds, orchestration) | Deploy app from public GitHub repo, auto-deploy via webhook |
+| 5 | [06-databases-backups.md](06-databases-backups.md) | Managed databases + backups | Create DB, S3 backup, restore |
+| 6 | [07-proxy-domains.md](07-proxy-domains.md) | Traefik, domains, SSL | Custom domain + automatic Let's Encrypt HTTPS |
+| 7 | [08-services-templates.md](08-services-templates.md) | Compose services + template gallery | 1-click WordPress deploy from gallery |
+| 8 | [09-advanced.md](09-advanced.md) | Previews, teams, notifications, metrics | Full core Coolify feature set |
+| 9 | [10-self-update-release.md](10-self-update-release.md) | Self-update + release pipeline | Signed `update` (Ed25519), releases on GitHub Releases |
+
 
 ## 2. Dependency graph
 
@@ -61,9 +61,8 @@ graph LR
 - Each workspace merges to the main branch via its **own PR**; CI must be green before merge.
 - Tasks may run in parallel only when they touch no common files and depend on no each other's output (noted in each phase file).
 
-### Phase gate (continuous mode — owner waiver from Phase 3 onward)
-- The owner waived per-phase STOPs: after a phase meets its exit criteria, the coordinator continues to the next phase automatically without asking. STOP only when blocked, when a decision is needed, or when a review gate fails.
-- Milestone reports are posted as PR descriptions and chat summaries instead of gate approvals.
+### Phase gate
+- After a phase meets its exit criteria, STOP and ask the project owner before starting the next phase (see [`AGENTS.md`](../../AGENTS.md)).
 
 ### Invariant (run after every task, before PR merge)
 1. `go build ./...` passes.
@@ -76,9 +75,9 @@ graph LR
 ### Review gates (mandatory, block merge)
 | Gate | When | Reviewers |
 |---|---|---|
-| G0 | End of Phase 0 | subagent `code-reviewer` (whole foundation) |
-| G1 | End of Phase 4 | `code-reviewer` + `e2e-runner` (core deploy experience) |
-| G2 | End of Phase 9 | `code-reviewer` + `security-reviewer` (release/self-update, signatures, install) |
+| G0 (passed) | End of Phase 0 | subagent `code-reviewer` (whole foundation) |
+| G1 (passed with waivers) | End of Phase 4 | `code-reviewer` + `e2e-runner` (core deploy experience) |
+| G2 (approved with conditions) | End of Phase 9 | `code-reviewer` + `security-reviewer` (release/self-update, signatures, install) |
 
 ### Rollback
 - Each phase file states how to roll back (revert migration, feature flag, old image tag) in its own section.

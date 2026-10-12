@@ -1,7 +1,6 @@
 /**
  * Message catalog convention (phase 1 is message-preserving: zero
- * user-visible diff, see docs/library-audit.md "Validation migration
- * inventory").
+ * user-visible diff, see docs/library-audit.md).
  *
  * A feature declares its strings as a plain object of rule-keyed messages
  * next to its schemas, and seeds every schema message from it:

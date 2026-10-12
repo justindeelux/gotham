@@ -26,3 +26,14 @@ func etag(info os.FileInfo) string {
 	dev, ino := devino(info)
 	return fmt.Sprintf("%q", fmt.Sprintf("%d:%d:%d:%d", dev, ino, info.ModTime().UnixNano(), info.Size()))
 }
+
+// ownerLinks returns the owner uid and hardlink count of an entry, used to
+// choose a write strategy. Both syscall.Stat_t.Uid and .Nlink exist on every
+// unix platform the agent targets.
+func ownerLinks(info os.FileInfo) (uid uint32, nlink uint64) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0
+	}
+	return st.Uid, uint64(st.Nlink)
+}

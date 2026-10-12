@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -97,7 +98,23 @@ type FileServer struct {
 	log   *slog.Logger
 	roots map[string]*fsroot.Root
 	order []string
+	// volumeRootPath is the canonical path of the writable managed-volumes
+	// root, whose top-level application directories are protected from rename
+	// and delete because running containers bind-mount them.
+	volumeRootPath string
+	// maxUpload bounds one upload in bytes; uploads over it are refused.
+	maxUpload int64
+	// transfers is a counting semaphore bounding concurrent file transfers.
+	transfers chan struct{}
+	// locks are striped mutexes serialising the commit of a write to one
+	// (root, path), so a concurrent writer sees the previous commit's etag.
+	locks []sync.Mutex
 }
+
+// fileLockStripes is the number of striped path locks. A stripe is shared by
+// unrelated paths, which only adds contention; the map-free design keeps the
+// lock set bounded no matter how many paths a node serves.
+const fileLockStripes = 64
 
 // NewFileServer validates and opens the configured roots. It fails closed: a
 // root that is not absolute, resolves into a dangerous tree or collides with a
@@ -109,7 +126,21 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		log = slog.Default()
 	}
 	protected := fileProtectedPaths(cfg)
-	server := &FileServer{log: log, roots: make(map[string]*fsroot.Root)}
+	maxUpload := cfg.FileMaxUpload
+	if maxUpload <= 0 {
+		maxUpload = defaultFileMaxUpload
+	}
+	maxTransfers := cfg.FileMaxTransfers
+	if maxTransfers <= 0 {
+		maxTransfers = defaultFileMaxTransfers
+	}
+	server := &FileServer{
+		log:       log,
+		roots:     make(map[string]*fsroot.Root),
+		maxUpload: maxUpload,
+		transfers: make(chan struct{}, maxTransfers),
+		locks:     make([]sync.Mutex, fileLockStripes),
+	}
 	var opened []string
 	for _, rc := range configuredFileRoots(cfg) {
 		if rc.builtin {
@@ -132,6 +163,9 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		if err != nil {
 			_ = server.Close()
 			return nil, err
+		}
+		if rc.name == fileRootVolumes {
+			server.volumeRootPath = real
 		}
 		server.roots[name] = root
 		server.order = append(server.order, name)
@@ -489,6 +523,12 @@ func fileError(action string, err error) error {
 		return status.Errorf(codes.PermissionDenied, "%s: %v", action, err)
 	case errors.Is(err, fsroot.ErrSpecial):
 		return status.Errorf(codes.FailedPrecondition, "%s: %v", action, err)
+	case errors.Is(err, fsroot.ErrExists):
+		return status.Errorf(codes.AlreadyExists, "%s: %v", action, err)
+	case errors.Is(err, fsroot.ErrConflict):
+		return status.Errorf(codes.Aborted, "%s: %v", action, err)
+	case errors.Is(err, fsroot.ErrReadOnly):
+		return status.Errorf(codes.PermissionDenied, "%s: %v", action, err)
 	case errors.Is(err, fsroot.ErrTooLarge):
 		return status.Errorf(codes.ResourceExhausted, "%s: %v", action, err)
 	case errors.Is(err, context.Canceled):
@@ -508,4 +548,14 @@ func freeBytes(dir string) uint64 {
 		return 0
 	}
 	return uint64(stat.Bavail) * uint64(stat.Bsize)
+}
+
+// totalBytes reports the total size of dir's filesystem, or 0 when it cannot
+// be read.
+func totalBytes(dir string) uint64 {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(dir, &stat); err != nil {
+		return 0
+	}
+	return uint64(stat.Blocks) * uint64(stat.Bsize)
 }

@@ -149,11 +149,6 @@ export function normalizeEntryName(name: string): string {
   return name.trim();
 }
 
-/** isSamePath reports whether two relative paths address the same entry. */
-export function isSamePath(a: string, b: string): boolean {
-  return a.replace(/^\/+|\/+$/g, "") === b.replace(/^\/+|\/+$/g, "");
-}
-
 /** TransferProblem names why a move/copy destination is refused before the call. */
 export type TransferProblem = "same-folder" | "into-itself";
 

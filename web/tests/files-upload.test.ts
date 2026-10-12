@@ -250,6 +250,40 @@ describe("useFileUpload", () => {
     expect(upload.items.value[0]!.status).toBe("done");
   });
 
+  it("does not re-send a failed row on a rapid double retry during a batch", async () => {
+    const gate = deferred<FilesUploadResult[]>();
+    vi.mocked(uploadFiles)
+      .mockResolvedValueOnce([{ name: "a", path: "a", error: "error" }])
+      .mockImplementationOnce(() => gate.promise)
+      .mockResolvedValue([ok("a")]);
+
+    const upload = useFileUpload();
+    upload.addFiles([file("a"), file("b")]);
+    const started = upload.start(target);
+
+    await vi.waitFor(() => {
+      if (upload.items.value[0]!.status !== "error") {
+        throw new Error("a has not failed");
+      }
+      if (upload.items.value[1]!.status !== "uploading") {
+        throw new Error("b has not started");
+      }
+    });
+
+    // Two rapid clicks on the failed row: the second must not queue a
+    // duplicate, and a completed row must never be sent again.
+    const id = upload.items.value[0]!.id;
+    const first = upload.retry(id, target, false);
+    expect(upload.items.value[0]!.status).toBe("queued");
+    const second = upload.retry(id, target, false);
+    gate.resolve([ok("b")]);
+    await Promise.all([started, first, second]);
+
+    // a failed once, b uploaded once, a retried once.
+    expect(vi.mocked(uploadFiles)).toHaveBeenCalledTimes(3);
+    expect(upload.items.value[0]!.status).toBe("done");
+  });
+
   it("sends the trimmed name it validated", async () => {
     vi.mocked(uploadFiles).mockResolvedValue([ok("a.txt")]);
 

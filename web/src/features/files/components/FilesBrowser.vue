@@ -148,6 +148,20 @@ const currentPath = computed<string>(() =>
   files.path === "" ? files.rootName : `${files.rootName}/${files.path}`,
 );
 
+/** pasteProblemText explains why the clipboard cannot be pasted here. */
+const pasteProblemText = computed<string>(() => {
+  switch (files.pasteProblem) {
+    case "cross-root":
+      return String(t("files.dialogs.pasteCrossRoot"));
+    case "same-folder":
+      return String(t("files.dialogs.transferSameFolder"));
+    case "into-itself":
+      return String(t("files.dialogs.transferIntoItself"));
+    default:
+      return "";
+  }
+});
+
 /** typeLabel resolves the Type column through the active locale. */
 function typeLabel(entry: FilesEntry): string {
   return entryTypeLabel(entry, locale.value);
@@ -232,6 +246,21 @@ function openDelete(entries: FilesEntry[]): void {
 }
 
 function openTransfer(mode: "move" | "copy", entries: FilesEntry[]): void {
+  // At the root the source's parent is the root itself (a same-folder
+  // destination). When no subfolder outside the moved entries is available the
+  // dialog could only open invalid, so refuse with a message instead.
+  const movedFolders = new Set(
+    entries.filter((entry) => entry.kind === "directory").map((entry) => entry.name),
+  );
+  if (
+    files.path === "" &&
+    !files.entries.some(
+      (entry) => entry.kind === "directory" && !movedFolders.has(entry.name),
+    )
+  ) {
+    message.warning(String(t("files.dialogs.transferNoSubfolders")));
+    return;
+  }
   transferMode.value = mode;
   actionTargets.value = entries;
   transferOpen.value = true;
@@ -272,6 +301,7 @@ function onDrop(event: DragEvent): void {
   }
   event.preventDefault();
   if (!files.canWrite) {
+    message.warning(String(t("files.dialogs.dropReadOnly")));
     return;
   }
   const { files: dropped, folders } = filesFromDrop(event.dataTransfer);
@@ -283,9 +313,34 @@ function onDrop(event: DragEvent): void {
   }
 }
 
-/** pasteAction applies the clipboard into the current directory. */
+/** pasteAction applies the clipboard into the current directory, with feedback. */
 async function pasteAction(): Promise<void> {
-  await files.paste();
+  if (files.pasteProblem !== null) {
+    message.warning(pasteProblemText.value);
+    return;
+  }
+  const mode = files.clipboardMode;
+  const summary = await files.paste();
+  if (summary.failed.length > 0) {
+    message.warning(
+      String(
+        t("files.dialogs.transferPartial", {
+          failed: summary.failed.length,
+          error: summary.failed[0]?.error ?? "",
+        }),
+      ),
+    );
+    return;
+  }
+  if (summary.done.length > 0) {
+    message.success(
+      String(
+        t(mode === "cut" ? "files.dialogs.moved" : "files.dialogs.copied", {
+          count: summary.done.length,
+        }),
+      ),
+    );
+  }
 }
 
 /** rowMenu builds the per-row actions menu. */
@@ -414,7 +469,8 @@ function onRowMenu(key: string, entry: FilesEntry): void {
         v-if="files.hasClipboard"
         size="small"
         secondary
-        :disabled="files.acting"
+        :disabled="files.acting || files.pasteProblem !== null"
+        :title="pasteProblemText || $t('files.actions.paste')"
         @click="() => void pasteAction()"
       >
         <template #icon>

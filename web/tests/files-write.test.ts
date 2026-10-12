@@ -41,6 +41,13 @@ const root: FilesRoot = {
   free_bytes: 21 * 1024 ** 3,
 };
 
+const composeRoot: FilesRoot = {
+  name: "compose",
+  path: "/var/lib/gotham-agent/compose",
+  writable: false,
+  free_bytes: 0,
+};
+
 /** entry builds one listing row with sensible defaults. */
 function entry(
   overrides: Partial<FilesEntry> & { name: string },
@@ -333,6 +340,71 @@ describe("files store selection hygiene", () => {
       "current",
       false,
     );
+  });
+
+  it("does not retarget the clipboard on a rename in another directory", async () => {
+    vi.mocked(renameEntry).mockResolvedValue(entry({ name: "c.txt" }));
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.cutSelection();
+    await store.openDirectory("data");
+
+    await store.rename(entry({ name: "app.yaml" }), "c.txt");
+
+    // The clipboard still points at the root's app.yaml, never data/c.txt.
+    expect(store.clipboard?.root).toBe("volumes");
+    expect(store.clipboard?.path).toBe("");
+    expect(store.clipboard?.names).toEqual(["app.yaml"]);
+  });
+
+  it("does not clear the clipboard on a delete in another directory", async () => {
+    vi.mocked(deleteEntry).mockResolvedValue(undefined);
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.cutSelection();
+    await store.openDirectory("data");
+
+    await store.remove([entry({ name: "app.yaml" })]);
+
+    expect(store.hasClipboard).toBe(true);
+    expect(store.clipboard?.path).toBe("");
+    expect(store.clipboard?.names).toEqual(["app.yaml"]);
+  });
+});
+
+describe("files store paste validation", () => {
+  it("refuses a cross-root paste and keeps the clipboard", async () => {
+    vi.mocked(listRoots).mockResolvedValue([root, composeRoot]);
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.cutSelection();
+    await store.setRoot("compose");
+
+    expect(store.pasteProblem).toBe("cross-root");
+    const summary = await store.paste();
+
+    expect(summary).toEqual({ done: [], conflicts: [], failed: [] });
+    expect(vi.mocked(moveEntry)).not.toHaveBeenCalled();
+    expect(store.hasClipboard).toBe(true);
+  });
+
+  it("refuses pasting a folder into its own subtree", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("config");
+    store.cutSelection();
+    await store.openDirectory("config");
+
+    expect(store.pasteProblem).toBe("into-itself");
+    await store.paste();
+
+    expect(vi.mocked(moveEntry)).not.toHaveBeenCalled();
   });
 });
 

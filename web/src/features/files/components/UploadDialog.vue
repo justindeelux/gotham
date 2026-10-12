@@ -208,6 +208,7 @@ function statusLabel(item: UploadItem): string {
             v-else-if="item.status === 'conflict'"
             size="tiny"
             secondary
+            :disabled="upload.uploading.value"
             @click="() => void upload.retry(item.id, target, true)"
           >
             {{ t("files.actions.replace") }}
@@ -216,6 +217,7 @@ function statusLabel(item: UploadItem): string {
             v-else-if="item.status === 'error'"
             size="tiny"
             secondary
+            :disabled="upload.uploading.value"
             @click="() => void upload.retry(item.id, target, false)"
           >
             {{ t("common.actions.retry") }}

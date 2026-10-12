@@ -18,11 +18,13 @@ import {
 import type {
   FilesEntry,
   FilesRoot,
+  FileKind,
 } from "@/features/files/schemas/files";
 import type { NameKind } from "@/features/files/utils/files";
 import {
   breadcrumbSegments,
   countByKind,
+  destinationProblem,
   entryMatchesQuery,
   isSelectable,
   joinPath,
@@ -35,6 +37,7 @@ import type {
   FilesSortDirection,
   FilesSortKey,
   FilesViewMode,
+  TransferProblem,
 } from "@/features/files/utils/files";
 import { useTeamsStore } from "@/features/teams";
 
@@ -44,6 +47,9 @@ export interface FilesClipboard {
   root: string;
   path: string;
   names: string[];
+  /** directories are the clipboard names that are folders, so pasting a folder
+   *  into its own subtree is refused before the agent call (400). */
+  directories: string[];
 }
 
 /** ConflictPrompt waits for the user to replace or skip 409'd names. */
@@ -207,6 +213,28 @@ export const useFilesStore = defineStore("files", () => {
     () => clipboard.value?.mode ?? null,
   );
 
+  /**
+   * pasteProblem explains why the clipboard cannot be pasted into the current
+   * directory: another root, the clipboard's own directory, or a folder inside
+   * a moved folder (all of which the agent refuses with 400). null means the
+   * paste is valid. It mirrors TransferDialog's pre-check so paste() never
+   * fires a doomed call.
+   */
+  const pasteProblem = computed<"cross-root" | TransferProblem | null>(() => {
+    const clip = clipboard.value;
+    if (!clip || clip.names.length === 0) {
+      return null;
+    }
+    if (clip.root !== rootName.value) {
+      return "cross-root";
+    }
+    return destinationProblem(
+      clip.path,
+      path.value,
+      clip.directories.map((name) => ({ name, kind: "directory" as FileKind })),
+    );
+  });
+
   /** teamId reads the active team the requests are scoped to. */
   function teamId(): string {
     return useTeamsStore().activeTeamId;
@@ -271,15 +299,38 @@ export const useFilesStore = defineStore("files", () => {
     selected.value = next;
   }
 
-  /** pruneClipboard drops names that no longer exist, clearing it when empty. */
-  function pruneClipboard(names: string[]): void {
+  /**
+   * pruneClipboard drops names that no longer exist from the clipboard. It only
+   * touches a clipboard taken from the same directory (root+path), so a delete
+   * or rename in another directory never clears it or retargets it. The scope is
+   * explicit for the cut-paste flow, where the moved names left the source
+   * directory rather than the directory on screen.
+   */
+  function pruneClipboard(
+    names: string[],
+    root = rootName.value,
+    dir = path.value,
+  ): void {
     const clip = clipboard.value;
     if (!clip || names.length === 0) {
       return;
     }
+    if (clip.root !== root || clip.path !== dir) {
+      return;
+    }
     const gone = new Set(names);
     const kept = clip.names.filter((name) => !gone.has(name));
-    clipboard.value = kept.length === 0 ? null : { ...clip, names: kept };
+    if (kept.length === clip.names.length) {
+      return;
+    }
+    clipboard.value =
+      kept.length === 0
+        ? null
+        : {
+            ...clip,
+            names: kept,
+            directories: clip.directories.filter((name) => !gone.has(name)),
+          };
   }
 
   /**
@@ -477,14 +528,23 @@ export const useFilesStore = defineStore("files", () => {
         source: joinPath(path.value, entry.name),
         destination: joinPath(path.value, next),
       });
-      // Follow the rename in the selection and any pending clipboard, so a
-      // later mutation does not act on the name that no longer exists.
+      // Follow the rename in the selection and any pending clipboard that was
+      // taken from this same directory (root+path): a rename elsewhere must not
+      // retarget the clipboard to a file in another folder.
       renameSelection(entry.name, next);
       const clip = clipboard.value;
-      if (clip && clip.names.includes(entry.name)) {
+      if (
+        clip &&
+        clip.root === rootName.value &&
+        clip.path === path.value &&
+        clip.names.includes(entry.name)
+      ) {
         clipboard.value = {
           ...clip,
           names: clip.names.map((name) => (name === entry.name ? next : name)),
+          directories: clip.directories.map((name) =>
+            name === entry.name ? next : name,
+          ),
         };
       }
       await loadEntries();
@@ -581,9 +641,10 @@ export const useFilesStore = defineStore("files", () => {
         ? { op, source, destination, names: [...summary.conflicts], cutClipboard }
         : null;
     // A cut clipboard is consumed only for the names that actually moved: a
-    // failed or skipped entry stays so the user can retry it.
+    // failed or skipped entry stays so the user can retry it. The scope is the
+    // source directory the names left, not the destination now on screen.
     if (cutClipboard && op === "move") {
-      pruneClipboard(summary.done);
+      pruneClipboard(summary.done, rootName.value, source);
     }
     return summary;
   }
@@ -603,7 +664,7 @@ export const useFilesStore = defineStore("files", () => {
       runTransfer(prompt.op, prompt.source, prompt.destination, prompt.names, true),
     );
     if (prompt.cutClipboard && prompt.op === "move") {
-      pruneClipboard(summary.done);
+      pruneClipboard(summary.done, rootName.value, prompt.source);
     }
     return summary;
   }
@@ -627,7 +688,17 @@ export const useFilesStore = defineStore("files", () => {
     if (names.length === 0) {
       return;
     }
-    clipboard.value = { mode, root: rootName.value, path: path.value, names: [...names] };
+    const wanted = new Set(names);
+    const directories = entries.value
+      .filter((entry) => entry.kind === "directory" && wanted.has(entry.name))
+      .map((entry) => entry.name);
+    clipboard.value = {
+      mode,
+      root: rootName.value,
+      path: path.value,
+      names: [...names],
+      directories,
+    };
   }
 
   /** clearClipboard drops any pending copy/cut. */
@@ -636,15 +707,16 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
-   * paste applies the clipboard into the current directory. A cross-root paste
-   * or a paste into the clipboard's own directory is a no-op (the agent refuses
-   * `src == dst`), so the clipboard survives. A name clash opens the
-   * replace/skip prompt; a cut clipboard is consumed only for the names that
+   * paste applies the clipboard into the current directory. It refuses an
+   * invalid destination up front (another root, the clipboard's own folder, or
+   * a folder inside a moved folder), so the agent's 400 is never reached; the
+   * caller reads {@link pasteProblem} to explain the refusal. A name clash opens
+   * the replace/skip prompt; a cut clipboard is consumed only for the names that
    * actually moved.
    */
   async function paste(): Promise<TransferSummary> {
     const clip = clipboard.value;
-    if (!clip || clip.root !== rootName.value || clip.path === path.value) {
+    if (!clip || clip.names.length === 0 || pasteProblem.value !== null) {
       return { done: [], conflicts: [], failed: [] };
     }
     return promptTransfer(
@@ -849,6 +921,7 @@ export const useFilesStore = defineStore("files", () => {
     canReadContent,
     canWrite,
     hasClipboard,
+    pasteProblem,
     // actions
     init,
     refresh,

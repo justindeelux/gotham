@@ -233,7 +233,15 @@ export function useFileUpload() {
           continue;
         }
         const item = items.value.find((candidate) => candidate.id === work.id);
-        if (!item || item.status === "uploading") {
+        // Only a row still waiting its turn may be sent. A duplicate queue
+        // entry (a double retry) or a row that already finished is skipped
+        // instead of re-sending an already-uploaded file.
+        if (
+          !item ||
+          (item.status !== "queued" &&
+            item.status !== "error" &&
+            item.status !== "conflict")
+        ) {
           continue;
         }
         await uploadOne(item, activeTarget, work.overwrite);
@@ -247,10 +255,22 @@ export function useFileUpload() {
     }
   }
 
-  /** enqueue adds work and (re)starts the single runner when it is idle. */
+  /**
+   * enqueue adds work and (re)starts the single runner when it is idle. An
+   * enqueued row is marked queued immediately, so a second click on a failed
+   * row is refused by retry() instead of queueing a duplicate send.
+   */
   function enqueue(work: UploadWork[]): Promise<void> {
     if (work.length > 0) {
       queue.push(...work);
+      for (const entry of work) {
+        const item = items.value.find((candidate) => candidate.id === entry.id);
+        if (item) {
+          item.status = "queued";
+          item.errorToken = "";
+          item.message = "";
+        }
+      }
     }
     return run();
   }

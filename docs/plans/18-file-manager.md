@@ -12,6 +12,126 @@
 - Web: HTTP client is `web/src/shared/api/http.ts` (Bearer header + `X-Team-Id`, 15 s default timeout). No editor library, no file components. `web/src/app/layouts/navigation.ts:32` has an inactive `files` nav stub. `internal/server/webdist` (2.4 MB) is committed and drift-checked.
 - No files mockup in `docs/design/`.
 
+## Spike results (step 0 gate)
+
+**Status: PASSED (rerun) — the rebuilt box (fresh Ubuntu 22.04) was healthy and the live
+read/write/list test ran as `gotham-agent` under both roots. The earlier BLOCKED status was a
+failed disk on the old box and no longer applies.** Checked 2026-10-13 on the all-in-one box from
+`docs/test-server.md`.
+
+Enabling the opt-in file service surfaced one **defect**: on a stock install the default
+`ComposeRoot` is rejected, so `GOTHAM_AGENT_FILES=true` aborts the agent (see below). The permission
+question itself is answered, but Phase 18 cannot be enabled on a stock box until JUS-105 is fixed.
+
+### Facts re-verified
+
+- **Kernel:** `uname -r` = `5.15.0-60-generic` (the rebuild kept the same kernel; `openat2` is
+  available since Linux 5.6, so `os.OpenRoot`'s fast path applies and the stdlib fallback still
+  covers older kernels).
+- **Agent identity:** `uid=116(gotham-agent) gid=122(gotham-agent)`. The running process carries
+  supplementary groups `122` and `999(docker)` (`/proc/<pid>/status`), from the unit's
+  `SupplementaryGroups=docker`; the `docker` group is gid 999. `id gotham-agent` alone does **not**
+  list `docker`, because the membership is a unit-level supplementary group, not an `/etc/group`
+  entry. **The uid/gid are allocated at install and are not stable** — the previous box had
+  `998:998`; policy must key off the `gotham-agent` user and the `docker` group name, never a
+  numeric uid.
+- **Roots (both defaulted, no override):**
+  - `ManagedVolumeRoot` = `/var/lib/gotham/volumes` (CP `internal/deploy/volumes.go`, agent
+    `agent/config.go`). Parent `/var/lib/gotham` is `root:root 0755`; the root itself did not exist
+    until a container bind created it.
+  - `ComposeRoot` = `/var/lib/gotham-agent/compose`; parent `/var/lib/gotham-agent` is
+    `gotham-agent:gotham-agent 0755`.
+- **Docker:** Engine 29.9.0, data root `/var/lib/docker` on the same filesystem as both roots.
+- **Traefik: not deployed on the rebuilt box** (no running container, no
+  `/var/lib/gotham-agent/traefik` directory), so the timeout check could not be re-run against a
+  live instance. The recorded config finding still holds from the generator:
+  `internal/proxy/generate.go` emits entryPoints `web:80` / `websecure:443` carrying only `address`
+  and **no `transport.respondingTimeouts`**, so Traefik v3 defaults apply (`readTimeout` 60 s,
+  `writeTimeout` 0, `idleTimeout` 180 s); the CP's own `ReadTimeout` is 30 s
+  (`internal/server/server.go:56`). At the edge Traefik caps reading a request **including its body**
+  at 60 s, so a > 1 GiB upload slower than that is cut off. Set an explicit
+  `respondingTimeouts.readTimeout` on `web`/`websecure` (or document the 60 s ceiling) in step 4/10.
+
+### Live permission test (as `gotham-agent`)
+
+Ownership is the whole story: Docker creates the bind source as `root:root 0755`, so an application
+volume is **not writable by the agent**, which is a plain unprivileged uid with no
+`CAP_DAC_OVERRIDE` and no group shared with container-owned trees.
+
+| Target (mode) | list | read 0644 | read 0600 | create | mkdir | rename | delete |
+|---|---|---|---|---|---|---|---|
+| container bind, root-owned (0755) | ok | ok | EACCES | EACCES | EACCES | EACCES | EACCES |
+| container bind, uid 1000 pre-provisioned (0755) | ok | ok | EACCES | EACCES | EACCES | EACCES | EACCES |
+| agent-owned subdir under `ManagedVolumeRoot` (0755) | ok | ok | n/a | ok | ok | ok | ok |
+| `ComposeRoot` (agent-owned parent, 0755) | ok | ok | n/a | ok | ok | ok | ok |
+
+Detail and exit codes (non-zero rc after `runuser -u gotham-agent -- ...`):
+
+- **dockerd-created bind `<root>/<appID>/data` is `root:root 0755`**; files written by a root
+  container are `0644` / `0600 root:root`. As `gotham-agent`: `list` rc 0, read `0644` rc 0, read
+  `0600` rc 1 (EACCES), create/append rc 2, `mkdir` rc 1, rename rc 1, delete rc 1, create directly
+  in `<root>/<appID>` rc 2. A write would need the container's own uid/gid/mode, which the agent
+  never has.
+- **Non-root container (uid 1000):** with the bind dir auto-created by dockerd (`root:root 0755`),
+  the container itself could not write into its mount (rc 1) — a uid-owned tree only appears when
+  the dir is pre-provisioned or chowned by a root container. With the dir pre-provisioned
+  `1000:1000 0755`, the same matrix as the root-owned case holds (agent reads `0644`, cannot read
+  `0600`, cannot write).
+- **Agent-created dirs:** the agent cannot create `ManagedVolumeRoot` itself (parent `/var/lib/gotham`
+  is `root:root`, rc 1) — dockerd creates it. An operator-provisioned agent-owned subdir
+  (`gotham-agent:gotham-agent 0755`) is fully usable (create/list/read/append/rename/delete all
+  rc 0), as is the `ComposeRoot` (agent owns the parent; `rmdir` rc 0). Files the agent creates are
+  `0644 gotham-agent:gotham-agent` (umask 022).
+- **Named Docker volumes are irrelevant:** their files live under
+  `/var/lib/docker/volumes/<name>/_data`, inside Docker's data root, which `validateFileRoot`
+  refuses; they are never browsable.
+
+### File-service enablement (opt-in) — defect found
+
+- **Unset (baseline):** a loopback gRPC client calling `ListRoots` gets
+  `code = Unimplemented desc = unknown service agent.v1.FileService` — the service is genuinely
+  absent when off.
+- **Enabled with the shipped unit and no overrides:** the agent **aborts startup**:
+  `file service error="file root \"/var/lib/gotham-agent/compose\" is inside /var/lib/gotham-agent"`
+  → exit 1, restart loop. Cause: `fileProtectedPaths` appends `{cfg.CertDir, exclusive: true}`, and
+  `deploy/gotham-agent.service` sets `GOTHAM_AGENT_CERT_DIR=/var/lib/gotham-agent`, i.e. the whole
+  state directory. The default `ComposeRoot` is a child of it, so `validateFileRoot` rejects it,
+  even though the plain state-root entry is deliberately non-exclusive ("the compose child stays
+  browsable read-only"). **On a stock install the two defaults are mutually incompatible, so Phase 18
+  cannot be enabled without overriding `GOTHAM_AGENT_COMPOSE_ROOT`.**
+- **Enabled with `GOTHAM_AGENT_COMPOSE_ROOT` pointed outside the state dir:** the agent starts and a
+  loopback client's `ListRoots` returns `root=volumes writable=true`,
+  `root=compose writable=false`, free space reported — **the `FileService` answers.**
+- The systemd drop-in was removed and the agent restarted; the box is left with
+  `GOTHAM_AGENT_FILES` off (`ListRoots` → `Unimplemented` again).
+
+### Decision
+
+- **No unit-file privilege change is warranted.** A unit-file edit cannot give a plain uid access to
+  a root-owned `0755` directory or to another uid's `0600` file; only `sudo`, a capability
+  (`CAP_DAC_OVERRIDE`) or root could, and the plan already excludes code-level privilege escalation.
+  The measurement confirms the plan's expectation: container-created volumes are read-mostly for the
+  agent (world-readable files listed and read; `0600` and every mutation denied).
+- **Container-owned volumes:** keep `ManagedVolumeRoot` the writable root, but expect writes to fail
+  outside agent-owned subtrees, so the per-entry "permission denied" UX stands. **Owner decision
+  needed for JUS-106/108:** if operators must upload/edit inside container volumes, provisioning must
+  make them agent-writable — either the CP chowns `<root>/<appID>` to `gotham-agent`, or a shared
+  group plus a setgid (`2775`) app dir is introduced (setgid alone is insufficient until the agent
+  joins the group). Until that decision lands, writes are limited to agent-owned roots.
+- **`ComposeRoot`** is agent-owned and read-only in the service by design: the filesystem allows
+  mutation, the service refuses it — matches the plan.
+- **Pre-step-1 fix (JUS-105):** the cert-dir protection must not invalidate the default compose root.
+  Recommended: protect the individual cert/key files (or mark the `cfg.CertDir` entry non-exclusive
+  when it is or contains the browsable compose root) instead of blanket-excluding everything under
+  `GOTHAM_AGENT_CERT_DIR`; the state-root entry already documents that the compose child stays
+  browsable. Alternatives: move the default `ComposeRoot` out of the agent state dir, or document a
+  mandatory `GOTHAM_AGENT_COMPOSE_ROOT` override. **Without this, `GOTHAM_AGENT_FILES=true`
+  (JUS-105's own deliverable) cannot start on a stock box.**
+- **Traefik:** keep the 60 s `readTimeout` finding; set an explicit `respondingTimeouts.readTimeout`
+  (or document the ceiling) in step 4/10.
+- **Gate:** step 0 is **passed** for the permission question (measurements above). The stock-config
+  startup defect is a JUS-105 fix, tracked before step 10's flag flip.
+
 ## Pyramid findings that drive the design
 Pyramid's backend is an unrestricted filesystem API (single `resolvePath` = `filepath.Abs`), blind overwrite on save, whole-file string read/write, `sh -c` archive commands with a broken `shellQuote` (command injection), 200-status error paths, swallowed upload errors and no tests. Its frontend is a Monaco dock with a global key handler that hijacks Ctrl+V/Ctrl+A/Delete while typing in the editor, "new file" that truncates an existing file, stale editor tabs after rename, silent discard on delete/reload and no search. **None of that is ported.**
 

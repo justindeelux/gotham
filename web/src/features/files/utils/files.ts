@@ -110,6 +110,135 @@ export function isSelectable(entry: FilesEntry): boolean {
   return entry.kind === "file" || entry.kind === "directory";
 }
 
+/**
+ * MAX_NAME_BYTES is the maximum UTF-8 byte length the server accepts for a
+ * single path segment (an entry name). The boundary is bytes, not code points,
+ * so a multi-byte name can be shorter in characters and still fail.
+ */
+export const MAX_NAME_BYTES = 255;
+
+/** NameKind distinguishes the create dialogs (an empty file or a folder). */
+export type NameKind = "file" | "directory";
+
+/**
+ * validateEntryName returns null when name is a legal path segment, otherwise
+ * the files catalog key of the first rule it breaks. It mirrors the server's
+ * rules: the name is trimmed, must be non-empty, must not be "." or "..", must
+ * not contain "/", "\" or NUL, and must be at most 255 bytes. The accepted
+ * value is the trimmed string; callers submit {@link normalizeEntryName}.
+ */
+export function validateEntryName(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed === "") {
+    return "files.name.required";
+  }
+  if (trimmed === "." || trimmed === "..") {
+    return "files.name.reserved";
+  }
+  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
+    return "files.name.invalid";
+  }
+  if (new TextEncoder().encode(trimmed).length > MAX_NAME_BYTES) {
+    return "files.name.tooLong";
+  }
+  return null;
+}
+
+/** normalizeEntryName returns the trimmed name the dialogs submit. */
+export function normalizeEntryName(name: string): string {
+  return name.trim();
+}
+
+/** TransferProblem names why a move/copy destination is refused before the call. */
+export type TransferProblem = "same-folder" | "into-itself";
+
+/**
+ * destinationProblem pre-validates a move/copy destination. The agent refuses a
+ * transfer onto itself with 400 (`src == dst || isWithin(src, dst)`), so the
+ * dialog must not offer the source folder or a descendant of a moved folder.
+ * Returns null when the destination is valid.
+ */
+export function destinationProblem(
+  source: string,
+  destination: string,
+  entries: Array<{ name: string; kind: FileKind }>,
+): TransferProblem | null {
+  const from = source.replace(/^\/+|\/+$/g, "");
+  const to = destination.replace(/^\/+|\/+$/g, "");
+  if (to === from) {
+    return "same-folder";
+  }
+  for (const entry of entries) {
+    if (entry.kind !== "directory") {
+      continue;
+    }
+    const folder = joinPath(from, entry.name);
+    if (to === folder || to.startsWith(`${folder}/`)) {
+      return "into-itself";
+    }
+  }
+  return null;
+}
+
+/**
+ * isFileDrag reports whether a drag carries OS files. A non-file drag (a text
+ * selection, a page element) must not be hijacked by the drop zone.
+ */
+export function isFileDrag(types?: ArrayLike<string> | null): boolean {
+  return types != null && Array.from(types).includes("Files");
+}
+
+/** DropItemLike is the minimal DataTransferItem surface the classifier reads. */
+export interface DropItemLike {
+  kind: string;
+  webkitGetAsEntry?: () => { isDirectory?: boolean } | null;
+  getAsFile?: () => File | null;
+}
+
+/** DropDataLike is the minimal DataTransfer surface the classifier reads. */
+export interface DropDataLike {
+  items?: ArrayLike<DropItemLike>;
+  files?: ArrayLike<File> | null;
+}
+
+/**
+ * filesFromDrop separates a drop into uploadable files and rejected folders.
+ * A dropped directory is a zero-byte File via dataTransfer.files, so it must be
+ * detected through webkitGetAsEntry and reported instead of uploaded as an
+ * empty file.
+ */
+export function filesFromDrop(
+  data: DropDataLike | null,
+): { files: File[]; folders: number } {
+  if (!data) {
+    return { files: [], folders: 0 };
+  }
+  const items = data.items;
+  if (!items || items.length === 0) {
+    return { files: data.files ? Array.from(data.files) : [], folders: 0 };
+  }
+  const files: File[] = [];
+  let folders = 0;
+  for (const item of Array.from(items)) {
+    if (item.kind !== "file") {
+      continue;
+    }
+    const entry = item.webkitGetAsEntry?.() ?? null;
+    if (entry?.isDirectory) {
+      folders += 1;
+      continue;
+    }
+    const file = item.getAsFile?.() ?? null;
+    if (file) {
+      files.push(file);
+    }
+  }
+  if (files.length === 0 && folders === 0 && data.files) {
+    return { files: Array.from(data.files), folders: 0 };
+  }
+  return { files, folders };
+}
+
 /** joinPath appends one entry name to a relative path. */
 export function joinPath(base: string, name: string): string {
   return base === "" ? name : `${base}/${name}`;

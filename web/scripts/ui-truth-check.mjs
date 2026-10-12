@@ -386,6 +386,7 @@ async function main() {
   const databases = await loadModule("../src/features/databases/api/databases.ts");
   const applications = await loadModule("../src/features/applications/api/applications.ts");
   const dashboard = await loadModule("../src/features/dashboard/utils/dashboard.ts");
+  const filesUtils = await loadModule("../src/features/files/utils/files.ts");
 
   console.log("shared usage thresholds (JUS-10)");
   await check("warn at 60 and danger at 80", () => {
@@ -1303,6 +1304,65 @@ async function main() {
   await databases.cleanup();
   await applications.cleanup();
   await dashboard.cleanup();
+
+  console.log("files name rules (P18 step 7)");
+  await check("accepts a plain trimmed segment and rejects the unsafe ones", () => {
+    const { validateEntryName, normalizeEntryName, MAX_NAME_BYTES } =
+      filesUtils.module;
+    assert(validateEntryName("app.yaml") === null, "plain name accepted");
+    assert(validateEntryName("  uploads  ") === null, "trimmed name accepted");
+    assert(normalizeEntryName("  uploads  ") === "uploads", "name trims");
+    assert(validateEntryName("") === "files.name.required", "empty rejected");
+    assert(validateEntryName("   ") === "files.name.required", "blank rejected");
+    assert(validateEntryName(".") === "files.name.reserved", "dot rejected");
+    assert(validateEntryName("..") === "files.name.reserved", "dotdot rejected");
+    assert(validateEntryName("a/b") === "files.name.invalid", "slash rejected");
+    assert(validateEntryName("a\\b") === "files.name.invalid", "backslash rejected");
+    assert(validateEntryName("a\u0000b") === "files.name.invalid", "NUL rejected");
+    assert(
+      validateEntryName("a".repeat(MAX_NAME_BYTES)) === null,
+      "255 bytes accepted",
+    );
+    assert(
+      validateEntryName("a".repeat(MAX_NAME_BYTES + 1)) === "files.name.tooLong",
+      "256 bytes rejected",
+    );
+  });
+
+  console.log("files transfer destination pre-validation (JUS-111 fix round 1)");
+  await check("refuses the source folder and a moved folder's subtree", () => {
+    const { destinationProblem } = filesUtils.module;
+    const folder = { name: "config", kind: "directory" };
+    const file = { name: "app.yaml", kind: "file" };
+    assert(
+      destinationProblem("src", "src", [file]) === "same-folder",
+      "same folder is refused for a move or a copy",
+    );
+    assert(
+      destinationProblem("src", "src/config/nested", [folder]) === "into-itself",
+      "a moved folder's descendant is refused",
+    );
+    assert(
+      destinationProblem("src", "other/deeper", [folder]) === null,
+      "an unrelated destination is allowed",
+    );
+  });
+
+  await check("classifies a drop into files and rejected folders", () => {
+    const { isFileDrag, filesFromDrop } = filesUtils.module;
+    assert(isFileDrag(["Files"]) === true, "a Files drag is a file drag");
+    assert(isFileDrag(["text/plain"]) === false, "a text drag is ignored");
+    const result = filesFromDrop({
+      items: [
+        { kind: "file", webkitGetAsEntry: () => ({ isDirectory: true }) },
+        { kind: "file", webkitGetAsEntry: () => null, getAsFile: () => null },
+      ],
+    });
+    assert(result.folders === 1, "a dropped directory is counted, not uploaded");
+    assert(result.files.length === 0, "no file is queued for a folder only drop");
+  });
+
+  await filesUtils.cleanup();
 
   const failed = results.filter((r) => !r.ok);
   console.log(

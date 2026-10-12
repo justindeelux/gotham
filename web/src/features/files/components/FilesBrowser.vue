@@ -4,28 +4,53 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
+  Copy,
   Download,
+  FilePlus2,
   Folder,
+  FolderPlus,
   HardDrive,
   LayoutGrid,
   List,
   Lock,
+  MoreVertical,
+  Pencil,
   RefreshCw,
+  Scissors,
   Search,
+  Trash2,
+  Upload,
 } from "@lucide/vue";
-import { NButton, NCard, NCheckbox, NInput, NSelect } from "naive-ui";
-import { computed, onMounted, watch } from "vue";
+import {
+  NButton,
+  NCard,
+  NCheckbox,
+  NDropdown,
+  NInput,
+  NSelect,
+  useMessage,
+} from "naive-ui";
+import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
+import ConflictDialog from "@/features/files/components/ConflictDialog.vue";
+import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue";
+import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
+import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
+import TransferDialog from "@/features/files/components/TransferDialog.vue";
+import UploadDialog from "@/features/files/components/UploadDialog.vue";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
-import { useFilesStore } from "@/features/files/stores/files";
 import type { FilesEntry } from "@/features/files/schemas/files";
+import { useFilesStore } from "@/features/files/stores/files";
+import type { NameKind } from "@/features/files/utils/files";
 import {
   entryIconKind,
   entryTypeLabel,
+  filesFromDrop,
   formatMode,
   formatTimestamp,
+  isFileDrag,
   isSelectable,
 } from "@/features/files/utils/files";
 import { useTeamsStore } from "@/features/teams";
@@ -38,6 +63,7 @@ interface Props {
 const props = defineProps<Props>();
 
 const { t, locale } = useI18n();
+const message = useMessage();
 const files = useFilesStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
@@ -46,7 +72,27 @@ watch(
   () => props.serverId,
   (next) => void files.init(next),
 );
+// A team switch changes the caller's role and the server's visibility, so the
+// listing must reload rather than keep the previous team's directory.
+watch(
+  () => teams.activeTeamId,
+  () => void files.reload(),
+);
 onMounted(() => void files.init(props.serverId));
+
+// ── Dialog state ──────────────────────────────────────────────────────────
+const createOpen = ref(false);
+const createKind = ref<NameKind>("directory");
+const renameOpen = ref(false);
+const renameTarget = ref<FilesEntry | null>(null);
+const deleteOpen = ref(false);
+const transferOpen = ref(false);
+const transferMode = ref<"move" | "copy">("move");
+const uploadOpen = ref(false);
+const droppedFiles = ref<File[]>([]);
+const dragActive = ref(false);
+/** actionTargets are the entries the delete/transfer dialogs act on. */
+const actionTargets = ref<FilesEntry[]>([]);
 
 /** filterModel binds the NInput to the store's client-side filter. */
 const filterModel = computed<string>({
@@ -73,6 +119,11 @@ const hasSelectedFiles = computed<boolean>(() =>
   files.selectedEntries.some((entry) => entry.kind === "file"),
 );
 
+/** selection is the current selection reduced to writable-safe entries. */
+const selection = computed<FilesEntry[]>(() =>
+  files.selectedEntries.filter(isSelectable),
+);
+
 /** footSummary is the "12 entries · 4 folders · 6 files…" footer line. */
 const footSummary = computed<string>(() => {
   const parts = [t("files.browser.entryCount", { count: files.entries.length })];
@@ -96,6 +147,20 @@ const footSummary = computed<string>(() => {
 const currentPath = computed<string>(() =>
   files.path === "" ? files.rootName : `${files.rootName}/${files.path}`,
 );
+
+/** pasteProblemText explains why the clipboard cannot be pasted here. */
+const pasteProblemText = computed<string>(() => {
+  switch (files.pasteProblem) {
+    case "cross-root":
+      return String(t("files.dialogs.pasteCrossRoot"));
+    case "same-folder":
+      return String(t("files.dialogs.transferSameFolder"));
+    case "into-itself":
+      return String(t("files.dialogs.transferIntoItself"));
+    default:
+      return "";
+  }
+});
 
 /** typeLabel resolves the Type column through the active locale. */
 function typeLabel(entry: FilesEntry): string {
@@ -163,10 +228,184 @@ async function downloadSelected(): Promise<void> {
     );
   }
 }
+
+// ── Dialog openers ────────────────────────────────────────────────────────
+function openCreate(kind: NameKind): void {
+  createKind.value = kind;
+  createOpen.value = true;
+}
+
+function openRename(entry: FilesEntry): void {
+  renameTarget.value = entry;
+  renameOpen.value = true;
+}
+
+function openDelete(entries: FilesEntry[]): void {
+  actionTargets.value = entries;
+  deleteOpen.value = true;
+}
+
+function openTransfer(mode: "move" | "copy", entries: FilesEntry[]): void {
+  // At the root the source's parent is the root itself (a same-folder
+  // destination). When no subfolder outside the moved entries is available the
+  // dialog could only open invalid, so refuse with a message instead.
+  const movedFolders = new Set(
+    entries.filter((entry) => entry.kind === "directory").map((entry) => entry.name),
+  );
+  if (
+    files.path === "" &&
+    !files.entries.some(
+      (entry) => entry.kind === "directory" && !movedFolders.has(entry.name),
+    )
+  ) {
+    message.warning(String(t("files.dialogs.transferNoSubfolders")));
+    return;
+  }
+  transferMode.value = mode;
+  actionTargets.value = entries;
+  transferOpen.value = true;
+}
+
+function openUpload(dropped: File[] = []): void {
+  droppedFiles.value = dropped;
+  uploadOpen.value = true;
+}
+
+/** onDragOver highlights the zone only for a file drag on a writable root. */
+function onDragOver(event: DragEvent): void {
+  if (!isFileDrag(event.dataTransfer?.types)) {
+    return;
+  }
+  // A file drag must preventDefault to allow the drop, even when the root is
+  // read-only (otherwise the browser opens the dropped file).
+  event.preventDefault();
+  if (files.canWrite) {
+    dragActive.value = true;
+  }
+}
+
+function onDragLeave(): void {
+  dragActive.value = false;
+}
+
+/**
+ * onDrop opens the upload dialog queued with the dropped files. A drop is only
+ * honoured on a writable root, a non-file drag is ignored, and a dropped
+ * directory is rejected with a clear message instead of uploaded as an empty
+ * file.
+ */
+function onDrop(event: DragEvent): void {
+  dragActive.value = false;
+  if (!isFileDrag(event.dataTransfer?.types)) {
+    return;
+  }
+  event.preventDefault();
+  if (!files.canWrite) {
+    message.warning(String(t("files.dialogs.dropReadOnly")));
+    return;
+  }
+  const { files: dropped, folders } = filesFromDrop(event.dataTransfer);
+  if (folders > 0) {
+    message.warning(String(t("files.dialogs.foldersUnsupported")));
+  }
+  if (dropped.length > 0) {
+    openUpload(dropped);
+  }
+}
+
+/** pasteAction applies the clipboard into the current directory, with feedback. */
+async function pasteAction(): Promise<void> {
+  if (files.pasteProblem !== null) {
+    message.warning(pasteProblemText.value);
+    return;
+  }
+  const mode = files.clipboardMode;
+  const summary = await files.paste();
+  if (summary.failed.length > 0) {
+    message.warning(
+      String(
+        t("files.dialogs.transferPartial", {
+          failed: summary.failed.length,
+          error: summary.failed[0]?.error ?? "",
+        }),
+      ),
+    );
+    return;
+  }
+  if (summary.done.length > 0) {
+    message.success(
+      String(
+        t(mode === "cut" ? "files.dialogs.moved" : "files.dialogs.copied", {
+          count: summary.done.length,
+        }),
+      ),
+    );
+  }
+}
+
+/** rowMenu builds the per-row actions menu. */
+function rowMenu(entry: FilesEntry): Array<{ label: string; key: string; disabled?: boolean }> {
+  const options: Array<{ label: string; key: string; disabled?: boolean }> = [];
+  if (entry.kind === "directory") {
+    options.push({ label: String(t("files.menu.open")), key: "open" });
+  } else if (entry.kind === "file") {
+    options.push({
+      label: String(t("files.menu.download")),
+      key: "download",
+      disabled: !files.canReadContent,
+    });
+  }
+  // Special files are list-only (see the mockup): offering a delete the store
+  // filters out would toast a false success. A symlink is unlinked as a link,
+  // its target untouched, so it keeps the write actions.
+  if (entry.kind !== "special" && entry.kind !== "unspecified") {
+    options.push(
+      { label: String(t("files.actions.rename")), key: "rename", disabled: !files.canWrite },
+      { label: String(t("files.actions.move")), key: "move", disabled: !files.canWrite },
+      { label: String(t("files.actions.copy")), key: "copy", disabled: !files.canWrite },
+      { label: String(t("files.actions.cut")), key: "cut", disabled: !files.canWrite },
+      { label: String(t("common.actions.delete")), key: "delete", disabled: !files.canWrite },
+    );
+  }
+  return options;
+}
+
+/** onRowMenu dispatches one row action on the row or the whole selection. */
+function onRowMenu(key: string, entry: FilesEntry): void {
+  switch (key) {
+    case "open":
+      void files.openDirectory(entry.name);
+      break;
+    case "download":
+      void startDownload(entry);
+      break;
+    case "rename":
+      openRename(entry);
+      break;
+    case "move":
+      openTransfer("move", files.targetsForRow(entry));
+      break;
+    case "copy":
+      openTransfer("copy", files.targetsForRow(entry));
+      break;
+    case "cut":
+      files.cutSelection(files.targetsForRow(entry).map((item) => item.name));
+      break;
+    case "delete":
+      openDelete(files.targetsForRow(entry));
+      break;
+  }
+}
 </script>
 
 <template>
-  <NCard class="files-browser">
+  <NCard
+    class="files-browser"
+    :class="{ 'is-dragging': dragActive }"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
     <template #header>
       <div class="fm-card-head">
         <h3 class="fm-card-title">{{ $t("files.browser.heading") }}</h3>
@@ -206,6 +445,44 @@ async function downloadSelected(): Promise<void> {
         </div>
       </div>
     </template>
+
+    <div v-if="files.canWrite" class="fm-toolbar">
+      <NButton size="small" secondary :disabled="files.acting" @click="openCreate('file')">
+        <template #icon>
+          <FilePlus2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.actions.newFile") }}
+      </NButton>
+      <NButton size="small" secondary :disabled="files.acting" @click="openCreate('directory')">
+        <template #icon>
+          <FolderPlus :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.actions.newFolder") }}
+      </NButton>
+      <NButton size="small" type="primary" :disabled="files.acting" @click="openUpload()">
+        <template #icon>
+          <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.actions.upload") }}
+      </NButton>
+      <NButton
+        v-if="files.hasClipboard"
+        size="small"
+        secondary
+        :disabled="files.acting || files.pasteProblem !== null"
+        :title="pasteProblemText || $t('files.actions.paste')"
+        @click="() => void pasteAction()"
+      >
+        <template #icon>
+          <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.actions.paste") }}
+        <span class="muted">({{ files.clipboard?.names.length ?? 0 }})</span>
+      </NButton>
+      <span v-if="files.hasClipboard" class="small muted clipboard-hint">
+        {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
+      </span>
+    </div>
 
     <div class="fm-bar">
       <nav class="fm-path" :aria-label="$t('files.browser.parent')">
@@ -271,8 +548,37 @@ async function downloadSelected(): Promise<void> {
           :title="files.canReadContent ? '' : $t('files.browser.fileNeedsRole')"
           @click="downloadSelected()"
         >
+          <template #icon>
+            <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
           {{ $t("files.browser.downloadSelected") }}
         </NButton>
+        <template v-if="files.canWrite">
+          <NButton size="small" secondary :disabled="files.acting" @click="openTransfer('move', selection)">
+            <template #icon>
+              <Folder :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ $t("files.actions.move") }}
+          </NButton>
+          <NButton size="small" secondary :disabled="files.acting" @click="openTransfer('copy', selection)">
+            <template #icon>
+              <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ $t("files.actions.copy") }}
+          </NButton>
+          <NButton size="small" secondary :disabled="files.acting" @click="files.cutSelection()">
+            <template #icon>
+              <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ $t("files.actions.cut") }}
+          </NButton>
+          <NButton size="small" type="error" secondary :disabled="files.acting" @click="openDelete(selection)">
+            <template #icon>
+              <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ $t("common.actions.delete") }}
+          </NButton>
+        </template>
         <NButton size="small" quaternary @click="files.clearSelection()">
           {{ $t("files.browser.clear") }}
         </NButton>
@@ -293,7 +599,16 @@ async function downloadSelected(): Promise<void> {
       <h4>{{ $t("files.browser.loading") }}</h4>
     </div>
 
-    <div v-else-if="files.error" class="empty fm-state">
+    <div v-else-if="files.permissionDenied" class="empty fm-state">
+      <Lock :size="26" :stroke-width="1.6" aria-hidden="true" />
+      <h4>{{ $t("files.browser.permissionTitle") }}</h4>
+      <p class="small">{{ $t("files.browser.permissionHint") }}</p>
+      <NButton size="small" secondary class="fm-state-action" @click="files.retry()">
+        {{ $t("common.actions.retry") }}
+      </NButton>
+    </div>
+
+    <div v-else-if="files.error && files.entries.length === 0" class="empty fm-state">
       <CircleAlert class="fm-danger" :size="26" :stroke-width="1.6" aria-hidden="true" />
       <h4 class="fm-danger">{{ $t("files.browser.errorTitle") }}</h4>
       <p class="small">{{ files.error }}</p>
@@ -309,6 +624,16 @@ async function downloadSelected(): Promise<void> {
     </div>
 
     <template v-else>
+      <div v-if="files.error" class="callout fm-inline-error" role="status">
+        <CircleAlert class="fm-danger" :size="18" :stroke-width="1.8" aria-hidden="true" />
+        <div class="grow">
+          <p class="small">{{ files.error }}</p>
+        </div>
+        <NButton size="tiny" secondary @click="files.retry()">
+          {{ $t("common.actions.retry") }}
+        </NButton>
+      </div>
+
       <div v-if="files.loaded && !files.writable && files.rootName !== ''" class="callout fm-readonly">
         <Lock :size="18" :stroke-width="1.8" aria-hidden="true" />
         <div>
@@ -414,6 +739,44 @@ async function downloadSelected(): Promise<void> {
                   <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </template>
               </NButton>
+              <NButton
+                v-if="files.canWrite && isSelectable(entry)"
+                size="tiny"
+                quaternary
+                :aria-label="$t('files.actions.rename')"
+                @click="openRename(entry)"
+              >
+                <template #icon>
+                  <Pencil :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+              </NButton>
+              <NButton
+                v-if="files.canWrite && isSelectable(entry)"
+                size="tiny"
+                quaternary
+                :aria-label="$t('files.browser.deleteEntry', { name: entry.name })"
+                @click="openDelete([entry])"
+              >
+                <template #icon>
+                  <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+              </NButton>
+              <NDropdown
+                trigger="click"
+                placement="bottom-end"
+                :options="rowMenu(entry)"
+                @select="(key: string) => onRowMenu(key, entry)"
+              >
+                <NButton
+                  size="tiny"
+                  quaternary
+                  :aria-label="$t('files.browser.moreActions', { name: entry.name })"
+                >
+                  <template #icon>
+                    <MoreVertical :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                </NButton>
+              </NDropdown>
             </div>
           </div>
         </div>
@@ -465,12 +828,32 @@ async function downloadSelected(): Promise<void> {
         <span>{{ $t("files.browser.freeSpace", { free: formatBytes(files.freeBytes) }) }}</span>
       </div>
     </template>
+
+    <div v-if="dragActive" class="fm-drop-overlay" aria-hidden="true">
+      <Upload :size="26" :stroke-width="1.6" />
+      <span>{{ $t("files.dialogs.uploadDrop") }}</span>
+    </div>
+
+    <CreateEntryDialog v-model:show="createOpen" :kind="createKind" />
+    <RenameEntryDialog v-model:show="renameOpen" :entry="renameTarget" />
+    <DeleteEntriesDialog v-model:show="deleteOpen" :entries="actionTargets" />
+    <TransferDialog
+      v-model:show="transferOpen"
+      :mode="transferMode"
+      :entries="actionTargets"
+    />
+    <UploadDialog v-model:show="uploadOpen" :initial-files="droppedFiles" />
+    <ConflictDialog />
   </NCard>
 </template>
 
 <style scoped>
 /* Ported from docs/design/assets/gotham-views.css (FILE MANAGER section) and
  * docs/design/files.html; only tokens from styles/tokens.css are used. */
+.files-browser {
+  position: relative;
+}
+
 .fm-card-head {
   display: flex;
   align-items: center;
@@ -494,6 +877,18 @@ async function downloadSelected(): Promise<void> {
 
 .fm-root-select {
   width: 220px;
+}
+
+.fm-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.clipboard-hint {
+  margin-left: var(--space-1);
 }
 
 .segmented {
@@ -634,6 +1029,19 @@ async function downloadSelected(): Promise<void> {
   margin-bottom: var(--space-3);
 }
 
+.fm-inline-error {
+  margin-bottom: var(--space-3);
+  align-items: center;
+}
+
+.fm-inline-error .grow {
+  flex: 1 1 auto;
+}
+
+.fm-inline-error p {
+  margin: 0;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -645,7 +1053,7 @@ async function downloadSelected(): Promise<void> {
 .fm-row {
   display: grid;
   /* Leading checkbox column, then the type icon beside the name. */
-  grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 124px;
+  grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 168px;
   gap: var(--space-3);
   align-items: center;
   padding: 7px var(--space-3);
@@ -902,6 +1310,23 @@ async function downloadSelected(): Promise<void> {
 
 .fm-foot .grow {
   flex: 1 1 auto;
+}
+
+.fm-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--surface) 82%, transparent);
+  color: var(--accent-ink);
+  font-weight: 500;
+  pointer-events: none;
 }
 
 @media (hover: none) {

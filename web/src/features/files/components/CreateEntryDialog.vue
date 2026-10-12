@@ -11,6 +11,7 @@ import {
   normalizeEntryName,
   validateEntryName,
 } from "@/features/files/utils/files";
+import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 
 interface Props {
   show: boolean;
@@ -51,6 +52,9 @@ const valid = computed<boolean>(() => validateEntryName(name.value) === null);
 
 /** submit creates the file or folder, surfacing any failure in a toast. */
 async function submit(): Promise<void> {
+  if (files.acting) {
+    return;
+  }
   touched.value = true;
   if (!valid.value) {
     return;
@@ -100,7 +104,7 @@ async function submit(): Promise<void> {
             ? t('files.dialogs.createFolderPlaceholder')
             : t('files.dialogs.createFilePlaceholder')
         "
-        @keyup.enter="() => void submit()"
+        @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, submit)"
       />
     </NFormItem>
     <p class="hint small muted">{{ t("files.name.hint") }}</p>

@@ -15,11 +15,14 @@ import type { FilesEntry } from "@/features/files/schemas/files";
 import {
   breadcrumbSegments,
   countByKind,
+  destinationProblem,
   entryIconKind,
   entryMatchesQuery,
   entryTypeLabel,
+  filesFromDrop,
   formatMode,
   formatTimestamp,
+  isFileDrag,
   isSelectable,
   joinPath,
   MAX_NAME_BYTES,
@@ -103,6 +106,7 @@ describe("filesErrorKey maps every status to a curated key", () => {
       [501, "files.errors.agentOutdated"],
       [502, "files.errors.agentUnavailable"],
       [503, "files.errors.disabled"],
+      [507, "files.errors.insufficientStorage"],
     ];
     for (const [status, key] of cases) {
       expect(filesErrorKey({ message: "server text", status })).toBe(key);
@@ -269,5 +273,72 @@ describe("validateEntryName", () => {
     );
     // Bytes, not code points: a 4-byte emoji overflows sooner.
     expect(validateEntryName("😀".repeat(64))).toBe("files.name.tooLong");
+  });
+});
+
+describe("destinationProblem", () => {
+  const folder = entry({ name: "config", kind: "directory", mode: 0o040755 });
+  const file = entry({ name: "app.yaml" });
+
+  it("refuses the source folder itself", () => {
+    expect(destinationProblem("a", "a", [file])).toBe("same-folder");
+    expect(destinationProblem("a", "a/b", [file])).toBeNull();
+  });
+
+  it("refuses a moved folder and its descendants", () => {
+    expect(destinationProblem("src", "src/config", [folder])).toBe("into-itself");
+    expect(destinationProblem("src", "src/config/nested", [folder])).toBe(
+      "into-itself",
+    );
+    expect(destinationProblem("src", "other", [folder])).toBeNull();
+  });
+
+  it("lets a plain file move anywhere but its own folder", () => {
+    expect(destinationProblem("src", "src", [file])).toBe("same-folder");
+    expect(destinationProblem("src", "src/deeper", [file])).toBeNull();
+  });
+});
+
+describe("filesFromDrop", () => {
+  function droppedFile(name: string) {
+    return new globalThis.File([new Uint8Array(4)], name);
+  }
+
+  it("separates files from folders and rejects a directory", () => {
+    const file = droppedFile("a.txt");
+    const result = filesFromDrop({
+      items: [
+        {
+          kind: "file",
+          webkitGetAsEntry: () => ({ isDirectory: false }),
+          getAsFile: () => file,
+        },
+        {
+          kind: "file",
+          webkitGetAsEntry: () => ({ isDirectory: true }),
+          getAsFile: () => null,
+        },
+      ],
+    });
+    expect(result.files).toEqual([file]);
+    expect(result.folders).toBe(1);
+  });
+
+  it("falls back to dataTransfer.files when items are absent", () => {
+    const file = droppedFile("b.txt");
+    expect(filesFromDrop({ files: [file] })).toEqual({
+      files: [file],
+      folders: 0,
+    });
+    expect(filesFromDrop(null)).toEqual({ files: [], folders: 0 });
+  });
+});
+
+describe("isFileDrag", () => {
+  it("detects a Files drag and ignores everything else", () => {
+    expect(isFileDrag(["Files"])).toBe(true);
+    expect(isFileDrag(["text/plain"])).toBe(false);
+    expect(isFileDrag(null)).toBe(false);
+    expect(isFileDrag(undefined)).toBe(false);
   });
 });

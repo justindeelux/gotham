@@ -238,6 +238,48 @@ export const useFilesStore = defineStore("files", () => {
     disabled.value = false;
     permissionDenied.value = false;
     lastLoadedPath = path.value;
+    // Drop selection names that no longer exist (a refresh after another
+    // session deleted them), so the bulk bar never counts a phantom row.
+    pruneSelectionToEntries();
+  }
+
+  /** pruneSelectionToEntries keeps only selected names still in the listing. */
+  function pruneSelectionToEntries(): void {
+    if (selected.value.size === 0) {
+      return;
+    }
+    const present = new Set(entries.value.map((entry) => entry.name));
+    const next = new Set<string>();
+    for (const name of selected.value) {
+      if (present.has(name)) {
+        next.add(name);
+      }
+    }
+    if (next.size !== selected.value.size) {
+      selected.value = next;
+    }
+  }
+
+  /** renameSelection follows a renamed selected entry to its new name. */
+  function renameSelection(oldName: string, nextName: string): void {
+    if (!selected.value.has(oldName)) {
+      return;
+    }
+    const next = new Set(selected.value);
+    next.delete(oldName);
+    next.add(nextName);
+    selected.value = next;
+  }
+
+  /** pruneClipboard drops names that no longer exist, clearing it when empty. */
+  function pruneClipboard(names: string[]): void {
+    const clip = clipboard.value;
+    if (!clip || names.length === 0) {
+      return;
+    }
+    const gone = new Set(names);
+    const kept = clip.names.filter((name) => !gone.has(name));
+    clipboard.value = kept.length === 0 ? null : { ...clip, names: kept };
   }
 
   /**
@@ -428,12 +470,23 @@ export const useFilesStore = defineStore("files", () => {
 
   /** rename changes one entry's name inside the current directory. */
   async function rename(entry: FilesEntry, nextName: string): Promise<void> {
+    const next = normalizeEntryName(nextName);
     await runMutation(async () => {
       await renameEntry(serverId.value, teamId(), {
         root: rootName.value,
         source: joinPath(path.value, entry.name),
-        destination: joinPath(path.value, normalizeEntryName(nextName)),
+        destination: joinPath(path.value, next),
       });
+      // Follow the rename in the selection and any pending clipboard, so a
+      // later mutation does not act on the name that no longer exists.
+      renameSelection(entry.name, next);
+      const clip = clipboard.value;
+      if (clip && clip.names.includes(entry.name)) {
+        clipboard.value = {
+          ...clip,
+          names: clip.names.map((name) => (name === entry.name ? next : name)),
+        };
+      }
       await loadEntries();
     });
   }
@@ -465,6 +518,7 @@ export const useFilesStore = defineStore("files", () => {
           summary.failed.push({ name: entry.name, error: describeFilesError(err) });
         }
       }
+      pruneClipboard(summary.done);
       await loadEntries();
       return summary;
     });
@@ -509,7 +563,8 @@ export const useFilesStore = defineStore("files", () => {
   /**
    * promptTransfer runs a transfer with overwrite=false and, when names clash,
    * opens the replace/skip prompt instead of silently failing them. cutClipboard
-   * marks a clipboard cut so resolving the prompt consumes the clipboard.
+   * marks a clipboard cut so the moved names are dropped from it; failed or
+   * skipped names stay for a later retry.
    */
   async function promptTransfer(
     op: "copy" | "move",
@@ -525,8 +580,10 @@ export const useFilesStore = defineStore("files", () => {
       summary.conflicts.length > 0
         ? { op, source, destination, names: [...summary.conflicts], cutClipboard }
         : null;
-    if (summary.conflicts.length === 0 && cutClipboard) {
-      clearClipboard();
+    // A cut clipboard is consumed only for the names that actually moved: a
+    // failed or skipped entry stays so the user can retry it.
+    if (cutClipboard && op === "move") {
+      pruneClipboard(summary.done);
     }
     return summary;
   }
@@ -539,36 +596,38 @@ export const useFilesStore = defineStore("files", () => {
       return { done: [], conflicts: [], failed: [] };
     }
     if (!overwrite) {
-      if (prompt.cutClipboard) {
-        clearClipboard();
-      }
+      // Skipped names stay in a cut clipboard so a later paste can retry them.
       return { done: [], conflicts: prompt.names, failed: [] };
     }
     const summary = await runMutation(() =>
       runTransfer(prompt.op, prompt.source, prompt.destination, prompt.names, true),
     );
-    if (prompt.cutClipboard) {
-      clearClipboard();
+    if (prompt.cutClipboard && prompt.op === "move") {
+      pruneClipboard(summary.done);
     }
     return summary;
   }
 
-  /** copySelection copy-marks the current selection. */
-  function copySelection(): void {
-    const names = selectedNames.value;
-    if (names.length === 0) {
-      return;
-    }
-    clipboard.value = { mode: "copy", root: rootName.value, path: path.value, names };
+  /**
+   * copySelection copy-marks names (the current selection by default). A row
+   * menu passes the single row it acted on, so it never has to mutate the
+   * selection to stage a copy.
+   */
+  function copySelection(names: string[] = selectedNames.value): void {
+    markClipboard("copy", names);
   }
 
-  /** cutSelection cut-marks the current selection. */
-  function cutSelection(): void {
-    const names = selectedNames.value;
+  /** cutSelection cut-marks names (the current selection by default). */
+  function cutSelection(names: string[] = selectedNames.value): void {
+    markClipboard("cut", names);
+  }
+
+  /** markClipboard stores a non-empty clipboard for the current directory. */
+  function markClipboard(mode: "copy" | "cut", names: string[]): void {
     if (names.length === 0) {
       return;
     }
-    clipboard.value = { mode: "cut", root: rootName.value, path: path.value, names };
+    clipboard.value = { mode, root: rootName.value, path: path.value, names: [...names] };
   }
 
   /** clearClipboard drops any pending copy/cut. */
@@ -578,13 +637,14 @@ export const useFilesStore = defineStore("files", () => {
 
   /**
    * paste applies the clipboard into the current directory. A cross-root paste
-   * is refused (the API is single-root); a name clash opens the replace/skip
-   * prompt. The clipboard survives a copy paste and is consumed by a cut paste
-   * once every entry has landed.
+   * or a paste into the clipboard's own directory is a no-op (the agent refuses
+   * `src == dst`), so the clipboard survives. A name clash opens the
+   * replace/skip prompt; a cut clipboard is consumed only for the names that
+   * actually moved.
    */
   async function paste(): Promise<TransferSummary> {
     const clip = clipboard.value;
-    if (!clip || clip.root !== rootName.value) {
+    if (!clip || clip.root !== rootName.value || clip.path === path.value) {
       return { done: [], conflicts: [], failed: [] };
     }
     return promptTransfer(
@@ -671,6 +731,16 @@ export const useFilesStore = defineStore("files", () => {
   /** isSelected reports whether one entry name is selected. */
   function isSelected(name: string): boolean {
     return selected.value.has(name);
+  }
+
+  /**
+   * targetsForRow resolves a row-menu action's targets: the whole current
+   * selection when the row is part of it, otherwise just that row. It never
+   * toggles the selection, so cutting an already-selected row cannot deselect
+   * it and cut an empty set.
+   */
+  function targetsForRow(entry: FilesEntry): FilesEntry[] {
+    return selected.value.has(entry.name) ? selectedEntries.value : [entry];
   }
 
   /** toggleSelection adds or removes one entry from the selection. */
@@ -793,6 +863,7 @@ export const useFilesStore = defineStore("files", () => {
     setViewMode,
     setQuery,
     isSelected,
+    targetsForRow,
     toggleSelection,
     toggleSelectAll,
     clearSelection,

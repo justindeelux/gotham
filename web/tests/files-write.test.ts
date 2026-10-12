@@ -28,6 +28,7 @@ import {
   listEntries,
   listRoots,
   moveEntry,
+  renameEntry,
 } from "@/features/files/api/files";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
@@ -58,7 +59,7 @@ const conflict = { message: "conflict", status: 409 };
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  for (const fn of [listRoots, listEntries, createFolder, createFile, copyEntry, moveEntry, deleteEntry]) {
+  for (const fn of [listRoots, listEntries, createFolder, createFile, copyEntry, moveEntry, deleteEntry, renameEntry]) {
     vi.mocked(fn).mockReset();
   }
   const teams = useTeamsStore();
@@ -69,6 +70,7 @@ beforeEach(() => {
     entries: [
       entry({ name: "app.yaml" }),
       entry({ name: "config", kind: "directory", size: 0, mode: 0o040755 }),
+      entry({ name: "data", kind: "directory", size: 0, mode: 0o040755 }),
     ],
     truncated: false,
     cursor: "",
@@ -152,10 +154,18 @@ describe("files store clipboard", () => {
     store.copySelection();
     expect(store.hasClipboard).toBe(true);
     expect(store.clipboardMode).toBe("copy");
+    // Paste into a different directory: the same directory is a no-op.
+    await store.openDirectory("data");
 
     const summary = await store.paste();
     expect(summary.conflicts).toEqual(["config"]);
     expect(store.conflictPrompt?.names).toEqual(["config"]);
+    expect(vi.mocked(copyEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+      root: "volumes",
+      source: "config",
+      destination: "data/config",
+      overwrite: false,
+    });
 
     const resolved = await store.resolveConflictPrompt(true);
     expect(resolved.done).toEqual(["config"]);
@@ -163,7 +173,7 @@ describe("files store clipboard", () => {
     expect(vi.mocked(copyEntry)).toHaveBeenLastCalledWith("server-1", "team-1", {
       root: "volumes",
       source: "config",
-      destination: "config",
+      destination: "data/config",
       overwrite: true,
     });
   });
@@ -175,6 +185,7 @@ describe("files store clipboard", () => {
     await store.init("server-1");
     store.toggleSelection("config");
     store.copySelection();
+    await store.openDirectory("data");
 
     await store.paste();
     const resolved = await store.resolveConflictPrompt(false);
@@ -193,14 +204,173 @@ describe("files store clipboard", () => {
     store.toggleSelection("app.yaml");
     store.cutSelection();
     expect(store.clipboardMode).toBe("cut");
+    await store.openDirectory("data");
 
     await store.paste();
     expect(store.hasClipboard).toBe(false);
     expect(vi.mocked(moveEntry)).toHaveBeenCalledWith("server-1", "team-1", {
       root: "volumes",
       source: "app.yaml",
-      destination: "app.yaml",
+      destination: "data/app.yaml",
       overwrite: false,
     });
+  });
+
+  it("no-ops a paste into the clipboard's own directory", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.cutSelection();
+
+    const summary = await store.paste();
+
+    expect(summary).toEqual({ done: [], conflicts: [], failed: [] });
+    expect(vi.mocked(moveEntry)).not.toHaveBeenCalled();
+    // The clip survives: the same-dir paste changed nothing.
+    expect(store.hasClipboard).toBe(true);
+  });
+
+  it("keeps a cut entry that failed and only drops the ones that moved", async () => {
+    vi.mocked(moveEntry)
+      .mockResolvedValueOnce(entry({ name: "app.yaml" }))
+      .mockRejectedValueOnce(new Error("boom"));
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.toggleSelection("config");
+    store.cutSelection();
+    await store.openDirectory("data");
+
+    const summary = await store.paste();
+
+    expect(summary.done).toEqual(["app.yaml"]);
+    expect(summary.failed).toHaveLength(1);
+    // The failed name stays on the clipboard for a later retry.
+    expect(store.clipboard?.names).toEqual(["config"]);
+  });
+
+  it("keeps skipped cut names on the clipboard", async () => {
+    vi.mocked(moveEntry).mockRejectedValue(conflict);
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("config");
+    store.cutSelection();
+    await store.openDirectory("data");
+
+    await store.paste();
+    await store.resolveConflictPrompt(false);
+
+    expect(store.hasClipboard).toBe(true);
+    expect(store.clipboard?.names).toEqual(["config"]);
+  });
+});
+
+describe("files store selection hygiene", () => {
+  it("drops selected names that vanish on refresh", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    expect(store.selectedNames).toEqual(["app.yaml"]);
+
+    vi.mocked(listEntries).mockResolvedValue({
+      entries: [entry({ name: "config", kind: "directory", size: 0, mode: 0o040755 })],
+      truncated: false,
+      cursor: "",
+    });
+    await store.refresh();
+
+    expect(store.selectedNames).toEqual([]);
+  });
+
+  it("follows a renamed entry in the selection and clipboard", async () => {
+    vi.mocked(renameEntry).mockResolvedValue(entry({ name: "main.yaml" }));
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.cutSelection();
+
+    vi.mocked(listEntries).mockResolvedValue({
+      entries: [entry({ name: "main.yaml" })],
+      truncated: false,
+      cursor: "",
+    });
+    await store.rename(entry({ name: "app.yaml" }), "main.yaml");
+
+    expect(store.selectedNames).toEqual(["main.yaml"]);
+    expect(store.clipboard?.names).toEqual(["main.yaml"]);
+  });
+
+  it("prunes a deleted name from the clipboard", async () => {
+    vi.mocked(deleteEntry).mockResolvedValue(undefined);
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.cutSelection();
+
+    await store.remove([entry({ name: "app.yaml" })]);
+
+    expect(store.hasClipboard).toBe(false);
+  });
+
+  it("removes a symlink with a plain unlink (no false success)", async () => {
+    vi.mocked(deleteEntry).mockResolvedValue(undefined);
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    const link = entry({ name: "current", kind: "symlink", size: 0, mode: 0o120777 });
+
+    const summary = await store.remove([link]);
+
+    expect(summary.done).toEqual(["current"]);
+    expect(vi.mocked(deleteEntry)).toHaveBeenCalledWith(
+      "server-1",
+      "team-1",
+      "volumes",
+      "current",
+      false,
+    );
+  });
+});
+
+describe("files store row targets", () => {
+  it("acts on the single row when it is not selected and the selection when it is", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    const app = entry({ name: "app.yaml" });
+    const config = entry({ name: "config", kind: "directory", size: 0, mode: 0o040755 });
+
+    // Not selected: the row itself.
+    expect(store.targetsForRow(app).map((item) => item.name)).toEqual(["app.yaml"]);
+
+    store.toggleSelection("app.yaml");
+    store.toggleSelection("config");
+    // Selected: the whole selection, including the row (no toggle-off).
+    expect(store.targetsForRow(app).map((item) => item.name).sort()).toEqual([
+      "app.yaml",
+      "config",
+    ]);
+    expect(store.targetsForRow(config).map((item) => item.name).sort()).toEqual([
+      "app.yaml",
+      "config",
+    ]);
+  });
+
+  it("stages a cut for an explicit row without mutating the selection", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("config");
+
+    const app = entry({ name: "app.yaml" });
+    store.cutSelection(store.targetsForRow(app).map((item) => item.name));
+
+    expect(store.clipboardMode).toBe("cut");
+    expect(store.clipboard?.names).toEqual(["app.yaml"]);
+    // The pre-existing selection is untouched.
+    expect(store.selectedNames).toEqual(["config"]);
   });
 });

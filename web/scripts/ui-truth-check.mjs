@@ -1329,6 +1329,39 @@ async function main() {
     );
   });
 
+  console.log("files transfer destination pre-validation (JUS-111 fix round 1)");
+  await check("refuses the source folder and a moved folder's subtree", () => {
+    const { destinationProblem } = filesUtils.module;
+    const folder = { name: "config", kind: "directory" };
+    const file = { name: "app.yaml", kind: "file" };
+    assert(
+      destinationProblem("src", "src", [file]) === "same-folder",
+      "same folder is refused for a move or a copy",
+    );
+    assert(
+      destinationProblem("src", "src/config/nested", [folder]) === "into-itself",
+      "a moved folder's descendant is refused",
+    );
+    assert(
+      destinationProblem("src", "other/deeper", [folder]) === null,
+      "an unrelated destination is allowed",
+    );
+  });
+
+  await check("classifies a drop into files and rejected folders", () => {
+    const { isFileDrag, filesFromDrop } = filesUtils.module;
+    assert(isFileDrag(["Files"]) === true, "a Files drag is a file drag");
+    assert(isFileDrag(["text/plain"]) === false, "a text drag is ignored");
+    const result = filesFromDrop({
+      items: [
+        { kind: "file", webkitGetAsEntry: () => ({ isDirectory: true }) },
+        { kind: "file", webkitGetAsEntry: () => null, getAsFile: () => null },
+      ],
+    });
+    assert(result.folders === 1, "a dropped directory is counted, not uploaded");
+    assert(result.files.length === 0, "no file is queued for a folder only drop");
+  });
+
   await filesUtils.cleanup();
 
   const failed = results.filter((r) => !r.ok);

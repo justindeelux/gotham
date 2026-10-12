@@ -7,7 +7,6 @@ import { useI18n } from "vue-i18n";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import type { TransferSummary } from "@/features/files/stores/files";
-import { isSelectable } from "@/features/files/utils/files";
 
 interface Props {
   show: boolean;
@@ -44,10 +43,16 @@ const messageText = computed<string>(() =>
     : String(t("files.dialogs.deleteMessage")),
 );
 
-/** submit deletes every selected entry and reports a per-name outcome. */
+/** submit deletes every entry and reports a per-name outcome. */
 async function submit(): Promise<void> {
+  if (files.acting) {
+    return;
+  }
   try {
-    const result = await files.remove(props.entries.filter(isSelectable));
+    // Every entry the dialog is open for is deletable: a folder recursively, a
+    // file or symlink with a plain unlink (a symlink removes the link, never
+    // its target). Special rows never reach this dialog.
+    const result = await files.remove(props.entries);
     if (result.failed.length === 0) {
       message.success(
         String(t("files.dialogs.deleted", { count: result.done.length })),

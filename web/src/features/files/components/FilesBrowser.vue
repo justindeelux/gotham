@@ -28,6 +28,7 @@ import {
   NDropdown,
   NInput,
   NSelect,
+  useMessage,
 } from "naive-ui";
 import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -46,8 +47,10 @@ import type { NameKind } from "@/features/files/utils/files";
 import {
   entryIconKind,
   entryTypeLabel,
+  filesFromDrop,
   formatMode,
   formatTimestamp,
+  isFileDrag,
   isSelectable,
 } from "@/features/files/utils/files";
 import { useTeamsStore } from "@/features/teams";
@@ -60,6 +63,7 @@ interface Props {
 const props = defineProps<Props>();
 
 const { t, locale } = useI18n();
+const message = useMessage();
 const files = useFilesStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
@@ -238,12 +242,44 @@ function openUpload(dropped: File[] = []): void {
   uploadOpen.value = true;
 }
 
-/** onDrop opens the upload dialog queued with the dropped files. */
+/** onDragOver highlights the zone only for a file drag on a writable root. */
+function onDragOver(event: DragEvent): void {
+  if (!isFileDrag(event.dataTransfer?.types)) {
+    return;
+  }
+  // A file drag must preventDefault to allow the drop, even when the root is
+  // read-only (otherwise the browser opens the dropped file).
+  event.preventDefault();
+  if (files.canWrite) {
+    dragActive.value = true;
+  }
+}
+
+function onDragLeave(): void {
+  dragActive.value = false;
+}
+
+/**
+ * onDrop opens the upload dialog queued with the dropped files. A drop is only
+ * honoured on a writable root, a non-file drag is ignored, and a dropped
+ * directory is rejected with a clear message instead of uploaded as an empty
+ * file.
+ */
 function onDrop(event: DragEvent): void {
   dragActive.value = false;
-  const list = event.dataTransfer?.files;
-  if (list && list.length > 0) {
-    openUpload(Array.from(list));
+  if (!isFileDrag(event.dataTransfer?.types)) {
+    return;
+  }
+  event.preventDefault();
+  if (!files.canWrite) {
+    return;
+  }
+  const { files: dropped, folders } = filesFromDrop(event.dataTransfer);
+  if (folders > 0) {
+    message.warning(String(t("files.dialogs.foldersUnsupported")));
+  }
+  if (dropped.length > 0) {
+    openUpload(dropped);
   }
 }
 
@@ -264,17 +300,22 @@ function rowMenu(entry: FilesEntry): Array<{ label: string; key: string; disable
       disabled: !files.canReadContent,
     });
   }
-  options.push(
-    { label: String(t("files.actions.rename")), key: "rename", disabled: !files.canWrite },
-    { label: String(t("files.actions.move")), key: "move", disabled: !files.canWrite },
-    { label: String(t("files.actions.copy")), key: "copy", disabled: !files.canWrite },
-    { label: String(t("files.actions.cut")), key: "cut", disabled: !files.canWrite },
-    { label: String(t("common.actions.delete")), key: "delete", disabled: !files.canWrite },
-  );
+  // Special files are list-only (see the mockup): offering a delete the store
+  // filters out would toast a false success. A symlink is unlinked as a link,
+  // its target untouched, so it keeps the write actions.
+  if (entry.kind !== "special" && entry.kind !== "unspecified") {
+    options.push(
+      { label: String(t("files.actions.rename")), key: "rename", disabled: !files.canWrite },
+      { label: String(t("files.actions.move")), key: "move", disabled: !files.canWrite },
+      { label: String(t("files.actions.copy")), key: "copy", disabled: !files.canWrite },
+      { label: String(t("files.actions.cut")), key: "cut", disabled: !files.canWrite },
+      { label: String(t("common.actions.delete")), key: "delete", disabled: !files.canWrite },
+    );
+  }
   return options;
 }
 
-/** onRowMenu dispatches one row action. */
+/** onRowMenu dispatches one row action on the row or the whole selection. */
 function onRowMenu(key: string, entry: FilesEntry): void {
   switch (key) {
     case "open":
@@ -287,17 +328,16 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       openRename(entry);
       break;
     case "move":
-      openTransfer("move", [entry]);
+      openTransfer("move", files.targetsForRow(entry));
       break;
     case "copy":
-      openTransfer("copy", [entry]);
+      openTransfer("copy", files.targetsForRow(entry));
       break;
     case "cut":
-      files.toggleSelection(entry.name);
-      files.cutSelection();
+      files.cutSelection(files.targetsForRow(entry).map((item) => item.name));
       break;
     case "delete":
-      openDelete([entry]);
+      openDelete(files.targetsForRow(entry));
       break;
   }
 }
@@ -307,9 +347,9 @@ function onRowMenu(key: string, entry: FilesEntry): void {
   <NCard
     class="files-browser"
     :class="{ 'is-dragging': dragActive }"
-    @dragover.prevent="dragActive = true"
-    @dragleave.prevent="dragActive = false"
-    @drop.prevent="onDrop"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
   >
     <template #header>
       <div class="fm-card-head">

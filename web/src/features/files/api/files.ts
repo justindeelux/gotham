@@ -416,4 +416,5 @@ const statusKeys: Record<number, string> = {
   501: "files.errors.agentOutdated",
   502: "files.errors.agentUnavailable",
   503: "files.errors.disabled",
+  507: "files.errors.insufficientStorage",
 };

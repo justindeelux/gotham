@@ -60,6 +60,15 @@ beforeEach(() => {
   messages.warning.mockReset();
 });
 
+/** deferred returns a promise with its resolve exposed (batch-gate tests). */
+function deferred<T>() {
+  let resolve!: (_value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe("useFileUpload", () => {
   it("uploads a file, reports progress and lands in done", async () => {
     vi.mocked(uploadFiles).mockImplementation(async (_s, _t, _files, options) => {
@@ -169,5 +178,86 @@ describe("useFileUpload", () => {
     expect(upload.items.value[0]?.status).toBe("error");
     expect(upload.items.value[0]?.errorToken).toBe("invalid");
     expect(vi.mocked(uploadFiles)).not.toHaveBeenCalled();
+  });
+
+  it("does not send a queued file removed during the batch", async () => {
+    const gate = deferred<FilesUploadResult[]>();
+    vi.mocked(uploadFiles)
+      .mockImplementationOnce(() => gate.promise)
+      .mockResolvedValueOnce([ok("b.txt")]);
+
+    const upload = useFileUpload();
+    upload.addFiles([file("a.bin"), file("b.txt")]);
+    const started = upload.start(target);
+    // a.bin is in flight; cancel the queued b.txt.
+    upload.removeItem(upload.items.value[1]!.id);
+    gate.resolve([ok("a.bin")]);
+    await started;
+
+    expect(vi.mocked(uploadFiles)).toHaveBeenCalledTimes(1);
+    expect(upload.items.value.map((item) => item.file.name)).toEqual(["a.bin"]);
+  });
+
+  it("clearing the queue stops the files that were still queued", async () => {
+    const gate = deferred<FilesUploadResult[]>();
+    vi.mocked(uploadFiles)
+      .mockImplementationOnce(() => gate.promise)
+      .mockResolvedValue([ok("x")]);
+
+    const upload = useFileUpload();
+    upload.addFiles([file("a"), file("b"), file("c")]);
+    const started = upload.start(target);
+    upload.clear();
+    gate.resolve([ok("a")]);
+    await started;
+
+    expect(vi.mocked(uploadFiles)).toHaveBeenCalledTimes(1);
+    expect(upload.items.value).toEqual([]);
+  });
+
+  it("retry never starts a second runner while a batch is in flight", async () => {
+    let inflight = 0;
+    let peak = 0;
+    const gate = deferred<FilesUploadResult[]>();
+    vi.mocked(uploadFiles)
+      .mockResolvedValueOnce([{ name: "a", path: "a", error: "error" }])
+      .mockImplementation(async () => {
+        inflight += 1;
+        peak = Math.max(peak, inflight);
+        const result = await gate.promise;
+        inflight -= 1;
+        return result;
+      });
+
+    const upload = useFileUpload();
+    upload.addFiles([file("a"), file("b")]);
+    const started = upload.start(target);
+
+    await vi.waitFor(() => {
+      if (upload.items.value[0]!.status !== "error") {
+        throw new Error("a still in flight");
+      }
+      if (upload.items.value[1]!.status !== "uploading") {
+        throw new Error("b has not started");
+      }
+    });
+
+    const retried = upload.retry(upload.items.value[0]!.id, target, false);
+    gate.resolve([ok("b")]);
+    await Promise.all([started, retried]);
+
+    expect(peak).toBe(1);
+    expect(upload.items.value[0]!.status).toBe("done");
+  });
+
+  it("sends the trimmed name it validated", async () => {
+    vi.mocked(uploadFiles).mockResolvedValue([ok("a.txt")]);
+
+    const upload = useFileUpload();
+    upload.addFiles([file("  a.txt  ")]);
+    await upload.start(target);
+
+    const sent = vi.mocked(uploadFiles).mock.calls[0]?.[2]?.[0];
+    expect(sent?.name).toBe("a.txt");
   });
 });

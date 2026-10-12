@@ -1,5 +1,5 @@
 import { useMessage } from "naive-ui";
-import { computed, ref } from "vue";
+import { computed, getCurrentScope, onScopeDispose, ref } from "vue";
 
 import {
   describeFilesError,
@@ -57,10 +57,25 @@ export interface UploadTarget {
 
 let uploadSeq = 0;
 
+/** UploadWork is one file the single runner still has to (re)send. */
+interface UploadWork {
+  id: string;
+  overwrite: boolean;
+}
+
 export function useFileUpload() {
   const message = useMessage();
   const items = ref<UploadItem[]>([]);
   const uploading = ref(false);
+
+  // One runner owns the whole queue: start, retry and retryFailed all enqueue
+  // work and drain it one file at a time, so a retry can never start a second
+  // concurrent sender. `cancelled` is re-checked before every file, so a
+  // cancel/close stops the remaining queued files instead of draining them.
+  const queue: UploadWork[] = [];
+  let draining = false;
+  let cancelled = false;
+  let activeTarget: UploadTarget | null = null;
 
   const summary = computed(() => {
     const counts: Record<UploadStatus, number> = {
@@ -113,13 +128,10 @@ export function useFileUpload() {
     items.value = items.value.filter((candidate) => candidate.id !== id);
   }
 
-  /** clear resets the whole queue. */
+  /** clear drops the whole queue and stops the runner (dialog close). */
   function clear(): void {
-    for (const item of items.value) {
-      item.controller?.abort();
-    }
+    cancelAll();
     items.value = [];
-    uploading.value = false;
   }
 
   /** uploadOne sends one file and records its terminal state. */
@@ -135,14 +147,22 @@ export function useFileUpload() {
     item.message = "";
     item.loaded = 0;
     // A local name check fails fast and shows the same rule as the create
-    // dialogs, instead of a round trip the server would reject anyway.
-    const nameError = validateEntryName(item.file.name);
+    // dialogs, instead of a round trip the server would reject anyway. The
+    // validated name is the trimmed one, so that is the name sent.
+    const name = item.file.name.trim();
+    const nameError = validateEntryName(name);
     if (nameError) {
       item.status = "error";
       item.errorToken = "invalid";
       item.message = String(i18n.global.t(nameError));
       item.controller = null;
       return;
+    }
+    if (name !== item.file.name) {
+      item.file = new File([item.file], name, {
+        type: item.file.type,
+        lastModified: item.file.lastModified,
+      });
     }
     try {
       const options: UploadFilesOptions = {
@@ -192,28 +212,64 @@ export function useFileUpload() {
   }
 
   /**
-   * start sends every queued file, one at a time, and toasts a one-line
-   * summary when failures remain. The caller refreshes the listing on success
-   * (the dialog shows the per-file rows meanwhile).
+   * run drains the work queue with a single sender. It is the only runner:
+   * every entry point funnels through it, so a retry during a batch extends
+   * the same run instead of starting a second one.
    */
-  async function start(target: UploadTarget): Promise<void> {
-    if (uploading.value) {
+  async function run(): Promise<void> {
+    if (draining) {
       return;
     }
+    draining = true;
     uploading.value = true;
     try {
-      for (const item of items.value) {
-        if (item.status !== "queued") {
+      while (queue.length > 0) {
+        if (cancelled) {
+          queue.length = 0;
+          break;
+        }
+        const work = queue.shift();
+        if (!work || !activeTarget) {
           continue;
         }
-        await uploadOne(item, target, false);
+        const item = items.value.find((candidate) => candidate.id === work.id);
+        if (!item || item.status === "uploading") {
+          continue;
+        }
+        await uploadOne(item, activeTarget, work.overwrite);
       }
     } finally {
+      draining = false;
       uploading.value = false;
     }
     if (summary.value.error > 0) {
       message.error(describeUploadError("error"));
     }
+  }
+
+  /** enqueue adds work and (re)starts the single runner when it is idle. */
+  function enqueue(work: UploadWork[]): Promise<void> {
+    if (work.length > 0) {
+      queue.push(...work);
+    }
+    return run();
+  }
+
+  /**
+   * start sends every queued file, one at a time, and toasts a one-line
+   * summary when failures remain. The caller refreshes the listing on success
+   * (the dialog shows the per-file rows meanwhile).
+   */
+  function start(target: UploadTarget): Promise<void> {
+    if (uploading.value || items.value.every((item) => item.status !== "queued")) {
+      return Promise.resolve();
+    }
+    cancelled = false;
+    activeTarget = target;
+    const work = items.value
+      .filter((item) => item.status === "queued")
+      .map((item) => ({ id: item.id, overwrite: false }));
+    return enqueue(work);
   }
 
   /** cancel aborts the in-flight request of one row. */
@@ -224,8 +280,13 @@ export function useFileUpload() {
     }
   }
 
-  /** cancelAll aborts the in-flight request (queued rows stay queued). */
+  /**
+   * cancelAll stops the runner and aborts the in-flight request. Queued rows
+   * stay queued (a later start re-sends them) but are never sent now.
+   */
   function cancelAll(): void {
+    cancelled = true;
+    queue.length = 0;
     for (const item of items.value) {
       if (item.status === "uploading") {
         item.controller?.abort();
@@ -233,22 +294,19 @@ export function useFileUpload() {
     }
   }
 
-  /** retry re-sends one row; overwrite replaces a conflicting name. */
-  async function retry(
+  /** retry re-sends one failed row; overwrite replaces a conflicting name. */
+  function retry(
     id: string,
     target: UploadTarget,
     overwrite = false,
   ): Promise<void> {
     const item = items.value.find((candidate) => candidate.id === id);
-    if (!item || item.status === "uploading") {
-      return;
+    if (!item || (item.status !== "error" && item.status !== "conflict")) {
+      return Promise.resolve();
     }
-    uploading.value = true;
-    try {
-      await uploadOne(item, target, overwrite);
-    } finally {
-      uploading.value = false;
-    }
+    cancelled = false;
+    activeTarget = target;
+    return enqueue([{ id, overwrite }]);
   }
 
   /**
@@ -256,22 +314,21 @@ export function useFileUpload() {
    * conflict retries with overwrite (the user retrying a skipped file means
    * replace).
    */
-  async function retryFailed(target: UploadTarget): Promise<void> {
-    if (uploading.value) {
-      return;
-    }
-    uploading.value = true;
-    try {
-      for (const item of items.value) {
-        if (item.status === "error") {
-          await uploadOne(item, target, false);
-        } else if (item.status === "conflict") {
-          await uploadOne(item, target, true);
-        }
-      }
-    } finally {
-      uploading.value = false;
-    }
+  function retryFailed(target: UploadTarget): Promise<void> {
+    cancelled = false;
+    activeTarget = target;
+    const work = items.value
+      .filter((item) => item.status === "error" || item.status === "conflict")
+      .map((item) => ({ id: item.id, overwrite: item.status === "conflict" }));
+    return enqueue(work);
+  }
+
+  // A route change unmounts the dialog while the runner may still be sending:
+  // stop it so cancelled files are never written after the user left.
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      cancelAll();
+    });
   }
 
   return {

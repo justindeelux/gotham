@@ -8,8 +8,10 @@ import { useI18n } from "vue-i18n";
 import { listEntries } from "@/features/files/api/files";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
+import type { TransferProblem } from "@/features/files/utils/files";
 import {
   breadcrumbSegments,
+  destinationProblem,
   joinPath,
   parentPath,
 } from "@/features/files/utils/files";
@@ -41,8 +43,44 @@ const crumbs = computed(() =>
   breadcrumbSegments(files.rootName, pickerPath.value),
 );
 
-/** canPick is false while a listing is in flight, so a race cannot confirm. */
-const canPick = computed<boolean>(() => !pickerLoading.value && !pickerError.value);
+/**
+ * problem reports why the current picker path is not a valid destination. The
+ * agent refuses a transfer onto the source folder or into a moved folder, so
+ * the dialog pre-validates instead of letting the call fail with 400.
+ */
+const problem = computed<TransferProblem | null>(() =>
+  destinationProblem(files.path, pickerPath.value, props.entries),
+);
+
+const problemText = computed<string>(() => {
+  switch (problem.value) {
+    case "same-folder":
+      return String(t("files.dialogs.transferSameFolder"));
+    case "into-itself":
+      return String(t("files.dialogs.transferIntoItself"));
+    default:
+      return "";
+  }
+});
+
+/** canPick is false while a listing is in flight or the destination is invalid. */
+const canPick = computed<boolean>(
+  () =>
+    !pickerLoading.value &&
+    !pickerError.value &&
+    problem.value === null,
+);
+
+/** childBlocked marks a subfolder the picker must not descend into. */
+function childBlocked(entry: FilesEntry): boolean {
+  return (
+    destinationProblem(
+      files.path,
+      joinPath(pickerPath.value, entry.name),
+      props.entries,
+    ) !== null
+  );
+}
 
 /** loadPicker reads only the directories of the picker's current path. */
 async function loadPicker(): Promise<void> {
@@ -64,12 +102,13 @@ async function loadPicker(): Promise<void> {
   }
 }
 
-// Reset to the source directory whenever the dialog opens.
+// Open on a valid destination: the parent of the source folder (the source
+// folder itself and its descendants are refused by the agent).
 watch(
   () => props.show,
   (open) => {
     if (open) {
-      pickerPath.value = files.path;
+      pickerPath.value = parentPath(files.path);
       void loadPicker();
     }
   },
@@ -190,6 +229,7 @@ async function confirm(): Promise<void> {
         :key="entry.name"
         type="button"
         class="picker-row"
+        :disabled="childBlocked(entry)"
         @click="openDirectory(entry)"
       >
         <Folder :size="15" :stroke-width="1.7" aria-hidden="true" />
@@ -197,6 +237,8 @@ async function confirm(): Promise<void> {
         <ChevronRight :size="14" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </div>
+
+    <p v-if="problemText" class="small picker-error">{{ problemText }}</p>
 
     <template #footer>
       <div class="dialog-foot">
@@ -296,6 +338,15 @@ async function confirm(): Promise<void> {
 
 .picker-row:hover {
   background: var(--hover-row);
+}
+
+.picker-row:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.picker-row:disabled:hover {
+  background: none;
 }
 
 .picker-row .grow {

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { CloudDownload, File, Upload } from "@lucide/vue";
-import { NButton, NModal, NProgress, NTag } from "naive-ui";
+import { NButton, NModal, NProgress, NTag, useMessage } from "naive-ui";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { UploadItem } from "@/features/files/composables/useFileUpload";
 import { useFileUpload } from "@/features/files/composables/useFileUpload";
 import { useFilesStore } from "@/features/files/stores/files";
+import { filesFromDrop, isFileDrag } from "@/features/files/utils/files";
 import { useTeamsStore } from "@/features/teams";
 import { formatBytes } from "@/shared/utils/format";
 
@@ -22,6 +23,7 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+const message = useMessage();
 const files = useFilesStore();
 const teams = useTeamsStore();
 const upload = useFileUpload();
@@ -59,11 +61,18 @@ function picked(event: Event): void {
   input.value = "";
 }
 
-/** dropped queues files dropped on the drop zone. */
+/** dropped queues files dropped on the drop zone (folders are rejected). */
 function dropped(event: DragEvent): void {
   dragging.value = false;
-  if (event.dataTransfer?.files) {
-    upload.addFiles(event.dataTransfer.files);
+  if (!isFileDrag(event.dataTransfer?.types)) {
+    return;
+  }
+  const { files: dropped, folders } = filesFromDrop(event.dataTransfer);
+  if (folders > 0) {
+    message.warning(String(t("files.dialogs.foldersUnsupported")));
+  }
+  if (dropped.length > 0) {
+    upload.addFiles(dropped);
   }
 }
 

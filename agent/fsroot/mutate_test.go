@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -329,5 +330,121 @@ func TestRemoveStaleTemps(t *testing.T) {
 	}
 	if _, err := os.Stat(outsideTemp); err != nil {
 		t.Fatalf("the sweep followed a symlink into the target directory: %v", err)
+	}
+}
+
+// TestRemoveStaleTempsSweepsStaleDirectories pins finding 1: a staging
+// directory left by a crashed directory copy (or a failed staged-copy cleanup)
+// is removed whole with its children, decided by its own prefix and age before
+// the sweep descends, while a fresh staging directory and a non-prefixed
+// directory are kept.
+func TestRemoveStaleTempsSweepsStaleDirectories(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	old := time.Now().Add(-48 * time.Hour)
+
+	stale := filepath.Join(dir, fsroot.TempPrefix+"abc")
+	if err := os.MkdirAll(filepath.Join(stale, "child"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "child", "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := filepath.Join(dir, fsroot.TempPrefix+"fresh")
+	if err := os.Mkdir(fresh, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fresh, "keep"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ordinary := filepath.Join(dir, "ordinary")
+	if err := os.Mkdir(ordinary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ordinary, "keep"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := openRoot(t, dir)
+
+	removed, err := root.RemoveStaleTemps(fsroot.TempPrefix, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatalf("RemoveStaleTemps: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the stale staging directory was not removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(fresh, "keep")); err != nil {
+		t.Fatalf("a fresh staging directory was touched: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ordinary, "keep")); err != nil {
+		t.Fatalf("a non-prefixed directory was touched: %v", err)
+	}
+}
+
+// TestCopyDirectoryModeExact pins finding 2: a copied directory carries the
+// exact source mode rather than the umask-masked one, and a read-only source
+// directory (0o555) still copies with its children. The test narrows the umask
+// so the old masking (0o770 -> 0o750) is observable; it is deliberately not run
+// in parallel because the umask is process-wide.
+func TestCopyDirectoryModeExact(t *testing.T) {
+	dir := t.TempDir()
+	writable := filepath.Join(dir, "writable")
+	readonly := filepath.Join(dir, "readonly")
+	for _, src := range []string{writable, readonly} {
+		if err := os.Mkdir(src, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(writable, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(readonly, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	// t.TempDir's cleanup must be able to descend into the read-only copies.
+	t.Cleanup(func() {
+		for _, p := range []string{readonly, filepath.Join(dir, "readonly-dst"), filepath.Join(dir, "writable-dst")} {
+			if err := os.Chmod(p, 0o755); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("restore mode on %s: %v", p, err)
+			}
+		}
+	})
+	root := openRoot(t, dir)
+
+	oldUmask := syscall.Umask(0o077)
+	defer syscall.Umask(oldUmask)
+
+	if err := root.Copy(context.Background(), "writable", "writable-dst", false, nil); err != nil {
+		t.Fatalf("copy a 0o770 directory: %v", err)
+	}
+	if err := root.Copy(context.Background(), "readonly", "readonly-dst", false, nil); err != nil {
+		t.Fatalf("copy a 0o555 directory: %v", err)
+	}
+	modeOf := func(name string) os.FileMode {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Mode().Perm()
+	}
+	if got := modeOf("writable-dst"); got != 0o770 {
+		t.Fatalf("copied 0o770 directory mode = %#o, want 0o770", got)
+	}
+	if got := modeOf("readonly-dst"); got != 0o555 {
+		t.Fatalf("copied 0o555 directory mode = %#o, want 0o555", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "readonly-dst", "f")); err != nil {
+		t.Fatalf("the read-only copy lost its child: %v", err)
 	}
 }

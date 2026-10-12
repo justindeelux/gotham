@@ -387,10 +387,13 @@ func (r *Root) removeTree(ctx context.Context, p string, onEntry func(string, En
 
 // RemoveStaleTemps deletes every entry under the root whose base name starts
 // with prefix and whose modification time is before cutoff, walking each
-// directory without following symbolic links. It returns how many entries it
-// removed and joins the errors of entries it could not remove, but keeps
-// walking so one stale file does not strand the rest. The agent uses it to
-// reclaim staging files a crashed upload left behind.
+// directory without following symbolic links. A stale staging directory is
+// removed whole (with its children) before the walk would descend into it, so a
+// directory a crashed directory copy or a failed staged-copy cleanup left
+// behind is reclaimed rather than only its stale children. It returns how many
+// top-level entries it removed and joins the errors of entries it could not
+// remove, but keeps walking so one stale file does not strand the rest. The
+// agent uses it to reclaim staging files a crashed upload left behind.
 func (r *Root) RemoveStaleTemps(prefix string, cutoff time.Time) (int, error) {
 	if err := r.requireWritable(); err != nil {
 		return 0, err
@@ -420,13 +423,28 @@ func (r *Root) removeStaleTemps(dir, prefix string, cutoff time.Time, depth int)
 			}
 			continue
 		}
+		stale := strings.HasPrefix(name, prefix) && entry.Modified.Before(cutoff)
 		if entry.Kind == KindDirectory {
+			// A stale staging directory is swept whole: check its prefix and
+			// age before descending, so a directory left by a crashed copy (or
+			// a failed staged-copy cleanup) is reclaimed even though it has
+			// children. A fresh or non-prefixed directory is descended into as
+			// before, so a stale file buried inside a live directory is still
+			// found.
+			if stale {
+				if err := r.removeTree(context.Background(), rel, nil); err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				removed++
+				continue
+			}
 			n, subErrs := r.removeStaleTemps(rel, prefix, cutoff, depth+1)
 			removed += n
 			errs = append(errs, subErrs...)
 			continue
 		}
-		if !strings.HasPrefix(name, prefix) || !entry.Modified.Before(cutoff) {
+		if !stale {
 			continue
 		}
 		if err := r.root.Remove(rel); err != nil {
@@ -606,7 +624,13 @@ func (r *Root) copyTree(ctx context.Context, src, dst string, onEntry func(strin
 	}
 	switch entry.Kind {
 	case KindDirectory:
-		if err := r.root.Mkdir(dst, entry.Mode.Perm()); err != nil {
+		// Create the directory writable so its children can be copied in even
+		// when the source mode is read-only (e.g. 0o555), then set the exact
+		// source mode once the children exist. os.Root.Mkdir is masked by the
+		// process umask, which would otherwise silently drop group or other
+		// bits (e.g. 0o770 -> 0o750); Chmod sets the exact mode as file mode
+		// is already set exactly by copyFile.
+		if err := r.root.Mkdir(dst, entry.Mode.Perm()|0o700); err != nil {
 			return mapError("mkdir", err)
 		}
 		names, err := r.dirNames(src)
@@ -620,6 +644,9 @@ func (r *Root) copyTree(ctx context.Context, src, dst string, onEntry func(strin
 			if err := r.copyTree(ctx, path.Join(src, name), path.Join(dst, name), onEntry, depth+1); err != nil {
 				return err
 			}
+		}
+		if err := r.root.Chmod(dst, entry.Mode.Perm()); err != nil {
+			return mapError("chmod", err)
 		}
 	case KindSymlink:
 		if err := r.root.Symlink(entry.SymlinkTarget, dst); err != nil {

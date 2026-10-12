@@ -51,8 +51,8 @@
                 <option value="compose">Compose root · read-only</option>
               </select>
               <span class="segmented" data-seg="fm-view">
-                <button class="is-active" type="button" data-value="list"><svg aria-hidden="true"><use href="#i-list"></use></svg>List</button>
-                <button type="button" data-value="grid"><svg aria-hidden="true"><use href="#i-grid"></use></svg>Grid</button>
+                <button class="is-active" type="button" data-value="list" aria-label="List view" title="List view"><svg aria-hidden="true"><use href="#i-list"></use></svg></button>
+                <button type="button" data-value="grid" aria-label="Grid view" title="Grid view"><svg aria-hidden="true"><use href="#i-grid"></use></svg></button>
               </span>
             </span>
           </div>
@@ -88,8 +88,8 @@
             <div class="table-wrap">
               <div class="fm-table" role="table">
                 <div class="fm-row fm-head" role="row">
-                  <div class="fm-name" role="columnheader" aria-sort="ascending" style="gap:var(--space-2)">
-                    <label class="check"><input type="checkbox" aria-label="Select all entries" /></label>
+                  <span class="fm-select" role="columnheader"><label class="check"><input type="checkbox" aria-label="Select all entries" /></label></span>
+                  <div class="fm-name" role="columnheader" aria-sort="ascending">
                     <button class="fm-sort is-active" type="button">Name <svg aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
                   </div>
                   <div role="columnheader">Type</div>
@@ -101,9 +101,9 @@
 
                 <!-- folders -->
                 <div class="fm-row" role="row" data-tag="folder">
+                  <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select config"></label></span>
                   <div class="fm-name" role="cell">
-                    <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg>
-                      <span class="fm-check"><label class="check"><input type="checkbox" aria-label="Select config"></label></span></span>
+                    <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened config/|info"><b>config</b><span>directory</span></button>
                   </div>
                   <div class="fm-cell" role="cell">Folder</div>
@@ -119,9 +119,9 @@
                 </div>
 
                 <div class="fm-row" role="row" data-tag="folder">
+                  <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select data"></label></span>
                   <div class="fm-name" role="cell">
-                    <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg>
-                      <span class="fm-check"><label class="check"><input type="checkbox" aria-label="Select data"></label></span></span>
+                    <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened data/|info"><b>data</b><span>directory</span></button>
                   </div>
                   <div class="fm-cell" role="cell">Folder</div>
@@ -137,9 +137,9 @@
                 </div>
 
                 <div class="fm-row" role="row" data-tag="folder">
+                  <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select logs"></label></span>
                   <div class="fm-name" role="cell">
-                    <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg>
-                      <span class="fm-check"><label class="check"><input type="checkbox" aria-label="Select logs"></label></span></span>
+                    <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened logs/|info"><b>logs</b><span>directory · 214 entries</span></button>
                   </div>
                   <div class="fm-cell" role="cell">Folder</div>
@@ -156,9 +156,9 @@
 
                 <!-- files -->
                 <div class="fm-row is-selected" role="row" data-tag="file">
+                  <span class="fm-select" role="cell"><label class="check"><input type="checkbox" checked aria-label="Select app.yaml"></label></span>
                   <div class="fm-name" role="cell">
-                    <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg>
-                      <span class="fm-check"><label class="check"><input type="checkbox" checked aria-label="Select app.yaml"></label></span></span>
+                    <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened app.yaml in the editor.|info"><b>app.yaml</b><span>YAML · open in editor</span></button>
                   </div>
                   <div class="fm-cell" role="cell">YAML</div>
@@ -174,9 +174,9 @@
                 </div>
 
                 <div class="fm-row" role="row" data-tag="file">
+                  <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select .env"></label></span>
                   <div class="fm-name" role="cell">
-                    <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg>
-                      <span class="fm-check"><label class="check"><input type="checkbox" aria-label="Select .env"></label></span></span>
+                    <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Content requires the owner or admin role.|warn"><b>.env</b><span>dotenv · restricted 0600</span></button>
                   </div>
                   <div class="fm-cell" role="cell">ENV</div>
@@ -192,9 +192,9 @@
                 </div>
 
                 <div class="fm-row" role="row" data-tag="file">
+                  <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select docker-compose.yml"></label></span>
                   <div class="fm-name" role="cell">
-                    <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-doc"></use></svg>
-                      <span class="fm-check"><label class="check"><input type="checkbox" aria-label="Select docker-compose.yml"></label></span></span>
+                    <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-doc"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened docker-compose.yml in the editor.|info"><b>docker-compose.yml</b><span>YAML · compose</span></button>
                   </div>
                   <div class="fm-cell" role="cell">YAML</div>
@@ -210,9 +210,9 @@
                 </div>
 
                 <div class="fm-row is-selected" role="row" data-tag="file">
+                  <span class="fm-select" role="cell"><label class="check"><input type="checkbox" checked aria-label="Select logo.png"></label></span>
                   <div class="fm-name" role="cell">
-                    <span class="fm-mark" data-kind="image"><svg aria-hidden="true"><use href="#i-image"></use></svg>
-                      <span class="fm-check"><label class="check"><input type="checkbox" checked aria-label="Select logo.png"></label></span></span>
+                    <span class="fm-mark" data-kind="image"><svg aria-hidden="true"><use href="#i-image"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Previewed logo.png.|info"><b>logo.png</b><span>PNG image · 512×512</span></button>
                   </div>
                   <div class="fm-cell" role="cell">Image</div>
@@ -228,9 +228,9 @@
                 </div>
 
                 <div class="fm-row" role="row" data-tag="file">
+                  <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select backup archive"></label></span>
                   <div class="fm-name" role="cell">
-                    <span class="fm-mark" data-kind="archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg>
-                      <span class="fm-check"><label class="check"><input type="checkbox" aria-label="Select backup archive"></label></span></span>
+                    <span class="fm-mark" data-kind="archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="128.4 MiB — over the 2 MiB editor limit. Download only.|warn"><b>backup-2026-10-11.tar.gz</b><span>gzip archive · download only</span></button>
                   </div>
                   <div class="fm-cell" role="cell">Archive</div>
@@ -246,9 +246,9 @@
                 </div>
 
                 <div class="fm-row" role="row" data-tag="file">
+                  <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select server.log"></label></span>
                   <div class="fm-name" role="cell">
-                    <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-terminal"></use></svg>
-                      <span class="fm-check"><label class="check"><input type="checkbox" aria-label="Select server.log"></label></span></span>
+                    <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-terminal"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="4.1 MiB — over the 2 MiB editor limit. Download only.|warn"><b>server.log</b><span>text · 4.1 MiB · download only</span></button>
                   </div>
                   <div class="fm-cell" role="cell">Log</div>
@@ -265,6 +265,7 @@
 
                 <!-- symlink + special file: no write actions -->
                 <div class="fm-row" role="row" data-tag="special">
+                  <span class="fm-select" role="cell"></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark"><svg aria-hidden="true"><use href="#i-link"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Symlink target: ../app-1190 (inside the same root).|info"><b>current</b><span>symlink → ../app-1190</span></button>
@@ -281,6 +282,7 @@
                 </div>
 
                 <div class="fm-row" role="row" data-tag="special">
+                  <span class="fm-select" role="cell"></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark"><svg aria-hidden="true"><use href="#i-terminal"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Special file (socket). List only — no read, write or copy.|warn"><b>run.sock</b><span>socket · special file, no actions</span></button>
@@ -296,6 +298,7 @@
 
                 <!-- permission denied: owned by root, unreadable by gotham-agent -->
                 <div class="fm-row" role="row" data-tag="denied">
+                  <span class="fm-select" role="cell"></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark"><svg aria-hidden="true"><use href="#i-lock"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Permission denied — gotham-agent cannot read this directory (owned by root, mode 0700).|warn"><b>secrets</b><span>directory · root-owned, unreadable</span></button>
@@ -338,7 +341,8 @@
             <div class="table-wrap mt-4">
               <div class="fm-table">
                 <div class="fm-row fm-head">
-                  <div class="fm-name" style="gap:var(--space-2)"><span style="width:16px"></span><span>Name</span></div>
+                  <span class="fm-select" aria-hidden="true"></span>
+                  <div class="fm-name"><span>Name</span></div>
                   <div>Type</div>
                   <div class="fm-cell--size">Size</div>
                   <div>Modified</div>
@@ -346,12 +350,14 @@
                   <div class="right">Actions</div>
                 </div>
                 <div class="fm-row">
+                  <span class="fm-select" aria-hidden="true"></span>
                   <div class="fm-name"><span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-doc"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened docker-compose.yml (read-only).|info"><b>docker-compose.yml</b><span>validated at deploy</span></button></div>
                   <div class="fm-cell">YAML</div><div class="fm-cell fm-cell--size">2.8 KiB</div><div class="fm-cell">2026-10-08 14:02</div><div class="fm-cell">-rw-r--r--</div>
                   <div class="fm-actions"><button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Downloading docker-compose.yml…|info" aria-label="Download docker-compose.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button></div>
                 </div>
                 <div class="fm-row">
+                  <span class="fm-select" aria-hidden="true"></span>
                   <div class="fm-name"><span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-doc"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened override.yml (read-only).|info"><b>override.yml</b><span>validated at deploy</span></button></div>
                   <div class="fm-cell">YAML</div><div class="fm-cell fm-cell--size">640 B</div><div class="fm-cell">2026-10-08 14:02</div><div class="fm-cell">-rw-r--r--</div>
@@ -369,36 +375,54 @@
           <span class="meta">same entries, tile density</span>
         </div>
         <div class="fm-grid">
-          <button class="fm-tile" type="button" data-toast="Opened config/|info">
-            <span class="row between"><span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span></span>
-            <span class="fm-label"><b>config</b><span>directory</span></span>
-            <span class="fm-meta">12 files · 09:14</span>
-          </button>
-          <button class="fm-tile" type="button" data-toast="Opened data/|info">
-            <span class="row between"><span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span></span>
-            <span class="fm-label"><b>data</b><span>directory</span></span>
-            <span class="fm-meta">3 files · 08:51</span>
-          </button>
-          <button class="fm-tile" type="button" data-toast="Opened app.yaml in the editor.|info">
-            <span class="row between"><span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg></span><span class="tag tag--accent">open</span></span>
-            <span class="fm-label"><b>app.yaml</b><span>YAML</span></span>
-            <span class="fm-meta">2.4 KiB · 09:02</span>
-          </button>
-          <button class="fm-tile" type="button" data-toast="Previewed logo.png.|info">
-            <span class="row between"><span class="fm-mark" data-kind="image"><svg aria-hidden="true"><use href="#i-image"></use></svg></span></span>
-            <span class="fm-label"><b>logo.png</b><span>PNG 512×512</span></span>
-            <span class="fm-meta">24.6 KiB · 11:05</span>
-          </button>
-          <button class="fm-tile" type="button" data-toast="128.4 MiB — download only.|warn">
-            <span class="row between"><span class="fm-mark" data-kind="archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></span></span>
-            <span class="fm-label"><b>backup-2026-10-11.tar.gz</b><span>gzip archive</span></span>
-            <span class="fm-meta">128.4 MiB · 03:00</span>
-          </button>
-          <button class="fm-tile" type="button" data-toast="Special file (socket) — no actions.|warn">
-            <span class="row between"><span class="fm-mark"><svg aria-hidden="true"><use href="#i-terminal"></use></svg></span><span class="tag tag--warn">special</span></span>
-            <span class="fm-label"><b>run.sock</b><span>socket</span></span>
-            <span class="fm-meta">09:19</span>
-          </button>
+          <div class="fm-tile-wrap">
+            <label class="fm-tile-check" title="Select config"><input type="checkbox" aria-label="Select config" /></label>
+            <button class="fm-tile" type="button" data-toast="Opened config/|info">
+              <span class="row between"><span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span></span>
+              <span class="fm-label"><b>config</b><span>directory</span></span>
+              <span class="fm-meta">12 files · 09:14</span>
+            </button>
+          </div>
+          <div class="fm-tile-wrap">
+            <label class="fm-tile-check" title="Select data"><input type="checkbox" aria-label="Select data" /></label>
+            <button class="fm-tile" type="button" data-toast="Opened data/|info">
+              <span class="row between"><span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span></span>
+              <span class="fm-label"><b>data</b><span>directory</span></span>
+              <span class="fm-meta">3 files · 08:51</span>
+            </button>
+          </div>
+          <div class="fm-tile-wrap">
+            <label class="fm-tile-check" title="Select app.yaml"><input type="checkbox" aria-label="Select app.yaml" /></label>
+            <button class="fm-tile" type="button" data-toast="Opened app.yaml in the editor.|info">
+              <span class="row between"><span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg></span><span class="tag tag--accent">open</span></span>
+              <span class="fm-label"><b>app.yaml</b><span>YAML</span></span>
+              <span class="fm-meta">2.4 KiB · 09:02</span>
+            </button>
+          </div>
+          <div class="fm-tile-wrap">
+            <label class="fm-tile-check" title="Select logo.png"><input type="checkbox" checked aria-label="Select logo.png" /></label>
+            <button class="fm-tile" type="button" data-toast="Previewed logo.png.|info">
+              <span class="row between"><span class="fm-mark" data-kind="image"><svg aria-hidden="true"><use href="#i-image"></use></svg></span></span>
+              <span class="fm-label"><b>logo.png</b><span>PNG 512×512</span></span>
+              <span class="fm-meta">24.6 KiB · 11:05</span>
+            </button>
+          </div>
+          <div class="fm-tile-wrap">
+            <label class="fm-tile-check" title="Select backup-2026-10-11.tar.gz"><input type="checkbox" aria-label="Select backup-2026-10-11.tar.gz" /></label>
+            <button class="fm-tile" type="button" data-toast="128.4 MiB — download only.|warn">
+              <span class="row between"><span class="fm-mark" data-kind="archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></span></span>
+              <span class="fm-label"><b>backup-2026-10-11.tar.gz</b><span>gzip archive</span></span>
+              <span class="fm-meta">128.4 MiB · 03:00</span>
+            </button>
+          </div>
+          <div class="fm-tile-wrap">
+            <label class="fm-tile-check" title="Select run.sock"><input type="checkbox" aria-label="Select run.sock" /></label>
+            <button class="fm-tile" type="button" data-toast="Special file (socket) — no actions.|warn">
+              <span class="row between"><span class="fm-mark"><svg aria-hidden="true"><use href="#i-terminal"></use></svg></span><span class="tag tag--warn">special</span></span>
+              <span class="fm-label"><b>run.sock</b><span>socket</span></span>
+              <span class="fm-meta">09:19</span>
+            </button>
+          </div>
         </div>
 
         <!-- ── Context menu ──────────────────────────────────────────────── -->
@@ -410,6 +434,7 @@
           <div class="card-body">
             <div class="fm-demo" style="min-height:360px">
               <div class="fm-row is-selected" data-menu-row>
+                <span class="fm-select" role="cell"><label class="check"><input type="checkbox" checked aria-label="Select app.yaml"></label></span>
                 <div class="fm-name">
                   <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg></span>
                   <button class="fm-label" type="button"><b>app.yaml</b><span>YAML · 2.4 KiB</span></button>

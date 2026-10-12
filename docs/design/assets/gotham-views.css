@@ -142,7 +142,9 @@
 .fm-table { min-width: 820px; }
 .fm-row {
   display: grid;
-  grid-template-columns: minmax(260px, 1.6fr) 118px 96px 148px 84px 124px;
+  /* Leading column reserved for the selection checkbox; the type icon sits
+     next to the name, never combined with the checkbox. */
+  grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 124px;
   gap: var(--space-3); align-items: center;
   padding: 7px var(--space-3); min-height: 42px;
   border-bottom: 1px solid var(--border); position: relative;
@@ -162,8 +164,8 @@
 .fm-head .fm-sort.is-active { color: var(--fg-2); }
 .fm-name { display: flex; align-items: center; gap: var(--space-3); min-width: 0; text-align: left; }
 .fm-label { background: none; text-align: left; min-width: 0; }
-.fm-check .check { cursor: pointer; gap: 0; }
-.fm-check .check input { width: 16px; height: 16px; margin: 0; }
+.fm-select .check { cursor: pointer; gap: 0; }
+.fm-select .check input { width: 16px; height: 16px; margin: 0; }
 .fm-name .fm-label { min-width: 0; }
 .fm-name .fm-label b { display: block; font-weight: 500; color: var(--fg); font-size: var(--text-xs); }
 .fm-name .fm-label span { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
@@ -177,13 +179,14 @@
 .fm-mark[data-kind="image"] { color: var(--success-ink); }
 .fm-mark[data-kind="film"] { color: var(--warn-ink); }
 .fm-mark[data-kind="archive"] { color: var(--danger-ink); }
-/* Ô tick thay chỗ icon loại file khi hover — giống ảnh tham chiếu. */
-.fm-check {
-  position: absolute; inset: 0; display: grid; place-items: center;
-  border-radius: inherit; background: var(--surface-warm);
+/* Row selection checkbox: revealed on hover / keyboard focus / when selected,
+   like the row actions. Header select-all is always shown. */
+.fm-select {
+  display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity var(--motion-fast) linear;
 }
-.fm-row:hover .fm-check, .fm-row:focus-within .fm-check, .fm-row.is-selected .fm-check { opacity: 1; }
+.fm-row:hover .fm-select, .fm-row:focus-within .fm-select, .fm-row.is-selected .fm-select { opacity: 1; }
+.fm-head .fm-select { opacity: 1; }
 .fm-cell { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); }
 .fm-cell--size { text-align: right; }
 /* Cụm nút chức năng: ẩn mặc định, hiện khi hover / focus bàn phím / đang chọn. */
@@ -194,10 +197,11 @@
 .fm-row:hover .fm-actions, .fm-row:focus-within .fm-actions, .fm-row.is-selected .fm-actions { opacity: 1; }
 /* Thiết bị cảm ứng không có hover → luôn hiện. */
 @media (hover: none) {
-  .fm-actions, .fm-check { opacity: 1; }
+  .fm-actions, .fm-select { opacity: 1; }
+  .fm-tile-check { opacity: 1; pointer-events: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fm-actions, .fm-check { transition: none; }
+  .fm-actions, .fm-select, .fm-tile-check { transition: none; }
 }
 /* Dạng lưới */
 .fm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: var(--space-3); }
@@ -219,6 +223,23 @@
   background: var(--float); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
 .fm-tile .fm-meta { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+/* Grid selection: the checkbox is a sibling of the tile button (never nested
+   in it) in the top-right corner. Hidden by opacity — not display/visibility —
+   so it stays keyboard-focusable; shown on hover, focus within, or checked. */
+.fm-tile-wrap { position: relative; display: flex; }
+.fm-tile-wrap .fm-tile { flex: 1 1 auto; width: 100%; }
+.fm-tile .row.between { padding-right: 26px; }
+.fm-tile-check {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  display: grid; place-items: center; width: 24px; height: 24px;
+  border-radius: var(--radius-sm); background: var(--float); border: 1px solid var(--border);
+  opacity: 0; pointer-events: none; transition: opacity var(--motion-fast) linear;
+}
+.fm-tile-check input { width: 15px; height: 15px; margin: 0; cursor: pointer; }
+.fm-tile-wrap:hover .fm-tile-check,
+.fm-tile-wrap:focus-within .fm-tile-check,
+.fm-tile-wrap:has(input:checked) .fm-tile-check { opacity: 1; pointer-events: auto; }
+.fm-tile-wrap:has(input:checked) .fm-tile { border-color: var(--accent); background: var(--accent-soft); }
 /* Thanh trạng thái dưới cùng */
 .fm-foot {
   display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;

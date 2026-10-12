@@ -127,6 +127,235 @@ service ComposeService {
   rpc ComposePs(ComposePsRequest) returns (ComposePsResponse);
 }
 
+// FileService runs on the node agent. The control plane dials it to browse —
+// and, from step 2 on, edit — files under the node's allow-listed roots.
+// Files are addressed as (root, path): root is a name from ListRoots and path
+// is relative to that root; absolute paths are rejected. Confinement is
+// agent-side defense in depth, not authentication: the agent opens every entry
+// under a validated root, never follows a path out of it, and reports
+// non-regular entries as FILE_KIND_SPECIAL.
+//
+// The whole contract (read and write) is defined here in step 1 so later steps
+// never touch this file. A method whose step has not landed answers
+// codes.Unimplemented.
+service FileService {
+  // ListRoots returns the agent's allow-listed roots; it is the only source of
+  // valid root names.
+  rpc ListRoots(ListRootsRequest) returns (ListRootsResponse);
+  // List returns one directory's entries sorted by name, capped at 5,000. A
+  // truncated listing carries a cursor to resume with.
+  rpc List(ListRequest) returns (ListResponse);
+  // Stat returns one entry.
+  rpc Stat(StatRequest) returns (StatResponse);
+  // Read streams one regular file in bounded chunks.
+  rpc Read(ReadRequest) returns (stream ReadChunk);
+  // Write creates or replaces one file. The first request must carry
+  // WriteHeader; the following requests stream the body; an optional final
+  // WriteCommit carries the whole body's sha256. The agent commits only when
+  // every declared byte arrived (or the commit digest matches), so a truncated
+  // upload never replaces the target.
+  rpc Write(stream WriteRequest) returns (WriteResponse);
+  // Copy copies one entry within a single root, streaming progress.
+  rpc Copy(CopyRequest) returns (stream Progress);
+  // Delete removes one entry, recursively when asked, streaming progress.
+  rpc Delete(DeleteRequest) returns (stream Progress);
+  // Mkdir creates one directory.
+  rpc Mkdir(MkdirRequest) returns (MkdirResponse);
+  // Rename renames or moves one entry within a single root.
+  rpc Rename(RenameRequest) returns (RenameResponse);
+  // Chmod changes one entry's permission bits.
+  rpc Chmod(ChmodRequest) returns (ChmodResponse);
+}
+
+// ListRootsRequest is empty: roots are node-local configuration.
+message ListRootsRequest {}
+
+// FileRoot is one browsable root.
+message FileRoot {
+  // name is the stable identifier other calls pass as `root`.
+  string name = 1;
+  // path is the absolute host path, for display only.
+  string path = 2;
+  // writable is false for roots the agent refuses to mutate (the compose root
+  // and any operator-added root).
+  bool writable = 3;
+  // free_bytes is the free space on the root's filesystem; 0 when unknown.
+  uint64 free_bytes = 4;
+}
+
+// ListRootsResponse lists the allow-listed roots.
+message ListRootsResponse {
+  repeated FileRoot roots = 1;
+}
+
+// ListRequest lists one directory.
+message ListRequest {
+  string root = 1;
+  // path is relative to the root; empty or "." lists the root itself.
+  string path = 2;
+  // cursor resumes a truncated listing; empty starts at the beginning.
+  string cursor = 3;
+}
+
+// FileKind classifies a directory entry.
+enum FileKind {
+  FILE_KIND_UNSPECIFIED = 0;
+  FILE_KIND_FILE = 1;
+  FILE_KIND_DIRECTORY = 2;
+  FILE_KIND_SYMLINK = 3;
+  // FILE_KIND_SPECIAL covers anything that is not a regular file, directory or
+  // symlink (device, socket, FIFO). It is listed but has no actions.
+  FILE_KIND_SPECIAL = 4;
+}
+
+// FileEntry describes one entry under a root.
+message FileEntry {
+  string name = 1;
+  FileKind kind = 2;
+  int64 size = 3;
+  // mode is the entry's permission bits (0o777 mask).
+  uint32 mode = 4;
+  google.protobuf.Timestamp modified_at = 5;
+  // symlink_target is the link target when kind is FILE_KIND_SYMLINK.
+  string symlink_target = 6;
+  // etag is the RFC 7232 quoted entity tag "dev:ino:mtime_ns:size".
+  string etag = 7;
+}
+
+// ListResponse is one page of a directory listing.
+message ListResponse {
+  repeated FileEntry entries = 1;
+  // truncated is true when more entries exist beyond this page.
+  bool truncated = 2;
+  // cursor resumes a truncated listing; empty when truncated is false.
+  string cursor = 3;
+}
+
+// StatRequest stats one entry.
+message StatRequest {
+  string root = 1;
+  string path = 2;
+}
+
+// StatResponse carries the entry.
+message StatResponse {
+  FileEntry entry = 1;
+}
+
+// ReadRequest reads one file.
+message ReadRequest {
+  string root = 1;
+  string path = 2;
+}
+
+// ReadChunk is one slice of a file body.
+message ReadChunk {
+  bytes data = 1;
+}
+
+// WriteRequest is one message of a Write stream.
+message WriteRequest {
+  oneof part {
+    WriteHeader header = 1;
+    bytes data = 2;
+    WriteCommit commit = 3;
+  }
+}
+
+// WriteHeader is the first request of a Write stream.
+message WriteHeader {
+  string root = 1;
+  string path = 2;
+  // size is the exact number of body bytes that follow.
+  int64 size = 3;
+  // expect_etag is the etag the client last read. Empty means the target must
+  // not exist yet (exclusive create).
+  string expect_etag = 4;
+  // overwrite permits replacing an existing target whose etag does not match.
+  bool overwrite = 5;
+  // mode is the permission bits for a newly created file.
+  uint32 mode = 6;
+}
+
+// WriteCommit optionally closes a Write with the body digest.
+message WriteCommit {
+  // sha256 is the hex digest of the whole body.
+  string sha256 = 1;
+}
+
+// WriteResponse reports the committed file.
+message WriteResponse {
+  FileEntry entry = 1;
+  // created is true when the call created a new file.
+  bool created = 2;
+  // write_mode reports how the agent committed ("rename" or "in_place").
+  string write_mode = 3;
+}
+
+// CopyRequest copies one entry within a single root.
+message CopyRequest {
+  string root = 1;
+  string source = 2;
+  string destination = 3;
+  // overwrite permits replacing an existing destination.
+  bool overwrite = 4;
+}
+
+// DeleteRequest removes one entry.
+message DeleteRequest {
+  string root = 1;
+  string path = 2;
+  // recursive removes a non-empty directory.
+  bool recursive = 3;
+}
+
+// Progress reports the state of a long Copy or Delete.
+message Progress {
+  // path is the entry currently in flight, relative to the root.
+  string path = 1;
+  int64 bytes_done = 2;
+  // bytes_total is -1 when the total is not known up front.
+  int64 bytes_total = 3;
+  // done is true on the final message of the stream.
+  bool done = 4;
+}
+
+// MkdirRequest creates one directory.
+message MkdirRequest {
+  string root = 1;
+  string path = 2;
+  uint32 mode = 3;
+}
+
+// MkdirResponse returns the created entry.
+message MkdirResponse {
+  FileEntry entry = 1;
+}
+
+// RenameRequest renames or moves one entry within a single root.
+message RenameRequest {
+  string root = 1;
+  string source = 2;
+  string destination = 3;
+  // overwrite permits replacing an existing destination.
+  bool overwrite = 4;
+}
+
+// RenameResponse returns the renamed entry.
+message RenameResponse {
+  FileEntry entry = 1;
+}
+
+// ChmodRequest changes one entry's permission bits.
+message ChmodRequest {
+  string root = 1;
+  string path = 2;
+  uint32 mode = 3;
+}
+
+// ChmodResponse is empty.
+message ChmodResponse {}
+
 // ProxyConfigFile is one generated Traefik configuration document.
 message ProxyConfigFile {
   // path is relative to the node's proxy config directory, e.g. "traefik.yml"

@@ -99,6 +99,20 @@ func runServe() int {
 
 	runner := agent.NewAgent(cfg, log, docker)
 
+	// The confined file service is opt-in. Validating and opening its roots
+	// eagerly fails startup fast on a bad configuration instead of surfacing
+	// the error on the first control-plane call.
+	var fileServer *agent.FileServer
+	if cfg.Files {
+		opened, err := agent.NewFileServer(cfg, log)
+		if err != nil {
+			log.Error("file service", "error", err)
+			return exitError
+		}
+		fileServer = opened
+		defer func() { _ = fileServer.Close() }()
+	}
+
 	var (
 		serverOnce sync.Once
 		reloadable bool
@@ -149,8 +163,7 @@ func runServe() int {
 				startErr = err
 				return
 			}
-			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log,
-				agent.WithManagedVolumeRoot(cfg.ManagedVolumeRoot)), log,
+			serverOptions := []agent.ServerOption{
 				agent.WithBuildService(agent.NewBuildServer(docker, log)),
 				agent.WithProxyService(agent.NewProxyServer(agent.ProxyServerConfig{Logger: log})),
 				agent.WithComposeService(agent.NewComposeServer(agent.ComposeServerConfig{
@@ -158,7 +171,13 @@ func runServe() int {
 					DockerHost: cfg.DockerSock,
 					VolumeRoot: cfg.ManagedVolumeRoot,
 					Logger:     log,
-				})))
+				})),
+			}
+			if fileServer != nil {
+				serverOptions = append(serverOptions, agent.WithFileService(fileServer))
+			}
+			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log,
+				agent.WithManagedVolumeRoot(cfg.ManagedVolumeRoot)), log, serverOptions...)
 			if err != nil {
 				startErr = err
 				return

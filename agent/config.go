@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,13 @@ const (
 	// envSharedManagedVolumeRoot lets a node reuse the control plane's root
 	// variable name; the agent-prefixed variable wins when both are set.
 	envSharedManagedVolumeRoot = "GOTHAM_MANAGED_VOLUME_ROOT"
+
+	// File service configuration (Phase 18). The confined file service is
+	// opt-in: it is never registered unless GOTHAM_AGENT_FILES is set.
+	envFiles            = "GOTHAM_AGENT_FILES"
+	envFileRoots        = "GOTHAM_AGENT_FILE_ROOTS"
+	envFileMaxUpload    = "GOTHAM_AGENT_FILE_MAX_UPLOAD"
+	envFileMaxTransfers = "GOTHAM_AGENT_FILE_MAX_TRANSFERS"
 
 	envAutoUpdate     = "GOTHAM_AGENT_AUTO_UPDATE"
 	envUpdateInterval = "GOTHAM_AGENT_UPDATE_INTERVAL"
@@ -63,6 +71,7 @@ const (
 	// privileges: the binary and its hardlink backup live in the agent-writable
 	// StateDirectory, the wrapper and its config are root-owned, and the
 	// authoritative status is root-owned in a directory the agent cannot write.
+	defaultAgentStateRoot    = "/var/lib/gotham-agent"
 	defaultAgentBinary       = "/var/lib/gotham-agent/bin/gotham-agent"
 	defaultAgentUpdateScript = "/usr/libexec/gotham/gotham-agent-update"
 	defaultAgentStatusPath   = "/var/lib/gotham-agent-updater/update.status"
@@ -84,6 +93,12 @@ const (
 	// betaUpdateChannel opts a node into prereleases: a beta node accepts both
 	// stable and beta offers (the offer carries the release's own channel).
 	betaUpdateChannel = "beta"
+
+	// defaultFileMaxUpload bounds one file upload in bytes (Phase 18).
+	defaultFileMaxUpload = 1 << 30
+	// defaultFileMaxTransfers caps concurrent file transfers per node
+	// (Phase 18); a transfer above the cap is refused as ResourceExhausted.
+	defaultFileMaxTransfers = 8
 )
 
 // Config holds the agent's runtime configuration, loaded from the environment.
@@ -117,6 +132,18 @@ type Config struct {
 	ManagedVolumeRoot string
 	// LogLevel is the slog level name (debug, info, warn, error).
 	LogLevel string
+
+	// Files enables the confined FileService. It is off by default: the file
+	// service is only registered when GOTHAM_AGENT_FILES=true.
+	Files bool
+	// FileRoots lists extra browsable roots, colon-separated
+	// (GOTHAM_AGENT_FILE_ROOTS). Every entry is read-only.
+	FileRoots string
+	// FileMaxUpload bounds one upload in bytes (GOTHAM_AGENT_FILE_MAX_UPLOAD).
+	FileMaxUpload int64
+	// FileMaxTransfers caps concurrent transfers per node
+	// (GOTHAM_AGENT_FILE_MAX_TRANSFERS).
+	FileMaxTransfers int
 
 	// Version is the running agent build version. It is set by the entrypoint
 	// (not the environment) and reported to the CP in heartbeats and update
@@ -172,6 +199,11 @@ func Load() (Config, error) {
 		LogLevel:    envOr(envLogLevel, defaultLogLevel),
 
 		ManagedVolumeRoot: envOr(envManagedVolumeRoot, envOr(envSharedManagedVolumeRoot, defaultManagedVolumeRoot)),
+
+		Files:            strings.EqualFold(strings.TrimSpace(os.Getenv(envFiles)), "true"),
+		FileRoots:        os.Getenv(envFileRoots),
+		FileMaxUpload:    int64FromEnv(envFileMaxUpload, defaultFileMaxUpload),
+		FileMaxTransfers: int(int64FromEnv(envFileMaxTransfers, defaultFileMaxTransfers)),
 
 		AutoUpdate:        strings.EqualFold(strings.TrimSpace(os.Getenv(envAutoUpdate)), "true"),
 		UpdateInterval:    updateIntervalFromEnv(),
@@ -285,4 +317,18 @@ func updateIntervalFromEnv() time.Duration {
 		return defaultUpdateInterval
 	}
 	return parsed
+}
+
+// int64FromEnv parses a positive integer environment value, falling back to
+// fallback for an unset, unparseable or non-positive value.
+func int64FromEnv(key string, fallback int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }

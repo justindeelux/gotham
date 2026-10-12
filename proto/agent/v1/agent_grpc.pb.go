@@ -1371,3 +1371,506 @@ var ComposeService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "agent/v1/agent.proto",
 }
+
+const (
+	FileService_ListRoots_FullMethodName = "/agent.v1.FileService/ListRoots"
+	FileService_List_FullMethodName      = "/agent.v1.FileService/List"
+	FileService_Stat_FullMethodName      = "/agent.v1.FileService/Stat"
+	FileService_Read_FullMethodName      = "/agent.v1.FileService/Read"
+	FileService_Write_FullMethodName     = "/agent.v1.FileService/Write"
+	FileService_Copy_FullMethodName      = "/agent.v1.FileService/Copy"
+	FileService_Delete_FullMethodName    = "/agent.v1.FileService/Delete"
+	FileService_Mkdir_FullMethodName     = "/agent.v1.FileService/Mkdir"
+	FileService_Rename_FullMethodName    = "/agent.v1.FileService/Rename"
+	FileService_Chmod_FullMethodName     = "/agent.v1.FileService/Chmod"
+)
+
+// FileServiceClient is the client API for FileService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// FileService runs on the node agent. The control plane dials it to browse —
+// and, from step 2 on, edit — files under the node's allow-listed roots.
+// Files are addressed as (root, path): root is a name from ListRoots and path
+// is relative to that root; absolute paths are rejected. Confinement is
+// agent-side defense in depth, not authentication: the agent opens every entry
+// under a validated root, never follows a path out of it, and reports
+// non-regular entries as FILE_KIND_SPECIAL.
+//
+// The whole contract (read and write) is defined here in step 1 so later steps
+// never touch this file. A method whose step has not landed answers
+// codes.Unimplemented.
+type FileServiceClient interface {
+	// ListRoots returns the agent's allow-listed roots; it is the only source of
+	// valid root names.
+	ListRoots(ctx context.Context, in *ListRootsRequest, opts ...grpc.CallOption) (*ListRootsResponse, error)
+	// List returns one directory's entries sorted by name, capped at 5,000. A
+	// truncated listing carries a cursor to resume with.
+	List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
+	// Stat returns one entry.
+	Stat(ctx context.Context, in *StatRequest, opts ...grpc.CallOption) (*StatResponse, error)
+	// Read streams one regular file in bounded chunks.
+	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadChunk], error)
+	// Write creates or replaces one file. The first request must carry
+	// WriteHeader; the following requests stream the body; an optional final
+	// WriteCommit carries the whole body's sha256. The agent commits only when
+	// every declared byte arrived (or the commit digest matches), so a truncated
+	// upload never replaces the target.
+	Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteRequest, WriteResponse], error)
+	// Copy copies one entry within a single root, streaming progress.
+	Copy(ctx context.Context, in *CopyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error)
+	// Delete removes one entry, recursively when asked, streaming progress.
+	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error)
+	// Mkdir creates one directory.
+	Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.CallOption) (*MkdirResponse, error)
+	// Rename renames or moves one entry within a single root.
+	Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error)
+	// Chmod changes one entry's permission bits.
+	Chmod(ctx context.Context, in *ChmodRequest, opts ...grpc.CallOption) (*ChmodResponse, error)
+}
+
+type fileServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewFileServiceClient(cc grpc.ClientConnInterface) FileServiceClient {
+	return &fileServiceClient{cc}
+}
+
+func (c *fileServiceClient) ListRoots(ctx context.Context, in *ListRootsRequest, opts ...grpc.CallOption) (*ListRootsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRootsResponse)
+	err := c.cc.Invoke(ctx, FileService_ListRoots_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListResponse)
+	err := c.cc.Invoke(ctx, FileService_List_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) Stat(ctx context.Context, in *StatRequest, opts ...grpc.CallOption) (*StatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(StatResponse)
+	err := c.cc.Invoke(ctx, FileService_Stat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FileService_ServiceDesc.Streams[0], FileService_Read_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReadRequest, ReadChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ReadClient = grpc.ServerStreamingClient[ReadChunk]
+
+func (c *fileServiceClient) Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteRequest, WriteResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FileService_ServiceDesc.Streams[1], FileService_Write_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WriteRequest, WriteResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_WriteClient = grpc.ClientStreamingClient[WriteRequest, WriteResponse]
+
+func (c *fileServiceClient) Copy(ctx context.Context, in *CopyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FileService_ServiceDesc.Streams[2], FileService_Copy_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CopyRequest, Progress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_CopyClient = grpc.ServerStreamingClient[Progress]
+
+func (c *fileServiceClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FileService_ServiceDesc.Streams[3], FileService_Delete_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[DeleteRequest, Progress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_DeleteClient = grpc.ServerStreamingClient[Progress]
+
+func (c *fileServiceClient) Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.CallOption) (*MkdirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MkdirResponse)
+	err := c.cc.Invoke(ctx, FileService_Mkdir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenameResponse)
+	err := c.cc.Invoke(ctx, FileService_Rename_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) Chmod(ctx context.Context, in *ChmodRequest, opts ...grpc.CallOption) (*ChmodResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChmodResponse)
+	err := c.cc.Invoke(ctx, FileService_Chmod_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// FileServiceServer is the server API for FileService service.
+// All implementations must embed UnimplementedFileServiceServer
+// for forward compatibility.
+//
+// FileService runs on the node agent. The control plane dials it to browse —
+// and, from step 2 on, edit — files under the node's allow-listed roots.
+// Files are addressed as (root, path): root is a name from ListRoots and path
+// is relative to that root; absolute paths are rejected. Confinement is
+// agent-side defense in depth, not authentication: the agent opens every entry
+// under a validated root, never follows a path out of it, and reports
+// non-regular entries as FILE_KIND_SPECIAL.
+//
+// The whole contract (read and write) is defined here in step 1 so later steps
+// never touch this file. A method whose step has not landed answers
+// codes.Unimplemented.
+type FileServiceServer interface {
+	// ListRoots returns the agent's allow-listed roots; it is the only source of
+	// valid root names.
+	ListRoots(context.Context, *ListRootsRequest) (*ListRootsResponse, error)
+	// List returns one directory's entries sorted by name, capped at 5,000. A
+	// truncated listing carries a cursor to resume with.
+	List(context.Context, *ListRequest) (*ListResponse, error)
+	// Stat returns one entry.
+	Stat(context.Context, *StatRequest) (*StatResponse, error)
+	// Read streams one regular file in bounded chunks.
+	Read(*ReadRequest, grpc.ServerStreamingServer[ReadChunk]) error
+	// Write creates or replaces one file. The first request must carry
+	// WriteHeader; the following requests stream the body; an optional final
+	// WriteCommit carries the whole body's sha256. The agent commits only when
+	// every declared byte arrived (or the commit digest matches), so a truncated
+	// upload never replaces the target.
+	Write(grpc.ClientStreamingServer[WriteRequest, WriteResponse]) error
+	// Copy copies one entry within a single root, streaming progress.
+	Copy(*CopyRequest, grpc.ServerStreamingServer[Progress]) error
+	// Delete removes one entry, recursively when asked, streaming progress.
+	Delete(*DeleteRequest, grpc.ServerStreamingServer[Progress]) error
+	// Mkdir creates one directory.
+	Mkdir(context.Context, *MkdirRequest) (*MkdirResponse, error)
+	// Rename renames or moves one entry within a single root.
+	Rename(context.Context, *RenameRequest) (*RenameResponse, error)
+	// Chmod changes one entry's permission bits.
+	Chmod(context.Context, *ChmodRequest) (*ChmodResponse, error)
+	mustEmbedUnimplementedFileServiceServer()
+}
+
+// UnimplementedFileServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedFileServiceServer struct{}
+
+func (UnimplementedFileServiceServer) ListRoots(context.Context, *ListRootsRequest) (*ListRootsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListRoots not implemented")
+}
+func (UnimplementedFileServiceServer) List(context.Context, *ListRequest) (*ListResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method List not implemented")
+}
+func (UnimplementedFileServiceServer) Stat(context.Context, *StatRequest) (*StatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Stat not implemented")
+}
+func (UnimplementedFileServiceServer) Read(*ReadRequest, grpc.ServerStreamingServer[ReadChunk]) error {
+	return status.Error(codes.Unimplemented, "method Read not implemented")
+}
+func (UnimplementedFileServiceServer) Write(grpc.ClientStreamingServer[WriteRequest, WriteResponse]) error {
+	return status.Error(codes.Unimplemented, "method Write not implemented")
+}
+func (UnimplementedFileServiceServer) Copy(*CopyRequest, grpc.ServerStreamingServer[Progress]) error {
+	return status.Error(codes.Unimplemented, "method Copy not implemented")
+}
+func (UnimplementedFileServiceServer) Delete(*DeleteRequest, grpc.ServerStreamingServer[Progress]) error {
+	return status.Error(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedFileServiceServer) Mkdir(context.Context, *MkdirRequest) (*MkdirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Mkdir not implemented")
+}
+func (UnimplementedFileServiceServer) Rename(context.Context, *RenameRequest) (*RenameResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Rename not implemented")
+}
+func (UnimplementedFileServiceServer) Chmod(context.Context, *ChmodRequest) (*ChmodResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Chmod not implemented")
+}
+func (UnimplementedFileServiceServer) mustEmbedUnimplementedFileServiceServer() {}
+func (UnimplementedFileServiceServer) testEmbeddedByValue()                     {}
+
+// UnsafeFileServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to FileServiceServer will
+// result in compilation errors.
+type UnsafeFileServiceServer interface {
+	mustEmbedUnimplementedFileServiceServer()
+}
+
+func RegisterFileServiceServer(s grpc.ServiceRegistrar, srv FileServiceServer) {
+	// If the following call panics, it indicates UnimplementedFileServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&FileService_ServiceDesc, srv)
+}
+
+func _FileService_ListRoots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRootsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).ListRoots(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_ListRoots_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).ListRoots(ctx, req.(*ListRootsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_List_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).List(ctx, req.(*ListRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_Stat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).Stat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_Stat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).Stat(ctx, req.(*StatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_Read_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ReadRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FileServiceServer).Read(m, &grpc.GenericServerStream[ReadRequest, ReadChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ReadServer = grpc.ServerStreamingServer[ReadChunk]
+
+func _FileService_Write_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(FileServiceServer).Write(&grpc.GenericServerStream[WriteRequest, WriteResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_WriteServer = grpc.ClientStreamingServer[WriteRequest, WriteResponse]
+
+func _FileService_Copy_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CopyRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FileServiceServer).Copy(m, &grpc.GenericServerStream[CopyRequest, Progress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_CopyServer = grpc.ServerStreamingServer[Progress]
+
+func _FileService_Delete_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(DeleteRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FileServiceServer).Delete(m, &grpc.GenericServerStream[DeleteRequest, Progress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_DeleteServer = grpc.ServerStreamingServer[Progress]
+
+func _FileService_Mkdir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MkdirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).Mkdir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_Mkdir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).Mkdir(ctx, req.(*MkdirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_Rename_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).Rename(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_Rename_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).Rename(ctx, req.(*RenameRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_Chmod_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChmodRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).Chmod(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_Chmod_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).Chmod(ctx, req.(*ChmodRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// FileService_ServiceDesc is the grpc.ServiceDesc for FileService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var FileService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "agent.v1.FileService",
+	HandlerType: (*FileServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListRoots",
+			Handler:    _FileService_ListRoots_Handler,
+		},
+		{
+			MethodName: "List",
+			Handler:    _FileService_List_Handler,
+		},
+		{
+			MethodName: "Stat",
+			Handler:    _FileService_Stat_Handler,
+		},
+		{
+			MethodName: "Mkdir",
+			Handler:    _FileService_Mkdir_Handler,
+		},
+		{
+			MethodName: "Rename",
+			Handler:    _FileService_Rename_Handler,
+		},
+		{
+			MethodName: "Chmod",
+			Handler:    _FileService_Chmod_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Read",
+			Handler:       _FileService_Read_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Write",
+			Handler:       _FileService_Write_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Copy",
+			Handler:       _FileService_Copy_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Delete",
+			Handler:       _FileService_Delete_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "agent/v1/agent.proto",
+}

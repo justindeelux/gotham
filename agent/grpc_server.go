@@ -306,6 +306,15 @@ func WithComposeService(compose agentv1.ComposeServiceServer) ServerOption {
 	}
 }
 
+// WithFileService registers the confined file service so the control plane can
+// browse the node's allow-listed roots. It is passed only when
+// GOTHAM_AGENT_FILES is enabled; an unset flag leaves the service unregistered.
+func WithFileService(files agentv1.FileServiceServer) ServerOption {
+	return func(server *grpc.Server) {
+		agentv1.RegisterFileServiceServer(server, files)
+	}
+}
+
 // Server wraps a gRPC server exposing DockerService over TLS.
 type Server struct {
 	grpc *grpc.Server

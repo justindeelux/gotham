@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -41,6 +42,30 @@ var fileRecvIdleTimeout = 2 * time.Minute
 // variable so a test can simulate a full disk.
 var fileDiskUsage = func(dir string) (free, total uint64) {
 	return freeBytes(dir), totalBytes(dir)
+}
+
+// fileFreeBytesOn reports the free bytes on an open file's own filesystem. It
+// is read from the target descriptor, not the root path, so a bind-mounted
+// single file that lives on another filesystem is judged against the filesystem
+// it is actually written to. It returns 0 when statfs cannot be read, which the
+// in-place path treats as "unknown, refuse". It is a variable so a test can
+// simulate a full disk.
+var fileFreeBytesOn = func(f *os.File) uint64 {
+	var stat unix.Statfs_t
+	if err := unix.Fstatfs(int(f.Fd()), &stat); err != nil {
+		return 0
+	}
+	return uint64(stat.Bavail) * uint64(stat.Bsize)
+}
+
+// renameWithin renames one entry within a root, honouring the overwrite policy.
+// It is a variable so a test can force the cross-device (EXDEV) fallback in
+// moveEntry without a real second mount.
+var renameWithin = func(root *fsroot.Root, src, dst string, overwrite bool) error {
+	if overwrite {
+		return root.Rename(src, dst)
+	}
+	return root.RenameExclusive(src, dst)
 }
 
 // writeRecv is one asynchronously received Write message.
@@ -265,23 +290,26 @@ func (s *FileServer) commitWrite(root *fsroot.Root, rel, tmpRel string, mode os.
 	return &agentv1.WriteResponse{Entry: fileEntry(entry), Created: created, WriteMode: writeMode}, nil
 }
 
-// overwriteInPlace copies the staged body over an existing file, truncating and
-// rewriting the same inode so hardlinks, ownership, ACLs and a bind mount of a
-// single file all keep working. It re-checks the etag on the opened descriptor
-// so a change by a container during the upload is a conflict, not a silent
-// overwrite. Because the rewrite is not atomic, it first refuses unless the
-// filesystem holds the whole incoming body: truncating and then hitting ENOSPC
-// would leave a container-owned file half-written.
+// overwriteInPlace copies the staged body over an existing file, rewriting the
+// same inode so hardlinks, ownership, ACLs and a bind mount of a single file
+// all keep working. It re-checks the etag on the opened descriptor so a change
+// by a container during the upload is a conflict, not a silent overwrite.
+//
+// The rewrite is deliberately not atomic (the in-place semantic exists to
+// preserve the inode, owner and bind mounts), so the two gaps are closed where
+// they can be: the free-space check reads the opened target's own filesystem
+// (0 free means refuse unless the body is empty), and a growing file is
+// fallocated to its new length before any byte is written, so an out-of-space
+// failure happens with the old contents still intact. A crash or I/O error
+// between the reservation and the final fsync can still leave the file
+// half-written; that residue is the documented limitation, not a truncate-then-
+// copy window.
 func (s *FileServer) overwriteInPlace(root *fsroot.Root, rel, tmpRel, expectEtag string, incoming int64) error {
 	src, _, err := root.OpenRegular(tmpRel)
 	if err != nil {
 		return fileError("write", err)
 	}
 	defer func() { _ = src.Close() }()
-
-	if free, _ := fileDiskUsage(root.Path()); free != 0 && free < uint64(incoming) {
-		return status.Errorf(codes.ResourceExhausted, "write: %d bytes do not fit in %d free bytes", incoming, free)
-	}
 
 	dst, entry, err := root.OpenWrite(rel)
 	if err != nil {
@@ -291,14 +319,39 @@ func (s *FileServer) overwriteInPlace(root *fsroot.Root, rel, tmpRel, expectEtag
 	if entry.Etag != expectEtag {
 		return status.Error(codes.Aborted, "write: the file changed during the upload")
 	}
-	if err := dst.Truncate(0); err != nil {
-		return fileError("write", err)
+	// free == 0 means statfs failed; refuse any non-empty body rather than
+	// guessing. An empty body needs no space.
+	if free := fileFreeBytesOn(dst); free < uint64(incoming) {
+		return status.Errorf(codes.ResourceExhausted, "write: %d bytes do not fit in %d free bytes", incoming, free)
+	}
+	if incoming > entry.Size {
+		if err := preallocate(dst, incoming); err != nil {
+			if errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EDQUOT) {
+				return status.Errorf(codes.ResourceExhausted, "write: %d bytes do not fit", incoming)
+			}
+			// A filesystem without fallocate support: the free-space check
+			// above already guarded the write, so continue.
+			if !errors.Is(err, syscall.EOPNOTSUPP) && !errors.Is(err, syscall.ENOSYS) && !errors.Is(err, syscall.EINVAL) {
+				return fileError("write", err)
+			}
+		}
 	}
 	if _, err := dst.Seek(0, io.SeekStart); err != nil {
 		return fileError("write", err)
 	}
-	if _, err := io.Copy(dst, src); err != nil {
+	written, err := io.Copy(dst, src)
+	if err != nil {
 		return fileError("write", err)
+	}
+	if written != incoming {
+		return status.Errorf(codes.Aborted, "write: staging holds %d bytes, want %d", written, incoming)
+	}
+	// A shrinking rewrite truncates after the write, so the old tail is never
+	// exposed mid-copy; a growing one was sized by the reservation above.
+	if incoming < entry.Size {
+		if err := dst.Truncate(incoming); err != nil {
+			return fileError("write", err)
+		}
 	}
 	if err := dst.Sync(); err != nil {
 		return fileError("write", err)
@@ -373,16 +426,13 @@ func (s *FileServer) Rename(ctx context.Context, req *agentv1.RenameRequest) (*a
 // moveEntry renames within the root, refusing an existing destination when
 // overwrite is false, and falling back to a guarded copy and delete when a bind
 // mount inside the root makes the two paths different filesystems (EXDEV). The
-// fallback acquires a transfer slot, checks free space and honours ctx, and
-// removes an existing destination before copying so a cross-device "replace"
-// can never merge two directory trees.
+// fallback acquires a transfer slot, checks free space and honours ctx. It does
+// not remove an existing destination first: Copy stages the tree in dst's own
+// directory and renames it into place, so a non-empty destination directory is
+// refused exactly as a same-filesystem rename would be (ENOTEMPTY) and a failed
+// copy leaves both the destination and the source intact.
 func (s *FileServer) moveEntry(ctx context.Context, root *fsroot.Root, src, dst string, overwrite bool) error {
-	var err error
-	if overwrite {
-		err = root.Rename(src, dst)
-	} else {
-		err = root.RenameExclusive(src, dst)
-	}
+	err := renameWithin(root, src, dst, overwrite)
 	if err == nil || !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
@@ -393,17 +443,6 @@ func (s *FileServer) moveEntry(ctx context.Context, root *fsroot.Root, src, dst 
 	defer release()
 	if s.lowSpace(root) {
 		return status.Error(codes.ResourceExhausted, "rename: the filesystem is low on free space")
-	}
-	if _, statErr := root.Stat(dst); statErr == nil {
-		if !overwrite {
-			return status.Errorf(codes.AlreadyExists, "rename: %q already exists", dst)
-		}
-		// Replace, not merge: drop the existing destination first.
-		if err := root.RemoveTree(ctx, dst, nil); err != nil {
-			return err
-		}
-	} else if !errors.Is(statErr, fsroot.ErrNotFound) {
-		return statErr
 	}
 	if err := root.Copy(ctx, src, dst, overwrite, nil); err != nil {
 		return err
@@ -454,8 +493,10 @@ func (s *FileServer) Copy(req *agentv1.CopyRequest, stream grpc.ServerStreamingS
 
 // Delete removes one entry, recursively when asked, streaming progress. The
 // root itself and the top-level application directories of the volumes root are
-// never removed. It holds the per-path lock for the whole delete so it cannot
-// race a write or rename, and honours the stream context so a cancelled delete
+// never removed. It holds the per-path lock while the tree is removed so it
+// cannot race a write or rename, but it collects progress and sends it only
+// after the lock is released, so a slow client cannot stall unrelated paths
+// that share the stripe. It honours the stream context so a cancelled delete
 // stops promptly.
 func (s *FileServer) Delete(req *agentv1.DeleteRequest, stream grpc.ServerStreamingServer[agentv1.Progress]) error {
 	root, err := s.root(req.GetRoot())
@@ -476,35 +517,45 @@ func (s *FileServer) Delete(req *agentv1.DeleteRequest, stream grpc.ServerStream
 		return fileError("delete", err)
 	}
 	unlock := s.lockPaths(root.Name(), rel)
-	defer unlock()
 	release, err := s.beginTransfer()
 	if err != nil {
+		unlock()
 		return err
 	}
-	defer release()
-
-	progress := &progressWriter{stream: stream, path: rel}
+	var buffered []*agentv1.Progress
+	progress := &progressWriter{stream: stream, path: rel, buffered: &buffered}
+	var walkErr error
 	if req.GetRecursive() {
-		if err := root.RemoveTree(stream.Context(), rel, progress.entry); err != nil {
-			return fileError("delete", err)
-		}
-	} else if err := root.Remove(rel); err != nil {
-		return fileError("delete", err)
+		walkErr = root.RemoveTree(stream.Context(), rel, progress.entry)
+	} else {
+		walkErr = root.Remove(rel)
+	}
+	// Release the lock before any Send: a blocked client must not hold a stripe
+	// that unrelated paths share.
+	unlock()
+	release()
+	if walkErr != nil {
+		_ = progress.flushBuffered()
+		return fileError("delete", walkErr)
 	}
 	return progress.finish()
 }
 
 // progressWriter streams throttled Copy/Delete progress and a final done
-// message. It reports the bytes of each completed entry.
+// message. It reports the bytes of each completed entry. When buffered is
+// non-nil it collects updates instead of sending them, so a caller can flush
+// them after releasing a lock.
 type progressWriter struct {
 	stream    grpc.ServerStreamingServer[agentv1.Progress]
 	path      string
 	bytesDone int64
 	last      time.Time
+	buffered  *[]*agentv1.Progress
 }
 
 // entry records one completed entry, emitting a progress message at most every
-// fileProgressInterval so a large tree does not flood the stream.
+// fileProgressInterval so a large tree does not flood the stream. While
+// buffering, the throttled update is stored rather than sent.
 func (p *progressWriter) entry(rel string, e fsroot.Entry) error {
 	if e.Kind == fsroot.KindRegular {
 		p.bytesDone += e.Size
@@ -514,11 +565,33 @@ func (p *progressWriter) entry(rel string, e fsroot.Entry) error {
 		return nil
 	}
 	p.last = now
-	return p.stream.Send(&agentv1.Progress{Path: rel, BytesDone: p.bytesDone, BytesTotal: -1})
+	msg := &agentv1.Progress{Path: rel, BytesDone: p.bytesDone, BytesTotal: -1}
+	if p.buffered != nil {
+		*p.buffered = append(*p.buffered, msg)
+		return nil
+	}
+	return p.stream.Send(msg)
 }
 
-// finish sends the terminal progress message.
+// flushBuffered sends and clears any updates collected while buffering.
+func (p *progressWriter) flushBuffered() error {
+	if p.buffered == nil {
+		return nil
+	}
+	for _, msg := range *p.buffered {
+		if err := p.stream.Send(msg); err != nil {
+			return err
+		}
+	}
+	*p.buffered = nil
+	return nil
+}
+
+// finish flushes any buffered updates and sends the terminal progress message.
 func (p *progressWriter) finish() error {
+	if err := p.flushBuffered(); err != nil {
+		return err
+	}
 	return p.stream.Send(&agentv1.Progress{Path: p.path, BytesDone: p.bytesDone, BytesTotal: -1, Done: true})
 }
 

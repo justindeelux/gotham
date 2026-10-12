@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,6 +153,103 @@ func TestCopyHonoursContext(t *testing.T) {
 	}
 }
 
+// TestCopyRefusesCopyOntoItselfThroughSymlinkedParent pins the round-2 fix: a
+// destination that resolves onto the source through a symlinked parent ("up"
+// -> ".") is refused for a file and for a directory, so the overwrite never
+// deletes the source. Under the old guard the destination's resolved parent was
+// compared against the source itself, which missed "f" -> "up/f".
+func TestCopyRefusesCopyOntoItselfThroughSymlinkedParent(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "A"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "A", "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".", filepath.Join(dir, "up")); err != nil {
+		t.Fatal(err)
+	}
+	root := openRoot(t, dir)
+
+	if err := root.Copy(context.Background(), "f", "up/f", true, nil); !errors.Is(err, fsroot.ErrInvalid) {
+		t.Fatalf("file copy onto itself through a symlink = %v, want ErrInvalid", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "f")); err != nil || string(got) != "payload" {
+		t.Fatalf("the source file was destroyed: %q, %v", got, err)
+	}
+	if err := root.Copy(context.Background(), "A", "up/A", true, nil); !errors.Is(err, fsroot.ErrInvalid) {
+		t.Fatalf("directory copy onto itself through a symlink = %v, want ErrInvalid", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "A", "a.txt")); err != nil {
+		t.Fatalf("the source directory was destroyed: %v", err)
+	}
+	// A legitimate overwriting copy through the same link still works.
+	if err := root.Copy(context.Background(), "f", "up/g", true, nil); err != nil {
+		t.Fatalf("legitimate copy through the link: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "g")); err != nil || string(got) != "payload" {
+		t.Fatalf("copied file = %q, %v", got, err)
+	}
+}
+
+// TestCopyFailureLeavesDestinationIntact pins finding B: the copy is staged in
+// a temporary sibling and only renamed into place on success, so a directory
+// copy that fails partway leaves the pre-existing destination exactly as it was
+// (no partially merged tree) and leaks no staging entry. The old direct copy
+// merged the first child into dst before failing on the second.
+func TestCopyFailureLeavesDestinationIntact(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, sub := range []string{"src", "dst"} {
+		if err := os.Mkdir(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"a", "b"} {
+		if err := os.WriteFile(filepath.Join(dir, "src", name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dst", "old"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := openRoot(t, dir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	copies := 0
+	onEntry := func(string, fsroot.Entry) error {
+		copies++
+		if copies == 1 {
+			cancel() // abort before the second child is copied
+		}
+		return nil
+	}
+	if err := root.Copy(ctx, "src", "dst", true, onEntry); !errors.Is(err, context.Canceled) {
+		t.Fatalf("copy aborted mid-walk = %v, want context.Canceled", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "dst"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "old" {
+		t.Fatalf("a failed copy modified the destination: %v", entries)
+	}
+	leftover, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range leftover {
+		if strings.HasPrefix(e.Name(), fsroot.TempPrefix) {
+			t.Fatalf("a staging entry leaked: %s", e.Name())
+		}
+	}
+}
+
 // TestRemoveStaleTemps pins the sweeper: it removes old staging files, keeps
 // fresh ones, and never follows a symlink out of the tree.
 func TestRemoveStaleTemps(t *testing.T) {
@@ -203,8 +301,8 @@ func TestRemoveStaleTemps(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := unix.Lutimes(link, []unix.Timeval{
-		{Sec: old.Unix(), Usec: 0},
-		{Sec: old.Unix(), Usec: 0},
+		unix.NsecToTimeval(old.UnixNano()),
+		unix.NsecToTimeval(old.UnixNano()),
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -162,6 +162,43 @@ func TestCopyDepthBound(t *testing.T) {
 	}
 }
 
+// TestRemoveStaleTempsDepthBound pins the sweeper bound: it stops descending
+// past maxSweepDepth, so a staging file buried deeper than the cap survives
+// (a documented ceiling) while a shallow one is still removed.
+func TestRemoveStaleTempsDepthBound(t *testing.T) {
+	old := maxSweepDepth
+	maxSweepDepth = 1
+	t.Cleanup(func() { maxSweepDepth = old })
+
+	dir := t.TempDir()
+	deep := filepath.Join(dir, "a", "b")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shallow := filepath.Join(dir, TempPrefix+"shallow")
+	if err := os.WriteFile(shallow, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deepTemp := filepath.Join(deep, TempPrefix+"deep")
+	if err := os.WriteFile(deepTemp, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := openInternalRoot(t, dir)
+	removed, err := root.RemoveStaleTemps(TempPrefix, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("RemoveStaleTemps: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1 (only the shallow temp)", removed)
+	}
+	if _, err := os.Stat(shallow); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("shallow staging file survived: %v", err)
+	}
+	if _, err := os.Stat(deepTemp); err != nil {
+		t.Fatalf("a staging file past the depth bound should be skipped: %v", err)
+	}
+}
+
 // TestListBoundedRetainedHeap proves a directory far larger than the page does
 // not retain memory proportional to its size: the page is limit entries and
 // the live heap after the call holds only the page, not the directory. The

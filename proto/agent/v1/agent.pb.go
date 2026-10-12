@@ -903,7 +903,13 @@ type WriteResponse struct {
 	Entry *FileEntry             `protobuf:"bytes,1,opt,name=entry,proto3" json:"entry,omitempty"`
 	// created is true when the call created a new file.
 	Created bool `protobuf:"varint,2,opt,name=created,proto3" json:"created,omitempty"`
-	// write_mode reports how the agent committed ("rename" or "in_place").
+	// write_mode reports how the agent committed ("rename" or "in_place"). A
+	// "rename" commit is atomic. An "in_place" commit rewrites the same inode so
+	// a foreign-owned, hard-linked or bind-mounted file keeps its owner, ACLs and
+	// mount; it is not atomic: the agent reserves the new length before writing
+	// and refuses when the target's filesystem cannot hold the body, but a crash
+	// or I/O error during the rewrite can leave the file half-written. See the
+	// "Deviations" section of docs/plans/18-file-manager.md.
 	WriteMode     string `protobuf:"bytes,3,opt,name=write_mode,json=writeMode,proto3" json:"write_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -631,13 +631,14 @@ func TestFileServerWriteStaleEtagIgnoresOverwrite(t *testing.T) {
 	}
 }
 
-// TestFileServerWriteInPlaceRefusesFullDisk pins finding 4: an in-place write
-// refuses before truncating when the incoming body does not fit in free space,
-// so a full disk cannot leave a container-owned file half-written.
+// TestFileServerWriteInPlaceRefusesFullDisk pins finding 4 and the round-2
+// hardening: an in-place write refuses before writing when the target's own
+// filesystem does not hold the incoming body, so a full disk cannot leave a
+// container-owned file half-written.
 func TestFileServerWriteInPlaceRefusesFullDisk(t *testing.T) {
-	old := fileDiskUsage
-	fileDiskUsage = func(string) (uint64, uint64) { return 5, 100 }
-	defer func() { fileDiskUsage = old }()
+	old := fileFreeBytesOn
+	fileFreeBytesOn = func(*os.File) uint64 { return 5 }
+	defer func() { fileFreeBytesOn = old }()
 
 	server, root := newTestFileServer(t)
 	path := filepath.Join(root, "hard.txt")
@@ -656,6 +657,41 @@ func TestFileServerWriteInPlaceRefusesFullDisk(t *testing.T) {
 		t.Fatalf("content = %q, want the original after a refused write", got)
 	}
 	assertNoTempFiles(t, root)
+}
+
+// TestFileServerWriteInPlaceUnknownFreeSpace pins the round-2 fix that a statfs
+// failure (free == 0) refuses a non-empty in-place body rather than skipping
+// the check, while an empty body still commits.
+func TestFileServerWriteInPlaceUnknownFreeSpace(t *testing.T) {
+	old := fileFreeBytesOn
+	fileFreeBytesOn = func(*os.File) uint64 { return 0 }
+	defer func() { fileFreeBytesOn = old }()
+
+	server, root := newTestFileServer(t)
+	path := filepath.Join(root, "hard.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(path, filepath.Join(root, "hard.link")); err != nil {
+		t.Skipf("hardlinks unsupported: %v", err)
+	}
+	if _, err := write(t, server, fileRootVolumes, "hard.txt", etagOf(t, server, "hard.txt"), true, []byte("data")); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("in-place write with unknown free space = %v, want ResourceExhausted", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "original" {
+		t.Fatalf("content = %q, want the original", got)
+	}
+	// An empty body needs no space and still commits in place.
+	resp, err := write(t, server, fileRootVolumes, "hard.txt", etagOf(t, server, "hard.txt"), true, nil)
+	if err != nil {
+		t.Fatalf("empty in-place write: %v", err)
+	}
+	if resp.GetWriteMode() != "in_place" {
+		t.Fatalf("write mode = %q, want in_place", resp.GetWriteMode())
+	}
+	if got, _ := os.ReadFile(path); len(got) != 0 {
+		t.Fatalf("content = %q, want empty", got)
+	}
 }
 
 // TestFileServerWriteIdleTimeout pins finding 9: a Write that receives nothing
@@ -843,5 +879,104 @@ func TestFileServerSweepTempFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(fresh); err != nil {
 		t.Fatalf("fresh staging file swept: %v", err)
+	}
+}
+
+// TestFileServerRenameCrossDeviceFallback pins finding C: when a bind mount
+// forces the copy fallback (EXDEV), an overwriting move onto a non-empty
+// directory is refused like a same-filesystem rename (ENOTEMPTY) and leaves
+// both the source and destination intact; a move onto a free name succeeds.
+func TestFileServerRenameCrossDeviceFallback(t *testing.T) {
+	server, root := newTestFileServer(t)
+	old := renameWithin
+	defer func() { renameWithin = old }()
+	renameWithin = func(*fsroot.Root, string, string, bool) error {
+		return &os.LinkError{Op: "rename", Err: syscall.EXDEV}
+	}
+
+	for _, name := range []string{"src", "dst"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "a"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "dst", "keep"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, moveErr := server.Rename(context.Background(), &agentv1.RenameRequest{
+		Root: fileRootVolumes, Source: "src", Destination: "dst", Overwrite: true,
+	})
+	// Linux refuses a non-empty directory rename with ENOTEMPTY
+	// (FailedPrecondition); macOS may report EEXIST (AlreadyExists). Both are
+	// the same refusal; what matters is that nothing is destroyed.
+	if code := status.Code(moveErr); code != codes.FailedPrecondition && code != codes.AlreadyExists {
+		t.Fatalf("cross-device move onto a non-empty dir = %v, want a refusal", moveErr)
+	}
+	if _, err := os.Stat(filepath.Join(root, "src", "a")); err != nil {
+		t.Fatalf("source lost on a refused move: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "dst", "keep")); string(got) != "keep" {
+		t.Fatalf("destination modified on a refused move: %q", got)
+	}
+
+	// A move onto a free name still copies and then removes the source.
+	if _, err := server.Rename(context.Background(), &agentv1.RenameRequest{
+		Root: fileRootVolumes, Source: "src", Destination: "moved", Overwrite: true,
+	}); err != nil {
+		t.Fatalf("cross-device move to a free name: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "moved", "a")); string(got) != "a" {
+		t.Fatalf("moved tree missing: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "src")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source survived a successful move: %v", err)
+	}
+}
+
+// blockingDeleteStream blocks inside Send so a test can observe whether the
+// stripe lock is still held while progress is being sent.
+type blockingDeleteStream struct {
+	grpc.ServerStream
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingDeleteStream) Send(*agentv1.Progress) error {
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return nil
+}
+
+func (s *blockingDeleteStream) Context() context.Context { return context.Background() }
+
+// TestFileServerDeleteSendsProgressOutsideLock pins finding E: Delete releases
+// its stripe lock before sending progress, so a slow client cannot stall
+// unrelated paths that share the stripe.
+func TestFileServerDeleteSendsProgressOutsideLock(t *testing.T) {
+	t.Parallel()
+	server, _ := newTestFileServer(t)
+	if _, err := write(t, server, fileRootVolumes, "f", "", false, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	stream := &blockingDeleteStream{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		done <- server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: "f"}, stream)
+	}()
+	<-stream.entered
+	idx := pathLockIndex(fileRootVolumes, "f", len(server.locks))
+	if !server.locks[idx].TryLock() {
+		t.Fatal("Delete held the stripe lock while sending progress")
+	}
+	server.locks[idx].Unlock()
+	close(stream.release)
+	if err := <-done; err != nil {
+		t.Fatalf("Delete: %v", err)
 	}
 }

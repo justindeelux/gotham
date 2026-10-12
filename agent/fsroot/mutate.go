@@ -32,6 +32,12 @@ const maxResolveLinks = 40
 // error instead of unbounded recursion. It is a variable so a test can lower it.
 var maxCopyDepth = 1024
 
+// maxSweepDepth bounds how deep the staging-file sweeper descends, so its
+// hourly walk of a large volume tree stays cheap. A staging file buried deeper
+// than the cap is left for a manual sweep. It is a variable so a test can lower
+// it.
+var maxSweepDepth = 128
+
 // CreateTemp creates a uniquely named temporary regular file inside dir (a
 // directory relative to the root) and returns it together with its
 // root-relative name. The name is random and O_EXCL, so it never collides with
@@ -389,12 +395,16 @@ func (r *Root) RemoveStaleTemps(prefix string, cutoff time.Time) (int, error) {
 	if err := r.requireWritable(); err != nil {
 		return 0, err
 	}
-	removed, errs := r.removeStaleTemps(".", prefix, cutoff)
+	removed, errs := r.removeStaleTemps(".", prefix, cutoff, 0)
 	return removed, errors.Join(errs...)
 }
 
-// removeStaleTemps is the recursive body of RemoveStaleTemps.
-func (r *Root) removeStaleTemps(dir, prefix string, cutoff time.Time) (int, []error) {
+// removeStaleTemps is the recursive body of RemoveStaleTemps. depth bounds the
+// descent so the sweep cost stays proportional to a bounded tree.
+func (r *Root) removeStaleTemps(dir, prefix string, cutoff time.Time, depth int) (int, []error) {
+	if depth > maxSweepDepth {
+		return 0, nil
+	}
 	names, err := r.dirNames(dir)
 	if err != nil {
 		return 0, []error{err}
@@ -411,7 +421,7 @@ func (r *Root) removeStaleTemps(dir, prefix string, cutoff time.Time) (int, []er
 			continue
 		}
 		if entry.Kind == KindDirectory {
-			n, subErrs := r.removeStaleTemps(rel, prefix, cutoff)
+			n, subErrs := r.removeStaleTemps(rel, prefix, cutoff, depth+1)
 			removed += n
 			errs = append(errs, subErrs...)
 			continue
@@ -431,11 +441,16 @@ func (r *Root) removeStaleTemps(dir, prefix string, cutoff time.Time) (int, []er
 // Copy copies src to dst within the root. A regular file is copied byte for
 // byte, a directory recursively and a symlink is recreated with its original
 // target text. An existing destination is refused unless overwrite is set;
-// overwriting a directory with a file (or the reverse) is always refused. ctx
-// is checked before every entry and between copy chunks, so a cancelled Copy
-// aborts promptly and its partial output file is removed. onEntry, when
-// non-nil, is called with each created entry's root-relative path as it
-// completes.
+// overwriting a directory with a file (or the reverse), or a non-empty
+// directory, is refused exactly as a same-filesystem rename would be. ctx is
+// checked before every entry and between copy chunks.
+//
+// The copy is staged in a temporary sibling of dst and renamed into place only
+// once it is complete, so a failure or cancellation never leaves a partial
+// destination tree and an overwrite never deletes the old destination before
+// the new one exists. onEntry, when non-nil, is called with each created
+// entry's root-relative path as it completes, reported against dst rather than
+// the staging name.
 func (r *Root) Copy(ctx context.Context, src, dst string, overwrite bool, onEntry func(string, Entry) error) error {
 	if err := r.requireWritable(); err != nil {
 		return err
@@ -457,42 +472,128 @@ func (r *Root) Copy(ctx context.Context, src, dst string, overwrite bool, onEntr
 	if err := r.refuseCopyIntoItself(s, d); err != nil {
 		return err
 	}
-	return r.copyEntry(ctx, s, d, overwrite, onEntry, 0)
+	if !overwrite {
+		// Fail before doing any work when the destination already exists.
+		if _, statErr := r.Stat(d); statErr == nil {
+			return fmt.Errorf("%w: %s", ErrExists, d)
+		} else if !errors.Is(statErr, ErrNotFound) {
+			return statErr
+		}
+	}
+	return r.copyStaged(ctx, s, d, overwrite, onEntry)
 }
 
-// refuseCopyIntoItself resolves the destination's parent inside the root and
-// refuses the copy when it resolves into the source directory. The lexical
-// check in Copy cannot see through a symlinked destination parent — for example
-// a link that points back at the source — which would otherwise recurse without
-// bound and corrupt the source.
+// refuseCopyIntoItself resolves the source and the destination's final parent
+// (following symbolic links) and refuses the copy when the destination would
+// land on the source itself or inside the source's subtree. Both directions
+// matter: a lexically distinct path can resolve onto the source through a
+// symlinked parent — "up" -> "." makes "up/f" address "f" — which would
+// otherwise turn the staging rename into a self-overwrite that destroys the
+// source. An existing destination that is the same inode as the source (a hard
+// link or a second name for it) is refused too, so an overwrite never unlinks
+// the source.
 func (r *Root) refuseCopyIntoItself(s, d string) error {
-	entry, err := r.Stat(s)
-	if err != nil {
-		return err
-	}
-	if entry.Kind != KindDirectory {
-		return nil
-	}
 	resolvedSrc, err := r.Resolve(s)
 	if err != nil {
 		return err
 	}
 	resolvedParent, err := r.Resolve(path.Dir(d))
 	if err != nil {
-		// The destination parent does not exist yet, so the copy cannot recurse
-		// into the source: creating it would fail first.
+		// The destination parent does not exist yet, so the copy cannot land on
+		// the source: creating it would fail first.
 		return nil
 	}
-	if resolvedParent == resolvedSrc || withinRel(resolvedSrc, resolvedParent) {
+	resolvedDst := path.Join(resolvedParent, path.Base(d))
+	if resolvedDst == resolvedSrc || withinRel(resolvedDst, resolvedSrc) || withinRel(resolvedSrc, resolvedDst) {
 		return fmt.Errorf("%w: cannot copy %q into itself", ErrInvalid, s)
+	}
+	if same, err := r.sameEntry(s, d); err == nil && same {
+		return fmt.Errorf("%w: cannot copy %q onto itself", ErrInvalid, s)
 	}
 	return nil
 }
 
-// copyEntry copies one entry, recursing into a directory. depth bounds the
-// recursion so a pathological tree is an explicit error, not unbounded
-// recursion.
-func (r *Root) copyEntry(ctx context.Context, src, dst string, overwrite bool, onEntry func(string, Entry) error, depth int) error {
+// sameEntry reports whether two root-relative paths name the same underlying
+// entry, following symbolic links on both. Device and inode are compared, so a
+// hard link or a second path to the same file is detected even when the
+// resolved names differ. A path that does not exist is not an error the caller
+// acts on: it is reported as (false, nil).
+func (r *Root) sameEntry(a, b string) (bool, error) {
+	ai, err := r.root.Stat(a)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, mapError("stat", err)
+	}
+	bi, err := r.root.Stat(b)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, mapError("stat", err)
+	}
+	return os.SameFile(ai, bi), nil
+}
+
+// copyStaged copies src into a fresh temporary sibling of dst and renames it
+// into place, so a partial copy never becomes the destination and an overwrite
+// never removes the old destination first. A failed copy removes the staging
+// tree and leaves the destination untouched.
+func (r *Root) copyStaged(ctx context.Context, src, dst string, overwrite bool, onEntry func(string, Entry) error) error {
+	stage, err := randomName(path.Dir(dst))
+	if err != nil {
+		return err
+	}
+	report := func(rel string, e Entry) error {
+		if onEntry == nil {
+			return nil
+		}
+		return onEntry(stagedPath(stage, dst, rel), e)
+	}
+	if err := r.copyTree(ctx, src, stage, report, 0); err != nil {
+		r.removeStaged(stage)
+		return err
+	}
+	if overwrite {
+		err = r.root.Rename(stage, dst)
+	} else {
+		// A non-replacing rename keeps a create exclusive even if the name
+		// appears between the check above and the commit.
+		err = r.RenameExclusive(stage, dst)
+	}
+	if err != nil {
+		r.removeStaged(stage)
+		return mapError("rename", err)
+	}
+	return nil
+}
+
+// removeStaged drops a staging entry after a failed or refused copy. It uses a
+// background context so cleanup still runs when the copy was cancelled, and
+// ignores errors: the destination is already intact and the sweeper reclaims a
+// leak.
+func (r *Root) removeStaged(p string) {
+	_ = r.RemoveTree(context.Background(), p, nil)
+}
+
+// stagedPath maps a path under the staging entry back to the logical
+// destination, so streamed progress addresses dst rather than a temporary name.
+func stagedPath(stage, dst, rel string) string {
+	if rel == stage {
+		return dst
+	}
+	if suffix, ok := strings.CutPrefix(rel, stage+"/"); ok {
+		return path.Join(dst, suffix)
+	}
+	return rel
+}
+
+// copyTree copies one entry into a fresh destination path that does not yet
+// exist, recursing into directories. Every entry is created exclusively, so a
+// staged copy can never clobber an existing entry. depth bounds the recursion
+// so a pathological tree is an explicit error, not unbounded recursion.
+func (r *Root) copyTree(ctx context.Context, src, dst string, onEntry func(string, Entry) error, depth int) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -503,24 +604,10 @@ func (r *Root) copyEntry(ctx context.Context, src, dst string, overwrite bool, o
 	if err != nil {
 		return err
 	}
-	dstEntry, dstErr := r.Stat(dst)
-	dstExists := dstErr == nil
-	if dstErr != nil && !errors.Is(dstErr, ErrNotFound) {
-		return dstErr
-	}
-	if dstExists && !overwrite {
-		return fmt.Errorf("%w: %s", ErrExists, dst)
-	}
-
 	switch entry.Kind {
 	case KindDirectory:
-		if dstExists && dstEntry.Kind != KindDirectory {
-			return fmt.Errorf("%w: %s", ErrExists, dst)
-		}
-		if !dstExists {
-			if err := r.root.Mkdir(dst, entry.Mode.Perm()); err != nil {
-				return mapError("mkdir", err)
-			}
+		if err := r.root.Mkdir(dst, entry.Mode.Perm()); err != nil {
+			return mapError("mkdir", err)
 		}
 		names, err := r.dirNames(src)
 		if err != nil {
@@ -530,48 +617,25 @@ func (r *Root) copyEntry(ctx context.Context, src, dst string, overwrite bool, o
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := r.copyEntry(ctx, path.Join(src, name), path.Join(dst, name), overwrite, onEntry, depth+1); err != nil {
+			if err := r.copyTree(ctx, path.Join(src, name), path.Join(dst, name), onEntry, depth+1); err != nil {
 				return err
 			}
 		}
 	case KindSymlink:
-		if err := r.prepareCopyTarget(dst, dstExists, dstEntry); err != nil {
-			return err
-		}
 		if err := r.root.Symlink(entry.SymlinkTarget, dst); err != nil {
 			return mapError("symlink", err)
 		}
 	case KindRegular:
-		if err := r.prepareCopyTarget(dst, dstExists, dstEntry); err != nil {
-			return err
-		}
 		if err := r.copyFile(ctx, src, dst, entry.Mode.Perm()); err != nil {
 			return err
 		}
 	default:
 		return fmt.Errorf("%w: cannot copy %s", ErrSpecial, src)
 	}
-
 	if onEntry != nil {
 		if err := onEntry(dst, entry); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-// prepareCopyTarget clears an existing non-directory destination so a fresh
-// entry can be created in its place. The overwrite policy is enforced by the
-// caller before this point.
-func (r *Root) prepareCopyTarget(dst string, dstExists bool, dstEntry Entry) error {
-	if !dstExists {
-		return nil
-	}
-	if dstEntry.Kind == KindDirectory {
-		return fmt.Errorf("%w: %s", ErrExists, dst)
-	}
-	if err := r.root.Remove(dst); err != nil {
-		return mapError("remove", err)
 	}
 	return nil
 }

@@ -25,7 +25,7 @@
           <div>
             <p class="eyebrow">Bản đồ giao diện · control plane v0.9.4</p>
             <h1 class="ov-title">Toàn bộ website Gotham, thiết kế lại theo ngôn ngữ Discord.</h1>
-            <p class="lede mt-4">15 screens covering the 10 phases in <span class="inline-code">docs/plans</span> plus Phase 13 (projects &amp; environments): auth, nodes &amp; agents, Docker, deploy from Git, databases &amp; backups, Traefik/SSL, services &amp; templates, previews/teams/notifications, self-update, projects. Dark-first, one blurple accent, server rail — sidebar — content column.</p>
+            <p class="lede mt-4">16 screens covering the 10 phases in <span class="inline-code">docs/plans</span> plus Phase 13 (projects &amp; environments): auth, nodes &amp; agents, Docker, deploy from Git, databases &amp; backups, Traefik/SSL, services &amp; templates, previews/teams/notifications, self-update, projects, files. Dark-first, one blurple accent, server rail — sidebar — content column.</p>
             <div class="row gap-3 wrap mt-6">
               <a class="btn btn-primary" href="dashboard.html">Mở dashboard</a>
               <a class="btn btn-outline" href="#screens">Danh sách màn hình</a>
@@ -152,6 +152,15 @@
             </span>
           </a>
 
+          <a class="screen-card" href="files.html" data-od-id="screen-files">
+            <span class="thumb"><span class="thumb-rail"><i class="on"></i><i></i><i></i></span><span class="thumb-side"><i></i><i class="on"></i><i></i></span><span class="thumb-main"><span class="bar"></span><span class="bar w80"></span><span class="bar w60"></span><span class="bar"></span></span></span>
+            <span class="body">
+              <span class="fg-2 bold">Files</span>
+              <span class="small muted">File manager on a node: roots, breadcrumb, list/grid, selection bar, context menu, code editor with conflict-safe saves, upload panel.</span>
+              <span class="foot"><span class="tag">Phase 18 · step 5</span><span class="tag">Browser + editor</span></span>
+            </span>
+          </a>
+
           <a class="screen-card" href="domains.html" data-od-id="screen-domains">
             <span class="thumb"><span class="thumb-rail"><i></i><i></i><i></i></span><span class="thumb-side"><i class="on"></i><i></i><i></i></span><span class="thumb-main"><span class="bar w60"></span><span class="bar"></span><span class="bar w80"></span><span class="bar w40"></span></span></span>
             <span class="body">
@@ -250,7 +259,7 @@
           </div>
         </div>
 
-        <div class="section-title"><h2>Linh kiện dùng chung</h2><span class="meta">one CSS source for all 14 screen cards</span></div>
+        <div class="section-title"><h2>Linh kiện dùng chung</h2><span class="meta">one CSS source for all 15 screen cards</span></div>
         <div class="token-grid">
           <div class="token-cell"><p class="t-name">Rail &amp; avatar</p><p class="t-val">.rail-btn .avatar</p><p class="small muted mt-2">Vuông bo 16px → tròn khi hover (350ms), pill trắng 4px đánh dấu node đang mở.</p></div>
           <div class="token-cell"><p class="t-name">Log viewer</p><p class="t-val">.log · data-log</p><p class="small muted mt-2">Stream có tạm dừng, tự cuộn, xoá buffer, tải về; màu theo mức log.</p></div>
@@ -301,7 +310,7 @@
             <div class="card-body">
               <div class="token-grid">
                 <div class="token-cell"><p class="t-name">Khung &amp; hệ thống</p><p class="t-val">assets/gotham-ui.css<br />assets/gotham-views.css<br />assets/gotham-ui.js</p></div>
-                <div class="token-cell"><p class="t-name">Màn hình</p><p class="t-val">index · dashboard<br />projects · project-detail · environment<br />applications · application-detail<br />services · databases<br />servers · server-detail<br />domains · team-settings<br />login</p></div>
+                <div class="token-cell"><p class="t-name">Màn hình</p><p class="t-val">index · dashboard<br />projects · project-detail · environment<br />applications · application-detail<br />services · databases<br />servers · server-detail · files<br />domains · team-settings<br />login</p></div>
               </div>
               <p class="small muted mt-3">Mở bất kỳ tệp nào trong trình duyệt. Nhấn <span class="kbd">⌘K</span> để mở bảng lệnh, điều hướng chéo giữa các màn hình bằng rail bên trái (máy chủ) và sidebar (nhóm chức năng).</p>
             </div>
@@ -314,7 +323,7 @@
               <span class="brand-mark brand-mark--sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 19V11a7 7 0 0114 0v8" /><path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19" /></svg></span>
               <div><p class="wordmark">Gotham</p><p class="small muted">Self-hosted PaaS · control plane v0.9.4</p></div>
             </div>
-            <p class="small meta">Thiết kế theo design system Discord · 15 screens · dữ liệu mẫu từ <span class="mono">docs/plans</span></p>
+            <p class="small meta">Thiết kế theo design system Discord · 16 screens · dữ liệu mẫu từ <span class="mono">docs/plans</span></p>
           </div>
         </div>
 

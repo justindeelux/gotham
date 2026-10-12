@@ -59,18 +59,22 @@ type handler struct {
 // RequireTeam + the write gate), and the service authorizes the target node's
 // team and role before any agent read. The download route is deliberately
 // outside the auth group: the single-use ticket is its credential, because a
-// native browser download cannot attach the bearer token. A nil svc mounts
-// nothing, so the control plane can call Mount unconditionally; the routes are
-// mounted whenever the service exists, and answer 503 ErrDisabled while
-// FEATURE_FILES is off.
+// native browser download cannot attach the bearer token. logger is the
+// control plane's configured logger; a nil logger falls back to slog.Default().
+// A nil svc mounts nothing, so the control plane can call Mount unconditionally;
+// the routes are mounted whenever the service exists, and answer 503 ErrDisabled
+// while FEATURE_FILES is off.
 //
 // The ticket rides the query string. The control plane's request logger records
 // r.URL.Path only, never the query, so the ticket never reaches the access log.
-func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService) {
+func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, logger *slog.Logger) {
 	if svc == nil {
 		return
 	}
-	h := &handler{svc: svc, logger: slog.Default()}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	h := &handler{svc: svc, logger: logger}
 	r.Get("/v1/servers/{id}/files/download", h.download)
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
@@ -183,6 +187,9 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.FormatInt(download.Size, 10))
 	w.Header().Set("Content-Disposition", contentDisposition(download.Name))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// A file body can hold secrets and the ticket URL is capability-bearing, so
+	// neither the browser nor an intermediary may cache the response.
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 
 	// The response controller extends the write deadline per chunk and flushes,
@@ -190,19 +197,22 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	// stalled client is dropped instead of pinning a connection. Both calls are
 	// no-ops on a recorder that does not support deadlines (the handler tests).
 	controller := http.NewResponseController(w)
+	var written int64
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case chunk, open := <-download.Chunks:
 			if !open {
-				// The stream ended. A terminal error after the headers were
-				// sent cannot become a JSON response, so the connection is
-				// aborted: the browser marks the Content-Length-short body as a
-				// failed download rather than a complete file.
-				if streamErr, ok := <-download.Err; ok && streamErr != nil {
+				// The stream ended. A terminal error, or a byte count that does
+				// not match the Content-Length already sent, cannot become a JSON
+				// response, so the connection is aborted: the browser marks the
+				// short body as a failed download rather than a complete file.
+				streamErr, hasErr := <-download.Err
+				if (hasErr && streamErr != nil) || written != download.Size {
 					h.logger.Error("files: download failed mid-stream",
-						"server_id", serverID.String(), "error", streamErr)
+						"server_id", serverID.String(), "error", streamErr,
+						"written", written, "size", download.Size)
 					panic(http.ErrAbortHandler)
 				}
 				return
@@ -211,6 +221,7 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 			if _, err := w.Write(chunk); err != nil {
 				return
 			}
+			written += int64(len(chunk))
 			_ = controller.Flush()
 		}
 	}
@@ -224,7 +235,9 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrForbidden):
 		writeJSON(w, http.StatusForbidden, errorBody{Message: "forbidden"})
 	case errors.Is(err, ErrValidation):
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: err.Error()})
+		// A fixed message: the underlying error can carry raw gRPC/agent text
+		// (mapRPCError wraps the agent error), which must not reach the client.
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request"})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "conflict"})
 	case errors.Is(err, ErrTooLarge):

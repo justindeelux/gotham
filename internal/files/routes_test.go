@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -76,7 +77,7 @@ func passthroughAuth(next http.Handler) http.Handler { return next }
 // newTestRouter mounts the file routes with the fake service.
 func newTestRouter(svc FileService) http.Handler {
 	r := chi.NewRouter()
-	Mount(r, passthroughAuth, svc)
+	Mount(r, passthroughAuth, svc, nil)
 	return r
 }
 
@@ -255,6 +256,9 @@ func TestDownloadStreamsFirstChunkBeforeEnd(t *testing.T) {
 	if disposition := resp.Header.Get("Content-Disposition"); !strings.Contains(disposition, `filename="a.txt"`) {
 		t.Errorf("content-disposition = %q", disposition)
 	}
+	if cacheControl := resp.Header.Get("Cache-Control"); cacheControl != "no-store" {
+		t.Errorf("cache-control = %q, want no-store", cacheControl)
+	}
 
 	first := make([]byte, len("first"))
 	if _, err := io.ReadFull(resp.Body, first); err != nil {
@@ -277,6 +281,56 @@ func TestDownloadStreamsFirstChunkBeforeEnd(t *testing.T) {
 // TestDownloadAbortsOnMidStreamError asserts a terminal agent error after the
 // headers were sent aborts the connection, so the browser marks the download as
 // failed instead of accepting a short body.
+// TestDownloadAbortsOnShortBody asserts a clean-end stream that produced fewer
+// bytes than the Content-Length already sent aborts the connection, so the
+// client sees a failed download instead of a truncated "success".
+func TestDownloadAbortsOnShortBody(t *testing.T) {
+	chunks := make(chan []byte)
+	streamErr := make(chan error)
+	go func() {
+		chunks <- []byte("part")
+		close(chunks)
+		close(streamErr)
+	}()
+
+	id := uuid.New()
+	h := newTestRouter(&fakeService{download: &Download{Name: "a.txt", Size: 100, Chunks: chunks, Err: streamErr}})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v1/servers/" + id.String() + "/files/download?ticket=t")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.ContentLength != 100 {
+		t.Fatalf("content-length = %d, want 100", resp.ContentLength)
+	}
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Fatalf("expected a truncated-body error, got none")
+	}
+}
+
+// TestValidationErrorMessageIsGeneric asserts the 400 body never echoes the raw
+// gRPC/agent error text a validation failure can carry.
+func TestValidationErrorMessageIsGeneric(t *testing.T) {
+	id := uuid.New()
+	h := newTestRouter(&fakeService{
+		listErr: fmt.Errorf("%w: rpc error: code = InvalidArgument desc = /etc/shadow: no such file", ErrValidation),
+	})
+	rec := doRequest(t, h, http.MethodGet, "/v1/servers/"+id.String()+"/files/list?root=volumes")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	var body errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body.Message != "invalid request" {
+		t.Fatalf("message = %q, want %q", body.Message, "invalid request")
+	}
+}
+
 func TestDownloadAbortsOnMidStreamError(t *testing.T) {
 	chunks := make(chan []byte)
 	streamErr := make(chan error, 1)

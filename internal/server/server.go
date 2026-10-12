@@ -358,7 +358,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// step 10 signs the feature off. The service authorizes the target
 		// node's team and role (owner/admin for content and download tickets)
 		// before any agent read.
-		files.Mount(api, s.withTeam(), s.fileService())
+		files.Mount(api, s.withTeam(), s.fileService(), s.logger)
 
 		// Deleted database volumes are kept for the grace window and then
 		// removed by the retention sweep. The loop starts here and is stopped

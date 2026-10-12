@@ -58,6 +58,11 @@ const (
 // Larger files answer 413 and are offered as a download instead.
 const MaxContentBytes int64 = 2 << 20 // 2 MiB
 
+// maxFileArgBytes bounds a root/path/cursor query value before it is put in a
+// proto message. A value longer than any real path is refused at the control
+// plane rather than passed to the agent.
+const maxFileArgBytes = 4096
+
 // Root is one browsable root as reported by the agent.
 type Root struct {
 	Name      string `json:"name"`
@@ -226,6 +231,12 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID, root, path, curs
 	if err := validateRoot(root); err != nil {
 		return Listing{}, err
 	}
+	if err := validateFileArg("path", path); err != nil {
+		return Listing{}, err
+	}
+	if err := validateFileArg("cursor", cursor); err != nil {
+		return Listing{}, err
+	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, false)
 	if err != nil {
 		return Listing{}, err
@@ -250,6 +261,9 @@ func (s *Service) Stat(ctx context.Context, serverID uuid.UUID, root, path strin
 		return Entry{}, ErrDisabled
 	}
 	if err := validateRoot(root); err != nil {
+		return Entry{}, err
+	}
+	if err := validateFileArg("path", path); err != nil {
 		return Entry{}, err
 	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, false)
@@ -279,6 +293,9 @@ func (s *Service) Content(ctx context.Context, serverID uuid.UUID, root, path st
 		return Content{}, ErrDisabled
 	}
 	if err := validateRoot(root); err != nil {
+		return Content{}, err
+	}
+	if err := validateFileArg("path", path); err != nil {
 		return Content{}, err
 	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, true)
@@ -332,6 +349,9 @@ func (s *Service) IssueDownloadTicket(ctx context.Context, serverID uuid.UUID, r
 	if err := validateRoot(root); err != nil {
 		return "", err
 	}
+	if err := validateFileArg("path", path); err != nil {
+		return "", err
+	}
 	server, err := s.resolve(ctx, serverID, true)
 	if err != nil {
 		return "", err
@@ -349,16 +369,14 @@ func (s *Service) IssueDownloadTicket(ctx context.Context, serverID uuid.UUID, r
 // Download consumes a ticket and opens the agent read stream for the entry. The
 // ticket is the authorization: it was issued to an owner/admin and is bound to
 // one (server, root, path). A missing, expired or already-consumed ticket, or a
-// ticket for a different server, answers ErrNotFound.
+// ticket for a different server, answers ErrNotFound; a wrong-server request
+// leaves the ticket intact rather than burning it.
 func (s *Service) Download(ctx context.Context, serverID uuid.UUID, ticketID string) (*Download, error) {
 	if !Enabled() {
 		return nil, ErrDisabled
 	}
-	t, ok := s.tickets.consume(ticketID)
+	t, ok := s.tickets.consumeFor(ticketID, serverID)
 	if !ok {
-		return nil, ErrNotFound
-	}
-	if t.ServerID != serverID {
 		return nil, ErrNotFound
 	}
 	server, err := s.server(ctx, serverID)
@@ -528,10 +546,29 @@ func (s *Service) closeClient(client FileClient) {
 	}
 }
 
-// validateRoot rejects an empty root name before it reaches the agent.
+// validateRoot rejects an empty root name and any value the gRPC layer cannot
+// carry, before it reaches the agent.
 func validateRoot(root string) error {
 	if strings.TrimSpace(root) == "" {
 		return fmt.Errorf("%w: root is required", ErrValidation)
+	}
+	return validateFileArg("root", root)
+}
+
+// validateFileArg rejects a root/path/cursor value the agent gRPC layer cannot
+// carry: invalid UTF-8 (proto.Marshal fails on it, which would otherwise
+// surface as a 500), an embedded NUL byte, or a value longer than any real path
+// (maxFileArgBytes). It runs before the dial, so a malformed request is a 400
+// and never reaches the agent.
+func validateFileArg(name, value string) error {
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("%w: %s is not valid UTF-8", ErrValidation, name)
+	}
+	if strings.IndexByte(value, 0) >= 0 {
+		return fmt.Errorf("%w: %s contains a NUL byte", ErrValidation, name)
+	}
+	if len(value) > maxFileArgBytes {
+		return fmt.Errorf("%w: %s is too long", ErrValidation, name)
 	}
 	return nil
 }
@@ -665,9 +702,12 @@ func (s *ticketStore) issue(t ticket) string {
 	return token
 }
 
-// consume removes and returns the ticket for token. It reports false when the
-// token is unknown, expired or already consumed, so a ticket is single-use.
-func (s *ticketStore) consume(token string) (ticket, bool) {
+// consumeFor removes and returns the ticket for token, but only when it is
+// bound to serverID. It reports false when the token is unknown, expired or
+// already consumed (so a ticket is single-use) and also when it belongs to a
+// different server — in that last case the ticket is left in the store, not
+// burned, so a request for the wrong server cannot invalidate a valid ticket.
+func (s *ticketStore) consumeFor(token string, serverID uuid.UUID) (ticket, bool) {
 	if token == "" {
 		return ticket{}, false
 	}
@@ -675,7 +715,7 @@ func (s *ticketStore) consume(token string) (ticket, bool) {
 	defer s.mu.Unlock()
 	s.pruneLocked()
 	t, ok := s.tickets[token]
-	if !ok {
+	if !ok || t.ServerID != serverID {
 		return ticket{}, false
 	}
 	delete(s.tickets, token)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -302,6 +303,64 @@ func TestContentLimits(t *testing.T) {
 			t.Fatalf("content = %+v", content)
 		}
 	})
+}
+
+// TestQueryValidation is the fix-round-1 regression: invalid UTF-8 or an
+// over-long root/path/cursor must fail as ErrValidation (400) before any dial,
+// instead of reaching proto.Marshal and surfacing as a 500.
+func TestQueryValidation(t *testing.T) {
+	teamID := uuid.New()
+	registry := newFakeRegistry()
+	server := registry.seed(teamID)
+	svc := newTestService(t, registry, &fakeFileClient{})
+	ctx := scopeCtx(teams.RoleOwner, teamID)
+
+	invalid := "\xff\xfe"
+	nul := "a\x00b"
+	long := strings.Repeat("a", maxFileArgBytes+1)
+
+	cases := map[string]func() error{
+		"list bad root":    func() error { _, err := svc.List(ctx, server.ID, invalid, "", ""); return err },
+		"list bad path":    func() error { _, err := svc.List(ctx, server.ID, "root", invalid, ""); return err },
+		"list bad cursor":  func() error { _, err := svc.List(ctx, server.ID, "root", "", invalid); return err },
+		"list NUL path":    func() error { _, err := svc.List(ctx, server.ID, "root", nul, ""); return err },
+		"list long path":   func() error { _, err := svc.List(ctx, server.ID, "root", long, ""); return err },
+		"stat bad path":    func() error { _, err := svc.Stat(ctx, server.ID, "root", invalid); return err },
+		"content bad path": func() error { _, err := svc.Content(ctx, server.ID, "root", invalid); return err },
+		"ticket bad path":  func() error { _, err := svc.IssueDownloadTicket(ctx, server.ID, "root", long); return err },
+		"empty root":       func() error { _, err := svc.List(ctx, server.ID, "", "", ""); return err },
+	}
+	for name, call := range cases {
+		if err := call(); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s err = %v, want ErrValidation", name, err)
+		}
+	}
+}
+
+// TestDownloadWrongServerNotBurned proves the redeem-time server check does not
+// consume a ticket issued for another server: the wrong-server request is
+// refused, then the legitimate server still redeems the same ticket.
+func TestDownloadWrongServerNotBurned(t *testing.T) {
+	teamID := uuid.New()
+	registry := newFakeRegistry()
+	server := registry.seed(teamID)
+	other := registry.seed(teamID)
+	svc := newTestService(t, registry, &fakeFileClient{
+		statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 2}},
+		readBody: []byte("hi"),
+	})
+	ctx := scopeCtx(teams.RoleOwner, teamID)
+
+	ticket, err := svc.IssueDownloadTicket(ctx, server.ID, "root", "a")
+	if err != nil {
+		t.Fatalf("issue ticket: %v", err)
+	}
+	if _, err := svc.Download(ctx, other.ID, ticket); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong-server download err = %v, want ErrNotFound", err)
+	}
+	if _, err := svc.Download(ctx, server.ID, ticket); err != nil {
+		t.Fatalf("the ticket was burned by the wrong-server request: %v", err)
+	}
 }
 
 func TestMapRPCError(t *testing.T) {

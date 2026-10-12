@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"syscall"
 	"testing"
 
@@ -14,7 +16,11 @@ import (
 
 func openRoot(t *testing.T, dir string) *fsroot.Root {
 	t.Helper()
-	root, err := fsroot.Open("test", dir, true)
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat root: %v", err)
+	}
+	root, err := fsroot.Open("test", dir, info, true)
 	if err != nil {
 		t.Fatalf("open root: %v", err)
 	}
@@ -24,7 +30,7 @@ func openRoot(t *testing.T, dir string) *fsroot.Root {
 
 func TestOpenRequiresAbsolutePath(t *testing.T) {
 	t.Parallel()
-	if _, err := fsroot.Open("test", "relative/path", true); err == nil {
+	if _, err := fsroot.Open("test", "relative/path", nil, true); err == nil {
 		t.Fatal("expected an error for a relative root")
 	}
 }
@@ -276,6 +282,83 @@ func TestStatMissing(t *testing.T) {
 	root := openRoot(t, t.TempDir())
 	if _, err := root.Stat("nope"); !errors.Is(err, fsroot.ErrNotFound) {
 		t.Fatalf("Stat error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestListPagesEveryNameExactlyOnce drives List with a page size far below the
+// directory size and proves the regression that shipped as truncated=true with
+// an empty cursor cannot recur: every page that reports truncated must carry a
+// cursor that strictly advances, and the walk terminates having yielded every
+// name exactly once, in sorted order.
+func TestListPagesEveryNameExactlyOnce(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	const total = 40
+	names := make([]string, 0, total)
+	for i := range total {
+		name := fmt.Sprintf("f%02d", i)
+		names = append(names, name)
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sort.Strings(names)
+	root := openRoot(t, dir)
+
+	var got []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > total+1 {
+			t.Fatal("paging did not terminate")
+		}
+		entries, truncated, next, err := root.List(".", cursor, 7)
+		if err != nil {
+			t.Fatalf("list page %d: %v", pages, err)
+		}
+		for _, entry := range entries {
+			got = append(got, entry.Name)
+		}
+		if !truncated {
+			if next != "" {
+				t.Fatalf("final page reports cursor %q, want empty", next)
+			}
+			break
+		}
+		if next == "" || next == cursor {
+			t.Fatalf("page %d truncated with non-advancing cursor %q", pages, next)
+		}
+		cursor = next
+	}
+	if !reflect.DeepEqual(got, names) {
+		t.Fatalf("paged names = %v, want %v", got, names)
+	}
+}
+
+// TestOpenDetectsSwappedRoot proves the descriptor is compared against the
+// identity captured before the open, not a fresh stat of the path: a directory
+// replaced between validation and open is refused.
+func TestOpenDetectsSwappedRoot(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	dir := filepath.Join(base, "root")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	validated, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Move the validated directory aside and put a different one at the path,
+	// standing in for a swap between the validation stat and the open.
+	if err := os.Rename(dir, dir+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fsroot.Open("test", dir, validated, true); err == nil {
+		t.Fatal("Open accepted a swapped root, want an error")
 	}
 }
 

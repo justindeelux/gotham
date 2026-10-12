@@ -391,6 +391,19 @@ leaves the tree is refused by the descriptor walk. The service must not be
 exposed without the agent's CA configured, since confinement is not
 authentication.
 
+`List` returns at most 5,000 entries per page, sorted by name. A page with more
+entries follows reports `truncated=true` and an opaque base64 `cursor`; pass the
+cursor back to resume, and keep paging until `truncated=false` — a truncated
+page always carries a non-empty cursor that makes progress, so a client can
+never loop. The cursor is base64 because a boundary name may hold bytes that are
+not valid UTF-8 (legal on Linux), which a raw proto3 string could not carry; the
+displayed `name` of such an entry is scrubbed to U+FFFD and therefore cannot be
+fed back to `Stat`/`Read`, but the cursor still addresses the real bytes. A
+malformed cursor is rejected with `InvalidArgument`. A single `List` scans up to
+100,000 directory entries and keeps only the page in memory; a directory larger
+than that fails with `ResourceExhausted` ("directory too large") rather than
+returning a silently partial listing.
+
 ## Updates and rollback
 
 Releases are verified with the public key embedded in the running binary, so no

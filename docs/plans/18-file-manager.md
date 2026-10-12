@@ -102,7 +102,7 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 
 **Accepted deviations (round 1 review):**
 - Operator roots from `GOTHAM_AGENT_FILE_ROOTS` are **read-only** in step 1 (`writable=false`); write intent is deferred to a later step.
-- Root validation resolves symlinks first: `validateFileRoot` judges the `EvalSymlinks` target, then `os.OpenRoot` is the confinement boundary and the opened descriptor is re-checked against that resolved path.
+- Root validation resolves symlinks first: `validateFileRoot` judges the `EvalSymlinks` target and captures the directory's dev/ino identity from that same stat, then `os.OpenRoot` is the confinement boundary and `verifySameRoot` re-checks the opened descriptor against the captured identity — never a fresh stat of the path, which would race the very swap it must reject.
 - `WriteHeader` carries `root`, so the write stream addresses `(root, path)` like the read RPCs.
 - A missing built-in root (`ManagedVolumeRoot`, `ComposeRoot`, both created lazily) is skipped with a warning; a missing or unsafe operator root still fails closed.
 

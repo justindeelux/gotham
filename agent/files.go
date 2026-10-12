@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,7 +118,7 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 				continue
 			}
 		}
-		real, err := validateFileRoot(rc.path, protected)
+		real, identity, err := validateFileRoot(rc.path, protected)
 		if err != nil {
 			_ = server.Close()
 			return nil, err
@@ -127,7 +128,7 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 			return nil, fmt.Errorf("file root %q overlaps root %q", rc.path, other)
 		}
 		name := uniqueRootName(server.roots, rc.name)
-		root, err := fsroot.Open(name, real, rc.writable)
+		root, err := fsroot.Open(name, real, identity, rc.writable)
 		if err != nil {
 			_ = server.Close()
 			return nil, err
@@ -228,22 +229,28 @@ func fileProtectedPaths(cfg Config) []protectedPath {
 	return paths
 }
 
-// validateFileRoot returns the canonical absolute path of a browsable root, or
-// an error when it must not be browsed. The path is resolved through symlinks
-// first (so a root that is a symlink into /etc is judged by where it really
-// points, and the legitimate /var → /private/var link on macOS does not block
-// an operator root), then checked against the dangerous trees and the
-// protected paths.
-func validateFileRoot(dir string, protected []protectedPath) (string, error) {
+// validateFileRoot returns the canonical absolute path of a browsable root and
+// the directory identity (both captured from the same stat), or an error when
+// it must not be browsed. The path is resolved through symlinks first (so a
+// root that is a symlink into /etc is judged by where it really points, and the
+// legitimate /var → /private/var link on macOS does not block an operator
+// root), then checked against the dangerous trees and the protected paths. The
+// identity travels to fsroot.Open so the descriptor actually opened is proven
+// to be the directory that was validated.
+func validateFileRoot(dir string, protected []protectedPath) (string, os.FileInfo, error) {
 	if !filepath.IsAbs(dir) {
-		return "", fmt.Errorf("file root %q must be an absolute path", dir)
+		return "", nil, fmt.Errorf("file root %q must be an absolute path", dir)
 	}
 	real, err := filepath.EvalSymlinks(filepath.Clean(dir))
 	if err != nil {
-		return "", fmt.Errorf("file root %q: %w", dir, err)
+		return "", nil, fmt.Errorf("file root %q: %w", dir, err)
 	}
 	if real == string(filepath.Separator) {
-		return "", fmt.Errorf("file root %q is the filesystem root", dir)
+		return "", nil, fmt.Errorf("file root %q is the filesystem root", dir)
+	}
+	identity, err := os.Stat(real)
+	if err != nil {
+		return "", nil, fmt.Errorf("file root %q: %w", dir, err)
 	}
 	// The default Docker data root plus whatever daemon.json declares; the
 	// three-index slice keeps the shared slice from being mutated by append.
@@ -255,22 +262,22 @@ func validateFileRoot(dir string, protected []protectedPath) (string, error) {
 		// exposing a system tree it contains.
 		if withinPath(tree, real) || withinPath(treeReal, real) ||
 			withinPath(real, tree) || withinPath(real, treeReal) {
-			return "", fmt.Errorf("file root %q overlaps %s", dir, tree)
+			return "", nil, fmt.Errorf("file root %q overlaps %s", dir, tree)
 		}
 	}
 	for _, p := range protected {
 		pp := canonicalPath(p.path)
 		if p.exclusive && withinPath(pp, real) {
-			return "", fmt.Errorf("file root %q is inside %s", dir, p.path)
+			return "", nil, fmt.Errorf("file root %q is inside %s", dir, p.path)
 		}
 		if pp == real {
-			return "", fmt.Errorf("file root %q is %s", dir, p.path)
+			return "", nil, fmt.Errorf("file root %q is %s", dir, p.path)
 		}
 		if withinPath(real, pp) {
-			return "", fmt.Errorf("file root %q contains %s", dir, p.path)
+			return "", nil, fmt.Errorf("file root %q contains %s", dir, p.path)
 		}
 	}
-	return real, nil
+	return real, identity, nil
 }
 
 // canonicalPath resolves p to its real absolute path, falling back to the
@@ -314,21 +321,51 @@ func (s *FileServer) ListRoots(context.Context, *agentv1.ListRootsRequest) (*age
 	return response, nil
 }
 
-// List returns one page of a directory under a root.
+// List returns one page of a directory under a root. The cursor is an opaque
+// base64 token so a boundary name that is not valid UTF-8 round-trips: proto3
+// strings must be valid UTF-8, so a raw name (legal on Linux) could not be
+// echoed back. A malformed cursor is rejected, never treated as "start over".
 func (s *FileServer) List(_ context.Context, req *agentv1.ListRequest) (*agentv1.ListResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
 		return nil, err
 	}
-	entries, truncated, cursor, err := root.List(req.GetPath(), req.GetCursor(), fileListLimit)
+	cursor, err := decodeCursor(req.GetCursor())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "list: %v", err)
+	}
+	entries, truncated, last, err := root.List(req.GetPath(), cursor, fileListLimit)
 	if err != nil {
 		return nil, fileError("list", err)
 	}
 	return &agentv1.ListResponse{
 		Entries:   fileEntries(entries),
 		Truncated: truncated,
-		Cursor:    validUTF8(cursor),
+		Cursor:    encodeCursor(last),
 	}, nil
+}
+
+// encodeCursor encodes the raw boundary name as base64 so arbitrary bytes
+// survive the proto3 UTF-8 requirement. An empty name (no more pages) stays
+// empty so the wire contract "truncated implies a non-empty cursor" holds.
+func encodeCursor(name string) string {
+	if name == "" {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString([]byte(name))
+}
+
+// decodeCursor reverses encodeCursor. An empty token means the first page; any
+// other token must be valid base64 or the request is malformed.
+func decodeCursor(token string) (string, error) {
+	if token == "" {
+		return "", nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(token)
+	if err != nil {
+		return "", fmt.Errorf("invalid cursor %q: %w", token, err)
+	}
+	return string(raw), nil
 }
 
 // Stat returns one entry under a root.
@@ -398,7 +435,10 @@ func fileEntries(entries []fsroot.Entry) []*agentv1.FileEntry {
 
 // fileEntry converts one entry. Proto3 string fields must be valid UTF-8, so a
 // filename or symlink target holding arbitrary bytes (legal on Linux) is
-// scrubbed rather than making the whole message fail to marshal.
+// scrubbed rather than making the whole message fail to marshal. The scrubbed
+// name may therefore differ from the bytes on disk and cannot be fed back to
+// Stat or Read; the List cursor is base64 precisely so paging still addresses
+// the real names.
 func fileEntry(entry fsroot.Entry) *agentv1.FileEntry {
 	out := &agentv1.FileEntry{
 		Name:          validUTF8(entry.Name),
@@ -449,6 +489,8 @@ func fileError(action string, err error) error {
 		return status.Errorf(codes.PermissionDenied, "%s: %v", action, err)
 	case errors.Is(err, fsroot.ErrSpecial):
 		return status.Errorf(codes.FailedPrecondition, "%s: %v", action, err)
+	case errors.Is(err, fsroot.ErrTooLarge):
+		return status.Errorf(codes.ResourceExhausted, "%s: %v", action, err)
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, action+": context canceled")
 	case errors.Is(err, context.DeadlineExceeded):

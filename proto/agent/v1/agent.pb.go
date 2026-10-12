@@ -242,7 +242,9 @@ type ListRequest struct {
 	Root  string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
 	// path is relative to the root; empty or "." lists the root itself.
 	Path string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
-	// cursor resumes a truncated listing; empty starts at the beginning.
+	// cursor resumes a truncated listing; empty starts at the beginning. It is
+	// the opaque base64 token from a previous ListResponse; a malformed token is
+	// rejected with InvalidArgument.
 	Cursor        string `protobuf:"bytes,3,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -401,7 +403,9 @@ type ListResponse struct {
 	Entries []*FileEntry           `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
 	// truncated is true when more entries exist beyond this page.
 	Truncated bool `protobuf:"varint,2,opt,name=truncated,proto3" json:"truncated,omitempty"`
-	// cursor resumes a truncated listing; empty when truncated is false.
+	// cursor is the opaque base64 token to resume a truncated listing with; it is
+	// empty when truncated is false. A truncated page always carries a non-empty
+	// cursor that makes progress.
 	Cursor        string `protobuf:"bytes,3,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

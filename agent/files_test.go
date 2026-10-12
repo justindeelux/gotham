@@ -62,7 +62,7 @@ func TestValidateFileRootTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, dir := range valid {
-		if _, err := validateFileRoot(dir, protected); err != nil {
+		if _, _, err := validateFileRoot(dir, protected); err != nil {
 			t.Errorf("validateFileRoot(%q) = %v, want nil", dir, err)
 		}
 	}
@@ -76,7 +76,7 @@ func TestValidateFileRootTable(t *testing.T) {
 		proxy,                         // the proxy directory (ACME keys)
 	}
 	for _, dir := range invalid {
-		if _, err := validateFileRoot(dir, protected); err == nil {
+		if _, _, err := validateFileRoot(dir, protected); err == nil {
 			t.Errorf("validateFileRoot(%q) = nil, want an error", dir)
 		}
 	}
@@ -85,7 +85,7 @@ func TestValidateFileRootTable(t *testing.T) {
 func TestValidateFileRootRejectsDangerousTrees(t *testing.T) {
 	t.Parallel()
 	for _, dir := range []string{"/etc", "/proc", "/sys", "/dev", "/run", "/boot", "/usr", "/home", "/root", "/var/lib/docker", "/"} {
-		if _, err := validateFileRoot(dir, nil); err == nil {
+		if _, _, err := validateFileRoot(dir, nil); err == nil {
 			t.Errorf("validateFileRoot(%q) = nil, want an error", dir)
 		}
 	}
@@ -95,7 +95,7 @@ func TestValidateFileRootRejectsDangerousTrees(t *testing.T) {
 	if err := os.Symlink("/etc", link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := validateFileRoot(link, nil); err == nil {
+	if _, _, err := validateFileRoot(link, nil); err == nil {
 		t.Error("validateFileRoot(symlink to /etc) = nil, want an error")
 	}
 }
@@ -502,7 +502,7 @@ func TestValidateFileRootRejectsDockerDataRoot(t *testing.T) {
 	t.Cleanup(func() { dockerDaemonConfig = old })
 
 	for _, dir := range []string{dataRoot, inside} {
-		if _, err := validateFileRoot(dir, nil); err == nil {
+		if _, _, err := validateFileRoot(dir, nil); err == nil {
 			t.Errorf("validateFileRoot(%q) = nil, want an error", dir)
 		}
 	}
@@ -532,5 +532,40 @@ func TestFileServerListNonUTF8Name(t *testing.T) {
 	}
 	if !strings.Contains(entries[0].GetName(), "\uFFFD") {
 		t.Fatalf("name %q is not scrubbed", entries[0].GetName())
+	}
+}
+
+// TestCursorRoundTrip proves the cursor is reversible for names that are not
+// valid UTF-8, so a boundary name survives the proto3 string round trip that
+// scrubbing it would corrupt.
+func TestCursorRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"", "plain", "a\xff", "a\xffz", "\xfd\xfe\xff", "mixed-\x80-\x81"} {
+		token := encodeCursor(name)
+		if name == "" && token != "" {
+			t.Fatalf("encodeCursor(%q) = %q, want empty", name, token)
+		}
+		got, err := decodeCursor(token)
+		if err != nil {
+			t.Fatalf("decodeCursor(%q): %v", token, err)
+		}
+		if got != name {
+			t.Fatalf("round trip %q -> %q -> %q", name, token, got)
+		}
+	}
+}
+
+// TestFileServerListMalformedCursor proves a cursor that is not the base64
+// token the agent emitted is rejected, never silently treated as the first
+// page (which would restart the listing).
+func TestFileServerListMalformedCursor(t *testing.T) {
+	t.Parallel()
+	server, _ := newTestFileServer(t)
+	_, err := server.List(context.Background(), &agentv1.ListRequest{Root: fileRootVolumes, Cursor: "not base64!!"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("List(malformed cursor) code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := decodeCursor("!!!!"); err == nil {
+		t.Fatal("decodeCursor accepted a malformed token")
 	}
 }

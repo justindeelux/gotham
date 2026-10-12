@@ -30,9 +30,10 @@ import (
 
 // listBatchSize is how many directory entries one ReadDir call returns, so a
 // directory is streamed instead of being buffered whole. listScanCap bounds
-// how many entries a single List scans, so a pathological directory cannot pin
-// CPU or memory for one page; a listing that reaches it is reported truncated.
-// Both are variables so a test can lower them and still exercise List.
+// how many entries a single List scans; a directory with more entries than the
+// cap is refused with ErrTooLarge rather than silently truncated, because a
+// silently partial listing is indistinguishable from a complete one and would
+// make the client page forever. Both are variables so a test can lower them.
 var (
 	listBatchSize = 512
 	listScanCap   = 100_000
@@ -54,6 +55,10 @@ var (
 	// ErrSpecial marks an entry that is neither a regular file nor a directory
 	// and therefore cannot be read or written.
 	ErrSpecial = errors.New("fsroot: not a regular file or directory")
+	// ErrTooLarge marks a directory holding more entries than one List scans.
+	// It is an explicit failure, never a truncated page, so a client can tell a
+	// directory it cannot enumerate from one it has finished enumerating.
+	ErrTooLarge = errors.New("fsroot: directory too large")
 )
 
 // Kind classifies a directory entry.
@@ -87,8 +92,13 @@ type Root struct {
 	root     *os.Root
 }
 
-// Open confines dir, which must be an absolute path that already exists.
-func Open(name, dir string, writable bool) (*Root, error) {
+// Open confines dir, which must be an absolute path that already exists. want
+// is the directory's identity captured during validation: the opened
+// descriptor is compared against it so a directory swapped between the
+// validation stat and this open is refused. An absolute path with a nil want
+// is refused (the identity is required); nil is only meaningful for a call
+// that fails the absolute-path check first.
+func Open(name, dir string, want os.FileInfo, writable bool) (*Root, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("fsroot: %q must be an absolute path", dir)
 	}
@@ -98,20 +108,21 @@ func Open(name, dir string, writable bool) (*Root, error) {
 		return nil, fmt.Errorf("fsroot: open %s: %w", dir, err)
 	}
 	// Guard against the path being swapped between the caller's validation and
-	// this open: the descriptor must still name the same directory.
-	if err := verifySameRoot(dir, real); err != nil {
+	// this open: the descriptor must still name the validated directory.
+	if err := verifySameRoot(dir, want, real); err != nil {
 		_ = real.Close()
 		return nil, err
 	}
 	return &Root{name: name, path: dir, writable: writable, root: real}, nil
 }
 
-// verifySameRoot compares the opened descriptor with a fresh stat of the path,
-// aborting when a swap made them different directories.
-func verifySameRoot(dir string, root *os.Root) error {
-	want, err := os.Stat(dir)
-	if err != nil {
-		return fmt.Errorf("fsroot: stat %s: %w", dir, err)
+// verifySameRoot compares the opened descriptor with the identity captured
+// during validation, aborting when a swap made them different directories. It
+// must not stat the path again: that stat would race the open and could see
+// the very replacement it is meant to reject.
+func verifySameRoot(dir string, want os.FileInfo, root *os.Root) error {
+	if want == nil {
+		return fmt.Errorf("fsroot: %s was not validated", dir)
 	}
 	got, err := root.Stat(".")
 	if err != nil {
@@ -137,12 +148,15 @@ func (r *Root) Close() error { return r.root.Close() }
 
 // List returns one page of the directory rel: up to limit entries sorted by
 // name, skipping every name at or before cursor. truncated reports whether
-// more entries follow the page and last is the last returned name.
+// more entries follow the page and last is the cursor boundary: the last
+// directory name of the page (not the last entry that survived its stat), so a
+// page whose entries all vanished still advances the cursor.
 //
 // The directory is streamed in batches and only the smallest limit+1 names
 // past the cursor are retained, so a directory with millions of entries never
-// pins memory proportional to its size. A scan cap bounds the work one call
-// performs; a listing that reaches it is reported truncated.
+// pins memory proportional to its size: memory is O(limit), time O(N) per
+// call. listScanCap bounds N; exceeding it is an explicit ErrTooLarge, so a
+// caller is never handed a silently partial listing.
 func (r *Root) List(rel, cursor string, limit int) (entries []Entry, truncated bool, last string, err error) {
 	if limit <= 0 {
 		limit = 1
@@ -164,15 +178,13 @@ func (r *Root) List(rel, cursor string, limit int) (entries []Entry, truncated b
 	heap.Init(kept)
 	capacity := limit + 1
 	scanned := 0
-	capped := false
 	for {
 		batch, readErr := file.ReadDir(listBatchSize)
 		for _, dirent := range batch {
-			if scanned >= listScanCap {
-				capped = true
-				break
-			}
 			scanned++
+			if scanned > listScanCap {
+				return nil, false, "", fmt.Errorf("%w: more than %d entries in %s", ErrTooLarge, listScanCap, dir)
+			}
 			name := dirent.Name()
 			if name <= cursor {
 				continue
@@ -184,9 +196,6 @@ func (r *Root) List(rel, cursor string, limit int) (entries []Entry, truncated b
 				(*kept)[0] = dirent
 				heap.Fix(kept, 0)
 			}
-		}
-		if capped {
-			break
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
@@ -203,21 +212,29 @@ func (r *Root) List(rel, cursor string, limit int) (entries []Entry, truncated b
 	dirs := make([]os.DirEntry, kept.Len())
 	copy(dirs, *kept)
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name() < dirs[j].Name() })
+
+	page, truncated, last := selectPage(dirs, limit)
+	entries, err = r.pageFromDirs(dir, page)
+	if err != nil {
+		return nil, false, "", err
+	}
+	return entries, truncated, last, nil
+}
+
+// selectPage truncates the sorted candidate entries to one page and reports
+// the cursor boundary. The boundary is the last directory name in the page,
+// taken from the directory listing rather than from the surviving entries, so
+// a page whose entries all vanished between ReadDir and their stat still
+// advances the cursor instead of repeating forever.
+func selectPage(dirs []os.DirEntry, limit int) (page []os.DirEntry, truncated bool, last string) {
 	if len(dirs) > limit {
 		dirs = dirs[:limit]
 		truncated = true
 	}
-	if capped {
-		truncated = true
+	if truncated && len(dirs) > 0 {
+		last = dirs[len(dirs)-1].Name()
 	}
-	entries, err = r.pageFromDirs(dir, dirs)
-	if err != nil {
-		return nil, false, "", err
-	}
-	if truncated && len(entries) > 0 {
-		last = entries[len(entries)-1].Name
-	}
-	return entries, truncated, last, nil
+	return dirs, truncated, last
 }
 
 // nameHeap is a max-heap of directory entries ordered by name, used to retain

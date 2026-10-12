@@ -38,14 +38,25 @@ func (f fakeFileInfo) ModTime() time.Time { return time.Unix(0, 0) }
 func (f fakeFileInfo) IsDir() bool        { return false }
 func (f fakeFileInfo) Sys() any           { return nil }
 
-// TestPageSkipsVanishedEntry pins that one entry that vanishes between the
-// directory read and its stat is skipped instead of aborting the page.
-func TestPageSkipsVanishedEntry(t *testing.T) {
-	root, err := Open("t", t.TempDir(), true)
+// openInternalRoot opens a temp directory as a root for an internal test.
+func openInternalRoot(t *testing.T, dir string) *Root {
+	t.Helper()
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open("t", dir, info, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = root.Close() })
+	return root
+}
+
+// TestPageSkipsVanishedEntry pins that one entry that vanishes between the
+// directory read and its stat is skipped instead of aborting the page.
+func TestPageSkipsVanishedEntry(t *testing.T) {
+	root := openInternalRoot(t, t.TempDir())
 
 	dirs := []os.DirEntry{
 		fakeDirEntry{name: "gone", err: &os.PathError{Op: "lstat", Path: "gone", Err: syscall.ENOENT}},
@@ -57,6 +68,51 @@ func TestPageSkipsVanishedEntry(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Name != "here" {
 		t.Fatalf("entries = %+v, want just %q", entries, "here")
+	}
+}
+
+// TestListAllEntriesVanishAdvancesCursor pins the loop fix: when every entry
+// of a truncated page vanishes between ReadDir and its stat, the page is empty
+// but the cursor must still advance to the last directory name seen, not to
+// the last surviving entry (which does not exist).
+func TestListAllEntriesVanishAdvancesCursor(t *testing.T) {
+	root := openInternalRoot(t, t.TempDir())
+
+	dirs := []os.DirEntry{
+		fakeDirEntry{name: "a", err: &os.PathError{Op: "lstat", Path: "a", Err: syscall.ENOENT}},
+		fakeDirEntry{name: "b", err: &os.PathError{Op: "lstat", Path: "b", Err: syscall.ENOENT}},
+		fakeDirEntry{name: "c", info: fakeFileInfo{name: "c", size: 1, mode: 0o644}},
+	}
+	page, truncated, last := selectPage(dirs, 2)
+	if !truncated || last != "b" {
+		t.Fatalf("selectPage truncated=%v last=%q, want true/%q", truncated, last, "b")
+	}
+	entries, err := root.pageFromDirs(".", page)
+	if err != nil {
+		t.Fatalf("pageFromDirs: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries = %+v, want none (both vanished)", entries)
+	}
+}
+
+// TestListScanCapIsExplicitError proves a directory larger than the scan cap
+// is refused, never returned as a silently partial page that would strand a
+// client in a paging loop.
+func TestListScanCapIsExplicitError(t *testing.T) {
+	old := listScanCap
+	listScanCap = 4
+	t.Cleanup(func() { listScanCap = old })
+
+	dir := t.TempDir()
+	for i := range 10 {
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%02d", i)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := openInternalRoot(t, dir)
+	if _, _, _, err := root.List(".", "", 3); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("List over the cap = %v, want ErrTooLarge", err)
 	}
 }
 
@@ -83,40 +139,38 @@ func TestMapErrorCodes(t *testing.T) {
 	}
 }
 
-// TestListBoundedAllocation proves a directory far larger than the scan cap
-// does not allocate memory proportional to its size: only the capped number of
-// entries is ever read. Without the cap (the old ReadDir(-1)) this directory
-// allocates well over a megabyte.
-func TestListBoundedAllocation(t *testing.T) {
-	oldBatch, oldCap := listBatchSize, listScanCap
-	listBatchSize, listScanCap = 64, 64
-	t.Cleanup(func() { listBatchSize, listScanCap = oldBatch, oldCap })
+// TestListBoundedRetainedHeap proves a directory far larger than the page does
+// not retain memory proportional to its size: the page is limit entries and
+// the live heap after the call holds only the page, not the directory. The
+// streaming batches are garbage, so a regression that buffered the whole
+// directory would show up as a live heap on the order of the entry count.
+func TestListBoundedRetainedHeap(t *testing.T) {
+	oldBatch := listBatchSize
+	listBatchSize = 64
+	t.Cleanup(func() { listBatchSize = oldBatch })
 
 	dir := t.TempDir()
-	const total = 3000
+	const total = 20_000
 	for i := range total {
 		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("f%05d", i)), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	root, err := Open("t", dir, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = root.Close() })
+	root := openInternalRoot(t, dir)
 
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 	entries, truncated, _, err := root.List(".", "", 10)
-	runtime.ReadMemStats(&after)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
 	if len(entries) != 10 || !truncated {
 		t.Fatalf("page = %d entries, truncated=%v, want 10/true", len(entries), truncated)
 	}
-	if grew := after.TotalAlloc - before.TotalAlloc; grew > 256<<10 {
-		t.Fatalf("list allocated %d bytes over a %d-entry directory; want a bounded scan", grew, total)
+	if grew := int64(after.HeapAlloc) - int64(before.HeapAlloc); grew > 1<<20 {
+		t.Fatalf("list retained %d live bytes over a %d-entry directory; want a bounded heap", grew, total)
 	}
 }

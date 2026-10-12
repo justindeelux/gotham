@@ -74,6 +74,17 @@ export const filesContentSchema = z.object({
 });
 export type FilesContent = z.infer<typeof filesContentSchema>;
 
+/**
+ * writeEnvelopeSchema validates PUT /content. `entry` carries the committed
+ * file's fresh etag, which the editor stores as the next If-Match.
+ */
+export const filesWriteEnvelopeSchema = z.object({
+  entry: filesEntrySchema,
+  created: z.boolean(),
+  write_mode: z.string(),
+});
+export type FilesWriteEnvelope = z.infer<typeof filesWriteEnvelopeSchema>;
+
 /** downloadTicketSchema validates POST /download-ticket. */
 export const downloadTicketSchema = z.object({
   ticket: z.string(),

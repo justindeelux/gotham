@@ -42,6 +42,7 @@ import TransferDialog from "@/features/files/components/TransferDialog.vue";
 import UploadDialog from "@/features/files/components/UploadDialog.vue";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import type { FilesEntry } from "@/features/files/schemas/files";
+import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
 import type { NameKind } from "@/features/files/utils/files";
 import {
@@ -52,6 +53,7 @@ import {
   formatTimestamp,
   isFileDrag,
   isSelectable,
+  joinPath,
 } from "@/features/files/utils/files";
 import { useTeamsStore } from "@/features/teams";
 import { formatBytes } from "@/shared/utils/format";
@@ -65,6 +67,7 @@ const props = defineProps<Props>();
 const { t, locale } = useI18n();
 const message = useMessage();
 const files = useFilesStore();
+const editor = useEditorStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
 
@@ -190,13 +193,43 @@ function ariaSort(key: string): "ascending" | "descending" | "none" {
   return files.sortDir === "asc" ? "ascending" : "descending";
 }
 
-/** activate opens a directory or starts a download for a file. */
+/** activate opens a directory, or a file in the code editor. */
 function activate(entry: FilesEntry): void {
   if (entry.kind === "directory") {
     void files.openDirectory(entry.name);
     return;
   }
-  void startDownload(entry);
+  openInEditor(entry);
+}
+
+/** openInEditor opens one text file in the editor (owner/admin only). */
+function openInEditor(entry: FilesEntry): void {
+  if (entry.kind !== "file" || !files.canReadContent) {
+    return;
+  }
+  void editor.openFile(
+    props.serverId,
+    teams.activeTeamId,
+    files.rootName,
+    joinPath(files.path, entry.name),
+  );
+}
+
+/**
+ * blockedByDirty refuses a rename/move/delete of entries with unsaved editor
+ * tabs, so the user's edits are never dropped by a file operation. `dir`
+ * defaults to the directory on screen; a paste passes the clipboard's source
+ * directory.
+ */
+function blockedByDirty(names: string[], dir = files.path): boolean {
+  const blocked = editor.blockingNames(files.rootName, dir, names);
+  if (blocked.length === 0) {
+    return false;
+  }
+  message.warning(
+    String(t("files.editor.dirtyBlocked", { names: blocked.join(", ") })),
+  );
+  return true;
 }
 
 /** startDownload mints a ticket and hands the file to the browser. */
@@ -236,16 +269,27 @@ function openCreate(kind: NameKind): void {
 }
 
 function openRename(entry: FilesEntry): void {
+  if (blockedByDirty([entry.name])) {
+    return;
+  }
   renameTarget.value = entry;
   renameOpen.value = true;
 }
 
 function openDelete(entries: FilesEntry[]): void {
+  if (blockedByDirty(entries.map((entry) => entry.name))) {
+    return;
+  }
   actionTargets.value = entries;
   deleteOpen.value = true;
 }
 
 function openTransfer(mode: "move" | "copy", entries: FilesEntry[]): void {
+  // A move retargets open tabs and a dirty buffer would be lost, so refuse it
+  // before opening the dialog; a copy leaves the source untouched.
+  if (mode === "move" && blockedByDirty(entries.map((entry) => entry.name))) {
+    return;
+  }
   // At the root the source's parent is the root itself (a same-folder
   // destination). When no subfolder outside the moved entries is available the
   // dialog could only open invalid, so refuse with a message instead.
@@ -319,6 +363,10 @@ async function pasteAction(): Promise<void> {
     message.warning(pasteProblemText.value);
     return;
   }
+  const clip = files.clipboard;
+  if (clip && clip.mode === "cut" && blockedByDirty(clip.names, clip.path)) {
+    return;
+  }
   const mode = files.clipboardMode;
   const summary = await files.paste();
   if (summary.failed.length > 0) {
@@ -350,6 +398,11 @@ function rowMenu(entry: FilesEntry): Array<{ label: string; key: string; disable
     options.push({ label: String(t("files.menu.open")), key: "open" });
   } else if (entry.kind === "file") {
     options.push({
+      label: String(t("files.menu.edit")),
+      key: "edit",
+      disabled: !files.canReadContent,
+    });
+    options.push({
       label: String(t("files.menu.download")),
       key: "download",
       disabled: !files.canReadContent,
@@ -375,6 +428,9 @@ function onRowMenu(key: string, entry: FilesEntry): void {
   switch (key) {
     case "open":
       void files.openDirectory(entry.name);
+      break;
+    case "edit":
+      openInEditor(entry);
       break;
     case "download":
       void startDownload(entry);

@@ -329,6 +329,9 @@ Useful agent installer flags and variables:
 | `GOTHAM_AGENT_CA` | The agent-side path the installer writes (`/etc/gotham/ca.crt`). It is **not** read from the ambient environment; on a reinstall the installer keeps the value already in `agent.env`. Use `--ca`/`GOTHAM_AGENT_CA_FILE` to change it. |
 | `GOTHAM_AGENT_UPDATE_CHANNEL` | Release channel this node accepts, `stable` (default) or `beta`; an offer with a different or empty channel is refused. |
 | `GOTHAM_AGENT_MANAGED_VOLUME_ROOT` | Parent of every application bind mount the node accepts (default `/var/lib/gotham/volumes`); falls back to the shared `GOTHAM_MANAGED_VOLUME_ROOT`. Must match the control plane. |
+| `GOTHAM_AGENT_FILES` | Enable the confined remote file service on the node (`true`; default off). When enabled, the node validates and opens its browsable roots at startup. |
+| `GOTHAM_AGENT_FILE_ROOTS` | Extra browsable roots, colon-separated absolute paths (default none). Operator roots are **read-only** in this phase; a root that is missing, not absolute, in a dangerous tree or overlapping another root refuses startup. |
+| `GOTHAM_AGENT_COMPOSE_ROOT` | Directory holding one subdirectory per compose project (default `/var/lib/gotham-agent/compose`); browsable read-only when the file service is enabled. |
 
 `GOTHAM_AGENT_CP_ADDR` must use a name or IP that is one of the control plane's
 listener SANs (see [Control plane](#control-plane)); otherwise the TLS handshake
@@ -362,6 +365,31 @@ explicit distinct value:
 sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=worker-1 \
     gotham/deploy/install-agent.sh --ca ./ca.crt
 ```
+
+## Remote file service
+
+The node-side file service is opt-in. Set `GOTHAM_AGENT_FILES=true` to register
+it; with the flag unset the RPCs are absent and the control plane reports the
+node as outdated. Roots are an agent-local allow-list:
+
+- `GOTHAM_AGENT_MANAGED_VOLUME_ROOT` — the writable root, holding the
+  application bind mounts.
+- `GOTHAM_AGENT_COMPOSE_ROOT` — the compose tree, browsable read-only (the next
+  `ComposeUp` overwrites edits).
+- `GOTHAM_AGENT_FILE_ROOTS` — colon-separated operator roots, read-only in this
+  phase.
+
+Every path is resolved and validated at startup. A root that is not absolute,
+resolves into `/etc /proc /sys /dev /run /boot /usr /home /root`, Docker's data
+root (the `data-root` from `/etc/docker/daemon.json`, else `/var/lib/docker`) or
+the agent's own state refuses startup; so does a root that overlaps another
+root. A built-in root that does not exist yet (Docker and the compose service
+create those lazily) is skipped with a warning instead of aborting the agent.
+Confinement itself is `os.OpenRoot`: every access is resolved relative to a held
+directory descriptor, so a `..` component, an absolute path or a symlink that
+leaves the tree is refused by the descriptor walk. The service must not be
+exposed without the agent's CA configured, since confinement is not
+authentication.
 
 ## Updates and rollback
 

@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -43,6 +45,28 @@ var dangerousFileTrees = []string{
 	"/var/lib/docker",
 }
 
+// dockerDaemonConfig is Docker's daemon configuration file, read to learn a
+// non-default data root. It is a variable so a test can point it at a fixture.
+var dockerDaemonConfig = "/etc/docker/daemon.json"
+
+// dockerDataRoot returns the data root Docker is configured with: the
+// data-root from daemon.json when it declares an absolute one, else the
+// default /var/lib/docker.
+func dockerDataRoot() string {
+	const fallback = "/var/lib/docker"
+	data, err := os.ReadFile(dockerDaemonConfig)
+	if err != nil {
+		return fallback
+	}
+	var cfg struct {
+		DataRoot string `json:"data-root"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil || !filepath.IsAbs(cfg.DataRoot) {
+		return fallback
+	}
+	return filepath.Clean(cfg.DataRoot)
+}
+
 // protectedPath is a location a browsable root must not collide with. A root
 // that is, or is an ancestor of, path is always refused (so a parent that
 // contains the location cannot be browsed around it). exclusive paths also
@@ -58,6 +82,9 @@ type fileRootConfig struct {
 	name     string
 	path     string
 	writable bool
+	// builtin marks the two managed roots, whose absence is normal (Docker and
+	// the compose service create them lazily) and must not abort startup.
+	builtin bool
 }
 
 // FileServer implements agentv1.FileServiceServer against the node's
@@ -72,19 +99,32 @@ type FileServer struct {
 }
 
 // NewFileServer validates and opens the configured roots. It fails closed: a
-// root that does not exist, is not absolute, resolves into a dangerous tree or
-// collides with a protected path aborts startup rather than being dropped.
+// root that is not absolute, resolves into a dangerous tree or collides with a
+// protected path aborts startup rather than being dropped. A built-in root
+// that does not exist yet is skipped with a warning, because Docker and the
+// compose service create those directories lazily.
 func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 	if log == nil {
 		log = slog.Default()
 	}
 	protected := fileProtectedPaths(cfg)
 	server := &FileServer{log: log, roots: make(map[string]*fsroot.Root)}
+	var opened []string
 	for _, rc := range configuredFileRoots(cfg) {
+		if rc.builtin {
+			if _, err := os.Stat(rc.path); errors.Is(err, os.ErrNotExist) {
+				log.Warn("file service root does not exist yet; skipping", "root", rc.name, "path", rc.path)
+				continue
+			}
+		}
 		real, err := validateFileRoot(rc.path, protected)
 		if err != nil {
 			_ = server.Close()
 			return nil, err
+		}
+		if other, ok := overlapRoot(real, opened); ok {
+			_ = server.Close()
+			return nil, fmt.Errorf("file root %q overlaps root %q", rc.path, other)
 		}
 		name := uniqueRootName(server.roots, rc.name)
 		root, err := fsroot.Open(name, real, rc.writable)
@@ -94,8 +134,20 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		}
 		server.roots[name] = root
 		server.order = append(server.order, name)
+		opened = append(opened, real)
 	}
 	return server, nil
+}
+
+// overlapRoot reports the first already-opened root that is equal to, contains
+// or is contained by real, so two browsable roots can never shadow each other.
+func overlapRoot(real string, opened []string) (string, bool) {
+	for _, other := range opened {
+		if withinPath(other, real) || withinPath(real, other) {
+			return other, true
+		}
+	}
+	return "", false
 }
 
 // Close releases every root descriptor.
@@ -115,8 +167,8 @@ func (s *FileServer) Close() error {
 // intent yet).
 func configuredFileRoots(cfg Config) []fileRootConfig {
 	roots := []fileRootConfig{
-		{name: fileRootVolumes, path: cfg.ManagedVolumeRoot, writable: true},
-		{name: fileRootCompose, path: cfg.ComposeRoot, writable: false},
+		{name: fileRootVolumes, path: cfg.ManagedVolumeRoot, writable: true, builtin: true},
+		{name: fileRootCompose, path: cfg.ComposeRoot, writable: false, builtin: true},
 	}
 	for _, raw := range filepath.SplitList(cfg.FileRoots) {
 		raw = strings.TrimSpace(raw)
@@ -193,7 +245,10 @@ func validateFileRoot(dir string, protected []protectedPath) (string, error) {
 	if real == string(filepath.Separator) {
 		return "", fmt.Errorf("file root %q is the filesystem root", dir)
 	}
-	for _, tree := range dangerousFileTrees {
+	// The default Docker data root plus whatever daemon.json declares; the
+	// three-index slice keeps the shared slice from being mutated by append.
+	trees := append(dangerousFileTrees[:len(dangerousFileTrees):len(dangerousFileTrees)], dockerDataRoot())
+	for _, tree := range trees {
 		treeReal := canonicalPath(tree)
 		// A root inside a dangerous tree, or an ancestor of one (such as "/"),
 		// is refused; the ancestor direction keeps a broad parent from
@@ -272,7 +327,7 @@ func (s *FileServer) List(_ context.Context, req *agentv1.ListRequest) (*agentv1
 	return &agentv1.ListResponse{
 		Entries:   fileEntries(entries),
 		Truncated: truncated,
-		Cursor:    cursor,
+		Cursor:    validUTF8(cursor),
 	}, nil
 }
 
@@ -341,20 +396,28 @@ func fileEntries(entries []fsroot.Entry) []*agentv1.FileEntry {
 	return out
 }
 
-// fileEntry converts one entry.
+// fileEntry converts one entry. Proto3 string fields must be valid UTF-8, so a
+// filename or symlink target holding arbitrary bytes (legal on Linux) is
+// scrubbed rather than making the whole message fail to marshal.
 func fileEntry(entry fsroot.Entry) *agentv1.FileEntry {
 	out := &agentv1.FileEntry{
-		Name:          entry.Name,
+		Name:          validUTF8(entry.Name),
 		Kind:          fileKind(entry.Kind),
 		Size:          entry.Size,
 		Mode:          uint32(entry.Mode.Perm()),
-		SymlinkTarget: entry.SymlinkTarget,
+		SymlinkTarget: validUTF8(entry.SymlinkTarget),
 		Etag:          entry.Etag,
 	}
 	if !entry.Modified.IsZero() {
 		out.ModifiedAt = timestamppb.New(entry.Modified)
 	}
 	return out
+}
+
+// validUTF8 replaces the invalid byte sequences proto3 string fields reject
+// with the Unicode replacement character.
+func validUTF8(s string) string {
+	return strings.ToValidUTF8(s, "\uFFFD")
 }
 
 // fileKind maps an fsroot kind onto the wire enum.

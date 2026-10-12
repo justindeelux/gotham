@@ -100,6 +100,12 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 - **Exit:** a gRPC client lists/stats/reads inside allowed roots only; all escape and special-file tests fail closed; service absent when disabled.
 - **Rollback:** revert PR; service unregistered.
 
+**Accepted deviations (round 1 review):**
+- Operator roots from `GOTHAM_AGENT_FILE_ROOTS` are **read-only** in step 1 (`writable=false`); write intent is deferred to a later step.
+- Root validation resolves symlinks first: `validateFileRoot` judges the `EvalSymlinks` target, then `os.OpenRoot` is the confinement boundary and the opened descriptor is re-checked against that resolved path.
+- `WriteHeader` carries `root`, so the write stream addresses `(root, path)` like the read RPCs.
+- A missing built-in root (`ManagedVolumeRoot`, `ComposeRoot`, both created lazily) is skipped with a warning; a missing or unsafe operator root still fails closed.
+
 ### Step 2 — Agent write RPCs
 - **Brief:** step 1 merged; reuse `fsroot`; reference `writeFileInDir`.
 - **Tasks:** `Write` (size/commit check, etag, `overwrite`, exclusive create, temp+rename vs in-place by owner/nlink, per-path mutex, statfs reserve, upload limit, transfer semaphore); `Mkdir`; `Rename` (+ protect `<appID>` dirs, read-only roots refuse mutations); `Copy`/`Delete` server-streams with progress (copy-into-self guard, EXDEV fallback, symlinks copied as links, never delete a root); `Chmod` stays `Unimplemented`.

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -14,7 +15,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
+	"github.com/justindeelux/gotham/agent/fsroot"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -138,9 +141,15 @@ func TestConfiguredFileRoots(t *testing.T) {
 	if roots[1].name != fileRootCompose || roots[1].writable {
 		t.Fatalf("compose root = %+v, want read-only", roots[1])
 	}
+	if !roots[0].builtin || !roots[1].builtin {
+		t.Fatalf("built-in roots = %+v / %+v, want builtin", roots[0], roots[1])
+	}
 	for _, extra := range roots[2:] {
 		if extra.writable {
 			t.Fatalf("extra root %+v is writable, want read-only", extra)
+		}
+		if extra.builtin {
+			t.Fatalf("extra root %+v is builtin, want operator", extra)
 		}
 	}
 }
@@ -371,15 +380,157 @@ func TestFileServicePresentWhenEnabled(t *testing.T) {
 	}
 }
 
-// TestNewFileServerFailsClosed proves a missing root aborts construction.
+// TestFileEntryScrubsInvalidUTF8 proves an entry with invalid UTF-8 marshals:
+// without the scrub, proto3 rejects the string and the page would fail.
+func TestFileEntryScrubsInvalidUTF8(t *testing.T) {
+	t.Parallel()
+	entry := fileEntry(fsroot.Entry{Name: "bad-\xff\xfe", SymlinkTarget: "target-\x80"})
+	if !strings.Contains(entry.GetName(), "\uFFFD") || !strings.Contains(entry.GetSymlinkTarget(), "\uFFFD") {
+		t.Fatalf("entry = %+v, want scrubbed name and target", entry)
+	}
+	if _, err := proto.Marshal(entry); err != nil {
+		t.Fatalf("marshal scrubbed entry: %v", err)
+	}
+}
+
+// TestNewFileServerSkipsMissingBuiltinRoots proves the lazily-created built-in
+// roots are skipped with a warning instead of aborting startup.
+func TestNewFileServerSkipsMissingBuiltinRoots(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	cfg := Config{
+		ManagedVolumeRoot: filepath.Join(base, "volumes"),
+		ComposeRoot:       filepath.Join(base, "compose"),
+		CertDir:           filepath.Join(base, "certs"),
+	}
+	server, err := NewFileServer(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("NewFileServer: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if len(server.roots) != 0 {
+		t.Fatalf("roots = %d, want 0 (both built-ins missing)", len(server.roots))
+	}
+}
+
+// TestNewFileServerFailsClosed proves a missing operator root still aborts
+// construction, so an explicit misconfiguration is not silently dropped.
 func TestNewFileServerFailsClosed(t *testing.T) {
 	t.Parallel()
+	base := t.TempDir()
 	cfg := Config{
-		ManagedVolumeRoot: filepath.Join(t.TempDir(), "does-not-exist"),
+		ManagedVolumeRoot: t.TempDir(),
 		ComposeRoot:       t.TempDir(),
-		CertDir:           filepath.Join(t.TempDir(), "certs"),
+		CertDir:           filepath.Join(base, "certs"),
+		FileRoots:         filepath.Join(base, "does-not-exist"),
 	}
 	if _, err := NewFileServer(cfg, discardLogger()); err == nil {
-		t.Fatal("NewFileServer with a missing root = nil, want an error")
+		t.Fatal("NewFileServer with a missing operator root = nil, want an error")
+	}
+}
+
+// TestNewFileServerRejectsUnsafeRoot proves a root in a dangerous tree still
+// aborts construction.
+func TestNewFileServerRejectsUnsafeRoot(t *testing.T) {
+	t.Parallel()
+	cfg := Config{
+		ManagedVolumeRoot: t.TempDir(),
+		ComposeRoot:       t.TempDir(),
+		FileRoots:         "/etc",
+	}
+	if _, err := NewFileServer(cfg, discardLogger()); err == nil {
+		t.Fatal("NewFileServer with a dangerous root = nil, want an error")
+	}
+}
+
+// TestRootsOverlap table-tests that equal or nested roots are detected.
+func TestRootsOverlap(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		other string
+		real  string
+		want  bool
+	}{
+		{"/a", "/a", true},
+		{"/a", "/a/b", true},
+		{"/a/b", "/a", true},
+		{"/a", "/ab", false},
+		{"/a", "/b", false},
+		{"/a/b", "/a/c", false},
+	}
+	for _, tc := range cases {
+		if _, got := overlapRoot(tc.real, []string{tc.other}); got != tc.want {
+			t.Errorf("overlapRoot(%q, [%q]) = %v, want %v", tc.real, tc.other, got, tc.want)
+		}
+	}
+}
+
+// TestNewFileServerRejectsOverlappingRoots proves two operator roots that nest
+// are refused rather than one shadowing the other.
+func TestNewFileServerRejectsOverlappingRoots(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	nested := filepath.Join(base, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		ManagedVolumeRoot: t.TempDir(),
+		ComposeRoot:       t.TempDir(),
+		FileRoots:         strings.Join([]string{base, nested}, string(filepath.ListSeparator)),
+	}
+	if _, err := NewFileServer(cfg, discardLogger()); err == nil {
+		t.Fatal("NewFileServer with overlapping roots = nil, want an error")
+	}
+}
+
+// TestValidateFileRootRejectsDockerDataRoot proves a non-default data root from
+// daemon.json is treated as a dangerous tree.
+func TestValidateFileRootRejectsDockerDataRoot(t *testing.T) {
+	base := t.TempDir()
+	dataRoot := filepath.Join(base, "docker-data")
+	inside := filepath.Join(dataRoot, "sub")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(base, "daemon.json")
+	if err := os.WriteFile(config, []byte(`{"data-root":"`+dataRoot+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := dockerDaemonConfig
+	dockerDaemonConfig = config
+	t.Cleanup(func() { dockerDaemonConfig = old })
+
+	for _, dir := range []string{dataRoot, inside} {
+		if _, err := validateFileRoot(dir, nil); err == nil {
+			t.Errorf("validateFileRoot(%q) = nil, want an error", dir)
+		}
+	}
+}
+
+// TestFileServerListNonUTF8Name proves a filename with invalid UTF-8 is
+// scrubbed so the page still marshals, instead of failing the whole List.
+func TestFileServerListNonUTF8Name(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filesystems reject invalid UTF-8 names")
+	}
+	server, volumeRoot := newTestFileServer(t)
+	name := "bad-\xff\xfe-name"
+	if err := os.WriteFile(filepath.Join(volumeRoot, name), []byte("x"), 0o600); err != nil {
+		t.Skipf("filesystem rejects a non-UTF-8 name: %v", err)
+	}
+
+	client := startFileServiceTestServer(t, WithFileService(server))
+	resp, err := client.List(context.Background(), &agentv1.ListRequest{Root: fileRootVolumes})
+	if err != nil {
+		t.Fatalf("List over a non-UTF-8 name: %v", err)
+	}
+	entries := resp.GetEntries()
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if !strings.Contains(entries[0].GetName(), "\uFFFD") {
+		t.Fatalf("name %q is not scrubbed", entries[0].GetName())
 	}
 }

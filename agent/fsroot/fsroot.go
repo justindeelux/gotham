@@ -14,8 +14,10 @@
 package fsroot
 
 import (
+	"container/heap"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -24,6 +26,16 @@ import (
 	"strings"
 	"syscall"
 	"time"
+)
+
+// listBatchSize is how many directory entries one ReadDir call returns, so a
+// directory is streamed instead of being buffered whole. listScanCap bounds
+// how many entries a single List scans, so a pathological directory cannot pin
+// CPU or memory for one page; a listing that reaches it is reported truncated.
+// Both are variables so a test can lower them and still exercise List.
+var (
+	listBatchSize = 512
+	listScanCap   = 100_000
 )
 
 // Sentinel errors a caller maps onto its own vocabulary. They wrap the
@@ -80,11 +92,35 @@ func Open(name, dir string, writable bool) (*Root, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("fsroot: %q must be an absolute path", dir)
 	}
-	real, err := os.OpenRoot(filepath.Clean(dir))
+	dir = filepath.Clean(dir)
+	real, err := os.OpenRoot(dir)
 	if err != nil {
 		return nil, fmt.Errorf("fsroot: open %s: %w", dir, err)
 	}
-	return &Root{name: name, path: filepath.Clean(dir), writable: writable, root: real}, nil
+	// Guard against the path being swapped between the caller's validation and
+	// this open: the descriptor must still name the same directory.
+	if err := verifySameRoot(dir, real); err != nil {
+		_ = real.Close()
+		return nil, err
+	}
+	return &Root{name: name, path: dir, writable: writable, root: real}, nil
+}
+
+// verifySameRoot compares the opened descriptor with a fresh stat of the path,
+// aborting when a swap made them different directories.
+func verifySameRoot(dir string, root *os.Root) error {
+	want, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("fsroot: stat %s: %w", dir, err)
+	}
+	got, err := root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("fsroot: stat opened root %s: %w", dir, err)
+	}
+	if !os.SameFile(want, got) {
+		return fmt.Errorf("fsroot: %s changed while opening", dir)
+	}
+	return nil
 }
 
 // Name is the stable identifier the caller addresses this root by.
@@ -101,7 +137,12 @@ func (r *Root) Close() error { return r.root.Close() }
 
 // List returns one page of the directory rel: up to limit entries sorted by
 // name, skipping every name at or before cursor. truncated reports whether
-// more entries follow the page and cursor is the last returned name.
+// more entries follow the page and last is the last returned name.
+//
+// The directory is streamed in batches and only the smallest limit+1 names
+// past the cursor are retained, so a directory with millions of entries never
+// pins memory proportional to its size. A scan cap bounds the work one call
+// performs; a listing that reaches it is reported truncated.
 func (r *Root) List(rel, cursor string, limit int) (entries []Entry, truncated bool, last string, err error) {
 	if limit <= 0 {
 		limit = 1
@@ -116,30 +157,104 @@ func (r *Root) List(rel, cursor string, limit int) (entries []Entry, truncated b
 	}
 	defer func() { _ = file.Close() }()
 
-	dirents, err := file.ReadDir(-1)
-	if err != nil {
-		return nil, false, "", mapError("list", err)
-	}
-	// ReadDir already sorts, but a page must never depend on that.
-	sort.Slice(dirents, func(i, j int) bool { return dirents[i].Name() < dirents[j].Name() })
-
-	start := 0
-	if cursor != "" {
-		start = sort.Search(len(dirents), func(i int) bool { return dirents[i].Name() > cursor })
-	}
-	end := min(start+limit, len(dirents))
-	for _, dirent := range dirents[start:end] {
-		entry, err := r.entry(dir, dirent)
-		if err != nil {
-			return nil, false, "", err
+	// Keep only the smallest limit+1 names greater than cursor in a max-heap:
+	// the extra slot answers "is there another page?" without retaining the
+	// rest of the directory.
+	kept := &nameHeap{}
+	heap.Init(kept)
+	capacity := limit + 1
+	scanned := 0
+	capped := false
+	for {
+		batch, readErr := file.ReadDir(listBatchSize)
+		for _, dirent := range batch {
+			if scanned >= listScanCap {
+				capped = true
+				break
+			}
+			scanned++
+			name := dirent.Name()
+			if name <= cursor {
+				continue
+			}
+			switch {
+			case kept.Len() < capacity:
+				heap.Push(kept, dirent)
+			case name < (*kept)[0].Name():
+				(*kept)[0] = dirent
+				heap.Fix(kept, 0)
+			}
 		}
-		entries = append(entries, entry)
+		if capped {
+			break
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return nil, false, "", mapError("list", readErr)
+		}
+		if len(batch) == 0 {
+			break
+		}
 	}
-	truncated = end < len(dirents)
+
+	// ReadDir returns directory order, so sort the retained names.
+	dirs := make([]os.DirEntry, kept.Len())
+	copy(dirs, *kept)
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name() < dirs[j].Name() })
+	if len(dirs) > limit {
+		dirs = dirs[:limit]
+		truncated = true
+	}
+	if capped {
+		truncated = true
+	}
+	entries, err = r.pageFromDirs(dir, dirs)
+	if err != nil {
+		return nil, false, "", err
+	}
 	if truncated && len(entries) > 0 {
 		last = entries[len(entries)-1].Name
 	}
 	return entries, truncated, last, nil
+}
+
+// nameHeap is a max-heap of directory entries ordered by name, used to retain
+// the smallest names while streaming a directory.
+type nameHeap []os.DirEntry
+
+func (h nameHeap) Len() int           { return len(h) }
+func (h nameHeap) Less(i, j int) bool { return h[i].Name() > h[j].Name() }
+func (h nameHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+
+func (h *nameHeap) Push(x any) { *h = append(*h, x.(os.DirEntry)) }
+
+func (h *nameHeap) Pop() any {
+	old := *h
+	n := len(old)
+	entry := old[n-1]
+	old[n-1] = nil
+	*h = old[:n-1]
+	return entry
+}
+
+// pageFromDirs builds the entries for a page, skipping any entry that vanished
+// between the directory read and its stat, so one transient delete never
+// aborts a whole listing.
+func (r *Root) pageFromDirs(dir string, dirs []os.DirEntry) ([]Entry, error) {
+	var entries []Entry
+	for _, dirent := range dirs {
+		entry, err := r.entry(dir, dirent)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
 }
 
 // Stat returns the metadata of rel without following a final symlink, so a
@@ -259,6 +374,10 @@ func mapError(op string, err error) error {
 	case errors.Is(err, os.ErrPermission):
 		return fmt.Errorf("%w: %s: %v", ErrPermission, op, err)
 	case errors.Is(err, os.ErrInvalid), errors.Is(err, fs.ErrInvalid):
+		return fmt.Errorf("%w: %s: %v", ErrInvalid, op, err)
+	case errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENOTDIR):
+		// A symlink loop or a non-directory component is a caller mistake, not
+		// an internal failure, so it maps to the typed path error.
 		return fmt.Errorf("%w: %s: %v", ErrInvalid, op, err)
 	case strings.Contains(err.Error(), "escapes from parent"):
 		return fmt.Errorf("%w: %s: %v", ErrEscape, op, err)

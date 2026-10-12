@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -84,8 +85,13 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 	if err := validateRoot(req.Root); err != nil {
 		return WriteResult{}, err
 	}
-	if err := validateFileArg("path", req.Path); err != nil {
+	if err := validatePathArg("path", req.Path); err != nil {
 		return WriteResult{}, err
+	}
+	// If-Match travels in the proto header, so invalid UTF-8 would fail
+	// proto.Marshal and surface as a 500; refuse it as a 400 before the dial.
+	if !utf8.ValidString(req.ExpectEtag) {
+		return WriteResult{}, fmt.Errorf("%w: If-Match is not valid UTF-8", ErrValidation)
 	}
 	if req.Size < 0 {
 		return WriteResult{}, fmt.Errorf("%w: size must not be negative", ErrValidation)
@@ -116,9 +122,9 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 		Overwrite:  req.Overwrite,
 		Mode:       req.Mode,
 	}}}
-	if err := stream.Send(header); err != nil {
+	if err := sendWritePart(stream, header); err != nil {
 		cancel()
-		return WriteResult{}, mapRPCError(err)
+		return WriteResult{}, err
 	}
 
 	hasher := sha256.New()
@@ -133,9 +139,9 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 				return WriteResult{}, fmt.Errorf("%w: body exceeds the declared size", ErrValidation)
 			}
 			_, _ = hasher.Write(buf[:n])
-			if err := stream.Send(&agentv1.WriteRequest{Part: &agentv1.WriteRequest_Data{Data: buf[:n]}}); err != nil {
+			if err := sendWritePart(stream, &agentv1.WriteRequest{Part: &agentv1.WriteRequest_Data{Data: buf[:n]}}); err != nil {
 				cancel()
-				return WriteResult{}, mapRPCError(err)
+				return WriteResult{}, err
 			}
 		}
 		if errors.Is(readErr, io.EOF) {
@@ -158,9 +164,9 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 	commit := &agentv1.WriteRequest{Part: &agentv1.WriteRequest_Commit{Commit: &agentv1.WriteCommit{
 		Sha256: hex.EncodeToString(hasher.Sum(nil)),
 	}}}
-	if err := stream.Send(commit); err != nil {
+	if err := sendWritePart(stream, commit); err != nil {
 		cancel()
-		return WriteResult{}, mapRPCError(err)
+		return WriteResult{}, err
 	}
 	response, err := stream.CloseAndRecv()
 	if err != nil {
@@ -182,7 +188,7 @@ func (s *Service) Mkdir(ctx context.Context, serverID uuid.UUID, root, path stri
 	if err := validateRoot(root); err != nil {
 		return Entry{}, err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return Entry{}, err
 	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, true)
@@ -214,10 +220,10 @@ func (s *Service) Rename(ctx context.Context, serverID uuid.UUID, root, source, 
 	if err := validateRoot(root); err != nil {
 		return Entry{}, err
 	}
-	if err := validateFileArg("source", source); err != nil {
+	if err := validatePathArg("source", source); err != nil {
 		return Entry{}, err
 	}
-	if err := validateFileArg("destination", destination); err != nil {
+	if err := validatePathArg("destination", destination); err != nil {
 		return Entry{}, err
 	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, true)
@@ -250,10 +256,10 @@ func (s *Service) Copy(ctx context.Context, serverID uuid.UUID, root, source, de
 	if err := validateRoot(root); err != nil {
 		return Entry{}, err
 	}
-	if err := validateFileArg("source", source); err != nil {
+	if err := validatePathArg("source", source); err != nil {
 		return Entry{}, err
 	}
-	if err := validateFileArg("destination", destination); err != nil {
+	if err := validatePathArg("destination", destination); err != nil {
 		return Entry{}, err
 	}
 	ctx, client, cancel, err := s.rpcTransfer(ctx, serverID)
@@ -290,7 +296,7 @@ func (s *Service) Delete(ctx context.Context, serverID uuid.UUID, root, path str
 	if err := validateRoot(root); err != nil {
 		return err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return err
 	}
 	ctx, client, cancel, err := s.rpcTransfer(ctx, serverID)
@@ -324,6 +330,31 @@ func (s *Service) rpcTransfer(ctx context.Context, serverID uuid.UUID) (context.
 		return ctx, nil, nil, err
 	}
 	return ctx, client, cancel, nil
+}
+
+// sendWritePart sends one message on a Write client stream and maps the
+// failure. When the agent rejects the stream before reading it — a read-only
+// root or application directory (PermissionDenied), a body over the node's
+// limit (ResourceExhausted), a low disk, an InvalidArgument header — it returns
+// its status and closes the send side, so Send surfaces only io.EOF while the
+// real status is available only from CloseAndRecv. Mapping the bare io.EOF
+// would answer 500; draining the stream here recovers the actual status so the
+// caller answers 403/400/413/507 as intended.
+func sendWritePart(stream grpc.ClientStreamingClient[agentv1.WriteRequest, agentv1.WriteResponse], msg *agentv1.WriteRequest) error {
+	err := stream.Send(msg)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, io.EOF) {
+		if _, recvErr := stream.CloseAndRecv(); recvErr != nil {
+			return mapRPCError(recvErr)
+		}
+		// A clean CloseAndRecv after an io.EOF Send means the stream ended
+		// without a status we can classify; treat it as an unavailable agent
+		// rather than surfacing a raw EOF (which would be a 500).
+		return fmt.Errorf("%w: the agent closed the write stream", ErrAgentUnavailable)
+	}
+	return mapRPCError(err)
 }
 
 // drainProgress reads a Copy/Delete progress stream to its end, mapping a

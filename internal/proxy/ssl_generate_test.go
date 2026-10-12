@@ -33,14 +33,8 @@ const goldenSSLStaticYAML = `entryPoints:
     address: :8080
   web:
     address: :80
-    transport:
-      respondingTimeouts:
-        readTimeout: 30m
   websecure:
     address: :443
-    transport:
-      respondingTimeouts:
-        readTimeout: 30m
 ping:
   entryPoint: traefik
 providers:
@@ -75,16 +69,8 @@ address = ':8080'
 [entryPoints.web]
 address = ':80'
 
-[entryPoints.web.transport]
-[entryPoints.web.transport.respondingTimeouts]
-readTimeout = '30m'
-
 [entryPoints.websecure]
 address = ':443'
-
-[entryPoints.websecure.transport]
-[entryPoints.websecure.transport.respondingTimeouts]
-readTimeout = '30m'
 
 [ping]
 entryPoint = 'traefik'
@@ -303,14 +289,8 @@ const goldenSSLStagingStaticYAML = `entryPoints:
     address: :8080
   web:
     address: :80
-    transport:
-      respondingTimeouts:
-        readTimeout: 30m
   websecure:
     address: :443
-    transport:
-      respondingTimeouts:
-        readTimeout: 30m
 ping:
   entryPoint: traefik
 providers:
@@ -348,16 +328,8 @@ address = ':8080'
 [entryPoints.web]
 address = ':80'
 
-[entryPoints.web.transport]
-[entryPoints.web.transport.respondingTimeouts]
-readTimeout = '30m'
-
 [entryPoints.websecure]
 address = ':443'
-
-[entryPoints.websecure.transport]
-[entryPoints.websecure.transport.respondingTimeouts]
-readTimeout = '30m'
 
 [ping]
 entryPoint = 'traefik'

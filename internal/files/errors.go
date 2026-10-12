@@ -27,9 +27,16 @@ var (
 	// ErrConflict reports an agent FailedPrecondition (409); the write side
 	// maps etag mismatches here.
 	ErrConflict = errors.New("files: conflict")
-	// ErrBusy reports the node's per-node transfer semaphore being full
-	// (429); the caller should retry.
+	// ErrBusy reports the node's per-node transfer semaphore being full, or the
+	// control plane's own upload-staging semaphore being full (429); the caller
+	// should retry.
 	ErrBusy = errors.New("files: node is busy")
+	// ErrInsufficientStorage reports the target filesystem is low on free space
+	// or a quota is exhausted — an agent ResourceExhausted about free space, or
+	// the control plane's own upload staging volume being too full (507). It is
+	// distinct from ErrBusy so the browser can tell "retry later" from "free
+	// space first".
+	ErrInsufficientStorage = errors.New("files: insufficient storage")
 	// ErrAgentOutdated reports a node agent that predates the FileService
 	// (agent codes.Unimplemented) — the caller must update the agent (501).
 	ErrAgentOutdated = errors.New("files: node agent is outdated")

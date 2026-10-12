@@ -24,14 +24,8 @@ const goldenStaticYAML = `entryPoints:
     address: :8080
   web:
     address: :80
-    transport:
-      respondingTimeouts:
-        readTimeout: 30m
   websecure:
     address: :443
-    transport:
-      respondingTimeouts:
-        readTimeout: 30m
 ping:
   entryPoint: traefik
 providers:
@@ -67,16 +61,8 @@ address = ':8080'
 [entryPoints.web]
 address = ':80'
 
-[entryPoints.web.transport]
-[entryPoints.web.transport.respondingTimeouts]
-readTimeout = '30m'
-
 [entryPoints.websecure]
 address = ':443'
-
-[entryPoints.websecure.transport]
-[entryPoints.websecure.transport.respondingTimeouts]
-readTimeout = '30m'
 
 [ping]
 entryPoint = 'traefik'
@@ -153,19 +139,29 @@ func TestGenerateGolden(t *testing.T) {
 	}
 }
 
-// TestPublicEntryPointsSetReadTimeout is the step-4 fix: Traefik v3 defaults
-// readTimeout to 60 s, which caps reading a request including its body and
-// would cut a large file upload. The public entrypoints must set an explicit,
-// generous responding read timeout; the loopback ping entrypoint must not.
-func TestPublicEntryPointsSetReadTimeout(t *testing.T) {
+// TestUploadReadTimeoutIsGated is the fix-round-1 regression: the long upload
+// read timeout must not be applied to every tenant route by default. With the
+// file feature off, the public entrypoints keep Traefik's 60 s default (no
+// respondingTimeouts); applyUploadReadTimeout — which the sync applies only when
+// the file feature is on — adds the generous timeout, and the loopback ping
+// entrypoint is never touched.
+func TestUploadReadTimeoutIsGated(t *testing.T) {
 	cfg := BuildConfig(nil, nil, nil, "", "")
 	for _, name := range []string{EntryPointWeb, EntryPointWebSecure} {
 		entry, ok := cfg.EntryPoints[name]
 		if !ok {
 			t.Fatalf("entrypoint %q missing", name)
 		}
+		if entry.Transport != nil {
+			t.Errorf("entrypoint %q must keep Traefik's default read timeout when files are off, got %+v", name, entry.Transport)
+		}
+	}
+
+	applyUploadReadTimeout(&cfg)
+	for _, name := range []string{EntryPointWeb, EntryPointWebSecure} {
+		entry := cfg.EntryPoints[name]
 		if entry.Transport == nil || entry.Transport.RespondingTimeouts == nil {
-			t.Fatalf("entrypoint %q has no respondingTimeouts", name)
+			t.Fatalf("entrypoint %q has no respondingTimeouts after applyUploadReadTimeout", name)
 		}
 		if got := entry.Transport.RespondingTimeouts.ReadTimeout; got != EntryPointReadTimeout {
 			t.Errorf("entrypoint %q readTimeout = %q, want %q", name, got, EntryPointReadTimeout)
@@ -173,6 +169,36 @@ func TestPublicEntryPointsSetReadTimeout(t *testing.T) {
 	}
 	if internal := cfg.EntryPoints[EntryPointInternal]; internal.Transport != nil {
 		t.Errorf("internal entrypoint should not set transport, got %+v", internal.Transport)
+	}
+}
+
+// TestSyncServiceGatesUploadReadTimeout proves the sync applies the long read
+// timeout only when the file feature is enabled, so a node with files off keeps
+// the default read window.
+func TestSyncServiceGatesUploadReadTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		filesUploads bool
+		wantTimeout  bool
+	}{
+		{"files off keeps the default", false, false},
+		{"files on widens the timeout", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &SyncService{filesUploads: tc.filesUploads}
+			cfg := svc.buildConfig(nil, nil, nil)
+			entry := cfg.EntryPoints[EntryPointWeb]
+			if tc.wantTimeout {
+				if entry.Transport == nil || entry.Transport.RespondingTimeouts == nil ||
+					entry.Transport.RespondingTimeouts.ReadTimeout != EntryPointReadTimeout {
+					t.Fatalf("web entrypoint = %+v, want readTimeout %q", entry.Transport, EntryPointReadTimeout)
+				}
+				return
+			}
+			if entry.Transport != nil {
+				t.Fatalf("web entrypoint = %+v, want no transport", entry.Transport)
+			}
+		})
 	}
 }
 

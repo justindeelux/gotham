@@ -228,11 +228,14 @@ func NewService(cfg Config) *Service {
 
 // NewDefaultService builds the production Service for the HTTP wiring. It
 // returns nil when registry is nil so callers can skip mounting the routes.
-func NewDefaultService(registry Registry) *Service {
+// logger is the control plane's configured logger; nil falls back to
+// slog.Default, so the file audit trail is written through the same logger as
+// the rest of the server instead of the process default.
+func NewDefaultService(registry Registry, logger *slog.Logger) *Service {
 	if registry == nil {
 		return nil
 	}
-	return NewService(Config{Registry: registry, MaxUploadBytes: maxUploadFromEnv()})
+	return NewService(Config{Registry: registry, Logger: logger, MaxUploadBytes: maxUploadFromEnv()})
 }
 
 // SetDial installs (or replaces) the agent dialer. It is the merge-time seam
@@ -286,7 +289,7 @@ func (s *Service) List(ctx context.Context, serverID uuid.UUID, root, path, curs
 	if err := validateRoot(root); err != nil {
 		return Listing{}, err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return Listing{}, err
 	}
 	if err := validateFileArg("cursor", cursor); err != nil {
@@ -318,7 +321,7 @@ func (s *Service) Stat(ctx context.Context, serverID uuid.UUID, root, path strin
 	if err := validateRoot(root); err != nil {
 		return Entry{}, err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return Entry{}, err
 	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, false)
@@ -351,7 +354,7 @@ func (s *Service) Content(ctx context.Context, serverID uuid.UUID, root, path st
 	if err := validateRoot(root); err != nil {
 		return Content{}, err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return Content{}, err
 	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, true)
@@ -405,7 +408,7 @@ func (s *Service) IssueDownloadTicket(ctx context.Context, serverID uuid.UUID, r
 	if err := validateRoot(root); err != nil {
 		return "", err
 	}
-	if err := validateFileArg("path", path); err != nil {
+	if err := validatePathArg("path", path); err != nil {
 		return "", err
 	}
 	server, err := s.resolve(ctx, serverID, true)
@@ -611,7 +614,23 @@ func validateRoot(root string) error {
 	if strings.TrimSpace(root) == "" {
 		return fmt.Errorf("%w: root is required", ErrValidation)
 	}
-	return validateFileArg("root", root)
+	return validatePathArg("root", root)
+}
+
+// validatePathArg validates a path-like argument (path/source/destination/root)
+// and additionally rejects a ".." segment. The agent's fsroot confines every
+// open, so this is not the security boundary; it is a cheap pre-dial check that
+// answers 400 for an obviously traversal-shaped path instead of a round trip.
+func validatePathArg(name, value string) error {
+	if err := validateFileArg(name, value); err != nil {
+		return err
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == ".." {
+			return fmt.Errorf("%w: %s must not contain a parent segment", ErrValidation, name)
+		}
+	}
+	return nil
 }
 
 // validateFileArg rejects a root/path/cursor value the agent gRPC layer cannot
@@ -714,13 +733,39 @@ func mapRPCError(err error) error {
 		// and Aborted a target that changed during the upload. All are 409.
 		return fmt.Errorf("%w: %v", ErrConflict, err)
 	case codes.ResourceExhausted:
-		return fmt.Errorf("%w: %v", ErrBusy, err)
+		return classifyResourceExhausted(err)
 	case codes.Unimplemented:
 		return fmt.Errorf("%w: %v", ErrAgentOutdated, err)
 	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
 		return fmt.Errorf("%w: %v", ErrAgentUnavailable, err)
 	default:
 		return err
+	}
+}
+
+// classifyResourceExhausted splits the agent's single ResourceExhausted code
+// into the three distinct conditions the proto message prefixes already
+// distinguish (agent/files_write.go), so a caller is not told "the node is
+// busy" when the real problem is a full disk or a body over the node's limit:
+//
+//   - a body over the node's upload limit is ErrTooLarge (413);
+//   - low free space or an exhausted quota is ErrInsufficientStorage (507);
+//   - the per-node transfer semaphore being full is ErrBusy (429).
+//
+// An unrecognised message keeps the historical ErrBusy mapping.
+func classifyResourceExhausted(err error) error {
+	message := strings.ToLower(status.Convert(err).Message())
+	switch {
+	case strings.Contains(message, "upload limit"), strings.Contains(message, "too large"):
+		return fmt.Errorf("%w: %v", ErrTooLarge, err)
+	case strings.Contains(message, "low on free space"),
+		strings.Contains(message, "do not fit"),
+		strings.Contains(message, "quota"),
+		strings.Contains(message, "no space left"),
+		strings.Contains(message, "disk full"):
+		return fmt.Errorf("%w: %v", ErrInsufficientStorage, err)
+	default:
+		return fmt.Errorf("%w: %v", ErrBusy, err)
 	}
 }
 
@@ -744,6 +789,8 @@ func auditResult(err error) string {
 		return "not_editable"
 	case errors.Is(err, ErrBusy):
 		return "busy"
+	case errors.Is(err, ErrInsufficientStorage):
+		return "insufficient_storage"
 	case errors.Is(err, ErrAgentOutdated):
 		return "agent_outdated"
 	case errors.Is(err, ErrAgentUnavailable):

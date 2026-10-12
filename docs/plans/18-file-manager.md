@@ -281,13 +281,50 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
   `GOTHAM_AGENT_FILE_MAX_UPLOAD`. A body above it is refused 413 before the
   agent is dialed (`http.MaxBytesReader` catches a lying or chunked
   `Content-Length`).
-- **Traefik read timeout.** Traefik v3 defaults an entrypoint's
-  `readTimeout` to 60 s, which caps reading a request **including its body**, so
-  a large upload slower than that is cut at the edge. The generated static
-  config now sets `transport.respondingTimeouts.readTimeout: 30m` on the
-  `web`/`websecure` entrypoints (`EntryPointReadTimeout`), matching the control
-  plane's 30-minute transfer budget. It is a ceiling: a larger or slower upload
-  still needs a higher value. The loopback `traefik` entrypoint is unchanged.
+- **Traefik read timeout is gated, not global.** Traefik v3 defaults an
+  entrypoint's `readTimeout` to 60 s, which caps reading a request **including
+  its body**, so a large upload slower than that would be cut at the edge. The
+  generated static config applies
+  `transport.respondingTimeouts.readTimeout: 30m` (`EntryPointReadTimeout`) on
+  the `web`/`websecure` entrypoints **only when the file-manager feature is
+  enabled** (`FEATURE_FILES`), through `applyUploadReadTimeout` at the sync
+  service (`SyncService.buildConfig`). With files off the entrypoints keep
+  Traefik's 60 s default, so a node that accepts no uploads does not widen the
+  slowloris window for every tenant route. The control plane's own file API is
+  served directly (not through Traefik), so the timeout is a courtesy for an
+  edge upload, not a requirement of the file manager; it is a ceiling, and a
+  larger or slower upload still needs a higher value. The loopback `traefik`
+  entrypoint is unchanged.
+- **Upload staging hygiene (fix round 1).** A streamed upload body is staged on
+  the control plane before it reaches the agent (the write header must declare
+  an exact size). Staging now lives in a bounded `spooler`
+  (`internal/files/spool.go`): `FILES_SPOOL_DIR` selects the directory (default
+  a private `gotham-spool` directory under `os.TempDir()`, created `0700`,
+  files `0600`); `FILES_SPOOL_CONCURRENCY` bounds how many bodies are staged at
+  once (default 4, `ErrBusy`/429 beyond it); the spool volume's free space is
+  checked against the ceiling before any write (`ErrInsufficientStorage`/507
+  when it cannot hold the body); a startup sweep and an opportunistic hourly
+  sweep remove `gotham-upload-*` files older than 24 h; and every error/cancel
+  path closes and removes the staging file and releases the slot.
+- **ResourceExhausted is classified, not blanket 429 (fix round 1).** An agent
+  `ResourceExhausted` was mapped to 429 "node is busy" for every case. It is now
+  split by the message prefixes the agent already defines
+  (`agent/files_write.go`): a body over the node's limit → `ErrTooLarge` (413),
+  low free space or an exhausted quota → `ErrInsufficientStorage` (507), and the
+  per-node transfer semaphore → `ErrBusy` (429).
+- **Write stream rejects map the real status (fix round 1).** When the agent
+  rejects a write stream at header time (read-only root/app dir, over-limit,
+  low disk, invalid header) the client stream's `Send` returns only `io.EOF`;
+  the status is recovered from `CloseAndRecv` and mapped, instead of surfacing a
+  raw EOF as a 500.
+- **Upload body is bounded end to end (fix round 1).** `POST /files/upload`
+  bounds the **whole** request body with `http.MaxBytesReader` (the upload
+  ceiling), not only each part, and a staging failure on one part no longer
+  drops the parts that follow: each part is reported in the result array.
+- **Chunked PUT is authorized before staging (fix round 1).** A chunked
+  `PUT /files/content` runs the feature-enabled and team/RBAC checks before it
+  spools the body, so a disabled feature answers 503 and a foreign team 404
+  without the body being read.
 - **Move is an alias of rename.** `/files/move` and `/files/rename` both call
   the single agent `Rename` RPC; both are single-root (cross-root → 400). The
   audit `op` is `rename` for either route, with the destination logged as an

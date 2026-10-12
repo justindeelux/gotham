@@ -41,11 +41,12 @@ const (
 	// reaches those published ports through the bridge gateway. Operators on
 	// a node with a customized docker bip override it (proxy.Config.BackendHost).
 	DefaultBackendHost = "172.17.0.1"
-	// EntryPointReadTimeout is the responding read timeout set on the public
-	// entrypoints (web/websecure). Traefik v3 defaults readTimeout to 60 s,
-	// which caps reading a request including its body and would cut a file
-	// upload slower than that; 30m matches the control plane's transfer budget.
-	// It is a ceiling: a larger or slower upload still needs a higher value.
+	// EntryPointReadTimeout is the responding read timeout applied to the public
+	// entrypoints (web/websecure) only when the file-manager feature is enabled
+	// (applyUploadReadTimeout). Traefik v3 defaults readTimeout to 60 s, which
+	// caps reading a request including its body and would cut a file upload
+	// slower than that; 30m matches the control plane's transfer budget. It is
+	// a ceiling: a larger or slower upload still needs a higher value.
 	EntryPointReadTimeout = "30m"
 )
 
@@ -150,14 +151,31 @@ type Redirect struct {
 	PreservePath bool
 }
 
-// publicEntryPoint builds a public entrypoint with the responding read timeout
-// that keeps a large file upload from being cut by Traefik's 60 s default.
+// publicEntryPoint builds a public entrypoint with Traefik's default
+// responding read timeout (60 s). The long upload timeout is applied
+// separately by applyUploadReadTimeout, and only when the file feature is on, so
+// a node that does not accept uploads never widens the read window for every
+// tenant route.
 func publicEntryPoint(address string) EntryPoint {
-	return EntryPoint{
-		Address: address,
-		Transport: &EntryPointTransport{
+	return EntryPoint{Address: address}
+}
+
+// applyUploadReadTimeout sets the long responding read timeout on the public
+// entrypoints, so a large file upload is not cut by Traefik v3's 60 s default.
+// It is a deliberate opt-in: the control plane applies it only when the
+// file-manager feature is enabled (FEATURE_FILES), because widening every
+// tenant route's read timeout also widens the slowloris window. The loopback
+// ping entrypoint is never touched.
+func applyUploadReadTimeout(cfg *ProxyConfig) {
+	for _, name := range []string{EntryPointWeb, EntryPointWebSecure} {
+		entry, ok := cfg.EntryPoints[name]
+		if !ok {
+			continue
+		}
+		entry.Transport = &EntryPointTransport{
 			RespondingTimeouts: &RespondingTimeouts{ReadTimeout: EntryPointReadTimeout},
-		},
+		}
+		cfg.EntryPoints[name] = entry
 	}
 }
 

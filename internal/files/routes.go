@@ -44,6 +44,11 @@ type errorBody struct {
 type handler struct {
 	svc    FileService
 	logger *slog.Logger
+	// spool stages a streamed upload body to a temp file (the agent's write
+	// header must declare an exact size, which a multipart part or a chunked
+	// PUT does not carry). It bounds concurrent staging, checks free space and
+	// sweeps stale files; see spool.go.
+	spool *spooler
 }
 
 // Mount registers the file endpoints on r:
@@ -82,7 +87,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, 
 	if logger == nil {
 		logger = slog.Default()
 	}
-	h := &handler{svc: svc, logger: logger}
+	h := &handler{svc: svc, logger: logger, spool: newSpooler("", 0, logger)}
 	r.Get("/v1/servers/{id}/files/download", h.download)
 	r.Group(func(protected chi.Router) {
 		protected.Use(auth)
@@ -267,6 +272,8 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusUnsupportedMediaType, errorBody{Message: "file is not editable text"})
 	case errors.Is(err, ErrBusy):
 		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "node is busy"})
+	case errors.Is(err, ErrInsufficientStorage):
+		writeJSON(w, http.StatusInsufficientStorage, errorBody{Message: "not enough free space"})
 	case errors.Is(err, ErrAgentOutdated):
 		writeJSON(w, http.StatusNotImplemented, errorBody{Message: "update the node agent"})
 	case errors.Is(err, ErrAgentUnavailable):

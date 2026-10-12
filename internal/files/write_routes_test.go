@@ -8,6 +8,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,15 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/teams"
 )
+
+// newRouterWithService mounts the real routes around svc under a team scope.
+func newRouterWithService(t *testing.T, svc FileService, teamID uuid.UUID) http.Handler {
+	t.Helper()
+	t.Setenv(FeatureEnv, "true")
+	r := chi.NewRouter()
+	Mount(r, scopeAuth(teams.RoleOwner, teamID), svc, nil)
+	return r
+}
 
 // scopeAuth injects an active team scope, standing in for the server's
 // RequireTeam middleware.
@@ -130,6 +141,54 @@ func TestPutContentRoute(t *testing.T) {
 	})
 }
 
+// countingReader records how many bytes a handler read from it.
+type countingReader struct {
+	n int
+	r io.Reader
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+// TestPutContentAuthorizesBeforeBody is the fix-round-1 regression: a chunked
+// PUT must be authorized (feature enabled, team, RBAC) before its body is
+// spooled, so a disabled feature answers 503, a foreign team 404 and a
+// read-only caller 403 without the request body being read.
+func TestPutContentAuthorizesBeforeBody(t *testing.T) {
+	id := uuid.New()
+	path := "/v1/servers/" + id.String() + "/files/content?root=volumes&path=a.txt"
+
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"feature off", ErrDisabled, http.StatusServiceUnavailable},
+		{"foreign team", ErrNotFound, http.StatusNotFound},
+		{"read-only caller", ErrForbidden, http.StatusForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestRouter(&fakeService{authorizeErr: tc.err})
+			body := &countingReader{r: strings.NewReader(strings.Repeat("x", 4096))}
+			req := httptest.NewRequest(http.MethodPut, path, body)
+			req.Header.Set("If-Match", `"v1"`)
+			req.ContentLength = -1 // force the chunked (spool) path
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+			if body.n != 0 {
+				t.Fatalf("the request body was read (%d bytes) before authorization", body.n)
+			}
+		})
+	}
+}
+
 func TestUploadPartialFailure(t *testing.T) {
 	id := uuid.New()
 	body, contentType := buildMultipart(t, []struct{ name, content string }{
@@ -162,6 +221,98 @@ func TestUploadPartialFailure(t *testing.T) {
 	}
 	if envelope.Results[1].Name != "b.txt" || envelope.Results[1].Error != "conflict" {
 		t.Fatalf("second result = %+v", envelope.Results[1])
+	}
+}
+
+// TestUploadBoundsTotalRequestBody is the fix-round-1 regression: the upload
+// route must bound the TOTAL request body, not only each part, so a multipart
+// whose bytes exceed the upload ceiling is refused instead of streaming
+// unbounded data through the control plane.
+func TestUploadBoundsTotalRequestBody(t *testing.T) {
+	teamID := uuid.New()
+	registry := newFakeRegistry()
+	server := registry.seed(teamID)
+	client := &fakeFileClient{writeResp: writeEntry()}
+	svc := NewService(Config{
+		Registry:       registry,
+		Dial:           func(context.Context, *servers.Server) (FileClient, error) { return client, nil },
+		MaxUploadBytes: 200,
+	})
+	h := newRouterWithService(t, svc, teamID)
+
+	body, contentType := buildMultipart(t, []struct{ name, content string }{
+		{"big.txt", strings.Repeat("x", 400)},
+	})
+	rec := doWrite(t, h, http.MethodPost, "/v1/servers/"+server.ID.String()+"/files/upload?root=volumes&path=", body,
+		map[string]string{"Content-Type": contentType})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	var envelope uploadEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode upload: %v", err)
+	}
+	tooLarge := false
+	for _, result := range envelope.Results {
+		if result.Entry != nil {
+			t.Fatalf("an over-limit upload was committed: %+v", result)
+		}
+		if result.Error == "too_large" {
+			tooLarge = true
+		}
+	}
+	if !tooLarge {
+		t.Fatalf("results = %+v, want a too_large result", envelope.Results)
+	}
+	if client.lastWrite != nil {
+		t.Fatal("an over-limit upload reached the agent")
+	}
+}
+
+// TestUploadSpoolErrorReportsEveryPart is the fix-round-1 regression: a staging
+// failure on one part must not silently drop the parts that follow it — each
+// part is reported in the result array.
+func TestUploadSpoolErrorReportsEveryPart(t *testing.T) {
+	// A spool directory that cannot be created makes every part fail to stage.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+	t.Setenv(SpoolDirEnv, filepath.Join(blocker, "spool"))
+
+	teamID := uuid.New()
+	registry := newFakeRegistry()
+	server := registry.seed(teamID)
+	client := &fakeFileClient{writeResp: writeEntry()}
+	svc := NewService(Config{
+		Registry: registry,
+		Dial:     func(context.Context, *servers.Server) (FileClient, error) { return client, nil },
+	})
+	h := newRouterWithService(t, svc, teamID)
+
+	body, contentType := buildMultipart(t, []struct{ name, content string }{
+		{"a.txt", "hello"},
+		{"b.txt", "world"},
+	})
+	rec := doWrite(t, h, http.MethodPost, "/v1/servers/"+server.ID.String()+"/files/upload?root=volumes&path=", body,
+		map[string]string{"Content-Type": contentType})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	var envelope uploadEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode upload: %v", err)
+	}
+	if len(envelope.Results) != 2 {
+		t.Fatalf("results = %+v, want one result per part", envelope.Results)
+	}
+	for _, result := range envelope.Results {
+		if result.Error == "" {
+			t.Fatalf("part %q was not reported as failed: %+v", result.Name, result)
+		}
+	}
+	if client.lastWrite != nil {
+		t.Fatal("a part with a staging failure reached the agent")
 	}
 }
 
@@ -329,6 +480,7 @@ func TestWriteErrorStatusMapping(t *testing.T) {
 		{"conflict", ErrConflict, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusConflict},
 		{"too large", ErrTooLarge, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusRequestEntityTooLarge},
 		{"busy", ErrBusy, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusTooManyRequests},
+		{"insufficient storage", ErrInsufficientStorage, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusInsufficientStorage},
 		{"disabled", ErrDisabled, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusServiceUnavailable},
 		{"agent outdated", ErrAgentOutdated, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusNotImplemented},
 		{"agent unavailable", ErrAgentUnavailable, base + "mkdir", `{"root":"volumes","path":"d"}`, http.StatusBadGateway},

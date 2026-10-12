@@ -134,9 +134,10 @@ type EntryPoint struct {
 	// Address is the listen address, e.g. ":80".
 	Address string `yaml:"address" toml:"address"`
 	// Transport carries the entrypoint's transport settings. The public
-	// entrypoints set a responding read timeout so a large file upload is not
-	// cut by Traefik v3's 60 s default; the loopback ping entrypoint leaves it
-	// unset.
+	// entrypoints get a responding read timeout only when the file-manager
+	// feature is enabled (applyUploadReadTimeout), so a large upload is not cut
+	// by Traefik v3's 60 s default; without the feature the entrypoint keeps
+	// the default, and the loopback ping entrypoint always leaves it unset.
 	Transport *EntryPointTransport `yaml:"transport,omitempty" toml:"transport,omitempty"`
 }
 

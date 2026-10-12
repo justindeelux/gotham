@@ -3,10 +3,8 @@ package files
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -79,6 +77,13 @@ func (h *handler) putContent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Authorize before reading the body, so a read-only caller or a foreign
+	// team is refused once (403/404) without the body being spooled, and a
+	// disabled feature answers 503 without staging anything.
+	if err := h.svc.AuthorizeWrite(r.Context(), serverID); err != nil {
+		h.writeError(w, err)
+		return
+	}
 	query := r.URL.Query()
 	expectEtag := strings.TrimSpace(r.Header.Get("If-Match"))
 	overwrite := parseBool(query.Get("overwrite"))
@@ -102,7 +107,7 @@ func (h *handler) putContent(w http.ResponseWriter, r *http.Request) {
 	if size < 0 {
 		// A chunked save has no declared length, but the agent's write header
 		// must state the exact size, so spool the body to learn it.
-		file, written, done, err := spoolBody(body, maxUpload)
+		file, written, done, err := h.spool.stage(body, maxUpload)
 		if err != nil {
 			h.writeError(w, err)
 			return
@@ -150,6 +155,10 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bound the whole request body, not only each part, so a multipart with
+	// many parts cannot stream unbounded bytes through the control plane. The
+	// per-part staging ceiling below still bounds one file's size.
+	r.Body = http.MaxBytesReader(w, r.Body, maxUpload)
 	reader, err := r.MultipartReader()
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "expected multipart/form-data"})
@@ -163,8 +172,11 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
-			// The request body itself failed: stop and report what landed.
+			// The request body failed before the next part could be read, so
+			// the remaining parts are unreachable: record one request-level
+			// failure instead of dropping them silently.
 			h.logger.Warn("files: upload request truncated", "server_id", serverID.String(), "error", err)
+			results = append(results, uploadResult{Error: uploadBodyError(err)})
 			break
 		}
 		name := partBaseName(part.FileName())
@@ -175,16 +187,13 @@ func (h *handler) upload(w http.ResponseWriter, r *http.Request) {
 			results = append(results, result)
 			continue
 		}
-		file, size, cleanup, err := spoolBody(part, maxUpload)
+		file, size, cleanup, err := h.spool.stage(part, maxUpload)
 		if err != nil {
-			result.Error = publicError(err)
+			result.Error = uploadBodyError(err)
 			results = append(results, result)
-			if errors.Is(err, ErrTooLarge) {
-				// The part is oversized but the request is intact; skip to the
-				// next file.
-				continue
-			}
-			break
+			// One unreadable or oversized part must not drop the parts that
+			// follow it: keep reading and report each one.
+			continue
 		}
 		written, writeErr := h.svc.Write(r.Context(), serverID, WriteRequest{
 			Root:      root,
@@ -304,32 +313,22 @@ func (h *handler) extendReadDeadline(w http.ResponseWriter, window time.Duration
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(window))
 }
 
-// spoolBody streams body into a temp file, returning the rewound file, its exact
-// size and a cleanup the caller must run. It fails with ErrTooLarge once limit
-// bytes are exceeded, so an oversized body is refused without buffering it all.
-func spoolBody(body io.Reader, limit int64) (*os.File, int64, func(), error) {
-	file, err := os.CreateTemp("", "gotham-upload-*")
-	if err != nil {
-		return nil, 0, func() {}, fmt.Errorf("%w: staging the upload", ErrValidation)
+// uploadBodyError renders a staging or request-body error as a stable per-file
+// result token. An overrun of the total request body (http.MaxBytesError) is
+// "too_large"; a sentinel staging error reuses publicError; anything else is a
+// request-level "truncated".
+func uploadBodyError(err error) string {
+	var maxBytes *http.MaxBytesError
+	if errors.As(err, &maxBytes) {
+		return "too_large"
 	}
-	cleanup := func() {
-		_ = file.Close()
-		_ = os.Remove(file.Name())
+	switch {
+	case errors.Is(err, ErrTooLarge), errors.Is(err, ErrBusy),
+		errors.Is(err, ErrInsufficientStorage), errors.Is(err, ErrValidation):
+		return publicError(err)
+	default:
+		return "truncated"
 	}
-	written, err := io.Copy(file, io.LimitReader(body, limit+1))
-	if err != nil {
-		cleanup()
-		return nil, 0, func() {}, fmt.Errorf("%w: reading the upload: %w", ErrValidation, err)
-	}
-	if written > limit {
-		cleanup()
-		return nil, 0, func() {}, ErrTooLarge
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		cleanup()
-		return nil, 0, func() {}, fmt.Errorf("%w: staging the upload", ErrValidation)
-	}
-	return file, written, cleanup, nil
 }
 
 // decodeJSON decodes a bounded JSON body, answering 400 on a malformed one.
@@ -380,6 +379,8 @@ func publicError(err error) string {
 		return "invalid"
 	case errors.Is(err, ErrBusy):
 		return "busy"
+	case errors.Is(err, ErrInsufficientStorage):
+		return "insufficient_storage"
 	case errors.Is(err, ErrAgentOutdated):
 		return "agent_outdated"
 	case errors.Is(err, ErrAgentUnavailable):

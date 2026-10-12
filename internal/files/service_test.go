@@ -1,9 +1,11 @@
 package files
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -546,13 +548,63 @@ func TestMapRPCError(t *testing.T) {
 	}
 }
 
+// TestResourceExhaustedClassification is the fix-round-1 regression: an agent
+// ResourceExhausted is not always "the node is busy". The message prefixes the
+// agent already defines distinguish a body over the node's limit (413), low
+// free space or an exhausted quota (507) and the transfer semaphore (429).
+func TestResourceExhaustedClassification(t *testing.T) {
+	cases := []struct {
+		name    string
+		message string
+		want    error
+	}{
+		{"over the upload limit", "write: 500 bytes exceeds the 100 byte upload limit", ErrTooLarge},
+		{"fsroot too large", "list: fsroot: directory too large", ErrTooLarge},
+		{"low on free space", "write: the filesystem is low on free space", ErrInsufficientStorage},
+		{"does not fit", "write: 500 bytes do not fit in 10 free bytes", ErrInsufficientStorage},
+		{"quota", "copy: the quota is exhausted", ErrInsufficientStorage},
+		{"enospc", "write: write /vol/a: no space left on device", ErrInsufficientStorage},
+		{"transfer semaphore", "file service is busy: too many concurrent transfers", ErrBusy},
+		{"unrecognised stays busy", "something else entirely", ErrBusy},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mapRPCError(status.Error(codes.ResourceExhausted, tc.message))
+			if !errors.Is(got, tc.want) {
+				t.Fatalf("mapRPCError(%q) = %v, want %v", tc.message, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDisabledFeature(t *testing.T) {
 	t.Setenv(FeatureEnv, "false")
 	registry := newFakeRegistry()
 	server := registry.seed(uuid.New())
-	svc := NewDefaultService(registry)
+	svc := NewDefaultService(registry, nil)
 	if _, err := svc.Roots(context.Background(), server.ID); !errors.Is(err, ErrDisabled) {
 		t.Fatalf("err = %v, want ErrDisabled", err)
+	}
+}
+
+// TestDefaultServiceUsesProvidedLogger is the fix-round-1 regression: the
+// production default service must write its audit trail through the control
+// plane's configured logger, not slog.Default.
+func TestDefaultServiceUsesProvidedLogger(t *testing.T) {
+	t.Setenv(FeatureEnv, "true")
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	registry := newFakeRegistry()
+	server := registry.seed(uuid.New())
+
+	svc := NewDefaultService(registry, logger)
+	// No dialer is wired, so the operation fails with ErrAgentUnavailable but
+	// still audits through the provided logger.
+	if _, err := svc.Mkdir(scopeCtx(teams.RoleOwner, server.TeamID), server.ID, "volumes", "d", 0); err == nil {
+		t.Fatal("mkdir without a dialer should fail")
+	}
+	if !strings.Contains(buf.String(), `"op":"mkdir"`) {
+		t.Fatalf("the audit trail did not use the provided logger: %s", buf.String())
 	}
 }
 

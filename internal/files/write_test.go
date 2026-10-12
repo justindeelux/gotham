@@ -4,13 +4,18 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/teams"
@@ -116,6 +121,97 @@ func TestWriteBodyErrorCancelsStream(t *testing.T) {
 	}
 }
 
+// rejectingFileServer is a real gRPC FileService whose Write rejects the stream
+// at header time with a fixed status, standing in for an agent that refuses a
+// read-only root, an over-limit body or a low disk before reading any bytes.
+type rejectingFileServer struct {
+	agentv1.UnimplementedFileServiceServer
+	err error
+}
+
+func (s rejectingFileServer) Write(grpc.ClientStreamingServer[agentv1.WriteRequest, agentv1.WriteResponse]) error {
+	return s.err
+}
+
+// startRejectingAgent serves rejectingFileServer over an in-memory bufconn
+// listener and returns a dialed client, so the test exercises real gRPC
+// semantics: Send surfaces io.EOF and the status is only available from
+// CloseAndRecv.
+func startRejectingAgent(t *testing.T, reject error) agentv1.FileServiceClient {
+	t.Helper()
+	lis := bufconn.Listen(1 << 20)
+	srv := grpc.NewServer()
+	agentv1.RegisterFileServiceServer(srv, rejectingFileServer{err: reject})
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(lis) }()
+	conn, err := grpc.NewClient(
+		"passthrough:///bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		srv.Stop()
+		<-serveErr
+		t.Fatalf("dial bufconn: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = conn.Close()
+		srv.Stop()
+		<-serveErr
+	})
+	return agentv1.NewFileServiceClient(conn)
+}
+
+// TestWriteHeaderRejectionMapsAgentStatus is the fix-round-1 regression: when
+// the agent rejects the stream at header time, the client stream's Send returns
+// only io.EOF and the real status is available from CloseAndRecv. The service
+// must recover and map that status (403/400/413/507/429), not surface a raw
+// io.EOF that the route turns into a 500 — even with a body large enough that
+// the failure lands on a body chunk rather than the header.
+func TestWriteHeaderRejectionMapsAgentStatus(t *testing.T) {
+	teamID := uuid.New()
+	registry := newFakeRegistry()
+	server := registry.seed(teamID)
+	t.Setenv(FeatureEnv, "true")
+
+	cases := []struct {
+		name  string
+		agent error
+		want  error
+	}{
+		{"read-only root", status.Error(codes.PermissionDenied, "write: root is read-only"), ErrForbidden},
+		{"invalid header", status.Error(codes.InvalidArgument, "write: invalid path"), ErrValidation},
+		{"over the node limit", status.Error(codes.ResourceExhausted, "write: 500 bytes exceeds the 100 byte upload limit"), ErrTooLarge},
+		{"low disk", status.Error(codes.ResourceExhausted, "write: the filesystem is low on free space"), ErrInsufficientStorage},
+		{"transfer slots full", status.Error(codes.ResourceExhausted, "file service is busy: too many concurrent transfers"), ErrBusy},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := startRejectingAgent(t, tc.agent)
+			svc := NewService(Config{
+				Registry: registry,
+				Dial:     func(context.Context, *servers.Server) (FileClient, error) { return client, nil },
+			})
+			const size = 4 << 20 // larger than the stream window, so a Send fails
+			body := strings.NewReader(strings.Repeat("x", size))
+			_, err := svc.Write(scopeCtx(teams.RoleOwner, teamID), server.ID, WriteRequest{
+				Root: "volumes", Path: "a.txt", Size: size,
+			}, body)
+			if err == nil {
+				t.Fatal("a header-time rejection must fail the write")
+			}
+			if errors.Is(err, io.EOF) {
+				t.Fatalf("the raw io.EOF leaked instead of the agent status: %v", err)
+			}
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestWriteExceedsUploadCeiling(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()
@@ -151,6 +247,33 @@ func TestWriteValidationBeforeDial(t *testing.T) {
 		"empty root":    {Root: "", Path: "a", Size: 0},
 		"NUL path":      {Root: "volumes", Path: "a\x00b", Size: 0},
 		"negative size": {Root: "volumes", Path: "a", Size: -1},
+	}
+	for name, req := range cases {
+		if _, err := svc.Write(ctx, server.ID, req, nil); !errors.Is(err, ErrValidation) {
+			t.Errorf("%s err = %v, want ErrValidation", name, err)
+		}
+	}
+	if client.lastWrite != nil {
+		t.Fatal("a malformed write must not dial the agent")
+	}
+}
+
+// TestWriteRejectsBadEtagAndParentSegment is the fix-round-1 regression: an
+// If-Match that is not valid UTF-8 would fail proto.Marshal and surface as a
+// 500, and a ".." path segment should be refused cheaply on the control plane.
+// Both must be ErrValidation (400) before the agent is dialed.
+func TestWriteRejectsBadEtagAndParentSegment(t *testing.T) {
+	teamID := uuid.New()
+	registry := newFakeRegistry()
+	server := registry.seed(teamID)
+	client := &fakeFileClient{writeResp: writeEntry()}
+	svc := newTestService(t, registry, client)
+	ctx := scopeCtx(teams.RoleOwner, teamID)
+
+	cases := map[string]WriteRequest{
+		"invalid UTF-8 etag":  {Root: "volumes", Path: "a.txt", ExpectEtag: "\xff\xfe", Size: 0},
+		"parent segment":      {Root: "volumes", Path: "a/../b", Size: 0},
+		"parent segment root": {Root: "..", Path: "a", Size: 0},
 	}
 	for name, req := range cases {
 		if _, err := svc.Write(ctx, server.ID, req, nil); !errors.Is(err, ErrValidation) {

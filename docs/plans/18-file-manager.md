@@ -12,6 +12,105 @@
 - Web: HTTP client is `web/src/shared/api/http.ts` (Bearer header + `X-Team-Id`, 15 s default timeout). No editor library, no file components. `web/src/app/layouts/navigation.ts:32` has an inactive `files` nav stub. `internal/server/webdist` (2.4 MB) is committed and drift-checked.
 - No files mockup in `docs/design/`.
 
+## Spike results (step 0 gate)
+
+**Status: BLOCKED — the test box's root filesystem is read-only after a disk
+failure, so the live read/write test could not be run.** Checked 2026-10-12 on
+the all-in-one box from `docs/test-server.md` (Ubuntu 22.04).
+
+### Facts recorded
+
+- **Kernel:** `Linux linux4857 5.15.0-60-generic #66-Ubuntu SMP Fri Jan 20
+  14:29:49 UTC 2023 x86_64` (`uname -r` = `5.15.0-60-generic`). `openat2` is
+  available (Linux ≥ 5.6), so `os.OpenRoot`'s fast path applies; the stdlib
+  fallback still covers older kernels.
+- **Agent identity:** `uid=998(gotham-agent) gid=998(gotham-agent)
+  groups=998(gotham-agent),999(docker)` — the supplementary `docker` group the
+  unit file sets.
+- **Roots (both defaulted; no override on either side):**
+  - `ManagedVolumeRoot` = `/var/lib/gotham/volumes` (CP
+    `internal/deploy/volumes.go`, agent `agent/config.go`; both env vars unset
+    on the box). Parent `/var/lib/gotham` is `root:root 0755`. The root itself
+    does **not** exist yet (no storage had been deployed).
+  - `ComposeRoot` = `/var/lib/gotham-agent/compose`
+    (`GOTHAM_AGENT_COMPOSE_ROOT` unset). Parent `/var/lib/gotham-agent` is
+    `gotham-agent:gotham-agent 0755`; the root itself does **not** exist yet.
+- **Docker root** `/var/lib/docker` (overlayfs), on the same filesystem.
+- **Traefik (v3.7, container `gotham-traefik`):** static config
+  `/var/lib/gotham-agent/traefik/traefik.yml` (agent-owned 0644; written by the
+  agent, not the file manager) declares entryPoints `traefik:8080`, `web:80`,
+  `websecure:443` and **no `transport.respondingTimeouts`**, so the Traefik v3
+  defaults apply on `web`/`websecure`: **`readTimeout` 60 s, `writeTimeout` 0
+  (no limit), `idleTimeout` 180 s**. The CP's own `ReadTimeout` is 30 s
+  (`internal/server/server.go:56`); at the edge Traefik caps reading a request
+  **including its body** at 60 s and the CP's response-controller deadlines
+  cannot extend it — a > 1 GiB upload that takes longer than 60 s at the edge
+  would be cut off. Set an explicit `respondingTimeouts.readTimeout` on
+  `web`/`websecure` (or document the 60 s ceiling) in step 4/10.
+- **No application storage exists on the box:** `/var/lib/gotham/volumes` is
+  absent and no running container has a bind under it (the Phase 13 migrations
+  truncated resources), so there was no live container-created volume to inspect
+  either.
+
+### Not verified (blocked) — and why
+
+Live read/write/list as `gotham-agent` under both roots, plus the
+container-created-volume ownership outcome. The box's root filesystem is
+**read-only after a disk failure**:
+
+- `/proc/mounts`: `/dev/mapper/vg0-lv--0 / ext4 ro,relatime 0 0`.
+- `dmesg`: `blk_update_request: I/O error, dev sda`, `sd 32:0:0:0: [sda]
+  timing out command, waited 1080s`, `FAILED Result: hostbyte=DID_RESET`,
+  `EXT4-fs error ... Journal has aborted`, then `EXT4-fs (dm-0): Remounting
+  filesystem read-only` at uptime `1291781` s (~14 h before the check).
+- Even `root` cannot write (`touch → Read-only file system`); `mount -o
+  remount,rw /` → `is write-protected` (rc 32).
+- Docker cannot run or exec containers (`docker run → read-only file system`),
+  so a container-created volume cannot be produced.
+- Knock-on effects: Postgres is `inactive`, CP `/healthz` returns 503, and
+  `gotham-agent` loops on `register failed ... internal error`. The agent's own
+  state dir is on the same filesystem, so it cannot create the ComposeRoot
+  either.
+
+### To run once the box is repaired
+
+Repair or replace the failing disk, reboot (fsck), and confirm `/proc/mounts`
+shows `/ rw` and `systemctl is-active postgresql gotham gotham-agent` are all
+`active`. Then, from a machine with the `gotham` SSH alias:
+
+```sh
+ROOT=/var/lib/gotham/volumes
+COMPOSE=/var/lib/gotham-agent/compose
+APPID=$(uuidgen)
+
+# 1. Who creates the root and the app dir, and with what ownership:
+docker run --rm -v "$ROOT/$APPID/data:/data" alpine:3 sh -c \
+  'echo hi > /data/from-container.txt; ls -la /data'  # dockerd creates the source as root:root
+ls -ld "$ROOT" "$ROOT/$APPID" "$ROOT/$APPID/data"
+
+# 2. As the agent: list, read 0644, read 0600, write, mkdir
+sudo -u gotham-agent ls    "$ROOT/$APPID/data"
+sudo -u gotham-agent cat   "$ROOT/$APPID/data/from-container.txt"  # expect ok
+sudo -u gotham-agent sh -c "echo x > '$ROOT/$APPID/data/newfile'"  # expect denied
+sudo -u gotham-agent mkdir "$ROOT/$APPID/newdir"                   # expect denied
+
+# 3. ComposeRoot (agent-owned parent):
+sudo -u gotham-agent mkdir -p "$COMPOSE/probe" && echo writable
+```
+
+Record the ownership of `$ROOT/$APPID/data` and each op's exit code here.
+
+### Decision
+
+- **`deploy/gotham-agent.service`: no change decided** — the measurement is
+  blocked. The expected result on re-run (to confirm, not assumed): a unit-file
+  change cannot let a uid-998 process read files another uid owns with mode
+  0600, nor write a root-owned 0755 directory; only root or userns remapping
+  could, which the plan already excludes. The read-mostly UX and per-entry
+  "permission denied" states stay the mitigation.
+- **Gate:** step 0 is **not passed**. Step 1 must not start until the box is
+  repaired and this section is completed with live results.
+
 ## Pyramid findings that drive the design
 Pyramid's backend is an unrestricted filesystem API (single `resolvePath` = `filepath.Abs`), blind overwrite on save, whole-file string read/write, `sh -c` archive commands with a broken `shellQuote` (command injection), 200-status error paths, swallowed upload errors and no tests. Its frontend is a Monaco dock with a global key handler that hijacks Ctrl+V/Ctrl+A/Delete while typing in the editor, "new file" that truncates an existing file, stale editor tabs after rename, silent discard on delete/reload and no search. **None of that is ported.**
 

@@ -59,6 +59,20 @@ var (
 	// It is an explicit failure, never a truncated page, so a client can tell a
 	// directory it cannot enumerate from one it has finished enumerating.
 	ErrTooLarge = errors.New("fsroot: directory too large")
+	// ErrExists marks a name that already exists where an exclusive create or a
+	// non-overwriting move/copy wanted it free.
+	ErrExists = errors.New("fsroot: already exists")
+	// ErrNotEmpty marks a directory that a non-recursive delete refused to
+	// remove because it still holds entries. It is distinct from ErrExists so
+	// the caller can report a precondition failure rather than a conflict.
+	ErrNotEmpty = errors.New("fsroot: directory not empty")
+	// ErrConflict marks a mutation whose precondition no longer holds, such as
+	// an etag that changed under the caller. It is a retryable-by-the-user
+	// conflict, not an internal failure.
+	ErrConflict = errors.New("fsroot: conflict")
+	// ErrReadOnly marks a mutation attempted on a root the caller opened
+	// read-only. The refusal is configuration, not a filesystem error.
+	ErrReadOnly = errors.New("fsroot: read-only root")
 )
 
 // Kind classifies a directory entry.
@@ -82,6 +96,12 @@ type Entry struct {
 	Modified      time.Time
 	SymlinkTarget string
 	Etag          string
+	// UID and Nlink are the platform identity needed to choose a write
+	// strategy: a file the agent owns with a single link can be replaced by an
+	// atomic rename, while a foreign, hard-linked or bind-mounted file must be
+	// written in place so its inode, owner and ACLs survive.
+	UID   uint32
+	Nlink uint64
 }
 
 // Root is a confined view of one directory tree.
@@ -142,6 +162,14 @@ func (r *Root) Path() string { return r.path }
 
 // Writable reports whether the caller may mutate entries under the root.
 func (r *Root) Writable() bool { return r.writable }
+
+// requireWritable refuses every mutation on a root opened read-only.
+func (r *Root) requireWritable() error {
+	if !r.writable {
+		return fmt.Errorf("%w: %s", ErrReadOnly, r.name)
+	}
+	return nil
+}
 
 // Close releases the root's directory descriptor.
 func (r *Root) Close() error { return r.root.Close() }
@@ -288,6 +316,67 @@ func (r *Root) Stat(rel string) (Entry, error) {
 	return r.entryFor(p, info)
 }
 
+// Resolve resolves rel inside the root, following symbolic links, and returns
+// the canonical root-relative path with no ".." or symlink component left, or
+// an error when rel does not exist or a link would leave the root. It never
+// follows an absolute link target or one that climbs above the root, so the
+// result is always confined. Callers use it to decide safety on the resolved
+// path rather than the caller-supplied one.
+func (r *Root) Resolve(rel string) (string, error) {
+	p, err := cleanRel(rel)
+	if err != nil {
+		return "", err
+	}
+	if p == "." {
+		return ".", nil
+	}
+	pending := strings.Split(p, "/")
+	var resolved []string
+	links := 0
+	for len(pending) > 0 {
+		comp := pending[0]
+		pending = pending[1:]
+		switch comp {
+		case "", ".":
+			continue
+		case "..":
+			if len(resolved) == 0 {
+				return "", fmt.Errorf("%w: %q escapes the root", ErrEscape, rel)
+			}
+			resolved = resolved[:len(resolved)-1]
+			continue
+		}
+		target := path.Join(strings.Join(resolved, "/"), comp)
+		info, err := r.root.Lstat(target)
+		if err != nil {
+			return "", mapError("resolve", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			links++
+			if links > maxResolveLinks {
+				return "", fmt.Errorf("%w: too many symbolic links resolving %q", ErrEscape, rel)
+			}
+			link, err := r.root.Readlink(target)
+			if err != nil {
+				return "", mapError("resolve", err)
+			}
+			if path.IsAbs(link) {
+				return "", fmt.Errorf("%w: %q has an absolute symlink target", ErrEscape, rel)
+			}
+			pending = append(strings.Split(link, "/"), pending...)
+			continue
+		}
+		if len(pending) > 0 && !info.IsDir() {
+			return "", fmt.Errorf("%w: %q has a non-directory component", ErrInvalid, rel)
+		}
+		resolved = append(resolved, comp)
+	}
+	if len(resolved) == 0 {
+		return ".", nil
+	}
+	return strings.Join(resolved, "/"), nil
+}
+
 // OpenRegular opens rel for reading and returns the open file and its entry.
 // It never follows a path out of the root and refuses anything that is not a
 // regular file, so a device, FIFO or socket can never block or be read.
@@ -342,6 +431,7 @@ func (r *Root) entryFor(p string, info os.FileInfo) (Entry, error) {
 		Modified: info.ModTime(),
 		Etag:     etag(info),
 	}
+	entry.UID, entry.Nlink = ownerLinks(info)
 	mode := info.Mode()
 	switch {
 	case mode&os.ModeSymlink != 0:
@@ -358,6 +448,12 @@ func (r *Root) entryFor(p string, info os.FileInfo) (Entry, error) {
 	}
 	return entry, nil
 }
+
+// Clean normalises a caller-supplied relative path the way every Root method
+// does and rejects the shapes that must never reach the descriptor walk, so a
+// caller can validate a path and derive its parent directory before it hands
+// the path to a mutation method. It returns "." for an empty path.
+func Clean(rel string) (string, error) { return cleanRel(rel) }
 
 // cleanRel normalises a caller-supplied relative path and rejects the shapes
 // that must never reach the descriptor walk. os.Root would also refuse them,
@@ -390,12 +486,26 @@ func mapError(op string, err error) error {
 		return fmt.Errorf("%w: %s: %v", ErrNotFound, op, err)
 	case errors.Is(err, os.ErrPermission):
 		return fmt.Errorf("%w: %s: %v", ErrPermission, op, err)
+	case errors.Is(err, syscall.ENOTEMPTY):
+		// A directory being removed or replaced is not empty: the caller's
+		// precondition (empty target) failed. It must be tested before the
+		// ErrExist case, because syscall.Errno.Is also matches ENOTEMPTY for
+		// fs.ErrExist.
+		return fmt.Errorf("%w: %s: %v", ErrNotEmpty, op, err)
+	case errors.Is(err, fs.ErrExist), errors.Is(err, syscall.EEXIST):
+		// A name that must be free already exists: the caller's conflict to
+		// resolve.
+		return fmt.Errorf("%w: %s: %v", ErrExists, op, err)
 	case errors.Is(err, os.ErrInvalid), errors.Is(err, fs.ErrInvalid):
 		return fmt.Errorf("%w: %s: %v", ErrInvalid, op, err)
 	case errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENOTDIR):
 		// A symlink loop or a non-directory component is a caller mistake, not
 		// an internal failure, so it maps to the typed path error.
 		return fmt.Errorf("%w: %s: %v", ErrInvalid, op, err)
+	case errors.Is(err, syscall.ENXIO):
+		// Opening a FIFO with no reader is a special file the service never
+		// reads or writes.
+		return fmt.Errorf("%w: %s: %v", ErrSpecial, op, err)
 	case strings.Contains(err.Error(), "escapes from parent"):
 		return fmt.Errorf("%w: %s: %v", ErrEscape, op, err)
 	default:

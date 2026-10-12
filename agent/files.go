@@ -11,6 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -97,7 +100,34 @@ type FileServer struct {
 	log   *slog.Logger
 	roots map[string]*fsroot.Root
 	order []string
+	// volumeRootPath is the canonical path of the writable managed-volumes
+	// root, whose top-level application directories are protected from rename
+	// and delete because running containers bind-mount them.
+	volumeRootPath string
+	// maxUpload bounds one upload in bytes; uploads over it are refused.
+	maxUpload int64
+	// transfers is a counting semaphore bounding concurrent file transfers.
+	transfers chan struct{}
+	// locks are striped mutexes serialising the commit of a write to one
+	// (root, path), so a concurrent writer sees the previous commit's etag.
+	locks []sync.Mutex
+	// stop closes to end the background staging-file sweeper; closeOnce makes
+	// Close idempotent.
+	stop      chan struct{}
+	closeOnce sync.Once
 }
+
+// fileTempSweepAge is how old a leaked staging file must be before the sweeper
+// removes it: old enough that no in-flight upload could still own it.
+const fileTempSweepAge = 24 * time.Hour
+
+// fileTempSweepInterval is how often the background sweeper runs.
+const fileTempSweepInterval = time.Hour
+
+// fileLockStripes is the number of striped path locks. A stripe is shared by
+// unrelated paths, which only adds contention; the map-free design keeps the
+// lock set bounded no matter how many paths a node serves.
+const fileLockStripes = 64
 
 // NewFileServer validates and opens the configured roots. It fails closed: a
 // root that is not absolute, resolves into a dangerous tree or collides with a
@@ -109,7 +139,22 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		log = slog.Default()
 	}
 	protected := fileProtectedPaths(cfg)
-	server := &FileServer{log: log, roots: make(map[string]*fsroot.Root)}
+	maxUpload := cfg.FileMaxUpload
+	if maxUpload <= 0 {
+		maxUpload = defaultFileMaxUpload
+	}
+	maxTransfers := cfg.FileMaxTransfers
+	if maxTransfers <= 0 {
+		maxTransfers = defaultFileMaxTransfers
+	}
+	server := &FileServer{
+		log:       log,
+		roots:     make(map[string]*fsroot.Root),
+		maxUpload: maxUpload,
+		transfers: make(chan struct{}, maxTransfers),
+		locks:     make([]sync.Mutex, fileLockStripes),
+		stop:      make(chan struct{}),
+	}
 	var opened []string
 	for _, rc := range configuredFileRoots(cfg) {
 		if rc.builtin {
@@ -133,10 +178,14 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 			_ = server.Close()
 			return nil, err
 		}
+		if rc.name == fileRootVolumes {
+			server.volumeRootPath = real
+		}
 		server.roots[name] = root
 		server.order = append(server.order, name)
 		opened = append(opened, real)
 	}
+	go server.sweepTempFilesLoop()
 	return server, nil
 }
 
@@ -151,8 +200,9 @@ func overlapRoot(real string, opened []string) (string, bool) {
 	return "", false
 }
 
-// Close releases every root descriptor.
+// Close releases every root descriptor and stops the staging-file sweeper.
 func (s *FileServer) Close() error {
+	s.closeOnce.Do(func() { close(s.stop) })
 	var errs []error
 	for _, name := range s.order {
 		if err := s.roots[name].Close(); err != nil {
@@ -160,6 +210,38 @@ func (s *FileServer) Close() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// sweepTempFilesLoop sweeps once at startup and then hourly until Close. A
+// crashed upload could otherwise leave a ".gotham-tmp-*" file behind forever.
+func (s *FileServer) sweepTempFilesLoop() {
+	s.sweepTempFiles(time.Now().Add(-fileTempSweepAge))
+	ticker := time.NewTicker(fileTempSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stop:
+			return
+		case now := <-ticker.C:
+			s.sweepTempFiles(now.Add(-fileTempSweepAge))
+		}
+	}
+}
+
+// sweepTempFiles removes staging files older than cutoff from every writable
+// root. It never follows a symlink, so a link planted in the tree cannot make
+// the sweep reach outside the root.
+func (s *FileServer) sweepTempFiles(cutoff time.Time) {
+	for _, name := range s.order {
+		root := s.roots[name]
+		if !root.Writable() {
+			continue
+		}
+		removed, err := root.RemoveStaleTemps(fsroot.TempPrefix, cutoff)
+		if err != nil {
+			s.log.Warn("file service temp sweep", "root", name, "removed", removed, "error", err)
+		}
+	}
 }
 
 // configuredFileRoots returns the allow-list in a stable order: the managed
@@ -497,8 +579,17 @@ func fileKind(kind fsroot.Kind) agentv1.FileKind {
 
 // fileError maps an fsroot error onto a gRPC status error. A path shape
 // problem is InvalidArgument, an escape attempt and an unreadable entry are
-// PermissionDenied, and a special file is FailedPrecondition.
+// PermissionDenied, a special file is FailedPrecondition, and the resource
+// errnos (ENOSPC, EDQUOT, EFBIG) are ResourceExhausted. An error that is
+// already a gRPC status is passed through unchanged so a handler's own status
+// is not demoted to Internal.
 func fileError(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := status.FromError(err); ok {
+		return err
+	}
 	switch {
 	case errors.Is(err, fsroot.ErrInvalid):
 		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
@@ -510,8 +601,29 @@ func fileError(action string, err error) error {
 		return status.Errorf(codes.PermissionDenied, "%s: %v", action, err)
 	case errors.Is(err, fsroot.ErrSpecial):
 		return status.Errorf(codes.FailedPrecondition, "%s: %v", action, err)
+	case errors.Is(err, fsroot.ErrExists):
+		return status.Errorf(codes.AlreadyExists, "%s: %v", action, err)
+	case errors.Is(err, fsroot.ErrNotEmpty):
+		// A non-recursive delete of a non-empty directory is a failed
+		// precondition, not a name conflict.
+		return status.Errorf(codes.FailedPrecondition, "%s: %v", action, err)
+	case errors.Is(err, fsroot.ErrConflict):
+		return status.Errorf(codes.Aborted, "%s: %v", action, err)
+	case errors.Is(err, fsroot.ErrReadOnly):
+		return status.Errorf(codes.PermissionDenied, "%s: %v", action, err)
 	case errors.Is(err, fsroot.ErrTooLarge):
 		return status.Errorf(codes.ResourceExhausted, "%s: %v", action, err)
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT), errors.Is(err, syscall.EFBIG):
+		// Out of space, over quota, or over the file-size limit: the caller can
+		// free space and retry.
+		return status.Errorf(codes.ResourceExhausted, "%s: %v", action, err)
+	case errors.Is(err, syscall.ENAMETOOLONG):
+		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
+	case errors.Is(err, syscall.EISDIR), errors.Is(err, syscall.ENOTDIR):
+		return status.Errorf(codes.InvalidArgument, "%s: %v", action, err)
+	case errors.Is(err, syscall.EROFS):
+		// A read-only filesystem follows the read-only-root convention.
+		return status.Errorf(codes.PermissionDenied, "%s: %v", action, err)
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, action+": context canceled")
 	case errors.Is(err, context.DeadlineExceeded):
@@ -529,4 +641,14 @@ func freeBytes(dir string) uint64 {
 		return 0
 	}
 	return uint64(stat.Bavail) * uint64(stat.Bsize)
+}
+
+// totalBytes reports the total size of dir's filesystem, or 0 when it cannot
+// be read.
+func totalBytes(dir string) uint64 {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(dir, &stat); err != nil {
+		return 0
+	}
+	return uint64(stat.Blocks) * uint64(stat.Bsize)
 }

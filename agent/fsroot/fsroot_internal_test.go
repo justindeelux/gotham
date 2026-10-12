@@ -1,6 +1,7 @@
 package fsroot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -129,6 +130,8 @@ func TestMapErrorCodes(t *testing.T) {
 		{"symlink loop", &os.PathError{Op: "open", Path: "x", Err: syscall.ELOOP}, ErrInvalid},
 		{"not a directory", &os.PathError{Op: "open", Path: "x", Err: syscall.ENOTDIR}, ErrInvalid},
 		{"missing", &os.PathError{Op: "open", Path: "x", Err: syscall.ENOENT}, ErrNotFound},
+		{"not empty", &os.PathError{Op: "remove", Path: "x", Err: syscall.ENOTEMPTY}, ErrNotEmpty},
+		{"exists", &os.PathError{Op: "mkdir", Path: "x", Err: syscall.EEXIST}, ErrExists},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,6 +139,63 @@ func TestMapErrorCodes(t *testing.T) {
 				t.Fatalf("mapError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestCopyDepthBound pins the recursion bound: a copy deeper than maxCopyDepth
+// fails explicitly instead of recursing without bound.
+func TestCopyDepthBound(t *testing.T) {
+	old := maxCopyDepth
+	maxCopyDepth = 1
+	t.Cleanup(func() { maxCopyDepth = old })
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a", "b", "c"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := openInternalRoot(t, dir)
+	if err := root.Copy(context.Background(), "a", "zz", false, nil); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("deep copy = %v, want ErrTooLarge", err)
+	}
+}
+
+// TestRemoveStaleTempsDepthBound pins the sweeper bound: it stops descending
+// past maxSweepDepth, so a staging file buried deeper than the cap survives
+// (a documented ceiling) while a shallow one is still removed.
+func TestRemoveStaleTempsDepthBound(t *testing.T) {
+	old := maxSweepDepth
+	maxSweepDepth = 1
+	t.Cleanup(func() { maxSweepDepth = old })
+
+	dir := t.TempDir()
+	deep := filepath.Join(dir, "a", "b")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shallow := filepath.Join(dir, TempPrefix+"shallow")
+	if err := os.WriteFile(shallow, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deepTemp := filepath.Join(deep, TempPrefix+"deep")
+	if err := os.WriteFile(deepTemp, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := openInternalRoot(t, dir)
+	removed, err := root.RemoveStaleTemps(TempPrefix, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("RemoveStaleTemps: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1 (only the shallow temp)", removed)
+	}
+	if _, err := os.Stat(shallow); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("shallow staging file survived: %v", err)
+	}
+	if _, err := os.Stat(deepTemp); err != nil {
+		t.Fatalf("a staging file past the depth bound should be skipped: %v", err)
 	}
 }
 

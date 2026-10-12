@@ -2,6 +2,8 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import {
+  createFile,
+  deleteEntry,
   describeFilesError,
   filesErrorKey,
   getContent,
@@ -10,6 +12,7 @@ import {
 import type { EditorEol, EditorLanguageId } from "@/features/files/utils/editor";
 import {
   detectLanguage,
+  pathWithin,
   rebasedPath,
   serializeDoc,
   splitDoc,
@@ -18,7 +21,13 @@ import {
 import { joinPath } from "@/features/files/utils/files";
 
 /** EditorTabStatus is the load outcome for one open document. */
-export type EditorTabStatus = "loading" | "ready" | "large" | "binary" | "error";
+export type EditorTabStatus =
+  | "loading"
+  | "ready"
+  | "large"
+  | "binary"
+  | "mixed"
+  | "error";
 
 /**
  * EditorTab is one open document. `doc` is the live editor text (BOM stripped,
@@ -178,7 +187,9 @@ export const useEditorStore = defineStore("filesEditor", () => {
         etag: content.etag,
         size: content.size,
         mode: content.mode,
-        status: "ready",
+        // A body with mixed terminators cannot round-trip, so it is shown
+        // read-only (download only) instead of being silently normalised.
+        status: shape.faithful ? "ready" : "mixed",
         error: "",
       });
     } catch (err) {
@@ -233,6 +244,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       tab.size = entry.size;
       tab.mode = entry.mode;
       tab.original = sentDoc;
+      tab.error = "";
       if (conflictId.value === id) {
         conflictId.value = null;
       }
@@ -287,8 +299,11 @@ export const useEditorStore = defineStore("filesEditor", () => {
 
   /**
    * saveAsCopy writes the tab's buffer to a sibling file `name` and retargets
-   * the tab onto the copy. The caller validates `name` and refuses a name that
-   * already exists in the directory (a force-overwrite would lose data).
+   * the tab onto the copy. It never force-overwrites: the target is reserved
+   * with an exclusive create first (409 when it already exists → "conflict"),
+   * then the buffer is written under that fresh etag. `original` advances to
+   * the exact text sent, so an edit made while the copy is in flight keeps the
+   * tab dirty.
    */
   async function saveAsCopy(
     id: string,
@@ -300,21 +315,42 @@ export const useEditorStore = defineStore("filesEditor", () => {
       return "blocked";
     }
     const target = joinPath(directoryOf(tab.path), name);
+    const sentDoc = tab.doc;
     tab.saving = true;
+    let reserved = false;
     try {
+      // Reserve the name exclusively: the /content route has no
+      // exclusive-create, so this is the guard against clobbering an existing
+      // file (a plain PUT with no etag would be refused 428).
+      let etag = "";
+      try {
+        const created = await createFile(serverId.value, teamId, {
+          root: tab.root,
+          path: target,
+        });
+        etag = created.etag;
+        reserved = true;
+      } catch (err) {
+        if (filesErrorKey(err) === "files.errors.conflict") {
+          return "conflict";
+        }
+        throw err;
+      }
       const entry = await putContent(serverId.value, teamId, {
         root: tab.root,
         path: target,
-        content: serializeDoc({ doc: tab.doc, eol: tab.eol, bom: tab.bom }),
-        overwrite: true,
+        content: serializeDoc({ doc: sentDoc, eol: tab.eol, bom: tab.bom }),
+        etag,
       });
+      reserved = false;
       tab.path = target;
       tab.name = tabTitle(target);
       tab.language = detectLanguage(target);
       tab.etag = entry.etag;
       tab.size = entry.size;
       tab.mode = entry.mode;
-      tab.original = tab.doc;
+      tab.original = sentDoc;
+      tab.error = "";
       if (conflictId.value === id) {
         conflictId.value = null;
       }
@@ -322,6 +358,12 @@ export const useEditorStore = defineStore("filesEditor", () => {
       return "saved";
     } catch (err) {
       tab.error = describeFilesError(err);
+      // Never leave the empty reserved file behind on a failed write.
+      if (reserved) {
+        await deleteEntry(serverId.value, teamId, tab.root, target, false).catch(
+          () => undefined,
+        );
+      }
       return "error";
     } finally {
       tab.saving = false;
@@ -361,25 +403,42 @@ export const useEditorStore = defineStore("filesEditor", () => {
 
   /**
    * blockingNames returns the names among `names` (in directory `dir`) that
-   * have unsaved changes, so a rename/move/delete can be refused before it
-   * drops the user's edits onto the floor.
+   * have unsaved changes in themselves or any descendant, so a
+   * rename/move/delete can be refused before it drops the user's edits onto
+   * the floor. A directory rename/delete therefore blocks on a dirty file
+   * anywhere inside it, not only on an exact-path tab.
    */
   function blockingNames(root: string, dir: string, names: string[]): string[] {
     return names.filter((name) => {
-      const tab = tabFor(root, joinPath(dir, name));
-      return tab !== null && isDirty(tab);
+      const target = joinPath(dir, name);
+      return tabs.value.some(
+        (tab) =>
+          tab.root === root &&
+          pathWithin(tab.path, target) &&
+          isDirty(tab),
+      );
     });
   }
 
-  /** applyRename retargets an open tab after a file was renamed. */
+  /**
+   * applyRename retargets every open tab under a renamed entry. A directory
+   * rename rebases its whole subtree (a file rename is the subtree of one),
+   * so a later Save never PUTs to the stale old path.
+   */
   function applyRename(root: string, dir: string, oldName: string, newName: string): void {
-    const tab = tabFor(root, joinPath(dir, oldName));
-    if (!tab) {
-      return;
+    const from = joinPath(dir, oldName);
+    const to = joinPath(dir, newName);
+    for (const tab of tabs.value) {
+      if (tab.root !== root) {
+        continue;
+      }
+      const next = rebasedPath(tab.path, from, to);
+      if (next !== null) {
+        tab.path = next;
+        tab.name = tabTitle(next);
+        tab.language = detectLanguage(next);
+      }
     }
-    tab.path = joinPath(dir, newName);
-    tab.name = newName;
-    tab.language = detectLanguage(newName);
   }
 
   /** applyMove rebases every open tab under one moved entry. */

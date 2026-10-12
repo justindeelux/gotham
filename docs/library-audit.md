@@ -185,12 +185,25 @@ single validation source. @vueuse/core adds ~0.04 kB gzip (tree-shaken).
   dependency**, so no grammar the ticket did not list can load. Shell,
   dockerfile and toml come from `@codemirror/legacy-modes` (StreamLanguage).
 - Reached only through a dynamic `import()` in `useCodeMirror.ts`, so every
-  CodeMirror package lands in its own chunk and the entry bundle is unchanged.
-  The `codemirror` meta package and `@codemirror/autocomplete`/`lint` are
-  omitted to keep the set minimal.
-- Bundle: measured `vite build` chunk count and entry-size delta recorded in the
-  P18 step 8 PR report.
+  CodeMirror package lands in the lazy `codemirror-*.js` chunk, never in the
+  entry. The `codemirror` meta package is not a dependency; the grammar
+  packages' transitive `@codemirror/autocomplete` and `@codemirror/lint` appear
+  in `package-lock.json` only — they are never imported, so no completion or
+  lint surface loads.
+- Bundle (measured `vite build`, this branch vs `origin/main`):
+  - entry `index-*.js`: **856,253 B → 857,530 B raw (+1,277 B)**. The editor
+    message catalogs are *not* in that delta: they are merged lazily
+    (`locales/editorEn.ts` / `editorVi.ts` + `locales/editorMessages.ts`, loaded
+    with the files-page chunk) and every `files.editor.*` string now lives only
+    in the lazy `ServerFilesPage-*.js` chunk (67.3 kB raw / 18.8 kB gzip). The
+    +1,277 B is the entry-resident `stores/files.ts` editor-sync plumbing
+    (`withEditor`, `applyRename/Move/Delete`) that step 8 had to add to the
+    store the auth store imports.
+  - new chunks: `codemirror-*.js` (658.9 kB raw / 235.7 kB gzip) and the files
+    page `ServerFilesPage-*.js`; **+2 JS chunks** vs `origin/main` (97 → 99),
+    well within the ≤ 15 budget.
 - Verdict: **DO — landed in P18 step 8 with exact pins in `web/package.json`.**
+
 
 ## zod design (as built in G1)
 

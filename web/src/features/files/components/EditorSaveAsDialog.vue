@@ -35,7 +35,11 @@ watch(show, (open) => {
   }
 });
 
-/** existsInFolder reports a name that already exists in the tab's folder. */
+/**
+ * existsInFolder is an advisory hint for the current listing only (the store
+ * performs the authoritative exclusive-create probe, so a stale or paginated
+ * listing can never cause a clobber).
+ */
 const collides = computed<boolean>(() => {
   const tab = editor.saveAsTab;
   if (!tab || directoryOf(tab.path) !== files.path) {
@@ -75,6 +79,10 @@ async function submit(): Promise<void> {
   const outcome = await editor.saveAsCopy(tab.id, teams.activeTeamId, target);
   if (outcome === "saved") {
     message.success(String(t("files.editor.saveAsSaved", { name: target })));
+    // The copy is a new entry: refresh the listing so it appears.
+    void files.refresh();
+  } else if (outcome === "conflict") {
+    message.error(String(t("files.editor.saveAsExists", { name: target })));
   } else if (outcome === "error") {
     message.error(tab.error || String(t("files.editor.saveFailed", { name: tab.name })));
   }

@@ -81,6 +81,15 @@ const entry = {
   etag: '"v1"',
 };
 
+const logoEntry = {
+  name: "logo.png",
+  kind: "file",
+  size: 25_190,
+  mode: 0o100644,
+  modified_at: "2026-10-12T09:01:00Z",
+  etag: '"p1"',
+};
+
 let server: Server;
 let baseURL = "";
 
@@ -150,12 +159,18 @@ async function mockApi(page: Page): Promise<void> {
     await route.fulfill({ json: { roots: [root] } });
   });
   await page.route(`**/api/v1/servers/${serverId}/files/list*`, async (route) => {
-    await route.fulfill({ json: { entries: [entry], truncated: false, cursor: "" } });
+    await route.fulfill({ json: { entries: [entry, logoEntry], truncated: false, cursor: "" } });
   });
   await page.route(`**/api/v1/servers/${serverId}/files/content*`, async (route) => {
     if (route.request().method() === "PUT") {
       // A concurrent write: the editor's If-Match no longer matches.
       await route.fulfill({ status: 409, json: { message: "conflict" } });
+      return;
+    }
+    const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+    if (path.endsWith("logo.png")) {
+      // A binary read: the editor renders the download-only state.
+      await route.fulfill({ status: 415, json: { message: "not editable" } });
       return;
     }
     await route.fulfill({
@@ -262,4 +277,116 @@ test("the conflict modal stays inside a short viewport", async ({ page }) => {
   expect(dialogBox!.y).toBeGreaterThanOrEqual(0);
   expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(viewport.height);
   await expect(dialog.getByRole("button", { name: "Overwrite" })).toBeVisible();
+});
+
+test("switching to a binary tab and back keeps the editor mounted", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  // Open the ready tab first.
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+
+  // Open a binary tab (415) — this used to unmount every ready host.
+  await page.locator(".fm-label", { hasText: "logo.png" }).first().click();
+  await expect(page.getByText("Binary file")).toBeVisible();
+
+  // Back to the ready tab: the CodeMirror surface must still be there.
+  await page.getByRole("tab", { name: /app\.yaml/ }).click();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByText("Binary file")).toHaveCount(0);
+});
+
+test("Ctrl/Cmd+S is a no-op on a clean tab", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  const editor = page.locator(".cm-content");
+  await expect(editor).toBeVisible({ timeout: 15_000 });
+  await editor.click();
+  // No edit: the tab is clean, so Ctrl+S must not fire the (mocked 409) PUT.
+  await page.keyboard.press("ControlOrMeta+s");
+  await page.waitForTimeout(500);
+  await expect(page.locator(".ed-dot")).toHaveCount(0);
+  await expect(page.locator(".n-modal.n-card")).toHaveCount(0);
+});
+
+test("the editor tablist exposes tabs, a panel and arrow-key navigation", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await page.locator(".fm-label", { hasText: "logo.png" }).first().click();
+  await expect(page.getByText("Binary file")).toBeVisible();
+
+  const tablist = page.getByRole("tablist");
+  await expect(tablist).toBeVisible();
+  const tabs = page.getByRole("tab");
+  await expect(tabs).toHaveCount(2);
+
+  // The active tab owns a resolvable panel with role=tabpanel.
+  const active = page.getByRole("tab", { selected: true });
+  const panelId = await active.getAttribute("aria-controls");
+  expect(panelId).toBeTruthy();
+  await expect(page.locator(`#${panelId}`)).toHaveAttribute("role", "tabpanel");
+
+  // Roving focus: ArrowLeft moves selection to the previous tab.
+  await active.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
+});
+
+test("the conflict modal is an alertdialog that confirms overwrite and reload", async ({
+  page,
+}) => {
+  const dialog = await openConflict(page);
+  await expect(dialog).toHaveAttribute("role", "alertdialog");
+
+  // Reload discards unsaved edits, so it asks first.
+  await dialog.getByRole("button", { name: "Reload", exact: true }).click();
+  const reloadPop = page.locator(".n-popconfirm");
+  await expect(reloadPop).toContainText("discards your unsaved edits");
+  await reloadPop.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.locator(".n-popconfirm")).toBeHidden();
+
+  // Overwrite is the danger action and asks first too.
+  const overwrite = dialog.getByRole("button", { name: "Overwrite", exact: true });
+  await expect(overwrite).toHaveClass(/n-button--error-type/);
+  await overwrite.click();
+  await expect(page.locator(".n-popconfirm")).toContainText("Overwrite replaces");
+});
+
+test("leaving the files route with a dirty tab asks before discarding", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  const editor = page.locator(".cm-content");
+  await expect(editor).toBeVisible({ timeout: 15_000 });
+  await editor.click();
+  await page.keyboard.type("# changed");
+  await expect(page.locator(".ed-dot")).toHaveCount(1);
+
+  await page.locator("a.nav-item", { hasText: "Servers" }).first().click();
+  const dialog = page.locator(".n-modal.n-card");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Discard unsaved changes?");
+
+  // Staying keeps the buffer and the route.
+  await dialog.getByRole("button", { name: "Stay" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".cm-content")).toBeVisible();
+  expect(new URL(page.url()).pathname).toContain("/files");
 });

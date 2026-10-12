@@ -10,20 +10,25 @@ import {
   NButton,
   NCard,
   NEmpty,
+  NModal,
   NPopconfirm,
   useMessage,
 } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 
 import EditorConflictDialog from "@/features/files/components/EditorConflictDialog.vue";
 import EditorSaveAsDialog from "@/features/files/components/EditorSaveAsDialog.vue";
+// Side-effect import: merges the lazy editor catalogs under `files.editor`.
+import "@/features/files/locales/editorMessages";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
 import { languageLabel } from "@/features/files/utils/editor";
+import type { EditorLanguageId } from "@/features/files/utils/editor";
 import { useTeamsStore } from "@/features/teams";
 import { formatBytes } from "@/shared/utils/format";
 
@@ -44,6 +49,12 @@ const { download } = useFileDownload();
 const sessions = new Map<string, EditorSession>();
 /** hosts maps a tab id onto its editor host element. */
 const hosts = new Map<string, HTMLElement>();
+/** sessionLanguages remembers the grammar a live session was last set to. */
+const sessionLanguages = new Map<string, EditorLanguageId>();
+/** sessionHosts remembers the host a session was created against. */
+const sessionHosts = new Map<string, HTMLElement>();
+/** creating holds the in-flight session build per tab (rapid re-entry guard). */
+const creating = new Map<string, Promise<void>>();
 const cursor = ref<{ line: number; column: number }>({ line: 1, column: 1 });
 
 const readyTabs = computed(() =>
@@ -53,9 +64,52 @@ const readyTabs = computed(() =>
 /** activeTab is the store's focused tab (convenience for the template). */
 const activeTab = computed(() => editor.activeTab);
 
+// A dirty buffer must never be dropped by a route change, a server switch or
+// a team switch without an explicit confirmation (beforeunload still covers a
+// browser close/reload).
+const leaveOpen = ref(false);
+let leaveResolve: ((_leave: boolean) => void) | null = null;
+
+/** confirmDiscard asks the user before discarding dirty buffers. */
+function confirmDiscard(): Promise<boolean> {
+  if (!editor.hasDirty) {
+    return Promise.resolve(true);
+  }
+  return new Promise<boolean>((resolve) => {
+    leaveResolve = resolve;
+    leaveOpen.value = true;
+  });
+}
+
+/** resolveLeave settles the pending confirmation. */
+function resolveLeave(leave: boolean): void {
+  leaveOpen.value = false;
+  leaveResolve?.(leave);
+  leaveResolve = null;
+}
+
+onBeforeRouteLeave(async () => confirmDiscard());
+onBeforeRouteUpdate(async () => confirmDiscard());
+
 watch(
   () => props.serverId,
   () => editor.reset(),
+);
+
+// A team switch changes the caller's role and the server's visibility; ask
+// before dropping dirty buffers, and revert the selection if the user stays.
+watch(
+  () => teams.activeTeamId,
+  async (next, prev) => {
+    if (prev === undefined || next === prev) {
+      return;
+    }
+    if (!(await confirmDiscard())) {
+      teams.selectTeam(prev);
+      return;
+    }
+    editor.reset();
+  },
 );
 
 // A tab switch, or a tab finishing its load, creates the CodeMirror instance
@@ -69,8 +123,9 @@ watch(
   { flush: "post" },
 );
 
-// Drop sessions whose tab was closed, and pull external doc changes (a reload)
-// back into a live instance.
+// Drop sessions whose tab was closed, pull external doc changes (a reload)
+// back into a live instance, and re-apply the grammar after a rename/save-as
+// retargets a tab.
 watch(
   () => editor.tabs,
   () => {
@@ -79,12 +134,21 @@ watch(
       if (!live.has(id)) {
         session.destroy();
         sessions.delete(id);
+        sessionLanguages.delete(id);
+        sessionHosts.delete(id);
       }
     }
     for (const tab of editor.tabs) {
       const session = sessions.get(tab.id);
-      if (session && tab.status === "ready" && session.getDoc() !== tab.doc) {
+      if (!session || tab.status !== "ready") {
+        continue;
+      }
+      if (session.getDoc() !== tab.doc) {
         session.setDoc(tab.doc);
+      }
+      if (sessionLanguages.get(tab.id) !== tab.language) {
+        session.setLanguage(tab.language);
+        sessionLanguages.set(tab.id, tab.language);
       }
     }
   },
@@ -116,17 +180,31 @@ async function ensureSession(): Promise<void> {
   if (!tab || tab.status !== "ready") {
     return;
   }
-  const existing = sessions.get(tab.id);
-  if (existing) {
-    existing.focus();
-    return;
-  }
   const host = hosts.get(tab.id);
   if (!host) {
     return;
   }
+  const existing = sessions.get(tab.id);
+  if (existing) {
+    // The host stays mounted across a status switch now, but if it was ever
+    // replaced (unmount/remount) the session is bound to a detached node and
+    // must be rebuilt against the live one.
+    if (sessionHosts.get(tab.id) === host) {
+      existing.focus();
+      return;
+    }
+    existing.destroy();
+    sessions.delete(tab.id);
+    sessionLanguages.delete(tab.id);
+    sessionHosts.delete(tab.id);
+  }
+  const pending = creating.get(tab.id);
+  if (pending) {
+    await pending;
+    return;
+  }
   const tabId = tab.id;
-  const session = await createEditorSession({
+  const build = createEditorSession({
     parent: host,
     doc: tab.doc,
     language: tab.language,
@@ -139,22 +217,39 @@ async function ensureSession(): Promise<void> {
       }
     },
     onSave: () => void saveTab(tabId),
+  }).then((session) => {
+    // A rapid tab switch while the chunk loaded: keep the instance only if the
+    // tab is still open.
+    if (editor.tabs.some((item) => item.id === tabId)) {
+      sessions.set(tabId, session);
+      sessionHosts.set(tabId, host);
+      sessionLanguages.set(tabId, tab.language);
+      session.requestMeasure();
+      session.focus();
+    } else {
+      session.destroy();
+    }
   });
-  // A rapid tab switch while the chunk loaded: keep the instance only if the
-  // tab is still open.
-  if (editor.tabs.some((item) => item.id === tabId)) {
-    sessions.set(tabId, session);
-    session.requestMeasure();
-    session.focus();
-  } else {
-    session.destroy();
+  creating.set(tabId, build);
+  try {
+    await build;
+  } finally {
+    creating.delete(tabId);
   }
 }
 
 /** saveTab saves one tab and reports the outcome. */
 async function saveTab(id: string): Promise<void> {
   const tab = editor.tabs.find((item) => item.id === id);
-  if (!tab || tab.saving) {
+  // Ctrl/Cmd+S is a no-op on a read-only or clean tab: never rewrite a clean
+  // file (which would normalise it) and never fire a write the server refuses.
+  if (
+    !tab ||
+    tab.saving ||
+    tab.status !== "ready" ||
+    !files.canWrite ||
+    !editor.isDirty(tab)
+  ) {
     return;
   }
   const outcome = await editor.save(id, teams.activeTeamId);
@@ -198,6 +293,39 @@ function toggleWrap(): void {
   editor.setWrap(!editor.wrap);
 }
 
+/** focusTab activates one tab and moves DOM focus onto its tab button. */
+function focusTab(index: number): void {
+  const tab = editor.tabs[index];
+  if (!tab) {
+    return;
+  }
+  editor.activate(tab.id);
+  void nextTick(() => {
+    document.getElementById(`ed-tab-${tab.id}`)?.focus();
+  });
+}
+
+/** onTabKeydown implements the tablist roving focus (Left/Right/Home/End). */
+function onTabKeydown(event: KeyboardEvent, index: number): void {
+  const count = editor.tabs.length;
+  if (count === 0) {
+    return;
+  }
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    focusTab((index + 1) % count);
+  } else if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    focusTab((index - 1 + count) % count);
+  } else if (event.key === "Home") {
+    event.preventDefault();
+    focusTab(0);
+  } else if (event.key === "End") {
+    event.preventDefault();
+    focusTab(count - 1);
+  }
+}
+
 /** onBeforeUnload guards a reload/close while a document is dirty. */
 function onBeforeUnload(event: BeforeUnloadEvent): void {
   if (!editor.hasDirty) {
@@ -216,6 +344,8 @@ onBeforeUnmount(() => {
     session.destroy();
   }
   sessions.clear();
+  sessionLanguages.clear();
+  sessionHosts.clear();
   editor.reset();
 });
 </script>
@@ -232,18 +362,22 @@ onBeforeUnmount(() => {
     <template v-if="editor.tabs.length > 0">
       <div class="ed-tabs" role="tablist" :aria-label="t('files.editor.heading')">
         <div
-          v-for="tab in editor.tabs"
+          v-for="(tab, index) in editor.tabs"
           :key="tab.id"
           class="ed-tab"
           :class="{ 'is-active': tab.id === editor.activeId, 'is-dirty': editor.isDirty(tab) }"
-          role="tab"
-          :aria-selected="tab.id === editor.activeId"
         >
           <button
             type="button"
             class="ed-tab-name"
+            role="tab"
+            :id="'ed-tab-' + tab.id"
+            :aria-selected="tab.id === editor.activeId"
+            :aria-controls="'ed-panel-' + tab.id"
+            :tabindex="tab.id === editor.activeId ? 0 : -1"
             :title="tab.path"
             @click="editor.activate(tab.id)"
+            @keydown="onTabKeydown($event, index)"
           >
             <span v-if="editor.isDirty(tab)" class="ed-dot" aria-hidden="true" />
             {{ tab.name }}
@@ -277,64 +411,78 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="activeTab" class="ed-body">
-        <template v-if="activeTab.status === 'ready'">
-          <div class="ed-toolbar">
-            <NButton
-              size="tiny"
-              secondary
-              :type="editor.wrap ? 'primary' : 'default'"
-              :title="editor.wrap ? t('files.editor.unwrap') : t('files.editor.wrap')"
-              :aria-pressed="editor.wrap"
-              @click="toggleWrap"
-            >
-              <template #icon>
-                <WrapText :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.wrap") }}
-            </NButton>
-            <NButton size="tiny" secondary :title="t('files.editor.search')" @click="openSearch">
-              <template #icon>
-                <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.search") }}
-            </NButton>
-            <NButton size="tiny" secondary :title="t('files.editor.goToLine')" @click="openGoToLine">
-              <template #icon>
-                <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ t("files.editor.goToLine") }}
-            </NButton>
-            <span class="grow" />
-            <NButton
-              v-if="files.canWrite"
-              size="small"
-              type="primary"
-              :loading="activeTab.saving"
-              :disabled="!editor.isDirty(activeTab)"
-              @click="() => void saveTab(activeTab!.id)"
-            >
-              <template #icon>
-                <Save :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              {{ activeTab.saving ? t("files.editor.saving") : t("files.editor.save") }}
-            </NButton>
-          </div>
+        <div v-if="activeTab.status === 'ready'" class="ed-toolbar">
+          <NButton
+            size="tiny"
+            secondary
+            :type="editor.wrap ? 'primary' : 'default'"
+            :title="editor.wrap ? t('files.editor.unwrap') : t('files.editor.wrap')"
+            :aria-pressed="editor.wrap"
+            @click="toggleWrap"
+          >
+            <template #icon>
+              <WrapText :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ t("files.editor.wrap") }}
+          </NButton>
+          <NButton size="tiny" secondary :title="t('files.editor.search')" @click="openSearch">
+            <template #icon>
+              <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ t("files.editor.search") }}
+          </NButton>
+          <NButton size="tiny" secondary :title="t('files.editor.goToLine')" @click="openGoToLine">
+            <template #icon>
+              <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ t("files.editor.goToLine") }}
+          </NButton>
+          <span class="grow" />
+          <NButton
+            v-if="files.canWrite"
+            size="small"
+            type="primary"
+            :loading="activeTab.saving"
+            :disabled="!editor.isDirty(activeTab)"
+            @click="() => void saveTab(activeTab!.id)"
+          >
+            <template #icon>
+              <Save :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            {{ activeTab.saving ? t("files.editor.saving") : t("files.editor.save") }}
+          </NButton>
+        </div>
 
-          <div
-            v-for="tab in readyTabs"
-            :key="tab.id"
-            v-show="tab.id === editor.activeId"
-            :ref="(el) => setHost(tab.id, el)"
-            class="ed-host"
-            :aria-label="tab.name"
-          />
-        </template>
+        <!-- One host per ready tab, kept mounted across a status switch (a
+             loading/large/binary/error tab must not detach a live session). -->
+        <div
+          v-for="tab in readyTabs"
+          :key="tab.id"
+          v-show="tab.id === editor.activeId"
+          :id="'ed-panel-' + tab.id"
+          :ref="(el) => setHost(tab.id, el)"
+          class="ed-host"
+          role="tabpanel"
+          :aria-labelledby="'ed-tab-' + tab.id"
+        />
 
-        <div v-else-if="activeTab.status === 'loading'" class="ed-state">
+        <div
+          v-if="activeTab.status === 'loading'"
+          class="ed-state"
+          role="tabpanel"
+          :id="'ed-panel-' + activeTab.id"
+          :aria-labelledby="'ed-tab-' + activeTab.id"
+        >
           <p class="small muted">{{ t("files.editor.loading", { name: activeTab.name }) }}</p>
         </div>
 
-        <div v-else-if="activeTab.status === 'large'" class="ed-state">
+        <div
+          v-else-if="activeTab.status === 'large'"
+          class="ed-state"
+          role="tabpanel"
+          :id="'ed-panel-' + activeTab.id"
+          :aria-labelledby="'ed-tab-' + activeTab.id"
+        >
           <NEmpty :description="t('files.editor.largeTitle')">
             <template #extra>
               <p class="small muted">
@@ -347,7 +495,13 @@ onBeforeUnmount(() => {
           </NEmpty>
         </div>
 
-        <div v-else-if="activeTab.status === 'binary'" class="ed-state">
+        <div
+          v-else-if="activeTab.status === 'binary'"
+          class="ed-state"
+          role="tabpanel"
+          :id="'ed-panel-' + activeTab.id"
+          :aria-labelledby="'ed-tab-' + activeTab.id"
+        >
           <NEmpty :description="t('files.editor.binaryTitle')">
             <template #extra>
               <p class="small muted">
@@ -360,7 +514,32 @@ onBeforeUnmount(() => {
           </NEmpty>
         </div>
 
-        <div v-else class="ed-state">
+        <div
+          v-else-if="activeTab.status === 'mixed'"
+          class="ed-state"
+          role="tabpanel"
+          :id="'ed-panel-' + activeTab.id"
+          :aria-labelledby="'ed-tab-' + activeTab.id"
+        >
+          <NEmpty :description="t('files.editor.mixedTitle')">
+            <template #extra>
+              <p class="small muted">
+                {{ t("files.editor.mixedHint", { name: activeTab.name }) }}
+              </p>
+              <NButton size="small" secondary @click="downloadActive">
+                {{ t("files.editor.download", { name: activeTab.name }) }}
+              </NButton>
+            </template>
+          </NEmpty>
+        </div>
+
+        <div
+          v-else
+          class="ed-state"
+          role="tabpanel"
+          :id="'ed-panel-' + activeTab.id"
+          :aria-labelledby="'ed-tab-' + activeTab.id"
+        >
           <NEmpty :description="t('files.editor.errorTitle', { name: activeTab.name })">
             <template #extra>
               <p class="small muted">{{ activeTab.error }}</p>
@@ -388,6 +567,27 @@ onBeforeUnmount(() => {
         <p class="small muted">{{ t("files.editor.emptyHint") }}</p>
       </template>
     </NEmpty>
+
+    <NModal
+      class="app-modal"
+      :show="leaveOpen"
+      preset="card"
+      style="width: 440px; max-width: 94vw"
+      :title="t('files.editor.leaveTitle')"
+      :mask-closable="false"
+      :close-on-esc="false"
+      @update:show="(value: boolean) => { if (!value) resolveLeave(false); }"
+    >
+      <p class="small">{{ t("files.editor.leaveMessage") }}</p>
+      <template #footer>
+        <div class="dialog-foot">
+          <NButton @click="resolveLeave(false)">{{ t("files.editor.leaveStay") }}</NButton>
+          <NButton type="error" @click="resolveLeave(true)">
+            {{ t("files.editor.leaveDiscard") }}
+          </NButton>
+        </div>
+      </template>
+    </NModal>
 
     <EditorConflictDialog />
     <EditorSaveAsDialog />
@@ -519,6 +719,12 @@ onBeforeUnmount(() => {
 
 .mono {
   font-family: var(--font-mono);
+}
+
+.dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 .small {

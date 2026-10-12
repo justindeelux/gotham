@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { NButton, NModal, useMessage } from "naive-ui";
-import { computed } from "vue";
+import { NButton, NModal, NPopconfirm, useMessage } from "naive-ui";
+import { computed, nextTick, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { useEditorStore } from "@/features/files/stores/editor";
@@ -13,43 +13,61 @@ const teams = useTeamsStore();
 
 /** show follows the store's pending conflict prompt. */
 const show = computed<boolean>(() => editor.conflictTab !== null);
+const tab = computed(() => editor.conflictTab);
 const name = computed<string>(() => editor.conflictTab?.name ?? "");
+const baseEtag = computed<string>(() => editor.conflictTab?.etag ?? "");
+const dirty = computed<boolean>(() => {
+  const current = editor.conflictTab;
+  return current !== null && editor.isDirty(current);
+});
+
+// NModal preset="card" hardcodes role="dialog"; a 409 that can overwrite the
+// server's copy is an alertdialog, so the role is corrected on the real card.
+watch(show, async (open) => {
+  if (!open) {
+    return;
+  }
+  await nextTick();
+  document
+    .querySelector<HTMLElement>(".files-conflict-modal")
+    ?.setAttribute("role", "alertdialog");
+});
 
 /** reload discards local edits and re-reads the server's version. */
 async function reload(): Promise<void> {
-  const tab = editor.conflictTab;
-  if (!tab) {
+  const current = editor.conflictTab;
+  if (!current) {
     return;
   }
-  await editor.reload(tab.id, teams.activeTeamId);
+  await editor.reload(current.id, teams.activeTeamId);
 }
 
 /** overwrite force-saves the buffer over the concurrent change. */
 async function overwrite(): Promise<void> {
-  const tab = editor.conflictTab;
-  if (!tab) {
+  const current = editor.conflictTab;
+  if (!current) {
     return;
   }
-  const outcome = await editor.overwrite(tab.id, teams.activeTeamId);
+  const outcome = await editor.overwrite(current.id, teams.activeTeamId);
   if (outcome === "saved") {
-    message.success(String(t("files.editor.saved", { name: tab.name })));
+    message.success(String(t("files.editor.saved", { name: current.name })));
   } else if (outcome === "error") {
-    message.error(tab.error || String(t("files.editor.saveFailed", { name: tab.name })));
+    message.error(current.error || String(t("files.editor.saveFailed", { name: current.name })));
   }
 }
 
 /** saveAs opens the save-as-copy dialog for the conflicting tab. */
 function saveAs(): void {
-  const tab = editor.conflictTab;
-  if (tab) {
-    editor.openSaveAs(tab.id);
+  const current = editor.conflictTab;
+  if (current) {
+    editor.openSaveAs(current.id);
   }
 }
 </script>
 
 <template>
   <NModal
-    class="app-modal"
+    class="app-modal files-conflict-modal"
     :show="show"
     preset="card"
     style="width: 480px; max-width: 94vw"
@@ -57,17 +75,41 @@ function saveAs(): void {
     @update:show="(value: boolean) => { if (!value) editor.dismissConflict(); }"
   >
     <p class="small">{{ t("files.editor.conflictMessage", { name }) }}</p>
+    <dl class="conflict-details">
+      <dt>{{ t("files.editor.conflictPath") }}</dt>
+      <dd class="mono">{{ tab?.path }}</dd>
+      <dt>{{ t("files.editor.conflictBase") }}</dt>
+      <dd class="mono">{{ baseEtag }}</dd>
+    </dl>
     <template #footer>
       <div class="dialog-foot">
-        <NButton @click="() => void reload()">
+        <NPopconfirm
+          v-if="dirty"
+          :positive-text="t('files.editor.conflictReloadConfirm')"
+          @positive-click="() => void reload()"
+        >
+          <template #trigger>
+            <NButton>{{ t("files.editor.conflictReload") }}</NButton>
+          </template>
+          {{ t("files.editor.conflictReloadWarning") }}
+        </NPopconfirm>
+        <NButton v-else @click="() => void reload()">
           {{ t("files.editor.conflictReload") }}
         </NButton>
         <NButton @click="saveAs">
           {{ t("files.editor.conflictSaveAs") }}
         </NButton>
-        <NButton type="primary" :loading="editor.conflictTab?.saving" @click="() => void overwrite()">
-          {{ t("files.editor.conflictOverwrite") }}
-        </NButton>
+        <NPopconfirm
+          :positive-text="t('files.editor.conflictOverwriteConfirm')"
+          @positive-click="() => void overwrite()"
+        >
+          <template #trigger>
+            <NButton type="error" :loading="tab?.saving">
+              {{ t("files.editor.conflictOverwrite") }}
+            </NButton>
+          </template>
+          {{ t("files.editor.conflictOverwriteWarning") }}
+        </NPopconfirm>
       </div>
     </template>
   </NModal>
@@ -76,6 +118,23 @@ function saveAs(): void {
 <style scoped>
 .small {
   margin: 0;
+}
+
+.conflict-details {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px var(--space-3);
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+}
+
+.conflict-details dt {
+  color: var(--muted);
+}
+
+.conflict-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .dialog-foot {

@@ -15,29 +15,42 @@ export interface DocShape {
   doc: string;
   eol: EditorEol;
   bom: boolean;
+  /**
+   * faithful is false when the body mixes CRLF with lone LF, or contains a
+   * lone CR: re-serialising such a body with a single `eol` cannot reproduce
+   * the original bytes. The store opens those files read-only instead of
+   * silently normalising them on the next save.
+   */
+  faithful: boolean;
 }
 
 const BOM = "\uFEFF";
 
 /**
  * splitDoc decodes one text body into editor text plus the line-ending and
- * BOM metadata needed to reproduce the original bytes on save. A document that
- * mixes CRLF and LF is normalised to the first terminator seen (the mockup's
- * files are consistent); a lone CR is treated as LF.
+ * BOM metadata needed to reproduce the original bytes on save. A body whose
+ * terminators are all one kind (LF, or CRLF) round-trips byte-identically;
+ * a mixed body (CRLF + lone LF, or any lone CR) is flagged `faithful: false`
+ * so it is never silently rewritten.
  */
 export function splitDoc(content: string): DocShape {
   const bom = content.startsWith(BOM);
   const body = bom ? content.slice(BOM.length) : content;
-  const eol: EditorEol = body.includes("\r\n") ? "\r\n" : "\n";
+  const crlf = (body.match(/\r\n/g) ?? []).length;
+  const loneCr = (body.match(/\r(?!\n)/g) ?? []).length;
+  const loneLf = (body.match(/(?<!\r)\n/g) ?? []).length;
+  const faithful = loneCr === 0 && !(crlf > 0 && loneLf > 0);
+  const eol: EditorEol = crlf > 0 ? "\r\n" : "\n";
   const doc = body.replace(/\r\n?|\n/g, "\n");
-  return { doc, eol, bom };
+  return { doc, eol, bom, faithful };
 }
 
 /**
  * serializeDoc re-encodes editor text with its original line endings and BOM,
- * so a load followed by an unchanged save writes the same bytes.
+ * so a load followed by an unchanged save writes the same bytes. It takes the
+ * round-trippable subset of {@link DocShape} (a mixed-EOL body is never saved).
  */
-export function serializeDoc(shape: DocShape): string {
+export function serializeDoc(shape: Pick<DocShape, "doc" | "eol" | "bom">): string {
   const body = shape.doc.replace(/\n/g, shape.eol);
   return shape.bom ? BOM + body : body;
 }

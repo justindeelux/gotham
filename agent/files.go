@@ -201,14 +201,24 @@ func fileProtectedPaths(cfg Config) []protectedPath {
 		// may be browsed.
 		{path: defaultTraefikDir, exclusive: true},
 	}
-	// The agent state, certificate and binary locations come from config, so a
-	// non-default install is protected too. They are relative-safe: an entry
-	// that cannot be made absolute is skipped rather than widened.
+	// The agent's secret and state locations come from config, so a non-default
+	// install is protected too. The cert dir is protected non-exclusively, like
+	// the state root above: a root that is or contains it is refused, but the
+	// default compose root, a child of it, stays browsable (the shipped unit
+	// sets GOTHAM_AGENT_CERT_DIR=/var/lib/gotham-agent, the very dir the
+	// default compose root lives in). The certificate and key files directly
+	// under it are protected individually, so a root that would otherwise
+	// contain one is still refused. Entries are relative-safe: one that cannot
+	// be made absolute is skipped rather than widened.
 	for _, p := range []struct {
 		path      string
 		exclusive bool
 	}{
-		{cfg.CertDir, true},
+		{cfg.CertDir, false},
+		{secretFilePath(cfg.CertDir, certFileName), false},
+		{secretFilePath(cfg.CertDir, keyFileName), false},
+		{cfg.KeyFile, false},
+		{cfg.CA, false},
 		{cfg.BinaryPath, false},
 		{cfg.UpdateScript, false},
 		{cfg.UpdateStatusPath, false},
@@ -227,6 +237,17 @@ func fileProtectedPaths(cfg Config) []protectedPath {
 		paths = append(paths, protectedPath{path: abs, exclusive: p.exclusive})
 	}
 	return paths
+}
+
+// secretFilePath returns the path of one of the agent's secret files directly
+// under certDir, or "" when certDir is unset. The guard matters: filepath.Join
+// would turn an empty cert dir into a relative "agent.key" and, once made
+// absolute, silently protect an unrelated path under the working directory.
+func secretFilePath(certDir, name string) string {
+	if certDir == "" {
+		return ""
+	}
+	return filepath.Join(certDir, name)
 }
 
 // validateFileRoot returns the canonical absolute path of a browsable root and

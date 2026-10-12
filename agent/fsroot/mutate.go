@@ -1,6 +1,7 @@
 package fsroot
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -10,11 +11,26 @@ import (
 	"path"
 	"strings"
 	"syscall"
+	"time"
 )
+
+// TempPrefix is the base-name prefix of every staging file fsroot creates. It
+// is exported so a caller can sweep leaked staging files it owns (the agent's
+// file service does this at startup and periodically).
+const TempPrefix = ".gotham-tmp-"
 
 // tempNameTries bounds how many random temporary names CreateTemp tries before
 // giving up; a collision this deep would mean something is very wrong.
 const tempNameTries = 100
+
+// maxResolveLinks bounds how many symbolic links Resolve follows before it
+// gives up, the same ceiling a kernel ELOOP enforces.
+const maxResolveLinks = 40
+
+// maxCopyDepth bounds how deep a recursive copy may descend. A healthy tree is
+// far shallower; the bound turns a symlink-fuelled self-copy into an explicit
+// error instead of unbounded recursion. It is a variable so a test can lower it.
+var maxCopyDepth = 1024
 
 // CreateTemp creates a uniquely named temporary regular file inside dir (a
 // directory relative to the root) and returns it together with its
@@ -51,7 +67,7 @@ func randomName(dir string) (string, error) {
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return "", fmt.Errorf("fsroot: random temp name: %w", err)
 	}
-	return path.Join(dir, ".gotham-tmp-"+hex.EncodeToString(suffix[:])), nil
+	return path.Join(dir, TempPrefix+hex.EncodeToString(suffix[:])), nil
 }
 
 // OpenWrite opens an existing regular file for writing without truncating it,
@@ -153,6 +169,104 @@ func (r *Root) Rename(src, dst string) error {
 	return nil
 }
 
+// RenameExclusive moves src to dst within the root and refuses when dst already
+// exists, even against a concurrent creator: it is the non-replacing rename the
+// overwrite=false policy needs. On Linux it uses renameat2(RENAME_NOREPLACE);
+// elsewhere it falls back to a hard link then unlink for a non-directory, or to
+// a stat-checked rename for a directory (no portable exclusive directory rename
+// exists). A cross-device move surfaces the wrapped EXDEV for the caller's
+// guarded copy fallback.
+func (r *Root) RenameExclusive(src, dst string) error {
+	if err := r.requireWritable(); err != nil {
+		return err
+	}
+	s, err := cleanRel(src)
+	if err != nil {
+		return err
+	}
+	d, err := cleanRel(dst)
+	if err != nil {
+		return err
+	}
+	if s == "." || d == "." {
+		return fmt.Errorf("%w: cannot rename the root", ErrInvalid)
+	}
+	oldDir, err := r.root.OpenRoot(path.Dir(s))
+	if err != nil {
+		return mapError("rename", err)
+	}
+	defer func() { _ = oldDir.Close() }()
+	newDir, err := r.root.OpenRoot(path.Dir(d))
+	if err != nil {
+		return mapError("rename", err)
+	}
+	defer func() { _ = newDir.Close() }()
+	oldFd, err := openDirFd(oldDir)
+	if err != nil {
+		return mapError("rename", err)
+	}
+	defer func() { _ = oldFd.Close() }()
+	newFd, err := openDirFd(newDir)
+	if err != nil {
+		return mapError("rename", err)
+	}
+	defer func() { _ = newFd.Close() }()
+
+	err = renameNoReplace(int(oldFd.Fd()), path.Base(s), int(newFd.Fd()), path.Base(d))
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, syscall.ENOSYS), errors.Is(err, syscall.EINVAL),
+		errors.Is(err, syscall.EOPNOTSUPP), errors.Is(err, syscall.ENOTSUP):
+		return r.renameExclusiveFallback(s, d)
+	default:
+		return mapError("rename", err)
+	}
+}
+
+// openDirFd returns a descriptor for a directory root, so a confined
+// renameat2 can run relative to it.
+func openDirFd(dir *os.Root) (*os.File, error) {
+	return dir.OpenFile(".", os.O_RDONLY|syscall.O_DIRECTORY, 0)
+}
+
+// renameExclusiveFallback implements a non-replacing rename without
+// renameat2: a hard link then unlink for a non-directory, and a stat-checked
+// rename for a directory. The directory case keeps the old stat-then-rename
+// window on platforms without renameat2, which the agent does not target for
+// writes.
+func (r *Root) renameExclusiveFallback(s, d string) error {
+	entry, err := r.Stat(s)
+	if err != nil {
+		return err
+	}
+	if entry.Kind == KindDirectory {
+		if _, err := r.Stat(d); err == nil {
+			return fmt.Errorf("%w: %s", ErrExists, d)
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		return r.Rename(s, d)
+	}
+	if err := r.root.Link(s, d); err != nil {
+		if errors.Is(err, syscall.EXDEV) {
+			return mapError("rename", err)
+		}
+		if errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.EPERM) {
+			// A filesystem without hard links: fall back to a stat-checked
+			// rename so such a filesystem can still create exclusively.
+			if _, err := r.Stat(d); err == nil {
+				return fmt.Errorf("%w: %s", ErrExists, d)
+			} else if !errors.Is(err, ErrNotFound) {
+				return err
+			}
+			return r.Rename(s, d)
+		}
+		return mapError("link", err)
+	}
+	return r.Remove(s)
+}
+
 // Link creates newname as a hard link to oldname, failing with ErrExists when
 // newname already occupies the name. It is the no-replace primitive an
 // exclusive create uses, so a file that appears after the caller checked is
@@ -214,9 +328,10 @@ func (r *Root) Remove(rel string) error {
 
 // RemoveTree deletes rel and everything under it. onEntry, when non-nil, is
 // called with each removed entry's root-relative path as it is removed,
-// deepest first, so a caller can stream progress; a symlink is removed as a
-// link and never followed into its target.
-func (r *Root) RemoveTree(rel string, onEntry func(string, Entry) error) error {
+// deepest first, so a caller can stream progress. The walk checks ctx before
+// every entry so a cancelled Delete stops promptly, and a symlink is removed as
+// a link and never followed into its target.
+func (r *Root) RemoveTree(ctx context.Context, rel string, onEntry func(string, Entry) error) error {
 	if err := r.requireWritable(); err != nil {
 		return err
 	}
@@ -227,11 +342,14 @@ func (r *Root) RemoveTree(rel string, onEntry func(string, Entry) error) error {
 	if p == "." {
 		return fmt.Errorf("%w: cannot remove the root", ErrInvalid)
 	}
-	return r.removeTree(p, onEntry)
+	return r.removeTree(ctx, p, onEntry)
 }
 
 // removeTree is the recursive body of RemoveTree.
-func (r *Root) removeTree(p string, onEntry func(string, Entry) error) error {
+func (r *Root) removeTree(ctx context.Context, p string, onEntry func(string, Entry) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	entry, err := r.Stat(p)
 	if err != nil {
 		return err
@@ -242,7 +360,10 @@ func (r *Root) removeTree(p string, onEntry func(string, Entry) error) error {
 			return err
 		}
 		for _, name := range names {
-			if err := r.removeTree(path.Join(p, name), onEntry); err != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := r.removeTree(ctx, path.Join(p, name), onEntry); err != nil {
 				return err
 			}
 		}
@@ -258,13 +379,64 @@ func (r *Root) removeTree(p string, onEntry func(string, Entry) error) error {
 	return nil
 }
 
+// RemoveStaleTemps deletes every entry under the root whose base name starts
+// with prefix and whose modification time is before cutoff, walking each
+// directory without following symbolic links. It returns how many entries it
+// removed and joins the errors of entries it could not remove, but keeps
+// walking so one stale file does not strand the rest. The agent uses it to
+// reclaim staging files a crashed upload left behind.
+func (r *Root) RemoveStaleTemps(prefix string, cutoff time.Time) (int, error) {
+	if err := r.requireWritable(); err != nil {
+		return 0, err
+	}
+	removed, errs := r.removeStaleTemps(".", prefix, cutoff)
+	return removed, errors.Join(errs...)
+}
+
+// removeStaleTemps is the recursive body of RemoveStaleTemps.
+func (r *Root) removeStaleTemps(dir, prefix string, cutoff time.Time) (int, []error) {
+	names, err := r.dirNames(dir)
+	if err != nil {
+		return 0, []error{err}
+	}
+	removed := 0
+	var errs []error
+	for _, name := range names {
+		rel := path.Join(dir, name)
+		entry, err := r.Stat(rel)
+		if err != nil {
+			if !errors.Is(err, ErrNotFound) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if entry.Kind == KindDirectory {
+			n, subErrs := r.removeStaleTemps(rel, prefix, cutoff)
+			removed += n
+			errs = append(errs, subErrs...)
+			continue
+		}
+		if !strings.HasPrefix(name, prefix) || !entry.Modified.Before(cutoff) {
+			continue
+		}
+		if err := r.root.Remove(rel); err != nil {
+			errs = append(errs, mapError("remove", err))
+			continue
+		}
+		removed++
+	}
+	return removed, errs
+}
+
 // Copy copies src to dst within the root. A regular file is copied byte for
 // byte, a directory recursively and a symlink is recreated with its original
 // target text. An existing destination is refused unless overwrite is set;
-// overwriting a directory with a file (or the reverse) is always refused.
-// onEntry, when non-nil, is called with each created entry's root-relative
-// path as it completes.
-func (r *Root) Copy(src, dst string, overwrite bool, onEntry func(string, Entry) error) error {
+// overwriting a directory with a file (or the reverse) is always refused. ctx
+// is checked before every entry and between copy chunks, so a cancelled Copy
+// aborts promptly and its partial output file is removed. onEntry, when
+// non-nil, is called with each created entry's root-relative path as it
+// completes.
+func (r *Root) Copy(ctx context.Context, src, dst string, overwrite bool, onEntry func(string, Entry) error) error {
 	if err := r.requireWritable(); err != nil {
 		return err
 	}
@@ -282,11 +454,51 @@ func (r *Root) Copy(src, dst string, overwrite bool, onEntry func(string, Entry)
 	if s == d || withinRel(s, d) {
 		return fmt.Errorf("%w: cannot copy %q into itself", ErrInvalid, src)
 	}
-	return r.copyEntry(s, d, overwrite, onEntry)
+	if err := r.refuseCopyIntoItself(s, d); err != nil {
+		return err
+	}
+	return r.copyEntry(ctx, s, d, overwrite, onEntry, 0)
 }
 
-// copyEntry copies one entry, recursing into a directory.
-func (r *Root) copyEntry(src, dst string, overwrite bool, onEntry func(string, Entry) error) error {
+// refuseCopyIntoItself resolves the destination's parent inside the root and
+// refuses the copy when it resolves into the source directory. The lexical
+// check in Copy cannot see through a symlinked destination parent — for example
+// a link that points back at the source — which would otherwise recurse without
+// bound and corrupt the source.
+func (r *Root) refuseCopyIntoItself(s, d string) error {
+	entry, err := r.Stat(s)
+	if err != nil {
+		return err
+	}
+	if entry.Kind != KindDirectory {
+		return nil
+	}
+	resolvedSrc, err := r.Resolve(s)
+	if err != nil {
+		return err
+	}
+	resolvedParent, err := r.Resolve(path.Dir(d))
+	if err != nil {
+		// The destination parent does not exist yet, so the copy cannot recurse
+		// into the source: creating it would fail first.
+		return nil
+	}
+	if resolvedParent == resolvedSrc || withinRel(resolvedSrc, resolvedParent) {
+		return fmt.Errorf("%w: cannot copy %q into itself", ErrInvalid, s)
+	}
+	return nil
+}
+
+// copyEntry copies one entry, recursing into a directory. depth bounds the
+// recursion so a pathological tree is an explicit error, not unbounded
+// recursion.
+func (r *Root) copyEntry(ctx context.Context, src, dst string, overwrite bool, onEntry func(string, Entry) error, depth int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if depth > maxCopyDepth {
+		return fmt.Errorf("%w: copy nesting exceeds %d levels", ErrTooLarge, maxCopyDepth)
+	}
 	entry, err := r.Stat(src)
 	if err != nil {
 		return err
@@ -315,7 +527,10 @@ func (r *Root) copyEntry(src, dst string, overwrite bool, onEntry func(string, E
 			return err
 		}
 		for _, name := range names {
-			if err := r.copyEntry(path.Join(src, name), path.Join(dst, name), overwrite, onEntry); err != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := r.copyEntry(ctx, path.Join(src, name), path.Join(dst, name), overwrite, onEntry, depth+1); err != nil {
 				return err
 			}
 		}
@@ -330,7 +545,7 @@ func (r *Root) copyEntry(src, dst string, overwrite bool, onEntry func(string, E
 		if err := r.prepareCopyTarget(dst, dstExists, dstEntry); err != nil {
 			return err
 		}
-		if err := r.copyFile(src, dst, entry.Mode.Perm()); err != nil {
+		if err := r.copyFile(ctx, src, dst, entry.Mode.Perm()); err != nil {
 			return err
 		}
 	default:
@@ -362,8 +577,10 @@ func (r *Root) prepareCopyTarget(dst string, dstExists bool, dstEntry Entry) err
 }
 
 // copyFile streams one regular file to a new destination, creating it
-// exclusively and setting the source's mode only after the bytes are in.
-func (r *Root) copyFile(src, dst string, mode os.FileMode) error {
+// exclusively and setting the source's mode only after the bytes are in. ctx is
+// checked between chunks; on any failure (including cancellation) the partial
+// destination is removed so a cancelled copy leaves no temp behind.
+func (r *Root) copyFile(ctx context.Context, src, dst string, mode os.FileMode) error {
 	in, _, err := r.OpenRegular(src)
 	if err != nil {
 		return err
@@ -374,7 +591,7 @@ func (r *Root) copyFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return mapError("create", err)
 	}
-	if _, err := io.Copy(out, in); err != nil {
+	if err := copyWithContext(ctx, out, in); err != nil {
 		_ = out.Close()
 		_ = r.root.Remove(dst)
 		return mapError("copy", err)
@@ -392,6 +609,29 @@ func (r *Root) copyFile(src, dst string, mode os.FileMode) error {
 		return mapError("chmod", err)
 	}
 	return nil
+}
+
+// copyWithContext copies src to dst, checking ctx between chunks so a large
+// file stops promptly when the caller cancels.
+func copyWithContext(ctx context.Context, dst io.Writer, src io.Reader) error {
+	buffer := make([]byte, 256<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, readErr := src.Read(buffer)
+		if n > 0 {
+			if _, writeErr := dst.Write(buffer[:n]); writeErr != nil {
+				return writeErr
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			return readErr
+		}
+	}
 }
 
 // dirNames returns every name in a directory. It is used only by copy and

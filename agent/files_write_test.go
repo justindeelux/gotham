@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -17,6 +20,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/justindeelux/gotham/agent/fsroot"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -49,6 +53,7 @@ func (s *scriptedWriteStream) Context() context.Context { return context.Backgro
 type collectProgressStream struct {
 	grpc.ServerStream
 	sent []*agentv1.Progress
+	ctx  context.Context
 }
 
 func (s *collectProgressStream) Send(p *agentv1.Progress) error {
@@ -56,7 +61,12 @@ func (s *collectProgressStream) Send(p *agentv1.Progress) error {
 	return nil
 }
 
-func (s *collectProgressStream) Context() context.Context { return context.Background() }
+func (s *collectProgressStream) Context() context.Context {
+	if s.ctx != nil {
+		return s.ctx
+	}
+	return context.Background()
+}
 
 func (s *collectProgressStream) done() bool {
 	return len(s.sent) > 0 && s.sent[len(s.sent)-1].GetDone()
@@ -179,8 +189,8 @@ func TestFileServerWriteEtagMismatch(t *testing.T) {
 	if _, err := write(t, server, fileRootVolumes, "x.txt", "", false, []byte("a")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := write(t, server, fileRootVolumes, "x.txt", `"stale"`, false, []byte("b")); status.Code(err) != codes.Aborted {
-		t.Fatalf("stale etag = %v, want Aborted", err)
+	if _, err := write(t, server, fileRootVolumes, "x.txt", `"stale"`, false, []byte("b")); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("stale etag = %v, want FailedPrecondition", err)
 	}
 	got, _ := os.ReadFile(filepath.Join(root, "x.txt"))
 	if string(got) != "a" {
@@ -321,7 +331,7 @@ func TestFileServerWriteConcurrentWriters(t *testing.T) {
 		switch status.Code(err) {
 		case codes.OK:
 			okCount++
-		case codes.Aborted:
+		case codes.FailedPrecondition:
 			conflictCount++
 		default:
 			t.Fatalf("unexpected error: %v", err)
@@ -447,9 +457,9 @@ func TestFileServerCopyAndDelete(t *testing.T) {
 		t.Fatalf("copy over an existing dir = %v, want AlreadyExists", err)
 	}
 
-	// A non-recursive delete of a non-empty directory is refused.
-	if err := server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: "dst"}, &collectProgressStream{}); status.Code(err) != codes.AlreadyExists {
-		t.Fatalf("non-recursive delete of a non-empty dir = %v, want AlreadyExists", err)
+	// A non-recursive delete of a non-empty directory is a failed precondition.
+	if err := server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: "dst"}, &collectProgressStream{}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("non-recursive delete of a non-empty dir = %v, want FailedPrecondition", err)
 	}
 	stream = &collectProgressStream{}
 	if err := server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: "dst", Recursive: true}, stream); err != nil {
@@ -570,5 +580,268 @@ func TestFileServiceWriteOverGRPC(t *testing.T) {
 	}
 	if !bytes.Equal(got, body) {
 		t.Fatal("the streamed body differs from what was written")
+	}
+}
+
+// blockingWriteStream returns a header, then blocks the next Recv until the
+// test releases it, standing in for a peer that stalls mid-upload.
+type blockingWriteStream struct {
+	grpc.ServerStream
+	header  *agentv1.WriteHeader
+	sent    bool
+	release chan struct{}
+}
+
+func (s *blockingWriteStream) Recv() (*agentv1.WriteRequest, error) {
+	if !s.sent {
+		s.sent = true
+		return &agentv1.WriteRequest{Part: &agentv1.WriteRequest_Header{Header: s.header}}, nil
+	}
+	<-s.release
+	return nil, io.EOF
+}
+
+func (s *blockingWriteStream) SendAndClose(*agentv1.WriteResponse) error { return nil }
+
+func (s *blockingWriteStream) Context() context.Context { return context.Background() }
+
+// TestFileServerWriteStaleEtagIgnoresOverwrite pins finding 5: a supplied etag
+// that no longer matches is a failed precondition even when overwrite is set,
+// so a stale save can never silently clobber a newer file.
+func TestFileServerWriteStaleEtagIgnoresOverwrite(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, fileRootVolumes, "x.txt", "", false, []byte("original")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := write(t, server, fileRootVolumes, "x.txt", `"stale"`, true, []byte("clobber")); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("stale etag with overwrite = %v, want FailedPrecondition", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, "x.txt"))
+	if string(got) != "original" {
+		t.Fatalf("content = %q, want the original", got)
+	}
+	// A matching etag with overwrite still replaces.
+	etag := etagOf(t, server, "x.txt")
+	if _, err := write(t, server, fileRootVolumes, "x.txt", etag, true, []byte("replaced")); err != nil {
+		t.Fatalf("matching etag with overwrite: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "x.txt")); string(got) != "replaced" {
+		t.Fatalf("content = %q, want replaced", got)
+	}
+}
+
+// TestFileServerWriteInPlaceRefusesFullDisk pins finding 4: an in-place write
+// refuses before truncating when the incoming body does not fit in free space,
+// so a full disk cannot leave a container-owned file half-written.
+func TestFileServerWriteInPlaceRefusesFullDisk(t *testing.T) {
+	old := fileDiskUsage
+	fileDiskUsage = func(string) (uint64, uint64) { return 5, 100 }
+	defer func() { fileDiskUsage = old }()
+
+	server, root := newTestFileServer(t)
+	path := filepath.Join(root, "hard.txt")
+	if err := os.WriteFile(path, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(path, filepath.Join(root, "hard.link")); err != nil {
+		t.Skipf("hardlinks unsupported: %v", err)
+	}
+	body := []byte("0123456789") // 10 bytes, more than the 5 bytes "free"
+	if _, err := write(t, server, fileRootVolumes, "hard.txt", etagOf(t, server, "hard.txt"), true, body); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("in-place write on a full disk = %v, want ResourceExhausted", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "original" {
+		t.Fatalf("content = %q, want the original after a refused write", got)
+	}
+	assertNoTempFiles(t, root)
+}
+
+// TestFileServerWriteIdleTimeout pins finding 9: a Write that receives nothing
+// after its header times out and releases its transfer slot instead of holding
+// it forever.
+func TestFileServerWriteIdleTimeout(t *testing.T) {
+	old := fileRecvIdleTimeout
+	fileRecvIdleTimeout = 20 * time.Millisecond
+	defer func() { fileRecvIdleTimeout = old }()
+
+	server, root := newTestFileServer(t)
+	release := make(chan struct{})
+	stream := &blockingWriteStream{
+		header:  &agentv1.WriteHeader{Root: fileRootVolumes, Path: "stall.txt", Size: 4},
+		release: release,
+	}
+	err := server.Write(stream)
+	close(release)
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("stalled write = %v, want DeadlineExceeded", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "stall.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a stalled write created a target: %v", err)
+	}
+	assertNoTempFiles(t, root)
+	// The slot is free again: a normal write succeeds.
+	if _, err := write(t, server, fileRootVolumes, "after.txt", "", false, []byte("ok")); err != nil {
+		t.Fatalf("write after a timeout: %v", err)
+	}
+}
+
+// TestFileServerProtectsAppDirViaSymlinkedParent pins finding 1: a symlinked
+// parent that resolves back to the root cannot be used to rename or delete a
+// sibling application directory.
+func TestFileServerProtectsAppDirViaSymlinkedParent(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	const appA = "0f8fad5b-d9cb-469f-a165-70867728950e"
+	const appB = "1f8fad5b-d9cb-469f-a165-70867728950f"
+	for _, name := range []string{appA, appB} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// appA/up -> .. so appA/up/appB resolves to the top-level appB.
+	if err := os.Symlink("..", filepath.Join(root, appA, "up")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: appA + "/up/" + appB, Recursive: true}, &collectProgressStream{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("delete through a symlinked parent = %v, want PermissionDenied", err)
+	}
+	if _, err := server.Rename(context.Background(), &agentv1.RenameRequest{Root: fileRootVolumes, Source: appA + "/up/" + appB, Destination: "moved"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("rename through a symlinked parent = %v, want PermissionDenied", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, appB)); err != nil {
+		t.Fatalf("the app dir was removed through the symlink: %v", err)
+	}
+}
+
+// TestFileServerCopyRefusesSymlinkedSelfCopy pins finding 2: a destination whose
+// resolved parent is the source is refused, so a symlinked destination cannot
+// recurse without bound and corrupt the source.
+func TestFileServerCopyRefusesSymlinkedSelfCopy(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: fileRootVolumes, Path: "src"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := write(t, server, fileRootVolumes, "src/f", "", false, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("src", filepath.Join(root, "out")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Copy(&agentv1.CopyRequest{Root: fileRootVolumes, Source: "src", Destination: "out/inner"}, &collectProgressStream{}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("copy into a symlink to the source = %v, want InvalidArgument", err)
+	}
+}
+
+// TestFileServerCopyDeleteHonourCancelledContext pins finding 3: a cancelled
+// stream aborts Copy and Delete promptly.
+func TestFileServerCopyDeleteHonourCancelledContext(t *testing.T) {
+	t.Parallel()
+	server, _ := newTestFileServer(t)
+	if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: fileRootVolumes, Path: "src"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := write(t, server, fileRootVolumes, "src/f", "", false, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &collectProgressStream{ctx: ctx}
+	if err := server.Copy(&agentv1.CopyRequest{Root: fileRootVolumes, Source: "src", Destination: "dst"}, stream); status.Code(err) != codes.Canceled {
+		t.Fatalf("Copy with a cancelled context = %v, want Canceled", err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: "src", Recursive: true}, stream); status.Code(err) != codes.Canceled {
+		t.Fatalf("Delete with a cancelled context = %v, want Canceled", err)
+	}
+}
+
+// TestFileServerRenameNonOverwriteRefusesExistingDir pins finding 7 at the RPC
+// level: a non-overwriting rename onto an existing directory is refused and the
+// source survives.
+func TestFileServerRenameNonOverwriteRefusesExistingDir(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	for _, name := range []string{"src", "dst"} {
+		if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: fileRootVolumes, Path: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := server.Rename(context.Background(), &agentv1.RenameRequest{Root: fileRootVolumes, Source: "src", Destination: "dst"}); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("non-overwrite rename onto an existing dir = %v, want AlreadyExists", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "src")); err != nil {
+		t.Fatalf("source lost on a refused rename: %v", err)
+	}
+}
+
+// TestFileErrorMapping pins finding 6: the resource, name and read-only errnos
+// map onto the documented gRPC codes, and an existing status passes through.
+func TestFileErrorMapping(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"enospc", &os.PathError{Op: "write", Path: "x", Err: syscall.ENOSPC}, codes.ResourceExhausted},
+		{"edquot", syscall.EDQUOT, codes.ResourceExhausted},
+		{"efbig", syscall.EFBIG, codes.ResourceExhausted},
+		{"enametoolong", &os.PathError{Op: "open", Path: "x", Err: syscall.ENAMETOOLONG}, codes.InvalidArgument},
+		{"eisdir", &os.PathError{Op: "open", Path: "x", Err: syscall.EISDIR}, codes.InvalidArgument},
+		{"enotdir", &os.PathError{Op: "open", Path: "x", Err: syscall.ENOTDIR}, codes.InvalidArgument},
+		{"erofs", &os.PathError{Op: "write", Path: "x", Err: syscall.EROFS}, codes.PermissionDenied},
+		{"notempty", fsroot.ErrNotEmpty, codes.FailedPrecondition},
+		{"exists", fsroot.ErrExists, codes.AlreadyExists},
+		{"escape", fsroot.ErrEscape, codes.PermissionDenied},
+	}
+	for _, tc := range cases {
+		if got := status.Code(fileError("test", tc.err)); got != tc.want {
+			t.Errorf("%s: fileError = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if got := status.Code(fileError("test", status.Error(codes.ResourceExhausted, "x"))); got != codes.ResourceExhausted {
+		t.Errorf("status passthrough = %v, want ResourceExhausted", got)
+	}
+}
+
+// TestPathLockIndexInRange pins finding 8: the stripe index is always in range,
+// including when the 32-bit hash has its high bit set (the old int(uint32)
+// modulo could go negative on a 32-bit build).
+func TestPathLockIndexInRange(t *testing.T) {
+	t.Parallel()
+	server, _ := newTestFileServer(t)
+	for i := range 5000 {
+		idx := pathLockIndex("volumes", fmt.Sprintf("some/deep/path-%d", i), len(server.locks))
+		if idx < 0 || idx >= len(server.locks) {
+			t.Fatalf("pathLockIndex returned %d, out of range [0,%d)", idx, len(server.locks))
+		}
+	}
+}
+
+// TestFileServerSweepTempFiles pins finding 10: the sweeper removes an old
+// staging file and keeps a fresh one.
+func TestFileServerSweepTempFiles(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	old := time.Now().Add(-48 * time.Hour)
+	stale := filepath.Join(root, fsroot.TempPrefix+"stale")
+	if err := os.WriteFile(stale, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	fresh := filepath.Join(root, fsroot.TempPrefix+"fresh")
+	if err := os.WriteFile(fresh, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server.sweepTempFiles(time.Now().Add(-24 * time.Hour))
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale staging file not swept: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("fresh staging file swept: %v", err)
 	}
 }

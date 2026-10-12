@@ -1,6 +1,7 @@
 package fsroot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -129,6 +130,8 @@ func TestMapErrorCodes(t *testing.T) {
 		{"symlink loop", &os.PathError{Op: "open", Path: "x", Err: syscall.ELOOP}, ErrInvalid},
 		{"not a directory", &os.PathError{Op: "open", Path: "x", Err: syscall.ENOTDIR}, ErrInvalid},
 		{"missing", &os.PathError{Op: "open", Path: "x", Err: syscall.ENOENT}, ErrNotFound},
+		{"not empty", &os.PathError{Op: "remove", Path: "x", Err: syscall.ENOTEMPTY}, ErrNotEmpty},
+		{"exists", &os.PathError{Op: "mkdir", Path: "x", Err: syscall.EEXIST}, ErrExists},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,6 +139,26 @@ func TestMapErrorCodes(t *testing.T) {
 				t.Fatalf("mapError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestCopyDepthBound pins the recursion bound: a copy deeper than maxCopyDepth
+// fails explicitly instead of recursing without bound.
+func TestCopyDepthBound(t *testing.T) {
+	old := maxCopyDepth
+	maxCopyDepth = 1
+	t.Cleanup(func() { maxCopyDepth = old })
+
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a", "b", "c"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := openInternalRoot(t, dir)
+	if err := root.Copy(context.Background(), "a", "zz", false, nil); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("deep copy = %v, want ErrTooLarge", err)
 	}
 }
 

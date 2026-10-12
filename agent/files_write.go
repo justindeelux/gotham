@@ -9,8 +9,8 @@ import (
 	"io"
 	"os"
 	"path"
+	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -30,6 +30,24 @@ const fileFreeReserveDivisor = 20
 // fileProgressInterval throttles Copy/Delete progress so a large tree does not
 // emit one message per entry.
 const fileProgressInterval = 250 * time.Millisecond
+
+// fileRecvIdleTimeout bounds how long a Write may hold a transfer slot without
+// receiving a message. It is reset on every message, so a slow but live upload
+// is never cut off; only a stalled peer trips it and releases the slot. It is a
+// variable so a test can lower it.
+var fileRecvIdleTimeout = 2 * time.Minute
+
+// fileDiskUsage reports (free, total) bytes on a path's filesystem. It is a
+// variable so a test can simulate a full disk.
+var fileDiskUsage = func(dir string) (free, total uint64) {
+	return freeBytes(dir), totalBytes(dir)
+}
+
+// writeRecv is one asynchronously received Write message.
+type writeRecv struct {
+	msg *agentv1.WriteRequest
+	err error
+}
 
 // Write creates or replaces one file. The first message must be a WriteHeader;
 // the following messages stream the body; an optional WriteCommit carries the
@@ -81,8 +99,8 @@ func (s *FileServer) Write(stream grpc.ClientStreamingServer[agentv1.WriteReques
 		return fileError("write", err)
 	}
 	// The staging file never survives the call: on success the target is a
-	// rename of it or a hard link to it (so unlinking the name is harmless),
-	// and on any failure removing it leaves the target untouched.
+	// rename of it (or its bytes are copied into an existing inode), and on any
+	// failure removing it leaves the target untouched.
 	defer func() {
 		_ = tmp.Close()
 		_ = root.Remove(tmpRel)
@@ -91,30 +109,67 @@ func (s *FileServer) Write(stream grpc.ClientStreamingServer[agentv1.WriteReques
 	hasher := sha256.New()
 	var received int64
 	var digest string
+
+	// Receive on a helper goroutine so the idle timer can fire while the caller
+	// is blocked in Recv; returning from the handler closes the stream, which
+	// unblocks the goroutine.
+	parts := make(chan writeRecv, 1)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			msg, recvErr := stream.Recv()
+			select {
+			case parts <- writeRecv{msg: msg, err: recvErr}:
+			case <-done:
+				return
+			}
+			if recvErr != nil {
+				return
+			}
+		}
+	}()
+
+	idle := time.NewTimer(fileRecvIdleTimeout)
+	defer idle.Stop()
+receive:
 	for {
-		msg, recvErr := stream.Recv()
-		if errors.Is(recvErr, io.EOF) {
-			break
-		}
-		if recvErr != nil {
-			return streamRecvError("write", recvErr)
-		}
-		switch part := msg.GetPart().(type) {
-		case *agentv1.WriteRequest_Data:
-			received += int64(len(part.Data))
-			if received > size || (s.maxUpload > 0 && received > s.maxUpload) {
-				return status.Errorf(codes.InvalidArgument, "write: the body exceeds the declared size of %d bytes", size)
+		select {
+		case <-stream.Context().Done():
+			return status.FromContextError(stream.Context().Err()).Err()
+		case <-idle.C:
+			return status.Errorf(codes.DeadlineExceeded, "write: no data for %s; aborting the upload", fileRecvIdleTimeout)
+		case result := <-parts:
+			if !idle.Stop() {
+				select {
+				case <-idle.C:
+				default:
+				}
 			}
-			if _, writeErr := tmp.Write(part.Data); writeErr != nil {
-				return fileError("write", writeErr)
+			idle.Reset(fileRecvIdleTimeout)
+			if errors.Is(result.err, io.EOF) {
+				break receive
 			}
-			_, _ = hasher.Write(part.Data)
-		case *agentv1.WriteRequest_Commit:
-			digest = strings.TrimSpace(part.Commit.GetSha256())
-		case *agentv1.WriteRequest_Header:
-			return status.Error(codes.InvalidArgument, "write: unexpected second header")
-		default:
-			return status.Error(codes.InvalidArgument, "write: empty message")
+			if result.err != nil {
+				return streamRecvError("write", result.err)
+			}
+			switch part := result.msg.GetPart().(type) {
+			case *agentv1.WriteRequest_Data:
+				received += int64(len(part.Data))
+				if received > size || (s.maxUpload > 0 && received > s.maxUpload) {
+					return status.Errorf(codes.InvalidArgument, "write: the body exceeds the declared size of %d bytes", size)
+				}
+				if _, writeErr := tmp.Write(part.Data); writeErr != nil {
+					return fileError("write", writeErr)
+				}
+				_, _ = hasher.Write(part.Data)
+			case *agentv1.WriteRequest_Commit:
+				digest = strings.TrimSpace(part.Commit.GetSha256())
+			case *agentv1.WriteRequest_Header:
+				return status.Error(codes.InvalidArgument, "write: unexpected second header")
+			default:
+				return status.Error(codes.InvalidArgument, "write: empty message")
+			}
 		}
 	}
 	if received != size {
@@ -132,7 +187,7 @@ func (s *FileServer) Write(stream grpc.ClientStreamingServer[agentv1.WriteReques
 		return fileError("write", err)
 	}
 
-	response, err := s.commitWrite(root, rel, tmpRel, mode, header.GetExpectEtag(), header.GetOverwrite())
+	response, err := s.commitWrite(root, rel, tmpRel, mode, header.GetExpectEtag(), header.GetOverwrite(), size)
 	if err != nil {
 		return err
 	}
@@ -143,10 +198,9 @@ func (s *FileServer) Write(stream grpc.ClientStreamingServer[agentv1.WriteReques
 // write in place, and applies the caller's conflict policy. The per-path lock
 // makes the etag check and the commit atomic with respect to other FileServer
 // writers, so a second writer always sees the first writer's etag.
-func (s *FileServer) commitWrite(root *fsroot.Root, rel, tmpRel string, mode os.FileMode, expect string, overwrite bool) (*agentv1.WriteResponse, error) {
-	lock := s.pathLock(root.Name(), rel)
-	lock.Lock()
-	defer lock.Unlock()
+func (s *FileServer) commitWrite(root *fsroot.Root, rel, tmpRel string, mode os.FileMode, expect string, overwrite bool, size int64) (*agentv1.WriteResponse, error) {
+	unlock := s.lockPaths(root.Name(), rel)
+	defer unlock()
 
 	existing, statErr := root.Stat(rel)
 	created := errors.Is(statErr, fsroot.ErrNotFound)
@@ -159,9 +213,10 @@ func (s *FileServer) commitWrite(root *fsroot.Root, rel, tmpRel string, mode os.
 		if err := root.Chmod(tmpRel, mode); err != nil {
 			return nil, fileError("write", err)
 		}
-		// Link, not rename, so the create stays exclusive even if a container
-		// creates the name between the stat above and the commit.
-		if err := root.Link(tmpRel, rel); err != nil {
+		// A non-replacing rename keeps the create exclusive even if a container
+		// creates the name between the stat above and the commit, and works on
+		// filesystems without hard links (where a link-based create cannot).
+		if err := root.RenameExclusive(tmpRel, rel); err != nil {
 			if errors.Is(err, fsroot.ErrExists) {
 				return nil, status.Error(codes.AlreadyExists, "write: the target already exists")
 			}
@@ -173,8 +228,11 @@ func (s *FileServer) commitWrite(root *fsroot.Root, rel, tmpRel string, mode os.
 		if existing.Kind != fsroot.KindRegular {
 			return nil, status.Errorf(codes.FailedPrecondition, "write: %q is not a regular file", rel)
 		}
-		if expect != "" && existing.Etag != expect && !overwrite {
-			return nil, status.Error(codes.Aborted, "write: the file changed since it was read")
+		// A supplied etag that no longer matches is a failed precondition even
+		// when overwrite is set: overwrite authorises replacing a target the
+		// caller has not read, never silently clobbering a newer one.
+		if expect != "" && existing.Etag != expect {
+			return nil, status.Error(codes.FailedPrecondition, "write: the file changed since it was read")
 		}
 		if expect == "" && !overwrite {
 			return nil, status.Error(codes.AlreadyExists, "write: the target already exists")
@@ -193,7 +251,7 @@ func (s *FileServer) commitWrite(root *fsroot.Root, rel, tmpRel string, mode os.
 		} else {
 			// A foreign, hard-linked or bind-mounted file must keep its inode,
 			// owner and ACLs, so its bytes are overwritten in place.
-			if err := s.overwriteInPlace(root, rel, tmpRel, existing.Etag); err != nil {
+			if err := s.overwriteInPlace(root, rel, tmpRel, existing.Etag, size); err != nil {
 				return nil, err
 			}
 			writeMode = "in_place"
@@ -211,13 +269,19 @@ func (s *FileServer) commitWrite(root *fsroot.Root, rel, tmpRel string, mode os.
 // rewriting the same inode so hardlinks, ownership, ACLs and a bind mount of a
 // single file all keep working. It re-checks the etag on the opened descriptor
 // so a change by a container during the upload is a conflict, not a silent
-// overwrite.
-func (s *FileServer) overwriteInPlace(root *fsroot.Root, rel, tmpRel, expectEtag string) error {
+// overwrite. Because the rewrite is not atomic, it first refuses unless the
+// filesystem holds the whole incoming body: truncating and then hitting ENOSPC
+// would leave a container-owned file half-written.
+func (s *FileServer) overwriteInPlace(root *fsroot.Root, rel, tmpRel, expectEtag string, incoming int64) error {
 	src, _, err := root.OpenRegular(tmpRel)
 	if err != nil {
 		return fileError("write", err)
 	}
 	defer func() { _ = src.Close() }()
+
+	if free, _ := fileDiskUsage(root.Path()); free != 0 && free < uint64(incoming) {
+		return status.Errorf(codes.ResourceExhausted, "write: %d bytes do not fit in %d free bytes", incoming, free)
+	}
 
 	dst, entry, err := root.OpenWrite(rel)
 	if err != nil {
@@ -269,8 +333,10 @@ func (s *FileServer) Mkdir(_ context.Context, req *agentv1.MkdirRequest) (*agent
 
 // Rename renames or moves one entry within a single root, refusing an
 // application directory at the top of the volumes root and any move into the
-// source's own subtree.
-func (s *FileServer) Rename(_ context.Context, req *agentv1.RenameRequest) (*agentv1.RenameResponse, error) {
+// source's own subtree. It takes the per-path locks for both names so a rename
+// is serialised with writes and other renames, and refuses a destination that
+// already exists unless overwrite is set.
+func (s *FileServer) Rename(ctx context.Context, req *agentv1.RenameRequest) (*agentv1.RenameResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
 		return nil, err
@@ -292,17 +358,9 @@ func (s *FileServer) Rename(_ context.Context, req *agentv1.RenameRequest) (*age
 	if s.protectsAppDir(root, src) || s.protectsAppDir(root, dst) {
 		return nil, status.Error(codes.PermissionDenied, "rename: an application directory cannot be renamed or replaced")
 	}
-	if _, err := root.Stat(src); err != nil {
-		return nil, fileError("rename", err)
-	}
-	if _, err := root.Stat(dst); err == nil {
-		if !req.GetOverwrite() {
-			return nil, status.Errorf(codes.AlreadyExists, "rename: %q already exists", dst)
-		}
-	} else if !errors.Is(err, fsroot.ErrNotFound) {
-		return nil, fileError("rename", err)
-	}
-	if err := s.moveEntry(root, src, dst, req.GetOverwrite()); err != nil {
+	unlock := s.lockPaths(root.Name(), src, dst)
+	defer unlock()
+	if err := s.moveEntry(ctx, root, src, dst, req.GetOverwrite()); err != nil {
 		return nil, fileError("rename", err)
 	}
 	entry, err := root.Stat(dst)
@@ -312,21 +370,50 @@ func (s *FileServer) Rename(_ context.Context, req *agentv1.RenameRequest) (*age
 	return &agentv1.RenameResponse{Entry: fileEntry(entry)}, nil
 }
 
-// moveEntry renames within the root, falling back to a copy and delete when a
-// bind mount inside the root makes the two paths different filesystems (EXDEV).
-func (s *FileServer) moveEntry(root *fsroot.Root, src, dst string, overwrite bool) error {
-	err := root.Rename(src, dst)
+// moveEntry renames within the root, refusing an existing destination when
+// overwrite is false, and falling back to a guarded copy and delete when a bind
+// mount inside the root makes the two paths different filesystems (EXDEV). The
+// fallback acquires a transfer slot, checks free space and honours ctx, and
+// removes an existing destination before copying so a cross-device "replace"
+// can never merge two directory trees.
+func (s *FileServer) moveEntry(ctx context.Context, root *fsroot.Root, src, dst string, overwrite bool) error {
+	var err error
+	if overwrite {
+		err = root.Rename(src, dst)
+	} else {
+		err = root.RenameExclusive(src, dst)
+	}
 	if err == nil || !errors.Is(err, syscall.EXDEV) {
 		return err
 	}
-	if copyErr := root.Copy(src, dst, overwrite, nil); copyErr != nil {
-		return copyErr
+	release, err := s.beginTransfer()
+	if err != nil {
+		return err
 	}
-	return root.RemoveTree(src, nil)
+	defer release()
+	if s.lowSpace(root) {
+		return status.Error(codes.ResourceExhausted, "rename: the filesystem is low on free space")
+	}
+	if _, statErr := root.Stat(dst); statErr == nil {
+		if !overwrite {
+			return status.Errorf(codes.AlreadyExists, "rename: %q already exists", dst)
+		}
+		// Replace, not merge: drop the existing destination first.
+		if err := root.RemoveTree(ctx, dst, nil); err != nil {
+			return err
+		}
+	} else if !errors.Is(statErr, fsroot.ErrNotFound) {
+		return statErr
+	}
+	if err := root.Copy(ctx, src, dst, overwrite, nil); err != nil {
+		return err
+	}
+	return root.RemoveTree(ctx, src, nil)
 }
 
 // Copy copies one entry within a single root, streaming progress and refusing a
-// copy into the source's own subtree.
+// copy into the source's own subtree. It honours the stream context so a
+// cancelled copy aborts promptly.
 func (s *FileServer) Copy(req *agentv1.CopyRequest, stream grpc.ServerStreamingServer[agentv1.Progress]) error {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -359,7 +446,7 @@ func (s *FileServer) Copy(req *agentv1.CopyRequest, stream grpc.ServerStreamingS
 	}
 
 	progress := &progressWriter{stream: stream, path: dst}
-	if err := root.Copy(src, dst, req.GetOverwrite(), progress.entry); err != nil {
+	if err := root.Copy(stream.Context(), src, dst, req.GetOverwrite(), progress.entry); err != nil {
 		return fileError("copy", err)
 	}
 	return progress.finish()
@@ -367,7 +454,9 @@ func (s *FileServer) Copy(req *agentv1.CopyRequest, stream grpc.ServerStreamingS
 
 // Delete removes one entry, recursively when asked, streaming progress. The
 // root itself and the top-level application directories of the volumes root are
-// never removed.
+// never removed. It holds the per-path lock for the whole delete so it cannot
+// race a write or rename, and honours the stream context so a cancelled delete
+// stops promptly.
 func (s *FileServer) Delete(req *agentv1.DeleteRequest, stream grpc.ServerStreamingServer[agentv1.Progress]) error {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -386,6 +475,8 @@ func (s *FileServer) Delete(req *agentv1.DeleteRequest, stream grpc.ServerStream
 	if _, err := root.Stat(rel); err != nil {
 		return fileError("delete", err)
 	}
+	unlock := s.lockPaths(root.Name(), rel)
+	defer unlock()
 	release, err := s.beginTransfer()
 	if err != nil {
 		return err
@@ -394,7 +485,7 @@ func (s *FileServer) Delete(req *agentv1.DeleteRequest, stream grpc.ServerStream
 
 	progress := &progressWriter{stream: stream, path: rel}
 	if req.GetRecursive() {
-		if err := root.RemoveTree(rel, progress.entry); err != nil {
+		if err := root.RemoveTree(stream.Context(), rel, progress.entry); err != nil {
 			return fileError("delete", err)
 		}
 	} else if err := root.Remove(rel); err != nil {
@@ -431,13 +522,41 @@ func (p *progressWriter) finish() error {
 	return p.stream.Send(&agentv1.Progress{Path: p.path, BytesDone: p.bytesDone, BytesTotal: -1, Done: true})
 }
 
-// pathLock returns the striped mutex guarding a (root, path) commit.
-func (s *FileServer) pathLock(rootName, rel string) *sync.Mutex {
+// lockPaths locks the striped path locks guarding every named path under a
+// root, in a canonical order so two concurrent callers cannot deadlock, and
+// returns a function that releases them. A rename locks both its source and
+// destination; a write locks its target.
+func (s *FileServer) lockPaths(rootName string, rels ...string) func() {
+	indices := make([]int, 0, len(rels))
+	seen := make(map[int]struct{}, len(rels))
+	for _, rel := range rels {
+		idx := pathLockIndex(rootName, rel, len(s.locks))
+		if _, ok := seen[idx]; ok {
+			continue
+		}
+		seen[idx] = struct{}{}
+		indices = append(indices, idx)
+	}
+	sort.Ints(indices)
+	for _, idx := range indices {
+		s.locks[idx].Lock()
+	}
+	return func() {
+		for i := len(indices) - 1; i >= 0; i-- {
+			s.locks[indices[i]].Unlock()
+		}
+	}
+}
+
+// pathLockIndex maps a (root, path) to a lock stripe. The hash is reduced
+// modulo the stripe count as uint32 before the int conversion, so a 32-bit
+// build never turns a large hash into a negative index.
+func pathLockIndex(rootName, rel string, stripes int) int {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(rootName))
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(rel))
-	return &s.locks[int(h.Sum32())%len(s.locks)]
+	return int(h.Sum32() % uint32(stripes))
 }
 
 // beginTransfer acquires a transfer slot or refuses when the node already has
@@ -454,32 +573,45 @@ func (s *FileServer) beginTransfer() (func(), error) {
 // lowSpace reports whether committing the write would eat into the filesystem's
 // free-space reserve.
 func (s *FileServer) lowSpace(root *fsroot.Root) bool {
-	total := totalBytes(root.Path())
+	free, total := fileDiskUsage(root.Path())
 	if total == 0 {
 		return false
 	}
-	return freeBytes(root.Path()) < total/fileFreeReserveDivisor
+	return free < total/fileFreeReserveDivisor
 }
 
-// protectsAppDir reports whether rel names a top-level application directory
-// of the writable managed-volumes root: a directory whose name is a canonical
-// application (UUID) id. A running container bind-mounts that directory, so it
-// must not be renamed or deleted. Ordinary directories a user creates are not
-// protected.
+// protectsAppDir reports whether rel resolves to a top-level application
+// directory of the writable managed-volumes root: a name that is a canonical
+// application (UUID) id whose resolved parent is the root itself. A running
+// container bind-mounts that directory, so it must not be renamed or deleted.
+// The decision is made on the resolved parent, never the lexical path, so a
+// symlinked parent (for example "<appA>/up -> ..") cannot launder the path and
+// reach a sibling application directory. Ordinary directories a user creates
+// are not protected.
 func (s *FileServer) protectsAppDir(root *fsroot.Root, rel string) bool {
 	if s.volumeRootPath == "" || root.Path() != s.volumeRootPath {
 		return false
 	}
 	clean := path.Clean(rel)
-	if clean == "." || strings.Contains(clean, "/") {
+	if clean == "." {
 		return false
 	}
-	id, err := parseAppID(clean)
-	if err != nil || id.String() != clean {
+	base := path.Base(clean)
+	id, err := parseAppID(base)
+	if err != nil || id.String() != base {
+		return false
+	}
+	parent, err := root.Resolve(path.Dir(clean))
+	if err != nil || parent != "." {
 		return false
 	}
 	entry, err := root.Stat(clean)
-	return err == nil && entry.Kind == fsroot.KindDirectory
+	if err != nil {
+		return false
+	}
+	// A directory is the app volume; a symlink with an app-directory name is
+	// treated as protected too, so unlinking the name cannot detach a mount.
+	return entry.Kind == fsroot.KindDirectory || entry.Kind == fsroot.KindSymlink
 }
 
 // streamRecvError maps a client-stream receive error: an early EOF is a

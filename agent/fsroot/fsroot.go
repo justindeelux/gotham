@@ -62,6 +62,10 @@ var (
 	// ErrExists marks a name that already exists where an exclusive create or a
 	// non-overwriting move/copy wanted it free.
 	ErrExists = errors.New("fsroot: already exists")
+	// ErrNotEmpty marks a directory that a non-recursive delete refused to
+	// remove because it still holds entries. It is distinct from ErrExists so
+	// the caller can report a precondition failure rather than a conflict.
+	ErrNotEmpty = errors.New("fsroot: directory not empty")
 	// ErrConflict marks a mutation whose precondition no longer holds, such as
 	// an etag that changed under the caller. It is a retryable-by-the-user
 	// conflict, not an internal failure.
@@ -312,6 +316,67 @@ func (r *Root) Stat(rel string) (Entry, error) {
 	return r.entryFor(p, info)
 }
 
+// Resolve resolves rel inside the root, following symbolic links, and returns
+// the canonical root-relative path with no ".." or symlink component left, or
+// an error when rel does not exist or a link would leave the root. It never
+// follows an absolute link target or one that climbs above the root, so the
+// result is always confined. Callers use it to decide safety on the resolved
+// path rather than the caller-supplied one.
+func (r *Root) Resolve(rel string) (string, error) {
+	p, err := cleanRel(rel)
+	if err != nil {
+		return "", err
+	}
+	if p == "." {
+		return ".", nil
+	}
+	pending := strings.Split(p, "/")
+	var resolved []string
+	links := 0
+	for len(pending) > 0 {
+		comp := pending[0]
+		pending = pending[1:]
+		switch comp {
+		case "", ".":
+			continue
+		case "..":
+			if len(resolved) == 0 {
+				return "", fmt.Errorf("%w: %q escapes the root", ErrEscape, rel)
+			}
+			resolved = resolved[:len(resolved)-1]
+			continue
+		}
+		target := path.Join(strings.Join(resolved, "/"), comp)
+		info, err := r.root.Lstat(target)
+		if err != nil {
+			return "", mapError("resolve", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			links++
+			if links > maxResolveLinks {
+				return "", fmt.Errorf("%w: too many symbolic links resolving %q", ErrEscape, rel)
+			}
+			link, err := r.root.Readlink(target)
+			if err != nil {
+				return "", mapError("resolve", err)
+			}
+			if path.IsAbs(link) {
+				return "", fmt.Errorf("%w: %q has an absolute symlink target", ErrEscape, rel)
+			}
+			pending = append(strings.Split(link, "/"), pending...)
+			continue
+		}
+		if len(pending) > 0 && !info.IsDir() {
+			return "", fmt.Errorf("%w: %q has a non-directory component", ErrInvalid, rel)
+		}
+		resolved = append(resolved, comp)
+	}
+	if len(resolved) == 0 {
+		return ".", nil
+	}
+	return strings.Join(resolved, "/"), nil
+}
+
 // OpenRegular opens rel for reading and returns the open file and its entry.
 // It never follows a path out of the root and refuses anything that is not a
 // regular file, so a device, FIFO or socket can never block or be read.
@@ -421,9 +486,15 @@ func mapError(op string, err error) error {
 		return fmt.Errorf("%w: %s: %v", ErrNotFound, op, err)
 	case errors.Is(err, os.ErrPermission):
 		return fmt.Errorf("%w: %s: %v", ErrPermission, op, err)
-	case errors.Is(err, fs.ErrExist), errors.Is(err, syscall.EEXIST), errors.Is(err, syscall.ENOTEMPTY):
-		// A name that must be free already exists, or a directory being
-		// replaced is not empty: both are the caller's conflict to resolve.
+	case errors.Is(err, syscall.ENOTEMPTY):
+		// A directory being removed or replaced is not empty: the caller's
+		// precondition (empty target) failed. It must be tested before the
+		// ErrExist case, because syscall.Errno.Is also matches ENOTEMPTY for
+		// fs.ErrExist.
+		return fmt.Errorf("%w: %s: %v", ErrNotEmpty, op, err)
+	case errors.Is(err, fs.ErrExist), errors.Is(err, syscall.EEXIST):
+		// A name that must be free already exists: the caller's conflict to
+		// resolve.
 		return fmt.Errorf("%w: %s: %v", ErrExists, op, err)
 	case errors.Is(err, os.ErrInvalid), errors.Is(err, fs.ErrInvalid):
 		return fmt.Errorf("%w: %s: %v", ErrInvalid, op, err)

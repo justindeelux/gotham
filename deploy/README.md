@@ -373,7 +373,7 @@ TLS; agents installed before that go offline until they are reinstalled with
   systemd update path is proven on the test box. Still unproven: applying a
   *newer* GitHub-hosted release through `gotham update` (control plane and agent
   rollout) and exercising the unattended `AUTO_UPDATE` loop. See
-  `docs/plans/10-self-update-release.md` and `docs/TODO.md` (Phase 9 residuals).
+  `docs/plans/10-self-update-release.md` and `docs/TODO.md` (LOW-4).
 - **Release trigger custody (INFO).** The release job and PR CI now run on
   GitHub-hosted runners and the signing key stays in the approval-gated
   `release` environment, so untrusted `pull_request` code no longer shares a host
@@ -592,3 +592,85 @@ setting the link DNS at runtime in the DNS-only path (revert restores both
 exactly; `status` already reported the link DNS as the effective list);
 covered by `TestHostctlDNSOnlyOverridesLinkDNS` and
 `TestGetReportsEffectiveLinkDNS`.
+
+## Hardening lessons (self-update and release, Phase 9)
+
+**Privileges (root touching service-owned paths)**
+- Never let root *follow* a path the service user controls: write via
+  temp-file+`rename` or `O_EXCL`/no-follow; open locks **read-only** (`exec 9<`, `flock`
+  works on read-only fds) after `-f`/`! -L` guards.
+- Reading a path the service user can replace is a hang vector: require a **regular
+  file** (no FIFO/symlink) before `Read`/`head`; in Go, `Lstat`/`open(O_NONBLOCK)`.
+- Keep authoritative writes (status/outcome) in a **root-owned directory** the service
+  cannot replace; keep the service-writable handoff separate.
+- The wrapper/unit/sudoers must live **outside** any service-writable directory, and
+  sudoers must pin the exact command with a trailing `""` (no args) — a bare path allows
+  arbitrary argv.
+- `umask` scoping: a global `umask 077` makes `mkdir -p /etc/...` 0700 and breaks the
+  service user; scope it to the secret/env writes and `chmod 0755` shared dirs.
+- Commit the exec bit for every script invoked directly (`git ls-files -s` → 100755);
+  a 644 helper fails with `bad interpreter` only on the printed-shell path.
+
+**Atomic activation / recovery**
+- Gap-free swap: `hardlink(target, backup)` then `rename(staging, target)` — the target
+  is never absent, so `ExecStart` can never miss it mid-update.
+- Keep the last known good until the new binary is **proven healthy**, then consume it;
+  a second apply must not overwrite an unproven backup (gate on the staged/pending state).
+- Serialize applies with a process-external `flock`; the wrapper must take the *same*
+  lock when restoring.
+- Crash recovery must also work from the wrapper (systemd cannot exec a missing target),
+  e.g. restore `.old` when the target is missing; startup `Recover` alone is not enough.
+- Startup resume must use a **non-blocking** lock (`tryFileLock`): waiting on the lock the
+  wrapper holds makes every healthy update deadlock and roll back after a health timeout.
+- The binary path must come from fixed configuration (unit env), never from
+  `os.Executable()` after a swap (on Linux it resolves to the renamed `.old`).
+
+**systemd**
+- `KillMode=process` lets a root wrapper survive the service's own restart; the wrapper
+  must also survive the cgroup (`setsid`) and re-`systemctl reset-failed` before a
+  restart after a crash loop, otherwise a broken new binary wedges the unit in
+  "start request repeated too quickly" and the rollback restart is refused.
+- After restoring the previous binary, **health-check it** before recording
+  `rolled_back`; otherwise a healthy restore is reported as failed.
+
+**Don't re-apply a broken release**
+- Persist the failed-attempt count/status and seed the backoff at startup; otherwise each
+  restart forgets the failure and re-applies the same broken release forever. Provide an
+  operator reset (`gotham update reset`, `gotham-agent update reset`).
+
+**Trust chain**
+- Embed the public key in the binary (env override only when the embedded key is empty,
+  and never in release builds); fail closed with no key.
+- Verify the **signed manifest** (version/channel/arch/file/sha256) before any write,
+  bind it to the offered release identity (no relabel/downgrade), require checksums, refuse
+  equal/older versions, and never trust metadata for the digest.
+- Bind an offered artifact to its **family** (agent vs control plane) and channel; an
+  empty channel must not skip the check.
+- Agent→CP registration has no bootstrap credential yet, so that direction is
+  server-authenticated TLS — document it instead of claiming mTLS; the node-control
+  listener can and should require client certs (mutual) once a CA exists.
+- Creating the CA must be part of the install (the serve path only *loads* it), and the
+  certificate SANs must include the address agents actually dial, not just loopback.
+
+**Release/distribution**
+- Gate the signing job behind a GitHub **Environment with required reviewers**; keep the
+  signing key out of repo-level secrets (env secrets only) and SHA-pin every action.
+- Assert completeness (all assets) before publishing; look drafts up via the releases
+  **list** (the by-tag endpoint 404s for drafts) and parse JSON with `jq`, not fragile
+  greps.
+- Separate the artifact download budget from the metadata timeout (`http.Client.Timeout`
+  includes the body; ~28 MB fails on slow links under a 10 s cap).
+- Make installers idempotent and owner-aware (preserve operator env edits, refuse to
+  apply as the wrong user, restore ownership), verify before install, and keep install
+  artifacts (wrapper/unit/sudoers) under the same signed/verified trust as the binary.
+
+**Tests/e2e**
+- Tests must never touch production paths when run as root: `TestMain` sandboxes that
+  disable the feature and point every path at a temp dir, plus a guard asserting paths
+  stay inside it; a test that shells out to the system wrapper must strip
+  `SUDO_USER/SUDO_UID/SUDO_GID` and shim `systemctl`/`mv`.
+- Harness reads of test-controlled paths must be non-blocking/regular-file-only too
+  (a planted FIFO hung a whole CI package for 600 s).
+- On a shared box that runs the product, e2e must never dial `127.0.0.1` with the
+  product's own ports: seed nodes on an unused loopback/address so the dial is a fast
+  refusal, otherwise a live agent answers `Unimplemented` and the flow stalls.

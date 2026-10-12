@@ -99,7 +99,6 @@
       items: [
         { nav: "dashboard", label: "Tổng quan", icon: "i-grid", href: "dashboard.html" },
         { nav: "projects", label: "Projects", icon: "i-layers", href: "projects.html", count: 3 },
-        { nav: "files", label: "Quản lý file", icon: "i-folder", href: "files.html" },
         { nav: "templates", label: "Thư viện template", icon: "i-rocket", href: "services.html#templates" },
         { nav: "servers", label: "Máy chủ", icon: "i-server", href: "servers.html", count: 4 },
         { nav: "domains", label: "Tên miền & SSL", icon: "i-globe", href: "domains.html", count: 11 }
@@ -337,7 +336,6 @@
     { label: "Services", hint: "4 compose project", href: "services.html", icon: "i-layers" },
     { label: "Thư viện template", hint: "WordPress, Nextcloud, n8n, Uptime Kuma", href: "services.html#templates", icon: "i-rocket" },
     { label: "Cơ sở dữ liệu", hint: "5 database", href: "databases.html", icon: "i-db" },
-    { label: "Quản lý file", hint: "Volume ứng dụng · tải lên, xoá, đổi tên", href: "files.html", icon: "i-folder" },
     { label: "Máy chủ", hint: "4 node", href: "servers.html", icon: "i-server" },
     { label: "Thêm máy chủ (SSH + agent)", hint: "Hành động", href: "servers.html#wizard", icon: "i-plus" },
     { label: "Tên miền & SSL", hint: "9 router", href: "domains.html", icon: "i-globe" },

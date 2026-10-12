@@ -35,7 +35,6 @@ templates/       # one-click service templates (YAML)
 deploy/          # install scripts, systemd units, compose
 docs/plans/      # feature/phase plans (medium to large work)
 docs/sub-plans/  # small focused plans (single UI fix, one-off work package)
-docs/design-plans/ # UI-only design briefs (what each screen must do)
 docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
 ```
 
@@ -84,16 +83,16 @@ When creating an issue (via `orca-linear`), always set all of these:
   (must render without the Vue/i18n runtime), and proper-noun autonyms
   (`language.names`) consumed by `LanguageSelect.vue`. Code/docs stay English-only
   per Language below.
-- Mockups for future-phase pages (applications, databases, domains, services, files, team-settings) are references only — implement them when their phase lands, not before.
+- Every shipped page has a mockup in `docs/design/`; the mockups' Vietnamese copy is not shipped (see above).
 - Modals: header and footer stay fixed, only the content region scrolls, max-height is bounded to the viewport and a modal never exceeds it — see the Modals rule in `docs/design/README.md` (shared `.app-modal`/`.wizard-modal` contract in `web/src/shared/styles/main.css`).
 - Rebuilt `internal/server/webdist` stays committed; the CI dist-drift check must pass.
 
 ## Language
 
-**English only** in source code, comments, commit messages and docs, replies, and multilingual (i18n) files —
+**English only** in source code, comments, commit messages, docs and multilingual (i18n) files —
 with one narrow UI-language exception: translated Vietnamese message *values* in
 `web/src/shared/i18n/locales/vi.ts` and `web/src/features/*/locales/vi.ts` may be Vietnamese.
-Message keys, identifiers, comments, docs and replies stay English.
+Message keys, identifiers, comments and docs stay English.
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

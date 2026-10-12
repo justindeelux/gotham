@@ -27,6 +27,7 @@ exit criteria, work packages, dependencies, and rollback. Start with the
 | 15 — Add resource flow & automatic Git sources | [15-add-resource-git-sources.md](plans/15-add-resource-git-sources.md) |
 | 16 — Instance settings | [16-instance-settings.md](plans/16-instance-settings.md) |
 | 17 — Update settings | [17-update-settings.md](plans/17-update-settings.md) |
+| 18 — Remote file manager & code editor | [18-file-manager.md](plans/18-file-manager.md) |
 
 Phase status and remaining work live only in [`TODO.md`](TODO.md).
 

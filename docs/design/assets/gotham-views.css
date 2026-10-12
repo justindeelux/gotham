@@ -210,6 +210,10 @@
 .fm-tile:hover { border-color: var(--accent); }
 .fm-tile.is-selected { border-color: var(--accent); background: var(--accent-soft); }
 .fm-tile .fm-mark { width: 34px; height: 34px; }
+/* Nhãn trong ô lưới xếp hai dòng như trong hàng danh sách. */
+.fm-tile .fm-label { display: block; }
+.fm-tile .fm-label b { display: block; font-weight: 500; color: var(--fg); font-size: var(--text-xs); }
+.fm-tile .fm-label span { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
 .fm-tile .fm-actions {
   position: absolute; right: 6px; top: 6px; padding: 2px;
   background: var(--float); border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -241,6 +245,31 @@
 }
 .fm-preview svg { width: 30px; height: 30px; color: var(--meta); margin: 0 auto var(--space-2); }
 .fm-bar .search { min-width: 200px; }
+/* Hộp thư mục trống / đang tải / lỗi dùng .empty có sẵn. */
+.fm-spinner {
+  width: 22px; height: 22px; border-radius: var(--radius-pill);
+  border: 2px solid var(--border-soft); border-top-color: var(--accent);
+  animation: spin 700ms linear infinite;
+}
+/* Menu ngữ cảnh của một hàng: mở bằng chuột phải hoặc nút ⋯. */
+.fm-demo { position: relative; }
+.fm-menu {
+  position: absolute; top: 46px; right: 8px; z-index: 40; min-width: 190px;
+  background: var(--float); border: 1px solid var(--border-soft); border-radius: var(--radius-md);
+  padding: var(--space-1); box-shadow: var(--elev-raised);
+}
+.fm-menu[hidden] { display: none; }
+.fm-menu button {
+  display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: 32px;
+  padding: 6px var(--space-2); border-radius: var(--radius-sm);
+  font-size: var(--text-sm); color: var(--fg); text-align: left;
+}
+.fm-menu button:hover, .fm-menu button:focus-visible { background: var(--hover-row); color: var(--fg-2); }
+.fm-menu button svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--meta); }
+.fm-menu button:hover svg, .fm-menu button:focus-visible svg { color: var(--fg); }
+.fm-menu button.is-danger { color: var(--danger-ink); }
+.fm-menu button.is-danger svg { color: var(--danger-ink); }
+.fm-menu-sep { height: 1px; background: var(--border); margin: var(--space-1) 0; }
 
 /* ── Footer (overview page) ───────────────────────────────────────────── */
 .pagefoot { padding: var(--space-6) 0 var(--space-8); border-top: 1px solid var(--border); color: var(--muted); font-size: var(--text-xs); }

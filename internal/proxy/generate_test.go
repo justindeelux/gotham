@@ -24,8 +24,14 @@ const goldenStaticYAML = `entryPoints:
     address: :8080
   web:
     address: :80
+    transport:
+      respondingTimeouts:
+        readTimeout: 30m
   websecure:
     address: :443
+    transport:
+      respondingTimeouts:
+        readTimeout: 30m
 ping:
   entryPoint: traefik
 providers:
@@ -61,8 +67,16 @@ address = ':8080'
 [entryPoints.web]
 address = ':80'
 
+[entryPoints.web.transport]
+[entryPoints.web.transport.respondingTimeouts]
+readTimeout = '30m'
+
 [entryPoints.websecure]
 address = ':443'
+
+[entryPoints.websecure.transport]
+[entryPoints.websecure.transport.respondingTimeouts]
+readTimeout = '30m'
 
 [ping]
 entryPoint = 'traefik'
@@ -136,6 +150,29 @@ func TestGenerateGolden(t *testing.T) {
 					tc.format, file.Name, file.Content, want)
 			}
 		}
+	}
+}
+
+// TestPublicEntryPointsSetReadTimeout is the step-4 fix: Traefik v3 defaults
+// readTimeout to 60 s, which caps reading a request including its body and
+// would cut a large file upload. The public entrypoints must set an explicit,
+// generous responding read timeout; the loopback ping entrypoint must not.
+func TestPublicEntryPointsSetReadTimeout(t *testing.T) {
+	cfg := BuildConfig(nil, nil, nil, "", "")
+	for _, name := range []string{EntryPointWeb, EntryPointWebSecure} {
+		entry, ok := cfg.EntryPoints[name]
+		if !ok {
+			t.Fatalf("entrypoint %q missing", name)
+		}
+		if entry.Transport == nil || entry.Transport.RespondingTimeouts == nil {
+			t.Fatalf("entrypoint %q has no respondingTimeouts", name)
+		}
+		if got := entry.Transport.RespondingTimeouts.ReadTimeout; got != EntryPointReadTimeout {
+			t.Errorf("entrypoint %q readTimeout = %q, want %q", name, got, EntryPointReadTimeout)
+		}
+	}
+	if internal := cfg.EntryPoints[EntryPointInternal]; internal.Transport != nil {
+		t.Errorf("internal entrypoint should not set transport, got %+v", internal.Transport)
 	}
 }
 

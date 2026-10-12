@@ -260,6 +260,43 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 - **Exit:** every write route is team-scoped, role-gated, audited.
 - **Rollback:** revert; read routes stay.
 
+**Deviations (step 4):**
+
+- **Upload staging on the control plane.** The agent's `Write` header must declare
+  the exact body size, and a multipart part carries no size. The upload route
+  therefore spools each part to a control-plane temp file (bounded by the same
+  ceiling, `spoolBody`) to learn its size, then streams it to the agent; it never
+  calls `ParseMultipartForm`, and only one part is in flight at a time. `PUT
+  /content` streams directly because its `Content-Length` is the size (a chunked
+  save is spooled the same way). A request-body error cancels the agent stream
+  before the commit, so a partial upload is never renamed into place.
+- **Content read stays owner/admin only.** File bodies hold secrets (0600
+  compose environment files, `.env`), so `GET /content`, `PUT /content` and
+  `POST /download-ticket` require a write-capable role (`Role.CanWrite`). The
+  plan allowed the owner to relax content reads to all members later; the
+  decision is to keep them owner/admin for now, revisited with step 10's flag
+  flip.
+- **Control-plane upload ceiling.** `FILES_MAX_UPLOAD_BYTES` bounds a write or
+  upload body; default 1 GiB, matching the agent's
+  `GOTHAM_AGENT_FILE_MAX_UPLOAD`. A body above it is refused 413 before the
+  agent is dialed (`http.MaxBytesReader` catches a lying or chunked
+  `Content-Length`).
+- **Traefik read timeout.** Traefik v3 defaults an entrypoint's
+  `readTimeout` to 60 s, which caps reading a request **including its body**, so
+  a large upload slower than that is cut at the edge. The generated static
+  config now sets `transport.respondingTimeouts.readTimeout: 30m` on the
+  `web`/`websecure` entrypoints (`EntryPointReadTimeout`), matching the control
+  plane's 30-minute transfer budget. It is a ceiling: a larger or slower upload
+  still needs a higher value. The loopback `traefik` entrypoint is unchanged.
+- **Move is an alias of rename.** `/files/move` and `/files/rename` both call
+  the single agent `Rename` RPC; both are single-root (cross-root → 400). The
+  audit `op` is `rename` for either route, with the destination logged as an
+  extra field.
+- **Write conflict status.** An agent `AlreadyExists`/`FailedPrecondition`/
+  `Aborted` maps to 409; a missing `If-Match` (and no `?overwrite=true`) is 428.
+  The plan's 412 alternative was dropped to keep one conflict status (409) in
+  the error contract.
+
 ### Step 5 — Mockup
 - **Brief:** `docs/design/README.md` (modal rules), `assets/gotham-ui.css`, `server-detail.html`.
 - **Tasks:** `docs/design/files.html`: toolbar, breadcrumb + root switcher, list with empty/loading/error/permission-denied rows, selection bar, context menu, editor pane (tabs, dirty dot, status bar, binary/too-large state), conflict modal (`.app-modal`), delete confirm, upload panel, read-only root banner; link from `docs/design/index.html`; English copy.

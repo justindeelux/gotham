@@ -87,6 +87,23 @@ type fakeFileClient struct {
 	readErr   error
 	closes    int
 	seenList  *agentv1.ListRequest
+
+	writeResp  *agentv1.WriteResponse
+	writeErr   error
+	lastWrite  *fakeWriteStream
+	writeCtx   context.Context
+	mkdirResp  *agentv1.MkdirResponse
+	mkdirErr   error
+	renameResp *agentv1.RenameResponse
+	renameErr  error
+	copyMsgs   []*agentv1.Progress
+	copyErr    error
+	deleteMsgs []*agentv1.Progress
+	deleteErr  error
+	seenRename *agentv1.RenameRequest
+	seenCopy   *agentv1.CopyRequest
+	seenDelete *agentv1.DeleteRequest
+	seenMkdir  *agentv1.MkdirRequest
 }
 
 func (f *fakeFileClient) ListRoots(context.Context, *agentv1.ListRootsRequest, ...grpc.CallOption) (*agentv1.ListRootsResponse, error) {
@@ -133,6 +150,145 @@ func (f *fakeFileClient) Read(context.Context, *agentv1.ReadRequest, ...grpc.Cal
 		return nil, f.readErr
 	}
 	return &fakeReadStream{chunks: [][]byte{f.readBody}}, nil
+}
+
+func (f *fakeFileClient) Write(ctx context.Context, _ ...grpc.CallOption) (grpc.ClientStreamingClient[agentv1.WriteRequest, agentv1.WriteResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.writeCtx = ctx
+	if f.writeErr != nil {
+		return nil, f.writeErr
+	}
+	stream := &fakeWriteStream{resp: f.writeResp}
+	f.lastWrite = stream
+	return stream, nil
+}
+
+func (f *fakeFileClient) Mkdir(_ context.Context, in *agentv1.MkdirRequest, _ ...grpc.CallOption) (*agentv1.MkdirResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenMkdir = in
+	if f.mkdirErr != nil {
+		return nil, f.mkdirErr
+	}
+	if f.mkdirResp != nil {
+		return f.mkdirResp, nil
+	}
+	return &agentv1.MkdirResponse{}, nil
+}
+
+func (f *fakeFileClient) Rename(_ context.Context, in *agentv1.RenameRequest, _ ...grpc.CallOption) (*agentv1.RenameResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenRename = in
+	if f.renameErr != nil {
+		return nil, f.renameErr
+	}
+	if f.renameResp != nil {
+		return f.renameResp, nil
+	}
+	return &agentv1.RenameResponse{}, nil
+}
+
+func (f *fakeFileClient) Copy(_ context.Context, in *agentv1.CopyRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenCopy = in
+	if f.copyErr != nil {
+		return nil, f.copyErr
+	}
+	return &fakeProgressStream{msgs: f.copyMsgs}, nil
+}
+
+func (f *fakeFileClient) Delete(_ context.Context, in *agentv1.DeleteRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenDelete = in
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
+	return &fakeProgressStream{msgs: f.deleteMsgs}, nil
+}
+
+// lastWriteHeader returns the header the fake Write stream received.
+func (f *fakeFileClient) lastWriteHeader() *agentv1.WriteHeader {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lastWrite == nil {
+		return nil
+	}
+	return f.lastWrite.header
+}
+
+// lastWriteBody returns the body bytes the fake Write stream received.
+func (f *fakeFileClient) lastWriteBody() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lastWrite == nil {
+		return nil
+	}
+	return f.lastWrite.body
+}
+
+// lastWriteClosed reports whether CloseAndRecv was called (i.e. the stream was
+// committed rather than cancelled).
+func (f *fakeFileClient) lastWriteClosed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastWrite != nil && f.lastWrite.closed
+}
+
+// fakeWriteStream is a scriptable Write client stream.
+type fakeWriteStream struct {
+	grpc.ClientStream
+	mu     sync.Mutex
+	header *agentv1.WriteHeader
+	body   []byte
+	resp   *agentv1.WriteResponse
+	closed bool
+}
+
+func (s *fakeWriteStream) Send(msg *agentv1.WriteRequest) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch part := msg.GetPart().(type) {
+	case *agentv1.WriteRequest_Header:
+		s.header = part.Header
+	case *agentv1.WriteRequest_Data:
+		s.body = append(s.body, part.Data...)
+	case *agentv1.WriteRequest_Commit:
+	}
+	return nil
+}
+
+func (s *fakeWriteStream) CloseAndRecv() (*agentv1.WriteResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	if s.resp != nil {
+		return s.resp, nil
+	}
+	return &agentv1.WriteResponse{}, nil
+}
+
+// fakeProgressStream is a scriptable Copy/Delete progress stream.
+type fakeProgressStream struct {
+	grpc.ClientStream
+	msgs  []*agentv1.Progress
+	index int
+	err   error
+}
+
+func (s *fakeProgressStream) Recv() (*agentv1.Progress, error) {
+	if s.index >= len(s.msgs) {
+		if s.err != nil {
+			return nil, s.err
+		}
+		return nil, io.EOF
+	}
+	msg := s.msgs[s.index]
+	s.index++
+	return msg, nil
 }
 
 // Close satisfies io.Closer so the service releases the fake like a real client.
@@ -372,6 +528,8 @@ func TestMapRPCError(t *testing.T) {
 		{codes.InvalidArgument, ErrValidation},
 		{codes.PermissionDenied, ErrForbidden},
 		{codes.FailedPrecondition, ErrConflict},
+		{codes.AlreadyExists, ErrConflict},
+		{codes.Aborted, ErrConflict},
 		{codes.ResourceExhausted, ErrBusy},
 		{codes.Unimplemented, ErrAgentOutdated},
 		{codes.Unavailable, ErrAgentUnavailable},

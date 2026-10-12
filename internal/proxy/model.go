@@ -133,6 +133,24 @@ type RedirectRegex struct {
 type EntryPoint struct {
 	// Address is the listen address, e.g. ":80".
 	Address string `yaml:"address" toml:"address"`
+	// Transport carries the entrypoint's transport settings. The public
+	// entrypoints set a responding read timeout so a large file upload is not
+	// cut by Traefik v3's 60 s default; the loopback ping entrypoint leaves it
+	// unset.
+	Transport *EntryPointTransport `yaml:"transport,omitempty" toml:"transport,omitempty"`
+}
+
+// EntryPointTransport is an entrypoint's transport section.
+type EntryPointTransport struct {
+	RespondingTimeouts *RespondingTimeouts `yaml:"respondingTimeouts,omitempty" toml:"respondingTimeouts,omitempty"`
+}
+
+// RespondingTimeouts bounds how long Traefik waits while reading a request or
+// writing a response.
+type RespondingTimeouts struct {
+	// ReadTimeout caps reading a request including its body, as a Traefik
+	// duration string (e.g. "30m").
+	ReadTimeout string `yaml:"readTimeout,omitempty" toml:"readTimeout,omitempty"`
 }
 
 // CertificatesResolver is a static certificate resolver

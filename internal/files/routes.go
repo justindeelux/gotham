@@ -48,12 +48,20 @@ type handler struct {
 
 // Mount registers the file endpoints on r:
 //
-//	GET  /v1/servers/{id}/files/roots
-//	GET  /v1/servers/{id}/files/list?root=&path=&cursor=
-//	GET  /v1/servers/{id}/files/stat?root=&path=
-//	GET  /v1/servers/{id}/files/content?root=&path=
-//	POST /v1/servers/{id}/files/download-ticket?root=&path=
-//	GET  /v1/servers/{id}/files/download?ticket=
+//	GET    /v1/servers/{id}/files/roots
+//	GET    /v1/servers/{id}/files/list?root=&path=&cursor=
+//	GET    /v1/servers/{id}/files/stat?root=&path=
+//	GET    /v1/servers/{id}/files/content?root=&path=
+//	PUT    /v1/servers/{id}/files/content?root=&path=          (If-Match / ?overwrite)
+//	POST   /v1/servers/{id}/files/upload?root=&path=&overwrite=
+//	POST   /v1/servers/{id}/files/mkdir
+//	POST   /v1/servers/{id}/files/create
+//	POST   /v1/servers/{id}/files/rename
+//	POST   /v1/servers/{id}/files/move
+//	POST   /v1/servers/{id}/files/copy
+//	DELETE /v1/servers/{id}/files/entry?root=&path=&recursive=
+//	POST   /v1/servers/{id}/files/download-ticket?root=&path=
+//	GET    /v1/servers/{id}/files/download?ticket=
 //
 // auth wraps the group: the server passes its team chain (RequireAuth +
 // RequireTeam + the write gate), and the service authorizes the target node's
@@ -82,6 +90,14 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, 
 		protected.Get("/v1/servers/{id}/files/list", h.list)
 		protected.Get("/v1/servers/{id}/files/stat", h.stat)
 		protected.Get("/v1/servers/{id}/files/content", h.content)
+		protected.Put("/v1/servers/{id}/files/content", h.putContent)
+		protected.Post("/v1/servers/{id}/files/upload", h.upload)
+		protected.Post("/v1/servers/{id}/files/mkdir", h.mkdir)
+		protected.Post("/v1/servers/{id}/files/create", h.create)
+		protected.Post("/v1/servers/{id}/files/rename", h.rename)
+		protected.Post("/v1/servers/{id}/files/move", h.move)
+		protected.Post("/v1/servers/{id}/files/copy", h.copy)
+		protected.Delete("/v1/servers/{id}/files/entry", h.deleteEntry)
 		protected.Post("/v1/servers/{id}/files/download-ticket", h.issueTicket)
 	})
 }
@@ -229,11 +245,16 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 
 // writeError maps service sentinels to HTTP responses.
 func (h *handler) writeError(w http.ResponseWriter, err error) {
+	var maxBytes *http.MaxBytesError
 	switch {
 	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
 	case errors.Is(err, ErrForbidden):
 		writeJSON(w, http.StatusForbidden, errorBody{Message: "forbidden"})
+	case errors.Is(err, ErrValidation) && errors.As(err, &maxBytes):
+		// A body that overran the ceiling while being read (a lying or chunked
+		// Content-Length) is 413, not 400.
+		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "file is too large to edit"})
 	case errors.Is(err, ErrValidation):
 		// A fixed message: the underlying error can carry raw gRPC/agent text
 		// (mapRPCError wraps the agent error), which must not reach the client.

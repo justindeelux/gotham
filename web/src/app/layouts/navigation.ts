@@ -29,7 +29,7 @@ export const navSections: NavSection[] = [
     items: [
       { key: "dashboard", label: "Dashboard", labelKey: "nav.items.dashboard", icon: "grid", to: "dashboard" },
       { key: "projects", label: "Projects", labelKey: "nav.items.projects", icon: "layers", to: "projects" },
-      { key: "files", label: "File manager", labelKey: "nav.items.files", icon: "folder" },
+      { key: "files", label: "File manager", labelKey: "nav.items.files", icon: "folder", to: "files" },
       { key: "templates", label: "Template library", labelKey: "nav.items.templates", icon: "rocket", to: "templates" },
       { key: "servers", label: "Servers", labelKey: "nav.items.servers", icon: "server", to: "servers" },
       { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains" },
@@ -84,9 +84,15 @@ export const sectionAliases: Record<string, string> = { settings: "notifications
  * notifications, so it keeps that highlight.
  */
 export function activeNavKey(path: string): string {
-  const [segment = "dashboard", section] = path.split("/").filter(Boolean);
+  const parts = path.split("/").filter(Boolean);
+  const [segment = "dashboard", section] = parts;
   if (segment === "settings") {
     return section ?? sectionAliases[segment] ?? segment;
+  }
+  // The file browser also lives at /servers/:id/files; highlight the File
+  // manager entry there instead of the Servers entry (JUS-110).
+  if (segment === "servers" && parts[2] === "files") {
+    return "files";
   }
   return sectionAliases[segment] ?? segment;
 }

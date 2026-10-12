@@ -104,6 +104,8 @@ const vi: CommonMessages = {
     servers: "Máy chủ",
     serverDetail: "Chi tiết máy chủ",
     serverContainers: "Container",
+    serverFiles: "Tệp",
+    files: "Quản lý tệp",
     projects: "Dự án",
     projectDetail: "Chi tiết dự án",
     environmentDetail: "Chi tiết môi trường",

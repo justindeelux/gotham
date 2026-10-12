@@ -24,6 +24,7 @@ import (
 	"github.com/justindeelux/gotham/internal/containers"
 	"github.com/justindeelux/gotham/internal/databases"
 	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/files"
 	"github.com/justindeelux/gotham/internal/githubapp"
 	"github.com/justindeelux/gotham/internal/instance"
 	"github.com/justindeelux/gotham/internal/notifications"
@@ -349,6 +350,15 @@ func (s *Server) routes() (http.Handler, error) {
 		// indistinguishable).
 		containerService := s.containerService()
 		containers.Mount(api, s.withTeam(), containerService)
+
+		// Remote file manager, read side (Phase 18 step 3): the mTLS agent
+		// dialer is plugged in here, behind the same team chain as the
+		// container routes. A nil service (no registry) mounts nothing;
+		// FEATURE_FILES defaults off, so the mounted routes answer 503 until
+		// step 10 signs the feature off. The service authorizes the target
+		// node's team and role (owner/admin for content and download tickets)
+		// before any agent read.
+		files.Mount(api, s.withTeam(), s.fileService(), s.logger)
 
 		// Deleted database volumes are kept for the grace window and then
 		// removed by the retention sweep. The loop starts here and is stopped
@@ -770,6 +780,30 @@ func (s *Server) containerService() containers.ContainerService {
 	if dialer, ok := s.servers.(containerDialer); ok {
 		service.SetDial(func(ctx context.Context, server *servers.Server) (containers.DockerClient, error) {
 			return dialer.DialDockerClient(ctx, server.ID)
+		})
+	}
+	return service
+}
+
+// fileDialer is the mTLS FileService dial implemented by
+// *servers.ServerService. The HTTP layer type-asserts its server registry to
+// this interface, so tests that pass a fake registry simply leave the dialer
+// unwired instead of forcing a wider interface change.
+type fileDialer interface {
+	DialFileClient(ctx context.Context, id uuid.UUID, opts ...servers.DockerDialOption) (*servers.FileClient, error)
+}
+
+// fileService builds the shared file service for the HTTP wiring and plugs the
+// agent dialer, which is what makes the read API reach a node. It returns a nil
+// interface when there is no server registry, so Mount stays a no-op.
+func (s *Server) fileService() files.FileService {
+	service := files.NewDefaultService(s.servers)
+	if service == nil {
+		return nil
+	}
+	if dialer, ok := s.servers.(fileDialer); ok {
+		service.SetDial(func(ctx context.Context, server *servers.Server) (files.FileClient, error) {
+			return dialer.DialFileClient(ctx, server.ID)
 		})
 	}
 	return service

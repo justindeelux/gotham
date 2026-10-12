@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/config"
 )
@@ -217,7 +219,21 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 		"deploy reads credentials":     {http.MethodGet, "/api/v1/databases/x/credentials", []string{auth.ScopeDeploy}, true, http.StatusOK},
 		"admin reads credentials":      {http.MethodGet, "/api/v1/databases/x/credentials", []string{auth.ScopeAdmin}, true, http.StatusOK},
 		"jwt reads credentials":        {http.MethodGet, "/api/v1/databases/x/credentials", nil, false, http.StatusOK},
-		"jwt mutates":                  {http.MethodPost, "/api/v1/servers", nil, false, http.StatusOK},
+		// File content is deploy-gated like /credentials (fix-round-1 #1).
+		"read cannot read files content":          {http.MethodGet, "/api/v1/servers/x/files/content", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy reads files content":              {http.MethodGet, "/api/v1/servers/x/files/content", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"admin reads files content":               {http.MethodGet, "/api/v1/servers/x/files/content", []string{auth.ScopeAdmin}, true, http.StatusOK},
+		"jwt reads files content":                 {http.MethodGet, "/api/v1/servers/x/files/content", nil, false, http.StatusOK},
+		"read cannot read content trailing slash": {http.MethodGet, "/api/v1/servers/x/files/content/", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot read content with query":     {http.MethodGet, "/api/v1/servers/x/files/content?root=r&path=p", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		// The other file reads stay read-scoped.
+		"read reads files roots": {http.MethodGet, "/api/v1/servers/x/files/roots", []string{auth.ScopeRead}, true, http.StatusOK},
+		"read reads files list":  {http.MethodGet, "/api/v1/servers/x/files/list", []string{auth.ScopeRead}, true, http.StatusOK},
+		"read reads files stat":  {http.MethodGet, "/api/v1/servers/x/files/stat", []string{auth.ScopeRead}, true, http.StatusOK},
+		// The ticket mint is deploy-gated by method.
+		"read cannot mint download ticket": {http.MethodPost, "/api/v1/servers/x/files/download-ticket", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy mints download ticket":     {http.MethodPost, "/api/v1/servers/x/files/download-ticket", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"jwt mutates":                      {http.MethodPost, "/api/v1/servers", nil, false, http.StatusOK},
 	}
 
 	for label, tc := range tests {
@@ -233,6 +249,36 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestFilesContentScopeGate proves the real mounted chain deploy-gates file
+// content (fix-round-1 #1): a read-scoped API token is refused with
+// "insufficient scope", while a deploy token passes the gate.
+func TestFilesContentScopeGate(t *testing.T) {
+	s, tokens := newScopeTestServer(t)
+	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
+	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	id := uuid.New()
+	path := "/api/v1/servers/" + id.String() + "/files/content?root=volumes&path=app.env"
+
+	rec := doRequest(t, s, http.MethodGet, path, "", "Bearer "+readToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("read token content = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+	var body apiError
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body.Message != "insufficient scope" {
+		t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
+	}
+
+	// The deploy token passes the scope gate; the unwired fake agent then fails
+	// downstream, which is any status other than the scope refusal.
+	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+deployToken)
+	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+		t.Fatalf("deploy token content = %d, want the scope gate to pass", rec.Code)
 	}
 }
 

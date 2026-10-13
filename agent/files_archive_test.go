@@ -8,13 +8,14 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
@@ -974,6 +975,27 @@ func TestZipCentralDirectoryBounds(t *testing.T) {
 	}
 }
 
+// TestZipCentralDirectoryBoundsToleratesMaxCount proves a saturated 16-bit entry
+// count without a zip64 locator falls back to the 16-bit value (a plain
+// 65535-entry archive) instead of being refused, matching archive/zip (Claude L3).
+func TestZipCentralDirectoryBoundsToleratesMaxCount(t *testing.T) {
+	t.Parallel()
+	plain := buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: []byte("x")}})
+	// Saturate only the entry-count fields; keep the real central-directory size
+	// and offset, and leave no zip64 locator before the EOCD.
+	plain[len(plain)-14] = 0xFF
+	plain[len(plain)-13] = 0xFF
+	plain[len(plain)-12] = 0xFF
+	plain[len(plain)-11] = 0xFF
+	entries, dirSize, err := zipCentralDirectoryBounds(bytes.NewReader(plain), int64(len(plain)))
+	if err != nil {
+		t.Fatalf("bounds: %v", err)
+	}
+	if entries != 65535 || dirSize <= 0 {
+		t.Fatalf("bounds = %d entries, %d bytes; want 65535, >0", entries, dirSize)
+	}
+}
+
 // TestFileServerExtractRejectsZipDeclaredEntryCount proves the declared entry
 // count is refused from the EOCD before zip.NewReader materialises anything
 // (OC M1/OC N1).
@@ -1061,14 +1083,15 @@ func TestExtractStateCachesAncestors(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractDeepTreeIsFast proves extracting thousands of entries
-// that share one deep directory is linear: without the ancestor cache each
-// entry re-walks the whole chain, which is O(entries × depth²) and takes tens of
-// seconds (Claude N1). Directory entries are used so the test measures the
-// ancestor walk, not per-file fsync cost.
-func TestFileServerExtractDeepTreeIsFast(t *testing.T) {
+// TestFileServerExtractDeepTreeIsLinear proves extracting thousands of entries
+// that share one deep directory stays linear: the ancestor cache turns each
+// entry's path check into O(depth) work once per directory instead of re-walking
+// the whole chain per entry (Claude N1). It asserts the Stat count on the real
+// extract path, so it fails without the cache instead of depending on a
+// wall-clock bound (Claude N3/OC N3).
+func TestFileServerExtractDeepTreeIsLinear(t *testing.T) {
 	t.Parallel()
-	server, root := newTestFileServer(t)
+	server, rootDir := newTestFileServer(t)
 	const entriesCount = 1000
 	prefix := strings.Repeat("d/", fileArchiveMaxNameDepth-2)
 	entries := make([]tarEntry, 0, entriesCount)
@@ -1077,12 +1100,235 @@ func TestFileServerExtractDeepTreeIsFast(t *testing.T) {
 			name: prefix + "x" + strconv.Itoa(i) + "/", typeflag: tar.TypeDir, mode: 0o755,
 		})
 	}
-	writeArchiveFile(t, root, "deep.tar", buildTar(t, entries))
-	start := time.Now()
-	if err := extract(t, server, fileRootVolumes, "deep.tar", ".", false); err != nil {
+	writeArchiveFile(t, rootDir, "deep.tar", buildTar(t, entries))
+
+	root := server.roots[fileRootVolumes]
+	archive, entry, err := root.OpenRegular("deep.tar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = archive.Close() }()
+	counter := &archiveCounter{maxEntries: server.archiveMaxEntries, maxBytes: server.archiveMaxBytes, archiveBytes: entry.Size}
+	state := newExtractState(root)
+	err = server.extractArchive(context.Background(), root, archive, entry.Size,
+		agentv1.ArchiveFormat_ARCHIVE_FORMAT_TAR, ".", "deep.tar", false,
+		counter, &extractDirs{}, state, &archiveProgress{stream: &collectProgressStream{}, path: "."})
+	if err != nil {
 		t.Fatalf("extract deep tree: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > 30*time.Second {
-		t.Fatalf("extract of %d entries at depth %d took %s", entriesCount, fileArchiveMaxNameDepth, elapsed)
+	if state.statCalls > fileArchiveMaxNameDepth*2 {
+		t.Fatalf("ancestor Stat calls = %d for %d entries at depth %d; want ~%d (cache not used?)",
+			state.statCalls, entriesCount, fileArchiveMaxNameDepth, fileArchiveMaxNameDepth)
+	}
+}
+
+// TestFileServerExtractLeavesExistingDirMode proves an archive entry that lands
+// on an already-existing directory does not have its mode rewritten, so a
+// world-writable entry cannot widen a private directory (Claude L2).
+func TestFileServerExtractLeavesExistingDirMode(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if err := os.Mkdir(filepath.Join(root, "keep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := buildTar(t, []tarEntry{
+		{name: "keep/", typeflag: tar.TypeDir, mode: 0o777},
+		{name: "keep/f", typeflag: tar.TypeReg, mode: 0o644, body: []byte("x")},
+	})
+	writeArchiveFile(t, root, "d.tar", body)
+	if err := extract(t, server, fileRootVolumes, "d.tar", ".", false); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "keep"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("existing dir mode = %o, want 700 (an archive entry must not widen it)", got)
+	}
+}
+
+// zipRawCentralHeader is the 46-byte fixed part of a central-directory file
+// header with an empty name, extra and comment. archive/zip accepts it, which
+// is what lets a crafted archive declare count=0 and still make the reader
+// materialise every header it physically contains.
+func zipRawCentralHeader() []byte {
+	h := make([]byte, zipCentralDirHeaderMinSize)
+	binary.LittleEndian.PutUint32(h[0:4], 0x02014b50) // central file header signature
+	return h
+}
+
+// zipEOCD builds an end-of-central-directory record.
+func zipEOCD(entries uint16, cdSize, cdOffset uint32, comment string) []byte {
+	b := make([]byte, 22+len(comment))
+	binary.LittleEndian.PutUint32(b[0:4], 0x06054b50)
+	binary.LittleEndian.PutUint16(b[8:10], entries)
+	binary.LittleEndian.PutUint16(b[10:12], entries)
+	binary.LittleEndian.PutUint32(b[12:16], cdSize)
+	binary.LittleEndian.PutUint32(b[16:20], cdOffset)
+	binary.LittleEndian.PutUint16(b[20:22], uint16(len(comment)))
+	copy(b[22:], comment)
+	return b
+}
+
+// TestFileServerExtractRejectsZipCentralDirectoryBomb proves the zip pre-parse
+// bounds the header table by the central directory's declared size, not the
+// declared entry count. archive/zip reads headers until a bad one and only
+// compares the count modulo 2^16, so an archive with 65536×k empty headers and
+// an EOCD declaring 0 entries would otherwise materialise every header (Claude
+// H1). The tests assert both the refusal and that it happens before the reader
+// allocates, by comparing TotalAlloc across the extract.
+func TestFileServerExtractRejectsZipCentralDirectoryBomb(t *testing.T) {
+	cases := map[string]int{
+		"wraparound 65536 declared as 0":   65536,
+		"10x wraparound 655360 declared 0": 10 * 65536,
+	}
+	for name, headers := range cases {
+		t.Run(name, func(t *testing.T) {
+			server, root := newTestFileServer(t)
+			server.archiveMaxEntries = 1000
+			cd := bytes.Repeat(zipRawCentralHeader(), headers)
+			body := append(cd, zipEOCD(0, uint32(len(cd)), 0, "")...)
+			writeArchiveFile(t, root, "bomb.zip", body)
+
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			err := extract(t, server, fileRootVolumes, "bomb.zip", ".", false)
+			runtime.ReadMemStats(&after)
+			if status.Code(err) != codes.ResourceExhausted {
+				t.Fatalf("extract of %d empty headers declared 0 = %v, want ResourceExhausted", headers, err)
+			}
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
+				t.Fatalf("pre-parse allocated %d bytes before refusing; want the cap to fire before zip.NewReader", allocated)
+			}
+		})
+	}
+}
+
+// TestFileServerExtractZipTwoEOCDsPicksArchiveZipRecord proves the pre-parse
+// selects the same end-of-central-directory record archive/zip selects (the
+// last one, even with trailing bytes), so a polyglot cannot point the pre-parse
+// at a benign inner record while the reader uses a malicious outer one (Claude
+// H1).
+func TestFileServerExtractZipTwoEOCDsPicksArchiveZipRecord(t *testing.T) {
+	server, root := newTestFileServer(t)
+	server.archiveMaxEntries = 1000
+	const headers = 65536
+	cd := bytes.Repeat(zipRawCentralHeader(), headers)
+	var body []byte
+	body = append(body, zipEOCD(1, 46, 0, "")...)              // inner record an exact-match scanner would settle on
+	body = append(body, cd...)                                 // the headers archive/zip will actually read
+	body = append(body, zipEOCD(0, uint32(len(cd)), 0, "")...) // outer record declaring 0 (wraparound)
+	body = append(body, 0x00)                                  // trailing byte: archive/zip still accepts the outer record
+	writeArchiveFile(t, root, "poly.zip", body)
+
+	if err := extract(t, server, fileRootVolumes, "poly.zip", ".", false); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("extract polyglot zip = %v, want ResourceExhausted", err)
+	}
+}
+
+// tarBlock builds one raw 512-byte tar header block.
+func tarBlock(t *testing.T, typeflag byte, name string, size int64) [512]byte {
+	t.Helper()
+	var b [512]byte
+	copy(b[0:100], name)
+	copy(b[100:108], "0000644\x00")
+	copy(b[108:116], "0000000\x00")
+	copy(b[116:124], "0000000\x00")
+	copy(b[124:136], fmt.Sprintf("%011o", size))
+	copy(b[136:148], "00000000000")
+	for i := 148; i < 156; i++ {
+		b[i] = ' '
+	}
+	b[156] = typeflag
+	copy(b[257:263], "ustar\x00")
+	copy(b[263:265], "00")
+	var sum uint32
+	for _, c := range b {
+		sum += uint32(c)
+	}
+	copy(b[148:156], fmt.Sprintf("%06o\x00 ", sum))
+	return b
+}
+
+// paxRecord formats a valid pax "length key=value\n" record.
+func paxRecord(key, value string) []byte {
+	body := key + "=" + value + "\n"
+	total := len(body) + 3
+	for {
+		s := strconv.Itoa(total)
+		if len(s)+1+len(body) == total {
+			return []byte(s + " " + body)
+		}
+		total = len(s) + 1 + len(body)
+	}
+}
+
+// buildTarPaxHeaders builds a tar of count TypeXHeader records, which
+// tar.Reader consumes internally (they never reach extractTar), followed by the
+// end-of-archive marker.
+func buildTarPaxHeaders(t *testing.T, count, valueLen int) []byte {
+	t.Helper()
+	record := paxRecord("user.k", strings.Repeat("v", valueLen))
+	var buf bytes.Buffer
+	for i := 0; i < count; i++ {
+		block := tarBlock(t, tar.TypeXHeader, "paxheader", int64(len(record)))
+		buf.Write(block[:])
+		buf.Write(record)
+		if pad := (512 - len(record)%512) % 512; pad > 0 {
+			buf.Write(make([]byte, pad))
+		}
+	}
+	buf.Write(make([]byte, 1024))
+	return buf.Bytes()
+}
+
+// TestFileServerExtractCountsTarMetadataHeaders proves pax global headers count
+// against the entry cap, so a stream of metadata-only records cannot bypass it
+// (Claude M1).
+func TestFileServerExtractCountsTarMetadataHeaders(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	server.archiveMaxEntries = 5
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for i := 0; i < 50; i++ {
+		if err := tw.WriteHeader(&tar.Header{
+			Typeflag:   tar.TypeXGlobalHeader,
+			PAXRecords: map[string]string{"user.k": "v"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeArchiveFile(t, root, "meta.tar", buf.Bytes())
+	if err := extract(t, server, fileRootVolumes, "meta.tar", ".", false); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("extract of 50 pax global headers with a cap of 5 = %v, want ResourceExhausted", err)
+	}
+}
+
+// TestFileServerExtractCapsTarStreamBytes proves the decompressed stream is
+// bounded on the bytes actually read, so pax/long-name records that tar.Reader
+// consumes internally cannot make the agent decompress an unbounded stream
+// (Claude M1).
+func TestFileServerExtractCapsTarStreamBytes(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	server.archiveMaxBytes = 64 << 10
+	server.archiveMaxEntries = 100
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write(buildTarPaxHeaders(t, 5000, 1000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeArchiveFile(t, root, "pax.tar.gz", buf.Bytes())
+	if err := extract(t, server, fileRootVolumes, "pax.tar.gz", ".", false); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("extract of a tar.gz of many pax headers = %v, want ResourceExhausted", err)
 	}
 }

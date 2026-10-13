@@ -573,8 +573,6 @@ test.describe("files archive", () => {
     await expect(page.getByText("Extracted backup.tar.gz.")).toBeVisible();
   });
 });
-  });
-});
 
 /**
  * The disabled scenario forces a 503 on purpose (that is exactly what

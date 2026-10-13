@@ -43,19 +43,29 @@ const fileArchiveDepth = 128
 // the ancestor cache is cold.
 const fileArchiveMaxNameDepth = 64
 
-// fileArchiveMaxCentralDirSize bounds the declared size of a zip central
-// directory, so a crafted archive cannot make zip.NewReader materialise an
-// oversized header table. An archive within the default entry cap has a
-// central directory far below this.
-const fileArchiveMaxCentralDirSize = 64 << 20
+// zipCentralDirHeaderMinSize is the fixed size of one central-directory file
+// header (the variable name/extra/comment fields follow). archive/zip reads
+// headers until it hits a bad one, so the number of entries it materialises is
+// bounded by the bytes actually present in the central directory: at most
+// cdSize/46 for a declared size of cdSize. The pre-parse uses that ratio as the
+// authoritative memory bound, so a crafted directory cannot make zip.NewReader
+// allocate millions of headers regardless of the declared entry count.
+const zipCentralDirHeaderMinSize = 46
+
+// fileArchiveStreamOverhead is the per-entry slack a decompressed archive
+// stream may add on top of the declared file bytes: tar's 512-byte header plus
+// padding, and any small pax/GNU long-name records. It bounds the total
+// decompressed bytes read, so metadata-only streams (repeated pax headers) and
+// a lying sequence of headers cannot burn CPU past the caps.
+const fileArchiveStreamOverhead = 4096
 
 // Zip end-of-central-directory parsing. The EOCD record sits in the last
-// 22+comment bytes of a zip; a comment is at most 0xFFFF bytes, so a bounded
-// tail window finds it without reading the whole archive.
+// 22+comment bytes of a zip; archive/zip searches the last 64 KiB for it, so
+// the pre-parse uses the same window and the same last-to-first rule to select
+// exactly the record archive/zip will use.
 const (
 	zipEndOfCentralDirMinSize              = 22
-	zipEndOfCentralDirCommentMax           = 0xFFFF
-	zipEndOfCentralDirTailWindow           = zipEndOfCentralDirMinSize + zipEndOfCentralDirCommentMax
+	zipEndOfCentralDirTailWindow           = 64 * 1024
 	zip64EndOfCentralDirLocatorSize        = 20
 	zip64EndOfCentralDirRecordSize         = 56
 	zipFieldMax16                   uint16 = 0xFFFF
@@ -127,6 +137,50 @@ func (c *archiveCounter) addEntry(size int64) error {
 		return fmt.Errorf("%w: archive expands by more than %d:1", fsroot.ErrTooLarge, fileArchiveRatioCap)
 	}
 	return nil
+}
+
+// errArchiveStreamTooLong marks a decompressed archive stream that outgrew its
+// byte budget; extractTar turns it into a "too large" refusal.
+var errArchiveStreamTooLong = errors.New("archive stream exceeds its decompressed size budget")
+
+// archiveStreamLimit is the total decompressed bytes one extract may read: the
+// declared byte cap plus per-entry header/padding slack, and no more than the
+// ratio ceiling when the archive is compressed. It bounds the work archive/tar
+// does on headers it consumes internally (pax/GNU long names), which never
+// reach addEntry.
+func archiveStreamLimit(counter *archiveCounter) int64 {
+	limit := counter.maxBytes + counter.maxEntries*fileArchiveStreamOverhead
+	if counter.archiveBytes > 0 {
+		if ratio := counter.archiveBytes * fileArchiveRatioCap; ratio < limit {
+			limit = ratio
+		}
+	}
+	return limit
+}
+
+// cappedReader fails once the underlying reader has yielded limit bytes total,
+// so the decompressed (gzip) or raw tar stream is bounded on the bytes actually
+// read rather than only the declared file sizes.
+type cappedReader struct {
+	r     io.Reader
+	limit int64
+	read  int64
+}
+
+func newCappedReader(r io.Reader, limit int64) *cappedReader {
+	return &cappedReader{r: r, limit: limit}
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.read >= c.limit {
+		return 0, errArchiveStreamTooLong
+	}
+	if int64(len(p)) > c.limit-c.read {
+		p = p[:c.limit-c.read]
+	}
+	n, err := c.r.Read(p)
+	c.read += int64(n)
+	return n, err
 }
 
 // archiveProgress streams throttled Compress/Extract progress and a final done
@@ -562,19 +616,24 @@ func (s *FileServer) Extract(req *agentv1.ExtractRequest, stream grpc.ServerStre
 func (s *FileServer) extractArchive(ctx context.Context, root *fsroot.Root, archive *os.File, size int64, format agentv1.ArchiveFormat, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress *archiveProgress) error {
 	switch format {
 	case agentv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP:
-		// The declared entry count and central-directory size are read from the
-		// tail before zip.NewReader runs: the reader materialises every entry
-		// header into memory, so a crafted archive declaring millions of
-		// entries must be refused before the first header is allocated.
+		// archive/zip does not validate the declared entry count while reading:
+		// it materialises one header per 46-byte record physically present in
+		// the central directory and only compares the count modulo 2^16 at the
+		// end. So the pre-parse reads the same end-of-central-directory record
+		// archive/zip will select (zip64-aware) and bounds the header table by
+		// the declared central-directory size: no more than dirSize/46 entries
+		// can be allocated. A declared count that cannot fit in dirSize is an
+		// inconsistent record and is refused.
 		entries, dirSize, err := zipCentralDirectoryBounds(archive, size)
 		if err != nil {
 			return fmt.Errorf("%w: reading zip: %v", fsroot.ErrInvalid, err)
 		}
-		if entries > counter.maxEntries {
+		maxBySize := dirSize / zipCentralDirHeaderMinSize
+		if entries > counter.maxEntries || maxBySize > counter.maxEntries {
 			return fmt.Errorf("%w: archive has more than %d entries", fsroot.ErrTooLarge, counter.maxEntries)
 		}
-		if dirSize > fileArchiveMaxCentralDirSize {
-			return fmt.Errorf("%w: archive is larger than %d bytes", fsroot.ErrTooLarge, fileArchiveMaxCentralDirSize)
+		if entries > maxBySize {
+			return fmt.Errorf("%w: zip central directory is inconsistent", fsroot.ErrInvalid)
 		}
 		zr, err := zip.NewReader(archive, size)
 		if err != nil {
@@ -593,24 +652,27 @@ func (s *FileServer) extractArchive(ctx context.Context, root *fsroot.Root, arch
 		}
 		return nil
 	case agentv1.ArchiveFormat_ARCHIVE_FORMAT_TAR:
-		return s.extractTar(ctx, root, archive, dst, src, overwrite, counter, dirs, state, progress)
+		return s.extractTar(ctx, root, newCappedReader(archive, archiveStreamLimit(counter)), dst, src, overwrite, counter, dirs, state, progress)
 	case agentv1.ArchiveFormat_ARCHIVE_FORMAT_TAR_GZ:
 		gz, err := gzip.NewReader(archive)
 		if err != nil {
 			return fmt.Errorf("%w: reading gzip: %v", fsroot.ErrInvalid, err)
 		}
 		defer func() { _ = gz.Close() }()
-		return s.extractTar(ctx, root, gz, dst, src, overwrite, counter, dirs, state, progress)
+		return s.extractTar(ctx, root, newCappedReader(gz, archiveStreamLimit(counter)), dst, src, overwrite, counter, dirs, state, progress)
 	default:
 		return fmt.Errorf("%w: unsupported archive format", fsroot.ErrInvalid)
 	}
 }
 
-// zipCentralDirectoryBounds reads the zip end-of-central-directory record (and,
-// when present, the zip64 locator and record) from the tail of f and returns
-// the declared entry count and central-directory size. It reads only a bounded
-// tail window and never parses entry headers, so a hostile archive cannot make
-// it allocate more than the window before the caller applies its caps.
+// zipCentralDirectoryBounds reads the zip end-of-central-directory record —
+// exactly the one archive/zip selects, so the pre-parse and the reader agree on
+// which record is authoritative — and returns the declared entry count and
+// central-directory size. Saturated 16/32-bit fields are resolved from the
+// zip64 records, matching archive/zip's fallback when the locator is absent.
+// It reads only the bounded tail window and never parses entry headers, so a
+// hostile archive cannot make it allocate more than the window before the
+// caller applies its caps.
 func zipCentralDirectoryBounds(f io.ReaderAt, size int64) (entries, centralDirSize int64, err error) {
 	if size < zipEndOfCentralDirMinSize {
 		return 0, 0, fmt.Errorf("file is too short to be a zip")
@@ -634,16 +696,30 @@ func zipCentralDirectoryBounds(f io.ReaderAt, size int64) (entries, centralDirSi
 	if count16 != zipFieldMax16 && size32 != zipFieldMax32 && offset32 != zipFieldMax32 {
 		return int64(count16), int64(size32), nil
 	}
-	// A 0xFFFF/0xFFFFFFFF field means the real values live in the zip64
-	// records; the locator sits immediately before the EOCD record.
-	return zip64CentralDirectoryBounds(f, size-window+int64(idx), size)
+	// A saturated field means the real values may live in the zip64 records.
+	// archive/zip falls back to the 16/32-bit fields when the locator is absent
+	// or invalid, so a 0xFFFF count with no zip64 is a plain 65535-entry archive.
+	entries, centralDirSize, used, err := zip64CentralDirectoryBounds(f, size-window+int64(idx), size)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !used {
+		entries, centralDirSize = int64(count16), int64(size32)
+	}
+	if entries < 0 || centralDirSize < 0 {
+		return 0, 0, fmt.Errorf("zip central directory declares a negative size")
+	}
+	if centralDirSize > size {
+		return 0, 0, fmt.Errorf("zip central directory is larger than the file")
+	}
+	return entries, centralDirSize, nil
 }
 
-// zipEndOfCentralDirOffset returns the offset of the real end-of-central-
-// directory record within tail, or -1 when none is found. Candidates are
-// scanned from the end and accepted only when the record's declared comment
-// length matches the bytes that follow, so a comment that happens to contain
-// the signature does not shadow the real record.
+// zipEndOfCentralDirOffset returns the offset of the end-of-central-directory
+// record within tail, or -1 when none is found. It scans last-to-first and
+// accepts the first signature whose declared comment does not run past the end
+// of the window, matching archive/zip's findSignatureInBlock (which gives up on
+// a truncated comment instead of walking back to an earlier signature).
 func zipEndOfCentralDirOffset(tail []byte) int {
 	signature := []byte{'P', 'K', 5, 6}
 	for i := len(tail) - zipEndOfCentralDirMinSize; i >= 0; i-- {
@@ -651,41 +727,50 @@ func zipEndOfCentralDirOffset(tail []byte) int {
 			continue
 		}
 		commentLen := int(binary.LittleEndian.Uint16(tail[i+20 : i+22]))
-		if len(tail)-i-zipEndOfCentralDirMinSize == commentLen {
-			return i
+		if i+zipEndOfCentralDirMinSize+commentLen > len(tail) {
+			return -1
 		}
+		return i
 	}
 	return -1
 }
 
 // zip64CentralDirectoryBounds reads the zip64 end-of-central-directory record
 // the locator points at and returns its declared entry count and central
-// directory size.
-func zip64CentralDirectoryBounds(f io.ReaderAt, eocdOffset, size int64) (entries, centralDirSize int64, err error) {
+// directory size. used is false when there is no valid locator, so the caller
+// falls back to the 16/32-bit EOCD fields exactly as archive/zip does.
+func zip64CentralDirectoryBounds(f io.ReaderAt, eocdOffset, size int64) (entries, centralDirSize int64, used bool, err error) {
 	if eocdOffset < zip64EndOfCentralDirLocatorSize {
-		return 0, 0, fmt.Errorf("missing zip64 end of central directory locator")
+		return 0, 0, false, nil
 	}
 	locator := make([]byte, zip64EndOfCentralDirLocatorSize)
 	if _, err := f.ReadAt(locator, eocdOffset-zip64EndOfCentralDirLocatorSize); err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
-	if !bytes.Equal(locator[0:4], []byte{'P', 'K', 6, 7}) {
-		return 0, 0, fmt.Errorf("missing zip64 end of central directory locator")
+	// Match archive/zip's findDirectory64End: the locator is valid only with the
+	// locator signature, disk number 0 and a single-disk marker.
+	if !bytes.Equal(locator[0:4], []byte{'P', 'K', 6, 7}) ||
+		binary.LittleEndian.Uint32(locator[4:8]) != 0 ||
+		binary.LittleEndian.Uint32(locator[16:20]) != 1 {
+		return 0, 0, false, nil
 	}
 	recordOffset := int64(binary.LittleEndian.Uint64(locator[8:16]))
 	if recordOffset < 0 || recordOffset > size-zip64EndOfCentralDirRecordSize {
-		return 0, 0, fmt.Errorf("zip64 end of central directory record out of range")
+		return 0, 0, false, fmt.Errorf("zip64 end of central directory record out of range")
 	}
 	record := make([]byte, zip64EndOfCentralDirRecordSize)
 	if _, err := f.ReadAt(record, recordOffset); err != nil {
-		return 0, 0, err
+		return 0, 0, false, err
 	}
 	if !bytes.Equal(record[0:4], []byte{'P', 'K', 6, 6}) {
-		return 0, 0, fmt.Errorf("missing zip64 end of central directory record")
+		return 0, 0, false, fmt.Errorf("missing zip64 end of central directory record")
 	}
 	entries = int64(binary.LittleEndian.Uint64(record[32:40]))
 	centralDirSize = int64(binary.LittleEndian.Uint64(record[40:48]))
-	return entries, centralDirSize, nil
+	if entries < 0 || centralDirSize < 0 {
+		return 0, 0, false, fmt.Errorf("zip64 end of central directory declares a negative size")
+	}
+	return entries, centralDirSize, true, nil
 }
 
 // extractZipEntry unpacks one zip member. Zip names may use backslashes as
@@ -742,6 +827,9 @@ func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Rea
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
+		if errors.Is(err, errArchiveStreamTooLong) {
+			return fmt.Errorf("%w: archive expands beyond %d bytes", fsroot.ErrTooLarge, counter.maxBytes)
+		}
 		if err != nil {
 			return fmt.Errorf("%w: reading tar: %v", fsroot.ErrInvalid, err)
 		}
@@ -755,8 +843,14 @@ func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Rea
 		case tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
 			return fmt.Errorf("%w: archive entry %q is a device or FIFO", fsroot.ErrSpecial, hdr.Name)
 		case tar.TypeXGlobalHeader, tar.TypeXHeader:
-			// Metadata records (pax global/extended headers) carry no payload
-			// the tar reader has not already consumed.
+			// A pax global/extended header carries no payload, but it still
+			// occupies a header record: count it against the entry cap so a
+			// stream of metadata-only records cannot bypass it. (Per-file
+			// pax/GNU long-name records are consumed inside tar.Reader.Next and
+			// are bounded by the stream cap instead.)
+			if err := counter.addEntry(0); err != nil {
+				return err
+			}
 			continue
 		}
 		// Count every accepted entry before acting on it, so a directory (size
@@ -809,10 +903,24 @@ func (s *FileServer) extractDir(root *fsroot.Root, dst, rel string, mode os.File
 	if err := state.verifyAncestors(dst, rel); err != nil {
 		return err
 	}
+	// Only a directory this extract creates gets its archived mode applied: an
+	// entry that lands on an existing directory must not widen (or narrow) it
+	// (Claude L2).
+	created := true
+	if entry, statErr := root.Stat(target); statErr == nil {
+		if entry.Kind != fsroot.KindDirectory {
+			return fmt.Errorf("%w: %s is not a directory", fsroot.ErrInvalid, target)
+		}
+		created = false
+	} else if !errors.Is(statErr, fsroot.ErrNotFound) {
+		return statErr
+	}
 	if err := state.ensureDir(target, mode|0o700); err != nil {
 		return err
 	}
-	dirs.record(target, mode)
+	if created {
+		dirs.record(target, mode)
+	}
 	return nil
 }
 

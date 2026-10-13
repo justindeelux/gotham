@@ -623,6 +623,16 @@ test.describe("files archive", () => {
 
     // Compress the selected folder.
     await page.getByLabel("Select conf").check();
+
+    // JUS-128: bulk actions live on the right of the toolbar; the former
+    // .fm-bulk bar is gone and the selection count shows.
+    await expect(page.locator(".fm-bulk")).toHaveCount(0);
+    const toolbar = page.locator(".fm-toolbar");
+    await expect(toolbar).toContainText("1 selected");
+    await expect(
+      toolbar.getByRole("button", { name: "Download", exact: true }),
+    ).toBeVisible();
+
     await page.getByRole("button", { name: "Compress…", exact: true }).click();
     const dialog = page.locator(".n-modal").filter({ hasText: "Compress selection" });
     await expect(dialog).toBeVisible();

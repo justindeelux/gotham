@@ -9,15 +9,18 @@ import type {
   FilesListing,
   FilesRoot,
   FilesUploadResult,
+  TrashListing,
 } from "@/features/files/schemas/files";
 import {
   downloadTicketSchema,
+  emptyTrashEnvelopeSchema,
   filesContentSchema,
   filesListingSchema,
   filesRootListSchema,
   filesStatSchema,
   filesUploadEnvelopeSchema,
   filesWriteEnvelopeSchema,
+  trashListingSchema,
 } from "@/features/files/schemas/files";
 
 /**
@@ -34,7 +37,11 @@ import {
  *   POST /servers/{id}/files/rename|/move|/copy owner/admin, 409 on conflict
  *   POST /servers/{id}/files/chmod           owner/admin, 0o777 bits only
  *   POST /servers/{id}/files/compress|/extract owner/admin, archive (9b)
- *   DELETE /servers/{id}/files/entry?recursive= owner/admin
+ *   DELETE /servers/{id}/files/entry?recursive=  owner/admin (moves to the bin)
+ *   GET  /servers/{id}/files/trash            any member -> bin listing
+ *   POST /servers/{id}/files/trash/restore    owner/admin, 409 on conflict
+ *   POST /servers/{id}/files/trash/purge      owner/admin, permanently deletes one
+ *   POST /servers/{id}/files/trash/empty      owner/admin, permanently deletes all
  *   POST /servers/{id}/files/upload          owner/admin, multipart, per-file result
  *
  * The routes are team-scoped: the control plane resolves the active team from
@@ -336,7 +343,11 @@ export async function copyEntry(
   return postLocation("copy", "FilesCopy", serverId, teamId, options);
 }
 
-/** deleteEntry permanently removes one entry (recursive for a folder). */
+/**
+ * deleteEntry removes one entry (recursive for a folder). A delete always moves
+ * the entry to the root's recycle bin — permanent deletion is offered only from
+ * the bin (purge one / empty). The control plane requires owner/admin.
+ */
 export async function deleteEntry(
   serverId: string,
   teamId: string,
@@ -348,6 +359,90 @@ export async function deleteEntry(
     params: { root, path, recursive: recursive ? "true" : "false" },
     headers: teamHeaders(teamId),
   });
+}
+
+/** listTrash reads one root's recycle bin, newest first (any member). */
+export async function listTrash(
+  serverId: string,
+  teamId: string,
+  root: string,
+): Promise<TrashListing> {
+  const response = await http.get(`/servers/${serverId}/files/trash`, {
+    params: { root },
+    headers: teamHeaders(teamId),
+  });
+  const data = parseWith(trashListingSchema, response.data, {
+    context: "TrashListing",
+  });
+  return {
+    entries: Array.isArray(data.entries) ? data.entries : [],
+    truncated: data.truncated === true,
+  };
+}
+
+/** RestoreTrashOptions addresses one bin restore. */
+export interface RestoreTrashOptions {
+  root: string;
+  /** id is the bin entry's opaque id (from the listing), not a path. */
+  id: string;
+  /** destination overrides the recorded original path when non-empty. */
+  destination?: string;
+  /** overwrite replaces an existing destination instead of 409ing. */
+  overwrite?: boolean;
+}
+
+/**
+ * restoreTrash moves one bin entry back to its recorded path (or an explicit
+ * destination) and returns the restored entry. An occupied destination is a
+ * 409 unless `overwrite` is set, so the caller can explain the conflict.
+ */
+export async function restoreTrash(
+  serverId: string,
+  teamId: string,
+  options: RestoreTrashOptions,
+): Promise<FilesEntry> {
+  const response = await http.post(
+    `/servers/${serverId}/files/trash/restore`,
+    {
+      root: options.root,
+      id: options.id,
+      destination: options.destination ?? "",
+      overwrite: options.overwrite === true,
+    },
+    { headers: teamHeaders(teamId) },
+  );
+  return parseEntry(response.data, "TrashRestore");
+}
+
+/** purgeTrash permanently deletes one bin entry (owner/admin). */
+export async function purgeTrash(
+  serverId: string,
+  teamId: string,
+  root: string,
+  id: string,
+): Promise<void> {
+  await http.post(
+    `/servers/${serverId}/files/trash/purge`,
+    { root, id },
+    { headers: teamHeaders(teamId) },
+  );
+}
+
+/** emptyTrash permanently deletes every bin entry and reports how many. */
+export async function emptyTrash(
+  serverId: string,
+  teamId: string,
+  root: string,
+): Promise<number> {
+  const response = await http.post(
+    `/servers/${serverId}/files/trash/empty`,
+    { root },
+    { headers: teamHeaders(teamId) },
+  );
+  const data = parseWith(emptyTrashEnvelopeSchema, response.data, {
+    context: "TrashEmpty",
+  });
+  return typeof data.removed === "number" ? data.removed : 0;
 }
 
 /** ChmodOptions addresses one permission change. */

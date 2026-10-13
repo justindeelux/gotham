@@ -37,13 +37,32 @@ const hasFolders = computed<boolean>(() =>
   props.entries.some((entry) => entry.kind === "directory"),
 );
 
-const messageText = computed<string>(() =>
-  hasFolders.value
-    ? String(t("files.dialogs.deleteFolderMessage"))
-    : String(t("files.dialogs.deleteMessage")),
+/** hasSymlink reassures that deleting a link never removes its target. */
+const hasSymlink = computed<boolean>(() =>
+  props.entries.some((entry) => entry.kind === "symlink"),
 );
 
-/** submit deletes every entry and reports a per-name outcome. */
+/** title names the target kind (folder vs file). */
+const title = computed<string>(() =>
+  String(t(hasFolders.value ? "files.dialogs.deleteFolderTitle" : "files.dialogs.deleteTitle")),
+);
+
+/**
+ * messageText explains the outcome: a delete always moves the entries to the
+ * recycle bin, where they stay recoverable until the bin is emptied. Permanent
+ * deletion is offered only from the bin itself.
+ */
+const messageText = computed<string>(() =>
+  String(
+    t(
+      hasFolders.value
+        ? "files.dialogs.recycleFolderMessage"
+        : "files.dialogs.recycleMessage",
+    ),
+  ),
+);
+
+/** submit moves every entry to the recycle bin and reports a per-name outcome. */
 async function submit(): Promise<void> {
   if (files.acting) {
     return;
@@ -55,7 +74,9 @@ async function submit(): Promise<void> {
     const result = await files.remove(props.entries);
     if (result.failed.length === 0) {
       message.success(
-        String(t("files.dialogs.deleted", { count: result.done.length })),
+        String(
+          t("files.dialogs.movedToBin", { count: result.done.length }),
+        ),
       );
       emit("update:show", false);
       return;
@@ -83,14 +104,17 @@ async function submit(): Promise<void> {
     :show="props.show"
     preset="card"
     style="width: 460px; max-width: 94vw"
-    :title="hasFolders ? t('files.dialogs.deleteFolderTitle') : t('files.dialogs.deleteTitle')"
+    :title="title"
     @update:show="(value: boolean) => emit('update:show', value)"
   >
     <p class="small">{{ messageText }}</p>
     <ul class="names mono">
       <li v-for="entry in props.entries" :key="entry.name">{{ entry.name }}</li>
     </ul>
-    <p class="small muted">{{ t("files.dialogs.deleteHint") }}</p>
+    <p v-if="hasSymlink" class="small muted symlink-hint">
+      {{ t("files.dialogs.recycleSymlinkHint") }}
+    </p>
+    <p class="small muted">{{ t("files.dialogs.recycleHint") }}</p>
 
     <NAlert v-if="summary" class="mt-3" type="warning" :title="t('files.dialogs.deletePartialTitle')">
       <ul class="names mono">
@@ -105,8 +129,12 @@ async function submit(): Promise<void> {
         <NButton @click="emit('update:show', false)">
           {{ t("common.actions.cancel") }}
         </NButton>
-        <NButton type="error" :loading="files.acting" @click="() => void submit()">
-          {{ t("files.dialogs.deleteConfirm") }}
+        <NButton
+          type="warning"
+          :loading="files.acting"
+          @click="() => void submit()"
+        >
+          {{ t("files.dialogs.recycleConfirm") }}
         </NButton>
       </div>
     </template>
@@ -125,6 +153,10 @@ async function submit(): Promise<void> {
 
 .small {
   margin: 0;
+}
+
+.symlink-hint {
+  margin-top: var(--space-1);
 }
 
 .mt-3 {

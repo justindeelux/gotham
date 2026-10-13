@@ -20,6 +20,7 @@ import { useApplicationsStore, useGitHubAppStore, useProvidersStore } from "@/fe
 import { useBackupsStore } from "@/features/databases";
 import { useDatabasesStore } from "@/features/databases";
 import { useFilesStore } from "@/features/files";
+import { useTrashStore } from "@/features/files/stores/trash";
 import { useNotificationsStore } from "@/features/notifications";
 import { useProjectsStore } from "@/features/projects";
 import { useProxyStore } from "@/features/domains";
@@ -147,6 +148,7 @@ export const useAuthStore = defineStore("auth", () => {
       () => useApplicationsStore().reset(),
       () => useDatabasesStore().reset(),
       () => useFilesStore().reset(),
+      () => useTrashStore().reset(),
       () => useNotificationsStore().reset(),
       () => useProjectsStore().reset(),
       () => useServicesStore().reset(),

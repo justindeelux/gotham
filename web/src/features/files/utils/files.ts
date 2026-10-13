@@ -488,9 +488,13 @@ export function formatTimestamp(iso: string | null | undefined): string {
   );
 }
 
-/** entryTypeLabel renders the Type column ("Folder", "YAML", "Image"…). */
+/**
+ * entryTypeLabel renders the Type column ("Folder", "YAML", "Image"…). It only
+ * needs a name and kind (plus the mode to name a special file's subtype), so the
+ * recycle-bin rows — which carry no mode — can reuse it.
+ */
 export function entryTypeLabel(
-  entry: FilesEntry,
+  entry: Pick<FilesEntry, "name" | "kind"> & { mode?: number },
   locale?: string | null,
 ): string {
   const t = catalogFor(locale).types;
@@ -501,7 +505,7 @@ export function entryTypeLabel(
     return t.symlink;
   }
   if (entry.kind === "special") {
-    const typeBits = entry.mode & 0o170000;
+    const typeBits = (entry.mode ?? 0) & 0o170000;
     if (typeBits === 0o140000) {
       return t.socket;
     }

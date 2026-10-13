@@ -42,6 +42,7 @@ import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog
 import ExtractDialog from "@/features/files/components/ExtractDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
 import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue";
+import RecycleBinDialog from "@/features/files/components/RecycleBinDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
 import UploadDialog from "@/features/files/components/UploadDialog.vue";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
@@ -49,6 +50,7 @@ import type { FilesEntry } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
 import type { FilesTab } from "@/features/files/stores/files";
+import { useTrashStore } from "@/features/files/stores/trash";
 import type { NameKind, TransferProblem } from "@/features/files/utils/files";
 import {
   entryIconKind,
@@ -79,19 +81,34 @@ const props = defineProps<Props>();
 const { t, locale } = useI18n();
 const message = useMessage();
 const files = useFilesStore();
+const trash = useTrashStore();
 const editor = useEditorStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
 
 watch(
   () => props.serverId,
-  (next) => void files.init(next),
+  (next) => {
+    // A node switch changes the bin's scope; drop any loaded listing first so
+    // the dialog can never show (or act on) the previous node's entries.
+    trash.reset();
+    void files.init(next);
+  },
 );
 // A team switch changes the caller's role and the server's visibility, so the
-// listing must reload rather than keep the previous team's directory.
+// listing must reload rather than keep the previous team's directory. It also
+// changes the bin's scope.
 watch(
   () => teams.activeTeamId,
-  () => void files.reload(),
+  () => {
+    trash.reset();
+    void files.reload();
+  },
+);
+// The bin is per root: a root switch invalidates the loaded listing.
+watch(
+  () => files.rootName,
+  () => trash.reset(),
 );
 onMounted(() => void files.init(props.serverId));
 
@@ -110,6 +127,8 @@ const compressOpen = ref(false);
 const compressTargets = ref<FilesEntry[]>([]);
 const extractOpen = ref(false);
 const extractTarget = ref<FilesEntry | null>(null);
+/** recycleOpen shows the recycle-bin dialog for the current root (JUS-122). */
+const recycleOpen = ref(false);
 /** actionTargets are the entries the delete/transfer dialogs act on. */
 const actionTargets = ref<FilesEntry[]>([]);
 
@@ -713,6 +732,9 @@ function onFolderMenu(key: string): void {
     case "upload":
       openUpload();
       break;
+    case "recycle-bin":
+      recycleOpen.value = true;
+      break;
     case "refresh":
       void files.refresh();
       break;
@@ -946,6 +968,22 @@ function onFolderMenu(key: string): void {
           <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
         </template>
         {{ $t("files.browser.refresh") }}
+      </NButton>
+
+      <!-- The bin belongs to the root, not the folder, so it lives on the path
+           bar: any member may open it, while restore/purge inside need write. -->
+      <NButton
+        size="small"
+        secondary
+        :disabled="files.rootName === ''"
+        :title="$t('files.browser.recycleBin')"
+        :aria-label="$t('files.browser.recycleBin')"
+        @click="recycleOpen = true"
+      >
+        <template #icon>
+          <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.browser.recycleBin") }}
       </NButton>
     </div>
 
@@ -1285,6 +1323,7 @@ function onFolderMenu(key: string): void {
     <RenameEntryDialog v-model:show="renameOpen" :entry="renameTarget" />
     <PermissionsDialog v-model:show="permissionsOpen" :entry="permissionsTarget" />
     <DeleteEntriesDialog v-model:show="deleteOpen" :entries="actionTargets" />
+    <RecycleBinDialog v-model:show="recycleOpen" />
     <UploadDialog v-model:show="uploadOpen" :initial-files="droppedFiles" />
     <CompressDialog v-model:show="compressOpen" :entries="compressTargets" />
     <ExtractDialog v-model:show="extractOpen" :entry="extractTarget" />

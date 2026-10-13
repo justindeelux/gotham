@@ -377,7 +377,7 @@ test.describe("files conflict", () => {
 });
 
 test.describe("files delete", () => {
-  test("deletes a row and drops it from the refreshed listing", async ({
+  test("deletes a row into the recycle bin and drops it from the refreshed listing", async ({
     page,
     request,
   }) => {
@@ -410,17 +410,94 @@ test.describe("files delete", () => {
 
     const dialog = page.locator(".n-modal").filter({ hasText: "Delete file" });
     await expect(dialog).toBeVisible();
+    // Delete always moves to the bin: the dialog offers no permanent option.
+    await expect(
+      dialog.getByRole("button", { name: "Delete permanently" }),
+    ).toHaveCount(0);
+
     const deleteRequest = page.waitForRequest(
       (candidate) =>
         candidate.method() === "DELETE" &&
         candidate.url().includes("/files/entry"),
     );
-    await dialog.getByRole("button", { name: "Delete permanently" }).click();
-    await deleteRequest;
+    await dialog.getByRole("button", { name: "Move to recycle bin" }).click();
+    const deleteCall = await deleteRequest;
+    // The normal delete never asks for a permanent removal.
+    expect(new URL(deleteCall.url()).searchParams.get("permanent")).not.toBe("true");
 
-    await expect(page.getByText("1 deleted.")).toBeVisible();
+    await expect(page.getByText("1 moved to the recycle bin.")).toBeVisible();
     await expect(page.getByText("old.txt")).toHaveCount(0);
     await expect(page.getByText("keep.txt")).toBeVisible();
+  });
+});
+
+test.describe("files recycle bin", () => {
+  test("opens the bin, restores an entry and refreshes the listing", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    let restored = false;
+    const restoreBodies: Array<Record<string, unknown>> = [];
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(
+          route,
+          200,
+          listing(
+            restored
+              ? [entry("old.txt", "file", 4, 0o100644, "etag-old")]
+              : [entry("keep.txt", "file", 3, 0o100644, "etag-keep")],
+          ),
+        ),
+      trash: (route) =>
+        json(route, 200, {
+          entries: restored
+            ? []
+            : [
+                {
+                  id: "trash-1",
+                  name: "old.txt",
+                  original_path: "srv/old.txt",
+                  deleted_at: "2026-01-02T03:04:05Z",
+                  size: 4,
+                  kind: "file",
+                },
+              ],
+          truncated: false,
+        }),
+      restore: async (route) => {
+        restoreBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+        restored = true;
+        await json(route, 200, {
+          entry: entry("old.txt", "file", 4, 0o100644, "etag-old"),
+        });
+      },
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await page.getByRole("button", { name: "Recycle bin" }).click();
+
+    const dialog = page.locator(".n-modal").filter({ hasText: "Recycle bin" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTitle("old.txt", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("srv/old.txt")).toBeVisible();
+
+    await dialog.getByRole("button", { name: "Restore old.txt" }).click();
+    await expect.poll(() => restoreBodies.length).toBe(1);
+    expect(restoreBodies[0]).toMatchObject({
+      root: "srv",
+      id: "trash-1",
+      destination: "",
+      overwrite: false,
+    });
+
+    await expect(page.getByText("old.txt restored.")).toBeVisible();
+    // The restored entry is back in the browser listing.
+    await expect(
+      page.locator(".fm-table").getByText("old.txt", { exact: true }),
+    ).toBeVisible();
   });
 });
 

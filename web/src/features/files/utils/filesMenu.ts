@@ -74,9 +74,10 @@ export function rowMenuOptions(
 
 /**
  * folderMenuOptions builds the empty-space / folder-level menu: create, paste,
- * upload and refresh. It never degrades to an empty menu — Refresh stays enabled
- * on a read-only root — while every write action follows canWrite. New entries
- * are appended here, so a later recycle-bin entry only adds one item.
+ * upload, the recycle bin and refresh. It never degrades to an empty menu —
+ * Refresh stays enabled on a read-only root — while every write action follows
+ * canWrite. The recycle bin is readable by any member (only restore/purge inside
+ * it need owner/admin), so it is never disabled.
  */
 export function folderMenuOptions(ctx: FilesMenuContext): FilesMenuItem[] {
   const { t, canWrite, canPaste } = ctx;
@@ -85,6 +86,7 @@ export function folderMenuOptions(ctx: FilesMenuContext): FilesMenuItem[] {
     item(t("files.actions.newFolder"), "new-folder", !canWrite),
     item(t("files.actions.paste"), "paste", !canWrite || !canPaste),
     item(t("files.actions.upload"), "upload", !canWrite),
+    item(t("files.menu.recycleBin"), "recycle-bin"),
     item(t("files.browser.refresh"), "refresh"),
   ];
 }

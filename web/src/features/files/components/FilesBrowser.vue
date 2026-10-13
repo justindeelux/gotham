@@ -55,6 +55,7 @@ import {
   entryTypeLabel,
   filesFromDrop,
   formatMode,
+  formatOctalModeFull,
   formatTimestamp,
   isExtractableArchive,
   isFileDrag,
@@ -841,7 +842,10 @@ function onRowMenu(key: string, entry: FilesEntry): void {
             <div class="fm-cell" role="cell">{{ typeLabel(entry) }}</div>
             <div class="fm-cell fm-cell--size" role="cell">{{ entry.kind === "directory" ? "—" : formatBytes(entry.size) }}</div>
             <div class="fm-cell" role="cell">{{ formatTimestamp(entry.modified_at) }}</div>
-            <div class="fm-cell" role="cell">{{ formatMode(entry.mode) }}</div>
+            <div class="fm-cell fm-mode" role="cell">
+              <span>{{ formatMode(entry.mode) }}</span>
+              <span class="fm-mode-octal">{{ formatOctalModeFull(entry.mode) }}</span>
+            </div>
             <div class="fm-actions" role="cell">
               <NButton
                 v-if="entry.kind === 'directory'"
@@ -1328,6 +1332,16 @@ function onRowMenu(key: string, entry: FilesEntry): void {
 
 .fm-cell--size {
   text-align: right;
+}
+
+.fm-mode {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.fm-mode-octal {
+  color: var(--fg-2);
 }
 
 .fm-actions {

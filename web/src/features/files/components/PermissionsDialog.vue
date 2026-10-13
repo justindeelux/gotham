@@ -8,7 +8,9 @@ import type { FilesEntry } from "@/features/files/schemas/files";
 import { filesOctalModeSchema } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import {
+  formatMode,
   formatOctalMode,
+  formatOctalModeFull,
   modeFromFlags,
   parseOctalMode,
   permissionFlags,
@@ -55,6 +57,13 @@ const columns = computed(() => [
 
 const octalValid = computed<boolean>(
   () => filesOctalModeSchema.safeParse(octal.value).success,
+);
+
+/** The entry's real mode as symbolic + full octal, for the read-only header. */
+const currentMode = computed(() =>
+  props.entry == null
+    ? ""
+    : `${formatMode(props.entry.mode)} · ${formatOctalModeFull(props.entry.mode)}`,
 );
 
 const flags = computed<boolean[]>(() =>
@@ -171,7 +180,13 @@ async function submit(): Promise<void> {
     @update:show="(value: boolean) => emit('update:show', value)"
   >
     <div class="stack gap-4">
-      <p class="small muted path">{{ props.entry?.name ?? "" }}</p>
+      <div>
+        <p class="small muted path">{{ props.entry?.name ?? "" }}</p>
+        <p v-if="currentMode" class="small muted mode-line">
+          {{ t("files.permissions.currentMode") }}
+          <span class="mono">{{ currentMode }}</span>
+        </p>
+      </div>
       <NFormItem
         :label="t('files.permissions.octal')"
         :validation-status="errorKey ? 'error' : undefined"
@@ -252,6 +267,10 @@ async function submit(): Promise<void> {
 .path {
   margin: 0;
   font-family: var(--font-mono);
+}
+
+.mode-line {
+  margin: 2px 0 0;
 }
 
 .octal {

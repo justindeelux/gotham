@@ -25,6 +25,7 @@ import {
   filesFromDrop,
   formatMode,
   formatOctalMode,
+  formatOctalModeFull,
   formatTimestamp,
   isFileDrag,
   isSelectable,
@@ -401,6 +402,19 @@ describe("permission bit helpers", () => {
   it("masks away special bits (never offered by the dialog)", () => {
     expect(formatOctalMode(0o4755)).toBe("755");
     expect(parseOctalMode("755")).toBe(0o755);
+  });
+
+  it("formats the display octal, adding a special-bits digit when set", () => {
+    // Files and directories stay three digits; the type bits are ignored.
+    expect(formatOctalModeFull(0o100644)).toBe("644");
+    expect(formatOctalModeFull(0o040755)).toBe("755");
+    expect(formatOctalModeFull(0)).toBe("000");
+    // setuid, setgid and sticky each take the fourth digit.
+    expect(formatOctalModeFull(0o4755)).toBe("4755");
+    expect(formatOctalModeFull(0o2755)).toBe("2755");
+    expect(formatOctalModeFull(0o1777)).toBe("1777");
+    // Type + special + permission bits combine for a real st_mode.
+    expect(formatOctalModeFull(0o104755)).toBe("4755");
   });
 
   it("maps a mode to the nine owner/group/other rwx flags", () => {

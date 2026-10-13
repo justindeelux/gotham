@@ -538,7 +538,7 @@
           <h2>Editor window</h2>
           <span class="meta">floating window · minimize → bottom dock · tabs, dirty dot, conflict-safe saves</span>
         </div>
-        <p class="small muted">Opening a file renders it in a floating window pinned bottom-right. <span class="kbd">Esc</span> (or the minimize control) folds it into an app-dock bar along the bottom of the content column; the dock item — file name plus an unsaved dot — restores it, and clicking another file in the browser restores it too. Buffers, dirty state, open tabs and conflict dialogs survive minimize/restore. Multiple files still use the window's tabs.</p>
+        <p class="small muted">Opening a file renders it in a floating window pinned bottom-right. Drag its title bar to move it anywhere on screen (it stays within the viewport and snaps back to the pinned default on a dock restore or a narrow screen). <span class="kbd">Esc</span> (or the minimize control) folds it into an app-dock bar along the bottom of the content column; the dock item — file name plus an unsaved dot — restores it, and clicking another file in the browser restores it too. The close control beside minimize closes the whole editor, asking first when any tab has unsaved changes. Buffers, dirty state, open tabs and conflict dialogs survive minimize/restore. Multiple files still use the window's tabs.</p>
         <div class="split-2">
           <div class="card" style="border-radius:var(--radius-md);box-shadow:var(--elev-raised)">
             <div class="row gap-2" style="align-items:center;padding:var(--space-2) var(--space-2) var(--space-2) var(--space-4);background:var(--surface-warm);border-bottom:1px solid var(--border)">
@@ -547,6 +547,7 @@
               <span class="small" style="color:var(--warn-ink)">Unsaved changes</span>
               <span class="grow"></span>
               <button class="btn btn-ghost btn-icon btn-sm" type="button" aria-label="Minimize editor" data-toast="Minimized to the dock (or press Esc).|info"><svg aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
+              <button class="btn btn-ghost btn-icon btn-sm" type="button" aria-label="Close editor" data-open="fm-close-all"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
             </div>
             <div class="tabs" data-tabs="editor" data-default="app.yaml" role="tablist">
               <button class="tab" type="button" data-tab="app.yaml" role="tab" id="tab-editor-app" aria-controls="panel-editor-app" aria-selected="true">app.yaml <span class="dot dot--idle" style="width:6px;height:6px" aria-hidden="true"></span><span class="sr-only">unsaved changes</span></button>
@@ -773,6 +774,29 @@ services:
       <button class="btn btn-outline" type="button" data-close>Reload from server</button>
       <button class="btn btn-outline" type="button" data-close>Save as copy</button>
       <button class="btn btn-danger" type="button" data-close>Overwrite server</button>
+    </div>
+  </div>
+</div>
+
+<!-- Close-all confirm: the editor Close control with dirty buffers -->
+<div class="overlay" id="fm-close-all" hidden>
+  <div class="modal modal--sm" role="alertdialog" aria-modal="true" aria-labelledby="fm-close-all-title">
+    <div class="modal-head">
+      <svg aria-hidden="true"><use href="#i-alert"></use></svg>
+      <div><h3 id="fm-close-all-title">Close all files?</h3>
+        <p class="small muted">2 tabs have unsaved changes.</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Close"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-3">
+      <p class="small">Some open files have unsaved changes. Closing the editor discards them.</p>
+      <ul class="small mono" style="margin:0;padding-left:var(--space-4)">
+        <li>volumes/storefront-8f2c1ab/app.yaml</li>
+        <li>volumes/storefront-8f2c1ab/override.yml</li>
+      </ul>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-outline" type="button" data-close>Cancel</button>
+      <button class="btn btn-danger" type="button" data-close>Discard and close</button>
     </div>
   </div>
 </div>

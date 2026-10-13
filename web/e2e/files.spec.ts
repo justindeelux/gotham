@@ -291,6 +291,80 @@ test.describe("files editor", () => {
     await expect(page.getByText("Saved app.yaml")).toBeVisible();
     await expect(editor.locator(".ed-dot")).toHaveCount(0);
   });
+
+  test("drags by the title bar and closes every tab from the close control", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(
+          route,
+          200,
+          listing([
+            entry("app.yaml", "file", 11, 0o100644, "etag-1"),
+            entry("notes.md", "file", 12, 0o100644, "etag-2"),
+          ]),
+        ),
+      content: async (route) => {
+        if (route.request().method() === "PUT") {
+          await json(route, 200, writeEnvelope);
+          return;
+        }
+        await json(route, 200, textContent);
+      },
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await page.locator(".fm-label").filter({ hasText: "app.yaml" }).click();
+
+    const editor = page.locator(".files-editor");
+    await expect(editor.locator(".cm-content")).toBeVisible();
+
+    // Drag the title bar up and to the left: the window follows and stays on
+    // screen (never a negative offset).
+    const window_ = page.locator(".ed-window");
+    const before = (await window_.boundingBox())!;
+    const bar = page.locator(".ed-window-bar");
+    const barBox = (await bar.boundingBox())!;
+    await page.mouse.move(barBox.x + 40, barBox.y + barBox.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(barBox.x - 220, barBox.y - 200, { steps: 8 });
+    await page.mouse.up();
+    const after = (await window_.boundingBox())!;
+    expect(after.x).toBeLessThan(before.x);
+    expect(after.y).toBeLessThan(before.y);
+    expect(after.x).toBeGreaterThanOrEqual(0);
+    expect(after.y).toBeGreaterThanOrEqual(0);
+
+    // A second tab, dirtied: close-all must ask before discarding.
+    await page.locator(".ed-window-min").click();
+    await page.locator(".fm-label").filter({ hasText: "notes.md" }).click();
+    const visibleContent = editor.locator(".ed-host:visible .cm-content");
+    await expect(visibleContent).toBeVisible();
+    await visibleContent.click();
+    await page.keyboard.type("edited");
+    await expect(editor.locator(".ed-dot")).toHaveCount(1);
+
+    await editor.locator(".ed-window-close").click();
+    const dialog = page.locator(".n-modal").filter({ hasText: "Close all files?" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("notes.md");
+    // Only the dirty buffer is listed; the clean app.yaml tab is not.
+    await expect(dialog.locator(".ed-unsaved")).not.toContainText("app.yaml");
+
+    // Cancel keeps the editor; discard closes every tab.
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.locator(".ed-window")).toBeVisible();
+    await editor.locator(".ed-window-close").click();
+    await dialog
+      .getByRole("button", { name: "Discard and close", exact: true })
+      .click();
+    await expect(page.locator(".ed-window")).toHaveCount(0);
+    await expect(page.locator(".ed-dock")).toHaveCount(0);
+  });
 });
 
 test.describe("files conflict", () => {

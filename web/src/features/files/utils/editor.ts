@@ -160,6 +160,27 @@ export function rebasedPath(
   return rest === "" ? to : `${to}/${rest}`;
 }
 
+/**
+ * clampEditorOffset keeps the floating editor window fully inside the viewport
+ * after a title-bar drag: the window may never hang off an edge, so its title
+ * bar (and the controls in it) can always be grabbed again. A window larger
+ * than the viewport (a small screen) pins to the top-left corner instead of
+ * producing a negative maximum.
+ */
+export function clampEditorOffset(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): { x: number; y: number } {
+  return {
+    x: Math.min(Math.max(0, x), Math.max(0, viewportWidth - width)),
+    y: Math.min(Math.max(0, y), Math.max(0, viewportHeight - height)),
+  };
+}
+
 /** languageLabel is the short uppercase tag shown in the status bar. */
 export function languageLabel(language: EditorLanguageId): string {
   switch (language) {

@@ -314,3 +314,81 @@ describe("FilesEditor guards", () => {
     wrapper.unmount();
   });
 });
+
+describe("FilesEditor close-all", () => {
+  it("closes every tab with no dialog when nothing is dirty", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", false), makeTab("t2", false)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Close all files?");
+    expect(editor.tabs).toHaveLength(0);
+    expect(wrapper.find(".ed-window").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("asks before discarding and lists the dirty files", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", true), makeTab("t2", false), makeTab("t3", true)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Close all files?");
+    const list = wrapper.find(".ed-unsaved");
+    expect(list.text()).toContain("t1.yaml");
+    expect(list.text()).toContain("t3.yaml");
+    // Only the dirty buffers are listed.
+    expect(list.text()).not.toContain("t2.yaml");
+    // Nothing is closed until the user chooses.
+    expect(editor.tabs).toHaveLength(3);
+    wrapper.unmount();
+  });
+
+  it("keeps every tab on cancel", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", true)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+    const cancel = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Cancel");
+    expect(cancel).toBeTruthy();
+    await cancel!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Close all files?");
+    expect(editor.tabs).toHaveLength(1);
+    expect(editor.hasDirty).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("discards every dirty buffer on confirm", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", true), makeTab("t2", true)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+    const discard = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Discard and close");
+    expect(discard).toBeTruthy();
+    await discard!.trigger("click");
+    await flushPromises();
+
+    expect(editor.tabs).toHaveLength(0);
+    expect(editor.hasDirty).toBe(false);
+    wrapper.unmount();
+  });
+});

@@ -280,6 +280,9 @@ function openCreate(kind: NameKind): void {
   createOpen.value = true;
 }
 
+/** newMenuOpen tracks the New dropdown disclosure state (aria-expanded). */
+const newMenuOpen = ref(false);
+
 /** newMenuOptions groups New file / New folder under one toolbar dropdown. */
 const newMenuOptions = computed(() =>
   [
@@ -578,6 +581,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
     <div v-if="files.canWrite" class="fm-toolbar">
       <div class="fm-toolbar-group">
         <NDropdown
+          v-model:show="newMenuOpen"
           trigger="click"
           placement="bottom-start"
           :options="newMenuOptions"
@@ -590,6 +594,8 @@ function onRowMenu(key: string, entry: FilesEntry): void {
           <NButton
             size="small"
             secondary
+            aria-haspopup="menu"
+            :aria-expanded="newMenuOpen"
             :disabled="files.acting"
             :title="$t('files.actions.new')"
             :aria-label="$t('files.actions.new')"
@@ -623,20 +629,25 @@ function onRowMenu(key: string, entry: FilesEntry): void {
           secondary
           :disabled="files.acting || files.pasteProblem !== null"
           :title="pasteProblemText || $t('files.actions.paste')"
-          :aria-label="$t('files.actions.paste')"
+          :aria-label="pasteProblemText || $t('files.actions.paste')"
           @click="() => void pasteAction()"
         >
           <template #icon>
             <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
           </template>
-          <span class="fm-btn-label">{{ $t("files.actions.paste") }}</span>
+          <span class="fm-btn-label">
+            {{ $t("files.actions.paste") }} ({{ files.clipboard?.names.length ?? 0 }})
+          </span>
         </NButton>
+        <span v-if="files.hasClipboard" class="small muted clipboard-hint">
+          {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
+        </span>
         <NButton
           size="small"
           secondary
           :disabled="files.acting || selection.length === 0"
           :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
-          :aria-label="$t('files.actions.compress')"
+          :aria-label="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
           @click="openCompress(selection)"
         >
           <template #icon>
@@ -1098,6 +1109,10 @@ function onRowMenu(key: string, entry: FilesEntry): void {
 
 .fm-toolbar-end {
   margin-left: auto;
+}
+
+.clipboard-hint {
+  margin-left: var(--space-1);
 }
 
 .fm-caret {

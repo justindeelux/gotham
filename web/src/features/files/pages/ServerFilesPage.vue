@@ -37,15 +37,27 @@ const serverName = computed<string>(() => {
 /**
  * nodeOptions feeds the bottom node switcher (JUS-119) with every managed
  * server. The current node is inserted first when the list has not loaded yet,
- * so the switcher always names the node on screen.
+ * so the switcher always names the node on screen. A node whose agent is not
+ * ready is listed with its status but not selectable — switching to it could
+ * only show the browser's error state.
  */
-const nodeOptions = computed<Array<{ label: string; value: string }>>(() => {
+const nodeOptions = computed<
+  Array<{ label: string; value: string; disabled?: boolean }>
+>(() => {
   const options = serversStore.servers.map((item) => ({
-    label: item.name,
+    label:
+      item.status === "ready"
+        ? item.name
+        : `${item.name} · ${String(t(`servers.status.${item.status}`))}`,
     value: item.id,
+    disabled: item.status !== "ready",
   }));
   if (!options.some((option) => option.value === serverId.value)) {
-    options.unshift({ label: serverName.value, value: serverId.value });
+    options.unshift({
+      label: serverName.value,
+      value: serverId.value,
+      disabled: false,
+    });
   }
   return options;
 });

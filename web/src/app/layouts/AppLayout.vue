@@ -79,13 +79,15 @@ const fillViewport = computed(() => route.meta.fillViewport === true);
 
 /* A fill page (JUS-118) spans the viewport as a flex column whose single
  * child owns the internal scroll, so the page itself never scrolls. The
- * bottom padding is trimmed so the panel reaches near the viewport edge. */
+ * bottom padding is trimmed so the panel reaches near the viewport edge, and
+ * `--ed-dock-h` (set by FilesEditor while its fixed bottom dock is on screen)
+ * reserves the dock band so the browser's bottom bar is never covered. */
 .page.page--fill {
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  padding-bottom: var(--space-6);
+  padding-bottom: calc(var(--space-6) + var(--ed-dock-h, 0px));
 }
 
 .page.page--fill > * {

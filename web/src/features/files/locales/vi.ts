@@ -5,7 +5,6 @@
  * parity test rejects those).
  */
 const vi = {
-  title: "Quản lý tệp",
   chooser: {
     eyebrow: "Vận hành · Quản lý tệp từ xa",
     title: "Quản lý tệp",

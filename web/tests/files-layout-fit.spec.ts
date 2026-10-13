@@ -56,13 +56,14 @@ const team = {
 
 const server1 = "11111111-1111-4111-8111-111111111111";
 const server2 = "22222222-2222-4222-8222-222222222222";
+const server3 = "33333333-3333-4333-8333-333333333333";
 
-function serverRow(id: string, name: string, ip: string) {
+function serverRow(id: string, name: string, ip: string, status = "ready") {
   return {
     id,
     name,
     ip,
-    status: "ready",
+    status,
     created_at: "2026-10-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
   };
@@ -70,7 +71,8 @@ function serverRow(id: string, name: string, ip: string) {
 
 const row1 = serverRow(server1, "prod-01", "10.0.0.1");
 const row2 = serverRow(server2, "prod-02", "10.0.0.2");
-const rows = [row1, row2];
+const row3 = serverRow(server3, "prod-03", "10.0.0.3", "offline");
+const rows = [row1, row2, row3];
 
 const root = {
   name: "volumes",
@@ -166,6 +168,18 @@ async function mockApi(page: Page): Promise<void> {
       });
     });
   }
+  // A small editable file so the editor window can open and be minimized.
+  await page.route("**/api/v1/servers/*/files/content*", async (route) => {
+    await route.fulfill({
+      json: {
+        content: "hello\n",
+        etag: '"v1"',
+        sha256: "abc",
+        size: 6,
+        mode: 0o100644,
+      },
+    });
+  });
 }
 
 test("the browser fills the viewport and only the entry list scrolls", async ({
@@ -225,8 +239,13 @@ test("the top breadcrumb is gone and the bottom node bar switches nodes", async 
   await expect(bar).toBeVisible();
   await expect(bar).toContainText("prod-01");
 
-  // Switching nodes reloads that node's files.
+  // An offline node is listed with its status but cannot be selected.
   await page.locator(".node-bar__select").click();
+  const offline = page.locator(".n-base-select-option", { hasText: "prod-03" });
+  await expect(offline).toHaveClass(/disabled/);
+  await expect(offline).toContainText("Offline");
+
+  // Switching nodes reloads that node's files.
   await page.locator(".n-base-select-option", { hasText: "prod-02" }).click();
   await expect(page.locator(".node-bar__select")).toContainText("prod-02");
   expect(new URL(page.url()).pathname).toContain(server2);
@@ -245,10 +264,16 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
   await expect(page.getByRole("button", { name: "New folder", exact: true })).toHaveCount(0);
   const newButton = page.getByRole("button", { name: "New", exact: true });
   await expect(newButton).toBeVisible();
+  await expect(newButton).toHaveAttribute("aria-haspopup", "menu");
+  await expect(newButton).toHaveAttribute("aria-expanded", "false");
   await newButton.click();
+  await expect(newButton).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("menuitem", { name: "New file", exact: true })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "New folder", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
+
+  // Select an entry so the bulk Compress action is enabled and named.
+  await page.locator(".fm-head .n-checkbox").click();
 
   // Bulk tools sit to the right of the create/upload group.
   const upload = await page.getByRole("button", { name: "Upload", exact: true }).boundingBox();
@@ -267,5 +292,49 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
       "aria-label",
       name,
     );
+  }
+});
+
+test("the minimized editor dock never covers the node switcher", async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await mockApi(page);
+    await page.goto(`${baseURL}/servers/${server1}/files`);
+
+    // Open a file and collapse the editor into the fixed bottom dock.
+    await page.locator(".fm-label").first().click();
+    await expect(page.locator(".ed-window")).toBeVisible({ timeout: 15_000 });
+    await page.locator(".ed-window-min").click();
+    await expect(page.locator(".ed-dock")).toBeVisible();
+
+    // The dock band and the node bar stack: the switcher's centre is clickable.
+    const hit = await page.evaluate(() => {
+      const dock = document.querySelector(".ed-dock");
+      const select = document.querySelector(".node-bar__select");
+      if (!(dock instanceof HTMLElement) || !(select instanceof HTMLElement)) {
+        return null;
+      }
+      const box = select.getBoundingClientRect();
+      const target = document.elementFromPoint(
+        box.x + box.width / 2,
+        box.y + box.height / 2,
+      );
+      return {
+        hitInsideDock: target !== null && dock.contains(target),
+        hitInsideSelect: target !== null && select.contains(target),
+        selectBottom: box.bottom,
+        dockTop: dock.getBoundingClientRect().top,
+      };
+    });
+    expect(hit).not.toBeNull();
+    expect(hit!.hitInsideDock).toBe(false);
+    expect(hit!.hitInsideSelect).toBe(true);
+    // The whole node bar clears the dock, with the reserved gap.
+    expect(hit!.selectBottom).toBeLessThanOrEqual(hit!.dockTop);
   }
 });

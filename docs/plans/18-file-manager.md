@@ -604,6 +604,15 @@ Deliberate, documented limits of the step-2 write path (JUS-106):
 - **Cross-root move/copy remain out of scope** (single-root only, as designed).
 - **The recycle bin has no retention policy.** JUS-122 moves a deleted entry into `<root>/.gotham-trash/<id>/{data,meta.json}` and keeps it until a restore, a purge or an empty. There is no age or size-based auto-expiry in v1: the bin grows with deleted data until it is emptied by hand, and a bin entry is only visible/restorable through the `trash` RPCs (the reserved directory is hidden from `List` and refused by every ordinary file operation, including archive members and paths reached through a symlink whose deepest existing ancestor is in the bin). Two edges are deliberate: a restore does not recreate a missing parent directory (restoring `d/f` after `d` was deleted fails and the caller must name a destination), and a cross-device recycle **delete** (a bind-mounted subtree) copies the tree under the path lock, so a very large one can hold a single path stripe. Deploy the control plane before the agent: `permanent` defaults off, so a new agent behind an old control plane recycles deletes with no way to see or restore them; old agent behind a new control plane answers `ErrAgentOutdated` (501).
 
+## Follow-ups — file-browser layout (JUS-116…124)
+
+Post-ship layout tickets for the files page, one package per PR:
+
+- **JUS-118 — viewport-fit panel.** The browser panel fills the viewport; the toolbar, path bar, selection bar and footer stay fixed and only the entry list (list or grid) scrolls. Implemented with a route `fillViewport` meta + `.page--fill` shell in `AppLayout.vue` and a flex-column card whose `.n-card-content` owns the overflow; `docs/design/files.html` mirrors it.
+- **JUS-119 — bottom node bar.** The page-top breadcrumb is removed; a bottom bar names the current agent node and switches nodes (same route, param change → the files store resets, so the new node opens at its default root). Non-ready nodes are listed with their status and are not selectable.
+- **JUS-120 — compact toolbar.** `New file`/`New folder` collapse into one `New` dropdown, the bulk tools (Compress, Paste) sit on the right, and on `max-width: 640px` the toolbar buttons drop their labels but keep a `title` + `aria-label`.
+- **JUS-116 — editor window + dock.** The editor opens in a floating window over the panel and collapses into a fixed bottom dock; the dock height is published as `--ed-dock-h` so the fill page reserves room for it and the node bar stays clickable.
+
 ## Risks
 | Risk | Mitigation |
 |---|---|

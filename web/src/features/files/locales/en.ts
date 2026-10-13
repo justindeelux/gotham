@@ -6,7 +6,6 @@
  * ever reaches the UI.
  */
 const en = {
-  title: "File manager",
   chooser: {
     eyebrow: "Operations · Remote file manager",
     title: "File manager",

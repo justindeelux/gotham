@@ -124,7 +124,10 @@ async function submit(): Promise<void> {
     preset="card"
     style="width: 460px; max-width: 94vw"
     :title="t('files.dialogs.compressTitle')"
-    @update:show="(value: boolean) => emit('update:show', value)"
+    :mask-closable="!files.acting"
+    :close-on-esc="!files.acting"
+    :closable="!files.acting"
+    @update:show="(value: boolean) => !files.acting && emit('update:show', value)"
   >
     <NFormItem :label="t('files.dialogs.compressFormat')">
       <NSelect v-model:value="format" :options="formatOptions" />
@@ -152,7 +155,7 @@ async function submit(): Promise<void> {
         :show-indicator="false"
         :height="6"
       />
-      <span class="small muted">{{ t("files.dialogs.compressProgress") }}</span>
+      <span class="small muted" role="status" aria-live="polite">{{ t("files.dialogs.compressProgress") }}</span>
     </div>
 
     <template #footer>
@@ -160,7 +163,7 @@ async function submit(): Promise<void> {
         <span class="grow small muted">
           {{ t("files.dialogs.compressSources", { count: props.entries.length }) }}
         </span>
-        <NButton @click="emit('update:show', false)">
+        <NButton :disabled="files.acting" @click="emit('update:show', false)">
           {{ t("common.actions.cancel") }}
         </NButton>
         <NButton

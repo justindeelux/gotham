@@ -426,22 +426,45 @@ returning a silently partial listing.
 `Compress` and `Extract` build and unpack `zip`, `tar` and `tar.gz` **without a
 shell** (`archive/zip`, `archive/tar`, `compress/gzip` only; no `os/exec`
 anywhere). Compress skips symbolic links and special files (never following a
-link) and reports how many it skipped in the final progress message; the archive
-is staged in a temporary file and renamed into place, so a failed or cancelled
-compress never leaves a partial archive. Extract refuses symbolic-link,
-hard-link, device and FIFO entries, strips setuid/setgid/sticky bits, and writes
-every entry through `os.Root`, so an absolute name, a `..` segment or a symlinked
-parent cannot escape the destination root. A file that already exists is refused
-unless the caller sets `overwrite`; an existing directory is reused, never
-removed. Both guard the running-app directory (an archive cannot replace a
-top-level application directory of the managed volumes root), refuse a read-only
-root, and honour the free-space reserve and transfer budget of the write path.
+link) and counts them in the final progress message; the archive is staged in a
+temporary file and renamed into place, so a failed or cancelled compress never
+leaves a partial archive. Extract refuses symbolic-link, hard-link, device and
+FIFO entries, strips setuid/setgid/sticky bits, and writes every entry through
+`os.Root`, so an absolute name, a `..` segment or a symlinked parent cannot
+escape the destination root. A file that already exists is refused unless the
+caller sets `overwrite`; an existing directory is reused, never removed. Each
+file is written to a temporary sibling and renamed over the target, so a failed
+overwrite never truncates the existing file. Both guard the running-app
+directory (an archive cannot replace a top-level application directory of the
+managed volumes root), refuse a read-only root, and honour the free-space
+reserve and transfer budget of the write path.
+
+**Extract is not transactional.** A failure part-way leaves the entries already
+unpacked in place (only the file being written is staged and removed), so the
+caller must treat a failed extract as a partial result and clean up if needed.
 
 Three caps bound an archive: the total uncompressed bytes
 (`GOTHAM_AGENT_ARCHIVE_MAX_BYTES`, default 4 GiB), the entry count
-(`GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES`, default 100000), and a compression ratio of
-200:1 against the archive's own size. A over-limit archive is refused before it
-fills the disk, mapping to **413** on the control plane.
+(`GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES`, default 100000), and a **fixed**
+compression ratio of **200:1** against the archive's own size (not
+env-configurable). Directory entries count toward the entry cap, and a zip's
+central directory is capped against `GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES` before
+any entry is written. An over-limit archive is refused before it fills the
+disk. Both limits are read as positive integers; an unparseable or non-positive
+value silently falls back to its default (like the other `GOTHAM_AGENT_FILE_*`
+limits), so a typo does not disable the cap.
+
+An archive limit is answered **413** with a distinct `archive_limit` body code,
+and a refused archive member (a link, device, FIFO or unsupported type) **409**
+with an `archive_entry` code, so the UI shows an archive-specific message
+instead of "file is too large to edit/upload" or "conflict".
+
+An archive request **stays open for the whole transfer**: the control plane
+holds the connection up to its transfer budget, and the browser disables its own
+client timeout, but a reverse proxy in front of the control plane must allow a
+long-lived response, or the request will be cut while the agent keeps working.
+The node's Traefik edge does not front the file API, so its timeouts do not
+apply to it.
 
 ### Control-plane side
 

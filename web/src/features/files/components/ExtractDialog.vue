@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive } from "@lucide/vue";
+import { ArchiveRestore } from "@lucide/vue";
 import { NButton, NCheckbox, NModal, NProgress, useMessage } from "naive-ui";
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -59,7 +59,10 @@ async function submit(): Promise<void> {
     preset="card"
     style="width: 460px; max-width: 94vw"
     :title="t('files.dialogs.extractTitle')"
-    @update:show="(value: boolean) => emit('update:show', value)"
+    :mask-closable="!files.acting"
+    :close-on-esc="!files.acting"
+    :closable="!files.acting"
+    @update:show="(value: boolean) => !files.acting && emit('update:show', value)"
   >
     <p class="message">
       {{ t("files.dialogs.extractMessage", { name }) }}
@@ -77,13 +80,13 @@ async function submit(): Promise<void> {
         :show-indicator="false"
         :height="6"
       />
-      <span class="small muted">{{ t("files.dialogs.extractProgress") }}</span>
+      <span class="small muted" role="status" aria-live="polite">{{ t("files.dialogs.extractProgress") }}</span>
     </div>
 
     <template #footer>
       <div class="dialog-foot">
         <span class="grow small muted">{{ t("files.dialogs.extractDestination") }}</span>
-        <NButton @click="emit('update:show', false)">
+        <NButton :disabled="files.acting" @click="emit('update:show', false)">
           {{ t("common.actions.cancel") }}
         </NButton>
         <NButton
@@ -93,7 +96,7 @@ async function submit(): Promise<void> {
           @click="() => void submit()"
         >
           <template #icon>
-            <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
+            <ArchiveRestore :size="14" :stroke-width="1.8" aria-hidden="true" />
           </template>
           {{ t("files.actions.extract") }}
         </NButton>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   Archive,
+  ArchiveRestore,
   ArrowUp,
   ChevronDown,
   ChevronRight,
@@ -875,7 +876,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
                 @click="openExtract(entry)"
               >
                 <template #icon>
-                  <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  <ArchiveRestore :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </template>
               </NButton>
               <NButton

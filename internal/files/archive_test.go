@@ -156,9 +156,11 @@ func TestArchiveRPCErrorMapping(t *testing.T) {
 		{"read-only", status.Error(codes.PermissionDenied, "x"), ErrForbidden},
 		{"conflict", status.Error(codes.AlreadyExists, "x"), ErrConflict},
 		{"unimplemented", status.Error(codes.Unimplemented, "x"), ErrAgentOutdated},
-		{"entry cap", status.Error(codes.ResourceExhausted, "extract: archive has more than 10 entries"), ErrTooLarge},
-		{"ratio cap", status.Error(codes.ResourceExhausted, "extract: archive expands by more than 200:1"), ErrTooLarge},
+		{"entry cap", status.Error(codes.ResourceExhausted, "extract: archive has more than 10 entries"), ErrArchiveLimit},
+		{"ratio cap", status.Error(codes.ResourceExhausted, "extract: archive expands by more than 200:1"), ErrArchiveLimit},
 		{"low disk", status.Error(codes.ResourceExhausted, "extract: the filesystem is low on free space"), ErrInsufficientStorage},
+		{"no space in an archive path", status.Error(codes.ResourceExhausted, "extract: write archive/x: no space left on device"), ErrInsufficientStorage},
+		{"refused entry", status.Error(codes.FailedPrecondition, `extract: archive entry "x" is a link`), ErrArchiveEntry},
 		{"busy", status.Error(codes.ResourceExhausted, "file service is busy: too many concurrent transfers"), ErrBusy},
 	}
 	for _, tc := range cases {
@@ -228,6 +230,8 @@ func TestArchiveRouteErrorStatuses(t *testing.T) {
 		{"forbidden", ErrForbidden, http.StatusForbidden},
 		{"conflict", ErrConflict, http.StatusConflict},
 		{"too large", ErrTooLarge, http.StatusRequestEntityTooLarge},
+		{"archive limit", ErrArchiveLimit, http.StatusRequestEntityTooLarge},
+		{"archive entry", ErrArchiveEntry, http.StatusConflict},
 		{"busy", ErrBusy, http.StatusTooManyRequests},
 		{"outdated", ErrAgentOutdated, http.StatusNotImplemented},
 		{"unavailable", ErrAgentUnavailable, http.StatusBadGateway},
@@ -243,6 +247,35 @@ func TestArchiveRouteErrorStatuses(t *testing.T) {
 		rec = doWrite(t, h, http.MethodPost, "/v1/servers/"+id.String()+"/files/extract", `{"root":"volumes","source":"a.zip","destination":"."}`, nil)
 		if rec.Code != tc.want {
 			t.Errorf("%s extract status = %d, want %d", tc.name, rec.Code, tc.want)
+		}
+	}
+}
+
+// TestArchiveRouteErrorCodes proves the archive-specific failures carry a
+// stable body code the browser maps to a distinct message (M9/M11).
+func TestArchiveRouteErrorCodes(t *testing.T) {
+	id := uuid.New()
+	cases := []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{ErrArchiveLimit, http.StatusRequestEntityTooLarge, "archive_limit"},
+		{ErrArchiveEntry, http.StatusConflict, "archive_entry"},
+	}
+	for _, tc := range cases {
+		svc := &fakeService{compressErr: tc.err, extractErr: tc.err}
+		h := newTestRouter(svc)
+		rec := doWrite(t, h, http.MethodPost, "/v1/servers/"+id.String()+"/files/compress", `{"root":"volumes","sources":["a"],"destination":"out.zip","format":"zip"}`, nil)
+		if rec.Code != tc.status {
+			t.Fatalf("compress status = %d, want %d", rec.Code, tc.status)
+		}
+		var body errorBody
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.Code != tc.code {
+			t.Errorf("error code = %q, want %q", body.Code, tc.code)
 		}
 	}
 }
@@ -291,6 +324,12 @@ func TestArchiveAudited(t *testing.T) {
 	for _, op := range []string{`"op":"compress"`, `"op":"extract"`} {
 		if !strings.Contains(out, op) {
 			t.Errorf("audit log missing %s: %s", op, out)
+		}
+	}
+	// The archive-specific extra fields are recorded too (L6).
+	for _, extra := range []string{`"format":"zip"`, `"overwrite":false`, `"destination":"."`, `"sources":1`} {
+		if !strings.Contains(out, extra) {
+			t.Errorf("audit log missing %s: %s", extra, out)
 		}
 	}
 }

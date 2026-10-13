@@ -135,6 +135,35 @@ func TestLoadOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadArchiveLimitsFromEnv(t *testing.T) {
+	clearAgentEnv(t)
+	t.Setenv(envInsecure, "true")
+	t.Setenv(envListenAddr, "127.0.0.1:9443")
+	t.Setenv(envFileArchiveMaxBytes, "12345")
+	t.Setenv(envFileArchiveMaxEntries, "42")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FileArchiveMaxBytes != 12345 || cfg.FileArchiveMaxEntries != 42 {
+		t.Fatalf("archive limits = %d/%d, want 12345/42", cfg.FileArchiveMaxBytes, cfg.FileArchiveMaxEntries)
+	}
+	// An unparseable or non-positive value falls back to the default rather
+	// than disabling the cap.
+	clearAgentEnv(t)
+	t.Setenv(envInsecure, "true")
+	t.Setenv(envListenAddr, "127.0.0.1:9443")
+	t.Setenv(envFileArchiveMaxBytes, "-1")
+	t.Setenv(envFileArchiveMaxEntries, "nope")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FileArchiveMaxBytes != defaultFileArchiveMaxBytes || cfg.FileArchiveMaxEntries != defaultFileArchiveMaxEntries {
+		t.Fatalf("archive limits = %d/%d, want the defaults", cfg.FileArchiveMaxBytes, cfg.FileArchiveMaxEntries)
+	}
+}
+
 func TestLoadFallsBackToDockerHost(t *testing.T) {
 	clearAgentEnv(t)
 	t.Setenv(envInsecure, "true")

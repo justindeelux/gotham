@@ -35,9 +35,12 @@ type ticketEnvelope struct {
 	Ticket string `json:"ticket"`
 }
 
-// errorBody is the JSON body returned for failures.
+// errorBody is the JSON body returned for failures. Code is a stable,
+// machine-readable token the browser maps to a localized message, so the
+// server's English text is never shown; it is absent when only status matters.
 type errorBody struct {
 	Message string `json:"message"`
+	Code    string `json:"code,omitempty"`
 }
 
 // handler serves the file routes for one FileService.
@@ -254,41 +257,50 @@ func (h *handler) download(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeError maps service sentinels to HTTP responses.
+// writeError maps service sentinels to HTTP responses. The body carries a
+// stable code token the browser maps to a localized message; the English
+// message is a fallback and is never shown by the UI.
 func (h *handler) writeError(w http.ResponseWriter, err error) {
 	var maxBytes *http.MaxBytesError
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found"})
+		writeJSON(w, http.StatusNotFound, errorBody{Message: "not found", Code: "not_found"})
 	case errors.Is(err, ErrForbidden):
-		writeJSON(w, http.StatusForbidden, errorBody{Message: "forbidden"})
+		writeJSON(w, http.StatusForbidden, errorBody{Message: "forbidden", Code: "forbidden"})
 	case errors.Is(err, ErrValidation) && errors.As(err, &maxBytes):
 		// A body that overran the ceiling while being read (a lying or chunked
 		// Content-Length) is 413, not 400.
-		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "file is too large to edit"})
+		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "file is too large to edit", Code: "too_large"})
 	case errors.Is(err, ErrValidation):
 		// A fixed message: the underlying error can carry raw gRPC/agent text
 		// (mapRPCError wraps the agent error), which must not reach the client.
-		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request"})
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request", Code: "invalid"})
 	case errors.Is(err, ErrConflict):
-		writeJSON(w, http.StatusConflict, errorBody{Message: "conflict"})
+		writeJSON(w, http.StatusConflict, errorBody{Message: "conflict", Code: "conflict"})
+	case errors.Is(err, ErrArchiveEntry):
+		// A refused archive member (link/device/FIFO/unsupported type) is a
+		// conflict-shaped refusal but not an existing-name clash, so it carries
+		// its own copy instead of the generic "conflict".
+		writeJSON(w, http.StatusConflict, errorBody{Message: "archive contains an entry that cannot be extracted", Code: "archive_entry"})
 	case errors.Is(err, ErrTooLarge):
-		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "file is too large to edit"})
+		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "file is too large to edit", Code: "too_large"})
+	case errors.Is(err, ErrArchiveLimit):
+		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "archive exceeds the node's archive limits", Code: "archive_limit"})
 	case errors.Is(err, ErrNotEditable):
-		writeJSON(w, http.StatusUnsupportedMediaType, errorBody{Message: "file is not editable text"})
+		writeJSON(w, http.StatusUnsupportedMediaType, errorBody{Message: "file is not editable text", Code: "not_editable"})
 	case errors.Is(err, ErrBusy):
-		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "node is busy"})
+		writeJSON(w, http.StatusTooManyRequests, errorBody{Message: "node is busy", Code: "busy"})
 	case errors.Is(err, ErrInsufficientStorage):
-		writeJSON(w, http.StatusInsufficientStorage, errorBody{Message: "not enough free space"})
+		writeJSON(w, http.StatusInsufficientStorage, errorBody{Message: "not enough free space", Code: "insufficient_storage"})
 	case errors.Is(err, ErrAgentOutdated):
-		writeJSON(w, http.StatusNotImplemented, errorBody{Message: "update the node agent"})
+		writeJSON(w, http.StatusNotImplemented, errorBody{Message: "update the node agent", Code: "agent_outdated"})
 	case errors.Is(err, ErrAgentUnavailable):
-		writeJSON(w, http.StatusBadGateway, errorBody{Message: "agent unavailable"})
+		writeJSON(w, http.StatusBadGateway, errorBody{Message: "agent unavailable", Code: "agent_unavailable"})
 	case errors.Is(err, ErrDisabled):
-		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "files are disabled"})
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "files are disabled", Code: "disabled"})
 	default:
 		h.logger.Error("files: request failed", "error", err)
-		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error"})
+		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error", Code: "error"})
 	}
 }
 

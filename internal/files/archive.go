@@ -3,6 +3,7 @@ package files
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/google/uuid"
@@ -59,7 +60,11 @@ func archiveFormat(format string) (agentv1.ArchiveFormat, error) {
 // mutation: the caller must hold a write-capable role (resolve enforces it) and
 // the agent must own a writable root.
 func (s *Service) Compress(ctx context.Context, serverID uuid.UUID, req CompressRequest) (entry Entry, err error) {
-	defer func() { s.audit(ctx, serverID, "compress", req.Root, req.Destination, err) }()
+	defer func() {
+		s.audit(ctx, serverID, "compress", req.Root, req.Destination, err,
+			"dest_dir", path.Dir(req.Destination), "sources", len(req.Sources),
+			"format", req.Format, "overwrite", req.Overwrite)
+	}()
 	if !Enabled() {
 		return Entry{}, ErrDisabled
 	}
@@ -123,7 +128,10 @@ func (s *Service) Compress(ctx context.Context, serverID uuid.UUID, req Compress
 // root, draining the agent's progress stream. It is a mutation, gated like
 // Compress.
 func (s *Service) Extract(ctx context.Context, serverID uuid.UUID, req ExtractRequest) (err error) {
-	defer func() { s.audit(ctx, serverID, "extract", req.Root, req.Source, err) }()
+	defer func() {
+		s.audit(ctx, serverID, "extract", req.Root, req.Source, err,
+			"destination", req.Destination, "overwrite", req.Overwrite)
+	}()
 	if !Enabled() {
 		return ErrDisabled
 	}

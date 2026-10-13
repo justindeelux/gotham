@@ -735,10 +735,19 @@ func mapRPCError(err error) error {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	case codes.PermissionDenied:
 		return fmt.Errorf("%w: %v", ErrForbidden, err)
-	case codes.FailedPrecondition, codes.AlreadyExists, codes.Aborted:
-		// FailedPrecondition is the agent's etag/type conflict, AlreadyExists an
-		// exclusive create or no-overwrite rename/copy hitting an existing name,
-		// and Aborted a target that changed during the upload. All are 409.
+	case codes.FailedPrecondition:
+		// The agent's FailedPrecondition is normally an etag/type conflict. A
+		// refused archive member (a link, device, FIFO or unsupported type) is
+		// the one FailedPrecondition that is not a conflict, so it gets its own
+		// message instead of surfacing as "conflict".
+		if strings.Contains(status.Convert(err).Message(), "archive entry") {
+			return fmt.Errorf("%w: %v", ErrArchiveEntry, err)
+		}
+		return fmt.Errorf("%w: %v", ErrConflict, err)
+	case codes.AlreadyExists, codes.Aborted:
+		// AlreadyExists is an exclusive create or no-overwrite rename/copy
+		// hitting an existing name, and Aborted a target that changed during
+		// the upload. Both are 409.
 		return fmt.Errorf("%w: %v", ErrConflict, err)
 	case codes.ResourceExhausted:
 		return classifyResourceExhausted(err)
@@ -752,30 +761,38 @@ func mapRPCError(err error) error {
 }
 
 // classifyResourceExhausted splits the agent's single ResourceExhausted code
-// into the three distinct conditions the proto message prefixes already
-// distinguish (agent/files_write.go), so a caller is not told "the node is
-// busy" when the real problem is a full disk or a body over the node's limit:
+// into the distinct conditions the proto message prefixes already distinguish
+// (agent/files_write.go, agent/files_archive.go), so a caller is not told "the
+// node is busy" when the real problem is a full disk or an archive over its
+// limits. Free-space checks run first, because an out-of-space message embeds
+// the path being written and a path may legitimately contain "archive":
 //
-//   - a body over the node's upload limit is ErrTooLarge (413);
 //   - low free space or an exhausted quota is ErrInsufficientStorage (507);
+//   - an archive over its entry/byte/ratio/depth limits is ErrArchiveLimit
+//     (413, with an archive-specific message);
+//   - a body over the node's upload limit is ErrTooLarge (413);
 //   - the per-node transfer semaphore being full is ErrBusy (429).
 //
 // An unrecognised message keeps the historical ErrBusy mapping.
 func classifyResourceExhausted(err error) error {
 	message := strings.ToLower(status.Convert(err).Message())
 	switch {
-	case strings.Contains(message, "upload limit"), strings.Contains(message, "too large"),
-		strings.Contains(message, "archive"):
-		// An archive limit (entry count, uncompressed bytes, compression ratio,
-		// nesting depth) is a body too large to process, like an over-limit
-		// upload.
-		return fmt.Errorf("%w: %v", ErrTooLarge, err)
 	case strings.Contains(message, "low on free space"),
 		strings.Contains(message, "do not fit"),
 		strings.Contains(message, "quota"),
 		strings.Contains(message, "no space left"),
 		strings.Contains(message, "disk full"):
 		return fmt.Errorf("%w: %v", ErrInsufficientStorage, err)
+	case strings.Contains(message, "archive has more than"),
+		strings.Contains(message, "archive expands"),
+		strings.Contains(message, "archive nesting"),
+		strings.Contains(message, "archive entry has a negative size"),
+		strings.Contains(message, "archive is larger than"):
+		// An archive limit (entry count, uncompressed bytes, compression ratio,
+		// nesting depth, archive size) is its own condition.
+		return fmt.Errorf("%w: %v", ErrArchiveLimit, err)
+	case strings.Contains(message, "upload limit"), strings.Contains(message, "too large"):
+		return fmt.Errorf("%w: %v", ErrTooLarge, err)
 	default:
 		return fmt.Errorf("%w: %v", ErrBusy, err)
 	}
@@ -797,6 +814,10 @@ func auditResult(err error) string {
 		return "conflict"
 	case errors.Is(err, ErrTooLarge):
 		return "too_large"
+	case errors.Is(err, ErrArchiveLimit):
+		return "archive_limit"
+	case errors.Is(err, ErrArchiveEntry):
+		return "archive_entry"
 	case errors.Is(err, ErrNotEditable):
 		return "not_editable"
 	case errors.Is(err, ErrBusy):

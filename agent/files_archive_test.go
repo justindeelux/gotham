@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/justindeelux/gotham/agent/fsroot"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
@@ -531,7 +534,7 @@ func TestArchiveEntryPath(t *testing.T) {
 		"./":          "",
 	}
 	for name, want := range valid {
-		got, err := archiveEntryPath(name)
+		got, err := archiveEntryPath(name, true)
 		if err != nil {
 			t.Errorf("archiveEntryPath(%q) = %v, want nil", name, err)
 			continue
@@ -540,11 +543,27 @@ func TestArchiveEntryPath(t *testing.T) {
 			t.Errorf("archiveEntryPath(%q) = %q, want %q", name, got, want)
 		}
 	}
-	invalid := []string{"../a", "/abs", "a/../../b", "a\x00b", "\\..\\a", "a/../b"}
+	// Zip normalises a Windows backslash separator into "/".
+	if got, err := archiveEntryPath(`a\b`, true); err != nil || got != "a/b" {
+		t.Errorf("zip archiveEntryPath(`a\\b`) = %q, %v, want a/b", got, err)
+	}
+	// A tar keeps backslashes: they are ordinary filename characters on Linux.
+	if got, err := archiveEntryPath(`a\b`, false); err != nil || got != `a\b` {
+		t.Errorf("tar archiveEntryPath(`a\\b`) = %q, %v, want literal", got, err)
+	}
+	invalid := []string{"../a", "/abs", "a/../../b", "a\x00b", "a/../b"}
 	for _, name := range invalid {
-		if _, err := archiveEntryPath(name); err == nil {
-			t.Errorf("archiveEntryPath(%q) = nil, want an error", name)
+		if _, err := archiveEntryPath(name, true); err == nil {
+			t.Errorf("zip archiveEntryPath(%q) = nil, want an error", name)
 		}
+	}
+	// A backslash-escaped traversal is only a traversal for zip; for tar it is
+	// a literal name, not an escape.
+	if _, err := archiveEntryPath(`\..\a`, true); err == nil {
+		t.Errorf("zip archiveEntryPath(`\\..\\a`) = nil, want an error")
+	}
+	if _, err := archiveEntryPath(`\..\a`, false); err != nil {
+		t.Errorf("tar archiveEntryPath(`\\..\\a`) = %v, want a literal name", err)
 	}
 }
 
@@ -591,5 +610,271 @@ func TestFileServerCompressSkipsSpecialFiles(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the real file is missing from the archive")
+	}
+}
+
+// TestArchiveCounterRejectsInt64Overflow proves a declared size near MaxInt64
+// cannot wrap the byte total past the cap (H1).
+func TestArchiveCounterRejectsInt64Overflow(t *testing.T) {
+	t.Parallel()
+	counter := &archiveCounter{maxEntries: 100, maxBytes: 1 << 30}
+	if err := counter.addEntry(1); err != nil {
+		t.Fatalf("first entry: %v", err)
+	}
+	if err := counter.addEntry(math.MaxInt64); !errors.Is(err, fsroot.ErrTooLarge) {
+		t.Fatalf("addEntry(MaxInt64) = %v, want ErrTooLarge", err)
+	}
+}
+
+// TestFileServerExtractCountsEveryEntry proves directory entries and names that
+// clean to nothing still count against the entry cap (H2).
+func TestFileServerExtractCountsEveryEntry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("tar-dir-bomb", func(t *testing.T) {
+		t.Parallel()
+		server, root := newTestFileServer(t)
+		server.archiveMaxEntries = 2
+		writeArchiveFile(t, root, "dirs.tar", buildTar(t, []tarEntry{
+			{name: "a/", typeflag: tar.TypeDir, mode: 0o755},
+			{name: "b/", typeflag: tar.TypeDir, mode: 0o755},
+			{name: "c/", typeflag: tar.TypeDir, mode: 0o755},
+		}))
+		if err := extract(t, server, fileRootVolumes, "dirs.tar", ".", false); status.Code(err) != codes.ResourceExhausted {
+			t.Fatalf("tar dir bomb = %v, want ResourceExhausted", err)
+		}
+	})
+
+	t.Run("zip-dir-bomb", func(t *testing.T) {
+		t.Parallel()
+		server, root := newTestFileServer(t)
+		server.archiveMaxEntries = 2
+		writeArchiveFile(t, root, "dirs.zip", buildZip(t, []zipTestEntry{
+			{name: "a/", mode: os.ModeDir | 0o755},
+			{name: "b/", mode: os.ModeDir | 0o755},
+			{name: "c/", mode: os.ModeDir | 0o755},
+		}))
+		if err := extract(t, server, fileRootVolumes, "dirs.zip", ".", false); status.Code(err) != codes.ResourceExhausted {
+			t.Fatalf("zip dir bomb = %v, want ResourceExhausted", err)
+		}
+	})
+
+	t.Run("zip-entry-cap-before-iteration", func(t *testing.T) {
+		t.Parallel()
+		server, root := newTestFileServer(t)
+		server.archiveMaxEntries = 2
+		writeArchiveFile(t, root, "many.zip", buildZip(t, []zipTestEntry{
+			{name: "a", mode: 0o644, body: []byte("a")},
+			{name: "b", mode: 0o644, body: []byte("b")},
+			{name: "c", mode: 0o644, body: []byte("c")},
+		}))
+		if err := extract(t, server, fileRootVolumes, "many.zip", ".", false); status.Code(err) != codes.ResourceExhausted {
+			t.Fatalf("zip over the entry cap = %v, want ResourceExhausted", err)
+		}
+	})
+}
+
+// corruptZipCRC flips a byte of the single entry's central-directory CRC32, so
+// the checksum the zip reader verifies at end-of-entry is wrong.
+func corruptZipCRC(t *testing.T, body []byte) []byte {
+	t.Helper()
+	idx := bytes.Index(body, []byte{'P', 'K', 1, 2})
+	if idx < 0 {
+		t.Fatal("no central directory header in the test zip")
+	}
+	body[idx+16] ^= 0xFF
+	return body
+}
+
+// TestFileServerExtractRejectsCorruptZip keeps an existing file intact when a
+// corrupt entry fails: the CRC is only checked at EOF, and the extract stages
+// the body in a temp file rather than truncating the target in place (M1, H3).
+func TestFileServerExtractRejectsCorruptZip(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	body := corruptZipCRC(t, buildZip(t, []zipTestEntry{
+		{name: "target.txt", mode: 0o644, method: zip.Store, body: []byte("new")},
+	}))
+	writeArchiveFile(t, root, "bad.zip", body)
+	if err := os.WriteFile(filepath.Join(root, "target.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := extract(t, server, fileRootVolumes, "bad.zip", ".", true); err == nil {
+		t.Fatal("extract of a corrupt zip succeeded, want a refusal")
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "target.txt")); string(got) != "keep" {
+		t.Fatalf("a failed overwrite destroyed the existing file: %q", got)
+	}
+}
+
+// TestFileServerCompressRefusesSymlinkedSourceSelfInclusion proves a destination
+// routed through a symlinked parent into a source is refused, so the archive can
+// never enumerate its own temp file (OC H1).
+func TestFileServerCompressRefusesSymlinkedSourceSelfInclusion(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if err := os.MkdirAll(filepath.Join(root, "a", "c"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("a", filepath.Join(root, "b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compress(t, server, fileRootVolumes, "b/c/out.zip", []string{"a"}, agentv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP, false); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("compress through a symlinked parent into its source = %v, want InvalidArgument", err)
+	}
+}
+
+// TestFileServerExtractAppliesReadOnlyDirMode proves a 0555 directory entry
+// still receives its children and ends at the archived mode (M6).
+func TestFileServerExtractAppliesReadOnlyDirMode(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	writeArchiveFile(t, root, "ro.tar", buildTar(t, []tarEntry{
+		{name: "ro/", typeflag: tar.TypeDir, mode: 0o555},
+		{name: "ro/f.txt", typeflag: tar.TypeReg, mode: 0o644, body: []byte("hi")},
+	}))
+	if err := extract(t, server, fileRootVolumes, "ro.tar", ".", false); err != nil {
+		t.Fatalf("extract under a read-only dir mode: %v", err)
+	}
+	// Restore write permission so the test's TempDir cleanup can descend.
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(root, "ro"), 0o755) })
+	if got, _ := os.ReadFile(filepath.Join(root, "ro", "f.txt")); string(got) != "hi" {
+		t.Fatalf("the child under a 0555 dir was not written: %q", got)
+	}
+	info, err := os.Stat(filepath.Join(root, "ro"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o555 {
+		t.Fatalf("dir mode = %o, want 555", info.Mode().Perm())
+	}
+}
+
+// TestFileServerExtractPaxGlobalHeader proves a pax global header (as git
+// archive and GitHub tarballs emit) is skipped, not refused (M7).
+func TestFileServerExtractPaxGlobalHeader(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	writeArchiveFile(t, root, "pax.tar", buildTar(t, []tarEntry{
+		{name: "pax_global_header", typeflag: tar.TypeXGlobalHeader},
+		{name: "f.txt", typeflag: tar.TypeReg, mode: 0o644, body: []byte("hi")},
+	}))
+	if err := extract(t, server, fileRootVolumes, "pax.tar", ".", false); err != nil {
+		t.Fatalf("extract with a pax global header: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "f.txt")); string(got) != "hi" {
+		t.Fatalf("the file after the pax header was not extracted: %q", got)
+	}
+}
+
+// TestFileServerExtractTarKeepsBackslash proves a tar member whose name holds a
+// backslash keeps it (only zip rewrites the separator) (M8).
+func TestFileServerExtractTarKeepsBackslash(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	writeArchiveFile(t, root, "bs.tar", buildTar(t, []tarEntry{
+		{name: `a\b`, typeflag: tar.TypeReg, mode: 0o644, body: []byte("x")},
+	}))
+	if err := extract(t, server, fileRootVolumes, "bs.tar", ".", false); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, `a\b`)); err != nil {
+		t.Fatalf("the backslashed name was not kept: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "a", "b")); !os.IsNotExist(err) {
+		t.Fatalf("the backslash was rewritten to a separator: %v", err)
+	}
+}
+
+// TestFileServerCompressRejectsDuplicateSources proves duplicate, nested and
+// same-base-name sources are refused (L1).
+func TestFileServerCompressRejectsDuplicateSources(t *testing.T) {
+	t.Parallel()
+	server, _ := newTestFileServer(t)
+	cases := map[string][]string{
+		"duplicate": {"a", "a"},
+		"nested":    {"a", "a/b"},
+		"same-base": {"x/f", "y/f"},
+	}
+	for name, sources := range cases {
+		if _, err := compress(t, server, fileRootVolumes, "out.zip", sources, agentv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP, false); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("%s sources = %v, want InvalidArgument", name, err)
+		}
+	}
+}
+
+// TestFileServerCompressOutputMode proves a fresh archive is readable (0644) and
+// a directory destination is refused up front (L2).
+func TestFileServerCompressOutputMode(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, fileRootVolumes, "f.txt", "", false, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compress(t, server, fileRootVolumes, "out.zip", []string{"f.txt"}, agentv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP, false); err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "out.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("archive mode = %o, want 644", info.Mode().Perm())
+	}
+	if err := os.MkdirAll(filepath.Join(root, "adir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compress(t, server, fileRootVolumes, "adir", []string{"f.txt"}, agentv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP, true); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("compress onto a directory = %v, want InvalidArgument", err)
+	}
+}
+
+// TestFileServerExtractRefusesSelfOverwrite proves an entry named like the
+// archive being read is refused (L3).
+func TestFileServerExtractRefusesSelfOverwrite(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	writeArchiveFile(t, root, "self.tar", buildTar(t, []tarEntry{
+		{name: "self.tar", typeflag: tar.TypeReg, mode: 0o644, body: []byte("x")},
+	}))
+	if err := extract(t, server, fileRootVolumes, "self.tar", ".", true); err == nil {
+		t.Fatal("extract overwrote the archive being read, want a refusal")
+	}
+}
+
+// TestFileServerExtractRefusesSymlinkedAncestor proves an entry whose parent
+// chain holds a pre-existing in-root symlink is refused, so a write never lands
+// outside the requested destination (M5).
+func TestFileServerExtractRefusesSymlinkedAncestor(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if err := os.MkdirAll(filepath.Join(root, "d", "real", "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(root, "d", "s")); err != nil {
+		t.Fatal(err)
+	}
+	writeArchiveFile(t, root, "e.tar", buildTar(t, []tarEntry{
+		{name: "s/x/f.txt", typeflag: tar.TypeReg, mode: 0o644, body: []byte("pwn")},
+	}))
+	if err := extract(t, server, fileRootVolumes, "e.tar", "d", false); err == nil {
+		t.Fatal("extract through a symlinked ancestor succeeded, want a refusal")
+	}
+	if _, err := os.Stat(filepath.Join(root, "d", "real", "x", "f.txt")); !os.IsNotExist(err) {
+		t.Fatalf("extract followed the symlinked ancestor: %v", err)
+	}
+}
+
+// TestFileServerExtractRefusesDeepName proves an entry with too many path
+// segments is refused before any directory walk (M4).
+func TestFileServerExtractRefusesDeepName(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	name := strings.Repeat("a/", fileArchiveMaxNameDepth+50) + "f"
+	writeArchiveFile(t, root, "deep.tar", buildTar(t, []tarEntry{
+		{name: name, typeflag: tar.TypeReg, mode: 0o644, body: []byte("x")},
+	}))
+	if err := extract(t, server, fileRootVolumes, "deep.tar", ".", false); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("extract of a deep name = %v, want ResourceExhausted", err)
 	}
 }

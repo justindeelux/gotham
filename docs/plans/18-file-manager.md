@@ -447,8 +447,38 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 - **The CP drains the agent progress stream** (like Copy/Delete) and returns the created archive's
   entry (compress) or **204** (extract); the browser shows an indeterminate progress line, since a
   drained stream carries no byte counters to the client.
-- **The skipped-entry count is reported by the agent but not surfaced to the browser yet** (the CP
-  returns the archive entry, not the stream's terminal `skipped`); documented as a follow-up.
+- **The skipped-entry count is reported by the agent but not surfaced to the browser** (the CP
+  returns the archive entry, not the stream's terminal `skipped`). The web compress hint no longer
+  claims the count is reported; surfacing it stays a follow-up (fix round 1 chose to correct the
+  copy rather than thread the count through the response).
+
+**Step 9b favorites (fix round 1):**
+
+- The byte cap is checked *before* it is added (`size > maxBytes || bytes > maxBytes-size`), so a
+  declared `int64`-near-MaxInt64 entry cannot wrap the counter past the cap.
+- Directory and cleaned-to-nothing entries count toward the entry cap; a zip's central directory is
+  capped against `GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES` and the archive's own size is bounded before
+  `zip.NewReader` materializes it.
+- Extract stages each file in a temp sibling and renames over the target, so a failed overwrite
+  never truncates or removes an existing file; extract remains non-transactional for earlier
+  entries.
+- A zipped entry is drained to EOF after its declared size, so a lying size or a bad CRC32 is
+  caught rather than silently accepted.
+- A destination routed through a symlinked parent into a source is refused (resolved, not lexical),
+  the live temp file is skipped by identity, and compress/extract copies honour cancellation and
+  re-check the opened descriptor.
+- Extract refuses entry names deeper than 128 segments and refuses to write through a pre-existing
+  in-root symlink; a 0555 directory entry still receives its children (its mode is applied last).
+- Compress rejects duplicate/nested/same-base sources, keeps 0644 (or the previous mode) on the
+  output, refuses a directory destination, and refuses a destination inside a source by resolved
+  path.
+- Tar compatibility: `TypeXGlobalHeader`/`TypeXHeader` are skipped and `TypeCont` is treated as a
+  regular file, so `git archive`/GitHub tarballs extract; backslash-to-slash is applied to zip
+  names only.
+- The CP maps archive limits to 413 with an `archive_limit` body code and refused entries to 409
+  with `archive_entry`, after the free-space checks (an ENOSPC whose path merely contains
+  "archive" stays 507); compress/extract audit lines carry source count, format, destination and
+  the overwrite flag.
 
 ### Step 10 — Hardening, e2e, docs
 - **Brief:** `.github/workflows/ui-e2e.yml`, `internal/e2e`, `docs/install.md`, `docs/TODO.md`.

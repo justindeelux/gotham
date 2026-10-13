@@ -211,10 +211,15 @@ export function downloadUrl(serverId: string, ticket: string): string {
   return `/api/v1/servers/${serverId}/files/download?ticket=${encodeURIComponent(ticket)}`;
 }
 
-/** filesErrorKey maps an HTTP status onto its files catalog key. */
+/** filesErrorKey maps an HTTP status (or a stable server code) onto its files catalog key. */
 export function filesErrorKey(error: unknown): string | null {
-  if (isApiError(error) && typeof error.status === "number") {
-    return statusKeys[error.status] ?? null;
+  if (isApiError(error)) {
+    if (error.code && codeKeys[error.code]) {
+      return codeKeys[error.code];
+    }
+    if (typeof error.status === "number") {
+      return statusKeys[error.status] ?? null;
+    }
   }
   return null;
 }
@@ -568,4 +573,14 @@ const statusKeys: Record<number, string> = {
   502: "files.errors.agentUnavailable",
   503: "files.errors.disabled",
   507: "files.errors.insufficientStorage",
+};
+
+/**
+ * codeKeys overrides the status mapping with a stable server token, so an
+ * archive limit (413) or a refused archive member (409) gets its own accurate
+ * message instead of the editor/upload or conflict copy.
+ */
+const codeKeys: Record<string, string> = {
+  archive_limit: "files.errors.archiveLimit",
+  archive_entry: "files.errors.archiveEntry",
 };

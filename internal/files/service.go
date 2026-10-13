@@ -157,6 +157,12 @@ type FileService interface {
 	Copy(ctx context.Context, serverID uuid.UUID, root, source, destination string, overwrite bool) (Entry, error)
 	// Delete removes one entry, recursively when requested.
 	Delete(ctx context.Context, serverID uuid.UUID, root, path string, recursive bool) error
+	// Compress builds one archive from sources inside a single root and returns
+	// the created archive's entry.
+	Compress(ctx context.Context, serverID uuid.UUID, req CompressRequest) (Entry, error)
+	// Extract unpacks one archive into a destination directory inside a single
+	// root.
+	Extract(ctx context.Context, serverID uuid.UUID, req ExtractRequest) error
 }
 
 // Config wires a Service. Registry is required; Dial may be nil until the mTLS
@@ -758,7 +764,11 @@ func mapRPCError(err error) error {
 func classifyResourceExhausted(err error) error {
 	message := strings.ToLower(status.Convert(err).Message())
 	switch {
-	case strings.Contains(message, "upload limit"), strings.Contains(message, "too large"):
+	case strings.Contains(message, "upload limit"), strings.Contains(message, "too large"),
+		strings.Contains(message, "archive"):
+		// An archive limit (entry count, uncompressed bytes, compression ratio,
+		// nesting depth) is a body too large to process, like an over-limit
+		// upload.
 		return fmt.Errorf("%w: %v", ErrTooLarge, err)
 	case strings.Contains(message, "low on free space"),
 		strings.Contains(message, "do not fit"),

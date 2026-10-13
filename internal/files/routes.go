@@ -65,6 +65,8 @@ type handler struct {
 //	POST   /v1/servers/{id}/files/move
 //	POST   /v1/servers/{id}/files/copy
 //	POST   /v1/servers/{id}/files/chmod
+//	POST   /v1/servers/{id}/files/compress
+//	POST   /v1/servers/{id}/files/extract
 //	DELETE /v1/servers/{id}/files/entry?root=&path=&recursive=
 //	POST   /v1/servers/{id}/files/download-ticket?root=&path=
 //	GET    /v1/servers/{id}/files/download?ticket=
@@ -104,6 +106,8 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, 
 		protected.Post("/v1/servers/{id}/files/move", h.move)
 		protected.Post("/v1/servers/{id}/files/copy", h.copy)
 		protected.Post("/v1/servers/{id}/files/chmod", h.chmod)
+		protected.Post("/v1/servers/{id}/files/compress", h.compress)
+		protected.Post("/v1/servers/{id}/files/extract", h.extract)
 		protected.Delete("/v1/servers/{id}/files/entry", h.deleteEntry)
 		protected.Post("/v1/servers/{id}/files/download-ticket", h.issueTicket)
 	})

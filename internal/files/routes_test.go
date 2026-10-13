@@ -34,23 +34,28 @@ type fakeService struct {
 	downloadErr error
 	calls       []string
 
-	writeResult  WriteResult
-	writeErr     error
-	writeHook    func(WriteRequest) (WriteResult, error)
-	seenWrite    *WriteRequest
-	writeBody    []byte
-	authorizeErr error
-	mkdirEntry   Entry
-	mkdirErr     error
-	createEntry  Entry
-	createErr    error
-	renameEntry  Entry
-	renameErr    error
-	chmodEntry   Entry
-	chmodErr     error
-	copyEntry    Entry
-	copyErr      error
-	deleteErr    error
+	writeResult   WriteResult
+	writeErr      error
+	writeHook     func(WriteRequest) (WriteResult, error)
+	seenWrite     *WriteRequest
+	writeBody     []byte
+	authorizeErr  error
+	mkdirEntry    Entry
+	mkdirErr      error
+	createEntry   Entry
+	createErr     error
+	renameEntry   Entry
+	renameErr     error
+	chmodEntry    Entry
+	chmodErr      error
+	copyEntry     Entry
+	copyErr       error
+	deleteErr     error
+	compressEntry Entry
+	compressErr   error
+	seenCompress  *CompressRequest
+	extractErr    error
+	seenExtract   *ExtractRequest
 }
 
 func (f *fakeService) record(call string) {
@@ -164,6 +169,22 @@ func (f *fakeService) Chmod(_ context.Context, _ uuid.UUID, _, _ string, _ uint3
 func (f *fakeService) Delete(_ context.Context, _ uuid.UUID, _, _ string, _ bool) error {
 	f.record("delete")
 	return f.deleteErr
+}
+
+func (f *fakeService) Compress(_ context.Context, _ uuid.UUID, req CompressRequest) (Entry, error) {
+	f.record("compress")
+	f.mu.Lock()
+	f.seenCompress = &req
+	f.mu.Unlock()
+	return f.compressEntry, f.compressErr
+}
+
+func (f *fakeService) Extract(_ context.Context, _ uuid.UUID, req ExtractRequest) error {
+	f.record("extract")
+	f.mu.Lock()
+	f.seenExtract = &req
+	f.mu.Unlock()
+	return f.extractErr
 }
 
 // passthroughAuth stands in for RequireAuth in route tests.

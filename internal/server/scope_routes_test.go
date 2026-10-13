@@ -247,8 +247,14 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 		"read cannot copy":             {http.MethodPost, "/api/v1/servers/x/files/copy", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"read cannot chmod":            {http.MethodPost, "/api/v1/servers/x/files/chmod", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"deploy chmods":                {http.MethodPost, "/api/v1/servers/x/files/chmod", []string{auth.ScopeDeploy}, true, http.StatusOK},
-		"read cannot delete entry":     {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeRead}, true, http.StatusForbidden},
-		"deploy deletes entry":         {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		// Archives are mutations: deploy-scoped by method like the other writes.
+		"read cannot compress":     {http.MethodPost, "/api/v1/servers/x/files/compress", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy compresses":        {http.MethodPost, "/api/v1/servers/x/files/compress", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"jwt compresses":           {http.MethodPost, "/api/v1/servers/x/files/compress", nil, false, http.StatusOK},
+		"read cannot extract":      {http.MethodPost, "/api/v1/servers/x/files/extract", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy extracts":          {http.MethodPost, "/api/v1/servers/x/files/extract", []string{auth.ScopeDeploy}, true, http.StatusOK},
+		"read cannot delete entry": {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy deletes entry":     {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeDeploy}, true, http.StatusOK},
 		// Bypass variants: the method decides, so a trailing slash, a doubled
 		// slash or a query string cannot downgrade a write to the read scope.
 		"read cannot mkdir trailing slash": {http.MethodPost, "/api/v1/servers/x/files/mkdir/", []string{auth.ScopeRead}, true, http.StatusForbidden},

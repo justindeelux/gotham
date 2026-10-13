@@ -35,6 +35,9 @@ type FileClient interface {
 	Mkdir(ctx context.Context, in *agentv1.MkdirRequest, opts ...grpc.CallOption) (*agentv1.MkdirResponse, error)
 	Rename(ctx context.Context, in *agentv1.RenameRequest, opts ...grpc.CallOption) (*agentv1.RenameResponse, error)
 	Chmod(ctx context.Context, in *agentv1.ChmodRequest, opts ...grpc.CallOption) (*agentv1.ChmodResponse, error)
+	// Compress and Extract stream archive progress like Copy/Delete.
+	Compress(ctx context.Context, in *agentv1.CompressRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error)
+	Extract(ctx context.Context, in *agentv1.ExtractRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error)
 }
 
 // Compile-time assertion that the generated client satisfies the local

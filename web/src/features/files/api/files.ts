@@ -583,4 +583,5 @@ const statusKeys: Record<number, string> = {
 const codeKeys: Record<string, string> = {
   archive_limit: "files.errors.archiveLimit",
   archive_entry: "files.errors.archiveEntry",
+  invalid_archive: "files.errors.invalidArchive",
 };

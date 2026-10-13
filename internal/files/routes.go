@@ -275,6 +275,10 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		// A fixed message: the underlying error can carry raw gRPC/agent text
 		// (mapRPCError wraps the agent error), which must not reach the client.
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid request", Code: "invalid"})
+	case errors.Is(err, ErrInvalidArchive):
+		// A truncated or corrupt archive is a 400 with its own copy, not the
+		// generic "invalid request" and never a 500.
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "archive is invalid or truncated", Code: "invalid_archive"})
 	case errors.Is(err, ErrConflict):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "conflict", Code: "conflict"})
 	case errors.Is(err, ErrArchiveEntry):

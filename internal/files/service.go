@@ -732,6 +732,12 @@ func mapRPCError(err error) error {
 	case codes.NotFound:
 		return fmt.Errorf("%w: %v", ErrNotFound, err)
 	case codes.InvalidArgument:
+		// A corrupt or truncated archive body (a bad zip/tar/gzip read, a
+		// truncated member, a member name the format forbids) is an invalid
+		// archive, not a malformed request; it gets its own 400 copy.
+		if isInvalidArchiveError(status.Convert(err).Message()) {
+			return fmt.Errorf("%w: %v", ErrInvalidArchive, err)
+		}
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	case codes.PermissionDenied:
 		return fmt.Errorf("%w: %v", ErrForbidden, err)
@@ -786,6 +792,7 @@ func classifyResourceExhausted(err error) error {
 	case strings.Contains(message, "archive has more than"),
 		strings.Contains(message, "archive expands"),
 		strings.Contains(message, "archive nesting"),
+		strings.Contains(message, "nests too deeply"),
 		strings.Contains(message, "archive entry has a negative size"),
 		strings.Contains(message, "archive is larger than"):
 		// An archive limit (entry count, uncompressed bytes, compression ratio,
@@ -796,6 +803,29 @@ func classifyResourceExhausted(err error) error {
 	default:
 		return fmt.Errorf("%w: %v", ErrBusy, err)
 	}
+}
+
+// isInvalidArchiveError reports whether an agent InvalidArgument message
+// describes a corrupt or unsupported archive body rather than a malformed
+// request, so the API answers a clear invalid-archive message instead of the
+// generic "invalid request". The phrases mirror the agent's archive errors
+// (agent/files_archive.go); a wording change there must be reflected here.
+func isInvalidArchiveError(message string) bool {
+	message = strings.ToLower(message)
+	for _, phrase := range []string{
+		"reading zip",
+		"reading tar",
+		"reading gzip",
+		"opening archive entry",
+		"archive entry",
+		"unsupported archive format",
+		"is not a .zip",
+	} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // auditResult renders a service error for the audit log as a small stable
@@ -818,6 +848,8 @@ func auditResult(err error) string {
 		return "archive_limit"
 	case errors.Is(err, ErrArchiveEntry):
 		return "archive_entry"
+	case errors.Is(err, ErrInvalidArchive):
+		return "invalid_archive"
 	case errors.Is(err, ErrNotEditable):
 		return "not_editable"
 	case errors.Is(err, ErrBusy):

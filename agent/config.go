@@ -44,6 +44,9 @@ const (
 	// Archive (compress/extract) caps, Phase 18 step 9b.
 	envFileArchiveMaxBytes   = "GOTHAM_AGENT_ARCHIVE_MAX_BYTES"
 	envFileArchiveMaxEntries = "GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES"
+	// envFileArchiveMaxInput bounds the on-disk size of an archive file that
+	// extract will read, before any parser allocates.
+	envFileArchiveMaxInput = "GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES"
 
 	envAutoUpdate     = "GOTHAM_AGENT_AUTO_UPDATE"
 	envUpdateInterval = "GOTHAM_AGENT_UPDATE_INTERVAL"
@@ -115,6 +118,12 @@ const (
 	// may walk (compress) or unpack (extract) (Phase 18 step 9b). Override with
 	// GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES.
 	defaultFileArchiveMaxEntries = 100_000
+	// defaultFileArchiveMaxInputBytes bounds the on-disk size of an archive
+	// file that extract will read, checked before any archive parser runs so a
+	// hostile archive cannot make the agent allocate ahead of the entry/byte
+	// caps (Phase 18 step 9b). Override with
+	// GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES.
+	defaultFileArchiveMaxInputBytes = 1 << 30 // 1 GiB
 )
 
 // Config holds the agent's runtime configuration, loaded from the environment.
@@ -170,6 +179,9 @@ type Config struct {
 	// FileArchiveMaxEntries bounds the entry count one archive operation may
 	// walk or unpack (GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES).
 	FileArchiveMaxEntries int64
+	// FileArchiveMaxInputBytes bounds the on-disk size of an archive file that
+	// extract will read (GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES).
+	FileArchiveMaxInputBytes int64
 
 	// Version is the running agent build version. It is set by the entrypoint
 	// (not the environment) and reported to the CP in heartbeats and update
@@ -232,8 +244,9 @@ func Load() (Config, error) {
 		FileMaxUpload:    int64FromEnv(envFileMaxUpload, defaultFileMaxUpload),
 		FileMaxTransfers: int(int64FromEnv(envFileMaxTransfers, defaultFileMaxTransfers)),
 
-		FileArchiveMaxBytes:   int64FromEnv(envFileArchiveMaxBytes, defaultFileArchiveMaxBytes),
-		FileArchiveMaxEntries: int64FromEnv(envFileArchiveMaxEntries, defaultFileArchiveMaxEntries),
+		FileArchiveMaxBytes:      int64FromEnv(envFileArchiveMaxBytes, defaultFileArchiveMaxBytes),
+		FileArchiveMaxEntries:    int64FromEnv(envFileArchiveMaxEntries, defaultFileArchiveMaxEntries),
+		FileArchiveMaxInputBytes: int64FromEnv(envFileArchiveMaxInput, defaultFileArchiveMaxInputBytes),
 
 		AutoUpdate:        strings.EqualFold(strings.TrimSpace(os.Getenv(envAutoUpdate)), "true"),
 		UpdateInterval:    updateIntervalFromEnv(),

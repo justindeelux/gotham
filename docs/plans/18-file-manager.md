@@ -467,8 +467,10 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 - A destination routed through a symlinked parent into a source is refused (resolved, not lexical),
   the live temp file is skipped by identity, and compress/extract copies honour cancellation and
   re-check the opened descriptor.
-- Extract refuses entry names deeper than 128 segments and refuses to write through a pre-existing
-  in-root symlink; a 0555 directory entry still receives its children (its mode is applied last).
+- Extract refuses entry names deeper than 64 segments and refuses to write through a pre-existing
+  in-root symlink; a directory entry's archived mode is applied last with owner rwx forced
+  (`mode | 0700`), so a read-only (0555) or non-executable (0644/0600) mode never leaves an
+  untraversable tree.
 - Compress rejects duplicate/nested/same-base sources, keeps 0644 (or the previous mode) on the
   output, refuses a directory destination, and refuses a destination inside a source by resolved
   path.
@@ -479,6 +481,25 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
   with `archive_entry`, after the free-space checks (an ENOSPC whose path merely contains
   "archive" stays 507); compress/extract audit lines carry source count, format, destination and
   the overwrite flag.
+
+**Step 9b favorites (fix round 2):**
+
+- The zip central directory is bounded **before** `zip.NewReader` allocates anything: the agent
+  reads the end-of-central-directory record (and the zip64 locator/record when present) from a
+  bounded tail window and refuses an archive whose declared entry count exceeds
+  `GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES` or whose declared central-directory size exceeds 64 MiB.
+- A compressed archive's on-disk size is bounded by `GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES`
+  (default 1 GiB) for **every** format, before any parser runs, so no format can be used to make
+  the agent allocate ahead of the caps.
+- Extract caches the directories it has verified or created for the duration of one extract and
+  lowers the name-depth cap to 64, so an archive with thousands of entries in one deep directory
+  is linear in CPU rather than quadratic. A depth-cap refusal classifies as `archive_limit` (413),
+  not `too_large`/`busy`.
+- A truncated or corrupt tar/gzip/zip body is an invalid archive: the agent returns
+  `InvalidArgument` and the CP answers **400** with an `invalid_archive` body code (en/vi copy),
+  never a 500.
+- The regression test helper builds a real `zip.Store` entry, so the CRC/size-lie test exercises
+  its own guard instead of a silently-deflated entry.
 
 ### Step 10 — Hardening, e2e, docs
 - **Brief:** `.github/workflows/ui-e2e.yml`, `internal/e2e`, `docs/install.md`, `docs/TODO.md`.

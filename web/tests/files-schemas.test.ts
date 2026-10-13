@@ -131,6 +131,10 @@ describe("filesErrorKey maps every status to a curated key", () => {
     expect(filesErrorKey({ message: "x", status: 409, code: "archive_entry" })).toBe(
       "files.errors.archiveEntry",
     );
+    // A corrupt archive is a 400 but must not read as a generic invalid request.
+    expect(filesErrorKey({ message: "x", status: 400, code: "invalid_archive" })).toBe(
+      "files.errors.invalidArchive",
+    );
     // An unknown code falls back to the status mapping.
     expect(filesErrorKey({ message: "x", status: 409, code: "other" })).toBe(
       "files.errors.conflict",

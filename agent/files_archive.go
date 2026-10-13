@@ -3,8 +3,10 @@ package agent
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -37,8 +39,28 @@ const fileArchiveDepth = 128
 // fileArchiveMaxNameDepth bounds how many path segments one archive entry name
 // may carry on extract. A name with thousands of segments makes MkdirAll walk
 // each ancestor (O(n²) syscalls) and recurses deeply; a healthy archive is far
-// shallower.
-const fileArchiveMaxNameDepth = 128
+// shallower. Kept low so the per-entry ancestor work stays bounded even when
+// the ancestor cache is cold.
+const fileArchiveMaxNameDepth = 64
+
+// fileArchiveMaxCentralDirSize bounds the declared size of a zip central
+// directory, so a crafted archive cannot make zip.NewReader materialise an
+// oversized header table. An archive within the default entry cap has a
+// central directory far below this.
+const fileArchiveMaxCentralDirSize = 64 << 20
+
+// Zip end-of-central-directory parsing. The EOCD record sits in the last
+// 22+comment bytes of a zip; a comment is at most 0xFFFF bytes, so a bounded
+// tail window finds it without reading the whole archive.
+const (
+	zipEndOfCentralDirMinSize              = 22
+	zipEndOfCentralDirCommentMax           = 0xFFFF
+	zipEndOfCentralDirTailWindow           = zipEndOfCentralDirMinSize + zipEndOfCentralDirCommentMax
+	zip64EndOfCentralDirLocatorSize        = 20
+	zip64EndOfCentralDirRecordSize         = 56
+	zipFieldMax16                   uint16 = 0xFFFF
+	zipFieldMax32                   uint32 = 0xFFFFFFFF
+)
 
 // fileArchiveDirMode is the mode a directory created implicitly by an extract
 // gets when the archive carries no mode for it. Explicit directory entries are
@@ -154,9 +176,11 @@ func (d *extractDirs) record(target string, mode os.FileMode) {
 	d.perms = append(d.perms, dirPerm{target: target, mode: mode})
 }
 
-// apply chmods every recorded directory to its archived mode, deepest first, so
-// a read-only parent never blocks chmod-ing its children. Errors are joined;
-// the first failure does not stop the rest.
+// apply chmods every recorded directory to its archived mode (with owner rwx
+// forced, so a mode that lacks owner execute — 0644, 0600, 0555 on some
+// producers — never leaves an untraversable tree), deepest first, so a
+// read-only parent never blocks chmod-ing its children. Errors are joined; the
+// first failure does not stop the rest.
 func (d *extractDirs) apply(root *fsroot.Root) error {
 	// Deepest first: sort by descending segment count.
 	sort.SliceStable(d.perms, func(i, j int) bool {
@@ -164,11 +188,92 @@ func (d *extractDirs) apply(root *fsroot.Root) error {
 	})
 	var errs []error
 	for _, p := range d.perms {
-		if err := root.Chmod(p.target, p.mode); err != nil {
+		if err := root.Chmod(p.target, p.mode|0o700); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// extractState bounds the CPU one extract spends on path checks. It caches the
+// directories it has already created or verified so an archive with many
+// entries in one deep directory is linear rather than re-walking the whole
+// ancestor chain per entry. Nothing ever invalidates a cached path: an archive
+// cannot create a symlink, so a verified real directory stays a real directory
+// for the duration of the extract.
+type extractState struct {
+	root *fsroot.Root
+	// verified holds root-relative paths proven to be real directories.
+	verified map[string]struct{}
+	// statCalls counts the Stat walks the state performed, so a test can prove
+	// the cache turns repeated deep paths into O(depth) work instead of
+	// O(entries × depth²).
+	statCalls int
+}
+
+// newExtractState builds the per-extract directory cache.
+func newExtractState(root *fsroot.Root) *extractState {
+	return &extractState{root: root, verified: make(map[string]struct{})}
+}
+
+// verifyAncestors refuses a symlinked or non-directory component in rel's
+// parent chain under base, so an archive entry never writes through a
+// pre-existing in-root symlink. base (the caller's chosen destination) is not
+// itself checked. A component already cached as a real directory is skipped.
+func (e *extractState) verifyAncestors(base, rel string) error {
+	parent := path.Dir(rel)
+	if parent == "." || parent == "" {
+		return nil
+	}
+	cur := base
+	for _, part := range strings.Split(parent, "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = path.Join(cur, part)
+		if _, ok := e.verified[cur]; ok {
+			continue
+		}
+		e.statCalls++
+		entry, err := e.root.Stat(cur)
+		if err != nil {
+			if errors.Is(err, fsroot.ErrNotFound) {
+				// A missing component cannot be a symlink; MkdirAll creates it.
+				return nil
+			}
+			return err
+		}
+		if entry.Kind == fsroot.KindSymlink {
+			return fmt.Errorf("%w: archive destination %q has a symlinked ancestor", fsroot.ErrEscape, cur)
+		}
+		if entry.Kind != fsroot.KindDirectory {
+			return fmt.Errorf("%w: archive destination %q is not a directory", fsroot.ErrInvalid, cur)
+		}
+		e.verified[cur] = struct{}{}
+	}
+	return nil
+}
+
+// ensureDir creates dir (a root-relative path) when it is not already known to
+// exist, then caches the created chain so later entries under it skip the walk.
+// Callers must have verified dir's ancestors first.
+func (e *extractState) ensureDir(dir string, mode os.FileMode) error {
+	if dir == "." || dir == "" {
+		return nil
+	}
+	if _, ok := e.verified[dir]; ok {
+		return nil
+	}
+	if err := e.root.MkdirAll(dir, mode); err != nil {
+		return err
+	}
+	for cur := dir; cur != "." && cur != "" && cur != "/"; cur = path.Dir(cur) {
+		if _, ok := e.verified[cur]; ok {
+			break
+		}
+		e.verified[cur] = struct{}{}
+	}
+	return nil
 }
 
 // Compress builds one archive from a set of sources inside a single writable
@@ -420,6 +525,12 @@ func (s *FileServer) Extract(req *agentv1.ExtractRequest, stream grpc.ServerStre
 		return fileError("extract", err)
 	}
 	defer func() { _ = archive.Close() }()
+	// Every format reads a compressed archive whose on-disk size is bounded
+	// before any parser runs, so a hostile archive cannot make the agent
+	// allocate more than the configured input cap.
+	if entry.Size > s.archiveMaxInputBytes {
+		return status.Errorf(codes.ResourceExhausted, "extract: archive is larger than %d bytes", s.archiveMaxInputBytes)
+	}
 
 	release, err := s.beginTransfer()
 	if err != nil {
@@ -433,7 +544,8 @@ func (s *FileServer) Extract(req *agentv1.ExtractRequest, stream grpc.ServerStre
 	counter := &archiveCounter{maxEntries: s.archiveMaxEntries, maxBytes: s.archiveMaxBytes, archiveBytes: entry.Size}
 	progress := &archiveProgress{stream: stream, path: dst}
 	dirs := &extractDirs{}
-	if err := s.extractArchive(stream.Context(), root, archive, entry.Size, format, dst, src, req.GetOverwrite(), counter, dirs, progress); err != nil {
+	state := newExtractState(root)
+	if err := s.extractArchive(stream.Context(), root, archive, entry.Size, format, dst, src, req.GetOverwrite(), counter, dirs, state, progress); err != nil {
 		return fileError("extract", err)
 	}
 	// Apply the archived directory modes last, so a read-only directory never
@@ -447,14 +559,22 @@ func (s *FileServer) Extract(req *agentv1.ExtractRequest, stream grpc.ServerStre
 // extractArchive dispatches to the reader for the archive format. src is the
 // archive's own path so an entry that would overwrite the archive being read is
 // refused.
-func (s *FileServer) extractArchive(ctx context.Context, root *fsroot.Root, archive *os.File, size int64, format agentv1.ArchiveFormat, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, progress *archiveProgress) error {
+func (s *FileServer) extractArchive(ctx context.Context, root *fsroot.Root, archive *os.File, size int64, format agentv1.ArchiveFormat, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress *archiveProgress) error {
 	switch format {
 	case agentv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP:
-		// An archive's own size is bounded before the central directory is
-		// parsed: zip.NewReader materialises every entry header into memory, so
-		// an oversized archive would otherwise be read before any cap fires.
-		if size > counter.maxBytes {
-			return fmt.Errorf("%w: archive is larger than %d bytes", fsroot.ErrTooLarge, counter.maxBytes)
+		// The declared entry count and central-directory size are read from the
+		// tail before zip.NewReader runs: the reader materialises every entry
+		// header into memory, so a crafted archive declaring millions of
+		// entries must be refused before the first header is allocated.
+		entries, dirSize, err := zipCentralDirectoryBounds(archive, size)
+		if err != nil {
+			return fmt.Errorf("%w: reading zip: %v", fsroot.ErrInvalid, err)
+		}
+		if entries > counter.maxEntries {
+			return fmt.Errorf("%w: archive has more than %d entries", fsroot.ErrTooLarge, counter.maxEntries)
+		}
+		if dirSize > fileArchiveMaxCentralDirSize {
+			return fmt.Errorf("%w: archive is larger than %d bytes", fsroot.ErrTooLarge, fileArchiveMaxCentralDirSize)
 		}
 		zr, err := zip.NewReader(archive, size)
 		if err != nil {
@@ -467,28 +587,110 @@ func (s *FileServer) extractArchive(ctx context.Context, root *fsroot.Root, arch
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := s.extractZipEntry(ctx, root, zf, dst, src, overwrite, counter, dirs, progress); err != nil {
+			if err := s.extractZipEntry(ctx, root, zf, dst, src, overwrite, counter, dirs, state, progress); err != nil {
 				return err
 			}
 		}
 		return nil
 	case agentv1.ArchiveFormat_ARCHIVE_FORMAT_TAR:
-		return s.extractTar(ctx, root, archive, dst, src, overwrite, counter, dirs, progress)
+		return s.extractTar(ctx, root, archive, dst, src, overwrite, counter, dirs, state, progress)
 	case agentv1.ArchiveFormat_ARCHIVE_FORMAT_TAR_GZ:
 		gz, err := gzip.NewReader(archive)
 		if err != nil {
 			return fmt.Errorf("%w: reading gzip: %v", fsroot.ErrInvalid, err)
 		}
 		defer func() { _ = gz.Close() }()
-		return s.extractTar(ctx, root, gz, dst, src, overwrite, counter, dirs, progress)
+		return s.extractTar(ctx, root, gz, dst, src, overwrite, counter, dirs, state, progress)
 	default:
 		return fmt.Errorf("%w: unsupported archive format", fsroot.ErrInvalid)
 	}
 }
 
+// zipCentralDirectoryBounds reads the zip end-of-central-directory record (and,
+// when present, the zip64 locator and record) from the tail of f and returns
+// the declared entry count and central-directory size. It reads only a bounded
+// tail window and never parses entry headers, so a hostile archive cannot make
+// it allocate more than the window before the caller applies its caps.
+func zipCentralDirectoryBounds(f io.ReaderAt, size int64) (entries, centralDirSize int64, err error) {
+	if size < zipEndOfCentralDirMinSize {
+		return 0, 0, fmt.Errorf("file is too short to be a zip")
+	}
+	window := int64(zipEndOfCentralDirTailWindow)
+	if size < window {
+		window = size
+	}
+	tail := make([]byte, window)
+	if _, err := f.ReadAt(tail, size-window); err != nil {
+		return 0, 0, err
+	}
+	idx := zipEndOfCentralDirOffset(tail)
+	if idx < 0 {
+		return 0, 0, fmt.Errorf("no end of central directory record")
+	}
+	eocd := tail[idx:]
+	count16 := binary.LittleEndian.Uint16(eocd[10:12])
+	size32 := binary.LittleEndian.Uint32(eocd[12:16])
+	offset32 := binary.LittleEndian.Uint32(eocd[16:20])
+	if count16 != zipFieldMax16 && size32 != zipFieldMax32 && offset32 != zipFieldMax32 {
+		return int64(count16), int64(size32), nil
+	}
+	// A 0xFFFF/0xFFFFFFFF field means the real values live in the zip64
+	// records; the locator sits immediately before the EOCD record.
+	return zip64CentralDirectoryBounds(f, size-window+int64(idx), size)
+}
+
+// zipEndOfCentralDirOffset returns the offset of the real end-of-central-
+// directory record within tail, or -1 when none is found. Candidates are
+// scanned from the end and accepted only when the record's declared comment
+// length matches the bytes that follow, so a comment that happens to contain
+// the signature does not shadow the real record.
+func zipEndOfCentralDirOffset(tail []byte) int {
+	signature := []byte{'P', 'K', 5, 6}
+	for i := len(tail) - zipEndOfCentralDirMinSize; i >= 0; i-- {
+		if !bytes.Equal(tail[i:i+4], signature) {
+			continue
+		}
+		commentLen := int(binary.LittleEndian.Uint16(tail[i+20 : i+22]))
+		if len(tail)-i-zipEndOfCentralDirMinSize == commentLen {
+			return i
+		}
+	}
+	return -1
+}
+
+// zip64CentralDirectoryBounds reads the zip64 end-of-central-directory record
+// the locator points at and returns its declared entry count and central
+// directory size.
+func zip64CentralDirectoryBounds(f io.ReaderAt, eocdOffset, size int64) (entries, centralDirSize int64, err error) {
+	if eocdOffset < zip64EndOfCentralDirLocatorSize {
+		return 0, 0, fmt.Errorf("missing zip64 end of central directory locator")
+	}
+	locator := make([]byte, zip64EndOfCentralDirLocatorSize)
+	if _, err := f.ReadAt(locator, eocdOffset-zip64EndOfCentralDirLocatorSize); err != nil {
+		return 0, 0, err
+	}
+	if !bytes.Equal(locator[0:4], []byte{'P', 'K', 6, 7}) {
+		return 0, 0, fmt.Errorf("missing zip64 end of central directory locator")
+	}
+	recordOffset := int64(binary.LittleEndian.Uint64(locator[8:16]))
+	if recordOffset < 0 || recordOffset > size-zip64EndOfCentralDirRecordSize {
+		return 0, 0, fmt.Errorf("zip64 end of central directory record out of range")
+	}
+	record := make([]byte, zip64EndOfCentralDirRecordSize)
+	if _, err := f.ReadAt(record, recordOffset); err != nil {
+		return 0, 0, err
+	}
+	if !bytes.Equal(record[0:4], []byte{'P', 'K', 6, 6}) {
+		return 0, 0, fmt.Errorf("missing zip64 end of central directory record")
+	}
+	entries = int64(binary.LittleEndian.Uint64(record[32:40]))
+	centralDirSize = int64(binary.LittleEndian.Uint64(record[40:48]))
+	return entries, centralDirSize, nil
+}
+
 // extractZipEntry unpacks one zip member. Zip names may use backslashes as
 // separators (Windows producers), so those are normalised for zip only.
-func (s *FileServer) extractZipEntry(ctx context.Context, root *fsroot.Root, zf *zip.File, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, progress *archiveProgress) error {
+func (s *FileServer) extractZipEntry(ctx context.Context, root *fsroot.Root, zf *zip.File, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress *archiveProgress) error {
 	rel, err := archiveEntryPath(zf.Name, true)
 	if err != nil {
 		return err
@@ -507,7 +709,7 @@ func (s *FileServer) extractZipEntry(ctx context.Context, root *fsroot.Root, zf 
 		if rel == "" {
 			return nil
 		}
-		return s.extractDir(root, dst, rel, mode.Perm(), dirs)
+		return s.extractDir(root, dst, rel, mode.Perm(), dirs, state)
 	}
 	if rel == "" {
 		return nil
@@ -516,7 +718,7 @@ func (s *FileServer) extractZipEntry(ctx context.Context, root *fsroot.Root, zf 
 		return err
 	}
 	target := path.Join(dst, rel)
-	if err := refuseSymlinkedAncestors(root, dst, rel); err != nil {
+	if err := state.verifyAncestors(dst, rel); err != nil {
 		return err
 	}
 	body, err := zf.Open()
@@ -524,13 +726,13 @@ func (s *FileServer) extractZipEntry(ctx context.Context, root *fsroot.Root, zf 
 		return fmt.Errorf("%w: opening archive entry %q: %v", fsroot.ErrInvalid, zf.Name, err)
 	}
 	defer func() { _ = body.Close() }()
-	return s.extractFile(ctx, root, target, mode.Perm(), int64(zf.UncompressedSize64), overwrite, src, body, progress)
+	return s.extractFile(ctx, root, target, mode.Perm(), int64(zf.UncompressedSize64), overwrite, src, body, state, progress)
 }
 
 // extractTar unpacks a tar or tar.gz body. The pax global header git archive
 // and GitHub tarballs put first is skipped, and a continuation record is
 // treated as a regular file, so those archives extract.
-func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Reader, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, progress *archiveProgress) error {
+func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Reader, dst, src string, overwrite bool, counter *archiveCounter, dirs *extractDirs, state *extractState, progress *archiveProgress) error {
 	tr := tar.NewReader(r)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -572,15 +774,15 @@ func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Rea
 		mode := os.FileMode(hdr.Mode).Perm()
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := s.extractDir(root, dst, rel, mode, dirs); err != nil {
+			if err := s.extractDir(root, dst, rel, mode, dirs, state); err != nil {
 				return err
 			}
 		case tar.TypeReg, 0, tar.TypeCont:
-			if err := refuseSymlinkedAncestors(root, dst, rel); err != nil {
+			if err := state.verifyAncestors(dst, rel); err != nil {
 				return err
 			}
 			target := path.Join(dst, rel)
-			if err := s.extractFile(ctx, root, target, mode, hdr.Size, overwrite, src, tr, progress); err != nil {
+			if err := s.extractFile(ctx, root, target, mode, hdr.Size, overwrite, src, tr, state, progress); err != nil {
 				return err
 			}
 		default:
@@ -593,7 +795,7 @@ func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Rea
 // refusing to replace anything else. The directory is created with owner rwx so
 // its children can be written even when the archive declared a read-only mode;
 // the archived mode is applied once the whole extract finishes.
-func (s *FileServer) extractDir(root *fsroot.Root, dst, rel string, mode os.FileMode, dirs *extractDirs) error {
+func (s *FileServer) extractDir(root *fsroot.Root, dst, rel string, mode os.FileMode, dirs *extractDirs, state *extractState) error {
 	target := path.Join(dst, rel)
 	if s.protectsAppDir(root, target) {
 		return status.Error(codes.PermissionDenied, "extract: an application directory cannot be replaced")
@@ -604,46 +806,13 @@ func (s *FileServer) extractDir(root *fsroot.Root, dst, rel string, mode os.File
 	// A pre-existing symlink anywhere in the target's ancestor chain (inside the
 	// destination) is refused: os.Root would follow an in-root symlink and write
 	// outside the requested destination.
-	if err := refuseSymlinkedAncestors(root, dst, rel); err != nil {
+	if err := state.verifyAncestors(dst, rel); err != nil {
 		return err
 	}
-	if err := root.MkdirAll(target, mode|0o700); err != nil {
+	if err := state.ensureDir(target, mode|0o700); err != nil {
 		return err
 	}
 	dirs.record(target, mode)
-	return nil
-}
-
-// refuseSymlinkedAncestors walks base/rel's parent chain and refuses when any
-// component is a symbolic link, so an archive entry never writes through a
-// pre-existing in-root symlink. base (the caller's chosen destination) is not
-// itself checked.
-func refuseSymlinkedAncestors(root *fsroot.Root, base, rel string) error {
-	parent := path.Dir(rel)
-	if parent == "." || parent == "" {
-		return nil
-	}
-	cur := base
-	for _, part := range strings.Split(parent, "/") {
-		if part == "" || part == "." {
-			continue
-		}
-		cur = path.Join(cur, part)
-		entry, err := root.Stat(cur)
-		if err != nil {
-			if errors.Is(err, fsroot.ErrNotFound) {
-				// A missing component cannot be a symlink; MkdirAll creates it.
-				return nil
-			}
-			return err
-		}
-		if entry.Kind == fsroot.KindSymlink {
-			return fmt.Errorf("%w: archive destination %q has a symlinked ancestor", fsroot.ErrEscape, cur)
-		}
-		if entry.Kind != fsroot.KindDirectory {
-			return fmt.Errorf("%w: archive destination %q is not a directory", fsroot.ErrInvalid, cur)
-		}
-	}
 	return nil
 }
 
@@ -656,7 +825,7 @@ func refuseSymlinkedAncestors(root *fsroot.Root, base, rel string) error {
 // checked. A target that is the archive being read is refused. The
 // running-app-directory guard refuses replacing a top-level application
 // directory; the byte/entry caps are enforced by the caller before this runs.
-func (s *FileServer) extractFile(ctx context.Context, root *fsroot.Root, target string, mode os.FileMode, size int64, overwrite bool, src string, r io.Reader, progress *archiveProgress) error {
+func (s *FileServer) extractFile(ctx context.Context, root *fsroot.Root, target string, mode os.FileMode, size int64, overwrite bool, src string, r io.Reader, state *extractState, progress *archiveProgress) error {
 	if s.protectsAppDir(root, target) {
 		return status.Error(codes.PermissionDenied, "extract: an application directory cannot be replaced")
 	}
@@ -677,7 +846,7 @@ func (s *FileServer) extractFile(ctx context.Context, root *fsroot.Root, target 
 		return statErr
 	}
 	if dir := path.Dir(target); dir != "." {
-		if err := root.MkdirAll(dir, fileArchiveDirMode); err != nil {
+		if err := state.ensureDir(dir, fileArchiveDirMode); err != nil {
 			return err
 		}
 	}
@@ -753,7 +922,10 @@ func archiveEntryPath(name string, backslash bool) (string, error) {
 	}
 	segments := strings.Split(name, "/")
 	if len(segments) > fileArchiveMaxNameDepth {
-		return "", fmt.Errorf("%w: archive entry %q nests too deeply", fsroot.ErrTooLarge, name)
+		// The name is echoed back only as a segment count: a hostile archive can
+		// carry a multi-megabyte name, which must not be embedded in the
+		// returned error (and thus the gRPC status).
+		return "", fmt.Errorf("%w: archive entry nests too deeply (%d segments)", fsroot.ErrTooLarge, len(segments))
 	}
 	for _, segment := range segments {
 		if segment == ".." {
@@ -794,7 +966,12 @@ func copyArchiveBody(ctx context.Context, dst io.Writer, src io.Reader, size int
 			if errors.Is(readErr, io.EOF) {
 				return size - remaining, nil
 			}
-			return size - remaining, readErr
+			if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
+				return size - remaining, readErr
+			}
+			// A short or corrupt body (a truncated tar/gzip/zip) is an invalid
+			// archive, not an internal failure, so the caller answers 4xx.
+			return size - remaining, fmt.Errorf("%w: archive entry is truncated or corrupt: %v", fsroot.ErrInvalid, readErr)
 		}
 	}
 	return size, nil

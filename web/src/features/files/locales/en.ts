@@ -213,6 +213,7 @@ const en = {
     tooLarge: "The file is too large to upload here.",
     archiveLimit: "The archive exceeds the node's archive limits (entry count, size or compression ratio).",
     archiveEntry: "The archive contains an entry that cannot be extracted safely (a link, device, FIFO or unsupported type).",
+    invalidArchive: "The archive is invalid or truncated and could not be unpacked.",
     notEditable: "The file is not editable text. Download it instead.",
     precondition: "The file changed on the node before the request completed.",
     busy: "The node is busy transferring files. Retry in a moment.",

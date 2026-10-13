@@ -158,9 +158,14 @@ func TestArchiveRPCErrorMapping(t *testing.T) {
 		{"unimplemented", status.Error(codes.Unimplemented, "x"), ErrAgentOutdated},
 		{"entry cap", status.Error(codes.ResourceExhausted, "extract: archive has more than 10 entries"), ErrArchiveLimit},
 		{"ratio cap", status.Error(codes.ResourceExhausted, "extract: archive expands by more than 200:1"), ErrArchiveLimit},
+		{"depth cap", status.Error(codes.ResourceExhausted, "extract: fsroot: directory too large: archive entry nests too deeply (65 segments)"), ErrArchiveLimit},
+		{"input cap", status.Error(codes.ResourceExhausted, "extract: archive is larger than 1073741824 bytes"), ErrArchiveLimit},
 		{"low disk", status.Error(codes.ResourceExhausted, "extract: the filesystem is low on free space"), ErrInsufficientStorage},
 		{"no space in an archive path", status.Error(codes.ResourceExhausted, "extract: write archive/x: no space left on device"), ErrInsufficientStorage},
 		{"refused entry", status.Error(codes.FailedPrecondition, `extract: archive entry "x" is a link`), ErrArchiveEntry},
+		{"truncated body", status.Error(codes.InvalidArgument, `extract: archive entry is truncated or corrupt: unexpected EOF`), ErrInvalidArchive},
+		{"corrupt zip", status.Error(codes.InvalidArgument, "extract: reading zip: zip: not a valid zip file"), ErrInvalidArchive},
+		{"invalid destination is not an archive error", status.Error(codes.InvalidArgument, "extract: invalid destination \"../x\""), ErrValidation},
 		{"busy", status.Error(codes.ResourceExhausted, "file service is busy: too many concurrent transfers"), ErrBusy},
 	}
 	for _, tc := range cases {
@@ -203,6 +208,37 @@ func TestCompressRoute(t *testing.T) {
 	}
 }
 
+// TestIsInvalidArchiveError pins the agent-message classification: a corrupt or
+// truncated archive body is invalid_archive, while an ordinary request-shape
+// error stays a plain invalid request (Claude N3).
+func TestIsInvalidArchiveError(t *testing.T) {
+	t.Parallel()
+	archive := []string{
+		`extract: archive entry is truncated or corrupt: unexpected EOF`,
+		`extract: reading zip: zip: not a valid zip file`,
+		`extract: reading gzip: gzip: invalid header`,
+		`extract: reading tar: unexpected EOF`,
+		`extract: opening archive entry "x": unexpected EOF`,
+		`extract: "a.rar" is not a .zip, .tar or .tar.gz archive`,
+	}
+	for _, message := range archive {
+		if !isInvalidArchiveError(message) {
+			t.Errorf("isInvalidArchiveError(%q) = false, want true", message)
+		}
+	}
+	notArchive := []string{
+		`extract: invalid destination "../x"`,
+		`compress: invalid source "../x"`,
+		`compress: destination "a.zip" is inside source "a"`,
+		`compress: sources "a" and "b" overlap`,
+	}
+	for _, message := range notArchive {
+		if isInvalidArchiveError(message) {
+			t.Errorf("isInvalidArchiveError(%q) = true, want false", message)
+		}
+	}
+}
+
 func TestExtractRoute(t *testing.T) {
 	id := uuid.New()
 	svc := &fakeService{}
@@ -232,6 +268,7 @@ func TestArchiveRouteErrorStatuses(t *testing.T) {
 		{"too large", ErrTooLarge, http.StatusRequestEntityTooLarge},
 		{"archive limit", ErrArchiveLimit, http.StatusRequestEntityTooLarge},
 		{"archive entry", ErrArchiveEntry, http.StatusConflict},
+		{"invalid archive", ErrInvalidArchive, http.StatusBadRequest},
 		{"busy", ErrBusy, http.StatusTooManyRequests},
 		{"outdated", ErrAgentOutdated, http.StatusNotImplemented},
 		{"unavailable", ErrAgentUnavailable, http.StatusBadGateway},
@@ -262,6 +299,7 @@ func TestArchiveRouteErrorCodes(t *testing.T) {
 	}{
 		{ErrArchiveLimit, http.StatusRequestEntityTooLarge, "archive_limit"},
 		{ErrArchiveEntry, http.StatusConflict, "archive_entry"},
+		{ErrInvalidArchive, http.StatusBadRequest, "invalid_archive"},
 	}
 	for _, tc := range cases {
 		svc := &fakeService{compressErr: tc.err, extractErr: tc.err}

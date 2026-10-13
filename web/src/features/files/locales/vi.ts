@@ -212,6 +212,7 @@ const vi = {
     tooLarge: "Tệp quá lớn để tải lên ở đây.",
     archiveLimit: "Tệp nén vượt giới hạn của node (số mục, kích thước hoặc tỷ lệ nén).",
     archiveEntry: "Tệp nén chứa mục không thể giải nén an toàn (liên kết, thiết bị, FIFO hoặc loại không hỗ trợ).",
+    invalidArchive: "Tệp nén không hợp lệ hoặc bị cắt ngắn, không thể giải nén.",
     notEditable: "Tệp không phải văn bản có thể sửa. Hãy tải về thay vì mở.",
     precondition: "Tệp đã thay đổi trên node trước khi yêu cầu hoàn tất.",
     busy: "Node đang bận truyền tệp. Thử lại sau một lát.",

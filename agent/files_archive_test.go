@@ -6,12 +6,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"errors"
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
@@ -84,7 +87,9 @@ func buildTarGz(t *testing.T, entries []tarEntry) []byte {
 	return buf.Bytes()
 }
 
-// zipTestEntry is one entry a test zip carries.
+// zipTestEntry is one entry a test zip carries. method is passed to the zip
+// writer verbatim: zip.Store (0, the zero value) writes a real uncompressed
+// entry, so a test can exercise the stored-entry CRC/size path.
 type zipTestEntry struct {
 	name   string
 	mode   os.FileMode
@@ -92,17 +97,15 @@ type zipTestEntry struct {
 	method uint16
 }
 
-// buildZip serialises entries into a zip archive.
+// buildZip serialises entries into a zip archive. The method is written as
+// given — an unset method (0) is a real Stored entry, never silently Deflated —
+// so a Store-entry regression test actually exercises its guard.
 func buildZip(t *testing.T, entries []zipTestEntry) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	for _, e := range entries {
-		method := e.method
-		if method == 0 {
-			method = zip.Deflate
-		}
-		hdr := &zip.FileHeader{Name: e.name, Method: method}
+		hdr := &zip.FileHeader{Name: e.name, Method: e.method}
 		hdr.SetMode(e.mode)
 		w, err := zw.CreateHeader(hdr)
 		if err != nil {
@@ -724,8 +727,10 @@ func TestFileServerCompressRefusesSymlinkedSourceSelfInclusion(t *testing.T) {
 	}
 }
 
-// TestFileServerExtractAppliesReadOnlyDirMode proves a 0555 directory entry
-// still receives its children and ends at the archived mode (M6).
+// TestFileServerExtractAppliesReadOnlyDirMode proves a read-only directory entry
+// still receives its children and ends with owner rwx forced (M6/OC N2): the
+// archived 0555 keeps its group/other bits but gains owner write, so the tree
+// stays usable.
 func TestFileServerExtractAppliesReadOnlyDirMode(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
@@ -736,8 +741,6 @@ func TestFileServerExtractAppliesReadOnlyDirMode(t *testing.T) {
 	if err := extract(t, server, fileRootVolumes, "ro.tar", ".", false); err != nil {
 		t.Fatalf("extract under a read-only dir mode: %v", err)
 	}
-	// Restore write permission so the test's TempDir cleanup can descend.
-	t.Cleanup(func() { _ = os.Chmod(filepath.Join(root, "ro"), 0o755) })
 	if got, _ := os.ReadFile(filepath.Join(root, "ro", "f.txt")); string(got) != "hi" {
 		t.Fatalf("the child under a 0555 dir was not written: %q", got)
 	}
@@ -745,8 +748,35 @@ func TestFileServerExtractAppliesReadOnlyDirMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o555 {
-		t.Fatalf("dir mode = %o, want 555", info.Mode().Perm())
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("dir mode = %o, want 755 (owner rwx forced)", info.Mode().Perm())
+	}
+}
+
+// TestFileServerExtractNormalisesNonExecutableDirMode proves a directory entry
+// whose archived mode lacks owner execute (0644) still yields a traversable tree
+// with its children readable — not a false success over an unusable directory
+// (OC N2).
+func TestFileServerExtractNormalisesNonExecutableDirMode(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	writeArchiveFile(t, root, "noexec.tar", buildTar(t, []tarEntry{
+		{name: "dm/", typeflag: tar.TypeDir, mode: 0o644},
+		{name: "dm/f.txt", typeflag: tar.TypeReg, mode: 0o644, body: []byte("hi")},
+	}))
+	if err := extract(t, server, fileRootVolumes, "noexec.tar", ".", false); err != nil {
+		t.Fatalf("extract under a non-executable dir mode: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "dm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o700 != 0o700 {
+		t.Fatalf("dir mode = %o, want owner rwx", info.Mode().Perm())
+	}
+	// The tree is traversable and the child is reachable.
+	if got, err := os.ReadFile(filepath.Join(root, "dm", "f.txt")); err != nil || string(got) != "hi" {
+		t.Fatalf("child under a 0644 dir = %q, %v", got, err)
 	}
 }
 
@@ -876,5 +906,183 @@ func TestFileServerExtractRefusesDeepName(t *testing.T) {
 	}))
 	if err := extract(t, server, fileRootVolumes, "deep.tar", ".", false); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("extract of a deep name = %v, want ResourceExhausted", err)
+	}
+}
+
+// appendZip64EntryTail rewrites a small zip's tail so its zip64 end-of-central-
+// directory record declares `entries` members even though the file holds one. It
+// proves the pre-parse EOCD check refuses an archive that declares millions of
+// entries without zip.NewReader allocating any header (OC M1/OC N1).
+func appendZip64EntryTail(t *testing.T, body []byte, entries uint64) []byte {
+	t.Helper()
+	const eocdLen = 22
+	if len(body) < eocdLen {
+		t.Fatal("zip body too short")
+	}
+	base := body[:len(body)-eocdLen]
+	recordOffset := uint64(len(base))
+	var buf bytes.Buffer
+	buf.Write(base)
+
+	// zip64 end of central directory record.
+	record := make([]byte, 56)
+	binary.LittleEndian.PutUint32(record[0:4], 0x06064b50)
+	binary.LittleEndian.PutUint64(record[4:12], 44) // bytes of the record after this field
+	binary.LittleEndian.PutUint64(record[24:32], entries)
+	binary.LittleEndian.PutUint64(record[32:40], entries)
+	buf.Write(record)
+
+	// zip64 end of central directory locator, pointing at the record.
+	locator := make([]byte, 20)
+	binary.LittleEndian.PutUint32(locator[0:4], 0x07064b50)
+	binary.LittleEndian.PutUint64(locator[8:16], recordOffset)
+	binary.LittleEndian.PutUint32(locator[16:20], 1)
+	buf.Write(locator)
+
+	// EOCD whose 16/32-bit fields are all "see zip64", forcing the zip64 read.
+	eocd := make([]byte, eocdLen)
+	binary.LittleEndian.PutUint32(eocd[0:4], 0x06054b50)
+	binary.LittleEndian.PutUint16(eocd[8:10], 0xFFFF)
+	binary.LittleEndian.PutUint16(eocd[10:12], 0xFFFF)
+	binary.LittleEndian.PutUint32(eocd[12:16], 0xFFFFFFFF)
+	binary.LittleEndian.PutUint32(eocd[16:20], 0xFFFFFFFF)
+	buf.Write(eocd)
+	return buf.Bytes()
+}
+
+// TestZipCentralDirectoryBounds proves the tail parser reads a normal zip's
+// declared entry count and central-directory size, and is not fooled by a
+// comment that embeds the EOCD signature.
+func TestZipCentralDirectoryBounds(t *testing.T) {
+	t.Parallel()
+	plain := buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: []byte("x")}})
+	entries, dirSize, err := zipCentralDirectoryBounds(bytes.NewReader(plain), int64(len(plain)))
+	if err != nil {
+		t.Fatalf("bounds: %v", err)
+	}
+	if entries != 1 || dirSize <= 0 {
+		t.Fatalf("bounds = %d entries, %d bytes; want 1, >0", entries, dirSize)
+	}
+	// A comment containing the EOCD signature must not shadow the real record.
+	comment := []byte("PK\x05\x06 not the record")
+	commented := append([]byte{}, plain...)
+	binary.LittleEndian.PutUint16(commented[len(commented)-2:], uint16(len(comment)))
+	commented = append(commented, comment...)
+	entries, _, err = zipCentralDirectoryBounds(bytes.NewReader(commented), int64(len(commented)))
+	if err != nil || entries != 1 {
+		t.Fatalf("commented bounds = %d, %v; want 1, nil", entries, err)
+	}
+}
+
+// TestFileServerExtractRejectsZipDeclaredEntryCount proves the declared entry
+// count is refused from the EOCD before zip.NewReader materialises anything
+// (OC M1/OC N1).
+func TestFileServerExtractRejectsZipDeclaredEntryCount(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	server.archiveMaxEntries = 2
+	body := appendZip64EntryTail(t,
+		buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: []byte("x")}}), 5_000_000)
+	writeArchiveFile(t, root, "huge.zip", body)
+	if err := extract(t, server, fileRootVolumes, "huge.zip", ".", false); status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("extract of a zip declaring 5M entries = %v, want ResourceExhausted", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "f")); !os.IsNotExist(err) {
+		t.Fatalf("an entry was written despite the refusal: %v", err)
+	}
+}
+
+// TestFileServerExtractRejectsOversizedInputArchive proves the compressed
+// archive's on-disk size is capped for every format before any parser runs
+// (OC M1).
+func TestFileServerExtractRejectsOversizedInputArchive(t *testing.T) {
+	t.Parallel()
+	body := bytes.Repeat([]byte("x"), 4096)
+	cases := map[string][]byte{
+		"a.tar":    buildTar(t, []tarEntry{{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: body}}),
+		"a.zip":    buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: body}}),
+		"a.tar.gz": buildTarGz(t, []tarEntry{{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: body}}),
+	}
+	for name, archive := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server, root := newTestFileServer(t)
+			server.archiveMaxInputBytes = 8
+			writeArchiveFile(t, root, name, archive)
+			if err := extract(t, server, fileRootVolumes, name, ".", false); status.Code(err) != codes.ResourceExhausted {
+				t.Fatalf("extract of an over-cap archive = %v, want ResourceExhausted", err)
+			}
+		})
+	}
+}
+
+// TestFileServerExtractRejectsTruncatedBody proves a truncated tar/gzip/zip body
+// is an invalid archive (InvalidArgument), not an internal error (Claude N3).
+func TestFileServerExtractRejectsTruncatedBody(t *testing.T) {
+	t.Parallel()
+	body := bytes.Repeat([]byte("x"), 2048)
+	cases := map[string][]byte{
+		"a.tar":    buildTar(t, []tarEntry{{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: body}}),
+		"a.tar.gz": buildTarGz(t, []tarEntry{{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: body}}),
+		"a.zip":    buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: body}}),
+	}
+	for name, archive := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			server, root := newTestFileServer(t)
+			writeArchiveFile(t, root, name, archive[:len(archive)/2])
+			err := extract(t, server, fileRootVolumes, name, ".", false)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("extract of a truncated %s = %v, want InvalidArgument", name, err)
+			}
+		})
+	}
+}
+
+// TestExtractStateCachesAncestors proves the per-extract ancestor cache turns
+// repeated deep paths into O(depth) work rather than re-walking the chain for
+// every entry (Claude N1).
+func TestExtractStateCachesAncestors(t *testing.T) {
+	t.Parallel()
+	server, _ := newTestFileServer(t)
+	root := server.roots[fileRootVolumes]
+	deep := strings.Repeat("d/", fileArchiveMaxNameDepth-1)
+	if err := root.MkdirAll(strings.TrimSuffix(deep, "/"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := newExtractState(root)
+	for i := 0; i < 2000; i++ {
+		if err := state.verifyAncestors(".", deep+"f"+strconv.Itoa(i)); err != nil {
+			t.Fatalf("verifyAncestors: %v", err)
+		}
+	}
+	if state.statCalls > fileArchiveMaxNameDepth*2 {
+		t.Fatalf("ancestor Stat calls = %d, want ~%d (cache not used?)", state.statCalls, fileArchiveMaxNameDepth)
+	}
+}
+
+// TestFileServerExtractDeepTreeIsFast proves extracting thousands of entries
+// that share one deep directory is linear: without the ancestor cache each
+// entry re-walks the whole chain, which is O(entries × depth²) and takes tens of
+// seconds (Claude N1). Directory entries are used so the test measures the
+// ancestor walk, not per-file fsync cost.
+func TestFileServerExtractDeepTreeIsFast(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	const entriesCount = 1000
+	prefix := strings.Repeat("d/", fileArchiveMaxNameDepth-2)
+	entries := make([]tarEntry, 0, entriesCount)
+	for i := 0; i < entriesCount; i++ {
+		entries = append(entries, tarEntry{
+			name: prefix + "x" + strconv.Itoa(i) + "/", typeflag: tar.TypeDir, mode: 0o755,
+		})
+	}
+	writeArchiveFile(t, root, "deep.tar", buildTar(t, entries))
+	start := time.Now()
+	if err := extract(t, server, fileRootVolumes, "deep.tar", ".", false); err != nil {
+		t.Fatalf("extract deep tree: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 30*time.Second {
+		t.Fatalf("extract of %d entries at depth %d took %s", entriesCount, fileArchiveMaxNameDepth, elapsed)
 	}
 }

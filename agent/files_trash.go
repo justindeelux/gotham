@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"container/heap"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -37,14 +38,16 @@ const (
 	fileTrashData     = "data"
 	fileTrashDirMode  = 0o700
 	fileTrashMetaMode = 0o600
-	// fileTrashMaxList bounds one ListTrash response.
-	fileTrashMaxList = 5000
 	// fileTrashMetaLimit bounds the metadata file the agent will parse.
 	fileTrashMetaLimit = 1 << 20
 	// fileTrashIDBytes is the length of a trash id in bytes; the hex id is
 	// twice that.
 	fileTrashIDBytes = 16
 )
+
+// fileTrashMaxList bounds one ListTrash page; a larger bin reports truncated.
+// It is a variable so a test can lower it.
+var fileTrashMaxList = 5000
 
 // trashRecord is the metadata stored for one deleted entry.
 type trashRecord struct {
@@ -106,6 +109,13 @@ func firstComponent(rel string) string {
 // guardTrash refuses a normal file operation that addresses the reserved trash
 // tree, lexically or through a symlink that resolves into it. The trash tree is
 // only reachable through the bin RPCs.
+//
+// The check resolves the deepest existing ancestor, not just the full path:
+// root.Resolve fails on a missing component, so for a create-shaped target
+// ("link/newfile") whose leaf does not exist yet it would silently pass, and a
+// pre-existing symlink "link -> .gotham-trash" would let an ordinary op plant
+// or overwrite entries inside the bin. Walking up to the deepest ancestor that
+// does resolve closes that bypass.
 func guardTrash(root *fsroot.Root, action, rel string) error {
 	if rel == "" || rel == "." {
 		return nil
@@ -113,10 +123,20 @@ func guardTrash(root *fsroot.Root, action, rel string) error {
 	if firstComponent(rel) == fileTrashDir {
 		return status.Errorf(codes.InvalidArgument, "%s: %q is reserved for the recycle bin", action, rel)
 	}
-	if resolved, err := root.Resolve(rel); err == nil && firstComponent(resolved) == fileTrashDir {
-		return status.Errorf(codes.InvalidArgument, "%s: %q resolves into the recycle bin", action, rel)
+	for p := rel; ; {
+		resolved, err := root.Resolve(p)
+		if err == nil {
+			if firstComponent(resolved) == fileTrashDir {
+				return status.Errorf(codes.InvalidArgument, "%s: %q resolves into the recycle bin", action, rel)
+			}
+			return nil
+		}
+		parent := path.Dir(p)
+		if parent == "." || parent == p {
+			return nil
+		}
+		p = parent
 	}
-	return nil
 }
 
 // guardTrashRaw cleans a caller-supplied path and applies guardTrash. A path
@@ -288,24 +308,30 @@ func (s *FileServer) trashEntry(ctx context.Context, root *fsroot.Root, rel stri
 	return nil
 }
 
-// ListTrash lists a root's recycle bin, newest first. A root with no bin (or a
-// bin whose entries could not be read) lists as empty rather than failing, so a
-// stale item never hides the rest of the bin.
+// ListTrash lists a root's recycle bin, newest first. The scan keeps only the
+// newest fileTrashMaxList+1 items by the metadata file's modification time (a
+// bounded heap), so parsing cost is O(page) rather than O(bin size); when more
+// entries exist the response reports truncated, so the cap is never silent. A
+// root with no bin lists as empty. An item whose metadata is unreadable or whose
+// payload is missing (a half-written delete a crash left behind) is skipped
+// rather than listed as a phantom that can never be restored.
 func (s *FileServer) ListTrash(_ context.Context, req *agentv1.ListTrashRequest) (*agentv1.ListTrashResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
 		return nil, err
 	}
-	ids, err := s.trashIDs(root)
+	selection, err := s.newestTrashIDs(root, fileTrashMaxList)
 	if err != nil {
 		return nil, fileError("list trash", err)
 	}
-	items := make([]trashListed, 0, len(ids))
-	for _, id := range ids {
+	items := make([]trashListed, 0, len(selection.ids))
+	for _, id := range selection.ids {
 		rec, err := s.readTrashRecord(root, id)
 		if err != nil {
-			// A malformed or half-written item is skipped, not fatal: the rest
-			// of the bin stays listable.
+			continue
+		}
+		if _, err := root.Stat(trashItemData(id)); err != nil {
+			// A metadata-only item is not restorable, so it is not listed.
 			continue
 		}
 		items = append(items, trashListed{id: id, rec: rec})
@@ -313,14 +339,11 @@ func (s *FileServer) ListTrash(_ context.Context, req *agentv1.ListTrashRequest)
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].rec.DeletedAt.After(items[j].rec.DeletedAt)
 	})
-	if len(items) > fileTrashMaxList {
-		items = items[:fileTrashMaxList]
-	}
 	entries := make([]*agentv1.TrashEntry, 0, len(items))
 	for _, item := range items {
 		entries = append(entries, trashEntryProto(item.id, item.rec))
 	}
-	return &agentv1.ListTrashResponse{Entries: entries}, nil
+	return &agentv1.ListTrashResponse{Entries: entries, Truncated: selection.truncated}, nil
 }
 
 // trashListed pairs an id with its metadata so the bin can be sorted by
@@ -328,6 +351,80 @@ func (s *FileServer) ListTrash(_ context.Context, req *agentv1.ListTrashRequest)
 type trashListed struct {
 	id  string
 	rec trashRecord
+}
+
+// trashSelection is the bounded newest-N result of a bin scan.
+type trashSelection struct {
+	ids       []string
+	truncated bool
+}
+
+// newestTrashIDs selects at most limit valid bin item ids, newest first by the
+// modification time of their metadata file (written at delete time), with a
+// bounded heap so the work is O(bin) stats but only O(limit) metadata reads. It
+// retains limit+1 candidates so a capped listing can report truncation.
+func (s *FileServer) newestTrashIDs(root *fsroot.Root, limit int) (trashSelection, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	kept := &trashIDHeap{}
+	capacity := limit + 1
+	err := root.Names(fileTrashDir, func(name string) error {
+		if !validTrashID(name) {
+			return nil
+		}
+		entry, statErr := root.Stat(trashItemMeta(name))
+		if statErr != nil {
+			return nil
+		}
+		candidate := trashIDHeapEntry{id: name, mod: entry.Modified}
+		switch {
+		case kept.Len() < capacity:
+			heap.Push(kept, candidate)
+		case candidate.mod.After((*kept)[0].mod):
+			(*kept)[0] = candidate
+			heap.Fix(kept, 0)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fsroot.ErrNotFound) {
+		return trashSelection{}, err
+	}
+	truncated := kept.Len() > limit
+	ordered := make([]trashIDHeapEntry, kept.Len())
+	copy(ordered, *kept)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].mod.After(ordered[j].mod) })
+	if len(ordered) > limit {
+		ordered = ordered[:limit]
+	}
+	ids := make([]string, 0, len(ordered))
+	for _, candidate := range ordered {
+		ids = append(ids, candidate.id)
+	}
+	return trashSelection{ids: ids, truncated: truncated}, nil
+}
+
+// trashIDHeapEntry is one candidate in the bounded newest-N selection.
+type trashIDHeapEntry struct {
+	id  string
+	mod time.Time
+}
+
+// trashIDHeap is a min-heap of candidates by modification time, so the oldest is
+// at the root and can be evicted when a newer one arrives.
+type trashIDHeap []trashIDHeapEntry
+
+func (h trashIDHeap) Len() int           { return len(h) }
+func (h trashIDHeap) Less(i, j int) bool { return h[i].mod.Before(h[j].mod) }
+func (h trashIDHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *trashIDHeap) Push(x any)        { *h = append(*h, x.(trashIDHeapEntry)) }
+
+func (h *trashIDHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
 }
 
 // trashIDs lists the valid item ids in a root's bin; a missing bin is empty.
@@ -410,7 +507,7 @@ func (s *FileServer) Restore(ctx context.Context, req *agentv1.RestoreRequest) (
 	if err != nil {
 		return nil, fileError("restore", err)
 	}
-	return &agentv1.RestoreResponse{Entry: fileEntry(entry)}, nil
+	return &agentv1.RestoreResponse{Entry: fileEntry(entry), Path: dst}, nil
 }
 
 // Purge permanently removes one bin entry.
@@ -426,6 +523,11 @@ func (s *FileServer) Purge(ctx context.Context, req *agentv1.PurgeRequest) (*age
 	if !validTrashID(id) {
 		return nil, status.Error(codes.InvalidArgument, "purge: invalid trash id")
 	}
+	// Serialise with a restore (and another purge) of the same item: a purge
+	// must never remove the item directory while a cross-device restore is
+	// still copying its payload.
+	unlock := s.lockPaths(root.Name(), trashItemData(id))
+	defer unlock()
 	if _, err := root.Stat(trashItemDir(id)); err != nil {
 		return nil, fileError("purge", err)
 	}
@@ -451,7 +553,12 @@ func (s *FileServer) EmptyTrash(ctx context.Context, req *agentv1.EmptyTrashRequ
 	}
 	var removed uint64
 	for _, id := range ids {
-		if err := root.RemoveTree(ctx, trashItemDir(id), nil); err != nil {
+		// Take the same per-item lock a restore uses, so emptying the bin
+		// cannot remove an item's payload while it is being restored.
+		unlock := s.lockPaths(root.Name(), trashItemData(id))
+		err := root.RemoveTree(ctx, trashItemDir(id), nil)
+		unlock()
+		if err != nil {
 			if errors.Is(err, fsroot.ErrNotFound) {
 				continue
 			}

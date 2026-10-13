@@ -38,12 +38,16 @@ func TestTrashServiceMapsEntries(t *testing.T) {
 	}}}
 	svc := newTestService(t, registry, client)
 
-	entries, err := svc.Trash(context.Background(), server.ID, "volumes")
+	listing, err := svc.Trash(context.Background(), server.ID, "volumes")
 	if err != nil {
 		t.Fatalf("Trash: %v", err)
 	}
+	entries := listing.Entries
 	if len(entries) != 2 {
 		t.Fatalf("got %d entries, want 2", len(entries))
+	}
+	if listing.Truncated {
+		t.Fatal("an uncapped listing reported truncation")
 	}
 	if entries[0].OriginalPath != "dir/a.txt" || entries[0].Kind != "file" || entries[0].Size != 12 || entries[0].DeletedAt.IsZero() {
 		t.Fatalf("entry[0] = %+v", entries[0])
@@ -54,6 +58,16 @@ func TestTrashServiceMapsEntries(t *testing.T) {
 
 	if _, err := svc.Trash(context.Background(), server.ID, ""); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Trash with an empty root = %v, want ErrValidation", err)
+	}
+
+	// The agent's truncation flag is surfaced, never dropped.
+	client.trashResp = &agentv1.ListTrashResponse{Truncated: true}
+	listing, err = svc.Trash(context.Background(), server.ID, "volumes")
+	if err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	if !listing.Truncated {
+		t.Fatal("a truncated agent listing was reported as complete")
 	}
 }
 

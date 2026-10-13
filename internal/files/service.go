@@ -176,8 +176,8 @@ type FileService interface {
 	Extract(ctx context.Context, serverID uuid.UUID, req ExtractRequest) error
 
 	// Trash lists a root's recycle bin, newest first. Any team member may read
-	// it, like List.
-	Trash(ctx context.Context, serverID uuid.UUID, root string) ([]TrashEntry, error)
+	// it, like List. Truncated reports a capped listing.
+	Trash(ctx context.Context, serverID uuid.UUID, root string) (TrashListing, error)
 	// Restore moves one bin entry back to its recorded original path (or an
 	// explicit destination); an existing target is a conflict unless overwrite
 	// is set.

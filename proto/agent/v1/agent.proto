@@ -375,6 +375,9 @@ message ListTrashRequest {
 // ListTrashResponse lists the bin, newest first.
 message ListTrashResponse {
   repeated TrashEntry entries = 1;
+  // truncated is true when the bin holds more entries than this page; the
+  // oldest are omitted. It is never a silent cap.
+  bool truncated = 2;
 }
 
 // RestoreRequest moves one trash entry back to its original path.
@@ -391,6 +394,9 @@ message RestoreRequest {
 // RestoreResponse returns the restored entry at its destination.
 message RestoreResponse {
   FileEntry entry = 1;
+  // path is the root-relative destination the entry was restored to (the
+  // recorded original path when the request carried no destination).
+  string path = 2;
 }
 
 // PurgeRequest permanently removes one trash entry.

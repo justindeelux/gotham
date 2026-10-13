@@ -30,32 +30,40 @@ type EmptyTrashRequest struct {
 	Root string `json:"root"`
 }
 
+// TrashListing is one recycle-bin listing.
+type TrashListing struct {
+	Entries []TrashEntry `json:"entries"`
+	// Truncated is true when the node holds more entries than it returned; the
+	// oldest are omitted. It is never a silent cap.
+	Truncated bool `json:"truncated"`
+}
+
 // Trash lists a root's recycle bin, newest first. Any team member may read it,
 // like List: it exposes deleted entry names, which the actor could already see.
-func (s *Service) Trash(ctx context.Context, serverID uuid.UUID, root string) (entries []TrashEntry, err error) {
+func (s *Service) Trash(ctx context.Context, serverID uuid.UUID, root string) (listing TrashListing, err error) {
 	defer func() { s.audit(ctx, serverID, "trash_list", root, "", err) }()
 	if !Enabled() {
-		return nil, ErrDisabled
+		return TrashListing{}, ErrDisabled
 	}
 	if err := validateRoot(root); err != nil {
-		return nil, err
+		return TrashListing{}, err
 	}
 	ctx, client, cancel, err := s.rpc(ctx, serverID, false)
 	if err != nil {
-		return nil, err
+		return TrashListing{}, err
 	}
 	defer cancel()
 	defer s.closeClient(client)
 
 	response, err := client.ListTrash(ctx, &agentv1.ListTrashRequest{Root: root})
 	if err != nil {
-		return nil, mapRPCError(err)
+		return TrashListing{}, mapRPCError(err)
 	}
-	entries = make([]TrashEntry, 0, len(response.GetEntries()))
+	entries := make([]TrashEntry, 0, len(response.GetEntries()))
 	for _, info := range response.GetEntries() {
 		entries = append(entries, newTrashEntry(info))
 	}
-	return entries, nil
+	return TrashListing{Entries: entries, Truncated: response.GetTruncated()}, nil
 }
 
 // Restore moves one bin entry back to its recorded original path (or an
@@ -63,8 +71,9 @@ func (s *Service) Trash(ctx context.Context, serverID uuid.UUID, root string) (e
 // is a conflict (409) unless overwrite is set, so the browser can offer a
 // rename.
 func (s *Service) Restore(ctx context.Context, serverID uuid.UUID, root, id, destination string, overwrite bool) (entry Entry, err error) {
+	restoredPath := destination
 	defer func() {
-		s.audit(ctx, serverID, "trash_restore", root, destination, err, "id", id, "overwrite", overwrite)
+		s.audit(ctx, serverID, "trash_restore", root, restoredPath, err, "id", id, "overwrite", overwrite)
 	}()
 	if !Enabled() {
 		return Entry{}, ErrDisabled
@@ -96,6 +105,11 @@ func (s *Service) Restore(ctx context.Context, serverID uuid.UUID, root, id, des
 	})
 	if err != nil {
 		return Entry{}, mapRPCError(err)
+	}
+	// Record where the entry actually landed (the recorded original path when
+	// the request carried no destination), so the audit names the restored path.
+	if path := response.GetPath(); path != "" {
+		restoredPath = path
 	}
 	info := response.GetEntry()
 	if info == nil {

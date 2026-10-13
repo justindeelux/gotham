@@ -59,6 +59,7 @@ type fakeService struct {
 	seenExtract     *ExtractRequest
 	trash           []TrashEntry
 	trashErr        error
+	trashTruncated  bool
 	restoreEntry    Entry
 	restoreErr      error
 	purgeErr        error
@@ -198,9 +199,9 @@ func (f *fakeService) Extract(_ context.Context, _ uuid.UUID, req ExtractRequest
 	return f.extractErr
 }
 
-func (f *fakeService) Trash(_ context.Context, _ uuid.UUID, _ string) ([]TrashEntry, error) {
+func (f *fakeService) Trash(_ context.Context, _ uuid.UUID, _ string) (TrashListing, error) {
 	f.record("trash")
-	return f.trash, f.trashErr
+	return TrashListing{Entries: f.trash, Truncated: f.trashTruncated}, f.trashErr
 }
 
 func (f *fakeService) Restore(_ context.Context, _ uuid.UUID, _, _, _ string, _ bool) (Entry, error) {

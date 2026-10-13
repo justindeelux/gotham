@@ -1,11 +1,14 @@
 package agent
 
 import (
+	"archive/tar"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -16,12 +19,17 @@ import (
 
 // listTrash reads a root's recycle bin.
 func listTrash(t *testing.T, server *FileServer) []*agentv1.TrashEntry {
+	return listTrashResponse(t, server).GetEntries()
+}
+
+// listTrashResponse reads a root's recycle bin with its truncation flag.
+func listTrashResponse(t *testing.T, server *FileServer) *agentv1.ListTrashResponse {
 	t.Helper()
 	resp, err := server.ListTrash(context.Background(), &agentv1.ListTrashRequest{Root: fileRootVolumes})
 	if err != nil {
 		t.Fatalf("ListTrash: %v", err)
 	}
-	return resp.GetEntries()
+	return resp
 }
 
 // TestFileServerDeleteMovesToTrash pins the core recycle behaviour: a delete
@@ -292,5 +300,203 @@ func TestFileServerTrashSymlinkEscape(t *testing.T) {
 	}
 	if target, err := os.Readlink(filepath.Join(root, "back")); err != nil || strings.TrimSpace(target) != outside {
 		t.Fatalf("restored link = %q, %v; want %q", target, err, outside)
+	}
+}
+
+// TestFileServerTrashSymlinkParentBypass pins review finding 1: a create-shaped
+// target under a symlink whose parent points into the bin (leaf not existing)
+// must still be refused, for every entry-creating operation.
+func TestFileServerTrashSymlinkParentBypass(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, fileRootVolumes, "src.txt", "", false, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: "src.txt"}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+	item := listTrash(t, server)[0]
+
+	// A hostile pre-existing symlink into the bin, at the root and nested, plus
+	// one pointing straight at an item directory.
+	if err := os.Symlink(fileTrashDir, filepath.Join(root, "up")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../"+fileTrashDir, filepath.Join(root, "nested", "up2")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(fileTrashDir+"/"+item.GetId(), filepath.Join(root, "itemup")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := write(t, server, fileRootVolumes, "up/forged.txt", "", false, []byte("evil")); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Write under a symlinked bin parent = %v, want InvalidArgument", err)
+	}
+	if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: fileRootVolumes, Path: "nested/up2/dir"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Mkdir under a nested symlinked bin parent = %v, want InvalidArgument", err)
+	}
+	if _, err := server.Rename(context.Background(), &agentv1.RenameRequest{Root: fileRootVolumes, Source: "nowhere", Destination: "up/moved"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Rename into a symlinked bin = %v, want InvalidArgument", err)
+	}
+	if err := server.Copy(&agentv1.CopyRequest{Root: fileRootVolumes, Source: "nowhere", Destination: "itemup/copied"}, &collectProgressStream{}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Copy into a symlinked item = %v, want InvalidArgument", err)
+	}
+	if err := server.Compress(&agentv1.CompressRequest{
+		Root: fileRootVolumes, Sources: []string{"nested"}, Destination: "up/box.tar", Format: agentv1.ArchiveFormat_ARCHIVE_FORMAT_TAR,
+	}, &collectProgressStream{}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Compress into a symlinked bin = %v, want InvalidArgument", err)
+	}
+	if err := server.Extract(&agentv1.ExtractRequest{Root: fileRootVolumes, Source: "x.tar", Destination: "nested/up2"}, &collectProgressStream{}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Extract into a symlinked bin = %v, want InvalidArgument", err)
+	}
+	if _, err := server.Restore(context.Background(), &agentv1.RestoreRequest{Root: fileRootVolumes, Id: item.GetId(), Destination: "up/forged"}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("Restore into a symlinked bin = %v, want InvalidArgument", err)
+	}
+
+	// Nothing was planted in the bin.
+	if _, err := os.Stat(filepath.Join(root, fileTrashDir, "forged.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a forged entry landed in the bin: %v", err)
+	}
+	if got := listTrash(t, server); len(got) != 1 {
+		t.Fatalf("the bin holds %d entries, want the original 1", len(got))
+	}
+}
+
+// TestFileServerExtractTrashMemberRefused pins review finding 2: an archive
+// member whose path enters the bin is refused and cannot forge or overwrite a
+// bin entry's metadata or payload.
+func TestFileServerExtractTrashMemberRefused(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, fileRootVolumes, "keep.txt", "", false, []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: "keep.txt"}, &collectProgressStream{}); err != nil {
+		t.Fatal(err)
+	}
+	item := listTrash(t, server)[0]
+	metaPath := filepath.Join(root, fileTrashDir, item.GetId(), fileTrashMeta)
+	dataPath := filepath.Join(root, fileTrashDir, item.GetId(), fileTrashData)
+	before, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	archive := buildTar(t, []tarEntry{
+		{name: "ok.txt", typeflag: tar.TypeReg, mode: 0o644, body: []byte("ok")},
+		{name: fileTrashDir + "/" + item.GetId() + "/" + fileTrashMeta, typeflag: tar.TypeReg, mode: 0o644, body: []byte(`{"original_path":"/etc/passwd"}`)},
+		{name: fileTrashDir + "/" + item.GetId() + "/" + fileTrashData, typeflag: tar.TypeReg, mode: 0o644, body: []byte("forged")},
+	})
+	if err := os.WriteFile(filepath.Join(root, "evil.tar"), archive, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err = server.Extract(&agentv1.ExtractRequest{Root: fileRootVolumes, Source: "evil.tar", Destination: "."}, &collectProgressStream{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Extract with a bin member = %v, want InvalidArgument", err)
+	}
+	after, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("the bin metadata was removed: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("the bin metadata was forged: %q", after)
+	}
+	if got, err := os.ReadFile(dataPath); err != nil || string(got) != "payload" {
+		t.Fatalf("the bin payload was overwritten: %q, %v", got, err)
+	}
+}
+
+// TestFileServerTrashListTruncatedAndPhantom pins review findings 3/4: a capped
+// listing reports truncation instead of silently dropping entries, and a
+// metadata-only (half-written) item is not listed as a phantom.
+func TestFileServerTrashListTruncatedAndPhantom(t *testing.T) {
+	// Not parallel: it lowers the global page cap.
+	defer func(old int) { fileTrashMaxList = old }(fileTrashMaxList)
+	fileTrashMaxList = 2
+
+	server, root := newTestFileServer(t)
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if _, err := write(t, server, fileRootVolumes, name, "", false, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: name}, &collectProgressStream{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resp := listTrashResponse(t, server)
+	if !resp.GetTruncated() {
+		t.Fatal("a bin over the page cap did not report truncation")
+	}
+	if len(resp.GetEntries()) != 2 {
+		t.Fatalf("capped listing returned %d entries, want 2", len(resp.GetEntries()))
+	}
+
+	// A metadata-only item (a crash between the record and the move) is skipped.
+	ghostID := "00112233445566778899aabbccddeeff"
+	ghostDir := filepath.Join(root, fileTrashDir, ghostID)
+	if err := os.MkdirAll(ghostDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ghostDir, fileTrashMeta), []byte(`{"original_path":"ghost"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range listTrash(t, server) {
+		if entry.GetId() == ghostID {
+			t.Fatal("a metadata-only item was listed as a restorable entry")
+		}
+	}
+}
+
+// TestFileServerTrashRestorePurgeRace pins review finding 2 (locks): a restore
+// and a purge of the same item must serialise, so the purge can never remove
+// the payload mid-restore. Run with -race.
+func TestFileServerTrashRestorePurgeRace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for i := 0; i < 50; i++ {
+		server, root := newTestFileServer(t)
+		name := fmt.Sprintf("f%d.txt", i)
+		if _, err := write(t, server, fileRootVolumes, name, "", false, []byte("payload")); err != nil {
+			t.Fatal(err)
+		}
+		if err := server.Delete(&agentv1.DeleteRequest{Root: fileRootVolumes, Path: name}, &collectProgressStream{}); err != nil {
+			t.Fatal(err)
+		}
+		item := listTrash(t, server)[0]
+
+		var wg sync.WaitGroup
+		var restoreErr, purgeErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, restoreErr = server.Restore(ctx, &agentv1.RestoreRequest{Root: fileRootVolumes, Id: item.GetId()})
+		}()
+		go func() {
+			defer wg.Done()
+			_, purgeErr = server.Purge(ctx, &agentv1.PurgeRequest{Root: fileRootVolumes, Id: item.GetId()})
+		}()
+		wg.Wait()
+
+		for _, err := range []error{restoreErr, purgeErr} {
+			if err == nil {
+				continue
+			}
+			if status.Code(err) != codes.NotFound {
+				t.Fatalf("iteration %d: unexpected error %v", i, err)
+			}
+		}
+		if got := listTrash(t, server); len(got) != 0 {
+			t.Fatalf("iteration %d: the bin still holds %d items after the race", i, len(got))
+		}
+		if restoreErr == nil {
+			got, err := os.ReadFile(filepath.Join(root, name))
+			if err != nil || string(got) != "payload" {
+				t.Fatalf("iteration %d: a successful restore left %q, %v", i, got, err)
+			}
+		}
 	}
 }

@@ -2,11 +2,6 @@ package files
 
 import "net/http"
 
-// trashEnvelope wraps the recycle-bin listing.
-type trashEnvelope struct {
-	Entries []TrashEntry `json:"entries"`
-}
-
 // emptyTrashEnvelope reports how many entries an empty call removed.
 type emptyTrashEnvelope struct {
 	Removed uint64 `json:"removed"`
@@ -18,15 +13,15 @@ func (h *handler) trash(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	entries, err := h.svc.Trash(r.Context(), serverID, r.URL.Query().Get("root"))
+	listing, err := h.svc.Trash(r.Context(), serverID, r.URL.Query().Get("root"))
 	if err != nil {
 		h.writeError(w, err)
 		return
 	}
-	if entries == nil {
-		entries = []TrashEntry{}
+	if listing.Entries == nil {
+		listing.Entries = []TrashEntry{}
 	}
-	writeJSON(w, http.StatusOK, trashEnvelope{Entries: entries})
+	writeJSON(w, http.StatusOK, listing)
 }
 
 // restoreTrash serves POST .../files/trash/restore.

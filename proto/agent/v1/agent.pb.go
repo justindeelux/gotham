@@ -1299,8 +1299,11 @@ func (x *ListTrashRequest) GetRoot() string {
 
 // ListTrashResponse lists the bin, newest first.
 type ListTrashResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Entries       []*TrashEntry          `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Entries []*TrashEntry          `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	// truncated is true when the bin holds more entries than this page; the
+	// oldest are omitted. It is never a silent cap.
+	Truncated     bool `protobuf:"varint,2,opt,name=truncated,proto3" json:"truncated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1340,6 +1343,13 @@ func (x *ListTrashResponse) GetEntries() []*TrashEntry {
 		return x.Entries
 	}
 	return nil
+}
+
+func (x *ListTrashResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
 }
 
 // RestoreRequest moves one trash entry back to its original path.
@@ -1416,8 +1426,11 @@ func (x *RestoreRequest) GetOverwrite() bool {
 
 // RestoreResponse returns the restored entry at its destination.
 type RestoreResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Entry         *FileEntry             `protobuf:"bytes,1,opt,name=entry,proto3" json:"entry,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Entry *FileEntry             `protobuf:"bytes,1,opt,name=entry,proto3" json:"entry,omitempty"`
+	// path is the root-relative destination the entry was restored to (the
+	// recorded original path when the request carried no destination).
+	Path          string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1457,6 +1470,13 @@ func (x *RestoreResponse) GetEntry() *FileEntry {
 		return x.Entry
 	}
 	return nil
+}
+
+func (x *RestoreResponse) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
 }
 
 // PurgeRequest permanently removes one trash entry.
@@ -5175,16 +5195,18 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x04size\x18\x05 \x01(\x03R\x04size\x12&\n" +
 	"\x04kind\x18\x06 \x01(\x0e2\x12.agent.v1.FileKindR\x04kind\"&\n" +
 	"\x10ListTrashRequest\x12\x12\n" +
-	"\x04root\x18\x01 \x01(\tR\x04root\"C\n" +
+	"\x04root\x18\x01 \x01(\tR\x04root\"a\n" +
 	"\x11ListTrashResponse\x12.\n" +
-	"\aentries\x18\x01 \x03(\v2\x14.agent.v1.TrashEntryR\aentries\"t\n" +
+	"\aentries\x18\x01 \x03(\v2\x14.agent.v1.TrashEntryR\aentries\x12\x1c\n" +
+	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"t\n" +
 	"\x0eRestoreRequest\x12\x12\n" +
 	"\x04root\x18\x01 \x01(\tR\x04root\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12 \n" +
 	"\vdestination\x18\x03 \x01(\tR\vdestination\x12\x1c\n" +
-	"\toverwrite\x18\x04 \x01(\bR\toverwrite\"<\n" +
+	"\toverwrite\x18\x04 \x01(\bR\toverwrite\"P\n" +
 	"\x0fRestoreResponse\x12)\n" +
-	"\x05entry\x18\x01 \x01(\v2\x13.agent.v1.FileEntryR\x05entry\"2\n" +
+	"\x05entry\x18\x01 \x01(\v2\x13.agent.v1.FileEntryR\x05entry\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"2\n" +
 	"\fPurgeRequest\x12\x12\n" +
 	"\x04root\x18\x01 \x01(\tR\x04root\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\"\x0f\n" +

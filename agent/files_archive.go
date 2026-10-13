@@ -943,6 +943,11 @@ func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Rea
 // the archived mode is applied once the whole extract finishes.
 func (s *FileServer) extractDir(root *fsroot.Root, dst, rel string, mode os.FileMode, dirs *extractDirs, state *extractState) error {
 	target := path.Join(dst, rel)
+	// A member path must never land in the reserved recycle bin, exactly like
+	// any other entry-addressing operation.
+	if err := guardTrash(root, "extract", target); err != nil {
+		return err
+	}
 	if s.protectsAppDir(root, target) {
 		return status.Error(codes.PermissionDenied, "extract: an application directory cannot be replaced")
 	}
@@ -986,6 +991,11 @@ func (s *FileServer) extractDir(root *fsroot.Root, dst, rel string, mode os.File
 // running-app-directory guard refuses replacing a top-level application
 // directory; the byte/entry caps are enforced by the caller before this runs.
 func (s *FileServer) extractFile(ctx context.Context, root *fsroot.Root, target string, mode os.FileMode, size int64, overwrite bool, src string, r io.Reader, state *extractState, progress *archiveProgress) error {
+	// A member path must never land in the reserved recycle bin, exactly like
+	// any other entry-addressing operation.
+	if err := guardTrash(root, "extract", target); err != nil {
+		return err
+	}
 	if s.protectsAppDir(root, target) {
 		return status.Error(codes.PermissionDenied, "extract: an application directory cannot be replaced")
 	}

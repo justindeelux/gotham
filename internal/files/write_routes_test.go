@@ -397,6 +397,7 @@ func TestMkdirCreateRenameMoveCopyDeleteRoutes(t *testing.T) {
 		mkdirEntry:  Entry{Name: "d", Kind: "directory"},
 		createEntry: Entry{Name: "a"},
 		renameEntry: Entry{Name: "b"},
+		chmodEntry:  Entry{Name: "a", Mode: 0o600},
 		copyEntry:   Entry{Name: "c"},
 	}
 	h := newTestRouter(svc)
@@ -413,6 +414,7 @@ func TestMkdirCreateRenameMoveCopyDeleteRoutes(t *testing.T) {
 		{"rename", base + "rename", `{"root":"volumes","source":"a","destination":"b"}`, http.StatusOK, "rename"},
 		{"move", base + "move", `{"root":"volumes","source":"a","destination":"b"}`, http.StatusOK, "rename"},
 		{"copy", base + "copy", `{"root":"volumes","source":"a","destination":"c"}`, http.StatusOK, "copy"},
+		{"chmod", base + "chmod", `{"root":"volumes","path":"a","mode":384}`, http.StatusOK, "chmod"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -453,6 +455,7 @@ func TestWriteRoutesRBAC(t *testing.T) {
 		{"rename", http.MethodPost, base + "rename", `{"root":"volumes","source":"a","destination":"b"}`, nil},
 		{"move", http.MethodPost, base + "move", `{"root":"volumes","source":"a","destination":"b"}`, nil},
 		{"copy", http.MethodPost, base + "copy", `{"root":"volumes","source":"a","destination":"b"}`, nil},
+		{"chmod", http.MethodPost, base + "chmod", `{"root":"volumes","path":"a","mode":384}`, nil},
 		{"delete", http.MethodDelete, base + "entry?root=volumes&path=a", "", nil},
 	}
 	for _, tc := range cases {
@@ -489,6 +492,52 @@ func TestWriteErrorStatusMapping(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newTestRouter(&fakeService{mkdirErr: tc.err})
 			rec := doWrite(t, h, http.MethodPost, tc.path, tc.body, nil)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestChmodRoute pins the route: the {root, path, mode} body reaches the
+// service and the response is the {entry} envelope with the new mode.
+func TestChmodRoute(t *testing.T) {
+	id := uuid.New()
+	svc := &fakeService{chmodEntry: Entry{Name: "a.txt", Kind: "file", Mode: 0o600, Etag: `"c"`}}
+	h := newTestRouter(svc)
+
+	rec := doWrite(t, h, http.MethodPost, "/v1/servers/"+id.String()+"/files/chmod",
+		`{"root":"volumes","path":"a.txt","mode":384}`, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (body %s)", rec.Code, rec.Body.String())
+	}
+	var body statEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Entry.Mode != 0o600 || body.Entry.Name != "a.txt" {
+		t.Fatalf("entry = %+v", body.Entry)
+	}
+}
+
+// TestChmodRouteErrorMapping pins the route status mapping for chmod.
+func TestChmodRouteErrorMapping(t *testing.T) {
+	id := uuid.New()
+	base := "/v1/servers/" + id.String() + "/files/chmod"
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"forbidden", ErrForbidden, http.StatusForbidden},
+		{"not found", ErrNotFound, http.StatusNotFound},
+		{"validation", ErrValidation, http.StatusBadRequest},
+		{"unsupported", ErrAgentOutdated, http.StatusNotImplemented},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestRouter(&fakeService{chmodErr: tc.err})
+			rec := doWrite(t, h, http.MethodPost, base, `{"root":"volumes","path":"a","mode":384}`, nil)
 			if rec.Code != tc.want {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
 			}

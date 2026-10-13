@@ -249,6 +249,25 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, statEnvelope{Entry: entry})
 }
 
+// chmod serves POST .../files/chmod: change one entry's permission bits. The
+// body shares mkdirRequest's {root, path, mode} shape.
+func (h *handler) chmod(w http.ResponseWriter, r *http.Request) {
+	serverID, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	var req mkdirRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	entry, err := h.svc.Chmod(r.Context(), serverID, req.Root, req.Path, req.Mode)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, statEnvelope{Entry: entry})
+}
+
 // rename serves POST .../files/rename.
 func (h *handler) rename(w http.ResponseWriter, r *http.Request) {
 	h.locate(w, r, "rename")

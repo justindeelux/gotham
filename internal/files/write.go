@@ -244,6 +244,47 @@ func (s *Service) Rename(ctx context.Context, serverID uuid.UUID, root, source, 
 	return newEntry(info), nil
 }
 
+// Chmod changes one entry's permission bits (owner/admin only). Only the low
+// 0o777 bits are accepted: a request carrying setuid, setgid or sticky (or any
+// other bit above 0o777) is refused (400) before the agent is dialed. The agent
+// refuses a symbolic link and a special file. The wired ChmodResponse is empty,
+// so the entry is re-stat-ed and returned, exactly as Copy does for its
+// destination; the fresh entry carries the new mode and etag for the browser.
+func (s *Service) Chmod(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (entry Entry, err error) {
+	defer func() { s.audit(ctx, serverID, "chmod", root, path, err, "mode", mode) }()
+	if !Enabled() {
+		return Entry{}, ErrDisabled
+	}
+	if err := validateRoot(root); err != nil {
+		return Entry{}, err
+	}
+	if err := validatePathArg("path", path); err != nil {
+		return Entry{}, err
+	}
+	if mode&^uint32(0o777) != 0 {
+		return Entry{}, fmt.Errorf("%w: mode %#o carries bits above the 0o777 permission mask", ErrValidation, mode)
+	}
+	ctx, client, cancel, err := s.rpc(ctx, serverID, true)
+	if err != nil {
+		return Entry{}, err
+	}
+	defer cancel()
+	defer s.closeClient(client)
+
+	if _, err := client.Chmod(ctx, &agentv1.ChmodRequest{Root: root, Path: path, Mode: mode}); err != nil {
+		return Entry{}, mapRPCError(err)
+	}
+	stat, err := client.Stat(ctx, &agentv1.StatRequest{Root: root, Path: path})
+	if err != nil {
+		return Entry{}, mapRPCError(err)
+	}
+	info := stat.GetEntry()
+	if info == nil {
+		return Entry{}, ErrNotFound
+	}
+	return newEntry(info), nil
+}
+
 // Copy copies one entry within a single root, draining the agent's progress
 // stream and returning the new destination entry.
 func (s *Service) Copy(ctx context.Context, serverID uuid.UUID, root, source, destination string, overwrite bool) (entry Entry, err error) {

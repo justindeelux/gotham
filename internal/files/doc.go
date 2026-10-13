@@ -29,4 +29,9 @@
 // gated by FEATURE_FILES, which defaults off: the routes are mounted but answer
 // 503 until step 10 signs the feature off. A 501 ErrAgentOutdated is returned
 // when the node agent predates the FileService.
+//
+// Step 9a adds POST /chmod (owner/admin, deploy scope for a token): it changes
+// only the low 0o777 permission bits — setuid, setgid and sticky are refused —
+// and never follows a symlink. The agent's ChmodResponse is empty, so the
+// service re-stats the entry after the call and returns the fresh entry/etag.
 package files

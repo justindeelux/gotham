@@ -98,6 +98,7 @@ type fakeFileClient struct {
 	mkdirErr   error
 	renameResp *agentv1.RenameResponse
 	renameErr  error
+	chmodErr   error
 	copyMsgs   []*agentv1.Progress
 	copyErr    error
 	deleteMsgs []*agentv1.Progress
@@ -106,6 +107,7 @@ type fakeFileClient struct {
 	seenCopy   *agentv1.CopyRequest
 	seenDelete *agentv1.DeleteRequest
 	seenMkdir  *agentv1.MkdirRequest
+	seenChmod  *agentv1.ChmodRequest
 }
 
 func (f *fakeFileClient) ListRoots(context.Context, *agentv1.ListRootsRequest, ...grpc.CallOption) (*agentv1.ListRootsResponse, error) {
@@ -190,6 +192,16 @@ func (f *fakeFileClient) Rename(_ context.Context, in *agentv1.RenameRequest, _ 
 		return f.renameResp, nil
 	}
 	return &agentv1.RenameResponse{}, nil
+}
+
+func (f *fakeFileClient) Chmod(_ context.Context, in *agentv1.ChmodRequest, _ ...grpc.CallOption) (*agentv1.ChmodResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenChmod = in
+	if f.chmodErr != nil {
+		return nil, f.chmodErr
+	}
+	return &agentv1.ChmodResponse{}, nil
 }
 
 func (f *fakeFileClient) Copy(_ context.Context, in *agentv1.CopyRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error) {

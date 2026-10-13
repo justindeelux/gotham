@@ -94,9 +94,10 @@ const vi = {
     group: "Nhóm",
     other: "Khác",
     flagAria: "{who} {perm}",
-    specialTitle: "Chỉ chủ sở hữu",
+    specialTitle: "Bit đặc biệt",
     specialNote:
-      "Chỉ các bit quyền 0o777 thay đổi. setuid, setgid và sticky không sửa được ở đây và bị agent từ chối.",
+      "Chỉ các bit quyền 0o777 thay đổi. setuid, setgid và sticky được giữ nguyên, không sửa được ở đây — agent từ chối yêu cầu mang các bit này.",
+    dirOwnerExec: "Thư mục phải giữ quyền thực thi của chủ sở hữu để còn truy cập được.",
     keepTypeNote: "Mục giữ nguyên loại; không thể chmod một liên kết tượng trưng.",
     apply: "Áp dụng",
     saved: "Đã đặt quyền của {name} thành {mode}.",

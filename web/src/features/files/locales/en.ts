@@ -95,9 +95,10 @@ const en = {
     group: "Group",
     other: "Other",
     flagAria: "{who} {perm}",
-    specialTitle: "Owner only",
+    specialTitle: "Special bits",
     specialNote:
-      "Only the 0o777 permission bits change. setuid, setgid and the sticky bit are not editable here and are refused by the agent.",
+      "Only the 0o777 permission bits change. setuid, setgid and the sticky bit are preserved, not editable here — the agent refuses a request that carries one.",
+    dirOwnerExec: "A directory must keep owner execute so it stays navigable.",
     keepTypeNote: "The entry keeps its type; a symlink cannot be chmod-ed.",
     apply: "Apply",
     saved: "Permissions of {name} set to {mode}.",

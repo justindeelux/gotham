@@ -763,7 +763,7 @@ services:
       </div>
       <div class="callout">
         <svg aria-hidden="true"><use href="#i-info"></use></svg>
-        <div><h4>Owner only</h4><p>Only the 0o777 permission bits change. setuid, setgid and the sticky bit are not editable here and are refused by the agent.</p></div>
+        <div><h4>Special bits</h4><p>Only the 0o777 permission bits change. setuid, setgid and the sticky bit are preserved, not editable here — the agent refuses a request that carries one.</p></div>
       </div>
     </div>
     <div class="modal-foot">

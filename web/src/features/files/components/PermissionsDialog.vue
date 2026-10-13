@@ -31,8 +31,8 @@ const files = useFilesStore();
 
 // The octal field is the source of truth; the 3x3 grid is derived from it and
 // writes back a fresh octal string, so the two stay in sync in both
-// directions. An invalid octal string leaves the grid showing all-false; the
-// Apply button stays disabled until the field is valid again.
+// directions. While the octal string is invalid the grid is disabled and left
+// all-false, so a stray grid click can never overwrite what the user typed.
 const octal = ref("644");
 const touched = ref(false);
 
@@ -61,10 +61,47 @@ const flags = computed<boolean[]>(() =>
   octalValid.value ? permissionFlags(parseOctalMode(octal.value)) : [false, false, false, false, false, false, false, false, false],
 );
 
-/** errorKey is the catalog key shown under the field once it was touched. */
-const errorKey = computed<string | null>(() =>
-  touched.value && !octalValid.value ? "files.permissions.invalid" : null,
+/** The mode the field currently expresses, when it is valid. */
+const parsedMode = computed<number | null>(() =>
+  octalValid.value ? parseOctalMode(octal.value) : null,
 );
+
+// A directory must keep owner execute (the agent refuses otherwise): without it
+// the entry cannot be traversed and the file manager would lock itself out.
+const directoryNeedsOwnerExec = computed<boolean>(
+  () =>
+    props.entry?.kind === "directory" &&
+    parsedMode.value !== null &&
+    (parsedMode.value & 0o100) === 0,
+);
+
+// Applying the mode the entry already has is a no-op the server would audit;
+// keep the button disabled until something actually changes.
+const unchanged = computed<boolean>(
+  () =>
+    props.entry != null &&
+    parsedMode.value !== null &&
+    parsedMode.value === (props.entry.mode & 0o777),
+);
+
+const canApply = computed<boolean>(
+  () =>
+    octalValid.value &&
+    !directoryNeedsOwnerExec.value &&
+    !unchanged.value &&
+    files.canWrite,
+);
+
+/** errorKey is the catalog key shown under the field, or null when valid. */
+const errorKey = computed<string | null>(() => {
+  if (!octalValid.value) {
+    return touched.value ? "files.permissions.invalid" : null;
+  }
+  if (directoryNeedsOwnerExec.value) {
+    return "files.permissions.dirOwnerExec";
+  }
+  return null;
+});
 
 /** flagAria builds a screen-reader label for one grid checkbox. */
 function flagAria(offset: number, column: number): string {
@@ -76,8 +113,12 @@ function flagAria(offset: number, column: number): string {
   );
 }
 
-/** toggleFlag writes one grid toggle back into the octal field. */
+/** toggleFlag writes one grid toggle back into the octal field. It is inert
+ * while the field is invalid, so the typed text is never rewritten. */
 function toggleFlag(index: number, checked: boolean): void {
+  if (!octalValid.value) {
+    return;
+  }
   const next = [...flags.value];
   next[index] = checked;
   octal.value = formatOctalMode(modeFromFlags(next));
@@ -99,7 +140,7 @@ async function submit(): Promise<void> {
     return;
   }
   touched.value = true;
-  if (!octalValid.value) {
+  if (!octalValid.value || directoryNeedsOwnerExec.value) {
     return;
   }
   const mode = parseOctalMode(octal.value);
@@ -134,7 +175,7 @@ async function submit(): Promise<void> {
       <NFormItem
         :label="t('files.permissions.octal')"
         :validation-status="errorKey ? 'error' : undefined"
-        :feedback="errorKey ? t('files.permissions.invalid') : ''"
+        :feedback="errorKey ? t(errorKey) : ''"
       >
         <NInput
           v-model:value="octal"
@@ -163,6 +204,7 @@ async function submit(): Promise<void> {
               <NCheckbox
                 size="small"
                 :checked="flags[row.offset + column]"
+                :disabled="!octalValid"
                 :aria-label="flagAria(row.offset, column)"
                 @update:checked="(checked: boolean) => toggleFlag(row.offset + column, checked)"
               />
@@ -187,7 +229,7 @@ async function submit(): Promise<void> {
         <NButton
           type="primary"
           :loading="files.acting"
-          :disabled="!octalValid || !files.canWrite"
+          :disabled="!canApply"
           @click="() => void submit()"
         >
           {{ t("files.permissions.apply") }}

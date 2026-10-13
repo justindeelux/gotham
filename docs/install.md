@@ -454,17 +454,30 @@ for the staging knobs.
 ### Permissions (chmod)
 
 `POST /files/chmod` (owner/admin, deploy scope for an API token) changes one
-entry's permission bits. Only the low `0o777` bits are accepted: a request
-carrying setuid (`0o4000`), setgid (`0o2000`), sticky (`0o1000`) or any higher
-bit is refused **400** before the agent is dialed. The agent refuses a symbolic
-link (it never follows the link to change its target) and a special file
-(FIFO/socket/device) with **403**/**409**, and a read-only root with **403**. The
-confinement opens the parent directory and `openat`s the entry with
-`O_NOFOLLOW`, then `fchmod`s the opened descriptor, so nothing outside the root
-can change and a swapped-in link cannot be followed. An old agent that predates
-the RPC answers **501**. chmod never changes an entry's type, so the
-application-directory guard (rename/delete only) does not apply; recursion is
-not supported.
+entry's permission bits. The body is `{root, path, mode}` and **`mode` is
+required**: an omitted field is refused **400** rather than silently applied as
+`000`. Only the low `0o777` bits are accepted: a request carrying setuid
+(`0o4000`), setgid (`0o2000`), sticky (`0o1000`) or any higher bit is refused
+**400** before the agent is dialed. A symbolic link is refused **400** (it never
+follows the link to change its target), a special file (FIFO/socket/device)
+**409**, and a read-only root **403**. The agent also refuses a directory that
+would lose its owner execute bit (it must stay traversable) and a hard-linked
+regular file in a confined root (its inode may be reachable outside the root);
+the whole-filesystem root has no "outside", so the hard-link check is moot there.
+Existing setuid/setgid/sticky bits are **preserved, not editable**: only the
+plain permission bits change and a special bit is never created. An old agent
+that predates the RPC answers **501**. chmod never changes an entry's type, so
+the application-directory guard (rename/delete only) does not apply; recursion
+is not supported.
+
+The confinement opens the root and every parent directory with `O_PATH` (needs
+search permission, not read), `openat`s the entry with `O_NOFOLLOW`, `fstat`s
+the descriptor to classify the type, and chmods that same inode — via
+`fchmodat2(AT_EMPTY_PATH)` where the kernel supports it (Linux 6.6+) and the
+`/proc/self/fd` magic link otherwise. Nothing outside the root can change, a
+swapped-in link cannot be followed, and an entry the agent just made unreadable
+(`000` or `0o111`) can still be recovered through the UI, including by a
+non-root agent.
 
 ### Permissions model
 

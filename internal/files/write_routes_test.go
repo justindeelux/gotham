@@ -520,6 +520,34 @@ func TestChmodRoute(t *testing.T) {
 	}
 }
 
+// TestChmodRouteRequiresMode pins that a body without mode is a 400 and never
+// reaches the service, while an explicit mode of 0 is still accepted (000 is a
+// real mode, just never a default).
+func TestChmodRouteRequiresMode(t *testing.T) {
+	id := uuid.New()
+	base := "/v1/servers/" + id.String() + "/files/chmod"
+
+	svc := &fakeService{}
+	h := newTestRouter(svc)
+	rec := doWrite(t, h, http.MethodPost, base, `{"root":"volumes","path":"a.txt"}`, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing mode status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if svc.called("chmod") {
+		t.Fatal("a missing mode reached the service")
+	}
+
+	svc = &fakeService{chmodEntry: Entry{Name: "a.txt", Kind: "file", Mode: 0, Etag: `"c"`}}
+	h = newTestRouter(svc)
+	rec = doWrite(t, h, http.MethodPost, base, `{"root":"volumes","path":"a.txt","mode":0}`, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("explicit mode 0 status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !svc.called("chmod") {
+		t.Fatal("an explicit mode 0 did not reach the service")
+	}
+}
+
 // TestChmodRouteErrorMapping pins the route status mapping for chmod.
 func TestChmodRouteErrorMapping(t *testing.T) {
 	id := uuid.New()

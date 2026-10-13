@@ -244,12 +244,15 @@ func (s *Service) Rename(ctx context.Context, serverID uuid.UUID, root, source, 
 	return newEntry(info), nil
 }
 
-// Chmod changes one entry's permission bits (owner/admin only). Only the low
-// 0o777 bits are accepted: a request carrying setuid, setgid or sticky (or any
-// other bit above 0o777) is refused (400) before the agent is dialed. The agent
-// refuses a symbolic link and a special file. The wired ChmodResponse is empty,
-// so the entry is re-stat-ed and returned, exactly as Copy does for its
-// destination; the fresh entry carries the new mode and etag for the browser.
+// Chmod changes one entry's permission bits (owner/admin only). The route
+// requires the mode field, so it is never absent here. Only the low 0o777 bits
+// are accepted: a request carrying setuid, setgid or sticky (or any other bit
+// above 0o777) is refused (400) before the agent is dialed. The agent refuses a
+// symbolic link and a special file, preserves any existing special bits, keeps
+// a directory's owner execute bit, and refuses a hard-linked file in a confined
+// root. The wired ChmodResponse is empty, so the entry is re-stat-ed and
+// returned, exactly as Copy does for its destination; the fresh entry carries
+// the new mode and etag for the browser.
 func (s *Service) Chmod(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (entry Entry, err error) {
 	defer func() { s.audit(ctx, serverID, "chmod", root, path, err, "mode", mode) }()
 	if !Enabled() {
@@ -271,7 +274,7 @@ func (s *Service) Chmod(ctx context.Context, serverID uuid.UUID, root, path stri
 	defer cancel()
 	defer s.closeClient(client)
 
-	if _, err := client.Chmod(ctx, &agentv1.ChmodRequest{Root: root, Path: path, Mode: mode}); err != nil {
+	if _, err := client.Chmod(ctx, &agentv1.ChmodRequest{Root: root, Path: path, Mode: &mode}); err != nil {
 		return Entry{}, mapRPCError(err)
 	}
 	stat, err := client.Stat(ctx, &agentv1.StatRequest{Root: root, Path: path})

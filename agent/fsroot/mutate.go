@@ -134,11 +134,20 @@ func (r *Root) Chmod(rel string, mode os.FileMode) error {
 // the updated entry. It is the user-facing chmod: a final symbolic link is
 // refused rather than followed (the link's target's mode is never touched), a
 // special file (FIFO, socket, device) is refused, and the root itself is
-// refused. Only mode.Perm() (the low 0o777 bits) is applied; the caller is
-// responsible for rejecting setuid/setgid/sticky. It never changes an entry's
-// type, so a directory (including a managed application directory) stays a
-// directory.
-func (r *Root) ChmodEntry(rel string, mode os.FileMode) (Entry, error) {
+// refused.
+//
+// Only mode.Perm() (the low 0o777 bits) is applied. The caller is responsible
+// for rejecting a requested setuid/setgid/sticky bit; existing special bits are
+// preserved (never created) so "only plain permission bits change" holds. A
+// directory must keep its owner execute bit so it stays traversable. When
+// refuseHardlink is set (a confined root, as opposed to the whole-filesystem
+// root), a regular file with more than one hard link is refused: its inode may
+// also be reachable outside the root, so changing its mode would change that
+// other name too. ChmodEntry never changes an entry's type, so a directory
+// (including a managed application directory) stays a directory. The returned
+// entry is read from the same descriptor, so an entry under a directory the
+// agent cannot read (0o111 or 0o000) is still chmod-able and reported.
+func (r *Root) ChmodEntry(rel string, mode os.FileMode, refuseHardlink bool) (Entry, error) {
 	if err := r.requireWritable(); err != nil {
 		return Entry{}, err
 	}
@@ -149,50 +158,32 @@ func (r *Root) ChmodEntry(rel string, mode os.FileMode) (Entry, error) {
 	if p == "." {
 		return Entry{}, fmt.Errorf("%w: cannot chmod the root", ErrInvalid)
 	}
-	if err := r.chmodNoFollow(p, mode.Perm()); err != nil {
-		return Entry{}, err
-	}
-	return r.Stat(p)
+	return r.chmodNoFollow(p, mode.Perm(), refuseHardlink)
 }
 
-// chmodNoFollow fchmods rel's final component without following a symbolic
-// link: it opens the file's parent as a rooted descriptor, openat's the base
-// name with O_NOFOLLOW (so a link is ELOOP, mapped to ErrInvalid, rather than
-// its target), fstat's the opened descriptor to refuse a special file, and
-// fchmod's that same descriptor. The fchmod acts on the exact inode that was
-// opened, so a link swapped in after the open cannot be followed and the mode
-// of a swapped-in file inside the root is the worst case (documented in
-// os.Root.Chmod's own note). It works on kernels without fchmodat2, unlike an
-// AT_SYMLINK_NOFOLLOW fchmodat, which returns EOPNOTSUPP on Linux < 6.6.
-func (r *Root) chmodNoFollow(p string, mode os.FileMode) error {
-	parent, err := r.root.OpenRoot(path.Dir(p))
-	if err != nil {
-		return mapError("chmod", err)
-	}
-	defer func() { _ = parent.Close() }()
-	dirFile, err := openDirFd(parent)
-	if err != nil {
-		return mapError("chmod", err)
-	}
-	defer func() { _ = dirFile.Close() }()
-	fd, err := unix.Openat(int(dirFile.Fd()), path.Base(p), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return mapError("chmod", err)
-	}
-	defer func() { _ = unix.Close(fd) }()
-	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err != nil {
-		return mapError("chmod", err)
-	}
+// chmodTargetMode classifies the opened entry from its fstat and returns the
+// mode to write: the caller's plain permission bits OR-ed with the special bits
+// already set (preserved, never created). It refuses a symbolic link
+// (ErrInvalid, so the control plane answers 400), a special file (ErrSpecial),
+// a directory that would lose its owner execute bit (ErrInvalid: the entry
+// would no longer be traversable), and — when refuseHardlink is set — a regular
+// file with more than one hard link (ErrInvalid).
+func chmodTargetMode(stat *unix.Stat_t, p string, mode os.FileMode, refuseHardlink bool) (uint32, error) {
 	switch stat.Mode & unix.S_IFMT {
-	case unix.S_IFREG, unix.S_IFDIR:
+	case unix.S_IFREG:
+		if refuseHardlink && stat.Nlink > 1 {
+			return 0, fmt.Errorf("%w: %s has %d hard links; refusing to change a shared inode", ErrInvalid, p, stat.Nlink)
+		}
+	case unix.S_IFDIR:
+		if mode.Perm()&0o100 == 0 {
+			return 0, fmt.Errorf("%w: %s is a directory and must keep owner execute", ErrInvalid, p)
+		}
+	case unix.S_IFLNK:
+		return 0, fmt.Errorf("%w: %s is a symbolic link", ErrInvalid, p)
 	default:
-		return fmt.Errorf("%w: %s", ErrSpecial, p)
+		return 0, fmt.Errorf("%w: %s", ErrSpecial, p)
 	}
-	if err := unix.Fchmod(fd, uint32(mode.Perm())); err != nil {
-		return mapError("chmod", err)
-	}
-	return nil
+	return uint32(mode.Perm()) | (uint32(stat.Mode) & 0o7000), nil
 }
 
 // Mkdir creates one directory and returns its entry. It is exclusive: a name

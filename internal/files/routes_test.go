@@ -72,6 +72,18 @@ func (f *fakeService) wrote() bool {
 	return false
 }
 
+// called reports whether the named service method was reached.
+func (f *fakeService) called(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, call := range f.calls {
+		if call == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *fakeService) Roots(_ context.Context, _ uuid.UUID) ([]Root, error) {
 	f.record("roots")
 	return f.roots, f.rootsErr

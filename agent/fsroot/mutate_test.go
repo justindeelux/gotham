@@ -473,7 +473,7 @@ func TestChmodEntryUpdatesMode(t *testing.T) {
 	}
 	root := openRoot(t, dir)
 
-	entry, err := root.ChmodEntry("f.txt", 0o600)
+	entry, err := root.ChmodEntry("f.txt", 0o600, true)
 	if err != nil {
 		t.Fatalf("ChmodEntry file: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestChmodEntryUpdatesMode(t *testing.T) {
 		t.Fatalf("entry = %+v, want regular 0o600", entry)
 	}
 
-	if _, err := root.ChmodEntry("d", 0o700); err != nil {
+	if _, err := root.ChmodEntry("d", 0o700, true); err != nil {
 		t.Fatalf("ChmodEntry dir: %v", err)
 	}
 	if got := modeOf(t, dir, "d"); got != 0o700 {
@@ -505,7 +505,7 @@ func TestChmodEntryRefusesSymlinkWithoutFollowing(t *testing.T) {
 	}
 	root := openRoot(t, dir)
 
-	if _, err := root.ChmodEntry("link.txt", 0o600); !errors.Is(err, fsroot.ErrInvalid) {
+	if _, err := root.ChmodEntry("link.txt", 0o600, true); !errors.Is(err, fsroot.ErrInvalid) {
 		t.Fatalf("ChmodEntry(symlink) = %v, want ErrInvalid", err)
 	}
 	if got := modeOf(t, dir, "real.txt"); got != 0o644 {
@@ -522,7 +522,7 @@ func TestChmodEntryRefusesSpecialFile(t *testing.T) {
 	}
 	root := openRoot(t, dir)
 
-	if _, err := root.ChmodEntry("pipe", 0o644); !errors.Is(err, fsroot.ErrSpecial) {
+	if _, err := root.ChmodEntry("pipe", 0o644, true); !errors.Is(err, fsroot.ErrSpecial) {
 		t.Fatalf("ChmodEntry(FIFO) = %v, want ErrSpecial", err)
 	}
 }
@@ -531,7 +531,7 @@ func TestChmodEntryRefusesSpecialFile(t *testing.T) {
 func TestChmodEntryRefusesRoot(t *testing.T) {
 	t.Parallel()
 	root := openRoot(t, t.TempDir())
-	if _, err := root.ChmodEntry(".", 0o700); !errors.Is(err, fsroot.ErrInvalid) {
+	if _, err := root.ChmodEntry(".", 0o700, true); !errors.Is(err, fsroot.ErrInvalid) {
 		t.Fatalf("ChmodEntry(.) = %v, want ErrInvalid", err)
 	}
 }
@@ -554,10 +554,100 @@ func TestChmodEntryReadOnlyRoot(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = root.Close() })
 
-	if _, err := root.ChmodEntry("f.txt", 0o600); !errors.Is(err, fsroot.ErrReadOnly) {
+	if _, err := root.ChmodEntry("f.txt", 0o600, true); !errors.Is(err, fsroot.ErrReadOnly) {
 		t.Fatalf("ChmodEntry on a read-only root = %v, want ErrReadOnly", err)
 	}
 	if got := modeOf(t, dir, "f.txt"); got != 0o644 {
 		t.Fatalf("a read-only root was mutated: mode %#o", got)
+	}
+}
+
+// TestChmodEntryPreservesSpecialBits pins that a chmod changes only the plain
+// permission bits: an existing setuid/setgid/sticky bit survives (it is never
+// created, but it must not be silently dropped either).
+func TestChmodEntryPreservesSpecialBits(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The test process must be able to set the special bits; a restrictive
+	// environment (no group membership, a filesystem that refuses them) skips.
+	if err := os.Chmod(filepath.Join(dir, "shared"), 0o755|os.ModeSetgid|os.ModeSticky); err != nil {
+		t.Skipf("cannot set special bits: %v", err)
+	}
+	before, err := os.Stat(filepath.Join(dir, "shared"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Mode()&os.ModeSetgid == 0 || before.Mode()&os.ModeSticky == 0 {
+		t.Skip("the filesystem dropped the special bits")
+	}
+	root := openRoot(t, dir)
+
+	if _, err := root.ChmodEntry("shared", 0o700, false); err != nil {
+		t.Fatalf("ChmodEntry: %v", err)
+	}
+	after, err := os.Stat(filepath.Join(dir, "shared"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Mode().Perm() != 0o700 {
+		t.Fatalf("perm = %#o, want 0o700", after.Mode().Perm())
+	}
+	if after.Mode()&os.ModeSetgid == 0 || after.Mode()&os.ModeSticky == 0 {
+		t.Fatalf("special bits were dropped: %v", after.Mode())
+	}
+}
+
+// TestChmodEntryRefusesHardlinkInConfinedRoot pins the confined-root hard-link
+// guard: a regular file with more than one link shares its inode, so it is
+// refused there, while the whole-filesystem root (refuseHardlink=false) allows
+// it.
+func TestChmodEntryRefusesHardlinkInConfinedRoot(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(dir, "f.txt"), filepath.Join(dir, "second.txt")); err != nil {
+		t.Skipf("hard link: %v", err)
+	}
+	root := openRoot(t, dir)
+
+	if _, err := root.ChmodEntry("f.txt", 0o600, true); !errors.Is(err, fsroot.ErrInvalid) {
+		t.Fatalf("ChmodEntry(hard-linked, confined) = %v, want ErrInvalid", err)
+	}
+	if got := modeOf(t, dir, "f.txt"); got != 0o644 {
+		t.Fatalf("a refused hard-linked chmod changed the mode: %#o", got)
+	}
+	if _, err := root.ChmodEntry("f.txt", 0o600, false); err != nil {
+		t.Fatalf("ChmodEntry(hard-linked, whole-filesystem) = %v, want success", err)
+	}
+	if got := modeOf(t, dir, "f.txt"); got != 0o600 {
+		t.Fatalf("mode = %#o, want 0o600", got)
+	}
+}
+
+// TestChmodEntryRefusesDirectoryWithoutOwnerExecute pins the self-lockout
+// guard: a directory must keep its owner execute bit so it stays traversable.
+func TestChmodEntryRefusesDirectoryWithoutOwnerExecute(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := openRoot(t, dir)
+
+	for _, mode := range []os.FileMode{0o000, 0o600, 0o666} {
+		if _, err := root.ChmodEntry("d", mode, false); !errors.Is(err, fsroot.ErrInvalid) {
+			t.Fatalf("ChmodEntry(dir, %#o) = %v, want ErrInvalid", mode, err)
+		}
+	}
+	if got := modeOf(t, dir, "d"); got != 0o755 {
+		t.Fatalf("a refused directory chmod changed the mode: %#o", got)
+	}
+	if _, err := root.ChmodEntry("d", 0o700, false); err != nil {
+		t.Fatalf("ChmodEntry(dir, 0o700) = %v, want success", err)
 	}
 }

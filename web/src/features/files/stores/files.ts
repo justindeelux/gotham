@@ -600,6 +600,7 @@ export const useFilesStore = defineStore("files", () => {
       await loadEntries();
     });
   }
+
   /**
    * remove deletes entries, recursing into folders. It never aborts on one
    * failure: the summary reports the names that were deleted and the ones that

@@ -44,6 +44,7 @@
 #
 # Usage:
 #   sudo ./install-agent.sh [--ca <path>] [--insecure] [--full] [--dry-run]
+#                           [--file-manager | --no-file-manager]
 #
 # Environment variables written to /etc/gotham/agent.env. A key left unset keeps
 # the value a previous install wrote (or the agent's built-in default on a fresh
@@ -60,6 +61,15 @@
 #   GOTHAM_AGENT_AUTO_UPDATE
 #   GOTHAM_AGENT_UPDATE_INTERVAL
 #   GOTHAM_AGENT_UPDATE_CHANNEL
+#   GOTHAM_AGENT_FILES         (true/false; written from the file-manager answer)
+#
+# File manager (remote file browser/editor in the web UI): the installer asks
+# whether you really want it (default: no). Answering yes lets the control
+# plane's platform operators browse, read, edit, upload and delete ANY file on
+# this node, because the agent then runs as root (systemd drop-in
+# file-manager.conf). Answer without a prompt with --file-manager /
+# --no-file-manager or GOTHAM_AGENT_FILE_MANAGER=yes|no; without a terminal the
+# answer is no. A re-run keeps the previous answer.
 #
 # Read once at startup (never written to agent.env):
 #   GOTHAM_AGENT_FULL          (set to 1 for the --full Docker setup)
@@ -88,6 +98,11 @@ DRY_RUN=0
 INSECURE=0
 FULL=0
 CA_SOURCE=""
+# File manager answer: yes | no | "" (ask). The environment form is the default
+# for a non-interactive run.
+FILE_MANAGER="${GOTHAM_AGENT_FILE_MANAGER:-}"
+FILE_MANAGER_DROPIN_DIR="/etc/systemd/system/gotham-agent.service.d"
+FILE_MANAGER_DROPIN="${FILE_MANAGER_DROPIN_DIR}/file-manager.conf"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -99,6 +114,12 @@ while [ "$#" -gt 0 ]; do
             ;;
         --full)
             FULL=1
+            ;;
+        --file-manager)
+            FILE_MANAGER=yes
+            ;;
+        --no-file-manager)
+            FILE_MANAGER=no
             ;;
         --ca)
             [ "$#" -ge 2 ] || { echo "--ca requires a path" >&2; exit 2; }
@@ -207,6 +228,71 @@ fi
 if [ "${GOTHAM_AGENT_FULL:-0}" = "1" ]; then
     FULL=1
 fi
+
+# ---- File manager: ask before enabling it ----------------------------------
+# The file manager gives the control plane's platform operators read/write
+# access to every file on this node, which needs the agent to run as root.
+# It is opt-in: the default answer is no, and so is any run without a terminal.
+resolve_file_manager() {
+    case "$(printf '%s' "${FILE_MANAGER}" | tr '[:upper:]' '[:lower:]')" in
+        yes | y | true | 1) FILE_MANAGER=yes; return 0 ;;
+        no | n | false | 0) FILE_MANAGER=no; return 0 ;;
+        "") ;;
+        *)
+            echo "install-agent.sh: GOTHAM_AGENT_FILE_MANAGER must be yes or no (got '${FILE_MANAGER}')" >&2
+            exit 2
+            ;;
+    esac
+    # A re-run keeps the previous answer: the drop-in marks yes, an explicit
+    # GOTHAM_AGENT_FILES=false in agent.env marks no.
+    if [ -f "${FILE_MANAGER_DROPIN}" ]; then
+        FILE_MANAGER=yes
+        return 0
+    fi
+    if [ -f "${ENV_FILE}" ]; then
+        case "$(sed -n 's/^[[:space:]]*GOTHAM_AGENT_FILES=//p' "${ENV_FILE}" | tail -n1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            false)
+                FILE_MANAGER=no
+                return 0
+                ;;
+            true)
+                # Enabled by hand earlier: keep it as is (no prompt, and no
+                # root drop-in the operator never asked for).
+                FILE_MANAGER=keep
+                return 0
+                ;;
+        esac
+    fi
+    FILE_MANAGER=no
+    _fm_tty="${GOTHAM_AGENT_FILE_MANAGER_TTY:-/dev/tty}"
+    # Only a character device qualifies, so the test seam can never make the
+    # prompt truncate a regular file as root.
+    if [ "${DRY_RUN}" -eq 1 ] || [ ! -c "${_fm_tty}" ] \
+        || ! { ( : <"${_fm_tty}" ) 2>/dev/null && ( : >>"${_fm_tty}" ) 2>/dev/null; }; then
+        return 0
+    fi
+    {
+        echo ""
+        echo "File manager"
+        echo "  Lets the control plane's platform operators browse, read, edit, upload and"
+        echo "  delete ANY file on this node. To do that the agent runs as root (instead of"
+        echo "  the unprivileged gotham-agent user) without systemd sandboxing."
+        printf '  Enable the file manager on this node? [y/N] '
+    } >"${_fm_tty}"
+    _fm_answer=""
+    IFS= read -r _fm_answer <"${_fm_tty}" || _fm_answer=""
+    case "$(printf '%s' "${_fm_answer}" | tr '[:upper:]' '[:lower:]')" in
+        y | yes) FILE_MANAGER=yes ;;
+    esac
+}
+resolve_file_manager
+if [ "${FILE_MANAGER}" = "no" ]; then
+    GOTHAM_AGENT_FILES=false
+else
+    GOTHAM_AGENT_FILES=true
+fi
+export GOTHAM_AGENT_FILES
+log "file manager: ${FILE_MANAGER}"
 
 # Validate every value that would land in agent.env before the first
 # mutation (system user, binary, CA, Docker): a bad value fails here, never
@@ -392,6 +478,36 @@ WantedBy=multi-user.target
 UNIT
         chmod 0644 "${SERVICE_FILE}"
     fi
+fi
+
+# File manager: the drop-in runs the agent as root without sandboxing so it can
+# reach every file; answering no removes it again (back to the unprivileged unit).
+if [ "${FILE_MANAGER}" = "yes" ]; then
+    log "installing ${FILE_MANAGER_DROPIN} (agent runs as root)"
+    if [ "${DRY_RUN}" -eq 1 ]; then
+        echo "[dry-run] write ${FILE_MANAGER_DROPIN}"
+    else
+        mkdir -p "${FILE_MANAGER_DROPIN_DIR}"
+        cat >"${FILE_MANAGER_DROPIN}" <<'DROPIN'
+# Written by install-agent.sh after you enabled the file manager. Remove this
+# file (and set GOTHAM_AGENT_FILES=false in /etc/gotham/agent.env) to go back to
+# the unprivileged, sandboxed agent.
+[Service]
+User=root
+Group=root
+ProtectSystem=no
+ProtectHome=no
+PrivateTmp=no
+DROPIN
+        chmod 0644 "${FILE_MANAGER_DROPIN}"
+    fi
+elif [ "${FILE_MANAGER}" = "no" ]; then
+    # Back to the unprivileged agent: files the root agent created in its state
+    # directory (certificate, key) must belong to the service user again.
+    if [ -f "${FILE_MANAGER_DROPIN}" ]; then
+        run chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
+    fi
+    run rm -f "${FILE_MANAGER_DROPIN}"
 fi
 
 log "enabling ${BINARY_NAME}"

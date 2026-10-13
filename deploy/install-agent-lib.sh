@@ -236,6 +236,18 @@ _env_check_value() {
                     ;;
             esac
             ;;
+        GOTHAM_AGENT_FILES)
+            # The file manager is on unless the agent reads exactly "false".
+            _ck_norm="$(printf '%s' "${_ck_value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+            case "${_ck_norm}" in
+                true | false)
+                    ;;
+                *)
+                    echo "install-agent.sh: ${_ck_key} must be true or false (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
         GOTHAM_AGENT_AUTO_UPDATE)
             # The agent enables unattended updates only on EqualFold(trimmed,
             # "true") (agent/config.go): 1/yes/on silently mean off there, so
@@ -389,7 +401,8 @@ agent_env_validate() (
         GOTHAM_AGENT_LOG_LEVEL \
         GOTHAM_AGENT_AUTO_UPDATE \
         GOTHAM_AGENT_UPDATE_INTERVAL \
-        GOTHAM_AGENT_UPDATE_CHANNEL; do
+        GOTHAM_AGENT_UPDATE_CHANNEL \
+        GOTHAM_AGENT_FILES; do
         _v_val="$(_v_value "${_v_key}")"
         _env_check_value "${_v_key}" "${_v_val}" || exit 1
     done
@@ -538,7 +551,8 @@ agent_env_write() {
             GOTHAM_AGENT_LOG_LEVEL \
             GOTHAM_AGENT_AUTO_UPDATE \
             GOTHAM_AGENT_UPDATE_INTERVAL \
-            GOTHAM_AGENT_UPDATE_CHANNEL; do
+            GOTHAM_AGENT_UPDATE_CHANNEL \
+            GOTHAM_AGENT_FILES; do
             _value="$(_env_value "${_key}")"
             if [ -n "${_value}" ]; then
                 printf '%s=%s\n' "${_key}" "${_value}" >>"${_env_tmp}"
@@ -562,7 +576,7 @@ agent_env_write() {
         # else aborts rather than silently dropping operator settings.
         _filter_status=0
         _preserved=$(printf '%s\n' "${_env_prev}" \
-            | grep -v -E '^[[:space:]]*GOTHAM_AGENT_(CP_ADDR|NODE_ID|LISTEN_ADDR|CERT_DIR|KEY|DOCKER_SOCK|LOG_LEVEL|AUTO_UPDATE|UPDATE_INTERVAL|UPDATE_CHANNEL|CA|INSECURE)=') \
+            | grep -v -E '^[[:space:]]*GOTHAM_AGENT_(CP_ADDR|NODE_ID|LISTEN_ADDR|CERT_DIR|KEY|DOCKER_SOCK|LOG_LEVEL|AUTO_UPDATE|UPDATE_INTERVAL|UPDATE_CHANNEL|FILES|CA|INSECURE)=') \
             || _filter_status=$?
         case "${_filter_status}" in
             0) ;;

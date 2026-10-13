@@ -290,7 +290,8 @@ the body).
   not written; a `0600` file is unreadable. To make a container volume editable,
   provisioning must make `<root>/<appID>` agent-writable — **either** the CP
   chowns it to `gotham-agent`, **or** a shared group plus a setgid (`2775`) dir
-  (the agent must join the group). Owner decision pending before nodes rely on it (details:
+  (the agent must join the group). Superseded for operators who accept the risk:
+  the installer's file-manager "yes" runs the agent as root (details:
   `docs/install.md` → "Remote file service").
 - **File manager — root-stat symlink swap (LOW).** `agent/files.go`
   `validateFileRoot` resolves the root with `EvalSymlinks` then re-`os.Stat`s the

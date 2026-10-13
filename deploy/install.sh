@@ -122,6 +122,7 @@
 #
 # Usage:
 #   sudo ./install.sh [--cp-host <name-or-ip>]... [--no-local-agent] [--dry-run]
+#                     [--file-manager | --no-file-manager]
 
 set -eu
 # A permissive base umask: shared directories (/etc/gotham, /usr/libexec/gotham,
@@ -149,6 +150,8 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
         --no-local-agent) NO_LOCAL_AGENT=1 ;;
+        --file-manager) GOTHAM_AGENT_FILE_MANAGER=yes; export GOTHAM_AGENT_FILE_MANAGER ;;
+        --no-file-manager) GOTHAM_AGENT_FILE_MANAGER=no; export GOTHAM_AGENT_FILE_MANAGER ;;
         --cp-host)
             [ "$#" -ge 2 ] || { echo "--cp-host requires a hostname or IP" >&2; exit 2; }
             CP_HOSTS_OPT="${CP_HOSTS_OPT} $2"
@@ -1336,6 +1339,7 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
                     -u GOTHAM_INSTALL_TEST_PUBLIC_KEY \
                     -u GOTHAM_INSTALL_TEST_ADMIN_BIN \
                     -u GOTHAM_INSTALL_TEST_ADMIN_TTY \
+                    -u GOTHAM_AGENT_FILE_MANAGER_TTY \
                     "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt"
             ) || LOCAL_AGENT_FAILED=1
         fi

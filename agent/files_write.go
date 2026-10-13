@@ -662,7 +662,19 @@ func (s *FileServer) lowSpace(root *fsroot.Root) bool {
 // reach a sibling application directory. Ordinary directories a user creates
 // are not protected.
 func (s *FileServer) protectsAppDir(root *fsroot.Root, rel string) bool {
-	if s.volumeRootPath == "" || root.Path() != s.volumeRootPath {
+	// wantParent is where the resolved parent of an application directory must
+	// land: the root itself for the volumes root, or the volumes directory
+	// inside the whole-filesystem root.
+	wantParent := "."
+	switch {
+	case s.volumeRootPath != "" && root.Path() == s.volumeRootPath:
+	case s.volumeRootRel != "" && root.Name() == fileRootSystem:
+		resolved, err := root.Resolve(s.volumeRootRel)
+		if err != nil {
+			return false
+		}
+		wantParent = resolved
+	default:
 		return false
 	}
 	clean := path.Clean(rel)
@@ -675,7 +687,7 @@ func (s *FileServer) protectsAppDir(root *fsroot.Root, rel string) bool {
 		return false
 	}
 	parent, err := root.Resolve(path.Dir(clean))
-	if err != nil || parent != "." {
+	if err != nil || parent != wantParent {
 		return false
 	}
 	entry, err := root.Stat(clean)

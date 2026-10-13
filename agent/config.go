@@ -31,9 +31,13 @@ const (
 	// variable name; the agent-prefixed variable wins when both are set.
 	envSharedManagedVolumeRoot = "GOTHAM_MANAGED_VOLUME_ROOT"
 
-	// File service configuration (Phase 18). The confined file service is
-	// opt-in: it is never registered unless GOTHAM_AGENT_FILES is set.
+	// File service configuration (Phase 18). The file service is on unless
+	// GOTHAM_AGENT_FILES=false; the installer asks the operator and writes the
+	// answer. By default it browses the whole filesystem (root "/"), limited
+	// only by the agent process's own permissions;
+	// GOTHAM_AGENT_FILE_FULL_ACCESS=false restores the confined roots.
 	envFiles            = "GOTHAM_AGENT_FILES"
+	envFileFullAccess   = "GOTHAM_AGENT_FILE_FULL_ACCESS"
 	envFileRoots        = "GOTHAM_AGENT_FILE_ROOTS"
 	envFileMaxUpload    = "GOTHAM_AGENT_FILE_MAX_UPLOAD"
 	envFileMaxTransfers = "GOTHAM_AGENT_FILE_MAX_TRANSFERS"
@@ -133,9 +137,13 @@ type Config struct {
 	// LogLevel is the slog level name (debug, info, warn, error).
 	LogLevel string
 
-	// Files enables the confined FileService. It is off by default: the file
-	// service is only registered when GOTHAM_AGENT_FILES=true.
+	// Files enables the FileService. It is on by default; only an explicit
+	// GOTHAM_AGENT_FILES=false turns it off.
 	Files bool
+	// FileFullAccess exposes the whole filesystem as one writable root "/" with
+	// no protected paths (the operator accepted the risk). It is on by default;
+	// GOTHAM_AGENT_FILE_FULL_ACCESS=false falls back to the confined roots.
+	FileFullAccess bool
 	// FileRoots lists extra browsable roots, colon-separated
 	// (GOTHAM_AGENT_FILE_ROOTS). Every entry is read-only.
 	FileRoots string
@@ -200,7 +208,8 @@ func Load() (Config, error) {
 
 		ManagedVolumeRoot: envOr(envManagedVolumeRoot, envOr(envSharedManagedVolumeRoot, defaultManagedVolumeRoot)),
 
-		Files:            strings.EqualFold(strings.TrimSpace(os.Getenv(envFiles)), "true"),
+		Files:            !envOff(envFiles),
+		FileFullAccess:   !envOff(envFileFullAccess),
 		FileRoots:        os.Getenv(envFileRoots),
 		FileMaxUpload:    int64FromEnv(envFileMaxUpload, defaultFileMaxUpload),
 		FileMaxTransfers: int(int64FromEnv(envFileMaxTransfers, defaultFileMaxTransfers)),
@@ -331,4 +340,15 @@ func int64FromEnv(key string, fallback int64) int64 {
 		return fallback
 	}
 	return value
+}
+
+// envOff reports whether a default-on switch was explicitly turned off. It
+// accepts the usual spellings (false, 0, no, off), so a typo such as "no" cannot
+// silently leave a risky default enabled.
+func envOff(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "false", "0", "no", "off":
+		return true
+	}
+	return false
 }

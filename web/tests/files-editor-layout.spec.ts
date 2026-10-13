@@ -523,3 +523,105 @@ test("leaving the files route with a dirty tab asks before discarding", async ({
   await expect(page.locator(".cm-content")).toBeVisible();
   expect(new URL(page.url()).pathname).toContain("/files");
 });
+
+/** dragWindow drags the floating editor by a point on its title bar. */
+async function dragWindow(
+  page: Page,
+  target: { x: number; y: number },
+): Promise<void> {
+  const bar = page.locator(".ed-window-bar");
+  const box = await bar.boundingBox();
+  // Grab the bar's left side (the title), never the minimize/close controls.
+  const fromX = box!.x + 40;
+  const fromY = box!.y + box!.height / 2;
+  await page.mouse.move(fromX, fromY);
+  await page.mouse.down();
+  await page.mouse.move(target.x, target.y, { steps: 10 });
+  await page.mouse.up();
+}
+
+test("the editor window drags by its title bar and clamps to the viewport", async ({
+  page,
+}) => {
+  const viewport = { width: 1440, height: 900 };
+  await page.setViewportSize(viewport);
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+
+  const window_ = page.locator(".ed-window");
+  const before = await window_.boundingBox();
+  expect(before).not.toBeNull();
+
+  // Drag up and to the left: the position actually changes.
+  await dragWindow(page, { x: before!.x - 180, y: before!.y - 140 });
+  const moved = await window_.boundingBox();
+  expect(moved!.x).toBeLessThan(before!.x);
+  expect(moved!.y).toBeLessThan(before!.y);
+
+  // Drag far past the top-left corner: it clamps on screen, not off it.
+  await dragWindow(page, { x: -500, y: -500 });
+  const clampedTopLeft = await window_.boundingBox();
+  expect(clampedTopLeft!.x).toBeGreaterThanOrEqual(0);
+  expect(clampedTopLeft!.y).toBeGreaterThanOrEqual(0);
+
+  // Drag far past the bottom-right corner: it stays fully inside the viewport.
+  await dragWindow(page, { x: viewport.width + 800, y: viewport.height + 800 });
+  const clampedBottomRight = await window_.boundingBox();
+  expect(clampedBottomRight!.x + clampedBottomRight!.width).toBeLessThanOrEqual(
+    viewport.width + 1,
+  );
+  expect(clampedBottomRight!.y + clampedBottomRight!.height).toBeLessThanOrEqual(
+    viewport.height + 1,
+  );
+});
+
+test("the Close control closes every tab, guarding dirty buffers", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  // Two open tabs, the active one dirty.
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await minimizeEditor(page);
+  await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
+  await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.locator(".ed-host:visible .cm-content").click();
+  await page.keyboard.type("# changed");
+  await expect(page.locator(".ed-dot")).toHaveCount(1);
+
+  // Close-all asks first and lists the unsaved file by path.
+  await page.locator(".ed-window-close").click();
+  const dialog = page.locator(".n-modal.files-editor-close-modal");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Close all files?");
+  await expect(dialog.locator(".ed-unsaved")).toContainText("notes.md");
+
+  // Cancel keeps the whole editor and its buffer.
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".ed-window")).toBeVisible();
+  await expect(page.locator(".ed-dot")).toHaveCount(1);
+
+  // Discard and close removes the editor and its dock entirely.
+  await page.locator(".ed-window-close").click();
+  await dialog
+    .getByRole("button", { name: "Discard and close", exact: true })
+    .click();
+  await expect(page.locator(".ed-window")).toHaveCount(0);
+  await expect(page.locator(".ed-dock")).toBeHidden();
+
+  // A clean buffer closes at once, with no confirmation dialog.
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await page.locator(".ed-window-close").click();
+  await expect(page.locator(".files-editor-close-modal")).toHaveCount(0);
+  await expect(page.locator(".ed-window")).toHaveCount(0);
+});

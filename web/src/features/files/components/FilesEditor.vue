@@ -16,6 +16,7 @@ import {
   useMessage,
 } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import type { CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 
@@ -28,7 +29,7 @@ import { createEditorSession } from "@/features/files/composables/useCodeMirror"
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
-import { languageLabel } from "@/features/files/utils/editor";
+import { clampEditorOffset, languageLabel } from "@/features/files/utils/editor";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 import { useTeamsStore } from "@/features/teams";
 import { formatBytes } from "@/shared/utils/format";
@@ -66,8 +67,46 @@ const dockButton = ref<HTMLButtonElement | null>(null);
 // variable so the fill page can reserve room for it.
 const dockElement = ref<HTMLElement | null>(null);
 
+// Below this width the floating window nearly fills the viewport, so a dragged
+// offset cannot be meaningful: it is reset to the pinned default.
+const NARROW_VIEWPORT = 640;
+
+// offset is the window's dragged top-left position, or null while it still sits
+// at the CSS default (pinned bottom-right). It is kept while the window stays
+// open and cleared on a dock restore, a narrow viewport, or a close-all.
+const offset = ref<{ x: number; y: number } | null>(null);
+// windowElement is the floating window, measured for drag clamping.
+const windowElement = ref<HTMLElement | null>(null);
+// dragState tracks one in-flight title-bar drag (null when idle).
+let dragState: {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+} | null = null;
+// closeAllOpen arms the "close all with unsaved files" confirmation.
+const closeAllOpen = ref(false);
+
 /** dockVisible is true while the collapsed dock is on screen. */
 const dockVisible = computed(() => editor.tabs.length > 0 && minimized.value);
+
+/**
+ * windowStyle applies a dragged position. Until the window is dragged the CSS
+ * default (pinned bottom-right) applies, so a fresh open is always as designed.
+ */
+const windowStyle = computed<CSSProperties>(() => {
+  const position = offset.value;
+  if (!position) {
+    return {};
+  }
+  return {
+    left: `${position.x}px`,
+    top: `${position.y}px`,
+    right: "auto",
+    bottom: "auto",
+  };
+});
 
 /**
  * syncDockSpace publishes the dock height as `--ed-dock-h` (consumed by the
@@ -253,6 +292,18 @@ watch(
   },
 );
 
+// The floating window unmounts with its last tab (close-all, or closing the
+// last tab individually), so any dragged position is meaningless afterwards:
+// clear it here so the next open starts at the pinned default again.
+watch(
+  () => editor.tabs.length,
+  (count) => {
+    if (count === 0) {
+      resetWindowPosition();
+    }
+  },
+);
+
 /** setHost stores a tab's host element from its template ref. */
 function setHost(id: string, el: unknown): void {
   if (el instanceof HTMLElement) {
@@ -392,6 +443,93 @@ function toggleWrap(): void {
   editor.setWrap(!editor.wrap);
 }
 
+/** resetWindowPosition returns the window to its pinned default position. */
+function resetWindowPosition(): void {
+  offset.value = null;
+  dragState = null;
+}
+
+/** onWindowResize re-clamps a dragged window; a narrow viewport resets it. */
+function onWindowResize(): void {
+  if (window.innerWidth < NARROW_VIEWPORT) {
+    resetWindowPosition();
+    return;
+  }
+  const element = windowElement.value;
+  const position = offset.value;
+  if (!element || !position) {
+    return;
+  }
+  const rect = element.getBoundingClientRect();
+  offset.value = clampEditorOffset(
+    position.x,
+    position.y,
+    rect.width,
+    rect.height,
+    window.innerWidth,
+    window.innerHeight,
+  );
+}
+
+/**
+ * onBarPointerDown starts a title-bar drag. The press must land on the bar
+ * itself: a press on a control (minimize/close) is that control's click, never
+ * a drag. Pointer capture keeps the drag tracking even outside the bar. The
+ * position is only pinned on the first move, so a bare click never re-anchors
+ * the window away from its bottom-right default.
+ */
+function onBarPointerDown(event: PointerEvent): void {
+  if (event.button !== 0) {
+    return;
+  }
+  const bar = event.currentTarget;
+  const element = windowElement.value;
+  if (!(bar instanceof HTMLElement) || !element) {
+    return;
+  }
+  // A press on a control (minimize/close) is a click, never a drag. The
+  // control's icon is an SVG element, so the test must accept any Element.
+  if (event.target instanceof Element && event.target.closest("button")) {
+    return;
+  }
+  const rect = element.getBoundingClientRect();
+  dragState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    originX: rect.left,
+    originY: rect.top,
+  };
+  bar.setPointerCapture(event.pointerId);
+}
+
+/** onBarPointerMove drags the window by the pointer delta, clamped on screen. */
+function onBarPointerMove(event: PointerEvent): void {
+  if (!dragState || event.pointerId !== dragState.pointerId) {
+    return;
+  }
+  const element = windowElement.value;
+  if (!element) {
+    return;
+  }
+  const rect = element.getBoundingClientRect();
+  offset.value = clampEditorOffset(
+    dragState.originX + (event.clientX - dragState.startX),
+    dragState.originY + (event.clientY - dragState.startY),
+    rect.width,
+    rect.height,
+    window.innerWidth,
+    window.innerHeight,
+  );
+}
+
+/** onBarPointerUp ends the drag (also on pointercancel). */
+function onBarPointerUp(event: PointerEvent): void {
+  if (dragState && event.pointerId === dragState.pointerId) {
+    dragState = null;
+  }
+}
+
 /** minimizeWindow collapses the window into the dock and moves focus there. */
 function minimizeWindow(): void {
   minimized.value = true;
@@ -413,6 +551,9 @@ function onWindowEsc(event: KeyboardEvent): void {
 /** restoreWindow reopens the window and returns focus to the active tab. */
 function restoreWindow(): void {
   minimized.value = false;
+  // A dock restore puts the window back at its pinned default, so it never
+  // reappears stranded at a stale dragged position.
+  resetWindowPosition();
   void nextTick(() => {
     const tab = document.getElementById(`ed-tab-${editor.activeId}`);
     if (tab) {
@@ -435,6 +576,50 @@ function focusTab(index: number): void {
   void nextTick(() => {
     document.getElementById(`ed-tab-${tab.id}`)?.focus();
   });
+}
+
+/** focusCloseButton returns focus to the title-bar Close control. */
+function focusCloseButton(): void {
+  document.querySelector<HTMLElement>(".ed-window-close")?.focus();
+}
+
+/** returnFocusToBrowser moves focus off a closing window back to the browser. */
+function returnFocusToBrowser(): void {
+  const target =
+    document.querySelector<HTMLElement>(".fm-search input") ??
+    document.querySelector<HTMLElement>(".fm-label");
+  target?.focus();
+}
+
+/** closeAllAndReturnFocus closes every tab and lands focus back on the page. */
+function closeAllAndReturnFocus(): void {
+  editor.closeAll();
+  void nextTick(() => returnFocusToBrowser());
+}
+
+/**
+ * closeAllTabs closes the whole editor. When any buffer is dirty it asks first
+ * (the dialog lists the unsaved files); with nothing dirty it closes at once,
+ * with no dialog.
+ */
+function closeAllTabs(): void {
+  if (editor.hasDirty) {
+    closeAllOpen.value = true;
+    return;
+  }
+  closeAllAndReturnFocus();
+}
+
+/** confirmCloseAll discards the dirty buffers and closes every tab. */
+function confirmCloseAll(): void {
+  closeAllOpen.value = false;
+  closeAllAndReturnFocus();
+}
+
+/** cancelCloseAll keeps the buffers and returns focus to the Close control. */
+function cancelCloseAll(): void {
+  closeAllOpen.value = false;
+  void nextTick(() => focusCloseButton());
 }
 
 /** onTabKeydown implements the tablist roving focus (Left/Right/Home/End). */
@@ -468,10 +653,14 @@ function onBeforeUnload(event: BeforeUnloadEvent): void {
   event.returnValue = "";
 }
 
-onMounted(() => window.addEventListener("beforeunload", onBeforeUnload));
+onMounted(() => {
+  window.addEventListener("beforeunload", onBeforeUnload);
+  window.addEventListener("resize", onWindowResize);
+});
 
 onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", onBeforeUnload);
+  window.removeEventListener("resize", onWindowResize);
   for (const session of sessions.values()) {
     session.destroy();
   }
@@ -492,12 +681,21 @@ onBeforeUnmount(() => {
   <section
     v-if="editor.tabs.length > 0"
     v-show="!minimized"
+    ref="windowElement"
     class="ed-window files-editor"
+    :style="windowStyle"
     role="region"
     :aria-label="t('files.editor.windowLabel')"
     @keydown.esc="onWindowEsc"
   >
-    <header class="ed-window-bar">
+    <header
+      class="ed-window-bar"
+      @pointerdown="onBarPointerDown"
+      @pointermove="onBarPointerMove"
+      @pointerup="onBarPointerUp"
+      @pointercancel="onBarPointerUp"
+      @lostpointercapture="onBarPointerUp"
+    >
       <span class="ed-window-title">{{ activeTab?.name ?? t("files.editor.heading") }}</span>
       <span v-if="activeTab" class="ed-window-path mono" :title="activeTab.path">
         {{ activeTab.path }}
@@ -516,6 +714,18 @@ onBeforeUnmount(() => {
       >
         <template #icon>
           <Minus :size="16" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+      </NButton>
+      <NButton
+        quaternary
+        size="tiny"
+        class="ed-window-close"
+        :title="t('files.editor.closeWindow')"
+        :aria-label="t('files.editor.closeWindow')"
+        @click="closeAllTabs"
+      >
+        <template #icon>
+          <X :size="16" :stroke-width="1.8" aria-hidden="true" />
         </template>
       </NButton>
     </header>
@@ -765,6 +975,30 @@ onBeforeUnmount(() => {
     </template>
   </NModal>
 
+  <NModal
+    class="app-modal files-editor-close-modal"
+    :show="closeAllOpen"
+    preset="card"
+    style="width: 440px; max-width: 94vw"
+    :title="t('files.editor.closeAllTitle')"
+    :mask-closable="false"
+    :close-on-esc="false"
+    @update:show="(value: boolean) => { if (!value) cancelCloseAll(); }"
+  >
+    <p class="small">{{ t("files.editor.closeAllMessage") }}</p>
+    <ul class="ed-unsaved" :aria-label="t('files.editor.closeAllList')">
+      <li v-for="tab in editor.dirtyTabs" :key="tab.id" class="mono">{{ tab.path }}</li>
+    </ul>
+    <template #footer>
+      <div class="dialog-foot">
+        <NButton @click="cancelCloseAll">{{ t("files.editor.closeAllCancel") }}</NButton>
+        <NButton type="error" @click="confirmCloseAll">
+          {{ t("files.editor.closeAllDiscard") }}
+        </NButton>
+      </div>
+    </template>
+  </NModal>
+
   <EditorConflictDialog />
   <EditorSaveAsDialog />
 </template>
@@ -795,6 +1029,15 @@ onBeforeUnmount(() => {
   padding: var(--space-1) var(--space-2) var(--space-1) var(--space-4);
   border-bottom: 1px solid var(--border);
   background: var(--surface-warm);
+  /* The bar is the drag handle: a grab cursor, no text selection, and no
+     touch scroll fighting the drag. */
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.ed-window-bar:active {
+  cursor: grabbing;
 }
 
 .ed-window-title {
@@ -1006,6 +1249,19 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+.ed-unsaved {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+  max-height: 40vh;
+  overflow-y: auto;
+  font-size: var(--text-xs);
+  color: var(--fg-2);
+}
+
+.ed-unsaved li {
+  overflow-wrap: anywhere;
 }
 
 .small {

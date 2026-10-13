@@ -3,7 +3,7 @@
 // ready tab must render no error state, and a role/root change must flip a live
 // session read-only. The CodeMirror chunk is mocked so the guards run without
 // a real editor.
-/* global document:readonly */
+/* global document:readonly, Event:readonly, HTMLElement:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -311,6 +311,133 @@ describe("FilesEditor guards", () => {
     files.roots = [{ name: "volumes", path: "/v", writable: false, free_bytes: 1 }];
     await flushPromises();
     expect(session.setReadOnly).toHaveBeenCalledWith(true);
+    wrapper.unmount();
+  });
+});
+
+describe("FilesEditor close-all", () => {
+  it("closes every tab with no dialog when nothing is dirty", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", false), makeTab("t2", false)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Close all files?");
+    expect(editor.tabs).toHaveLength(0);
+    expect(wrapper.find(".ed-window").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("asks before discarding and lists the dirty files", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", true), makeTab("t2", false), makeTab("t3", true)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Close all files?");
+    const list = wrapper.find(".ed-unsaved");
+    expect(list.text()).toContain("t1.yaml");
+    expect(list.text()).toContain("t3.yaml");
+    // Only the dirty buffers are listed.
+    expect(list.text()).not.toContain("t2.yaml");
+    // Nothing is closed until the user chooses.
+    expect(editor.tabs).toHaveLength(3);
+    wrapper.unmount();
+  });
+
+  it("keeps every tab on cancel", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", true)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+    const cancel = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Cancel");
+    expect(cancel).toBeTruthy();
+    await cancel!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Close all files?");
+    expect(editor.tabs).toHaveLength(1);
+    expect(editor.hasDirty).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("discards every dirty buffer on confirm", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", true), makeTab("t2", true)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+    const discard = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Discard and close");
+    expect(discard).toBeTruthy();
+    await discard!.trigger("click");
+    await flushPromises();
+
+    expect(editor.tabs).toHaveLength(0);
+    expect(editor.hasDirty).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("resets the dragged position when the editor is closed and reopened", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", false)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    // Simulate a title-bar drag: pointerdown anchors, pointermove pins the
+    // position (jsdom has no PointerEvent, so dispatch a plain Event).
+    const bar = wrapper.find(".ed-window-bar").element as HTMLElement;
+    bar.setPointerCapture = vi.fn();
+    const down = new Event("pointerdown");
+    Object.assign(down, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+    bar.dispatchEvent(down);
+    const move = new Event("pointermove");
+    Object.assign(move, { pointerId: 1, clientX: 210, clientY: 110 });
+    bar.dispatchEvent(move);
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("left:");
+
+    // Close-all (clean, so no dialog) then reopen: the pinned default is back.
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".ed-window").exists()).toBe(false);
+
+    editor.tabs = [makeTab("t2", false)];
+    editor.activeId = "t2";
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("left:");
+    wrapper.unmount();
+  });
+
+  it("does not re-anchor the window on a bare title-bar click", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", false)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    const bar = wrapper.find(".ed-window-bar").element as HTMLElement;
+    bar.setPointerCapture = vi.fn();
+    const down = new Event("pointerdown");
+    Object.assign(down, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+    bar.dispatchEvent(down);
+    await flushPromises();
+
+    // No move: the window keeps its CSS (bottom-right) anchoring.
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("left:");
     wrapper.unmount();
   });
 });

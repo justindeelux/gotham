@@ -109,6 +109,7 @@ function mountEditor() {
       }),
   });
   const wrapper = mount(shell, {
+    attachTo: document.body,
     global: { plugins: [i18n], stubs: { teleport: true } },
   });
   return { wrapper, teams, files, editor };
@@ -186,6 +187,115 @@ describe("FilesEditor guards", () => {
 
     wrapper.unmount();
     expect(editor.tabs).toHaveLength(0);
+  });
+
+  it("minimizes to the dock and restores with the dirty buffer intact", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
+    expect(editor.hasDirty).toBe(true);
+
+    await wrapper.find("button.ed-window-min").trigger("click");
+    await flushPromises();
+
+    // The window folds away and its dock item takes over (and takes focus).
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
+    expect(wrapper.find(".ed-dock").attributes("style") ?? "").not.toContain("display: none");
+    const dockItem = wrapper.find("button.ed-dock-item");
+    expect(dockItem.attributes("aria-label")).toContain("Restore");
+    expect(document.activeElement).toBe(dockItem.element);
+    // The buffer, its dirty state and the open tab all survive the collapse.
+    expect(editor.tabs).toHaveLength(1);
+    expect(editor.hasDirty).toBe(true);
+
+    await dockItem.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
+    expect(wrapper.find(".ed-dock").attributes("style")).toContain("display: none");
+    expect(editor.hasDirty).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("reopens the window when a new file is opened while minimized", async () => {
+    const { wrapper, editor } = mountEditor();
+    const first = makeTab("t1", false);
+    editor.tabs = [first];
+    editor.activeId = first.id;
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-min").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
+
+    // openFile() appends the tab and focuses it (a new activeId).
+    const second = makeTab("t2", false);
+    editor.tabs = [first, second];
+    editor.activeId = second.id;
+    await flushPromises();
+
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
+    expect(wrapper.find(".ed-dock").attributes("style")).toContain("display: none");
+    wrapper.unmount();
+  });
+
+  it("reopens the window when an already-open file is activated while minimized", async () => {
+    const { wrapper, editor } = mountEditor();
+    const first = makeTab("t1", false);
+    const second = makeTab("t2", false);
+    editor.tabs = [first, second];
+    editor.activeId = first.id;
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-min").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
+
+    // Clicking a file already open only changes activeId (no new tab).
+    editor.activeId = second.id;
+    await flushPromises();
+
+    expect(editor.tabs).toHaveLength(2);
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
+    wrapper.unmount();
+  });
+
+  it("folds the unsaved state into the dock control's accessible name", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-min").trigger("click");
+    await flushPromises();
+    const dockItem = wrapper.find("button.ed-dock-item");
+    expect(dockItem.attributes("aria-label")).toBe("Restore t1.yaml (unsaved changes)");
+    expect(wrapper.find(".ed-sr").exists()).toBe(false);
+
+    // A clean buffer keeps the plain label.
+    editor.tabs[0]!.doc = editor.tabs[0]!.original;
+    await flushPromises();
+    expect(dockItem.attributes("aria-label")).toBe("Restore t1.yaml");
+    wrapper.unmount();
+  });
+
+  it("minimizes the window on Escape", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
+    expect(wrapper.find(".ed-dock").attributes("style") ?? "").not.toContain("display: none");
+    wrapper.unmount();
   });
 
   it("reconfigures a live session read-only when the write gate drops", async () => {

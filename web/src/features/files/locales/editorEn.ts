@@ -8,9 +8,11 @@
  */
 const en = {
   heading: "Editor",
-  hint: "Tabs, dirty dot, conflict-safe saves. A save sends the etag it read.",
-  empty: "No open files",
-  emptyHint: "Open a text file from the browser. Reading a file body needs the owner or admin role.",
+  windowLabel: "Code editor window",
+  minimize: "Minimize editor",
+  dockLabel: "Editor dock",
+  restore: "Restore {name}",
+  restoreUnsaved: "Restore {name} (unsaved changes)",
   close: "Close {name}",
   closeDirty: "Close {name}? Unsaved changes will be lost.",
   closeConfirm: "Close",

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global document:readonly, URL, window:readonly */
+/* global document:readonly, HTMLElement:readonly, URL, window:readonly */
 // URL/window run inside the page and server callbacks (browser/Node URL
 // globals); the repo lint envs do not cover tests/, so they are declared.
 
@@ -225,6 +225,50 @@ async function openConflict(page: Page): Promise<Locator> {
   return dialog;
 }
 
+/**
+ * minimizeEditor collapses the floating editor window into the bottom dock so
+ * the file browser underneath becomes clickable (the window overlays it).
+ */
+async function minimizeEditor(page: Page): Promise<void> {
+  await page.locator(".ed-window-min").click();
+  await expect(page.locator(".ed-dock")).toBeVisible();
+}
+
+test("the minimized dock is inset so the rail foot and sidebar stay clickable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await minimizeEditor(page);
+
+  const dock = page.locator(".ed-dock");
+  const box = await dock.boundingBox();
+  expect(box).not.toBeNull();
+  // The dock starts after the rail (72px) + sidebar (260px) columns.
+  expect(box!.x).toBeGreaterThanOrEqual(300);
+
+  // Neither bottom-corner chrome column is swallowed by the opaque dock band.
+  const covered = await page.evaluate(() => {
+    const el = document.querySelector(".ed-dock");
+    if (!(el instanceof HTMLElement)) {
+      return { rail: false, sidebar: false };
+    }
+    const y = window.innerHeight - 20;
+    const rail = document.elementFromPoint(36, y);
+    const sidebar = document.elementFromPoint(160, y);
+    return {
+      rail: rail !== null && el.contains(rail),
+      sidebar: sidebar !== null && el.contains(sidebar),
+    };
+  });
+  expect(covered.rail).toBe(false);
+  expect(covered.sidebar).toBe(false);
+});
+
 test("editor save conflict opens a bounded modal with pinned header and three choices", async ({
   page,
 }) => {
@@ -309,7 +353,9 @@ test("switching to a binary tab and back keeps the editor mounted", async ({
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
 
-  // Open a binary tab (415) — this used to unmount every ready host.
+  // Open a binary tab (415) — this used to unmount every ready host. The
+  // floating window overlays the browser, so minimize it first.
+  await minimizeEditor(page);
   await page.locator(".fm-label", { hasText: "logo.png" }).first().click();
   await expect(page.getByText("Binary file")).toBeVisible();
 
@@ -344,6 +390,7 @@ test("the editor tablist exposes tabs, a panel and arrow-key navigation", async 
 
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await minimizeEditor(page);
   await page.locator(".fm-label", { hasText: "logo.png" }).first().click();
   await expect(page.getByText("Binary file")).toBeVisible();
 
@@ -375,6 +422,7 @@ test("a ready tab renders no error state and keeps tab/panel ids unique", async 
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   // A second ready tab: with the old unguarded v-else each one added a
   // duplicate "Could not open <name>" panel sharing the host's id.
+  await minimizeEditor(page);
   await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
   await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
     timeout: 15_000,
@@ -405,6 +453,7 @@ test("arrow keys keep switching between two ready tabs", async ({ page }) => {
 
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await minimizeEditor(page);
   await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
   await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
     timeout: 15_000,

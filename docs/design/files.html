@@ -465,13 +465,21 @@
           </div>
         </div>
 
-        <!-- ── Editor ────────────────────────────────────────────────────── -->
+        <!-- ── Editor window + dock (JUS-116) ────────────────────────────── -->
         <div class="section-title" id="editor">
-          <h2>Editor</h2>
-          <span class="meta">tabs, dirty dot, status bar · conflict-safe saves</span>
+          <h2>Editor window</h2>
+          <span class="meta">floating window · minimize → bottom dock · tabs, dirty dot, conflict-safe saves</span>
         </div>
+        <p class="small muted">Opening a file renders it in a floating window pinned bottom-right. <span class="kbd">Esc</span> (or the minimize control) folds it into an app-dock bar along the bottom of the content column; the dock item — file name plus an unsaved dot — restores it, and clicking another file in the browser restores it too. Buffers, dirty state, open tabs and conflict dialogs survive minimize/restore. Multiple files still use the window's tabs.</p>
         <div class="split-2">
-          <div class="card">
+          <div class="card" style="border-radius:var(--radius-md);box-shadow:var(--elev-raised)">
+            <div class="row gap-2" style="align-items:center;padding:var(--space-2) var(--space-2) var(--space-2) var(--space-4);background:var(--surface-warm);border-bottom:1px solid var(--border)">
+              <span class="fg-2" style="font-weight:600">app.yaml</span>
+              <span class="small muted mono truncate">volumes/storefront-8f2c1ab/app.yaml</span>
+              <span class="small" style="color:var(--warn-ink)">Unsaved changes</span>
+              <span class="grow"></span>
+              <button class="btn btn-ghost btn-icon btn-sm" type="button" aria-label="Minimize editor" data-toast="Minimized to the dock (or press Esc).|info"><svg aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
+            </div>
             <div class="tabs" data-tabs="editor" data-default="app.yaml" role="tablist">
               <button class="tab" type="button" data-tab="app.yaml" role="tab" id="tab-editor-app" aria-controls="panel-editor-app" aria-selected="true">app.yaml <span class="dot dot--idle" style="width:6px;height:6px" aria-hidden="true"></span><span class="sr-only">unsaved changes</span></button>
               <button class="tab" type="button" data-tab="override" role="tab" id="tab-editor-override" aria-controls="panel-editor-override" aria-selected="false">override.yml</button>
@@ -596,6 +604,22 @@ services:
             </div>
           </aside>
         </div>
+
+        <!-- The window collapsed to its dock item -->
+        <div class="section-title" id="editor-dock">
+          <h2>Dock (minimized)</h2>
+          <span class="meta">one item per window · click / Enter restores · unsaved state in the label</span>
+        </div>
+        <div class="row gap-2" style="align-items:center;padding:var(--space-2) var(--space-4);background:var(--surface-warm);border:1px solid var(--border);border-radius:var(--radius-sm)">
+          <span class="small meta">content column →</span>
+          <span class="grow"></span>
+          <button class="btn btn-outline btn-sm row gap-2" type="button" style="align-items:center" aria-label="Restore app.yaml (unsaved changes)" data-toast="Restored app.yaml — buffer and cursor kept.|info">
+            <svg aria-hidden="true"><use href="#i-terminal"></use></svg>
+            <span class="mono">app.yaml</span>
+            <span class="dot dot--idle" style="width:6px;height:6px" aria-hidden="true"></span>
+          </button>
+        </div>
+        <p class="small muted mt-2">The dock starts after the server rail and sidebar columns, so the rail foot and the sidebar MeCard stay visible and clickable while minimized.</p>
 
         <!-- ── List states ───────────────────────────────────────────────── -->
         <div class="section-title" id="states">

@@ -80,9 +80,15 @@ const vi = {
   },
   menu: {
     open: "Mở",
+    openTab: "Mở trong tab mới",
     edit: "Sửa trong trình soạn thảo",
     download: "Tải về",
     permissions: "Quyền…",
+  },
+  tabs: {
+    list: "Các tab trình duyệt",
+    new: "Tab mới",
+    close: "Đóng {name}",
   },
   permissions: {
     title: "Quyền truy cập",

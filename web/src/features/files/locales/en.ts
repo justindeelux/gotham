@@ -81,9 +81,15 @@ const en = {
   },
   menu: {
     open: "Open",
+    openTab: "Open in new tab",
     edit: "Edit in editor",
     download: "Download",
     permissions: "Permissions…",
+  },
+  tabs: {
+    list: "Browser tabs",
+    new: "New tab",
+    close: "Close {name}",
   },
   permissions: {
     title: "Permissions",

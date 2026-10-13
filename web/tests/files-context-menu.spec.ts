@@ -223,7 +223,7 @@ test("right-click on a folder opens its row menu", async ({ page }) => {
 
   const menu = page.getByRole("menu", { name: "More actions for config" });
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole("menuitem", { name: "Open" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Open", exact: true })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Move", exact: true })).toHaveCount(0);
 });
 

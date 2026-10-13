@@ -77,6 +77,7 @@ describe("rowMenuOptions", () => {
 
     expect(keys(options)).toEqual([
       "open",
+      "open-tab",
       "permissions",
       "rename",
       "cut",

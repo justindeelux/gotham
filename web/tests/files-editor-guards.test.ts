@@ -3,7 +3,7 @@
 // ready tab must render no error state, and a role/root change must flip a live
 // session read-only. The CodeMirror chunk is mocked so the guards run without
 // a real editor.
-/* global document:readonly */
+/* global document:readonly, Event:readonly, HTMLElement:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -389,6 +389,55 @@ describe("FilesEditor close-all", () => {
 
     expect(editor.tabs).toHaveLength(0);
     expect(editor.hasDirty).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("resets the dragged position when the editor is closed and reopened", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", false)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    // Simulate a title-bar drag: pointerdown anchors, pointermove pins the
+    // position (jsdom has no PointerEvent, so dispatch a plain Event).
+    const bar = wrapper.find(".ed-window-bar").element as HTMLElement;
+    bar.setPointerCapture = vi.fn();
+    const down = new Event("pointerdown");
+    Object.assign(down, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+    bar.dispatchEvent(down);
+    const move = new Event("pointermove");
+    Object.assign(move, { pointerId: 1, clientX: 210, clientY: 110 });
+    bar.dispatchEvent(move);
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("left:");
+
+    // Close-all (clean, so no dialog) then reopen: the pinned default is back.
+    await wrapper.find("button.ed-window-close").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".ed-window").exists()).toBe(false);
+
+    editor.tabs = [makeTab("t2", false)];
+    editor.activeId = "t2";
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("left:");
+    wrapper.unmount();
+  });
+
+  it("does not re-anchor the window on a bare title-bar click", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", false)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    const bar = wrapper.find(".ed-window-bar").element as HTMLElement;
+    bar.setPointerCapture = vi.fn();
+    const down = new Event("pointerdown");
+    Object.assign(down, { button: 0, pointerId: 1, clientX: 10, clientY: 10 });
+    bar.dispatchEvent(down);
+    await flushPromises();
+
+    // No move: the window keeps its CSS (bottom-right) anchoring.
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("left:");
     wrapper.unmount();
   });
 });

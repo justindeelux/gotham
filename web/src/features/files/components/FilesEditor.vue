@@ -292,6 +292,18 @@ watch(
   },
 );
 
+// The floating window unmounts with its last tab (close-all, or closing the
+// last tab individually), so any dragged position is meaningless afterwards:
+// clear it here so the next open starts at the pinned default again.
+watch(
+  () => editor.tabs.length,
+  (count) => {
+    if (count === 0) {
+      resetWindowPosition();
+    }
+  },
+);
+
 /** setHost stores a tab's host element from its template ref. */
 function setHost(id: string, el: unknown): void {
   if (el instanceof HTMLElement) {
@@ -462,7 +474,9 @@ function onWindowResize(): void {
 /**
  * onBarPointerDown starts a title-bar drag. The press must land on the bar
  * itself: a press on a control (minimize/close) is that control's click, never
- * a drag. Pointer capture keeps the drag tracking even outside the bar.
+ * a drag. Pointer capture keeps the drag tracking even outside the bar. The
+ * position is only pinned on the first move, so a bare click never re-anchors
+ * the window away from its bottom-right default.
  */
 function onBarPointerDown(event: PointerEvent): void {
   if (event.button !== 0) {
@@ -479,7 +493,6 @@ function onBarPointerDown(event: PointerEvent): void {
     return;
   }
   const rect = element.getBoundingClientRect();
-  offset.value = { x: rect.left, y: rect.top };
   dragState = {
     pointerId: event.pointerId,
     startX: event.clientX,
@@ -681,6 +694,7 @@ onBeforeUnmount(() => {
       @pointermove="onBarPointerMove"
       @pointerup="onBarPointerUp"
       @pointercancel="onBarPointerUp"
+      @lostpointercapture="onBarPointerUp"
     >
       <span class="ed-window-title">{{ activeTab?.name ?? t("files.editor.heading") }}</span>
       <span v-if="activeTab" class="ed-window-path mono" :title="activeTab.path">

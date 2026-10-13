@@ -49,8 +49,10 @@ question itself is answered, but Phase 18 cannot be enabled on a stock box until
   and **no `transport.respondingTimeouts`**, so Traefik v3 defaults apply (`readTimeout` 60 s,
   `writeTimeout` 0, `idleTimeout` 180 s); the CP's own `ReadTimeout` is 30 s
   (`internal/server/server.go:56`). At the edge Traefik caps reading a request **including its body**
-  at 60 s, so a > 1 GiB upload slower than that is cut off. Set an explicit
-  `respondingTimeouts.readTimeout` on `web`/`websecure` (or document the 60 s ceiling) in step 4/10.
+  at 60 s, so a > 1 GiB tenant-application upload slower than that is cut off. The file API is served
+  by the control plane directly and never traverses node Traefik, so this edge default is a
+  tenant-application ceiling, not the file manager's concern, and is left at Traefik's default (see
+  step 4).
 
 ### Live permission test (as `gotham-agent`)
 
@@ -127,8 +129,9 @@ Detail and exit codes (non-zero rc after `runuser -u gotham-agent -- ...`):
   browsable. Alternatives: move the default `ComposeRoot` out of the agent state dir, or document a
   mandatory `GOTHAM_AGENT_COMPOSE_ROOT` override. **Without this, `GOTHAM_AGENT_FILES=true`
   (JUS-105's own deliverable) cannot start on a stock box.**
-- **Traefik:** keep the 60 s `readTimeout` finding; set an explicit `respondingTimeouts.readTimeout`
-  (or document the ceiling) in step 4/10.
+- **Traefik:** the 60 s default `readTimeout` is a tenant-application edge ceiling; the file API is
+  served by the control plane directly, so no explicit `respondingTimeouts.readTimeout` is set
+  (see step 4).
 - **Gate:** step 0 is **passed** for the permission question (measurements above). The stock-config
   startup defect is a JUS-105 fix, tracked before step 10's flag flip.
 
@@ -162,7 +165,7 @@ Pyramid's backend is an unrestricted filesystem API (single `resolvePath` = `fil
 - **Etag:** `dev:ino:mtime_ns:size` (RFC 7232 quoted); `/content` also returns a sha256 of the (≤ 2 MiB) body. Per-path mutex on the agent around check+commit with a re-`fstat` before rename. Writes by containers can still race (documented).
 - **Limits (configurable on the agent):** `GOTHAM_AGENT_FILE_MAX_UPLOAD` default 1 GiB, `statfs` check keeping 5 % free, max 8 concurrent transfers per node (`ResourceExhausted` → 429).
 - **RBAC:** the files `resolve` requires the server to have a team (or a platform admin) and always enforces `Role.CanWrite()` for writes; foreign team/missing node = 404. `list/stat/roots` = any member; **`content` and `download` = owner/admin** (file bodies hold secrets such as 0600 compose env). Owner may relax this to all members; revisit in step 4. Reads of content/download are audit-logged too.
-- **Downloads:** `POST /download-ticket` → single-use ticket (60 s, bound to user, team, server, root, path); `GET /download?ticket=` consumes it so the browser can use a native streaming download. `ticket` is redacted from access logs. Sets `Content-Length`, `Content-Disposition: attachment`, `nosniff`; on a mid-stream agent error the handler aborts the connection (`http.ErrAbortHandler`) so the browser marks the download failed. Long transfers use `http.NewResponseController(w).SetReadDeadline/SetWriteDeadline`; check Traefik `readTimeout` (v3 default 60 s) and document or set it.
+- **Downloads:** `POST /download-ticket` → single-use ticket (60 s, bound to user, team, server, root, path); `GET /download?ticket=` consumes it so the browser can use a native streaming download. `ticket` is redacted from access logs. Sets `Content-Length`, `Content-Disposition: attachment`, `nosniff`; on a mid-stream agent error the handler aborts the connection (`http.ErrAbortHandler`) so the browser marks the download failed. Long transfers use `http.NewResponseController(w).SetReadDeadline/SetWriteDeadline`; the file API is served by the control plane directly, so no edge read timeout applies.
 - **Old agents:** `codes.Unimplemented` → `ErrAgentOutdated` (501, "update the agent").
 - **Audit:** structured `slog` (`actor_team_id`, `actor_user_id`, server, root, relpath, op, result); precedent `internal/servers/service.go`. No table.
 - **Editor:** CodeMirror 6, dynamic import (own chunk), explicit language set (json, yaml, js/ts, python, go, markdown, css, html, shell, dockerfile, toml) — **not** `language-data` (~100 committed chunks). Line separator and BOM detected on load and preserved on save (CRLF file round-trips byte-identical). Monaco rejected (multi-MB in a committed `webdist`). Recorded as `F22` in `docs/library-audit.md`. CodeMirror injects styles (CSP currently allows `style-src 'unsafe-inline'`; note so nobody tightens it blindly). Editor lives inside the Files page, not a global dock.
@@ -281,20 +284,6 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
   `GOTHAM_AGENT_FILE_MAX_UPLOAD`. A body above it is refused 413 before the
   agent is dialed (`http.MaxBytesReader` catches a lying or chunked
   `Content-Length`).
-- **Traefik read timeout is gated, not global.** Traefik v3 defaults an
-  entrypoint's `readTimeout` to 60 s, which caps reading a request **including
-  its body**, so a large upload slower than that would be cut at the edge. The
-  generated static config applies
-  `transport.respondingTimeouts.readTimeout: 30m` (`EntryPointReadTimeout`) on
-  the `web`/`websecure` entrypoints **only when the file-manager feature is
-  enabled** (`FEATURE_FILES`), through `applyUploadReadTimeout` at the sync
-  service (`SyncService.buildConfig`). With files off the entrypoints keep
-  Traefik's 60 s default, so a node that accepts no uploads does not widen the
-  slowloris window for every tenant route. The control plane's own file API is
-  served directly (not through Traefik), so the timeout is a courtesy for an
-  edge upload, not a requirement of the file manager; it is a ceiling, and a
-  larger or slower upload still needs a higher value. The loopback `traefik`
-  entrypoint is unchanged.
 - **Upload staging hygiene (fix round 1).** A streamed upload body is staged on
   the control plane before it reaches the agent (the write header must declare
   an exact size). Staging now lives in a bounded `spooler`
@@ -373,15 +362,17 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 
 ### Step 10 — Hardening, e2e, docs
 - **Brief:** `.github/workflows/ui-e2e.yml`, `internal/e2e`, `docs/install.md`, `docs/TODO.md`.
-- **Tasks:** `internal/e2e` scenario (upload → edit → conflict → download → delete) run manually with `GOTHAM_E2E=1 go test ./internal/e2e -run Files`; `web/e2e/files.spec.ts` using `page.route` fixtures (CI has no enrolled agent); `gitnexus explain` taint review on `internal/files` and `agent/files*.go`; docs (`README.md` row, `00-roadmap.md`, `TODO.md`, `install.md` env + permissions); flip `FEATURE_FILES` default to on only with owner sign-off.
-- **Exit:** CI green, manual e2e recorded, review gate signed off by the project owner. **Rollback:** flag off.
+- **Tasks:** `internal/e2e` scenario (upload → edit → conflict → download → delete) driven by `GOTHAM_E2E=1 go test ./internal/e2e -run Files` — it runs in CI through `.github/workflows/e2e.yml` (which sets `GOTHAM_E2E=1` and needs the runner's Postgres/Redis/Docker) and locally the same way; `web/e2e/files.spec.ts` using `page.route` fixtures (CI has no enrolled agent), run by `npm run e2e` in `.github/workflows/ui-e2e.yml`; GitNexus MCP `explain` taint review on `internal/files` and `agent/files*.go`; docs (`README.md` row, `00-roadmap.md`, `TODO.md`, `install.md` env + permissions); flip `FEATURE_FILES` default to on only with owner sign-off.
+- **Exit:** CI green (Go e2e + Playwright), e2e recorded, review gate signed off by the project owner. **Rollback:** flag off.
 
 #### Step 10 results (JUS-115)
 
 **Flag defaults unchanged.** `FEATURE_FILES` (CP) and `GOTHAM_AGENT_FILES` (agent) stay **off**: the owner owns the enablement sign-off, so step 10 ships the hardening, coverage and docs without flipping either default.
 
-**Manual API e2e (`internal/e2e`).** `GOTHAM_E2E=1 go test ./internal/e2e -run Files -v` —
-**PASS**, run 2026-10-13 on the dev machine (Docker 29.8.1, go1.27). `TestFilesEndToEnd`
+**API e2e (`internal/e2e`, runs in CI).** `GOTHAM_E2E=1 go test ./internal/e2e -run Files -v` —
+**PASS**, run 2026-10-13 on the dev machine (Docker 29.8.1, go1.27); the same suite runs in CI
+via `.github/workflows/e2e.yml` on every change under `internal/e2e/**` (and the other gated
+paths), so it is not manual-only. `TestFilesEndToEnd`
 drives the real HTTP routes → `internal/files.Service` → the mTLS `FileService` dial → a live
 agent whose two confined roots are temporary directories: `roots` (volumes writable, compose
 read-only), 428 without `If-Match`, multipart upload, content + strong etag, `If-Match` save
@@ -390,7 +381,8 @@ read-only), 428 without `If-Match`, multipart upload, content + strong etag, `If
 with `FEATURE_FILES=false`. Without `GOTHAM_E2E` both **skip cleanly** (verified).
 
 **Browser e2e (`web/e2e/files.spec.ts`).** Playwright with `page.route` fixtures (CI has no
-enrolled agent): browse, upload (per-file result), edit + save (asserts the `If-Match` sent),
+enrolled agent), run by `npm run e2e` in `.github/workflows/ui-e2e.yml`: browse, upload
+(per-file result), edit + save (asserts the `If-Match` sent),
 409 conflict modal + overwrite (`?overwrite=true`), delete, 503 disabled state, and the
 `read_only` role. Run: **7 passed**; stable over `--repeat-each=3` (**21 passed**, 0 flaky).
 
@@ -414,15 +406,14 @@ drop-ins, restarted both units, and drove the demo account through the CP API wi
 - Cleanup: both drop-ins removed, units restarted, `FEATURE_FILES`/`GOTHAM_AGENT_FILES` absent
   again; the temporary server row and the test directories were removed.
 
-**Security review.** `gitnexus analyze --pdg` then `explain` over `internal/files`,
-`agent/files.go`, `agent/files_write.go` and `agent/fsroot` (the PDG layer is populated:
-CFG 166,388 / CDG 59,161 / REACHING_DEF 141,315 edges over 158,700 basic blocks) reports
-**zero `TAINTED`/`TAINT_PATH` findings**, repo-wide as well as for the file paths. Manual review
-corroborates it; **no real finding needed a code fix**:
+**Security review.** The GitNexus MCP `explain` tool (its PDG layer populated by
+`gitnexus analyze --pdg`) over `internal/files`, `agent/files.go`, `agent/files_write.go` and
+`agent/fsroot` reports **zero `TAINTED`/`TAINT_PATH` findings**, repo-wide as well as for the file
+paths. Manual review corroborates it; **no real finding needed a code fix**:
 
 | Check | Result | Triage |
 |---|---|---|
-| `gitnexus explain` taint on `internal/files`, `agent/files*.go`, `agent/fsroot` | 0 findings (PDG layer present, 0 repo-wide) | No modeled source→sink flow; corroborated by the manual checks below. |
+| GitNexus MCP `explain` taint on `internal/files`, `agent/files*.go`, `agent/fsroot` | 0 findings (PDG layer present, 0 repo-wide) | No modeled source→sink flow; corroborated by the manual checks below. |
 | `os/exec` / `sh -c` in the file paths | none | Real: no shell anywhere in the read/write path. Archives (9b) stay deferred and would use Go `archive/*`, not a shell. |
 | `filepath.Join` with user input outside `fsroot` | none | Real: the agent resolves every path through `os.OpenRoot` (`agent/fsroot`), never a string join. The only CP `Join` is the spool dir + `os.ReadDir` entry names (fixed prefix, regular files only). |
 | Unbounded reads/allocations | bounded | `readAllLimited` caps content at 2 MiB; agent chunks 256 KiB; `List` caps 5,000/page and 100,000 scanned; the spool caps a body at `FILES_MAX_UPLOAD_BYTES`. |
@@ -447,16 +438,9 @@ corroborates it; **no real finding needed a code fix**:
   be able to write the target, and roots are operator-controlled, so the exposure is small;
   `nlink>1` is already why the writer keeps the inode instead of renaming. Revisit if roots ever
   accept container-created links to sensitive inodes.
-- **Traefik upload `readTimeout` widening is unnecessary — recommend dropping it (follow-up).**
-  Settled from the code: the file API is served by the control plane's own HTTP server
-  (`internal/server/server.go` mounts it on the `api` router), so **file-API traffic does not
-  traverse the node's Traefik at all** — Traefik is the edge for tenant application domains
-  (`internal/proxy`). `applyUploadReadTimeout` therefore widens the public `web`/`websecure`
-  entrypoint `readTimeout` to 30 m purely as a courtesy, at the cost of a wider slowloris window
-  for every tenant route. Recommendation: drop the `FEATURE_FILES`-gated
-  `EntryPointReadTimeout` change (`internal/proxy`) as a follow-up and document the 60 s default
-  as a tenant-app ceiling; the file manager needs it for nothing. The box run confirmed the file
-  uploads above 60 s without any Traefik in the path.
+- **Download ticket travels in the URL query.** `GET /files/download?ticket=` carries the
+  single-use, short-TTL ticket in the query string, so it may appear in any proxy or access log
+  along the path; the control plane's own access log records `r.URL.Path` only, never the query.
 - **Container-volume writability (owner decision).** Unchanged from step 0: container-created
   volumes are `root:root`, so the unprivileged agent reads world-readable files and is denied
   writes. To let operators upload/edit inside a container volume, provisioning must make

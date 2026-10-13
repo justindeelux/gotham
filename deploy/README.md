@@ -259,31 +259,14 @@ TLS; agents installed before that go offline until they are reinstalled with
   missing, both `Applier.Recover` (startup) and the wrapper restore
   `<binary>.old` before starting the service.
 
-## File-manager uploads (edge read timeout and staging)
+## File-manager uploads (staging)
 
 The remote file manager is served by the control plane directly; its upload
-endpoints are **not** routed through the node's Traefik. Traefik's public
-entrypoints (`web`/`websecure`) therefore keep their v3 default
-`readTimeout` of **60 s**, which caps reading a request **including its body**
-and is a ceiling for any tenant application that itself accepts large uploads.
-
-The generated Traefik static config widens that read timeout to 30 m
-(`transport.respondingTimeouts.readTimeout: 30m`) **only when the control plane
-runs with `FEATURE_FILES=true`**. With the feature off (the default), the 60 s
-default is kept, so a node that accepts no file uploads does not widen the
-slowloris window for every tenant route. To raise the ceiling, enable the file
-feature; to raise it further, edit `EntryPointReadTimeout` (a larger or slower
-upload still needs a higher value).
-
-**Settled (JUS-115): the widening is unnecessary — recommend dropping it.** The
-file API is served by the control plane's own HTTP server (`internal/files` on
-the `api` router), so file-API traffic never traverses node Traefik; Traefik is
-the edge for tenant application domains (`internal/proxy`). `applyUploadReadTimeout`
-therefore buys the file manager nothing and widens the slowloris window for every
-tenant route while `FEATURE_FILES` is on. The live box run uploaded for 51 s and
-85 s with no Traefik in the path and no cut. Follow-up: remove the
-`FEATURE_FILES`-gated `EntryPointReadTimeout` change and document the 60 s default
-as a tenant-app ceiling instead.
+endpoints are **not** routed through the node's Traefik, so the file feature does
+not touch the edge read timeout. Traefik's public entrypoints (`web`/`websecure`)
+keep their v3 default `readTimeout` of **60 s**, which caps reading a request
+**including its body** and is a ceiling for any tenant application that itself
+accepts large uploads.
 
 A streamed upload body is staged on the control plane before it reaches the node
 agent. Staging is bounded and configurable:

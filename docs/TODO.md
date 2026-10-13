@@ -71,9 +71,6 @@ The full triage lives in [`plans/18-file-manager.md`](plans/18-file-manager.md) 
   (`O_PATH`/`openat` + `fstat`, or `Lstat`) instead of `EvalSymlinks` then a fresh `os.Stat`.
 - [ ] **Per-team upload staging cap.** `FILES_SPOOL_CONCURRENCY` is a single global semaphore, so
   one team can starve others; add a per-team cap or fair queueing.
-- [ ] **Drop the Traefik upload `readTimeout` widening.** Settled: file-API traffic does not
-  traverse node Traefik, so the `FEATURE_FILES`-gated 30 m `EntryPointReadTimeout` widens the
-  slowloris window for tenant routes for no file-manager benefit. Recommend removing it.
 - [ ] **Step 9a chmod (JUS-113) / step 9b archives (JUS-114)** remain deferred; not built now.
 
 ## Phase 4 residuals

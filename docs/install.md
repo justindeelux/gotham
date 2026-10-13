@@ -411,8 +411,12 @@ default), they are mounted but answer **503**. The routes are team-scoped: a
 browsable server must belong to a team (a legacy team-less node answers 404),
 `roots`/`list`/`stat` need any member, and `content`, `download`, uploads and
 every mutation need an owner/admin role. File bodies can hold secrets (a `0600`
-compose `.env`), so `GET /content` and `POST /download-ticket` stay owner/admin,
-and the whole surface is deploy-gated for API tokens.
+compose `.env`), so `GET /content` and `POST /download-ticket` stay owner/admin.
+For API tokens: `roots`/`list`/`stat` are readable with a **read**-scoped token;
+every write, `GET /content` and `POST /download-ticket` need the **deploy** scope
+(the non-GET method gate plus the secret-bearing read suffix); and the
+ticket-gated `GET /files/download` sits outside the auth group, so the
+single-use ticket is its credential.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -426,8 +430,8 @@ declare an exact size, which a multipart part does not carry). The spool is
 swept at startup and hourly, and its free space is checked against the ceiling
 before any write. The file API is served by the control plane directly, so it
 does **not** traverse the node's Traefik; see
-[`../deploy/README.md`](../deploy/README.md) → "File-manager uploads" for the
-edge-timeout note.
+[`../deploy/README.md`](../deploy/README.md) → "File-manager uploads (staging)"
+for the staging knobs.
 
 ### Permissions model
 

@@ -70,6 +70,18 @@ const readyTabs = computed(() =>
 /** activeTab is the store's focused tab (convenience for the template). */
 const activeTab = computed(() => editor.activeTab);
 
+/**
+ * dockLabel is the dock control's accessible name. The unsaved state is folded
+ * in because an `aria-label` overrides any child text a screen reader would
+ * otherwise read.
+ */
+const dockLabel = computed<string>(() => {
+  const name = activeTab.value?.name ?? String(t("files.editor.heading"));
+  return editor.hasDirty
+    ? String(t("files.editor.restoreUnsaved", { name }))
+    : String(t("files.editor.restore", { name }));
+});
+
 // A dirty buffer must never be dropped by a route change, a server switch or
 // a team switch without an explicit confirmation (beforeunload still covers a
 // browser close/reload).
@@ -202,13 +214,13 @@ watch(
   },
 );
 
-// Opening another file while the window is collapsed reopens it, so a click in
-// the browser always lands somewhere visible. (Switching tabs is impossible
-// while collapsed: the tablist is inside the hidden window.)
+// Opening or focusing any file from the browser while the window is collapsed
+// reopens it, so a click always lands somewhere visible. openFile() focuses the
+// tab it opens — new or already open — which is exactly an activeId change.
 watch(
-  () => editor.tabs.length,
-  (next, prev) => {
-    if (next > prev && minimized.value) {
+  () => editor.activeId,
+  () => {
+    if (minimized.value) {
       restoreWindow();
     }
   },
@@ -359,6 +371,18 @@ function minimizeWindow(): void {
   void nextTick(() => dockButton.value?.focus());
 }
 
+/**
+ * onWindowEsc minimizes the window on Escape. A child that already handled the
+ * key (CodeMirror's search panel) calls preventDefault, so it is left alone.
+ * The leave/conflict/save-as dialogs are teleported to body, so their Escape
+ * never bubbles through the window and their own handling is unaffected.
+ */
+function onWindowEsc(event: KeyboardEvent): void {
+  if (!event.defaultPrevented) {
+    minimizeWindow();
+  }
+}
+
 /** restoreWindow reopens the window and returns focus to the active tab. */
 function restoreWindow(): void {
   minimized.value = false;
@@ -444,6 +468,7 @@ onBeforeUnmount(() => {
     class="ed-window files-editor"
     role="region"
     :aria-label="t('files.editor.windowLabel')"
+    @keydown.esc="onWindowEsc"
   >
     <header class="ed-window-bar">
       <span class="ed-window-title">{{ activeTab?.name ?? t("files.editor.heading") }}</span>
@@ -681,14 +706,13 @@ onBeforeUnmount(() => {
       ref="dockButton"
       type="button"
       class="ed-dock-item"
-      :title="t('files.editor.restore', { name: activeTab?.name ?? t('files.editor.heading') })"
-      :aria-label="t('files.editor.restore', { name: activeTab?.name ?? t('files.editor.heading') })"
+      :title="dockLabel"
+      :aria-label="dockLabel"
       @click="restoreWindow"
     >
       <Code :size="14" :stroke-width="1.8" aria-hidden="true" />
       <span class="ed-dock-name">{{ activeTab?.name ?? t("files.editor.heading") }}</span>
       <span v-if="editor.hasDirty" class="ed-dock-dirty" aria-hidden="true" />
-      <span v-if="editor.hasDirty" class="ed-sr">{{ t("files.editor.unsaved") }}</span>
     </button>
   </div>
 
@@ -721,11 +745,12 @@ onBeforeUnmount(() => {
 .ed-window {
   position: fixed;
   right: var(--space-6);
-  bottom: 76px;
+  bottom: var(--space-4);
   display: flex;
   flex-direction: column;
   width: min(1024px, calc(100vw - var(--space-6) * 2));
-  height: min(720px, calc(100vh - 160px));
+  height: min(720px, calc(100vh - 104px));
+  height: min(720px, calc(100dvh - 104px));
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -766,10 +791,12 @@ onBeforeUnmount(() => {
 }
 
 /* Bottom app-dock: one item while the editor window is collapsed; a click
-   restores it. Fixed so it survives any page scroll. */
+   restores it. Fixed so it survives any page scroll, but constrained to the
+   main content column so it never covers the ServerRail foot or the sidebar
+   MeCard (both sticky at the same bottom edge). */
 .ed-dock {
   position: fixed;
-  left: 0;
+  left: calc(var(--rail-w) + var(--sidebar-w));
   right: 0;
   bottom: 0;
   z-index: 60;
@@ -779,6 +806,14 @@ onBeforeUnmount(() => {
   padding: var(--space-2) var(--space-4);
   background: var(--surface-warm);
   border-top: 1px solid var(--border);
+}
+
+/* At <=1024px the sidebar column is collapsed (AppLayout grid), so the dock
+   starts right after the rail. --rail-w is re-declared on .app at <=640px. */
+@media (max-width: 1024px) {
+  .ed-dock {
+    left: var(--rail-w);
+  }
 }
 
 .ed-dock-item {
@@ -811,18 +846,6 @@ onBeforeUnmount(() => {
   height: 6px;
   border-radius: 50%;
   background: var(--warn);
-}
-
-.ed-sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 .ed-tabs {

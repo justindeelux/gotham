@@ -12,6 +12,7 @@ const en = {
   minimize: "Minimize editor",
   dockLabel: "Editor dock",
   restore: "Restore {name}",
+  restoreUnsaved: "Restore {name} (unsaved changes)",
   close: "Close {name}",
   closeDirty: "Close {name}? Unsaved changes will be lost.",
   closeConfirm: "Close",

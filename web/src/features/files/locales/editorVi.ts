@@ -8,6 +8,7 @@ const vi = {
   minimize: "Thu nhỏ trình soạn thảo",
   dockLabel: "Thanh neo trình soạn thảo",
   restore: "Khôi phục {name}",
+  restoreUnsaved: "Khôi phục {name} (thay đổi chưa lưu)",
   close: "Đóng {name}",
   closeDirty: "Đóng {name}? Thay đổi chưa lưu sẽ mất.",
   closeConfirm: "Đóng",

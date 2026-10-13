@@ -241,6 +241,14 @@ test("editor save conflict opens a bounded modal with pinned header and three ch
   // Header stays fixed while the body scrolls.
   const header = dialog.locator(".n-card-header");
   const body = dialog.locator(".n-card-content");
+  // Wait out the modal enter transition so the header position is settled.
+  await expect
+    .poll(async () => {
+      const first = (await header.boundingBox())!.y;
+      await page.waitForTimeout(150);
+      return first - (await header.boundingBox())!.y;
+    })
+    .toBe(0);
   const before = await header.boundingBox();
   await body.evaluate((element) => {
     element.scrollTop = element.scrollHeight;

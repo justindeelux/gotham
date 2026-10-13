@@ -69,6 +69,9 @@ const activeTab = computed(() => editor.activeTab);
 // browser close/reload).
 const leaveOpen = ref(false);
 let leaveResolve: ((_leave: boolean) => void) | null = null;
+// leaveResolved records that the user explicitly allowed a discard (clicked
+// "Discard and leave"). An unmount without it keeps dirty buffers in the store.
+let leaveResolved = false;
 
 /** confirmDiscard asks the user before discarding dirty buffers. */
 function confirmDiscard(): Promise<boolean> {
@@ -84,6 +87,9 @@ function confirmDiscard(): Promise<boolean> {
 /** resolveLeave settles the pending confirmation. */
 function resolveLeave(leave: boolean): void {
   leaveOpen.value = false;
+  if (leave) {
+    leaveResolved = true;
+  }
   leaveResolve?.(leave);
   leaveResolve = null;
 }
@@ -93,18 +99,32 @@ onBeforeRouteUpdate(async () => confirmDiscard());
 
 watch(
   () => props.serverId,
-  () => editor.reset(),
+  () => {
+    // A route update (server switch) resets the tabs; a discard resolved for
+    // that navigation must not linger and auto-approve a later implicit
+    // unmount.
+    leaveResolved = false;
+    editor.reset();
+  },
 );
 
 // A team switch changes the caller's role and the server's visibility; ask
 // before dropping dirty buffers, and revert the selection if the user stays.
+// Reverting writes activeTeamId back, which re-triggers this watcher: swallow
+// that echo (teamRevertTarget) instead of prompting again forever.
+let teamRevertTarget: string | null = null;
 watch(
   () => teams.activeTeamId,
   async (next, prev) => {
+    if (next === teamRevertTarget) {
+      teamRevertTarget = null;
+      return;
+    }
     if (prev === undefined || next === prev) {
       return;
     }
     if (!(await confirmDiscard())) {
+      teamRevertTarget = prev;
       teams.selectTeam(prev);
       return;
     }
@@ -165,6 +185,17 @@ watch(
   },
 );
 
+// A role or writable-root change flips the write gate; a live session must
+// follow it, or a demoted caller could still type into an already-open buffer.
+watch(
+  () => files.canWrite,
+  (canWrite) => {
+    for (const session of sessions.values()) {
+      session.setReadOnly(!canWrite);
+    }
+  },
+);
+
 /** setHost stores a tab's host element from its template ref. */
 function setHost(id: string, el: unknown): void {
   if (el instanceof HTMLElement) {
@@ -172,6 +203,12 @@ function setHost(id: string, el: unknown): void {
   } else {
     hosts.delete(id);
   }
+}
+
+/** isTabFocused reports whether DOM focus is on a tablist button. */
+function isTabFocused(): boolean {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && active.getAttribute("role") === "tab";
 }
 
 /** ensureSession creates the active tab's editor instance on first view. */
@@ -190,7 +227,12 @@ async function ensureSession(): Promise<void> {
     // replaced (unmount/remount) the session is bound to a detached node and
     // must be rebuilt against the live one.
     if (sessionHosts.get(tab.id) === host) {
-      existing.focus();
+      // Only pull focus into the editor on an explicit open (browser click).
+      // While the user is on a tab button, re-focusing here would steal
+      // ArrowLeft/ArrowRight from the roving tablist focus.
+      if (!isTabFocused()) {
+        existing.focus();
+      }
       return;
     }
     existing.destroy();
@@ -346,7 +388,13 @@ onBeforeUnmount(() => {
   sessions.clear();
   sessionLanguages.clear();
   sessionHosts.clear();
-  editor.reset();
+  // An implicit unmount (a team switch, or losing the read role) must never
+  // drop a dirty buffer: reset only when nothing is dirty, or the user
+  // resolved the discard prompt. The store outlives the component, so a
+  // remount restores the tabs.
+  if (!editor.hasDirty || leaveResolved) {
+    editor.reset();
+  }
 });
 </script>
 
@@ -534,7 +582,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div
-          v-else
+          v-else-if="activeTab.status === 'error'"
           class="ed-state"
           role="tabpanel"
           :id="'ed-panel-' + activeTab.id"

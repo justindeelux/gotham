@@ -12,7 +12,6 @@ import {
   defaultKeymap,
   history,
   historyKeymap,
-  indentWithTab,
 } from "@codemirror/commands";
 import { css } from "@codemirror/lang-css";
 import { go } from "@codemirror/lang-go";
@@ -57,6 +56,7 @@ export interface EditorSession {
   setDoc: (_doc: string) => void;
   setLanguage: (_language: EditorLanguageId) => void;
   setWrap: (_wrap: boolean) => void;
+  setReadOnly: (_readOnly: boolean) => void;
   focus: () => void;
   requestMeasure: () => void;
   openSearch: () => void;
@@ -106,6 +106,12 @@ function languageExtension(id: EditorLanguageId): Extension {
     default:
       return [];
   }
+}
+
+/** readOnlyExtensions bundles the two facets that gate typing, so a live
+ *  session can be flipped read-only when the caller's role/root changes. */
+function readOnlyExtensions(readOnly: boolean): Extension {
+  return [EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)];
 }
 
 /** gothamHighlight maps syntax tags onto the app's dark palette. */
@@ -165,13 +171,15 @@ const gothamTheme = EditorView.theme(
 );
 
 /**
- * createEditorSession builds one editor. The wrap and language facets live in
- * Compartments so the toolbar can reconfigure them without recreating the view,
- * which would lose the undo history.
+ * createEditorSession builds one editor. The wrap, language and read-only
+ * facets live in Compartments so the toolbar (or a role change) can
+ * reconfigure them without recreating the view, which would lose the undo
+ * history.
  */
 export function createEditorSession(options: EditorSessionOptions): EditorSession {
   const languageCompartment = new Compartment();
   const wrapCompartment = new Compartment();
+  const readOnlyCompartment = new Compartment();
 
   const saveKeymap = keymap.of([
     {
@@ -206,9 +214,11 @@ export function createEditorSession(options: EditorSessionOptions): EditorSessio
         wrapCompartment.of(options.wrap ? EditorView.lineWrapping : []),
         languageCompartment.of(languageExtension(options.language)),
         placeholderExt("(empty file)"),
-        EditorState.readOnly.of(options.readOnly),
-        EditorView.editable.of(!options.readOnly),
-        keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+        readOnlyCompartment.of(readOnlyExtensions(options.readOnly)),
+        // indentWithTab is deliberately omitted: it binds Tab to indentation,
+        // which traps keyboard focus in the editor (WCAG 2.1.2). Tab now moves
+        // focus out of the editor as usual.
+        keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         saveKeymap,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -244,6 +254,11 @@ export function createEditorSession(options: EditorSessionOptions): EditorSessio
     setWrap(wrap: boolean): void {
       view.dispatch({
         effects: wrapCompartment.reconfigure(wrap ? EditorView.lineWrapping : []),
+      });
+    },
+    setReadOnly(readOnly: boolean): void {
+      view.dispatch({
+        effects: readOnlyCompartment.reconfigure(readOnlyExtensions(readOnly)),
       });
     },
     focus(): void {

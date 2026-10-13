@@ -186,22 +186,26 @@ single validation source. @vueuse/core adds ~0.04 kB gzip (tree-shaken).
   dockerfile and toml come from `@codemirror/legacy-modes` (StreamLanguage).
 - Reached only through a dynamic `import()` in `useCodeMirror.ts`, so every
   CodeMirror package lands in the lazy `codemirror-*.js` chunk, never in the
-  entry. The `codemirror` meta package is not a dependency; the grammar
-  packages' transitive `@codemirror/autocomplete` and `@codemirror/lint` appear
-  in `package-lock.json` only — they are never imported, so no completion or
-  lint surface loads.
+  entry. The `codemirror` meta package is not a dependency, and
+  `@codemirror/lint` is not bundled (it appears in `package-lock.json` only,
+  is never imported, and no lint surface ships). `@codemirror/autocomplete`
+  **is** bundled: the language packages pull it in transitively for their
+  completion sources, so its code and the `cm-tooltip-autocomplete` style land
+  in the chunk. No completion extension (`autocompletion()`) is enabled, so no
+  completion popup is ever shown.
 - Bundle (measured `vite build`, this branch vs `origin/main`):
-  - entry `index-*.js`: **856,253 B → 857,530 B raw (+1,277 B)**. The editor
-    message catalogs are *not* in that delta: they are merged lazily
-    (`locales/editorEn.ts` / `editorVi.ts` + `locales/editorMessages.ts`, loaded
-    with the files-page chunk) and every `files.editor.*` string now lives only
-    in the lazy `ServerFilesPage-*.js` chunk (67.3 kB raw / 18.8 kB gzip). The
-    +1,277 B is the entry-resident `stores/files.ts` editor-sync plumbing
-    (`withEditor`, `applyRename/Move/Delete`) that step 8 had to add to the
-    store the auth store imports.
-  - new chunks: `codemirror-*.js` (658.9 kB raw / 235.7 kB gzip) and the files
-    page `ServerFilesPage-*.js`; **+2 JS chunks** vs `origin/main` (97 → 99),
-    well within the ≤ 15 budget.
+  - entry `index-*.js`: **856,253 B → 857,539 B raw (+1,286 B)**; gzip
+    261.68 kB → 262.10 kB. The editor message catalogs are *not* in that delta:
+    they are merged lazily (`locales/editorEn.ts` / `editorVi.ts` +
+    `locales/editorMessages.ts`, loaded with the files-page chunk) and every
+    `files.editor.*` string lives only in the lazy `ServerFilesPage-*.js` chunk
+    (67,557 B raw / 18.90 kB gzip). The +1,286 B is the entry-resident
+    `stores/files.ts` editor-sync plumbing (`withEditor`,
+    `applyRename/Move/Delete`) that step 8 had to add to the store the auth
+    store imports.
+  - new chunks: `codemirror-*.js` (658,956 B raw / 235.74 kB gzip) plus the
+    grown files page `ServerFilesPage-*.js`; **+2 JS chunks** vs `origin/main`
+    (97 → 99), well within the ≤ 15 budget.
 - Verdict: **DO — landed in P18 step 8 with exact pins in `web/package.json`.**
 
 

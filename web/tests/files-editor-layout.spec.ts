@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global URL, window:readonly */
+/* global document:readonly, URL, window:readonly */
 // URL/window run inside the page and server callbacks (browser/Node URL
 // globals); the repo lint envs do not cover tests/, so they are declared.
 
@@ -90,6 +90,15 @@ const logoEntry = {
   etag: '"p1"',
 };
 
+const notesEntry = {
+  name: "notes.md",
+  kind: "file",
+  size: 18,
+  mode: 0o100644,
+  modified_at: "2026-10-12T09:03:00Z",
+  etag: '"v2"',
+};
+
 let server: Server;
 let baseURL = "";
 
@@ -159,7 +168,9 @@ async function mockApi(page: Page): Promise<void> {
     await route.fulfill({ json: { roots: [root] } });
   });
   await page.route(`**/api/v1/servers/${serverId}/files/list*`, async (route) => {
-    await route.fulfill({ json: { entries: [entry, logoEntry], truncated: false, cursor: "" } });
+    await route.fulfill({
+      json: { entries: [entry, notesEntry, logoEntry], truncated: false, cursor: "" },
+    });
   });
   await page.route(`**/api/v1/servers/${serverId}/files/content*`, async (route) => {
     if (route.request().method() === "PUT") {
@@ -341,6 +352,68 @@ test("the editor tablist exposes tabs, a panel and arrow-key navigation", async 
 
   // Roving focus: ArrowLeft moves selection to the previous tab.
   await active.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
+});
+
+test("a ready tab renders no error state and keeps tab/panel ids unique", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  // A second ready tab: with the old unguarded v-else each one added a
+  // duplicate "Could not open <name>" panel sharing the host's id.
+  await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
+  await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await expect(page.locator(".ed-state")).toHaveCount(0);
+  await expect(page.getByText("Could not open")).toHaveCount(0);
+
+  // The whole document (visible and v-show-hidden) must hold one panel id per
+  // ready tab and no duplicate: the old v-else added a second `ed-panel-<id>`
+  // for the active ready tab.
+  const ids = await page.evaluate(() =>
+    [...document.querySelectorAll("[id^='ed-panel-'], [id^='ed-tab-']")].map(
+      (element) => element.id,
+    ),
+  );
+  const panelIds = ids.filter((id) => id.startsWith("ed-panel-"));
+  const tabIds = ids.filter((id) => id.startsWith("ed-tab-"));
+  expect(tabIds.length).toBe(2);
+  expect(panelIds.length).toBe(2);
+  expect(new Set(ids).size).toBe(ids.length);
+});
+
+test("arrow keys keep switching between two ready tabs", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
+  await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  const tabs = page.getByRole("tab");
+  await expect(tabs).toHaveCount(2);
+  // Activate the first tab: the click focuses its button, but the session focus
+  // must not be yanked into the editor, or the arrow keys below drive the
+  // editor cursor instead of the tablist.
+  await page.getByRole("tab", { name: /app\.yaml/ }).click();
+  await expect(page.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { selected: true })).toHaveText(/notes\.md/);
+  expect(
+    await page.evaluate(() => document.activeElement?.getAttribute("role")),
+  ).toBe("tab");
   await page.keyboard.press("ArrowLeft");
   await expect(page.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
 });

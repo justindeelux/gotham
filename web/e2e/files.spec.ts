@@ -267,7 +267,7 @@ test.describe("files editor", () => {
     });
 
     await page.goto(`/servers/${server.id}/files`);
-    await page.locator(".fm-label").filter({ hasText: "app.yaml" }).click();
+    await page.locator(".fm-label").filter({ hasText: "app.yaml" }).dblclick();
 
     const editor = page.locator(".files-editor");
     const content = editor.locator(".cm-content");
@@ -318,7 +318,7 @@ test.describe("files editor", () => {
     });
 
     await page.goto(`/servers/${server.id}/files`);
-    await page.locator(".fm-label").filter({ hasText: "app.yaml" }).click();
+    await page.locator(".fm-label").filter({ hasText: "app.yaml" }).dblclick();
 
     const editor = page.locator(".files-editor");
     await expect(editor.locator(".cm-content")).toBeVisible();
@@ -341,7 +341,7 @@ test.describe("files editor", () => {
 
     // A second tab, dirtied: close-all must ask before discarding.
     await page.locator(".ed-window-min").click();
-    await page.locator(".fm-label").filter({ hasText: "notes.md" }).click();
+    await page.locator(".fm-label").filter({ hasText: "notes.md" }).dblclick();
     const visibleContent = editor.locator(".ed-host:visible .cm-content");
     await expect(visibleContent).toBeVisible();
     await visibleContent.click();
@@ -414,7 +414,7 @@ test.describe("files conflict", () => {
     });
 
     await page.goto(`/servers/${server.id}/files`);
-    await page.locator(".fm-label").filter({ hasText: "app.yaml" }).click();
+    await page.locator(".fm-label").filter({ hasText: "app.yaml" }).dblclick();
 
     const editor = page.locator(".files-editor");
     const content = editor.locator(".cm-content");
@@ -835,5 +835,140 @@ test.describe("files read-only role", () => {
     await expect(
       page.getByRole("heading", { name: "This root is read-only" }),
     ).toBeVisible();
+  });
+});
+
+/**
+ * JUS-130: a double-click dispatches by entry kind — a folder navigates, a
+ * text/code file opens the editor, an extractable archive opens the Extract
+ * dialog, and anything else (a binary/oversized file, a symlink, a special
+ * file) does nothing. A single click only selects.
+ */
+test.describe("files double-click", () => {
+  /** dblclickRow double-clicks the name of one listing row. */
+  async function dblclickRow(page: Page, name: string): Promise<void> {
+    await page.locator(".fm-label").filter({ hasText: name }).dblclick();
+  }
+
+  test("a single click only selects and Ctrl+click multi-selects", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(
+          route,
+          200,
+          listing([
+            entry("conf", "directory", 4096, 0o040755, "etag-conf"),
+            entry("app.yaml", "file", 11, 0o100644, "etag-yaml"),
+          ]),
+        ),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    const table = page.locator(".fm-table");
+    await expect(table.getByText("app.yaml")).toBeVisible();
+
+    // A plain click selects the row; it must not navigate or open anything.
+    await table.getByText("app.yaml").click();
+    const selected = table.locator(".fm-row.is-selected");
+    await expect(selected).toHaveCount(1);
+    await expect(selected).toContainText("app.yaml");
+    await expect(page.locator(".files-editor")).toHaveCount(0);
+    await expect(page.locator(".n-modal")).toHaveCount(0);
+    await expect(table.getByText("conf", { exact: true })).toBeVisible();
+
+    // Ctrl/⌘+click adds to the selection instead of replacing it.
+    await table.getByText("conf", { exact: true }).click({
+      modifiers: ["ControlOrMeta"],
+    });
+    await expect(selected).toHaveCount(2);
+  });
+
+  test("double-clicking a folder navigates into it", async ({ page, request }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => {
+        const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+        return json(
+          route,
+          200,
+          listing(
+            path === "conf"
+              ? [entry("inside.txt", "file", 5, 0o100644, "etag-in")]
+              : [entry("conf", "directory", 4096, 0o040755, "etag-conf")],
+          ),
+        );
+      },
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await dblclickRow(page, "conf");
+    await expect(page.locator(".fm-table").getByText("inside.txt")).toBeVisible();
+  });
+
+  test("double-clicking a text file opens it in the editor", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(route, 200, listing([entry("app.yaml", "file", 11, 0o100644, "etag-1")])),
+      content: (route) => json(route, 200, textContent),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await dblclickRow(page, "app.yaml");
+    await expect(page.locator(".files-editor")).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("double-clicking an extractable archive opens the Extract dialog", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(
+          route,
+          200,
+          listing([entry("backup.tar.gz", "file", 128, 0o100644, "etag-tgz")]),
+        ),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await dblclickRow(page, "backup.tar.gz");
+    const dialog = page.locator(".n-modal").filter({ hasText: "Extract here" });
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: "Extract here…", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("double-clicking a binary file does nothing", async ({ page, request }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(
+          route,
+          200,
+          listing([entry("logo.png", "file", 25190, 0o100644, "etag-png")]),
+        ),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await dblclickRow(page, "logo.png");
+    // No editor tab, no modal, no navigation: the listing is unchanged.
+    await expect(page.locator(".files-editor")).toHaveCount(0);
+    await expect(page.locator(".n-modal")).toHaveCount(0);
+    await expect(page.locator(".fm-table").getByText("logo.png")).toBeVisible();
   });
 });

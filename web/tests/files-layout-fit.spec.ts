@@ -459,7 +459,7 @@ test("the minimized editor dock never covers the node switcher", async ({
     await page.goto(`${baseURL}/servers/${server1}/files`);
 
     // Open a file and collapse the editor into the fixed bottom dock.
-    await page.locator(".fm-label").first().click();
+    await page.locator(".fm-label").first().dblclick();
     await expect(page.locator(".ed-window")).toBeVisible({ timeout: 15_000 });
     await page.locator(".ed-window-min").click();
     await expect(page.locator(".ed-dock")).toBeVisible();

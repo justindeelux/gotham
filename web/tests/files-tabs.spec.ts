@@ -216,7 +216,7 @@ test("two tabs keep independent paths and the tab bar is a real tablist", async 
   await expect(tabs(page)).toHaveCount(1);
 
   // Descend into alpha in the first tab.
-  await rowFor(page, "alpha").locator(".fm-label").click();
+  await rowFor(page, "alpha").locator(".fm-label").dblclick();
   await expect(page.locator(".fm-label b").first()).toHaveText("a.txt");
 
   // Open a second tab: it starts at the root and lists the folders again.
@@ -254,7 +254,7 @@ test("a cut in one tab pastes into another tab (shared clipboard)", async ({
   });
 
   // Tab A: enter alpha and cut a.txt from its row menu.
-  await rowFor(page, "alpha").locator(".fm-label").click();
+  await rowFor(page, "alpha").locator(".fm-label").dblclick();
   await expect(page.locator(".fm-label b").first()).toHaveText("a.txt");
   await rowFor(page, "a.txt").click({ button: "right" });
   const menu = page.getByRole("menu", { name: "More actions for a.txt" });
@@ -332,7 +332,7 @@ test("tab titles carry the full path and the strip scrolls at narrow widths", as
   await openFiles(page);
 
   // A tab's tooltip is the full root-relative location.
-  await rowFor(page, "alpha").locator(".fm-label").click();
+  await rowFor(page, "alpha").locator(".fm-label").dblclick();
   await expect(page.locator(".fm-label b").first()).toHaveText("a.txt");
   await expect(activeTab(page)).toHaveAttribute("title", "volumes/alpha");
 

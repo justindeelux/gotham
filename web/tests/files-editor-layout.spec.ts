@@ -204,7 +204,7 @@ async function openConflict(page: Page): Promise<Locator> {
 
   const label = page.locator(".fm-label", { hasText: "app.yaml" }).first();
   await expect(label).toBeVisible();
-  await label.click();
+  await label.dblclick();
 
   // The CodeMirror chunk loads lazily; wait for the real editor surface.
   const editor = page.locator(".cm-content");
@@ -234,6 +234,16 @@ async function minimizeEditor(page: Page): Promise<void> {
   await expect(page.locator(".ed-dock")).toBeVisible();
 }
 
+/**
+ * openViaMenu opens one file's editor tab through its row menu. A binary file
+ * (JUS-130) has no double-click action, so its binary/download-only tab is only
+ * reachable through "Edit in editor".
+ */
+async function openViaMenu(page: Page, name: string): Promise<void> {
+  await page.getByRole("button", { name: `More actions for ${name}` }).click();
+  await page.getByRole("menuitem", { name: "Edit in editor" }).click();
+}
+
 test("the minimized dock is inset so the rail foot and sidebar stay clickable", async ({
   page,
 }) => {
@@ -241,7 +251,7 @@ test("the minimized dock is inset so the rail foot and sidebar stay clickable", 
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await minimizeEditor(page);
 
@@ -326,7 +336,7 @@ test("the conflict modal stays inside a short viewport", async ({ page }) => {
 
   const label = page.locator(".fm-label", { hasText: "app.yaml" }).first();
   await expect(label).toBeVisible();
-  await label.click();
+  await label.dblclick();
   const editor = page.locator(".cm-content");
   await expect(editor).toBeVisible({ timeout: 15_000 });
   await editor.click();
@@ -350,13 +360,13 @@ test("switching to a binary tab and back keeps the editor mounted", async ({
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
   // Open the ready tab first.
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
 
   // Open a binary tab (415) — this used to unmount every ready host. The
   // floating window overlays the browser, so minimize it first.
   await minimizeEditor(page);
-  await page.locator(".fm-label", { hasText: "logo.png" }).first().click();
+  await openViaMenu(page, "logo.png");
   await expect(page.getByText("Binary file")).toBeVisible();
 
   // Back to the ready tab: the CodeMirror surface must still be there.
@@ -370,7 +380,7 @@ test("Ctrl/Cmd+S is a no-op on a clean tab", async ({ page }) => {
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   const editor = page.locator(".cm-content");
   await expect(editor).toBeVisible({ timeout: 15_000 });
   await editor.click();
@@ -388,10 +398,10 @@ test("the editor tablist exposes tabs, a panel and arrow-key navigation", async 
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await minimizeEditor(page);
-  await page.locator(".fm-label", { hasText: "logo.png" }).first().click();
+  await openViaMenu(page, "logo.png");
   await expect(page.getByText("Binary file")).toBeVisible();
 
   // The browser also exposes a tablist (JUS-123), so scope to the editor.
@@ -419,12 +429,12 @@ test("a ready tab renders no error state and keeps tab/panel ids unique", async 
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   // A second ready tab: with the old unguarded v-else each one added a
   // duplicate "Could not open <name>" panel sharing the host's id.
   await minimizeEditor(page);
-  await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
+  await page.locator(".fm-label", { hasText: "notes.md" }).first().dblclick();
   await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
     timeout: 15_000,
   });
@@ -452,10 +462,10 @@ test("arrow keys keep switching between two ready tabs", async ({ page }) => {
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await minimizeEditor(page);
-  await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
+  await page.locator(".fm-label", { hasText: "notes.md" }).first().dblclick();
   await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
     timeout: 15_000,
   });
@@ -505,7 +515,7 @@ test("leaving the files route with a dirty tab asks before discarding", async ({
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   const editor = page.locator(".cm-content");
   await expect(editor).toBeVisible({ timeout: 15_000 });
   await editor.click();
@@ -548,7 +558,7 @@ test("the editor window drags by its title bar and clamps to the viewport", asyn
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
 
   const window_ = page.locator(".ed-window");
@@ -586,10 +596,10 @@ test("the Close control closes every tab, guarding dirty buffers", async ({
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 
   // Two open tabs, the active one dirty.
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await minimizeEditor(page);
-  await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
+  await page.locator(".fm-label", { hasText: "notes.md" }).first().dblclick();
   await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
     timeout: 15_000,
   });
@@ -619,7 +629,7 @@ test("the Close control closes every tab, guarding dirty buffers", async ({
   await expect(page.locator(".ed-dock")).toBeHidden();
 
   // A clean buffer closes at once, with no confirmation dialog.
-  await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await page.locator(".ed-window-close").click();
   await expect(page.locator(".files-editor-close-modal")).toHaveCount(0);

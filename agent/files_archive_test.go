@@ -951,27 +951,77 @@ func appendZip64EntryTail(t *testing.T, body []byte, entries uint64) []byte {
 	return buf.Bytes()
 }
 
+// appendZip64HonestTail rewrites a small zip's tail into a valid zip64 archive:
+// the zip64 end-of-central-directory record carries the archive's real entry
+// count, central-directory size and offset, so the central directory ends
+// exactly at the zip64 record — the layout the pre-parse must accept.
+func appendZip64HonestTail(t *testing.T, body []byte, entries int) []byte {
+	t.Helper()
+	const eocdLen = 22
+	if len(body) < eocdLen {
+		t.Fatal("zip body too short")
+	}
+	eocd := body[len(body)-eocdLen:]
+	cdSize := binary.LittleEndian.Uint32(eocd[12:16])
+	cdOffset := binary.LittleEndian.Uint32(eocd[16:20])
+	base := body[:len(body)-eocdLen]
+	recordOffset := uint64(len(base))
+	var buf bytes.Buffer
+	buf.Write(base)
+
+	// zip64 end of central directory record, with the real directory metrics.
+	record := make([]byte, 56)
+	binary.LittleEndian.PutUint32(record[0:4], 0x06064b50)
+	binary.LittleEndian.PutUint64(record[4:12], 44) // bytes of the record after this field
+	binary.LittleEndian.PutUint64(record[24:32], uint64(entries))
+	binary.LittleEndian.PutUint64(record[32:40], uint64(entries))
+	binary.LittleEndian.PutUint64(record[40:48], uint64(cdSize))
+	binary.LittleEndian.PutUint64(record[48:56], uint64(cdOffset))
+	buf.Write(record)
+
+	// zip64 end of central directory locator, pointing at the record.
+	locator := make([]byte, 20)
+	binary.LittleEndian.PutUint32(locator[0:4], 0x07064b50)
+	binary.LittleEndian.PutUint64(locator[8:16], recordOffset)
+	binary.LittleEndian.PutUint32(locator[16:20], 1)
+	buf.Write(locator)
+
+	// EOCD whose 16/32-bit fields are all "see zip64", forcing the zip64 read.
+	zip64EOCD := make([]byte, eocdLen)
+	binary.LittleEndian.PutUint32(zip64EOCD[0:4], 0x06054b50)
+	binary.LittleEndian.PutUint16(zip64EOCD[8:10], 0xFFFF)
+	binary.LittleEndian.PutUint16(zip64EOCD[10:12], 0xFFFF)
+	binary.LittleEndian.PutUint32(zip64EOCD[12:16], 0xFFFFFFFF)
+	binary.LittleEndian.PutUint32(zip64EOCD[16:20], 0xFFFFFFFF)
+	buf.Write(zip64EOCD)
+	return buf.Bytes()
+}
+
 // TestZipCentralDirectoryBounds proves the tail parser reads a normal zip's
 // declared entry count and central-directory size, and is not fooled by a
 // comment that embeds the EOCD signature.
 func TestZipCentralDirectoryBounds(t *testing.T) {
 	t.Parallel()
 	plain := buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: []byte("x")}})
-	entries, dirSize, err := zipCentralDirectoryBounds(bytes.NewReader(plain), int64(len(plain)))
+	dir, err := zipCentralDirectoryBounds(bytes.NewReader(plain), int64(len(plain)))
 	if err != nil {
 		t.Fatalf("bounds: %v", err)
 	}
-	if entries != 1 || dirSize <= 0 {
-		t.Fatalf("bounds = %d entries, %d bytes; want 1, >0", entries, dirSize)
+	if dir.entries != 1 || dir.size <= 0 {
+		t.Fatalf("bounds = %d entries, %d bytes; want 1, >0", dir.entries, dir.size)
+	}
+	// The declared directory must end exactly at the EOCD record.
+	if dir.offset+dir.size != dir.recordOffset {
+		t.Fatalf("central directory ends at %d, want the EOCD record at %d", dir.offset+dir.size, dir.recordOffset)
 	}
 	// A comment containing the EOCD signature must not shadow the real record.
 	comment := []byte("PK\x05\x06 not the record")
 	commented := append([]byte{}, plain...)
 	binary.LittleEndian.PutUint16(commented[len(commented)-2:], uint16(len(comment)))
 	commented = append(commented, comment...)
-	entries, _, err = zipCentralDirectoryBounds(bytes.NewReader(commented), int64(len(commented)))
-	if err != nil || entries != 1 {
-		t.Fatalf("commented bounds = %d, %v; want 1, nil", entries, err)
+	dir, err = zipCentralDirectoryBounds(bytes.NewReader(commented), int64(len(commented)))
+	if err != nil || dir.entries != 1 {
+		t.Fatalf("commented bounds = %d, %v; want 1, nil", dir.entries, err)
 	}
 }
 
@@ -987,12 +1037,35 @@ func TestZipCentralDirectoryBoundsToleratesMaxCount(t *testing.T) {
 	plain[len(plain)-13] = 0xFF
 	plain[len(plain)-12] = 0xFF
 	plain[len(plain)-11] = 0xFF
-	entries, dirSize, err := zipCentralDirectoryBounds(bytes.NewReader(plain), int64(len(plain)))
+	dir, err := zipCentralDirectoryBounds(bytes.NewReader(plain), int64(len(plain)))
 	if err != nil {
 		t.Fatalf("bounds: %v", err)
 	}
-	if entries != 65535 || dirSize <= 0 {
-		t.Fatalf("bounds = %d entries, %d bytes; want 65535, >0", entries, dirSize)
+	if dir.entries != 65535 || dir.size <= 0 {
+		t.Fatalf("bounds = %d entries, %d bytes; want 65535, >0", dir.entries, dir.size)
+	}
+}
+
+// TestZipCentralDirectoryBoundsAcceptsMaxComment proves the tail window matches
+// archive/zip's widest search: an EOCD with the maximum 65535-byte comment sits
+// 65557 bytes from the end, past a 64 KiB window but inside the 65 KiB one
+// archive/zip uses, so both the pre-parse and zip.NewReader must accept it
+// (Claude L1).
+func TestZipCentralDirectoryBoundsAcceptsMaxComment(t *testing.T) {
+	t.Parallel()
+	body := buildZip(t, []zipTestEntry{{name: "f", mode: 0o644, body: []byte("x")}})
+	binary.LittleEndian.PutUint16(body[len(body)-2:], 65535)
+	body = append(body, bytes.Repeat([]byte("x"), 65535)...)
+
+	if _, err := zip.NewReader(bytes.NewReader(body), int64(len(body))); err != nil {
+		t.Fatalf("archive/zip rejects a max-comment zip: %v", err)
+	}
+	dir, err := zipCentralDirectoryBounds(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("pre-parse rejects a max-comment zip archive/zip accepts: %v", err)
+	}
+	if dir.entries != 1 {
+		t.Fatalf("bounds = %d entries, want 1", dir.entries)
 	}
 }
 
@@ -1158,16 +1231,14 @@ func zipRawCentralHeader() []byte {
 	return h
 }
 
-// zipEOCD builds an end-of-central-directory record.
-func zipEOCD(entries uint16, cdSize, cdOffset uint32, comment string) []byte {
-	b := make([]byte, 22+len(comment))
+// zipEOCD builds a comment-less end-of-central-directory record.
+func zipEOCD(entries uint16, cdSize, cdOffset uint32) []byte {
+	b := make([]byte, 22)
 	binary.LittleEndian.PutUint32(b[0:4], 0x06054b50)
 	binary.LittleEndian.PutUint16(b[8:10], entries)
 	binary.LittleEndian.PutUint16(b[10:12], entries)
 	binary.LittleEndian.PutUint32(b[12:16], cdSize)
 	binary.LittleEndian.PutUint32(b[16:20], cdOffset)
-	binary.LittleEndian.PutUint16(b[20:22], uint16(len(comment)))
-	copy(b[22:], comment)
 	return b
 }
 
@@ -1188,7 +1259,7 @@ func TestFileServerExtractRejectsZipCentralDirectoryBomb(t *testing.T) {
 			server, root := newTestFileServer(t)
 			server.archiveMaxEntries = 1000
 			cd := bytes.Repeat(zipRawCentralHeader(), headers)
-			body := append(cd, zipEOCD(0, uint32(len(cd)), 0, "")...)
+			body := append(cd, zipEOCD(0, uint32(len(cd)), 0)...)
 			writeArchiveFile(t, root, "bomb.zip", body)
 
 			var before, after runtime.MemStats
@@ -1206,6 +1277,67 @@ func TestFileServerExtractRejectsZipCentralDirectoryBomb(t *testing.T) {
 	}
 }
 
+// TestFileServerExtractRejectsZipUnderDeclaredCentralDir proves the pre-parse is
+// authoritative about the central-directory layout, not just the declared size:
+// an EOCD that under-declares cdSize (0 or a single header) in front of a
+// physically large central directory is refused before zip.NewReader runs.
+// archive/zip ignores cdSize and reads headers from directoryOffset until one is
+// bad, so without the cdOffset+cdSize==recordOffset check it materialises ~5.5x
+// the archive — the 4 MiB ceiling below fails on the old code (Claude H1).
+// The physical directory is 65536 empty headers (3 MiB), from which archive/zip
+// allocates ~16 MiB.
+func TestFileServerExtractRejectsZipUnderDeclaredCentralDir(t *testing.T) {
+	cases := map[string]struct{ cdSize, cdOffset uint32 }{
+		"cdSize 0":             {0, 0},
+		"cdSize 46":            {46, 0},
+		"cdSize 0 offset 1000": {0, 1000},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			server, root := newTestFileServer(t)
+			server.archiveMaxEntries = 1000
+			cd := bytes.Repeat(zipRawCentralHeader(), 65536)
+			// The declared directory ends far short of the EOCD record, so the
+			// layout check must refuse; the declared count is 0, so the entry cap
+			// alone would not.
+			body := append(cd, zipEOCD(0, tc.cdSize, tc.cdOffset)...)
+			writeArchiveFile(t, root, "bomb.zip", body)
+
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			err := extract(t, server, fileRootVolumes, "bomb.zip", ".", false)
+			runtime.ReadMemStats(&after)
+			if err == nil {
+				t.Fatal("extract of an under-declared central directory succeeded, want a refusal")
+			}
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 4<<20 {
+				t.Fatalf("pre-parse allocated %d bytes before refusing; want the layout check to fire before zip.NewReader", allocated)
+			}
+		})
+	}
+}
+
+// TestFileServerExtractAcceptsZip64WithEndingDirectory proves an honest zip64
+// archive whose central directory ends exactly at the zip64 end-of-central-
+// directory record still extracts: the layout check must use the zip64 record
+// offset, not the trailing EOCD offset, or every zip64 archive would be refused
+// (Claude H1).
+func TestFileServerExtractAcceptsZip64WithEndingDirectory(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	body := appendZip64HonestTail(t, buildZip(t, []zipTestEntry{
+		{name: "f.txt", mode: 0o644, body: []byte("hi")},
+	}), 1)
+	writeArchiveFile(t, root, "z64.zip", body)
+	if err := extract(t, server, fileRootVolumes, "z64.zip", ".", false); err != nil {
+		t.Fatalf("extract an honest zip64 archive: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "f.txt")); string(got) != "hi" {
+		t.Fatalf("zip64 entry body = %q, want %q", got, "hi")
+	}
+}
+
 // TestFileServerExtractZipTwoEOCDsPicksArchiveZipRecord proves the pre-parse
 // selects the same end-of-central-directory record archive/zip selects (the
 // last one, even with trailing bytes), so a polyglot cannot point the pre-parse
@@ -1217,10 +1349,10 @@ func TestFileServerExtractZipTwoEOCDsPicksArchiveZipRecord(t *testing.T) {
 	const headers = 65536
 	cd := bytes.Repeat(zipRawCentralHeader(), headers)
 	var body []byte
-	body = append(body, zipEOCD(1, 46, 0, "")...)              // inner record an exact-match scanner would settle on
-	body = append(body, cd...)                                 // the headers archive/zip will actually read
-	body = append(body, zipEOCD(0, uint32(len(cd)), 0, "")...) // outer record declaring 0 (wraparound)
-	body = append(body, 0x00)                                  // trailing byte: archive/zip still accepts the outer record
+	body = append(body, zipEOCD(1, 46, 0)...)              // inner record an exact-match scanner would settle on
+	body = append(body, cd...)                             // the headers archive/zip will actually read
+	body = append(body, zipEOCD(0, uint32(len(cd)), 0)...) // outer record declaring 0 (wraparound)
+	body = append(body, 0x00)                              // trailing byte: archive/zip still accepts the outer record
 	writeArchiveFile(t, root, "poly.zip", body)
 
 	if err := extract(t, server, fileRootVolumes, "poly.zip", ".", false); status.Code(err) != codes.ResourceExhausted {

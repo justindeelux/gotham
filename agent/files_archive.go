@@ -60,12 +60,13 @@ const zipCentralDirHeaderMinSize = 46
 const fileArchiveStreamOverhead = 4096
 
 // Zip end-of-central-directory parsing. The EOCD record sits in the last
-// 22+comment bytes of a zip; archive/zip searches the last 64 KiB for it, so
-// the pre-parse uses the same window and the same last-to-first rule to select
-// exactly the record archive/zip will use.
+// 22+comment bytes of a zip; archive/zip searches the last 65 KiB for it (after
+// a 1 KiB first pass) and accepts a comment up to 65535 bytes, so the pre-parse
+// uses the same 65 KiB window and the same last-to-first rule to select exactly
+// the record archive/zip will use.
 const (
 	zipEndOfCentralDirMinSize              = 22
-	zipEndOfCentralDirTailWindow           = 64 * 1024
+	zipEndOfCentralDirTailWindow           = 65 * 1024
 	zip64EndOfCentralDirLocatorSize        = 20
 	zip64EndOfCentralDirRecordSize         = 56
 	zipFieldMax16                   uint16 = 0xFFFF
@@ -617,23 +618,31 @@ func (s *FileServer) extractArchive(ctx context.Context, root *fsroot.Root, arch
 	switch format {
 	case agentv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP:
 		// archive/zip does not validate the declared entry count while reading:
-		// it materialises one header per 46-byte record physically present in
+		// it materialises one header per 46-byte record physically present at
 		// the central directory and only compares the count modulo 2^16 at the
-		// end. So the pre-parse reads the same end-of-central-directory record
-		// archive/zip will select (zip64-aware) and bounds the header table by
-		// the declared central-directory size: no more than dirSize/46 entries
-		// can be allocated. A declared count that cannot fit in dirSize is an
-		// inconsistent record and is refused.
-		entries, dirSize, err := zipCentralDirectoryBounds(archive, size)
+		// end. It also ignores the declared central-directory size and reads
+		// headers from the declared offset until one is bad, so a declared size
+		// that does not cover the physical directory is not a bound. The
+		// pre-parse therefore reads the same end-of-central-directory record
+		// archive/zip will select (zip64-aware), requires the declared central
+		// directory to end exactly at that record, and bounds the header table
+		// by both the declared size (dirSize/46) and the entry cap. Requiring
+		// the directory to end at the record makes cdSize authoritative: a
+		// shorter declared size (the memory-bomb shape) is refused here, before
+		// zip.NewReader can allocate the headers.
+		dir, err := zipCentralDirectoryBounds(archive, size)
 		if err != nil {
 			return fmt.Errorf("%w: reading zip: %v", fsroot.ErrInvalid, err)
 		}
-		maxBySize := dirSize / zipCentralDirHeaderMinSize
-		if entries > counter.maxEntries || maxBySize > counter.maxEntries {
+		maxBySize := dir.size / zipCentralDirHeaderMinSize
+		if dir.entries > counter.maxEntries || maxBySize > counter.maxEntries {
 			return fmt.Errorf("%w: archive has more than %d entries", fsroot.ErrTooLarge, counter.maxEntries)
 		}
-		if entries > maxBySize {
+		if dir.entries > maxBySize {
 			return fmt.Errorf("%w: zip central directory is inconsistent", fsroot.ErrInvalid)
+		}
+		if dir.offset+dir.size != dir.recordOffset {
+			return fmt.Errorf("%w: zip central directory does not end at the end-of-central-directory record", fsroot.ErrInvalid)
 		}
 		zr, err := zip.NewReader(archive, size)
 		if err != nil {
@@ -665,17 +674,32 @@ func (s *FileServer) extractArchive(ctx context.Context, root *fsroot.Root, arch
 	}
 }
 
+// zipCentralDirectory describes the central directory a zip's
+// end-of-central-directory record declares. recordOffset is the physical offset
+// of the end-of-central-directory record the directory must end at: the zip64
+// end-of-central-directory record for a zip64 archive, otherwise the EOCD
+// record itself — the same offset archive/zip treats as the end of the
+// directory.
+type zipCentralDirectory struct {
+	entries      int64
+	size         int64
+	offset       int64
+	recordOffset int64
+}
+
 // zipCentralDirectoryBounds reads the zip end-of-central-directory record —
 // exactly the one archive/zip selects, so the pre-parse and the reader agree on
-// which record is authoritative — and returns the declared entry count and
-// central-directory size. Saturated 16/32-bit fields are resolved from the
-// zip64 records, matching archive/zip's fallback when the locator is absent.
-// It reads only the bounded tail window and never parses entry headers, so a
-// hostile archive cannot make it allocate more than the window before the
-// caller applies its caps.
-func zipCentralDirectoryBounds(f io.ReaderAt, size int64) (entries, centralDirSize int64, err error) {
+// which record is authoritative — and returns the declared entry count,
+// central-directory size and offset, and the physical offset the directory must
+// end at. Saturated 16/32-bit fields are resolved from the zip64 records,
+// matching archive/zip's fallback when the locator is absent. It reads only the
+// bounded tail window and never parses entry headers, so a hostile archive
+// cannot make it allocate more than the window before the caller applies its
+// caps.
+func zipCentralDirectoryBounds(f io.ReaderAt, size int64) (zipCentralDirectory, error) {
+	var empty zipCentralDirectory
 	if size < zipEndOfCentralDirMinSize {
-		return 0, 0, fmt.Errorf("file is too short to be a zip")
+		return empty, fmt.Errorf("file is too short to be a zip")
 	}
 	window := int64(zipEndOfCentralDirTailWindow)
 	if size < window {
@@ -683,36 +707,47 @@ func zipCentralDirectoryBounds(f io.ReaderAt, size int64) (entries, centralDirSi
 	}
 	tail := make([]byte, window)
 	if _, err := f.ReadAt(tail, size-window); err != nil {
-		return 0, 0, err
+		return empty, err
 	}
 	idx := zipEndOfCentralDirOffset(tail)
 	if idx < 0 {
-		return 0, 0, fmt.Errorf("no end of central directory record")
+		return empty, fmt.Errorf("no end of central directory record")
 	}
+	recordOffset := size - window + int64(idx)
 	eocd := tail[idx:]
 	count16 := binary.LittleEndian.Uint16(eocd[10:12])
 	size32 := binary.LittleEndian.Uint32(eocd[12:16])
 	offset32 := binary.LittleEndian.Uint32(eocd[16:20])
 	if count16 != zipFieldMax16 && size32 != zipFieldMax32 && offset32 != zipFieldMax32 {
-		return int64(count16), int64(size32), nil
+		return zipCentralDirectory{
+			entries:      int64(count16),
+			size:         int64(size32),
+			offset:       int64(offset32),
+			recordOffset: recordOffset,
+		}, nil
 	}
 	// A saturated field means the real values may live in the zip64 records.
 	// archive/zip falls back to the 16/32-bit fields when the locator is absent
 	// or invalid, so a 0xFFFF count with no zip64 is a plain 65535-entry archive.
-	entries, centralDirSize, used, err := zip64CentralDirectoryBounds(f, size-window+int64(idx), size)
+	dir, used, err := zip64CentralDirectoryBounds(f, recordOffset, size)
 	if err != nil {
-		return 0, 0, err
+		return empty, err
 	}
 	if !used {
-		entries, centralDirSize = int64(count16), int64(size32)
+		dir = zipCentralDirectory{
+			entries:      int64(count16),
+			size:         int64(size32),
+			offset:       int64(offset32),
+			recordOffset: recordOffset,
+		}
 	}
-	if entries < 0 || centralDirSize < 0 {
-		return 0, 0, fmt.Errorf("zip central directory declares a negative size")
+	if dir.entries < 0 || dir.size < 0 || dir.offset < 0 {
+		return empty, fmt.Errorf("zip central directory declares a negative size")
 	}
-	if centralDirSize > size {
-		return 0, 0, fmt.Errorf("zip central directory is larger than the file")
+	if dir.size > size {
+		return empty, fmt.Errorf("zip central directory is larger than the file")
 	}
-	return entries, centralDirSize, nil
+	return dir, nil
 }
 
 // zipEndOfCentralDirOffset returns the offset of the end-of-central-directory
@@ -736,41 +771,46 @@ func zipEndOfCentralDirOffset(tail []byte) int {
 }
 
 // zip64CentralDirectoryBounds reads the zip64 end-of-central-directory record
-// the locator points at and returns its declared entry count and central
-// directory size. used is false when there is no valid locator, so the caller
-// falls back to the 16/32-bit EOCD fields exactly as archive/zip does.
-func zip64CentralDirectoryBounds(f io.ReaderAt, eocdOffset, size int64) (entries, centralDirSize int64, used bool, err error) {
+// the locator points at and returns its declared entry count, central-directory
+// size and offset, and the record's own offset (where the directory must end).
+// used is false when there is no valid locator, so the caller falls back to the
+// 16/32-bit EOCD fields exactly as archive/zip does.
+func zip64CentralDirectoryBounds(f io.ReaderAt, eocdOffset, size int64) (zipCentralDirectory, bool, error) {
 	if eocdOffset < zip64EndOfCentralDirLocatorSize {
-		return 0, 0, false, nil
+		return zipCentralDirectory{}, false, nil
 	}
 	locator := make([]byte, zip64EndOfCentralDirLocatorSize)
 	if _, err := f.ReadAt(locator, eocdOffset-zip64EndOfCentralDirLocatorSize); err != nil {
-		return 0, 0, false, err
+		return zipCentralDirectory{}, false, err
 	}
 	// Match archive/zip's findDirectory64End: the locator is valid only with the
 	// locator signature, disk number 0 and a single-disk marker.
 	if !bytes.Equal(locator[0:4], []byte{'P', 'K', 6, 7}) ||
 		binary.LittleEndian.Uint32(locator[4:8]) != 0 ||
 		binary.LittleEndian.Uint32(locator[16:20]) != 1 {
-		return 0, 0, false, nil
+		return zipCentralDirectory{}, false, nil
 	}
 	recordOffset := int64(binary.LittleEndian.Uint64(locator[8:16]))
 	if recordOffset < 0 || recordOffset > size-zip64EndOfCentralDirRecordSize {
-		return 0, 0, false, fmt.Errorf("zip64 end of central directory record out of range")
+		return zipCentralDirectory{}, false, fmt.Errorf("zip64 end of central directory record out of range")
 	}
 	record := make([]byte, zip64EndOfCentralDirRecordSize)
 	if _, err := f.ReadAt(record, recordOffset); err != nil {
-		return 0, 0, false, err
+		return zipCentralDirectory{}, false, err
 	}
 	if !bytes.Equal(record[0:4], []byte{'P', 'K', 6, 6}) {
-		return 0, 0, false, fmt.Errorf("missing zip64 end of central directory record")
+		return zipCentralDirectory{}, false, fmt.Errorf("missing zip64 end of central directory record")
 	}
-	entries = int64(binary.LittleEndian.Uint64(record[32:40]))
-	centralDirSize = int64(binary.LittleEndian.Uint64(record[40:48]))
-	if entries < 0 || centralDirSize < 0 {
-		return 0, 0, false, fmt.Errorf("zip64 end of central directory declares a negative size")
+	dir := zipCentralDirectory{
+		entries:      int64(binary.LittleEndian.Uint64(record[32:40])),
+		size:         int64(binary.LittleEndian.Uint64(record[40:48])),
+		offset:       int64(binary.LittleEndian.Uint64(record[48:56])),
+		recordOffset: recordOffset,
 	}
-	return entries, centralDirSize, true, nil
+	if dir.entries < 0 || dir.size < 0 || dir.offset < 0 {
+		return zipCentralDirectory{}, false, fmt.Errorf("zip64 end of central directory declares a negative size")
+	}
+	return dir, true, nil
 }
 
 // extractZipEntry unpacks one zip member. Zip names may use backslashes as

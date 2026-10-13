@@ -24,6 +24,14 @@
 // reads one multipart part at a time (never ParseMultipartForm), spooling each
 // part just long enough to learn its exact size, and reports a per-file result.
 //
+// Archives (step 9b) are mutations too: POST /compress builds a zip/tar/tar.gz
+// from sources inside one root and POST /extract unpacks one into a destination
+// directory inside the same root. Both drain the agent's progress stream like
+// Copy/Delete; the agent builds and unpacks them with Go's archive packages and
+// no shell, refuses escape and link/device entries, and bounds the entry count,
+// uncompressed size and compression ratio (a ResourceExhausted limit maps to
+// 413).
+//
 // The agent dialect is injected as a DialFunc (see Service.SetDial); the mTLS
 // dialer lands with *servers.ServerService.DialFileClient. The whole surface is
 // gated by FEATURE_FILES, which defaults off: the routes are mounted but answer

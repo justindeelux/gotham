@@ -1,1 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/use-message-ecpJL7nx.js
 import{aX as s,Y as o,fA as t}from"./index-DMPagSTQ.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+========
+import{aX as s,Y as o,fy as t}from"./index-CGS6bI6I.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+>>>>>>>> f9786c1e (feat(files): web archive actions, docs and rebuilt webdist):internal/server/webdist/assets/use-message-ony_QJek.js

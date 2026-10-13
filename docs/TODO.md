@@ -9,7 +9,7 @@ merge evidence live in git history and the PRs.
 All phases are complete: 0–9 (roadmap; G0, G1 and G2 passed), 11 UI alignment,
 12 user profile, 13 projects and environments, 14 English/Vietnamese i18n,
 15 add-resource flow and Git sources, 16 instance settings, 17 update settings,
-18 remote file manager (hardening/e2e/docs done; optional steps 9a/9b deferred).
+18 remote file manager (hardening/e2e/docs done; step 9b archives built; optional step 9a chmod deferred).
 The retro review of Phases 0–5 closed 2026-10-03
 ([`sub-plans/retro-review-p0-5-register.md`](sub-plans/retro-review-p0-5-register.md)).
 Releases `v0.1.0` and `v0.1.1` are signed and published; the real `gotham update`
@@ -75,8 +75,10 @@ The full triage lives in [`plans/18-file-manager.md`](plans/18-file-manager.md) 
   one team can starve others; add a per-team cap or fair queueing.
 - [x] **Step 9a chmod (JUS-113)** built: agent `FileService.Chmod` (0o777 bits only;
   setuid/setgid/sticky refused; no symlink follow; read-only roots refused), CP
-  `POST /files/chmod`, and the web Permissions dialog. Step 9b archives (JUS-114)
-  remains deferred.
+  `POST /files/chmod`, and the web Permissions dialog.
+- [x] **Step 9b archives (JUS-114) built.** The agent `Compress`/`Extract` RPCs,
+  the CP `/files/compress` + `/files/extract` routes and the web Compress…/Extract
+  here… dialogs ship.
 
 ## Phase 4 residuals
 

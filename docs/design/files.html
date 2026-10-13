@@ -69,6 +69,7 @@
                 <input type="search" placeholder="Filter this folder…" aria-label="Filter entries" data-search="[data-tag]" />
               </div>
               <button class="btn btn-sm btn-outline" type="button" data-open="fm-newfolder"><svg aria-hidden="true"><use href="#i-plus"></use></svg>New folder</button>
+              <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress"><svg aria-hidden="true"><use href="#i-archive"></use></svg>Compress…</button>
               <button class="btn btn-sm btn-primary" type="button" data-open="fm-upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Upload</button>
             </div>
 
@@ -238,10 +239,10 @@
                   <div class="fm-cell" role="cell">2026-10-11 03:00</div>
                   <div class="fm-cell" role="cell">-rw-r--r--</div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Archives are not available yet — download the file instead.|info" aria-label="Extract backup archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-extract" aria-label="Extract backup archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming 128.4 MiB to your browser…|info" aria-label="Download backup archive"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete backup-2026-10-11.tar.gz? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete backup archive"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, move, copy, delete.|info" aria-label="More actions for backup archive"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: extract, download, rename, move, copy, delete.|info" aria-label="More actions for backup archive"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -820,6 +821,69 @@ services:
       <span class="small muted grow">2 of 3 done · 1 skipped</span>
       <button class="btn btn-outline" type="button" data-close>Close</button>
       <button class="btn btn-primary" type="button" data-toast="Retrying skipped files…|info" data-close>Retry skipped</button>
+    </div>
+  </div>
+</div>
+
+<!-- Compress: build an archive from the selection -->
+<div class="overlay" id="fm-compress" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="fm-compress-title">
+    <div class="modal-head">
+      <svg aria-hidden="true"><use href="#i-archive"></use></svg>
+      <div><h3 id="fm-compress-title">Compress selection</h3><p class="small muted">volumes/storefront-8f2c1ab · 2 entries</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Close"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-4">
+      <div class="field">
+        <label class="field-label" for="fm-compress-format">Format</label>
+        <select class="select" id="fm-compress-format">
+          <option value="zip" selected>zip</option>
+          <option value="tar">tar</option>
+          <option value="tar.gz">tar.gz</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label" for="fm-compress-name">Archive name</label>
+        <input class="input mono" id="fm-compress-name" type="text" value="storefront.tar.gz" data-pattern="^[^/\\]+$" />
+        <span class="field-hint">An existing name is refused (<span class="mono">409</span>). Symbolic links and special files are skipped and reported; nothing is written outside the root.</span>
+      </div>
+      <div class="progress">
+        <svg aria-hidden="true"><use href="#i-archive"></use></svg>
+        <span class="grow"><span class="mono small">storefront.tar.gz</span></span>
+        <span class="meter" style="width:160px" data-meter="42"></span>
+        <span class="mono small">42%</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Compression runs on the node — no shell</span>
+      <button class="btn btn-outline" type="button" data-close>Cancel</button>
+      <button class="btn btn-primary" type="button" data-toast="Created storefront.tar.gz.|success" data-close>Create archive</button>
+    </div>
+  </div>
+</div>
+
+<!-- Extract here: unpack an archive into the current folder -->
+<div class="overlay" id="fm-extract" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="fm-extract-title">
+    <div class="modal-head">
+      <svg aria-hidden="true"><use href="#i-archive"></use></svg>
+      <div><h3 id="fm-extract-title">Extract here</h3><p class="small muted">volumes/storefront-8f2c1ab</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Close"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-4">
+      <p>Unpack <span class="mono">backup-2026-10-11.tar.gz</span> into this folder? Symbolic-link, hard-link, device and FIFO entries are refused; nothing is written outside the root.</p>
+      <label class="check"><input type="checkbox" /> Replace existing files</label>
+      <div class="progress">
+        <svg aria-hidden="true"><use href="#i-archive"></use></svg>
+        <span class="grow"><span class="mono small">backup-2026-10-11.tar.gz</span></span>
+        <span class="meter" style="width:160px" data-meter="58"></span>
+        <span class="mono small">58%</span>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Extraction is confined to the current root</span>
+      <button class="btn btn-outline" type="button" data-close>Cancel</button>
+      <button class="btn btn-primary" type="button" data-toast="Extracted backup-2026-10-11.tar.gz.|success" data-close>Extract here</button>
     </div>
   </div>
 </div>

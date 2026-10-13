@@ -480,6 +480,102 @@ test.describe("files chmod", () => {
   });
 });
 
+test.describe("files archive", () => {
+  test("compresses the selection and extracts an archive in place", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    const entries = [
+      entry("conf", "directory", 4096, 0o040755, "etag-conf"),
+      entry("backup.tar.gz", "file", 128, 0o100644, "etag-tgz"),
+    ];
+    let created = false;
+    const compressBodies: Array<Record<string, unknown>> = [];
+    page.on("request", (outgoing) => {
+      if (
+        outgoing.method() === "POST" &&
+        outgoing.url().includes("/files/compress")
+      ) {
+        compressBodies.push(
+          JSON.parse(outgoing.postData() ?? "{}") as Record<string, unknown>,
+        );
+      }
+    });
+
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(
+          route,
+          200,
+          listing(
+            created
+              ? [...entries, entry("conf.zip", "file", 64, 0o100644, "etag-zip")]
+              : entries,
+          ),
+        ),
+      compress: async (route) => {
+        created = true;
+        await json(route, 200, {
+          entry: entry("conf.zip", "file", 64, 0o100644, "etag-zip"),
+        });
+      },
+      extract: (route) => route.fulfill({ status: 204 }),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(page.getByText("backup.tar.gz")).toBeVisible();
+
+    // Compress the selected folder.
+    await page.getByLabel("Select conf").check();
+    await page.getByRole("button", { name: "Compress…", exact: true }).click();
+    const dialog = page.locator(".n-modal").filter({ hasText: "Compress selection" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Compress…", exact: true }).click();
+
+    await expect.poll(() => compressBodies.length).toBe(1);
+    expect(compressBodies[0]).toMatchObject({
+      root: "srv",
+      sources: ["conf"],
+      destination: "conf.zip",
+      format: "zip",
+    });
+    await expect(page.getByText("conf.zip created.")).toBeVisible();
+
+    // Extract the archive into the current folder. The listing now holds two
+    // archives (seeded backup.tar.gz + the new conf.zip), so scope the row
+    // action to backup.tar.gz instead of a page-wide ambiguous locator.
+    await page
+      .getByRole("row")
+      .filter({ hasText: "backup.tar.gz" })
+      .getByLabel("Extract here…")
+      .click();
+    const extractDialog = page
+      .locator(".n-modal")
+      .filter({ hasText: "Extract here" });
+    await expect(extractDialog).toBeVisible();
+    const extractRequest = page.waitForRequest(
+      (candidate) =>
+        candidate.method() === "POST" &&
+        candidate.url().includes("/files/extract"),
+    );
+    await extractDialog
+      .getByRole("button", { name: "Extract here…", exact: true })
+      .click();
+    const extract = await extractRequest;
+    expect(JSON.parse(extract.postData() ?? "{}")).toMatchObject({
+      root: "srv",
+      source: "backup.tar.gz",
+      destination: "",
+      overwrite: false,
+    });
+    await expect(page.getByText("Extracted backup.tar.gz.")).toBeVisible();
+  });
+});
+  });
+});
+
 /**
  * The disabled scenario forces a 503 on purpose (that is exactly what
  * FEATURE_FILES=false answers) and the browser logs the 5xx; the guardrail

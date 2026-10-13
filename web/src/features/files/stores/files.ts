@@ -3,11 +3,13 @@ import { computed, ref } from "vue";
 
 import {
   chmodEntry,
+  compressEntries,
   copyEntry,
   createFile,
   createFolder,
   deleteEntry,
   describeFilesError,
+  extractEntry,
   filesErrorKey,
   isConflictError,
   isFilesDisabled,
@@ -16,6 +18,7 @@ import {
   moveEntry,
   renameEntry,
 } from "@/features/files/api/files";
+import type { ArchiveFormat } from "@/features/files/api/files";
 import type {
   FilesEntry,
   FilesRoot,
@@ -602,6 +605,45 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
+   * compress builds one archive from entries in the current directory and
+   * returns the created archive's entry. It refreshes the listing on success
+   * and rethrows so the dialog owns the localized error.
+   */
+  async function compress(
+    entries: FilesEntry[],
+    name: string,
+    format: ArchiveFormat,
+  ): Promise<FilesEntry> {
+    const destination = joinPath(path.value, normalizeEntryName(name));
+    return runMutation(async () => {
+      const created = await compressEntries(serverId.value, teamId(), {
+        root: rootName.value,
+        sources: entries.map((entry) => joinPath(path.value, entry.name)),
+        destination,
+        format,
+      });
+      await loadEntries();
+      return created;
+    });
+  }
+
+  /**
+   * extract unpacks one archive into the current directory. It refreshes the
+   * listing on success and rethrows so the dialog owns the localized error.
+   */
+  async function extract(entry: FilesEntry, overwrite: boolean): Promise<void> {
+    await runMutation(async () => {
+      await extractEntry(serverId.value, teamId(), {
+        root: rootName.value,
+        source: joinPath(path.value, entry.name),
+        destination: path.value,
+        overwrite,
+      });
+      await loadEntries();
+    });
+  }
+
+  /**
    * remove deletes entries, recursing into folders. It never aborts on one
    * failure: the summary reports the names that were deleted and the ones that
    * failed, so a partial batch still shows feedback for every entry.
@@ -997,6 +1039,8 @@ export const useFilesStore = defineStore("files", () => {
     rename,
     chmod,
     remove,
+    compress,
+    extract,
     promptTransfer,
     resolveConflictPrompt,
     copySelection,

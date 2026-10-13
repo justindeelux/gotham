@@ -3,7 +3,7 @@
 **Goal:** operators browse, transfer and edit files on a managed server from the UI: a file manager (list, create, rename, move, copy, delete, upload, download) plus a tabbed code editor with safe saves, scoped to confined roots on the node. Ported in spirit from the `pyramid` project (`api/files`, `app/components/files`, `app/components/codeEditor`), re-designed for Gotham's control-plane → agent architecture. Linear: JUS-103.
 
 ## Current state (verified)
-- No file/exec/archive RPC exists. `proto/agent/v1/agent.proto` (single proto file; `make proto`, `make proto-check`) has `AgentService`, `UpdateService`, `DockerService`, `BuildService`, `ProxyService`, `ComposeService`. Streaming templates: `DockerService.StreamLogs` (server-stream), `BuildService.BuildImage` (bidi).
+- The file manager (read, write, editor, archives) is implemented; archives (step 9b, JUS-114) use Go `archive/zip|tar` + `compress/gzip` and no shell. `proto/agent/v1/agent.proto` (single proto file; `make proto`, `make proto-check`) has `AgentService`, `UpdateService`, `DockerService`, `BuildService`, `ProxyService`, `ComposeService`. Streaming templates: `DockerService.StreamLogs` (server-stream), `BuildService.BuildImage` (bidi), `FileService.Copy/Delete/Compress/Extract` (server-stream progress).
 - Agent: runs as unprivileged `gotham-agent` (`deploy/gotham-agent.service`: `ProtectSystem=full`, `ProtectHome=true`, `SupplementaryGroups=docker`). gRPC server caps receives at 2 MiB, 64 concurrent streams (`agent/grpc_server.go:29-30,336`); the CP client sets no `MaxCallRecvMsgSize` (4 MiB default). The agent listener accepts any peer when `GOTHAM_AGENT_CA` is unset (`agent/tls.go:84-90`, TODO LOW-4), so **confinement and an opt-in switch must live on the agent**; confinement is not authentication.
 - Roots: `ManagedVolumeRoot` (default `/var/lib/gotham/volumes`) and `ComposeRoot` (default `/var/lib/gotham-agent/compose`, inside the agent's own state dir) in `agent/config.go`.
 - Precedents: `agent/volumes.go` (`validateAppVolume`, `rejectSymlinkComponents`, exact-match `isDangerousHostPath` at `:223`), `agent/proxy.go:393,431` (`writeFileInDir`, `openTrustedDir`). `RemoveVolume` re-validates on the agent.
@@ -186,6 +186,7 @@ Pyramid's backend is an unrestricted filesystem API (single `resolvePath` = `fil
 | `POST /upload?root=&path=&overwrite=` | owner/admin | streamed multipart, per-file result array |
 | `POST /mkdir`, `/create` | owner/admin | exclusive create |
 | `POST /rename`, `/move`, `/copy` | owner/admin | single root; `overwrite=false` default; copy-into-self guard |
+| `POST /compress`, `/extract` | owner/admin | one archive inside a single root; 409 unless `overwrite`; 413 on an archive limit (step 9b) |
 | `DELETE /entry?root=&path=&recursive=` | owner/admin | permanent delete |
 | `POST /chmod` | owner/admin | octal, setuid/setgid/sticky rejected (step 9a) |
 
@@ -418,10 +419,36 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
   tests added. **Exit:** only plain permission bits change. **Rollback:** revert
   the PR.
 
-### Step 9b — Archives (phase 2) — **DEFERRED (not built now)**
-- **Status:** deferred, tracked as JUS-114. Not implemented in Phase 18: no `Compress`/`Extract` RPC, no CP archive routes, no web dialogs.
-- **Tasks:** agent `Compress`/`Extract` via `archive/zip|tar`, `compress/gzip`, no shell; zip-slip, symlink-entry, size and entry-count guards; progress stream; CP routes; web dialogs.
-- **Verify:** common + zip-slip/zip-bomb/symlink-entry tests. **Exit:** archives never write outside the target root. **Rollback:** revert.
+### Step 9b — Archives (phase 2) — **BUILT (JUS-114)**
+- **Status:** built. The agent `Compress`/`Extract` RPCs, the CP `/files/compress` + `/files/extract`
+  routes and the web "Compress…"/"Extract here…" dialogs ship; only step 9a chmod (JUS-113) stays
+  deferred.
+- **Tasks:** agent `Compress`/`Extract` via `archive/zip`, `archive/tar`, `compress/gzip`, no shell;
+  zip-slip, symlink/hard-link/device-entry, setuid-strip, entry-count, size and ratio guards;
+  progress stream; CP routes; web dialogs. Done: all of the above.
+- **Verify:** common + zip-slip/zip-bomb/symlink-entry/round-trip tests. **Exit:** archives never
+  write outside the target root. **Rollback:** revert.
+
+**Step 9b decisions:**
+
+- **Entry names are relative to each source's parent.** Compressing `app/uploads/file.txt` stores
+  `file.txt`, and a directory source stores its base name (`data/…`), so "Extract here" into the
+  same directory does not nest a full path. The agent skips symbolic links and special files and
+  reports the count in the final `Progress.skipped`.
+- **The compression-ratio cap is fixed at 200:1** (not env-configurable): the archive's own size
+  times 200 bounds the total uncompressed bytes, on top of `GOTHAM_AGENT_ARCHIVE_MAX_BYTES`
+  (default 4 GiB) and `GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES` (default 100000). An archive-limit
+  `ResourceExhausted` maps to **413** on the CP.
+- **Extract refuses rather than skips** a symlink/hard-link/device/FIFO entry (a whole-archive
+  failure); compress skips them. Setuid/setgid/sticky bits are stripped to `mode.Perm()`.
+- **The running-app-directory guard applies to extraction.** An entry that would replace a
+  top-level application directory of the managed volumes root is refused, so an archive can never
+  clobber a container bind mount.
+- **The CP drains the agent progress stream** (like Copy/Delete) and returns the created archive's
+  entry (compress) or **204** (extract); the browser shows an indeterminate progress line, since a
+  drained stream carries no byte counters to the client.
+- **The skipped-entry count is reported by the agent but not surfaced to the browser yet** (the CP
+  returns the archive entry, not the stream's terminal `skipped`); documented as a follow-up.
 
 ### Step 10 — Hardening, e2e, docs
 - **Brief:** `.github/workflows/ui-e2e.yml`, `internal/e2e`, `docs/install.md`, `docs/TODO.md`.
@@ -477,7 +504,7 @@ paths. Manual review corroborates it; **no real finding needed a code fix**:
 | Check | Result | Triage |
 |---|---|---|
 | GitNexus MCP `explain` taint on `internal/files`, `agent/files*.go`, `agent/fsroot` | 0 findings (PDG layer present, 0 repo-wide) | No modeled source→sink flow; corroborated by the manual checks below. |
-| `os/exec` / `sh -c` in the file paths | none | Real: no shell anywhere in the read/write path. Archives (9b) stay deferred and would use Go `archive/*`, not a shell. |
+| `os/exec` / `sh -c` in the file paths | none | Real: no shell anywhere in the read/write path. Archives (9b) use Go `archive/zip|tar` + `compress/gzip`, not a shell. |
 | `filepath.Join` with user input outside `fsroot` | none | Real: the agent resolves every path through `os.OpenRoot` (`agent/fsroot`), never a string join. The only CP `Join` is the spool dir + `os.ReadDir` entry names (fixed prefix, regular files only). |
 | Unbounded reads/allocations | bounded | `readAllLimited` caps content at 2 MiB; agent chunks 256 KiB; `List` caps 5,000/page and 100,000 scanned; the spool caps a body at `FILES_MAX_UPLOAD_BYTES`. |
 | Goroutine leaks on cancel | none found | The download pump selects `ctx.Done()` and defers `cancel`+close; the write recv goroutine unblocks on handler return (stream close) via its `done` channel; the temp sweeper stops on `Close`. |

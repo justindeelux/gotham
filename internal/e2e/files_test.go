@@ -54,6 +54,9 @@ const (
 //     exact bytes and a second use answers 404.
 //  9. DELETE /entry removes the file; a stat then answers 404 and the path is
 //     gone from disk.
+//  10. POST /mkdir + /upload stage a tree, POST /compress builds a zip, DELETE
+//     /entry removes the tree, POST /extract restores it and the restored file
+//     reads back byte for byte — the archive path over the real CP↔agent dial.
 func TestFilesEndToEnd(t *testing.T) {
 	requireE2E(t)
 	t.Setenv(files.FeatureEnv, "true")
@@ -169,6 +172,44 @@ func TestFilesEndToEnd(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(base.writableRoot, "hello.txt")); !os.IsNotExist(err) {
 		t.Fatalf("file still on disk after delete: err=%v", err)
+	}
+
+	// 10. Archives round-trip through the real control-plane service and agent:
+	// stage a small tree, build a zip, delete the tree, extract the zip back and
+	// read a restored file. This drives the CP /compress and /extract routes
+	// over the real mTLS FileService dial (OC N2).
+	if status, body := base.do(t, client, http.MethodPost, serverPath+"/mkdir",
+		`{"root":"`+fileRootVolumes+`","path":"data"}`, nil); status != http.StatusCreated {
+		t.Fatalf("mkdir data = %d (%s), want 201", status, body)
+	}
+	for name, content := range map[string]string{"a.txt": "alpha\n", "b.txt": "beta\n"} {
+		base.upload(t, client, serverPath+"/upload?root="+fileRootVolumes+"&path=data/", name, content)
+	}
+	status, body = base.do(t, client, http.MethodPost, serverPath+"/compress",
+		`{"root":"`+fileRootVolumes+`","sources":["data"],"destination":"data.zip","format":"zip"}`, nil)
+	if status != http.StatusOK {
+		t.Fatalf("compress = %d (%s), want 200", status, body)
+	}
+	var compressEnvelope map[string]any
+	if err := json.Unmarshal([]byte(body), &compressEnvelope); err != nil {
+		t.Fatalf("decode compress: %v (%s)", err, body)
+	}
+	if name := compressEnvelope["entry"].(map[string]any)["name"].(string); name != "data.zip" {
+		t.Fatalf("compress entry name = %q, want data.zip", name)
+	}
+	if status, body := base.do(t, client, http.MethodDelete,
+		serverPath+"/entry?root="+fileRootVolumes+"&path=data&recursive=true", "", nil); status != http.StatusNoContent {
+		t.Fatalf("delete data = %d (%s), want 204", status, body)
+	}
+	if status, body := base.do(t, client, http.MethodPost, serverPath+"/extract",
+		`{"root":"`+fileRootVolumes+`","source":"data.zip","destination":""}`, nil); status != http.StatusNoContent {
+		t.Fatalf("extract = %d (%s), want 204", status, body)
+	}
+	if got := base.getJSON(t, client, serverPath+"/content?root="+fileRootVolumes+"&path=data/a.txt")["content"].(string); got != "alpha\n" {
+		t.Fatalf("restored content = %q, want %q", got, "alpha\n")
+	}
+	if _, err := os.Stat(filepath.Join(base.writableRoot, "data", "b.txt")); err != nil {
+		t.Fatalf("restored file missing on disk: %v", err)
 	}
 
 	t.Logf("files e2e ok: node=%s root=%s", base.nodeID, base.writableRoot)

@@ -18,12 +18,15 @@ import type { AuthResult } from "./token";
 /** Axios error payloads returned by the Gotham API. */
 interface ApiErrorBody {
   message?: string;
+  code?: string;
 }
 
 /** Normalised failure surfaced to callers of the Gotham API. */
 export interface ApiError {
   status: number | null;
   message: string;
+  /** Stable machine-readable token from the server body, if any. */
+  code?: string;
   cause: unknown;
 }
 
@@ -464,6 +467,7 @@ function toApiError(error: AxiosError<ApiErrorBody>): ApiError {
   return {
     status: error.response?.status ?? null,
     message,
+    code: error.response?.data?.code,
     cause: error,
   };
 }

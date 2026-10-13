@@ -455,6 +455,40 @@ func (r *Root) entryFor(p string, info os.FileInfo) (Entry, error) {
 // the path to a mutation method. It returns "." for an empty path.
 func Clean(rel string) (string, error) { return cleanRel(rel) }
 
+// Names streams every name in the directory rel to fn, in the directory's own
+// order, stopping at the first error fn returns or a read error. It never
+// follows a symbolic link, so a link planted in the tree cannot direct the walk
+// outside the root. It is the streaming form of a directory scan, so a caller
+// that bounds how many names it consumes never buffers a whole directory.
+func (r *Root) Names(rel string, fn func(name string) error) error {
+	p, err := cleanRel(rel)
+	if err != nil {
+		return err
+	}
+	file, err := r.root.OpenFile(p, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return mapError("open dir", err)
+	}
+	defer func() { _ = file.Close() }()
+	for {
+		batch, readErr := file.ReadDir(listBatchSize)
+		for _, dirent := range batch {
+			if err := fn(dirent.Name()); err != nil {
+				return err
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			return mapError("read dir", readErr)
+		}
+		if len(batch) == 0 {
+			return nil
+		}
+	}
+}
+
 // cleanRel normalises a caller-supplied relative path and rejects the shapes
 // that must never reach the descriptor walk. os.Root would also refuse them,
 // but a typed error is clearer than a wrapped ELOOP/ENOENT.

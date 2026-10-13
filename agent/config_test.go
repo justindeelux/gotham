@@ -12,6 +12,7 @@ func clearAgentEnv(t *testing.T) {
 		envCPAddr, envNodeID, envListenAddr, envCA, envCertDir,
 		envKey, envInsecure, envDockerSock, envComposeRoot, envLogLevel, envDockerHost,
 		envManagedVolumeRoot, envSharedManagedVolumeRoot,
+		envFileArchiveMaxBytes, envFileArchiveMaxEntries, envFileArchiveMaxInput,
 	} {
 		t.Setenv(key, "")
 	}
@@ -132,6 +133,38 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.ManagedVolumeRoot != "/srv/gotham/volumes" {
 		t.Errorf("ManagedVolumeRoot = %q", cfg.ManagedVolumeRoot)
+	}
+}
+
+func TestLoadArchiveLimitsFromEnv(t *testing.T) {
+	clearAgentEnv(t)
+	t.Setenv(envInsecure, "true")
+	t.Setenv(envListenAddr, "127.0.0.1:9443")
+	t.Setenv(envFileArchiveMaxBytes, "12345")
+	t.Setenv(envFileArchiveMaxEntries, "42")
+	t.Setenv(envFileArchiveMaxInput, "678")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FileArchiveMaxBytes != 12345 || cfg.FileArchiveMaxEntries != 42 || cfg.FileArchiveMaxInputBytes != 678 {
+		t.Fatalf("archive limits = %d/%d/%d, want 12345/42/678", cfg.FileArchiveMaxBytes, cfg.FileArchiveMaxEntries, cfg.FileArchiveMaxInputBytes)
+	}
+	// An unparseable or non-positive value falls back to the default rather
+	// than disabling the cap.
+	clearAgentEnv(t)
+	t.Setenv(envInsecure, "true")
+	t.Setenv(envListenAddr, "127.0.0.1:9443")
+	t.Setenv(envFileArchiveMaxBytes, "-1")
+	t.Setenv(envFileArchiveMaxEntries, "nope")
+	t.Setenv(envFileArchiveMaxInput, "0")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FileArchiveMaxBytes != defaultFileArchiveMaxBytes || cfg.FileArchiveMaxEntries != defaultFileArchiveMaxEntries ||
+		cfg.FileArchiveMaxInputBytes != defaultFileArchiveMaxInputBytes {
+		t.Fatalf("archive limits = %d/%d/%d, want the defaults", cfg.FileArchiveMaxBytes, cfg.FileArchiveMaxEntries, cfg.FileArchiveMaxInputBytes)
 	}
 }
 

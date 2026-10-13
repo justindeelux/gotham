@@ -21,6 +21,19 @@ var (
 	// ErrTooLarge reports a file larger than the editor's readable ceiling
 	// (413); the browser should offer a download instead.
 	ErrTooLarge = errors.New("files: file is too large to edit")
+	// ErrArchiveLimit reports an archive that exceeds the node's archive limits
+	// (entry count, uncompressed bytes, compression ratio or nesting): 413 with
+	// its own message, distinct from the editor's ErrTooLarge.
+	ErrArchiveLimit = errors.New("files: archive exceeds the node limits")
+	// ErrArchiveEntry reports an archive member the agent refuses to unpack
+	// safely (a symbolic link, hard link, device, FIFO or unsupported type):
+	// 409 with its own message, not a plain conflict.
+	ErrArchiveEntry = errors.New("files: archive contains an unsupported entry")
+	// ErrInvalidArchive reports an archive the agent cannot parse: a truncated
+	// or corrupt zip/tar/tar.gz body, or a member name the format forbids (400
+	// with its own message, so a broken upload does not read as "internal
+	// error").
+	ErrInvalidArchive = errors.New("files: archive is invalid")
 	// ErrNotEditable reports a file the editor cannot load as text, for
 	// example a binary body or invalid UTF-8 (415).
 	ErrNotEditable = errors.New("files: file is not editable text")

@@ -2,6 +2,7 @@ import { activeLocale } from "@/shared/i18n/locale";
 import en from "@/features/files/locales/en";
 import vi from "@/features/files/locales/vi";
 
+import type { ArchiveFormat } from "@/features/files/api/files";
 import type { FileKind, FilesEntry } from "@/features/files/schemas/files";
 
 /**
@@ -103,6 +104,68 @@ export function entryExtension(name: string): string {
     return "";
   }
   return name.slice(dot + 1).toLowerCase();
+}
+
+/** archiveFormatFromName returns the extract format the name's extension selects. */
+export function archiveFormatFromName(name: string): ArchiveFormat | null {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
+    return "tar.gz";
+  }
+  if (lower.endsWith(".tar")) {
+    return "tar";
+  }
+  if (lower.endsWith(".zip")) {
+    return "zip";
+  }
+  return null;
+}
+
+/** isExtractableArchive reports a regular file the "Extract here…" action unpacks. */
+export function isExtractableArchive(entry: FilesEntry): boolean {
+  return entry.kind === "file" && archiveFormatFromName(entry.name) !== null;
+}
+
+/** archiveExtension returns the file extension for one compress format. */
+export function archiveExtension(format: ArchiveFormat): string {
+  switch (format) {
+    case "zip":
+      return ".zip";
+    case "tar":
+      return ".tar";
+    case "tar.gz":
+    default:
+      return ".tar.gz";
+  }
+}
+
+/** stripArchiveExtension drops a known archive suffix from a source name. */
+function stripArchiveExtension(name: string): string {
+  const lower = name.toLowerCase();
+  for (const ext of [
+    ".tar.gz", ".tgz", ".tar", ".zip", ".gz", ".bz2", ".xz", ".7z", ".rar", ".zst",
+  ]) {
+    if (lower.endsWith(ext)) {
+      return name.slice(0, name.length - ext.length);
+    }
+  }
+  return name;
+}
+
+/**
+ * defaultArchiveName derives the default archive name: a single source keeps
+ * its base (minus a known archive suffix), several sources use "archive". The
+ * format decides the extension.
+ */
+export function defaultArchiveName(
+  sources: FilesEntry[],
+  format: ArchiveFormat,
+): string {
+  const base =
+    sources.length === 1
+      ? stripArchiveExtension(sources[0]?.name ?? "") || "archive"
+      : "archive";
+  return `${base}${archiveExtension(format)}`;
 }
 
 /** isSelectable reports whether a row offers the selection checkbox. */

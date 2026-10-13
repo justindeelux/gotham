@@ -121,6 +121,25 @@ describe("filesErrorKey maps every status to a curated key", () => {
     expect(filesErrorKey(new Error("plain"))).toBeNull();
     expect(filesErrorKey({ message: "odd", status: 418 })).toBeNull();
   });
+
+  it("prefers a stable server code over the status", () => {
+    // An archive limit is a 413 but must not read as "file too large to edit".
+    expect(filesErrorKey({ message: "x", status: 413, code: "archive_limit" })).toBe(
+      "files.errors.archiveLimit",
+    );
+    // A refused archive member is a 409 but must not read as a conflict.
+    expect(filesErrorKey({ message: "x", status: 409, code: "archive_entry" })).toBe(
+      "files.errors.archiveEntry",
+    );
+    // A corrupt archive is a 400 but must not read as a generic invalid request.
+    expect(filesErrorKey({ message: "x", status: 400, code: "invalid_archive" })).toBe(
+      "files.errors.invalidArchive",
+    );
+    // An unknown code falls back to the status mapping.
+    expect(filesErrorKey({ message: "x", status: 409, code: "other" })).toBe(
+      "files.errors.conflict",
+    );
+  });
 });
 
 describe("files catalog parity", () => {

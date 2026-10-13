@@ -333,6 +333,9 @@ Useful agent installer flags and variables:
 | `GOTHAM_AGENT_FILES` | The remote file service on the node. On unless set to `false` (the installer writes the answer above). |
 | `GOTHAM_AGENT_FILE_FULL_ACCESS` | On unless set to `false`: the service exposes the **whole filesystem** as one writable root `system` (`/`), with no protected paths — the operator accepted that risk. `false` restores the confined roots described below. |
 | `GOTHAM_AGENT_FILE_ROOTS` | Extra browsable roots, colon-separated absolute paths (default none). Operator roots are **read-only** in this phase; a root that is missing, not absolute, in a dangerous tree or overlapping another root refuses startup. |
+| `GOTHAM_AGENT_ARCHIVE_MAX_BYTES` | Total uncompressed bytes one **compress or extract** may read/write before it is refused with `ResourceExhausted` (413) — the size cap and half of the zip-bomb guard. Default `4294967296` (4 GiB). |
+| `GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES` | Maximum entries one archive operation may walk or unpack (default `100000`); beyond it the operation is refused with `ResourceExhausted` (413). |
+| `GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES` | Maximum on-disk size of an archive file that **extract** will read (default `1073741824`, 1 GiB); an archive above it is refused with `ResourceExhausted` (413) before any parser runs. Applies to every format. |
 | `GOTHAM_AGENT_COMPOSE_ROOT` | Directory holding one subdirectory per compose project (default `/var/lib/gotham-agent/compose`); browsable read-only when the file service is enabled. |
 
 `GOTHAM_AGENT_CP_ADDR` must use a name or IP that is one of the control plane's
@@ -418,6 +421,60 @@ malformed cursor is rejected with `InvalidArgument`. A single `List` scans up to
 100,000 directory entries and keeps only the page in memory; a directory larger
 than that fails with `ResourceExhausted` ("directory too large") rather than
 returning a silently partial listing.
+
+### Archives (compress / extract)
+
+`Compress` and `Extract` build and unpack `zip`, `tar` and `tar.gz` **without a
+shell** (`archive/zip`, `archive/tar`, `compress/gzip` only; no `os/exec`
+anywhere). Compress skips symbolic links and special files (never following a
+link) and counts them in the final progress message (which the control plane
+does not surface to the browser — see below); the archive is staged in a
+temporary file and renamed into place, so a failed or cancelled compress never
+leaves a partial archive. Extract refuses symbolic-link, hard-link, device and
+FIFO entries, strips setuid/setgid/sticky bits, and writes every entry through
+`os.Root`, so an absolute name, a `..` segment or a symlinked parent cannot
+escape the destination root. A file that already exists is refused unless the
+caller sets `overwrite`; an existing directory is reused, never removed. Each
+file is written to a temporary sibling and renamed over the target, so a failed
+overwrite never truncates the existing file. Both guard the running-app
+directory (an archive cannot replace a top-level application directory of the
+managed volumes root), refuse a read-only root, and honour the free-space
+reserve and transfer budget of the write path.
+
+**Extract is not transactional.** A failure part-way leaves the entries already
+unpacked in place (only the file being written is staged and removed), so the
+caller must treat a failed extract as a partial result and clean up if needed.
+
+Four bounds guard an archive: the **on-disk size of the archive file** extract will read
+(`GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES`, default 1 GiB, checked before any parser runs and for
+every format); the total uncompressed bytes (`GOTHAM_AGENT_ARCHIVE_MAX_BYTES`, default 4 GiB); the
+entry count (`GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES`, default 100000); and a **fixed** compression ratio
+of **200:1** against the archive's own size (not env-configurable). Directory entries count toward
+the entry cap. For a zip, the end-of-central-directory record (and the zip64 locator/record when
+present) is read from the file's tail before `zip.NewReader` runs, and the archive is refused when
+its declared entry count exceeds `GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES` or its declared
+central-directory size exceeds 64 MiB — so a crafted archive declaring millions of entries is
+rejected before any header is allocated. An entry name deeper than 64 segments is refused. An
+over-limit archive is refused before it fills the disk. All limits are read as positive integers;
+an unparseable or non-positive value silently falls back to its default (like the other
+`GOTHAM_AGENT_FILE_*` limits), so a typo does not disable the cap.
+
+The skipped-entry count a compress emits is **not surfaced to the browser**: the agent reports it
+in the stream's terminal `Progress.skipped`, but the control plane drains the stream and returns
+only the created archive, so the UI cannot show it.
+
+An archive limit is answered **413** with a distinct `archive_limit` body code,
+a refused archive member (a link, device, FIFO or unsupported type) **409**
+with an `archive_entry` code, and a truncated or corrupt archive body **400**
+with an `invalid_archive` code, so the UI shows an archive-specific message
+instead of "file is too large to edit/upload", "conflict" or an internal error.
+
+An archive request **stays open for the whole transfer**: the control plane
+holds the connection up to its transfer budget, and the browser disables its own
+client timeout, but a reverse proxy in front of the control plane must allow a
+long-lived response, or the request will be cut while the agent keeps working.
+The node's Traefik edge does not front the file API, so its timeouts do not
+apply to it.
 
 ### Control-plane side
 

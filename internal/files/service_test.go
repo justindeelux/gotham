@@ -108,6 +108,13 @@ type fakeFileClient struct {
 	seenDelete *agentv1.DeleteRequest
 	seenMkdir  *agentv1.MkdirRequest
 	seenChmod  *agentv1.ChmodRequest
+
+	compressMsgs []*agentv1.Progress
+	compressErr  error
+	extractMsgs  []*agentv1.Progress
+	extractErr   error
+	seenCompress *agentv1.CompressRequest
+	seenExtract  *agentv1.ExtractRequest
 }
 
 func (f *fakeFileClient) ListRoots(context.Context, *agentv1.ListRootsRequest, ...grpc.CallOption) (*agentv1.ListRootsResponse, error) {
@@ -222,6 +229,26 @@ func (f *fakeFileClient) Delete(_ context.Context, in *agentv1.DeleteRequest, _ 
 		return nil, f.deleteErr
 	}
 	return &fakeProgressStream{msgs: f.deleteMsgs}, nil
+}
+
+func (f *fakeFileClient) Compress(_ context.Context, in *agentv1.CompressRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenCompress = in
+	if f.compressErr != nil {
+		return nil, f.compressErr
+	}
+	return &fakeProgressStream{msgs: f.compressMsgs}, nil
+}
+
+func (f *fakeFileClient) Extract(_ context.Context, in *agentv1.ExtractRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenExtract = in
+	if f.extractErr != nil {
+		return nil, f.extractErr
+	}
+	return &fakeProgressStream{msgs: f.extractMsgs}, nil
 }
 
 // lastWriteHeader returns the header the fake Write stream received.

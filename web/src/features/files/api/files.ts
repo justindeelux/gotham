@@ -33,6 +33,7 @@ import {
  *   POST /servers/{id}/files/mkdir|/create   owner/admin, exclusive create
  *   POST /servers/{id}/files/rename|/move|/copy owner/admin, 409 on conflict
  *   POST /servers/{id}/files/chmod           owner/admin, 0o777 bits only
+ *   POST /servers/{id}/files/compress|/extract owner/admin, archive (9b)
  *   DELETE /servers/{id}/files/entry?recursive= owner/admin
  *   POST /servers/{id}/files/upload          owner/admin, multipart, per-file result
  *
@@ -210,10 +211,15 @@ export function downloadUrl(serverId: string, ticket: string): string {
   return `/api/v1/servers/${serverId}/files/download?ticket=${encodeURIComponent(ticket)}`;
 }
 
-/** filesErrorKey maps an HTTP status onto its files catalog key. */
+/** filesErrorKey maps an HTTP status (or a stable server code) onto its files catalog key. */
 export function filesErrorKey(error: unknown): string | null {
-  if (isApiError(error) && typeof error.status === "number") {
-    return statusKeys[error.status] ?? null;
+  if (isApiError(error)) {
+    if (error.code && codeKeys[error.code]) {
+      return codeKeys[error.code];
+    }
+    if (typeof error.status === "number") {
+      return statusKeys[error.status] ?? null;
+    }
   }
   return null;
 }
@@ -370,6 +376,79 @@ export async function chmodEntry(
   return parseEntry(response.data, "FilesChmod");
 }
 
+/** ArchiveFormat is the container/compression the compress dialog offers. */
+export type ArchiveFormat = "zip" | "tar" | "tar.gz";
+
+/** CompressOptions configures one archive build. */
+export interface CompressOptions {
+  root: string;
+  /** sources are root-relative paths of the files/folders to archive. */
+  sources: string[];
+  /** destination is the archive's root-relative path. */
+  destination: string;
+  format: ArchiveFormat;
+  /** overwrite replaces an existing archive; default false (409). */
+  overwrite?: boolean;
+}
+
+/**
+ * compressEntries builds one archive from sources inside a single root. The
+ * control plane streams the agent's progress and returns the created archive's
+ * entry; the request timeout is disabled because a large tree outlives the 15 s
+ * default.
+ */
+export async function compressEntries(
+  serverId: string,
+  teamId: string,
+  options: CompressOptions,
+): Promise<FilesEntry> {
+  const response = await http.post(
+    `/servers/${serverId}/files/compress`,
+    {
+      root: options.root,
+      sources: options.sources,
+      destination: options.destination,
+      format: options.format,
+      overwrite: options.overwrite === true,
+    },
+    { headers: teamHeaders(teamId), timeout: fileTransferTimeoutMs },
+  );
+  return parseEntry(response.data, "FilesCompress");
+}
+
+/** ExtractOptions configures one archive unpack. */
+export interface ExtractOptions {
+  root: string;
+  /** source is the archive's root-relative path. */
+  source: string;
+  /** destination is the root-relative directory to unpack into ("" = root). */
+  destination: string;
+  /** overwrite replaces existing files; default false (409). */
+  overwrite?: boolean;
+}
+
+/**
+ * extractEntry unpacks one archive into a destination directory inside a single
+ * root. The agent refuses symbolic-link, hard-link, device and FIFO entries and
+ * never writes outside the root.
+ */
+export async function extractEntry(
+  serverId: string,
+  teamId: string,
+  options: ExtractOptions,
+): Promise<void> {
+  await http.post(
+    `/servers/${serverId}/files/extract`,
+    {
+      root: options.root,
+      source: options.source,
+      destination: options.destination,
+      overwrite: options.overwrite === true,
+    },
+    { headers: teamHeaders(teamId), timeout: fileTransferTimeoutMs },
+  );
+}
+
 /** UploadProgress is one upload's transferred bytes. */
 export interface UploadProgress {
   loaded: number;
@@ -494,4 +573,15 @@ const statusKeys: Record<number, string> = {
   502: "files.errors.agentUnavailable",
   503: "files.errors.disabled",
   507: "files.errors.insufficientStorage",
+};
+
+/**
+ * codeKeys overrides the status mapping with a stable server token, so an
+ * archive limit (413) or a refused archive member (409) gets its own accurate
+ * message instead of the editor/upload or conflict copy.
+ */
+const codeKeys: Record<string, string> = {
+  archive_limit: "files.errors.archiveLimit",
+  archive_entry: "files.errors.archiveEntry",
+  invalid_archive: "files.errors.invalidArchive",
 };

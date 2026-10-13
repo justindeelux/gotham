@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import {
+  Archive,
+  ArchiveRestore,
   ArrowUp,
   ChevronDown,
   ChevronRight,
@@ -34,8 +36,10 @@ import { computed, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import ConflictDialog from "@/features/files/components/ConflictDialog.vue";
+import CompressDialog from "@/features/files/components/CompressDialog.vue";
 import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue";
 import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog.vue";
+import ExtractDialog from "@/features/files/components/ExtractDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
 import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
@@ -52,6 +56,7 @@ import {
   filesFromDrop,
   formatMode,
   formatTimestamp,
+  isExtractableArchive,
   isFileDrag,
   isSelectable,
   joinPath,
@@ -97,6 +102,10 @@ const transferMode = ref<"move" | "copy">("move");
 const uploadOpen = ref(false);
 const droppedFiles = ref<File[]>([]);
 const dragActive = ref(false);
+const compressOpen = ref(false);
+const compressTargets = ref<FilesEntry[]>([]);
+const extractOpen = ref(false);
+const extractTarget = ref<FilesEntry | null>(null);
 /** actionTargets are the entries the delete/transfer dialogs act on. */
 const actionTargets = ref<FilesEntry[]>([]);
 
@@ -324,6 +333,24 @@ function openUpload(dropped: File[] = []): void {
   uploadOpen.value = true;
 }
 
+/** openCompress builds an archive from the current selection. */
+function openCompress(entries: FilesEntry[]): void {
+  if (entries.length === 0) {
+    return;
+  }
+  compressTargets.value = entries;
+  compressOpen.value = true;
+}
+
+/** openExtract unpacks one archive into the current directory. */
+function openExtract(entry: FilesEntry): void {
+  if (!isExtractableArchive(entry)) {
+    return;
+  }
+  extractTarget.value = entry;
+  extractOpen.value = true;
+}
+
 /** onDragOver highlights the zone only for a file drag on a writable root. */
 function onDragOver(event: DragEvent): void {
   if (!isFileDrag(event.dataTransfer?.types)) {
@@ -430,6 +457,13 @@ function rowMenu(entry: FilesEntry): Array<{ label: string; key: string; disable
     });
   }
   if (entry.kind !== "special" && entry.kind !== "unspecified") {
+    if (entry.kind === "file" && isExtractableArchive(entry)) {
+      options.push({
+        label: String(t("files.actions.extract")),
+        key: "extract",
+        disabled: !files.canWrite,
+      });
+    }
     options.push(
       { label: String(t("files.actions.rename")), key: "rename", disabled: !files.canWrite },
       { label: String(t("files.actions.move")), key: "move", disabled: !files.canWrite },
@@ -466,6 +500,9 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       break;
     case "copy":
       openTransfer("copy", files.targetsForRow(entry));
+      break;
+    case "extract":
+      openExtract(entry);
       break;
     case "cut":
       files.cutSelection(files.targetsForRow(entry).map((item) => item.name));
@@ -537,6 +574,18 @@ function onRowMenu(key: string, entry: FilesEntry): void {
           <FolderPlus :size="14" :stroke-width="1.8" aria-hidden="true" />
         </template>
         {{ $t("files.actions.newFolder") }}
+      </NButton>
+      <NButton
+        size="small"
+        secondary
+        :disabled="files.acting || selection.length === 0"
+        :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
+        @click="openCompress(selection)"
+      >
+        <template #icon>
+          <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.actions.compress") }}
       </NButton>
       <NButton size="small" type="primary" :disabled="files.acting" @click="openUpload()">
         <template #icon>
@@ -819,6 +868,18 @@ function onRowMenu(key: string, entry: FilesEntry): void {
                 </template>
               </NButton>
               <NButton
+                v-if="files.canWrite && isExtractableArchive(entry)"
+                size="tiny"
+                quaternary
+                :title="$t('files.actions.extract')"
+                :aria-label="$t('files.actions.extract')"
+                @click="openExtract(entry)"
+              >
+                <template #icon>
+                  <ArchiveRestore :size="14" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+              </NButton>
+              <NButton
                 v-if="files.canWrite && isSelectable(entry)"
                 size="tiny"
                 quaternary
@@ -927,6 +988,8 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       :entries="actionTargets"
     />
     <UploadDialog v-model:show="uploadOpen" :initial-files="droppedFiles" />
+    <CompressDialog v-model:show="compressOpen" :entries="compressTargets" />
+    <ExtractDialog v-model:show="extractOpen" :entry="extractTarget" />
     <ConflictDialog />
   </NCard>
 </template>

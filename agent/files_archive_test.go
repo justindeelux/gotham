@@ -135,14 +135,13 @@ func compress(t *testing.T, server *FileServer, root, dst string, sources []stri
 	return stream, err
 }
 
-// extract runs the Extract RPC and returns the collected progress.
-func extract(t *testing.T, server *FileServer, root, src, dst string, overwrite bool) (*collectProgressStream, error) {
+// extract runs the Extract RPC and returns its error.
+func extract(t *testing.T, server *FileServer, root, src, dst string, overwrite bool) error {
 	t.Helper()
 	stream := &collectProgressStream{}
-	err := server.Extract(&agentv1.ExtractRequest{
+	return server.Extract(&agentv1.ExtractRequest{
 		Root: root, Source: src, Destination: dst, Overwrite: overwrite,
 	}, stream)
-	return stream, err
 }
 
 // TestFileServerArchiveRoundTrip proves each format round-trips a directory
@@ -191,7 +190,7 @@ func TestFileServerArchiveRoundTrip(t *testing.T) {
 			if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: fileRootVolumes, Path: "restored"}); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := extract(t, server, fileRootVolumes, name, "restored", false); err != nil {
+			if err := extract(t, server, fileRootVolumes, name, "restored", false); err != nil {
 				t.Fatalf("Extract: %v", err)
 			}
 			if got, _ := os.ReadFile(filepath.Join(root, "restored", "data", "top.txt")); string(got) != "top" {
@@ -255,7 +254,7 @@ func TestFileServerExtractZipSlip(t *testing.T) {
 			writeArchiveFile(t, root, "evil.tar", buildTar(t, []tarEntry{
 				{name: tc.name, typeflag: tar.TypeReg, mode: 0o644, body: tc.body},
 			}))
-			if _, err := extract(t, server, fileRootVolumes, "evil.tar", ".", false); err == nil {
+			if err := extract(t, server, fileRootVolumes, "evil.tar", ".", false); err == nil {
 				t.Fatalf("extract of %q succeeded, want a refusal", tc.name)
 			}
 			// Nothing landed at the root level beyond the archive itself.
@@ -283,7 +282,7 @@ func TestFileServerExtractRefusesLinkAndSpecialEntries(t *testing.T) {
 			t.Parallel()
 			server, root := newTestFileServer(t)
 			writeArchiveFile(t, root, "bad.tar", buildTar(t, []tarEntry{entry}))
-			_, err := extract(t, server, fileRootVolumes, "bad.tar", ".", false)
+			err := extract(t, server, fileRootVolumes, "bad.tar", ".", false)
 			if status.Code(err) != codes.FailedPrecondition {
 				t.Fatalf("extract of a %s entry = %v, want FailedPrecondition", name, err)
 			}
@@ -297,7 +296,7 @@ func TestFileServerExtractRefusesLinkAndSpecialEntries(t *testing.T) {
 		writeArchiveFile(t, root, "bad.zip", buildZip(t, []zipTestEntry{
 			{name: "link", mode: os.ModeSymlink | 0o777, body: []byte("target")},
 		}))
-		if _, err := extract(t, server, fileRootVolumes, "bad.zip", ".", false); status.Code(err) != codes.FailedPrecondition {
+		if err := extract(t, server, fileRootVolumes, "bad.zip", ".", false); status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("extract of a zip symlink = %v, want FailedPrecondition", err)
 		}
 	})
@@ -315,7 +314,7 @@ func TestFileServerExtractSymlinkedParentEscape(t *testing.T) {
 	writeArchiveFile(t, root, "escape.tar", buildTar(t, []tarEntry{
 		{name: "link/pwn.txt", typeflag: tar.TypeReg, mode: 0o644, body: []byte("pwn")},
 	}))
-	if _, err := extract(t, server, fileRootVolumes, "escape.tar", ".", false); err == nil {
+	if err := extract(t, server, fileRootVolumes, "escape.tar", ".", false); err == nil {
 		t.Fatal("extract through a symlinked parent succeeded, want a refusal")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "pwn.txt")); !os.IsNotExist(err) {
@@ -337,7 +336,7 @@ func TestFileServerExtractCaps(t *testing.T) {
 			{name: "b", typeflag: tar.TypeReg, mode: 0o644, body: []byte("b")},
 			{name: "c", typeflag: tar.TypeReg, mode: 0o644, body: []byte("c")},
 		}))
-		if _, err := extract(t, server, fileRootVolumes, "many.tar", ".", false); status.Code(err) != codes.ResourceExhausted {
+		if err := extract(t, server, fileRootVolumes, "many.tar", ".", false); status.Code(err) != codes.ResourceExhausted {
 			t.Fatalf("extract over the entry cap = %v, want ResourceExhausted", err)
 		}
 	})
@@ -349,7 +348,7 @@ func TestFileServerExtractCaps(t *testing.T) {
 		writeArchiveFile(t, root, "big.tar", buildTar(t, []tarEntry{
 			{name: "big", typeflag: tar.TypeReg, mode: 0o644, body: bytes.Repeat([]byte("x"), 100)},
 		}))
-		if _, err := extract(t, server, fileRootVolumes, "big.tar", ".", false); status.Code(err) != codes.ResourceExhausted {
+		if err := extract(t, server, fileRootVolumes, "big.tar", ".", false); status.Code(err) != codes.ResourceExhausted {
 			t.Fatalf("extract over the byte cap = %v, want ResourceExhausted", err)
 		}
 	})
@@ -362,7 +361,7 @@ func TestFileServerExtractCaps(t *testing.T) {
 		writeArchiveFile(t, root, "bomb.tar.gz", buildTarGz(t, []tarEntry{
 			{name: "bomb", typeflag: tar.TypeReg, mode: 0o644, body: bytes.Repeat([]byte{0}, 1<<20)},
 		}))
-		if _, err := extract(t, server, fileRootVolumes, "bomb.tar.gz", ".", false); status.Code(err) != codes.ResourceExhausted {
+		if err := extract(t, server, fileRootVolumes, "bomb.tar.gz", ".", false); status.Code(err) != codes.ResourceExhausted {
 			t.Fatalf("extract of a zip bomb = %v, want ResourceExhausted", err)
 		}
 	})
@@ -376,7 +375,7 @@ func TestFileServerExtractStripsSpecialModeBits(t *testing.T) {
 	writeArchiveFile(t, root, "modes.tar", buildTar(t, []tarEntry{
 		{name: "suid", typeflag: tar.TypeReg, mode: 0o4755, body: []byte("x")},
 	}))
-	if _, err := extract(t, server, fileRootVolumes, "modes.tar", ".", false); err != nil {
+	if err := extract(t, server, fileRootVolumes, "modes.tar", ".", false); err != nil {
 		t.Fatalf("extract: %v", err)
 	}
 	info, err := os.Lstat(filepath.Join(root, "suid"))
@@ -406,13 +405,13 @@ func TestFileServerExtractConflictPolicy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "dir", "f.txt"), []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := extract(t, server, fileRootVolumes, "one.tar", ".", false); status.Code(err) != codes.AlreadyExists {
+	if err := extract(t, server, fileRootVolumes, "one.tar", ".", false); status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("extract over an existing file = %v, want AlreadyExists", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(root, "dir", "f.txt")); string(got) != "old" {
 		t.Fatalf("refused extract changed the file: %q", got)
 	}
-	if _, err := extract(t, server, fileRootVolumes, "one.tar", ".", true); err != nil {
+	if err := extract(t, server, fileRootVolumes, "one.tar", ".", true); err != nil {
 		t.Fatalf("extract with overwrite: %v", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(root, "dir", "f.txt")); string(got) != "new" {
@@ -436,7 +435,7 @@ func TestFileServerExtractProtectsAppDir(t *testing.T) {
 		{name: appID + "/", typeflag: tar.TypeDir, mode: 0o755},
 		{name: appID + "/keep", typeflag: tar.TypeReg, mode: 0o644, body: []byte("pwn")},
 	}))
-	if _, err := extract(t, server, fileRootVolumes, "clobber.tar", ".", true); status.Code(err) != codes.PermissionDenied {
+	if err := extract(t, server, fileRootVolumes, "clobber.tar", ".", true); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("extract over an app dir = %v, want PermissionDenied", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(root, appID, "keep")); string(got) != "keep" {
@@ -452,7 +451,7 @@ func TestFileServerArchiveRefusesReadOnlyRoot(t *testing.T) {
 	if _, err := compress(t, server, fileRootCompose, "x.zip", []string{"a"}, agentv1.ArchiveFormat_ARCHIVE_FORMAT_ZIP, false); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("Compress on a read-only root = %v, want PermissionDenied", err)
 	}
-	if _, err := extract(t, server, fileRootCompose, "x.zip", ".", false); status.Code(err) != codes.PermissionDenied {
+	if err := extract(t, server, fileRootCompose, "x.zip", ".", false); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("Extract on a read-only root = %v, want PermissionDenied", err)
 	}
 }
@@ -463,7 +462,7 @@ func TestFileServerArchiveUnknownFormat(t *testing.T) {
 	t.Parallel()
 	server, root := newTestFileServer(t)
 	writeArchiveFile(t, root, "blob.bin", []byte("not an archive"))
-	if _, err := extract(t, server, fileRootVolumes, "blob.bin", ".", false); status.Code(err) != codes.InvalidArgument {
+	if err := extract(t, server, fileRootVolumes, "blob.bin", ".", false); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("extract of an unknown extension = %v, want InvalidArgument", err)
 	}
 	if _, err := compress(t, server, fileRootVolumes, "x.zip", []string{"a"}, agentv1.ArchiveFormat_ARCHIVE_FORMAT_UNSPECIFIED, false); status.Code(err) != codes.InvalidArgument {
@@ -496,7 +495,7 @@ func TestFullAccessArchiveRoundTrip(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(base, "out"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := extract(t, server, fileRootSystem, rel+"/out.zip", rel+"/out", false); err != nil {
+	if err := extract(t, server, fileRootSystem, rel+"/out.zip", rel+"/out", false); err != nil {
 		t.Fatalf("Extract through /: %v", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(base, "out", "hello.txt")); string(got) != "hello" {

@@ -385,7 +385,7 @@ func (s *FileServer) extractZipEntry(ctx context.Context, root *fsroot.Root, zf 
 		return fmt.Errorf("%w: opening archive entry %q: %v", fsroot.ErrInvalid, zf.Name, err)
 	}
 	defer func() { _ = body.Close() }()
-	return s.extractFile(ctx, root, target, mode.Perm(), int64(zf.UncompressedSize64), overwrite, body, counter, progress)
+	return s.extractFile(ctx, root, target, mode.Perm(), int64(zf.UncompressedSize64), overwrite, body, progress)
 }
 
 // extractTar unpacks a tar or tar.gz body.
@@ -422,11 +422,11 @@ func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Rea
 			if err := s.extractDir(root, target, mode); err != nil {
 				return err
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg, 0:
 			if err := counter.addEntry(hdr.Size); err != nil {
 				return err
 			}
-			if err := s.extractFile(ctx, root, target, mode, hdr.Size, overwrite, tr, counter, progress); err != nil {
+			if err := s.extractFile(ctx, root, target, mode, hdr.Size, overwrite, tr, progress); err != nil {
 				return err
 			}
 		default:
@@ -451,8 +451,9 @@ func (s *FileServer) extractDir(root *fsroot.Root, target string, mode os.FileMo
 // bytes of r, so a lying header cannot stream more than it declared. A partial
 // file is removed on any failure so a failed extract leaves nothing behind. The
 // running-app-directory guard refuses replacing a top-level application
-// directory of the managed-volumes root.
-func (s *FileServer) extractFile(ctx context.Context, root *fsroot.Root, target string, mode os.FileMode, size int64, overwrite bool, r io.Reader, counter *archiveCounter, progress *archiveProgress) error {
+// directory of the managed-volumes root; the byte/entry caps are enforced by the
+// caller before this runs.
+func (s *FileServer) extractFile(ctx context.Context, root *fsroot.Root, target string, mode os.FileMode, size int64, overwrite bool, r io.Reader, progress *archiveProgress) error {
 	if s.protectsAppDir(root, target) {
 		return status.Error(codes.PermissionDenied, "extract: an application directory cannot be replaced")
 	}

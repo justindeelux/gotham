@@ -848,6 +848,11 @@ function onFolderMenu(key: string): void {
       </button>
     </div>
 
+    <!-- Toolbar (JUS-120): create/upload on the left, clipboard Paste and the
+         JUS-128 bulk actions on the right. A writer (canWrite) always sees the
+         row, so selecting never shifts the list; a reader without write sees it
+         only once something is selected — the same appear-on-selection behaviour
+         the .fm-bulk bar it replaces had. -->
     <div v-if="files.canWrite || hasSelection" class="fm-toolbar">
       <div v-if="files.canWrite" class="fm-toolbar-group">
         <NDropdown
@@ -924,7 +929,7 @@ function onFolderMenu(key: string): void {
           size="small"
           secondary
           :disabled="!files.canReadContent || !hasSelectedFiles"
-          :title="files.canReadContent ? $t('files.browser.downloadSelected') : $t('files.browser.fileNeedsRole')"
+          :title="!files.canReadContent ? $t('files.browser.fileNeedsRole') : (hasSelectedFiles ? $t('files.browser.downloadSelected') : $t('files.dialogs.compressSelect'))"
           :aria-label="$t('files.browser.downloadSelected')"
           @click="downloadSelected()"
         >
@@ -938,7 +943,7 @@ function onFolderMenu(key: string): void {
             size="small"
             secondary
             :disabled="files.acting || selection.length === 0"
-            :title="$t('files.actions.copy')"
+            :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.copy')"
             :aria-label="$t('files.actions.copy')"
             @click="files.copySelection(selection.map((item) => item.name))"
           >
@@ -951,7 +956,7 @@ function onFolderMenu(key: string): void {
             size="small"
             secondary
             :disabled="files.acting || selection.length === 0"
-            :title="$t('files.actions.cut')"
+            :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.cut')"
             :aria-label="$t('files.actions.cut')"
             @click="files.cutSelection(selection.map((item) => item.name))"
           >
@@ -965,7 +970,7 @@ function onFolderMenu(key: string): void {
             secondary
             :disabled="files.acting || selection.length === 0"
             :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
-            :aria-label="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
+            :aria-label="$t('files.actions.compress')"
             @click="openCompress(selection)"
           >
             <template #icon>
@@ -978,7 +983,7 @@ function onFolderMenu(key: string): void {
             type="error"
             secondary
             :disabled="files.acting || selection.length === 0"
-            :title="$t('common.actions.delete')"
+            :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('common.actions.delete')"
             :aria-label="$t('common.actions.delete')"
             @click="openDelete(selection)"
           >
@@ -996,6 +1001,9 @@ function onFolderMenu(key: string): void {
           :aria-label="$t('files.browser.clear')"
           @click="files.clearSelection()"
         >
+          <template #icon>
+            <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
           <span class="fm-btn-label">{{ $t("files.browser.clear") }}</span>
         </NButton>
       </div>
@@ -1533,15 +1541,20 @@ function onFolderMenu(key: string): void {
 
 /* Left group (New dropdown + Upload) and the right-aligned group: clipboard
    Paste plus the JUS-128 bulk actions (Download/Copy/Cut/Compress/Delete/Clear)
-   that used to live in their own bar, JUS-120/128. */
+   that used to live in their own bar, JUS-120/128. Both groups wrap internally
+   and may shrink, so a long right group never overflows/clips at narrow
+   widths — every action stays reachable instead of spilling past the panel. */
 .fm-toolbar-group {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .fm-toolbar-end {
   margin-left: auto;
+  justify-content: flex-end;
 }
 
 .clipboard-hint {

@@ -5,7 +5,7 @@ import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 /* global document:readonly, HTMLElement:readonly, URL, window:readonly */
 // JUS-118/119/120 layout proof: the committed webdist is served statically with
@@ -93,6 +93,41 @@ function manyEntries() {
     modified_at: "2026-10-12T09:02:00Z",
     etag: `"e${index}"`,
   }));
+}
+
+/**
+ * assertReachable fails when `locator` is not laid out inside `container` (and
+ * the viewport) or when its centre is not the topmost element at that point —
+ * so a clipped, spilling or covered element fails even though it has an
+ * aria-label.
+ */
+async function assertReachable(
+  page: Page,
+  locator: Locator,
+  container: { x: number; y: number; width: number; height: number },
+  viewport: { width: number; height: number },
+  name: string,
+  context: string = name,
+): Promise<void> {
+  await expect(locator, context).toBeVisible();
+  const box = await locator.boundingBox();
+  expect(box, `${context}: no box`).not.toBeNull();
+  expect(box!.x, `${context}: left inside container`).toBeGreaterThanOrEqual(container.x - 1);
+  expect(box!.x + box!.width, `${context}: right inside container`).toBeLessThanOrEqual(
+    container.x + container.width + 1,
+  );
+  expect(box!.y, `${context}: top inside viewport`).toBeGreaterThanOrEqual(-1);
+  expect(box!.y + box!.height, `${context}: bottom inside viewport`).toBeLessThanOrEqual(
+    viewport.height + 1,
+  );
+  const hit = await page.evaluate(
+    ({ x, y }) => {
+      const element = document.elementFromPoint(x, y) as HTMLElement | null;
+      return element?.closest("button")?.getAttribute("aria-label") ?? null;
+    },
+    { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 },
+  );
+  expect(hit, `${context}: hit-testable at its centre`).toBe(name);
 }
 
 let server: Server;
@@ -241,7 +276,8 @@ test("the top breadcrumb is gone and the bottom node bar switches nodes", async 
   await expect(bar).toBeVisible();
   await expect(bar).toContainText("prod-01");
 
-  // JUS-125: the node select is ~3/4 of the bar width.
+  // JUS-125: at desktop the node select is ~3/4 of the bar width (the mobile
+  // case is asserted in its own test).
   const ratio = await page.evaluate(() => {
     const barEl = document.querySelector(".node-bar") as HTMLElement | null;
     const selectEl = document.querySelector(".node-bar__select") as HTMLElement | null;
@@ -251,7 +287,7 @@ test("the top breadcrumb is gone and the bottom node bar switches nodes", async 
     return selectEl.getBoundingClientRect().width / barEl.getBoundingClientRect().width;
   });
   expect(ratio).not.toBeNull();
-  expect(ratio!).toBeGreaterThan(0.55);
+  expect(ratio!).toBeGreaterThan(0.6);
   expect(ratio!).toBeLessThan(0.8);
 
   // An offline node is listed with its status but cannot be selected.
@@ -265,6 +301,88 @@ test("the top breadcrumb is gone and the bottom node bar switches nodes", async 
   await expect(page.locator(".node-bar__select")).toContainText("prod-02");
   expect(new URL(page.url()).pathname).toContain(server2);
   await expect(page.locator(".fm-label").first()).toBeVisible();
+});
+
+test("the node select is ~3/4 width at desktop and on mobile", async ({ page }) => {
+  const measure = () =>
+    page.evaluate(() => {
+      const bar = document.querySelector(".node-bar") as HTMLElement | null;
+      const select = document.querySelector(".node-bar__select") as HTMLElement | null;
+      if (bar === null || select === null) {
+        return null;
+      }
+      return {
+        width: select.getBoundingClientRect().width,
+        ratio: select.getBoundingClientRect().width / bar.getBoundingClientRect().width,
+      };
+    });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".node-bar__select")).toBeVisible();
+  const desktop = await measure();
+  expect(desktop).not.toBeNull();
+  // 75% of the bar, and far wider than the small-screen width.
+  expect(desktop!.ratio).toBeGreaterThan(0.6);
+  expect(desktop!.ratio).toBeLessThan(0.8);
+  expect(desktop!.width).toBeGreaterThan(400);
+
+  // Mobile: it used to grow to fill the row (~166px). JUS-125 wants 3/4 of
+  // that (~124px), so it must no longer fill the bar.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = await measure();
+  expect(mobile).not.toBeNull();
+  expect(mobile!.width).toBeGreaterThan(100);
+  expect(mobile!.width).toBeLessThan(145);
+  expect(mobile!.ratio).toBeLessThan(0.6);
+});
+
+test("bulk actions stay reachable with a selection at every width", async ({
+  page,
+}) => {
+  const bulkActions = ["Download", "Copy", "Cut", "Compress…", "Delete", "Clear"];
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await mockApi(page);
+    await page.goto(`${baseURL}/servers/${server1}/files`);
+    // Select the whole listing so every bulk action is enabled and Clear shows.
+    await page.locator(".fm-head .n-checkbox").click();
+
+    const toolbar = page.locator(".fm-toolbar");
+    const toolbarBox = await toolbar.boundingBox();
+    expect(toolbarBox, `toolbar missing at ${viewport.width}px`).not.toBeNull();
+    await expect(page.locator(".fm-bulk-count")).toContainText("60 selected");
+
+    for (const name of bulkActions) {
+      await assertReachable(
+        page,
+        toolbar.getByRole("button", { name, exact: true }),
+        toolbarBox!,
+        viewport,
+        name,
+        `${name}@${viewport.width}`,
+      );
+    }
+
+    // Nothing in the toolbar (buttons or the count) spills past its right edge.
+    const spill = await page.evaluate(() => {
+      const bar = document.querySelector(".fm-toolbar") as HTMLElement | null;
+      if (bar === null) {
+        return null;
+      }
+      const right = bar.getBoundingClientRect().right;
+      return [...bar.querySelectorAll("button, .fm-bulk-count")]
+        .map((element) => element.getBoundingClientRect().right - right)
+        .reduce((max, value) => Math.max(max, value), Number.NEGATIVE_INFINITY);
+    });
+    expect(spill, `no toolbar spill at ${viewport.width}px`).not.toBeNull();
+    expect(spill!).toBeLessThanOrEqual(1);
+  }
 });
 
 test("the toolbar groups New, keeps bulk tools right and is icon-only on small screens", async ({

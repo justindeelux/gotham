@@ -169,8 +169,9 @@ function switchNode(next: string | number | null): void {
   .node-bar__select {
     width: auto;
     min-width: 0;
-    /* 3/4 of the former 160px basis. */
-    flex: 1 1 120px;
+    /* JUS-125: ~3/4 of the former 160px basis; no grow, so the select stops
+       stretching to fill the row on mobile (it used to keep its main width). */
+    flex: 0 1 120px;
   }
 }
 </style>

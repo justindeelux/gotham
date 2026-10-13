@@ -1,0 +1,1 @@
+import{bI as o,g as t,p as c,S as i,bf as s}from"./index-DMPagSTQ.js";function v(){const e=c(null),a=t(()=>{if(e.value!==null)return i.value,String(s.global.t("projects.conflict.nameTaken"))}),u=t(()=>e.value===null?void 0:"error");function l(){e.value=null}function r(n){return o(n)?(e.value=n,!0):!1}return{feedback:a,status:u,clear:l,take:r}}export{v as u};

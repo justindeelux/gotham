@@ -438,7 +438,9 @@ function rowMenu(entry: FilesEntry): Array<{ label: string; key: string; disable
       { label: String(t("common.actions.delete")), key: "delete", disabled: !files.canWrite },
     );
   }
-  return options;
+  // NDropdown renders each option body as a plain div, so the menuitem role
+  // must be set explicitly (the container gets role="menu" on the dropdown).
+  return options.map((option) => ({ ...option, props: { role: "menuitem" } }));
 }
 
 /** onRowMenu dispatches one row action on the row or the whole selection. */
@@ -842,6 +844,10 @@ function onRowMenu(key: string, entry: FilesEntry): void {
                 trigger="click"
                 placement="bottom-end"
                 :options="rowMenu(entry)"
+                :menu-props="() => ({
+                  role: 'menu',
+                  'aria-label': $t('files.browser.moreActions', { name: entry.name }),
+                })"
                 @select="(key: string) => onRowMenu(key, entry)"
               >
                 <NButton

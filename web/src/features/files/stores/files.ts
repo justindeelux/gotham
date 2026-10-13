@@ -59,6 +59,11 @@ export interface FilesClipboard {
 /** ConflictPrompt waits for the user to replace or skip 409'd names. */
 export interface ConflictPrompt {
   op: "copy" | "move";
+  /** root is the root the transfer ran in, captured when the prompt opened. */
+  root: string;
+  /** tabId binds the resolution to the tab that started the transfer, so a tab
+   *  switch while the prompt is open cannot retarget the retry. */
+  tabId: string;
   source: string;
   destination: string;
   names: string[];
@@ -549,7 +554,8 @@ export const useFilesStore = defineStore("files", () => {
    */
   async function loadAll(): Promise<void> {
     const tab = activeTab.value;
-    if (!serverId.value) {
+    const server = serverId.value;
+    if (!server) {
       return;
     }
     const gen = ++tab.generation;
@@ -557,28 +563,38 @@ export const useFilesStore = defineStore("files", () => {
     tab.errorRaw = null;
     tab.disabled = false;
     try {
-      const list = await listRoots(serverId.value, teamId());
-      if (gen !== tab.generation) {
+      const list = await listRoots(server, teamId());
+      // A node/team switch discards this tab and bumps its generation (see
+      // resetBrowser) and changes serverId, so a stale roots response can never
+      // overwrite the shared roots of the node now on screen.
+      if (gen !== tab.generation || server !== serverId.value) {
         return;
       }
       roots.value = list;
-      if (!list.some((root) => root.name === tab.rootName)) {
-        tab.rootName = list[0]?.name ?? "";
+      // Re-validate EVERY tab's root against the refreshed list, not only the
+      // active one: a background tab bound to a removed root would otherwise
+      // error on its next load.
+      for (const item of tabs.value) {
+        if (!list.some((root) => root.name === item.rootName)) {
+          item.rootName = list[0]?.name ?? "";
+          item.path = "";
+          item.loaded = false;
+        }
       }
       if (tab.rootName === "") {
         applyListingTo(tab, [], "", false);
         return;
       }
-      const listing = await listEntries(serverId.value, teamId(), {
+      const listing = await listEntries(server, teamId(), {
         root: tab.rootName,
         path: tab.path,
       });
-      if (gen !== tab.generation) {
+      if (gen !== tab.generation || server !== serverId.value) {
         return;
       }
       applyListingTo(tab, listing.entries, listing.cursor ?? "", listing.truncated);
     } catch (err) {
-      if (gen !== tab.generation) {
+      if (gen !== tab.generation || server !== serverId.value) {
         return;
       }
       applyErrorTo(tab, err);
@@ -634,6 +650,26 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
+   * refreshTabsShowing reloads every other tab whose root+path shows one of the
+   * directories a mutation changed, so a cross-tab cut/paste (or a delete from
+   * another tab) never leaves a stale listing behind. `skipId` is the tab the
+   * caller has already refreshed.
+   */
+  async function refreshTabsShowing(
+    root: string,
+    dirs: string[],
+    skipId: string | null,
+  ): Promise<void> {
+    const targets = tabs.value.filter(
+      (tab) =>
+        tab.id !== skipId &&
+        tab.rootName === root &&
+        dirs.includes(tab.path),
+    );
+    await Promise.all(targets.map((tab) => loadEntriesFor(tab)));
+  }
+
+  /**
    * init binds the store to one server. Switching servers (nodes) resets every
    * tab back to a single default tab so a node never inherits the previous
    * node's tabs; a repeat call for the same server is a no-op once it has
@@ -653,6 +689,23 @@ export const useFilesStore = defineStore("files", () => {
   /** refresh reloads the active tab's directory. */
   async function refresh(): Promise<void> {
     await loadEntries();
+  }
+
+  /**
+   * refreshDirectory reloads every tab showing root+dir (the active tab when
+   * none matches). Used by a background batch — an upload into a directory the
+   * user may have tabbed away from — so the directory it landed in is not left
+   * stale.
+   */
+  async function refreshDirectory(root: string, dir: string): Promise<void> {
+    const matching = tabs.value.filter(
+      (tab) => tab.rootName === root && tab.path === dir,
+    );
+    if (matching.length === 0) {
+      await loadEntries();
+      return;
+    }
+    await Promise.all(matching.map((tab) => loadEntriesFor(tab)));
   }
 
   /** retry re-runs the first load after a failure. */
@@ -746,7 +799,9 @@ export const useFilesStore = defineStore("files", () => {
     }
     tabs.value = remaining;
     if (wasActive) {
-      activeTabId.value = remaining[Math.min(index, remaining.length - 1)].id;
+      // Route through switchTab so a neighbour that was never loaded (or was
+      // invalidated by loadAll's root re-validation) is fetched, not shown blank.
+      await switchTab(remaining[Math.min(index, remaining.length - 1)].id);
     }
   }
 
@@ -808,19 +863,22 @@ export const useFilesStore = defineStore("files", () => {
   /** createEntry creates an empty file or a folder in the active directory. */
   async function createEntry(name: string, kind: NameKind): Promise<FilesEntry> {
     const tab = activeTab.value;
-    const target = joinPath(tab.path, normalizeEntryName(name));
+    const root = tab.rootName;
+    const dir = tab.path;
+    const target = joinPath(dir, normalizeEntryName(name));
     return runMutation(async () => {
       const created =
         kind === "directory"
           ? await createFolder(serverId.value, teamId(), {
-              root: tab.rootName,
+              root,
               path: target,
             })
           : await createFile(serverId.value, teamId(), {
-              root: tab.rootName,
+              root,
               path: target,
             });
       await loadEntriesFor(tab);
+      await refreshTabsShowing(root, [dir], tab.id);
       return created;
     });
   }
@@ -828,25 +886,27 @@ export const useFilesStore = defineStore("files", () => {
   /** rename changes one entry's name inside the active directory. */
   async function rename(entry: FilesEntry, nextName: string): Promise<void> {
     const tab = activeTab.value;
+    const root = tab.rootName;
+    const dir = tab.path;
     const next = normalizeEntryName(nextName);
     await runMutation(async () => {
       await renameEntry(serverId.value, teamId(), {
-        root: tab.rootName,
-        source: joinPath(tab.path, entry.name),
-        destination: joinPath(tab.path, next),
+        root,
+        source: joinPath(dir, entry.name),
+        destination: joinPath(dir, next),
       });
       // Follow the rename in the selection and any pending clipboard that was
       // taken from this same directory (root+path): a rename elsewhere must not
       // retarget the clipboard to a file in another folder.
       renameSelection(tab, entry.name, next);
       await withEditor((editor) =>
-        editor.applyRename(tab.rootName, tab.path, entry.name, next),
+        editor.applyRename(root, dir, entry.name, next),
       );
       const clip = clipboard.value;
       if (
         clip &&
-        clip.root === tab.rootName &&
-        clip.path === tab.path &&
+        clip.root === root &&
+        clip.path === dir &&
         clip.names.includes(entry.name)
       ) {
         clipboard.value = {
@@ -858,6 +918,7 @@ export const useFilesStore = defineStore("files", () => {
         };
       }
       await loadEntriesFor(tab);
+      await refreshTabsShowing(root, [dir], tab.id);
     });
   }
 
@@ -873,13 +934,16 @@ export const useFilesStore = defineStore("files", () => {
    */
   async function chmod(entry: FilesEntry, mode: number): Promise<void> {
     const tab = activeTab.value;
+    const root = tab.rootName;
+    const dir = tab.path;
     await runMutation(async () => {
       await chmodEntry(serverId.value, teamId(), {
-        root: tab.rootName,
-        path: joinPath(tab.path, entry.name),
+        root,
+        path: joinPath(dir, entry.name),
         mode,
       });
       await loadEntriesFor(tab);
+      await refreshTabsShowing(root, [dir], tab.id);
     });
   }
 
@@ -894,15 +958,18 @@ export const useFilesStore = defineStore("files", () => {
     format: ArchiveFormat,
   ): Promise<FilesEntry> {
     const tab = activeTab.value;
-    const destination = joinPath(tab.path, normalizeEntryName(name));
+    const root = tab.rootName;
+    const dir = tab.path;
+    const destination = joinPath(dir, normalizeEntryName(name));
     return runMutation(async () => {
       const created = await compressEntries(serverId.value, teamId(), {
-        root: tab.rootName,
-        sources: entries.map((entry) => joinPath(tab.path, entry.name)),
+        root,
+        sources: entries.map((entry) => joinPath(dir, entry.name)),
         destination,
         format,
       });
       await loadEntriesFor(tab);
+      await refreshTabsShowing(root, [dir], tab.id);
       return created;
     });
   }
@@ -913,14 +980,17 @@ export const useFilesStore = defineStore("files", () => {
    */
   async function extract(entry: FilesEntry, overwrite: boolean): Promise<void> {
     const tab = activeTab.value;
+    const root = tab.rootName;
+    const dir = tab.path;
     await runMutation(async () => {
       await extractEntry(serverId.value, teamId(), {
-        root: tab.rootName,
-        source: joinPath(tab.path, entry.name),
-        destination: tab.path,
+        root,
+        source: joinPath(dir, entry.name),
+        destination: dir,
         overwrite,
       });
       await loadEntriesFor(tab);
+      await refreshTabsShowing(root, [dir], tab.id);
     });
   }
 
@@ -931,6 +1001,8 @@ export const useFilesStore = defineStore("files", () => {
    */
   async function remove(entries: FilesEntry[]): Promise<TransferSummary> {
     const tab = activeTab.value;
+    const root = tab.rootName;
+    const dir = tab.path;
     return runMutation(async () => {
       const summary: TransferSummary = { done: [], conflicts: [], failed: [] };
       for (const entry of entries) {
@@ -938,8 +1010,8 @@ export const useFilesStore = defineStore("files", () => {
           await deleteEntry(
             serverId.value,
             teamId(),
-            tab.rootName,
-            joinPath(tab.path, entry.name),
+            root,
+            joinPath(dir, entry.name),
             isDirectory(entry),
           );
           summary.done.push(entry.name);
@@ -947,11 +1019,10 @@ export const useFilesStore = defineStore("files", () => {
           summary.failed.push({ name: entry.name, error: describeFilesError(err) });
         }
       }
-      pruneClipboard(summary.done, tab.rootName, tab.path);
-      await withEditor((editor) =>
-        editor.applyDelete(tab.rootName, tab.path, summary.done),
-      );
+      pruneClipboard(summary.done, root, dir);
+      await withEditor((editor) => editor.applyDelete(root, dir, summary.done));
       await loadEntriesFor(tab);
+      await refreshTabsShowing(root, [dir], tab.id);
       return summary;
     });
   }
@@ -960,22 +1031,24 @@ export const useFilesStore = defineStore("files", () => {
    * runTransfer copies or moves names from source into destination (same root),
    * one entry at a time so a single 409 or failure does not hide the rest. It
    * does not prompt: callers that want the replace/skip flow call
-   * {@link promptTransfer}.
+   * {@link promptTransfer}. The acting tab is passed in, so a prompt resolved
+   * after a tab switch still retries the tab that started the transfer.
    */
   async function runTransfer(
+    tab: FilesTab,
     op: "copy" | "move",
     source: string,
     destination: string,
     names: string[],
     overwrite: boolean,
   ): Promise<TransferSummary> {
-    const tab = activeTab.value;
+    const root = tab.rootName;
     const summary: TransferSummary = { done: [], conflicts: [], failed: [] };
     const call = op === "copy" ? copyEntry : moveEntry;
     for (const name of names) {
       try {
         await call(serverId.value, teamId(), {
-          root: tab.rootName,
+          root,
           source: joinPath(source, name),
           destination: joinPath(destination, name),
           overwrite,
@@ -991,10 +1064,16 @@ export const useFilesStore = defineStore("files", () => {
     }
     if (op === "move" && summary.done.length > 0) {
       await withEditor((editor) =>
-        editor.applyMove(tab.rootName, source, destination, summary.done),
+        editor.applyMove(root, source, destination, summary.done),
       );
     }
     await loadEntriesFor(tab);
+    if (op === "move" && summary.done.length > 0) {
+      // A move changes both the source and the destination directory. Refresh
+      // every other tab still showing either, so a cross-tab cut/paste leaves
+      // no stale listing (and no selection pointing at a moved path) behind.
+      await refreshTabsShowing(root, [source, destination], tab.id);
+    }
     return summary;
   }
 
@@ -1002,7 +1081,8 @@ export const useFilesStore = defineStore("files", () => {
    * promptTransfer runs a transfer with overwrite=false and, when names clash,
    * opens the replace/skip prompt instead of silently failing them. cutClipboard
    * marks a clipboard cut so the moved names are dropped from it; failed or
-   * skipped names stay for a later retry.
+   * skipped names stay for a later retry. The prompt records the acting tab, so
+   * a resolution after a tab switch still targets it.
    */
   async function promptTransfer(
     op: "copy" | "move",
@@ -1013,11 +1093,19 @@ export const useFilesStore = defineStore("files", () => {
   ): Promise<TransferSummary> {
     const tab = activeTab.value;
     const summary = await runMutation(() =>
-      runTransfer(op, source, destination, names, false),
+      runTransfer(tab, op, source, destination, names, false),
     );
     conflictPrompt.value =
       summary.conflicts.length > 0
-        ? { op, source, destination, names: [...summary.conflicts], cutClipboard }
+        ? {
+            op,
+            root: tab.rootName,
+            tabId: tab.id,
+            source,
+            destination,
+            names: [...summary.conflicts],
+            cutClipboard,
+          }
         : null;
     // A cut clipboard is consumed only for the names that actually moved: a
     // failed or skipped entry stays so the user can retry it. The scope is the
@@ -1030,18 +1118,20 @@ export const useFilesStore = defineStore("files", () => {
 
   /** resolveConflictPrompt retries the 409'd names, or drops them (skip). */
   async function resolveConflictPrompt(overwrite: boolean): Promise<TransferSummary> {
-    const tab = activeTab.value;
     const prompt = conflictPrompt.value;
     conflictPrompt.value = null;
     if (!prompt) {
       return { done: [], conflicts: [], failed: [] };
     }
+    // Resolve against the tab that started the transfer, even if the user has
+    // since switched (or closed) tabs.
+    const tab = findTab(prompt.tabId) ?? activeTab.value;
     if (!overwrite) {
       // Skipped names stay in a cut clipboard so a later paste can retry them.
       return { done: [], conflicts: prompt.names, failed: [] };
     }
     const summary = await runMutation(() =>
-      runTransfer(prompt.op, prompt.source, prompt.destination, prompt.names, true),
+      runTransfer(tab, prompt.op, prompt.source, prompt.destination, prompt.names, true),
     );
     if (prompt.cutClipboard && prompt.op === "move") {
       pruneClipboard(summary.done, tab.rootName, prompt.source);
@@ -1249,6 +1339,14 @@ export const useFilesStore = defineStore("files", () => {
    * server id. It is the node-switch reset and the team-switch/ sign-out base.
    */
   function resetBrowser(): void {
+    // Invalidate every tab being discarded: a listing (listRoots/listEntries)
+    // still in flight for one of them must not write after the switch. The
+    // shared `roots` is the dangerous one — a stale listRoots would replace the
+    // new node's roots with the previous node's. Pre-PR this was a single
+    // module-level counter bumped on reset; per-tab counters need the same bump.
+    for (const discarded of tabs.value) {
+      discarded.generation += 1;
+    }
     const tab = createTab();
     tabs.value = [tab];
     activeTabId.value = tab.id;
@@ -1318,6 +1416,7 @@ export const useFilesStore = defineStore("files", () => {
     // actions
     init,
     refresh,
+    refreshDirectory,
     retry,
     reload,
     loadMore,

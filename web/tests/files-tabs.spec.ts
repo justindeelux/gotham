@@ -286,6 +286,39 @@ test("the tablist is keyboard navigable with arrow keys", async ({ page }) => {
   await expect(tabs(page).nth(1)).toBeFocused();
 });
 
+test("the tablist exposes tabs with a panel and moves focus on close", async ({
+  page,
+}) => {
+  await openFiles(page);
+  await openExtraTab(page);
+
+  // Every owned child of the tablist is a tab (no stray close buttons), and the
+  // active tab controls the single panel that labels itself by that tab.
+  const childRoles = await page.evaluate(() =>
+    [...document.querySelectorAll(".fm-tabstrip > *")].map((element) =>
+      element.getAttribute("role"),
+    ),
+  );
+  expect(childRoles.length).toBeGreaterThan(0);
+  expect(childRoles.every((role) => role === "tab")).toBe(true);
+
+  const panel = page.locator("#fm-tabpanel");
+  await expect(panel).toHaveAttribute("role", "tabpanel");
+  const activeId = await activeTab(page).getAttribute("id");
+  await expect(activeTab(page)).toHaveAttribute("aria-controls", "fm-tabpanel");
+  await expect(panel).toHaveAttribute("aria-labelledby", activeId!);
+
+  // Closing the active tab via the × moves focus to the neighbour that takes over.
+  await activeTab(page).locator(".fm-tab-close").click();
+  await expect(tabs(page)).toHaveCount(1);
+  await expect(activeTab(page)).toBeFocused();
+
+  // Delete on the sole tab is a no-op (the × is hidden there too).
+  await activeTab(page).focus();
+  await page.keyboard.press("Delete");
+  await expect(tabs(page)).toHaveCount(1);
+});
+
 test("tab titles carry the full path and the strip scrolls at narrow widths", async ({
   page,
 }) => {

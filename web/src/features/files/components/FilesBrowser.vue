@@ -262,12 +262,14 @@ function openNewTab(): void {
   void files.openTab();
 }
 
-/** focusActiveTab moves DOM focus onto the active tab after a keyboard move. */
+/** focusActiveTab moves DOM focus onto the active tab and keeps it in view. */
 async function focusActiveTab(): Promise<void> {
   await nextTick();
-  tabListEl.value
-    ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
-    ?.focus();
+  const active = tabListEl.value?.querySelector<HTMLElement>(
+    '[role="tab"][aria-selected="true"]',
+  );
+  active?.focus();
+  active?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 /** neighbourTabId returns the tab `delta` places from `id`, wrapping around. */
@@ -283,26 +285,28 @@ function onTabKeydown(event: KeyboardEvent, tab: FilesTab): void {
     case "ArrowRight":
     case "ArrowDown":
       event.preventDefault();
-      void files.switchTab(neighbourTabId(tab.id, 1)).then(focusActiveTab);
+      void files.switchTab(neighbourTabId(tab.id, 1));
       break;
     case "ArrowLeft":
     case "ArrowUp":
       event.preventDefault();
-      void files.switchTab(neighbourTabId(tab.id, -1)).then(focusActiveTab);
+      void files.switchTab(neighbourTabId(tab.id, -1));
       break;
     case "Home":
       event.preventDefault();
-      void files.switchTab(files.tabs[0].id).then(focusActiveTab);
+      void files.switchTab(files.tabs[0].id);
       break;
     case "End":
       event.preventDefault();
-      void files
-        .switchTab(files.tabs[files.tabs.length - 1].id)
-        .then(focusActiveTab);
+      void files.switchTab(files.tabs[files.tabs.length - 1].id);
       break;
     case "Delete":
-      event.preventDefault();
-      void files.closeTab(tab.id).then(focusActiveTab);
+      // Closing the only tab would silently recreate it at the root (the × is
+      // hidden for a single tab), so Delete is a no-op there too.
+      if (files.tabs.length > 1) {
+        event.preventDefault();
+        void files.closeTab(tab.id);
+      }
       break;
   }
 }
@@ -321,10 +325,18 @@ function onListScroll(event: Event): void {
   files.setScrollTop((event.currentTarget as HTMLElement).scrollTop);
 }
 
-// Restore a tab's scroll offset after a switch and follow a navigation back to
-// the top (the store zeroes scrollTop on navigation, so the DOM replays it).
+// Move focus to the active tab as soon as it changes (nextTick), never after
+// the tab's listing finishes loading — otherwise the roving tabindex lags
+// behind and the next arrow press navigates from the stale tab. Also covers a
+// mouse close: the × removes the focused button, so focus must follow the tab
+// that takes over.
+watch(() => files.activeTabId, () => void focusActiveTab());
+
+// Replay the active tab's scroll offset after a switch, and after a load
+// completes (a restore that landed while the rows were still unrendered would
+// clamp to 0), plus back to the top on navigation (the store zeroes it).
 watch(
-  () => [files.activeTabId, files.path] as const,
+  () => [files.activeTabId, files.path, files.loaded, files.entries.length] as const,
   async () => {
     await nextTick();
     if (scrollEl.value) {
@@ -757,7 +769,9 @@ function onFolderMenu(key: string): void {
     </template>
 
     <!-- Tab bar (JUS-123): one tab per open directory. A middle-click or the
-         × closes a tab; the trailing + opens a new one at the root top. -->
+         × closes a tab; the trailing + opens a new one at the root top. The
+         tablist owns only role=tab buttons (the × is a span inside the tab) so
+         it satisfies aria-required-children; keyboard users close with Delete. -->
     <div class="fm-tabs">
       <div
         ref="tabListEl"
@@ -765,38 +779,35 @@ function onFolderMenu(key: string): void {
         role="tablist"
         :aria-label="$t('files.tabs.list')"
       >
-        <div
+        <button
           v-for="tab in files.tabs"
           :key="tab.id"
+          type="button"
           class="fm-tab"
           :class="{ 'is-active': tab.id === files.activeTabId }"
+          role="tab"
+          :id="'fm-tab-' + tab.id"
+          aria-controls="fm-tabpanel"
+          aria-keyshortcuts="Delete"
+          :aria-selected="tab.id === files.activeTabId"
+          :tabindex="tab.id === files.activeTabId ? 0 : -1"
+          :title="tabTitle(tab)"
+          :aria-label="tabTitle(tab)"
+          @click="files.switchTab(tab.id)"
+          @keydown="onTabKeydown($event, tab)"
+          @auxclick="onTabAuxClick($event, tab.id)"
         >
-          <button
-            type="button"
-            class="fm-tab-label"
-            role="tab"
-            :aria-selected="tab.id === files.activeTabId"
-            :tabindex="tab.id === files.activeTabId ? 0 : -1"
-            :title="tabTitle(tab)"
-            :aria-label="tabTitle(tab)"
-            @click="files.switchTab(tab.id)"
-            @keydown="onTabKeydown($event, tab)"
-            @auxclick="onTabAuxClick($event, tab.id)"
-          >
-            <span class="fm-tab-name">{{ tabLabel(tab) }}</span>
-          </button>
-          <button
+          <span class="fm-tab-name">{{ tabLabel(tab) }}</span>
+          <span
             v-if="files.tabs.length > 1"
-            type="button"
             class="fm-tab-close"
-            :aria-label="$t('files.tabs.close', { name: tabLabel(tab) })"
+            aria-hidden="true"
             :title="$t('files.tabs.close', { name: tabLabel(tab) })"
             @click.stop="void files.closeTab(tab.id)"
-            @auxclick="onTabAuxClick($event, tab.id)"
           >
             <X :size="12" :stroke-width="2" aria-hidden="true" />
-          </button>
-        </div>
+          </span>
+        </button>
       </div>
       <button
         type="button"
@@ -985,6 +996,14 @@ function onFolderMenu(key: string): void {
       </span>
     </div>
 
+    <!-- The tab's content region: one panel shared by every tab (aria-controls
+         points at it), labelled by the active tab. -->
+    <div
+      id="fm-tabpanel"
+      class="fm-panel"
+      role="tabpanel"
+      :aria-labelledby="'fm-tab-' + files.activeTabId"
+    >
     <div v-if="files.disabled" class="empty fm-state" @contextmenu.prevent="openFolderContext">
       <Lock :size="26" :stroke-width="1.6" aria-hidden="true" />
       <h4>{{ $t("files.browser.disabledTitle") }}</h4>
@@ -1255,6 +1274,7 @@ function onFolderMenu(key: string): void {
         <span>{{ $t("files.browser.freeSpace", { free: formatBytes(files.freeBytes) }) }}</span>
       </div>
     </template>
+    </div>
 
     <div v-if="dragActive" class="fm-drop-overlay" aria-hidden="true">
       <Upload :size="26" :stroke-width="1.6" />
@@ -1358,22 +1378,11 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-tab {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  max-width: 200px;
-  border-radius: 3px;
-}
-
-.fm-tab.is-active {
-  background: var(--selected-row);
-}
-
-.fm-tab-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
+  flex: 0 0 auto;
+  max-width: 200px;
   border: 0;
   background: none;
   padding: 5px 8px;
@@ -1383,7 +1392,8 @@ function onFolderMenu(key: string): void {
   cursor: pointer;
 }
 
-.fm-tab.is-active .fm-tab-label {
+.fm-tab.is-active {
+  background: var(--selected-row);
   color: var(--fg-2);
   font-weight: 600;
 }
@@ -1397,14 +1407,10 @@ function onFolderMenu(key: string): void {
 .fm-tab-close {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  margin-right: 2px;
-  border: 0;
-  background: none;
+  width: 18px;
+  height: 18px;
   border-radius: 3px;
   color: var(--muted);
-  cursor: pointer;
 }
 
 .fm-tab-close:hover {
@@ -1433,6 +1439,15 @@ function onFolderMenu(key: string): void {
 .fm-tab-add:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* The tabpanel: one flex column shared by every tab, so the entry list stays
+   the single scrolling region and the footer stays pinned (JUS-118/123). */
+.fm-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .fm-toolbar {

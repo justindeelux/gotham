@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { CloudDownload, File, Upload } from "@lucide/vue";
 import { NButton, NModal, NProgress, NTag, useMessage } from "naive-ui";
-import { computed, ref, watch } from "vue";
+import { ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { UploadItem } from "@/features/files/composables/useFileUpload";
@@ -31,18 +31,25 @@ const upload = useFileUpload();
 const dragging = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-/** target is the directory the queue uploads into (frozen while open). */
-const target = computed(() => ({
-  serverId: files.serverId,
-  teamId: teams.activeTeamId,
-  root: files.rootName,
-  path: files.path,
-}));
+/** target is the directory the queue uploads into, frozen when the dialog
+ *  opens, so a tab switch behind the modal cannot retarget the batch. */
+const target = ref({
+  serverId: "",
+  teamId: "",
+  root: "",
+  path: "",
+});
 
 watch(
   () => props.show,
   (open) => {
     if (open) {
+      target.value = {
+        serverId: files.serverId,
+        teamId: teams.activeTeamId,
+        root: files.rootName,
+        path: files.path,
+      };
       if (props.initialFiles.length > 0) {
         upload.addFiles(props.initialFiles);
       }
@@ -76,10 +83,10 @@ function dropped(event: DragEvent): void {
   }
 }
 
-/** close ends the batch, refreshing the listing when anything landed. */
+/** close ends the batch, refreshing the directory it landed in. */
 function close(): void {
   if (upload.summary.value.done > 0) {
-    void files.refresh();
+    void files.refreshDirectory(target.value.root, target.value.path);
   }
   emit("update:show", false);
 }
@@ -88,7 +95,7 @@ function close(): void {
 async function start(): Promise<void> {
   await upload.start(target.value);
   if (upload.summary.value.done > 0) {
-    void files.refresh();
+    void files.refreshDirectory(target.value.root, target.value.path);
   }
 }
 

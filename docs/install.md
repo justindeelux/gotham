@@ -410,7 +410,7 @@ The `/api/v1/servers/{id}/files` routes are mounted by default; set
 `FEATURE_FILES=false` to switch them off (they then answer **503**). The whole
 surface is limited to **platform operators** (an admin-scoped API token, a session
 with the `admin` role claim, or an email in `PLATFORM_ADMINS`): everyone else gets
-**403**, because the API exposes the node's filesystem. The routes are also team-scoped: a
+**403**, because the API exposes the node's filesystem. Operators also need to belong to the node's team, and read/deploy-scoped API tokens no longer reach the file API (an admin-scoped token is required). The routes are also team-scoped: a
 browsable server must belong to a team (a legacy team-less node answers 404),
 `roots`/`list`/`stat` need any member, and `content`, `download`, uploads and
 every mutation need an owner/admin role. File bodies can hold secrets (a `0600`

@@ -202,7 +202,7 @@ export const router = createRouter({
   routes,
 });
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore();
 
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
@@ -210,7 +210,12 @@ router.beforeEach((to) => {
   }
 
   if (to.meta.requiresPlatformAdmin && !authStore.isPlatformAdmin) {
-    return { name: "dashboard" };
+    // Login/refresh payloads omit the PLATFORM_ADMINS email match that
+    // /auth/me adds, so re-read the profile once before refusing.
+    await authStore.fetchMe().catch(() => undefined);
+    if (!authStore.isPlatformAdmin) {
+      return { name: "dashboard" };
+    }
   }
 
   if (to.meta.publicOnly && authStore.isAuthenticated) {

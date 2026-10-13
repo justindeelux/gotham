@@ -234,6 +234,13 @@ test("two tabs keep independent paths and the tab bar is a real tablist", async 
   await tabs(page).nth(1).click();
   await expect(activeTab(page)).toHaveText("volumes");
   await expect(page.locator(".fm-label b").first()).toHaveText("alpha");
+
+  // JUS-126: + sits immediately after the last tab, not at the far right.
+  const lastTab = await tabs(page).nth(1).boundingBox();
+  const addBox = await page.locator(".fm-tab-add").boundingBox();
+  expect(lastTab).not.toBeNull();
+  expect(addBox).not.toBeNull();
+  expect(addBox!.x).toBeGreaterThan(lastTab!.x + lastTab!.width);
 });
 
 test("a cut in one tab pastes into another tab (shared clipboard)", async ({
@@ -352,4 +359,13 @@ test("tab titles carry the full path and the strip scrolls at narrow widths", as
   expect(strip!.scroll).toBeGreaterThan(strip!.client);
   // The strip scrolls itself; the page never gains a horizontal scrollbar.
   expect(strip!.pageOverflow).toBeLessThanOrEqual(1);
+
+  // JUS-126: + follows the last tab and stays on-screen when the strip
+  // overflows, instead of being pushed out of view.
+  const addBox = await page.locator(".fm-tab-add").boundingBox();
+  const stripBox = await page.locator(".fm-tabstrip").boundingBox();
+  expect(addBox).not.toBeNull();
+  expect(stripBox).not.toBeNull();
+  expect(addBox!.x).toBeGreaterThanOrEqual(stripBox!.x + stripBox!.width - 1);
+  expect(addBox!.x + addBox!.width).toBeLessThanOrEqual(420 + 1);
 });

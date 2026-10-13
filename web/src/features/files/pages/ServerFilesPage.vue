@@ -155,7 +155,10 @@ function switchNode(next: string | number | null): void {
 }
 
 .node-bar__select {
-  min-width: 200px;
+  /* JUS-125: 3/4 of the width it used to take (it stretched to ~full via the
+     select's own width:100%), with a readable floor for node names. */
+  width: 75%;
+  min-width: 150px;
 }
 
 @media (max-width: 640px) {
@@ -164,8 +167,10 @@ function switchNode(next: string | number | null): void {
   }
 
   .node-bar__select {
+    width: auto;
     min-width: 0;
-    flex: 1 1 160px;
+    /* 3/4 of the former 160px basis. */
+    flex: 1 1 120px;
   }
 }
 </style>

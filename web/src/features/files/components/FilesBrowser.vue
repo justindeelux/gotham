@@ -157,6 +157,9 @@ const hasSelectedFiles = computed<boolean>(() =>
   files.selectedEntries.some((entry) => entry.kind === "file"),
 );
 
+/** hasSelection gates the toolbar's bulk actions (JUS-128). */
+const hasSelection = computed<boolean>(() => files.selectedNames.length > 0);
+
 /** selection is the current selection reduced to writable-safe entries. */
 const selection = computed<FilesEntry[]>(() =>
   files.selectedEntries.filter(isSelectable),
@@ -790,10 +793,12 @@ function onFolderMenu(key: string): void {
       </div>
     </template>
 
-    <!-- Tab bar (JUS-123): one tab per open directory. A middle-click or the
-         × closes a tab; the trailing + opens a new one at the root top. The
-         tablist owns only role=tab buttons (the × is a span inside the tab) so
-         it satisfies aria-required-children; keyboard users close with Delete. -->
+    <!-- Tab bar (JUS-123/126): one tab per open directory. A middle-click or
+         the × closes a tab; the + opens a new one at the root top and sits
+         right after the last tab (the strip hugs its tabs and scrolls, so + is
+         always reachable). The tablist owns only role=tab buttons (the × is a
+         span inside the tab) so it satisfies aria-required-children; keyboard
+         users close with Delete. -->
     <div class="fm-tabs">
       <div
         ref="tabListEl"
@@ -843,8 +848,8 @@ function onFolderMenu(key: string): void {
       </button>
     </div>
 
-    <div v-if="files.canWrite" class="fm-toolbar">
-      <div class="fm-toolbar-group">
+    <div v-if="files.canWrite || hasSelection" class="fm-toolbar">
+      <div v-if="files.canWrite" class="fm-toolbar-group">
         <NDropdown
           v-model:show="newMenuOpen"
           trigger="click"
@@ -907,18 +912,91 @@ function onFolderMenu(key: string): void {
         <span v-if="files.hasClipboard" class="small muted clipboard-hint">
           {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
         </span>
+
+        <!-- Bulk actions (JUS-128): the selection count and every action the
+             former .fm-bulk bar offered now live on the right of the toolbar
+             and stay disabled until there is a selection. -->
+        <span v-if="hasSelection" class="small muted fm-bulk-count">
+          {{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}
+          · {{ formatBytes(files.selectedBytes) }}
+        </span>
         <NButton
           size="small"
           secondary
-          :disabled="files.acting || selection.length === 0"
-          :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
-          :aria-label="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
-          @click="openCompress(selection)"
+          :disabled="!files.canReadContent || !hasSelectedFiles"
+          :title="files.canReadContent ? $t('files.browser.downloadSelected') : $t('files.browser.fileNeedsRole')"
+          :aria-label="$t('files.browser.downloadSelected')"
+          @click="downloadSelected()"
         >
           <template #icon>
-            <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
+            <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
           </template>
-          <span class="fm-btn-label">{{ $t("files.actions.compress") }}</span>
+          <span class="fm-btn-label">{{ $t("files.browser.downloadSelected") }}</span>
+        </NButton>
+        <template v-if="files.canWrite">
+          <NButton
+            size="small"
+            secondary
+            :disabled="files.acting || selection.length === 0"
+            :title="$t('files.actions.copy')"
+            :aria-label="$t('files.actions.copy')"
+            @click="files.copySelection(selection.map((item) => item.name))"
+          >
+            <template #icon>
+              <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("files.actions.copy") }}</span>
+          </NButton>
+          <NButton
+            size="small"
+            secondary
+            :disabled="files.acting || selection.length === 0"
+            :title="$t('files.actions.cut')"
+            :aria-label="$t('files.actions.cut')"
+            @click="files.cutSelection(selection.map((item) => item.name))"
+          >
+            <template #icon>
+              <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("files.actions.cut") }}</span>
+          </NButton>
+          <NButton
+            size="small"
+            secondary
+            :disabled="files.acting || selection.length === 0"
+            :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
+            :aria-label="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
+            @click="openCompress(selection)"
+          >
+            <template #icon>
+              <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("files.actions.compress") }}</span>
+          </NButton>
+          <NButton
+            size="small"
+            type="error"
+            secondary
+            :disabled="files.acting || selection.length === 0"
+            :title="$t('common.actions.delete')"
+            :aria-label="$t('common.actions.delete')"
+            @click="openDelete(selection)"
+          >
+            <template #icon>
+              <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("common.actions.delete") }}</span>
+          </NButton>
+        </template>
+        <NButton
+          v-if="hasSelection"
+          size="small"
+          quaternary
+          :title="$t('files.browser.clear')"
+          :aria-label="$t('files.browser.clear')"
+          @click="files.clearSelection()"
+        >
+          <span class="fm-btn-label">{{ $t("files.browser.clear") }}</span>
         </NButton>
       </div>
     </div>
@@ -985,53 +1063,6 @@ function onFolderMenu(key: string): void {
         </template>
         {{ $t("files.browser.recycleBin") }}
       </NButton>
-    </div>
-
-    <div
-      v-if="files.selectedNames.length > 0"
-      class="fm-bulk"
-      role="region"
-      :aria-label="$t('files.browser.selectionCount', { count: files.selectedNames.length })"
-    >
-      <span class="bold">{{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}</span>
-      <span class="muted">{{ formatBytes(files.selectedBytes) }}</span>
-      <span class="fm-bulk-actions">
-        <NButton
-          size="small"
-          secondary
-          :disabled="!files.canReadContent || !hasSelectedFiles"
-          :title="files.canReadContent ? '' : $t('files.browser.fileNeedsRole')"
-          @click="downloadSelected()"
-        >
-          <template #icon>
-            <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          {{ $t("files.browser.downloadSelected") }}
-        </NButton>
-        <template v-if="files.canWrite">
-          <NButton size="small" secondary :disabled="files.acting" @click="files.copySelection(selection.map((item) => item.name))">
-            <template #icon>
-              <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            {{ $t("files.actions.copy") }}
-          </NButton>
-          <NButton size="small" secondary :disabled="files.acting" @click="files.cutSelection(selection.map((item) => item.name))">
-            <template #icon>
-              <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            {{ $t("files.actions.cut") }}
-          </NButton>
-          <NButton size="small" type="error" secondary :disabled="files.acting" @click="openDelete(selection)">
-            <template #icon>
-              <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            {{ $t("common.actions.delete") }}
-          </NButton>
-        </template>
-        <NButton size="small" quaternary @click="files.clearSelection()">
-          {{ $t("files.browser.clear") }}
-        </NButton>
-      </span>
     </div>
 
     <!-- The tab's content region: one panel shared by every tab (aria-controls
@@ -1350,7 +1381,7 @@ function onFolderMenu(key: string): void {
 .files-browser {
   position: relative;
   /* The panel is a flex column that fills whatever height its parent gives it
-   * (JUS-118): toolbar/bar/bulk/footer stay fixed while the entry list is the
+   * (JUS-118): toolbar/bar/footer stay fixed while the entry list is the
    * only scrolling region (`flex: 1` on .table-wrap / .fm-grid / .fm-state). */
   display: flex;
   flex-direction: column;
@@ -1406,28 +1437,30 @@ function onFolderMenu(key: string): void {
   display: flex;
   align-items: stretch;
   gap: 2px;
-  flex: 1 1 auto;
+  /* Hug the tabs so the + button sits right after the last one (JUS-126);
+     shrinking below the content keeps the strip the only scroll region. */
+  flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;
   background: var(--surface-warm);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 2px;
+  padding: 3px;
 }
 
 .fm-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex: 0 0 auto;
-  max-width: 200px;
+  max-width: 220px;
   border: 0;
   background: none;
-  padding: 5px 8px;
-  border-radius: 3px;
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 
@@ -1446,9 +1479,9 @@ function onFolderMenu(key: string): void {
 .fm-tab-close {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
 }
 
@@ -1461,8 +1494,8 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border: 1px solid var(--border);
   background: var(--surface-warm);
   border-radius: var(--radius-sm);
@@ -1498,8 +1531,9 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-3);
 }
 
-/* Left group (New dropdown + Upload) and the right-aligned bulk group
-   (Paste + Compress), JUS-120. */
+/* Left group (New dropdown + Upload) and the right-aligned group: clipboard
+   Paste plus the JUS-128 bulk actions (Download/Copy/Cut/Compress/Delete/Clear)
+   that used to live in their own bar, JUS-120/128. */
 .fm-toolbar-group {
   display: flex;
   align-items: center;
@@ -1617,23 +1651,10 @@ function onFolderMenu(key: string): void {
   margin-left: auto;
 }
 
-.fm-bulk {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  background: var(--accent-soft);
-  border-bottom: 1px solid color-mix(in oklab, var(--accent) 28%, transparent);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-xs);
-  color: var(--fg-2);
-}
-
-.fm-bulk-actions {
-  margin-left: auto;
-  display: inline-flex;
-  gap: var(--space-2);
+/* Bulk selection count on the toolbar (JUS-128): the former .fm-bulk bar is
+   gone; the count and its actions live in .fm-toolbar-end. */
+.fm-bulk-count {
+  white-space: nowrap;
 }
 
 .fm-state {
@@ -1703,8 +1724,8 @@ function onFolderMenu(key: string): void {
   grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 168px;
   gap: var(--space-3);
   align-items: center;
-  padding: 7px var(--space-3);
-  min-height: 42px;
+  padding: 10px var(--space-3);
+  min-height: 52px;
   border-bottom: 1px solid var(--border);
   position: relative;
   transition: background var(--motion-base) var(--ease-standard);
@@ -1784,6 +1805,13 @@ function onFolderMenu(key: string): void {
   cursor: pointer;
 }
 
+/* JUS-127: the name/type lines get breathing room inside one list row. */
+.fm-name .fm-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 .fm-label b {
   display: block;
   font-weight: 500;
@@ -1833,6 +1861,7 @@ function onFolderMenu(key: string): void {
 .fm-mode {
   display: flex;
   flex-direction: column;
+  gap: 4px;
   line-height: 1.3;
 }
 

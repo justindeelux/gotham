@@ -486,7 +486,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.permissionDenied = false;
     tab.lastLoadedPath = tab.path;
     // Drop selection names that no longer exist (a refresh after another
-    // session deleted them), so the bulk bar never counts a phantom row.
+    // session deleted them), so the bulk actions never count a phantom row.
     pruneSelectionToEntries(tab);
   }
 

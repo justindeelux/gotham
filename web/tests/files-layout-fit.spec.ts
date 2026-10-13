@@ -241,6 +241,19 @@ test("the top breadcrumb is gone and the bottom node bar switches nodes", async 
   await expect(bar).toBeVisible();
   await expect(bar).toContainText("prod-01");
 
+  // JUS-125: the node select is ~3/4 of the bar width.
+  const ratio = await page.evaluate(() => {
+    const barEl = document.querySelector(".node-bar") as HTMLElement | null;
+    const selectEl = document.querySelector(".node-bar__select") as HTMLElement | null;
+    if (barEl === null || selectEl === null) {
+      return null;
+    }
+    return selectEl.getBoundingClientRect().width / barEl.getBoundingClientRect().width;
+  });
+  expect(ratio).not.toBeNull();
+  expect(ratio!).toBeGreaterThan(0.55);
+  expect(ratio!).toBeLessThan(0.8);
+
   // An offline node is listed with its status but cannot be selected.
   await page.locator(".node-bar__select").click();
   const offline = page.locator(".n-base-select-option", { hasText: "prod-03" });
@@ -274,8 +287,18 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
   await expect(page.getByRole("menuitem", { name: "New folder", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  // Select an entry so the bulk Compress action is enabled and named.
+  // JUS-128: no separate bulk bar — its actions live on the right of the
+  // toolbar and are enabled only with a selection.
+  await expect(page.locator(".fm-bulk")).toHaveCount(0);
+  const toolbar = page.locator(".fm-toolbar");
+  const bulkDownload = toolbar.getByRole("button", { name: "Download", exact: true });
+  await expect(bulkDownload).toBeVisible();
+  await expect(bulkDownload).toBeDisabled();
+
+  // Select the whole listing so the bulk actions enable and the count shows.
   await page.locator(".fm-head .n-checkbox").click();
+  await expect(bulkDownload).toBeEnabled();
+  await expect(toolbar.locator(".fm-bulk-count")).toContainText("60 selected");
 
   // Bulk tools sit to the right of the create/upload group.
   const upload = await page.getByRole("button", { name: "Upload", exact: true }).boundingBox();
@@ -289,7 +312,16 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
   // Small screens: labels are hidden and every toolbar button keeps its name.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".fm-btn-label").first()).toBeHidden();
-  for (const name of ["New", "Upload", "Compress…"]) {
+  for (const name of [
+    "New",
+    "Upload",
+    "Download",
+    "Copy",
+    "Cut",
+    "Compress…",
+    "Delete",
+    "Clear",
+  ]) {
     await expect(page.getByRole("button", { name, exact: true })).toHaveAttribute(
       "aria-label",
       name,

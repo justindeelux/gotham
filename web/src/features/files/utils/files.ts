@@ -429,6 +429,19 @@ export function formatOctalMode(mode: number): string {
   return (mode & PERMISSION_BITS).toString(8).padStart(3, "0");
 }
 
+/**
+ * formatOctalModeFull renders a mode for display: the three permission digits,
+ * plus a leading special-bits digit (setuid 4, setgid 2, sticky 1) when one is
+ * set — so "644" and "755" stay three digits and "4755"/"1777" are four. The
+ * type bits are ignored, so files, directories and special files share it. The
+ * dialog's editable field keeps using {@link formatOctalMode}: a chmod never
+ * carries a special bit (the agent refuses one).
+ */
+export function formatOctalModeFull(mode: number): string {
+  const bits = mode & 0o7777;
+  return bits.toString(8).padStart(bits > PERMISSION_BITS ? 4 : 3, "0");
+}
+
 /** parseOctalMode converts a validated 3-digit octal string to a number. */
 export function parseOctalMode(value: string): number {
   return Number.parseInt(value, 8) & PERMISSION_BITS;

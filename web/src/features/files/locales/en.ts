@@ -89,6 +89,7 @@ const en = {
     octalPlaceholder: "e.g. 644",
     octalHint: "Three octal digits (000–777). Type a mode or tick the boxes — they stay in sync.",
     invalid: "Enter three octal digits (0–7), e.g. 644.",
+    currentMode: "Current mode",
     bitsLabel: "Permission bits",
     read: "Read",
     write: "Write",

@@ -88,6 +88,7 @@ const vi = {
     octalPlaceholder: "ví dụ: 644",
     octalHint: "Ba chữ số bát phân (000–777). Nhập chế độ hoặc tích các ô — hai bên luôn đồng bộ.",
     invalid: "Hãy nhập ba chữ số bát phân (0–7), ví dụ 644.",
+    currentMode: "Chế độ hiện tại",
     bitsLabel: "Bit quyền",
     read: "Đọc",
     write: "Ghi",

@@ -394,13 +394,14 @@ test("the editor tablist exposes tabs, a panel and arrow-key navigation", async 
   await page.locator(".fm-label", { hasText: "logo.png" }).first().click();
   await expect(page.getByText("Binary file")).toBeVisible();
 
-  const tablist = page.getByRole("tablist");
+  // The browser also exposes a tablist (JUS-123), so scope to the editor.
+  const tablist = page.getByRole("tablist", { name: "Editor" });
   await expect(tablist).toBeVisible();
-  const tabs = page.getByRole("tab");
+  const tabs = tablist.getByRole("tab");
   await expect(tabs).toHaveCount(2);
 
   // The active tab owns a resolvable panel with role=tabpanel.
-  const active = page.getByRole("tab", { selected: true });
+  const active = tablist.getByRole("tab", { selected: true });
   const panelId = await active.getAttribute("aria-controls");
   expect(panelId).toBeTruthy();
   await expect(page.locator(`#${panelId}`)).toHaveAttribute("role", "tabpanel");
@@ -408,7 +409,7 @@ test("the editor tablist exposes tabs, a panel and arrow-key navigation", async 
   // Roving focus: ArrowLeft moves selection to the previous tab.
   await active.focus();
   await page.keyboard.press("ArrowLeft");
-  await expect(page.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
+  await expect(tablist.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
 });
 
 test("a ready tab renders no error state and keeps tab/panel ids unique", async ({
@@ -459,20 +460,22 @@ test("arrow keys keep switching between two ready tabs", async ({ page }) => {
     timeout: 15_000,
   });
 
-  const tabs = page.getByRole("tab");
-  await expect(tabs).toHaveCount(2);
+  // Scope to the editor tablist: the browser tab bar (JUS-123) is a second
+  // tablist on the page.
+  const editorTabs = page.getByRole("tablist", { name: "Editor" });
+  await expect(editorTabs.getByRole("tab")).toHaveCount(2);
   // Activate the first tab: the click focuses its button, but the session focus
   // must not be yanked into the editor, or the arrow keys below drive the
   // editor cursor instead of the tablist.
-  await page.getByRole("tab", { name: /app\.yaml/ }).click();
-  await expect(page.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
+  await editorTabs.getByRole("tab", { name: /app\.yaml/ }).click();
+  await expect(editorTabs.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("tab", { selected: true })).toHaveText(/notes\.md/);
+  await expect(editorTabs.getByRole("tab", { selected: true })).toHaveText(/notes\.md/);
   expect(
     await page.evaluate(() => document.activeElement?.getAttribute("role")),
   ).toBe("tab");
   await page.keyboard.press("ArrowLeft");
-  await expect(page.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
+  await expect(editorTabs.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
 });
 
 test("the conflict modal is an alertdialog that confirms overwrite and reload", async ({

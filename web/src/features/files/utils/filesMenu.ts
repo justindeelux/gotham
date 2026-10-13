@@ -43,6 +43,7 @@ export function rowMenuOptions(
   const options: FilesMenuItem[] = [];
   if (entry.kind === "directory") {
     options.push(item(t("files.menu.open"), "open"));
+    options.push(item(t("files.menu.openTab"), "open-tab"));
   } else if (entry.kind === "file") {
     options.push(item(t("files.menu.edit"), "edit", !canReadContent));
     options.push(item(t("files.menu.download"), "download", !canReadContent));

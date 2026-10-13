@@ -54,6 +54,25 @@
                  one New dropdown, Upload sits beside it, and the bulk tools
                  (Compress) move to the right. Labels collapse to icon-only
                  <=640px, each keeping a title + aria-label. -->
+            <!-- JUS-123: browser tabs. Each tab owns its own root, path,
+                 selection, sort/filter and scroll offset; the clipboard stays
+                 shared across tabs. Middle-click or × closes a tab, + opens a
+                 new one at the root top, and the strip scrolls at narrow
+                 widths. -->
+            <div class="fm-tabs">
+              <div class="fm-tabstrip" role="tablist" aria-label="Browser tabs">
+                <div class="fm-tab">
+                  <button class="fm-tab-label" type="button" role="tab" aria-selected="false" tabindex="-1" title="volumes" aria-label="volumes"><span class="fm-tab-name">volumes</span></button>
+                  <button class="fm-tab-close" type="button" aria-label="Close volumes" title="Close volumes"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+                </div>
+                <div class="fm-tab is-active">
+                  <button class="fm-tab-label" type="button" role="tab" aria-selected="true" tabindex="0" title="volumes/storefront-8f2c1ab" aria-label="volumes/storefront-8f2c1ab"><span class="fm-tab-name">storefront-8f2c1ab</span></button>
+                  <button class="fm-tab-close" type="button" aria-label="Close storefront-8f2c1ab" title="Close storefront-8f2c1ab"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+                </div>
+              </div>
+              <button class="fm-tab-add" type="button" aria-label="New tab" title="New tab"><svg aria-hidden="true"><use href="#i-plus"></use></svg></button>
+            </div>
+
             <div class="fm-toolbar">
               <div class="fm-toolbar-group">
                 <button class="btn btn-sm btn-outline" type="button" data-open="fm-newfolder" aria-haspopup="menu" aria-expanded="false"><svg aria-hidden="true"><use href="#i-plus"></use></svg><span class="fm-btn-label">New</span><svg class="fm-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>

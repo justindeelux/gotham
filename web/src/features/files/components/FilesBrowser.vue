@@ -21,6 +21,7 @@ import {
   Search,
   Trash2,
   Upload,
+  X,
 } from "@lucide/vue";
 import {
   NButton,
@@ -31,7 +32,7 @@ import {
   NSelect,
   useMessage,
 } from "naive-ui";
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import ConflictDialog from "@/features/files/components/ConflictDialog.vue";
@@ -47,6 +48,7 @@ import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
+import type { FilesTab } from "@/features/files/stores/files";
 import type { NameKind, TransferProblem } from "@/features/files/utils/files";
 import {
   entryIconKind,
@@ -235,6 +237,101 @@ function openInEditor(entry: FilesEntry): void {
     joinPath(files.path, entry.name),
   );
 }
+
+// ── Tabs (JUS-123) ────────────────────────────────────────────────────────
+// The tab bar lists every open directory tab. Each tab owns its path, root,
+// selection, sort/filter and scroll offset (the store keeps them per tab); the
+// clipboard stays shared, so a cut in one tab pastes in another.
+/** tabListEl is the role=tablist strip, refocused after an arrow-key move. */
+const tabListEl = ref<HTMLElement | null>(null);
+/** scrollEl is the mounted entry-list scroll container (list or grid). */
+const scrollEl = ref<HTMLElement | null>(null);
+
+/** tabLabel is the visible tab name: the folder's basename, or the root. */
+function tabLabel(tab: FilesTab): string {
+  return tab.path === "" ? tab.rootName : (tab.path.split("/").pop() ?? tab.rootName);
+}
+
+/** tabTitle is the tab tooltip / accessible name: the full root-relative path. */
+function tabTitle(tab: FilesTab): string {
+  return tab.path === "" ? tab.rootName : `${tab.rootName}/${tab.path}`;
+}
+
+/** openNewTab opens a tab at the active root's top level. */
+function openNewTab(): void {
+  void files.openTab();
+}
+
+/** focusActiveTab moves DOM focus onto the active tab after a keyboard move. */
+async function focusActiveTab(): Promise<void> {
+  await nextTick();
+  tabListEl.value
+    ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+    ?.focus();
+}
+
+/** neighbourTabId returns the tab `delta` places from `id`, wrapping around. */
+function neighbourTabId(id: string, delta: number): string {
+  const count = files.tabs.length;
+  const index = files.tabs.findIndex((tab) => tab.id === id);
+  return files.tabs[(index + delta + count) % count]?.id ?? id;
+}
+
+/** onTabKeydown drives the roving-tabindex tablist (arrows, Home/End, Delete). */
+function onTabKeydown(event: KeyboardEvent, tab: FilesTab): void {
+  switch (event.key) {
+    case "ArrowRight":
+    case "ArrowDown":
+      event.preventDefault();
+      void files.switchTab(neighbourTabId(tab.id, 1)).then(focusActiveTab);
+      break;
+    case "ArrowLeft":
+    case "ArrowUp":
+      event.preventDefault();
+      void files.switchTab(neighbourTabId(tab.id, -1)).then(focusActiveTab);
+      break;
+    case "Home":
+      event.preventDefault();
+      void files.switchTab(files.tabs[0].id).then(focusActiveTab);
+      break;
+    case "End":
+      event.preventDefault();
+      void files
+        .switchTab(files.tabs[files.tabs.length - 1].id)
+        .then(focusActiveTab);
+      break;
+    case "Delete":
+      event.preventDefault();
+      void files.closeTab(tab.id).then(focusActiveTab);
+      break;
+  }
+}
+
+/** onTabAuxClick closes a tab on a middle-button click. */
+function onTabAuxClick(event: MouseEvent, id: string): void {
+  if (event.button !== 1) {
+    return;
+  }
+  event.preventDefault();
+  void files.closeTab(id);
+}
+
+/** onListScroll records the active tab's entry-list scroll offset. */
+function onListScroll(event: Event): void {
+  files.setScrollTop((event.currentTarget as HTMLElement).scrollTop);
+}
+
+// Restore a tab's scroll offset after a switch and follow a navigation back to
+// the top (the store zeroes scrollTop on navigation, so the DOM replays it).
+watch(
+  () => [files.activeTabId, files.path] as const,
+  async () => {
+    await nextTick();
+    if (scrollEl.value) {
+      scrollEl.value.scrollTop = files.scrollTop;
+    }
+  },
+);
 
 /**
  * blockedByDirty refuses a rename/move/delete of entries with unsaved editor
@@ -459,6 +556,10 @@ function onRowMenu(key: string, entry: FilesEntry): void {
     case "open":
       void files.openDirectory(entry.name);
       break;
+    case "open-tab":
+      // Open the folder in a new tab, leaving this one where it is.
+      void files.openTab({ root: files.rootName, path: joinPath(files.path, entry.name) });
+      break;
     case "edit":
       openInEditor(entry);
       break;
@@ -654,6 +755,60 @@ function onFolderMenu(key: string): void {
         </div>
       </div>
     </template>
+
+    <!-- Tab bar (JUS-123): one tab per open directory. A middle-click or the
+         × closes a tab; the trailing + opens a new one at the root top. -->
+    <div class="fm-tabs">
+      <div
+        ref="tabListEl"
+        class="fm-tabstrip"
+        role="tablist"
+        :aria-label="$t('files.tabs.list')"
+      >
+        <div
+          v-for="tab in files.tabs"
+          :key="tab.id"
+          class="fm-tab"
+          :class="{ 'is-active': tab.id === files.activeTabId }"
+        >
+          <button
+            type="button"
+            class="fm-tab-label"
+            role="tab"
+            :aria-selected="tab.id === files.activeTabId"
+            :tabindex="tab.id === files.activeTabId ? 0 : -1"
+            :title="tabTitle(tab)"
+            :aria-label="tabTitle(tab)"
+            @click="files.switchTab(tab.id)"
+            @keydown="onTabKeydown($event, tab)"
+            @auxclick="onTabAuxClick($event, tab.id)"
+          >
+            <span class="fm-tab-name">{{ tabLabel(tab) }}</span>
+          </button>
+          <button
+            v-if="files.tabs.length > 1"
+            type="button"
+            class="fm-tab-close"
+            :aria-label="$t('files.tabs.close', { name: tabLabel(tab) })"
+            :title="$t('files.tabs.close', { name: tabLabel(tab) })"
+            @click.stop="void files.closeTab(tab.id)"
+            @auxclick="onTabAuxClick($event, tab.id)"
+          >
+            <X :size="12" :stroke-width="2" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      <button
+        type="button"
+        class="fm-tab-add"
+        :disabled="files.rootName === ''"
+        :aria-label="$t('files.tabs.new')"
+        :title="$t('files.tabs.new')"
+        @click="openNewTab()"
+      >
+        <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
+      </button>
+    </div>
 
     <div v-if="files.canWrite" class="fm-toolbar">
       <div class="fm-toolbar-group">
@@ -887,7 +1042,7 @@ function onFolderMenu(key: string): void {
         </div>
       </div>
 
-      <div v-if="files.viewMode === 'list'" class="table-wrap" @contextmenu.prevent="openFolderContext">
+      <div v-if="files.viewMode === 'list'" ref="scrollEl" class="table-wrap" @scroll="onListScroll" @contextmenu.prevent="openFolderContext">
         <div class="fm-table" role="table">
           <div class="fm-row fm-head" role="row">
             <span class="fm-select" role="columnheader">
@@ -1048,7 +1203,7 @@ function onFolderMenu(key: string): void {
         </div>
       </div>
 
-      <div v-else class="fm-grid" @contextmenu.prevent="openFolderContext">
+      <div v-else ref="scrollEl" class="fm-grid" @scroll="onListScroll" @contextmenu.prevent="openFolderContext">
         <div
           v-for="entry in files.visibleEntries"
           :key="entry.name"
@@ -1175,6 +1330,109 @@ function onFolderMenu(key: string): void {
 
 .fm-root-select {
   width: 220px;
+}
+
+/* Tab bar (JUS-123): one tab per open directory. The strip scrolls
+   horizontally at narrow widths instead of wrapping the layout; the active tab
+   is filled, and each label ellipsises inside its own max width. */
+.fm-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  margin-bottom: var(--space-3);
+}
+
+.fm-tabstrip {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+}
+
+.fm-tab {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 200px;
+  border-radius: 3px;
+}
+
+.fm-tab.is-active {
+  background: var(--selected-row);
+}
+
+.fm-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 5px 8px;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.fm-tab.is-active .fm-tab-label {
+  color: var(--fg-2);
+  font-weight: 600;
+}
+
+.fm-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-tab-close {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 2px;
+  border: 0;
+  background: none;
+  border-radius: 3px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fm-tab-close:hover {
+  background: var(--hover-row);
+  color: var(--fg-2);
+}
+
+.fm-tab-add {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  background: var(--surface-warm);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fm-tab-add:hover:not(:disabled) {
+  color: var(--fg-2);
+  border-color: var(--accent);
+}
+
+.fm-tab-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .fm-toolbar {

@@ -61,8 +61,11 @@ const en = {
     specialCount: "{count} special",
     freeSpace: "Free space: {free}",
     currentPath: "Root: {path}",
+    nodeLabel: "Agent node",
+    switchNode: "Switch agent node",
   },
   actions: {
+    new: "New",
     newFile: "New file",
     newFolder: "New folder",
     upload: "Upload",

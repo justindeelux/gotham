@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { RouterView } from "vue-router";
+import { computed } from "vue";
+import { RouterView, useRoute } from "vue-router";
 
 import { TaskProgressCards } from "@/features/tasks";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
@@ -8,6 +9,11 @@ import AppTopbar from "./AppTopbar.vue";
 import { provideMobileNav } from "./useMobileNav";
 
 const { mobileNavOpen, closeMobileNav } = provideMobileNav();
+
+// A route with `fillViewport` owns its own scrolling region (see the file
+// browser, JUS-118): the page spans the viewport and never scrolls itself.
+const route = useRoute();
+const fillViewport = computed(() => route.meta.fillViewport === true);
 </script>
 
 <template>
@@ -23,7 +29,7 @@ const { mobileNavOpen, closeMobileNav } = provideMobileNav();
       <AppTopbar />
 
       <main class="view">
-        <div class="page">
+        <div class="page" :class="{ 'page--fill': fillViewport }">
           <RouterView />
         </div>
       </main>
@@ -69,6 +75,21 @@ const { mobileNavOpen, closeMobileNav } = provideMobileNav();
 .page {
   padding: var(--space-6) var(--space-6) var(--space-12);
   max-width: 1360px;
+}
+
+/* A fill page (JUS-118) spans the viewport as a flex column whose single
+ * child owns the internal scroll, so the page itself never scrolls. The
+ * bottom padding is trimmed so the panel reaches near the viewport edge. */
+.page.page--fill {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  padding-bottom: var(--space-6);
+}
+
+.page.page--fill > * {
+  min-height: 0;
 }
 
 .backdrop {

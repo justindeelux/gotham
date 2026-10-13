@@ -8,15 +8,14 @@ import {
   CircleAlert,
   Copy,
   Download,
-  FilePlus2,
   Folder,
-  FolderPlus,
   HardDrive,
   LayoutGrid,
   List,
   Lock,
   MoreVertical,
   Pencil,
+  Plus,
   RefreshCw,
   Scissors,
   Search,
@@ -279,6 +278,19 @@ async function downloadSelected(): Promise<void> {
 function openCreate(kind: NameKind): void {
   createKind.value = kind;
   createOpen.value = true;
+}
+
+/** newMenuOptions groups New file / New folder under one toolbar dropdown. */
+const newMenuOptions = computed(() =>
+  [
+    { label: String(t("files.actions.newFile")), key: "file" },
+    { label: String(t("files.actions.newFolder")), key: "directory" },
+  ].map((option) => ({ ...option, props: { role: "menuitem" } })),
+);
+
+/** onNewMenu maps the New dropdown's key back to a create kind. */
+function onNewMenu(key: string): void {
+  openCreate(key === "directory" ? "directory" : "file");
 }
 
 function openRename(entry: FilesEntry): void {
@@ -564,53 +576,75 @@ function onRowMenu(key: string, entry: FilesEntry): void {
     </template>
 
     <div v-if="files.canWrite" class="fm-toolbar">
-      <NButton size="small" secondary :disabled="files.acting" @click="openCreate('file')">
-        <template #icon>
-          <FilePlus2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        {{ $t("files.actions.newFile") }}
-      </NButton>
-      <NButton size="small" secondary :disabled="files.acting" @click="openCreate('directory')">
-        <template #icon>
-          <FolderPlus :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        {{ $t("files.actions.newFolder") }}
-      </NButton>
-      <NButton
-        size="small"
-        secondary
-        :disabled="files.acting || selection.length === 0"
-        :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
-        @click="openCompress(selection)"
-      >
-        <template #icon>
-          <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        {{ $t("files.actions.compress") }}
-      </NButton>
-      <NButton size="small" type="primary" :disabled="files.acting" @click="openUpload()">
-        <template #icon>
-          <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        {{ $t("files.actions.upload") }}
-      </NButton>
-      <NButton
-        v-if="files.hasClipboard"
-        size="small"
-        secondary
-        :disabled="files.acting || files.pasteProblem !== null"
-        :title="pasteProblemText || $t('files.actions.paste')"
-        @click="() => void pasteAction()"
-      >
-        <template #icon>
-          <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        {{ $t("files.actions.paste") }}
-        <span class="muted">({{ files.clipboard?.names.length ?? 0 }})</span>
-      </NButton>
-      <span v-if="files.hasClipboard" class="small muted clipboard-hint">
-        {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
-      </span>
+      <div class="fm-toolbar-group">
+        <NDropdown
+          trigger="click"
+          placement="bottom-start"
+          :options="newMenuOptions"
+          :menu-props="() => ({
+            role: 'menu',
+            'aria-label': $t('files.actions.new'),
+          })"
+          @select="onNewMenu"
+        >
+          <NButton
+            size="small"
+            secondary
+            :disabled="files.acting"
+            :title="$t('files.actions.new')"
+            :aria-label="$t('files.actions.new')"
+          >
+            <template #icon>
+              <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("files.actions.new") }}</span>
+            <ChevronDown class="fm-caret" :size="12" :stroke-width="1.8" aria-hidden="true" />
+          </NButton>
+        </NDropdown>
+        <NButton
+          size="small"
+          type="primary"
+          :disabled="files.acting"
+          :title="$t('files.actions.upload')"
+          :aria-label="$t('files.actions.upload')"
+          @click="openUpload()"
+        >
+          <template #icon>
+            <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ $t("files.actions.upload") }}</span>
+        </NButton>
+      </div>
+
+      <div class="fm-toolbar-group fm-toolbar-end">
+        <NButton
+          v-if="files.hasClipboard"
+          size="small"
+          secondary
+          :disabled="files.acting || files.pasteProblem !== null"
+          :title="pasteProblemText || $t('files.actions.paste')"
+          :aria-label="$t('files.actions.paste')"
+          @click="() => void pasteAction()"
+        >
+          <template #icon>
+            <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ $t("files.actions.paste") }}</span>
+        </NButton>
+        <NButton
+          size="small"
+          secondary
+          :disabled="files.acting || selection.length === 0"
+          :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
+          :aria-label="$t('files.actions.compress')"
+          @click="openCompress(selection)"
+        >
+          <template #icon>
+            <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ $t("files.actions.compress") }}</span>
+        </NButton>
+      </div>
     </div>
 
     <div class="fm-bar">
@@ -1003,6 +1037,21 @@ function onRowMenu(key: string, entry: FilesEntry): void {
  * docs/design/files.html; only tokens from styles/tokens.css are used. */
 .files-browser {
   position: relative;
+  /* The panel is a flex column that fills whatever height its parent gives it
+   * (JUS-118): toolbar/bar/bulk/footer stay fixed while the entry list is the
+   * only scrolling region (`flex: 1` on .table-wrap / .fm-grid / .fm-state). */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: none;
+}
+
+.files-browser :deep(.n-card-content) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .fm-card-head {
@@ -1034,12 +1083,34 @@ function onRowMenu(key: string, entry: FilesEntry): void {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  flex: 0 0 auto;
   flex-wrap: wrap;
   margin-bottom: var(--space-3);
 }
 
-.clipboard-hint {
-  margin-left: var(--space-1);
+/* Left group (New dropdown + Upload) and the right-aligned bulk group
+   (Paste + Compress), JUS-120. */
+.fm-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.fm-toolbar-end {
+  margin-left: auto;
+}
+
+.fm-caret {
+  margin-left: 2px;
+  color: var(--muted);
+}
+
+/* Small screens drop the toolbar labels, leaving icon-only buttons whose
+   accessible name comes from each button's aria-label + title (JUS-120). */
+@media (max-width: 640px) {
+  .fm-btn-label {
+    display: none;
+  }
 }
 
 .segmented {
@@ -1075,6 +1146,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  flex: 0 0 auto;
   flex-wrap: wrap;
   margin-bottom: var(--space-3);
 }
@@ -1135,6 +1207,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  flex: 0 0 auto;
   flex-wrap: wrap;
   background: var(--accent-soft);
   border-bottom: 1px solid color-mix(in oklab, var(--accent) 28%, transparent);
@@ -1150,6 +1223,11 @@ function onRowMenu(key: string, entry: FilesEntry): void {
 }
 
 .fm-state {
+  /* A state view owns the whole entry area, which is why it scrolls
+     internally instead of growing the panel. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   padding: var(--space-8) 0;
   color: var(--muted);
 }
@@ -1194,7 +1272,11 @@ function onRowMenu(key: string, entry: FilesEntry): void {
 }
 
 .table-wrap {
+  /* The entry list is the panel's single scrolling region (JUS-118). */
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-x: auto;
+  overflow-y: auto;
 }
 
 .fm-table {
@@ -1363,6 +1445,11 @@ function onRowMenu(key: string, entry: FilesEntry): void {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
   gap: var(--space-3);
+  /* Grid view scrolls internally too, keeping tiles top-aligned. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
 }
 
 .fm-tile-wrap {
@@ -1453,6 +1540,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
 
 .fm-more {
   display: flex;
+  flex: 0 0 auto;
   justify-content: center;
   padding: var(--space-3) 0;
 }
@@ -1461,6 +1549,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
   display: flex;
   align-items: center;
   gap: var(--space-4);
+  flex: 0 0 auto;
   flex-wrap: wrap;
   padding: var(--space-3) 0 0;
   border-top: 1px solid var(--border);

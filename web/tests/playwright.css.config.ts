@@ -10,6 +10,7 @@ export default defineConfig({
     "add-resource-picker.spec.ts",
     "environment-layout.spec.ts",
     "files-editor-layout.spec.ts",
+    "files-layout-fit.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",
     "git-connect-modals-layout.spec.ts",

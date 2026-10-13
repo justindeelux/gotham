@@ -17,6 +17,8 @@ import type { Page } from "@playwright/test";
 //   - JUS-120 the toolbar groups New file/New folder under one dropdown, keeps
 //     bulk tools on the right, and collapses to labelled icon-only buttons on
 //     small screens.
+//   - JUS-131 the permissions dialog shows the bits grid first with the octal
+//     field below it, and drops the explanatory copy.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -336,5 +338,39 @@ test("the minimized editor dock never covers the node switcher", async ({
     expect(hit!.hitInsideSelect).toBe(true);
     // The whole node bar clears the dock, with the reserved gap.
     expect(hit!.selectBottom).toBeLessThanOrEqual(hit!.dockTop);
+  }
+});
+
+test("the permissions dialog puts the octal field under the bits and drops the copy", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+
+  await page
+    .getByRole("button", { name: "More actions for file-00.txt" })
+    .click();
+  await page.getByRole("menuitem", { name: "Permissions…" }).click();
+
+  const dialog = page.locator(".n-modal").filter({ hasText: "Permissions" });
+  await expect(dialog).toBeVisible();
+
+  // JUS-131: the bits grid comes first, the octal field sits below it.
+  const grid = await dialog.locator(".perms-grid").boundingBox();
+  const octal = await dialog.locator(".octal input").boundingBox();
+  expect(grid).not.toBeNull();
+  expect(octal).not.toBeNull();
+  expect(octal!.y).toBeGreaterThan(grid!.y + grid!.height);
+
+  // The redundant explanatory copy is gone.
+  const text = await dialog.innerText();
+  for (const removed of [
+    "Three octal digits",
+    "Special bits",
+    "keeps its type",
+    "Current mode",
+  ]) {
+    expect(text).not.toContain(removed);
   }
 });

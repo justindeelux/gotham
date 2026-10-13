@@ -451,6 +451,21 @@ does **not** traverse the node's Traefik; see
 [`../deploy/README.md`](../deploy/README.md) → "File-manager uploads (staging)"
 for the staging knobs.
 
+### Permissions (chmod)
+
+`POST /files/chmod` (owner/admin, deploy scope for an API token) changes one
+entry's permission bits. Only the low `0o777` bits are accepted: a request
+carrying setuid (`0o4000`), setgid (`0o2000`), sticky (`0o1000`) or any higher
+bit is refused **400** before the agent is dialed. The agent refuses a symbolic
+link (it never follows the link to change its target) and a special file
+(FIFO/socket/device) with **403**/**409**, and a read-only root with **403**. The
+confinement opens the parent directory and `openat`s the entry with
+`O_NOFOLLOW`, then `fchmod`s the opened descriptor, so nothing outside the root
+can change and a swapped-in link cannot be followed. An old agent that predates
+the RPC answers **501**. chmod never changes an entry's type, so the
+application-directory guard (rename/delete only) does not apply; recursion is
+not supported.
+
 ### Permissions model
 
 The agent runs as the unprivileged `gotham-agent` user with no

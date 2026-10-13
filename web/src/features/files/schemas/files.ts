@@ -111,3 +111,14 @@ export const filesUploadEnvelopeSchema = z.object({
   results: z.array(filesUploadResultSchema),
 });
 export type FilesUploadEnvelope = z.infer<typeof filesUploadEnvelopeSchema>;
+
+/**
+ * filesOctalModeSchema validates the Permissions dialog's octal field: exactly
+ * three octal digits (the low 0o777 bits). The message is a catalog key, so
+ * the shared validation adapter resolves it in the active locale.
+ */
+export const filesOctalModeSchema = z
+  .string()
+  .trim()
+  .regex(/^[0-7]{3}$/, "files.permissions.invalid");
+export type FilesOctalMode = z.infer<typeof filesOctalModeSchema>;

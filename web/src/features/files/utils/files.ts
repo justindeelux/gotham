@@ -356,6 +356,43 @@ export function formatMode(mode: number): string {
 }
 
 /**
+ * PERMISSION_BITS is the mask of the permission bits a chmod may change; the
+ * special bits (setuid 0o4000, setgid 0o2000, sticky 0o1000) are never in it.
+ */
+export const PERMISSION_BITS = 0o777;
+
+/** formatOctalMode renders the low permission bits as a 3-digit octal string. */
+export function formatOctalMode(mode: number): string {
+  return (mode & PERMISSION_BITS).toString(8).padStart(3, "0");
+}
+
+/** parseOctalMode converts a validated 3-digit octal string to a number. */
+export function parseOctalMode(value: string): number {
+  return Number.parseInt(value, 8) & PERMISSION_BITS;
+}
+
+/**
+ * permissionFlags returns the nine permission bits in owner/group/other ×
+ * rwx order (index 0 = owner read … index 8 = other execute), the order the
+ * Permissions dialog's 3×3 grid renders.
+ */
+export function permissionFlags(mode: number): boolean[] {
+  const m = mode & PERMISSION_BITS;
+  return [8, 7, 6, 5, 4, 3, 2, 1, 0].map((shift) => ((m >> shift) & 1) === 1);
+}
+
+/** modeFromFlags rebuilds a mode number from the nine rwx flags. */
+export function modeFromFlags(flags: boolean[]): number {
+  let mode = 0;
+  for (let index = 0; index < 9; index += 1) {
+    if (flags[index]) {
+      mode |= 1 << (8 - index);
+    }
+  }
+  return mode;
+}
+
+/**
  * formatTimestamp renders modified_at as "YYYY-MM-DD HH:mm" in UTC. Timestamps
  * are shown as fixed monospace values (like the mockup), so the output does
  * not follow the UI locale and unit checks stay deterministic.

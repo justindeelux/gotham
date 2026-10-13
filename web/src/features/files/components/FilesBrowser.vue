@@ -37,6 +37,7 @@ import ConflictDialog from "@/features/files/components/ConflictDialog.vue";
 import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue";
 import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
+import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
 import TransferDialog from "@/features/files/components/TransferDialog.vue";
 import UploadDialog from "@/features/files/components/UploadDialog.vue";
@@ -88,6 +89,8 @@ const createOpen = ref(false);
 const createKind = ref<NameKind>("directory");
 const renameOpen = ref(false);
 const renameTarget = ref<FilesEntry | null>(null);
+const permissionsOpen = ref(false);
+const permissionsTarget = ref<FilesEntry | null>(null);
 const deleteOpen = ref(false);
 const transferOpen = ref(false);
 const transferMode = ref<"move" | "copy">("move");
@@ -276,6 +279,12 @@ function openRename(entry: FilesEntry): void {
   renameOpen.value = true;
 }
 
+/** openPermissions opens the chmod dialog for one file or folder. */
+function openPermissions(entry: FilesEntry): void {
+  permissionsTarget.value = entry;
+  permissionsOpen.value = true;
+}
+
 function openDelete(entries: FilesEntry[]): void {
   if (blockedByDirty(entries.map((entry) => entry.name))) {
     return;
@@ -411,6 +420,15 @@ function rowMenu(entry: FilesEntry): Array<{ label: string; key: string; disable
   // Special files are list-only (see the mockup): offering a delete the store
   // filters out would toast a false success. A symlink is unlinked as a link,
   // its target untouched, so it keeps the write actions.
+  if (entry.kind === "file" || entry.kind === "directory") {
+    // Only a regular file or a folder can be chmod-ed: the agent refuses a
+    // symlink (it would follow to the target) and a special file.
+    options.push({
+      label: String(t("files.menu.permissions")),
+      key: "permissions",
+      disabled: !files.canWrite,
+    });
+  }
   if (entry.kind !== "special" && entry.kind !== "unspecified") {
     options.push(
       { label: String(t("files.actions.rename")), key: "rename", disabled: !files.canWrite },
@@ -437,6 +455,9 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       break;
     case "rename":
       openRename(entry);
+      break;
+    case "permissions":
+      openPermissions(entry);
       break;
     case "move":
       openTransfer("move", files.targetsForRow(entry));
@@ -892,6 +913,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
 
     <CreateEntryDialog v-model:show="createOpen" :kind="createKind" />
     <RenameEntryDialog v-model:show="renameOpen" :entry="renameTarget" />
+    <PermissionsDialog v-model:show="permissionsOpen" :entry="permissionsTarget" />
     <DeleteEntriesDialog v-model:show="deleteOpen" :entries="actionTargets" />
     <TransferDialog
       v-model:show="transferOpen"

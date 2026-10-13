@@ -450,6 +450,7 @@
               <div class="fm-menu" id="fm-menu-demo" role="menu" aria-label="Actions for app.yaml">
                 <button type="button" role="menuitem" data-toast="Opened app.yaml in the editor.|info"><svg aria-hidden="true"><use href="#i-eye"></use></svg>Open</button>
                 <button type="button" role="menuitem" data-toast="Preparing a single-use download ticket…|info"><svg aria-hidden="true"><use href="#i-download"></use></svg>Download</button>
+                <button type="button" role="menuitem" data-open="fm-properties"><svg aria-hidden="true"><use href="#i-shield"></use></svg>Permissions…</button>
                 <div class="fm-menu-sep" role="separator"></div>
                 <button type="button" role="menuitem" data-open="fm-rename"><svg aria-hidden="true"><use href="#i-pencil"></use></svg>Rename…</button>
                 <button type="button" role="menuitem" data-toast="Cut app.yaml to the clipboard.|info"><svg aria-hidden="true"><use href="#i-cut"></use></svg>Cut</button>
@@ -724,6 +725,51 @@ services:
       <span class="small muted grow">Folders are created inside the current root</span>
       <button class="btn btn-outline" type="button" data-close>Cancel</button>
       <button class="btn btn-primary" type="button" data-toast="Created folder uploads/|success" data-close>Create folder</button>
+    </div>
+  </div>
+</div>
+
+<!-- Permissions (chmod) -->
+<div class="overlay" id="fm-properties" hidden>
+  <div class="modal modal--sm" role="dialog" aria-modal="true" aria-labelledby="fm-properties-title">
+    <div class="modal-head">
+      <svg aria-hidden="true"><use href="#i-shield"></use></svg>
+      <div><h3 id="fm-properties-title">Permissions</h3><p class="small muted">volumes/storefront-8f2c1ab/app.yaml</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Close"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-4">
+      <div class="field">
+        <label class="field-label" for="fm-properties-octal">Octal mode</label>
+        <input class="input mono" id="fm-properties-octal" type="text" inputmode="numeric" value="644" maxlength="3" pattern="[0-7]{3}" aria-describedby="fm-properties-hint" />
+        <span class="field-hint" id="fm-properties-hint">Three octal digits (000–777). Type a mode or tick the boxes — they stay in sync.</span>
+      </div>
+      <div class="field">
+        <span class="field-label">Permissions</span>
+        <div class="perms-grid" role="group" aria-label="rwx permissions">
+          <span class="perms-head"></span><span class="perms-head">Read</span><span class="perms-head">Write</span><span class="perms-head">Execute</span>
+          <span class="perms-row">Owner</span>
+          <label class="check"><input type="checkbox" checked aria-label="Owner read" /></label>
+          <label class="check"><input type="checkbox" checked aria-label="Owner write" /></label>
+          <label class="check"><input type="checkbox" checked aria-label="Owner execute" /></label>
+          <span class="perms-row">Group</span>
+          <label class="check"><input type="checkbox" checked aria-label="Group read" /></label>
+          <label class="check"><input type="checkbox" aria-label="Group write" /></label>
+          <label class="check"><input type="checkbox" aria-label="Group execute" /></label>
+          <span class="perms-row">Other</span>
+          <label class="check"><input type="checkbox" checked aria-label="Other read" /></label>
+          <label class="check"><input type="checkbox" aria-label="Other write" /></label>
+          <label class="check"><input type="checkbox" aria-label="Other execute" /></label>
+        </div>
+      </div>
+      <div class="callout">
+        <svg aria-hidden="true"><use href="#i-info"></use></svg>
+        <div><h4>Owner only</h4><p>Only the 0o777 permission bits change. setuid, setgid and the sticky bit are not editable here and are refused by the agent.</p></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">The entry keeps its type; a symlink cannot be chmod-ed</span>
+      <button class="btn btn-outline" type="button" data-close>Cancel</button>
+      <button class="btn btn-primary" type="button" data-toast="Permissions of app.yaml set to 644.|success" data-close>Apply</button>
     </div>
   </div>
 </div>

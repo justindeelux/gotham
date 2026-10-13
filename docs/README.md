@@ -32,8 +32,8 @@ exit criteria, work packages, dependencies, and rollback. Start with the
 Phase 18 is complete (step 10 hardening/e2e/docs, JUS-115): the agent `FileService`, the
 control-plane `internal/files` module and the web browser/ops/editor ship behind the
 `FEATURE_FILES` (CP, on by default, platform operators only) and the per-node opt-in
-`GOTHAM_AGENT_FILES` (agent) flags. Optional steps
-9a (chmod, JUS-113) and 9b (archives, JUS-114) are **deferred**. Phase status and remaining work
+`GOTHAM_AGENT_FILES` (agent) flags. Step 9a chmod (JUS-113) shipped as an optional
+phase-2 add; step 9b archives (JUS-114) is **deferred**. Phase status and remaining work
 live only in [`TODO.md`](TODO.md).
 
 ### Where a plan goes

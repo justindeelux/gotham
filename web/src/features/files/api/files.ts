@@ -32,6 +32,7 @@ import {
  *   GET  /servers/{id}/files/download?ticket ticket (native browser download)
  *   POST /servers/{id}/files/mkdir|/create   owner/admin, exclusive create
  *   POST /servers/{id}/files/rename|/move|/copy owner/admin, 409 on conflict
+ *   POST /servers/{id}/files/chmod           owner/admin, 0o777 bits only
  *   DELETE /servers/{id}/files/entry?recursive= owner/admin
  *   POST /servers/{id}/files/upload          owner/admin, multipart, per-file result
  *
@@ -341,6 +342,32 @@ export async function deleteEntry(
     params: { root, path, recursive: recursive ? "true" : "false" },
     headers: teamHeaders(teamId),
   });
+}
+
+/** ChmodOptions addresses one permission change. */
+export interface ChmodOptions {
+  root: string;
+  path: string;
+  /** The new permission bits (low 0o777 only; special bits are refused). */
+  mode: number;
+}
+
+/**
+ * chmodEntry changes one entry's permission bits (owner/admin only). The
+ * server refuses setuid/setgid/sticky and returns the updated entry, which the
+ * caller uses to refresh the listing.
+ */
+export async function chmodEntry(
+  serverId: string,
+  teamId: string,
+  options: ChmodOptions,
+): Promise<FilesEntry> {
+  const response = await http.post(
+    `/servers/${serverId}/files/chmod`,
+    { root: options.root, path: options.path, mode: options.mode },
+    { headers: teamHeaders(teamId) },
+  );
+  return parseEntry(response.data, "FilesChmod");
 }
 
 /** UploadProgress is one upload's transferred bytes. */

@@ -39,6 +39,8 @@ const (
 const (
 	fileRootVolumes = "volumes"
 	fileRootCompose = "compose"
+	// fileRootSystem is the whole-filesystem root of the full-access mode.
+	fileRootSystem = "system"
 )
 
 // dangerousFileTrees are whole trees the file service must never expose: the
@@ -89,6 +91,9 @@ type fileRootConfig struct {
 	// builtin marks the two managed roots, whose absence is normal (Docker and
 	// the compose service create them lazily) and must not abort startup.
 	builtin bool
+	// unrestricted skips the dangerous-tree and protected-path checks: the
+	// operator opted into whole-filesystem access (root "/").
+	unrestricted bool
 }
 
 // FileServer implements agentv1.FileServiceServer against the node's
@@ -163,7 +168,11 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 				continue
 			}
 		}
-		real, identity, err := validateFileRoot(rc.path, protected)
+		validate := validateFileRoot
+		if rc.unrestricted {
+			validate = resolveFileRoot
+		}
+		real, identity, err := validate(rc.path, protected)
 		if err != nil {
 			_ = server.Close()
 			return nil, err
@@ -249,6 +258,9 @@ func (s *FileServer) sweepTempFiles(cutoff time.Time) {
 // operator-added root (read-only, because writes have no owner-configured
 // intent yet).
 func configuredFileRoots(cfg Config) []fileRootConfig {
+	if cfg.FileFullAccess {
+		return []fileRootConfig{{name: fileRootSystem, path: string(filepath.Separator), writable: true, unrestricted: true}}
+	}
 	roots := []fileRootConfig{
 		{name: fileRootVolumes, path: cfg.ManagedVolumeRoot, writable: true, builtin: true},
 		{name: fileRootCompose, path: cfg.ComposeRoot, writable: false, builtin: true},
@@ -330,6 +342,24 @@ func secretFilePath(certDir, name string) string {
 		return ""
 	}
 	return filepath.Join(certDir, name)
+}
+
+// resolveFileRoot is validateFileRoot without the safety checks, used only for
+// the operator-approved whole-filesystem root: it still requires an absolute
+// path that resolves to a directory.
+func resolveFileRoot(dir string, _ []protectedPath) (string, os.FileInfo, error) {
+	if !filepath.IsAbs(dir) {
+		return "", nil, fmt.Errorf("file root %q must be an absolute path", dir)
+	}
+	real, err := filepath.EvalSymlinks(filepath.Clean(dir))
+	if err != nil {
+		return "", nil, fmt.Errorf("file root %q: %w", dir, err)
+	}
+	identity, err := os.Stat(real)
+	if err != nil {
+		return "", nil, fmt.Errorf("file root %q: %w", dir, err)
+	}
+	return real, identity, nil
 }
 
 // validateFileRoot returns the canonical absolute path of a browsable root and

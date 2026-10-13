@@ -329,7 +329,9 @@ Useful agent installer flags and variables:
 | `GOTHAM_AGENT_CA` | The agent-side path the installer writes (`/etc/gotham/ca.crt`). It is **not** read from the ambient environment; on a reinstall the installer keeps the value already in `agent.env`. Use `--ca`/`GOTHAM_AGENT_CA_FILE` to change it. |
 | `GOTHAM_AGENT_UPDATE_CHANNEL` | Release channel this node accepts, `stable` (default) or `beta`; an offer with a different or empty channel is refused. |
 | `GOTHAM_AGENT_MANAGED_VOLUME_ROOT` | Parent of every application bind mount the node accepts (default `/var/lib/gotham/volumes`); falls back to the shared `GOTHAM_MANAGED_VOLUME_ROOT`. Must match the control plane. |
-| `GOTHAM_AGENT_FILES` | Enable the confined remote file service on the node (`true`; default off). When enabled, the node validates and opens its browsable roots at startup. |
+| `--file-manager` / `--no-file-manager` / `GOTHAM_AGENT_FILE_MANAGER=yes\|no` | Answer the installer's file-manager question without a prompt. The installer asks (default **no**; no terminal also means no). Yes writes `GOTHAM_AGENT_FILES=true` and a `gotham-agent.service.d/file-manager.conf` drop-in that runs the agent **as root** without systemd sandboxing; no writes `GOTHAM_AGENT_FILES=false` and removes the drop-in. A re-run keeps the previous answer. |
+| `GOTHAM_AGENT_FILES` | The remote file service on the node. On unless set to `false` (the installer writes the answer above). |
+| `GOTHAM_AGENT_FILE_FULL_ACCESS` | On unless set to `false`: the service exposes the **whole filesystem** as one writable root `system` (`/`), with no protected paths — the operator accepted that risk. `false` restores the confined roots described below. |
 | `GOTHAM_AGENT_FILE_ROOTS` | Extra browsable roots, colon-separated absolute paths (default none). Operator roots are **read-only** in this phase; a root that is missing, not absolute, in a dangerous tree or overlapping another root refuses startup. |
 | `GOTHAM_AGENT_COMPOSE_ROOT` | Directory holding one subdirectory per compose project (default `/var/lib/gotham-agent/compose`); browsable read-only when the file service is enabled. |
 
@@ -368,9 +370,20 @@ sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=worker-1 \
 
 ## Remote file service
 
-The node-side file service is opt-in. Set `GOTHAM_AGENT_FILES=true` to register
-it; with the flag unset the RPCs are absent and the control plane reports the
-node as outdated. Roots are an agent-local allow-list:
+**Whole-filesystem mode (default).** The file service is on unless
+`GOTHAM_AGENT_FILES=false`, and by default it exposes one writable root named
+`system` that is `/`: every file the agent process can reach, with no dangerous
+or protected path excluded (including the agent's own key and certificates). The
+owner accepted this risk; only platform operators can use it. What the agent can
+really read or change is bounded by its Unix user, so the installer asks whether
+you want the file manager (default no) and, on yes, runs the agent as root via
+the `file-manager.conf` drop-in. Run as the unprivileged `gotham-agent` user the
+same root is mostly read-only. Existing nodes that auto-update to this version
+expose `/` to operators with the permissions of their current user until
+`GOTHAM_AGENT_FILES=false` is set.
+
+**Confined mode** (`GOTHAM_AGENT_FILE_FULL_ACCESS=false`). Roots are an
+agent-local allow-list:
 
 - `GOTHAM_AGENT_MANAGED_VOLUME_ROOT` — the writable root, holding the
   application bind mounts.

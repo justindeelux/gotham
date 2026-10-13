@@ -1513,6 +1513,44 @@ GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
     || fail "V1: valid input no longer passes validation"
 pass "V1: bad values fail before the first mutation, good values pass"
 
+echo "==> FM1 file manager answer: flags, environment, no-terminal default, agent.env"
+FM_DIR="$(mktemp -d)"
+printf 'x' >"${FM_DIR}/ca.pem"
+_fm_run() {
+    env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
+        GOTHAM_AGENT_FILE_MANAGER_TTY=/nonexistent/tty TMPDIR="${FM_DIR}" "$@" \
+        sh "${AGENT_INSTALLER}" --ca "${FM_DIR}/ca.pem" --dry-run 2>&1
+}
+_fm_run >"${FM_DIR}/default.log" || fail "FM1: default dry-run failed"
+grep -q "file manager: no" "${FM_DIR}/default.log" || fail "FM1: no terminal must default to no"
+if grep -q "file-manager.conf" "${FM_DIR}/default.log" && grep -q "write .*file-manager.conf" "${FM_DIR}/default.log"; then
+    fail "FM1: the default run must not install the root drop-in"
+fi
+_fm_run GOTHAM_AGENT_FILE_MANAGER=yes >"${FM_DIR}/yes.log" || fail "FM1: yes dry-run failed"
+grep -q "file manager: yes" "${FM_DIR}/yes.log" || fail "FM1: GOTHAM_AGENT_FILE_MANAGER=yes ignored"
+grep -q "write /etc/systemd/system/gotham-agent.service.d/file-manager.conf" "${FM_DIR}/yes.log" \
+    || fail "FM1: yes must plan the root drop-in"
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${FM_DIR}" \
+    sh "${AGENT_INSTALLER}" --ca "${FM_DIR}/ca.pem" --dry-run --file-manager >"${FM_DIR}/flag.log" 2>&1 \
+    || fail "FM1: --file-manager dry-run failed"
+grep -q "file manager: yes" "${FM_DIR}/flag.log" || fail "FM1: --file-manager flag ignored"
+if _fm_run GOTHAM_AGENT_FILE_MANAGER=maybe >"${FM_DIR}/bad.log"; then
+    fail "FM1: an invalid GOTHAM_AGENT_FILE_MANAGER must be refused"
+fi
+FM_ENV="${FM_DIR}/agent.env"
+( GOTHAM_AGENT_FILES=true; export GOTHAM_AGENT_FILES; agent_env_write "${FM_ENV}" "/etc/gotham/ca.crt" 0 ) \
+    || fail "FM1: agent_env_write failed"
+grep -qx "GOTHAM_AGENT_FILES=true" "${FM_ENV}" || fail "FM1: GOTHAM_AGENT_FILES=true not written"
+( GOTHAM_AGENT_FILES=false; export GOTHAM_AGENT_FILES; agent_env_write "${FM_ENV}" "/etc/gotham/ca.crt" 0 ) \
+    || fail "FM1: agent_env_write (false) failed"
+[ "$(grep -c '^GOTHAM_AGENT_FILES=' "${FM_ENV}")" = 1 ] && grep -qx "GOTHAM_AGENT_FILES=false" "${FM_ENV}" \
+    || fail "FM1: GOTHAM_AGENT_FILES must be rewritten once, not appended"
+if ( GOTHAM_AGENT_FILES=maybe; export GOTHAM_AGENT_FILES; agent_env_write "${FM_ENV}" "/etc/gotham/ca.crt" 0 ) 2>/dev/null; then
+    fail "FM1: an invalid GOTHAM_AGENT_FILES must be refused"
+fi
+rm -rf "${FM_DIR}"
+pass "FM1: file manager answer defaults to no and drives the drop-in and agent.env"
+
 if [ "${FAILURES}" -eq 0 ]; then
     echo "ALL AGENT-INSTALL TESTS PASSED"
     exit 0

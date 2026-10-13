@@ -566,3 +566,33 @@ func TestFileServerListMalformedCursor(t *testing.T) {
 		t.Fatal("decodeCursor accepted a malformed token")
 	}
 }
+
+// TestFullAccessOpensWholeFilesystem pins the operator-approved mode: one
+// writable "system" root at "/" with no dangerous-tree or protected-path
+// rejection, and the env defaults (files on, full access on, "false" off).
+func TestFullAccessOpensWholeFilesystem(t *testing.T) {
+	cfg := Config{FileFullAccess: true}
+	roots := configuredFileRoots(cfg)
+	if len(roots) != 1 || roots[0].name != "system" || roots[0].path != "/" || !roots[0].writable || !roots[0].unrestricted {
+		t.Fatalf("roots = %+v, want one writable unrestricted system root at /", roots)
+	}
+	server, err := NewFileServer(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewFileServer full access: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if len(server.order) != 1 || server.order[0] != "system" {
+		t.Fatalf("opened roots = %v, want [system]", server.order)
+	}
+
+	t.Setenv(envFiles, "")
+	t.Setenv(envFileFullAccess, "")
+	if c, err := Load(); err != nil || !c.Files || !c.FileFullAccess {
+		t.Fatalf("defaults: Files=%v FileFullAccess=%v, want both on", c.Files, c.FileFullAccess)
+	}
+	t.Setenv(envFiles, "false")
+	t.Setenv(envFileFullAccess, "false")
+	if c, err := Load(); err != nil || c.Files || c.FileFullAccess {
+		t.Fatalf("explicit false: Files=%v FileFullAccess=%v, want both off", c.Files, c.FileFullAccess)
+	}
+}

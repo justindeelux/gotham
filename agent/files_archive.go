@@ -358,6 +358,9 @@ func (s *FileServer) Compress(req *agentv1.CompressRequest, stream grpc.ServerSt
 	if err != nil || dst == "." {
 		return status.Errorf(codes.InvalidArgument, "compress: invalid destination %q", req.GetDestination())
 	}
+	if err := guardTrash(root, "compress", dst); err != nil {
+		return err
+	}
 	if s.protectsAppDir(root, dst) {
 		return status.Error(codes.PermissionDenied, "compress: an application directory cannot be replaced")
 	}
@@ -366,6 +369,9 @@ func (s *FileServer) Compress(req *agentv1.CompressRequest, stream grpc.ServerSt
 		rel, err := fsroot.Clean(raw)
 		if err != nil || rel == "." {
 			return status.Errorf(codes.InvalidArgument, "compress: invalid source %q", raw)
+		}
+		if err := guardTrash(root, "compress", rel); err != nil {
+			return err
 		}
 		if rel == dst || isWithin(rel, dst) {
 			return status.Errorf(codes.InvalidArgument, "compress: destination %q is inside source %q", req.GetDestination(), raw)
@@ -562,6 +568,9 @@ func (s *FileServer) Extract(req *agentv1.ExtractRequest, stream grpc.ServerStre
 	if err != nil || src == "." {
 		return status.Errorf(codes.InvalidArgument, "extract: invalid source %q", req.GetSource())
 	}
+	if err := guardTrash(root, "extract", src); err != nil {
+		return err
+	}
 	format, ok := archiveFormatFromName(src)
 	if !ok {
 		return status.Errorf(codes.InvalidArgument, "extract: %q is not a .zip, .tar or .tar.gz archive", req.GetSource())
@@ -569,6 +578,9 @@ func (s *FileServer) Extract(req *agentv1.ExtractRequest, stream grpc.ServerStre
 	dst, err := fsroot.Clean(req.GetDestination())
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "extract: invalid destination %q", req.GetDestination())
+	}
+	if err := guardTrash(root, "extract", dst); err != nil {
+		return err
 	}
 	if entry, err := root.Stat(dst); err != nil {
 		return fileError("extract", err)

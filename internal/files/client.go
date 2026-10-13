@@ -38,6 +38,12 @@ type FileClient interface {
 	// Compress and Extract stream archive progress like Copy/Delete.
 	Compress(ctx context.Context, in *agentv1.CompressRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error)
 	Extract(ctx context.Context, in *agentv1.ExtractRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error)
+	// The recycle-bin RPCs: ListTrash reads a root's bin, and Restore, Purge and
+	// EmptyTrash mutate it.
+	ListTrash(ctx context.Context, in *agentv1.ListTrashRequest, opts ...grpc.CallOption) (*agentv1.ListTrashResponse, error)
+	Restore(ctx context.Context, in *agentv1.RestoreRequest, opts ...grpc.CallOption) (*agentv1.RestoreResponse, error)
+	Purge(ctx context.Context, in *agentv1.PurgeRequest, opts ...grpc.CallOption) (*agentv1.PurgeResponse, error)
+	EmptyTrash(ctx context.Context, in *agentv1.EmptyTrashRequest, opts ...grpc.CallOption) (*agentv1.EmptyTrashResponse, error)
 }
 
 // Compile-time assertion that the generated client satisfies the local

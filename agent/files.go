@@ -512,12 +512,19 @@ func (s *FileServer) List(_ context.Context, req *agentv1.ListRequest) (*agentv1
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "list: %v", err)
 	}
-	entries, truncated, last, err := root.List(req.GetPath(), cursor, fileListLimit)
+	rel, err := fsroot.Clean(req.GetPath())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "list: invalid path %q", req.GetPath())
+	}
+	if err := guardTrash(root, "list", rel); err != nil {
+		return nil, err
+	}
+	entries, truncated, last, err := root.List(rel, cursor, fileListLimit)
 	if err != nil {
 		return nil, fileError("list", err)
 	}
 	return &agentv1.ListResponse{
-		Entries:   fileEntries(entries),
+		Entries:   fileEntries(hideTrashEntries(rel, entries)),
 		Truncated: truncated,
 		Cursor:    encodeCursor(last),
 	}, nil
@@ -552,6 +559,9 @@ func (s *FileServer) Stat(_ context.Context, req *agentv1.StatRequest) (*agentv1
 	if err != nil {
 		return nil, err
 	}
+	if err := guardTrashRaw(root, "stat", req.GetPath()); err != nil {
+		return nil, err
+	}
 	entry, err := root.Stat(req.GetPath())
 	if err != nil {
 		return nil, fileError("stat", err)
@@ -565,6 +575,9 @@ func (s *FileServer) Stat(_ context.Context, req *agentv1.StatRequest) (*agentv1
 func (s *FileServer) Read(req *agentv1.ReadRequest, stream grpc.ServerStreamingServer[agentv1.ReadChunk]) error {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
+		return err
+	}
+	if err := guardTrashRaw(root, "read", req.GetPath()); err != nil {
 		return err
 	}
 	file, _, err := root.OpenRegular(req.GetPath())

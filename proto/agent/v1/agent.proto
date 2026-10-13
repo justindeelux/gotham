@@ -179,6 +179,17 @@ service FileService {
   // and the total uncompressed size, the entry count and the compression ratio
   // are bounded.
   rpc Extract(ExtractRequest) returns (stream Progress);
+  // ListTrash lists a root's recycle bin, newest first. Entries are deleted
+  // entries the service moved into the root's trash; the trash tree itself is
+  // never browsable through List.
+  rpc ListTrash(ListTrashRequest) returns (ListTrashResponse);
+  // Restore moves one trash entry back to its recorded original path (or to an
+  // explicit destination), refusing an existing target unless overwrite is set.
+  rpc Restore(RestoreRequest) returns (RestoreResponse);
+  // Purge permanently removes one trash entry.
+  rpc Purge(PurgeRequest) returns (PurgeResponse);
+  // EmptyTrash permanently removes every entry in a root's recycle bin.
+  rpc EmptyTrash(EmptyTrashRequest) returns (EmptyTrashResponse);
 }
 
 // ListRootsRequest is empty: roots are node-local configuration.
@@ -329,12 +340,76 @@ message CopyRequest {
   bool overwrite = 4;
 }
 
-// DeleteRequest removes one entry.
+// DeleteRequest removes one entry. By default the entry is moved into the
+// root's recycle bin (see ListTrash/Restore); permanent deletes it outright.
 message DeleteRequest {
   string root = 1;
   string path = 2;
-  // recursive removes a non-empty directory.
+  // recursive removes a non-empty directory. A non-recursive delete of a
+  // non-empty directory is still refused.
   bool recursive = 3;
+  // permanent skips the recycle bin and removes the entry from the filesystem.
+  bool permanent = 4;
+}
+
+// TrashEntry is one entry held in a root's recycle bin.
+message TrashEntry {
+  // id identifies the entry within the bin; it is opaque to the caller and is
+  // the handle Restore/Purge take.
+  string id = 1;
+  // original_path is the root-relative path the entry was deleted from.
+  string original_path = 2;
+  // name is the base name of original_path, for display.
+  string name = 3;
+  google.protobuf.Timestamp deleted_at = 4;
+  // size is the entry's size in bytes (a directory's own size, not its tree).
+  int64 size = 5;
+  FileKind kind = 6;
+}
+
+// ListTrashRequest lists one root's recycle bin.
+message ListTrashRequest {
+  string root = 1;
+}
+
+// ListTrashResponse lists the bin, newest first.
+message ListTrashResponse {
+  repeated TrashEntry entries = 1;
+}
+
+// RestoreRequest moves one trash entry back to its original path.
+message RestoreRequest {
+  string root = 1;
+  // id is the TrashEntry handle to restore.
+  string id = 2;
+  // destination overrides the recorded original path when non-empty.
+  string destination = 3;
+  // overwrite permits replacing an existing destination.
+  bool overwrite = 4;
+}
+
+// RestoreResponse returns the restored entry at its destination.
+message RestoreResponse {
+  FileEntry entry = 1;
+}
+
+// PurgeRequest permanently removes one trash entry.
+message PurgeRequest {
+  string root = 1;
+  string id = 2;
+}
+
+// PurgeResponse is empty.
+message PurgeResponse {}
+
+// EmptyTrashRequest empties one root's recycle bin.
+message EmptyTrashRequest {
+  string root = 1;
+}
+
+// EmptyTrashResponse reports how many entries were permanently removed.
+message EmptyTrashResponse {
+  uint64 removed = 1;
 }
 
 // Progress reports the state of a long Copy, Delete, Compress or Extract.

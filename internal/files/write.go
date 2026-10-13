@@ -331,9 +331,11 @@ func (s *Service) Copy(ctx context.Context, serverID uuid.UUID, root, source, de
 	return newEntry(info), nil
 }
 
-// Delete removes one entry, recursively when requested.
-func (s *Service) Delete(ctx context.Context, serverID uuid.UUID, root, path string, recursive bool) (err error) {
-	defer func() { s.audit(ctx, serverID, "delete", root, path, err) }()
+// Delete removes one entry. By default it is moved into the node's recycle bin
+// (Trash/Restore/Purge/EmptyTrash); permanent asks the agent to remove it
+// outright. recursive permits deleting a non-empty directory.
+func (s *Service) Delete(ctx context.Context, serverID uuid.UUID, root, path string, recursive, permanent bool) (err error) {
+	defer func() { s.audit(ctx, serverID, "delete", root, path, err, "permanent", permanent) }()
 	if !Enabled() {
 		return ErrDisabled
 	}
@@ -350,7 +352,7 @@ func (s *Service) Delete(ctx context.Context, serverID uuid.UUID, root, path str
 	defer cancel()
 	defer s.closeClient(client)
 
-	stream, err := client.Delete(ctx, &agentv1.DeleteRequest{Root: root, Path: path, Recursive: recursive})
+	stream, err := client.Delete(ctx, &agentv1.DeleteRequest{Root: root, Path: path, Recursive: recursive, Permanent: permanent})
 	if err != nil {
 		return mapRPCError(err)
 	}

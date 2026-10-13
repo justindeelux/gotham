@@ -308,7 +308,7 @@ func TestWriteRBACReadOnly(t *testing.T) {
 		"rename": func() error { _, err := svc.Rename(ctx, server.ID, "volumes", "a", "b", false); return err },
 		"copy":   func() error { _, err := svc.Copy(ctx, server.ID, "volumes", "a", "b", false); return err },
 		"chmod":  func() error { _, err := svc.Chmod(ctx, server.ID, "volumes", "a", 0o600); return err },
-		"delete": func() error { return svc.Delete(ctx, server.ID, "volumes", "a", false) },
+		"delete": func() error { return svc.Delete(ctx, server.ID, "volumes", "a", false, false) },
 	}
 	for name, call := range cases {
 		if err := call(); !errors.Is(err, ErrForbidden) {
@@ -365,7 +365,7 @@ func TestMkdirRenameCopyDelete(t *testing.T) {
 		t.Fatalf("copy request = %+v", client.seenCopy)
 	}
 
-	if err := svc.Delete(ctx, server.ID, "volumes", "a", true); err != nil {
+	if err := svc.Delete(ctx, server.ID, "volumes", "a", true, false); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if !client.seenDelete.GetRecursive() {
@@ -415,7 +415,7 @@ func TestWriteRPCErrorMapping(t *testing.T) {
 		if _, err := svc.Copy(ctx, server.ID, "volumes", "a", "b", false); !errors.Is(err, tc.want) {
 			t.Errorf("copy %s = %v, want %v", tc.code, err, tc.want)
 		}
-		if err := svc.Delete(ctx, server.ID, "volumes", "a", false); !errors.Is(err, tc.want) {
+		if err := svc.Delete(ctx, server.ID, "volumes", "a", false, false); !errors.Is(err, tc.want) {
 			t.Errorf("delete %s = %v, want %v", tc.code, err, tc.want)
 		}
 	}

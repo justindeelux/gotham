@@ -170,7 +170,7 @@ Pyramid's backend is an unrestricted filesystem API (single `resolvePath` = `fil
 - **Audit:** structured `slog` (`actor_team_id`, `actor_user_id`, server, root, relpath, op, result); precedent `internal/servers/service.go`. No table.
 - **Editor:** CodeMirror 6, dynamic import (own chunk), explicit language set (json, yaml, js/ts, python, go, markdown, css, html, shell, dockerfile, toml) — **not** `language-data` (~100 committed chunks). Line separator and BOM detected on load and preserved on save (CRLF file round-trips byte-identical). Monaco rejected (multi-MB in a committed `webdist`). Recorded as `F22` in `docs/library-audit.md`. CodeMirror injects styles (CSP currently allows `style-src 'unsafe-inline'`; note so nobody tightens it blindly). Editor renders as a floating window that minimizes into a bottom app-dock inset to the content column (JUS-116), not an inline card on the page.
 - **Entry points:** route `files` (`/files`, server chooser → last-used/only server) and `server-files` (`servers/:id/files`); server-detail "Files" tab links to it; nav item highlights on both.
-- **Deletion:** confirm modal then permanent delete inside the root (no trash this phase).
+- **Deletion:** confirm modal, then the entry moves into a per-root recycle bin (`<root>/.gotham-trash/<id>/{data,meta.json}` recording the original path, deleted-at, size and kind) instead of being removed. The bin is listed through `GET /trash` and entries are restored, permanently deleted or the whole bin emptied through `POST /trash/*` (JUS-122); a permanent delete of an arbitrary entry stays available with `?permanent=true`. The reserved `.gotham-trash` name is hidden from `List` and refused by every ordinary file operation, and confinement is unchanged (a delete of a symlink moves the link, never follows it). **Retention: no auto-expiry in v1** — entries stay until restored, purged or the bin is emptied (known residual, not a background job).
 - **UX expectation:** volumes created by containers are usually root-owned, so many entries are read-only/unreadable for `gotham-agent`; the UI is read-mostly with clear per-entry "permission denied" states.
 
 ## API (all under `/api/v1/servers/{id}/files`)
@@ -187,7 +187,11 @@ Pyramid's backend is an unrestricted filesystem API (single `resolvePath` = `fil
 | `POST /mkdir`, `/create` | owner/admin | exclusive create |
 | `POST /rename`, `/move`, `/copy` | owner/admin | single root; `overwrite=false` default; copy-into-self guard |
 | `POST /compress`, `/extract` | owner/admin | one archive inside a single root; 409 unless `overwrite`; 413 on an archive limit (step 9b) |
-| `DELETE /entry?root=&path=&recursive=` | owner/admin | permanent delete |
+| `DELETE /entry?root=&path=&recursive=&permanent=` | owner/admin | move to the recycle bin; `permanent=true` deletes outright (step 9c) |
+| `GET /trash?root=` | member | recycle-bin entries (id, original path, deleted-at, size, kind) |
+| `POST /trash/restore` | owner/admin | restore an entry to its original path (409 conflict unless `overwrite`) |
+| `POST /trash/purge` | owner/admin | permanently delete one bin entry |
+| `POST /trash/empty` | owner/admin | permanently delete every bin entry |
 | `POST /chmod` | owner/admin | octal, setuid/setgid/sticky rejected (step 9a) |
 
 Errors `{message}`: 400 bad path/cross-root, 403 forbidden/permission denied, 404 not found/foreign team, 409 conflict/exists, 413 too large, 415 not editable, 428 missing precondition, 429 busy, 501 agent outdated, 502 agent unavailable, 503 disabled.
@@ -598,6 +602,7 @@ Deliberate, documented limits of the step-2 write path (JUS-106):
 - **The cross-device (`EXDEV`) move fallback reuses the staged copy**: it never removes the destination before copying, so a failure leaves both the source and the destination intact.
 - **The staging-file sweeper is depth-bounded.** It walks each writable root hourly and removes `.gotham-tmp-*` entries older than 24 h, but stops descending below `maxSweepDepth` (128) so the walk stays cheap on a large volume; a staging file buried deeper than the cap is left for a manual sweep.
 - **Cross-root move/copy remain out of scope** (single-root only, as designed).
+- **The recycle bin has no retention policy.** JUS-122 moves a deleted entry into `<root>/.gotham-trash/<id>/` and keeps it until a restore, a purge or an empty. There is no age or size-based auto-expiry in v1: the bin grows with deleted data until it is emptied by hand, and a bin entry is only visible/restorable through the `trash` RPCs (the reserved directory is hidden from `List` and refused by every ordinary file operation).
 
 ## Risks
 | Risk | Mitigation |
@@ -612,7 +617,7 @@ Deliberate, documented limits of the step-2 write path (JUS-106):
 | Scope creep to containers/terminal | Out of scope |
 
 ## Out of scope
-Container filesystem browsing (Docker `archive`/`exec`), host-wide filesystem access, `chown`, trash/restore, file search, diff view, collaborative editing, terminal, durable audit table, resumable/chunked browser uploads, cross-root move/copy.
+Container filesystem browsing (Docker `archive`/`exec`), host-wide filesystem access, `chown`, file search, diff view, collaborative editing, terminal, durable audit table, resumable/chunked browser uploads, cross-root move/copy. (Trash/restore is delivered by step 9c, JUS-122.)
 
 ## Tickets
 Parent JUS-103 (Feature, project gotham). Children, one per step:

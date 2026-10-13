@@ -45,6 +45,7 @@ google/uuid, redis, goose, minio; `sethvargo/go-retry` and
 | F19 | Go request validation (existing code) | go-playground/validator/v10 | domain `validateEnv*` fns | **SKIP** |
 | F20 | validator.js (web, e.g. email/host checks) | validator.js | covered by F1 | **SKIP** |
 | F21 | EN/VI UI localization runtime (web) | vue-i18n `^11.4.13` (MIT, active) | hand-rolled locale state + English-only strings | **DO (landed I18N-1)** |
+| F22 | Code editor (web, file manager) | CodeMirror 6 (MIT, active) | no editor existed | **DO (landed P18 step 8)** |
 
 Bundle-size note: zod v3-classic (~14 kB gzip standalone; v4-classic 93 kB and
 v4-mini 5.4 kB were rejected on size and API churn) now ships once in the entry
@@ -160,6 +161,53 @@ single validation source. @vueuse/core adds ~0.04 kB gzip (tree-shaken).
 - Bundle: measured `vite build` gzip delta in the I18N-1 report
   (`.git/i18n-execution/foundation-report.md`).
 - Verdict: **DO — landed in I18N-1 with the npm lockfile.**
+
+### F22 — CodeMirror 6 for the file code editor — DO (landed P18 step 8)
+
+- Location: `web/src/features/files/editor/codemirror.ts` (the editor chunk),
+  `web/src/features/files/composables/useCodeMirror.ts` (the lazy entry),
+  `web/src/features/files/components/FilesEditor.vue`,
+  `web/src/features/files/components/EditorConflictDialog.vue`,
+  `web/src/features/files/components/EditorSaveAsDialog.vue`,
+  `web/src/features/files/stores/editor.ts`,
+  `web/src/features/files/utils/editor.ts`.
+- Library: **CodeMirror 6**, exact pins (no ranges), all **MIT**:
+  `@codemirror/state 6.7.6`, `@codemirror/view 6.43.14`,
+  `@codemirror/commands 6.11.1`, `@codemirror/language 6.13.1`,
+  `@codemirror/search 6.7.2`, `@codemirror/lang-json 6.0.2`,
+  `@codemirror/lang-yaml 6.1.3`, `@codemirror/lang-javascript 6.2.5`,
+  `@codemirror/lang-python 6.2.1`, `@codemirror/lang-go 6.0.1`,
+  `@codemirror/lang-markdown 6.5.2`, `@codemirror/lang-css 6.3.1`,
+  `@codemirror/lang-html 6.4.12`, `@codemirror/legacy-modes 6.5.5`,
+  `@lezer/highlight 1.2.5`.
+- Explicit language set (json, yaml, js/ts, python, go, markdown, css, html,
+  shell, dockerfile, toml); **`@codemirror/language-data` is deliberately not a
+  dependency**, so no grammar the ticket did not list can load. Shell,
+  dockerfile and toml come from `@codemirror/legacy-modes` (StreamLanguage).
+- Reached only through a dynamic `import()` in `useCodeMirror.ts`, so every
+  CodeMirror package lands in the lazy `codemirror-*.js` chunk, never in the
+  entry. The `codemirror` meta package is not a dependency, and
+  `@codemirror/lint` is not bundled (it appears in `package-lock.json` only,
+  is never imported, and no lint surface ships). `@codemirror/autocomplete`
+  **is** bundled: the language packages pull it in transitively for their
+  completion sources, so its code and the `cm-tooltip-autocomplete` style land
+  in the chunk. No completion extension (`autocompletion()`) is enabled, so no
+  completion popup is ever shown.
+- Bundle (measured `vite build`, this branch vs `origin/main`):
+  - entry `index-*.js`: **856,253 B → 857,539 B raw (+1,286 B)**; gzip
+    261.68 kB → 262.10 kB. The editor message catalogs are *not* in that delta:
+    they are merged lazily (`locales/editorEn.ts` / `editorVi.ts` +
+    `locales/editorMessages.ts`, loaded with the files-page chunk) and every
+    `files.editor.*` string lives only in the lazy `ServerFilesPage-*.js` chunk
+    (67,557 B raw / 18.90 kB gzip). The +1,286 B is the entry-resident
+    `stores/files.ts` editor-sync plumbing (`withEditor`,
+    `applyRename/Move/Delete`) that step 8 had to add to the store the auth
+    store imports.
+  - new chunks: `codemirror-*.js` (658,956 B raw / 235.74 kB gzip) plus the
+    grown files page `ServerFilesPage-*.js`; **+2 JS chunks** vs `origin/main`
+    (97 → 99), well within the ≤ 15 budget.
+- Verdict: **DO — landed in P18 step 8 with exact pins in `web/package.json`.**
+
 
 ## zod design (as built in G1)
 

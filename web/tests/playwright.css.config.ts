@@ -9,6 +9,7 @@ export default defineConfig({
     "create-app-polish.spec.ts",
     "add-resource-picker.spec.ts",
     "environment-layout.spec.ts",
+    "files-editor-layout.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",
     "git-connect-modals-layout.spec.ts",

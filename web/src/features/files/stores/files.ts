@@ -70,6 +70,31 @@ export interface TransferSummary {
 }
 
 /**
+ * EditorSync is the slice of the editor tab store the browser drives when a
+ * mutation changes the filesystem under an open document. It is structural so
+ * the store can be reached lazily (see {@link withEditor}) without a static
+ * import.
+ */
+interface EditorSync {
+  applyRename: (_root: string, _dir: string, _oldName: string, _newName: string) => void;
+  applyMove: (_root: string, _fromDir: string, _toDir: string, _names: string[]) => void;
+  applyDelete: (_root: string, _dir: string, _names: string[]) => void;
+}
+
+/**
+ * withEditor reaches the editor tab store through a dynamic import. The files
+ * store must not import it statically: the auth store (in the entry chunk)
+ * resets the files store on sign-out, so a static import would drag the editor
+ * store and its helpers into the entry bundle. The lazy import keeps them in
+ * the files-page chunk while every mutation still routes its tab sync through
+ * one place.
+ */
+async function withEditor(sync: (_editor: EditorSync) => void): Promise<void> {
+  const { useEditorStore } = await import("@/features/files/stores/editor");
+  sync(useEditorStore());
+}
+
+/**
  * Files browser store. Holds one server's browsable roots plus the current
  * directory page, the selection, the sort/filter, the view mode and the step-7
  * write surface (create, rename, delete, move/copy, clipboard, upload). Every
@@ -532,6 +557,9 @@ export const useFilesStore = defineStore("files", () => {
       // taken from this same directory (root+path): a rename elsewhere must not
       // retarget the clipboard to a file in another folder.
       renameSelection(entry.name, next);
+      await withEditor((editor) =>
+        editor.applyRename(rootName.value, path.value, entry.name, next),
+      );
       const clip = clipboard.value;
       if (
         clip &&
@@ -579,6 +607,9 @@ export const useFilesStore = defineStore("files", () => {
         }
       }
       pruneClipboard(summary.done);
+      await withEditor((editor) =>
+        editor.applyDelete(rootName.value, path.value, summary.done),
+      );
       await loadEntries();
       return summary;
     });
@@ -615,6 +646,11 @@ export const useFilesStore = defineStore("files", () => {
           summary.failed.push({ name, error: describeFilesError(err) });
         }
       }
+    }
+    if (op === "move" && summary.done.length > 0) {
+      await withEditor((editor) =>
+        editor.applyMove(rootName.value, source, destination, summary.done),
+      );
     }
     await loadEntries();
     return summary;

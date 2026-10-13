@@ -76,6 +76,7 @@ const vi = {
   },
   menu: {
     open: "Mở",
+    edit: "Sửa trong trình soạn thảo",
     download: "Tải về",
   },
   clipboard: {

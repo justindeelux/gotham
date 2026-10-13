@@ -2,7 +2,6 @@ import { useMessage } from "naive-ui";
 import { ref } from "vue";
 
 import { describeFilesError, downloadUrl, issueDownloadTicket } from "@/features/files/api/files";
-import type { FilesEntry } from "@/features/files/schemas/files";
 import { joinPath } from "@/features/files/utils/files";
 
 /**
@@ -45,7 +44,7 @@ export function useFileDownload() {
     teamId: string,
     root: string,
     directory: string,
-    entry: FilesEntry,
+    entry: { name: string },
   ): Promise<boolean> {
     if (pending.value) {
       return false;

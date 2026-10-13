@@ -17,6 +17,7 @@ import {
   filesRootListSchema,
   filesStatSchema,
   filesUploadEnvelopeSchema,
+  filesWriteEnvelopeSchema,
 } from "@/features/files/schemas/files";
 
 /**
@@ -126,6 +127,55 @@ export async function getContent(
   return parseWith(filesContentSchema, response.data, {
     context: "FilesContent",
   });
+}
+
+/** SaveContentOptions configures one editor save (PUT /content). */
+export interface SaveContentOptions {
+  root: string;
+  path: string;
+  /** Serialized file bytes (BOM/EOL already re-applied). */
+  content: string;
+  /** The etag from the last read/save; "" only with overwrite. */
+  etag?: string;
+  /** overwrite force-replaces a target the caller has not read (If-Match: *). */
+  overwrite?: boolean;
+}
+
+/**
+ * putContent saves one editable text body (owner/admin only). The body is the
+ * raw file text, not a JSON envelope: the control plane streams it to the agent
+ * and the agent's write header needs an exact byte count, which the browser
+ * sets from the string. `If-Match` is the read etag (428 when absent, 409 when
+ * stale); `overwrite` sends `If-Match: *` to force-replace.
+ */
+export async function putContent(
+  serverId: string,
+  teamId: string,
+  options: SaveContentOptions,
+): Promise<FilesEntry> {
+  const overwrite = options.overwrite === true;
+  const response = await http.put(
+    `/servers/${serverId}/files/content`,
+    options.content,
+    {
+      params: {
+        root: options.root,
+        path: options.path,
+        overwrite: overwrite ? "true" : "false",
+      },
+      headers: {
+        ...teamHeaders(teamId),
+        "Content-Type": "text/plain; charset=utf-8",
+        "If-Match": overwrite ? "*" : (options.etag ?? ""),
+      },
+      // A 2 MiB save over a slow link can outlive the 15 s default.
+      timeout: fileTransferTimeoutMs,
+    },
+  );
+  const data = parseWith(filesWriteEnvelopeSchema, response.data, {
+    context: "FilesWrite",
+  });
+  return data.entry;
 }
 
 /**

@@ -1,0 +1,206 @@
+// FilesEditor guard regressions (JUS-112 fix round 2): the team-switch prompt
+// must not ping-pong, an implicit unmount must never drop a dirty buffer, a
+// ready tab must render no error state, and a role/root change must flip a live
+// session read-only. The CodeMirror chunk is mocked so the guards run without
+// a real editor.
+/* global document:readonly */
+import { flushPromises, mount } from "@vue/test-utils";
+import { NMessageProvider } from "naive-ui";
+import { createPinia, setActivePinia } from "pinia";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineComponent, h, nextTick } from "vue";
+
+interface FakeSession {
+  getDoc: () => string;
+  setDoc: ReturnType<typeof vi.fn>;
+  setLanguage: ReturnType<typeof vi.fn>;
+  setWrap: ReturnType<typeof vi.fn>;
+  setReadOnly: ReturnType<typeof vi.fn>;
+  focus: ReturnType<typeof vi.fn>;
+  requestMeasure: ReturnType<typeof vi.fn>;
+  openSearch: ReturnType<typeof vi.fn>;
+  goToLine: ReturnType<typeof vi.fn>;
+  destroy: ReturnType<typeof vi.fn>;
+}
+
+const codemirror = vi.hoisted(() => ({
+  sessions: [] as FakeSession[],
+}));
+
+vi.mock("@/features/files/composables/useCodeMirror", () => ({
+  createEditorSession: vi.fn(async () => {
+    const session: FakeSession = {
+      getDoc: () => "",
+      setDoc: vi.fn(),
+      setLanguage: vi.fn(),
+      setWrap: vi.fn(),
+      setReadOnly: vi.fn(),
+      focus: vi.fn(),
+      requestMeasure: vi.fn(),
+      openSearch: vi.fn(),
+      goToLine: vi.fn(),
+      destroy: vi.fn(),
+    };
+    codemirror.sessions.push(session);
+    return session;
+  }),
+}));
+
+vi.mock("@/features/files/composables/useFileDownload", () => ({
+  useFileDownload: () => ({ pending: { value: false }, download: vi.fn() }),
+}));
+
+import FilesEditor from "@/features/files/components/FilesEditor.vue";
+import { useEditorStore } from "@/features/files/stores/editor";
+import type { EditorTab } from "@/features/files/stores/editor";
+import { useFilesStore } from "@/features/files/stores/files";
+import { useTeamsStore } from "@/features/teams";
+import type { Team } from "@/features/teams/api/teams";
+import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
+
+/** makeTab builds one ready tab; `dirty` sets doc !== original. */
+function makeTab(id: string, dirty: boolean): EditorTab {
+  return {
+    id,
+    root: "volumes",
+    path: `${id}.yaml`,
+    name: `${id}.yaml`,
+    doc: dirty ? "changed" : "start",
+    original: "start",
+    etag: '"v1"',
+    eol: "\n",
+    bom: false,
+    size: 6,
+    mode: 0o100644,
+    language: "yaml",
+    status: "ready",
+    error: "",
+    saving: false,
+  };
+}
+
+function team(id: string, role: Team["role"]): Team {
+  return {
+    id,
+    name: id,
+    is_personal: false,
+    role,
+    created_at: "2026-10-01T00:00:00Z",
+    updated_at: "2026-10-01T00:00:00Z",
+  };
+}
+
+/** mountEditor mounts FilesEditor under the message provider with both teams. */
+function mountEditor() {
+  setActivePinia(createPinia());
+  const teams = useTeamsStore();
+  teams.teams = [team("team-a", "owner"), team("team-b", "owner")];
+  teams.activeTeamId = "team-a";
+
+  const files = useFilesStore();
+  files.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
+  files.rootName = "volumes";
+
+  const editor = useEditorStore();
+  const shell = defineComponent({
+    render: () =>
+      h(NMessageProvider, null, {
+        default: () => h(FilesEditor, { serverId: "srv" }),
+      }),
+  });
+  const wrapper = mount(shell, {
+    global: { plugins: [i18n], stubs: { teleport: true } },
+  });
+  return { wrapper, teams, files, editor };
+}
+
+beforeEach(() => {
+  resetLocaleState();
+  syncComposerLocale("en");
+  codemirror.sessions.length = 0;
+});
+
+afterEach(() => {
+  document.body.innerHTML = "";
+  vi.restoreAllMocks();
+});
+
+describe("FilesEditor guards", () => {
+  it("renders no error state and unique ids on a ready tab", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    expect(wrapper.findAll(".ed-state")).toHaveLength(0);
+    const panels = wrapper
+      .findAll('[role="tabpanel"]')
+      .map((node) => node.attributes("id"));
+    expect(panels).toHaveLength(1);
+    expect(new Set(panels).size).toBe(panels.length);
+    wrapper.unmount();
+  });
+
+  it("rejects a team switch once and never re-prompts", async () => {
+    const { wrapper, teams, editor } = mountEditor();
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    teams.activeTeamId = "team-b";
+    await flushPromises();
+    expect(wrapper.text()).toContain("Discard unsaved changes?");
+
+    const stay = wrapper.findAll("button").find((button) => button.text() === "Stay");
+    expect(stay).toBeTruthy();
+    await stay!.trigger("click");
+    await flushPromises();
+
+    // Reverted to the previous team; the revert echo never re-opens the prompt.
+    expect(teams.activeTeamId).toBe("team-a");
+    expect(wrapper.text()).not.toContain("Discard unsaved changes?");
+    wrapper.unmount();
+  });
+
+  it("keeps dirty buffers when unmounted without a resolved discard", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+    expect(editor.hasDirty).toBe(true);
+
+    wrapper.unmount();
+    expect(editor.tabs).toHaveLength(1);
+    expect(editor.hasDirty).toBe(true);
+  });
+
+  it("resets clean buffers on unmount", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    wrapper.unmount();
+    expect(editor.tabs).toHaveLength(0);
+  });
+
+  it("reconfigures a live session read-only when the write gate drops", async () => {
+    const { wrapper, files, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+    await nextTick();
+    expect(codemirror.sessions).toHaveLength(1);
+    const session = codemirror.sessions[0];
+
+    files.roots = [{ name: "volumes", path: "/v", writable: false, free_bytes: 1 }];
+    await flushPromises();
+    expect(session.setReadOnly).toHaveBeenCalledWith(true);
+    wrapper.unmount();
+  });
+});

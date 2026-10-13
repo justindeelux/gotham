@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 
 import { filesErrorKey } from "@/features/files/api/files";
+import editorEn from "@/features/files/locales/editorEn";
+import editorVi from "@/features/files/locales/editorVi";
 import en from "@/features/files/locales/en";
 import vi from "@/features/files/locales/vi";
 import {
@@ -119,6 +121,10 @@ describe("filesErrorKey maps every status to a curated key", () => {
 describe("files catalog parity", () => {
   it("keeps en and vi in step", () => {
     expect(checkCatalogParity(en, vi)).toEqual([]);
+  });
+
+  it("keeps the lazy editor en and vi catalogs in step", () => {
+    expect(checkCatalogParity(editorEn, editorVi)).toEqual([]);
   });
 });
 

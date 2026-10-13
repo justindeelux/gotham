@@ -77,6 +77,7 @@ const en = {
   },
   menu: {
     open: "Open",
+    edit: "Edit in editor",
     download: "Download",
   },
   clipboard: {

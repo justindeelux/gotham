@@ -1,0 +1,62 @@
+/**
+ * Files editor English catalog, split out of `locales/en.ts` so the editor
+ * messages live in the lazy files-page chunk instead of the eager feature
+ * catalog (which is bundled into the entry chunk). Merged under
+ * `files.editor` by `locales/editorMessages.ts` when the editor loads.
+ * The filename is deliberately not `en.ts` or `vi.ts`, so the eager catalog
+ * scan (which globs those exact names) never picks it up.
+ */
+const en = {
+  heading: "Editor",
+  hint: "Tabs, dirty dot, conflict-safe saves. A save sends the etag it read.",
+  empty: "No open files",
+  emptyHint: "Open a text file from the browser. Reading a file body needs the owner or admin role.",
+  close: "Close {name}",
+  closeDirty: "Close {name}? Unsaved changes will be lost.",
+  closeConfirm: "Close",
+  unsaved: "Unsaved changes",
+  readOnly: "Read-only",
+  save: "Save",
+  saving: "Saving…",
+  saved: "Saved {name}",
+  saveFailed: "Could not save {name}",
+  wrap: "Wrap",
+  unwrap: "No wrap",
+  search: "Find / replace",
+  goToLine: "Go to line",
+  lineColumn: "Ln {line}, Col {column}",
+  encoding: "UTF-8",
+  loading: "Loading {name}…",
+  errorTitle: "Could not open {name}",
+  largeTitle: "Too large to edit",
+  largeHint: "{name} is over the 2 MiB editor limit. Download only.",
+  binaryTitle: "Binary file",
+  binaryHint: "{name} is not valid UTF-8. Download only.",
+  mixedTitle: "Mixed line endings",
+  mixedHint: "{name} mixes line-ending styles, so editing it could rewrite the whole file. Download it and normalise it locally.",
+  download: "Download {name}",
+  dirtyBlocked: "Save or close the unsaved editor tab for {names} first.",
+  leaveTitle: "Discard unsaved changes?",
+  leaveMessage: "Some open files have unsaved changes. Leaving this page discards them.",
+  leaveStay: "Stay",
+  leaveDiscard: "Discard and leave",
+  conflictTitle: "File changed on the server",
+  conflictMessage: "{name} changed since you opened it. Reload the server version, overwrite it with your edits, or save your version as a copy.",
+  conflictPath: "Path",
+  conflictBase: "Your base",
+  conflictReload: "Reload",
+  conflictReloadWarning: "Reloading discards your unsaved edits. Continue?",
+  conflictReloadConfirm: "Reload",
+  conflictOverwrite: "Overwrite",
+  conflictOverwriteWarning: "Overwrite replaces the server's version with your buffer. Continue?",
+  conflictOverwriteConfirm: "Overwrite",
+  conflictSaveAs: "Save as copy",
+  saveAsTitle: "Save as copy",
+  saveAsLabel: "File name",
+  saveAsPlaceholder: "app.yaml.copy",
+  saveAsConfirm: "Save copy",
+  saveAsExists: "A file named {name} already exists in this folder.",
+  saveAsSaved: "Saved copy as {name}",
+};
+
+export default en;

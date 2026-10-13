@@ -113,6 +113,38 @@ export const filesUploadEnvelopeSchema = z.object({
 export type FilesUploadEnvelope = z.infer<typeof filesUploadEnvelopeSchema>;
 
 /**
+ * trashEntrySchema validates one recycle-bin entry (GET /trash). It carries the
+ * recorded original path, the deleted-at timestamp, the entry's size and kind
+ * (no mode/etag: the bin is not a directory listing).
+ */
+export const trashEntrySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  original_path: z.string(),
+  deleted_at: z.string(),
+  size: z.number(),
+  kind: fileKindSchema,
+});
+export type TrashEntry = z.infer<typeof trashEntrySchema>;
+
+/**
+ * trashListingSchema validates GET /trash. `truncated` reports a capped listing
+ * (the node holds more entries than it returned; the oldest are omitted), never
+ * a silent cap, so the dialog can say so instead of lying with a short list.
+ */
+export const trashListingSchema = z.object({
+  entries: z.array(trashEntrySchema),
+  truncated: z.boolean(),
+});
+export type TrashListing = z.infer<typeof trashListingSchema>;
+
+/** emptyTrashEnvelopeSchema validates POST /trash/empty (`removed` count). */
+export const emptyTrashEnvelopeSchema = z.object({
+  removed: z.number(),
+});
+export type EmptyTrashEnvelope = z.infer<typeof emptyTrashEnvelopeSchema>;
+
+/**
  * filesOctalModeSchema validates the Permissions dialog's octal field: exactly
  * three octal digits (the low 0o777 bits). The message is a catalog key, so
  * the shared validation adapter resolves it in the active locale.

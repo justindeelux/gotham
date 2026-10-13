@@ -151,23 +151,26 @@ describe("rowMenuOptions", () => {
 });
 
 describe("folderMenuOptions", () => {
-  it("offers create, paste, upload and refresh in order", () => {
+  it("offers create, paste, upload, the recycle bin and refresh in order", () => {
     expect(keys(folderMenuOptions(ctx()))).toEqual([
       "new-file",
       "new-folder",
       "paste",
       "upload",
+      "recycle-bin",
       "refresh",
     ]);
   });
 
-  it("follows canWrite, keeping refresh usable on a read-only root", () => {
+  it("follows canWrite, keeping refresh and the recycle bin usable on a read-only root", () => {
     const options = folderMenuOptions(ctx({ canWrite: false }));
 
     expect(byKey(options, "new-file")?.disabled).toBe(true);
     expect(byKey(options, "new-folder")?.disabled).toBe(true);
     expect(byKey(options, "paste")?.disabled).toBe(true);
     expect(byKey(options, "upload")?.disabled).toBe(true);
+    // Listing the bin needs no write role; only restore/purge inside it do.
+    expect(byKey(options, "recycle-bin")?.disabled).toBe(false);
     expect(byKey(options, "refresh")?.disabled).toBe(false);
   });
 });

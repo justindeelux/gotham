@@ -18,20 +18,29 @@ vi.mock("@/features/files/api/files", async (importOriginal) => {
     listRoots: vi.fn(),
     listEntries: vi.fn(),
     renameEntry: vi.fn(),
+    deleteEntry: vi.fn(),
   };
 });
 
 import {
   createFolder,
+  deleteEntry,
   listEntries,
   listRoots,
   renameEntry,
 } from "@/features/files/api/files";
 import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue";
+import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
+import { useFilesStore } from "@/features/files/stores/files";
 import { useTeamsStore } from "@/features/teams";
-import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "@/shared/i18n";
 
 const root: FilesRoot = {
   name: "volumes",
@@ -74,6 +83,7 @@ function dialogShell(component: object, props: Record<string, unknown>) {
 beforeEach(() => {
   setActivePinia(createPinia());
   resetLocaleState();
+  registerDiscoveredCatalogs();
   syncComposerLocale("en");
   vi.clearAllMocks();
   const teams = useTeamsStore();
@@ -131,5 +141,62 @@ describe("files create/rename dialogs", () => {
     expect(vi.mocked(renameEntry)).toHaveBeenCalledTimes(1);
     gate.resolve(entry({ name: "main.yaml" }));
     await flushPromises();
+  });
+});
+
+describe("files delete dialog (recycle bin)", () => {
+  /** confirmButton finds a footer button by its label text. */
+  function confirmButton(
+    wrapper: ReturnType<typeof mount>,
+    label: string,
+  ) {
+    return wrapper.findAll("button").find((button) => button.text().includes(label));
+  }
+
+  it("always moves to the recycle bin and offers no permanent option", async () => {
+    vi.mocked(deleteEntry).mockResolvedValue(undefined);
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    const wrapper = mount(
+      dialogShell(DeleteEntriesDialog, {
+        show: true,
+        entries: [entry({ name: "app.yaml" })],
+      }),
+      { global: { plugins: [i18n], stubs: { teleport: true } } },
+    );
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Move to recycle bin");
+    // Permanent deletion lives only in the recycle bin, never here.
+    expect(wrapper.text()).not.toContain("Delete permanently");
+
+    await confirmButton(wrapper, "Move to recycle bin")!.trigger("click");
+    await flushPromises();
+    expect(vi.mocked(deleteEntry)).toHaveBeenLastCalledWith(
+      "server-1",
+      "team-1",
+      "volumes",
+      "app.yaml",
+      false,
+    );
+  });
+
+  it("reassures that a symlink's target is not removed", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    const wrapper = mount(
+      dialogShell(DeleteEntriesDialog, {
+        show: true,
+        entries: [
+          entry({ name: "current", kind: "symlink", mode: 0o120777 }),
+        ],
+      }),
+      { global: { plugins: [i18n], stubs: { teleport: true } } },
+    );
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("its target is not removed");
   });
 });

@@ -12,6 +12,7 @@ export default defineConfig({
     "files-context-menu.spec.ts",
     "files-editor-layout.spec.ts",
     "files-layout-fit.spec.ts",
+    "files-recycle-bin.spec.ts",
     "files-tabs.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",

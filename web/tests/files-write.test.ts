@@ -139,7 +139,8 @@ describe("files store delete", () => {
     expect(summary.failed).toHaveLength(1);
     expect(summary.failed[0]?.name).toBe("config");
     expect(summary.failed[0]?.error).toBeTruthy();
-    // A folder is deleted recursively; a file is not.
+    // A folder is deleted recursively; a file is not. A delete always moves the
+    // entry to the recycle bin (the client never sends a permanent flag).
     expect(vi.mocked(deleteEntry)).toHaveBeenNthCalledWith(
       2,
       "server-1",

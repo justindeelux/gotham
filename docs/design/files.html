@@ -93,6 +93,10 @@
                 <input type="search" placeholder="Filter this folder…" aria-label="Filter entries" data-search="[data-tag]" />
               </div>
               <button class="btn btn-sm btn-ghost btn-icon" type="button" data-toast="Reloaded entries from the agent (List).|info" aria-label="Refresh" title="Refresh"><svg aria-hidden="true"><use href="#i-refresh"></use></svg></button>
+              <!-- JUS-122: the bin is per root, so it lives on the path bar
+                   (not the write-gated toolbar). Any member may browse it;
+                   restore / purge / empty need owner/admin. -->
+              <button class="btn btn-sm btn-outline" type="button" data-open="fm-recycle"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Recycle bin</span></button>
             </div>
 
             <!-- Selection bar: appears only when at least one row is selected -->
@@ -105,7 +109,7 @@
                      Cut only stage the clipboard; Paste (toolbar) applies it. -->
                 <button class="btn btn-sm btn-outline" type="button" data-toast="Copied 2 items to the clipboard.|success"><svg aria-hidden="true"><use href="#i-copy"></use></svg>Copy</button>
                 <button class="btn btn-sm btn-outline" type="button" data-toast="Cut 2 items to the clipboard.|success"><svg aria-hidden="true"><use href="#i-cut"></use></svg>Cut</button>
-                <button class="btn btn-sm btn-danger-ghost" type="button" data-confirm="Delete the 2 selected entries? This cannot be undone." data-confirm-title="Delete 2 entries" data-confirm-label="Delete permanently"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Delete</button>
+                <button class="btn btn-sm btn-danger-ghost" type="button" data-confirm="Move the 2 selected entries? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete 2 entries" data-confirm-label="Move to recycle bin"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Delete</button>
                 <button class="btn btn-sm btn-ghost" type="button" data-toast="Selection cleared.|info">Clear</button>
               </span>
             </div>
@@ -138,7 +142,7 @@
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened config/|info" aria-label="Open config"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename config"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete folder config and the 12 files inside it? This cannot be undone." data-confirm-title="Delete folder" data-confirm-label="Delete permanently" aria-label="Delete config"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move folder config and the 12 files inside it? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete folder" data-confirm-label="Move to recycle bin" aria-label="Delete config"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for config"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -156,7 +160,7 @@
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened data/|info" aria-label="Open data"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename data"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete folder data and everything inside it? This cannot be undone." data-confirm-title="Delete folder" data-confirm-label="Delete permanently" aria-label="Delete data"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move folder data and everything inside it? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete folder" data-confirm-label="Move to recycle bin" aria-label="Delete data"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for data"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -174,7 +178,7 @@
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened logs/|info" aria-label="Open logs"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename logs"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete folder logs recursively and its 214 files? This cannot be undone." data-confirm-title="Delete folder recursively" data-confirm-label="Delete permanently" aria-label="Delete logs"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move folder logs recursively and its 214 files? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete folder recursively" data-confirm-label="Move to recycle bin" aria-label="Delete logs"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for logs"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -193,7 +197,7 @@
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened app.yaml in the editor.|info" aria-label="Edit app.yaml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for app.yaml…|info" aria-label="Download app.yaml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete app.yaml? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete app.yaml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move app.yaml? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete app.yaml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for app.yaml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -211,7 +215,7 @@
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Open .env"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Download .env"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete .env? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete .env"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move .env? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete .env"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for .env"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -229,7 +233,7 @@
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened docker-compose.yml in the editor.|info" aria-label="Edit docker-compose.yml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket…|info" aria-label="Download docker-compose.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete docker-compose.yml? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete docker-compose.yml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move docker-compose.yml? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete docker-compose.yml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for docker-compose.yml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -247,7 +251,7 @@
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Binary file — download to open locally.|info" aria-label="Preview logo.png"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for logo.png…|info" aria-label="Download logo.png"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete logo.png? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete logo.png"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move logo.png? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete logo.png"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for logo.png"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -265,7 +269,7 @@
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-extract" aria-label="Extract backup archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming 128.4 MiB to your browser…|info" aria-label="Download backup archive"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete backup-2026-10-11.tar.gz? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete backup archive"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move backup-2026-10-11.tar.gz? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete backup archive"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: extract, download, rename, cut, copy, paste, delete.|info" aria-label="More actions for backup archive"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -283,7 +287,7 @@
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Over the 2 MiB editor limit — download only.|warn" aria-label="Open server.log"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming server.log to your browser…|info" aria-label="Download server.log"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete server.log? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete server.log"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move server.log? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete server.log"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for server.log"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -301,7 +305,7 @@
                   <div class="fm-cell" role="cell">lrwxrwxrwx</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Followed symlink to ../app-1190.|info" aria-label="Follow symlink current"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete symlink current? The target is not removed." data-confirm-title="Delete symlink" data-confirm-label="Delete symlink" aria-label="Delete symlink current"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move symlink current to the recycle bin? The target is not removed." data-confirm-title="Delete symlink" data-confirm-label="Move to recycle bin" aria-label="Delete symlink current"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Symlinks are copied as links, never followed.|info" aria-label="More actions for current"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
@@ -492,7 +496,7 @@
                 <button type="button" role="menuitem" data-toast="Cut app.yaml to the clipboard.|info"><svg aria-hidden="true"><use href="#i-cut"></use></svg>Cut</button>
                 <button type="button" role="menuitem" data-toast="Copied app.yaml to the clipboard.|success"><svg aria-hidden="true"><use href="#i-copy"></use></svg>Copy</button>
                 <div class="fm-menu-sep" role="separator"></div>
-                <button type="button" role="menuitem" class="is-danger" data-confirm="Delete app.yaml? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Delete</button>
+                <button type="button" role="menuitem" class="is-danger" data-confirm="Move app.yaml? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Delete</button>
               </div>
             </div>
             <p class="small muted mt-4">Right-clicking a row opens its menu at the cursor; on an unselected row it selects that row first, on a row already inside the selection it keeps the whole multi-selection. <span class="kbd">Shift</span>+<span class="kbd">F10</span> (or the menu key) opens the same menu on the focused row. A folder row also offers <b>Paste</b>, which pastes the clipboard INTO that folder; a file row has no destination, so it has no Paste. Disabled actions follow the write gate (a read-only root greys every write action), and a special file opens no menu.</p>
@@ -506,11 +510,27 @@
                 <button type="button" role="menuitem" data-toast="New folder — an existing name is refused (409).|info"><svg aria-hidden="true"><use href="#i-plus"></use></svg>New folder</button>
                 <button type="button" role="menuitem" data-toast="Pasted into this folder — name clash shows a 409 replace/skip prompt.|info"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Paste</button>
                 <button type="button" role="menuitem" data-open="fm-upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Upload</button>
+                <button type="button" role="menuitem" data-open="fm-recycle"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Recycle bin…</button>
                 <button type="button" role="menuitem" data-toast="Reloaded entries from the agent (List).|info"><svg aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
               </div>
             </div>
 
             <p class="small muted mt-4">Keyboard: <span class="kbd">↑</span> <span class="kbd">↓</span> move, <span class="kbd">Enter</span> open, <span class="kbd">⌘/Ctrl</span>+click multi-select, <span class="kbd">F2</span> rename, <span class="kbd">Del</span> delete — all scoped to the focused list, never to the editor.</p>
+          </div>
+        </div>
+
+        <!-- ── Recycle bin (JUS-122) ──────────────────────────────────────── -->
+        <div class="section-title" id="recycle-bin">
+          <h2>Recycle bin</h2>
+          <span class="meta">per root · restore to the recorded path · purge one · empty</span>
+        </div>
+        <div class="card">
+          <div class="card-body stack gap-3">
+            <p class="small muted">Deleting an entry now moves it into the root's recycle bin instead of removing it. The bin is per root: <span class="mono">.gotham-trash</span> holds each deleted entry with its original path, deleted-at, size and kind. Any team member can list the bin; restoring, permanently deleting one entry and emptying the bin need owner or admin on a writable root.</p>
+            <p class="small muted">The delete confirm always moves entries to the recycle bin (<b>Move to recycle bin</b>) — a normal delete is never permanent. Permanent deletion happens only from the bin: purge a single entry or empty the whole bin. A restore that meets an existing entry at the original path returns <span class="mono">409</span> and shows a clear conflict message — nothing is overwritten. A capped listing says it is truncated; entries have <b>no auto-expiry</b> in v1.</p>
+            <div class="row gap-2">
+              <button class="btn btn-sm btn-outline" type="button" data-open="fm-recycle"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Open the recycle bin</button>
+            </div>
           </div>
         </div>
 
@@ -957,6 +977,66 @@ services:
       <span class="small muted grow">Extraction is confined to the current root</span>
       <button class="btn btn-outline" type="button" data-close>Cancel</button>
       <button class="btn btn-primary" type="button" data-toast="Extracted backup-2026-10-11.tar.gz.|success" data-close>Extract here</button>
+    </div>
+  </div>
+</div>
+
+<!-- Recycle bin (JUS-122): per-root bin, newest first. Any member may list it;
+     restore / permanent delete / empty need owner/admin. -->
+<div class="overlay" id="fm-recycle" hidden>
+  <div class="modal modal--lg" role="dialog" aria-modal="true" aria-labelledby="fm-recycle-title">
+    <div class="modal-head">
+      <svg aria-hidden="true"><use href="#i-trash"></use></svg>
+      <div><h3 id="fm-recycle-title">Recycle bin</h3><p class="small muted">volumes · entries stay until restored, permanently deleted, or the bin is emptied</p></div>
+      <button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Close"><svg aria-hidden="true"><use href="#i-x"></use></svg></button>
+    </div>
+    <div class="modal-body stack gap-3">
+      <p class="small muted">2 entries</p>
+      <div class="callout">
+        <svg aria-hidden="true"><use href="#i-alert"></use></svg>
+        <div><h4>Listing truncated</h4><p>The bin holds more entries than shown; the oldest are omitted. Restore or permanently delete newer entries to see the rest.</p></div>
+      </div>
+      <div class="fm-table" role="table">
+        <div class="fm-row fm-head" role="row">
+          <div role="columnheader">Name</div>
+          <div role="columnheader">Original path</div>
+          <div role="columnheader">Deleted</div>
+          <div role="columnheader" class="fm-cell--size">Size</div>
+          <div role="columnheader">Type</div>
+          <div role="columnheader" class="right">Actions</div>
+        </div>
+        <div class="fm-row" role="row">
+          <div role="cell"><b>app.yaml</b></div>
+          <div role="cell" class="mono small">storefront-8f2c1ab/app.yaml</div>
+          <div role="cell">2026-10-13 10:00</div>
+          <div role="cell" class="fm-cell--size">2.4 KiB</div>
+          <div role="cell">YAML</div>
+          <div role="cell" class="fm-actions">
+            <button class="btn btn-sm btn-outline" type="button" data-toast="Restored app.yaml to its original path.|success"><svg aria-hidden="true"><use href="#i-refresh"></use></svg>Restore</button>
+            <button class="btn btn-sm btn-danger-ghost btn-icon" type="button" data-confirm="Permanently delete app.yaml? This cannot be undone." data-confirm-title="Delete permanently" data-confirm-label="Delete permanently" aria-label="Delete app.yaml permanently"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+          </div>
+        </div>
+        <div class="fm-row" role="row">
+          <div role="cell"><b>config</b></div>
+          <div role="cell" class="mono small">storefront-8f2c1ab/config</div>
+          <div role="cell">2026-10-12 21:14</div>
+          <div role="cell" class="fm-cell--size">18.2 KiB</div>
+          <div role="cell">Folder</div>
+          <div role="cell" class="fm-actions">
+            <button class="btn btn-sm btn-outline" type="button" data-toast="Restored config to its original path.|success"><svg aria-hidden="true"><use href="#i-refresh"></use></svg>Restore</button>
+            <button class="btn btn-sm btn-danger-ghost btn-icon" type="button" data-confirm="Permanently delete config? This cannot be undone." data-confirm-title="Delete permanently" data-confirm-label="Delete permanently" aria-label="Delete config permanently"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+          </div>
+        </div>
+      </div>
+      <div class="callout">
+        <svg aria-hidden="true"><use href="#i-info"></use></svg>
+        <div><h4>Restore conflict</h4><p>If the original path is now occupied, the restore returns <span class="mono">409</span> and the dialog explains it: move or rename the occupying entry, then restore again. Nothing is overwritten.</p></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span class="small muted grow">Listing needs any member · restore, purge and empty need owner/admin</span>
+      <button class="btn btn-danger-ghost" type="button" data-confirm="Permanently delete all 2 entries in this bin? This cannot be undone." data-confirm-title="Empty the recycle bin" data-confirm-label="Empty bin"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Empty bin</button>
+      <button class="btn btn-outline" type="button" data-close>Close</button>
     </div>
   </div>
 </div>

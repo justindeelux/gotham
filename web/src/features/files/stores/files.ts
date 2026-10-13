@@ -995,9 +995,11 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
-   * remove deletes entries, recursing into folders. It never aborts on one
-   * failure: the summary reports the names that were deleted and the ones that
-   * failed, so a partial batch still shows feedback for every entry.
+   * remove deletes entries, recursing into folders. A delete always moves the
+   * entries to the root's recycle bin (permanent deletion happens only from the
+   * bin). It never aborts on one failure: the summary reports the names that
+   * were deleted and the ones that failed, so a partial batch still shows
+   * feedback for every entry.
    */
   async function remove(entries: FilesEntry[]): Promise<TransferSummary> {
     const tab = activeTab.value;

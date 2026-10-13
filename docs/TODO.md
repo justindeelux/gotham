@@ -73,7 +73,10 @@ The full triage lives in [`plans/18-file-manager.md`](plans/18-file-manager.md) 
   (`O_PATH`/`openat` + `fstat`, or `Lstat`) instead of `EvalSymlinks` then a fresh `os.Stat`.
 - [ ] **Per-team upload staging cap.** `FILES_SPOOL_CONCURRENCY` is a single global semaphore, so
   one team can starve others; add a per-team cap or fair queueing.
-- [ ] **Step 9a chmod (JUS-113) / step 9b archives (JUS-114)** remain deferred; not built now.
+- [x] **Step 9a chmod (JUS-113)** built: agent `FileService.Chmod` (0o777 bits only;
+  setuid/setgid/sticky refused; no symlink follow; read-only roots refused), CP
+  `POST /files/chmod`, and the web Permissions dialog. Step 9b archives (JUS-114)
+  remains deferred.
 
 ## Phase 4 residuals
 

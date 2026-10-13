@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import {
+  chmodEntry,
   copyEntry,
   createFile,
   createFolder,
@@ -585,6 +586,22 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
+   * chmod changes one entry's permission bits and refreshes the listing. Only
+   * the low 0o777 bits are sent; the agent refuses setuid/setgid/sticky. A
+   * successful call re-loads the directory so the new mode shows immediately.
+   */
+  async function chmod(entry: FilesEntry, mode: number): Promise<void> {
+    await runMutation(async () => {
+      await chmodEntry(serverId.value, teamId(), {
+        root: rootName.value,
+        path: joinPath(path.value, entry.name),
+        mode,
+      });
+      await loadEntries();
+    });
+  }
+
+  /**
    * remove deletes entries, recursing into folders. It never aborts on one
    * failure: the summary reports the names that were deleted and the ones that
    * failed, so a partial batch still shows feedback for every entry.
@@ -978,6 +995,7 @@ export const useFilesStore = defineStore("files", () => {
     clearSelection,
     createEntry,
     rename,
+    chmod,
     remove,
     promptTransfer,
     resolveConflictPrompt,

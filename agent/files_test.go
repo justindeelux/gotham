@@ -234,14 +234,6 @@ func TestFileServerErrors(t *testing.T) {
 	}
 }
 
-func TestFileServerChmodUnimplemented(t *testing.T) {
-	t.Parallel()
-	server, _ := newTestFileServer(t)
-	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{Root: fileRootVolumes, Path: "x"}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("Chmod code = %v, want Unimplemented", status.Code(err))
-	}
-}
-
 func TestFileServerListCap(t *testing.T) {
 	t.Parallel()
 	server, volumeRoot := newTestFileServer(t)

@@ -364,7 +364,10 @@ message RenameResponse {
 message ChmodRequest {
   string root = 1;
   string path = 2;
-  uint32 mode = 3;
+  // mode is the new permission bits. It is optional so the agent can refuse a
+  // request that omits it (INVALID_ARGUMENT): unlike a create, a chmod has no
+  // safe default, and a missing mode must never silently mean 000.
+  optional uint32 mode = 3;
 }
 
 // ChmodResponse is empty.

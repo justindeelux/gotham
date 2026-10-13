@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // TempPrefix is the base-name prefix of every staging file fsroot creates. It
@@ -111,7 +113,9 @@ func (r *Root) OpenWrite(rel string) (*os.File, Entry, error) {
 }
 
 // Chmod sets one entry's permission bits (0o777 mask). It is used to give a
-// freshly created temporary file the requested or inherited mode.
+// freshly created temporary file the requested or inherited mode. It follows a
+// final symbolic link to its target (like os.Root.Chmod); the user-facing
+// chmod is ChmodEntry, which refuses a link instead.
 func (r *Root) Chmod(rel string, mode os.FileMode) error {
 	if err := r.requireWritable(); err != nil {
 		return err
@@ -124,6 +128,62 @@ func (r *Root) Chmod(rel string, mode os.FileMode) error {
 		return mapError("chmod", err)
 	}
 	return nil
+}
+
+// ChmodEntry sets the permission bits of one entry under the root and returns
+// the updated entry. It is the user-facing chmod: a final symbolic link is
+// refused rather than followed (the link's target's mode is never touched), a
+// special file (FIFO, socket, device) is refused, and the root itself is
+// refused.
+//
+// Only mode.Perm() (the low 0o777 bits) is applied. The caller is responsible
+// for rejecting a requested setuid/setgid/sticky bit; existing special bits are
+// preserved (never created) so "only plain permission bits change" holds. A
+// directory must keep its owner execute bit so it stays traversable. When
+// refuseHardlink is set (a confined root, as opposed to the whole-filesystem
+// root), a regular file with more than one hard link is refused: its inode may
+// also be reachable outside the root, so changing its mode would change that
+// other name too. ChmodEntry never changes an entry's type, so a directory
+// (including a managed application directory) stays a directory. The returned
+// entry is read from the same descriptor, so an entry under a directory the
+// agent cannot read (0o111 or 0o000) is still chmod-able and reported.
+func (r *Root) ChmodEntry(rel string, mode os.FileMode, refuseHardlink bool) (Entry, error) {
+	if err := r.requireWritable(); err != nil {
+		return Entry{}, err
+	}
+	p, err := cleanRel(rel)
+	if err != nil {
+		return Entry{}, err
+	}
+	if p == "." {
+		return Entry{}, fmt.Errorf("%w: cannot chmod the root", ErrInvalid)
+	}
+	return r.chmodNoFollow(p, mode.Perm(), refuseHardlink)
+}
+
+// chmodTargetMode classifies the opened entry from its fstat and returns the
+// mode to write: the caller's plain permission bits OR-ed with the special bits
+// already set (preserved, never created). It refuses a symbolic link
+// (ErrInvalid, so the control plane answers 400), a special file (ErrSpecial),
+// a directory that would lose its owner execute bit (ErrInvalid: the entry
+// would no longer be traversable), and — when refuseHardlink is set — a regular
+// file with more than one hard link (ErrInvalid).
+func chmodTargetMode(stat *unix.Stat_t, p string, mode os.FileMode, refuseHardlink bool) (uint32, error) {
+	switch stat.Mode & unix.S_IFMT {
+	case unix.S_IFREG:
+		if refuseHardlink && stat.Nlink > 1 {
+			return 0, fmt.Errorf("%w: %s has %d hard links; refusing to change a shared inode", ErrInvalid, p, stat.Nlink)
+		}
+	case unix.S_IFDIR:
+		if mode.Perm()&0o100 == 0 {
+			return 0, fmt.Errorf("%w: %s is a directory and must keep owner execute", ErrInvalid, p)
+		}
+	case unix.S_IFLNK:
+		return 0, fmt.Errorf("%w: %s is a symbolic link", ErrInvalid, p)
+	default:
+		return 0, fmt.Errorf("%w: %s", ErrSpecial, p)
+	}
+	return uint32(mode.Perm()) | (uint32(stat.Mode) & 0o7000), nil
 }
 
 // Mkdir creates one directory and returns its entry. It is exclusive: a name

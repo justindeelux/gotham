@@ -1393,10 +1393,13 @@ func (x *RenameResponse) GetEntry() *FileEntry {
 
 // ChmodRequest changes one entry's permission bits.
 type ChmodRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Root          string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
-	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
-	Mode          uint32                 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Root  string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
+	Path  string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// mode is the new permission bits. It is optional so the agent can refuse a
+	// request that omits it (INVALID_ARGUMENT): unlike a create, a chmod has no
+	// safe default, and a missing mode must never silently mean 000.
+	Mode          *uint32 `protobuf:"varint,3,opt,name=mode,proto3,oneof" json:"mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1446,8 +1449,8 @@ func (x *ChmodRequest) GetPath() string {
 }
 
 func (x *ChmodRequest) GetMode() uint32 {
-	if x != nil {
-		return x.Mode
+	if x != nil && x.Mode != nil {
+		return *x.Mode
 	}
 	return 0
 }
@@ -4468,11 +4471,12 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\vdestination\x18\x03 \x01(\tR\vdestination\x12\x1c\n" +
 	"\toverwrite\x18\x04 \x01(\bR\toverwrite\";\n" +
 	"\x0eRenameResponse\x12)\n" +
-	"\x05entry\x18\x01 \x01(\v2\x13.agent.v1.FileEntryR\x05entry\"J\n" +
+	"\x05entry\x18\x01 \x01(\v2\x13.agent.v1.FileEntryR\x05entry\"X\n" +
 	"\fChmodRequest\x12\x12\n" +
 	"\x04root\x18\x01 \x01(\tR\x04root\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
-	"\x04mode\x18\x03 \x01(\rR\x04mode\"\x0f\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x17\n" +
+	"\x04mode\x18\x03 \x01(\rH\x00R\x04mode\x88\x01\x01B\a\n" +
+	"\x05_mode\"\x0f\n" +
 	"\rChmodResponse\"?\n" +
 	"\x0fProxyConfigFile\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
@@ -4929,6 +4933,7 @@ func file_agent_v1_agent_proto_init() {
 		(*WriteRequest_Data)(nil),
 		(*WriteRequest_Commit)(nil),
 	}
+	file_agent_v1_agent_proto_msgTypes[21].OneofWrappers = []any{}
 	file_agent_v1_agent_proto_msgTypes[50].OneofWrappers = []any{
 		(*BuildImageRequest_Meta)(nil),
 		(*BuildImageRequest_ContextChunk)(nil),

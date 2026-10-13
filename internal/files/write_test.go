@@ -307,6 +307,7 @@ func TestWriteRBACReadOnly(t *testing.T) {
 		"mkdir":  func() error { _, err := svc.Mkdir(ctx, server.ID, "volumes", "d", 0); return err },
 		"rename": func() error { _, err := svc.Rename(ctx, server.ID, "volumes", "a", "b", false); return err },
 		"copy":   func() error { _, err := svc.Copy(ctx, server.ID, "volumes", "a", "b", false); return err },
+		"chmod":  func() error { _, err := svc.Chmod(ctx, server.ID, "volumes", "a", 0o600); return err },
 		"delete": func() error { return svc.Delete(ctx, server.ID, "volumes", "a", false) },
 	}
 	for name, call := range cases {
@@ -392,6 +393,7 @@ func TestWriteRPCErrorMapping(t *testing.T) {
 		client := &fakeFileClient{
 			mkdirErr:  status.Error(tc.code, "x"),
 			renameErr: status.Error(tc.code, "x"),
+			chmodErr:  status.Error(tc.code, "x"),
 			copyErr:   status.Error(tc.code, "x"),
 			deleteErr: status.Error(tc.code, "x"),
 			writeErr:  status.Error(tc.code, "x"),
@@ -406,6 +408,9 @@ func TestWriteRPCErrorMapping(t *testing.T) {
 		}
 		if _, err := svc.Rename(ctx, server.ID, "volumes", "a", "b", false); !errors.Is(err, tc.want) {
 			t.Errorf("rename %s = %v, want %v", tc.code, err, tc.want)
+		}
+		if _, err := svc.Chmod(ctx, server.ID, "volumes", "a", 0o600); !errors.Is(err, tc.want) {
+			t.Errorf("chmod %s = %v, want %v", tc.code, err, tc.want)
 		}
 		if _, err := svc.Copy(ctx, server.ID, "volumes", "a", "b", false); !errors.Is(err, tc.want) {
 			t.Errorf("copy %s = %v, want %v", tc.code, err, tc.want)
@@ -472,5 +477,51 @@ func TestAuditDisabledAndUnavailableResults(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), `"result":"disabled"`) {
 		t.Fatalf("audit log = %s", buf.String())
+	}
+}
+
+// TestChmod sends a mode to the agent and returns the re-stat-ed entry (the
+// wired ChmodResponse is empty, so the service stats the entry, as Copy does).
+func TestChmod(t *testing.T) {
+	teamID := uuid.New()
+	registry := newFakeRegistry()
+	server := registry.seed(teamID)
+	client := &fakeFileClient{
+		statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{
+			Name: "a.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Mode: 0o600, Etag: `"c"`,
+		}},
+	}
+	svc := newTestService(t, registry, client)
+
+	entry, err := svc.Chmod(scopeCtx(teams.RoleOwner, teamID), server.ID, "volumes", "a.txt", 0o600)
+	if err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if client.seenChmod.GetMode() != 0o600 || client.seenChmod.GetPath() != "a.txt" || client.seenChmod.GetRoot() != "volumes" {
+		t.Fatalf("chmod request = %+v", client.seenChmod)
+	}
+	if entry.Mode != 0o600 || entry.Etag != `"c"` {
+		t.Fatalf("entry = %+v", entry)
+	}
+}
+
+// TestChmodRejectsModeBitsBeforeDial proves setuid/setgid/sticky and any bit
+// above 0o777 are a 400 before the agent is dialed, so a bad mode never reaches
+// the node.
+func TestChmodRejectsModeBitsBeforeDial(t *testing.T) {
+	teamID := uuid.New()
+	registry := newFakeRegistry()
+	server := registry.seed(teamID)
+	client := &fakeFileClient{}
+	svc := newTestService(t, registry, client)
+	ctx := scopeCtx(teams.RoleOwner, teamID)
+
+	for _, mode := range []uint32{0o4755, 0o2755, 0o1755, 0o7777, 0o10000} {
+		if _, err := svc.Chmod(ctx, server.ID, "volumes", "a", mode); !errors.Is(err, ErrValidation) {
+			t.Errorf("Chmod(%#o) = %v, want ErrValidation", mode, err)
+		}
+	}
+	if client.seenChmod != nil {
+		t.Fatal("an invalid mode reached the agent")
 	}
 }

@@ -46,6 +46,8 @@ type fakeService struct {
 	createErr    error
 	renameEntry  Entry
 	renameErr    error
+	chmodEntry   Entry
+	chmodErr     error
 	copyEntry    Entry
 	copyErr      error
 	deleteErr    error
@@ -64,6 +66,18 @@ func (f *fakeService) wrote() bool {
 	defer f.mu.Unlock()
 	for _, call := range f.calls {
 		if call == "write" {
+			return true
+		}
+	}
+	return false
+}
+
+// called reports whether the named service method was reached.
+func (f *fakeService) called(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, call := range f.calls {
+		if call == name {
 			return true
 		}
 	}
@@ -140,6 +154,11 @@ func (f *fakeService) Rename(_ context.Context, _ uuid.UUID, _, _, _ string, _ b
 func (f *fakeService) Copy(_ context.Context, _ uuid.UUID, _, _, _ string, _ bool) (Entry, error) {
 	f.record("copy")
 	return f.copyEntry, f.copyErr
+}
+
+func (f *fakeService) Chmod(_ context.Context, _ uuid.UUID, _, _ string, _ uint32) (Entry, error) {
+	f.record("chmod")
+	return f.chmodEntry, f.chmodErr
 }
 
 func (f *fakeService) Delete(_ context.Context, _ uuid.UUID, _, _ string, _ bool) error {

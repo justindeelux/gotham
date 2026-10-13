@@ -17,10 +17,12 @@ vi.mock("@/features/files/api/files", async (importOriginal) => {
     moveEntry: vi.fn(),
     copyEntry: vi.fn(),
     deleteEntry: vi.fn(),
+    chmodEntry: vi.fn(),
   };
 });
 
 import {
+  chmodEntry,
   copyEntry,
   createFile,
   createFolder,
@@ -66,7 +68,7 @@ const conflict = { message: "conflict", status: 409 };
 
 beforeEach(() => {
   setActivePinia(createPinia());
-  for (const fn of [listRoots, listEntries, createFolder, createFile, copyEntry, moveEntry, deleteEntry, renameEntry]) {
+  for (const fn of [listRoots, listEntries, createFolder, createFile, copyEntry, moveEntry, deleteEntry, renameEntry, chmodEntry]) {
     vi.mocked(fn).mockReset();
   }
   const teams = useTeamsStore();
@@ -444,5 +446,44 @@ describe("files store row targets", () => {
     expect(store.clipboard?.names).toEqual(["app.yaml"]);
     // The pre-existing selection is untouched.
     expect(store.selectedNames).toEqual(["config"]);
+  });
+});
+
+describe("files store chmod", () => {
+  it("sends the permission bits and refreshes the listing", async () => {
+    vi.mocked(chmodEntry).mockResolvedValue(entry({ name: "app.yaml", mode: 0o100600 }));
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    vi.mocked(listEntries).mockResolvedValue({
+      entries: [entry({ name: "app.yaml", mode: 0o100600 })],
+      truncated: false,
+      cursor: "",
+    });
+
+    await store.chmod(entry({ name: "app.yaml" }), 0o600);
+
+    expect(vi.mocked(chmodEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+      root: "volumes",
+      path: "app.yaml",
+      mode: 0o600,
+    });
+    expect(store.entries[0]?.mode).toBe(0o100600);
+    expect(store.acting).toBe(false);
+  });
+
+  it("surfaces a refusal and keeps the listing", async () => {
+    vi.mocked(chmodEntry).mockRejectedValue({ message: "forbidden", status: 403 });
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    const before = store.entries.map((item) => item.name);
+
+    await expect(store.chmod(entry({ name: "app.yaml" }), 0o600)).rejects.toMatchObject({
+      status: 403,
+    });
+
+    expect(store.entries.map((item) => item.name)).toEqual(before);
+    expect(store.acting).toBe(false);
   });
 });

@@ -11,6 +11,7 @@ import {
   filesContentSchema,
   filesEntrySchema,
   filesListingSchema,
+  filesOctalModeSchema,
   filesRootListSchema,
 } from "@/features/files/schemas/files";
 import type { FilesEntry } from "@/features/files/schemas/files";
@@ -23,13 +24,17 @@ import {
   entryTypeLabel,
   filesFromDrop,
   formatMode,
+  formatOctalMode,
   formatTimestamp,
   isFileDrag,
   isSelectable,
   joinPath,
   MAX_NAME_BYTES,
+  modeFromFlags,
   normalizeEntryName,
   parentPath,
+  parseOctalMode,
+  permissionFlags,
   sortEntries,
   validateEntryName,
 } from "@/features/files/utils/files";
@@ -346,5 +351,54 @@ describe("isFileDrag", () => {
     expect(isFileDrag(["text/plain"])).toBe(false);
     expect(isFileDrag(null)).toBe(false);
     expect(isFileDrag(undefined)).toBe(false);
+  });
+});
+
+describe("filesOctalModeSchema", () => {
+  it("accepts exactly three octal digits and trims", () => {
+    expect(filesOctalModeSchema.safeParse("644").success).toBe(true);
+    expect(filesOctalModeSchema.safeParse("000").success).toBe(true);
+    expect(filesOctalModeSchema.safeParse(" 755 ").success).toBe(true);
+  });
+
+  it("rejects a wrong length or a non-octal digit", () => {
+    expect(filesOctalModeSchema.safeParse("64").success).toBe(false);
+    expect(filesOctalModeSchema.safeParse("6444").success).toBe(false);
+    expect(filesOctalModeSchema.safeParse("689").success).toBe(false);
+    expect(filesOctalModeSchema.safeParse("abc").success).toBe(false);
+    expect(filesOctalModeSchema.safeParse("").success).toBe(false);
+  });
+});
+
+describe("permission bit helpers", () => {
+  it("formats and parses octal modes round-trip", () => {
+    expect(formatOctalMode(0o100644)).toBe("644");
+    expect(formatOctalMode(0o040755)).toBe("755");
+    expect(formatOctalMode(0)).toBe("000");
+    expect(parseOctalMode("644")).toBe(0o644);
+    expect(parseOctalMode("750")).toBe(0o750);
+  });
+
+  it("masks away special bits (never offered by the dialog)", () => {
+    expect(formatOctalMode(0o4755)).toBe("755");
+    expect(parseOctalMode("755")).toBe(0o755);
+  });
+
+  it("maps a mode to the nine owner/group/other rwx flags", () => {
+    expect(permissionFlags(0o644)).toEqual([
+      true, true, false,
+      true, false, false,
+      true, false, false,
+    ]);
+    expect(permissionFlags(0o755)).toEqual([
+      true, true, true,
+      true, false, true,
+      true, false, true,
+    ]);
+  });
+
+  it("rebuilds the mode from the flags", () => {
+    expect(modeFromFlags([true, true, false, true, false, false, true, false, false])).toBe(0o644);
+    expect(modeFromFlags(permissionFlags(0o750))).toBe(0o750);
   });
 });

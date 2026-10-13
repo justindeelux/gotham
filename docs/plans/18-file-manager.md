@@ -201,7 +201,7 @@ Errors `{message}`: 400 bad path/cross-root, 403 forbidden/permission denied, 40
 6. **Web foundation + read-only browser.** Dep 3, 5.
 7. **Web file operations.** Dep 4, 6.
 8. **Web code editor.** Dep 4, 6; **serial after 7** (same page).
-9a. **chmod** (phase 2, optional). Dep 2, 7.
+9a. **chmod** (JUS-113, built). Dep 2, 7.
 9b. **Archives** (phase 2, optional). Dep 2, 7.
 10. **Hardening, e2e, docs, flag default.** Dep all.
 
@@ -350,10 +350,73 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 - **Exit:** editor keys never reach the list; entry chunk size unchanged; new chunk files ≤ 15.
 - **Rollback:** revert PR + rebuild webdist.
 
-### Step 9a — chmod (phase 2) — **DEFERRED (not built now)**
-- **Status:** deferred, tracked as JUS-113. Not implemented in Phase 18; the agent's `Chmod` stays `Unimplemented` and the CP exposes no `/chmod` route. Re-open when the phase-2 file operations land.
-- **Tasks:** agent `Chmod` (reject setuid/setgid/sticky, no recursion following symlinks), CP route, properties dialog (octal + rwx grid).
-- **Verify:** common + mode-bit rejection tests. **Exit:** only plain permission bits change. **Rollback:** revert.
+### Step 9a — chmod (phase 2) — **BUILT (JUS-113)**
+- **Status:** implemented. The agent's `FileService.Chmod` sets only the low 0o777
+  permission bits; the CP exposes `POST /api/v1/servers/{id}/files/chmod`; the web
+  browser has a Permissions dialog reached from the row action menu.
+- **Agent behaviour (documented decisions):**
+  - `mode` is **required**: the proto field is `optional uint32` and an absent
+    value is refused with `InvalidArgument` (CP 400), never treated as 000. The
+    CP's request body likewise uses a `*uint32` so `{"root","path"}` is 400.
+    `mode: 0` (000) is still a real, accepted mode; only its *absence* is refused.
+  - Only the `0o777` bits may change. Any `mode` carrying setuid (`0o4000`), setgid
+    (`0o2000`), sticky (`0o1000`) or any higher bit is refused with
+    `InvalidArgument` (CP 400) before the filesystem is touched.
+  - Existing setuid/setgid/sticky bits are **preserved, not editable**: the agent
+    `fstat`s first and writes `(st_mode & 0o7000) | requested`. A special bit is
+    never created (the mask above still refuses one in the request), so the rule
+    "only plain permission bits change" holds — the special bits are unchanged.
+  - A symbolic link is **refused** with `InvalidArgument` (CP **400**; it is never
+    followed and its target's mode is untouched). A special file (FIFO, socket,
+    device) is refused with `FailedPrecondition` (CP **409**). The root itself is
+    refused.
+  - A directory must keep its owner execute bit (`0o100`), or the chmod is refused
+    with `InvalidArgument`: removing it would make the entry un-traversable and
+    self-lock the file manager. A managed application directory is covered by the
+    same rule (it may be chmod-ed as long as it keeps owner execute and stays a
+    directory).
+  - A hard-linked regular file is refused with `InvalidArgument` in a **confined**
+    root, because its inode may also be reachable outside the root. The
+    whole-filesystem root has no "outside", so the check is moot there.
+  - **Recovery:** the confinement (`fsroot.ChmodEntry`) opens the root and every
+    parent with `O_PATH` (search permission only), `openat`s the basename with
+    `O_NOFOLLOW`, `fstat`s the descriptor to classify the type, chmods that same
+    inode, and reads the returned entry back from the same descriptor. So a
+    `000`/`0o111` entry the agent itself just made unreadable — including a
+    directory, and including one under an unreadable parent — is still
+    chmod-able by a **non-root** agent. The chmod itself is
+    `fchmodat2(AT_EMPTY_PATH)` where available (Linux 6.6+) and the
+    `/proc/self/fd` magic link otherwise; neither needs read permission on the
+    entry, and the descriptor pins the inode so a swapped-in link is never
+    followed. `O_NOCTTY` is set on any open that could touch a device.
+  - Read-only roots refuse with `PermissionDenied`, matching every other mutation.
+  - Recursion is **not** implemented: `ChmodRequest` has no `recursive` field and a
+    single `chmod(2)` is atomic, so there is no entry-cap/symlink-walk surface to
+    guard. Adding recursion would need a new proto field and a bounded, no-follow
+    walk; it is out of scope.
+- **Wire:** `ChmodResponse` is empty (the step-1 contract). The CP therefore
+  re-`Stat`s the entry after a successful `Chmod` and returns the fresh
+  entry/etag, exactly as `Copy` already does for its destination — no proto change
+  beyond making `mode` optional.
+- **CP:** `POST /files/chmod` (body `{root, path, mode}`, 200 `{entry}`) is
+  owner/admin, deploy-gated for an API token by the existing non-GET method gate,
+  audit-logged, and maps an old agent's `Unimplemented` to 501. A body that omits
+  `mode` is a 400.
+- **Web:** a Permissions dialog (octal input + a 3×3 rwx grid kept in sync) from
+  the row action menu, disabled for a read-only root or role, with a note that
+  special bits are preserved (never editable); the grid is disabled while the
+  octal field is invalid (so it never overwrites what was typed), Apply is
+  disabled when the mode is unchanged or a directory would lose owner execute,
+  and the listing refreshes after success. The `docs/design/files.html` mockup
+  gained the menu entry and the modal before the Vue port.
+- **Verify:** `go build ./...`, `go test ./...`, `golangci-lint run`, `go vet`,
+  `npm run build`, `npm run type-check`, `npm test` all green; mode-bit rejection
+  (setuid/setgid/sticky/>0o777), missing-mode rejection, symlink-not-followed,
+  special-file, directory-owner-execute, hard-link, special-bit-preservation,
+  read-only root, app-dir-stays-directory, whole-filesystem and a non-root
+  `000`/`0o111` recovery (file and directory, and under an unsearchable parent)
+  tests added. **Exit:** only plain permission bits change. **Rollback:** revert
+  the PR.
 
 ### Step 9b — Archives (phase 2) — **DEFERRED (not built now)**
 - **Status:** deferred, tracked as JUS-114. Not implemented in Phase 18: no `Compress`/`Extract` RPC, no CP archive routes, no web dialogs.

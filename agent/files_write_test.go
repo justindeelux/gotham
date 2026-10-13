@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"golang.org/x/sys/unix"
 
@@ -353,6 +354,9 @@ func TestFileServerMutationsRefuseReadOnlyRoot(t *testing.T) {
 	}
 	if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: root, Path: "d"}); status.Code(err) != codes.PermissionDenied {
 		t.Errorf("Mkdir = %v, want PermissionDenied", err)
+	}
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{Root: root, Path: "x", Mode: proto.Uint32(0o600)}); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("Chmod = %v, want PermissionDenied", err)
 	}
 	if _, err := server.Rename(context.Background(), &agentv1.RenameRequest{Root: root, Source: "a", Destination: "b"}); status.Code(err) != codes.PermissionDenied {
 		t.Errorf("Rename = %v, want PermissionDenied", err)
@@ -1018,5 +1022,214 @@ func TestFullAccessProtectsAppDirectory(t *testing.T) {
 		Root: fileRootSystem, Source: rel + "/plain", Destination: rel + "/plain2",
 	}); err != nil {
 		t.Fatalf("rename of an ordinary directory: %v", err)
+	}
+}
+
+// chmodMode returns the permission bits of a path under a root.
+func chmodMode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info.Mode().Perm()
+}
+
+// TestFileServerChmod pins the happy path: the mode changes on disk and the
+// response is the empty ChmodResponse the wired contract returns.
+func TestFileServerChmod(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, fileRootVolumes, "a.txt", "", false, []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+		Root: fileRootVolumes, Path: "a.txt", Mode: proto.Uint32(0o600),
+	}); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	if got := chmodMode(t, filepath.Join(root, "a.txt")); got != 0o600 {
+		t.Fatalf("mode = %#o, want 0o600", got)
+	}
+	// The agent re-stats for the control plane, so the new mode must be visible.
+	stat, err := server.Stat(context.Background(), &agentv1.StatRequest{Root: fileRootVolumes, Path: "a.txt"})
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if stat.GetEntry().GetMode() != 0o600 {
+		t.Fatalf("stat mode = %#o, want 0o600", stat.GetEntry().GetMode())
+	}
+	// A directory can be chmod-ed too and keeps its type.
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+		Root: fileRootVolumes, Path: ".", Mode: proto.Uint32(0o700),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Chmod of the root = %v, want InvalidArgument", err)
+	}
+}
+
+// TestFileServerChmodRequiresMode pins that an absent mode is refused rather
+// than silently treated as 000 (the wire field is optional for exactly this).
+func TestFileServerChmodRequiresMode(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, fileRootVolumes, "a.txt", "", false, []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+		Root: fileRootVolumes, Path: "a.txt",
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Chmod without a mode = %v, want InvalidArgument", err)
+	}
+	if got := chmodMode(t, filepath.Join(root, "a.txt")); got != 0o644 {
+		t.Fatalf("an absent-mode chmod changed the mode: %#o", got)
+	}
+}
+
+// TestFileServerChmodRejectsModeBits pins the mask: setuid, setgid, sticky and
+// any bit above 0o777 are a single refusal and never touch the file.
+func TestFileServerChmodRejectsModeBits(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, fileRootVolumes, "a.txt", "", false, []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []uint32{0o4755, 0o2755, 0o1755, 0o7777, 0o10000, 0o4000} {
+		t.Run(fmt.Sprintf("%#o", mode), func(t *testing.T) {
+			if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+				Root: fileRootVolumes, Path: "a.txt", Mode: proto.Uint32(mode),
+			}); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("Chmod(%#o) = %v, want InvalidArgument", mode, err)
+			}
+		})
+	}
+	if got := chmodMode(t, filepath.Join(root, "a.txt")); got&0o777 != 0o644 {
+		t.Fatalf("a rejected chmod changed the mode: %#o", got)
+	}
+}
+
+// TestFileServerChmodRejectsSymlink proves the target's mode is never changed
+// through a link entry, and a special file is refused.
+func TestFileServerChmodRejectsSymlink(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if err := os.WriteFile(filepath.Join(root, "real.txt"), []byte("real"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real.txt", filepath.Join(root, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+		Root: fileRootVolumes, Path: "link.txt", Mode: proto.Uint32(0o600),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Chmod of a symlink = %v, want InvalidArgument", err)
+	}
+	if got := chmodMode(t, filepath.Join(root, "real.txt")); got != 0o644 {
+		t.Fatalf("the symlink target's mode changed to %#o, want 0o644 unchanged", got)
+	}
+}
+
+// TestFileServerChmodRejectsSpecialFile pins the FIFO refusal.
+func TestFileServerChmodRejectsSpecialFile(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if err := unix.Mkfifo(filepath.Join(root, "pipe"), 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+		Root: fileRootVolumes, Path: "pipe", Mode: proto.Uint32(0o644),
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Chmod of a FIFO = %v, want FailedPrecondition", err)
+	}
+}
+
+// TestFileServerChmodAppDirStaysDirectory pins the plan decision: a managed
+// application directory may be chmod-ed (it stays a directory), unlike rename
+// and delete which refuse it.
+func TestFileServerChmodAppDirStaysDirectory(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	const appID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+	if err := os.MkdirAll(filepath.Join(root, appID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+		Root: fileRootVolumes, Path: appID, Mode: proto.Uint32(0o700),
+	}); err != nil {
+		t.Fatalf("Chmod of an app dir: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, appID))
+	if err != nil {
+		t.Fatalf("stat app dir: %v", err)
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("app dir = dir:%v mode:%#o, want a directory with mode 0o700", info.IsDir(), info.Mode().Perm())
+	}
+}
+
+// TestFileServerChmodRefusesDirWithoutOwnerExecute pins the self-lockout guard
+// at the service level: a directory must keep owner execute.
+func TestFileServerChmodRefusesDirWithoutOwnerExecute(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if err := os.Mkdir(filepath.Join(root, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+		Root: fileRootVolumes, Path: "d", Mode: proto.Uint32(0o666),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Chmod(dir, 0o666) = %v, want InvalidArgument", err)
+	}
+	if got := chmodMode(t, filepath.Join(root, "d")); got != 0o755 {
+		t.Fatalf("a refused directory chmod changed the mode: %#o", got)
+	}
+}
+
+// TestFileServerChmodRefusesHardlinkInConfinedRoot pins the hard-link guard: a
+// hard-linked regular file is refused in a confined root (its inode may be
+// reachable outside it).
+func TestFileServerChmodRefusesHardlinkInConfinedRoot(t *testing.T) {
+	t.Parallel()
+	server, root := newTestFileServer(t)
+	if _, err := write(t, server, fileRootVolumes, "a.txt", "", false, []byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(root, "a.txt"), filepath.Join(root, "b.txt")); err != nil {
+		t.Skipf("hard link: %v", err)
+	}
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+		Root: fileRootVolumes, Path: "a.txt", Mode: proto.Uint32(0o600),
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Chmod(hard-linked) = %v, want InvalidArgument", err)
+	}
+	if got := chmodMode(t, filepath.Join(root, "a.txt")); got != 0o644 {
+		t.Fatalf("a refused hard-linked chmod changed the mode: %#o", got)
+	}
+}
+
+// TestFullAccessChmod proves chmod works through the whole-filesystem "system"
+// root as well as a confined root.
+func TestFullAccessChmod(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	if err := os.WriteFile(filepath.Join(base, "f.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewFileServer(Config{FileFullAccess: true, ManagedVolumeRoot: base}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	real, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := strings.TrimPrefix(filepath.ToSlash(real), "/")
+	if _, err := server.Chmod(context.Background(), &agentv1.ChmodRequest{
+		Root: fileRootSystem, Path: rel + "/f.txt", Mode: proto.Uint32(0o640),
+	}); err != nil {
+		t.Fatalf("Chmod through the system root: %v", err)
+	}
+	if got := chmodMode(t, filepath.Join(base, "f.txt")); got != 0o640 {
+		t.Fatalf("mode = %#o, want 0o640", got)
 	}
 }

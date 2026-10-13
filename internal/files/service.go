@@ -150,6 +150,9 @@ type FileService interface {
 	Create(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (Entry, error)
 	// Rename renames or moves one entry within a single root.
 	Rename(ctx context.Context, serverID uuid.UUID, root, source, destination string, overwrite bool) (Entry, error)
+	// Chmod changes one entry's permission bits (owner/admin only). Only the
+	// low 0o777 bits are accepted; setuid/setgid/sticky are refused.
+	Chmod(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (Entry, error)
 	// Copy copies one entry within a single root and returns the new entry.
 	Copy(ctx context.Context, serverID uuid.UUID, root, source, destination string, overwrite bool) (Entry, error)
 	// Delete removes one entry, recursively when requested.

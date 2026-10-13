@@ -20,8 +20,7 @@ import (
 //	})
 //
 // Declaring the interface locally keeps this package testable with a mock and
-// independently mergeable, exactly like containers.DockerClient. Chmod is
-// deliberately absent: it stays Unimplemented on the agent until step 9a.
+// independently mergeable, exactly like containers.DockerClient.
 type FileClient interface {
 	ListRoots(ctx context.Context, in *agentv1.ListRootsRequest, opts ...grpc.CallOption) (*agentv1.ListRootsResponse, error)
 	List(ctx context.Context, in *agentv1.ListRequest, opts ...grpc.CallOption) (*agentv1.ListResponse, error)
@@ -35,6 +34,7 @@ type FileClient interface {
 	Delete(ctx context.Context, in *agentv1.DeleteRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.Progress], error)
 	Mkdir(ctx context.Context, in *agentv1.MkdirRequest, opts ...grpc.CallOption) (*agentv1.MkdirResponse, error)
 	Rename(ctx context.Context, in *agentv1.RenameRequest, opts ...grpc.CallOption) (*agentv1.RenameResponse, error)
+	Chmod(ctx context.Context, in *agentv1.ChmodRequest, opts ...grpc.CallOption) (*agentv1.ChmodResponse, error)
 }
 
 // Compile-time assertion that the generated client satisfies the local

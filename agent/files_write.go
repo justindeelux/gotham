@@ -384,6 +384,53 @@ func (s *FileServer) Mkdir(_ context.Context, req *agentv1.MkdirRequest) (*agent
 	return &agentv1.MkdirResponse{Entry: fileEntry(entry)}, nil
 }
 
+// Chmod changes one entry's permission bits. The mode field is required: an
+// absent mode is refused (InvalidArgument), never treated as 000. Only the
+// 0o777 permission bits are accepted: any request carrying setuid, setgid or
+// sticky (or any other bit above 0o777) is refused, and a special file or a
+// symbolic link is refused — a link's target's mode is never changed. Existing
+// setuid/setgid/sticky bits are preserved, not created. A directory must keep
+// its owner execute bit so it stays traversable, and a hard-linked regular file
+// in a confined root is refused (its inode may also be reachable outside the
+// root). The entry keeps its type, so chmod-ing a managed application directory
+// is allowed as long as it stays a directory (rename and delete keep their own
+// app-directory guard). ChmodResponse is empty (the wired contract predates this
+// step), so the control plane re-stats the entry after a successful chmod,
+// exactly as Copy does.
+func (s *FileServer) Chmod(_ context.Context, req *agentv1.ChmodRequest) (*agentv1.ChmodResponse, error) {
+	root, err := s.root(req.GetRoot())
+	if err != nil {
+		return nil, err
+	}
+	if !root.Writable() {
+		return nil, status.Errorf(codes.PermissionDenied, "chmod: root %q is read-only", req.GetRoot())
+	}
+	rel, err := fsroot.Clean(req.GetPath())
+	if err != nil || rel == "." {
+		return nil, status.Errorf(codes.InvalidArgument, "chmod: invalid path %q", req.GetPath())
+	}
+	// mode is optional on the wire so an absent field is refused rather than
+	// silently decoded as 000: a chmod has no safe default (unlike a create).
+	if req.Mode == nil {
+		return nil, status.Error(codes.InvalidArgument, "chmod: mode is required")
+	}
+	// Only the low 0o777 bits may change: setuid (0o4000), setgid (0o2000),
+	// sticky (0o1000) and every higher bit are refused as one mask. Existing
+	// special bits are preserved by fsroot.ChmodEntry, never created.
+	mode := req.GetMode()
+	if mode&^uint32(0o777) != 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "chmod: mode %#o carries bits above the 0o777 permission mask", mode)
+	}
+	// A hard link shares its inode with every other name, so chmod-ing it in a
+	// confined root could change a file outside the root. In the
+	// whole-filesystem root there is no "outside", so the check is moot.
+	refuseHardlink := root.Name() != fileRootSystem
+	if _, err := root.ChmodEntry(rel, os.FileMode(mode), refuseHardlink); err != nil {
+		return nil, fileError("chmod", err)
+	}
+	return &agentv1.ChmodResponse{}, nil
+}
+
 // Rename renames or moves one entry within a single root, refusing an
 // application directory at the top of the volumes root and any move into the
 // source's own subtree. It takes the per-path locks for both names so a rename

@@ -245,6 +245,8 @@ func TestRequireResourceScopesClassifier(t *testing.T) {
 		"read cannot rename":           {http.MethodPost, "/api/v1/servers/x/files/rename", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"read cannot move":             {http.MethodPost, "/api/v1/servers/x/files/move", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"read cannot copy":             {http.MethodPost, "/api/v1/servers/x/files/copy", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"read cannot chmod":            {http.MethodPost, "/api/v1/servers/x/files/chmod", []string{auth.ScopeRead}, true, http.StatusForbidden},
+		"deploy chmods":                {http.MethodPost, "/api/v1/servers/x/files/chmod", []string{auth.ScopeDeploy}, true, http.StatusOK},
 		"read cannot delete entry":     {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeRead}, true, http.StatusForbidden},
 		"deploy deletes entry":         {http.MethodDelete, "/api/v1/servers/x/files/entry", []string{auth.ScopeDeploy}, true, http.StatusOK},
 		// Bypass variants: the method decides, so a trailing slash, a doubled
@@ -332,6 +334,7 @@ func TestFilesWriteScopeGate(t *testing.T) {
 		{"rename", http.MethodPost, base + "rename", `{"root":"volumes","source":"a","destination":"b"}`},
 		{"move", http.MethodPost, base + "move", `{"root":"volumes","source":"a","destination":"b"}`},
 		{"copy", http.MethodPost, base + "copy", `{"root":"volumes","source":"a","destination":"b"}`},
+		{"chmod", http.MethodPost, base + "chmod", `{"root":"volumes","path":"a","mode":384}`},
 		{"delete", http.MethodDelete, base + "entry?root=volumes&path=a", ""},
 	}
 	for _, tc := range cases {

@@ -43,6 +43,15 @@ type mkdirRequest struct {
 	Mode uint32 `json:"mode"`
 }
 
+// chmodRequest is the body of POST /chmod. Mode is a pointer so an omitted
+// field is refused (400): unlike a create, a chmod has no safe default and a
+// missing mode must never silently decode as 000.
+type chmodRequest struct {
+	Root string  `json:"root"`
+	Path string  `json:"path"`
+	Mode *uint32 `json:"mode"`
+}
+
 // locationRequest is the body of POST /rename, /move and /copy.
 type locationRequest struct {
 	Root        string `json:"root"`
@@ -247,6 +256,30 @@ func (h *handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, statEnvelope{Entry: entry})
+}
+
+// chmod serves POST .../files/chmod: change one entry's permission bits. The
+// body is {root, path, mode}; mode is required, so an omitted field is a 400
+// rather than a silent chmod 000.
+func (h *handler) chmod(w http.ResponseWriter, r *http.Request) {
+	serverID, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+	var req chmodRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Mode == nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "mode is required"})
+		return
+	}
+	entry, err := h.svc.Chmod(r.Context(), serverID, req.Root, req.Path, *req.Mode)
+	if err != nil {
+		h.writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, statEnvelope{Entry: entry})
 }
 
 // rename serves POST .../files/rename.

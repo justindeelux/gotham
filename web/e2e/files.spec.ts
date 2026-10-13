@@ -424,6 +424,62 @@ test.describe("files delete", () => {
   });
 });
 
+test.describe("files chmod", () => {
+  test("changes permissions from the row menu and refreshes the listing", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    let mode = 0o100644;
+    const chmodBodies: Array<{ root: string; path: string; mode: number }> = [];
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(
+          route,
+          200,
+          listing([entry("app.yaml", "file", 2048, mode, "etag-yaml")]),
+        ),
+      chmod: async (route) => {
+        chmodBodies.push(
+          route.request().postDataJSON() as { root: string; path: string; mode: number },
+        );
+        mode = 0o100600;
+        await json(route, 200, {
+          entry: entry("app.yaml", "file", 2048, mode, "etag-yaml-2"),
+        });
+      },
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(page.getByText("app.yaml")).toBeVisible();
+
+    await page
+      .getByRole("button", { name: "More actions for app.yaml" })
+      .click();
+    await page.getByRole("menuitem", { name: "Permissions…" }).click();
+
+    const dialog = page
+      .locator(".n-modal")
+      .filter({ hasText: "Permissions" });
+    await expect(dialog).toBeVisible();
+    const octal = dialog.locator(".octal input");
+    await expect(octal).toHaveValue("644");
+    await octal.fill("600");
+    await dialog.getByRole("button", { name: "Apply" }).click();
+
+    await expect.poll(() => chmodBodies.length).toBe(1);
+    expect(chmodBodies[0]).toEqual({
+      root: "srv",
+      path: "app.yaml",
+      mode: 0o600,
+    });
+    await expect(page.getByText("Permissions of app.yaml set to 600.")).toBeVisible();
+    // The listing refreshed: the row's mode column now shows the new bits.
+    await expect(page.locator(".fm-table")).toContainText("-rw-------");
+  });
+});
+
 /**
  * The disabled scenario forces a 503 on purpose (that is exactly what
  * FEATURE_FILES=false answers) and the browser logs the 5xx; the guardrail

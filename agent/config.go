@@ -41,6 +41,9 @@ const (
 	envFileRoots        = "GOTHAM_AGENT_FILE_ROOTS"
 	envFileMaxUpload    = "GOTHAM_AGENT_FILE_MAX_UPLOAD"
 	envFileMaxTransfers = "GOTHAM_AGENT_FILE_MAX_TRANSFERS"
+	// Archive (compress/extract) caps, Phase 18 step 9b.
+	envFileArchiveMaxBytes   = "GOTHAM_AGENT_ARCHIVE_MAX_BYTES"
+	envFileArchiveMaxEntries = "GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES"
 
 	envAutoUpdate     = "GOTHAM_AGENT_AUTO_UPDATE"
 	envUpdateInterval = "GOTHAM_AGENT_UPDATE_INTERVAL"
@@ -103,6 +106,15 @@ const (
 	// defaultFileMaxTransfers caps concurrent file transfers per node
 	// (Phase 18); a transfer above the cap is refused as ResourceExhausted.
 	defaultFileMaxTransfers = 8
+	// defaultFileArchiveMaxBytes bounds the total uncompressed bytes an archive
+	// operation may read (compress) or write (extract), guarding a zip bomb and
+	// an oversized archive (Phase 18 step 9b). Override with
+	// GOTHAM_AGENT_ARCHIVE_MAX_BYTES.
+	defaultFileArchiveMaxBytes = 4 << 30 // 4 GiB
+	// defaultFileArchiveMaxEntries bounds how many entries an archive operation
+	// may walk (compress) or unpack (extract) (Phase 18 step 9b). Override with
+	// GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES.
+	defaultFileArchiveMaxEntries = 100_000
 )
 
 // Config holds the agent's runtime configuration, loaded from the environment.
@@ -152,6 +164,12 @@ type Config struct {
 	// FileMaxTransfers caps concurrent transfers per node
 	// (GOTHAM_AGENT_FILE_MAX_TRANSFERS).
 	FileMaxTransfers int
+	// FileArchiveMaxBytes bounds the total uncompressed bytes one archive
+	// operation may read or write (GOTHAM_AGENT_ARCHIVE_MAX_BYTES).
+	FileArchiveMaxBytes int64
+	// FileArchiveMaxEntries bounds the entry count one archive operation may
+	// walk or unpack (GOTHAM_AGENT_ARCHIVE_MAX_ENTRIES).
+	FileArchiveMaxEntries int64
 
 	// Version is the running agent build version. It is set by the entrypoint
 	// (not the environment) and reported to the CP in heartbeats and update
@@ -213,6 +231,9 @@ func Load() (Config, error) {
 		FileRoots:        os.Getenv(envFileRoots),
 		FileMaxUpload:    int64FromEnv(envFileMaxUpload, defaultFileMaxUpload),
 		FileMaxTransfers: int(int64FromEnv(envFileMaxTransfers, defaultFileMaxTransfers)),
+
+		FileArchiveMaxBytes:   int64FromEnv(envFileArchiveMaxBytes, defaultFileArchiveMaxBytes),
+		FileArchiveMaxEntries: int64FromEnv(envFileArchiveMaxEntries, defaultFileArchiveMaxEntries),
 
 		AutoUpdate:        strings.EqualFold(strings.TrimSpace(os.Getenv(envAutoUpdate)), "true"),
 		UpdateInterval:    updateIntervalFromEnv(),

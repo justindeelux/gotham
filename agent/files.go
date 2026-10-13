@@ -116,6 +116,12 @@ type FileServer struct {
 	volumeRootRel string
 	// maxUpload bounds one upload in bytes; uploads over it are refused.
 	maxUpload int64
+	// archiveMaxBytes bounds the total uncompressed bytes one archive
+	// operation (Compress/Extract) may read or write.
+	archiveMaxBytes int64
+	// archiveMaxEntries bounds the entry count one archive operation may walk
+	// or unpack.
+	archiveMaxEntries int64
 	// transfers is a counting semaphore bounding concurrent file transfers.
 	transfers chan struct{}
 	// locks are striped mutexes serialising the commit of a write to one
@@ -157,13 +163,23 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 	if maxTransfers <= 0 {
 		maxTransfers = defaultFileMaxTransfers
 	}
+	archiveMaxBytes := cfg.FileArchiveMaxBytes
+	if archiveMaxBytes <= 0 {
+		archiveMaxBytes = defaultFileArchiveMaxBytes
+	}
+	archiveMaxEntries := cfg.FileArchiveMaxEntries
+	if archiveMaxEntries <= 0 {
+		archiveMaxEntries = defaultFileArchiveMaxEntries
+	}
 	server := &FileServer{
-		log:       log,
-		roots:     make(map[string]*fsroot.Root),
-		maxUpload: maxUpload,
-		transfers: make(chan struct{}, maxTransfers),
-		locks:     make([]sync.Mutex, fileLockStripes),
-		stop:      make(chan struct{}),
+		log:               log,
+		roots:             make(map[string]*fsroot.Root),
+		maxUpload:         maxUpload,
+		archiveMaxBytes:   archiveMaxBytes,
+		archiveMaxEntries: archiveMaxEntries,
+		transfers:         make(chan struct{}, maxTransfers),
+		locks:             make([]sync.Mutex, fileLockStripes),
+		stop:              make(chan struct{}),
 	}
 	var opened []string
 	for _, rc := range configuredFileRoots(cfg) {

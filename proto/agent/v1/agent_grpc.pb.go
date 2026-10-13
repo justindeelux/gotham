@@ -1383,6 +1383,8 @@ const (
 	FileService_Mkdir_FullMethodName     = "/agent.v1.FileService/Mkdir"
 	FileService_Rename_FullMethodName    = "/agent.v1.FileService/Rename"
 	FileService_Chmod_FullMethodName     = "/agent.v1.FileService/Chmod"
+	FileService_Compress_FullMethodName  = "/agent.v1.FileService/Compress"
+	FileService_Extract_FullMethodName   = "/agent.v1.FileService/Extract"
 )
 
 // FileServiceClient is the client API for FileService service.
@@ -1427,6 +1429,20 @@ type FileServiceClient interface {
 	Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error)
 	// Chmod changes one entry's permission bits.
 	Chmod(ctx context.Context, in *ChmodRequest, opts ...grpc.CallOption) (*ChmodResponse, error)
+	// Compress builds one archive (zip, tar or tar.gz) from a set of sources
+	// inside a single root and writes it to a destination inside the same root,
+	// streaming progress. Only regular files and directories are stored; a
+	// symbolic link or a special file is skipped and counted in the final
+	// Progress.skipped.
+	Compress(ctx context.Context, in *CompressRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error)
+	// Extract unpacks one archive (zip, tar or tar.gz) into a destination
+	// directory inside the same root, streaming progress. The format is the
+	// archive's file extension; an unknown extension is refused. Symbolic-link,
+	// hard-link, device and FIFO entries are refused, an absolute name or a name
+	// that escapes the root is refused, setuid/setgid/sticky bits are stripped,
+	// and the total uncompressed size, the entry count and the compression ratio
+	// are bounded.
+	Extract(ctx context.Context, in *ExtractRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error)
 }
 
 type fileServiceClient struct {
@@ -1567,6 +1583,44 @@ func (c *fileServiceClient) Chmod(ctx context.Context, in *ChmodRequest, opts ..
 	return out, nil
 }
 
+func (c *fileServiceClient) Compress(ctx context.Context, in *CompressRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FileService_ServiceDesc.Streams[4], FileService_Compress_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[CompressRequest, Progress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_CompressClient = grpc.ServerStreamingClient[Progress]
+
+func (c *fileServiceClient) Extract(ctx context.Context, in *ExtractRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FileService_ServiceDesc.Streams[5], FileService_Extract_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ExtractRequest, Progress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ExtractClient = grpc.ServerStreamingClient[Progress]
+
 // FileServiceServer is the server API for FileService service.
 // All implementations must embed UnimplementedFileServiceServer
 // for forward compatibility.
@@ -1609,6 +1663,20 @@ type FileServiceServer interface {
 	Rename(context.Context, *RenameRequest) (*RenameResponse, error)
 	// Chmod changes one entry's permission bits.
 	Chmod(context.Context, *ChmodRequest) (*ChmodResponse, error)
+	// Compress builds one archive (zip, tar or tar.gz) from a set of sources
+	// inside a single root and writes it to a destination inside the same root,
+	// streaming progress. Only regular files and directories are stored; a
+	// symbolic link or a special file is skipped and counted in the final
+	// Progress.skipped.
+	Compress(*CompressRequest, grpc.ServerStreamingServer[Progress]) error
+	// Extract unpacks one archive (zip, tar or tar.gz) into a destination
+	// directory inside the same root, streaming progress. The format is the
+	// archive's file extension; an unknown extension is refused. Symbolic-link,
+	// hard-link, device and FIFO entries are refused, an absolute name or a name
+	// that escapes the root is refused, setuid/setgid/sticky bits are stripped,
+	// and the total uncompressed size, the entry count and the compression ratio
+	// are bounded.
+	Extract(*ExtractRequest, grpc.ServerStreamingServer[Progress]) error
 	mustEmbedUnimplementedFileServiceServer()
 }
 
@@ -1648,6 +1716,12 @@ func (UnimplementedFileServiceServer) Rename(context.Context, *RenameRequest) (*
 }
 func (UnimplementedFileServiceServer) Chmod(context.Context, *ChmodRequest) (*ChmodResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Chmod not implemented")
+}
+func (UnimplementedFileServiceServer) Compress(*CompressRequest, grpc.ServerStreamingServer[Progress]) error {
+	return status.Error(codes.Unimplemented, "method Compress not implemented")
+}
+func (UnimplementedFileServiceServer) Extract(*ExtractRequest, grpc.ServerStreamingServer[Progress]) error {
+	return status.Error(codes.Unimplemented, "method Extract not implemented")
 }
 func (UnimplementedFileServiceServer) mustEmbedUnimplementedFileServiceServer() {}
 func (UnimplementedFileServiceServer) testEmbeddedByValue()                     {}
@@ -1818,6 +1892,28 @@ func _FileService_Chmod_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FileService_Compress_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(CompressRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FileServiceServer).Compress(m, &grpc.GenericServerStream[CompressRequest, Progress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_CompressServer = grpc.ServerStreamingServer[Progress]
+
+func _FileService_Extract_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ExtractRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(FileServiceServer).Extract(m, &grpc.GenericServerStream[ExtractRequest, Progress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type FileService_ExtractServer = grpc.ServerStreamingServer[Progress]
+
 // FileService_ServiceDesc is the grpc.ServiceDesc for FileService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1869,6 +1965,16 @@ var FileService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "Delete",
 			Handler:       _FileService_Delete_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Compress",
+			Handler:       _FileService_Compress_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "Extract",
+			Handler:       _FileService_Extract_Handler,
 			ServerStreams: true,
 		},
 	},

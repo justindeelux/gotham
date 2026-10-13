@@ -210,6 +210,91 @@ func (r *Root) Mkdir(rel string, mode os.FileMode) (Entry, error) {
 	return r.Stat(p)
 }
 
+// CreateFile opens rel for writing, creating it when it is missing. An existing
+// entry that is not a regular file (a directory, symlink or special file) is
+// refused, so a create never writes through a link. When overwrite is false an
+// existing name is ErrExists (the create is exclusive and race-safe via O_EXCL);
+// when true an existing regular file is truncated. The caller sets the exact
+// mode afterwards with Chmod if it needs bits the process umask would drop.
+func (r *Root) CreateFile(rel string, mode os.FileMode, overwrite bool) (*os.File, error) {
+	if err := r.requireWritable(); err != nil {
+		return nil, err
+	}
+	p, err := cleanRel(rel)
+	if err != nil {
+		return nil, err
+	}
+	if p == "." {
+		return nil, fmt.Errorf("%w: cannot create the root", ErrInvalid)
+	}
+	if entry, statErr := r.Stat(p); statErr == nil {
+		if entry.Kind != KindRegular {
+			return nil, fmt.Errorf("%w: %s is not a regular file", ErrSpecial, p)
+		}
+		if !overwrite {
+			return nil, fmt.Errorf("%w: %s", ErrExists, p)
+		}
+	} else if !errors.Is(statErr, ErrNotFound) {
+		return nil, statErr
+	}
+	flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC | syscall.O_CLOEXEC
+	if !overwrite {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL | syscall.O_CLOEXEC
+	}
+	file, err := r.root.OpenFile(p, flags, mode.Perm())
+	if err != nil {
+		return nil, mapError("create", err)
+	}
+	return file, nil
+}
+
+// MkdirAll creates rel and every missing parent, each with mode. An existing
+// path is reused when it is a directory and refused otherwise, so extracting an
+// archive whose directory entries are absent still lands inside the root, while
+// a file that already occupies a directory name is never overwritten.
+func (r *Root) MkdirAll(rel string, mode os.FileMode) error {
+	if err := r.requireWritable(); err != nil {
+		return err
+	}
+	p, err := cleanRel(rel)
+	if err != nil {
+		return err
+	}
+	if p == "." {
+		return nil
+	}
+	if dir := path.Dir(p); dir != "." {
+		entry, statErr := r.Stat(dir)
+		switch {
+		case statErr == nil:
+			if entry.Kind != KindDirectory {
+				return fmt.Errorf("%w: %s is not a directory", ErrInvalid, dir)
+			}
+		case errors.Is(statErr, ErrNotFound):
+			if err := r.MkdirAll(dir, mode); err != nil {
+				return err
+			}
+		default:
+			return statErr
+		}
+	}
+	entry, statErr := r.Stat(p)
+	switch {
+	case statErr == nil:
+		if entry.Kind != KindDirectory {
+			return fmt.Errorf("%w: %s is not a directory", ErrInvalid, p)
+		}
+		return nil
+	case errors.Is(statErr, ErrNotFound):
+		if _, err := r.Mkdir(p, mode); err != nil && !errors.Is(err, ErrExists) {
+			return err
+		}
+		return nil
+	default:
+		return statErr
+	}
+}
+
 // Rename moves src to dst within the root. os.Root.Rename replaces dst
 // atomically; the caller enforces the overwrite policy and any app-directory
 // protection beforehand. A cross-device rename surfaces the raw EXDEV so the

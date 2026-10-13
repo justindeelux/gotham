@@ -165,6 +165,20 @@ service FileService {
   rpc Rename(RenameRequest) returns (RenameResponse);
   // Chmod changes one entry's permission bits.
   rpc Chmod(ChmodRequest) returns (ChmodResponse);
+  // Compress builds one archive (zip, tar or tar.gz) from a set of sources
+  // inside a single root and writes it to a destination inside the same root,
+  // streaming progress. Only regular files and directories are stored; a
+  // symbolic link or a special file is skipped and counted in the final
+  // Progress.skipped.
+  rpc Compress(CompressRequest) returns (stream Progress);
+  // Extract unpacks one archive (zip, tar or tar.gz) into a destination
+  // directory inside the same root, streaming progress. The format is the
+  // archive's file extension; an unknown extension is refused. Symbolic-link,
+  // hard-link, device and FIFO entries are refused, an absolute name or a name
+  // that escapes the root is refused, setuid/setgid/sticky bits are stripped,
+  // and the total uncompressed size, the entry count and the compression ratio
+  // are bounded.
+  rpc Extract(ExtractRequest) returns (stream Progress);
 }
 
 // ListRootsRequest is empty: roots are node-local configuration.
@@ -323,7 +337,7 @@ message DeleteRequest {
   bool recursive = 3;
 }
 
-// Progress reports the state of a long Copy or Delete.
+// Progress reports the state of a long Copy, Delete, Compress or Extract.
 message Progress {
   // path is the entry currently in flight, relative to the root.
   string path = 1;
@@ -332,6 +346,49 @@ message Progress {
   int64 bytes_total = 3;
   // done is true on the final message of the stream.
   bool done = 4;
+  // skipped is the number of entries the operation refused to store or
+  // restore: on Compress a symbolic link or special file that was left out of
+  // the archive, on Extract an entry that was skipped (currently always 0,
+  // since Extract refuses such entries outright). It is meaningful on the
+  // final (done) message; earlier messages leave it 0.
+  uint64 skipped = 5;
+}
+
+// ArchiveFormat selects an archive's container and compression.
+enum ArchiveFormat {
+  ARCHIVE_FORMAT_UNSPECIFIED = 0;
+  ARCHIVE_FORMAT_ZIP = 1;
+  ARCHIVE_FORMAT_TAR = 2;
+  ARCHIVE_FORMAT_TAR_GZ = 3;
+}
+
+// CompressRequest builds one archive inside a root.
+message CompressRequest {
+  string root = 1;
+  // sources are files or directories relative to the root; an empty list is
+  // refused. A source that is a symbolic link or a special file is skipped.
+  repeated string sources = 2;
+  // destination is the archive path relative to the root. It must not equal,
+  // or lie inside, a source directory.
+  string destination = 3;
+  // format selects the container. ARCHIVE_FORMAT_UNSPECIFIED is refused.
+  ArchiveFormat format = 4;
+  // overwrite permits replacing an existing destination archive.
+  bool overwrite = 5;
+}
+
+// ExtractRequest unpacks one archive inside a root.
+message ExtractRequest {
+  string root = 1;
+  // source is the archive path relative to the root. Its extension selects the
+  // format (.zip, .tar, .tar.gz or .tgz); an unknown extension is refused.
+  string source = 2;
+  // destination is the directory relative to the root to unpack into. It must
+  // already exist.
+  string destination = 3;
+  // overwrite permits replacing an existing file. An existing directory is
+  // reused, never removed.
+  bool overwrite = 4;
 }
 
 // MkdirRequest creates one directory.

@@ -126,6 +126,78 @@ export function isExtractableArchive(entry: FilesEntry): boolean {
   return entry.kind === "file" && archiveFormatFromName(entry.name) !== null;
 }
 
+/** EntryAction is the default action a double-click (or Enter) performs on a row. */
+export type EntryAction = "directory" | "editor" | "extract" | "none";
+
+/** EntryActionGates are the role/root gates the dispatch respects. */
+export interface EntryActionGates {
+  /** canOpenEditor is the owner/admin read gate the editor open needs. */
+  canOpenEditor: boolean;
+  /** canExtract is the write gate the Extract action needs. */
+  canExtract: boolean;
+}
+
+/**
+ * MAX_EDITABLE_BYTES is the editor's content ceiling: a larger body answers 413
+ * on read and is offered as a download instead. It mirrors the control plane's
+ * `files.MaxContentBytes` (2 MiB, internal/files/service.go).
+ */
+export const MAX_EDITABLE_BYTES = 2 << 20;
+
+// Families the editor never decodes as text. The control plane decides binary
+// by content (invalid UTF-8 / a NUL byte); from a listing the name is all there
+// is, so the same image/audio/video/archive families the type label already
+// classifies (plus fonts and PDF) are treated as non-text.
+const binaryExtensions = new Set([
+  ...imageExtensions,
+  ...videoExtensions,
+  ...audioExtensions,
+  ...archiveExtensions,
+  "pdf", "woff", "woff2", "ttf", "otf", "eot",
+]);
+
+/**
+ * canOpenInEditor reports whether one listing row opens as editable text in the
+ * code editor: a regular file within {@link MAX_EDITABLE_BYTES} and not a known
+ * binary family. It is the name/size half of the editor-open decision, so a
+ * double-click never opens a tab the editor can only show as download-only
+ * (JUS-130, owner decision: such files do nothing).
+ */
+export function canOpenInEditor(entry: FilesEntry): boolean {
+  return (
+    entry.kind === "file" &&
+    entry.size <= MAX_EDITABLE_BYTES &&
+    !binaryExtensions.has(entryExtension(entry.name))
+  );
+}
+
+/**
+ * entryAction resolves an entry's default action (JUS-130): a folder navigates
+ * into it, an extractable archive opens Extract (only when the root is
+ * writable), a text/code file opens in the editor (only with the read role and
+ * only when the editor can show it as text), and everything else — symlinks,
+ * special files, binary/oversized files, a non-extractable archive — does
+ * nothing. It is the one rule the double-click, Enter and the tests all read.
+ */
+export function entryAction(
+  entry: FilesEntry,
+  gates: EntryActionGates,
+): EntryAction {
+  if (entry.kind === "directory") {
+    return "directory";
+  }
+  if (entry.kind !== "file") {
+    return "none";
+  }
+  if (isExtractableArchive(entry)) {
+    return gates.canExtract ? "extract" : "none";
+  }
+  if (!canOpenInEditor(entry)) {
+    return "none";
+  }
+  return gates.canOpenEditor ? "editor" : "none";
+}
+
 /** archiveExtension returns the file extension for one compress format. */
 export function archiveExtension(format: ArchiveFormat): string {
   switch (format) {

@@ -1305,6 +1305,15 @@ export const useFilesStore = defineStore("files", () => {
     selected.value = new Set([entry.name]);
   }
 
+  /**
+   * selectOnly makes one entry the sole selection. It is the plain single-click
+   * row rule (JUS-130): a click selects just that row, while Ctrl/⌘+click
+   * toggles it via {@link toggleSelection}.
+   */
+  function selectOnly(name: string): void {
+    selected.value = new Set([name]);
+  }
+
   /** toggleSelection adds or removes one entry from the selection. */
   function toggleSelection(name: string): void {
     const next = new Set(selected.value);
@@ -1438,6 +1447,7 @@ export const useFilesStore = defineStore("files", () => {
     isSelected,
     targetsForRow,
     selectForRowContext,
+    selectOnly,
     toggleSelection,
     toggleSelectAll,
     clearSelection,

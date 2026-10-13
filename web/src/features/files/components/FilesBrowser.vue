@@ -53,6 +53,7 @@ import type { FilesTab } from "@/features/files/stores/files";
 import { useTrashStore } from "@/features/files/stores/trash";
 import type { NameKind, TransferProblem } from "@/features/files/utils/files";
 import {
+  entryAction,
   entryIconKind,
   entryTypeLabel,
   filesFromDrop,
@@ -238,13 +239,64 @@ function ariaSort(key: string): "ascending" | "descending" | "none" {
   return files.sortDir === "asc" ? "ascending" : "descending";
 }
 
-/** activate opens a directory, or a file in the code editor. */
+/**
+ * activate performs an entry's default action for a double-click (or Enter) on
+ * a row (JUS-130). The dispatch rule lives in {@link entryAction} so it is
+ * unit-tested; every branch reuses the existing open/extract path rather than
+ * duplicating it.
+ */
 function activate(entry: FilesEntry): void {
-  if (entry.kind === "directory") {
-    void files.openDirectory(entry.name);
+  switch (
+    entryAction(entry, {
+      canOpenEditor: files.canReadContent,
+      canExtract: files.canWrite,
+    })
+  ) {
+    case "directory":
+      void files.openDirectory(entry.name);
+      break;
+    case "editor":
+      openInEditor(entry);
+      break;
+    case "extract":
+      openExtract(entry);
+      break;
+    case "none":
+      break;
+  }
+}
+
+/** isRowControl reports a press that belongs to a row's own control, not the row. */
+function isRowControl(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(".fm-select, .fm-actions, .fm-tile-check") !== null
+  );
+}
+
+/**
+ * onRowClick selects a row. A plain click makes it the sole selection;
+ * Ctrl/⌘+click toggles it in the current selection. Activation is left to the
+ * double-click (or Enter), so a press on a checkbox/action never changes the
+ * selection and two clicks never open the entry twice.
+ */
+function onRowClick(event: MouseEvent, entry: FilesEntry): void {
+  if (isRowControl(event.target) || !isSelectable(entry)) {
     return;
   }
-  openInEditor(entry);
+  if (event.ctrlKey || event.metaKey) {
+    files.toggleSelection(entry.name);
+    return;
+  }
+  files.selectOnly(entry.name);
+}
+
+/** onRowDblclick performs a row's default action, ignoring its own controls. */
+function onRowDblclick(event: MouseEvent, entry: FilesEntry): void {
+  if (isRowControl(event.target)) {
+    return;
+  }
+  activate(entry);
 }
 
 /** openInEditor opens one text file in the editor (owner/admin only). */
@@ -920,10 +972,14 @@ function onFolderMenu(key: string): void {
 
         <!-- Bulk actions (JUS-128): the selection count and every action the
              former .fm-bulk bar offered now live on the right of the toolbar
-             and stay disabled until there is a selection. -->
-        <span v-if="hasSelection" class="small muted fm-bulk-count">
-          {{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}
-          · {{ formatBytes(files.selectedBytes) }}
+             and stay disabled until there is a selection. The count slot is
+             always reserved for a writer so selecting never re-wraps the
+             toolbar (which would shift the rows under a double-click). -->
+        <span v-if="files.canWrite || hasSelection" class="small muted fm-bulk-count">
+          <template v-if="hasSelection">
+            {{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}
+            · {{ formatBytes(files.selectedBytes) }}
+          </template>
         </span>
         <NButton
           size="small"
@@ -994,7 +1050,7 @@ function onFolderMenu(key: string): void {
           </NButton>
         </template>
         <NButton
-          v-if="hasSelection"
+          :disabled="!hasSelection"
           size="small"
           quaternary
           :title="$t('files.browser.clear')"
@@ -1189,6 +1245,8 @@ function onFolderMenu(key: string): void {
             class="fm-row"
             :class="{ 'is-selected': files.isSelected(entry.name) }"
             role="row"
+            @click="onRowClick($event, entry)"
+            @dblclick="onRowDblclick($event, entry)"
             @contextmenu.stop.prevent="openRowContext($event, entry)"
             @keydown="onRowKeydown($event, entry)"
           >
@@ -1203,7 +1261,11 @@ function onFolderMenu(key: string): void {
             </span>
             <div class="fm-name" role="cell">
               <FileTypeIcon :kind="iconKind(entry)" />
-              <button type="button" class="fm-label" @click="activate(entry)">
+              <button
+                type="button"
+                class="fm-label"
+                @keydown.enter.prevent="activate(entry)"
+              >
                 <b>{{ entry.name }}</b>
                 <span>{{ entrySubtitle(entry) }}</span>
               </button>
@@ -1304,6 +1366,8 @@ function onFolderMenu(key: string): void {
           v-for="entry in files.visibleEntries"
           :key="entry.name"
           class="fm-tile-wrap"
+          @click="onRowClick($event, entry)"
+          @dblclick="onRowDblclick($event, entry)"
           @contextmenu.stop.prevent="openRowContext($event, entry)"
           @keydown="onRowKeydown($event, entry)"
         >
@@ -1323,7 +1387,7 @@ function onFolderMenu(key: string): void {
             type="button"
             class="fm-tile"
             :class="{ 'is-selected': files.isSelected(entry.name) }"
-            @click="activate(entry)"
+            @keydown.enter.prevent="activate(entry)"
           >
             <span class="fm-tile-top">
               <FileTypeIcon :kind="iconKind(entry)" />
@@ -1665,9 +1729,13 @@ function onFolderMenu(key: string): void {
 }
 
 /* Bulk selection count on the toolbar (JUS-128): the former .fm-bulk bar is
-   gone; the count and its actions live in .fm-toolbar-end. */
+   gone; the count and its actions live in .fm-toolbar-end. The min-width
+   reserves the slot even with nothing selected, so the count appearing never
+   re-wraps the toolbar and shifts the rows under a double-click (JUS-130). */
 .fm-bulk-count {
   white-space: nowrap;
+  min-width: 9.5rem;
+  text-align: right;
 }
 
 .fm-state {

@@ -1,1 +1,0 @@
-import{bD as o,g as a,p as c,S as i,ba as s}from"./index-BnP2wf46.js";function v(){const e=c(null),t=a(()=>{if(e.value!==null)return i.value,String(s.global.t("projects.conflict.nameTaken"))}),u=a(()=>e.value===null?void 0:"error");function l(){e.value=null}function r(n){return o(n)?(e.value=n,!0):!1}return{feedback:t,status:u,clear:l,take:r}}export{v as u};

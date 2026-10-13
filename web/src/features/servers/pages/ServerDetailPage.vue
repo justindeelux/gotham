@@ -25,6 +25,7 @@ import {
   ServerMetricsKey,
   useServerMetrics,
 } from "@/features/servers/composables/useServerMetrics";
+import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers/stores/servers";
 
 const route = useRoute();
@@ -32,6 +33,7 @@ const router = useRouter();
 const message = useMessage();
 const { locale, t } = useI18n();
 const serversStore = useServersStore();
+const authStore = useAuthStore();
 
 const serverId = computed<string>(() => String(route.params.id ?? ""));
 
@@ -202,7 +204,11 @@ onMounted(() => {
             </NCard>
           </NTabPane>
 
-          <NTabPane name="files" :tab="$t('servers.detail.tabFiles')">
+          <NTabPane
+            v-if="authStore.isPlatformAdmin"
+            name="files"
+            :tab="$t('servers.detail.tabFiles')"
+          >
             <NCard style="margin-top: 16px">
               <NEmpty :description="$t('servers.detail.filesEmpty')">
                 <template #extra>

@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute } from "vue-router";
 
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
+import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers";
 import MeCard from "./MeCard.vue";
 import { activeNavKey, navSections } from "./navigation";
@@ -13,6 +14,7 @@ import { useMobileNav } from "./useMobileNav";
 
 const { t } = useI18n();
 const serversStore = useServersStore();
+const authStore = useAuthStore();
 const route = useRoute();
 const { sidebarRef } = useMobileNav();
 const { versionTag } = useAppVersion();
@@ -41,7 +43,10 @@ const activeKey = computed<string>(() => activeNavKey(route.path));
     <nav class="sidebar-body">
       <template v-for="section in navSections" :key="section.labelKey">
         <p class="nav-label">{{ t(section.labelKey) }}</p>
-        <template v-for="item in section.items" :key="item.key">
+        <template
+          v-for="item in section.items.filter((i) => !i.adminOnly || authStore.isPlatformAdmin)"
+          :key="item.key"
+        >
           <RouterLink
             v-if="item.to"
             class="nav-item"

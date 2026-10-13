@@ -29,17 +29,16 @@ import (
 )
 
 // FeatureEnv is the kill switch for the whole file-manager surface:
-// FEATURE_FILES=true enables it. It defaults off (unlike the databases and
-// services flags, which default on) until step 10 signs the feature off: the
-// routes are mounted but every route answers 503 ErrDisabled while the flag is
-// off.
+// FEATURE_FILES=false disables it. It defaults on (like the databases and
+// services flags); the surface is limited to platform operators, and a node only
+// answers once its agent opts in with GOTHAM_AGENT_FILES=true. While the flag is
+// off every route answers 503 ErrDisabled.
 const FeatureEnv = "FEATURE_FILES"
 
-// Enabled reports whether the file-manager feature is on. It defaults off: only
-// an explicit true turns it on, so an unconfigured control plane cannot expose
-// file bodies by accident.
+// Enabled reports whether the file-manager feature is on. Only an explicit
+// false turns it off.
 func Enabled() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv(FeatureEnv)), "true")
+	return !strings.EqualFold(strings.TrimSpace(os.Getenv(FeatureEnv)), "false")
 }
 
 // MaxUploadEnv optionally overrides the write/upload body ceiling in bytes; an

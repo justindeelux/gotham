@@ -406,8 +406,11 @@ returning a silently partial listing.
 
 ### Control-plane side
 
-`FEATURE_FILES=true` mounts the `/api/v1/servers/{id}/files` routes; off (the
-default), they are mounted but answer **503**. The routes are team-scoped: a
+The `/api/v1/servers/{id}/files` routes are mounted by default; set
+`FEATURE_FILES=false` to switch them off (they then answer **503**). The whole
+surface is limited to **platform operators** (an admin-scoped API token, a session
+with the `admin` role claim, or an email in `PLATFORM_ADMINS`): everyone else gets
+**403**, because the API exposes the node's filesystem. Operators also need to belong to the node's team, and read/deploy-scoped API tokens no longer reach the file API (an admin-scoped token is required). The routes are also team-scoped: a
 browsable server must belong to a team (a legacy team-less node answers 404),
 `roots`/`list`/`stat` need any member, and `content`, `download`, uploads and
 every mutation need an owner/admin role. File bodies can hold secrets (a `0600`
@@ -420,7 +423,7 @@ single-use ticket is its credential.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `FEATURE_FILES` | off | Enable the file API (503 while off). |
+| `FEATURE_FILES` | on | Set `false` to disable the file API (503 while off). |
 | `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Ceiling for one write/upload body (413 above it); should match the agent's `GOTHAM_AGENT_FILE_MAX_UPLOAD`. |
 | `FILES_SPOOL_DIR` | `<tmpdir>/gotham-spool` (0700) | Directory staging a streamed upload body before it reaches the agent. |
 | `FILES_SPOOL_CONCURRENCY` | `4` | Max upload bodies staged at once; beyond it an upload answers 429. |

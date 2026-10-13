@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -292,11 +293,18 @@ func TestFilesContentScopeGate(t *testing.T) {
 		t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
 	}
 
-	// The deploy token passes the scope gate; the unwired fake agent then fails
-	// downstream, which is any status other than the scope refusal.
+	// The deploy token passes the scope gate but not the platform-operator gate
+	// that limits the whole file surface to admins.
 	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+deployToken)
+	if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "insufficient scope") {
+		t.Fatalf("deploy token content = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
+	}
+
+	// An admin token passes both gates; the unwired fake agent then fails
+	// downstream, which is any status other than a refusal.
+	rec = doRequest(t, s, http.MethodGet, path, "", "Bearer "+mustCreateToken(t, tokens, auth.ScopeAdmin))
 	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
-		t.Fatalf("deploy token content = %d, want the scope gate to pass", rec.Code)
+		t.Fatalf("admin token content = %d, want the gates to pass", rec.Code)
 	}
 }
 
@@ -307,6 +315,7 @@ func TestFilesWriteScopeGate(t *testing.T) {
 	s, tokens := newScopeTestServer(t)
 	readToken := mustCreateToken(t, tokens, auth.ScopeRead)
 	deployToken := mustCreateToken(t, tokens, auth.ScopeDeploy)
+	adminToken := mustCreateToken(t, tokens, auth.ScopeAdmin)
 	id := uuid.New()
 	base := "/api/v1/servers/" + id.String() + "/files/"
 
@@ -338,11 +347,16 @@ func TestFilesWriteScopeGate(t *testing.T) {
 			if body.Message != "insufficient scope" {
 				t.Fatalf("message = %q, want %q", body.Message, "insufficient scope")
 			}
-			// The deploy token passes the scope gate; the unwired fake agent
-			// then fails downstream, which is any status other than a refusal.
+			// The deploy token passes the scope gate but not the platform-operator
+			// gate; an admin token passes both and the unwired fake agent then
+			// fails downstream, which is any status other than a refusal.
 			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+deployToken)
+			if rec.Code != http.StatusForbidden || strings.Contains(rec.Body.String(), "insufficient scope") {
+				t.Fatalf("deploy token = %d (body %s), want the platform-operator refusal", rec.Code, rec.Body.String())
+			}
+			rec = doRequest(t, s, tc.method, tc.path, tc.body, "Bearer "+adminToken)
 			if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
-				t.Fatalf("deploy token = %d, want the scope gate to pass (body %s)", rec.Code, rec.Body.String())
+				t.Fatalf("admin token = %d, want the gates to pass (body %s)", rec.Code, rec.Body.String())
 			}
 		})
 	}

@@ -8,6 +8,8 @@ export interface NavItem {
   labelKey: string;
   icon: IconName;
   to?: string;
+  /** adminOnly hides the entry from callers who are not platform operators. */
+  adminOnly?: boolean;
 }
 
 export interface NavSection {
@@ -29,7 +31,7 @@ export const navSections: NavSection[] = [
     items: [
       { key: "dashboard", label: "Dashboard", labelKey: "nav.items.dashboard", icon: "grid", to: "dashboard" },
       { key: "projects", label: "Projects", labelKey: "nav.items.projects", icon: "layers", to: "projects" },
-      { key: "files", label: "File manager", labelKey: "nav.items.files", icon: "folder", to: "files" },
+      { key: "files", label: "File manager", labelKey: "nav.items.files", icon: "folder", to: "files", adminOnly: true },
       { key: "templates", label: "Template library", labelKey: "nav.items.templates", icon: "rocket", to: "templates" },
       { key: "servers", label: "Servers", labelKey: "nav.items.servers", icon: "server", to: "servers" },
       { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains" },

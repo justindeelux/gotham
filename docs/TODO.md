@@ -63,10 +63,10 @@ and the real agent rollout from the GitHub CDN are proven.
 The full triage lives in [`plans/18-file-manager.md`](plans/18-file-manager.md) (step 10 results
 + "Known residuals").
 
-- [ ] **Owner decision: flip the flags.** `FEATURE_FILES` (CP) and `GOTHAM_AGENT_FILES` (agent)
-  stay off until the owner signs off. Before flipping on nodes that must edit inside
-  container-created volumes, make `<root>/<appID>` agent-writable (CP chown to `gotham-agent`,
-  or a shared group + setgid `2775`).
+- [x] **Flags (owner sign-off 2026-10-13).** `FEATURE_FILES` (CP) now defaults on and the file
+  surface is platform-operator only; `GOTHAM_AGENT_FILES` stays an explicit per-node opt-in.
+- [ ] **Container-created volumes.** To edit inside them, make `<root>/<appID>` agent-writable
+  (CP chown to `gotham-agent`, or a shared group + setgid `2775`) — owner decision pending.
 - [ ] **`agent/files.go` root-stat symlink swap.** Capture the root identity fd-first
   (`O_PATH`/`openat` + `fstat`, or `Lstat`) instead of `EvalSymlinks` then a fresh `os.Stat`.
 - [ ] **Per-team upload staging cap.** `FILES_SPOOL_CONCURRENCY` is a single global semaphore, so

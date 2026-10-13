@@ -74,7 +74,14 @@ const routes: RouteRecordRaw[] = [
         path: "servers/:id/files",
         name: "server-files",
         component: () => import("@/features/files/pages/ServerFilesPage.vue"),
-        meta: { titleKey: "titles.serverFiles", requiresAuth: true, requiresPlatformAdmin: true },
+        meta: {
+          titleKey: "titles.serverFiles",
+          requiresAuth: true,
+          requiresPlatformAdmin: true,
+          // The file browser fills the viewport and scrolls its own entry list,
+          // so the page must not grow past the viewport (JUS-118).
+          fillViewport: true,
+        },
       },
       {
         path: "projects",

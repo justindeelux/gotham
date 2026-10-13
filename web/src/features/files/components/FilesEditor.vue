@@ -62,6 +62,33 @@ const cursor = ref<{ line: number; column: number }>({ line: 1, column: 1 });
 const minimized = ref(false);
 // dockButton is the dock control that receives focus when the window collapses.
 const dockButton = ref<HTMLButtonElement | null>(null);
+// dockElement is the fixed dock band; its measured height is published as a CSS
+// variable so the fill page can reserve room for it.
+const dockElement = ref<HTMLElement | null>(null);
+
+/** dockVisible is true while the collapsed dock is on screen. */
+const dockVisible = computed(() => editor.tabs.length > 0 && minimized.value);
+
+/**
+ * syncDockSpace publishes the dock height as `--ed-dock-h` (consumed by the
+ * fill page's bottom padding, AppLayout `.page--fill`) or clears it when the
+ * dock is hidden. The dock is `v-show`-hidden (display:none) while the window
+ * is open, so it is only measured once it is actually laid out.
+ */
+async function syncDockSpace(): Promise<void> {
+  await nextTick();
+  const element = dockElement.value;
+  if (dockVisible.value && element) {
+    document.documentElement.style.setProperty("--ed-dock-h", `${element.offsetHeight}px`);
+    return;
+  }
+  document.documentElement.style.removeProperty("--ed-dock-h");
+}
+
+watch(dockVisible, () => void syncDockSpace(), { immediate: true });
+onBeforeUnmount(() => {
+  document.documentElement.style.removeProperty("--ed-dock-h");
+});
 
 const readyTabs = computed(() =>
   editor.tabs.filter((tab) => tab.status === "ready"),
@@ -698,6 +725,7 @@ onBeforeUnmount(() => {
   <div
     v-if="editor.tabs.length > 0"
     v-show="minimized"
+    ref="dockElement"
     class="ed-dock"
     role="toolbar"
     :aria-label="t('files.editor.dockLabel')"

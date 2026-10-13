@@ -5,7 +5,6 @@
  * parity test rejects those).
  */
 const vi = {
-  title: "Quản lý tệp",
   chooser: {
     eyebrow: "Vận hành · Quản lý tệp từ xa",
     title: "Quản lý tệp",
@@ -60,8 +59,11 @@ const vi = {
     specialCount: "{count} đặc biệt",
     freeSpace: "Còn trống: {free}",
     currentPath: "Gốc: {path}",
+    nodeLabel: "Node agent",
+    switchNode: "Đổi node agent",
   },
   actions: {
+    new: "Tạo mới",
     newFile: "Tệp mới",
     newFolder: "Thư mục mới",
     upload: "Tải lên",

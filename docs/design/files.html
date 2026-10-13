@@ -21,22 +21,11 @@
     <div class="view">
       <div class="page">
 
-        <nav class="breadcrumb" aria-label="Breadcrumb">
-          <a href="servers.html">Servers</a><span>/</span>
-          <a href="server-detail.html">gotham-prod-01</a><span>/</span>
-          <span class="fg-2">Files</span>
-        </nav>
-
         <div class="page-head">
           <span class="avatar avatar--lg">P1</span>
           <div>
             <h1 class="row gap-2">Files <span class="tag tag--success"><span class="dot dot--online"></span>agent v0.9.4</span></h1>
             <p class="page-desc">Browse, transfer and edit files inside the agent's allowed roots on gotham-prod-01. The volume root is writable; the compose root is read-only. Absolute paths are rejected — every path is relative to the root you pick.</p>
-          </div>
-          <div class="page-actions">
-            <button class="btn btn-outline" type="button" data-open="fm-newfolder"><svg aria-hidden="true"><use href="#i-plus"></use></svg>New folder</button>
-            <button class="btn btn-primary" type="button" data-open="fm-upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Upload</button>
-            <button class="btn btn-ghost btn-icon" type="button" data-toast="Reloaded entries from the agent (List).|info" aria-label="Refresh"><svg aria-hidden="true"><use href="#i-refresh"></use></svg></button>
           </div>
         </div>
 
@@ -58,6 +47,23 @@
           </div>
 
           <div class="card-body">
+            <!-- JUS-118: in the app this panel fills the viewport — the card
+                 body is the only scroll region, while the toolbar, path bar
+                 and footer stay fixed. -->
+            <!-- Compact toolbar (JUS-120): New file / New folder collapse into
+                 one New dropdown, Upload sits beside it, and the bulk tools
+                 (Compress) move to the right. Labels collapse to icon-only
+                 <=640px, each keeping a title + aria-label. -->
+            <div class="fm-toolbar">
+              <div class="fm-toolbar-group">
+                <button class="btn btn-sm btn-outline" type="button" data-open="fm-newfolder" aria-haspopup="menu" aria-expanded="false"><svg aria-hidden="true"><use href="#i-plus"></use></svg><span class="fm-btn-label">New</span><svg class="fm-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
+                <button class="btn btn-sm btn-primary" type="button" data-open="fm-upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Upload</span></button>
+              </div>
+              <div class="fm-toolbar-group fm-toolbar-end">
+                <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress"><svg aria-hidden="true"><use href="#i-archive"></use></svg><span class="fm-btn-label">Compress…</span></button>
+              </div>
+            </div>
+
             <div class="fm-bar">
               <nav class="fm-path" aria-label="Current path">
                 <a class="fm-crumb" href="#"><svg aria-hidden="true"><use href="#i-drive"></use></svg>volumes</a>
@@ -68,9 +74,7 @@
                 <svg aria-hidden="true"><use href="#i-search"></use></svg>
                 <input type="search" placeholder="Filter this folder…" aria-label="Filter entries" data-search="[data-tag]" />
               </div>
-              <button class="btn btn-sm btn-outline" type="button" data-open="fm-newfolder"><svg aria-hidden="true"><use href="#i-plus"></use></svg>New folder</button>
-              <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress"><svg aria-hidden="true"><use href="#i-archive"></use></svg>Compress…</button>
-              <button class="btn btn-sm btn-primary" type="button" data-open="fm-upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Upload</button>
+              <button class="btn btn-sm btn-ghost btn-icon" type="button" data-toast="Reloaded entries from the agent (List).|info" aria-label="Refresh" title="Refresh"><svg aria-hidden="true"><use href="#i-refresh"></use></svg></button>
             </div>
 
             <!-- Selection bar: appears only when at least one row is selected -->
@@ -321,6 +325,17 @@
               <span>Free space: <span class="mono">21.6 GiB</span> of 40 GiB</span>
             </div>
           </div>
+        </div>
+
+        <!-- Bottom node bar (JUS-119): names the active agent node and switches
+             nodes. It sits below the viewport-fit panel so it stays reachable.
+             A node whose agent is not ready is listed with its status but not
+             selectable. -->
+        <div class="fm-node-bar" role="group" aria-label="Switch agent node">
+          <svg aria-hidden="true"><use href="#i-server"></use></svg>
+          <span class="small muted">Agent node</span>
+          <span class="fm-node-bar__value">gotham-prod-01</span>
+          <span class="fm-node-bar__caret" aria-hidden="true"><svg><use href="#i-chevron-down"></use></svg></span>
         </div>
 
         <!-- ── Read-only root (compose) ──────────────────────────────────── -->

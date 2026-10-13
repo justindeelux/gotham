@@ -225,6 +225,39 @@ describe("files store clipboard", () => {
     });
   });
 
+  it("pastes a copy into a chosen folder without navigating there", async () => {
+    vi.mocked(copyEntry).mockResolvedValue(entry({ name: "app.yaml" }));
+
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.copySelection();
+
+    // A folder-row Paste passes the folder's path, not the directory on screen.
+    const summary = await store.pasteInto("config");
+
+    expect(summary.done).toEqual(["app.yaml"]);
+    expect(vi.mocked(copyEntry)).toHaveBeenCalledWith("server-1", "team-1", {
+      root: "volumes",
+      source: "app.yaml",
+      destination: "config/app.yaml",
+      overwrite: false,
+    });
+  });
+
+  it("refuses a same-folder copy paste (duplicate needs a follow-up rename)", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.copySelection();
+
+    expect(store.pasteProblemAt("")).toBe("same-folder");
+    const summary = await store.pasteInto("");
+
+    expect(summary).toEqual({ done: [], conflicts: [], failed: [] });
+    expect(vi.mocked(copyEntry)).not.toHaveBeenCalled();
+  });
+
   it("no-ops a paste into the clipboard's own directory", async () => {
     const store = useFilesStore();
     await store.init("server-1");

@@ -60,6 +60,11 @@
                 <button class="btn btn-sm btn-primary" type="button" data-open="fm-upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Upload</span></button>
               </div>
               <div class="fm-toolbar-group fm-toolbar-end">
+                <!-- JUS-117: copy/cut land on a clipboard and Paste applies it
+                     into the current folder. The button only appears while the
+                     clipboard holds entries; the hint names the pending mode. -->
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Pasted 2 items into this folder.|success"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Paste (2)</span></button>
+                <span class="small muted">Cut clipboard</span>
                 <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress"><svg aria-hidden="true"><use href="#i-archive"></use></svg><span class="fm-btn-label">Compress…</span></button>
               </div>
             </div>
@@ -83,8 +88,10 @@
               <span class="muted">1.4 MiB</span>
               <span class="row gap-1" style="margin-left:auto">
                 <button class="btn btn-sm btn-outline" type="button" data-toast="Preparing a single-use download ticket for 2 items…|info"><svg aria-hidden="true"><use href="#i-download"></use></svg>Download</button>
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Choose a destination for 2 items.|info"><svg aria-hidden="true"><use href="#i-copy"></use></svg>Move</button>
+                <!-- JUS-117: no plain Move. Cut + Paste is the move, so Copy and
+                     Cut only stage the clipboard; Paste (toolbar) applies it. -->
                 <button class="btn btn-sm btn-outline" type="button" data-toast="Copied 2 items to the clipboard.|success"><svg aria-hidden="true"><use href="#i-copy"></use></svg>Copy</button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Cut 2 items to the clipboard.|success"><svg aria-hidden="true"><use href="#i-cut"></use></svg>Cut</button>
                 <button class="btn btn-sm btn-danger-ghost" type="button" data-confirm="Delete the 2 selected entries? This cannot be undone." data-confirm-title="Delete 2 entries" data-confirm-label="Delete permanently"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Delete</button>
                 <button class="btn btn-sm btn-ghost" type="button" data-toast="Selection cleared.|info">Clear</button>
               </span>
@@ -119,7 +126,7 @@
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened config/|info" aria-label="Open config"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename config"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete folder config and the 12 files inside it? This cannot be undone." data-confirm-title="Delete folder" data-confirm-label="Delete permanently" aria-label="Delete config"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, move, copy, delete.|info" aria-label="More actions for config"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for config"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -137,7 +144,7 @@
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened data/|info" aria-label="Open data"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename data"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete folder data and everything inside it? This cannot be undone." data-confirm-title="Delete folder" data-confirm-label="Delete permanently" aria-label="Delete data"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, move, copy, delete.|info" aria-label="More actions for data"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for data"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -155,7 +162,7 @@
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened logs/|info" aria-label="Open logs"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename logs"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete folder logs recursively and its 214 files? This cannot be undone." data-confirm-title="Delete folder recursively" data-confirm-label="Delete permanently" aria-label="Delete logs"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, move, copy, delete.|info" aria-label="More actions for logs"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for logs"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -174,7 +181,7 @@
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened app.yaml in the editor.|info" aria-label="Edit app.yaml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for app.yaml…|info" aria-label="Download app.yaml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete app.yaml? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete app.yaml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, move, copy, delete.|info" aria-label="More actions for app.yaml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for app.yaml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -192,7 +199,7 @@
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Open .env"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Download .env"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete .env? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete .env"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, move, copy, delete.|info" aria-label="More actions for .env"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for .env"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -210,7 +217,7 @@
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened docker-compose.yml in the editor.|info" aria-label="Edit docker-compose.yml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket…|info" aria-label="Download docker-compose.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete docker-compose.yml? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete docker-compose.yml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, move, copy, delete.|info" aria-label="More actions for docker-compose.yml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for docker-compose.yml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -228,7 +235,7 @@
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Binary file — download to open locally.|info" aria-label="Preview logo.png"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for logo.png…|info" aria-label="Download logo.png"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete logo.png? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete logo.png"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, move, copy, delete.|info" aria-label="More actions for logo.png"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for logo.png"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -246,7 +253,7 @@
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-extract" aria-label="Extract backup archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming 128.4 MiB to your browser…|info" aria-label="Download backup archive"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete backup-2026-10-11.tar.gz? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete backup archive"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: extract, download, rename, move, copy, delete.|info" aria-label="More actions for backup archive"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: extract, download, rename, cut, copy, paste, delete.|info" aria-label="More actions for backup archive"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -264,7 +271,7 @@
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Over the 2 MiB editor limit — download only.|warn" aria-label="Open server.log"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming server.log to your browser…|info" aria-label="Download server.log"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Delete server.log? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently" aria-label="Delete server.log"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, move, copy, delete.|info" aria-label="More actions for server.log"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for server.log"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -444,7 +451,7 @@
         <!-- ── Context menu ──────────────────────────────────────────────── -->
         <div class="section-title" id="context-menu">
           <h2>Context menu</h2>
-          <span class="meta">use the ⋯ button for row actions; shortcuts are scoped to the list</span>
+          <span class="meta">right-click a row or empty space, or Shift+F10 / the menu key — shortcuts stay scoped to the list</span>
         </div>
         <div class="card">
           <div class="card-body">
@@ -471,11 +478,25 @@
                 <button type="button" role="menuitem" data-open="fm-rename"><svg aria-hidden="true"><use href="#i-pencil"></use></svg>Rename…</button>
                 <button type="button" role="menuitem" data-toast="Cut app.yaml to the clipboard.|info"><svg aria-hidden="true"><use href="#i-cut"></use></svg>Cut</button>
                 <button type="button" role="menuitem" data-toast="Copied app.yaml to the clipboard.|success"><svg aria-hidden="true"><use href="#i-copy"></use></svg>Copy</button>
-                <button type="button" role="menuitem" data-toast="Paste into this folder — name clash shows a 409 replace/skip prompt.|info"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Paste</button>
                 <div class="fm-menu-sep" role="separator"></div>
                 <button type="button" role="menuitem" class="is-danger" data-confirm="Delete app.yaml? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Delete</button>
               </div>
             </div>
+            <p class="small muted mt-4">Right-clicking a row opens its menu at the cursor; on an unselected row it selects that row first, on a row already inside the selection it keeps the whole multi-selection. <span class="kbd">Shift</span>+<span class="kbd">F10</span> (or the menu key) opens the same menu on the focused row. A folder row also offers <b>Paste</b>, which pastes the clipboard INTO that folder; a file row has no destination, so it has no Paste. Disabled actions follow the write gate (a read-only root greys every write action), and a special file opens no menu.</p>
+
+            <!-- Folder-level menu: right-click empty space. -->
+            <div class="fm-demo" style="min-height:300px;display:flex;flex-direction:column;gap:var(--space-3);align-items:flex-start">
+              <p class="small muted" style="margin:0">Right-click empty space for the folder menu:</p>
+              <button class="btn btn-sm btn-outline" type="button" data-menu-toggle="fm-folder-menu-demo" aria-haspopup="menu" aria-expanded="false"><svg aria-hidden="true"><use href="#i-more"></use></svg>Show folder menu</button>
+              <div class="fm-menu" id="fm-folder-menu-demo" role="menu" aria-label="Folder actions">
+                <button type="button" role="menuitem" data-toast="New file — an existing name is refused (409).|info"><svg aria-hidden="true"><use href="#i-plus"></use></svg>New file</button>
+                <button type="button" role="menuitem" data-toast="New folder — an existing name is refused (409).|info"><svg aria-hidden="true"><use href="#i-plus"></use></svg>New folder</button>
+                <button type="button" role="menuitem" data-toast="Pasted into this folder — name clash shows a 409 replace/skip prompt.|info"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Paste</button>
+                <button type="button" role="menuitem" data-open="fm-upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Upload</button>
+                <button type="button" role="menuitem" data-toast="Reloaded entries from the agent (List).|info"><svg aria-hidden="true"><use href="#i-refresh"></use></svg>Refresh</button>
+              </div>
+            </div>
+
             <p class="small muted mt-4">Keyboard: <span class="kbd">↑</span> <span class="kbd">↓</span> move, <span class="kbd">Enter</span> open, <span class="kbd">⌘/Ctrl</span>+click multi-select, <span class="kbd">F2</span> rename, <span class="kbd">Del</span> delete — all scoped to the focused list, never to the editor.</p>
           </div>
         </div>

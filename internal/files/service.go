@@ -31,7 +31,7 @@ import (
 // FeatureEnv is the kill switch for the whole file-manager surface:
 // FEATURE_FILES=false disables it. It defaults on (like the databases and
 // services flags); the surface is limited to platform operators, and a node only
-// answers once its agent opts in with GOTHAM_AGENT_FILES=true. While the flag is
+// answers while its agent has the file service on (GOTHAM_AGENT_FILES). While the flag is
 // off every route answers 503 ErrDisabled.
 const FeatureEnv = "FEATURE_FILES"
 

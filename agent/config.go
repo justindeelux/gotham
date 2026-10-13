@@ -208,8 +208,8 @@ func Load() (Config, error) {
 
 		ManagedVolumeRoot: envOr(envManagedVolumeRoot, envOr(envSharedManagedVolumeRoot, defaultManagedVolumeRoot)),
 
-		Files:            !strings.EqualFold(strings.TrimSpace(os.Getenv(envFiles)), "false"),
-		FileFullAccess:   !strings.EqualFold(strings.TrimSpace(os.Getenv(envFileFullAccess)), "false"),
+		Files:            !envOff(envFiles),
+		FileFullAccess:   !envOff(envFileFullAccess),
 		FileRoots:        os.Getenv(envFileRoots),
 		FileMaxUpload:    int64FromEnv(envFileMaxUpload, defaultFileMaxUpload),
 		FileMaxTransfers: int(int64FromEnv(envFileMaxTransfers, defaultFileMaxTransfers)),
@@ -340,4 +340,15 @@ func int64FromEnv(key string, fallback int64) int64 {
 		return fallback
 	}
 	return value
+}
+
+// envOff reports whether a default-on switch was explicitly turned off. It
+// accepts the usual spellings (false, 0, no, off), so a typo such as "no" cannot
+// silently leave a risky default enabled.
+func envOff(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "false", "0", "no", "off":
+		return true
+	}
+	return false
 }

@@ -249,14 +249,26 @@ resolve_file_manager() {
         FILE_MANAGER=yes
         return 0
     fi
-    if [ -f "${ENV_FILE}" ] \
-        && [ "$(sed -n 's/^[[:space:]]*GOTHAM_AGENT_FILES=//p' "${ENV_FILE}" | tail -n1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
-        FILE_MANAGER=no
-        return 0
+    if [ -f "${ENV_FILE}" ]; then
+        case "$(sed -n 's/^[[:space:]]*GOTHAM_AGENT_FILES=//p' "${ENV_FILE}" | tail -n1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            false)
+                FILE_MANAGER=no
+                return 0
+                ;;
+            true)
+                # Enabled by hand earlier: keep it as is (no prompt, and no
+                # root drop-in the operator never asked for).
+                FILE_MANAGER=keep
+                return 0
+                ;;
+        esac
     fi
     FILE_MANAGER=no
     _fm_tty="${GOTHAM_AGENT_FILE_MANAGER_TTY:-/dev/tty}"
-    if [ "${DRY_RUN}" -eq 1 ] || ! { ( : <"${_fm_tty}" ) 2>/dev/null && ( : >>"${_fm_tty}" ) 2>/dev/null; }; then
+    # Only a character device qualifies, so the test seam can never make the
+    # prompt truncate a regular file as root.
+    if [ "${DRY_RUN}" -eq 1 ] || [ ! -c "${_fm_tty}" ] \
+        || ! { ( : <"${_fm_tty}" ) 2>/dev/null && ( : >>"${_fm_tty}" ) 2>/dev/null; }; then
         return 0
     fi
     {
@@ -274,10 +286,10 @@ resolve_file_manager() {
     esac
 }
 resolve_file_manager
-if [ "${FILE_MANAGER}" = "yes" ]; then
-    GOTHAM_AGENT_FILES=true
-else
+if [ "${FILE_MANAGER}" = "no" ]; then
     GOTHAM_AGENT_FILES=false
+else
+    GOTHAM_AGENT_FILES=true
 fi
 export GOTHAM_AGENT_FILES
 log "file manager: ${FILE_MANAGER}"
@@ -489,7 +501,12 @@ PrivateTmp=no
 DROPIN
         chmod 0644 "${FILE_MANAGER_DROPIN}"
     fi
-else
+elif [ "${FILE_MANAGER}" = "no" ]; then
+    # Back to the unprivileged agent: files the root agent created in its state
+    # directory (certificate, key) must belong to the service user again.
+    if [ -f "${FILE_MANAGER_DROPIN}" ]; then
+        run chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}"
+    fi
     run rm -f "${FILE_MANAGER_DROPIN}"
 fi
 

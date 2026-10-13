@@ -99,7 +99,7 @@ func runServe() int {
 
 	runner := agent.NewAgent(cfg, log, docker)
 
-	// The confined file service is opt-in. Validating and opening its roots
+	// The file service is on unless GOTHAM_AGENT_FILES=false. Validating and opening its roots
 	// eagerly fails startup fast on a bad configuration instead of surfacing
 	// the error on the first control-plane call.
 	var fileServer *agent.FileServer

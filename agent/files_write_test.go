@@ -980,3 +980,43 @@ func TestFileServerDeleteSendsProgressOutsideLock(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 }
+
+// TestFullAccessProtectsAppDirectory pins that the whole-filesystem root keeps
+// the running-container guard: the application directory of the managed volumes
+// root cannot be renamed or deleted through "/".
+func TestFullAccessProtectsAppDirectory(t *testing.T) {
+	t.Parallel()
+	volumes := t.TempDir()
+	const appID = "0f8fad5b-d9cb-469f-a165-70867728950e"
+	if err := os.MkdirAll(filepath.Join(volumes, appID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewFileServer(Config{FileFullAccess: true, ManagedVolumeRoot: volumes}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	real, err := filepath.EvalSymlinks(volumes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := strings.TrimPrefix(filepath.ToSlash(real), "/")
+	if _, err := server.Rename(context.Background(), &agentv1.RenameRequest{
+		Root: fileRootSystem, Source: rel + "/" + appID, Destination: rel + "/moved",
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("rename of an app dir through / = %v, want PermissionDenied", err)
+	}
+	if err := server.Delete(&agentv1.DeleteRequest{
+		Root: fileRootSystem, Path: rel + "/" + appID, Recursive: true,
+	}, &collectProgressStream{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("delete of an app dir through / = %v, want PermissionDenied", err)
+	}
+	if _, err := server.Mkdir(context.Background(), &agentv1.MkdirRequest{Root: fileRootSystem, Path: rel + "/plain"}); err != nil {
+		t.Fatalf("mkdir beside the app dir: %v", err)
+	}
+	if _, err := server.Rename(context.Background(), &agentv1.RenameRequest{
+		Root: fileRootSystem, Source: rel + "/plain", Destination: rel + "/plain2",
+	}); err != nil {
+		t.Fatalf("rename of an ordinary directory: %v", err)
+	}
+}

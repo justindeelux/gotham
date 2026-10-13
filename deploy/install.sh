@@ -1339,6 +1339,7 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
                     -u GOTHAM_INSTALL_TEST_PUBLIC_KEY \
                     -u GOTHAM_INSTALL_TEST_ADMIN_BIN \
                     -u GOTHAM_INSTALL_TEST_ADMIN_TTY \
+                    -u GOTHAM_AGENT_FILE_MANAGER_TTY \
                     "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt"
             ) || LOCAL_AGENT_FAILED=1
         fi

@@ -99,6 +99,9 @@ func (s *FileServer) Write(stream grpc.ClientStreamingServer[agentv1.WriteReques
 	if err != nil || rel == "." {
 		return status.Errorf(codes.InvalidArgument, "write: invalid path %q", header.GetPath())
 	}
+	if err := guardTrash(root, "write", rel); err != nil {
+		return err
+	}
 	size := header.GetSize()
 	if size < 0 {
 		return status.Error(codes.InvalidArgument, "write: size must not be negative")
@@ -373,6 +376,9 @@ func (s *FileServer) Mkdir(_ context.Context, req *agentv1.MkdirRequest) (*agent
 	if err != nil || rel == "." {
 		return nil, status.Errorf(codes.InvalidArgument, "mkdir: invalid path %q", req.GetPath())
 	}
+	if err := guardTrash(root, "mkdir", rel); err != nil {
+		return nil, err
+	}
 	mode := os.FileMode(req.GetMode()) & 0o777
 	if mode == 0 {
 		mode = 0o755
@@ -408,6 +414,9 @@ func (s *FileServer) Chmod(_ context.Context, req *agentv1.ChmodRequest) (*agent
 	rel, err := fsroot.Clean(req.GetPath())
 	if err != nil || rel == "." {
 		return nil, status.Errorf(codes.InvalidArgument, "chmod: invalid path %q", req.GetPath())
+	}
+	if err := guardTrash(root, "chmod", rel); err != nil {
+		return nil, err
 	}
 	// mode is optional on the wire so an absent field is refused rather than
 	// silently decoded as 000: a chmod has no safe default (unlike a create).
@@ -451,6 +460,12 @@ func (s *FileServer) Rename(ctx context.Context, req *agentv1.RenameRequest) (*a
 	dst, err := fsroot.Clean(req.GetDestination())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "rename: invalid destination %q", req.GetDestination())
+	}
+	if err := guardTrash(root, "rename", src); err != nil {
+		return nil, err
+	}
+	if err := guardTrash(root, "rename", dst); err != nil {
+		return nil, err
 	}
 	if src == "." || dst == "." || src == dst || isWithin(src, dst) {
 		return nil, status.Errorf(codes.InvalidArgument, "rename: cannot move %q to %q", req.GetSource(), req.GetDestination())
@@ -516,6 +531,12 @@ func (s *FileServer) Copy(req *agentv1.CopyRequest, stream grpc.ServerStreamingS
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "copy: invalid destination %q", req.GetDestination())
 	}
+	if err := guardTrash(root, "copy", src); err != nil {
+		return err
+	}
+	if err := guardTrash(root, "copy", dst); err != nil {
+		return err
+	}
 	if src == "." || dst == "." || src == dst || isWithin(src, dst) {
 		return status.Errorf(codes.InvalidArgument, "copy: cannot copy %q to %q", req.GetSource(), req.GetDestination())
 	}
@@ -538,13 +559,14 @@ func (s *FileServer) Copy(req *agentv1.CopyRequest, stream grpc.ServerStreamingS
 	return progress.finish()
 }
 
-// Delete removes one entry, recursively when asked, streaming progress. The
-// root itself and the top-level application directories of the volumes root are
-// never removed. It holds the per-path lock while the tree is removed so it
-// cannot race a write or rename, but it collects progress and sends it only
-// after the lock is released, so a slow client cannot stall unrelated paths
-// that share the stripe. It honours the stream context so a cancelled delete
-// stops promptly.
+// Delete removes one entry, streaming progress. By default the entry is moved
+// into the root's recycle bin (ListTrash/Restore/Purge/EmptyTrash) instead of
+// being removed, and a permanent delete is asked for explicitly. The root
+// itself and the top-level application directories of the volumes root are
+// never removed. It holds the per-path lock while the entry moves so it cannot
+// race a write or rename, but it sends progress only after the lock is released,
+// so a slow client cannot stall unrelated paths that share the stripe. It
+// honours the stream context so a cancelled delete stops promptly.
 func (s *FileServer) Delete(req *agentv1.DeleteRequest, stream grpc.ServerStreamingServer[agentv1.Progress]) error {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -557,11 +579,27 @@ func (s *FileServer) Delete(req *agentv1.DeleteRequest, stream grpc.ServerStream
 	if err != nil || rel == "." {
 		return status.Errorf(codes.InvalidArgument, "delete: invalid path %q", req.GetPath())
 	}
+	if err := guardTrash(root, "delete", rel); err != nil {
+		return err
+	}
 	if s.protectsAppDir(root, rel) {
 		return status.Error(codes.PermissionDenied, "delete: an application directory cannot be deleted")
 	}
 	if _, err := root.Stat(rel); err != nil {
 		return fileError("delete", err)
+	}
+	if !req.GetPermanent() {
+		unlock := s.lockPaths(root.Name(), rel)
+		moveErr := s.trashEntry(stream.Context(), root, rel, req.GetRecursive())
+		// Release the lock before any Send: a blocked client must not hold a
+		// stripe that unrelated paths share.
+		unlock()
+		if moveErr != nil {
+			return fileError("delete", moveErr)
+		}
+		// A recycle move is a single rename, so there is no per-entry progress
+		// to stream; report the terminal done message.
+		return (&progressWriter{stream: stream, path: rel}).finish()
 	}
 	unlock := s.lockPaths(root.Name(), rel)
 	release, err := s.beginTransfer()

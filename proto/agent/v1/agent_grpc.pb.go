@@ -1373,18 +1373,22 @@ var ComposeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	FileService_ListRoots_FullMethodName = "/agent.v1.FileService/ListRoots"
-	FileService_List_FullMethodName      = "/agent.v1.FileService/List"
-	FileService_Stat_FullMethodName      = "/agent.v1.FileService/Stat"
-	FileService_Read_FullMethodName      = "/agent.v1.FileService/Read"
-	FileService_Write_FullMethodName     = "/agent.v1.FileService/Write"
-	FileService_Copy_FullMethodName      = "/agent.v1.FileService/Copy"
-	FileService_Delete_FullMethodName    = "/agent.v1.FileService/Delete"
-	FileService_Mkdir_FullMethodName     = "/agent.v1.FileService/Mkdir"
-	FileService_Rename_FullMethodName    = "/agent.v1.FileService/Rename"
-	FileService_Chmod_FullMethodName     = "/agent.v1.FileService/Chmod"
-	FileService_Compress_FullMethodName  = "/agent.v1.FileService/Compress"
-	FileService_Extract_FullMethodName   = "/agent.v1.FileService/Extract"
+	FileService_ListRoots_FullMethodName  = "/agent.v1.FileService/ListRoots"
+	FileService_List_FullMethodName       = "/agent.v1.FileService/List"
+	FileService_Stat_FullMethodName       = "/agent.v1.FileService/Stat"
+	FileService_Read_FullMethodName       = "/agent.v1.FileService/Read"
+	FileService_Write_FullMethodName      = "/agent.v1.FileService/Write"
+	FileService_Copy_FullMethodName       = "/agent.v1.FileService/Copy"
+	FileService_Delete_FullMethodName     = "/agent.v1.FileService/Delete"
+	FileService_Mkdir_FullMethodName      = "/agent.v1.FileService/Mkdir"
+	FileService_Rename_FullMethodName     = "/agent.v1.FileService/Rename"
+	FileService_Chmod_FullMethodName      = "/agent.v1.FileService/Chmod"
+	FileService_Compress_FullMethodName   = "/agent.v1.FileService/Compress"
+	FileService_Extract_FullMethodName    = "/agent.v1.FileService/Extract"
+	FileService_ListTrash_FullMethodName  = "/agent.v1.FileService/ListTrash"
+	FileService_Restore_FullMethodName    = "/agent.v1.FileService/Restore"
+	FileService_Purge_FullMethodName      = "/agent.v1.FileService/Purge"
+	FileService_EmptyTrash_FullMethodName = "/agent.v1.FileService/EmptyTrash"
 )
 
 // FileServiceClient is the client API for FileService service.
@@ -1443,6 +1447,17 @@ type FileServiceClient interface {
 	// and the total uncompressed size, the entry count and the compression ratio
 	// are bounded.
 	Extract(ctx context.Context, in *ExtractRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Progress], error)
+	// ListTrash lists a root's recycle bin, newest first. Entries are deleted
+	// entries the service moved into the root's trash; the trash tree itself is
+	// never browsable through List.
+	ListTrash(ctx context.Context, in *ListTrashRequest, opts ...grpc.CallOption) (*ListTrashResponse, error)
+	// Restore moves one trash entry back to its recorded original path (or to an
+	// explicit destination), refusing an existing target unless overwrite is set.
+	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
+	// Purge permanently removes one trash entry.
+	Purge(ctx context.Context, in *PurgeRequest, opts ...grpc.CallOption) (*PurgeResponse, error)
+	// EmptyTrash permanently removes every entry in a root's recycle bin.
+	EmptyTrash(ctx context.Context, in *EmptyTrashRequest, opts ...grpc.CallOption) (*EmptyTrashResponse, error)
 }
 
 type fileServiceClient struct {
@@ -1621,6 +1636,46 @@ func (c *fileServiceClient) Extract(ctx context.Context, in *ExtractRequest, opt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FileService_ExtractClient = grpc.ServerStreamingClient[Progress]
 
+func (c *fileServiceClient) ListTrash(ctx context.Context, in *ListTrashRequest, opts ...grpc.CallOption) (*ListTrashResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTrashResponse)
+	err := c.cc.Invoke(ctx, FileService_ListTrash_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RestoreResponse)
+	err := c.cc.Invoke(ctx, FileService_Restore_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) Purge(ctx context.Context, in *PurgeRequest, opts ...grpc.CallOption) (*PurgeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PurgeResponse)
+	err := c.cc.Invoke(ctx, FileService_Purge_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) EmptyTrash(ctx context.Context, in *EmptyTrashRequest, opts ...grpc.CallOption) (*EmptyTrashResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmptyTrashResponse)
+	err := c.cc.Invoke(ctx, FileService_EmptyTrash_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FileServiceServer is the server API for FileService service.
 // All implementations must embed UnimplementedFileServiceServer
 // for forward compatibility.
@@ -1677,6 +1732,17 @@ type FileServiceServer interface {
 	// and the total uncompressed size, the entry count and the compression ratio
 	// are bounded.
 	Extract(*ExtractRequest, grpc.ServerStreamingServer[Progress]) error
+	// ListTrash lists a root's recycle bin, newest first. Entries are deleted
+	// entries the service moved into the root's trash; the trash tree itself is
+	// never browsable through List.
+	ListTrash(context.Context, *ListTrashRequest) (*ListTrashResponse, error)
+	// Restore moves one trash entry back to its recorded original path (or to an
+	// explicit destination), refusing an existing target unless overwrite is set.
+	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
+	// Purge permanently removes one trash entry.
+	Purge(context.Context, *PurgeRequest) (*PurgeResponse, error)
+	// EmptyTrash permanently removes every entry in a root's recycle bin.
+	EmptyTrash(context.Context, *EmptyTrashRequest) (*EmptyTrashResponse, error)
 	mustEmbedUnimplementedFileServiceServer()
 }
 
@@ -1722,6 +1788,18 @@ func (UnimplementedFileServiceServer) Compress(*CompressRequest, grpc.ServerStre
 }
 func (UnimplementedFileServiceServer) Extract(*ExtractRequest, grpc.ServerStreamingServer[Progress]) error {
 	return status.Error(codes.Unimplemented, "method Extract not implemented")
+}
+func (UnimplementedFileServiceServer) ListTrash(context.Context, *ListTrashRequest) (*ListTrashResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTrash not implemented")
+}
+func (UnimplementedFileServiceServer) Restore(context.Context, *RestoreRequest) (*RestoreResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Restore not implemented")
+}
+func (UnimplementedFileServiceServer) Purge(context.Context, *PurgeRequest) (*PurgeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Purge not implemented")
+}
+func (UnimplementedFileServiceServer) EmptyTrash(context.Context, *EmptyTrashRequest) (*EmptyTrashResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EmptyTrash not implemented")
 }
 func (UnimplementedFileServiceServer) mustEmbedUnimplementedFileServiceServer() {}
 func (UnimplementedFileServiceServer) testEmbeddedByValue()                     {}
@@ -1914,6 +1992,78 @@ func _FileService_Extract_Handler(srv interface{}, stream grpc.ServerStream) err
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FileService_ExtractServer = grpc.ServerStreamingServer[Progress]
 
+func _FileService_ListTrash_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTrashRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).ListTrash(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_ListTrash_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).ListTrash(ctx, req.(*ListTrashRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_Restore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).Restore(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_Restore_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).Restore(ctx, req.(*RestoreRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_Purge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PurgeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).Purge(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_Purge_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).Purge(ctx, req.(*PurgeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_EmptyTrash_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyTrashRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).EmptyTrash(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_EmptyTrash_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).EmptyTrash(ctx, req.(*EmptyTrashRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FileService_ServiceDesc is the grpc.ServiceDesc for FileService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1944,6 +2094,22 @@ var FileService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Chmod",
 			Handler:    _FileService_Chmod_Handler,
+		},
+		{
+			MethodName: "ListTrash",
+			Handler:    _FileService_ListTrash_Handler,
+		},
+		{
+			MethodName: "Restore",
+			Handler:    _FileService_Restore_Handler,
+		},
+		{
+			MethodName: "Purge",
+			Handler:    _FileService_Purge_Handler,
+		},
+		{
+			MethodName: "EmptyTrash",
+			Handler:    _FileService_EmptyTrash_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

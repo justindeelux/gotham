@@ -358,6 +358,9 @@ func (s *FileServer) Compress(req *agentv1.CompressRequest, stream grpc.ServerSt
 	if err != nil || dst == "." {
 		return status.Errorf(codes.InvalidArgument, "compress: invalid destination %q", req.GetDestination())
 	}
+	if err := guardTrash(root, "compress", dst); err != nil {
+		return err
+	}
 	if s.protectsAppDir(root, dst) {
 		return status.Error(codes.PermissionDenied, "compress: an application directory cannot be replaced")
 	}
@@ -366,6 +369,9 @@ func (s *FileServer) Compress(req *agentv1.CompressRequest, stream grpc.ServerSt
 		rel, err := fsroot.Clean(raw)
 		if err != nil || rel == "." {
 			return status.Errorf(codes.InvalidArgument, "compress: invalid source %q", raw)
+		}
+		if err := guardTrash(root, "compress", rel); err != nil {
+			return err
 		}
 		if rel == dst || isWithin(rel, dst) {
 			return status.Errorf(codes.InvalidArgument, "compress: destination %q is inside source %q", req.GetDestination(), raw)
@@ -562,6 +568,9 @@ func (s *FileServer) Extract(req *agentv1.ExtractRequest, stream grpc.ServerStre
 	if err != nil || src == "." {
 		return status.Errorf(codes.InvalidArgument, "extract: invalid source %q", req.GetSource())
 	}
+	if err := guardTrash(root, "extract", src); err != nil {
+		return err
+	}
 	format, ok := archiveFormatFromName(src)
 	if !ok {
 		return status.Errorf(codes.InvalidArgument, "extract: %q is not a .zip, .tar or .tar.gz archive", req.GetSource())
@@ -569,6 +578,9 @@ func (s *FileServer) Extract(req *agentv1.ExtractRequest, stream grpc.ServerStre
 	dst, err := fsroot.Clean(req.GetDestination())
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "extract: invalid destination %q", req.GetDestination())
+	}
+	if err := guardTrash(root, "extract", dst); err != nil {
+		return err
 	}
 	if entry, err := root.Stat(dst); err != nil {
 		return fileError("extract", err)
@@ -931,6 +943,11 @@ func (s *FileServer) extractTar(ctx context.Context, root *fsroot.Root, r io.Rea
 // the archived mode is applied once the whole extract finishes.
 func (s *FileServer) extractDir(root *fsroot.Root, dst, rel string, mode os.FileMode, dirs *extractDirs, state *extractState) error {
 	target := path.Join(dst, rel)
+	// A member path must never land in the reserved recycle bin, exactly like
+	// any other entry-addressing operation.
+	if err := guardTrash(root, "extract", target); err != nil {
+		return err
+	}
 	if s.protectsAppDir(root, target) {
 		return status.Error(codes.PermissionDenied, "extract: an application directory cannot be replaced")
 	}
@@ -974,6 +991,11 @@ func (s *FileServer) extractDir(root *fsroot.Root, dst, rel string, mode os.File
 // running-app-directory guard refuses replacing a top-level application
 // directory; the byte/entry caps are enforced by the caller before this runs.
 func (s *FileServer) extractFile(ctx context.Context, root *fsroot.Root, target string, mode os.FileMode, size int64, overwrite bool, src string, r io.Reader, state *extractState, progress *archiveProgress) error {
+	// A member path must never land in the reserved recycle bin, exactly like
+	// any other entry-addressing operation.
+	if err := guardTrash(root, "extract", target); err != nil {
+		return err
+	}
 	if s.protectsAppDir(root, target) {
 		return status.Error(codes.PermissionDenied, "extract: an application directory cannot be replaced")
 	}

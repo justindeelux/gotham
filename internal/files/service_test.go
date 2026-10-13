@@ -115,6 +115,17 @@ type fakeFileClient struct {
 	extractErr   error
 	seenCompress *agentv1.CompressRequest
 	seenExtract  *agentv1.ExtractRequest
+
+	trashResp      *agentv1.ListTrashResponse
+	trashErr       error
+	restoreResp    *agentv1.RestoreResponse
+	restoreErr     error
+	purgeErr       error
+	emptyTrashResp *agentv1.EmptyTrashResponse
+	emptyTrashErr  error
+	seenRestore    *agentv1.RestoreRequest
+	seenPurge      *agentv1.PurgeRequest
+	seenEmpty      *agentv1.EmptyTrashRequest
 }
 
 func (f *fakeFileClient) ListRoots(context.Context, *agentv1.ListRootsRequest, ...grpc.CallOption) (*agentv1.ListRootsResponse, error) {
@@ -249,6 +260,54 @@ func (f *fakeFileClient) Extract(_ context.Context, in *agentv1.ExtractRequest, 
 		return nil, f.extractErr
 	}
 	return &fakeProgressStream{msgs: f.extractMsgs}, nil
+}
+
+func (f *fakeFileClient) ListTrash(_ context.Context, _ *agentv1.ListTrashRequest, _ ...grpc.CallOption) (*agentv1.ListTrashResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.trashErr != nil {
+		return nil, f.trashErr
+	}
+	if f.trashResp != nil {
+		return f.trashResp, nil
+	}
+	return &agentv1.ListTrashResponse{}, nil
+}
+
+func (f *fakeFileClient) Restore(_ context.Context, in *agentv1.RestoreRequest, _ ...grpc.CallOption) (*agentv1.RestoreResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenRestore = in
+	if f.restoreErr != nil {
+		return nil, f.restoreErr
+	}
+	if f.restoreResp != nil {
+		return f.restoreResp, nil
+	}
+	return &agentv1.RestoreResponse{}, nil
+}
+
+func (f *fakeFileClient) Purge(_ context.Context, in *agentv1.PurgeRequest, _ ...grpc.CallOption) (*agentv1.PurgeResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenPurge = in
+	if f.purgeErr != nil {
+		return nil, f.purgeErr
+	}
+	return &agentv1.PurgeResponse{}, nil
+}
+
+func (f *fakeFileClient) EmptyTrash(_ context.Context, in *agentv1.EmptyTrashRequest, _ ...grpc.CallOption) (*agentv1.EmptyTrashResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenEmpty = in
+	if f.emptyTrashErr != nil {
+		return nil, f.emptyTrashErr
+	}
+	if f.emptyTrashResp != nil {
+		return f.emptyTrashResp, nil
+	}
+	return &agentv1.EmptyTrashResponse{}, nil
 }
 
 // lastWriteHeader returns the header the fake Write stream received.

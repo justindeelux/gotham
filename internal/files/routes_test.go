@@ -34,28 +34,37 @@ type fakeService struct {
 	downloadErr error
 	calls       []string
 
-	writeResult   WriteResult
-	writeErr      error
-	writeHook     func(WriteRequest) (WriteResult, error)
-	seenWrite     *WriteRequest
-	writeBody     []byte
-	authorizeErr  error
-	mkdirEntry    Entry
-	mkdirErr      error
-	createEntry   Entry
-	createErr     error
-	renameEntry   Entry
-	renameErr     error
-	chmodEntry    Entry
-	chmodErr      error
-	copyEntry     Entry
-	copyErr       error
-	deleteErr     error
-	compressEntry Entry
-	compressErr   error
-	seenCompress  *CompressRequest
-	extractErr    error
-	seenExtract   *ExtractRequest
+	writeResult     WriteResult
+	writeErr        error
+	writeHook       func(WriteRequest) (WriteResult, error)
+	seenWrite       *WriteRequest
+	writeBody       []byte
+	authorizeErr    error
+	mkdirEntry      Entry
+	mkdirErr        error
+	createEntry     Entry
+	createErr       error
+	renameEntry     Entry
+	renameErr       error
+	chmodEntry      Entry
+	chmodErr        error
+	copyEntry       Entry
+	copyErr         error
+	deleteErr       error
+	deletePermanent bool
+	compressEntry   Entry
+	compressErr     error
+	seenCompress    *CompressRequest
+	extractErr      error
+	seenExtract     *ExtractRequest
+	trash           []TrashEntry
+	trashErr        error
+	trashTruncated  bool
+	restoreEntry    Entry
+	restoreErr      error
+	purgeErr        error
+	emptyRemoved    uint64
+	emptyErr        error
 }
 
 func (f *fakeService) record(call string) {
@@ -166,8 +175,11 @@ func (f *fakeService) Chmod(_ context.Context, _ uuid.UUID, _, _ string, _ uint3
 	return f.chmodEntry, f.chmodErr
 }
 
-func (f *fakeService) Delete(_ context.Context, _ uuid.UUID, _, _ string, _ bool) error {
+func (f *fakeService) Delete(_ context.Context, _ uuid.UUID, _, _ string, _, permanent bool) error {
 	f.record("delete")
+	f.mu.Lock()
+	f.deletePermanent = permanent
+	f.mu.Unlock()
 	return f.deleteErr
 }
 
@@ -185,6 +197,26 @@ func (f *fakeService) Extract(_ context.Context, _ uuid.UUID, req ExtractRequest
 	f.seenExtract = &req
 	f.mu.Unlock()
 	return f.extractErr
+}
+
+func (f *fakeService) Trash(_ context.Context, _ uuid.UUID, _ string) (TrashListing, error) {
+	f.record("trash")
+	return TrashListing{Entries: f.trash, Truncated: f.trashTruncated}, f.trashErr
+}
+
+func (f *fakeService) Restore(_ context.Context, _ uuid.UUID, _, _, _ string, _ bool) (Entry, error) {
+	f.record("restore")
+	return f.restoreEntry, f.restoreErr
+}
+
+func (f *fakeService) Purge(_ context.Context, _ uuid.UUID, _, _ string) error {
+	f.record("purge")
+	return f.purgeErr
+}
+
+func (f *fakeService) EmptyTrash(_ context.Context, _ uuid.UUID, _ string) (uint64, error) {
+	f.record("empty")
+	return f.emptyRemoved, f.emptyErr
 }
 
 // passthroughAuth stands in for RequireAuth in route tests.

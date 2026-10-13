@@ -457,6 +457,9 @@ func TestWriteRoutesRBAC(t *testing.T) {
 		{"copy", http.MethodPost, base + "copy", `{"root":"volumes","source":"a","destination":"b"}`, nil},
 		{"chmod", http.MethodPost, base + "chmod", `{"root":"volumes","path":"a","mode":384}`, nil},
 		{"delete", http.MethodDelete, base + "entry?root=volumes&path=a", "", nil},
+		{"trash restore", http.MethodPost, base + "trash/restore", `{"root":"volumes","id":"0123456789abcdef0123456789abcdef"}`, nil},
+		{"trash purge", http.MethodPost, base + "trash/purge", `{"root":"volumes","id":"0123456789abcdef0123456789abcdef"}`, nil},
+		{"trash empty", http.MethodPost, base + "trash/empty", `{"root":"volumes"}`, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -465,6 +468,12 @@ func TestWriteRoutesRBAC(t *testing.T) {
 				t.Fatalf("status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
 			}
 		})
+	}
+
+	// Listing the bin is a read: a read_only member is allowed.
+	rec := doWrite(t, h, http.MethodGet, base+"trash?root=volumes", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET trash as read_only = %d, want 200 (body %s)", rec.Code, rec.Body.String())
 	}
 }
 

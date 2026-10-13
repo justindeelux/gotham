@@ -332,7 +332,7 @@ func (h *handler) deleteEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	if err := h.svc.Delete(r.Context(), serverID, query.Get("root"), query.Get("path"), parseBool(query.Get("recursive"))); err != nil {
+	if err := h.svc.Delete(r.Context(), serverID, query.Get("root"), query.Get("path"), parseBool(query.Get("recursive")), parseBool(query.Get("permanent"))); err != nil {
 		h.writeError(w, err)
 		return
 	}

@@ -70,7 +70,11 @@ type handler struct {
 //	POST   /v1/servers/{id}/files/chmod
 //	POST   /v1/servers/{id}/files/compress
 //	POST   /v1/servers/{id}/files/extract
-//	DELETE /v1/servers/{id}/files/entry?root=&path=&recursive=
+//	DELETE /v1/servers/{id}/files/entry?root=&path=&recursive=&permanent=
+//	GET    /v1/servers/{id}/files/trash?root=
+//	POST   /v1/servers/{id}/files/trash/restore
+//	POST   /v1/servers/{id}/files/trash/purge
+//	POST   /v1/servers/{id}/files/trash/empty
 //	POST   /v1/servers/{id}/files/download-ticket?root=&path=
 //	GET    /v1/servers/{id}/files/download?ticket=
 //
@@ -112,6 +116,10 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, 
 		protected.Post("/v1/servers/{id}/files/compress", h.compress)
 		protected.Post("/v1/servers/{id}/files/extract", h.extract)
 		protected.Delete("/v1/servers/{id}/files/entry", h.deleteEntry)
+		protected.Get("/v1/servers/{id}/files/trash", h.trash)
+		protected.Post("/v1/servers/{id}/files/trash/restore", h.restoreTrash)
+		protected.Post("/v1/servers/{id}/files/trash/purge", h.purgeTrash)
+		protected.Post("/v1/servers/{id}/files/trash/empty", h.emptyTrash)
 		protected.Post("/v1/servers/{id}/files/download-ticket", h.issueTicket)
 	})
 }

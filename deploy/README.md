@@ -308,6 +308,21 @@ the body).
   Creating the link needs the agent uid to already be able to write the target,
   and roots are operator-controlled, so the exposure is small (`nlink>1` is also
   why the writer keeps the inode instead of renaming).
+- **File manager — recycle bin has no retention, plus documented edges (JUS-122).**
+  Deletes move into `<root>/.gotham-trash/<id>/{data,meta.json}` and stay until a
+  restore, a purge, or an empty. There is **no age/size auto-expiry** in v1, so a
+  large mass-delete keeps its bytes on the root filesystem until an operator
+  empties the bin. A restore renames the payload back to its recorded path but
+  does **not** recreate a missing parent directory, so restoring `d/f` after `d`
+  was also deleted fails `NotFound` and the caller must name a destination. The
+  listing is capped (`fileTrashMaxList`) and reports `truncated`, never a silent
+  drop. Deletes serialise per path, but a cross-device recycle delete (a
+  bind-mounted subtree) copies the tree under the path lock, so a very large one
+  can hold a single path stripe. **Rollout order:** `permanent` defaults off, so
+  upgrade the control plane (or enable the bin UI) **before** the agent — a new
+  agent behind an old control plane recycles deletes with no way to see or
+  restore them; an old agent behind a new control plane answers 501
+  (`ErrAgentOutdated`).
 - **`KillMode=process` applies to every stop (children handled in Go).**
   `KillMode=process` is required so the wrapper survives the update restart, so
   systemd itself does not kill control-plane children (`git`/`ssh`) on

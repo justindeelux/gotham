@@ -103,6 +103,16 @@ type Listing struct {
 	Cursor    string  `json:"cursor,omitempty"`
 }
 
+// TrashEntry is one entry held in a node's recycle bin.
+type TrashEntry struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	OriginalPath string    `json:"original_path"`
+	DeletedAt    time.Time `json:"deleted_at"`
+	Size         int64     `json:"size"`
+	Kind         string    `json:"kind"`
+}
+
 // Content is one editable text body.
 type Content struct {
 	Content string `json:"content"`
@@ -155,14 +165,28 @@ type FileService interface {
 	Chmod(ctx context.Context, serverID uuid.UUID, root, path string, mode uint32) (Entry, error)
 	// Copy copies one entry within a single root and returns the new entry.
 	Copy(ctx context.Context, serverID uuid.UUID, root, source, destination string, overwrite bool) (Entry, error)
-	// Delete removes one entry, recursively when requested.
-	Delete(ctx context.Context, serverID uuid.UUID, root, path string, recursive bool) error
+	// Delete removes one entry: by default into the node's recycle bin, or
+	// permanently when permanent is set.
+	Delete(ctx context.Context, serverID uuid.UUID, root, path string, recursive, permanent bool) error
 	// Compress builds one archive from sources inside a single root and returns
 	// the created archive's entry.
 	Compress(ctx context.Context, serverID uuid.UUID, req CompressRequest) (Entry, error)
 	// Extract unpacks one archive into a destination directory inside a single
 	// root.
 	Extract(ctx context.Context, serverID uuid.UUID, req ExtractRequest) error
+
+	// Trash lists a root's recycle bin, newest first. Any team member may read
+	// it, like List. Truncated reports a capped listing.
+	Trash(ctx context.Context, serverID uuid.UUID, root string) (TrashListing, error)
+	// Restore moves one bin entry back to its recorded original path (or an
+	// explicit destination); an existing target is a conflict unless overwrite
+	// is set.
+	Restore(ctx context.Context, serverID uuid.UUID, root, id, destination string, overwrite bool) (Entry, error)
+	// Purge permanently removes one bin entry.
+	Purge(ctx context.Context, serverID uuid.UUID, root, id string) error
+	// EmptyTrash permanently removes every entry in a root's bin, reporting how
+	// many were removed.
+	EmptyTrash(ctx context.Context, serverID uuid.UUID, root string) (uint64, error)
 }
 
 // Config wires a Service. Registry is required; Dial may be nil until the mTLS

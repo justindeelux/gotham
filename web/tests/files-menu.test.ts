@@ -52,9 +52,10 @@ beforeEach(() => {
 });
 
 describe("rowMenuOptions", () => {
-  it("offers the clipboard pair and never a duplicate Move", () => {
+  it("offers the clipboard pair and never a duplicate Move on a file", () => {
     const options = rowMenuOptions(entry({ name: "app.yaml" }), ctx());
 
+    // A file row has no destination, so it carries no Paste.
     expect(keys(options)).toEqual([
       "edit",
       "download",
@@ -62,13 +63,13 @@ describe("rowMenuOptions", () => {
       "rename",
       "cut",
       "copy",
-      "paste",
       "delete",
     ]);
     expect(keys(options)).not.toContain("move");
+    expect(keys(options)).not.toContain("paste");
   });
 
-  it("opens a folder with Open and no extract entry", () => {
+  it("opens a folder with Open and pastes into that folder", () => {
     const options = rowMenuOptions(
       entry({ name: "config", kind: "directory", mode: 0o040755 }),
       ctx(),
@@ -102,7 +103,7 @@ describe("rowMenuOptions", () => {
       ctx(),
     );
 
-    expect(keys(options)).toEqual(["rename", "cut", "copy", "paste", "delete"]);
+    expect(keys(options)).toEqual(["rename", "cut", "copy", "delete"]);
   });
 
   it("offers nothing for a special file", () => {
@@ -138,11 +139,12 @@ describe("rowMenuOptions", () => {
     expect(byKey(options, "download")?.disabled).toBe(true);
   });
 
-  it("disables Paste when the clipboard cannot land here", () => {
-    const blocked = rowMenuOptions(entry({ name: "app.yaml" }), ctx({ canPaste: false }));
+  it("disables Paste on a folder row when the clipboard cannot land there", () => {
+    const folder = entry({ name: "config", kind: "directory", mode: 0o040755 });
+    const blocked = rowMenuOptions(folder, ctx({ canPaste: false }));
     expect(byKey(blocked, "paste")?.disabled).toBe(true);
 
-    const ready = rowMenuOptions(entry({ name: "app.yaml" }), ctx());
+    const ready = rowMenuOptions(folder, ctx());
     expect(byKey(ready, "paste")?.disabled).toBe(false);
   });
 });

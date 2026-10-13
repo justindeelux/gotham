@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global document:readonly, MouseEvent:readonly, window:readonly */
+/* global document:readonly, HTMLElement:readonly, MouseEvent:readonly, URL, window:readonly */
 // JUS-124 context-menu proof: the committed webdist is served statically with
 // the control-plane file API mocked in real Chromium. Measured claims:
 //   - right-click on a file, a folder and empty space opens the custom menu,
@@ -76,6 +76,7 @@ function listing() {
     { name: "app.yaml", kind: "file", size: 2458, mode: 0o100644, modified_at: "2026-10-12T09:02:00Z", etag: '"a"' },
     { name: "config", kind: "directory", size: 0, mode: 0o040755, modified_at: "2026-10-12T09:14:00Z", etag: '"b"' },
     { name: "data", kind: "directory", size: 0, mode: 0o040755, modified_at: "2026-10-12T08:51:00Z", etag: '"c"' },
+    { name: "run.sock", kind: "special", size: 0, mode: 0o140777, modified_at: "2026-10-12T09:19:00Z", etag: '"d"' },
   ];
 }
 
@@ -176,6 +177,18 @@ test("right-click on a file opens the custom menu, not the native one", async ({
   // Esc closes it.
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
+
+  // Outside click closes it too.
+  await rowFor(page, "app.yaml").click({ button: "right" });
+  await expect(menu).toBeVisible();
+  await page.locator(".fm-card-title").click();
+  await expect(menu).toBeHidden();
+});
+
+test("right-click on a special entry opens no menu", async ({ page }) => {
+  await openFiles(page);
+  await rowFor(page, "run.sock").click({ button: "right" });
+  await expect(page.getByRole("menu")).toHaveCount(0);
 });
 
 test("the custom menu cancels the native context menu", async ({ page }) => {
@@ -212,6 +225,46 @@ test("right-click on a folder opens its row menu", async ({ page }) => {
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Open" })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "Move", exact: true })).toHaveCount(0);
+});
+
+test("folder-row Paste copies into that folder", async ({ page }) => {
+  await openFiles(page);
+  const copies: Array<Record<string, unknown>> = [];
+  await page.route(`**/api/v1/servers/${server1}/files/copy`, async (route) => {
+    copies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({
+      json: {
+        entry: {
+          name: "app.yaml",
+          kind: "file",
+          size: 2458,
+          mode: 0o100644,
+          modified_at: "2026-10-12T09:02:00Z",
+          etag: '"x"',
+        },
+      },
+    });
+  });
+
+  // Stage a copy from a row menu, then paste from the folder's row menu. Wait
+  // for each menu to settle so the click lands on the item, not the row behind.
+  await rowFor(page, "app.yaml").click({ button: "right" });
+  const fileMenu = page.getByRole("menu", { name: "More actions for app.yaml" });
+  await expect(fileMenu).toBeVisible();
+  await fileMenu.getByRole("menuitem", { name: "Copy" }).click();
+
+  await rowFor(page, "config").click({ button: "right" });
+  const folderMenu = page.getByRole("menu", { name: "More actions for config" });
+  await expect(folderMenu).toBeVisible();
+  await folderMenu.getByRole("menuitem", { name: "Paste" }).click();
+
+  await expect.poll(() => copies.length).toBe(1);
+  expect(copies[0]).toMatchObject({
+    root: "volumes",
+    source: "app.yaml",
+    destination: "config/app.yaml",
+    overwrite: false,
+  });
 });
 
 test("right-click on empty space opens the folder-level menu", async ({ page }) => {

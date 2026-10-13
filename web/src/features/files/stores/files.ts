@@ -243,13 +243,20 @@ export const useFilesStore = defineStore("files", () => {
   );
 
   /**
-   * pasteProblem explains why the clipboard cannot be pasted into the current
-   * directory: another root, the clipboard's own directory, or a folder inside
-   * a moved folder (all of which the agent refuses with 400). null means the
-   * paste is valid. It mirrors TransferDialog's pre-check so paste() never
-   * fires a doomed call.
+   * pasteProblemAt explains why the clipboard cannot be pasted into
+   * `destination`: another root, the clipboard's own directory, or a folder
+   * inside a moved folder (all of which the agent refuses with 400). null means
+   * the paste is valid. It mirrors the old destination-picker pre-check so a
+   * paste never fires a doomed call.
+   *
+   * A copy into the clipboard's own directory is refused as "same-folder" too.
+   * A cut into itself is a no-op, and a same-folder copy needs a "name copy"
+   * rename the agent does not perform, so duplicating in place is deliberately
+   * left out rather than faked (a follow-up can add the auto-rename).
    */
-  const pasteProblem = computed<"cross-root" | TransferProblem | null>(() => {
+  function pasteProblemAt(
+    destination: string,
+  ): "cross-root" | TransferProblem | null {
     const clip = clipboard.value;
     if (!clip || clip.names.length === 0) {
       return null;
@@ -259,10 +266,15 @@ export const useFilesStore = defineStore("files", () => {
     }
     return destinationProblem(
       clip.path,
-      path.value,
+      destination,
       clip.directories.map((name) => ({ name, kind: "directory" as FileKind })),
     );
-  });
+  }
+
+  /** pasteProblem is the current directory's paste validity. */
+  const pasteProblem = computed<"cross-root" | TransferProblem | null>(() =>
+    pasteProblemAt(path.value),
+  );
 
   /** teamId reads the active team the requests are scoped to. */
   function teamId(): string {
@@ -802,25 +814,34 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
-   * paste applies the clipboard into the current directory. It refuses an
-   * invalid destination up front (another root, the clipboard's own folder, or
-   * a folder inside a moved folder), so the agent's 400 is never reached; the
-   * caller reads {@link pasteProblem} to explain the refusal. A name clash opens
-   * the replace/skip prompt; a cut clipboard is consumed only for the names that
-   * actually moved.
+   * pasteInto applies the clipboard into `destination` (a folder in the current
+   * root). It refuses an invalid destination up front (another root, the
+   * clipboard's own folder, or a folder inside a moved folder), so the agent's
+   * 400 is never reached; the caller reads {@link pasteProblemAt} to explain the
+   * refusal. A name clash opens the replace/skip prompt; a cut clipboard is
+   * consumed only for the names that actually moved.
    */
-  async function paste(): Promise<TransferSummary> {
+  async function pasteInto(destination: string): Promise<TransferSummary> {
     const clip = clipboard.value;
-    if (!clip || clip.names.length === 0 || pasteProblem.value !== null) {
+    if (
+      !clip ||
+      clip.names.length === 0 ||
+      pasteProblemAt(destination) !== null
+    ) {
       return { done: [], conflicts: [], failed: [] };
     }
     return promptTransfer(
       clip.mode === "copy" ? "copy" : "move",
       clip.path,
-      path.value,
+      destination,
       clip.names,
       clip.mode === "cut",
     );
+  }
+
+  /** paste applies the clipboard into the current directory. */
+  async function paste(): Promise<TransferSummary> {
+    return pasteInto(path.value);
   }
 
   /** reload re-reads roots and the listing (a team switch changes both). */
@@ -1030,6 +1051,7 @@ export const useFilesStore = defineStore("files", () => {
     canWrite,
     hasClipboard,
     pasteProblem,
+    pasteProblemAt,
     // actions
     init,
     refresh,
@@ -1061,6 +1083,7 @@ export const useFilesStore = defineStore("files", () => {
     cutSelection,
     clearClipboard,
     paste,
+    pasteInto,
     reset,
   };
 });

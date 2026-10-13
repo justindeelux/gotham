@@ -31,7 +31,7 @@ import {
   NSelect,
   useMessage,
 } from "naive-ui";
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import ConflictDialog from "@/features/files/components/ConflictDialog.vue";
@@ -47,7 +47,7 @@ import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
-import type { NameKind } from "@/features/files/utils/files";
+import type { NameKind, TransferProblem } from "@/features/files/utils/files";
 import {
   entryIconKind,
   entryTypeLabel,
@@ -165,9 +165,11 @@ const currentPath = computed<string>(() =>
   files.path === "" ? files.rootName : `${files.rootName}/${files.path}`,
 );
 
-/** pasteProblemText explains why the clipboard cannot be pasted here. */
-const pasteProblemText = computed<string>(() => {
-  switch (files.pasteProblem) {
+/** pasteProblemMessage explains why the clipboard cannot land at one destination. */
+function pasteProblemMessage(
+  problem: "cross-root" | TransferProblem | null,
+): string {
+  switch (problem) {
     case "cross-root":
       return String(t("files.dialogs.pasteCrossRoot"));
     case "same-folder":
@@ -177,7 +179,12 @@ const pasteProblemText = computed<string>(() => {
     default:
       return "";
   }
-});
+}
+
+/** pasteProblemText explains why the clipboard cannot be pasted here. */
+const pasteProblemText = computed<string>(() =>
+  pasteProblemMessage(files.pasteProblem),
+);
 
 /** typeLabel resolves the Type column through the active locale. */
 function typeLabel(entry: FilesEntry): string {
@@ -385,10 +392,15 @@ function onDrop(event: DragEvent): void {
   }
 }
 
-/** pasteAction applies the clipboard into the current directory, with feedback. */
-async function pasteAction(): Promise<void> {
-  if (files.pasteProblem !== null) {
-    message.warning(pasteProblemText.value);
+/**
+ * pasteAction applies the clipboard into `destination` (the current directory
+ * by default), with feedback. A folder-row Paste passes that folder's path, so
+ * right-clicking a folder pastes into it rather than into the folder on screen.
+ */
+async function pasteAction(destination = files.path): Promise<void> {
+  const problem = files.pasteProblemAt(destination);
+  if (problem !== null) {
+    message.warning(pasteProblemMessage(problem));
     return;
   }
   const clip = files.clipboard;
@@ -396,7 +408,7 @@ async function pasteAction(): Promise<void> {
     return;
   }
   const mode = files.clipboardMode;
-  const summary = await files.paste();
+  const summary = await files.pasteInto(destination);
   if (summary.failed.length > 0) {
     message.warning(
       String(
@@ -427,9 +439,18 @@ const menuContext = computed(() => ({
   t: (key: string) => String(t(key)),
 }));
 
-/** rowMenu builds the per-row (⋮ and right-click) actions menu. */
+/**
+ * rowMenu builds the per-row (⋮ and right-click) actions menu. Paste is offered
+ * on a folder row only, and pastes INTO that folder, so its validity is checked
+ * against the folder rather than the directory on screen.
+ */
 function rowMenu(entry: FilesEntry): FilesMenuItem[] {
-  return rowMenuOptions(entry, menuContext.value);
+  const base = menuContext.value;
+  const canPaste =
+    entry.kind === "directory" &&
+    files.hasClipboard &&
+    files.pasteProblemAt(joinPath(files.path, entry.name)) === null;
+  return rowMenuOptions(entry, { ...base, canPaste });
 }
 
 /** onRowMenu dispatches one row action on the row or the whole selection. */
@@ -457,7 +478,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       files.cutSelection(files.targetsForRow(entry).map((item) => item.name));
       break;
     case "paste":
-      void pasteAction();
+      void pasteAction(joinPath(files.path, entry.name));
       break;
     case "extract":
       openExtract(entry);
@@ -494,6 +515,10 @@ const contextAria = computed<string>(() =>
 
 /** openRowContext opens the row menu at the pointer and applies the selection rule. */
 function openRowContext(event: MouseEvent, entry: FilesEntry): void {
+  // A special/unspecified row has no actions, so suppress the empty menu.
+  if (rowMenu(entry).length === 0) {
+    return;
+  }
   files.selectForRowContext(entry);
   contextEntry.value = entry;
   contextX.value = event.clientX;
@@ -513,7 +538,7 @@ function openFolderContext(event: MouseEvent): void {
 function onRowKeydown(event: KeyboardEvent, entry: FilesEntry): void {
   const isMenuKey =
     event.key === "ContextMenu" || (event.shiftKey && event.key === "F10");
-  if (!isMenuKey) {
+  if (!isMenuKey || rowMenu(entry).length === 0) {
     return;
   }
   event.preventDefault();
@@ -524,6 +549,30 @@ function onRowKeydown(event: KeyboardEvent, entry: FilesEntry): void {
   contextY.value = box.top + box.height / 2;
   contextOpen.value = true;
 }
+
+/**
+ * onDocumentPointerDown closes the context menu on a press outside it. A
+ * manual-trigger popover never auto-closes and naive's clickoutside misfires on
+ * the menu's own items, so the listener is owned here: a press inside the
+ * dropdown is ignored, anything else closes the menu.
+ */
+function onDocumentPointerDown(event: PointerEvent): void {
+  if (!contextOpen.value) {
+    return;
+  }
+  const target = event.target as HTMLElement | null;
+  if (target && target.closest(".n-dropdown")) {
+    return;
+  }
+  contextOpen.value = false;
+}
+
+onMounted(() =>
+  document.addEventListener("pointerdown", onDocumentPointerDown, true),
+);
+onBeforeUnmount(() =>
+  document.removeEventListener("pointerdown", onDocumentPointerDown, true),
+);
 
 /** onContextSelect dispatches a context-menu action and closes the menu. */
 function onContextSelect(key: string): void {
@@ -1077,7 +1126,6 @@ function onFolderMenu(key: string): void {
       :options="contextOptions"
       :menu-props="() => ({ role: 'menu', 'aria-label': contextAria })"
       @select="onContextSelect"
-      @clickoutside="contextOpen = false"
     />
   </NCard>
 </template>

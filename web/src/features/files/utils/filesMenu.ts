@@ -15,8 +15,9 @@ export type FilesMenuItem = DropdownOption;
 export interface FilesMenuContext {
   canWrite: boolean;
   canReadContent: boolean;
-  /** canPaste is true when a clipboard exists and the current directory is a
-   *  valid destination (the store's pasteProblem is null). */
+  /** canPaste is true when a clipboard exists and the menu's destination is
+   *  valid: the current directory for the folder menu, or the row's folder for
+   *  a folder row (the store's pasteProblemAt is null). */
   canPaste: boolean;
   t: (_key: string) => string;
 }
@@ -29,9 +30,10 @@ function item(label: string, key: string, disabled = false): FilesMenuItem {
 /**
  * rowMenuOptions builds the per-row (and right-click) actions menu. It carries
  * no plain "Move": cut + paste is the move, so the clipboard Copy/Cut pair plus
- * the toolbar Paste is the only transfer surface. Disabled states follow
- * canWrite/canReadContent, so a read-only root greys the actions rather than
- * hiding them.
+ * Paste is the only transfer surface. Paste is offered on a folder row only and
+ * pastes INTO that folder; file rows have no destination, so no Paste. Disabled
+ * states follow canWrite/canReadContent, so a read-only root greys the actions
+ * rather than hiding them.
  */
 export function rowMenuOptions(
   entry: FilesEntry,
@@ -57,9 +59,13 @@ export function rowMenuOptions(
     options.push(item(t("files.actions.rename"), "rename", !canWrite));
     options.push(item(t("files.actions.cut"), "cut", !canWrite));
     options.push(item(t("files.actions.copy"), "copy", !canWrite));
-    options.push(
-      item(t("files.actions.paste"), "paste", !canWrite || !canPaste),
-    );
+    // Paste is a folder action: on a folder row it pastes INTO that folder, so
+    // it is offered only where a destination makes sense, never on a file row.
+    if (entry.kind === "directory") {
+      options.push(
+        item(t("files.actions.paste"), "paste", !canWrite || !canPaste),
+      );
+    }
     options.push(item(t("common.actions.delete"), "delete", !canWrite));
   }
   return options;

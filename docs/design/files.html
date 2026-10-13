@@ -478,12 +478,11 @@
                 <button type="button" role="menuitem" data-open="fm-rename"><svg aria-hidden="true"><use href="#i-pencil"></use></svg>Rename…</button>
                 <button type="button" role="menuitem" data-toast="Cut app.yaml to the clipboard.|info"><svg aria-hidden="true"><use href="#i-cut"></use></svg>Cut</button>
                 <button type="button" role="menuitem" data-toast="Copied app.yaml to the clipboard.|success"><svg aria-hidden="true"><use href="#i-copy"></use></svg>Copy</button>
-                <button type="button" role="menuitem" data-toast="Paste into this folder — name clash shows a 409 replace/skip prompt.|info"><svg aria-hidden="true"><use href="#i-upload"></use></svg>Paste</button>
                 <div class="fm-menu-sep" role="separator"></div>
                 <button type="button" role="menuitem" class="is-danger" data-confirm="Delete app.yaml? This cannot be undone." data-confirm-title="Delete file" data-confirm-label="Delete permanently"><svg aria-hidden="true"><use href="#i-trash"></use></svg>Delete</button>
               </div>
             </div>
-            <p class="small muted mt-4">Right-clicking a row opens its menu at the cursor; on an unselected row it selects that row first, on a row already inside the selection it keeps the whole multi-selection. <span class="kbd">Shift</span>+<span class="kbd">F10</span> (or the menu key) opens the same menu on the focused row. Disabled actions follow the write gate (a read-only root greys every write action).</p>
+            <p class="small muted mt-4">Right-clicking a row opens its menu at the cursor; on an unselected row it selects that row first, on a row already inside the selection it keeps the whole multi-selection. <span class="kbd">Shift</span>+<span class="kbd">F10</span> (or the menu key) opens the same menu on the focused row. A folder row also offers <b>Paste</b>, which pastes the clipboard INTO that folder; a file row has no destination, so it has no Paste. Disabled actions follow the write gate (a read-only root greys every write action), and a special file opens no menu.</p>
 
             <!-- Folder-level menu: right-click empty space. -->
             <div class="fm-demo" style="min-height:300px;display:flex;flex-direction:column;gap:var(--space-3);align-items:flex-start">

@@ -542,6 +542,23 @@ test.describe("files chmod", () => {
     await expect(dialog).toBeVisible();
     const octal = dialog.locator(".octal input");
     await expect(octal).toHaveValue("644");
+
+    // JUS-131: the bits grid comes first and the octal field sits below it,
+    // with the explanatory copy removed.
+    const gridBox = await dialog.locator(".perms-grid").boundingBox();
+    const octalBox = await octal.boundingBox();
+    expect(gridBox).not.toBeNull();
+    expect(octalBox).not.toBeNull();
+    expect(octalBox!.y).toBeGreaterThan(gridBox!.y + gridBox!.height);
+    for (const removed of [
+      "Three octal digits",
+      "Special bits",
+      "keeps its type",
+      "Current mode",
+    ]) {
+      await expect(dialog).not.toContainText(removed);
+    }
+
     await octal.fill("600");
     await dialog.getByRole("button", { name: "Apply" }).click();
 

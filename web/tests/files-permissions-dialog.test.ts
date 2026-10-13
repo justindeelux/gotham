@@ -1,7 +1,7 @@
-// Permissions dialog (JUS-113 fix round 1): the grid is inert while the octal
-// field is invalid (it must not rewrite what the user typed), Apply is disabled
-// when the mode is unchanged or a directory would lose owner execute, and the
-// Vietnamese special-bits title says "Special bits", not "Owner only".
+// Permissions dialog (JUS-113 fix round 1, simplified by JUS-131): the grid is
+// inert while the octal field is invalid (it must not rewrite what the user
+// typed), Apply is disabled when the mode is unchanged or a directory would
+// lose owner execute, and the octal field now sits BELOW the bits grid.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h } from "vue";
@@ -100,7 +100,7 @@ describe("permissions dialog", () => {
     const wrapper = mountDialog(entry({ name: "app.yaml" }));
     await flushPromises();
 
-    const input = wrapper.find("input");
+    const input = wrapper.find(".octal input");
     await input.setValue("99");
     await flushPromises();
 
@@ -123,7 +123,7 @@ describe("permissions dialog", () => {
     // The dialog opens on the entry's current mode: nothing to apply yet.
     expect(applyButton(wrapper)?.attributes("disabled")).toBeDefined();
 
-    await wrapper.find("input").setValue("600");
+    await wrapper.find(".octal input").setValue("600");
     await flushPromises();
     expect(applyButton(wrapper)?.attributes("disabled")).toBeUndefined();
   });
@@ -135,7 +135,7 @@ describe("permissions dialog", () => {
     );
     await flushPromises();
 
-    await wrapper.find("input").setValue("666");
+    await wrapper.find(".octal input").setValue("666");
     await flushPromises();
     expect(wrapper.text()).toContain(
       "A directory must keep owner execute so it stays navigable.",
@@ -143,12 +143,31 @@ describe("permissions dialog", () => {
     expect(applyButton(wrapper)?.attributes("disabled")).toBeDefined();
 
     // Owner execute present: valid again.
-    await wrapper.find("input").setValue("700");
+    await wrapper.find(".octal input").setValue("700");
     await flushPromises();
     expect(applyButton(wrapper)?.attributes("disabled")).toBeUndefined();
   });
 
-  it("labels the special-bits callout in Vietnamese", () => {
-    expect(viCatalog.permissions.specialTitle).toBe("Bit đặc biệt");
+  it("puts the octal field below the bits grid and drops the extra copy", async () => {
+    await initStore();
+    const wrapper = mountDialog(entry({ name: "app.yaml" }));
+    await flushPromises();
+
+    // Bits first, then the octal field: in document order the grid precedes
+    // the `.octal` input the user types in.
+    const html = wrapper.html();
+    expect(html.indexOf("perms-grid")).toBeGreaterThanOrEqual(0);
+    expect(html.indexOf("octal")).toBeGreaterThan(html.indexOf("perms-grid"));
+
+    // JUS-131: the explanatory copy and the labelled "current mode" line are
+    // gone, while the read-only symbolic + octal mode stays visible.
+    const text = wrapper.text();
+    expect(text).not.toContain("Three octal digits");
+    expect(text).not.toContain("Special bits");
+    expect(text).not.toContain("keeps its type");
+    expect(text).not.toContain("Current mode");
+    expect(text).toContain("-rw-r--r-- · 644");
+    // en/vi keep one short label for the octal field.
+    expect(viCatalog.permissions.octal).toBe("Bát phân");
   });
 });

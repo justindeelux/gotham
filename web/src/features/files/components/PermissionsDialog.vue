@@ -59,7 +59,7 @@ const octalValid = computed<boolean>(
   () => filesOctalModeSchema.safeParse(octal.value).success,
 );
 
-/** The entry's real mode as symbolic + full octal, for the read-only header. */
+/** The entry's real mode as symbolic + full octal, shown read-only above the grid. */
 const currentMode = computed(() =>
   props.entry == null
     ? ""
@@ -182,26 +182,8 @@ async function submit(): Promise<void> {
     <div class="stack gap-4">
       <div>
         <p class="small muted path">{{ props.entry?.name ?? "" }}</p>
-        <p v-if="currentMode" class="small muted mode-line">
-          {{ t("files.permissions.currentMode") }}
-          <span class="mono">{{ currentMode }}</span>
-        </p>
+        <p v-if="currentMode" class="mode-line mono">{{ currentMode }}</p>
       </div>
-      <NFormItem
-        :label="t('files.permissions.octal')"
-        :validation-status="errorKey ? 'error' : undefined"
-        :feedback="errorKey ? t(errorKey) : ''"
-      >
-        <NInput
-          v-model:value="octal"
-          class="mono octal"
-          maxlength="3"
-          autofocus
-          :placeholder="t('files.permissions.octalPlaceholder')"
-          @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, submit)"
-        />
-      </NFormItem>
-      <p class="hint small muted">{{ t("files.permissions.octalHint") }}</p>
 
       <div class="field">
         <span class="field-label">{{ t("files.permissions.bitsLabel") }}</span>
@@ -228,16 +210,24 @@ async function submit(): Promise<void> {
         </div>
       </div>
 
-      <div class="callout">
-        <div>
-          <h4>{{ t("files.permissions.specialTitle") }}</h4>
-          <p class="small">{{ t("files.permissions.specialNote") }}</p>
-        </div>
-      </div>
+      <NFormItem
+        :label="t('files.permissions.octal')"
+        :validation-status="errorKey ? 'error' : undefined"
+        :feedback="errorKey ? t(errorKey) : ''"
+      >
+        <NInput
+          v-model:value="octal"
+          class="mono octal"
+          maxlength="3"
+          autofocus
+          :placeholder="t('files.permissions.octalPlaceholder')"
+          @keydown.enter="(event: KeyboardEvent) => submitOnEnter(event, submit)"
+        />
+      </NFormItem>
     </div>
     <template #footer>
       <div class="dialog-foot">
-        <span class="small muted grow">{{ t("files.permissions.keepTypeNote") }}</span>
+        <span class="grow"></span>
         <NButton @click="emit('update:show', false)">
           {{ t("common.actions.cancel") }}
         </NButton>
@@ -275,10 +265,6 @@ async function submit(): Promise<void> {
 
 .octal {
   max-width: 120px;
-}
-
-.hint {
-  margin: 0;
 }
 
 .perms-grid {

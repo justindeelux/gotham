@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // TempPrefix is the base-name prefix of every staging file fsroot creates. It
@@ -111,7 +113,9 @@ func (r *Root) OpenWrite(rel string) (*os.File, Entry, error) {
 }
 
 // Chmod sets one entry's permission bits (0o777 mask). It is used to give a
-// freshly created temporary file the requested or inherited mode.
+// freshly created temporary file the requested or inherited mode. It follows a
+// final symbolic link to its target (like os.Root.Chmod); the user-facing
+// chmod is ChmodEntry, which refuses a link instead.
 func (r *Root) Chmod(rel string, mode os.FileMode) error {
 	if err := r.requireWritable(); err != nil {
 		return err
@@ -121,6 +125,71 @@ func (r *Root) Chmod(rel string, mode os.FileMode) error {
 		return err
 	}
 	if err := r.root.Chmod(p, mode.Perm()); err != nil {
+		return mapError("chmod", err)
+	}
+	return nil
+}
+
+// ChmodEntry sets the permission bits of one entry under the root and returns
+// the updated entry. It is the user-facing chmod: a final symbolic link is
+// refused rather than followed (the link's target's mode is never touched), a
+// special file (FIFO, socket, device) is refused, and the root itself is
+// refused. Only mode.Perm() (the low 0o777 bits) is applied; the caller is
+// responsible for rejecting setuid/setgid/sticky. It never changes an entry's
+// type, so a directory (including a managed application directory) stays a
+// directory.
+func (r *Root) ChmodEntry(rel string, mode os.FileMode) (Entry, error) {
+	if err := r.requireWritable(); err != nil {
+		return Entry{}, err
+	}
+	p, err := cleanRel(rel)
+	if err != nil {
+		return Entry{}, err
+	}
+	if p == "." {
+		return Entry{}, fmt.Errorf("%w: cannot chmod the root", ErrInvalid)
+	}
+	if err := r.chmodNoFollow(p, mode.Perm()); err != nil {
+		return Entry{}, err
+	}
+	return r.Stat(p)
+}
+
+// chmodNoFollow fchmods rel's final component without following a symbolic
+// link: it opens the file's parent as a rooted descriptor, openat's the base
+// name with O_NOFOLLOW (so a link is ELOOP, mapped to ErrInvalid, rather than
+// its target), fstat's the opened descriptor to refuse a special file, and
+// fchmod's that same descriptor. The fchmod acts on the exact inode that was
+// opened, so a link swapped in after the open cannot be followed and the mode
+// of a swapped-in file inside the root is the worst case (documented in
+// os.Root.Chmod's own note). It works on kernels without fchmodat2, unlike an
+// AT_SYMLINK_NOFOLLOW fchmodat, which returns EOPNOTSUPP on Linux < 6.6.
+func (r *Root) chmodNoFollow(p string, mode os.FileMode) error {
+	parent, err := r.root.OpenRoot(path.Dir(p))
+	if err != nil {
+		return mapError("chmod", err)
+	}
+	defer func() { _ = parent.Close() }()
+	dirFile, err := openDirFd(parent)
+	if err != nil {
+		return mapError("chmod", err)
+	}
+	defer func() { _ = dirFile.Close() }()
+	fd, err := unix.Openat(int(dirFile.Fd()), path.Base(p), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return mapError("chmod", err)
+	}
+	defer func() { _ = unix.Close(fd) }()
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		return mapError("chmod", err)
+	}
+	switch stat.Mode & unix.S_IFMT {
+	case unix.S_IFREG, unix.S_IFDIR:
+	default:
+		return fmt.Errorf("%w: %s", ErrSpecial, p)
+	}
+	if err := unix.Fchmod(fd, uint32(mode.Perm())); err != nil {
 		return mapError("chmod", err)
 	}
 	return nil

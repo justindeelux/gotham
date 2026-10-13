@@ -384,6 +384,38 @@ func (s *FileServer) Mkdir(_ context.Context, req *agentv1.MkdirRequest) (*agent
 	return &agentv1.MkdirResponse{Entry: fileEntry(entry)}, nil
 }
 
+// Chmod changes one entry's permission bits. Only the 0o777 permission bits
+// are accepted: any request carrying setuid, setgid or sticky (or any other
+// bit above 0o777) is refused, and a special file or a symbolic link is refused
+// — a link's target's mode is never changed. The entry keeps its type, so
+// chmod-ing a managed application directory is allowed as long as it stays a
+// directory (rename and delete keep their own app-directory guard). ChmodResponse
+// is empty (the wired contract predates this step), so the control plane
+// re-stats the entry after a successful chmod, exactly as Copy does.
+func (s *FileServer) Chmod(_ context.Context, req *agentv1.ChmodRequest) (*agentv1.ChmodResponse, error) {
+	root, err := s.root(req.GetRoot())
+	if err != nil {
+		return nil, err
+	}
+	if !root.Writable() {
+		return nil, status.Errorf(codes.PermissionDenied, "chmod: root %q is read-only", req.GetRoot())
+	}
+	rel, err := fsroot.Clean(req.GetPath())
+	if err != nil || rel == "." {
+		return nil, status.Errorf(codes.InvalidArgument, "chmod: invalid path %q", req.GetPath())
+	}
+	// Only the low 0o777 bits may change: setuid (0o4000), setgid (0o2000),
+	// sticky (0o1000) and every higher bit are refused as one mask.
+	mode := req.GetMode()
+	if mode&^uint32(0o777) != 0 {
+		return nil, status.Errorf(codes.InvalidArgument, "chmod: mode %#o carries bits above the 0o777 permission mask", mode)
+	}
+	if _, err := root.ChmodEntry(rel, os.FileMode(mode)); err != nil {
+		return nil, fileError("chmod", err)
+	}
+	return &agentv1.ChmodResponse{}, nil
+}
+
 // Rename renames or moves one entry within a single root, refusing an
 // application directory at the top of the volumes root and any move into the
 // source's own subtree. It takes the per-path locks for both names so a rename

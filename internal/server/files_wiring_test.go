@@ -83,8 +83,8 @@ func TestFilesServiceWiring(t *testing.T) {
 	}
 }
 
-// TestFilesServiceWiringDisabled proves FEATURE_FILES defaults off through the
-// real chain: a mounted route answers 503, not 404.
+// TestFilesServiceWiringDisabled proves FEATURE_FILES=false disables the routes through
+// the real chain: a mounted route answers 503, not 404.
 func TestFilesServiceWiringDisabled(t *testing.T) {
 	t.Setenv(files.FeatureEnv, "false")
 
@@ -109,5 +109,39 @@ func TestFilesServiceNilWithoutRegistry(t *testing.T) {
 	s := newTestServer(t, stubPinger{}, stubPinger{})
 	if svc := s.fileService(); svc != nil {
 		t.Fatalf("fileService() = %v, want nil without a registry", svc)
+	}
+}
+
+// TestFilesRoutesRequirePlatformAdmin proves the file surface is limited to
+// platform operators: a plain session is refused with 403 before the file
+// service runs, while an admin-scoped API token reaches it.
+func TestFilesRoutesRequirePlatformAdmin(t *testing.T) {
+	t.Setenv(files.FeatureEnv, "true")
+	t.Setenv(PlatformAdminsEnv, "")
+
+	server := &servers.Server{ID: uuid.New(), Name: "node-1", TeamID: uuid.New()}
+	cfg := &config.Config{Values: config.Values{Server: config.Server{Addr: "127.0.0.1", Port: 0}}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	tokens := newFakeTokenService()
+	s, err := New(cfg, logger, newFakeAuthService(), nil, tokens, fakeFileServer{server: server}, nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(s.closer)
+	s.db = stubPinger{}
+	s.redis = stubPinger{}
+
+	url := "/api/v1/servers/" + server.ID.String() + "/files/roots"
+	if rec := doRequest(t, s, http.MethodGet, url, "", "Bearer valid-token"); rec.Code != http.StatusForbidden {
+		t.Fatalf("plain session roots = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	adminToken, err := tokens.Create(context.Background(), testUserID, "admin", []string{"admin"})
+	if err != nil {
+		t.Fatalf("create admin token: %v", err)
+	}
+	rec := doRequest(t, s, http.MethodGet, url, "", "Bearer "+adminToken.Token)
+	if rec.Code == http.StatusForbidden || rec.Code == http.StatusUnauthorized {
+		t.Fatalf("admin token roots = %d, want past the platform gate (body %s)", rec.Code, rec.Body.String())
 	}
 }

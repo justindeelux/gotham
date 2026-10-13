@@ -354,11 +354,15 @@ func (s *Server) routes() (http.Handler, error) {
 		// Remote file manager, read side (Phase 18 step 3): the mTLS agent
 		// dialer is plugged in here, behind the same team chain as the
 		// container routes. A nil service (no registry) mounts nothing;
-		// FEATURE_FILES defaults off, so the mounted routes answer 503 until
-		// step 10 signs the feature off. The service authorizes the target
+		// FEATURE_FILES=false makes the mounted routes answer 503. The service authorizes the target
 		// node's team and role (owner/admin for content and download tickets)
-		// before any agent read.
-		files.Mount(api, s.withTeam(), s.fileService(), s.logger)
+		// before any agent read. The whole surface is further limited to
+		// platform operators: it exposes the host filesystem, so a plain team
+		// member (even a team owner) never reaches it.
+		filesAuth := func(next http.Handler) http.Handler {
+			return s.withTeam()(s.RequirePlatformAdmin(next))
+		}
+		files.Mount(api, filesAuth, s.fileService(), s.logger)
 
 		// Deleted database volumes are kept for the grace window and then
 		// removed by the retention sweep. The loop starts here and is stopped

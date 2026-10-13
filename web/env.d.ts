@@ -9,5 +9,6 @@ declare module "vue-router" {
     title?: string;
     requiresAuth?: boolean;
     publicOnly?: boolean;
+    requiresPlatformAdmin?: boolean;
   }
 }

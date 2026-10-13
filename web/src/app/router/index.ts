@@ -68,13 +68,13 @@ const routes: RouteRecordRaw[] = [
         path: "files",
         name: "files",
         component: () => import("@/features/files/pages/FilesPage.vue"),
-        meta: { titleKey: "titles.files", requiresAuth: true },
+        meta: { titleKey: "titles.files", requiresAuth: true, requiresPlatformAdmin: true },
       },
       {
         path: "servers/:id/files",
         name: "server-files",
         component: () => import("@/features/files/pages/ServerFilesPage.vue"),
-        meta: { titleKey: "titles.serverFiles", requiresAuth: true },
+        meta: { titleKey: "titles.serverFiles", requiresAuth: true, requiresPlatformAdmin: true },
       },
       {
         path: "projects",
@@ -207,6 +207,10 @@ router.beforeEach((to) => {
 
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
     return { name: "login", query: { redirect: to.fullPath } };
+  }
+
+  if (to.meta.requiresPlatformAdmin && !authStore.isPlatformAdmin) {
+    return { name: "dashboard" };
   }
 
   if (to.meta.publicOnly && authStore.isAuthenticated) {

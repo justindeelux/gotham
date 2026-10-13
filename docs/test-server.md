@@ -62,12 +62,13 @@ same approach as 2026-09-27, plus these notes:
   migration 00031, plus the `PLATFORM_ADMINS` drop-in). Its password is a fresh
   random value from `gotham admin create --generate-password`, stored ONLY on
   the box at `/root/.gotham-demo-password` (mode 0600).
-- **Not restored** (regenerate if needed; never copy keys around): the
-  self-hosted GitHub Actions runner (`~/actions-runner`), the release signing
-  key (`~/.gotham-release-keys/signing.key`), the agent update wrapper/sudoers
+- **Not restored** (regenerate if needed; never copy keys around): the release
+  signing key (`~/.gotham-release-keys/signing.key`), the agent update wrapper/sudoers
   (`/usr/libexec/gotham/*`), `railpack` (only needed for Railpack-source apps,
-  out of scope here), and all previous box data (fresh database). Enabling
-  `GOTHAM_AGENT_FILES` stays a separate follow-up spike.
+  out of scope here), and all previous box data (fresh database). The box needs
+  **no** self-hosted GitHub Actions runner (owner decision, 2026-10-13): CI runs on
+  GitHub-hosted runners. The file manager is enabled on the box (see
+  `docs/install.md` → "Remote file service").
 
 ## All-in-one test workflow
 

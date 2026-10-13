@@ -834,10 +834,6 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		Containers: containerService,
 		Logger:     s.logger,
 		Secret:     s.secretKey,
-		// The file-manager feature gates the long entrypoint upload read
-		// timeout, so a node that accepts no uploads keeps Traefik's 60 s
-		// default instead of widening every tenant route's read window.
-		FilesUploads: files.Enabled(),
 		// Compose service hosts (BE-7.1) join the generated routing model
 		// through the same generator; the adapter renders each stored
 		// document, which this package cannot do without a cycle.

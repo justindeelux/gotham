@@ -259,21 +259,14 @@ TLS; agents installed before that go offline until they are reinstalled with
   missing, both `Applier.Recover` (startup) and the wrapper restore
   `<binary>.old` before starting the service.
 
-## File-manager uploads (edge read timeout and staging)
+## File-manager uploads (staging)
 
 The remote file manager is served by the control plane directly; its upload
-endpoints are **not** routed through the node's Traefik. Traefik's public
-entrypoints (`web`/`websecure`) therefore keep their v3 default
-`readTimeout` of **60 s**, which caps reading a request **including its body**
-and is a ceiling for any tenant application that itself accepts large uploads.
-
-The generated Traefik static config widens that read timeout to 30 m
-(`transport.respondingTimeouts.readTimeout: 30m`) **only when the control plane
-runs with `FEATURE_FILES=true`**. With the feature off (the default), the 60 s
-default is kept, so a node that accepts no file uploads does not widen the
-slowloris window for every tenant route. To raise the ceiling, enable the file
-feature; to raise it further, edit `EntryPointReadTimeout` (a larger or slower
-upload still needs a higher value).
+endpoints are **not** routed through the node's Traefik, so the file feature does
+not touch the edge read timeout. Traefik's public entrypoints (`web`/`websecure`)
+keep their v3 default `readTimeout` of **60 s**, which caps reading a request
+**including its body** and is a ceiling for any tenant application that itself
+accepts large uploads.
 
 A streamed upload body is staged on the control plane before it reaches the node
 agent. Staging is bounded and configurable:
@@ -291,6 +284,30 @@ the body).
 
 ## Known residuals
 
+- **File manager — container volumes are read-mostly (owner decision).** The
+  agent runs as unprivileged `gotham-agent`, so Docker's `root:root 0755`
+  application bind directories can be listed and (world-readable) files read but
+  not written; a `0600` file is unreadable. To make a container volume editable,
+  provisioning must make `<root>/<appID>` agent-writable — **either** the CP
+  chowns it to `gotham-agent`, **or** a shared group plus a setgid (`2775`) dir
+  (the agent must join the group). Owner decision before `FEATURE_FILES` /
+  `GOTHAM_AGENT_FILES` are flipped on for such nodes (details:
+  `docs/install.md` → "Remote file service").
+- **File manager — root-stat symlink swap (LOW).** `agent/files.go`
+  `validateFileRoot` resolves the root with `EvalSymlinks` then re-`os.Stat`s the
+  resolved path; a component swapped between the calls is followed by `os.Stat`.
+  `fsroot.Open` re-verifies the opened descriptor, so confinement holds, but the
+  comparison identity can be the swapped one. Fix: capture the identity fd-first
+  (`O_PATH`/`openat` + `fstat`, or `Lstat`).
+- **File manager — global upload-staging semaphore.** `FILES_SPOOL_CONCURRENCY`
+  bounds all staged uploads on a control plane, so one team can starve others
+  with 429s; a per-team cap is the upgrade.
+- **File manager — hard-link bypass note (LOW).** A writable root can hold a hard
+  link whose other name is outside the root; the in-place rewrite writes the
+  shared inode, so an edit through the linked name also changes the outside file.
+  Creating the link needs the agent uid to already be able to write the target,
+  and roots are operator-controlled, so the exposure is small (`nlink>1` is also
+  why the writer keeps the inode instead of renaming).
 - **`KillMode=process` applies to every stop (children handled in Go).**
   `KillMode=process` is required so the wrapper survives the update restart, so
   systemd itself does not kill control-plane children (`git`/`ssh`) on

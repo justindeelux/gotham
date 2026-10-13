@@ -910,6 +910,19 @@ export const useFilesStore = defineStore("files", () => {
     return selected.value.has(entry.name) ? selectedEntries.value : [entry];
   }
 
+  /**
+   * selectForRowContext applies the right-click selection rule: an unselected
+   * row becomes the sole selection, while a row already inside the selection
+   * keeps the whole multi-selection for the menu. A non-selectable entry is
+   * left untouched so the menu still resolves it through {@link targetsForRow}.
+   */
+  function selectForRowContext(entry: FilesEntry): void {
+    if (!isSelectable(entry) || selected.value.has(entry.name)) {
+      return;
+    }
+    selected.value = new Set([entry.name]);
+  }
+
   /** toggleSelection adds or removes one entry from the selection. */
   function toggleSelection(name: string): void {
     const next = new Set(selected.value);
@@ -1032,6 +1045,7 @@ export const useFilesStore = defineStore("files", () => {
     setQuery,
     isSelected,
     targetsForRow,
+    selectForRowContext,
     toggleSelection,
     toggleSelectAll,
     clearSelection,

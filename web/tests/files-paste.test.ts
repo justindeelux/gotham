@@ -37,6 +37,8 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { listEntries, listRoots, moveEntry } from "@/features/files/api/files";
 import FilesBrowser from "@/features/files/components/FilesBrowser.vue";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
+import { useEditorStore } from "@/features/files/stores/editor";
+import type { EditorTab } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
 import { useTeamsStore } from "@/features/teams";
 import { i18n, registerDiscoveredCatalogs, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
@@ -132,5 +134,68 @@ describe("files browser paste feedback", () => {
     expect(pasteButton).toBeTruthy();
     expect(pasteButton!.attributes("disabled")).toBeDefined();
     expect(store.pasteProblem).toBe("same-folder");
+  });
+
+  it("hides paste when the clipboard is empty", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    const wrapper = mount(FilesBrowser, {
+      props: { serverId: "server-1" },
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    });
+    await flushPromises();
+
+    expect(store.hasClipboard).toBe(false);
+    expect(
+      wrapper.findAll("button").find((button) => button.text().includes("Paste")),
+    ).toBeUndefined();
+  });
+
+  it("refuses a cut paste while the source has unsaved editor changes", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+    store.toggleSelection("app.yaml");
+    store.cutSelection();
+    await store.openDirectory("data");
+
+    const editor = useEditorStore();
+    const dirty: EditorTab = {
+      id: "t1",
+      root: "volumes",
+      path: "app.yaml",
+      name: "app.yaml",
+      doc: "changed",
+      original: "start",
+      etag: '"1"',
+      eol: "\n",
+      bom: false,
+      size: 6,
+      mode: 0o100644,
+      language: "yaml",
+      status: "ready",
+      error: "",
+      saving: false,
+    };
+    editor.tabs = [dirty];
+
+    const wrapper = mount(FilesBrowser, {
+      props: { serverId: "server-1" },
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    });
+    await flushPromises();
+
+    const pasteButton = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Paste"));
+    expect(pasteButton).toBeTruthy();
+    await pasteButton!.trigger("click");
+    await flushPromises();
+
+    // The move is refused before the agent call and the cut stays on the
+    // clipboard so the user can save the buffer and paste again.
+    expect(vi.mocked(moveEntry)).not.toHaveBeenCalled();
+    expect(messages.warning).toHaveBeenCalledTimes(1);
+    expect(store.hasClipboard).toBe(true);
   });
 });

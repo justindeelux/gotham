@@ -42,7 +42,6 @@ import ExtractDialog from "@/features/files/components/ExtractDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
 import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
-import TransferDialog from "@/features/files/components/TransferDialog.vue";
 import UploadDialog from "@/features/files/components/UploadDialog.vue";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import type { FilesEntry } from "@/features/files/schemas/files";
@@ -61,6 +60,11 @@ import {
   isSelectable,
   joinPath,
 } from "@/features/files/utils/files";
+import {
+  folderMenuOptions,
+  rowMenuOptions,
+} from "@/features/files/utils/filesMenu";
+import type { FilesMenuItem } from "@/features/files/utils/filesMenu";
 import { useTeamsStore } from "@/features/teams";
 import { formatBytes } from "@/shared/utils/format";
 
@@ -97,8 +101,6 @@ const renameTarget = ref<FilesEntry | null>(null);
 const permissionsOpen = ref(false);
 const permissionsTarget = ref<FilesEntry | null>(null);
 const deleteOpen = ref(false);
-const transferOpen = ref(false);
-const transferMode = ref<"move" | "copy">("move");
 const uploadOpen = ref(false);
 const droppedFiles = ref<File[]>([]);
 const dragActive = ref(false);
@@ -318,32 +320,6 @@ function openDelete(entries: FilesEntry[]): void {
   deleteOpen.value = true;
 }
 
-function openTransfer(mode: "move" | "copy", entries: FilesEntry[]): void {
-  // A move retargets open tabs and a dirty buffer would be lost, so refuse it
-  // before opening the dialog; a copy leaves the source untouched.
-  if (mode === "move" && blockedByDirty(entries.map((entry) => entry.name))) {
-    return;
-  }
-  // At the root the source's parent is the root itself (a same-folder
-  // destination). When no subfolder outside the moved entries is available the
-  // dialog could only open invalid, so refuse with a message instead.
-  const movedFolders = new Set(
-    entries.filter((entry) => entry.kind === "directory").map((entry) => entry.name),
-  );
-  if (
-    files.path === "" &&
-    !files.entries.some(
-      (entry) => entry.kind === "directory" && !movedFolders.has(entry.name),
-    )
-  ) {
-    message.warning(String(t("files.dialogs.transferNoSubfolders")));
-    return;
-  }
-  transferMode.value = mode;
-  actionTargets.value = entries;
-  transferOpen.value = true;
-}
-
 function openUpload(dropped: File[] = []): void {
   droppedFiles.value = dropped;
   uploadOpen.value = true;
@@ -443,54 +419,17 @@ async function pasteAction(): Promise<void> {
   }
 }
 
-/** rowMenu builds the per-row actions menu. */
-function rowMenu(entry: FilesEntry): Array<{ label: string; key: string; disabled?: boolean }> {
-  const options: Array<{ label: string; key: string; disabled?: boolean }> = [];
-  if (entry.kind === "directory") {
-    options.push({ label: String(t("files.menu.open")), key: "open" });
-  } else if (entry.kind === "file") {
-    options.push({
-      label: String(t("files.menu.edit")),
-      key: "edit",
-      disabled: !files.canReadContent,
-    });
-    options.push({
-      label: String(t("files.menu.download")),
-      key: "download",
-      disabled: !files.canReadContent,
-    });
-  }
-  // Special files are list-only (see the mockup): offering a delete the store
-  // filters out would toast a false success. A symlink is unlinked as a link,
-  // its target untouched, so it keeps the write actions.
-  if (entry.kind === "file" || entry.kind === "directory") {
-    // Only a regular file or a folder can be chmod-ed: the agent refuses a
-    // symlink (it would follow to the target) and a special file.
-    options.push({
-      label: String(t("files.menu.permissions")),
-      key: "permissions",
-      disabled: !files.canWrite,
-    });
-  }
-  if (entry.kind !== "special" && entry.kind !== "unspecified") {
-    if (entry.kind === "file" && isExtractableArchive(entry)) {
-      options.push({
-        label: String(t("files.actions.extract")),
-        key: "extract",
-        disabled: !files.canWrite,
-      });
-    }
-    options.push(
-      { label: String(t("files.actions.rename")), key: "rename", disabled: !files.canWrite },
-      { label: String(t("files.actions.move")), key: "move", disabled: !files.canWrite },
-      { label: String(t("files.actions.copy")), key: "copy", disabled: !files.canWrite },
-      { label: String(t("files.actions.cut")), key: "cut", disabled: !files.canWrite },
-      { label: String(t("common.actions.delete")), key: "delete", disabled: !files.canWrite },
-    );
-  }
-  // NDropdown renders each option body as a plain div, so the menuitem role
-  // must be set explicitly (the container gets role="menu" on the dropdown).
-  return options.map((option) => ({ ...option, props: { role: "menuitem" } }));
+/** menuContext is the gate set both menus read, rebuilt as the gates change. */
+const menuContext = computed(() => ({
+  canWrite: files.canWrite,
+  canReadContent: files.canReadContent,
+  canPaste: files.hasClipboard && files.pasteProblem === null,
+  t: (key: string) => String(t(key)),
+}));
+
+/** rowMenu builds the per-row (⋮ and right-click) actions menu. */
+function rowMenu(entry: FilesEntry): FilesMenuItem[] {
+  return rowMenuOptions(entry, menuContext.value);
 }
 
 /** onRowMenu dispatches one row action on the row or the whole selection. */
@@ -511,20 +450,109 @@ function onRowMenu(key: string, entry: FilesEntry): void {
     case "permissions":
       openPermissions(entry);
       break;
-    case "move":
-      openTransfer("move", files.targetsForRow(entry));
-      break;
     case "copy":
-      openTransfer("copy", files.targetsForRow(entry));
-      break;
-    case "extract":
-      openExtract(entry);
+      files.copySelection(files.targetsForRow(entry).map((item) => item.name));
       break;
     case "cut":
       files.cutSelection(files.targetsForRow(entry).map((item) => item.name));
       break;
+    case "paste":
+      void pasteAction();
+      break;
+    case "extract":
+      openExtract(entry);
+      break;
     case "delete":
       openDelete(files.targetsForRow(entry));
+      break;
+  }
+}
+
+// ── Context menu (JUS-124) ────────────────────────────────────────────────
+// One controlled NDropdown serves the row right-click, the empty-space
+// right-click and the Shift+F10 / menu key on every row. The ⋮ button keeps its
+// own click dropdown; both reuse the same builders.
+const contextOpen = ref(false);
+const contextX = ref(0);
+const contextY = ref(0);
+/** contextEntry is the row the menu acts on; null means the folder itself. */
+const contextEntry = ref<FilesEntry | null>(null);
+
+/** contextOptions is the row menu when a row is targeted, else the folder menu. */
+const contextOptions = computed<FilesMenuItem[]>(() =>
+  contextEntry.value
+    ? rowMenu(contextEntry.value)
+    : folderMenuOptions(menuContext.value),
+);
+
+/** contextAria names the menu for the row it opened on, or the folder. */
+const contextAria = computed<string>(() =>
+  contextEntry.value
+    ? String(t("files.browser.moreActions", { name: contextEntry.value.name }))
+    : String(t("files.browser.folderActions")),
+);
+
+/** openRowContext opens the row menu at the pointer and applies the selection rule. */
+function openRowContext(event: MouseEvent, entry: FilesEntry): void {
+  files.selectForRowContext(entry);
+  contextEntry.value = entry;
+  contextX.value = event.clientX;
+  contextY.value = event.clientY;
+  contextOpen.value = true;
+}
+
+/** openFolderContext opens the folder-level menu at the pointer. */
+function openFolderContext(event: MouseEvent): void {
+  contextEntry.value = null;
+  contextX.value = event.clientX;
+  contextY.value = event.clientY;
+  contextOpen.value = true;
+}
+
+/** onRowKeydown opens the row menu on Shift+F10 or the dedicated menu key. */
+function onRowKeydown(event: KeyboardEvent, entry: FilesEntry): void {
+  const isMenuKey =
+    event.key === "ContextMenu" || (event.shiftKey && event.key === "F10");
+  if (!isMenuKey) {
+    return;
+  }
+  event.preventDefault();
+  files.selectForRowContext(entry);
+  contextEntry.value = entry;
+  const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  contextX.value = box.left + 16;
+  contextY.value = box.top + box.height / 2;
+  contextOpen.value = true;
+}
+
+/** onContextSelect dispatches a context-menu action and closes the menu. */
+function onContextSelect(key: string): void {
+  const entry = contextEntry.value;
+  contextOpen.value = false;
+  if (entry) {
+    onRowMenu(key, entry);
+    return;
+  }
+  onFolderMenu(key);
+}
+
+/** onFolderMenu dispatches a folder-level action. */
+function onFolderMenu(key: string): void {
+  switch (key) {
+    case "new-file":
+      openCreate("file");
+      break;
+    case "new-folder":
+      openCreate("directory");
+      break;
+    case "paste":
+      void pasteAction();
+      break;
+    case "upload":
+      openUpload();
+      break;
+    case "refresh":
+      void files.refresh();
       break;
   }
 }
@@ -728,19 +756,13 @@ function onRowMenu(key: string, entry: FilesEntry): void {
           {{ $t("files.browser.downloadSelected") }}
         </NButton>
         <template v-if="files.canWrite">
-          <NButton size="small" secondary :disabled="files.acting" @click="openTransfer('move', selection)">
-            <template #icon>
-              <Folder :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            {{ $t("files.actions.move") }}
-          </NButton>
-          <NButton size="small" secondary :disabled="files.acting" @click="openTransfer('copy', selection)">
+          <NButton size="small" secondary :disabled="files.acting" @click="files.copySelection(selection.map((item) => item.name))">
             <template #icon>
               <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
             </template>
             {{ $t("files.actions.copy") }}
           </NButton>
-          <NButton size="small" secondary :disabled="files.acting" @click="files.cutSelection()">
+          <NButton size="small" secondary :disabled="files.acting" @click="files.cutSelection(selection.map((item) => item.name))">
             <template #icon>
               <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
             </template>
@@ -759,7 +781,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       </span>
     </div>
 
-    <div v-if="files.disabled" class="empty fm-state">
+    <div v-if="files.disabled" class="empty fm-state" @contextmenu.prevent="openFolderContext">
       <Lock :size="26" :stroke-width="1.6" aria-hidden="true" />
       <h4>{{ $t("files.browser.disabledTitle") }}</h4>
       <p class="small">{{ $t("files.browser.disabledHint") }}</p>
@@ -768,12 +790,12 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       </NButton>
     </div>
 
-    <div v-else-if="files.loading && files.entries.length === 0" class="empty fm-state">
+    <div v-else-if="files.loading && files.entries.length === 0" class="empty fm-state" @contextmenu.prevent="openFolderContext">
       <span class="fm-spinner" aria-hidden="true"></span>
       <h4>{{ $t("files.browser.loading") }}</h4>
     </div>
 
-    <div v-else-if="files.permissionDenied" class="empty fm-state">
+    <div v-else-if="files.permissionDenied" class="empty fm-state" @contextmenu.prevent="openFolderContext">
       <Lock :size="26" :stroke-width="1.6" aria-hidden="true" />
       <h4>{{ $t("files.browser.permissionTitle") }}</h4>
       <p class="small">{{ $t("files.browser.permissionHint") }}</p>
@@ -782,7 +804,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       </NButton>
     </div>
 
-    <div v-else-if="files.error && files.entries.length === 0" class="empty fm-state">
+    <div v-else-if="files.error && files.entries.length === 0" class="empty fm-state" @contextmenu.prevent="openFolderContext">
       <CircleAlert class="fm-danger" :size="26" :stroke-width="1.6" aria-hidden="true" />
       <h4 class="fm-danger">{{ $t("files.browser.errorTitle") }}</h4>
       <p class="small">{{ files.error }}</p>
@@ -791,7 +813,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       </NButton>
     </div>
 
-    <div v-else-if="files.loaded && files.visibleEntries.length === 0" class="empty fm-state">
+    <div v-else-if="files.loaded && files.visibleEntries.length === 0" class="empty fm-state" @contextmenu.prevent="openFolderContext">
       <Folder :size="26" :stroke-width="1.6" aria-hidden="true" />
       <h4>{{ $t("files.browser.empty") }}</h4>
       <p class="small">{{ $t("files.browser.emptyHint") }}</p>
@@ -816,7 +838,7 @@ function onRowMenu(key: string, entry: FilesEntry): void {
         </div>
       </div>
 
-      <div v-if="files.viewMode === 'list'" class="table-wrap">
+      <div v-if="files.viewMode === 'list'" class="table-wrap" @contextmenu.prevent="openFolderContext">
         <div class="fm-table" role="table">
           <div class="fm-row fm-head" role="row">
             <span class="fm-select" role="columnheader">
@@ -867,6 +889,8 @@ function onRowMenu(key: string, entry: FilesEntry): void {
             class="fm-row"
             :class="{ 'is-selected': files.isSelected(entry.name) }"
             role="row"
+            @contextmenu.stop.prevent="openRowContext($event, entry)"
+            @keydown="onRowKeydown($event, entry)"
           >
             <span class="fm-select" role="cell">
               <NCheckbox
@@ -975,8 +999,14 @@ function onRowMenu(key: string, entry: FilesEntry): void {
         </div>
       </div>
 
-      <div v-else class="fm-grid">
-        <div v-for="entry in files.visibleEntries" :key="entry.name" class="fm-tile-wrap">
+      <div v-else class="fm-grid" @contextmenu.prevent="openFolderContext">
+        <div
+          v-for="entry in files.visibleEntries"
+          :key="entry.name"
+          class="fm-tile-wrap"
+          @contextmenu.stop.prevent="openRowContext($event, entry)"
+          @keydown="onRowKeydown($event, entry)"
+        >
           <label
             v-if="isSelectable(entry)"
             class="fm-tile-check"
@@ -1031,15 +1061,24 @@ function onRowMenu(key: string, entry: FilesEntry): void {
     <RenameEntryDialog v-model:show="renameOpen" :entry="renameTarget" />
     <PermissionsDialog v-model:show="permissionsOpen" :entry="permissionsTarget" />
     <DeleteEntriesDialog v-model:show="deleteOpen" :entries="actionTargets" />
-    <TransferDialog
-      v-model:show="transferOpen"
-      :mode="transferMode"
-      :entries="actionTargets"
-    />
     <UploadDialog v-model:show="uploadOpen" :initial-files="droppedFiles" />
     <CompressDialog v-model:show="compressOpen" :entries="compressTargets" />
     <ExtractDialog v-model:show="extractOpen" :entry="extractTarget" />
     <ConflictDialog />
+
+    <!-- One controlled dropdown serves the row / empty-space context menu and
+         the Shift+F10 / menu key; x/y place it at the pointer or the row. -->
+    <NDropdown
+      v-model:show="contextOpen"
+      trigger="manual"
+      placement="bottom-start"
+      :x="contextX"
+      :y="contextY"
+      :options="contextOptions"
+      :menu-props="() => ({ role: 'menu', 'aria-label': contextAria })"
+      @select="onContextSelect"
+      @clickoutside="contextOpen = false"
+    />
   </NCard>
 </template>
 

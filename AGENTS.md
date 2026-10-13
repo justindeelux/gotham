@@ -51,6 +51,7 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
 - Mandatory review gates: G0 (end of Phase 0), G1 (Phase 4), G2 (Phase 9) — see `docs/plans/00-roadmap.md`.
 - Phase gate: after each phase meets its exit criteria, STOP and ask the project owner before starting the next phase.
+- Orchestration rules (worker dispatch, recipe, lessons): see `docs/ORCHESTRATION.md`.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
 ## Linear Issues

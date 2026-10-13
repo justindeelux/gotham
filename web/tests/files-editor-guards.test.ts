@@ -109,6 +109,7 @@ function mountEditor() {
       }),
   });
   const wrapper = mount(shell, {
+    attachTo: document.body,
     global: { plugins: [i18n], stubs: { teleport: true } },
   });
   return { wrapper, teams, files, editor };
@@ -186,6 +187,37 @@ describe("FilesEditor guards", () => {
 
     wrapper.unmount();
     expect(editor.tabs).toHaveLength(0);
+  });
+
+  it("minimizes to the dock and restores with the dirty buffer intact", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
+    expect(editor.hasDirty).toBe(true);
+
+    await wrapper.find("button.ed-window-min").trigger("click");
+    await flushPromises();
+
+    // The window folds away and its dock item takes over (and takes focus).
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
+    expect(wrapper.find(".ed-dock").attributes("style") ?? "").not.toContain("display: none");
+    const dockItem = wrapper.find("button.ed-dock-item");
+    expect(dockItem.attributes("aria-label")).toContain("Restore");
+    expect(document.activeElement).toBe(dockItem.element);
+    // The buffer, its dirty state and the open tab all survive the collapse.
+    expect(editor.tabs).toHaveLength(1);
+    expect(editor.hasDirty).toBe(true);
+
+    await dockItem.trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
+    expect(wrapper.find(".ed-dock").attributes("style")).toContain("display: none");
+    expect(editor.hasDirty).toBe(true);
+    wrapper.unmount();
   });
 
   it("reconfigures a live session read-only when the write gate drops", async () => {

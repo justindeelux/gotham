@@ -225,6 +225,15 @@ async function openConflict(page: Page): Promise<Locator> {
   return dialog;
 }
 
+/**
+ * minimizeEditor collapses the floating editor window into the bottom dock so
+ * the file browser underneath becomes clickable (the window overlays it).
+ */
+async function minimizeEditor(page: Page): Promise<void> {
+  await page.locator(".ed-window-min").click();
+  await expect(page.locator(".ed-dock")).toBeVisible();
+}
+
 test("editor save conflict opens a bounded modal with pinned header and three choices", async ({
   page,
 }) => {
@@ -309,7 +318,9 @@ test("switching to a binary tab and back keeps the editor mounted", async ({
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
 
-  // Open a binary tab (415) — this used to unmount every ready host.
+  // Open a binary tab (415) — this used to unmount every ready host. The
+  // floating window overlays the browser, so minimize it first.
+  await minimizeEditor(page);
   await page.locator(".fm-label", { hasText: "logo.png" }).first().click();
   await expect(page.getByText("Binary file")).toBeVisible();
 
@@ -344,6 +355,7 @@ test("the editor tablist exposes tabs, a panel and arrow-key navigation", async 
 
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await minimizeEditor(page);
   await page.locator(".fm-label", { hasText: "logo.png" }).first().click();
   await expect(page.getByText("Binary file")).toBeVisible();
 
@@ -375,6 +387,7 @@ test("a ready tab renders no error state and keeps tab/panel ids unique", async 
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   // A second ready tab: with the old unguarded v-else each one added a
   // duplicate "Could not open <name>" panel sharing the host's id.
+  await minimizeEditor(page);
   await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
   await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
     timeout: 15_000,
@@ -405,6 +418,7 @@ test("arrow keys keep switching between two ready tabs", async ({ page }) => {
 
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().click();
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  await minimizeEditor(page);
   await page.locator(".fm-label", { hasText: "notes.md" }).first().click();
   await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible({
     timeout: 15_000,

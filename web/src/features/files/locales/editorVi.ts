@@ -4,9 +4,10 @@
  */
 const vi = {
   heading: "Trình soạn thảo",
-  hint: "Thẻ, chấm bẩn, lưu an toàn khi xung đột. Mỗi lần lưu gửi kèm etag đã đọc.",
-  empty: "Không có tệp nào đang mở",
-  emptyHint: "Mở một tệp văn bản từ trình duyệt. Đọc nội dung tệp cần vai trò chủ sở hữu hoặc quản trị.",
+  windowLabel: "Cửa sổ trình soạn thảo mã",
+  minimize: "Thu nhỏ trình soạn thảo",
+  dockLabel: "Thanh neo trình soạn thảo",
+  restore: "Khôi phục {name}",
   close: "Đóng {name}",
   closeDirty: "Đóng {name}? Thay đổi chưa lưu sẽ mất.",
   closeConfirm: "Đóng",

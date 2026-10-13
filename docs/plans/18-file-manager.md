@@ -361,11 +361,13 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 - **Exit:** editor keys never reach the list; entry chunk size unchanged; new chunk files ≤ 15.
 - **Rollback:** revert PR + rebuild webdist.
 
-### Step 9a — chmod (phase 2)
+### Step 9a — chmod (phase 2) — **DEFERRED (not built now)**
+- **Status:** deferred, tracked as JUS-113. Not implemented in Phase 18; the agent's `Chmod` stays `Unimplemented` and the CP exposes no `/chmod` route. Re-open when the phase-2 file operations land.
 - **Tasks:** agent `Chmod` (reject setuid/setgid/sticky, no recursion following symlinks), CP route, properties dialog (octal + rwx grid).
 - **Verify:** common + mode-bit rejection tests. **Exit:** only plain permission bits change. **Rollback:** revert.
 
-### Step 9b — Archives (phase 2)
+### Step 9b — Archives (phase 2) — **DEFERRED (not built now)**
+- **Status:** deferred, tracked as JUS-114. Not implemented in Phase 18: no `Compress`/`Extract` RPC, no CP archive routes, no web dialogs.
 - **Tasks:** agent `Compress`/`Extract` via `archive/zip|tar`, `compress/gzip`, no shell; zip-slip, symlink-entry, size and entry-count guards; progress stream; CP routes; web dialogs.
 - **Verify:** common + zip-slip/zip-bomb/symlink-entry tests. **Exit:** archives never write outside the target root. **Rollback:** revert.
 
@@ -373,6 +375,94 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 - **Brief:** `.github/workflows/ui-e2e.yml`, `internal/e2e`, `docs/install.md`, `docs/TODO.md`.
 - **Tasks:** `internal/e2e` scenario (upload → edit → conflict → download → delete) run manually with `GOTHAM_E2E=1 go test ./internal/e2e -run Files`; `web/e2e/files.spec.ts` using `page.route` fixtures (CI has no enrolled agent); `gitnexus explain` taint review on `internal/files` and `agent/files*.go`; docs (`README.md` row, `00-roadmap.md`, `TODO.md`, `install.md` env + permissions); flip `FEATURE_FILES` default to on only with owner sign-off.
 - **Exit:** CI green, manual e2e recorded, review gate signed off by the project owner. **Rollback:** flag off.
+
+#### Step 10 results (JUS-115)
+
+**Flag defaults unchanged.** `FEATURE_FILES` (CP) and `GOTHAM_AGENT_FILES` (agent) stay **off**: the owner owns the enablement sign-off, so step 10 ships the hardening, coverage and docs without flipping either default.
+
+**Manual API e2e (`internal/e2e`).** `GOTHAM_E2E=1 go test ./internal/e2e -run Files -v` —
+**PASS**, run 2026-10-13 on the dev machine (Docker 29.8.1, go1.27). `TestFilesEndToEnd`
+drives the real HTTP routes → `internal/files.Service` → the mTLS `FileService` dial → a live
+agent whose two confined roots are temporary directories: `roots` (volumes writable, compose
+read-only), 428 without `If-Match`, multipart upload, content + strong etag, `If-Match` save
+(200), stale etag (409, file intact), read-only-root write (403), single-use download ticket
+(200 then 404), delete (204) then 404 and gone from disk. `TestFilesEndToEndDisabled` pins 503
+with `FEATURE_FILES=false`. Without `GOTHAM_E2E` both **skip cleanly** (verified).
+
+**Browser e2e (`web/e2e/files.spec.ts`).** Playwright with `page.route` fixtures (CI has no
+enrolled agent): browse, upload (per-file result), edit + save (asserts the `If-Match` sent),
+409 conflict modal + overwrite (`?overwrite=true`), delete, 503 disabled state, and the
+`read_only` role. Run: **7 passed**; stable over `--repeat-each=3` (**21 passed**, 0 flaky).
+
+**Live test-box run.** Deployed `origin/main` (`4549a352`) on the all-in-one box, built with
+`make build` (Go only; the committed `webdist` is used because the box has no Node), enabled
+`FEATURE_FILES` on the CP and `GOTHAM_AGENT_FILES` on the agent through **temporary** systemd
+drop-ins, restarted both units, and drove the demo account through the CP API with `curl`
+(password read from the box file in place — never printed, never recorded). Redacted evidence:
+
+- `GET /roots` → `volumes` `writable:true`, `compose` `writable:false`.
+- upload `e2e/hello.txt` → per-file entry; `GET /content` → `hello\n` + etag; `PUT` with the
+  matching `If-Match` → 200; `PUT` with the **stale** etag → **409**; `POST /download-ticket`
+  → 201, `GET /download` → the exact bytes, a second use → **404**; `DELETE` → **204**, then
+  `stat` → **404**.
+- **Root-owned container volume** (`root-owned.txt`, `root:root 0644`): read OK, edit **403**;
+  creating a file at the `volumes` **top level** **403** — the read-mostly behaviour the step-0
+  spike predicted. The `compose` root refuses a write with 403.
+- **Slow uploads:** 512 KiB at 10 KiB/s (**51 s**) and 256 KiB at 3 KiB/s (**85 s**) both
+  committed. This proves the control plane's 30 s `ReadTimeout` is extended per request by the
+  file handlers, and shows the direct CP path has **no 60 s edge cut**.
+- Cleanup: both drop-ins removed, units restarted, `FEATURE_FILES`/`GOTHAM_AGENT_FILES` absent
+  again; the temporary server row and the test directories were removed.
+
+**Security review.** `gitnexus analyze --pdg` then `explain` over `internal/files`,
+`agent/files.go`, `agent/files_write.go` and `agent/fsroot` (the PDG layer is populated:
+CFG 166,388 / CDG 59,161 / REACHING_DEF 141,315 edges over 158,700 basic blocks) reports
+**zero `TAINTED`/`TAINT_PATH` findings**, repo-wide as well as for the file paths. Manual review
+corroborates it; **no real finding needed a code fix**:
+
+| Check | Result | Triage |
+|---|---|---|
+| `gitnexus explain` taint on `internal/files`, `agent/files*.go`, `agent/fsroot` | 0 findings (PDG layer present, 0 repo-wide) | No modeled source→sink flow; corroborated by the manual checks below. |
+| `os/exec` / `sh -c` in the file paths | none | Real: no shell anywhere in the read/write path. Archives (9b) stay deferred and would use Go `archive/*`, not a shell. |
+| `filepath.Join` with user input outside `fsroot` | none | Real: the agent resolves every path through `os.OpenRoot` (`agent/fsroot`), never a string join. The only CP `Join` is the spool dir + `os.ReadDir` entry names (fixed prefix, regular files only). |
+| Unbounded reads/allocations | bounded | `readAllLimited` caps content at 2 MiB; agent chunks 256 KiB; `List` caps 5,000/page and 100,000 scanned; the spool caps a body at `FILES_MAX_UPLOAD_BYTES`. |
+| Goroutine leaks on cancel | none found | The download pump selects `ctx.Done()` and defers `cancel`+close; the write recv goroutine unblocks on handler return (stream close) via its `done` channel; the temp sweeper stops on `Close`. |
+| Secrets in logs | none | Audit records `op/result/actor/server/root/relpath` only — never a body or a ticket. The download ticket rides the query string and the access logger records `r.URL.Path` only. |
+
+#### Known residuals (step 10 follow-ups)
+
+- **`agent/files.go` root-stat symlink swap (follow-up).** `validateFileRoot` resolves the root
+  path with `filepath.EvalSymlinks` and then re-`os.Stat`s the resolved path; a component swapped
+  between the two calls makes `os.Stat` follow the new target. `fsroot.Open`'s `verifySameRoot`
+  re-checks the *opened descriptor* against the captured identity, so the confinement boundary
+  holds, but the identity captured for comparison can itself be the swapped one. Fix: capture the
+  identity fd-first (`O_PATH`/`openat` the resolved path once and `fstat` it, or `Lstat` the
+  final component) so the validated identity is the one that is opened.
+- **Global spool semaphore, not per-team.** `FILES_SPOOL_CONCURRENCY` bounds *all* uploads staged
+  on a control plane (`internal/files/spool.go`), so one noisy team can occupy every slot and
+  starve others with 429s. A per-team cap (or fair queueing) is the upgrade.
+- **Hard-link bypass note (LOW).** A writable root can hold a hard link whose other name is
+  outside the root; the in-place rewrite path writes the shared inode, so an edit through the
+  linked name also changes the outside file. Creating such a link needs the agent uid to already
+  be able to write the target, and roots are operator-controlled, so the exposure is small;
+  `nlink>1` is already why the writer keeps the inode instead of renaming. Revisit if roots ever
+  accept container-created links to sensitive inodes.
+- **Traefik upload `readTimeout` widening is unnecessary — recommend dropping it (follow-up).**
+  Settled from the code: the file API is served by the control plane's own HTTP server
+  (`internal/server/server.go` mounts it on the `api` router), so **file-API traffic does not
+  traverse the node's Traefik at all** — Traefik is the edge for tenant application domains
+  (`internal/proxy`). `applyUploadReadTimeout` therefore widens the public `web`/`websecure`
+  entrypoint `readTimeout` to 30 m purely as a courtesy, at the cost of a wider slowloris window
+  for every tenant route. Recommendation: drop the `FEATURE_FILES`-gated
+  `EntryPointReadTimeout` change (`internal/proxy`) as a follow-up and document the 60 s default
+  as a tenant-app ceiling; the file manager needs it for nothing. The box run confirmed the file
+  uploads above 60 s without any Traefik in the path.
+- **Container-volume writability (owner decision).** Unchanged from step 0: container-created
+  volumes are `root:root`, so the unprivileged agent reads world-readable files and is denied
+  writes. To let operators upload/edit inside a container volume, provisioning must make
+  `<root>/<appID>` agent-writable by **either** the CP chowning it to `gotham-agent` **or** a
+  shared group plus a setgid (`2775`) app dir (the agent must also join the group). Owner decision
+  before the flag is flipped on for such nodes; the UI already shows per-entry permission-denied.
 
 ## Deviations
 

@@ -404,6 +404,50 @@ malformed cursor is rejected with `InvalidArgument`. A single `List` scans up to
 than that fails with `ResourceExhausted` ("directory too large") rather than
 returning a silently partial listing.
 
+### Control-plane side
+
+`FEATURE_FILES=true` mounts the `/api/v1/servers/{id}/files` routes; off (the
+default), they are mounted but answer **503**. The routes are team-scoped: a
+browsable server must belong to a team (a legacy team-less node answers 404),
+`roots`/`list`/`stat` need any member, and `content`, `download`, uploads and
+every mutation need an owner/admin role. File bodies can hold secrets (a `0600`
+compose `.env`), so `GET /content` and `POST /download-ticket` stay owner/admin,
+and the whole surface is deploy-gated for API tokens.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FEATURE_FILES` | off | Enable the file API (503 while off). |
+| `FILES_MAX_UPLOAD_BYTES` | `1073741824` (1 GiB) | Ceiling for one write/upload body (413 above it); should match the agent's `GOTHAM_AGENT_FILE_MAX_UPLOAD`. |
+| `FILES_SPOOL_DIR` | `<tmpdir>/gotham-spool` (0700) | Directory staging a streamed upload body before it reaches the agent. |
+| `FILES_SPOOL_CONCURRENCY` | `4` | Max upload bodies staged at once; beyond it an upload answers 429. |
+
+A streamed body is staged on the control plane (the agent's write header must
+declare an exact size, which a multipart part does not carry). The spool is
+swept at startup and hourly, and its free space is checked against the ceiling
+before any write. The file API is served by the control plane directly, so it
+does **not** traverse the node's Traefik; see
+[`../deploy/README.md`](../deploy/README.md) → "File-manager uploads" for the
+edge-timeout note.
+
+### Permissions model
+
+The agent runs as the unprivileged `gotham-agent` user with no
+`CAP_DAC_OVERRIDE`, so **who owns a file decides what the file manager can do**:
+
+- The `volumes` root (default `/var/lib/gotham/volumes`) is the writable root, but Docker
+  creates each application bind directory as `root:root 0755`. The agent can list it and read
+  world-readable files, but **cannot create, rename, delete or edit** anything a container
+  wrote; a `0600` file is unreadable. This is the deliberate read-mostly UX with per-entry
+  "permission denied" states.
+- The `compose` root and `GOTHAM_AGENT_FILE_ROOTS` are **read-only** in the service even though
+  the filesystem may allow writes (a compose edit would be overwritten by the next `ComposeUp`).
+
+For containers to be editable, provisioning must make `<root>/<appID>` agent-writable, by
+**either** the control plane chowning it to `gotham-agent`, **or** a shared group plus a setgid
+(`2775`) application directory (the agent must also be in that group). This is an **owner
+decision** pending before either flag is flipped on for such nodes; setgid alone is not enough
+until the agent joins the group.
+
 ## Updates and rollback
 
 Releases are verified with the public key embedded in the running binary, so no

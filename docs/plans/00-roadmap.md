@@ -10,7 +10,7 @@ Overall plan for building Gotham, a self-hosted PaaS (Coolify clone) using the t
 
 ## 1. Phase overview
 
-Phases 0–9 are the original roadmap. Later side tracks (11 UI alignment, 12 user profile, 13 projects/environments, 14 i18n, 15 add-resource/Git sources, 16 instance settings, 17 update settings) have their own plan files in this folder. All phases are complete; see [`../TODO.md`](../TODO.md).
+Phases 0–9 are the original roadmap. Later side tracks (11 UI alignment, 12 user profile, 13 projects/environments, 14 i18n, 15 add-resource/Git sources, 16 instance settings, 17 update settings, 18 remote file manager) have their own plan files in this folder. All phases are complete; see [`../TODO.md`](../TODO.md).
 
 | Phase | File | Contents | Milestone (exit criteria) |
 |---|---|---|---|

@@ -8,7 +8,8 @@ merge evidence live in git history and the PRs.
 
 All phases are complete: 0–9 (roadmap; G0, G1 and G2 passed), 11 UI alignment,
 12 user profile, 13 projects and environments, 14 English/Vietnamese i18n,
-15 add-resource flow and Git sources, 16 instance settings, 17 update settings.
+15 add-resource flow and Git sources, 16 instance settings, 17 update settings,
+18 remote file manager (hardening/e2e/docs done; optional steps 9a/9b deferred).
 The retro review of Phases 0–5 closed 2026-10-03
 ([`sub-plans/retro-review-p0-5-register.md`](sub-plans/retro-review-p0-5-register.md)).
 Releases `v0.1.0` and `v0.1.1` are signed and published; the real `gotham update`
@@ -56,6 +57,24 @@ and the real agent rollout from the GitHub CDN are proven.
   `TestStoreCreateFirstUserSerializes` needs its own DB/schema (or a serial CI
   step) to stop skipping; backfill the `target_id` index on the next migration;
   the `connectionDisplay` DSN masking should move to `new URL()`.
+
+## Phase 18 residuals (file manager; none blocking)
+
+The full triage lives in [`plans/18-file-manager.md`](plans/18-file-manager.md) (step 10 results
++ "Known residuals").
+
+- [ ] **Owner decision: flip the flags.** `FEATURE_FILES` (CP) and `GOTHAM_AGENT_FILES` (agent)
+  stay off until the owner signs off. Before flipping on nodes that must edit inside
+  container-created volumes, make `<root>/<appID>` agent-writable (CP chown to `gotham-agent`,
+  or a shared group + setgid `2775`).
+- [ ] **`agent/files.go` root-stat symlink swap.** Capture the root identity fd-first
+  (`O_PATH`/`openat` + `fstat`, or `Lstat`) instead of `EvalSymlinks` then a fresh `os.Stat`.
+- [ ] **Per-team upload staging cap.** `FILES_SPOOL_CONCURRENCY` is a single global semaphore, so
+  one team can starve others; add a per-team cap or fair queueing.
+- [ ] **Drop the Traefik upload `readTimeout` widening.** Settled: file-API traffic does not
+  traverse node Traefik, so the `FEATURE_FILES`-gated 30 m `EntryPointReadTimeout` widens the
+  slowloris window for tenant routes for no file-manager benefit. Recommend removing it.
+- [ ] **Step 9a chmod (JUS-113) / step 9b archives (JUS-114)** remain deferred; not built now.
 
 ## Phase 4 residuals
 

@@ -275,6 +275,16 @@ slowloris window for every tenant route. To raise the ceiling, enable the file
 feature; to raise it further, edit `EntryPointReadTimeout` (a larger or slower
 upload still needs a higher value).
 
+**Settled (JUS-115): the widening is unnecessary — recommend dropping it.** The
+file API is served by the control plane's own HTTP server (`internal/files` on
+the `api` router), so file-API traffic never traverses node Traefik; Traefik is
+the edge for tenant application domains (`internal/proxy`). `applyUploadReadTimeout`
+therefore buys the file manager nothing and widens the slowloris window for every
+tenant route while `FEATURE_FILES` is on. The live box run uploaded for 51 s and
+85 s with no Traefik in the path and no cut. Follow-up: remove the
+`FEATURE_FILES`-gated `EntryPointReadTimeout` change and document the 60 s default
+as a tenant-app ceiling instead.
+
 A streamed upload body is staged on the control plane before it reaches the node
 agent. Staging is bounded and configurable:
 
@@ -291,6 +301,30 @@ the body).
 
 ## Known residuals
 
+- **File manager — container volumes are read-mostly (owner decision).** The
+  agent runs as unprivileged `gotham-agent`, so Docker's `root:root 0755`
+  application bind directories can be listed and (world-readable) files read but
+  not written; a `0600` file is unreadable. To make a container volume editable,
+  provisioning must make `<root>/<appID>` agent-writable — **either** the CP
+  chowns it to `gotham-agent`, **or** a shared group plus a setgid (`2775`) dir
+  (the agent must join the group). Owner decision before `FEATURE_FILES` /
+  `GOTHAM_AGENT_FILES` are flipped on for such nodes (details:
+  `docs/install.md` → "Remote file service").
+- **File manager — root-stat symlink swap (LOW).** `agent/files.go`
+  `validateFileRoot` resolves the root with `EvalSymlinks` then re-`os.Stat`s the
+  resolved path; a component swapped between the calls is followed by `os.Stat`.
+  `fsroot.Open` re-verifies the opened descriptor, so confinement holds, but the
+  comparison identity can be the swapped one. Fix: capture the identity fd-first
+  (`O_PATH`/`openat` + `fstat`, or `Lstat`).
+- **File manager — global upload-staging semaphore.** `FILES_SPOOL_CONCURRENCY`
+  bounds all staged uploads on a control plane, so one team can starve others
+  with 429s; a per-team cap is the upgrade.
+- **File manager — hard-link bypass note (LOW).** A writable root can hold a hard
+  link whose other name is outside the root; the in-place rewrite writes the
+  shared inode, so an edit through the linked name also changes the outside file.
+  Creating the link needs the agent uid to already be able to write the target,
+  and roots are operator-controlled, so the exposure is small (`nlink>1` is also
+  why the writer keeps the inode instead of renaming).
 - **`KillMode=process` applies to every stop (children handled in Go).**
   `KillMode=process` is required so the wrapper survives the update restart, so
   systemd itself does not kill control-plane children (`git`/`ssh`) on

@@ -109,8 +109,7 @@
       label: "Nhóm",
       items: [
         { nav: "team", label: "Thành viên & quyền", icon: "i-users", href: "team-settings.html" },
-        { nav: "notifications", label: "Kênh thông báo", icon: "i-bell", href: "team-settings.html#notifications" },
-        { nav: "tokens", label: "API tokens", icon: "i-key", href: "team-settings.html#tokens" }
+        { nav: "notifications", label: "Kênh thông báo", icon: "i-bell", href: "team-settings.html#notifications" }
       ]
     },
     {
@@ -188,12 +187,7 @@
       '<button class="btn btn-ghost btn-icon nav-toggle" type="button" data-nav-toggle aria-label="Mở điều hướng">' + ic("i-grid") + "</button>" +
       '<span class="row gap-2"><span class="status-line">' + ic("i-shield") + 'production</span>' +
       '<span class="channel-chip">CP :8000</span><span class="channel-chip">gRPC :9442</span></span>' +
-      '<div class="search" style="margin-left:auto" role="search">' + ic("i-search") +
-      '<input type="search" placeholder="Tìm ứng dụng, máy chủ, database…" aria-label="Tìm kiếm" data-palette-open>' +
-      '<span class="kbd">⌘K</span></div>' +
       '<div class="topbar-right">' +
-      '<button class="btn btn-ghost btn-icon" type="button" data-open="alerts" aria-label="Cảnh báo">' + ic("i-bell") + "</button>" +
-      '<a class="btn btn-ghost btn-icon" href="index.html" aria-label="Tài liệu thiết kế">' + ic("i-doc") + "</a>" +
       '<button class="btn btn-ghost btn-icon" type="button" data-open="account" aria-label="Tài khoản">' +
       '<span class="avatar avatar--sm">NA</span></button>' +
       "</div>";

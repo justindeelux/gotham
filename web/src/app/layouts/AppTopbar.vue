@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NButton, NInput, NTooltip } from "naive-ui";
+import { NButton } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { RouterLink } from "vue-router";
@@ -55,38 +55,8 @@ const envLabel = computed<string>(() => {
     </span>
     <span class="channel-chip" :title="t('shell.cpPortTitle')">CP :{{ cpPort }}</span>
     <span class="channel-chip" :title="t('shell.grpcPortTitle')">gRPC :{{ grpcPort }}</span>
-    <NTooltip trigger="hover">
-      <template #trigger>
-        <div class="search" role="search" :aria-label="t('shell.searchLabel')">
-          <GothamIcon name="search" />
-          <NInput disabled :placeholder="t('shell.searchPlaceholder')" :aria-label="t('shell.searchLabel')" />
-          <span class="kbd">⌘K</span>
-        </div>
-      </template>
-      {{ t("shell.searchSoon") }}
-    </NTooltip>
     <div class="topbar-right">
       <LanguageSelect />
-      <NTooltip trigger="hover">
-        <template #trigger>
-          <NButton quaternary circle :aria-label="t('shell.notifications')" class="is-stub">
-            <template #icon>
-              <GothamIcon name="bell" />
-            </template>
-          </NButton>
-        </template>
-        {{ t("shell.notificationsSoon") }}
-      </NTooltip>
-      <NTooltip trigger="hover">
-        <template #trigger>
-          <NButton quaternary circle :aria-label="t('shell.docs')" class="is-stub">
-            <template #icon>
-              <GothamIcon name="doc" />
-            </template>
-          </NButton>
-        </template>
-        {{ t("shell.docsSoon") }}
-      </NTooltip>
       <AccountMenu v-if="authStore.isAuthenticated" compact />
       <RouterLink v-else to="/login">
         <NButton quaternary type="primary">{{ t("shell.signIn") }}</NButton>
@@ -137,56 +107,11 @@ const envLabel = computed<string>(() => {
   white-space: nowrap;
 }
 
-.search {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  background: var(--surface-warm);
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-2);
-  height: 28px;
-  width: min(360px, 38vw);
-  color: var(--muted);
-  margin-left: auto;
-  cursor: not-allowed;
-}
-
-.search :deep(svg) {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-}
-
-.search :deep(.n-input) {
-  background: none;
-  cursor: not-allowed;
-}
-
-.search :deep(.n-input .n-input__input-el) {
-  cursor: not-allowed;
-}
-
-.kbd {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  border-bottom-width: 2px;
-  border-radius: 3px;
-  padding: 1px 5px;
-  flex: 0 0 auto;
-}
-
 .topbar-right {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-}
-
-.is-stub {
-  opacity: 0.65;
-  cursor: default;
+  margin-left: auto;
 }
 
 .nav-toggle {
@@ -204,26 +129,11 @@ const envLabel = computed<string>(() => {
   .topbar .status-line {
     display: none;
   }
-
-  .search {
-    width: auto;
-  }
-
-  .topbar .search :deep(.n-input) {
-    width: 0;
-    padding: 0;
-  }
 }
 
-/* Phone: the language selector plus the account control are essential and
-   always stay visible; the disabled search stub and the coming-soon stub
-   buttons yield instead (the search input is already collapsed above). */
+/* Phone: the language selector and the account control are the only
+   controls left in the top bar; tighten the spacing around them. */
 @media (max-width: 640px) {
-  .topbar .search,
-  .topbar .is-stub {
-    display: none;
-  }
-
   .topbar {
     gap: var(--space-2);
     padding: 0 var(--space-3);

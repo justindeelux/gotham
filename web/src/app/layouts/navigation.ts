@@ -1,6 +1,6 @@
 import type { IconName } from "@/shared/ui/GothamIcon.vue";
 
-/** Sidebar entry: live route when `to` is set, inert stub otherwise. */
+/** Sidebar entry: `to` is the route name rendered as a link. */
 export interface NavItem {
   key: string;
   label: string;
@@ -20,8 +20,8 @@ export interface NavSection {
 }
 
 // Group order and English labels follow the docs/design shell renderer
-// (docs/design/assets/gotham-ui.js SECTIONS). Entries with no route are inert
-// and say so — every backend phase has shipped, so no phase number is claimed.
+// (docs/design/assets/gotham-ui.js SECTIONS). Every entry links to a shipped
+// route; features without a screen (API tokens) are absent until they ship.
 // `label` keeps the English text for source checks; `labelKey` is what the
 // sidebar renders, so a language switch updates labels without remounting.
 export const navSections: NavSection[] = [
@@ -56,7 +56,6 @@ export const navSections: NavSection[] = [
         icon: "refresh",
         to: "git-sources",
       },
-      { key: "tokens", label: "API tokens", labelKey: "nav.items.tokens", icon: "key" },
     ],
   },
   {

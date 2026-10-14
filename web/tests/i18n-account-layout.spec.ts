@@ -279,29 +279,11 @@ for (const locale of ["en", "vi"]) {
       const selector = page.locator(".topbar-right .language-select");
       await expect(selector).toBeVisible();
 
-      if (width === 390) {
-        // Stubs yield room on phones; selector and account stay usable.
-        expect(await page.locator(".topbar .search").count()).toBe(1);
-        expect(await page.locator(".topbar .search").isVisible()).toBe(false);
-        const stubVisible = await page
-          .locator(".topbar .is-stub")
-          .evaluateAll((nodes) =>
-            nodes.filter(
-              (node) => (node as HTMLElement).offsetParent !== null,
-            ).length,
-          );
-        expect(stubVisible).toBe(0);
-      } else {
-        // Wide layouts keep every control visible.
-        const stubVisible = await page
-          .locator(".topbar .is-stub")
-          .evaluateAll((nodes) =>
-            nodes.filter(
-              (node) => (node as HTMLElement).offsetParent !== null,
-            ).length,
-          );
-        expect(stubVisible).toBe(2);
-      }
+      // JUS-136: the disabled search, notifications and docs placeholders are
+      // hidden until their features ship, so no stub control renders at any
+      // width (phones used to collapse them, wide layouts kept them).
+      expect(await page.locator(".topbar .search").count()).toBe(0);
+      expect(await page.locator(".topbar .is-stub").count()).toBe(0);
     });
 
     test(`profile password pair stacks at ${width}px in ${locale}`, async ({ page }) => {

@@ -21,7 +21,19 @@ const isMobile = useMediaQuery("(max-width: 1024px)");
 // JUS-135: the shared server poll belongs to the shell, not the rail. The rail
 // unmounts (its drawer closes, or the viewport crosses the breakpoint), so it
 // must never stop a poll the topbar drawer and every page still rely on.
-onMounted(() => serversStore.pollServers());
+onMounted(() => {
+  // JUS-143: seed the list once so the sidebar count and the rail are correct
+  // on first paint, even on a cold load of a page that neither fetches servers
+  // nor opens the rail (a mobile page, where the rail is not mounted). The
+  // guard skips when the rail or the page has already started a load; the
+  // store's listSync ordering keeps any overlapping loads correct.
+  if (serversStore.servers.length === 0 && !serversStore.loading) {
+    void serversStore.fetchServers().catch(() => {
+      // The servers page surfaces load errors; the shell stays quiet.
+    });
+  }
+  serversStore.pollServers();
+});
 onUnmounted(() => serversStore.stopPolling());
 
 // A route with `fillViewport` owns its own scrolling region (see the file

@@ -14,6 +14,10 @@
 </head>
 <body data-page="files" data-nav="servers" data-server="prod-01">
 <div class="app">
+  <!-- JUS-143: the shell seeds the server list when it arms the shared poll, so
+       the rail and the sidebar's servers count are populated on first paint —
+       on every page, including a mobile load where the rail is a closed drawer.
+       The mockups render the settled state (rail and count already filled). -->
   <nav class="rail" id="rail" aria-label="Managed servers"></nav>
   <aside class="sidebar" id="sidebar"></aside>
   <main class="main">

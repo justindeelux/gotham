@@ -1174,6 +1174,60 @@ test.describe("files shift-click range selection", () => {
   });
 });
 
+test.describe("files keyboard navigation (JUS-139)", () => {
+  // Distinct names let the sorted order be reasoned about: conf (dir),
+  // app.yaml, logo.png, notes.md.
+  const keysEntries: WireEntry[] = [
+    entry("conf", "directory", 0, 0o040755, "etag-conf"),
+    entry("app.yaml", "file", 300, 0o100644, "etag-yaml"),
+    entry("logo.png", "file", 100, 0o100644, "etag-png"),
+    entry("notes.md", "file", 200, 0o100644, "etag-md"),
+  ];
+
+  /** row locator for one entry name in the list. */
+  function listRow(page: Page, name: string): Locator {
+    return page.locator(`.fm-row[data-entry="${name}"]`);
+  }
+
+  test("arrows, Space, Shift+Arrow, Ctrl/Cmd+A and type-to-focus drive the list", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => json(route, 200, listing(keysEntries)),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(listRow(page, "notes.md")).toBeVisible();
+
+    // One roving tab stop: the focused row's name control.
+    await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
+
+    // Arrow moves focus; Space toggles the focused row's selection.
+    await listRow(page, "conf").locator(".fm-label").focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(listRow(page, "app.yaml").locator(".fm-label")).toBeFocused();
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
+
+    // Shift+Arrow extends the range from the roving anchor.
+    await page.keyboard.press("Shift+ArrowDown");
+    await expect(listRow(page, "logo.png").locator(".fm-label")).toBeFocused();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(2);
+
+    // Ctrl/Cmd+A selects every visible entry.
+    await page.keyboard.press("ControlOrMeta+a");
+    await expect(page.locator(".fm-bulk-count")).toContainText("4 selected");
+
+    // Type-to-focus jumps by prefix and leaves the selection alone.
+    await page.keyboard.type("not");
+    await expect(listRow(page, "notes.md").locator(".fm-label")).toBeFocused();
+    await expect(page.locator(".fm-bulk-count")).toContainText("4 selected");
+  });
+});
+
 /**
  * JUS-132: the folder filter resets on navigation with a filtered footer
  * count, and a symlink row shows its target and can jump to it.

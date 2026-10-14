@@ -1403,6 +1403,15 @@ export const useFilesStore = defineStore("files", () => {
     activeTab.value.anchor = name;
   }
 
+  /**
+   * setAnchor moves the shift-range anchor without touching the selection. The
+   * keyboard roving focus (JUS-139) calls it as the cursor moves, so a following
+   * Shift+Arrow extends the run from the row the cursor left.
+   */
+  function setAnchor(name: string | null): void {
+    activeTab.value.anchor = name;
+  }
+
   /** toggleSelection adds or removes one entry from the selection. */
   function toggleSelection(name: string): void {
     const next = new Set(selected.value);
@@ -1579,6 +1588,7 @@ export const useFilesStore = defineStore("files", () => {
     selectForRowContext,
     selectOnly,
     selectRange,
+    setAnchor,
     toggleSelection,
     toggleSelectAll,
     clearSelection,

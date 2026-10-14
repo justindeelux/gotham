@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global document:readonly, HTMLElement:readonly, URL, window:readonly */
+/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL, window:readonly */
 // JUS-137 windowed listing proof: the committed webdist is served statically
 // with the control-plane file API mocked in real Chromium. Measured claims on a
 // 5,000-entry directory:
@@ -669,5 +669,156 @@ test.describe("windowed grid", () => {
     const tileBox = (await tile.boundingBox())!;
     expect(tileBox.x).toBeGreaterThanOrEqual(gridBox.x - 1);
     expect(tileBox.x + tileBox.width).toBeLessThanOrEqual(gridBox.x + gridBox.width + 1);
+  });
+});
+
+test.describe("row keyboard navigation (JUS-139)", () => {
+  /** focusedEntry is the data-entry of the row that owns focus, or null. */
+  async function focusedEntry(page: Page): Promise<string | null> {
+    return page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      return active?.closest<HTMLElement>("[data-entry]")?.dataset.entry ?? null;
+    });
+  }
+
+  test("arrows move the roving focus; Home/End/Page reach far rows", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await rowFor(page, "aaa-dir").locator(".fm-label").focus();
+
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0001.txt");
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
+
+    // PageDown moves a viewport of rows.
+    await page.keyboard.press("PageDown");
+    await expect.poll(() => focusedEntry(page)).not.toBe("file-0000.txt");
+    const paged = await focusedEntry(page);
+    expect(paged).not.toBeNull();
+
+    // End materialises the last row of the 5,000-entry listing.
+    await page.keyboard.press("End");
+    await expect.poll(() => focusedEntry(page)).toBe("file-4998.txt");
+    await expect(
+      page.locator(".fm-table b").filter({ hasText: "file-4998.txt" }),
+    ).toBeVisible();
+
+    await page.keyboard.press("Home");
+    await expect.poll(() => focusedEntry(page)).toBe("aaa-dir");
+  });
+
+  test("Space toggles the focused row and Ctrl/Cmd+A selects all", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await rowFor(page, "aaa-dir").locator(".fm-label").focus();
+
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-bulk-count")).toHaveText("");
+
+    await page.keyboard.press("ControlOrMeta+a");
+    await expect(page.locator(".fm-bulk-count")).toContainText("5000 selected");
+    await expect(
+      page.locator(".fm-table .fm-row.is-selected").first(),
+    ).toBeVisible();
+  });
+
+  test("Shift+Arrow extends a range from the keyboard anchor", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await rowFor(page, "aaa-dir").locator(".fm-label").focus();
+
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
+    await page.keyboard.press("Shift+ArrowDown");
+    await page.keyboard.press("Shift+ArrowDown");
+
+    await expect(page.locator(".fm-bulk-count")).toContainText("3 selected");
+    await expect(
+      page.locator('.fm-row[data-entry="file-0000.txt"].is-selected'),
+    ).toHaveCount(1);
+    await expect(
+      page.locator('.fm-row[data-entry="file-0002.txt"].is-selected'),
+    ).toHaveCount(1);
+  });
+
+  test("type-to-focus jumps to a prefix across unrendered rows", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await rowFor(page, "aaa-dir").locator(".fm-label").focus();
+
+    await page.keyboard.type("file-4998", { delay: 20 });
+    await expect.poll(() => focusedEntry(page)).toBe("file-4998.txt");
+    await expect(
+      page.locator(".fm-table b").filter({ hasText: "file-4998.txt" }),
+    ).toBeVisible();
+  });
+
+  test("the grid adds Left/Right and moves a visual row with Up/Down", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+
+    await page.locator('.fm-tile-wrap[data-entry="aaa-dir"] .fm-tile').focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => focusedEntry(page)).not.toBe("file-0000.txt");
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(() => focusedEntry(page)).toBe("aaa-dir");
+  });
+
+  test("one roving tab stop, aria state and the focus ring stay correct", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    // Exactly one rendered label is a Tab stop; the rest are -1.
+    await expect(
+      page.locator('.fm-table .fm-label[tabindex="0"]'),
+    ).toHaveCount(1);
+    const total = await page.locator(".fm-table .fm-label").count();
+    expect(await page.locator('.fm-table .fm-label[tabindex="-1"]').count()).toBe(
+      total - 1,
+    );
+
+    // The roving tabindex follows the arrow keys.
+    await rowFor(page, "aaa-dir").locator(".fm-label").focus();
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
+    await expect(
+      page.locator('.fm-row[data-entry="file-0000.txt"] .fm-label'),
+    ).toHaveAttribute("tabindex", "0");
+    await expect(
+      page.locator('.fm-row[data-entry="aaa-dir"] .fm-label'),
+    ).toHaveAttribute("tabindex", "-1");
+
+    // aria-selected reflects the Space toggle; the row count is unchanged.
+    await page.keyboard.press(" ");
+    await expect(
+      page.locator('.fm-row[data-entry="file-0000.txt"]'),
+    ).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".fm-table")).toHaveAttribute(
+      "aria-rowcount",
+      String(COUNT + 1),
+    );
+
+    // Keyboard focus paints the shared focus ring.
+    const focused = page.locator('.fm-row[data-entry="file-0000.txt"] .fm-label');
+    const outline = await focused.evaluate(
+      (element) => getComputedStyle(element).outlineStyle,
+    );
+    expect(outline).not.toBe("none");
   });
 });

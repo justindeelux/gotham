@@ -274,6 +274,37 @@ export function rangeNames(
 }
 
 /**
+ * typeaheadIndex resolves one type-to-focus keystroke against the visible
+ * listing order (JUS-139): the index of the first name starting with `prefix`
+ * (case-insensitive), scanning from `from` and wrapping, or -1 when nothing
+ * matches. When every character of `prefix` is the same letter it is collapsed
+ * to that one letter and the scan starts at `from`, so repeated presses of one
+ * key cycle through the names that share it; a mixed prefix scans the whole
+ * listing. The caller passes the sorted+filtered order, so a match is found
+ * even when the row is outside the rendered window (JUS-137).
+ */
+export function typeaheadIndex(
+  names: string[],
+  prefix: string,
+  from = 0,
+): number {
+  if (names.length === 0 || prefix === "") {
+    return -1;
+  }
+  const first = prefix.slice(0, 1);
+  const cycling = prefix.split("").every((char) => char === first);
+  const needle = (cycling ? first : prefix).toLowerCase();
+  const start = cycling ? from : 0;
+  for (let offset = 0; offset < names.length; offset += 1) {
+    const index = (start + offset) % names.length;
+    if (names[index].toLowerCase().startsWith(needle)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
  * MAX_NAME_BYTES is the maximum UTF-8 byte length the server accepts for a
  * single path segment (an entry name). The boundary is bytes, not code points,
  * so a multi-byte name can be shorter in characters and still fail.

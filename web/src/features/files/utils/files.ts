@@ -246,6 +246,34 @@ export function isSelectable(entry: FilesEntry): boolean {
 }
 
 /**
+ * rangeNames returns the names of the selectable entries between `anchor` and
+ * `target` inclusive, in the array's own order (JUS-138). The browser passes the
+ * current sorted+filtered listing, so the scan is over the entry order and never
+ * the DOM — a range spans rows a windowed list did not render (JUS-137). The
+ * anchor and target may arrive in either order. Non-selectable entries (symlinks,
+ * special files) carry no checkbox, so they are skipped rather than counted in a
+ * selection they cannot join. Returns [] when either name is absent (a stale
+ * anchor after a filter/sort/folder change).
+ */
+export function rangeNames(
+  entries: FilesEntry[],
+  anchor: string,
+  target: string,
+): string[] {
+  const from = entries.findIndex((entry) => entry.name === anchor);
+  const to = entries.findIndex((entry) => entry.name === target);
+  if (from === -1 || to === -1) {
+    return [];
+  }
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  return entries
+    .slice(start, end + 1)
+    .filter(isSelectable)
+    .map((entry) => entry.name);
+}
+
+/**
  * MAX_NAME_BYTES is the maximum UTF-8 byte length the server accepts for a
  * single path segment (an entry name). The boundary is bytes, not code points,
  * so a multi-byte name can be shorter in characters and still fail.

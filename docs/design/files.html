@@ -117,6 +117,11 @@
                    (not the write-gated toolbar). Any member may browse it;
                    restore / purge / empty need owner/admin. -->
               <button class="btn btn-sm btn-outline" type="button" data-open="fm-recycle"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Recycle bin</span></button>
+              <!-- JUS-145: compact sort control. The list's Type/Modified/Mode
+                   headers are hidden at compact widths and the grid has no
+                   headers at all, so every column stays sortable through this
+                   menu; it mirrors the active column + direction. -->
+              <button class="btn btn-sm btn-outline" type="button" data-toast="Sorted by Size — ascending.|info" aria-haspopup="menu" aria-expanded="false" aria-label="Sort: Size — Ascending" title="Sort: Size — Ascending"><svg aria-hidden="true"><use href="#i-sort"></use></svg><span class="fm-btn-label">Size</span></button>
               <div class="fm-toolbar-group fm-toolbar-end">
                 <!-- JUS-117: copy/cut land on a clipboard and Paste applies it
                      into the current folder. The button only appears while the

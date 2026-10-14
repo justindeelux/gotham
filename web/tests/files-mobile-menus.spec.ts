@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global URL, document:readonly, window:readonly */
-// JUS-145 proof: at 390px and 768px every row (list) and tile (grid) menu
-// trigger is inside the viewport and the listing does not scroll horizontally,
-// so a touch user reaches the row menu with one tap. The committed webdist is
-// served statically with the control-plane file API mocked in real Chromium.
-// Before the fix the row ⋮ sat at x≈975 in a 390px viewport (the .table-wrap
-// scrolled horizontally) and grid tiles had no trigger at all.
+/* global URL, document:readonly, window:readonly, HTMLElement:readonly, getComputedStyle:readonly */
+// JUS-145 proof, round 1: at EVERY width where the list overflows horizontally
+// the row/tile menu trigger is on screen and hit-testable (the actions cell is
+// pinned sticky-right), the compact layout keeps Modified visible and the
+// Type/Modified/Mode columns sortable, and the windowed list keeps its exact
+// scroll maths. The committed webdist is served statically with the
+// control-plane file API mocked in real Chromium.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -69,19 +69,22 @@ const root = {
   free_bytes: 21 * 1024 ** 3,
 };
 
-/** viewports are the widths the issue names (a phone and a tablet). */
-const viewports = [
-  { width: 390, height: 844 },
-  { width: 768, height: 1024 },
-];
+/**
+ * reachWidths covers the phone, tablet, the previously-broken 861..1400 band
+ * (where the table overflows but the compact columns have not kicked in) and
+ * desktop. `run.sock` (a special row) is the only row without a menu.
+ */
+const reachWidths = [390, 540, 768, 861, 1024, 1280, 1440];
 
-/** listing is a small folder of directories and files (every row has a menu). */
+/** listing is a small folder with one of every entry kind (12 rows). */
 function listing() {
   return [
     { name: "app.yaml", kind: "file" as const, size: 2458, mode: 0o100644, modified_at: "2026-10-12T09:02:00Z", etag: '"a"' },
     { name: "backup.tar.gz", kind: "file" as const, size: 4096, mode: 0o100644, modified_at: "2026-10-12T09:10:00Z", etag: '"b"' },
     { name: "config", kind: "directory" as const, size: 0, mode: 0o040755, modified_at: "2026-10-12T09:14:00Z", etag: '"c"' },
-    ...Array.from({ length: 9 }, (_, index) => ({
+    { name: "link-to-data", kind: "symlink" as const, size: 0, mode: 0o120777, modified_at: "2026-10-12T09:16:00Z", symlink_target: "data", etag: '"s"' },
+    { name: "run.sock", kind: "special" as const, size: 0, mode: 0o140777, modified_at: "2026-10-12T09:19:00Z", etag: '"d"' },
+    ...Array.from({ length: 7 }, (_, index) => ({
       name: `report-${String(index).padStart(4, "0")}.txt`,
       kind: "file" as const,
       size: 1024 + index,
@@ -158,7 +161,7 @@ interface OpenOptions {
 /** openFiles seeds a session, mocks the file API and lands on the browser. */
 async function openFiles(page: Page, options: OpenOptions = {}): Promise<void> {
   const entries = options.entries ?? listing();
-  const viewport = options.viewport ?? viewports[0];
+  const viewport = options.viewport ?? { width: 1440, height: 900 };
   await page.setViewportSize(viewport);
   await page.addInitScript((value) => {
     window.localStorage.setItem("gotham.auth.session", value);
@@ -197,97 +200,319 @@ function moreFor(page: Page, name: string): Locator {
   return page.getByRole("button", { name: `More actions for ${name}` });
 }
 
-/** expectNoHorizontalOverflow proves the page (and the list wrap) never scrolls
- * sideways — the trigger must be reachable without a sideways scroll. */
-async function expectNoHorizontalOverflow(page: Page): Promise<void> {
+/** expectNoPageOverflow proves the page itself never scrolls sideways. */
+async function expectNoPageOverflow(page: Page): Promise<void> {
   const doc = await page.evaluate(() => {
     const el = document.documentElement;
     return el.scrollWidth - el.clientWidth;
   });
   expect(doc, "page horizontal overflow").toBeLessThanOrEqual(1);
-
-  const wrap = page.locator(".table-wrap");
-  if ((await wrap.count()) > 0) {
-    const overflow = await wrap.evaluate((el) => el.scrollWidth - el.clientWidth);
-    expect(overflow, ".table-wrap horizontal overflow").toBeLessThanOrEqual(1);
-  }
 }
 
-/** expectInsideViewport asserts the trigger's rectangle is fully on screen. */
-async function expectInsideViewport(
-  trigger: Locator,
-  viewport: { width: number },
-): Promise<void> {
+/** bringIntoView scrolls a row/tile into the VERTICAL view of its scroller only
+ * (never sideways), so the hit test runs on a genuinely visible trigger. */
+async function bringIntoView(trigger: Locator): Promise<void> {
+  await trigger.evaluate((el) => {
+    const wrap = el.closest(".table-wrap, .fm-grid") as HTMLElement | null;
+    if (wrap === null) {
+      return;
+    }
+    const row = el.getBoundingClientRect();
+    const box = wrap.getBoundingClientRect();
+    if (row.top < box.top + 2) {
+      wrap.scrollTop -= box.top - row.top + 8;
+    } else if (row.bottom > box.bottom - 2) {
+      wrap.scrollTop += row.bottom - box.bottom + 8;
+    }
+  });
+}
+
+/** expectReachable asserts the trigger is on screen (no sideways scroll) AND the
+ * top-most element at its centre is the trigger itself. */
+async function expectReachable(trigger: Locator, width: number): Promise<void> {
   await expect(trigger).toBeVisible();
   const box = await trigger.boundingBox();
   expect(box, "trigger has no box").not.toBeNull();
   expect(box!.x, "trigger left edge").toBeGreaterThanOrEqual(-1);
-  expect(box!.x + box!.width, "trigger right edge").toBeLessThanOrEqual(
-    viewport.width + 1,
-  );
+  expect(box!.x + box!.width, "trigger right edge").toBeLessThanOrEqual(width + 1);
+  const hit = await trigger.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const top = document.elementFromPoint(
+      r.left + r.width / 2,
+      r.top + r.height / 2,
+    );
+    return top === el || el.contains(top);
+  });
+  expect(hit, "elementFromPoint hits the trigger").toBe(true);
 }
 
 test.describe("row and tile menus are reachable without scrolling (JUS-145)", () => {
-  for (const viewport of viewports) {
-    test(`list at ${viewport.width}px: every row ⋮ is on screen`, async ({ page }) => {
-      await openFiles(page, { viewport });
-      await expectNoHorizontalOverflow(page);
+  for (const width of reachWidths) {
+    test(`list at ${width}px: every row ⋮ is on screen and hit-testable`, async ({
+      page,
+    }) => {
+      await openFiles(page, { viewport: { width, height: 900 } });
+      await expectNoPageOverflow(page);
+
+      // Below the compact breakpoint the table must also fit internally, so no
+      // sideways scroll is needed at all.
+      if (width <= 860) {
+        const overflow = await page
+          .locator(".table-wrap")
+          .evaluate((el) => el.scrollWidth - el.clientWidth);
+        expect(overflow, ".table-wrap horizontal overflow").toBeLessThanOrEqual(1);
+      }
 
       const rows = page.locator(".fm-table .fm-row:not(.fm-head)");
-      const count = await rows.count();
-      expect(count).toBe(12);
-      for (let index = 0; index < count; index += 1) {
+      expect(await rows.count()).toBe(12);
+      for (let index = 0; index < 12; index += 1) {
         const name = (await rows.nth(index).getAttribute("data-entry")) ?? "";
-        await expectInsideViewport(moreFor(page, name), viewport);
+        // A special row genuinely has no actions, so no trigger.
+        if (name === "run.sock") {
+          expect(await moreFor(page, name).count()).toBe(0);
+          continue;
+        }
+        const trigger = moreFor(page, name);
+        await bringIntoView(trigger);
+        await expectReachable(trigger, width);
       }
     });
 
-    test(`grid at ${viewport.width}px: every tile ⋮ is on screen`, async ({ page }) => {
-      await openFiles(page, { viewport });
+    test(`grid at ${width}px: every tile ⋮ is on screen and hit-testable`, async ({
+      page,
+    }) => {
+      await openFiles(page, { viewport: { width, height: 900 } });
       await page.getByRole("button", { name: "Grid view" }).click();
-      await expectNoHorizontalOverflow(page);
+      await expectNoPageOverflow(page);
 
       const tiles = page.locator(".fm-grid .fm-tile-wrap");
-      const count = await tiles.count();
-      expect(count).toBe(12);
-      for (let index = 0; index < count; index += 1) {
+      expect(await tiles.count()).toBe(12);
+      for (let index = 0; index < 12; index += 1) {
         const name = (await tiles.nth(index).getAttribute("data-entry")) ?? "";
-        await expectInsideViewport(moreFor(page, name), viewport);
+        if (name === "run.sock") {
+          expect(await moreFor(page, name).count()).toBe(0);
+          continue;
+        }
+        const trigger = moreFor(page, name);
+        await bringIntoView(trigger);
+        await expectReachable(trigger, width);
       }
     });
   }
 
-  test("a 5,000-entry folder stays windowed and keeps its menus on screen", async ({
+  test("the sticky actions cell keeps its row-state background and the header stays pinned", async ({
     page,
   }) => {
-    const entries = bigListing();
-    for (const viewport of viewports) {
-      await openFiles(page, { entries, viewport });
-      await expectNoHorizontalOverflow(page);
+    await openFiles(page, { viewport: { width: 1024, height: 768 } });
 
-      // Windowed: only a fraction of the 5,000 rows are in the DOM.
-      const rows = page.locator(".fm-table .fm-row:not(.fm-head)");
-      const rendered = await rows.count();
-      expect(rendered).toBeGreaterThan(0);
-      expect(rendered).toBeLessThan(500);
-      for (let index = 0; index < Math.min(rendered, 5); index += 1) {
-        const name = (await rows.nth(index).getAttribute("data-entry")) ?? "";
-        await expectInsideViewport(moreFor(page, name), viewport);
-      }
+    // Select a row so the selected tint must follow the pinned cell.
+    await page.locator('.fm-table .fm-row:not(.fm-head)[data-entry="config"]').click();
+    const cells = await page.evaluate(() => {
+      const selected = document.querySelector(
+        '.fm-table .fm-row.is-selected > .fm-actions',
+      ) as HTMLElement;
+      const plain = document.querySelector(
+        '.fm-table .fm-row:not(.fm-head):not(.is-selected) > .fm-actions',
+      ) as HTMLElement;
+      return {
+        selectedBg: getComputedStyle(selected).backgroundColor,
+        selectedImage: getComputedStyle(selected).backgroundImage,
+        plainBg: getComputedStyle(plain).backgroundColor,
+        plainImage: getComputedStyle(plain).backgroundImage,
+        selectedPos: getComputedStyle(selected).position,
+      };
+    });
+    expect(cells.selectedPos).toBe("sticky");
+    // Opaque surface (never transparent, or the columns scrolling under it show
+    // through) with the selected tint layered on top.
+    expect(cells.selectedBg).not.toBe("rgba(0, 0, 0, 0)");
+    expect(cells.selectedBg).toBe(cells.plainBg);
+    expect(cells.selectedImage).not.toBe("none");
+    expect(cells.plainImage).toBe("none");
+  });
+});
 
-      await page.getByRole("button", { name: "Grid view" }).click();
-      const tiles = page.locator(".fm-grid .fm-tile-wrap");
-      const tileCount = await tiles.count();
-      expect(tileCount).toBeGreaterThan(0);
-      expect(tileCount).toBeLessThan(500);
-      for (let index = 0; index < Math.min(tileCount, 5); index += 1) {
-        const name = (await tiles.nth(index).getAttribute("data-entry")) ?? "";
-        await expectInsideViewport(moreFor(page, name), viewport);
-      }
-    }
+test.describe("windowed list keeps its maths and reachability (JUS-145)", () => {
+  /** scrollMath reads the table's exact scroll height against the row token. */
+  async function scrollMath(page: Page) {
+    return page.evaluate(() => {
+      const wrap = document.querySelector(".table-wrap") as HTMLElement;
+      const table = document.querySelector(".fm-table") as HTMLElement;
+      const row = document.querySelector(
+        ".fm-table .fm-row:not(.fm-head)",
+      ) as HTMLElement;
+      const head = document.querySelector(".fm-table .fm-head") as HTMLElement;
+      return {
+        scrollHeight: table.scrollHeight,
+        rowHeight: row.getBoundingClientRect().height,
+        headerHeight: head.getBoundingClientRect().height,
+        rendered: document.querySelectorAll(".fm-table .fm-row:not(.fm-head)")
+          .length,
+        wrapScrollTop: wrap.scrollTop,
+      };
+    });
+  }
+
+  test("scrollHeight == entries x row height at 36px and 52px, across the breakpoint", async ({
+    page,
+  }) => {
+    await openFiles(page, {
+      entries: bigListing(),
+      viewport: { width: 861, height: 900 },
+    });
+
+    const checked = async (expectedRow: number): Promise<void> => {
+      await expect
+        .poll(
+          async () => {
+            const math = await scrollMath(page);
+            const expected = COUNT * math.rowHeight + math.headerHeight;
+            const fits = Math.abs(math.scrollHeight - expected) <= 2;
+            return `${Math.round(math.rowHeight)}:${fits}:${math.rendered < 500}`;
+          },
+          { timeout: 5000 },
+        )
+        .toBe(`${expectedRow}:true:true`);
+    };
+
+    await checked(36);
+    // Cross the compact breakpoint: the token grows to 52px, then back.
+    await page.setViewportSize({ width: 860, height: 900 });
+    await checked(52);
+    await page.setViewportSize({ width: 861, height: 900 });
+    await checked(36);
   });
 
-  test("the grid ⋮ follows the same popup/ARIA contract as the list", async ({
+  test("the far end of a 5,000-entry list keeps its ⋮ reachable and hit-testable", async ({
+    page,
+  }) => {
+    await openFiles(page, {
+      entries: bigListing(),
+      viewport: { width: 390, height: 844 },
+    });
+    // Scroll to the bottom (vertical only); the pinned actions cell must be on
+    // screen and hit-testable there too.
+    await page.locator(".table-wrap").evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(
+      page.locator(".fm-table b", { hasText: "file-4998.txt" }),
+    ).toBeVisible();
+    await expectReachable(moreFor(page, "file-4998.txt"), 390);
+    expect(
+      await page.locator(".table-wrap").evaluate((el) => el.scrollLeft),
+    ).toBe(0);
+  });
+});
+
+test.describe("folded row actions and compact sort (JUS-145)", () => {
+  test("every inline action has an equivalent in the ⋮ menu at compact width", async ({
+    page,
+  }) => {
+    await openFiles(page, { viewport: { width: 390, height: 844 } });
+
+    const menuLabels = async (name: string): Promise<string[]> => {
+      await moreFor(page, name).click();
+      const menu = page.getByRole("menu", { name: `More actions for ${name}` });
+      await expect(menu).toBeVisible();
+      const labels = await menu.getByRole("menuitem").allInnerTexts();
+      await page.keyboard.press("Escape");
+      return labels.map((text) => text.trim());
+    };
+
+    // A file: edit/download/permissions/rename/cut/copy/delete.
+    for (const label of [
+      "Edit in editor",
+      "Download",
+      "Permissions…",
+      "Rename",
+      "Cut",
+      "Copy",
+      "Delete",
+    ]) {
+      expect(await menuLabels("app.yaml"), label).toContain(label);
+    }
+    // An archive keeps Extract here….
+    expect(await menuLabels("backup.tar.gz")).toContain("Extract here…");
+    // A folder: open/open-in-new-tab/.../paste/delete.
+    const folder = await menuLabels("config");
+    for (const label of ["Open", "Open in new tab", "Paste", "Delete"]) {
+      expect(folder, label).toContain(label);
+    }
+    // A symlink keeps Go to target.
+    expect(await menuLabels("link-to-data")).toContain("Go to target");
+    // A special row has no menu at all.
+    expect(await moreFor(page, "run.sock").count()).toBe(0);
+  });
+
+  test("the compact list shows Modified and the sort control reorders every column", async ({
+    page,
+  }) => {
+    await openFiles(page, { viewport: { width: 390, height: 844 } });
+
+    // Modified is a visible, muted secondary line on the compact row.
+    const sub = page.locator(
+      '.fm-table .fm-row[data-entry="app.yaml"] .fm-row-sub',
+    );
+    await expect(sub).toBeVisible();
+    await expect(sub).not.toHaveText("");
+
+    const order = (): Promise<string[]> =>
+      page
+        .locator(".fm-table .fm-row:not(.fm-head)")
+        .evaluateAll((els) =>
+          els.map((el) => (el as HTMLElement).dataset.entry ?? ""),
+        );
+
+    // Headers for Type / Modified / Mode are hidden, so the toolbar control is
+    // the only way to sort by them.
+    await expect(page.locator(".fm-head .fm-cell--type")).toBeHidden();
+    await expect(page.locator(".fm-head .fm-cell--modified")).toBeHidden();
+    await expect(page.locator(".fm-head .fm-cell--mode")).toBeHidden();
+
+    const sortButton = page.getByRole("button", { name: /^Sort:/ });
+    await expect(sortButton).toBeVisible();
+    await expect(sortButton).toHaveAttribute("aria-label", /Name/);
+
+    // Baseline: Name ascending → app.yaml before backup.tar.gz.
+    let names = await order();
+    expect(names.indexOf("app.yaml")).toBeLessThan(
+      names.indexOf("backup.tar.gz"),
+    );
+
+    // Sort by Size ascending: the smallest file before the largest, and the
+    // folder still groups first (kind rank is direction-independent).
+    await sortButton.click();
+    await page.getByRole("menu", { name: "Sort" }).getByRole("menuitem", { name: "Size" }).click();
+    await expect(sortButton).toHaveAttribute("aria-label", /Size/);
+    names = await order();
+    expect(names[0]).toBe("config");
+    expect(names.indexOf("report-0000.txt")).toBeLessThan(
+      names.indexOf("backup.tar.gz"),
+    );
+
+    // Flip the direction: the largest file now comes before the smallest.
+    await sortButton.click();
+    await page
+      .getByRole("menu", { name: "Sort" })
+      .getByRole("menuitem", { name: "Descending" })
+      .click();
+    await expect(sortButton).toHaveAttribute("aria-label", /Descending/);
+    names = await order();
+    expect(names.indexOf("backup.tar.gz")).toBeLessThan(
+      names.indexOf("report-0000.txt"),
+    );
+
+    // A keyboard user reaches the control too (native Enter opens the menu).
+    await sortButton.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menu", { name: "Sort" })).toBeVisible();
+    await expect(sortButton).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+test.describe("the grid ⋮ follows the same popup/ARIA contract as the list", () => {
+  test("haspopup/expanded agree and only one menu opens at a time", async ({
     page,
   }) => {
     await openFiles(page, { viewport: { width: 1280, height: 900 } });
@@ -302,7 +527,6 @@ test.describe("row and tile menus are reachable without scrolling (JUS-145)", ()
     await expect(menu).toBeVisible();
     await expect(more).toHaveAttribute("aria-expanded", "true");
 
-    // Escape closes popup and state together.
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
     await expect(more).toHaveAttribute("aria-expanded", "false");
@@ -351,5 +575,21 @@ test.describe("touch targets (JUS-145)", () => {
       page.getByRole("menu", { name: "More actions for app.yaml" }),
     ).toBeVisible();
     await expect(tileMore).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("a touch tablet above the compact range keeps a 44px ⋮ and reachable row", async ({
+    page,
+  }) => {
+    await openFiles(page, { viewport: { width: 1024, height: 768 } });
+    const more = moreFor(page, "app.yaml");
+    const box = await more.boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+    await bringIntoView(more);
+    await expectReachable(more, 1024);
+    await more.tap();
+    await expect(
+      page.getByRole("menu", { name: "More actions for app.yaml" }),
+    ).toBeVisible();
   });
 });

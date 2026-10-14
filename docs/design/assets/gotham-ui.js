@@ -68,6 +68,7 @@
     "i-share": '<circle cx="17" cy="6" r="2.4"/><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 10.8l6.6-3.6M8.2 13.2l6.6 3.6"/>',
     "i-more": '<circle cx="5.5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18.5" cy="12" r="1.4"/>',
     "i-list": '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    "i-sort": '<path d="M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4"/>',
     "i-cloud-down": '<path d="M7 17a4 4 0 01.6-8 5.5 5.5 0 0110.6 1.4A3.6 3.6 0 0118 17"/><path d="M12 12v7M9 16l3 3 3-3"/>'
   };
 

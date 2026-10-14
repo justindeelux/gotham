@@ -412,7 +412,7 @@ const scrollSize = useElementSize(scrollEl);
 // border-box: a revealed row must clear the header's padding and border too.
 const headSize = useElementSize(headEl, undefined, { box: "border-box" });
 
-// ── Focus retention (JUS-137 review round 1) ──────────────────────────────
+// ── Focus retention (JUS-137 review rounds 1-2) ───────────────────────────
 // Windowing unmounts off-window rows, which used to (a) drop keyboard focus to
 // <body> when the focused row scrolled away and (b) make off-window rows
 // unreachable. Rather than add a roving tabindex — which needs arrow-key row
@@ -424,10 +424,26 @@ const headSize = useElementSize(headEl, undefined, { box: "border-box" });
 // so the next entry is always already rendered.
 /** focusedName is the entry that last received focus inside the list/grid. */
 const focusedName = ref<string | null>(null);
-/** pinnedName is the entry kept rendered outside the window. */
-const pinnedName = ref<string | null>(null);
-/** menuRowName is the row whose context menu is open; pinned while it is up. */
+/** menuRowName is the row whose context menu is open. */
 const menuRowName = ref<string | null>(null);
+/**
+ * pinnedName is the one entry kept rendered outside the window: the row whose
+ * context menu is open, else the row that owns focus. It is DERIVED, so every
+ * route that drops a pin source (menu closed/Escape, focus left, directory or
+ * tab change, entry gone) releases the pin — there is no stale flag to leak.
+ */
+const pinnedName = computed<string | null>(
+  () => menuRowName.value ?? focusedName.value,
+);
+/**
+ * restorePending is armed only by a render WE schedule (see the arm watcher
+ * below) and consumed once after it. Chromium blurs a node the keyed diff moves
+ * as well as one the user clicks away from, and both report relatedTarget=null;
+ * the arm is what tells the two apart, so a plain click never steals focus back.
+ */
+let restorePending = false;
+/** lastFocusWasPointer marks a click's focus so it never nudges the scroll. */
+let lastFocusWasPointer = false;
 
 /** pinnedIndex is the pinned entry's index in the current listing, or -1. */
 const pinnedIndex = computed<number>(() => {
@@ -807,11 +823,25 @@ function scrollEntryIntoView(name: string): void {
 
 /** restoringFocus marks a programmatic focus restore so it does not re-scroll. */
 let restoringFocus = false;
+/** focusedEl is the exact control that held focus, restored after a re-render. */
+let focusedEl: HTMLElement | null = null;
 
-/** focusEntry focuses one rendered entry's own control, if it is in the DOM. */
+/** focusEntry restores focus to the exact control that had it, else the row. */
 function focusEntry(name: string | null): void {
   const el = scrollEl.value;
   if (name === null || el === null) {
+    return;
+  }
+  // Prefer the very control that held focus (a row's ⋮, checkbox, action): the
+  // keyed window keeps that node, so Tab continues from where it was.
+  if (
+    focusedEl !== null &&
+    focusedEl.isConnected &&
+    focusedEl.closest<HTMLElement>("[data-entry]")?.dataset.entry === name
+  ) {
+    restoringFocus = true;
+    focusedEl.focus({ preventScroll: true });
+    restoringFocus = false;
     return;
   }
   for (const node of el.querySelectorAll<HTMLElement>("[data-entry]")) {
@@ -830,68 +860,119 @@ function focusEntry(name: string | null): void {
 }
 
 /**
- * onListFocusIn remembers the focused row and keeps it visible: the pin keeps it
- * mounted when the user scrolls it out of the window (so focus is never dropped
- * to <body>), and the scroll clears the sticky header a Shift+Tab or a
- * programmatic focus left the row under. A restored focus must not re-scroll.
+ * onListFocusIn remembers the focused row and keeps it visible. The focus pin
+ * keeps the row mounted when the user scrolls it out of the window (so focus is
+ * never dropped to <body>), and the scroll clears the sticky header a Shift+Tab
+ * or a programmatic focus left the row under. A restored focus must not
+ * re-scroll, and neither must a click: a pointer focus should never nudge the
+ * list, so the scroll only runs for keyboard-initiated focus.
  */
 function onListFocusIn(event: FocusEvent): void {
-  const row = (event.target as HTMLElement | null)?.closest<HTMLElement>(
-    "[data-entry]",
-  );
+  const target = event.target as HTMLElement | null;
+  const row = target?.closest<HTMLElement>("[data-entry]");
   const name = row?.dataset.entry ?? null;
   if (name === null) {
     return;
   }
   focusedName.value = name;
-  pinnedName.value = name;
-  if (!restoringFocus) {
+  focusedEl = target;
+  if (!restoringFocus && !lastFocusWasPointer) {
     scrollEntryIntoView(name);
   }
 }
 
+/** releaseFocus drops the focus pin along with its remembered control. */
+function releaseFocus(): void {
+  focusedName.value = null;
+  focusedEl = null;
+}
+
 /**
- * onListFocusOut releases the pin once focus leaves the list for another place,
- * so off-window rows are not kept rendered forever. Focus moving to another row,
- * or into the (teleported) row menu, keeps the pin.
+ * onListFocusOut keeps the pin only while focus stays in the list (another row)
+ * or moves into its (teleported) row menu, and drops it when focus leaves.
  *
- * When focus falls to <body> the focused row was moved or unmounted by a window
- * re-render (Chromium blurs a node the keyed diff moves): the pin is kept and
- * the same entry is refocused once the re-render settles, so a scroll can never
- * strand a keyboard user.
+ * A `relatedTarget` of null is ambiguous — Chromium reports it both for a node
+ * our window re-render moved or unmounted and for a press on non-focusable
+ * content — so the pin is kept only when `restorePending` was armed by our own
+ * render; a plain blur releases it (and never refocuses).
  */
 function onListFocusOut(event: FocusEvent): void {
   const next = event.relatedTarget as Element | null;
-  if (next === null) {
-    if (focusedName.value === null) {
+  if (next !== null) {
+    if (scrollEl.value?.contains(next) || next.closest(".n-dropdown")) {
       return;
     }
-    void nextTick().then(() => {
-      if (document.activeElement !== document.body) {
-        return;
-      }
-      focusEntry(focusedName.value);
-    });
+    releaseFocus();
     return;
   }
-  if (scrollEl.value?.contains(next) || next.closest(".n-dropdown")) {
-    return;
+  if (!restorePending) {
+    releaseFocus();
   }
-  pinnedName.value = null;
 }
 
-/** closeRowMenu clears the menu pin; the row keeps its pin only if still focused. */
+/** closeRowMenu drops the menu's pin; a still-focused row stays pinned. */
 function closeRowMenu(): void {
-  const name = menuRowName.value;
   menuRowName.value = null;
-  if (
-    name !== null &&
-    pinnedName.value === name &&
-    focusedName.value !== name
-  ) {
-    pinnedName.value = null;
+}
+
+/**
+ * onContextShow keeps the context dropdown's model in step and releases the menu
+ * pin on every close route the dropdown itself drives (Escape, click-away), not
+ * just the ones we call closeRowMenu() from.
+ */
+function onContextShow(show: boolean): void {
+  contextOpen.value = show;
+  if (!show) {
+    closeRowMenu();
   }
 }
+
+// Arm a one-shot refocus for a render WE schedule, and consume it after the
+// patch. A keyed window change moves or unmounts the focused node and Chromium
+// blurs it; `restorePending` (armed pre-flush, before the patch) is what tells
+// that blur apart from a user press on the very next focusout. The post-flush
+// consumer runs whether or not the component re-rendered, so the arm can never
+// go stale. A pointerdown/keydown clears the arm first, so a user gesture wins.
+watch(
+  [listRows, gridRows],
+  () => {
+    restorePending = true;
+  },
+  { flush: "pre" },
+);
+watch(
+  [listRows, gridRows],
+  () => {
+    if (!restorePending) {
+      return;
+    }
+    restorePending = false;
+    if (document.activeElement !== document.body || focusedName.value === null) {
+      return;
+    }
+    focusEntry(focusedName.value);
+  },
+  { flush: "post" },
+);
+
+// A directory, tab or root change moves every row: the focused/menu name from
+// the previous listing must not survive (it could pin a same-named entry there).
+watch(
+  () => [files.activeTabId, files.rootName, files.path] as const,
+  () => {
+    releaseFocus();
+    closeRowMenu();
+  },
+);
+
+// The pinned entry itself disappearing (deleted, renamed, filtered out) releases
+// the pin rather than leaving a name that a same-named entry could match later.
+watch(pinnedIndex, (index) => {
+  if (index === -1) {
+    releaseFocus();
+    closeRowMenu();
+  }
+});
 
 // Move focus to the active tab as soon as it changes (nextTick), never after
 // the tab's listing finishes loading — otherwise the roving tabindex lags
@@ -1223,7 +1304,6 @@ function openRowContext(event: MouseEvent, entry: FilesEntry): void {
   contextEntry.value = entry;
   // Pin the row so its menu keeps its anchor while the list scrolls (JUS-137).
   menuRowName.value = entry.name;
-  pinnedName.value = entry.name;
   contextX.value = event.clientX;
   contextY.value = event.clientY;
   contextOpen.value = true;
@@ -1232,7 +1312,7 @@ function openRowContext(event: MouseEvent, entry: FilesEntry): void {
 /** openFolderContext opens the folder-level menu at the pointer. */
 function openFolderContext(event: MouseEvent): void {
   contextEntry.value = null;
-  menuRowName.value = null;
+  closeRowMenu();
   contextX.value = event.clientX;
   contextY.value = event.clientY;
   contextOpen.value = true;
@@ -1249,7 +1329,6 @@ function onRowKeydown(event: KeyboardEvent, entry: FilesEntry): void {
   files.selectForRowContext(entry);
   contextEntry.value = entry;
   menuRowName.value = entry.name;
-  pinnedName.value = entry.name;
   const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
   contextX.value = box.left + 16;
   contextY.value = box.top + box.height / 2;
@@ -1261,8 +1340,13 @@ function onRowKeydown(event: KeyboardEvent, entry: FilesEntry): void {
  * manual-trigger popover never auto-closes and naive's clickoutside misfires on
  * the menu's own items, so the listener is owned here: a press inside the
  * dropdown is ignored, anything else closes the menu.
+ *
+ * It also marks the press: a user gesture always wins over an armed refocus (the
+ * blur it causes is deliberate and must not snap focus back to a stale row).
  */
 function onDocumentPointerDown(event: PointerEvent): void {
+  restorePending = false;
+  lastFocusWasPointer = true;
   if (!contextOpen.value) {
     return;
   }
@@ -1274,12 +1358,20 @@ function onDocumentPointerDown(event: PointerEvent): void {
   closeRowMenu();
 }
 
-onMounted(() =>
-  document.addEventListener("pointerdown", onDocumentPointerDown, true),
-);
-onBeforeUnmount(() =>
-  document.removeEventListener("pointerdown", onDocumentPointerDown, true),
-);
+/** onDocumentKeyDown marks keyboard-initiated focus (and any key as a gesture). */
+function onDocumentKeyDown(): void {
+  restorePending = false;
+  lastFocusWasPointer = false;
+}
+
+onMounted(() => {
+  document.addEventListener("pointerdown", onDocumentPointerDown, true);
+  document.addEventListener("keydown", onDocumentKeyDown, true);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+  document.removeEventListener("keydown", onDocumentKeyDown, true);
+});
 
 /** onContextSelect dispatches a context-menu action and closes the menu. */
 function onContextSelect(key: string): void {
@@ -2022,15 +2114,18 @@ function onFolderMenu(key: string): void {
     <ConflictDialog />
 
     <!-- One controlled dropdown serves the row / empty-space context menu and
-         the Shift+F10 / menu key; x/y place it at the pointer or the row. -->
+         the Shift+F10 / menu key; x/y place it at the pointer or the row. The
+         explicit update:show handler releases the menu pin on the dropdown's
+         own close routes (Escape, click-away), not just our calls. -->
     <NDropdown
-      v-model:show="contextOpen"
+      :show="contextOpen"
       trigger="manual"
       placement="bottom-start"
       :x="contextX"
       :y="contextY"
       :options="contextOptions"
       :menu-props="() => ({ role: 'menu', 'aria-label': contextAria })"
+      @update:show="onContextShow"
       @select="onContextSelect"
     />
   </NCard>

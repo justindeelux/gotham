@@ -102,6 +102,33 @@ function bigListing() {
   ];
 }
 
+/**
+ * folderListing is the 150-entry listing inside `aaa-dir`. It deliberately ends
+ * with an entry named `file-0000.txt` — the same name the root listing has near
+ * its top — so a focus pin leaked from the root into this folder is observable
+ * (the entry sorts outside the folder's window).
+ */
+function folderListing(): Listing {
+  return [
+    ...Array.from({ length: 149 }, (_, index) => ({
+      name: `aaa-${String(index).padStart(4, "0")}.txt`,
+      kind: "file" as const,
+      size: 100 + index,
+      mode: 0o100644,
+      modified_at: "2026-10-12T09:02:00Z",
+      etag: `"f${index}"`,
+    })),
+    {
+      name: "file-0000.txt",
+      kind: "file" as const,
+      size: 7,
+      mode: 0o100644,
+      modified_at: "2026-10-12T09:02:00Z",
+      etag: '"fg"',
+    },
+  ];
+}
+
 let server: Server;
 let baseURL = "";
 
@@ -178,20 +205,7 @@ async function openFiles(page: Page): Promise<{ listing: Listing }> {
     const path = new URL(route.request().url()).searchParams.get("path") ?? "";
     if (path === "aaa-dir") {
       await route.fulfill({
-        json: {
-          entries: [
-            {
-              name: "hosts",
-              kind: "file",
-              size: 12,
-              mode: 0o100644,
-              modified_at: "2026-10-12T09:02:00Z",
-              etag: '"h"',
-            },
-          ],
-          truncated: false,
-          cursor: "",
-        },
+        json: { entries: folderListing(), truncated: false, cursor: "" },
       });
       return;
     }
@@ -328,14 +342,18 @@ test.describe("windowed list", () => {
     await openFiles(page);
     await rowFor(page, "aaa-dir").locator(".fm-label").focus();
     await page.keyboard.press("Enter");
-    await expect(page.locator(".fm-foot")).toContainText("1 entries");
-    await expect(page.locator(".fm-label").filter({ hasText: "hosts" })).toBeVisible();
+    await expect(page.locator(".fm-foot")).toContainText("150 entries");
+    await expect(
+      page.locator(".fm-label").filter({ hasText: "aaa-0000.txt" }),
+    ).toBeVisible();
   });
 
   test("double-click opens a rendered row", async ({ page }) => {
     await openFiles(page);
     await rowFor(page, "aaa-dir").locator(".fm-label").dblclick();
-    await expect(page.locator(".fm-label").filter({ hasText: "hosts" })).toBeVisible();
+    await expect(
+      page.locator(".fm-label").filter({ hasText: "aaa-0000.txt" }),
+    ).toBeVisible();
   });
 
   test("Shift+F10 opens the row menu on a focused windowed row", async ({ page }) => {
@@ -513,6 +531,80 @@ test.describe("keyboard focus retention across the window", () => {
     });
     await expect(menu).toBeVisible();
     await expect(rowFor(page, "file-0000.txt")).toHaveCount(1);
+  });
+
+  test("a click on another row's non-focusable cell does not steal focus back", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const label = rowFor(page, "aaa-dir").locator(".fm-label");
+    await label.focus();
+    await expect(label).toBeFocused();
+
+    // Click row B's Size cell: it is not focusable, so focus falls to <body>.
+    // The blur must NOT be read as our own re-render and pull focus back to A.
+    await rowFor(page, "file-0000.txt").locator(".fm-cell--size").click();
+    await expect.poll(() => focusedEntry(page)).not.toBe("aaa-dir");
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(0);
+
+    // Enter must not act on the stale row (which would open aaa-dir).
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".fm-foot")).toContainText("5000 entries");
+    await expect(rowFor(page, "aaa-dir")).toBeVisible();
+  });
+
+  test("a click on blank space does not steal focus back", async ({ page }) => {
+    await openFiles(page);
+    const label = rowFor(page, "file-0000.txt").locator(".fm-label");
+    await label.focus();
+    await expect(label).toBeFocused();
+
+    // The footer band is plain, non-focusable content outside the scroller.
+    await page.locator(".fm-foot .grow").click();
+    await expect.poll(() => focusedEntry(page)).not.toBe("file-0000.txt");
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(0);
+  });
+
+  test("dismissing the row menu with Escape releases the pin", async ({ page }) => {
+    await openFiles(page);
+    // Right-click (which does not move focus) then dismiss with Escape, which
+    // the dropdown drives itself via its show model.
+    await rowFor(page, "aaa-dir").click({ button: "right" });
+    const menu = page.getByRole("menu", { name: "More actions for aaa-dir" });
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(menu).toHaveCount(0);
+
+    // Scroll the row out of the window: nothing may stay pinned.
+    const wrap = page.locator(".table-wrap");
+    await wrap.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => wrap.evaluate((element) => element.scrollTop)).toBeGreaterThan(1000);
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(0);
+    await expect(rowFor(page, "aaa-dir")).toHaveCount(0);
+  });
+
+  test("a folder change resets the focus pin", async ({ page }) => {
+    await openFiles(page);
+    // Focus a root entry whose name (file-0000.txt) also exists inside aaa-dir,
+    // where it sorts outside the folder's window.
+    await rowFor(page, "file-0000.txt").locator(".fm-label").focus();
+    await expect(rowFor(page, "file-0000.txt").locator(".fm-label")).toBeFocused();
+
+    // Navigate through the folder's row menu: a right-click does not move focus,
+    // so a stale name would survive into the new listing and pin the same-named
+    // row there (file-0000.txt sorts outside the folder's window).
+    await rowFor(page, "aaa-dir").click({ button: "right" });
+    const menu = page.getByRole("menu", { name: "More actions for aaa-dir" });
+    await expect(menu).toBeVisible();
+    await menu.getByRole("menuitem", { name: "Open", exact: true }).click();
+
+    await expect(page.locator(".fm-foot")).toContainText("150 entries");
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(0);
+    await expect(
+      page.locator(".fm-table b").filter({ hasText: "file-0000.txt" }),
+    ).toHaveCount(0);
   });
 });
 

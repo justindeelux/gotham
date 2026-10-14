@@ -29,6 +29,7 @@ const vi = {
     openFolder: "Mở {name}",
     downloadFile: "Tải {name}",
     deleteEntry: "Xóa {name}",
+    renameEntry: "Đổi tên {name}",
     moreActions: "Thêm thao tác cho {name}",
     folderActions: "Thao tác thư mục",
     fileNeedsRole: "Nội dung tệp yêu cầu vai trò chủ sở hữu hoặc quản trị.",

@@ -1334,9 +1334,9 @@ function onFolderMenu(key: string): void {
             </div>
             <div class="fm-actions" role="cell">
               <!-- The inline actions (.fm-action) stay hover/focus-revealed on
-                   pointer devices; the ⋮ menu button below never hides, so
-                   touch and keyboard users reach the row menu without a hover
-                   (JUS-133). -->
+                   pointer devices; the ⋮ menu button below stays visible
+                   whenever the row has actions, so touch and keyboard users
+                   reach the row menu without a hover (JUS-133). -->
               <NButton
                 v-if="entry.kind === 'directory'"
                 class="fm-action"
@@ -1382,8 +1382,8 @@ function onFolderMenu(key: string): void {
                 class="fm-action"
                 size="tiny"
                 quaternary
-                :title="$t('files.actions.rename')"
-                :aria-label="$t('files.actions.rename')"
+                :title="$t('files.browser.renameEntry', { name: entry.name })"
+                :aria-label="$t('files.browser.renameEntry', { name: entry.name })"
                 @click="openRename(entry)"
               >
                 <template #icon>
@@ -1403,6 +1403,8 @@ function onFolderMenu(key: string): void {
                   <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
                 </template>
               </NButton>
+              <!-- A row with no actions (a special/unspecified entry) has no
+                   menu, so there is deliberately no ⋮ to open an empty menu. -->
               <NDropdown
                 v-if="rowMenu(entry).length > 0"
                 trigger="click"
@@ -2045,8 +2047,9 @@ function onFolderMenu(key: string): void {
 }
 
 /* Inline row actions (open/download/extract/rename/delete) reveal on row hover
-   or keyboard focus / selection; the ⋮ menu button is never hidden, so touch
-   and keyboard users reach the row menu without a hover (JUS-133). */
+   or keyboard focus / selection; the ⋮ menu button is never hidden when the row
+   has actions, so touch and keyboard users reach the row menu without a hover
+   (JUS-133). */
 .fm-actions .fm-action {
   opacity: 0;
   transition: opacity var(--motion-base) var(--ease-standard);
@@ -2056,6 +2059,15 @@ function onFolderMenu(key: string): void {
 .fm-row:focus-within .fm-actions .fm-action,
 .fm-row.is-selected .fm-actions .fm-action {
   opacity: 1;
+}
+
+/* A disabled action (a file's Download without the content role) keeps naive's
+   dimmed opacity when revealed: these selectors out-specify both the reveal
+   rule above and naive's own .n-button--disabled rule. */
+.fm-row:hover .fm-actions .fm-action.n-button--disabled,
+.fm-row:focus-within .fm-actions .fm-action.n-button--disabled,
+.fm-row.is-selected .fm-actions .fm-action.n-button--disabled {
+  opacity: var(--n-opacity-disabled, 0.5);
 }
 
 .fm-grid {
@@ -2200,7 +2212,14 @@ function onFolderMenu(key: string): void {
 }
 
 @media (hover: none) {
-  .fm-actions .fm-action,
+  .fm-actions .fm-action {
+    opacity: 1;
+  }
+
+  .fm-actions .fm-action.n-button--disabled {
+    opacity: var(--n-opacity-disabled, 0.5);
+  }
+
   .fm-select {
     opacity: 1;
   }
@@ -2212,7 +2231,7 @@ function onFolderMenu(key: string): void {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fm-actions,
+  .fm-actions .fm-action,
   .fm-select,
   .fm-tile-check,
   .fm-sort-arrow {

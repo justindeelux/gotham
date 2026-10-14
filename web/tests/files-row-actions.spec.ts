@@ -17,7 +17,9 @@ import type { Locator, Page } from "@playwright/test";
 //   - on a touch device (hover: none) the whole action set is visible and the
 //     ⋮ opens the row menu;
 //   - every icon-only control (toolbar + row actions) has an accessible name
-//     (aria-label) and a tooltip (title).
+//     (aria-label) and a tooltip (title), in English and Vietnamese;
+//   - a disabled row action (a file's Download without the content role) stays
+//     dimmed when revealed instead of being forced fully opaque.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -123,12 +125,29 @@ test.afterAll(async () => {
   });
 });
 
+/** OpenOptions tunes the seeded team role and UI locale per test. */
+interface OpenOptions {
+  entries?: ReturnType<typeof listing>;
+  /** Team role; anything but owner/admin hides the content (download) gate. */
+  role?: string;
+  /** UI locale stored before boot (defaults to English). */
+  locale?: string;
+}
+
 /** openFiles seeds a session, mocks the file API and lands on the browser. */
-async function openFiles(page: Page, entries = listing()): Promise<void> {
+async function openFiles(page: Page, options: OpenOptions = {}): Promise<void> {
+  const entries = options.entries ?? listing();
+  const role = options.role ?? "owner";
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.addInitScript((value) => {
-    window.localStorage.setItem("gotham.auth.session", value);
-  }, JSON.stringify(session));
+  await page.addInitScript(
+    ({ sessionValue, storedLocale }) => {
+      window.localStorage.setItem("gotham.auth.session", sessionValue);
+      if (storedLocale !== "") {
+        window.localStorage.setItem("gotham-locale", storedLocale);
+      }
+    },
+    { sessionValue: JSON.stringify(session), storedLocale: options.locale ?? "" },
+  );
   await page.route("**/api/v1/**", async (route) => {
     await route.fulfill({ json: {} });
   });
@@ -136,7 +155,7 @@ async function openFiles(page: Page, entries = listing()): Promise<void> {
     await route.fulfill({ json: session.user });
   });
   await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [team] } });
+    await route.fulfill({ json: { teams: [{ ...team, role }] } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -191,9 +210,9 @@ test.describe("icon-only controls are accessible", () => {
     await row.locator(".fm-label").focus();
     await expect(inline.first()).toHaveCSS("opacity", "1");
 
-    // The ⋮ button is the last focusable control and stays visible once focused.
+    // Focusing the ⋮ also keeps the row's inline actions revealed (focus-within).
     await more.focus();
-    await expect(more).toHaveCSS("opacity", "1");
+    await expect(inline.first()).toHaveCSS("opacity", "1");
   });
 
   test("every toolbar and row icon-only control has an aria-label and a title", async ({
@@ -210,7 +229,7 @@ test.describe("icon-only controls are accessible", () => {
     const fileRow = rowFor(page, "app.yaml");
     for (const label of [
       "Download app.yaml",
-      "Rename",
+      "Rename app.yaml",
       "Delete app.yaml",
       "More actions for app.yaml",
     ]) {
@@ -227,7 +246,7 @@ test.describe("icon-only controls are accessible", () => {
     const folderRow = rowFor(page, "config");
     for (const label of [
       "Open config",
-      "Rename",
+      "Rename config",
       "Delete config",
       "More actions for config",
     ]) {
@@ -262,6 +281,79 @@ test.describe("icon-only controls are accessible", () => {
       page.getByRole("button", { name: "More actions for run.sock" }),
     ).toHaveCount(0);
   });
+
+  test("a disabled row action stays dimmed when the row is revealed", async ({
+    page,
+  }) => {
+    // A member cannot read content, so a file's Download action is disabled.
+    await openFiles(page, { role: "member" });
+    const row = rowFor(page, "app.yaml");
+    const download = row.getByRole("button", {
+      name: "Download app.yaml",
+      exact: true,
+    });
+    await expect(download).toBeDisabled();
+
+    // naive renders a disabled button at its --n-opacity-disabled value; the
+    // fix must keep exactly that when the row reveals the action. Read the
+    // value first so the assertion pins the dim rather than an arbitrary half.
+    const dim = await download.evaluate((element) =>
+      window
+        .getComputedStyle(element)
+        .getPropertyValue("--n-opacity-disabled")
+        .trim(),
+    );
+    expect(dim).not.toBe("");
+    expect(Number(dim)).toBeLessThan(1);
+
+    // Hidden at rest, exactly like the enabled inline actions...
+    await expect(download).toHaveCSS("opacity", "0");
+
+    // ...and dimmed to naive's disabled value once the reveal transition
+    // settles. (Before the fix the reveal rule forced it to opacity 1.)
+    await row.hover();
+    await expect(download).toHaveCSS("opacity", dim);
+  });
+
+  test("row and toolbar labels are localized (vi)", async ({ page }) => {
+    await openFiles(page, { locale: "vi" });
+
+    const fileRow = rowFor(page, "app.yaml");
+    for (const label of [
+      "Tải app.yaml",
+      "Đổi tên app.yaml",
+      "Xóa app.yaml",
+      "Thêm thao tác cho app.yaml",
+    ]) {
+      const button = fileRow.getByRole("button", { name: label, exact: true });
+      await expect(button, label).toHaveAttribute("aria-label", label);
+      await expect(button, label).toHaveAttribute("title", label);
+    }
+    await expect(
+      rowFor(page, "config").getByRole("button", { name: "Mở config", exact: true }),
+    ).toHaveAttribute("title", "Mở config");
+
+    // The toolbar's icon-only labels are localized too.
+    await page.locator(".fm-head .n-checkbox").click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator(".fm-btn-label").first()).toBeHidden();
+    for (const name of [
+      "Tạo mới",
+      "Tải lên",
+      "Tải về",
+      "Sao chép",
+      "Cắt",
+      "Nén…",
+      "Xóa",
+      "Bỏ chọn",
+    ]) {
+      const button = page
+        .locator(".fm-toolbar")
+        .getByRole("button", { name, exact: true });
+      await expect(button, name).toHaveAttribute("aria-label", name);
+      await expect(button, name).toHaveAttribute("title", name);
+    }
+  });
 });
 
 test.describe("touch devices", () => {
@@ -284,5 +376,22 @@ test.describe("touch devices", () => {
       page.getByRole("menu", { name: "More actions for app.yaml" }),
     ).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Edit in editor" })).toBeVisible();
+  });
+
+  test("a disabled row action stays dimmed under hover:none", async ({ page }) => {
+    await openFiles(page, { role: "member" });
+    const download = rowFor(page, "app.yaml").getByRole("button", {
+      name: "Download app.yaml",
+      exact: true,
+    });
+    const dim = await download.evaluate((element) =>
+      window
+        .getComputedStyle(element)
+        .getPropertyValue("--n-opacity-disabled")
+        .trim(),
+    );
+    expect(Number(dim)).toBeGreaterThan(0);
+    expect(Number(dim)).toBeLessThan(1);
+    await expect(download).toHaveCSS("opacity", dim);
   });
 });

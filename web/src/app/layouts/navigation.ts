@@ -1,13 +1,13 @@
 import type { IconName } from "@/shared/ui/GothamIcon.vue";
 
-/** Sidebar entry: `to` is the route name rendered as a link. */
+/** Sidebar entry: every entry links to a shipped route via `to`. */
 export interface NavItem {
   key: string;
   label: string;
   /** labelKey renders the item label in the active locale (stable key). */
   labelKey: string;
   icon: IconName;
-  to?: string;
+  to: string;
   /** adminOnly hides the entry from callers who are not platform operators. */
   adminOnly?: boolean;
 }

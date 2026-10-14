@@ -42,21 +42,17 @@ const activeKey = computed<string>(() => activeNavKey(route.path));
     <nav class="sidebar-body">
       <template v-for="section in navSections" :key="section.labelKey">
         <p class="nav-label">{{ t(section.labelKey) }}</p>
-        <template
+        <RouterLink
           v-for="item in section.items.filter((i) => !i.adminOnly || authStore.isPlatformAdmin)"
           :key="item.key"
+          class="nav-item"
+          :class="{ 'is-active': activeKey === item.key }"
+          :to="{ name: item.to }"
         >
-          <RouterLink
-            v-if="item.to"
-            class="nav-item"
-            :class="{ 'is-active': activeKey === item.key }"
-            :to="{ name: item.to }"
-          >
-            <GothamIcon :name="item.icon" />
-            <span>{{ t(item.labelKey) }}</span>
-            <span v-if="item.key === 'servers'" class="nav-count">{{ serversCount }}</span>
-          </RouterLink>
-        </template>
+          <GothamIcon :name="item.icon" />
+          <span>{{ t(item.labelKey) }}</span>
+          <span v-if="item.key === 'servers'" class="nav-count">{{ serversCount }}</span>
+        </RouterLink>
       </template>
     </nav>
     <div class="sidebar-foot">

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 
@@ -27,21 +27,16 @@ const alertsLabelText = computed<string>(() =>
   t("servers.rail.alerts", { text: alertText.value }),
 );
 
-// The persistent rail owns the shared server poll: it arms the interval on
-// mount and is the only component that clears it (on its own unmount). Pages
-// fetch on mount but never stop the timer, so navigation cannot freeze the rail
-// dots (B4-7).
+// The shared server poll is owned by the app shell (AppLayout), which stays
+// mounted for the whole session: the rail itself unmounts below the tablet
+// breakpoint (it becomes a drawer), so it must never start or stop the shared
+// timer. The rail only seeds the list when nothing has loaded it yet.
 onMounted(() => {
   if (serversStore.servers.length === 0) {
     void serversStore.fetchServers().catch(() => {
       // Read-only rail: the servers page surfaces load errors.
     });
   }
-  serversStore.pollServers();
-});
-
-onUnmounted(() => {
-  serversStore.stopPolling();
 });
 </script>
 

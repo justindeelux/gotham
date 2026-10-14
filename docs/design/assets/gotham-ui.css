@@ -717,12 +717,16 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 0; }
   .context { display: none; }
 }
 @media (max-width: 1024px) {
-  /* The sidebar leaves the flow (position: fixed) → declare only rail + content. */
-  .app, .app.is-collapsed { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
-  .sidebar { position: fixed; left: var(--rail-w); top: 0; bottom: 0; width: var(--sidebar-w); z-index: 90;
+  /* JUS-135: the rail (a drawer below the tablet breakpoint) leaves the grid,
+     so only the content column remains in flow; the sidebar overlays it. */
+  .app, .app.is-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { position: fixed; left: 0; top: 0; bottom: 0; width: var(--sidebar-w); z-index: 90;
     border-right: 1px solid var(--border-soft); box-shadow: var(--elev-raised); visibility: hidden; }
   .app.is-open .sidebar { visibility: visible; }
-  .nav-toggle { display: inline-flex !important; }
+  .rail { position: fixed; left: 0; top: 0; bottom: 0; width: var(--rail-w); z-index: 95;
+    visibility: hidden; box-shadow: var(--elev-raised); }
+  .app.is-rail-open .rail { visibility: visible; }
+  .nav-toggle, .rail-toggle { display: inline-flex !important; }
   .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .page { padding: var(--space-5) var(--space-5) var(--space-8); }
 }

@@ -923,7 +923,7 @@ function onFolderMenu(key: string): void {
                listing) lives next to the Root selector instead of a bar at
                the page bottom. -->
           <slot name="header-tools" />
-          <span class="small muted">{{ $t("files.browser.rootLabel") }}</span>
+          <span class="small muted fm-field-label">{{ $t("files.browser.rootLabel") }}</span>
           <NSelect
             v-model:value="selectedRoot"
             class="fm-root-select"
@@ -1102,11 +1102,11 @@ function onFolderMenu(key: string): void {
         </template>
       </NInput>
 
-      <NButton size="small" secondary :loading="files.loading" @click="files.refresh()">
+      <NButton size="small" secondary :loading="files.loading" :title="$t('files.browser.refresh')" :aria-label="$t('files.browser.refresh')" @click="files.refresh()">
         <template #icon>
           <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
         </template>
-        {{ $t("files.browser.refresh") }}
+        <span class="fm-btn-label">{{ $t("files.browser.refresh") }}</span>
       </NButton>
 
       <!-- The bin belongs to the root, not the folder, so it lives on the path
@@ -1122,7 +1122,7 @@ function onFolderMenu(key: string): void {
         <template #icon>
           <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
         </template>
-        {{ $t("files.browser.recycleBin") }}
+        <span class="fm-btn-label">{{ $t("files.browser.recycleBin") }}</span>
       </NButton>
 
       <div class="fm-toolbar-group fm-toolbar-end">
@@ -1540,8 +1540,8 @@ function onFolderMenu(key: string): void {
 
       <div class="fm-foot">
         <span class="grow">{{ footSummary }}</span>
-        <span v-if="files.rootName !== ''">{{ $t("files.browser.currentPath", { path: currentPath }) }}</span>
-        <span>{{ $t("files.browser.freeSpace", { free: formatBytes(files.freeBytes) }) }}</span>
+        <span v-if="files.rootName !== ''" class="fm-foot-path">{{ $t("files.browser.currentPath", { path: currentPath }) }}</span>
+        <span class="fm-foot-free">{{ $t("files.browser.freeSpace", { free: formatBytes(files.freeBytes) }) }}</span>
       </div>
     </template>
     </div>
@@ -1766,7 +1766,9 @@ function onFolderMenu(key: string): void {
 }
 
 /* Small screens drop the toolbar labels, leaving icon-only buttons whose
-   accessible name comes from each button's aria-label + title (JUS-120). */
+   accessible name comes from each button's aria-label + title (JUS-120).
+   JUS-135's phone layout rules live at the end of this stylesheet (after the
+   base rules they override). */
 @media (max-width: 640px) {
   .fm-btn-label {
     display: none;
@@ -2303,6 +2305,132 @@ function onFolderMenu(key: string): void {
   color: var(--accent-ink);
   font-weight: 500;
   pointer-events: none;
+}
+
+/* ── JUS-135: phone layout ────────────────────────────────────────────────
+   At 390px the toolbar used to wrap to four rows and the selection cluster
+   squeezed the list to ~1.5 rows. The rules below (deliberately last, so they
+   win over the desktop base rules):
+   - trim the card padding and the inter-block rhythm so the fixed chrome is
+     a thin band;
+   - put the selection cluster (count + Download/Copy/Cut/Compress/Delete/
+     Clear) on its own full-width row that never wraps and scrolls
+     horizontally when a long selection or touch-sized targets overflow it, so
+     every action stays reachable and the row count (hence the list height) is
+     the same with and without a selection (JUS-130);
+   - keep Root/view toggle/tabs to one or two compact rows. */
+@media (max-width: 640px) {
+  .files-browser :deep(.n-card-header) {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .files-browser :deep(.n-card-content) {
+    padding: 0 var(--space-3) var(--space-2);
+  }
+
+  .fm-card-head {
+    gap: var(--space-2);
+  }
+
+  /* JUS-135: the card heading is redundant on a phone (the page/environment
+     already name the view) and keeping it forces the node/root/view controls
+     onto a second row. */
+  .fm-card-title {
+    display: none;
+  }
+
+  .fm-card-tools {
+    gap: var(--space-2);
+  }
+
+  /* The "Root" caption is redundant at this width: the control keeps its
+     accessible name through aria-label. (The slotted "Agent node" caption is
+     hidden by ServerFilesPage, which owns that slot content.) */
+  .fm-field-label {
+    display: none;
+  }
+
+  .fm-root-select {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 90px;
+  }
+
+  .fm-tabs,
+  .fm-toolbar {
+    margin-bottom: var(--space-1);
+  }
+
+  /* Slimmer tab strip/footer band: every pixel here is list height. */
+  .fm-tab {
+    padding: 6px 9px;
+  }
+
+  .fm-tab-add {
+    width: 30px;
+    height: 30px;
+  }
+
+  /* Row 1: create/upload group + the breadcrumb (scrolls, never wraps). */
+  .fm-path {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  /* Row 2: the folder filter, then Refresh and Recycle bin. */
+  .fm-search {
+    min-width: 0;
+    max-width: none;
+    flex: 1 1 120px;
+    margin-left: 0;
+  }
+
+  /* Row 3: the selection cluster, full width. */
+  .fm-toolbar-end {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+  }
+
+  .fm-bulk-count {
+    width: auto;
+    min-width: 0;
+    /* Keep the count at its natural width; the scrolling action row absorbs
+       the shrink instead of clipping the count text (JUS-135). */
+    flex: 0 0 auto;
+  }
+
+  .fm-selection-actions {
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  /* Every selection action is a 44px touch target on a phone (the row
+     scrolls, so the larger targets never squeeze the toolbar). */
+  .fm-selection-actions :deep(.n-button) {
+    min-width: 44px;
+    height: 44px;
+  }
+
+  /* Compact phone footer: the entry summary is the useful line; the path and
+     the free-space readout duplicate the breadcrumb/root. */
+  .fm-foot {
+    gap: var(--space-3);
+    margin-top: 2px;
+    padding-top: 6px;
+  }
+
+  .fm-foot-path,
+  .fm-foot-free {
+    display: none;
+  }
 }
 
 @media (hover: none) {

@@ -1079,11 +1079,12 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--border);
 }
 
-/* At <=1024px the sidebar column is collapsed (AppLayout grid), so the dock
-   starts right after the rail. --rail-w is re-declared on .app at <=640px. */
+/* At <=1024px the sidebar column leaves the flow and the rail becomes a
+   drawer (AppLayout grid), so the content column starts at x=0 and the dock
+   must too (JUS-135). */
 @media (max-width: 1024px) {
   .ed-dock {
-    left: var(--rail-w);
+    left: 0;
   }
 }
 

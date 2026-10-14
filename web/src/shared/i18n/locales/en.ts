@@ -75,6 +75,7 @@ const en = {
   },
   shell: {
     navToggle: "Toggle navigation",
+    serversToggle: "Toggle servers",
     envTitle: "Serving environment: {env}",
     cpPortTitle: "Control-plane HTTP port",
     grpcPortTitle: "Agent gRPC port",

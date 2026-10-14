@@ -1,14 +1,28 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { useMediaQuery } from "@vueuse/core";
+import { computed, onMounted, onUnmounted } from "vue";
 import { RouterView, useRoute } from "vue-router";
 
 import { TaskProgressCards } from "@/features/tasks";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
+import { useServersStore } from "@/features/servers";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
 import { provideMobileNav } from "./useMobileNav";
 
 const { mobileNavOpen, closeMobileNav } = provideMobileNav();
+const serversStore = useServersStore();
+
+// JUS-135: below the tablet breakpoint the rail leaves the grid column and
+// moves into the rail drawer (AppTopbar). Only one ServerRail is mounted at a
+// time (the grid copy above 1024px, the drawer copy below).
+const isMobile = useMediaQuery("(max-width: 1024px)");
+
+// JUS-135: the shared server poll belongs to the shell, not the rail. The rail
+// unmounts (its drawer closes, or the viewport crosses the breakpoint), so it
+// must never stop a poll the topbar drawer and every page still rely on.
+onMounted(() => serversStore.pollServers());
+onUnmounted(() => serversStore.stopPolling());
 
 // A route with `fillViewport` owns its own scrolling region (see the file
 // browser, JUS-118): the page spans the viewport and never scrolls itself.
@@ -21,7 +35,7 @@ const fillViewport = computed(() => route.meta.fillViewport === true);
     class="app"
     :class="{ 'is-open': mobileNavOpen }"
   >
-    <ServerRail />
+    <ServerRail v-if="!isMobile" />
 
     <AppSidebar />
 
@@ -102,8 +116,10 @@ const fillViewport = computed(() => route.meta.fillViewport === true);
 }
 
 @media (max-width: 1024px) {
+  /* JUS-135: the rail has left the grid (it is a drawer now), so the single
+     remaining in-flow column is the content; the fixed sidebar overlays it. */
   .app {
-    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .page {
@@ -112,12 +128,15 @@ const fillViewport = computed(() => route.meta.fillViewport === true);
 }
 
 @media (max-width: 640px) {
-  .app {
-    --rail-w: 60px;
-  }
-
   .page {
     padding: var(--space-4) var(--space-4) var(--space-8);
+  }
+
+  /* JUS-135: on a phone the fill page keeps a tighter band so the file list
+     (the only scrolling region) gets more of the viewport. */
+  .page.page--fill {
+    padding-top: var(--space-2);
+    padding-bottom: calc(var(--space-2) + var(--ed-dock-h, 0px));
   }
 }
 

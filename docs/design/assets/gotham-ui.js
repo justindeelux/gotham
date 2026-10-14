@@ -184,6 +184,7 @@
     const host = document.getElementById("topbar");
     if (!host) return;
     host.innerHTML =
+      '<button class="btn btn-ghost btn-icon rail-toggle" type="button" data-rail-toggle aria-label="Mở danh sách máy chủ">' + ic("i-server") + "</button>" +
       '<button class="btn btn-ghost btn-icon nav-toggle" type="button" data-nav-toggle aria-label="Mở điều hướng">' + ic("i-grid") + "</button>" +
       '<span class="row gap-2"><span class="status-line">' + ic("i-shield") + 'production</span>' +
       '<span class="channel-chip">CP :8000</span><span class="channel-chip">gRPC :9442</span></span>' +
@@ -878,6 +879,23 @@
       navToggle.addEventListener("click", function () {
         const open = document.querySelector(".app").classList.toggle("is-open");
         backdrop.hidden = !open;
+      });
+    }
+    /* JUS-135: below the tablet breakpoint the server rail is a drawer opened
+       from the topbar (the app ships this as a Naive UI NDrawer). */
+    const railToggle = document.querySelector("[data-rail-toggle]");
+    if (railToggle) {
+      const railBackdrop = document.createElement("div");
+      railBackdrop.className = "nav-backdrop rail-backdrop";
+      railBackdrop.hidden = true;
+      railBackdrop.addEventListener("click", function () {
+        document.querySelector(".app").classList.remove("is-rail-open");
+        railBackdrop.hidden = true;
+      });
+      document.body.appendChild(railBackdrop);
+      railToggle.addEventListener("click", function () {
+        const open = document.querySelector(".app").classList.toggle("is-rail-open");
+        railBackdrop.hidden = !open;
       });
     }
     initTabs();

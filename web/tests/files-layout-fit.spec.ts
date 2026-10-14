@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global document:readonly, HTMLElement:readonly, URL, window:readonly */
+/* global document:readonly, HTMLElement:readonly, requestAnimationFrame:readonly, URL, window:readonly */
 // JUS-118/119/120 layout proof: the committed webdist is served statically with
 // the control-plane file API mocked in real Chromium. Measured claims:
 //   - JUS-118 the browser panel fills the viewport and only the entry list
@@ -402,6 +402,207 @@ test("bulk actions stay reachable with a selection at every width", async ({
   }
 });
 
+// JUS-134/JUS-141: selecting a row must not reflow the toolbar, or the second
+// click of a double-click lands on a different row. The count cell stacks a
+// hidden reserve sizer and the live summary in one grid area, so its width is
+// max(reserve, live) in every selection state and the toolbar's height is the
+// same before and after the first click at every width. The fixture is the
+// MED-1 boundary: total "1.00 MiB" but a subset "1023.0 KiB" (formatBytes is
+// non-monotonic), plus a long name.
+async function firstRowY(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      (
+        document.querySelector(".fm-table .fm-row:not(.fm-head)") as HTMLElement
+      ).getBoundingClientRect().y,
+  );
+}
+
+/** installListing overrides the listing route with the given entries. */
+async function installListing(page: Page, entries: unknown[]): Promise<void> {
+  await page.route(`**/api/v1/servers/${server1}/files/list*`, async (route) => {
+    await route.fulfill({ json: { entries, truncated: false, cursor: "" } });
+  });
+}
+
+/** installBoundaryListing overrides the listing with a formatBytes boundary. */
+async function installBoundaryListing(page: Page, count: number): Promise<void> {
+  const entries = Array.from({ length: count }, (_, index) =>
+    index === 0
+      ? {
+          name: "a-very-long-entry-name-that-uses-the-whole-name-column-backup.tar.gz",
+          kind: "file",
+          size: 1047552,
+          mode: 0o100644,
+          modified_at: "2026-10-12T09:02:00Z",
+          etag: '"big"',
+        }
+      : {
+          name: `small-${index}.txt`,
+          kind: "file",
+          size: Math.floor(1024 / (count - 1)),
+          mode: 0o100644,
+          modified_at: "2026-10-12T09:02:00Z",
+          etag: `"s${index}"`,
+        },
+  );
+  await installListing(page, entries);
+}
+
+/** settleLayout waits for the responsive re-layout after a viewport change. */
+async function settleLayout(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+}
+
+/** countCellWidth is the count cell's rendered width. */
+async function countCellWidth(page: Page): Promise<number> {
+  return page
+    .locator(".fm-bulk-count")
+    .evaluate((element) => element.getBoundingClientRect().width);
+}
+
+/** assertStableOnSelect measures the count-cell width and first-row y on select
+ *  and clear, so a reserve narrower than the live summary (a widened cell that
+ *  wraps the toolbar) fails loudly. */
+async function assertStableOnSelect(page: Page, widths: number[]): Promise<void> {
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 1024 });
+    await settleLayout(page);
+    const beforeY = await firstRowY(page);
+    const beforeWidth = await countCellWidth(page);
+
+    await page.locator(".fm-label").first().click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+    const selectedWidth = await countCellWidth(page);
+    expect(
+      Math.abs(selectedWidth - beforeWidth),
+      `count cell width delta on select at ${width}px`,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      Math.abs((await firstRowY(page)) - beforeY),
+      `row shift on select at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+
+    // Clear via the last bulk button (locale-agnostic: its label is translated).
+    await page.locator(".fm-selection-actions .n-button").last().click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
+    expect(
+      Math.abs((await firstRowY(page)) - beforeY),
+      `row shift on clear at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+  }
+}
+
+/** assertNoRowShift measures the first-row y across select and clear. */
+async function assertNoRowShift(page: Page, widths: number[]): Promise<void> {
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 1024 });
+    await settleLayout(page);
+    const before = await firstRowY(page);
+
+    await page.locator(".fm-label").first().click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+    const selected = await firstRowY(page);
+    expect(
+      Math.abs(selected - before),
+      `row shift on select at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+
+    // Clear via the last bulk button (locale-agnostic: its label is translated).
+    await page.locator(".fm-selection-actions .n-button").last().click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
+    const cleared = await firstRowY(page);
+    expect(
+      Math.abs(cleared - before),
+      `row shift on clear at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+  }
+}
+
+test("selecting a row never shifts the list across 700-1500px", async ({ page }) => {
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 1280, height: 1024 });
+  await mockApi(page);
+  await installBoundaryListing(page, 5);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(5);
+
+  // The 5-entry fixture exposes the formatBytes boundary on a single click
+  // ("5 selected · 1.00 MiB" reserve vs "1 selected · 1023.0 KiB" live); 796,
+  // 802 and 808 are inside the even step-2 sweep.
+  const widths: number[] = [];
+  for (let width = 700; width <= 1500; width += 2) {
+    widths.push(width);
+  }
+  await assertNoRowShift(page, widths);
+});
+
+test("the count cell never widens at the 100x-unit rounding boundary", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 1280, height: 1024 });
+  await mockApi(page);
+  // A folder of 102399 + 1 bytes: the total formats "100.0 KiB" but a subset
+  // (the 102399-byte entry) formats the WIDER "100.00 KiB" (formatBytes drops
+  // from 2 to 1 decimal at 100, and toFixed rounds 99.999 up). This is the
+  // round-2 BLOCK-1 counterexample; the guard must fail on it.
+  await installListing(page, [
+    {
+      name: "almost-one-hundred-kib.bin",
+      kind: "file",
+      size: 102399,
+      mode: 0o100644,
+      modified_at: "2026-10-12T09:02:00Z",
+      etag: '"a"',
+    },
+    {
+      name: "one-byte.bin",
+      kind: "file",
+      size: 1,
+      mode: 0o100644,
+      modified_at: "2026-10-12T09:02:00Z",
+      etag: '"b"',
+    },
+  ]);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(2);
+
+  // The reported band, then the full dense sweep.
+  const widths = [808, 810, 812, 1148, 1150, 1152];
+  for (let width = 700; width <= 1500; width += 2) {
+    widths.push(width);
+  }
+  await assertStableOnSelect(page, widths);
+});
+
+test("selecting a row never shifts the list in vi with a large count", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 1280, height: 1024 });
+  await page.addInitScript(() => {
+    window.localStorage.setItem("gotham-locale", "vi");
+  });
+  await mockApi(page);
+  await installBoundaryListing(page, 1500);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  // The list windows, so assert the folder total (via the reserve sizer) rather
+  // than the rendered rows. Localized copy, so match the count only.
+  await expect(page.locator(".fm-bulk-count-reserve")).toContainText("1500");
+
+  const widths: number[] = [];
+  for (let width = 700; width <= 1500; width += 6) {
+    widths.push(width);
+  }
+  await assertNoRowShift(page, widths);
+});
+
 // JUS-135: the phone toolbar must not eat the list. With a selection active
 // (the tallest chrome state) the entry list keeps at least 60% of an iPhone-14
 // viewport.
@@ -683,15 +884,24 @@ test("the folder filter resets on navigation and the footer counts the filtered 
   const search = page.locator(".fm-search input");
   await search.fill("etc");
 
-  // While filtering, the footer says how many of the folder's entries show.
+  // While filtering, the footer says how many of the folder's entries show,
+  // and the breakdown follows the filtered rows: only the matching directory
+  // is counted, so the whole folder's "2 folders · 1 symlink" is not mixed in
+  // (JUS-141).
   await expect(page.locator(".fm-foot")).toContainText("1 of 3 entries");
+  await expect(page.locator(".fm-foot")).toContainText("1 folder");
+  await expect(page.locator(".fm-foot")).not.toContainText("symlink");
 
   // Opening the filtered folder clears the needle: its own listing is not
   // silently hidden behind the stale filter.
   await page.locator(".fm-label").filter({ hasText: "etc" }).dblclick();
   await expect(page.locator(".fm-label").filter({ hasText: "hosts" })).toBeVisible();
   await expect(search).toHaveValue("");
-  await expect(page.locator(".fm-foot")).toContainText("1 entries");
+  await expect(page.locator(".fm-foot")).toContainText("1 entry");
+
+  // A filtered single-entry folder reads "1 of 1 entry", not "1 of 1 entries".
+  await search.fill("hosts");
+  await expect(page.locator(".fm-foot")).toContainText("1 of 1 entry");
 });
 
 test("a symlink row shows its target and can jump to it", async ({ page }) => {

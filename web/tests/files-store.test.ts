@@ -236,6 +236,45 @@ describe("files store navigation", () => {
     expect(store.query).toBe("");
   });
 
+  it("clears a stale filter when re-validation replaces a removed root", async () => {
+    vi.mocked(listRoots).mockResolvedValue([root, readOnlyRoot]);
+    vi.mocked(listEntries).mockResolvedValue(listing);
+
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    // The active tab browses the read-only root with a filter typed for it.
+    await store.setRoot("compose");
+    store.setQuery("app");
+    expect(store.query).toBe("app");
+
+    // The root disappears from the refreshed list and the next loadAll
+    // re-validates every tab: the tab drops to volumes and its now-meaningless
+    // filter goes with it (JUS-141).
+    vi.mocked(listRoots).mockResolvedValue([root]);
+    await store.init("server-1");
+
+    expect(store.rootName).toBe("volumes");
+    expect(store.path).toBe("");
+    expect(store.query).toBe("");
+  });
+
+  it("tallies only the visible rows while filtering", async () => {
+    vi.mocked(listRoots).mockResolvedValue([root]);
+    vi.mocked(listEntries).mockResolvedValue(listing);
+
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    expect(store.visibleCounts).toMatchObject({ file: 2, directory: 2, symlink: 0 });
+    expect(store.counts).toMatchObject({ file: 2, directory: 2 });
+
+    store.setQuery("app");
+
+    // The breakdown follows the filtered rows, never the whole folder.
+    expect(store.visibleCounts).toMatchObject({ file: 1, directory: 0, symlink: 0 });
+  });
+
   describe("openSymlinkTarget", () => {
     it("opens the resolved target and clears the filter", async () => {
       vi.mocked(listEntries).mockImplementation(async (_s, _t, options) =>
@@ -254,7 +293,7 @@ describe("files store navigation", () => {
 
       const opened = await store.openSymlinkTarget("usr/bin");
 
-      expect(opened).toBe(true);
+      expect(opened).toBe("opened");
       expect(store.path).toBe("usr/bin");
       expect(store.query).toBe("");
       expect(store.entries.map((item) => item.name)).toEqual(["python3"]);
@@ -275,11 +314,66 @@ describe("files store navigation", () => {
 
       const opened = await store.openSymlinkTarget("conf/app.yaml");
 
-      expect(opened).toBe(false);
+      expect(opened).toBe("not-folder");
       expect(store.path).toBe("conf");
       expect(store.entries.map((item) => item.name)).toHaveLength(4);
       expect(store.error).toBeNull();
       expect(store.loading).toBe(false);
+    });
+
+    it("treats a forbidden target as not a folder, never a retry", async () => {
+      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+        if (options.path === "conf/private") {
+          throw { message: "forbidden", status: 403 };
+        }
+        return listing;
+      });
+
+      const store = useFilesStore();
+      await store.init("server-1");
+
+      const opened = await store.openSymlinkTarget("conf/private");
+
+      expect(opened).toBe("not-folder");
+      expect(store.path).toBe("");
+      expect(store.error).toBeNull();
+    });
+
+    it("reports a transient failure distinctly from a non-folder target", async () => {
+      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+        if (options.path === "usr/bin") {
+          throw { message: "agent unavailable", status: 502 };
+        }
+        return listing;
+      });
+
+      const store = useFilesStore();
+      await store.init("server-1");
+
+      const opened = await store.openSymlinkTarget("usr/bin");
+
+      expect(opened).toBe("error");
+      // The view stays put on a transient failure too.
+      expect(store.path).toBe("");
+      expect(store.error).toBeNull();
+      expect(store.loading).toBe(false);
+    });
+
+    it("stays silent for a target read the caller aborted", async () => {
+      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+        if (options.path === "usr/bin") {
+          throw { message: "canceled", status: null };
+        }
+        return listing;
+      });
+
+      const store = useFilesStore();
+      await store.init("server-1");
+
+      const opened = await store.openSymlinkTarget("usr/bin");
+
+      expect(opened).toBe("opened");
+      expect(store.error).toBeNull();
     });
 
     it("treats the current folder as an already-open target", async () => {
@@ -289,7 +383,7 @@ describe("files store navigation", () => {
 
       const opened = await store.openSymlinkTarget("");
 
-      expect(opened).toBe(true);
+      expect(opened).toBe("opened");
       expect(store.path).toBe("");
       expect(store.query).toBe("");
     });

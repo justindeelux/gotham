@@ -147,8 +147,10 @@
    overflow the toolbar at narrow widths (JUS-128). */
 .fm-toolbar-group { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
 .fm-toolbar-end { margin-left: auto; justify-content: flex-end; }
-/* JUS-128: selection count shown with the toolbar's bulk actions. */
-.fm-bulk-count { white-space: nowrap; min-width: 10rem; text-align: right; }
+/* JUS-128/141: selection count shown with the toolbar's bulk actions. Its width
+   follows the count text; the reserved action slot beside it (below) holds the
+   toolbar's layout steady across a selection (JUS-134). */
+.fm-bulk-count { white-space: nowrap; text-align: right; }
 /* JUS-134: the bulk actions slot — shown only with a selection in the app,
    where it is reserved (visibility, not display) so selecting a row never
    shifts the toolbar and the list (JUS-130). */
@@ -281,29 +283,26 @@
 .fm-cell--size { text-align: right; }
 /* JUS-134: the mode cell is one line ("755"); the rwx form is its tooltip. */
 .fm-mode, .fm-date { display: block; white-space: nowrap; }
-/* Row action cluster: the inline actions stay hidden until row hover, keyboard
-   focus or selection; the ⋮ menu button is the last button in the cluster and
-   is always visible so touch users reach it without hover (JUS-133). A cluster
-   with a single button (read-only Download) has no ⋮, so that lone button
-   reveals like the other inline actions. */
+/* Row action cluster: the inline actions carry the explicit .fm-action class
+   and stay hidden until row hover, keyboard focus or selection; the ⋮ menu
+   button is not tagged, so it is always visible and touch users reach the row
+   menu without hover (JUS-133). The explicit class replaces the old positional
+   :not(:last-child) heuristic, which left a lone read-only Download with the
+   wrong visibility (JUS-141, mirrors the app's .fm-actions .fm-action). */
 .fm-actions { display: flex; align-items: center; gap: 2px; justify-content: flex-end; }
-.fm-actions > .btn:not(:last-child),
-.fm-actions > .btn:only-child {
+.fm-actions .fm-action {
   opacity: 0; transition: opacity var(--motion-base) var(--ease-standard);
 }
-.fm-row:hover .fm-actions > .btn:not(:last-child),
-.fm-row:focus-within .fm-actions > .btn:not(:last-child),
-.fm-row.is-selected .fm-actions > .btn:not(:last-child),
-.fm-row:hover .fm-actions > .btn:only-child,
-.fm-row:focus-within .fm-actions > .btn:only-child,
-.fm-row.is-selected .fm-actions > .btn:only-child { opacity: 1; }
+.fm-row:hover .fm-actions .fm-action,
+.fm-row:focus-within .fm-actions .fm-action,
+.fm-row.is-selected .fm-actions .fm-action { opacity: 1; }
 /* Touch devices have no hover → reveal the inline actions too. */
 @media (hover: none) {
-  .fm-actions > .btn:not(:last-child), .fm-actions > .btn:only-child, .fm-select { opacity: 1; }
+  .fm-actions .fm-action, .fm-select { opacity: 1; }
   .fm-tile-check { opacity: 1; pointer-events: auto; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fm-actions > .btn:not(:last-child), .fm-actions > .btn:only-child, .fm-select, .fm-tile-check { transition: none; }
+  .fm-actions .fm-action, .fm-select, .fm-tile-check { transition: none; }
 }
 /* Dạng lưới */
 .fm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: var(--space-3); }

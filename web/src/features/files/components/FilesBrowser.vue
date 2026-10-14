@@ -55,6 +55,7 @@ import type { FilesTab } from "@/features/files/stores/files";
 import { useTrashStore } from "@/features/files/stores/trash";
 import type { NameKind, TransferProblem } from "@/features/files/utils/files";
 import {
+  disambiguatedTabLabels,
   entryAction,
   entryIconKind,
   entryTypeLabel,
@@ -68,6 +69,7 @@ import {
   joinPath,
   resolveSymlinkTarget,
   typeaheadIndex,
+  widestBytesLabel,
 } from "@/features/files/utils/files";
 import {
   folderMenuOptions,
@@ -174,6 +176,22 @@ const hasSelectedFiles = computed<boolean>(() =>
 /** hasSelection gates the toolbar's bulk actions (JUS-128). */
 const hasSelection = computed<boolean>(() => files.selectedNames.length > 0);
 
+/**
+ * countReserve is the widest selection summary the current folder can produce:
+ * its full entry count (digit-monotonic, so never fewer digits than a subset)
+ * and the widest byte label any subset can format to ({@link widestBytesLabel},
+ * because formatBytes is non-monotonic across unit boundaries). It is a hidden
+ * sizer in the count cell in BOTH selection states, so the cell width is
+ * max(reserve, live) no matter what is selected and the toolbar's row count can
+ * never depend on the selection (JUS-134/JUS-141).
+ */
+const countReserve = computed<string>(
+  () =>
+    `${t("files.browser.selectionCount", { count: files.entries.length })} · ${widestBytesLabel(
+      files.entries.reduce((sum, entry) => sum + entry.size, 0),
+    )}`,
+);
+
 /** selection is the current selection reduced to writable-safe entries. */
 const selection = computed<FilesEntry[]>(() =>
   files.selectedEntries.filter(isSelectable),
@@ -189,10 +207,15 @@ const footSummary = computed<string>(() => {
       ? t("files.browser.entryCountFiltered", {
           shown: files.visibleEntries.length,
           total: files.entries.length,
+          // The total picks the plural form: "1 of 1 entry", not "1 of 1 entries".
+          count: files.entries.length,
         })
       : t("files.browser.entryCount", { count: files.entries.length }),
   ];
-  const counts = files.counts;
+  // The breakdown follows the rows on screen: while filtering it tallies the
+  // visible rows, never mixing a filtered count with whole-folder totals
+  // (JUS-141).
+  const counts = filtering ? files.visibleCounts : files.counts;
   if (counts.directory > 0) {
     parts.push(t("files.browser.folderCount", { count: counts.directory }));
   }
@@ -289,17 +312,22 @@ function symlinkTargetPath(entry: FilesEntry): string | null {
  * goToSymlinkTarget opens a symlink's resolved target. The listing does not say
  * whether the target is a directory, so a target that turns out to be a file,
  * a broken link or an unreadable folder keeps the current view and reports it
- * with a non-blocking warning rather than replacing the list with an error
- * (JUS-132).
+ * with a non-blocking warning; a transient node/network failure gets its own
+ * retry copy instead (JUS-132, JUS-141).
  */
 async function goToSymlinkTarget(entry: FilesEntry): Promise<void> {
   const target = symlinkTargetPath(entry);
   if (target === null) {
     return;
   }
-  if (!(await files.openSymlinkTarget(target))) {
+  const result = await files.openSymlinkTarget(target);
+  if (result === "not-folder") {
     message.warning(
       String(t("files.dialogs.symlinkTargetFailed", { name: entry.name })),
+    );
+  } else if (result === "error") {
+    message.error(
+      String(t("files.dialogs.symlinkTargetError", { name: entry.name })),
     );
   }
 }
@@ -768,36 +796,23 @@ const gridSpacerBottom = computed<number>(() =>
 );
 
 /**
- * tabLabel is the visible tab name: the folder's basename, or the root. When
- * two tabs show different locations that share a basename (two folders named
- * "config" under different parents) the parent segment is prefixed so the tabs
- * stay distinguishable; the full path is always the tab's tooltip
- * ({@link tabTitle}).
+ * tabLabels caches every tab's unique visible label. The pure rule lives in
+ * {@link disambiguatedTabLabels}; caching it as a computed recomputes the
+ * labels only when the tab set (or a tab's root/path) changes, not for every
+ * tab on every render.
  */
+const tabLabels = computed<Map<string, string>>(() =>
+  disambiguatedTabLabels(files.tabs),
+);
+
+/** tabLabel is a tab's cached, unique visible name. */
 function tabLabel(tab: FilesTab): string {
-  const base = tabBasename(tab);
-  const here = tabLocation(tab);
-  const duplicate = files.tabs.some(
-    (other) =>
-      other.id !== tab.id &&
-      tabBasename(other) === base &&
-      tabLocation(other) !== here,
-  );
-  if (!duplicate) {
-    return base;
-  }
-  const parent = tab.path.split("/").slice(-2, -1)[0];
-  return parent ? `${parent}/${base}` : `${tab.rootName}/${base}`;
+  return tabLabels.value.get(tab.id) ?? tabBasename(tab);
 }
 
 /** tabBasename is a tab's own folder name (the root name at the top level). */
 function tabBasename(tab: FilesTab): string {
   return tab.path === "" ? tab.rootName : (tab.path.split("/").pop() ?? tab.rootName);
-}
-
-/** tabLocation is the tab's full "root/path" identity. */
-function tabLocation(tab: FilesTab): string {
-  return tab.path === "" ? tab.rootName : `${tab.rootName}/${tab.path}`;
 }
 
 /** modifiedLabel renders the Modified column as a localized relative age that
@@ -2063,93 +2078,100 @@ function onFolderMenu(key: string): void {
              height never changes when the first click of a double-click
              selects a row (JUS-130: selecting must not shift the rows). -->
         <span class="small muted fm-bulk-count">
-          <template v-if="hasSelection">
-            {{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}
-            · {{ formatBytes(files.selectedBytes) }}
-          </template>
+          <!-- Both texts stay mounted in every selection state: the reserve is
+               a hidden sizer, so the cell is always as wide as the wider of
+               reserve and the live summary and the toolbar's row count never
+               depends on the selection (JUS-134/JUS-141). -->
+          <span class="fm-bulk-count-reserve" aria-hidden="true">{{ countReserve }}</span>
+          <span class="fm-bulk-count-live" :class="{ 'is-hidden': !hasSelection }">
+            <template v-if="hasSelection">
+              {{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}
+              · {{ formatBytes(files.selectedBytes) }}
+            </template>
+          </span>
         </span>
         <div class="fm-selection-actions" :class="{ 'is-visible': hasSelection }">
-        <NButton
-          size="small"
-          secondary
-          :disabled="!files.canReadContent || !hasSelectedFiles"
-          :title="!files.canReadContent ? $t('files.browser.fileNeedsRole') : (hasSelectedFiles ? $t('files.browser.downloadSelected') : $t('files.dialogs.compressSelect'))"
-          :aria-label="$t('files.browser.downloadSelected')"
-          @click="downloadSelected()"
-        >
-          <template #icon>
-            <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
+          <NButton
+            size="small"
+            secondary
+            :disabled="!files.canReadContent || !hasSelectedFiles"
+            :title="!files.canReadContent ? $t('files.browser.fileNeedsRole') : (hasSelectedFiles ? $t('files.browser.downloadSelected') : $t('files.dialogs.compressSelect'))"
+            :aria-label="$t('files.browser.downloadSelected')"
+            @click="downloadSelected()"
+          >
+            <template #icon>
+              <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("files.browser.downloadSelected") }}</span>
+          </NButton>
+          <template v-if="files.canWrite">
+            <NButton
+              size="small"
+              secondary
+              :disabled="files.acting || selection.length === 0"
+              :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.copy')"
+              :aria-label="$t('files.actions.copy')"
+              @click="files.copySelection(selection.map((item) => item.name))"
+            >
+              <template #icon>
+                <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              <span class="fm-btn-label">{{ $t("files.actions.copy") }}</span>
+            </NButton>
+            <NButton
+              size="small"
+              secondary
+              :disabled="files.acting || selection.length === 0"
+              :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.cut')"
+              :aria-label="$t('files.actions.cut')"
+              @click="files.cutSelection(selection.map((item) => item.name))"
+            >
+              <template #icon>
+                <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              <span class="fm-btn-label">{{ $t("files.actions.cut") }}</span>
+            </NButton>
+            <NButton
+              size="small"
+              secondary
+              :disabled="files.acting || selection.length === 0"
+              :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
+              :aria-label="$t('files.actions.compress')"
+              @click="openCompress(selection)"
+            >
+              <template #icon>
+                <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              <span class="fm-btn-label">{{ $t("files.actions.compress") }}</span>
+            </NButton>
+            <NButton
+              size="small"
+              type="error"
+              secondary
+              :disabled="files.acting || selection.length === 0"
+              :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('common.actions.delete')"
+              :aria-label="$t('common.actions.delete')"
+              @click="openDelete(selection)"
+            >
+              <template #icon>
+                <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              <span class="fm-btn-label">{{ $t("common.actions.delete") }}</span>
+            </NButton>
           </template>
-          <span class="fm-btn-label">{{ $t("files.browser.downloadSelected") }}</span>
-        </NButton>
-        <template v-if="files.canWrite">
           <NButton
+            :disabled="!hasSelection"
             size="small"
-            secondary
-            :disabled="files.acting || selection.length === 0"
-            :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.copy')"
-            :aria-label="$t('files.actions.copy')"
-            @click="files.copySelection(selection.map((item) => item.name))"
+            quaternary
+            :title="$t('files.browser.clear')"
+            :aria-label="$t('files.browser.clear')"
+            @click="files.clearSelection()"
           >
             <template #icon>
-              <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <X :size="14" :stroke-width="1.8" aria-hidden="true" />
             </template>
-            <span class="fm-btn-label">{{ $t("files.actions.copy") }}</span>
+            <span class="fm-btn-label">{{ $t("files.browser.clear") }}</span>
           </NButton>
-          <NButton
-            size="small"
-            secondary
-            :disabled="files.acting || selection.length === 0"
-            :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.cut')"
-            :aria-label="$t('files.actions.cut')"
-            @click="files.cutSelection(selection.map((item) => item.name))"
-          >
-            <template #icon>
-              <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            <span class="fm-btn-label">{{ $t("files.actions.cut") }}</span>
-          </NButton>
-          <NButton
-            size="small"
-            secondary
-            :disabled="files.acting || selection.length === 0"
-            :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
-            :aria-label="$t('files.actions.compress')"
-            @click="openCompress(selection)"
-          >
-            <template #icon>
-              <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            <span class="fm-btn-label">{{ $t("files.actions.compress") }}</span>
-          </NButton>
-          <NButton
-            size="small"
-            type="error"
-            secondary
-            :disabled="files.acting || selection.length === 0"
-            :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('common.actions.delete')"
-            :aria-label="$t('common.actions.delete')"
-            @click="openDelete(selection)"
-          >
-            <template #icon>
-              <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            <span class="fm-btn-label">{{ $t("common.actions.delete") }}</span>
-          </NButton>
-        </template>
-        <NButton
-          :disabled="!hasSelection"
-          size="small"
-          quaternary
-          :title="$t('files.browser.clear')"
-          :aria-label="$t('files.browser.clear')"
-          @click="files.clearSelection()"
-        >
-          <template #icon>
-            <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          <span class="fm-btn-label">{{ $t("files.browser.clear") }}</span>
-        </NButton>
         </div>
       </div>
     </div>
@@ -2839,22 +2861,38 @@ function onFolderMenu(key: string): void {
 }
 
 /* Bulk selection count on the toolbar (JUS-128): the former .fm-bulk bar is
-   gone; the count and its actions live in .fm-toolbar-end. A fixed width (not
-   a min-width) keeps the slot the same size whether or not anything is
-   selected, so the count appearing never re-wraps the toolbar and shifts the
-   rows under a double-click (JUS-130). */
+   gone; the count and its actions live in .fm-toolbar-end. The cell stacks a
+   hidden reserve sizer and the live selection summary in one grid area, so its
+   width is max(reserve, live) in every selection state and the toolbar's row
+   count (and therefore the list's position under a double-click) can never
+   depend on the selection (JUS-134/JUS-141). The reserve is the folder's widest
+   summary, so the cell width still follows the folder content. */
 .fm-bulk-count {
-  display: inline-flex;
+  display: inline-grid;
   align-items: center;
-  justify-content: flex-end;
-  width: 10rem;
-  /* A constant height as well as width: with nothing selected the count is
-     empty, and an empty inline box would collapse and shift the rows. */
+  justify-items: end;
+  /* A constant height, not width: an empty count would collapse and shift the
+     rows. */
   min-height: 22px;
   flex: 0 0 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  /* Equal-width digits, so the reserve sizer and the live summary compare by
+     character count, not by per-glyph advance (JUS-141). */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Both texts share one grid cell and overlap: the cell is as wide as the wider
+   of the two, in both states. */
+.fm-bulk-count > * {
+  grid-area: 1 / 1;
+}
+
+.fm-bulk-count-reserve {
+  visibility: hidden;
+}
+
+.fm-bulk-count-live.is-hidden {
+  visibility: hidden;
 }
 
 /* JUS-134: the bulk actions stay mounted and are hidden with visibility (not
@@ -3423,7 +3461,6 @@ function onFolderMenu(key: string): void {
   }
 
   .fm-bulk-count {
-    width: auto;
     min-width: 0;
     /* Keep the count at its natural width; the scrolling action row absorbs
        the shrink instead of clipping the count text (JUS-135). */

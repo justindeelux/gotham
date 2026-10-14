@@ -19,6 +19,7 @@ vi.mock("@/features/files/api/files", async (importOriginal) => {
 import { listEntries, listRoots, moveEntry } from "@/features/files/api/files";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
+import { disambiguatedTabLabels } from "@/features/files/utils/files";
 import { useTeamsStore } from "@/features/teams";
 
 const volumes: FilesRoot = {
@@ -132,6 +133,27 @@ describe("files browser tabs", () => {
     expect(store.selectedNames).toHaveLength(1);
     expect(store.scrollTop).toBe(120);
     expect(store.entries[0]?.name).toBe("volumes:data");
+  });
+
+  it("keeps each tab's own folder filter across a switch", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    // Tab A filters to "app" (JUS-141: a tab switch is not a filter reset).
+    store.setQuery("app");
+    const tabA = store.activeTabId;
+
+    // Tab B carries its own needle.
+    await store.openTab();
+    const tabB = store.activeTabId;
+    store.setQuery("data");
+    expect(store.query).toBe("data");
+
+    // Switching back and forth restores each tab's own filter.
+    await store.switchTab(tabA);
+    expect(store.query).toBe("app");
+    await store.switchTab(tabB);
+    expect(store.query).toBe("data");
   });
 
   it("closes a tab onto a neighbour and keeps one default tab at the end", async () => {
@@ -413,5 +435,41 @@ describe("files browser tab races", () => {
       .mock.calls.map(([, , options]) => options.path);
     expect(paths).toContain("");
     expect(paths).toContain("data");
+  });
+});
+
+describe("disambiguatedTabLabels", () => {
+  it("uses each tab's basename when the labels are already unique", () => {
+    const labels = disambiguatedTabLabels([
+      { id: "a", rootName: "volumes", path: "" },
+      { id: "b", rootName: "volumes", path: "alpha" },
+    ]);
+    expect(labels.get("a")).toBe("volumes");
+    expect(labels.get("b")).toBe("alpha");
+  });
+
+  it("prepends parent segments until the labels differ", () => {
+    const labels = disambiguatedTabLabels([
+      { id: "a", rootName: "r", path: "a/x/config" },
+      { id: "b", rootName: "r", path: "b/x/config" },
+    ]);
+    expect(labels.get("a")).toBe("a/x/config");
+    expect(labels.get("b")).toBe("b/x/config");
+  });
+
+  it("prepends only as far as needed and falls back to the root", () => {
+    const shared = disambiguatedTabLabels([
+      { id: "a", rootName: "r", path: "x/config" },
+      { id: "b", rootName: "r", path: "other/config" },
+    ]);
+    expect(shared.get("a")).toBe("x/config");
+    expect(shared.get("b")).toBe("other/config");
+
+    const acrossRoots = disambiguatedTabLabels([
+      { id: "a", rootName: "volumes", path: "config" },
+      { id: "b", rootName: "compose", path: "config" },
+    ]);
+    expect(acrossRoots.get("a")).toBe("volumes/config");
+    expect(acrossRoots.get("b")).toBe("compose/config");
   });
 });

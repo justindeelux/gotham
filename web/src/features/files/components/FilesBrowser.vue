@@ -2343,8 +2343,9 @@ function onFolderMenu(key: string): void {
     gap: var(--space-2);
   }
 
-  /* The "Agent node" / "Root" captions are redundant at this width: each
-     control keeps its accessible name through aria-label. */
+  /* The "Root" caption is redundant at this width: the control keeps its
+     accessible name through aria-label. (The slotted "Agent node" caption is
+     hidden by ServerFilesPage, which owns that slot content.) */
   .fm-field-label {
     display: none;
   }

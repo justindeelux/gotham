@@ -29,8 +29,9 @@ watch(isMobile, (value) => {
     railOpen.value = false;
   }
 });
+// Close on any navigation (the query included) ...
 watch(
-  () => route.path,
+  () => route.fullPath,
   () => {
     railOpen.value = false;
   },
@@ -110,7 +111,10 @@ const envLabel = computed<string>(() => {
     :width="72"
     :aria-label="t('servers.rail.navLabel')"
   >
-    <div class="rail-drawer">
+    <!-- A tap on any rail link/button selects its target and closes the
+         drawer — including a link whose route is the current one, where the
+         route watcher above never fires (JUS-135). -->
+    <div class="rail-drawer" @click="railOpen = false">
       <ServerRail />
     </div>
   </NDrawer>

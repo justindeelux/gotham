@@ -137,3 +137,17 @@ describe("shell drawer DOM", () => {
     second.unmount();
   });
 });
+
+// JUS-135: the rail unmounts below the tablet breakpoint (it is a drawer), so
+// the shared server poll must be owned by the shell, not the rail.
+describe("shared server poll ownership", () => {
+  it("arms the poll for the shell's lifetime and clears it on unmount", async () => {
+    const layout = await mountShell();
+    const servers = useServersStore();
+    expect(servers.pollServers).toHaveBeenCalled();
+
+    const stop = vi.spyOn(servers, "stopPolling").mockImplementation(() => {});
+    layout.unmount();
+    expect(stop).toHaveBeenCalled();
+  });
+});

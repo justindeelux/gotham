@@ -279,6 +279,61 @@ test("the minimized dock is inset so the rail foot and sidebar stay clickable", 
   expect(covered.sidebar).toBe(false);
 });
 
+test("the minimized dock starts where the content column starts at every width", async ({
+  page,
+}) => {
+  // JUS-135: the rail is a drawer below the tablet breakpoint, so the content
+  // column starts at x=0 there (and after rail+sidebar above). The dock must
+  // track it; a stale `left: var(--rail-w)` left a 60-72px blank gutter.
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await mockApi(page);
+    await page.goto(`${baseURL}/servers/${serverId}/files`);
+    await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+    await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+    await minimizeEditor(page);
+
+    const metrics = await page.evaluate(() => {
+      const dock = document.querySelector(".ed-dock") as HTMLElement | null;
+      const view = document.querySelector("main.view") as HTMLElement | null;
+      if (dock === null || view === null) {
+        return null;
+      }
+      const dockBox = dock.getBoundingClientRect();
+      const viewBox = view.getBoundingClientRect();
+      return {
+        dockLeft: dockBox.left,
+        dockRight: dockBox.right,
+        viewLeft: viewBox.left,
+        viewWidth: viewBox.width,
+        innerWidth: window.innerWidth,
+      };
+    });
+    expect(metrics, `dock/view missing at ${viewport.width}px`).not.toBeNull();
+    expect(
+      Math.abs(metrics!.dockLeft - metrics!.viewLeft),
+      `dock starts at the content column at ${viewport.width}px`,
+    ).toBeLessThanOrEqual(1);
+    if (viewport.width <= 1024) {
+      // The regression: a stale `left: var(--rail-w)` leaves a 60/72px gutter.
+      expect(
+        metrics!.dockLeft,
+        `no rail gutter below the tablet breakpoint at ${viewport.width}px`,
+      ).toBeLessThanOrEqual(1);
+    } else {
+      expect(metrics!.dockLeft, "desktop dock starts after rail + sidebar").toBeGreaterThanOrEqual(300);
+    }
+    expect(
+      Math.abs(metrics!.dockRight - metrics!.innerWidth),
+      `dock reaches the viewport's right edge at ${viewport.width}px`,
+    ).toBeLessThanOrEqual(1);
+  }
+});
+
 test("editor save conflict opens a bounded modal with pinned header and three choices", async ({
   page,
 }) => {

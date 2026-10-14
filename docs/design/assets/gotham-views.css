@@ -194,7 +194,7 @@
      next to the name, never combined with the checkbox. */
   grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 168px;
   gap: var(--space-3); align-items: center;
-  padding: 4px var(--space-3); min-height: 38px;
+  padding: 4px var(--space-3); min-height: 36px;
   border-bottom: 1px solid var(--border); position: relative;
   transition: background var(--motion-base) var(--ease-standard);
 }

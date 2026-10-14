@@ -26,7 +26,6 @@ import {
   formatMode,
   formatOctalMode,
   formatOctalModeFull,
-  formatRelativeTime,
   formatTimestamp,
   isFileDrag,
   isSelectable,
@@ -169,22 +168,6 @@ describe("formatTimestamp", () => {
     expect(formatTimestamp("")).toBe("—");
     expect(formatTimestamp(null)).toBe("—");
     expect(formatTimestamp("not-a-date")).toBe("—");
-  });
-});
-
-describe("formatRelativeTime", () => {
-  // A fixed clock keeps the wording asserted rather than the machine's now.
-  const now = Date.parse("2026-10-14T12:00:00Z");
-
-  it("renders a coarse age in the active locale", () => {
-    expect(formatRelativeTime("2026-10-12T09:02:00Z", "en", now)).toBe("2 days ago");
-    expect(formatRelativeTime("2026-10-13T12:00:00Z", "en", now)).toBe("yesterday");
-    expect(formatRelativeTime("2026-10-14T09:00:00Z", "en", now)).toBe("3 hours ago");
-    // Vietnamese wording comes from Intl, not a per-unit catalog key.
-    expect(formatRelativeTime("2026-10-12T09:02:00Z", "vi", now)).not.toBe(
-      formatRelativeTime("2026-10-12T09:02:00Z", "en", now),
-    );
-    expect(formatRelativeTime("not-a-date", "en", now)).toBe("—");
   });
 });
 

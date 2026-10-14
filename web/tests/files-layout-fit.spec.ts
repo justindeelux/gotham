@@ -12,8 +12,8 @@ import type { Locator, Page } from "@playwright/test";
 // the control-plane file API mocked in real Chromium. Measured claims:
 //   - JUS-118 the browser panel fills the viewport and only the entry list
 //     scrolls (no page-level scroll) at desktop and mobile widths.
-//   - JUS-119 the page-top breadcrumb is gone and a bottom bar names the node
-//     and switches to another node's files.
+//   - JUS-119/134 the page-top breadcrumb is gone and the agent-node selector
+//     lives in the browser card header (it switches to another node's files).
 //   - JUS-120 the toolbar groups New file/New folder under one dropdown, keeps
 //     bulk tools on the right, and collapses to labelled icon-only buttons on
 //     small screens.
@@ -234,31 +234,45 @@ test("the browser fills the viewport and only the entry list scrolls", async ({
     const card = page.locator(".files-browser");
     await expect(card).toBeVisible();
     await expect(page.locator(".fm-label").first()).toBeVisible();
+    // Wait for the whole listing to render before measuring: the flex height
+    // and the scroll metrics settle only after the rows exist (measuring
+    // mid-render was the source of the one-off flake in the full-suite run).
+    await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
 
     // No page-level scroll: neither the window nor the .view container scrolls.
-    const scroll = await page.evaluate(() => {
-      const view = document.querySelector(".view") as HTMLElement | null;
-      const doc = document.scrollingElement as HTMLElement;
-      return {
-        docScroll: doc.scrollHeight - window.innerHeight,
-        viewScroll: view ? view.scrollHeight - view.clientHeight : 0,
-      };
-    });
-    expect(scroll.docScroll).toBeLessThanOrEqual(1);
-    expect(scroll.viewScroll).toBeLessThanOrEqual(1);
+    // Polled so a transient mid-layout frame cannot fail the check.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const view = document.querySelector(".view") as HTMLElement | null;
+            const doc = document.scrollingElement as HTMLElement;
+            return Math.max(
+              doc.scrollHeight - window.innerHeight,
+              view ? view.scrollHeight - view.clientHeight : 0,
+            );
+          }),
+        { message: "no page-level scroll" },
+      )
+      .toBeLessThanOrEqual(1);
 
     // The panel reaches the bottom of the content column (bar + padding).
-    const box = await card.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.y + box!.height).toBeGreaterThan(viewport.height - 120);
+    await expect
+      .poll(async () => {
+        const box = await card.boundingBox();
+        return box ? box.y + box.height : 0;
+      })
+      .toBeGreaterThan(viewport.height - 120);
 
     // The list owns the overflow: it is taller than its scrollport.
-    const list = await page.evaluate(() => {
-      const wrap = document.querySelector(".table-wrap") as HTMLElement | null;
-      return wrap ? { scroll: wrap.scrollHeight, client: wrap.clientHeight } : null;
-    });
-    expect(list).not.toBeNull();
-    expect(list!.scroll).toBeGreaterThan(list!.client);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const wrap = document.querySelector(".table-wrap") as HTMLElement | null;
+          return wrap ? wrap.scrollHeight - wrap.clientHeight : 0;
+        }),
+      )
+      .toBeGreaterThan(0);
   }
 });
 

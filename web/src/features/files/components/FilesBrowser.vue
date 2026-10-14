@@ -45,6 +45,7 @@ import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue
 import RecycleBinDialog from "@/features/files/components/RecycleBinDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
 import UploadDialog from "@/features/files/components/UploadDialog.vue";
+import { useCoarseNow } from "@/features/files/composables/useCoarseNow";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
@@ -59,7 +60,6 @@ import {
   filesFromDrop,
   formatMode,
   formatOctalModeFull,
-  formatRelativeTime,
   formatTimestamp,
   isExtractableArchive,
   isFileDrag,
@@ -73,7 +73,7 @@ import {
 } from "@/features/files/utils/filesMenu";
 import type { FilesMenuItem } from "@/features/files/utils/filesMenu";
 import { useTeamsStore } from "@/features/teams";
-import { formatBytes } from "@/shared/utils/format";
+import { formatBytes, relativeTime } from "@/shared/utils/format";
 
 interface Props {
   serverId: string;
@@ -88,6 +88,8 @@ const trash = useTrashStore();
 const editor = useEditorStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
+/** coarseNow is the shared minute clock behind the Modified column's age. */
+const coarseNow = useCoarseNow();
 
 watch(
   () => props.serverId,
@@ -416,9 +418,15 @@ function tabLocation(tab: FilesTab): string {
   return tab.path === "" ? tab.rootName : `${tab.rootName}/${tab.path}`;
 }
 
-/** modifiedLabel renders the Modified column as a localized relative age. */
+/** modifiedLabel renders the Modified column as a localized relative age that
+ * refreshes on the shared coarse clock, so it never goes stale on an idle page
+ * (JUS-134). */
 function modifiedLabel(entry: FilesEntry): string {
-  return formatRelativeTime(entry.modified_at, locale.value);
+  return relativeTime(
+    entry.modified_at,
+    locale.value === "vi" ? "vi" : "en",
+    { long: true, now: coarseNow.value },
+  );
 }
 
 /** tabTitle is the tab tooltip / accessible name: the full root-relative path. */

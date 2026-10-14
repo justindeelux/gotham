@@ -621,42 +621,6 @@ export function formatTimestamp(iso: string | null | undefined): string {
 }
 
 /**
- * formatRelativeTime renders modified_at as a coarse relative age ("2 days
- * ago", "yesterday") in the UI locale, so the Modified column stays readable
- * at a glance; the absolute {@link formatTimestamp} value is the cell's
- * tooltip. Intl.RelativeTimeFormat supplies the en/vi wording, so no catalog
- * key is needed per unit. `now` is injectable to keep unit checks
- * deterministic.
- */
-export function formatRelativeTime(
-  iso: string | null | undefined,
-  locale?: string | null,
-  now: number = Date.now(),
-): string {
-  const date = new Date(iso ?? "");
-  if (Number.isNaN(date.getTime())) {
-    return "—";
-  }
-  const seconds = Math.round((date.getTime() - now) / 1000);
-  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-    ["year", 31536000],
-    ["month", 2592000],
-    ["week", 604800],
-    ["day", 86400],
-    ["hour", 3600],
-    ["minute", 60],
-    ["second", 1],
-  ];
-  const [unit, size] = units.find(([, span]) => Math.abs(seconds) >= span) ?? [
-    "second",
-    1,
-  ];
-  return new Intl.RelativeTimeFormat(locale || undefined, {
-    numeric: "auto",
-  }).format(Math.round(seconds / size), unit);
-}
-
-/**
  * entryTypeLabel renders the Type column ("Folder", "YAML", "Image"…). It only
  * needs a name and kind (plus the mode to name a special file's subtype), so the
  * recycle-bin rows — which carry no mode — can reuse it.

@@ -164,6 +164,9 @@ function switchNode(next: string | number | null): void {
 @media (max-width: 640px) {
   .fm-node__select {
     width: auto;
+    /* The 120px basis needs the floor reset too, or the base min-width: 140px
+       above wins and the shrink never takes effect. */
+    min-width: 0;
     flex: 0 1 120px;
   }
 }

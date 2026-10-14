@@ -12,10 +12,15 @@ vi.mock("@/features/files/api/files", async (importOriginal) => {
     ...actual,
     listRoots: vi.fn(),
     listEntries: vi.fn(),
+    renameEntry: vi.fn(),
   };
 });
 
-import { listEntries, listRoots } from "@/features/files/api/files";
+import {
+  listEntries,
+  listRoots,
+  renameEntry,
+} from "@/features/files/api/files";
 import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import { rangeNames } from "@/features/files/utils/files";
@@ -63,6 +68,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   vi.mocked(listRoots).mockReset();
   vi.mocked(listEntries).mockReset();
+  vi.mocked(renameEntry).mockReset();
   const teams = useTeamsStore();
   teams.activeTeamId = "team-1";
   teams.teams = [];
@@ -266,5 +272,104 @@ describe("files store range selection", () => {
     store.clearSelection();
 
     expect(store.activeTab.anchor).toBeNull();
+  });
+
+  it("moves the anchor on a right-click selection so the next range follows", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    store.selectOnly("echo");
+    const alpha = store.entries.find((item) => item.name === "alpha")!;
+    store.selectForRowContext(alpha);
+
+    expect(store.selectedNames).toEqual(["alpha"]);
+    expect(store.activeTab.anchor).toBe("alpha");
+
+    store.selectRange("charlie", false);
+    expect(store.selectedNames.sort()).toEqual(["alpha", "beta", "charlie"]);
+  });
+
+  it("keeps the anchor on a right-click inside an existing selection", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    store.selectOnly("alpha");
+    store.selectRange("echo", false);
+    const charlie = store.entries.find((item) => item.name === "charlie")!;
+    store.selectForRowContext(charlie);
+
+    // Already selected: the multi-selection and the anchor both survive.
+    expect(store.selectedNames).toHaveLength(5);
+    expect(store.activeTab.anchor).toBe("alpha");
+  });
+
+  it("seeds the anchor on select-all so a shift-click extends the run", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    store.toggleSelectAll();
+    expect(store.selectedNames).toHaveLength(5);
+    expect(store.activeTab.anchor).toBe("alpha");
+
+    // Not collapsed to the clicked row: the run starts at the first entry.
+    store.selectRange("beta", false);
+    expect(store.selectedNames.sort()).toEqual(["alpha", "beta"]);
+  });
+
+  it("drops a dangling anchor when a refresh removes the entry", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    store.selectOnly("echo");
+    vi.mocked(listEntries).mockResolvedValue({
+      entries: [entry({ name: "alpha", kind: "directory", size: 0, mode: 0o040755 })],
+      truncated: false,
+      cursor: "",
+    });
+
+    await store.refresh();
+
+    expect(store.activeTab.anchor).toBeNull();
+  });
+
+  it("carries the anchor across a rename", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    const charlie = store.entries.find((item) => item.name === "charlie")!;
+    store.selectOnly("charlie");
+    vi.mocked(renameEntry).mockResolvedValue(entry({ name: "charlie2" }));
+    vi.mocked(listEntries).mockResolvedValue({
+      entries: [
+        ...listing.entries.filter((item) => item.name !== "charlie"),
+        entry({ name: "charlie2" }),
+      ],
+      truncated: false,
+      cursor: "",
+    });
+
+    await store.rename(charlie, "charlie2");
+
+    expect(store.activeTab.anchor).toBe("charlie2");
+  });
+
+  it("resets the anchor when goToPath re-clears the current folder's filter", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    store.selectOnly("alpha");
+    await store.goToPath(store.path);
+
+    expect(store.activeTab.anchor).toBeNull();
+  });
+
+  it("refuses a non-selectable range target", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    store.selectOnly("alpha");
+    store.selectRange("link", false);
+
+    expect(store.selectedNames).toEqual(["alpha"]);
   });
 });

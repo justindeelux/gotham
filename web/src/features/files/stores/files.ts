@@ -103,9 +103,11 @@ export interface FilesTab {
   sortDir: FilesSortDirection;
   query: string;
   selected: Set<string>;
-  /** anchor is the last row a plain/⌘-click selected: the fixed end of a
-   *  shift-click range (JUS-138). null until a row is clicked, and reset by a
-   *  folder, tab, filter or sort change so a range never spans a view change. */
+  /** anchor is the last row a selection gesture left the cursor on: the fixed
+   *  end of a shift-click range (JUS-138). null until a row is clicked, and
+   *  reset by a folder/root, tab, filter or sort change, by clearSelection()
+   *  and by a listing refresh that drops the entry; a rename carries it to the
+   *  new name so a run is never left spanning a view change. */
   anchor: string | null;
   /** scrollTop is the entry list's scroll offset, restored on tab switch. */
   scrollTop: number;
@@ -496,12 +498,22 @@ export const useFilesStore = defineStore("files", () => {
     pruneSelectionToEntries(tab);
   }
 
-  /** pruneSelectionToEntries keeps only selected names still in the listing. */
+  /**
+   * pruneSelectionToEntries keeps only selected names still in the listing, and
+   * drops a range anchor whose entry a refresh removed (JUS-138) so a later
+   * shift-click never resolves a deleted name to a same-named row.
+   */
   function pruneSelectionToEntries(tab: FilesTab): void {
-    if (tab.selected.size === 0) {
+    if (tab.selected.size === 0 && tab.anchor === null) {
       return;
     }
     const present = new Set(tab.entries.map((entry) => entry.name));
+    if (tab.anchor !== null && !present.has(tab.anchor)) {
+      tab.anchor = null;
+    }
+    if (tab.selected.size === 0) {
+      return;
+    }
     const next = new Set<string>();
     for (const name of tab.selected) {
       if (present.has(name)) {
@@ -513,8 +525,15 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /** renameSelection follows a renamed selected entry to its new name. */
+  /**
+   * renameSelection follows a renamed selected entry to its new name, and
+   * carries the range anchor with it (JUS-138) so the next shift-click still
+   * starts from the row the user last clicked.
+   */
   function renameSelection(tab: FilesTab, oldName: string, nextName: string): void {
+    if (tab.anchor === oldName) {
+      tab.anchor = nextName;
+    }
     if (!tab.selected.has(oldName)) {
       return;
     }
@@ -1252,8 +1271,10 @@ export const useFilesStore = defineStore("files", () => {
     const tab = activeTab.value;
     if (next === tab.path) {
       // Clicking the current crumb is still a navigation: drop a stale filter
-      // so the folder is shown in full again.
+      // so the folder is shown in full again, and end the range (a filter
+      // change resets the anchor).
       tab.query = "";
+      tab.anchor = null;
       return;
     }
     tab.path = next;
@@ -1274,7 +1295,9 @@ export const useFilesStore = defineStore("files", () => {
   async function openSymlinkTarget(target: string): Promise<boolean> {
     const tab = activeTab.value;
     if (!serverId.value || tab.rootName === "" || target === tab.path) {
+      // Same folder (or no root): still drop the filter, which ends the range.
       tab.query = "";
+      tab.anchor = null;
       return true;
     }
     const gen = ++tab.generation;
@@ -1364,6 +1387,9 @@ export const useFilesStore = defineStore("files", () => {
       return;
     }
     selected.value = new Set([entry.name]);
+    // Moving the sole selection moves the range anchor with it (JUS-138), so
+    // the next shift-click extends from the row the user just right-clicked.
+    activeTab.value.anchor = entry.name;
   }
 
   /**
@@ -1394,12 +1420,17 @@ export const useFilesStore = defineStore("files", () => {
    * over the current sorted+filtered order (JUS-138). `additive` (⌘/Ctrl+Shift)
    * keeps the existing selection; a plain shift-click replaces it. A missing or
    * filtered-away anchor falls back to selecting just the clicked row and adopts
-   * it as the new anchor. The anchor never moves on a range click, so repeated
+   * it as the new anchor. It refuses a non-selectable target itself (the store
+   * stays self-defending). The anchor never moves on a range click, so repeated
    * shift-clicks grow or shrink the same run.
    */
   function selectRange(name: string, additive: boolean): void {
     const tab = activeTab.value;
     const entries = visibleEntries.value;
+    const target = entries.find((entry) => entry.name === name);
+    if (target === undefined || !isSelectable(target)) {
+      return;
+    }
     const anchor = tab.anchor;
     const anchored =
       anchor !== null && entries.some((entry) => entry.name === anchor);
@@ -1414,7 +1445,12 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /** toggleSelectAll adds every visible selectable entry, or clears them. */
+  /**
+   * toggleSelectAll adds every visible selectable entry, or clears them. When
+   * it selects all and no anchor exists yet, the anchor is seeded at the first
+   * selectable visible entry (JUS-138), so a following shift-click extends the
+   * run from the top instead of collapsing the whole selection to one row.
+   */
   function toggleSelectAll(): void {
     const next = new Set(selected.value);
     if (allVisibleSelected.value) {
@@ -1424,6 +1460,9 @@ export const useFilesStore = defineStore("files", () => {
     } else {
       for (const entry of selectableVisible.value) {
         next.add(entry.name);
+      }
+      if (activeTab.value.anchor === null) {
+        activeTab.value.anchor = selectableVisible.value[0]?.name ?? null;
       }
     }
     selected.value = next;

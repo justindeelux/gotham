@@ -363,15 +363,18 @@ function extendRange(event: MouseEvent, entry: FilesEntry): void {
  * selection from the last-clicked anchor (⌘/Ctrl+Shift keeps it, Shift alone
  * replaces it). Activation is left to the double-click (or Enter), so a press on
  * a checkbox/action never changes the selection and two clicks never open the
- * entry twice.
+ * entry twice. The row-control guard runs FIRST, so Shift+click on an inline
+ * action or the ⋮ menu behaves exactly as without Shift (the control runs, the
+ * selection is untouched); the checkbox's own capture handler covers the other
+ * row control.
  */
 function onRowClick(event: MouseEvent, entry: FilesEntry): void {
+  if (isRowControl(event.target) || !isSelectable(entry)) {
+    return;
+  }
   if (event.shiftKey) {
     event.preventDefault();
     extendRange(event, entry);
-    return;
-  }
-  if (isRowControl(event.target) || !isSelectable(entry)) {
     return;
   }
   if (event.ctrlKey || event.metaKey) {
@@ -399,7 +402,10 @@ function onCheckboxCapture(event: MouseEvent, entry: FilesEntry): void {
 /**
  * onListMouseDown suppresses the browser's text selection for a Shift+press in
  * the list/grid: without it a Shift+click starts selecting the rows' text
- * instead of a run of entries (JUS-138).
+ * instead of a run of entries (JUS-138). It also cancels the default focus a
+ * press would move; that is deliberate here (the range, not focus, is the
+ * gesture), but JUS-139 must re-check focus behaviour at this binding when it
+ * adds arrow-key row navigation.
  */
 function onListMouseDown(event: MouseEvent): void {
   if (event.shiftKey) {
@@ -407,9 +413,14 @@ function onListMouseDown(event: MouseEvent): void {
   }
 }
 
-/** onRowDblclick performs a row's default action, ignoring its own controls. */
+/**
+ * onRowDblclick performs a row's default action, ignoring its own controls and
+ * a Shift+double-click (JUS-138): Shift is a range gesture, so a shift-double
+ * click must not open a folder (which would clear the selection) or activate an
+ * entry. A plain double-click (JUS-130) is unchanged.
+ */
 function onRowDblclick(event: MouseEvent, entry: FilesEntry): void {
-  if (isRowControl(event.target)) {
+  if (event.shiftKey || isRowControl(event.target)) {
     return;
   }
   activate(entry);

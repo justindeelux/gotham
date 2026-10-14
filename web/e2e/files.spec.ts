@@ -1108,6 +1108,70 @@ test.describe("files shift-click range selection", () => {
     await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
     await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
   });
+
+  test("shift-click on a row's own controls runs the control and leaves the selection alone", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => json(route, 200, listing(rangeEntries)),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    // Anchor on app.yaml: a range to logo.png would select a second row.
+    await listRow(page, "app.yaml").click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+
+    // Shift+click the ⋮ menu: the menu opens, the selection is untouched.
+    await listRow(page, "logo.png")
+      .getByRole("button", { name: "More actions for logo.png" })
+      .click({ modifiers: ["Shift"] });
+    await expect(
+      page.getByRole("menu", { name: "More actions for logo.png" }),
+    ).toBeVisible();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+
+    // Shift+click the inline Rename action: the dialog opens, selection intact.
+    await listRow(page, "logo.png")
+      .getByRole("button", { name: "Rename logo.png" })
+      .click({ modifiers: ["Shift"] });
+    await expect(
+      page.locator(".n-modal").filter({ hasText: "Rename entry" }),
+    ).toBeVisible();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+  });
+
+  test("a shift+double-click does not activate a row", async ({ page, request }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => {
+        const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+        return json(
+          route,
+          200,
+          listing(
+            path === "conf"
+              ? [entry("inside.txt", "file", 5, 0o100644, "etag-in")]
+              : [
+                  entry("conf", "directory", 4096, 0o040755, "etag-conf"),
+                  entry("app.yaml", "file", 2048, 0o100644, "etag-yaml"),
+                ],
+          ),
+        );
+      },
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await listRow(page, "conf").dblclick({ modifiers: ["Shift"] });
+
+    // Still in the root listing: the folder was not opened.
+    await expect(listRow(page, "conf")).toBeVisible();
+    await expect(page.getByText("inside.txt")).toHaveCount(0);
+  });
 });
 
 /**

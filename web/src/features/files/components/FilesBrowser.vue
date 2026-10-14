@@ -427,6 +427,12 @@ function onRowClick(event: MouseEvent, entry: FilesEntry): void {
     return;
   }
   files.selectOnly(entry.name);
+  // A plain click/tap also moves the roving row to the pressed entry, so the
+  // roving tab stop (and the shared accessible description that tracks it) never
+  // describes a different row than the one the user just clicked (JUS-140). It
+  // moves the tab stop only — no scroll/focus nudge (JUS-130/137), unlike the
+  // Shift+click arm above, which has to restore the focus its press cancelled.
+  rovingName.value = entry.name;
 }
 
 /**
@@ -1439,7 +1445,6 @@ watch(
   () => {
     releaseFocus();
     closeRowMenu();
-    resetRowMenu();
     rovingName.value = null;
     resetTypeahead();
   },
@@ -1451,7 +1456,6 @@ watch(pinnedIndex, (index) => {
   if (index === -1) {
     releaseFocus();
     closeRowMenu();
-    resetRowMenu();
   }
 });
 
@@ -1810,12 +1814,14 @@ const contextAria = computed<string>(() =>
 const rowMenuOpenName = ref<string | null>(null);
 
 /**
- * resetRowMenu clears the ⋮ dropdown's tracked open name. An unmounting
- * NDropdown never emits `update:show(false)`, so a name left behind would render
- * `aria-expanded="true"` with nothing open. It is the ONE reset called by every
- * listing invalidation — the listing-identity and pin watchers above, and the
- * rendered-set watcher below (the dropdown's own Escape/click-away/select routes
- * clear it through {@link onRowMenuShow}) — JUS-140.
+ * resetRowMenu drops the tracked open name when its row leaves the rendered set
+ * — the one case the dropdown cannot report itself: an unmounting NDropdown
+ * never emits `update:show(false)`, so a name left behind would render
+ * `aria-expanded="true"` with no menu. `rowMenuOpenName` mirrors the dropdown's
+ * own `show` (set from `@update:show`), so this only ever runs once the popup
+ * has already unmounted and the two always agree. A listing change that keeps
+ * the owning row mounted (sort/filter/scroll, or a navigation that reuses the
+ * same-named node) leaves the menu open and `aria-expanded` "true" (JUS-140).
  */
 function resetRowMenu(): void {
   rowMenuOpenName.value = null;

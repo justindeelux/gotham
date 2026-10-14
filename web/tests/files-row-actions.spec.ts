@@ -184,6 +184,55 @@ function rowFor(page: Page, name: string): Locator {
     .first();
 }
 
+/** moreFor / menuFor locate one row's ⋮ trigger and its (teleported) menu. */
+function moreFor(page: Page, name: string): Locator {
+  return page.getByRole("button", { name: `More actions for ${name}` });
+}
+function menuFor(page: Page, name: string): Locator {
+  return page.getByRole("menu", { name: `More actions for ${name}` });
+}
+
+/** expectMenuOpen asserts the ⋮ popup is visible AND aria-expanded is true. */
+async function expectMenuOpen(page: Page, name: string): Promise<void> {
+  await expect(menuFor(page, name)).toBeVisible();
+  await expect(moreFor(page, name)).toHaveAttribute("aria-expanded", "true");
+}
+
+/** expectMenuClosed asserts no row menu is open AND the trigger is collapsed. */
+async function expectMenuClosed(page: Page, name: string): Promise<void> {
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(moreFor(page, name)).toHaveAttribute("aria-expanded", "false");
+}
+
+/**
+ * expectMenuAgrees asserts the ⋮ popup and aria-expanded never disagree —
+ * whichever state a route leaves them in (menu visible <=> aria-expanded true).
+ */
+async function expectMenuAgrees(page: Page, name: string): Promise<void> {
+  await expect
+    .poll(async () => {
+      const menu = menuFor(page, name);
+      const open = (await menu.count()) > 0 && (await menu.first().isVisible());
+      const expanded = await moreFor(page, name).getAttribute("aria-expanded");
+      return `${open ? "open" : "closed"}:${expanded ?? "none"}`;
+    })
+    .toMatch(/^(open:true|closed:false)$/);
+}
+
+/** expectDescribes asserts the roving description node describes `entry`. */
+async function expectDescribes(page: Page, entry: string): Promise<void> {
+  const row = page.locator(`.fm-row[data-entry="${entry}"]`);
+  await expect(row.locator(".fm-label")).toHaveAttribute(
+    "aria-describedby",
+    "fm-row-details",
+  );
+  const mode = await row.locator(".fm-mode").getAttribute("title");
+  const date = await row.locator(".fm-date").getAttribute("title");
+  await expect(page.locator("#fm-row-details")).toHaveText(
+    `Mode ${mode}, modified ${date}`,
+  );
+}
+
 test.describe("icon-only controls are accessible", () => {
   test("the ⋮ is visible at rest; inline actions reveal on hover, then focus", async ({
     page,
@@ -406,102 +455,236 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expect(folderMore).toHaveAttribute("aria-expanded", "false");
   });
 
-  test("the roving row's accessible description carries the mode and modified time", async ({
+  test("the roving description follows clicks, taps, arrows, Home/End and Shift+click", async ({
     page,
   }) => {
     await openFiles(page);
     // One shared, visually hidden description node — never one per row.
     await expect(page.locator("#fm-row-details")).toHaveCount(1);
 
-    /** entryOf returns the data-entry of the row/tile a control belongs to. */
-    const entryOf = (locator: Locator): Promise<string> =>
-      locator.evaluate(
-        (el) =>
-          (el.closest("[data-entry]") as HTMLElement | null)?.dataset.entry ?? "",
-      );
-    /** expectedDetails is the localized description for one entry. */
-    const expectedDetails = async (entry: string): Promise<string> => {
-      const row = page.locator(`.fm-row[data-entry="${entry}"]`);
-      const mode = await row.locator(".fm-mode").getAttribute("title");
-      const date = await row.locator(".fm-date").getAttribute("title");
-      return `Mode ${mode}, modified ${date}`;
-    };
+    /** rowOrder lists the rendered rows' names in listing order. */
+    const rowOrder = (): Promise<string[]> =>
+      page
+        .locator(".fm-row[data-entry]")
+        .evaluateAll((els) =>
+          els.map((el) => (el as HTMLElement).dataset.entry ?? ""),
+        );
+    /** rovingName is the entry that owns the roving tab stop. */
+    const rovingName = (): Promise<string> =>
+      page
+        .locator('.fm-table .fm-label[tabindex="0"]')
+        .evaluate(
+          (el) =>
+            (el.closest("[data-entry]") as HTMLElement | null)?.dataset
+              .entry ?? "",
+        );
 
-    const roving = page.locator('.fm-table .fm-label[tabindex="0"]');
-    await expect(roving).toHaveCount(1);
-    await expect(roving).toHaveAttribute("aria-describedby", "fm-row-details");
-    const first = await entryOf(roving);
-    await expect(roving).toHaveAccessibleDescription(await expectedDetails(first));
     // The Mode/Modified cells keep their hover tooltips (mouse users).
-    await expect(
-      page.locator(`.fm-row[data-entry="${first}"] .fm-mode`),
-    ).toHaveAttribute("title", /./);
+    await expect(rowFor(page, "app.yaml").locator(".fm-mode")).toHaveAttribute(
+      "title",
+      /./,
+    );
 
-    // Roving moves to the next row: the one shared node follows it (still exactly
-    // one tab stop — JUS-139) and the previous row loses the reference.
-    await roving.focus();
+    // A plain click moves the roving row (and the description) to the clicked
+    // row — the previously-missing pointer/touch path.
+    await rowFor(page, "app.yaml").click();
+    await expectDescribes(page, "app.yaml");
+
+    // Arrows keep the description on the focused row.
+    await rowFor(page, "app.yaml").locator(".fm-label").focus();
     await page.keyboard.press("ArrowDown");
-    const moved = page.locator('.fm-table .fm-label[tabindex="0"]');
-    await expect(moved).toHaveCount(1);
-    const second = await entryOf(moved);
-    expect(second).not.toBe(first);
-    await expect(moved).toHaveAttribute("aria-describedby", "fm-row-details");
-    await expect(moved).toHaveAccessibleDescription(await expectedDetails(second));
-    await expect(
-      page.locator(`.fm-row[data-entry="${first}"] .fm-label`),
-    ).not.toHaveAttribute("aria-describedby", "fm-row-details");
+    await expectDescribes(page, await rovingName());
+
+    // Home / End move the roving row too.
+    const order = await rowOrder();
+    await page.keyboard.press("Home");
+    await expectDescribes(page, order[0]);
+    await page.keyboard.press("End");
+    await expectDescribes(page, order[order.length - 1]);
+
+    // Shift+click moves the roving row to the clicked entry.
+    await rowFor(page, "config").click();
+    await rowFor(page, "backup.tar.gz").click({ modifiers: ["Shift"] });
+    await expectDescribes(page, "backup.tar.gz");
+
+    // Exactly one tab stop survives every route (JUS-139).
     await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
 
     // The grid tile carries the same single-node description (mode is not a
     // visible cell there).
     await page.getByRole("button", { name: "Grid view" }).click();
-    await expect(page.locator('.fm-tile[tabindex="0"]')).toHaveCount(1);
     const tile = page.locator('.fm-tile[tabindex="0"]');
+    await expect(tile).toHaveCount(1);
     await expect(tile).toHaveAttribute("aria-describedby", "fm-row-details");
     await expect(tile).toHaveAccessibleDescription(/Mode |Quyền /);
   });
 
-  test("an open ⋮ is not stale after its row is filtered out and back", async ({
-    page,
-  }) => {
+  test("the ⋮ popup and aria-expanded agree on every route", async ({ page }) => {
     await openFiles(page);
-    const more = page.getByRole("button", { name: "More actions for app.yaml" });
-    await more.click();
-    await expect(more).toHaveAttribute("aria-expanded", "true");
+    const more = moreFor(page, "app.yaml");
 
-    // Type in the folder filter: the row unmounts while its menu is open, and no
-    // dropdown close event fires for an unmounted trigger. Clearing the filter
-    // renders the row again — its ⋮ must not come back expanded.
+    // Baseline: a real click opens both.
+    await more.click();
+    await expectMenuOpen(page, "app.yaml");
+
+    // Escape and click-away close both.
+    await page.keyboard.press("Escape");
+    await expectMenuClosed(page, "app.yaml");
+    await more.click();
+    await expectMenuOpen(page, "app.yaml");
+    await page.locator(".fm-card-title").click();
+    await expectMenuClosed(page, "app.yaml");
+
+    // Selecting a menu item closes both.
+    await more.click();
+    await expectMenuOpen(page, "app.yaml");
+    await menuFor(page, "app.yaml")
+      .getByRole("menuitem", { name: "Copy", exact: true })
+      .click();
+    await expectMenuClosed(page, "app.yaml");
+
+    // Filter typing / clearing and a sort change keep the row mounted, so the
+    // menu stays open and aria-expanded stays true — the menu is never
+    // force-closed while its row is still valid (the two always agree).
+    await more.click();
+    await expectMenuOpen(page, "app.yaml");
+    await page.locator(".fm-search input").fill("app");
+    await expectMenuAgrees(page, "app.yaml");
+    await expectMenuOpen(page, "app.yaml");
+    await page.locator(".fm-search input").fill("");
+    await expect(rowFor(page, "app.yaml")).toBeVisible();
+    await expectMenuOpen(page, "app.yaml");
+    await page.getByRole("button", { name: "Size", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expectMenuOpen(page, "app.yaml");
+  });
+
+  test("the ⋮ menu closes when its row leaves the rendered set", async ({ page }) => {
+    await openFiles(page);
+    await moreFor(page, "app.yaml").click();
+    await expectMenuOpen(page, "app.yaml");
+
+    // Filter the row out (it unmounts with its dropdown), then clear the filter:
+    // the row renders again with no menu and a collapsed trigger.
     const filter = page.locator(".fm-search input");
     await filter.fill("config");
     await expect(rowFor(page, "app.yaml")).toHaveCount(0);
+    await expect(page.getByRole("menu")).toHaveCount(0);
     await filter.fill("");
     await expect(rowFor(page, "app.yaml")).toBeVisible();
-
-    await expect(page.getByRole("menu")).toHaveCount(0);
-    await expect(
-      page.getByRole("button", { name: "More actions for app.yaml" }),
-    ).toHaveAttribute("aria-expanded", "false");
+    await expectMenuClosed(page, "app.yaml");
   });
 
-  test("an open ⋮ is not inherited by a same-named row in another folder", async ({
+  test("a listing change reusing a same-named row keeps popup and aria in agreement", async ({
     page,
   }) => {
     await openFiles(page);
-    await page.getByRole("button", { name: "More actions for app.yaml" }).click();
-    await expect(
-      page.getByRole("button", { name: "More actions for app.yaml" }),
-    ).toHaveAttribute("aria-expanded", "true");
+    await moreFor(page, "app.yaml").click();
+    await expectMenuOpen(page, "app.yaml");
 
-    // Keyboard-open the `config` folder so no pointerdown closes the dropdown:
-    // the next listing also holds an `app.yaml`, which must not inherit the
-    // previous row's expanded state.
+    // Keyboard-open `config`; the mock returns the same listing, so the
+    // same-named `app.yaml` node (and its open popup) is reused. The trigger and
+    // the popup must still agree — never aria-expanded="false" while a menu shows.
     await rowFor(page, "config").locator(".fm-label").focus();
     await page.keyboard.press("Enter");
     await expect(rowFor(page, "app.yaml")).toBeVisible();
-    await expect(
-      page.getByRole("button", { name: "More actions for app.yaml" }),
-    ).toHaveAttribute("aria-expanded", "false");
+    await expectMenuAgrees(page, "app.yaml");
+    await expectMenuOpen(page, "app.yaml");
+  });
+
+  test("a tab switch closes the row menu", async ({ page }) => {
+    await openFiles(page);
+    await moreFor(page, "app.yaml").click();
+    await expectMenuOpen(page, "app.yaml");
+    await page.getByRole("button", { name: "New tab" }).click();
+    await expect(moreFor(page, "app.yaml")).toBeVisible();
+    await expectMenuClosed(page, "app.yaml");
+  });
+
+  test("right-click and Shift+F10 keep the popup and aria in agreement", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    // The context route shows the same menu, so the ⋮ reports expanded.
+    await rowFor(page, "config").click({ button: "right" });
+    await expectMenuOpen(page, "config");
+    await page.keyboard.press("Escape");
+    await expectMenuClosed(page, "config");
+
+    await rowFor(page, "app.yaml").locator(".fm-label").focus();
+    await page.keyboard.press("Shift+F10");
+    await expectMenuOpen(page, "app.yaml");
+    await page.keyboard.press("Escape");
+    await expectMenuClosed(page, "app.yaml");
+  });
+
+  test("deleting the open entry closes the menu and drops the trigger", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    let deleted = false;
+    await page.route(`**/api/v1/servers/${server1}/files/list*`, (route) => {
+      const entries = deleted
+        ? listing().filter((entry) => entry.name !== "app.yaml")
+        : listing();
+      return route.fulfill({ json: { entries, truncated: false, cursor: "" } });
+    });
+    await page.route(`**/api/v1/servers/${server1}/files/entry*`, (route) => {
+      if (route.request().method() === "DELETE") {
+        deleted = true;
+        return route.fulfill({ status: 204, body: "" });
+      }
+      return route.fallback();
+    });
+
+    await moreFor(page, "app.yaml").click();
+    await expectMenuOpen(page, "app.yaml");
+    await menuFor(page, "app.yaml")
+      .getByRole("menuitem", { name: "Delete", exact: true })
+      .click();
+    await expectMenuClosed(page, "app.yaml");
+
+    const dialog = page.locator(".n-modal").filter({ hasText: "Delete file" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Move to recycle bin" }).click();
+    await expect(moreFor(page, "app.yaml")).toHaveCount(0);
+    await expect(page.getByRole("menu")).toHaveCount(0);
+  });
+
+  test("a row scrolled out of the window and back leaves no stale ⋮ state", async ({
+    page,
+  }) => {
+    // A long, windowed listing so the open row can be unmounted by scrolling.
+    const many = Array.from({ length: 5000 }, (_, index) => ({
+      name: `file-${String(index).padStart(4, "0")}.txt`,
+      kind: "file",
+      size: index + 1,
+      mode: 0o100644,
+      modified_at: "2026-10-12T09:02:00Z",
+      etag: `"e${index}"`,
+    }));
+    await openFiles(page, { entries: many });
+    await moreFor(page, "file-0000.txt").click();
+    await expectMenuOpen(page, "file-0000.txt");
+
+    // Release the focus pin with no pointer press (the ⋮ button owns focus), so
+    // the row can be windowed out; its dropdown unmounts without a close event.
+    await page.evaluate(() =>
+      (document.activeElement as HTMLElement | null)?.blur(),
+    );
+    const wrap = page.locator(".table-wrap");
+    await wrap.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect
+      .poll(() => page.locator('.fm-row[data-entry="file-0000.txt"]').count())
+      .toBe(0);
+
+    await wrap.evaluate((el) => {
+      el.scrollTop = 0;
+    });
+    await expect(page.locator('.fm-row[data-entry="file-0000.txt"]')).toBeVisible();
+    await expectMenuClosed(page, "file-0000.txt");
   });
 
   test("the selection bar hiding never drops focus to <body>", async ({ page }) => {
@@ -527,8 +710,8 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await checkbox.click();
     await expect(page.locator("body")).not.toBeFocused();
     expect(
-      await page.evaluate(
-        () => document.activeElement?.closest('[data-entry="app.yaml"]') !== null,
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest('[data-entry="app.yaml"]')),
       ),
     ).toBe(true);
   });
@@ -554,6 +737,15 @@ test.describe("row action accessibility nits (JUS-140)", () => {
 test.describe("touch devices", () => {
   // hasTouch makes Chromium report `(hover: none)` / `(pointer: coarse)`.
   test.use({ hasTouch: true });
+
+  test("a tap moves the row description to the tapped row (JUS-140)", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await rowFor(page, "app.yaml").tap();
+    await expectDescribes(page, "app.yaml");
+    await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
+  });
 
   test("the whole action set is visible and the ⋮ opens the row menu", async ({
     page,

@@ -1,4 +1,5 @@
 import { activeLocale } from "@/shared/i18n/locale";
+import { formatBytes } from "@/shared/utils/format";
 import en from "@/features/files/locales/en";
 import vi from "@/features/files/locales/vi";
 
@@ -769,4 +770,98 @@ export function countByKind(entries: FilesEntry[]): Record<FileKind, number> {
     counts[entry.kind] += 1;
   }
   return counts;
+}
+
+/**
+ * widestBytesLabel is the widest `formatBytes` label any byte count in
+ * `[0, total]` can produce — a true upper bound on the live selection summary.
+ * `formatBytes` is non-monotonic across unit boundaries twice over: it switches
+ * unit at powers of 1024, and it drops from 2 to 1 decimal at a value of 100,
+ * so `toFixed` rounds a value just below a `10^k` boundary *up* into a wider
+ * string (99.999 -> "100.00 KiB", 999.99 -> "1000.0 KiB"). Probing each
+ * reachable rounding peak (`10^k * unit - 1`) captures those, so the reserve
+ * built from this is never narrower than a subset's live label.
+ */
+export function widestBytesLabel(total: number): string {
+  if (!(total > 0)) {
+    return formatBytes(total);
+  }
+  let widest = formatBytes(total);
+  for (let base = 1; base <= total; base *= 1024) {
+    for (const boundary of [10, 100, 1000, 1024]) {
+      const peak = base * boundary - 1;
+      if (peak < base || peak > total) {
+        continue;
+      }
+      const label = formatBytes(peak);
+      if (
+        label.length > widest.length ||
+        // On a length tie prefer the widest unit glyph (MiB) so a
+        // proportional-font unit can never render wider than the reserve.
+        (label.length === widest.length &&
+          unitRank(label) > unitRank(widest))
+      ) {
+        widest = label;
+      }
+    }
+  }
+  return widest;
+}
+
+/** unitRank orders `formatBytes` units by glyph width (MiB widest). */
+function unitRank(label: string): number {
+  const unit = label.split(" ")[1] ?? "";
+  // 'M' is the widest unit initial; the single-char byte unit is narrowest.
+  if (unit === "MiB") {
+    return 3;
+  }
+  return unit === "B" ? 0 : 1;
+}
+
+/** TabAddress is the root+path identity a browser tab's label is derived from. */
+export interface TabAddress {
+  id: string;
+  rootName: string;
+  path: string;
+}
+
+/** tabSegments splits one tab's location into ordered root-relative segments. */
+function tabSegments(tab: TabAddress): string[] {
+  return tab.path === "" ? [tab.rootName] : [tab.rootName, ...tab.path.split("/")];
+}
+
+/**
+ * disambiguatedTabLabels maps every tab to a unique visible label: the folder's
+ * basename, or the root. When two tabs share a basename (two folders named
+ * "config" under different parents) the parent segments are prepended one by
+ * one until every label differs, so "a/x/config" and "b/x/config" no longer
+ * both read "x/config". The caller keeps the full path as the tab tooltip.
+ */
+export function disambiguatedTabLabels(tabs: TabAddress[]): Map<string, string> {
+  const labelAt = (segments: string[], depth: number): string =>
+    segments.slice(-depth).join("/");
+  const depth = new Map<string, number>(tabs.map((tab) => [tab.id, 1]));
+  // Grow the prefix of every colliding tab until all labels differ, or the
+  // label already spans the whole root-relative path (two identical locations
+  // cannot be told apart, so they keep the basename).
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const counts = new Map<string, number>();
+    for (const tab of tabs) {
+      const label = labelAt(tabSegments(tab), depth.get(tab.id) ?? 1);
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    for (const tab of tabs) {
+      const segments = tabSegments(tab);
+      const d = depth.get(tab.id) ?? 1;
+      if ((counts.get(labelAt(segments, d)) ?? 0) > 1 && d < segments.length) {
+        depth.set(tab.id, d + 1);
+        changed = true;
+      }
+    }
+  }
+  return new Map(
+    tabs.map((tab) => [tab.id, labelAt(tabSegments(tab), depth.get(tab.id) ?? 1)]),
+  );
 }

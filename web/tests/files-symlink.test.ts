@@ -34,9 +34,18 @@ describe("resolveSymlinkTarget", () => {
     expect(resolveSymlinkTarget("", "x", "/srv/a/b", "/srv/")).toBe("a/b");
   });
 
+  it("resolves a target at the root's top level to \"\"", () => {
+    // The root itself is inside the root and browsable.
+    expect(resolveSymlinkTarget("", "x", "/srv", "/srv")).toBe("");
+    expect(resolveSymlinkTarget("", "x", "/", "/")).toBe("");
+    expect(resolveSymlinkTarget("conf", "up", "..")).toBe("");
+    expect(resolveSymlinkTarget("", "self", ".")).toBe("");
+    // A link to "." in a subfolder is that folder, not the root.
+    expect(resolveSymlinkTarget("conf", "self", ".")).toBe("conf");
+  });
+
   it("returns null for an absolute target outside the root or with no root path", () => {
     expect(resolveSymlinkTarget("", "x", "/etc/passwd", "/srv")).toBeNull();
-    expect(resolveSymlinkTarget("", "x", "/srv", "/srv")).toBeNull();
     expect(resolveSymlinkTarget("", "x", "/usr/bin")).toBeNull();
   });
 

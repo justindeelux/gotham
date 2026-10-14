@@ -140,6 +140,7 @@ const vi = {
     recycleMessage: "Chuyển các tệp đã chọn vào thùng rác? Bạn có thể khôi phục cho tới khi thùng rác được làm trống.",
     recycleFolderMessage: "Chuyển các thư mục đã chọn cùng mọi thứ bên trong vào thùng rác? Bạn có thể khôi phục cho tới khi thùng rác được làm trống.",
     recycleSymlinkHint: "Liên kết được chuyển vào thùng rác — không xóa mục tiêu của nó.",
+    symlinkTargetFailed: "Không mở được đích của {name} — đó không phải thư mục trong gốc này.",
     recycleHint: "Các mục được chuyển vào thùng rác và vẫn khôi phục được cho tới khi thùng rác được làm trống.",
     recycleConfirm: "Chuyển vào thùng rác",
     movedToBin: "Đã chuyển {count} mục vào thùng rác.",

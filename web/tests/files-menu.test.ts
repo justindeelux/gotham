@@ -108,10 +108,19 @@ describe("rowMenuOptions", () => {
   });
 
   it("adds Go to target for a symlink with a browsable target only", () => {
-    const symlink = entry({ name: "bin", kind: "symlink", mode: 0o120777 });
+    const symlink = entry({
+      name: "bin",
+      kind: "symlink",
+      mode: 0o120777,
+      symlink_target: "usr/bin",
+    });
 
     const reachable = rowMenuOptions(symlink, ctx({ symlinkTargetPath: "usr/bin" }));
     expect(keys(reachable)[0]).toBe("go-target");
+
+    // "" (the root's top level) is a valid target, not a hidden one.
+    const root = rowMenuOptions(symlink, ctx({ symlinkTargetPath: "" }));
+    expect(keys(root)[0]).toBe("go-target");
 
     // An unresolvable target (outside the root) hides the action.
     const elsewhere = rowMenuOptions(symlink, ctx({ symlinkTargetPath: null }));
@@ -123,6 +132,13 @@ describe("rowMenuOptions", () => {
       ctx({ symlinkTargetPath: "usr/bin" }),
     );
     expect(keys(file)).not.toContain("go-target");
+
+    // A symlink with no reported target never grows the action.
+    const bare = rowMenuOptions(
+      entry({ name: "current", kind: "symlink", mode: 0o120777 }),
+      ctx({ symlinkTargetPath: "usr/bin" }),
+    );
+    expect(keys(bare)).not.toContain("go-target");
   });
 
   it("offers nothing for a special file", () => {

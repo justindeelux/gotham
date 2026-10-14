@@ -1068,3 +1068,51 @@ test.describe("files filter and symlink target", () => {
     ).toBeVisible();
   });
 });
+
+/**
+ * JUS-132: a symlink whose target is a file or a broken link is offered the
+ * action, but a failed open keeps the current listing and warns instead of
+ * replacing the view with an error state. The deliberate 400 makes the browser
+ * log the failed resource, so this scenario whitelists that console line.
+ */
+test.describe("files symlink target failure", () => {
+  test.use({ expectedConsoleErrors: ["Failed to load resource"] });
+
+  test("a non-directory target keeps the view and warns", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => {
+        const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+        if (path === "usr/bin") {
+          return json(route, 400, { message: "not a directory" });
+        }
+        return json(
+          route,
+          200,
+          listing([entry("bin", "symlink", 7, 0o120777, "etag-bin", "usr/bin")]),
+        );
+      },
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(
+      page.locator(".fm-table").getByText("Symlink → usr/bin"),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "More actions for bin" }).click();
+    await page.getByRole("menuitem", { name: "Go to target" }).click();
+
+    await expect(page.locator(".n-message")).toContainText(
+      "Could not open the target of bin",
+    );
+    // The listing is unchanged: no error/empty state replaced it.
+    await expect(
+      page.locator(".fm-table").getByText("Symlink → usr/bin"),
+    ).toBeVisible();
+    await expect(page.locator(".fm-state")).toHaveCount(0);
+  });
+});

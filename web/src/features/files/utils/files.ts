@@ -422,10 +422,11 @@ export function entryMatchesQuery(entry: FilesEntry, query: string): boolean {
  * the browser can open, so "Go to target" lands on the real directory rather
  * than re-listing the link. A relative target resolves from the link's own
  * folder; an absolute target is mapped onto the root's absolute path when it
- * sits inside it. Returns null for a target the browser cannot address — an
- * empty target, one that climbs above the root, or an absolute path outside it
- * (or with an unknown root path) — so the caller hides the action instead of
- * offering a doomed navigation.
+ * sits inside it. "" is a valid result: the target is the root's top level
+ * (e.g. a link to ".." or to the root itself). Returns null only when the
+ * target is not inside the browsable root — an empty target, one that climbs
+ * above the root, or an absolute path outside it (or with an unknown root
+ * path) — so the caller hides the action instead of offering a doomed one.
  */
 export function resolveSymlinkTarget(
   dir: string,
@@ -441,6 +442,10 @@ export function resolveSymlinkTarget(
       return null;
     }
     const root = rootPath.replace(/\/+$/, "");
+    const base = root === "" ? "/" : root;
+    if (target === base) {
+      return "";
+    }
     const prefix = root === "" ? "/" : `${root}/`;
     if (!target.startsWith(prefix)) {
       return null;

@@ -547,6 +547,10 @@ test("the list header stays pinned while scrolling a long folder", async ({ page
   // The header rides the top of the scrollport instead of scrolling away.
   expect(headBox.y).toBeGreaterThanOrEqual(wrapBox.y - 1);
   expect(headBox.y).toBeLessThan(wrapBox.y + 4);
+
+  // Hovering the pinned header keeps it opaque, so rows cannot bleed through.
+  await head.hover();
+  await expect(head).toHaveCSS("background-color", "rgb(43, 45, 49)");
 });
 
 test("the folder filter resets on navigation and the footer counts the filtered rows", async ({
@@ -658,8 +662,13 @@ test("a symlink row shows its target and can jump to it", async ({ page }) => {
 
   await page.goto(`${baseURL}/servers/${server1}/files`);
 
-  // The target is shown next to the type, in list and grid.
+  // The target is shown next to the type, in list and grid, and a long target
+  // truncates with an ellipsis instead of wrapping the name column.
   await expect(page.locator(".fm-table").getByText("Symlink → usr/bin")).toBeVisible();
+  const subtitle = page.locator(".fm-table .fm-label span").first();
+  await expect(subtitle).toHaveCSS("text-overflow", "ellipsis");
+  await expect(subtitle).toHaveCSS("white-space", "nowrap");
+  await expect(subtitle).toHaveAttribute("title", "Symlink → usr/bin");
   await page.getByRole("button", { name: "Grid view" }).click();
   await expect(page.locator(".fm-grid").getByText("Symlink → usr/bin")).toBeVisible();
   await page.getByRole("button", { name: "List view" }).click();
@@ -671,4 +680,46 @@ test("a symlink row shows its target and can jump to it", async ({ page }) => {
     page.locator(".fm-table").getByText("python3", { exact: true }),
   ).toBeVisible();
   expect(requestedPaths).toContain("usr/bin");
+});
+
+test("Go to target on a file or broken link keeps the view and warns", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.route(`**/api/v1/servers/${server1}/files/list*`, async (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+    if (path === "usr/bin") {
+      // A target that is not a browsable directory answers 400 (ENOTDIR).
+      await route.fulfill({ status: 400, json: { message: "not a directory" } });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        entries: [
+          {
+            name: "bin",
+            kind: "symlink",
+            size: 7,
+            mode: 0o120777,
+            symlink_target: "usr/bin",
+            modified_at: "2026-10-12T09:02:00Z",
+            etag: '"b"',
+          },
+        ],
+        truncated: false,
+        cursor: "",
+      },
+    });
+  });
+
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table").getByText("Symlink → usr/bin")).toBeVisible();
+
+  await page.getByRole("button", { name: "More actions for bin" }).click();
+  await page.getByRole("menuitem", { name: "Go to target" }).click();
+
+  // The list stays on the folder it was in; the failure is a warning, not an
+  // error view.
+  await expect(page.locator(".n-message")).toContainText("Could not open the target of bin");
+  await expect(page.locator(".fm-table").getByText("Symlink → usr/bin")).toBeVisible();
+  await expect(page.locator(".fm-state")).toHaveCount(0);
 });

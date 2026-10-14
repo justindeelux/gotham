@@ -53,8 +53,13 @@ export function rowMenuOptions(
     options.push(item(t("files.menu.download"), "download", !canReadContent));
   }
   // JUS-132: a symlink whose target lives inside the browsable root can jump
-  // there; the entry layer hides the action when the target cannot be addressed.
-  if (entry.kind === "symlink" && ctx.symlinkTargetPath) {
+  // there. "" is the root's top level and stays valid; null (outside the root)
+  // hides the action. The entry's own target must be present too.
+  if (
+    entry.kind === "symlink" &&
+    entry.symlink_target &&
+    typeof ctx.symlinkTargetPath === "string"
+  ) {
     options.push(item(t("files.menu.goTarget"), "go-target"));
   }
   // Only a regular file or a folder can be chmod-ed: the agent refuses a

@@ -208,6 +208,9 @@
      region so the active sort column stays visible in long folders. */
   position: sticky; top: 0; z-index: 2; background: var(--surface);
 }
+/* Keep the pinned header opaque on hover (the row hover tint would otherwise
+   let the rows scrolling under it show through). */
+.fm-head:hover { background: var(--surface); }
 .fm-head .fm-sort { display: inline-flex; align-items: center; gap: 4px; color: inherit; font: inherit; }
 .fm-head .fm-sort:hover { color: var(--fg-2); }
 .fm-head .fm-sort svg { width: 12px; height: 12px; }
@@ -219,7 +222,7 @@
 .fm-select .check { cursor: pointer; gap: 0; }
 .fm-select .check input { width: 16px; height: 16px; margin: 0; }
 .fm-name .fm-label b { display: block; font-weight: 500; color: var(--fg); font-size: var(--text-xs); }
-.fm-name .fm-label span { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+.fm-name .fm-label span { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-mark {
   position: relative; width: 28px; height: 28px; flex: 0 0 auto;
   display: grid; place-items: center; border-radius: 7px;

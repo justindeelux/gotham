@@ -80,6 +80,7 @@ import {
   clampScrollTop,
   gridColumnCount,
   gridWindow,
+  renderedKey,
   windowRange,
 } from "@/features/files/utils/virtual";
 import { useTeamsStore } from "@/features/teams";
@@ -500,16 +501,15 @@ const scrollSize = useElementSize(scrollEl);
 // border-box: a revealed row must clear the header's padding and border too.
 const headSize = useElementSize(headEl, undefined, { box: "border-box" });
 
-// ── Focus retention (JUS-137 review rounds 1-2) ───────────────────────────
-// Windowing unmounts off-window rows, which used to (a) drop keyboard focus to
-// <body> when the focused row scrolled away and (b) make off-window rows
-// unreachable. Rather than add a roving tabindex — which needs arrow-key row
-// navigation, still out of scope — the row that owns focus (or the row whose
-// context menu is open) is PINNED into the rendered set: it stays mounted
-// wherever it is, rendered absolutely at its true offset so it never disturbs
-// the flow spacers, and keeps focus/menu. Tab keeps walking the rendered rows;
-// as focus passes the window edge the native focus scroll advances the window,
-// so the next entry is always already rendered.
+// ── Focus retention (JUS-137 review rounds 1-2; JUS-139 roving) ───────────
+// Windowing unmounts off-window rows, which used to drop keyboard focus to
+// <body> when the focused row scrolled away. The row that owns focus (or the
+// row whose context menu is open) is PINNED into the rendered set: it stays
+// mounted wherever it is, rendered absolutely at its true offset so it never
+// disturbs the flow spacers, and keeps focus/menu. Keyboard focus that crosses
+// the window edge advances the window through scrollEntryIntoView
+// (onListFocusIn), so the next entry is already rendered; the roving tabindex
+// (JUS-139) then walks the rendered rows.
 /** focusedName is the entry that last received focus inside the list/grid. */
 const focusedName = ref<string | null>(null);
 /** menuRowName is the row whose context menu is open. */
@@ -571,7 +571,7 @@ function readVirtualMetrics(): void {
     style.getPropertyValue("--fm-row-height"),
     rowHeight.value,
   );
-  tileMetrics.value = {
+  const tiles = {
     min: parsePx(style.getPropertyValue("--fm-tile-min"), tileMetrics.value.min),
     gap: parsePx(style.columnGap, tileMetrics.value.gap),
     height: parsePx(
@@ -579,6 +579,15 @@ function readVirtualMetrics(): void {
       tileMetrics.value.height,
     ),
   };
+  // Assign only on a real change: a fresh object every resize tick would
+  // invalidate every metric-dependent computed for nothing.
+  if (
+    tiles.min !== tileMetrics.value.min ||
+    tiles.gap !== tileMetrics.value.gap ||
+    tiles.height !== tileMetrics.value.height
+  ) {
+    tileMetrics.value = tiles;
+  }
 }
 watch(
   () => scrollEl.value,
@@ -589,6 +598,12 @@ watch(
     localScrollTop.value = el?.scrollTop ?? 0;
   },
   { flush: "post" },
+);
+// Re-read the row/tile metrics when the scroller is resized (a viewport or zoom
+// change), not only when it mounts or swaps view.
+watch(
+  [() => scrollSize.width.value, () => scrollSize.height.value],
+  () => readVirtualMetrics(),
 );
 
 /** isListVirtual / isGridVirtual gate windowing on a long listing. */
@@ -646,11 +661,7 @@ function windowRows(
     }
   }
   const pinned = pinnedIndex.value;
-  if (
-    pinned >= 0 &&
-    entries[pinned] &&
-    (pinned < start || pinned >= end)
-  ) {
+  if (pinned >= 0 && entries[pinned] && (pinned < start || pinned >= end)) {
     rows.push({ entry: entries[pinned], index: pinned, pinned: true });
     rows.sort((a, b) => a.index - b.index);
   }
@@ -673,14 +684,31 @@ function pinnedListStyle(index: number): Record<string, string> {
   return { top: `${headSize.height.value + index * rowHeight.value}px` };
 }
 
-/** gridColumns is the current auto-fill column count for the container width. */
-const gridColumns = computed<number>(() =>
-  gridColumnCount(
-    scrollSize.width.value,
-    tileMetrics.value.min,
-    tileMetrics.value.gap,
-  ),
-);
+/**
+ * gridColumns is the resolved auto-fill column count. Reading the used
+ * grid-template-columns keeps the window maths in step with the CSS (a
+ * responsive token change included) instead of re-deriving the auto-fill
+ * formula; the formula is the fallback before the grid is laid out.
+ */
+const gridColumns = computed<number>(() => {
+  // Touch the reactive width/metrics FIRST: the resolved-value path below must
+  // still re-evaluate when the container resizes, and getComputedStyle alone is
+  // not a reactive dependency (it would freeze the count at the first layout).
+  const width = scrollSize.width.value;
+  const { min, gap } = tileMetrics.value;
+  const el = scrollEl.value;
+  if (el !== null && files.viewMode === "grid") {
+    const columns = getComputedStyle(el).gridTemplateColumns;
+    const count = columns
+      .trim()
+      .split(/\s+/)
+      .filter((part) => part !== "").length;
+    if (count > 0 && columns !== "none") {
+      return count;
+    }
+  }
+  return gridColumnCount(width, min, gap);
+});
 /** gridPitch is one tile row's height plus the row gap. */
 const gridPitch = computed<number>(
   () => tileMetrics.value.height + tileMetrics.value.gap,
@@ -717,6 +745,19 @@ const gridRows = computed<RenderedRow[]>(() => {
   const win = gridWindowRange.value;
   return windowRows(entries, win.start, win.end);
 });
+
+/**
+ * renderedKeys identifies the rows/tiles currently in the DOM. The restore arm
+ * is keyed on this rendered-set identity, not on the data slice, so a data-only
+ * change that re-renders nothing never arms a refocus.
+ */
+const renderedKeys = computed<string>(() =>
+  renderedKey(
+    (files.viewMode === "grid" ? gridRows.value : listRows.value).map(
+      (row) => row.entry.name,
+    ),
+  ),
+);
 
 /** gridTileWidth is one tile's width for the current column count. */
 const gridTileWidth = computed<number>(() => {
@@ -1229,12 +1270,20 @@ function onListFocusIn(event: FocusEvent): void {
   const target = event.target as HTMLElement | null;
   const row = target?.closest<HTMLElement>("[data-entry]");
   const name = row?.dataset.entry ?? null;
+  // The flag describes THIS focus transition only: read it, then reset it, so a
+  // later programmatic focus is not misread as the earlier click's.
+  const pointer = lastFocusWasPointer;
+  lastFocusWasPointer = false;
   if (name === null) {
+    // Focus moved to an in-scroller control that is not a row (a header sort
+    // button, the select-all checkbox): the pin no longer guards focus, so drop
+    // the stale row instead of leaving focusedName/focusedEl pointing at it.
+    releaseFocus();
     return;
   }
   focusedName.value = name;
   focusedEl = target;
-  if (!restoringFocus && !lastFocusWasPointer) {
+  if (!restoringFocus && !pointer) {
     scrollEntryIntoView(name);
   }
 }
@@ -1286,20 +1335,22 @@ function onContextShow(show: boolean): void {
 }
 
 // Arm a one-shot refocus for a render WE schedule, and consume it after the
-// patch. A keyed window change moves or unmounts the focused node and Chromium
-// blurs it; `restorePending` (armed pre-flush, before the patch) is what tells
-// that blur apart from a user press on the very next focusout. The post-flush
-// consumer runs whether or not the component re-rendered, so the arm can never
-// go stale. A pointerdown/keydown clears the arm first, so a user gesture wins.
+// patch. The arm is keyed on the RENDERED-set identity, not the data slice, so a
+// data-only change that re-renders nothing never arms it. A keyed window change
+// moves or unmounts the focused node and Chromium blurs it; `restorePending`
+// (armed pre-flush, before the patch) is what tells that blur apart from a user
+// press on the very next focusout. The post-flush consumer runs whether or not
+// the component re-rendered, so the arm can never go stale. A pointerdown/keydown
+// clears the arm first, so a user gesture wins.
 watch(
-  [listRows, gridRows],
+  renderedKeys,
   () => {
     restorePending = true;
   },
   { flush: "pre" },
 );
 watch(
-  [listRows, gridRows],
+  renderedKeys,
   () => {
     if (!restorePending) {
       return;
@@ -2401,6 +2452,7 @@ function onFolderMenu(key: string): void {
         v-else
         ref="scrollEl"
         class="fm-grid"
+        role="list"
         :class="{ 'is-virtual': isGridVirtual }"
         @scroll="onListScroll"
         @mousedown="onListMouseDown"
@@ -2422,6 +2474,9 @@ function onFolderMenu(key: string): void {
           v-for="{ entry, index, pinned } in gridRows"
           :key="entry.name"
           class="fm-tile-wrap"
+          role="listitem"
+          :aria-posinset="index + 1"
+          :aria-setsize="files.visibleEntries.length"
           :class="{ 'is-pinned': pinned }"
           :data-entry="entry.name"
           :style="pinned ? pinnedTileStyle(index) : undefined"

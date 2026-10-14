@@ -443,8 +443,8 @@
           <h2>Grid view</h2>
           <span class="meta">same entries, tile density</span>
         </div>
-        <div class="fm-grid">
-          <div class="fm-tile-wrap">
+        <div class="fm-grid" role="list">
+          <div class="fm-tile-wrap" role="listitem" aria-posinset="1" aria-setsize="6">
             <label class="fm-tile-check" title="Select config"><input type="checkbox" aria-label="Select config" /></label>
             <button class="fm-tile" type="button" data-toast="Opened config/|info">
               <span class="row between"><span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span></span>
@@ -452,7 +452,7 @@
               <span class="fm-meta">12 files · 09:14</span>
             </button>
           </div>
-          <div class="fm-tile-wrap">
+          <div class="fm-tile-wrap" role="listitem" aria-posinset="2" aria-setsize="6">
             <label class="fm-tile-check" title="Select data"><input type="checkbox" aria-label="Select data" /></label>
             <button class="fm-tile" type="button" data-toast="Opened data/|info">
               <span class="row between"><span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span></span>
@@ -460,7 +460,7 @@
               <span class="fm-meta">3 files · 08:51</span>
             </button>
           </div>
-          <div class="fm-tile-wrap">
+          <div class="fm-tile-wrap" role="listitem" aria-posinset="3" aria-setsize="6">
             <label class="fm-tile-check" title="Select app.yaml"><input type="checkbox" aria-label="Select app.yaml" /></label>
             <button class="fm-tile" type="button" data-toast="Opened app.yaml in the editor.|info">
               <span class="row between"><span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg></span><span class="tag tag--accent">open</span></span>
@@ -468,7 +468,7 @@
               <span class="fm-meta">2.4 KiB · 09:02</span>
             </button>
           </div>
-          <div class="fm-tile-wrap">
+          <div class="fm-tile-wrap" role="listitem" aria-posinset="4" aria-setsize="6">
             <label class="fm-tile-check" title="Select logo.png"><input type="checkbox" checked aria-label="Select logo.png" /></label>
             <button class="fm-tile" type="button" data-toast="Previewed logo.png.|info">
               <span class="row between"><span class="fm-mark" data-kind="image"><svg aria-hidden="true"><use href="#i-image"></use></svg></span></span>
@@ -476,7 +476,7 @@
               <span class="fm-meta">24.6 KiB · 11:05</span>
             </button>
           </div>
-          <div class="fm-tile-wrap">
+          <div class="fm-tile-wrap" role="listitem" aria-posinset="5" aria-setsize="6">
             <label class="fm-tile-check" title="Select backup-2026-10-11.tar.gz"><input type="checkbox" aria-label="Select backup-2026-10-11.tar.gz" /></label>
             <button class="fm-tile" type="button" data-toast="128.4 MiB — download only.|warn">
               <span class="row between"><span class="fm-mark" data-kind="archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></span></span>
@@ -484,7 +484,7 @@
               <span class="fm-meta">128.4 MiB · 03:00</span>
             </button>
           </div>
-          <div class="fm-tile-wrap">
+          <div class="fm-tile-wrap" role="listitem" aria-posinset="6" aria-setsize="6">
             <label class="fm-tile-check" title="Select run.sock"><input type="checkbox" aria-label="Select run.sock" /></label>
             <button class="fm-tile" type="button" data-toast="Special file (socket) — no actions.|warn">
               <span class="row between"><span class="fm-mark"><svg aria-hidden="true"><use href="#i-terminal"></use></svg></span><span class="tag tag--warn">special</span></span>

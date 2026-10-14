@@ -114,3 +114,13 @@ export function gridWindow(
     padBottom: win.padBottom,
   };
 }
+
+/**
+ * renderedKey is a collision-safe identity for a rendered row-name sequence.
+ * JSON escaping makes it injective, so two different rendered sets can never
+ * share a key — a filename may itself contain the separator a plain join would
+ * use (a name may hold any byte but "/").
+ */
+export function renderedKey(names: string[]): string {
+  return JSON.stringify(names);
+}

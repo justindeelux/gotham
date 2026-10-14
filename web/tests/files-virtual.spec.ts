@@ -722,7 +722,8 @@ test.describe("row keyboard navigation (JUS-139)", () => {
     await page.keyboard.press(" ");
     await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
     await page.keyboard.press(" ");
-    await expect(page.locator(".fm-bulk-count")).toHaveText("");
+    // The live summary empties; the hidden reserve sizer stays mounted (JUS-141).
+    await expect(page.locator(".fm-bulk-count-live")).toHaveText("");
 
     await page.keyboard.press("ControlOrMeta+a");
     await expect(page.locator(".fm-bulk-count")).toContainText("5000 selected");
@@ -849,7 +850,9 @@ test.describe("row keyboard navigation (JUS-139)", () => {
       "aria-sort",
       "ascending",
     );
-    await expect(page.locator(".fm-bulk-count")).toHaveText("");
+    // Sorting keeps the selection empty, so the live summary stays blank (the
+    // hidden reserve sizer is not the live count — JUS-141).
+    await expect(page.locator(".fm-bulk-count-live")).toHaveText("");
 
     // Space on the select-all checkbox selects every entry.
     await page.locator(".fm-head .n-checkbox").focus();

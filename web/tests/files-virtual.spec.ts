@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL, window:readonly */
+/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, MouseEvent:readonly, URL, window:readonly */
 // JUS-137 windowed listing proof: the committed webdist is served statically
 // with the control-plane file API mocked in real Chromium. Measured claims on a
 // 5,000-entry directory:
@@ -606,6 +606,80 @@ test.describe("keyboard focus retention across the window", () => {
       page.locator(".fm-table b").filter({ hasText: "file-0000.txt" }),
     ).toHaveCount(0);
   });
+
+  test("a row menu opened on another row keeps a focused pinned row mounted", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const label = rowFor(page, "file-0000.txt").locator(".fm-label");
+    await label.focus();
+    await expect(label).toBeFocused();
+
+    // Scroll the focused row far out of the window so it is pinned.
+    const wrap = page.locator(".table-wrap");
+    await wrap.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => wrap.evaluate((el) => el.scrollTop)).toBeGreaterThan(1000);
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(1);
+
+    // Open the row menu on a row that IS in the window without moving focus
+    // (the menu-open path that does not blur, as a real Chromium right-click
+    // additionally blurs and the pointer guard treats that as a user gesture).
+    // The focused row must stay pinned alongside the menu row: a single-slot pin
+    // dropped it and left focus on <body> until the menu closed.
+    await page.evaluate(() => {
+      const row = document.querySelector(
+        '.fm-row[data-entry="file-4998.txt"]',
+      ) as HTMLElement;
+      const box = row.getBoundingClientRect();
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          clientX: box.left + 30,
+          clientY: box.top + 10,
+        }),
+      );
+    });
+    await expect(
+      page.getByRole("menu", { name: "More actions for file-4998.txt" }),
+    ).toBeVisible();
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(1);
+    await expect(label).toBeFocused();
+    await expect(label).toBeAttached();
+
+    // Closing the menu keeps the focused row pinned (and focused).
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(label).toBeFocused();
+  });
+
+  test("focusing an in-scroller header control clears the stale pin", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const label = rowFor(page, "file-0000.txt").locator(".fm-label");
+    await label.focus();
+    const wrap = page.locator(".table-wrap");
+    await wrap.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => wrap.evaluate((el) => el.scrollTop)).toBeGreaterThan(1000);
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(1);
+
+    // Focus the sticky header's Name sort button: it lives inside the scroller
+    // but owns no row, so the pin must be released rather than left stale.
+    await page.getByRole("button", { name: "Name", exact: true }).focus();
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(0);
+
+    // Scrolling back does not resurrect the dropped pin.
+    await wrap.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(0);
+  });
 });
 
 test.describe("windowed grid", () => {
@@ -669,6 +743,22 @@ test.describe("windowed grid", () => {
     const tileBox = (await tile.boundingBox())!;
     expect(tileBox.x).toBeGreaterThanOrEqual(gridBox.x - 1);
     expect(tileBox.x + tileBox.width).toBeLessThanOrEqual(gridBox.x + gridBox.width + 1);
+  });
+
+  test("the grid exposes the full set size to assistive tech", async ({ page }) => {
+    await openFiles(page);
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+
+    // The grid is a list whose items carry their true listing position and the
+    // full listing size — the grid's equivalent of the list's aria-rowcount.
+    await expect(page.locator(".fm-grid")).toHaveAttribute("role", "list");
+    const tiles = page.locator(".fm-grid .fm-tile-wrap");
+    expect(await tiles.count()).toBeLessThan(80);
+    await expect(tiles.first()).toHaveAttribute("role", "listitem");
+    await expect(tiles.first()).toHaveAttribute("aria-setsize", String(COUNT));
+    await expect(tiles.first()).toHaveAttribute("aria-posinset", "1");
+    await expect(tiles.last()).toHaveAttribute("aria-setsize", String(COUNT));
   });
 });
 

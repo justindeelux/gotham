@@ -67,6 +67,7 @@ import {
   isSelectable,
   joinPath,
   resolveSymlinkTarget,
+  typeaheadIndex,
 } from "@/features/files/utils/files";
 import {
   folderMenuOptions,
@@ -375,6 +376,9 @@ function onRowClick(event: MouseEvent, entry: FilesEntry): void {
   if (event.shiftKey) {
     event.preventDefault();
     extendRange(event, entry);
+    // A Shift+mousedown cancelled the browser's focus (onListMouseDown), so
+    // move the roving focus to the clicked row here (JUS-139).
+    focusRow(entry.name);
     return;
   }
   if (event.ctrlKey || event.metaKey) {
@@ -397,15 +401,15 @@ function onCheckboxCapture(event: MouseEvent, entry: FilesEntry): void {
   event.preventDefault();
   event.stopPropagation();
   extendRange(event, entry);
+  focusRow(entry.name);
 }
 
 /**
  * onListMouseDown suppresses the browser's text selection for a Shift+press in
  * the list/grid: without it a Shift+click starts selecting the rows' text
  * instead of a run of entries (JUS-138). It also cancels the default focus a
- * press would move; that is deliberate here (the range, not focus, is the
- * gesture), but JUS-139 must re-check focus behaviour at this binding when it
- * adds arrow-key row navigation.
+ * press would move; the Shift+click handlers move the roving focus explicitly
+ * (JUS-139), so the row the user clicks still becomes the focused row.
  */
 function onListMouseDown(event: MouseEvent): void {
   if (event.shiftKey) {
@@ -877,6 +881,289 @@ function scrollEntryIntoView(name: string): void {
   files.setScrollTop(el.scrollTop);
 }
 
+// ── Row keyboard navigation (JUS-139) ─────────────────────────────────────
+// The list/grid is one roving tabindex: the focused row's name control carries
+// tabindex 0 and every other row's carries -1, so Tab enters the listing once
+// and the arrows move within it. The per-row controls (checkbox, inline
+// actions, ⋮) keep their own tab stops, so Tab still walks a row's controls and
+// crosses the window edge — the JUS-137 focus pin above keeps that crossing and
+// a scroll-away safe, so it stays.
+/** rovingName is the entry whose name control holds the list's tab stop. */
+const rovingName = ref<string | null>(null);
+/** TYPEAHEAD_RESET_MS is the idle gap after which a type-to-focus run resets. */
+const TYPEAHEAD_RESET_MS = 1000;
+/** typeBuffer accumulates type-to-focus keystrokes; typeTimer clears it. */
+let typeBuffer = "";
+let typeTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * rovingTabName is the entry that owns tabindex 0. It follows the focused row
+ * when that row is RENDERED (the windowed slice plus any pinned row), so the
+ * listing always has exactly one tab stop; when the roving row has scrolled out
+ * of the rendered slice the stop falls back to the first rendered row, and to
+ * null for an empty list. It never points at an unrendered row (that used to
+ * leave the list with zero tab stops after a blur + scroll).
+ */
+const rovingTabName = computed<string | null>(() => {
+  const entries = files.visibleEntries;
+  if (entries.length === 0) {
+    return null;
+  }
+  const rendered = files.viewMode === "grid" ? gridRows.value : listRows.value;
+  if (
+    rovingName.value !== null &&
+    rendered.some((row) => row.entry.name === rovingName.value)
+  ) {
+    return rovingName.value;
+  }
+  return rendered[0]?.entry.name ?? null;
+});
+
+/** rowTabindex is the roving tabindex for one row's name control. */
+function rowTabindex(name: string): 0 | -1 {
+  return name === rovingTabName.value ? 0 : -1;
+}
+
+/** isTextTarget reports a keystroke aimed at a text field, not the listing. */
+function isTextTarget(target: HTMLElement | null): boolean {
+  if (target === null) {
+    return false;
+  }
+  const tag = target.tagName;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    target.isContentEditable
+  );
+}
+
+/** focusedListIndex is the listing index of the row that owns focus, or -1. */
+function focusedListIndex(): number {
+  const active = document.activeElement as HTMLElement | null;
+  const row = active?.closest<HTMLElement>("[data-entry]");
+  const name = row?.dataset.entry ?? rovingTabName.value;
+  return name === null
+    ? -1
+    : files.visibleEntries.findIndex((entry) => entry.name === name);
+}
+
+/** pageStep is how many entries one PageUp/PageDown moves (a viewport of rows). */
+function pageStep(itemSize: number, columns: number): number {
+  const rows = Math.max(
+    1,
+    Math.floor(scrollSize.height.value / Math.max(1, itemSize)),
+  );
+  return rows * columns;
+}
+
+/** entryAt clamps one listing index to a real entry, or null. */
+function entryAt(index: number): FilesEntry | null {
+  const entries = files.visibleEntries;
+  if (entries.length === 0) {
+    return null;
+  }
+  return entries[Math.min(Math.max(index, 0), entries.length - 1)] ?? null;
+}
+
+/**
+ * focusRowAt moves the roving focus to one listing index, materialising the row
+ * first (scrollEntryIntoView + nextTick) so a row outside the rendered window
+ * can still take focus. The pin is released first so the keyed re-render cannot
+ * pull focus back to the row being left.
+ */
+async function focusRowAt(index: number): Promise<void> {
+  const entry = entryAt(index);
+  if (entry === null) {
+    return;
+  }
+  rovingName.value = entry.name;
+  releaseFocus();
+  scrollEntryIntoView(entry.name);
+  await nextTick();
+  focusEntry(entry.name);
+}
+
+/**
+ * focusRow moves the roving focus to one entry by name. Shift+click cancels the
+ * browser's own focus (onListMouseDown preventDefault), so the click handler
+ * calls this to move the roving focus to the clicked row (JUS-139).
+ */
+function focusRow(name: string): void {
+  rovingName.value = name;
+  scrollEntryIntoView(name);
+  void nextTick(() => focusEntry(name));
+}
+
+/** clearTypeTimer stops a pending type-to-focus reset timer. */
+function clearTypeTimer(): void {
+  if (typeTimer !== null) {
+    clearTimeout(typeTimer);
+    typeTimer = null;
+  }
+}
+
+/**
+ * resetTypeahead drops any pending type-to-focus run. It runs on unmount and
+ * whenever the listing identity changes (folder/tab/root, filter, sort), so a
+ * prefix typed in one view never matches into the next.
+ */
+function resetTypeahead(): void {
+  clearTypeTimer();
+  typeBuffer = "";
+}
+
+/** typeToFocus jumps the roving focus to the next typed-prefix match. */
+function typeToFocus(char: string): void {
+  clearTypeTimer();
+  typeBuffer += char;
+  typeTimer = setTimeout(() => {
+    typeBuffer = "";
+    typeTimer = null;
+  }, TYPEAHEAD_RESET_MS);
+  const names = files.visibleEntries.map((entry) => entry.name);
+  const current = focusedListIndex();
+  const index = typeaheadIndex(names, typeBuffer, current < 0 ? 0 : current + 1);
+  if (index >= 0) {
+    void focusRowAt(index);
+  }
+}
+
+/**
+ * onListKeydown drives the roving row focus: arrows (the grid adds Left/Right),
+ * Home/End, PageUp/PageDown, Space to toggle the focused row's selection,
+ * Shift+Arrow to extend the range from the anchor, Ctrl/Cmd+A to select every
+ * visible entry, and type-to-focus for a printable prefix. Enter opens the
+ * focused row. It acts ONLY on a key whose target is inside a row (or a
+ * row-owned control), so the sticky header's sort buttons, the select-all
+ * checkbox and any other control inside the scroller keep their native
+ * Enter/Space/arrow behaviour; keys typed into a field or a dialog/menu never
+ * reach here either (the handler is on the list, and both are guarded). A row
+ * control (checkbox, inline action, ⋮) keeps its native Enter/Space too, via
+ * {@link isRowControl}.
+ */
+function onListKeydown(event: KeyboardEvent): void {
+  if (event.defaultPrevented) {
+    return;
+  }
+  const target = event.target as HTMLElement | null;
+  if (
+    isTextTarget(target) ||
+    target?.closest(".n-modal, .n-dropdown") !== null
+  ) {
+    return;
+  }
+  // Only a row target drives row keys: the header's sort buttons and the
+  // select-all checkbox sit inside the scroller, so Enter/Space/arrows there
+  // must pass straight through.
+  if (!(target instanceof Element) || target.closest("[data-entry]") === null) {
+    return;
+  }
+  const meta = event.ctrlKey || event.metaKey;
+  // Ctrl/Cmd+A selects every visible entry (the header checkbox's set).
+  if (meta && !event.altKey && event.key.toLowerCase() === "a") {
+    event.preventDefault();
+    if (!files.allVisibleSelected) {
+      files.toggleSelectAll();
+    }
+    return;
+  }
+  if (meta || event.altKey) {
+    return;
+  }
+  const grid = files.viewMode === "grid";
+  const columns = Math.max(1, gridColumns.value);
+  const step = grid ? columns : 1;
+  const page = pageStep(
+    grid ? gridPitch.value : rowHeight.value,
+    grid ? columns : 1,
+  );
+  const current = focusedListIndex();
+  let next: number;
+  switch (event.key) {
+    case "ArrowDown":
+      next = current + step;
+      break;
+    case "ArrowUp":
+      next = current - step;
+      break;
+    case "ArrowRight":
+      if (!grid) {
+        return;
+      }
+      next = current + 1;
+      break;
+    case "ArrowLeft":
+      if (!grid) {
+        return;
+      }
+      next = current - 1;
+      break;
+    case "Home":
+      next = 0;
+      break;
+    case "End":
+      next = files.visibleEntries.length - 1;
+      break;
+    case "PageDown":
+      next = current + page;
+      break;
+    case "PageUp":
+      next = current - page;
+      break;
+    case " ": {
+      if (isRowControl(target)) {
+        return;
+      }
+      event.preventDefault();
+      const entry = files.visibleEntries[current];
+      if (entry && isSelectable(entry)) {
+        files.toggleSelection(entry.name);
+      }
+      return;
+    }
+    case "Enter": {
+      if (isRowControl(target)) {
+        return;
+      }
+      event.preventDefault();
+      const entry = files.visibleEntries[current];
+      if (entry) {
+        activate(entry);
+      }
+      return;
+    }
+    default:
+      if (
+        event.key.length === 1 &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        typeToFocus(event.key);
+      }
+      return;
+  }
+  event.preventDefault();
+  const targetEntry = entryAt(next);
+  if (event.shiftKey) {
+    // The store resets the range anchor on a sort/filter/folder/tab change, so
+    // the first Shift+Arrow after one would otherwise drop the origin row and
+    // select only the target. Seed the anchor at the focused row first, so the
+    // run always includes the row the cursor is on.
+    if (files.activeTab.anchor === null && current >= 0) {
+      files.setAnchor(files.visibleEntries[current]?.name ?? null);
+    }
+    if (targetEntry && isSelectable(targetEntry)) {
+      files.selectRange(targetEntry.name, false);
+    }
+  } else {
+    files.setAnchor(targetEntry?.name ?? null);
+  }
+  void focusRowAt(next);
+}
+
 /** restoringFocus marks a programmatic focus restore so it does not re-scroll. */
 let restoringFocus = false;
 /** focusedEl is the exact control that held focus, restored after a re-render. */
@@ -1011,13 +1298,26 @@ watch(
   { flush: "post" },
 );
 
-// A directory, tab or root change moves every row: the focused/menu name from
-// the previous listing must not survive (it could pin a same-named entry there).
+// A directory, tab or root change, a filter or a sort moves every row: the
+// focused/menu name from the previous listing must not survive (it could pin a
+// same-named entry there), and neither must the roving tab stop or a pending
+// type-to-focus run (JUS-139) — a same-named entry in the new view would
+// otherwise inherit the stop.
 watch(
-  () => [files.activeTabId, files.rootName, files.path] as const,
+  () =>
+    [
+      files.activeTabId,
+      files.rootName,
+      files.path,
+      files.query,
+      files.sortKey,
+      files.sortDir,
+    ] as const,
   () => {
     releaseFocus();
     closeRowMenu();
+    rovingName.value = null;
+    resetTypeahead();
   },
 );
 
@@ -1427,6 +1727,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", onDocumentPointerDown, true);
   document.removeEventListener("keydown", onDocumentKeyDown, true);
+  resetTypeahead();
 });
 
 /** onContextSelect dispatches a context-menu action and closes the menu. */
@@ -1867,7 +2168,7 @@ function onFolderMenu(key: string): void {
         </div>
       </div>
 
-      <div v-if="files.viewMode === 'list'" ref="scrollEl" class="table-wrap" @scroll="onListScroll" @mousedown="onListMouseDown" @focusin="onListFocusIn" @focusout="onListFocusOut" @contextmenu.prevent="openFolderContext">
+      <div v-if="files.viewMode === 'list'" ref="scrollEl" class="table-wrap" @scroll="onListScroll" @mousedown="onListMouseDown" @keydown="onListKeydown" @focusin="onListFocusIn" @focusout="onListFocusOut" @contextmenu.prevent="openFolderContext">
         <div
           class="fm-table"
           :class="{ 'is-virtual': isListVirtual }"
@@ -1932,6 +2233,9 @@ function onFolderMenu(key: string): void {
             :class="{ 'is-selected': files.isSelected(entry.name), 'is-pinned': pinned }"
             role="row"
             :aria-rowindex="index + 2"
+            :aria-selected="
+              isSelectable(entry) ? files.isSelected(entry.name) : undefined
+            "
             :data-entry="entry.name"
             :style="pinned ? pinnedListStyle(index) : undefined"
             @click="onRowClick($event, entry)"
@@ -1953,7 +2257,7 @@ function onFolderMenu(key: string): void {
               <button
                 type="button"
                 class="fm-label"
-                @keydown.enter.prevent="activate(entry)"
+                :tabindex="rowTabindex(entry.name)"
               >
                 <b>{{ entry.name }}</b>
                 <span v-if="entryTarget(entry)" class="fm-target" :title="entryTarget(entry)">
@@ -2078,6 +2382,7 @@ function onFolderMenu(key: string): void {
         :class="{ 'is-virtual': isGridVirtual }"
         @scroll="onListScroll"
         @mousedown="onListMouseDown"
+        @keydown="onListKeydown"
         @focusin="onListFocusIn"
         @focusout="onListFocusOut"
         @contextmenu.prevent="openFolderContext"
@@ -2120,7 +2425,7 @@ function onFolderMenu(key: string): void {
             type="button"
             class="fm-tile"
             :class="{ 'is-selected': files.isSelected(entry.name) }"
-            @keydown.enter.prevent="activate(entry)"
+            :tabindex="rowTabindex(entry.name)"
           >
             <span class="fm-tile-top">
               <FileTypeIcon :kind="iconKind(entry)" />

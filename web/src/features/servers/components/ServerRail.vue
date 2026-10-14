@@ -30,9 +30,11 @@ const alertsLabelText = computed<string>(() =>
 // The shared server poll is owned by the app shell (AppLayout), which stays
 // mounted for the whole session: the rail itself unmounts below the tablet
 // breakpoint (it becomes a drawer), so it must never start or stop the shared
-// timer. The rail only seeds the list when nothing has loaded it yet.
+// timer. The rail only seeds the list when nothing has loaded it yet and no
+// load is in flight (JUS-143: the shell seeds too, so this guard avoids a
+// duplicate request).
 onMounted(() => {
-  if (serversStore.servers.length === 0) {
+  if (serversStore.servers.length === 0 && !serversStore.loading) {
     void serversStore.fetchServers().catch(() => {
       // Read-only rail: the servers page surfaces load errors.
     });

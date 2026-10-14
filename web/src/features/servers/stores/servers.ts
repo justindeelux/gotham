@@ -153,6 +153,10 @@ export const useServersStore = defineStore("servers", () => {
    */
   function reset(): void {
     stopPolling();
+    // JUS-143: invalidate any load that began before this reset, so a list
+    // request still in flight at sign-out cannot resolve into the next
+    // account's session.
+    listSync.markMutation();
     servers.value = [];
     loading.value = false;
     failure.value = null;

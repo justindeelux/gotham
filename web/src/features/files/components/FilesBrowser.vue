@@ -1333,10 +1333,16 @@ function onFolderMenu(key: string): void {
               <span class="fm-mode-octal">{{ formatOctalModeFull(entry.mode) }}</span>
             </div>
             <div class="fm-actions" role="cell">
+              <!-- The inline actions (.fm-action) stay hover/focus-revealed on
+                   pointer devices; the ⋮ menu button below never hides, so
+                   touch and keyboard users reach the row menu without a hover
+                   (JUS-133). -->
               <NButton
                 v-if="entry.kind === 'directory'"
+                class="fm-action"
                 size="tiny"
                 quaternary
+                :title="$t('files.browser.openFolder', { name: entry.name })"
                 :aria-label="$t('files.browser.openFolder', { name: entry.name })"
                 @click="files.openDirectory(entry.name)"
               >
@@ -1346,6 +1352,7 @@ function onFolderMenu(key: string): void {
               </NButton>
               <NButton
                 v-else-if="entry.kind === 'file'"
+                class="fm-action"
                 size="tiny"
                 quaternary
                 :disabled="!files.canReadContent"
@@ -1359,6 +1366,7 @@ function onFolderMenu(key: string): void {
               </NButton>
               <NButton
                 v-if="files.canWrite && isExtractableArchive(entry)"
+                class="fm-action"
                 size="tiny"
                 quaternary
                 :title="$t('files.actions.extract')"
@@ -1371,8 +1379,10 @@ function onFolderMenu(key: string): void {
               </NButton>
               <NButton
                 v-if="files.canWrite && isSelectable(entry)"
+                class="fm-action"
                 size="tiny"
                 quaternary
+                :title="$t('files.actions.rename')"
                 :aria-label="$t('files.actions.rename')"
                 @click="openRename(entry)"
               >
@@ -1382,8 +1392,10 @@ function onFolderMenu(key: string): void {
               </NButton>
               <NButton
                 v-if="files.canWrite && isSelectable(entry)"
+                class="fm-action"
                 size="tiny"
                 quaternary
+                :title="$t('files.browser.deleteEntry', { name: entry.name })"
                 :aria-label="$t('files.browser.deleteEntry', { name: entry.name })"
                 @click="openDelete([entry])"
               >
@@ -1392,6 +1404,7 @@ function onFolderMenu(key: string): void {
                 </template>
               </NButton>
               <NDropdown
+                v-if="rowMenu(entry).length > 0"
                 trigger="click"
                 placement="bottom-end"
                 :options="rowMenu(entry)"
@@ -1404,6 +1417,7 @@ function onFolderMenu(key: string): void {
                 <NButton
                   size="tiny"
                   quaternary
+                  :title="$t('files.browser.moreActions', { name: entry.name })"
                   :aria-label="$t('files.browser.moreActions', { name: entry.name })"
                 >
                   <template #icon>
@@ -2028,13 +2042,19 @@ function onFolderMenu(key: string): void {
   align-items: center;
   gap: 2px;
   justify-content: flex-end;
+}
+
+/* Inline row actions (open/download/extract/rename/delete) reveal on row hover
+   or keyboard focus / selection; the ⋮ menu button is never hidden, so touch
+   and keyboard users reach the row menu without a hover (JUS-133). */
+.fm-actions .fm-action {
   opacity: 0;
   transition: opacity var(--motion-base) var(--ease-standard);
 }
 
-.fm-row:hover .fm-actions,
-.fm-row:focus-within .fm-actions,
-.fm-row.is-selected .fm-actions {
+.fm-row:hover .fm-actions .fm-action,
+.fm-row:focus-within .fm-actions .fm-action,
+.fm-row.is-selected .fm-actions .fm-action {
   opacity: 1;
 }
 
@@ -2180,7 +2200,7 @@ function onFolderMenu(key: string): void {
 }
 
 @media (hover: none) {
-  .fm-actions,
+  .fm-actions .fm-action,
   .fm-select {
     opacity: 1;
   }

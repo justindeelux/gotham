@@ -11,6 +11,7 @@ import {
   clampScrollTop,
   gridColumnCount,
   gridWindow,
+  renderedKey,
   windowRange,
 } from "@/features/files/utils/virtual";
 
@@ -111,5 +112,15 @@ describe("gridWindow", () => {
   it("covers the whole grid when every row fits", () => {
     const range = gridWindow(10, 4, 144, 0, 1000);
     expect(range).toEqual({ start: 0, end: 10, padTop: 0, padBottom: 0 });
+  });
+});
+
+describe("renderedKey", () => {
+  it("never collides across a separator a filename could contain", () => {
+    // A filename may hold any byte but "/", so a plain join would alias these.
+    expect(renderedKey(["a\nb"])).not.toBe(renderedKey(["a", "b"]));
+    expect(renderedKey(["a|b"])).not.toBe(renderedKey(["a", "b"]));
+    expect(renderedKey(["a", "b"])).toBe(renderedKey(["a", "b"]));
+    expect(renderedKey([])).toBe(renderedKey([]));
   });
 });

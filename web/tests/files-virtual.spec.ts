@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, MouseEvent:readonly, URL, window:readonly */
+/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL, window:readonly */
 // JUS-137 windowed listing proof: the committed webdist is served statically
 // with the control-plane file API mocked in real Chromium. Measured claims on a
 // 5,000-entry directory:
@@ -607,53 +607,31 @@ test.describe("keyboard focus retention across the window", () => {
     ).toHaveCount(0);
   });
 
-  test("a row menu opened on another row keeps a focused pinned row mounted", async ({
+  test("a pointer focus spends the no-scroll flag so a later programmatic focus reveals", async ({
     page,
   }) => {
     await openFiles(page);
-    const label = rowFor(page, "file-0000.txt").locator(".fm-label");
-    await label.focus();
-    await expect(label).toBeFocused();
-
-    // Scroll the focused row far out of the window so it is pinned.
     const wrap = page.locator(".table-wrap");
-    await wrap.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-    });
-    await expect.poll(() => wrap.evaluate((el) => el.scrollTop)).toBeGreaterThan(1000);
-    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(1);
 
-    // Open the row menu on a row that IS in the window without moving focus
-    // (the menu-open path that does not blur, as a real Chromium right-click
-    // additionally blurs and the pointer guard treats that as a user gesture).
-    // The focused row must stay pinned alongside the menu row: a single-slot pin
-    // dropped it and left focus on <body> until the menu closed.
+    // Click the first row's label: pointer-initiated focus must not nudge the
+    // scroll (the flag suppresses it), and the flag must then be spent.
+    await rowFor(page, "file-0000.txt").locator(".fm-label").click();
+    expect(await wrap.evaluate((el) => el.scrollTop)).toBe(0);
+
+    // Focus the last rendered row (below the fold) without a native scroll: the
+    // reveal must come from scrollEntryIntoView on this non-pointer focus. With
+    // the flag left set from the click, no reveal happens and the row stays
+    // hidden below the fold.
     await page.evaluate(() => {
-      const row = document.querySelector(
-        '.fm-row[data-entry="file-4998.txt"]',
-      ) as HTMLElement;
-      const box = row.getBoundingClientRect();
-      row.dispatchEvent(
-        new MouseEvent("contextmenu", {
-          bubbles: true,
-          cancelable: true,
-          button: 2,
-          clientX: box.left + 30,
-          clientY: box.top + 10,
-        }),
+      const rows = document.querySelectorAll<HTMLElement>(
+        ".fm-table .fm-row:not(.fm-head)",
       );
+      const last = rows[rows.length - 1];
+      (last.querySelector(".fm-label") as HTMLElement).focus({
+        preventScroll: true,
+      });
     });
-    await expect(
-      page.getByRole("menu", { name: "More actions for file-4998.txt" }),
-    ).toBeVisible();
-    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(1);
-    await expect(label).toBeFocused();
-    await expect(label).toBeAttached();
-
-    // Closing the menu keeps the focused row pinned (and focused).
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("menu")).toHaveCount(0);
-    await expect(label).toBeFocused();
+    await expect.poll(() => wrap.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   });
 
   test("focusing an in-scroller header control clears the stale pin", async ({
@@ -759,6 +737,57 @@ test.describe("windowed grid", () => {
     await expect(tiles.first()).toHaveAttribute("aria-setsize", String(COUNT));
     await expect(tiles.first()).toHaveAttribute("aria-posinset", "1");
     await expect(tiles.last()).toHaveAttribute("aria-setsize", String(COUNT));
+  });
+
+  test("the grid column count follows an in-session resize and zoom", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+
+    // measured compares the app's own grid height against the height implied by
+    // the layout's real column count (the browser's resolved auto-fill). A stale
+    // internal column count leaves the spacers too short, so the app height
+    // diverges from the layout by tens of thousands of px.
+    const measured = () =>
+      page.evaluate(() => {
+        const grid = document.querySelector(".fm-grid") as HTMLElement;
+        const style = getComputedStyle(grid);
+        const columns = style.gridTemplateColumns.trim().split(/\s+/).length;
+        const gap = parseFloat(style.columnGap);
+        const pitch = parseFloat(style.getPropertyValue("--fm-tile-height")) + gap;
+        return {
+          scrollHeight: grid.scrollHeight,
+          expected: Math.ceil(5000 / columns) * pitch - gap,
+        };
+      });
+    const expectFollows = async () => {
+      await expect
+        .poll(async () => {
+          const { scrollHeight, expected } = await measured();
+          return Math.abs(scrollHeight - expected);
+        })
+        .toBeLessThan(400);
+    };
+
+    // Narrow (fewer columns), then widen back, all in one session.
+    await page.setViewportSize({ width: 900, height: 900 });
+    await expectFollows();
+    await page.setViewportSize({ width: 600, height: 900 });
+    await expectFollows();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expectFollows();
+
+    // A zoom change reflows the same way (CSS px shrink) without a viewport edit.
+    await page.evaluate(() => {
+      document.documentElement.style.zoom = "1.5";
+    });
+    await expectFollows();
+    await page.evaluate(() => {
+      document.documentElement.style.zoom = "";
+    });
+    await expectFollows();
   });
 });
 

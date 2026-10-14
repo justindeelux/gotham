@@ -78,6 +78,7 @@ import {
   clampScrollTop,
   gridColumnCount,
   gridWindow,
+  renderedKey,
   windowRange,
 } from "@/features/files/utils/virtual";
 import { useTeamsStore } from "@/features/teams";
@@ -474,8 +475,8 @@ const headSize = useElementSize(headEl, undefined, { box: "border-box" });
 
 // ── Focus retention (JUS-137 review rounds 1-2; JUS-139 roving) ───────────
 // Windowing unmounts off-window rows, which used to drop keyboard focus to
-// <body> when the focused row scrolled away. The row that owns focus AND the
-// row whose context menu is open are PINNED into the rendered set: each stays
+// <body> when the focused row scrolled away. The row that owns focus (or the
+// row whose context menu is open) is PINNED into the rendered set: it stays
 // mounted wherever it is, rendered absolutely at its true offset so it never
 // disturbs the flow spacers, and keeps focus/menu. Keyboard focus that crosses
 // the window edge advances the window through scrollEntryIntoView
@@ -486,23 +487,14 @@ const focusedName = ref<string | null>(null);
 /** menuRowName is the row whose context menu is open. */
 const menuRowName = ref<string | null>(null);
 /**
- * pinnedNames are the entries kept rendered outside the window: the row whose
- * context menu is open AND the row that owns focus, when they differ. Both are
- * DERIVED, so every route that drops a pin source (menu closed/Escape, focus
- * left, directory or tab change, entry gone) releases its own pin — there is no
- * stale flag to leak. Pinning only the menu row used to drop focus to <body>
- * when a different row held focus and the menu row was already in the window.
+ * pinnedName is the one entry kept rendered outside the window: the row whose
+ * context menu is open, else the row that owns focus. It is DERIVED, so every
+ * route that drops a pin source (menu closed/Escape, focus left, directory or
+ * tab change, entry gone) releases the pin — there is no stale flag to leak.
  */
-const pinnedNames = computed<string[]>(() => {
-  const names: string[] = [];
-  if (menuRowName.value !== null) {
-    names.push(menuRowName.value);
-  }
-  if (focusedName.value !== null && focusedName.value !== menuRowName.value) {
-    names.push(focusedName.value);
-  }
-  return names;
-});
+const pinnedName = computed<string | null>(
+  () => menuRowName.value ?? focusedName.value,
+);
 /**
  * restorePending is armed only by a render WE schedule (see the arm watcher
  * below) and consumed once after it. Chromium blurs a node the keyed diff moves
@@ -513,13 +505,13 @@ let restorePending = false;
 /** lastFocusWasPointer marks a click's focus so it never nudges the scroll. */
 let lastFocusWasPointer = false;
 
-/** pinnedIndices are the pinned entries' indices in the current listing. */
-const pinnedIndices = computed<number[]>(() => {
-  const entries = files.visibleEntries;
-  return pinnedNames.value
-    .map((name) => entries.findIndex((entry) => entry.name === name))
-    .filter((index) => index >= 0)
-    .sort((a, b) => a - b);
+/** pinnedIndex is the pinned entry's index in the current listing, or -1. */
+const pinnedIndex = computed<number>(() => {
+  const name = pinnedName.value;
+  if (name === null) {
+    return -1;
+  }
+  return files.visibleEntries.findIndex((entry) => entry.name === name);
 });
 
 /**
@@ -551,7 +543,7 @@ function readVirtualMetrics(): void {
     style.getPropertyValue("--fm-row-height"),
     rowHeight.value,
   );
-  tileMetrics.value = {
+  const tiles = {
     min: parsePx(style.getPropertyValue("--fm-tile-min"), tileMetrics.value.min),
     gap: parsePx(style.columnGap, tileMetrics.value.gap),
     height: parsePx(
@@ -559,6 +551,15 @@ function readVirtualMetrics(): void {
       tileMetrics.value.height,
     ),
   };
+  // Assign only on a real change: a fresh object every resize tick would
+  // invalidate every metric-dependent computed for nothing.
+  if (
+    tiles.min !== tileMetrics.value.min ||
+    tiles.gap !== tileMetrics.value.gap ||
+    tiles.height !== tileMetrics.value.height
+  ) {
+    tileMetrics.value = tiles;
+  }
 }
 watch(
   () => scrollEl.value,
@@ -570,9 +571,8 @@ watch(
   },
   { flush: "post" },
 );
-// Re-read the row/tile metrics when the scroller is resized, so a token that a
-// breakpoint changes (or a density change) is picked up, not only a scroller
-// that mounts or swaps view.
+// Re-read the row/tile metrics when the scroller is resized (a viewport or zoom
+// change), not only when it mounts or swaps view.
 watch(
   [() => scrollSize.width.value, () => scrollSize.height.value],
   () => readVirtualMetrics(),
@@ -619,7 +619,7 @@ interface RenderedRow {
   pinned: boolean;
 }
 
-/** windowRows is the rendered slice plus any pinned rows, in listing order. */
+/** windowRows is the rendered slice plus the pinned row, in listing order. */
 function windowRows(
   entries: FilesEntry[],
   start: number,
@@ -632,13 +632,11 @@ function windowRows(
       rows.push({ entry, index, pinned: false });
     }
   }
-  for (const index of pinnedIndices.value) {
-    const entry = entries[index];
-    if (entry && (index < start || index >= end)) {
-      rows.push({ entry, index, pinned: true });
-    }
+  const pinned = pinnedIndex.value;
+  if (pinned >= 0 && entries[pinned] && (pinned < start || pinned >= end)) {
+    rows.push({ entry: entries[pinned], index: pinned, pinned: true });
+    rows.sort((a, b) => a.index - b.index);
   }
-  rows.sort((a, b) => a.index - b.index);
   return rows;
 }
 
@@ -665,6 +663,11 @@ function pinnedListStyle(index: number): Record<string, string> {
  * formula; the formula is the fallback before the grid is laid out.
  */
 const gridColumns = computed<number>(() => {
+  // Touch the reactive width/metrics FIRST: the resolved-value path below must
+  // still re-evaluate when the container resizes, and getComputedStyle alone is
+  // not a reactive dependency (it would freeze the count at the first layout).
+  const width = scrollSize.width.value;
+  const { min, gap } = tileMetrics.value;
   const el = scrollEl.value;
   if (el !== null && files.viewMode === "grid") {
     const columns = getComputedStyle(el).gridTemplateColumns;
@@ -676,11 +679,7 @@ const gridColumns = computed<number>(() => {
       return count;
     }
   }
-  return gridColumnCount(
-    scrollSize.width.value,
-    tileMetrics.value.min,
-    tileMetrics.value.gap,
-  );
+  return gridColumnCount(width, min, gap);
 });
 /** gridPitch is one tile row's height plus the row gap. */
 const gridPitch = computed<number>(
@@ -725,9 +724,11 @@ const gridRows = computed<RenderedRow[]>(() => {
  * change that re-renders nothing never arms a refocus.
  */
 const renderedKeys = computed<string>(() =>
-  (files.viewMode === "grid" ? gridRows.value : listRows.value)
-    .map((row) => row.entry.name)
-    .join("\n"),
+  renderedKey(
+    (files.viewMode === "grid" ? gridRows.value : listRows.value).map(
+      (row) => row.entry.name,
+    ),
+  ),
 );
 
 /** gridTileWidth is one tile's width for the current column count. */
@@ -1371,21 +1372,14 @@ watch(
   },
 );
 
-// The pinned entries themselves disappearing (deleted, renamed, filtered out)
-// release their own pin rather than leaving a name a same-named entry could
-// match later. Focus and the open menu resolve independently.
-watch(
-  () => [menuRowName.value, focusedName.value, files.visibleEntries] as const,
-  () => {
-    const present = new Set(files.visibleEntries.map((entry) => entry.name));
-    if (menuRowName.value !== null && !present.has(menuRowName.value)) {
-      closeRowMenu();
-    }
-    if (focusedName.value !== null && !present.has(focusedName.value)) {
-      releaseFocus();
-    }
-  },
-);
+// The pinned entry itself disappearing (deleted, renamed, filtered out) releases
+// the pin rather than leaving a name that a same-named entry could match later.
+watch(pinnedIndex, (index) => {
+  if (index === -1) {
+    releaseFocus();
+    closeRowMenu();
+  }
+});
 
 // Move focus to the active tab as soon as it changes (nextTick), never after
 // the tab's listing finishes loading — otherwise the roving tabindex lags

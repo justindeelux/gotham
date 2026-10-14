@@ -52,6 +52,7 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
 - Mandatory review gates: G0 (end of Phase 0), G1 (Phase 4), G2 (Phase 9) — see `docs/plans/00-roadmap.md`.
 - Phase gate: after each phase meets its exit criteria, STOP and ask the project owner before starting the next phase.
 - Orchestration rules (worker dispatch, recipe, lessons): see `docs/ORCHESTRATION.md`.
+- UI e2e: a worker whose change touches the UI or the API behind it runs the **whole** Playwright smoke suite (`npm run e2e` in `web/`, not just the specs it added) against its own throwaway Postgres + Redis containers and its own `gotham serve` (see `docs/test-server.md`). Never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`. Remove the containers (and stop the server) when the run ends, pass or fail.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
 ## Linear Issues
@@ -60,7 +61,7 @@ When creating an issue (via `orca-linear`), always set all of these:
 
 - Team `JUS`, project `gotham`, assignee `me` (Justin Nguyen).
 - Exactly one label matching the work: `Bug` (broken behavior), `Improvement` (UI/UX polish or enhancement of existing behavior), `Feature` (new capability).
-- English title and body: Summary, Changes (numbered), Acceptance criteria (include the relevant invariants from Development Workflow).
+- Title and body in the project language: Summary, Changes (numbered), Acceptance criteria (include the relevant invariants from Development Workflow).
 
 ## Code Style
 
@@ -75,25 +76,14 @@ When creating an issue (via `orca-linear`), always set all of these:
 
 - `docs/design/` is the UI source of truth: one `*.html` mockup per page + shared tokens in `assets/gotham-ui.css` (+ page CSS in `assets/gotham-views.css`).
 - Any task touching `web/` MUST compare against the matching mockup first and port the gap: extract design tokens (colors, fonts, spacing, radii) from `gotham-ui.css` into the Vue app, theme Naive UI to match — keep Naive UI as the component base, do not rebuild components from raw CSS.
-- UI copy is English (rewrite from the mockups where they differ); shipped English copy is the
-  English i18n catalog baseline. Vietnamese lives as translated message values in
-  `web/src/shared/i18n/locales/vi.ts` and `web/src/features/*/locales/vi.ts`, plus three
-  deliberate non-catalog spots: parameterized day-count sentences in
-  `web/src/shared/utils/format.ts` (consume static `time.*` labels from the catalog),
-  the dependency-free stale-chunk copy in `web/src/shared/i18n/staleFallback.ts`
-  (must render without the Vue/i18n runtime), and proper-noun autonyms
-  (`language.names`) consumed by `LanguageSelect.vue`. Code/docs stay English-only
-  per Language below.
-- Every shipped page has a mockup in `docs/design/`; the mockups' Vietnamese copy is not shipped (see above).
+- UI copy follows the project's language policy (see Language below); rewrite from the mockups where they differ.
+- Every shipped page has a mockup in `docs/design/`.
 - Modals: header and footer stay fixed, only the content region scrolls, max-height is bounded to the viewport and a modal never exceeds it — see the Modals rule in `docs/design/README.md` (shared `.app-modal`/`.wizard-modal` contract in `web/src/shared/styles/main.css`).
 - Rebuilt `internal/server/webdist` stays committed; the CI dist-drift check must pass.
 
 ## Language
 
-**English only** in source code, comments, commit messages, docs and multilingual (i18n) files —
-with one narrow UI-language exception: translated Vietnamese message *values* in
-`web/src/shared/i18n/locales/vi.ts` and `web/src/features/*/locales/vi.ts` may be Vietnamese.
-Message keys, identifiers, comments and docs stay English.
+Use one consistent language across the project (code, comments, commit messages, docs, UI copy and i18n files).
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

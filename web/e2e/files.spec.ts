@@ -1,6 +1,6 @@
 import { expect, test } from "./fixtures";
 import { test as plainTest } from "@playwright/test";
-import type { APIRequestContext, Page, Route } from "@playwright/test";
+import type { APIRequestContext, Locator, Page, Route } from "@playwright/test";
 
 import {
   loadAccount,
@@ -983,6 +983,130 @@ test.describe("files double-click", () => {
     await expect(page.locator(".files-editor")).toHaveCount(0);
     await expect(page.locator(".n-modal")).toHaveCount(0);
     await expect(page.locator(".fm-table").getByText("logo.png")).toBeVisible();
+  });
+});
+
+/**
+ * JUS-138: shift-click selects the run between the last-clicked row and the
+ * clicked one, computed from the sorted+filtered entry order (so it spans rows
+ * the windowed list never rendered), in both the list and the grid.
+ */
+test.describe("files shift-click range selection", () => {
+  // Distinct sizes let a sort change reorder the rows (name order: conf,
+  // app.yaml, logo.png, notes.md; size order: conf, logo.png, notes.md,
+  // app.yaml).
+  const rangeEntries: WireEntry[] = [
+    entry("conf", "directory", 0, 0o040755, "etag-conf"),
+    entry("app.yaml", "file", 300, 0o100644, "etag-yaml"),
+    entry("logo.png", "file", 100, 0o100644, "etag-png"),
+    entry("notes.md", "file", 200, 0o100644, "etag-md"),
+  ];
+
+  /** row locator for one entry name in the list. */
+  function listRow(page: Page, name: string): Locator {
+    return page.locator(`.fm-row[data-entry="${name}"]`);
+  }
+
+  test("selects the run in the list and adds it with ⌘/Ctrl+Shift", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => json(route, 200, listing(rangeEntries)),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(listRow(page, "notes.md")).toBeVisible();
+
+    // Plain click anchors the run; Shift+click selects every row between.
+    await listRow(page, "conf").click();
+    await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
+    await listRow(page, "notes.md").click({ modifiers: ["Shift"] });
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(4);
+    await expect(page.locator(".fm-bulk-count")).toContainText("4 selected");
+
+    // ⌘/Ctrl+Shift adds the new run to the existing selection.
+    await listRow(page, "app.yaml").click();
+    await listRow(page, "logo.png").click({ modifiers: ["ControlOrMeta"] });
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(2);
+    await listRow(page, "notes.md").click({
+      modifiers: ["ControlOrMeta", "Shift"],
+    });
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(3);
+    await expect(page.locator(".fm-bulk-count")).toContainText("3 selected");
+  });
+
+  test("selects the run in the grid", async ({ page, request }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => json(route, 200, listing(rangeEntries)),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator('.fm-tile-wrap[data-entry="notes.md"]')).toBeVisible();
+
+    await page.locator('.fm-tile-wrap[data-entry="conf"]').click();
+    await page
+      .locator('.fm-tile-wrap[data-entry="notes.md"]')
+      .click({ modifiers: ["Shift"] });
+
+    await expect(page.locator(".fm-grid .fm-tile.is-selected")).toHaveCount(4);
+    await expect(page.locator(".fm-bulk-count")).toContainText("4 selected");
+  });
+
+  test("spans rows the windowed list did not render", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    const many = Array.from({ length: 5000 }, (_, index) =>
+      entry(
+        `file-${String(index).padStart(4, "0")}`,
+        "file",
+        index + 1,
+        0o100644,
+        `etag-${index}`,
+      ),
+    );
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => json(route, 200, listing(many)),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(listRow(page, "file-0000")).toBeVisible();
+    await listRow(page, "file-0000").click();
+
+    // Scroll to the far end: the last row is only now rendered, while every row
+    // between is not in the DOM at all.
+    await page.locator(".table-wrap").evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(listRow(page, "file-4999")).toBeVisible();
+    await listRow(page, "file-4999").click({ modifiers: ["Shift"] });
+
+    await expect(page.locator(".fm-bulk-count")).toContainText("5000 selected");
+  });
+
+  test("a sort change ends the run", async ({ page, request }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => json(route, 200, listing(rangeEntries)),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await listRow(page, "conf").click();
+    // Reorder: the anchor no longer points at the same neighbours.
+    await page.getByRole("button", { name: "Size", exact: true }).click();
+    await listRow(page, "notes.md").click({ modifiers: ["Shift"] });
+
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+    await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
   });
 });
 

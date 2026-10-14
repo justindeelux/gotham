@@ -34,6 +34,7 @@ import {
   joinPath,
   normalizeEntryName,
   parentPath,
+  rangeNames,
   sortEntries,
 } from "@/features/files/utils/files";
 import type {
@@ -102,6 +103,10 @@ export interface FilesTab {
   sortDir: FilesSortDirection;
   query: string;
   selected: Set<string>;
+  /** anchor is the last row a plain/⌘-click selected: the fixed end of a
+   *  shift-click range (JUS-138). null until a row is clicked, and reset by a
+   *  folder, tab, filter or sort change so a range never spans a view change. */
+  anchor: string | null;
   /** scrollTop is the entry list's scroll offset, restored on tab switch. */
   scrollTop: number;
   /** lastLoadedPath is the path of the last successful listing in this tab. */
@@ -183,6 +188,7 @@ export const useFilesStore = defineStore("files", () => {
       sortDir: "asc",
       query: "",
       selected: new Set(),
+      anchor: null,
       scrollTop: 0,
       lastLoadedPath: "",
       generation: 0,
@@ -812,6 +818,8 @@ export const useFilesStore = defineStore("files", () => {
       return;
     }
     activeTabId.value = tab.id;
+    // A tab switch ends the range: the anchor belongs to the view it was set in.
+    tab.anchor = null;
     if (!tab.loaded && !tab.loading) {
       await loadEntriesFor(tab);
     }
@@ -1306,6 +1314,9 @@ export const useFilesStore = defineStore("files", () => {
 
   /** setSort cycles a column: same key flips the direction, a new key resets. */
   function setSort(key: FilesSortKey): void {
+    // A reorder moves every row, so the range anchor no longer refers to the
+    // same neighbours it did before.
+    activeTab.value.anchor = null;
     if (sortKey.value === key) {
       sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
       return;
@@ -1321,6 +1332,9 @@ export const useFilesStore = defineStore("files", () => {
 
   /** setQuery updates the active tab's client-side folder filter. */
   function setQuery(next: string): void {
+    // The filter changes which rows are shown between the anchor and a later
+    // shift-click, so it ends the current range.
+    activeTab.value.anchor = null;
     query.value = next;
   }
 
@@ -1355,10 +1369,12 @@ export const useFilesStore = defineStore("files", () => {
   /**
    * selectOnly makes one entry the sole selection. It is the plain single-click
    * row rule (JUS-130): a click selects just that row, while Ctrl/⌘+click
-   * toggles it via {@link toggleSelection}.
+   * toggles it via {@link toggleSelection}. Both also move the shift-click range
+   * anchor (JUS-138).
    */
   function selectOnly(name: string): void {
     selected.value = new Set([name]);
+    activeTab.value.anchor = name;
   }
 
   /** toggleSelection adds or removes one entry from the selection. */
@@ -1370,6 +1386,32 @@ export const useFilesStore = defineStore("files", () => {
       next.add(name);
     }
     selected.value = next;
+    activeTab.value.anchor = name;
+  }
+
+  /**
+   * selectRange extends the selection from the last-clicked anchor to `name`
+   * over the current sorted+filtered order (JUS-138). `additive` (⌘/Ctrl+Shift)
+   * keeps the existing selection; a plain shift-click replaces it. A missing or
+   * filtered-away anchor falls back to selecting just the clicked row and adopts
+   * it as the new anchor. The anchor never moves on a range click, so repeated
+   * shift-clicks grow or shrink the same run.
+   */
+  function selectRange(name: string, additive: boolean): void {
+    const tab = activeTab.value;
+    const entries = visibleEntries.value;
+    const anchor = tab.anchor;
+    const anchored =
+      anchor !== null && entries.some((entry) => entry.name === anchor);
+    const range = anchored ? rangeNames(entries, anchor, name) : [name];
+    const next = additive ? new Set(selected.value) : new Set<string>();
+    for (const entryName of range) {
+      next.add(entryName);
+    }
+    selected.value = next;
+    if (!anchored) {
+      tab.anchor = name;
+    }
   }
 
   /** toggleSelectAll adds every visible selectable entry, or clears them. */
@@ -1387,9 +1429,10 @@ export const useFilesStore = defineStore("files", () => {
     selected.value = next;
   }
 
-  /** clearSelection drops the whole selection. */
+  /** clearSelection drops the whole selection and ends any range. */
   function clearSelection(): void {
     selected.value = new Set();
+    activeTab.value.anchor = null;
   }
 
   /**
@@ -1496,6 +1539,7 @@ export const useFilesStore = defineStore("files", () => {
     targetsForRow,
     selectForRowContext,
     selectOnly,
+    selectRange,
     toggleSelection,
     toggleSelectAll,
     clearSelection,

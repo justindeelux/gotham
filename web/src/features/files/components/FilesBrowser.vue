@@ -346,12 +346,31 @@ function isRowControl(target: EventTarget | null): boolean {
 }
 
 /**
+ * extendRange applies a Shift+click's range selection from the anchor to `entry`
+ * over the current sorted+filtered order (JUS-138). ⌘/Ctrl+Shift keeps the
+ * existing selection; Shift alone replaces it.
+ */
+function extendRange(event: MouseEvent, entry: FilesEntry): void {
+  if (!isSelectable(entry)) {
+    return;
+  }
+  files.selectRange(entry.name, event.ctrlKey || event.metaKey);
+}
+
+/**
  * onRowClick selects a row. A plain click makes it the sole selection;
- * Ctrl/⌘+click toggles it in the current selection. Activation is left to the
- * double-click (or Enter), so a press on a checkbox/action never changes the
- * selection and two clicks never open the entry twice.
+ * Ctrl/⌘+click toggles it in the current selection; Shift+click extends the
+ * selection from the last-clicked anchor (⌘/Ctrl+Shift keeps it, Shift alone
+ * replaces it). Activation is left to the double-click (or Enter), so a press on
+ * a checkbox/action never changes the selection and two clicks never open the
+ * entry twice.
  */
 function onRowClick(event: MouseEvent, entry: FilesEntry): void {
+  if (event.shiftKey) {
+    event.preventDefault();
+    extendRange(event, entry);
+    return;
+  }
   if (isRowControl(event.target) || !isSelectable(entry)) {
     return;
   }
@@ -360,6 +379,32 @@ function onRowClick(event: MouseEvent, entry: FilesEntry): void {
     return;
   }
   files.selectOnly(entry.name);
+}
+
+/**
+ * onCheckboxCapture routes a Shift+click on a row's checkbox into the range
+ * selection. Capture runs before the checkbox, and swallowing the press stops it
+ * toggling that one row as well, so a Shift+click on the checkbox behaves like
+ * one on the row itself. A plain click is left to the checkbox (JUS-138).
+ */
+function onCheckboxCapture(event: MouseEvent, entry: FilesEntry): void {
+  if (!event.shiftKey) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  extendRange(event, entry);
+}
+
+/**
+ * onListMouseDown suppresses the browser's text selection for a Shift+press in
+ * the list/grid: without it a Shift+click starts selecting the rows' text
+ * instead of a run of entries (JUS-138).
+ */
+function onListMouseDown(event: MouseEvent): void {
+  if (event.shiftKey) {
+    event.preventDefault();
+  }
 }
 
 /** onRowDblclick performs a row's default action, ignoring its own controls. */
@@ -1811,7 +1856,7 @@ function onFolderMenu(key: string): void {
         </div>
       </div>
 
-      <div v-if="files.viewMode === 'list'" ref="scrollEl" class="table-wrap" @scroll="onListScroll" @focusin="onListFocusIn" @focusout="onListFocusOut" @contextmenu.prevent="openFolderContext">
+      <div v-if="files.viewMode === 'list'" ref="scrollEl" class="table-wrap" @scroll="onListScroll" @mousedown="onListMouseDown" @focusin="onListFocusIn" @focusout="onListFocusOut" @contextmenu.prevent="openFolderContext">
         <div
           class="fm-table"
           :class="{ 'is-virtual': isListVirtual }"
@@ -1883,7 +1928,7 @@ function onFolderMenu(key: string): void {
             @contextmenu.stop.prevent="openRowContext($event, entry)"
             @keydown="onRowKeydown($event, entry)"
           >
-            <span class="fm-select" role="cell">
+            <span class="fm-select" role="cell" @click.capture="onCheckboxCapture($event, entry)">
               <NCheckbox
                 v-if="isSelectable(entry)"
                 size="small"
@@ -2021,6 +2066,7 @@ function onFolderMenu(key: string): void {
         class="fm-grid"
         :class="{ 'is-virtual': isGridVirtual }"
         @scroll="onListScroll"
+        @mousedown="onListMouseDown"
         @focusin="onListFocusIn"
         @focusout="onListFocusOut"
         @contextmenu.prevent="openFolderContext"
@@ -2050,6 +2096,7 @@ function onFolderMenu(key: string): void {
             v-if="isSelectable(entry)"
             class="fm-tile-check"
             :title="$t('files.browser.selectEntry', { name: entry.name })"
+            @click.capture="onCheckboxCapture($event, entry)"
           >
             <NCheckbox
               size="small"

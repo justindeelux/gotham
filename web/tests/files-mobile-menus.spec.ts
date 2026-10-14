@@ -592,4 +592,20 @@ test.describe("touch targets (JUS-145)", () => {
       page.getByRole("menu", { name: "More actions for app.yaml" }),
     ).toBeVisible();
   });
+
+  for (const width of [390, 768, 861, 1024, 1280]) {
+    test(`touch at ${width}px: the row and tile ⋮ are hit-testable`, async ({
+      page,
+    }) => {
+      await openFiles(page, { viewport: { width, height: 900 } });
+      const listMore = moreFor(page, "app.yaml");
+      await bringIntoView(listMore);
+      await expectReachable(listMore, width);
+
+      await page.getByRole("button", { name: "Grid view" }).click();
+      const tileMore = moreFor(page, "app.yaml");
+      await bringIntoView(tileMore);
+      await expectReachable(tileMore, width);
+    });
+  }
 });

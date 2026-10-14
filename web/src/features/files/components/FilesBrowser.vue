@@ -897,23 +897,26 @@ let typeBuffer = "";
 let typeTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * rovingTabName is the entry that owns tabindex 0. It follows the focused row,
- * falling back to the first rendered row (then the first entry) so the list
- * always has exactly one tab stop, even after the roving row scrolls out.
+ * rovingTabName is the entry that owns tabindex 0. It follows the focused row
+ * when that row is RENDERED (the windowed slice plus any pinned row), so the
+ * listing always has exactly one tab stop; when the roving row has scrolled out
+ * of the rendered slice the stop falls back to the first rendered row, and to
+ * null for an empty list. It never points at an unrendered row (that used to
+ * leave the list with zero tab stops after a blur + scroll).
  */
 const rovingTabName = computed<string | null>(() => {
   const entries = files.visibleEntries;
   if (entries.length === 0) {
     return null;
   }
+  const rendered = files.viewMode === "grid" ? gridRows.value : listRows.value;
   if (
     rovingName.value !== null &&
-    entries.some((entry) => entry.name === rovingName.value)
+    rendered.some((row) => row.entry.name === rovingName.value)
   ) {
     return rovingName.value;
   }
-  const rendered = files.viewMode === "grid" ? gridRows.value : listRows.value;
-  return rendered[0]?.entry.name ?? entries[0].name;
+  return rendered[0]?.entry.name ?? null;
 });
 
 /** rowTabindex is the roving tabindex for one row's name control. */
@@ -992,11 +995,27 @@ function focusRow(name: string): void {
   void nextTick(() => focusEntry(name));
 }
 
-/** typeToFocus jumps the roving focus to the next typed-prefix match. */
-function typeToFocus(char: string): void {
+/** clearTypeTimer stops a pending type-to-focus reset timer. */
+function clearTypeTimer(): void {
   if (typeTimer !== null) {
     clearTimeout(typeTimer);
+    typeTimer = null;
   }
+}
+
+/**
+ * resetTypeahead drops any pending type-to-focus run. It runs on unmount and
+ * whenever the listing identity changes (folder/tab/root, filter, sort), so a
+ * prefix typed in one view never matches into the next.
+ */
+function resetTypeahead(): void {
+  clearTypeTimer();
+  typeBuffer = "";
+}
+
+/** typeToFocus jumps the roving focus to the next typed-prefix match. */
+function typeToFocus(char: string): void {
+  clearTypeTimer();
   typeBuffer += char;
   typeTimer = setTimeout(() => {
     typeBuffer = "";
@@ -1015,9 +1034,13 @@ function typeToFocus(char: string): void {
  * Home/End, PageUp/PageDown, Space to toggle the focused row's selection,
  * Shift+Arrow to extend the range from the anchor, Ctrl/Cmd+A to select every
  * visible entry, and type-to-focus for a printable prefix. Enter opens the
- * focused row. Keys typed into a field or a dialog/menu never reach here (the
- * handler is on the list, and both are guarded), and a row control (checkbox,
- * inline action, ⋮) keeps its native Enter/Space.
+ * focused row. It acts ONLY on a key whose target is inside a row (or a
+ * row-owned control), so the sticky header's sort buttons, the select-all
+ * checkbox and any other control inside the scroller keep their native
+ * Enter/Space/arrow behaviour; keys typed into a field or a dialog/menu never
+ * reach here either (the handler is on the list, and both are guarded). A row
+ * control (checkbox, inline action, ⋮) keeps its native Enter/Space too, via
+ * {@link isRowControl}.
  */
 function onListKeydown(event: KeyboardEvent): void {
   if (event.defaultPrevented) {
@@ -1028,6 +1051,12 @@ function onListKeydown(event: KeyboardEvent): void {
     isTextTarget(target) ||
     target?.closest(".n-modal, .n-dropdown") !== null
   ) {
+    return;
+  }
+  // Only a row target drives row keys: the header's sort buttons and the
+  // select-all checkbox sit inside the scroller, so Enter/Space/arrows there
+  // must pass straight through.
+  if (!(target instanceof Element) || target.closest("[data-entry]") === null) {
     return;
   }
   const meta = event.ctrlKey || event.metaKey;
@@ -1119,6 +1148,13 @@ function onListKeydown(event: KeyboardEvent): void {
   event.preventDefault();
   const targetEntry = entryAt(next);
   if (event.shiftKey) {
+    // The store resets the range anchor on a sort/filter/folder/tab change, so
+    // the first Shift+Arrow after one would otherwise drop the origin row and
+    // select only the target. Seed the anchor at the focused row first, so the
+    // run always includes the row the cursor is on.
+    if (files.activeTab.anchor === null && current >= 0) {
+      files.setAnchor(files.visibleEntries[current]?.name ?? null);
+    }
     if (targetEntry && isSelectable(targetEntry)) {
       files.selectRange(targetEntry.name, false);
     }
@@ -1262,13 +1298,26 @@ watch(
   { flush: "post" },
 );
 
-// A directory, tab or root change moves every row: the focused/menu name from
-// the previous listing must not survive (it could pin a same-named entry there).
+// A directory, tab or root change, a filter or a sort moves every row: the
+// focused/menu name from the previous listing must not survive (it could pin a
+// same-named entry there), and neither must the roving tab stop or a pending
+// type-to-focus run (JUS-139) — a same-named entry in the new view would
+// otherwise inherit the stop.
 watch(
-  () => [files.activeTabId, files.rootName, files.path] as const,
+  () =>
+    [
+      files.activeTabId,
+      files.rootName,
+      files.path,
+      files.query,
+      files.sortKey,
+      files.sortDir,
+    ] as const,
   () => {
     releaseFocus();
     closeRowMenu();
+    rovingName.value = null;
+    resetTypeahead();
   },
 );
 
@@ -1678,6 +1727,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", onDocumentPointerDown, true);
   document.removeEventListener("keydown", onDocumentKeyDown, true);
+  resetTypeahead();
 });
 
 /** onContextSelect dispatches a context-menu action and closes the menu. */

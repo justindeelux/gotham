@@ -768,6 +768,9 @@ test.describe("row keyboard navigation (JUS-139)", () => {
     await openFiles(page);
     await page.getByRole("button", { name: "Grid view" }).click();
     await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+    await expect(
+      page.locator('.fm-tile-wrap[data-entry="file-0000.txt"]'),
+    ).toBeVisible();
 
     await page.locator('.fm-tile-wrap[data-entry="aaa-dir"] .fm-tile').focus();
     await page.keyboard.press("ArrowRight");
@@ -820,5 +823,111 @@ test.describe("row keyboard navigation (JUS-139)", () => {
       (element) => getComputedStyle(element).outlineStyle,
     );
     expect(outline).not.toBe("none");
+  });
+
+  test("the header sort controls keep their native Enter/Space", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const nameHeader = page.locator('.fm-head .fm-name[aria-sort]');
+    await expect(nameHeader).toHaveAttribute("aria-sort", "ascending");
+
+    // Enter on the Name sort header toggles the sort; it must not activate the
+    // roving row (which used to navigate into aaa-dir).
+    await page.getByRole("button", { name: "Name", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expect(nameHeader).toHaveAttribute("aria-sort", "descending");
+    await expect(page.locator(".fm-foot")).toContainText("5000 entries");
+    await expect(rowFor(page, "aaa-dir")).toBeVisible();
+
+    // Space sorts the Size column and must not toggle a row's selection.
+    await page.getByRole("button", { name: "Size", exact: true }).focus();
+    await page.keyboard.press(" ");
+    await expect(page.locator('.fm-head .fm-cell--size[aria-sort]')).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+    await expect(page.locator(".fm-bulk-count")).toHaveText("");
+
+    // Space on the select-all checkbox selects every entry.
+    await page.locator(".fm-head .n-checkbox").focus();
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-bulk-count")).toContainText("5000 selected");
+  });
+
+  test("blur + scroll away still leaves exactly one roving tab stop", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await rowFor(page, "aaa-dir").locator(".fm-label").focus();
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
+    await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
+
+    // Blur, then scroll the roving row far out of the window: the stop falls
+    // back to the first rendered row instead of disappearing.
+    await page.locator(".fm-foot .grow").click();
+    const wrap = page.locator(".table-wrap");
+    await wrap.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => wrap.evaluate((el) => el.scrollTop)).toBeGreaterThan(
+      1000,
+    );
+    await expect(page.locator('.fm-row[data-entry="file-0000.txt"]')).toHaveCount(0);
+    await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
+
+    // Scrolling back restores the stop on the roving row.
+    await wrap.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
+    await expect(
+      page.locator('.fm-row[data-entry="file-0000.txt"] .fm-label'),
+    ).toHaveAttribute("tabindex", "0");
+  });
+
+  test("blur + scroll away still leaves exactly one roving tab stop in the grid", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+    await expect(
+      page.locator('.fm-tile-wrap[data-entry="file-0000.txt"]'),
+    ).toBeVisible();
+    await page.locator('.fm-tile-wrap[data-entry="aaa-dir"] .fm-tile').focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
+    await expect(page.locator('.fm-tile[tabindex="0"]')).toHaveCount(1);
+
+    await page.locator(".fm-foot .grow").click();
+    const grid = page.locator(".fm-grid");
+    await grid.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => grid.evaluate((el) => el.scrollTop)).toBeGreaterThan(
+      1000,
+    );
+    await expect(page.locator('.fm-tile[tabindex="0"]')).toHaveCount(1);
+  });
+
+  test("a folder change re-resolves the roving stop", async ({ page }) => {
+    await openFiles(page);
+    // Rove onto file-0000.txt, a name that also exists inside aaa-dir (where it
+    // sorts outside the window): the new folder must not inherit the stop.
+    await rowFor(page, "aaa-dir").locator(".fm-label").focus();
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => focusedEntry(page)).toBe("file-0000.txt");
+
+    await rowFor(page, "aaa-dir").locator(".fm-label").dblclick();
+    await expect(page.locator(".fm-foot")).toContainText("150 entries");
+    await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
+    await expect(
+      page.locator('.fm-row[data-entry="aaa-0000.txt"] .fm-label'),
+    ).toHaveAttribute("tabindex", "0");
+    await expect(
+      page.locator('.fm-row[data-entry="file-0000.txt"] .fm-label'),
+    ).toHaveCount(0);
   });
 });

@@ -55,6 +55,7 @@ const en = {
     clear: "Clear",
     downloadSelected: "Download",
     entryCount: "{count} entries",
+    entryCountFiltered: "{shown} of {total} entries",
     folderCount: "{count} folders",
     fileCount: "{count} files",
     symlinkCount: "{count} symlinks",
@@ -86,6 +87,7 @@ const en = {
     edit: "Edit in editor",
     download: "Download",
     permissions: "Permissions…",
+    goTarget: "Go to target",
     recycleBin: "Recycle bin…",
   },
   tabs: {

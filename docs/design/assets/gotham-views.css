@@ -204,6 +204,9 @@
   font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--muted);
   border-bottom: 1px solid var(--border-soft); min-height: 34px; padding-block: var(--space-2);
+  /* JUS-132: pin the column header to the top of the entry list's scroll
+     region so the active sort column stays visible in long folders. */
+  position: sticky; top: 0; z-index: 2; background: var(--surface);
 }
 .fm-head .fm-sort { display: inline-flex; align-items: center; gap: 4px; color: inherit; font: inherit; }
 .fm-head .fm-sort:hover { color: var(--fg-2); }

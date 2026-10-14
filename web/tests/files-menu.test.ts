@@ -107,6 +107,24 @@ describe("rowMenuOptions", () => {
     expect(keys(options)).toEqual(["rename", "cut", "copy", "delete"]);
   });
 
+  it("adds Go to target for a symlink with a browsable target only", () => {
+    const symlink = entry({ name: "bin", kind: "symlink", mode: 0o120777 });
+
+    const reachable = rowMenuOptions(symlink, ctx({ symlinkTargetPath: "usr/bin" }));
+    expect(keys(reachable)[0]).toBe("go-target");
+
+    // An unresolvable target (outside the root) hides the action.
+    const elsewhere = rowMenuOptions(symlink, ctx({ symlinkTargetPath: null }));
+    expect(keys(elsewhere)).not.toContain("go-target");
+
+    // A regular file never grows the action, even with a stray path.
+    const file = rowMenuOptions(
+      entry({ name: "app.yaml" }),
+      ctx({ symlinkTargetPath: "usr/bin" }),
+    );
+    expect(keys(file)).not.toContain("go-target");
+  });
+
   it("offers nothing for a special file", () => {
     const options = rowMenuOptions(
       entry({ name: "run.sock", kind: "special", mode: 0o140777 }),

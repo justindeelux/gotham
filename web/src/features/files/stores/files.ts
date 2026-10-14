@@ -1224,6 +1224,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.rootName = name;
     tab.path = "";
     tab.scrollTop = 0;
+    tab.query = "";
     clearSelection();
     await loadEntriesFor(tab);
   }
@@ -1233,6 +1234,7 @@ export const useFilesStore = defineStore("files", () => {
     const tab = activeTab.value;
     tab.path = joinPath(tab.path, name);
     tab.scrollTop = 0;
+    tab.query = "";
     clearSelection();
     await loadEntriesFor(tab);
   }
@@ -1245,6 +1247,7 @@ export const useFilesStore = defineStore("files", () => {
     }
     tab.path = next;
     tab.scrollTop = 0;
+    tab.query = "";
     clearSelection();
     await loadEntriesFor(tab);
   }

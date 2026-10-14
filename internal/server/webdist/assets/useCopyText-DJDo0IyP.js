@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-BSt3s19S.js
+import{a as i}from"./index-BhJUlJtU.js";import{u as n}from"./use-message-C1Eil0Xk.js";import{bi as e}from"./index-D2W1yQ0v.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+========
+import{a as i}from"./index-DoHSzK-o.js";import{u as n}from"./use-message-C4PQAkkA.js";import{bi as e}from"./index-C9qNuy9Q.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+>>>>>>>> 40b85150 (fix(files): reset stale filter, pin the list header and show symlink targets (JUS-132)):internal/server/webdist/assets/useCopyText-DJDo0IyP.js

@@ -54,6 +54,7 @@ const vi = {
     clear: "Bỏ chọn",
     downloadSelected: "Tải về",
     entryCount: "{count} mục",
+    entryCountFiltered: "{shown} / {total} mục",
     folderCount: "{count} thư mục",
     fileCount: "{count} tệp",
     symlinkCount: "{count} liên kết",
@@ -85,6 +86,7 @@ const vi = {
     edit: "Sửa trong trình soạn thảo",
     download: "Tải về",
     permissions: "Quyền…",
+    goTarget: "Đi tới đích liên kết",
     recycleBin: "Thùng rác…",
   },
   tabs: {

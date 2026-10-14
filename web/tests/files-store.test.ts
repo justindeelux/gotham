@@ -205,6 +205,25 @@ describe("files store navigation", () => {
     expect(store.entries.map((item) => item.name)).toEqual(["keep.txt"]);
   });
 
+  it("clears the folder filter on every folder change", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    store.setQuery("conf");
+    expect(store.query).toBe("conf");
+
+    await store.openDirectory("config");
+    expect(store.query).toBe("");
+
+    store.setQuery("app");
+    await store.goToPath("");
+    expect(store.query).toBe("");
+
+    store.setQuery("logo");
+    await store.setRoot("compose");
+    expect(store.query).toBe("");
+  });
+
   it("resets the browser on sign-out", async () => {
     const store = useFilesStore();
     await store.init("server-1");

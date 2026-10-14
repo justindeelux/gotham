@@ -524,3 +524,151 @@ test("the permissions dialog puts the octal field under the bits and drops the c
     expect(text).not.toContain(removed);
   }
 });
+
+// JUS-132: the list header stays pinned while a long folder scrolls, the
+// folder filter resets on navigation with a "N of M entries" footer, and a
+// symlink row shows its target and can jump to it.
+test("the list header stays pinned while scrolling a long folder", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-label").first()).toBeVisible();
+
+  const head = page.locator(".fm-head");
+  await expect(head).toHaveCSS("position", "sticky");
+
+  const wrap = page.locator(".table-wrap");
+  const wrapBox = (await wrap.boundingBox())!;
+  await wrap.evaluate((element) => {
+    element.scrollTop = 600;
+  });
+
+  const headBox = (await head.boundingBox())!;
+  // The header rides the top of the scrollport instead of scrolling away.
+  expect(headBox.y).toBeGreaterThanOrEqual(wrapBox.y - 1);
+  expect(headBox.y).toBeLessThan(wrapBox.y + 4);
+});
+
+test("the folder filter resets on navigation and the footer counts the filtered rows", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.route(`**/api/v1/servers/${server1}/files/list*`, async (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+    await route.fulfill({
+      json: {
+        entries:
+          path === "etc"
+            ? [
+                {
+                  name: "hosts",
+                  kind: "file",
+                  size: 12,
+                  mode: 0o100644,
+                  modified_at: "2026-10-12T09:02:00Z",
+                  etag: '"h"',
+                },
+              ]
+            : [
+                {
+                  name: "bin",
+                  kind: "symlink",
+                  size: 7,
+                  mode: 0o120777,
+                  symlink_target: "usr/bin",
+                  modified_at: "2026-10-12T09:02:00Z",
+                  etag: '"b"',
+                },
+                {
+                  name: "etc",
+                  kind: "directory",
+                  size: 4096,
+                  mode: 0o040755,
+                  modified_at: "2026-10-12T09:02:00Z",
+                  etag: '"e"',
+                },
+                {
+                  name: "usr",
+                  kind: "directory",
+                  size: 4096,
+                  mode: 0o040755,
+                  modified_at: "2026-10-12T09:02:00Z",
+                  etag: '"u"',
+                },
+              ],
+        truncated: false,
+        cursor: "",
+      },
+    });
+  });
+
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  const search = page.locator(".fm-search input");
+  await search.fill("etc");
+
+  // While filtering, the footer says how many of the folder's entries show.
+  await expect(page.locator(".fm-foot")).toContainText("1 of 3 entries");
+
+  // Opening the filtered folder clears the needle: its own listing is not
+  // silently hidden behind the stale filter.
+  await page.locator(".fm-label").filter({ hasText: "etc" }).dblclick();
+  await expect(page.locator(".fm-label").filter({ hasText: "hosts" })).toBeVisible();
+  await expect(search).toHaveValue("");
+  await expect(page.locator(".fm-foot")).toContainText("1 entries");
+});
+
+test("a symlink row shows its target and can jump to it", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  const requestedPaths: string[] = [];
+  await page.route(`**/api/v1/servers/${server1}/files/list*`, async (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+    requestedPaths.push(path);
+    await route.fulfill({
+      json: {
+        entries:
+          path === "usr/bin"
+            ? [
+                {
+                  name: "python3",
+                  kind: "file",
+                  size: 9,
+                  mode: 0o100755,
+                  modified_at: "2026-10-12T09:02:00Z",
+                  etag: '"p"',
+                },
+              ]
+            : [
+                {
+                  name: "bin",
+                  kind: "symlink",
+                  size: 7,
+                  mode: 0o120777,
+                  symlink_target: "usr/bin",
+                  modified_at: "2026-10-12T09:02:00Z",
+                  etag: '"b"',
+                },
+              ],
+        truncated: false,
+        cursor: "",
+      },
+    });
+  });
+
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+
+  // The target is shown next to the type, in list and grid.
+  await expect(page.locator(".fm-table").getByText("Symlink → usr/bin")).toBeVisible();
+  await page.getByRole("button", { name: "Grid view" }).click();
+  await expect(page.locator(".fm-grid").getByText("Symlink → usr/bin")).toBeVisible();
+  await page.getByRole("button", { name: "List view" }).click();
+
+  // "Go to target" follows the link to the resolved path.
+  await page.getByRole("button", { name: "More actions for bin" }).click();
+  await page.getByRole("menuitem", { name: "Go to target" }).click();
+  await expect(
+    page.locator(".fm-table").getByText("python3", { exact: true }),
+  ).toBeVisible();
+  expect(requestedPaths).toContain("usr/bin");
+});

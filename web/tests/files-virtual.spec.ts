@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-/* global URL, window:readonly */
+/* global document:readonly, HTMLElement:readonly, URL, window:readonly */
 // JUS-137 windowed listing proof: the committed webdist is served statically
 // with the control-plane file API mocked in real Chromium. Measured claims on a
 // 5,000-entry directory:
@@ -212,6 +212,20 @@ async function openFiles(page: Page): Promise<{ listing: Listing }> {
     const renamed = state.listing.find((entry) => entry.name === to) ?? null;
     await route.fulfill({ json: { entry: renamed } });
   });
+  await page.route(`**/api/v1/servers/${server1}/files/mkdir`, async (route) => {
+    const body = route.request().postDataJSON() as { path: string };
+    const name = body.path.split("/").pop() ?? "";
+    const created = {
+      name,
+      kind: "directory" as const,
+      size: 4096,
+      mode: 0o040755,
+      modified_at: "2026-10-12T09:02:00Z",
+      etag: '"new"',
+    };
+    state.listing = [...state.listing, created];
+    await route.fulfill({ json: { entry: created } });
+  });
 
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)").first()).toBeVisible();
@@ -262,7 +276,6 @@ test.describe("windowed list", () => {
     await wrap.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
-    await page.waitForTimeout(100);
 
     // Bottom: the last entry is rendered, the first dropped from the DOM.
     await expect(page.locator(".fm-table b", { hasText: "file-4998.txt" })).toBeVisible();
@@ -273,7 +286,8 @@ test.describe("windowed list", () => {
     await wrap.evaluate((element) => {
       element.scrollTop = 4000;
     });
-    await page.waitForTimeout(100);
+    // Let the scroll land (and the window re-render) before measuring.
+    await expect.poll(() => wrap.evaluate((element) => element.scrollTop)).toBeGreaterThan(3000);
     const wrapBox = (await wrap.boundingBox())!;
     const headBox = (await page.locator(".fm-head").boundingBox())!;
     expect(headBox.y).toBeGreaterThanOrEqual(wrapBox.y - 1);
@@ -342,6 +356,23 @@ test.describe("windowed list", () => {
     await expect(rowFor(page, "file-4998.txt")).toBeVisible();
   });
 
+  test("filtering while scrolled deep clamps the offset and still renders rows", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const wrap = page.locator(".table-wrap");
+    await wrap.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => wrap.evaluate((element) => element.scrollTop)).toBeGreaterThan(1000);
+
+    // 1,000 matches stays windowed, but the stored offset points past its end.
+    await page.locator(".fm-search input").fill("file-0");
+    await expect(page.locator(".fm-foot")).toContainText("1000 of 5000 entries");
+    await expect.poll(() => rows(page).count()).toBeGreaterThan(0);
+    await expect(rows(page).first()).toBeVisible();
+  });
+
   test("sorting reorders the whole listing before it is windowed", async ({ page }) => {
     await openFiles(page);
     // Name asc: the first file row is the smallest name.
@@ -361,7 +392,6 @@ test.describe("windowed list", () => {
     await wrap.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
-    await page.waitForTimeout(100);
 
     // Rename the bottom row to a name that now sorts to the very top.
     await rowFor(page, "file-4998.txt").getByRole("button", { name: /More actions/ }).click();
@@ -375,6 +405,115 @@ test.describe("windowed list", () => {
     const top = await wrap.evaluate((element) => element.scrollTop);
     expect(top).toBeLessThan(120);
   });
+
+  test("a created row that sorts out of the window is scrolled into view", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const wrap = page.locator(".table-wrap");
+    await wrap.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect(rowFor(page, "file-4998.txt")).toBeVisible();
+
+    // Create a folder that sorts to the very top: the listing grows, which used
+    // to make the scroll-replay watcher stomp the reveal with the old offset.
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await page.getByRole("menuitem", { name: "New folder", exact: true }).click();
+    const dialog = page.locator(".n-modal").filter({ hasText: "New folder" });
+    await dialog.locator("input").fill("0000-created");
+    await dialog.getByRole("button", { name: "Create folder", exact: true }).click();
+
+    await expect(
+      page.locator(".fm-table b").filter({ hasText: "0000-created" }),
+    ).toBeVisible();
+    await expect.poll(() => wrap.evaluate((element) => element.scrollTop)).toBeLessThan(120);
+  });
+});
+
+test.describe("keyboard focus retention across the window", () => {
+  /** renderedNames is the data-entry list of the rows currently in the DOM. */
+  async function renderedNames(page: Page): Promise<string[]> {
+    return rows(page).evaluateAll((nodes) =>
+      nodes.map((node) => (node as HTMLElement).dataset.entry ?? ""),
+    );
+  }
+
+  /** focusedEntry is the data-entry of the row that owns focus, or null. */
+  async function focusedEntry(page: Page): Promise<string | null> {
+    return page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      return active?.closest<HTMLElement>("[data-entry]")?.dataset.entry ?? null;
+    });
+  }
+
+  test("a focused row keeps focus and its outline when scrolled out of the window", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const label = rowFor(page, "file-0000.txt").locator(".fm-label");
+    await label.focus();
+    await expect(label).toBeFocused();
+
+    // Scroll it far out of the window: the pin keeps the row mounted, so focus
+    // is never dropped to <body>.
+    const wrap = page.locator(".table-wrap");
+    await wrap.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect.poll(() => wrap.evaluate((element) => element.scrollTop)).toBeGreaterThan(1000);
+    // The focused row is pinned OUTSIDE the rendered window (not merely still in
+    // it): the pin is what keeps it mounted and focused.
+    await expect(page.locator(".fm-row.is-pinned")).toHaveCount(1);
+    await expect(label).toBeFocused();
+    await expect(label).toBeAttached();
+
+    // ...and scrolling back shows the same focused row again.
+    await wrap.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await expect(label).toBeFocused();
+    await expect(label).toBeVisible();
+  });
+
+  test("Tab from the last rendered row reaches the next entry and scrolls it in", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const initial = await renderedNames(page);
+    expect(initial.length).toBeGreaterThan(0);
+
+    // Focus the last rendered row's last control (its ⋮ menu button); its own
+    // focus scroll advances the window.
+    await rows(page).last().getByRole("button", { name: /More actions/ }).focus();
+    await expect
+      .poll(async () => (await renderedNames(page)).some((name) => !initial.includes(name)))
+      .toBe(true);
+
+    await page.keyboard.press("Tab");
+
+    const next = await focusedEntry(page);
+    expect(next).not.toBeNull();
+    expect(initial).not.toContain(next);
+    await expect(
+      rows(page).filter({ has: page.locator(`b:text-is("${next}")`) }),
+    ).toBeVisible();
+  });
+
+  test("the row menu stays open on its row while the list scrolls", async ({ page }) => {
+    await openFiles(page);
+    await rowFor(page, "file-0000.txt").locator(".fm-label").focus();
+    await page.keyboard.press("Shift+F10");
+    const menu = page.getByRole("menu", { name: "More actions for file-0000.txt" });
+    await expect(menu).toBeVisible();
+
+    // Scrolling the row out of the window keeps the pinned row (and its menu).
+    await page.locator(".table-wrap").evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect(menu).toBeVisible();
+    await expect(rowFor(page, "file-0000.txt")).toHaveCount(1);
+  });
 });
 
 test.describe("windowed grid", () => {
@@ -387,22 +526,56 @@ test.describe("windowed grid", () => {
     await page.locator(".table-wrap").evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
-    await page.waitForTimeout(100);
     await page.getByRole("button", { name: "Grid view" }).click();
     await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
-    expect(await page.locator(".fm-grid .fm-tile").count()).toBeGreaterThan(0);
 
+    // The grid window is a few whole rows (7 columns x ~9 rows at 1440px), far
+    // below the 5,000 tiles of the listing.
     const rendered = await page.locator(".fm-grid .fm-tile").count();
-    expect(rendered).toBeLessThan(120);
+    expect(rendered).toBeGreaterThan(0);
+    expect(rendered).toBeLessThan(80);
+
+    const grid = page.locator(".fm-grid");
+    // The spacers still make the scroller span the whole grid.
+    const metrics = await grid.evaluate((element) => ({
+      scrollHeight: element.scrollHeight,
+      clientHeight: element.clientHeight,
+    }));
+    expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight * 100);
+
+    await grid.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect(
+      page.locator(".fm-grid").getByText("file-4998.txt", { exact: true }),
+    ).toBeVisible();
+    expect(await page.locator(".fm-grid .fm-tile").count()).toBeLessThan(80);
+  });
+
+  test("a focused tile keeps focus when scrolled out of the grid window", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await page.getByRole("button", { name: "Grid view" }).click();
+    const tile = page
+      .locator(".fm-tile-wrap", { has: page.locator('b:text-is("aaa-dir")') })
+      .locator(".fm-tile");
+    await tile.focus();
+    await expect(tile).toBeFocused();
 
     const grid = page.locator(".fm-grid");
     await grid.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });
-    await page.waitForTimeout(100);
-    await expect(
-      page.locator(".fm-grid").getByText("file-4998.txt", { exact: true }),
-    ).toBeVisible();
-    expect(await page.locator(".fm-grid .fm-tile").count()).toBeLessThan(120);
+    await expect.poll(() => grid.evaluate((element) => element.scrollTop)).toBeGreaterThan(1000);
+
+    // Pinned outside the window, still focused, and still placed inside the
+    // grid's own width.
+    await expect(page.locator(".fm-tile-wrap.is-pinned")).toHaveCount(1);
+    await expect(tile).toBeFocused();
+    const gridBox = (await grid.boundingBox())!;
+    const tileBox = (await tile.boundingBox())!;
+    expect(tileBox.x).toBeGreaterThanOrEqual(gridBox.x - 1);
+    expect(tileBox.x + tileBox.width).toBeLessThanOrEqual(gridBox.x + gridBox.width + 1);
   });
 });

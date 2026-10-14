@@ -77,6 +77,21 @@ export function gridColumnCount(
 }
 
 /**
+ * clampScrollTop keeps a scroll offset inside the content a listing actually
+ * has. After a filter shrinks a long directory the stored offset can point far
+ * past the new end; without this the window maths would render an empty slice
+ * for one frame (a full-height top spacer, no rows) before the browser clamps
+ * the scroller and its scroll event corrects the window.
+ */
+export function clampScrollTop(
+  top: number,
+  contentHeight: number,
+  viewport: number,
+): number {
+  return Math.min(Math.max(top, 0), Math.max(0, contentHeight - viewport));
+}
+
+/**
  * gridWindow windows a row-major grid. Whole rows are always included so the
  * rendered window lines up with the un-windowed grid's columns; the returned pad
  * is row-aligned too.

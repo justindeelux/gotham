@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  clampScrollTop,
   gridColumnCount,
   gridWindow,
   windowRange,
@@ -56,6 +57,22 @@ describe("windowRange", () => {
       padTop: 0,
       padBottom: 0,
     });
+  });
+});
+
+describe("clampScrollTop", () => {
+  it("keeps an in-range offset", () => {
+    expect(clampScrollTop(500, 5000, 400)).toBe(500);
+  });
+
+  it("clamps a stale deep offset after the listing shrank", () => {
+    // 5,000 rows of 36px -> 150 rows: the old offset is far past the new end.
+    expect(clampScrollTop(180_000, 150 * 36, 400)).toBe(150 * 36 - 400);
+  });
+
+  it("never goes negative on an empty or short listing", () => {
+    expect(clampScrollTop(300, 0, 400)).toBe(0);
+    expect(clampScrollTop(-40, 10_000, 400)).toBe(0);
   });
 });
 

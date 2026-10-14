@@ -74,6 +74,7 @@ import {
 } from "@/features/files/utils/filesMenu";
 import type { FilesMenuItem } from "@/features/files/utils/filesMenu";
 import {
+  clampScrollTop,
   gridColumnCount,
   gridWindow,
   windowRange,
@@ -408,11 +409,46 @@ const localScrollTop = ref(0);
 /** headEl measures the sticky header the window must not count as visible. */
 const headEl = ref<HTMLElement | null>(null);
 const scrollSize = useElementSize(scrollEl);
-const headSize = useElementSize(headEl);
+// border-box: a revealed row must clear the header's padding and border too.
+const headSize = useElementSize(headEl, undefined, { box: "border-box" });
 
-/** parsePx reads a CSS length ("36px") with a numeric fallback. */
+// ── Focus retention (JUS-137 review round 1) ──────────────────────────────
+// Windowing unmounts off-window rows, which used to (a) drop keyboard focus to
+// <body> when the focused row scrolled away and (b) make off-window rows
+// unreachable. Rather than add a roving tabindex — which needs arrow-key row
+// navigation, still out of scope — the row that owns focus (or the row whose
+// context menu is open) is PINNED into the rendered set: it stays mounted
+// wherever it is, rendered absolutely at its true offset so it never disturbs
+// the flow spacers, and keeps focus/menu. Tab keeps walking the rendered rows;
+// as focus passes the window edge the native focus scroll advances the window,
+// so the next entry is always already rendered.
+/** focusedName is the entry that last received focus inside the list/grid. */
+const focusedName = ref<string | null>(null);
+/** pinnedName is the entry kept rendered outside the window. */
+const pinnedName = ref<string | null>(null);
+/** menuRowName is the row whose context menu is open; pinned while it is up. */
+const menuRowName = ref<string | null>(null);
+
+/** pinnedIndex is the pinned entry's index in the current listing, or -1. */
+const pinnedIndex = computed<number>(() => {
+  const name = pinnedName.value;
+  if (name === null) {
+    return -1;
+  }
+  return files.visibleEntries.findIndex((entry) => entry.name === name);
+});
+
+/**
+ * parsePx reads a CSS px length ("36px") with a numeric fallback. A non-px token
+ * (rem, calc) fails loudly to the fallback rather than mis-parsing to a tiny
+ * size that would window the whole listing.
+ */
 function parsePx(value: string, fallback: number): number {
-  const parsed = Number.parseFloat(value);
+  const text = value.trim();
+  if (!text.endsWith("px")) {
+    return fallback;
+  }
+  const parsed = Number.parseFloat(text);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -472,14 +508,66 @@ const listWindow = computed(() => {
   return windowRange(
     count,
     rowHeight.value,
-    localScrollTop.value,
+    clampScrollTop(
+      localScrollTop.value,
+      headSize.height.value + count * rowHeight.value,
+      scrollSize.height.value,
+    ),
     scrollSize.height.value,
     headSize.height.value,
   );
 });
-const listEntries = computed<FilesEntry[]>(() =>
-  files.visibleEntries.slice(listWindow.value.start, listWindow.value.end),
-);
+
+/**
+ * RenderedRow is one row/tile in the DOM: its listing index and whether it is
+ * the pinned (out-of-window, focus- or menu-holding) element.
+ */
+interface RenderedRow {
+  entry: FilesEntry;
+  index: number;
+  pinned: boolean;
+}
+
+/** windowRows is the rendered slice plus the pinned row, in listing order. */
+function windowRows(
+  entries: FilesEntry[],
+  start: number,
+  end: number,
+): RenderedRow[] {
+  const rows: RenderedRow[] = [];
+  for (let index = start; index < end; index += 1) {
+    const entry = entries[index];
+    if (entry) {
+      rows.push({ entry, index, pinned: false });
+    }
+  }
+  const pinned = pinnedIndex.value;
+  if (
+    pinned >= 0 &&
+    entries[pinned] &&
+    (pinned < start || pinned >= end)
+  ) {
+    rows.push({ entry: entries[pinned], index: pinned, pinned: true });
+    rows.sort((a, b) => a.index - b.index);
+  }
+  return rows;
+}
+
+/** listRows is the windowed list slice plus the pinned row. */
+const listRows = computed<RenderedRow[]>(() => {
+  const entries = files.visibleEntries;
+  if (!isListVirtual.value) {
+    return entries.map((entry, index) => ({ entry, index, pinned: false }));
+  }
+  const win = listWindow.value;
+  return windowRows(entries, win.start, win.end);
+});
+
+/** pinnedListStyle places the pinned list row at its true offset inside
+ *  .fm-table (position: relative), just below the in-flow sticky header. */
+function pinnedListStyle(index: number): Record<string, string> {
+  return { top: `${headSize.height.value + index * rowHeight.value}px` };
+}
 
 /** gridColumns is the current auto-fill column count for the container width. */
 const gridColumns = computed<number>(() =>
@@ -489,6 +577,15 @@ const gridColumns = computed<number>(() =>
     tileMetrics.value.gap,
   ),
 );
+/** gridPitch is one tile row's height plus the row gap. */
+const gridPitch = computed<number>(
+  () => tileMetrics.value.height + tileMetrics.value.gap,
+);
+/** gridContentHeight is the full grid's pixel height (no trailing row gap). */
+function gridContentHeight(count: number): number {
+  const rows = Math.ceil(count / gridColumns.value);
+  return rows > 0 ? rows * gridPitch.value - tileMetrics.value.gap : 0;
+}
 /** gridWindowRange is the grid slice (whole rows) to render. */
 const gridWindowRange = computed(() => {
   const count = files.visibleEntries.length;
@@ -498,14 +595,43 @@ const gridWindowRange = computed(() => {
   return gridWindow(
     count,
     gridColumns.value,
-    tileMetrics.value.height + tileMetrics.value.gap,
-    localScrollTop.value,
+    gridPitch.value,
+    clampScrollTop(
+      localScrollTop.value,
+      gridContentHeight(count),
+      scrollSize.height.value,
+    ),
     scrollSize.height.value,
   );
 });
-const gridEntries = computed<FilesEntry[]>(() =>
-  files.visibleEntries.slice(gridWindowRange.value.start, gridWindowRange.value.end),
-);
+/** gridRows is the windowed grid slice plus the pinned tile in listing order. */
+const gridRows = computed<RenderedRow[]>(() => {
+  const entries = files.visibleEntries;
+  if (!isGridVirtual.value) {
+    return entries.map((entry, index) => ({ entry, index, pinned: false }));
+  }
+  const win = gridWindowRange.value;
+  return windowRows(entries, win.start, win.end);
+});
+
+/** gridTileWidth is one tile's width for the current column count. */
+const gridTileWidth = computed<number>(() => {
+  const cols = Math.max(1, gridColumns.value);
+  return (
+    (scrollSize.width.value - (cols - 1) * tileMetrics.value.gap) / cols
+  );
+});
+
+/** pinnedTileStyle places the pinned grid tile at its true row/column offset. */
+function pinnedTileStyle(index: number): Record<string, string> {
+  const cols = Math.max(1, gridColumns.value);
+  const gap = tileMetrics.value.gap;
+  return {
+    top: `${Math.floor(index / cols) * gridPitch.value}px`,
+    left: `${(index % cols) * (gridTileWidth.value + gap)}px`,
+    width: `${gridTileWidth.value}px`,
+  };
+}
 
 /**
  * The grid spacers span every column, so the CSS row gap also sits between a
@@ -523,7 +649,6 @@ const gridSpacerBottom = computed<number>(() =>
     ? gridWindowRange.value.padBottom - tileMetrics.value.gap
     : 0,
 );
-
 
 /**
  * tabLabel is the visible tab name: the folder's basename, or the root. When
@@ -674,6 +799,98 @@ function scrollEntryIntoView(name: string): void {
     el.scrollTop = bottom - el.clientHeight;
   }
   localScrollTop.value = el.scrollTop;
+  // Record the new offset in the store too: a create/rename changes
+  // entries.length, and the replay watcher below would otherwise restore the
+  // stale pre-reveal offset over this scroll.
+  files.setScrollTop(el.scrollTop);
+}
+
+/** restoringFocus marks a programmatic focus restore so it does not re-scroll. */
+let restoringFocus = false;
+
+/** focusEntry focuses one rendered entry's own control, if it is in the DOM. */
+function focusEntry(name: string | null): void {
+  const el = scrollEl.value;
+  if (name === null || el === null) {
+    return;
+  }
+  for (const node of el.querySelectorAll<HTMLElement>("[data-entry]")) {
+    if (node.dataset.entry !== name) {
+      continue;
+    }
+    const target = node.querySelector<HTMLElement>(".fm-label, .fm-tile");
+    if (target !== null) {
+      // The row may be off-screen (pinned): never yank the user's scroll.
+      restoringFocus = true;
+      target.focus({ preventScroll: true });
+      restoringFocus = false;
+    }
+    return;
+  }
+}
+
+/**
+ * onListFocusIn remembers the focused row and keeps it visible: the pin keeps it
+ * mounted when the user scrolls it out of the window (so focus is never dropped
+ * to <body>), and the scroll clears the sticky header a Shift+Tab or a
+ * programmatic focus left the row under. A restored focus must not re-scroll.
+ */
+function onListFocusIn(event: FocusEvent): void {
+  const row = (event.target as HTMLElement | null)?.closest<HTMLElement>(
+    "[data-entry]",
+  );
+  const name = row?.dataset.entry ?? null;
+  if (name === null) {
+    return;
+  }
+  focusedName.value = name;
+  pinnedName.value = name;
+  if (!restoringFocus) {
+    scrollEntryIntoView(name);
+  }
+}
+
+/**
+ * onListFocusOut releases the pin once focus leaves the list for another place,
+ * so off-window rows are not kept rendered forever. Focus moving to another row,
+ * or into the (teleported) row menu, keeps the pin.
+ *
+ * When focus falls to <body> the focused row was moved or unmounted by a window
+ * re-render (Chromium blurs a node the keyed diff moves): the pin is kept and
+ * the same entry is refocused once the re-render settles, so a scroll can never
+ * strand a keyboard user.
+ */
+function onListFocusOut(event: FocusEvent): void {
+  const next = event.relatedTarget as Element | null;
+  if (next === null) {
+    if (focusedName.value === null) {
+      return;
+    }
+    void nextTick().then(() => {
+      if (document.activeElement !== document.body) {
+        return;
+      }
+      focusEntry(focusedName.value);
+    });
+    return;
+  }
+  if (scrollEl.value?.contains(next) || next.closest(".n-dropdown")) {
+    return;
+  }
+  pinnedName.value = null;
+}
+
+/** closeRowMenu clears the menu pin; the row keeps its pin only if still focused. */
+function closeRowMenu(): void {
+  const name = menuRowName.value;
+  menuRowName.value = null;
+  if (
+    name !== null &&
+    pinnedName.value === name &&
+    focusedName.value !== name
+  ) {
+    pinnedName.value = null;
+  }
 }
 
 // Move focus to the active tab as soon as it changes (nextTick), never after
@@ -686,9 +903,19 @@ watch(() => files.activeTabId, () => void focusActiveTab());
 // Replay the active tab's scroll offset after a switch, and after a load
 // completes (a restore that landed while the rows were still unrendered would
 // clamp to 0), plus back to the top on navigation (the store zeroes it). The
-// windowed range reads localScrollTop, so it is kept in step here too.
+// windowed range reads localScrollTop, so it is kept in step here too. The
+// visible-entry count is in the key so a shrinking filter re-clamps the offset.
+// `scrollEntryIntoView` writes the store offset back, so a create/rename reveal
+// always wins over this replay.
 watch(
-  () => [files.activeTabId, files.path, files.loaded, files.entries.length] as const,
+  () =>
+    [
+      files.activeTabId,
+      files.path,
+      files.loaded,
+      files.entries.length,
+      files.visibleEntries.length,
+    ] as const,
   async () => {
     await nextTick();
     if (scrollEl.value) {
@@ -994,6 +1221,9 @@ function openRowContext(event: MouseEvent, entry: FilesEntry): void {
   }
   files.selectForRowContext(entry);
   contextEntry.value = entry;
+  // Pin the row so its menu keeps its anchor while the list scrolls (JUS-137).
+  menuRowName.value = entry.name;
+  pinnedName.value = entry.name;
   contextX.value = event.clientX;
   contextY.value = event.clientY;
   contextOpen.value = true;
@@ -1002,6 +1232,7 @@ function openRowContext(event: MouseEvent, entry: FilesEntry): void {
 /** openFolderContext opens the folder-level menu at the pointer. */
 function openFolderContext(event: MouseEvent): void {
   contextEntry.value = null;
+  menuRowName.value = null;
   contextX.value = event.clientX;
   contextY.value = event.clientY;
   contextOpen.value = true;
@@ -1017,6 +1248,8 @@ function onRowKeydown(event: KeyboardEvent, entry: FilesEntry): void {
   event.preventDefault();
   files.selectForRowContext(entry);
   contextEntry.value = entry;
+  menuRowName.value = entry.name;
+  pinnedName.value = entry.name;
   const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
   contextX.value = box.left + 16;
   contextY.value = box.top + box.height / 2;
@@ -1038,6 +1271,7 @@ function onDocumentPointerDown(event: PointerEvent): void {
     return;
   }
   contextOpen.value = false;
+  closeRowMenu();
 }
 
 onMounted(() =>
@@ -1051,6 +1285,7 @@ onBeforeUnmount(() =>
 function onContextSelect(key: string): void {
   const entry = contextEntry.value;
   contextOpen.value = false;
+  closeRowMenu();
   if (entry) {
     onRowMenu(key, entry);
     return;
@@ -1484,7 +1719,7 @@ function onFolderMenu(key: string): void {
         </div>
       </div>
 
-      <div v-if="files.viewMode === 'list'" ref="scrollEl" class="table-wrap" @scroll="onListScroll" @contextmenu.prevent="openFolderContext">
+      <div v-if="files.viewMode === 'list'" ref="scrollEl" class="table-wrap" @scroll="onListScroll" @focusin="onListFocusIn" @focusout="onListFocusOut" @contextmenu.prevent="openFolderContext">
         <div
           class="fm-table"
           :class="{ 'is-virtual': isListVirtual }"
@@ -1540,16 +1775,17 @@ function onFolderMenu(key: string): void {
             v-if="listWindow.padTop > 0"
             class="fm-pad"
             :style="{ height: `${listWindow.padTop}px` }"
-            role="presentation"
             aria-hidden="true"
           ></div>
           <div
-            v-for="(entry, index) in listEntries"
+            v-for="{ entry, index, pinned } in listRows"
             :key="entry.name"
             class="fm-row"
-            :class="{ 'is-selected': files.isSelected(entry.name) }"
+            :class="{ 'is-selected': files.isSelected(entry.name), 'is-pinned': pinned }"
             role="row"
-            :aria-rowindex="listWindow.start + index + 2"
+            :aria-rowindex="index + 2"
+            :data-entry="entry.name"
+            :style="pinned ? pinnedListStyle(index) : undefined"
             @click="onRowClick($event, entry)"
             @dblclick="onRowDblclick($event, entry)"
             @contextmenu.stop.prevent="openRowContext($event, entry)"
@@ -1682,7 +1918,6 @@ function onFolderMenu(key: string): void {
             v-if="listWindow.padBottom > 0"
             class="fm-pad"
             :style="{ height: `${listWindow.padBottom}px` }"
-            role="presentation"
             aria-hidden="true"
           ></div>
         </div>
@@ -1694,6 +1929,8 @@ function onFolderMenu(key: string): void {
         class="fm-grid"
         :class="{ 'is-virtual': isGridVirtual }"
         @scroll="onListScroll"
+        @focusin="onListFocusIn"
+        @focusout="onListFocusOut"
         @contextmenu.prevent="openFolderContext"
       >
         <!-- The spacers span every column and stand in for the unrendered rows
@@ -1703,13 +1940,15 @@ function onFolderMenu(key: string): void {
           v-if="gridSpacerTop > 0"
           class="fm-pad"
           :style="{ height: `${gridSpacerTop}px` }"
-          role="presentation"
           aria-hidden="true"
         ></div>
         <div
-          v-for="entry in gridEntries"
+          v-for="{ entry, index, pinned } in gridRows"
           :key="entry.name"
           class="fm-tile-wrap"
+          :class="{ 'is-pinned': pinned }"
+          :data-entry="entry.name"
+          :style="pinned ? pinnedTileStyle(index) : undefined"
           @click="onRowClick($event, entry)"
           @dblclick="onRowDblclick($event, entry)"
           @contextmenu.stop.prevent="openRowContext($event, entry)"
@@ -1749,7 +1988,6 @@ function onFolderMenu(key: string): void {
           v-if="gridSpacerBottom > 0"
           class="fm-pad"
           :style="{ height: `${gridSpacerBottom}px` }"
-          role="presentation"
           aria-hidden="true"
         ></div>
       </div>
@@ -2184,6 +2422,12 @@ function onFolderMenu(key: string): void {
   min-width: 820px;
 }
 
+/* JUS-137: the pinned (out-of-window) row is absolutely positioned, so the
+   table is its containing block. */
+.fm-table.is-virtual {
+  position: relative;
+}
+
 /* JUS-137: the windowed list replaces the unrendered rows with these exact-px
    spacers, so the scrollbar (and cross-row select-all) still spans the listing.
    role=presentation keeps them invisible to assistive tech. */
@@ -2228,6 +2472,15 @@ function onFolderMenu(key: string): void {
 .fm-table.is-virtual .fm-row:not(.fm-head) {
   height: var(--fm-row-height);
   overflow: hidden;
+}
+
+/* The pinned row (focus/menu holder) is rendered outside the flow window but at
+   its true offset, so it never disturbs the spacers. */
+.fm-table.is-virtual .fm-row.is-pinned {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
 }
 
 .fm-head {
@@ -2423,8 +2676,18 @@ function onFolderMenu(key: string): void {
 
 /* JUS-137: windowed tiles are pinned to the token height so the fixed row maths
    stays exact (the un-windowed grid keeps its min-height and natural flow). */
+.fm-grid.is-virtual {
+  position: relative;
+}
+
 .fm-grid.is-virtual .fm-tile {
   height: var(--fm-tile-height);
+}
+
+/* The pinned tile (focus holder) sits at its true row/column offset. */
+.fm-grid.is-virtual .fm-tile-wrap.is-pinned {
+  position: absolute;
+  z-index: 1;
 }
 
 .fm-tile-wrap {
@@ -2444,7 +2707,8 @@ function onFolderMenu(key: string): void {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  min-height: 132px;
+  /* JUS-137: the one tile-height source the window maths reads too. */
+  min-height: var(--fm-tile-height);
   cursor: pointer;
   transition: border-color var(--motion-base) var(--ease-standard), background var(--motion-base) var(--ease-standard);
 }

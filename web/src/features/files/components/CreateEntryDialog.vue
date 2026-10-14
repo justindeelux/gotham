@@ -21,6 +21,8 @@ interface Props {
 const props = defineProps<Props>();
 const emit = defineEmits<{
   "update:show": [value: boolean];
+  /** created reports the new entry's name so the browser can reveal it. */
+  created: [name: string];
 }>();
 
 const { t } = useI18n();
@@ -66,6 +68,7 @@ async function submit(): Promise<void> {
         t("files.dialogs.created", { name: normalizeEntryName(name.value) }),
       ),
     );
+    emit("created", normalizeEntryName(name.value));
     emit("update:show", false);
   } catch (err) {
     message.error(describeFilesError(err));

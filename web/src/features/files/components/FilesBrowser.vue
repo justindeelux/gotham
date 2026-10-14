@@ -23,6 +23,7 @@ import {
   Upload,
   X,
 } from "@lucide/vue";
+import { useElementSize } from "@vueuse/core";
 import {
   NButton,
   NCard,
@@ -72,6 +73,11 @@ import {
   rowMenuOptions,
 } from "@/features/files/utils/filesMenu";
 import type { FilesMenuItem } from "@/features/files/utils/filesMenu";
+import {
+  gridColumnCount,
+  gridWindow,
+  windowRange,
+} from "@/features/files/utils/virtual";
 import { useTeamsStore } from "@/features/teams";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
 
@@ -385,6 +391,140 @@ const tabListEl = ref<HTMLElement | null>(null);
 /** scrollEl is the mounted entry-list scroll container (list or grid). */
 const scrollEl = ref<HTMLElement | null>(null);
 
+// ── Windowing (JUS-137) ───────────────────────────────────────────────────
+// A long directory renders only the visible window plus overscan, with
+// pixel-exact spacers standing in for the unrendered rows so the scrollbar (and
+// the sticky header, selection, filter and footer) keep working across rows that
+// are not in the DOM. Below the threshold every row renders, so a small folder
+// keeps exactly the DOM it always had and both paths behave identically.
+/** VIRTUAL_THRESHOLD is the entry count above which the list/grid window. */
+const VIRTUAL_THRESHOLD = 100;
+/** rowHeight caches --fm-row-height (px) for the window maths. */
+const rowHeight = ref(36);
+/** tileMetrics caches the .fm-grid tile size/gap (px) for the window maths. */
+const tileMetrics = ref({ min: 176, gap: 12, height: 132 });
+/** localScrollTop mirrors the entry list's offset (the store keeps it per tab). */
+const localScrollTop = ref(0);
+/** headEl measures the sticky header the window must not count as visible. */
+const headEl = ref<HTMLElement | null>(null);
+const scrollSize = useElementSize(scrollEl);
+const headSize = useElementSize(headEl);
+
+/** parsePx reads a CSS length ("36px") with a numeric fallback. */
+function parsePx(value: string, fallback: number): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+/**
+ * readVirtualMetrics re-reads the row/tile sizes from the live CSS tokens, so
+ * the window maths tracks the one-value density change and never duplicates a
+ * size (JUS-134 kept --fm-row-height as the single list-row height).
+ */
+function readVirtualMetrics(): void {
+  const el = scrollEl.value;
+  if (el === null) {
+    return;
+  }
+  const style = getComputedStyle(el);
+  rowHeight.value = parsePx(
+    style.getPropertyValue("--fm-row-height"),
+    rowHeight.value,
+  );
+  tileMetrics.value = {
+    min: parsePx(style.getPropertyValue("--fm-tile-min"), tileMetrics.value.min),
+    gap: parsePx(style.columnGap, tileMetrics.value.gap),
+    height: parsePx(
+      style.getPropertyValue("--fm-tile-height"),
+      tileMetrics.value.height,
+    ),
+  };
+}
+watch(
+  () => scrollEl.value,
+  (el) => {
+    readVirtualMetrics();
+    // A list↔grid switch mounts a fresh scroller at offset 0; resync so the
+    // window does not render around the previous view's offset (a blank list).
+    localScrollTop.value = el?.scrollTop ?? 0;
+  },
+  { flush: "post" },
+);
+
+/** isListVirtual / isGridVirtual gate windowing on a long listing. */
+const isListVirtual = computed<boolean>(
+  () =>
+    files.viewMode === "list" &&
+    files.visibleEntries.length > VIRTUAL_THRESHOLD,
+);
+const isGridVirtual = computed<boolean>(
+  () =>
+    files.viewMode === "grid" &&
+    files.visibleEntries.length > VIRTUAL_THRESHOLD,
+);
+
+/** listWindow is the list slice to render (the whole list when not windowing). */
+const listWindow = computed(() => {
+  const count = files.visibleEntries.length;
+  if (!isListVirtual.value) {
+    return { start: 0, end: count, padTop: 0, padBottom: 0 };
+  }
+  return windowRange(
+    count,
+    rowHeight.value,
+    localScrollTop.value,
+    scrollSize.height.value,
+    headSize.height.value,
+  );
+});
+const listEntries = computed<FilesEntry[]>(() =>
+  files.visibleEntries.slice(listWindow.value.start, listWindow.value.end),
+);
+
+/** gridColumns is the current auto-fill column count for the container width. */
+const gridColumns = computed<number>(() =>
+  gridColumnCount(
+    scrollSize.width.value,
+    tileMetrics.value.min,
+    tileMetrics.value.gap,
+  ),
+);
+/** gridWindowRange is the grid slice (whole rows) to render. */
+const gridWindowRange = computed(() => {
+  const count = files.visibleEntries.length;
+  if (!isGridVirtual.value) {
+    return { start: 0, end: count, padTop: 0, padBottom: 0 };
+  }
+  return gridWindow(
+    count,
+    gridColumns.value,
+    tileMetrics.value.height + tileMetrics.value.gap,
+    localScrollTop.value,
+    scrollSize.height.value,
+  );
+});
+const gridEntries = computed<FilesEntry[]>(() =>
+  files.visibleEntries.slice(gridWindowRange.value.start, gridWindowRange.value.end),
+);
+
+/**
+ * The grid spacers span every column, so the CSS row gap also sits between a
+ * spacer and the first/last tile row. Subtracting one gap keeps the rendered
+ * rows exactly on their true pixel offsets. (The list uses in-flow spacers with
+ * no gap, so its pads are used as-is.)
+ */
+const gridSpacerTop = computed<number>(() =>
+  gridWindowRange.value.padTop > 0
+    ? gridWindowRange.value.padTop - tileMetrics.value.gap
+    : 0,
+);
+const gridSpacerBottom = computed<number>(() =>
+  gridWindowRange.value.padBottom > 0
+    ? gridWindowRange.value.padBottom - tileMetrics.value.gap
+    : 0,
+);
+
+
 /**
  * tabLabel is the visible tab name: the folder's basename, or the root. When
  * two tabs show different locations that share a basename (two folders named
@@ -497,9 +637,43 @@ function onTabAuxClick(event: MouseEvent, id: string): void {
   void files.closeTab(id);
 }
 
-/** onListScroll records the active tab's entry-list scroll offset. */
+/**
+ * onListScroll records the active tab's entry-list scroll offset and drives the
+ * windowed range (the store owns the per-tab offset for tab-restore).
+ */
 function onListScroll(event: Event): void {
-  files.setScrollTop((event.currentTarget as HTMLElement).scrollTop);
+  const el = event.currentTarget as HTMLElement;
+  localScrollTop.value = el.scrollTop;
+  files.setScrollTop(el.scrollTop);
+}
+
+/**
+ * scrollEntryIntoView brings one entry into the list's visible band, scrolling
+ * when the row is outside the current window or below the fold. It is how a row
+ * that must be seen (a just-created or renamed entry) stays reachable when the
+ * listing is windowed and the row itself is not rendered (JUS-137).
+ */
+function scrollEntryIntoView(name: string): void {
+  const index = files.visibleEntries.findIndex((entry) => entry.name === name);
+  const el = scrollEl.value;
+  if (index < 0 || el === null) {
+    return;
+  }
+  const grid = files.viewMode === "grid";
+  const itemSize = grid
+    ? tileMetrics.value.height + tileMetrics.value.gap
+    : rowHeight.value;
+  const row = grid ? Math.floor(index / gridColumns.value) : index;
+  // The sticky header shares the scrollport, so the usable band starts below it.
+  const lead = grid ? 0 : headSize.height.value;
+  const top = lead + row * itemSize;
+  const bottom = top + itemSize;
+  if (top < el.scrollTop + lead) {
+    el.scrollTop = Math.max(0, top - lead);
+  } else if (bottom > el.scrollTop + el.clientHeight) {
+    el.scrollTop = bottom - el.clientHeight;
+  }
+  localScrollTop.value = el.scrollTop;
 }
 
 // Move focus to the active tab as soon as it changes (nextTick), never after
@@ -511,13 +685,15 @@ watch(() => files.activeTabId, () => void focusActiveTab());
 
 // Replay the active tab's scroll offset after a switch, and after a load
 // completes (a restore that landed while the rows were still unrendered would
-// clamp to 0), plus back to the top on navigation (the store zeroes it).
+// clamp to 0), plus back to the top on navigation (the store zeroes it). The
+// windowed range reads localScrollTop, so it is kept in step here too.
 watch(
   () => [files.activeTabId, files.path, files.loaded, files.entries.length] as const,
   async () => {
     await nextTick();
     if (scrollEl.value) {
       scrollEl.value.scrollTop = files.scrollTop;
+      localScrollTop.value = scrollEl.value.scrollTop;
     }
   },
 );
@@ -1309,8 +1485,13 @@ function onFolderMenu(key: string): void {
       </div>
 
       <div v-if="files.viewMode === 'list'" ref="scrollEl" class="table-wrap" @scroll="onListScroll" @contextmenu.prevent="openFolderContext">
-        <div class="fm-table" role="table">
-          <div class="fm-row fm-head" role="row">
+        <div
+          class="fm-table"
+          :class="{ 'is-virtual': isListVirtual }"
+          role="table"
+          :aria-rowcount="files.visibleEntries.length + 1"
+        >
+          <div ref="headEl" class="fm-row fm-head" role="row" :aria-rowindex="1">
             <span class="fm-select" role="columnheader">
               <NCheckbox
                 size="small"
@@ -1353,12 +1534,22 @@ function onFolderMenu(key: string): void {
             <div role="columnheader" class="right">{{ $t("files.browser.columnActions") }}</div>
           </div>
 
+          <!-- Windowed list (JUS-137): the spacers stand in for the unrendered
+               rows so the scrollbar still spans the whole listing. -->
           <div
-            v-for="entry in files.visibleEntries"
+            v-if="listWindow.padTop > 0"
+            class="fm-pad"
+            :style="{ height: `${listWindow.padTop}px` }"
+            role="presentation"
+            aria-hidden="true"
+          ></div>
+          <div
+            v-for="(entry, index) in listEntries"
             :key="entry.name"
             class="fm-row"
             :class="{ 'is-selected': files.isSelected(entry.name) }"
             role="row"
+            :aria-rowindex="listWindow.start + index + 2"
             @click="onRowClick($event, entry)"
             @dblclick="onRowDblclick($event, entry)"
             @contextmenu.stop.prevent="openRowContext($event, entry)"
@@ -1487,12 +1678,36 @@ function onFolderMenu(key: string): void {
               </NDropdown>
             </div>
           </div>
+          <div
+            v-if="listWindow.padBottom > 0"
+            class="fm-pad"
+            :style="{ height: `${listWindow.padBottom}px` }"
+            role="presentation"
+            aria-hidden="true"
+          ></div>
         </div>
       </div>
 
-      <div v-else ref="scrollEl" class="fm-grid" @scroll="onListScroll" @contextmenu.prevent="openFolderContext">
+      <div
+        v-else
+        ref="scrollEl"
+        class="fm-grid"
+        :class="{ 'is-virtual': isGridVirtual }"
+        @scroll="onListScroll"
+        @contextmenu.prevent="openFolderContext"
+      >
+        <!-- The spacers span every column and stand in for the unrendered rows
+             (JUS-137). A spacer, not padding: a huge padding-bottom would stop
+             the flex column from shrinking the scroller to its viewport. -->
         <div
-          v-for="entry in files.visibleEntries"
+          v-if="gridSpacerTop > 0"
+          class="fm-pad"
+          :style="{ height: `${gridSpacerTop}px` }"
+          role="presentation"
+          aria-hidden="true"
+        ></div>
+        <div
+          v-for="entry in gridEntries"
           :key="entry.name"
           class="fm-tile-wrap"
           @click="onRowClick($event, entry)"
@@ -1530,6 +1745,13 @@ function onFolderMenu(key: string): void {
             </span>
           </button>
         </div>
+        <div
+          v-if="gridSpacerBottom > 0"
+          class="fm-pad"
+          :style="{ height: `${gridSpacerBottom}px` }"
+          role="presentation"
+          aria-hidden="true"
+        ></div>
       </div>
 
       <div v-if="files.hasMore" class="fm-more">
@@ -1551,8 +1773,8 @@ function onFolderMenu(key: string): void {
       <span>{{ $t("files.dialogs.uploadDrop") }}</span>
     </div>
 
-    <CreateEntryDialog v-model:show="createOpen" :kind="createKind" />
-    <RenameEntryDialog v-model:show="renameOpen" :entry="renameTarget" />
+    <CreateEntryDialog v-model:show="createOpen" :kind="createKind" @created="scrollEntryIntoView" />
+    <RenameEntryDialog v-model:show="renameOpen" :entry="renameTarget" @renamed="scrollEntryIntoView" />
     <PermissionsDialog v-model:show="permissionsOpen" :entry="permissionsTarget" />
     <DeleteEntriesDialog v-model:show="deleteOpen" :entries="actionTargets" />
     <RecycleBinDialog v-model:show="recycleOpen" />
@@ -1962,6 +2184,19 @@ function onFolderMenu(key: string): void {
   min-width: 820px;
 }
 
+/* JUS-137: the windowed list replaces the unrendered rows with these exact-px
+   spacers, so the scrollbar (and cross-row select-all) still spans the listing.
+   role=presentation keeps them invisible to assistive tech. */
+.fm-pad {
+  display: block;
+  width: 100%;
+}
+
+/* In the grid a spacer spans every column so it never lands in a tile cell. */
+.fm-grid > .fm-pad {
+  grid-column: 1 / -1;
+}
+
 .fm-row {
   display: grid;
   /* Leading checkbox column, then the type icon beside the name. */
@@ -1986,6 +2221,13 @@ function onFolderMenu(key: string): void {
 
 .fm-row.is-selected:hover {
   background: var(--accent-softer);
+}
+
+/* JUS-137: a windowed row takes exactly the token height so the fixed-size
+   window maths never drifts (the un-windowed list keeps its min-height). */
+.fm-table.is-virtual .fm-row:not(.fm-head) {
+  height: var(--fm-row-height);
+  overflow: hidden;
 }
 
 .fm-head {
@@ -2168,13 +2410,21 @@ function onFolderMenu(key: string): void {
 
 .fm-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  --fm-tile-min: 176px;
+  --fm-tile-height: 132px;
+  grid-template-columns: repeat(auto-fill, minmax(var(--fm-tile-min), 1fr));
   gap: var(--space-3);
   /* Grid view scrolls internally too, keeping tiles top-aligned. */
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   align-content: start;
+}
+
+/* JUS-137: windowed tiles are pinned to the token height so the fixed row maths
+   stays exact (the un-windowed grid keeps its min-height and natural flow). */
+.fm-grid.is-virtual .fm-tile {
+  height: var(--fm-tile-height);
 }
 
 .fm-tile-wrap {

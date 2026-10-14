@@ -134,6 +134,15 @@
               </div>
             </div>
 
+            <!-- JUS-137: the list (and the grid further down) windows a long
+                 folder — only the visible rows plus overscan are in the DOM,
+                 with in-flow spacers standing in for the rest so the scrollbar,
+                 the sticky header, select-all, filter/sort and the footer counts
+                 still cover the whole listing. List rows are one
+                 --fm-row-height (36px); grid tiles take a fixed token height
+                 with the column count derived from the container width. The
+                 un-windowed DOM below is the small-folder shape (identical
+                 behaviour, every row rendered). -->
             <div class="table-wrap">
               <div class="fm-table" role="table">
                 <div class="fm-row fm-head" role="row">

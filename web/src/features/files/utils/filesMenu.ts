@@ -19,6 +19,10 @@ export interface FilesMenuContext {
    *  valid: the current directory for the folder menu, or the row's folder for
    *  a folder row (the store's pasteProblemAt is null). */
   canPaste: boolean;
+  /** symlinkTargetPath is the root-relative path a symlink row's "Go to target"
+   *  opens (JUS-132), or null when the target cannot be browsed; the action is
+   *  offered only for a symlink with a browsable target. Ignored for other rows. */
+  symlinkTargetPath?: string | null;
   t: (_key: string) => string;
 }
 
@@ -47,6 +51,16 @@ export function rowMenuOptions(
   } else if (entry.kind === "file") {
     options.push(item(t("files.menu.edit"), "edit", !canReadContent));
     options.push(item(t("files.menu.download"), "download", !canReadContent));
+  }
+  // JUS-132: a symlink whose target lives inside the browsable root can jump
+  // there. "" is the root's top level and stays valid; null (outside the root)
+  // hides the action. The entry's own target must be present too.
+  if (
+    entry.kind === "symlink" &&
+    entry.symlink_target &&
+    typeof ctx.symlinkTargetPath === "string"
+  ) {
+    options.push(item(t("files.menu.goTarget"), "go-target"));
   }
   // Only a regular file or a folder can be chmod-ed: the agent refuses a
   // symlink (it would follow to the target) and a special file.

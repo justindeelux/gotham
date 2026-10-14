@@ -1224,6 +1224,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.rootName = name;
     tab.path = "";
     tab.scrollTop = 0;
+    tab.query = "";
     clearSelection();
     await loadEntriesFor(tab);
   }
@@ -1233,6 +1234,7 @@ export const useFilesStore = defineStore("files", () => {
     const tab = activeTab.value;
     tab.path = joinPath(tab.path, name);
     tab.scrollTop = 0;
+    tab.query = "";
     clearSelection();
     await loadEntriesFor(tab);
   }
@@ -1241,12 +1243,57 @@ export const useFilesStore = defineStore("files", () => {
   async function goToPath(next: string): Promise<void> {
     const tab = activeTab.value;
     if (next === tab.path) {
+      // Clicking the current crumb is still a navigation: drop a stale filter
+      // so the folder is shown in full again.
+      tab.query = "";
       return;
     }
     tab.path = next;
     tab.scrollTop = 0;
+    tab.query = "";
     clearSelection();
     await loadEntriesFor(tab);
+  }
+
+  /**
+   * openSymlinkTarget navigates to a symlink's resolved target. Unlike a folder
+   * row, the listing does not say whether the target is itself a directory, so
+   * the target is fetched first and the view is committed only on success: a
+   * target that is a regular file, a broken link or an unreadable folder leaves
+   * the current listing on screen (JUS-132). Returns true when the target is
+   * shown or was already the current folder.
+   */
+  async function openSymlinkTarget(target: string): Promise<boolean> {
+    const tab = activeTab.value;
+    if (!serverId.value || tab.rootName === "" || target === tab.path) {
+      tab.query = "";
+      return true;
+    }
+    const gen = ++tab.generation;
+    tab.loading = true;
+    try {
+      const listing = await listEntries(serverId.value, teamId(), {
+        root: tab.rootName,
+        path: target,
+      });
+      if (gen !== tab.generation) {
+        return true;
+      }
+      tab.path = target;
+      tab.scrollTop = 0;
+      tab.query = "";
+      tab.errorRaw = null;
+      clearSelection();
+      applyListingTo(tab, listing.entries, listing.cursor ?? "", listing.truncated);
+      return true;
+    } catch {
+      // Not a browsable directory: keep the tab where it is.
+      return gen !== tab.generation;
+    } finally {
+      if (gen === tab.generation) {
+        tab.loading = false;
+      }
+    }
   }
 
   /** goUp navigates to the parent directory (no-op at the root). */
@@ -1440,6 +1487,7 @@ export const useFilesStore = defineStore("files", () => {
     setRoot,
     openDirectory,
     goToPath,
+    openSymlinkTarget,
     goUp,
     setSort,
     setViewMode,

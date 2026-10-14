@@ -205,6 +205,96 @@ describe("files store navigation", () => {
     expect(store.entries.map((item) => item.name)).toEqual(["keep.txt"]);
   });
 
+  it("clears the folder filter on every folder change", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+
+    store.setQuery("conf");
+    expect(store.query).toBe("conf");
+
+    await store.openDirectory("config");
+    expect(store.query).toBe("");
+
+    store.setQuery("app");
+    await store.goToPath("");
+    expect(store.query).toBe("");
+
+    store.setQuery("logo");
+    await store.setRoot("compose");
+    expect(store.query).toBe("");
+  });
+
+  it("clears the filter even when navigating to the current path", async () => {
+    const store = useFilesStore();
+    await store.init("server-1");
+    await store.openDirectory("config");
+
+    store.setQuery("app");
+    await store.goToPath("config");
+
+    expect(store.path).toBe("config");
+    expect(store.query).toBe("");
+  });
+
+  describe("openSymlinkTarget", () => {
+    it("opens the resolved target and clears the filter", async () => {
+      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) =>
+        options.path === "usr/bin"
+          ? {
+              entries: [entry({ name: "python3" })],
+              truncated: false,
+              cursor: "",
+            }
+          : listing,
+      );
+
+      const store = useFilesStore();
+      await store.init("server-1");
+      store.setQuery("usr");
+
+      const opened = await store.openSymlinkTarget("usr/bin");
+
+      expect(opened).toBe(true);
+      expect(store.path).toBe("usr/bin");
+      expect(store.query).toBe("");
+      expect(store.entries.map((item) => item.name)).toEqual(["python3"]);
+      expect(store.error).toBeNull();
+    });
+
+    it("keeps the current listing when the target is not a browsable folder", async () => {
+      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+        if (options.path === "conf/app.yaml") {
+          throw { message: "not a directory", status: 400 };
+        }
+        return listing;
+      });
+
+      const store = useFilesStore();
+      await store.init("server-1");
+      await store.openDirectory("conf");
+
+      const opened = await store.openSymlinkTarget("conf/app.yaml");
+
+      expect(opened).toBe(false);
+      expect(store.path).toBe("conf");
+      expect(store.entries.map((item) => item.name)).toHaveLength(4);
+      expect(store.error).toBeNull();
+      expect(store.loading).toBe(false);
+    });
+
+    it("treats the current folder as an already-open target", async () => {
+      const store = useFilesStore();
+      await store.init("server-1");
+      store.setQuery("config");
+
+      const opened = await store.openSymlinkTarget("");
+
+      expect(opened).toBe(true);
+      expect(store.path).toBe("");
+      expect(store.query).toBe("");
+    });
+  });
+
   it("resets the browser on sign-out", async () => {
     const store = useFilesStore();
     await store.init("server-1");

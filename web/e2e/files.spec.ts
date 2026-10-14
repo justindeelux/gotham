@@ -31,6 +31,7 @@ interface WireEntry {
   mode: number;
   modified_at: string;
   etag: string;
+  symlink_target?: string;
 }
 
 interface WireRoot {
@@ -63,8 +64,17 @@ function entry(
   size: number,
   mode: number,
   etag: string,
+  symlinkTarget?: string,
 ): WireEntry {
-  return { name, kind, size, mode, modified_at: "2026-01-02T03:04:05Z", etag };
+  return {
+    name,
+    kind,
+    size,
+    mode,
+    modified_at: "2026-01-02T03:04:05Z",
+    etag,
+    ...(symlinkTarget === undefined ? {} : { symlink_target: symlinkTarget }),
+  };
 }
 
 /** The directory the browse scenario opens. */
@@ -970,5 +980,139 @@ test.describe("files double-click", () => {
     await expect(page.locator(".files-editor")).toHaveCount(0);
     await expect(page.locator(".n-modal")).toHaveCount(0);
     await expect(page.locator(".fm-table").getByText("logo.png")).toBeVisible();
+  });
+});
+
+/**
+ * JUS-132: the folder filter resets on navigation with a filtered footer
+ * count, and a symlink row shows its target and can jump to it.
+ */
+test.describe("files filter and symlink target", () => {
+  test("the folder filter resets on navigation and the footer counts the filtered rows", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => {
+        const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+        return json(
+          route,
+          200,
+          listing(
+            path === "conf"
+              ? [entry("inside.txt", "file", 5, 0o100644, "etag-in")]
+              : [
+                  entry("conf", "directory", 4096, 0o040755, "etag-conf"),
+                  entry("app.yaml", "file", 2048, 0o100644, "etag-yaml"),
+                  entry("logo.png", "file", 1048576, 0o100644, "etag-png"),
+                ],
+          ),
+        );
+      },
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    const search = page.locator(".fm-search input");
+    await search.fill("conf");
+    await expect(page.locator(".fm-foot")).toContainText("1 of 3 entries");
+
+    await page.locator(".fm-label").filter({ hasText: "conf" }).dblclick();
+    await expect(
+      page.locator(".fm-table").getByText("inside.txt"),
+    ).toBeVisible();
+    await expect(search).toHaveValue("");
+    await expect(page.locator(".fm-foot")).toContainText("1 entries");
+  });
+
+  test("a symlink row shows its target and Go to target follows it", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => {
+        const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+        return json(
+          route,
+          200,
+          listing(
+            path === "usr/bin"
+              ? [entry("python3", "file", 9, 0o100755, "etag-py")]
+              : [
+                  entry(
+                    "bin",
+                    "symlink",
+                    7,
+                    0o120777,
+                    "etag-bin",
+                    "usr/bin",
+                  ),
+                ],
+          ),
+        );
+      },
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(
+      page.locator(".fm-table").getByText("Symlink → usr/bin"),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "More actions for bin" }).click();
+    await page.getByRole("menuitem", { name: "Go to target" }).click();
+    await expect(
+      page.locator(".fm-table").getByText("python3", { exact: true }),
+    ).toBeVisible();
+  });
+});
+
+/**
+ * JUS-132: a symlink whose target is a file or a broken link is offered the
+ * action, but a failed open keeps the current listing and warns instead of
+ * replacing the view with an error state. The deliberate 400 makes the browser
+ * log the failed resource, so this scenario whitelists that console line.
+ */
+test.describe("files symlink target failure", () => {
+  test.use({ expectedConsoleErrors: ["Failed to load resource"] });
+
+  test("a non-directory target keeps the view and warns", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) => {
+        const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+        if (path === "usr/bin") {
+          return json(route, 400, { message: "not a directory" });
+        }
+        return json(
+          route,
+          200,
+          listing([entry("bin", "symlink", 7, 0o120777, "etag-bin", "usr/bin")]),
+        );
+      },
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await expect(
+      page.locator(".fm-table").getByText("Symlink → usr/bin"),
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "More actions for bin" }).click();
+    await page.getByRole("menuitem", { name: "Go to target" }).click();
+
+    await expect(page.locator(".n-message")).toContainText(
+      "Could not open the target of bin",
+    );
+    // The listing is unchanged: no error/empty state replaced it.
+    await expect(
+      page.locator(".fm-table").getByText("Symlink → usr/bin"),
+    ).toBeVisible();
+    await expect(page.locator(".fm-state")).toHaveCount(0);
   });
 });

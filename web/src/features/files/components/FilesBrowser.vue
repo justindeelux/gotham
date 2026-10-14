@@ -64,6 +64,7 @@ import {
   isFileDrag,
   isSelectable,
   joinPath,
+  resolveSymlinkTarget,
 } from "@/features/files/utils/files";
 import {
   folderMenuOptions,
@@ -168,7 +169,17 @@ const selection = computed<FilesEntry[]>(() =>
 
 /** footSummary is the "12 entries · 4 folders · 6 files…" footer line. */
 const footSummary = computed<string>(() => {
-  const parts = [t("files.browser.entryCount", { count: files.entries.length })];
+  // While the folder filter is narrowing the list, the leading count reports
+  // "shown of total" so a filtered view never reads as the whole folder.
+  const filtering = files.query.trim() !== "";
+  const parts = [
+    filtering
+      ? t("files.browser.entryCountFiltered", {
+          shown: files.visibleEntries.length,
+          total: files.entries.length,
+        })
+      : t("files.browser.entryCount", { count: files.entries.length }),
+  ];
   const counts = files.counts;
   if (counts.directory > 0) {
     parts.push(t("files.browser.folderCount", { count: counts.directory }));
@@ -229,6 +240,43 @@ function entrySubtitle(entry: FilesEntry): string {
       : typeLabel(entry);
   }
   return typeLabel(entry);
+}
+
+/**
+ * symlinkTargetPath resolves a symlink row's target to the root-relative path
+ * "Go to target" opens ("" is the root's top level), or null when the target
+ * lives outside the browsable root (the action is then hidden). A non-symlink
+ * row resolves to null.
+ */
+function symlinkTargetPath(entry: FilesEntry): string | null {
+  if (entry.kind !== "symlink" || !entry.symlink_target) {
+    return null;
+  }
+  return resolveSymlinkTarget(
+    files.path,
+    entry.name,
+    entry.symlink_target,
+    files.currentRoot?.path ?? "",
+  );
+}
+
+/**
+ * goToSymlinkTarget opens a symlink's resolved target. The listing does not say
+ * whether the target is a directory, so a target that turns out to be a file,
+ * a broken link or an unreadable folder keeps the current view and reports it
+ * with a non-blocking warning rather than replacing the list with an error
+ * (JUS-132).
+ */
+async function goToSymlinkTarget(entry: FilesEntry): Promise<void> {
+  const target = symlinkTargetPath(entry);
+  if (target === null) {
+    return;
+  }
+  if (!(await files.openSymlinkTarget(target))) {
+    message.warning(
+      String(t("files.dialogs.symlinkTargetFailed", { name: entry.name })),
+    );
+  }
 }
 
 /** ariaSort reflects the store's sort for one column header. */
@@ -633,7 +681,11 @@ function rowMenu(entry: FilesEntry): FilesMenuItem[] {
     entry.kind === "directory" &&
     files.hasClipboard &&
     files.pasteProblemAt(joinPath(files.path, entry.name)) === null;
-  return rowMenuOptions(entry, { ...base, canPaste });
+  return rowMenuOptions(entry, {
+    ...base,
+    canPaste,
+    symlinkTargetPath: symlinkTargetPath(entry),
+  });
 }
 
 /** onRowMenu dispatches one row action on the row or the whole selection. */
@@ -648,6 +700,9 @@ function onRowMenu(key: string, entry: FilesEntry): void {
       break;
     case "edit":
       openInEditor(entry);
+      break;
+    case "go-target":
+      void goToSymlinkTarget(entry);
       break;
     case "download":
       void startDownload(entry);
@@ -1267,7 +1322,7 @@ function onFolderMenu(key: string): void {
                 @keydown.enter.prevent="activate(entry)"
               >
                 <b>{{ entry.name }}</b>
-                <span>{{ entrySubtitle(entry) }}</span>
+                <span :title="entrySubtitle(entry)">{{ entrySubtitle(entry) }}</span>
               </button>
             </div>
             <div class="fm-cell" role="cell">{{ typeLabel(entry) }}</div>
@@ -1394,7 +1449,7 @@ function onFolderMenu(key: string): void {
             </span>
             <span class="fm-label">
               <b>{{ entry.name }}</b>
-              <span>{{ typeLabel(entry) }}</span>
+              <span :title="entrySubtitle(entry)">{{ entrySubtitle(entry) }}</span>
             </span>
             <span class="fm-meta">
               <template v-if="entry.kind !== 'directory'">{{ formatBytes(entry.size) }} · </template>{{ formatTimestamp(entry.modified_at) }}
@@ -1825,6 +1880,13 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-head {
+  /* JUS-132: the column header stays pinned to the top of the entry list's
+     scroll region so the active sort column is visible in long folders. The
+     solid surface matches the card, so rows scroll under it cleanly. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.06em;
@@ -1837,6 +1899,12 @@ function onFolderMenu(key: string): void {
 
 .fm-head .right {
   text-align: right;
+}
+
+/* Hovering the pinned header must not reveal the rows scrolling under it:
+   keep the solid card surface instead of the row hover tint. */
+.fm-head:hover {
+  background: var(--surface);
 }
 
 .fm-sort {
@@ -1908,6 +1976,11 @@ function onFolderMenu(key: string): void {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--muted);
+  /* A long symlink target must not wrap or spill the name column (JUS-132);
+     the full text stays reachable through the span's title tooltip. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The row checkbox is revealed on hover / focus / selection. */
@@ -2029,6 +2102,9 @@ function onFolderMenu(key: string): void {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fm-tile .fm-meta {

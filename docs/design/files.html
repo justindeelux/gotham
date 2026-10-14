@@ -104,6 +104,10 @@
                 <svg aria-hidden="true"><use href="#i-search"></use></svg>
                 <input type="search" placeholder="Filter this folder…" aria-label="Filter entries" data-search="[data-tag]" />
               </div>
+              <!-- JUS-132: the filter resets on every folder change (opening a
+                   folder, a crumb, Up, or a root switch) so a stale needle never
+                   hides a newly opened listing; while one is active the footer
+                   reads "N of M entries" instead of the whole-folder total. -->
               <button class="btn btn-sm btn-ghost btn-icon" type="button" data-toast="Reloaded entries from the agent (List).|info" aria-label="Refresh" title="Refresh"><svg aria-hidden="true"><use href="#i-refresh"></use></svg></button>
               <!-- JUS-122: the bin is per root, so it lives on the path bar
                    (not the write-gated toolbar). Any member may browse it;

@@ -55,6 +55,7 @@ const en = {
     clear: "Clear",
     downloadSelected: "Download",
     entryCount: "{count} entries",
+    entryCountFiltered: "{shown} of {total} entries",
     folderCount: "{count} folders",
     fileCount: "{count} files",
     symlinkCount: "{count} symlinks",
@@ -86,6 +87,7 @@ const en = {
     edit: "Edit in editor",
     download: "Download",
     permissions: "Permissions…",
+    goTarget: "Go to target",
     recycleBin: "Recycle bin…",
   },
   tabs: {
@@ -139,6 +141,7 @@ const en = {
     recycleMessage: "Move the selected files to the recycle bin? You can restore them until the bin is emptied.",
     recycleFolderMessage: "Move the selected folders and everything inside them to the recycle bin? You can restore them until the bin is emptied.",
     recycleSymlinkHint: "A symlink is moved into the bin — its target is not removed.",
+    symlinkTargetFailed: "Could not open the target of {name} — it is not a folder inside this root.",
     recycleHint: "Entries move to the recycle bin and stay recoverable until the bin is emptied.",
     recycleConfirm: "Move to recycle bin",
     movedToBin: "{count} moved to the recycle bin.",

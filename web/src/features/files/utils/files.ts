@@ -417,6 +417,66 @@ export function entryMatchesQuery(entry: FilesEntry, query: string): boolean {
   return needle === "" || entry.name.toLowerCase().includes(needle);
 }
 
+/**
+ * resolveSymlinkTarget maps a symlink's raw target onto a root-relative path
+ * the browser can open, so "Go to target" lands on the real directory rather
+ * than re-listing the link. A relative target resolves from the link's own
+ * folder; an absolute target is mapped onto the root's absolute path when it
+ * sits inside it. "" is a valid result: the target is the root's top level
+ * (e.g. a link to ".." or to the root itself). Returns null only when the
+ * target is not inside the browsable root — an empty target, one that climbs
+ * above the root, or an absolute path outside it (or with an unknown root
+ * path) — so the caller hides the action instead of offering a doomed one.
+ */
+export function resolveSymlinkTarget(
+  dir: string,
+  name: string,
+  target: string,
+  rootPath = "",
+): string | null {
+  if (target === "") {
+    return null;
+  }
+  if (target.startsWith("/")) {
+    if (rootPath === "") {
+      return null;
+    }
+    const root = rootPath.replace(/\/+$/, "");
+    const base = root === "" ? "/" : root;
+    if (target === base) {
+      return "";
+    }
+    const prefix = root === "" ? "/" : `${root}/`;
+    if (!target.startsWith(prefix)) {
+      return null;
+    }
+    return resolvePathSegments([], target.slice(prefix.length));
+  }
+  // The link's own folder is where a relative target resolves from.
+  const folder = joinPath(dir, name).split("/");
+  folder.pop();
+  return resolvePathSegments(folder, target);
+}
+
+/** resolvePathSegments applies a target's "." / ".." segments to `base`. */
+function resolvePathSegments(base: string[], target: string): string | null {
+  const parts = [...base];
+  for (const segment of target.split("/")) {
+    if (segment === "" || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (parts.length === 0) {
+        return null;
+      }
+      parts.pop();
+      continue;
+    }
+    parts.push(segment);
+  }
+  return parts.join("/");
+}
+
 /** timestampOf parses modified_at into epoch millis (NaN when unknown). */
 function timestampOf(entry: FilesEntry): number {
   return new Date(entry.modified_at).getTime();

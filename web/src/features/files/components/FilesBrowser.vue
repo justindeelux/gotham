@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import {
-  Archive,
   ArchiveRestore,
   ArrowDown,
   ArrowUp,
@@ -19,7 +18,6 @@ import {
   Pencil,
   Plus,
   RefreshCw,
-  Scissors,
   Search,
   Trash2,
   Upload,
@@ -44,6 +42,7 @@ import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue
 import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog.vue";
 import ExtractDialog from "@/features/files/components/ExtractDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
+import FilesSelectionBar from "@/features/files/components/FilesSelectionBar.vue";
 import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue";
 import RecycleBinDialog from "@/features/files/components/RecycleBinDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
@@ -171,12 +170,7 @@ const selectedRoot = computed<string>({
   set: (value) => void files.setRoot(value ?? ""),
 });
 
-/** hasSelectedFiles gates the bulk download action. */
-const hasSelectedFiles = computed<boolean>(() =>
-  files.selectedEntries.some((entry) => entry.kind === "file"),
-);
-
-/** hasSelection gates the toolbar's bulk actions (JUS-128). */
+/** hasSelection gates the header's bulk bar and its focus hand-off (JUS-128). */
 const hasSelection = computed<boolean>(() => files.selectedNames.length > 0);
 
 /**
@@ -193,11 +187,6 @@ const countReserve = computed<string>(
     `${t("files.browser.selectionCount", { count: files.entries.length })} · ${widestBytesLabel(
       files.entries.reduce((sum, entry) => sum + entry.size, 0),
     )}`,
-);
-
-/** selection is the current selection reduced to writable-safe entries. */
-const selection = computed<FilesEntry[]>(() =>
-  files.selectedEntries.filter(isSelectable),
 );
 
 /** footSummary is the "12 entries · 4 folders · 6 files…" footer line. */
@@ -521,6 +510,13 @@ const headEl = ref<HTMLElement | null>(null);
 const scrollSize = useElementSize(scrollEl);
 // border-box: a revealed row must clear the header's padding and border too.
 const headSize = useElementSize(headEl, undefined, { box: "border-box" });
+/**
+ * scrollerWidthPx is the visible entry-list width, exposed to the sticky bulk
+ * bar as --fm-scroller-w. The bar is constrained to it so, when the table is
+ * wider than the scroller, its actions scroll in their own row instead of
+ * hiding off-screen behind the table scroll (JUS-146).
+ */
+const scrollerWidthPx = computed<string>(() => `${scrollSize.width.value}px`);
 
 // ── Focus retention (JUS-137 review rounds 1-2; JUS-139 roving) ───────────
 // Windowing unmounts off-window rows, which used to drop keyboard focus to
@@ -2379,108 +2375,17 @@ function onFolderMenu(key: string): void {
         <span v-if="files.hasClipboard" class="small muted clipboard-hint">
           {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
         </span>
-
-        <!-- Bulk actions (JUS-128, JUS-134): shown only while entries are
-             selected, so no disabled row is ever visible. They stay mounted
-             and are hidden with visibility — not removed — so the toolbar's
-             height never changes when the first click of a double-click
-             selects a row (JUS-130: selecting must not shift the rows). -->
-        <span class="small muted fm-bulk-count">
-          <!-- Both texts stay mounted in every selection state: the reserve is
-               a hidden sizer, so the cell is always as wide as the wider of
-               reserve and the live summary and the toolbar's row count never
-               depends on the selection (JUS-134/JUS-141). -->
-          <span class="fm-bulk-count-reserve" aria-hidden="true">{{ countReserve }}</span>
-          <span class="fm-bulk-count-live" :class="{ 'is-hidden': !hasSelection }">
-            <template v-if="hasSelection">
-              {{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}
-              · {{ formatBytes(files.selectedBytes) }}
-            </template>
-          </span>
-        </span>
-        <div class="fm-selection-actions" :class="{ 'is-visible': hasSelection }">
-          <NButton
-            size="small"
-            secondary
-            :disabled="!files.canReadContent || !hasSelectedFiles"
-            :title="!files.canReadContent ? $t('files.browser.fileNeedsRole') : (hasSelectedFiles ? $t('files.browser.downloadSelected') : $t('files.dialogs.compressSelect'))"
-            :aria-label="$t('files.browser.downloadSelected')"
-            @click="downloadSelected()"
-          >
-            <template #icon>
-              <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            <span class="fm-btn-label">{{ $t("files.browser.downloadSelected") }}</span>
-          </NButton>
-          <template v-if="files.canWrite">
-            <NButton
-              size="small"
-              secondary
-              :disabled="files.acting || selection.length === 0"
-              :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.copy')"
-              :aria-label="$t('files.actions.copy')"
-              @click="files.copySelection(selection.map((item) => item.name))"
-            >
-              <template #icon>
-                <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              <span class="fm-btn-label">{{ $t("files.actions.copy") }}</span>
-            </NButton>
-            <NButton
-              size="small"
-              secondary
-              :disabled="files.acting || selection.length === 0"
-              :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.cut')"
-              :aria-label="$t('files.actions.cut')"
-              @click="files.cutSelection(selection.map((item) => item.name))"
-            >
-              <template #icon>
-                <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              <span class="fm-btn-label">{{ $t("files.actions.cut") }}</span>
-            </NButton>
-            <NButton
-              size="small"
-              secondary
-              :disabled="files.acting || selection.length === 0"
-              :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('files.actions.compress')"
-              :aria-label="$t('files.actions.compress')"
-              @click="openCompress(selection)"
-            >
-              <template #icon>
-                <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              <span class="fm-btn-label">{{ $t("files.actions.compress") }}</span>
-            </NButton>
-            <NButton
-              size="small"
-              type="error"
-              secondary
-              :disabled="files.acting || selection.length === 0"
-              :title="selection.length === 0 ? $t('files.dialogs.compressSelect') : $t('common.actions.delete')"
-              :aria-label="$t('common.actions.delete')"
-              @click="openDelete(selection)"
-            >
-              <template #icon>
-                <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </template>
-              <span class="fm-btn-label">{{ $t("common.actions.delete") }}</span>
-            </NButton>
-          </template>
-          <NButton
-            :disabled="!hasSelection"
-            size="small"
-            quaternary
-            :title="$t('files.browser.clear')"
-            :aria-label="$t('files.browser.clear')"
-            @click="files.clearSelection()"
-          >
-            <template #icon>
-              <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            <span class="fm-btn-label">{{ $t("files.browser.clear") }}</span>
-          </NButton>
-        </div>
+        <!-- JUS-146: the grid has no column-header row to replace, so its
+             selection bar stays in the toolbar (as before) while the list's
+             lives in the sticky header row. One shared component, two hosts. -->
+        <FilesSelectionBar
+          v-if="files.viewMode === 'grid'"
+          :count-reserve="countReserve"
+          @download="downloadSelected()"
+          @compress="openCompress"
+          @remove="openDelete"
+          @clear="files.clearSelection()"
+        />
       </div>
     </div>
 
@@ -2556,7 +2461,13 @@ function onFolderMenu(key: string): void {
           role="table"
           :aria-rowcount="files.visibleEntries.length + 1"
         >
-          <div ref="headEl" class="fm-row fm-head" role="row" :aria-rowindex="1">
+          <div
+            ref="headEl"
+            class="fm-row fm-head"
+            role="row"
+            :aria-rowindex="1"
+            :style="{ '--fm-scroller-w': scrollerWidthPx }"
+          >
             <span class="fm-select" role="columnheader">
               <NCheckbox
                 size="small"
@@ -2566,37 +2477,70 @@ function onFolderMenu(key: string): void {
                 @update:checked="files.toggleSelectAll()"
               />
             </span>
-            <div class="fm-name" role="columnheader" :aria-sort="ariaSort('name')">
-              <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'name' }" @click="files.setSort('name')">
-                {{ $t("files.browser.columnName") }}
-                <ChevronDown v-if="files.sortKey === 'name'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
-              </button>
+            <!-- JUS-146: the sticky header row swaps between the column
+                 headers and the bulk bar while entries are selected. Both
+                 variants are always mounted and overlap the SAME grid cells
+                 (one row), so the row's height is max(columns, bar) in every
+                 selection state — selecting never reflows the list (JUS-130/
+                 134) and no row is permanently reserved. The variants hide
+                 with visibility, so hidden controls are neither focusable nor
+                 announced; the JUS-140 focus hand-off still finds the focused
+                 bulk control. The leading select-all checkbox stays visible in
+                 both states, so select-all/deselect-all stay reachable; the
+                 sort buttons (and their aria-sort) come back on Clear. -->
+            <div class="fm-head-cols" :class="{ 'is-hidden': hasSelection }">
+              <div class="fm-name" role="columnheader" :aria-sort="ariaSort('name')">
+                <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'name' }" @click="files.setSort('name')">
+                  {{ $t("files.browser.columnName") }}
+                  <ChevronDown v-if="files.sortKey === 'name'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
+                </button>
+              </div>
+              <div class="fm-cell--type" role="columnheader" :aria-sort="ariaSort('kind')">
+                <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'kind' }" @click="files.setSort('kind')">
+                  {{ $t("files.browser.columnType") }}
+                  <ChevronDown v-if="files.sortKey === 'kind'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
+                </button>
+              </div>
+              <div role="columnheader" class="fm-cell--size" :aria-sort="ariaSort('size')">
+                <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'size' }" @click="files.setSort('size')">
+                  {{ $t("files.browser.columnSize") }}
+                  <ChevronDown v-if="files.sortKey === 'size'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
+                </button>
+              </div>
+              <div class="fm-cell--modified" role="columnheader" :aria-sort="ariaSort('modified')">
+                <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'modified' }" @click="files.setSort('modified')">
+                  {{ $t("files.browser.columnModified") }}
+                  <ChevronDown v-if="files.sortKey === 'modified'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
+                </button>
+              </div>
+              <div class="fm-cell--mode" role="columnheader" :aria-sort="ariaSort('mode')">
+                <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'mode' }" @click="files.setSort('mode')">
+                  {{ $t("files.browser.columnMode") }}
+                  <ChevronDown v-if="files.sortKey === 'mode'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
+                </button>
+              </div>
+              <div role="columnheader" class="right fm-actions-cell">{{ $t("files.browser.columnActions") }}</div>
             </div>
-            <div class="fm-cell--type" role="columnheader" :aria-sort="ariaSort('kind')">
-              <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'kind' }" @click="files.setSort('kind')">
-                {{ $t("files.browser.columnType") }}
-                <ChevronDown v-if="files.sortKey === 'kind'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
-              </button>
+
+            <!-- The bulk bar (the former toolbar cluster, JUS-128/134/146):
+                 it replaces the column headers in the same sticky row while
+                 entries are selected. It is always mounted (hidden with
+                 visibility), so the row height stays put and the JUS-141 count
+                 reserve keeps the count cell content-derived. Its count is
+                 announced politely (aria-live). -->
+            <div
+              class="fm-head-bulk"
+              :class="{ 'is-visible': hasSelection }"
+              role="columnheader"
+            >
+              <FilesSelectionBar
+                :count-reserve="countReserve"
+                @download="downloadSelected()"
+                @compress="openCompress"
+                @remove="openDelete"
+                @clear="files.clearSelection()"
+              />
             </div>
-            <div role="columnheader" class="fm-cell--size" :aria-sort="ariaSort('size')">
-              <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'size' }" @click="files.setSort('size')">
-                {{ $t("files.browser.columnSize") }}
-                <ChevronDown v-if="files.sortKey === 'size'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-            </div>
-            <div class="fm-cell--modified" role="columnheader" :aria-sort="ariaSort('modified')">
-              <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'modified' }" @click="files.setSort('modified')">
-                {{ $t("files.browser.columnModified") }}
-                <ChevronDown v-if="files.sortKey === 'modified'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-            </div>
-            <div class="fm-cell--mode" role="columnheader" :aria-sort="ariaSort('mode')">
-              <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'mode' }" @click="files.setSort('mode')">
-                {{ $t("files.browser.columnMode") }}
-                <ChevronDown v-if="files.sortKey === 'mode'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-            </div>
-            <div role="columnheader" class="right fm-actions-cell">{{ $t("files.browser.columnActions") }}</div>
           </div>
 
           <!-- Windowed list (JUS-137): the spacers stand in for the unrendered
@@ -3119,8 +3063,13 @@ function onFolderMenu(key: string): void {
   justify-content: flex-end;
 }
 
+/* The clipboard hint (Paste (N) / Cut clipboard) is its own compact chip so
+   the words never wrap vertically when the toolbar is narrow (JUS-146): it
+   refuses to shrink and never breaks inside a word. */
 .clipboard-hint {
   margin-left: var(--space-1);
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .fm-caret {
@@ -3228,57 +3177,8 @@ function onFolderMenu(key: string): void {
   margin-left: auto;
 }
 
-/* Bulk selection count on the toolbar (JUS-128): the former .fm-bulk bar is
-   gone; the count and its actions live in .fm-toolbar-end. The cell stacks a
-   hidden reserve sizer and the live selection summary in one grid area, so its
-   width is max(reserve, live) in every selection state and the toolbar's row
-   count (and therefore the list's position under a double-click) can never
-   depend on the selection (JUS-134/JUS-141). The reserve is the folder's widest
-   summary, so the cell width still follows the folder content. */
-.fm-bulk-count {
-  display: inline-grid;
-  align-items: center;
-  justify-items: end;
-  /* A constant height, not width: an empty count would collapse and shift the
-     rows. */
-  min-height: 22px;
-  flex: 0 0 auto;
-  white-space: nowrap;
-  /* Equal-width digits, so the reserve sizer and the live summary compare by
-     character count, not by per-glyph advance (JUS-141). */
-  font-variant-numeric: tabular-nums;
-}
-
-/* Both texts share one grid cell and overlap: the cell is as wide as the wider
-   of the two, in both states. */
-.fm-bulk-count > * {
-  grid-area: 1 / 1;
-}
-
-.fm-bulk-count-reserve {
-  visibility: hidden;
-}
-
-.fm-bulk-count-live.is-hidden {
-  visibility: hidden;
-}
-
-/* JUS-134: the bulk actions stay mounted and are hidden with visibility (not
-   display) while nothing is selected — reserving the slot keeps the toolbar
-   height fixed, so the first click of a row double-click can never shift the
-   rows (JUS-130). They are not rendered as a disabled row. */
-.fm-selection-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  visibility: hidden;
-}
-
-.fm-selection-actions.is-visible {
-  visibility: visible;
-}
+/* The count cell and the bulk actions live in FilesSelectionBar (scoped there),
+   because the same cluster is hosted by the list header and the grid toolbar. */
 
 .fm-state {
   /* A state view owns the whole entry area, which is why it scrolls
@@ -3413,14 +3313,81 @@ function onFolderMenu(key: string): void {
   top: 0;
   z-index: 2;
   background: var(--surface);
+  color: var(--muted);
+  border-bottom: 1px solid var(--border-soft);
+  /* JUS-146: the row height is max(column headers, bulk bar). Both variants
+     are always mounted and overlap the same cells, so the height never depends
+     on the selection — no reserved band, no row shift (JUS-130/134). */
+  min-height: var(--fm-row-height);
+  padding-block: 0;
+  align-items: center;
+}
+
+/* JUS-146: the column-header variant occupies columns 2-7 (the leading
+   select-all checkbox cell, column 1, stays visible in both states). The bulk
+   bar below reuses exactly the same cells, so the two overlap and the row
+   keeps one constant height. */
+.fm-head-cols {
+  grid-column: 2 / -1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: minmax(240px, 1.6fr) 118px 96px 148px 84px 168px;
+  gap: var(--space-3);
+  align-items: center;
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border-soft);
-  min-height: 34px;
-  padding-block: var(--space-2);
+}
+
+.fm-head-cols.is-hidden {
+  visibility: hidden;
+}
+
+/* JUS-145/146: mirror the compact row grid inside the column-header variant so
+   the header columns line up with the rows at ≤860px (Type/Modified/Mode are
+   hidden there; the name/size/actions tracks match .fm-row). */
+@media (max-width: 860px) {
+  .fm-head-cols {
+    grid-template-columns: minmax(0, 1fr) 64px 64px;
+    gap: var(--space-2);
+  }
+}
+
+/* JUS-146: the bulk bar (count + bulk actions) replaces the column headers in
+   the same sticky row while entries are selected. Its controls self-hide with
+   visibility, so the row keeps the same height and the hidden controls are
+   neither focusable nor announced. */
+.fm-head-bulk {
+  grid-column: 2 / -1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  /* The bar overlaps the column headers (same cells), so while nothing is
+     selected it is transparent and must not intercept their clicks. */
+  pointer-events: none;
+}
+
+.fm-head-bulk.is-visible {
+  pointer-events: auto;
+  background: var(--surface);
+}
+
+/* JUS-146: above the compact breakpoint the desktop table can be wider than the
+   scroller, so the bar is pinned to the scroller's left edge and constrained to
+   the VISIBLE scroller width (--fm-scroller-w) — its actions then scroll in
+   their OWN row instead of hiding off-screen behind the table scroll. Below 861px
+   the table fits (min-width: 0) so the bar just fills its cell. 58px = the
+   header inline padding + the select-all cell + the grid gap. */
+@media (min-width: 861px) {
+  .fm-head-bulk {
+    position: sticky;
+    left: calc(var(--space-3) + 34px + var(--space-3));
+    justify-self: start;
+    width: calc(var(--fm-scroller-w, 100%) - var(--space-3) - 34px - var(--space-3));
+  }
 }
 
 .fm-head .right {
@@ -3875,34 +3842,12 @@ function onFolderMenu(key: string): void {
     margin-left: 0;
   }
 
-  /* Row 3: the selection cluster, full width. */
+  /* Row 3: the clipboard (Paste + its nowrap hint chip). The bulk actions
+     moved into the header bar (JUS-146), so nothing competes for this row. */
   .fm-toolbar-end {
     flex: 1 1 100%;
     justify-content: flex-start;
     flex-wrap: nowrap;
-  }
-
-  .fm-bulk-count {
-    min-width: 0;
-    /* Keep the count at its natural width; the scrolling action row absorbs
-       the shrink instead of clipping the count text (JUS-135). */
-    flex: 0 0 auto;
-  }
-
-  .fm-selection-actions {
-    flex: 1 1 auto;
-    min-width: 0;
-    flex-wrap: nowrap;
-    justify-content: flex-start;
-    overflow-x: auto;
-    scrollbar-width: thin;
-  }
-
-  /* Every selection action is a 44px touch target on a phone (the row
-     scrolls, so the larger targets never squeeze the toolbar). */
-  .fm-selection-actions :deep(.n-button) {
-    min-width: 44px;
-    height: 44px;
   }
 
   /* Compact phone footer: the entry summary is the useful line; the path and

@@ -147,24 +147,35 @@
    overflow the toolbar at narrow widths (JUS-128). */
 .fm-toolbar-group { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
 .fm-toolbar-end { margin-left: auto; justify-content: flex-end; }
-/* JUS-128/141: selection count shown with the toolbar's bulk actions. Its width
-   follows the count text; the reserved action slot beside it (below) holds the
-   toolbar's layout steady across a selection (JUS-134). */
-.fm-bulk-count { white-space: nowrap; text-align: right; }
-/* JUS-134: the bulk actions slot — shown only with a selection in the app,
-   where it is reserved (visibility, not display) so selecting a row never
-   shifts the toolbar and the list (JUS-130). */
-.fm-selection-actions { display: inline-flex; align-items: center; gap: var(--space-2); }
+/* JUS-146: the clipboard hint is its own compact chip so its words never wrap
+   vertically next to the bulk actions. */
+.clipboard-hint { flex: 0 0 auto; white-space: nowrap; }
+/* JUS-141/146: the selection count lives in the header's bulk bar; its width
+   follows the count text (a hidden reserve sizer keeps it stable). */
+.fm-bulk-count { white-space: nowrap; text-align: left; }
+/* JUS-134/146: the bulk actions replace the column headers in the sticky header
+   row while a selection exists; they are hidden (visibility, not display) when
+   nothing is selected, so the row height never changes and the list never
+   shifts (JUS-130). They never wrap — the row scrolls instead. */
+.fm-selection-actions { display: inline-flex; align-items: center; gap: var(--space-2); flex-wrap: nowrap; overflow-x: auto; }
 .fm-selection-actions:not(.is-visible) { visibility: hidden; }
+/* JUS-146: the column-header variant and the bulk bar overlap the same header
+   row (columns 2-7; the leading select-all checkbox is column 1), so the row's
+   height is max(columns, bar) in every selection state. */
+.fm-head { align-items: center; }
+.fm-head-cols { grid-column: 2 / -1; grid-row: 1; display: grid; grid-template-columns: minmax(240px, 1.6fr) 118px 96px 148px 84px 168px; gap: var(--space-3); align-items: center; }
+.fm-head-cols.is-hidden { visibility: hidden; }
+.fm-head-bulk { grid-column: 2 / -1; grid-row: 1; display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.fm-head-bulk:not(.is-visible) { pointer-events: none; }
 .fm-caret { width: 12px; height: 12px; color: var(--muted); }
 @media (max-width: 640px) {
   .fm-toolbar .fm-btn-label { display: none; }
-  /* JUS-135: the phone toolbar must not eat the list. Row 1 keeps the
+  /* JUS-135/146: the phone toolbar must not eat the list. Row 1 keeps the
      create/upload group and the (scrolling) breadcrumb; row 2 the filter and
-     the per-root tools; row 3 the selection cluster on its own full-width row
-     that never wraps and scrolls horizontally with 44px touch targets, so
-     every action stays reachable and the list keeps >=60% of the viewport
-     with a selection active. */
+     the per-root tools; row 3 the clipboard (Paste + its nowrap hint chip).
+     The bulk actions live in the header bar (JUS-146), whose own row scrolls
+     with 44px touch targets, so every action stays reachable and the list
+     keeps >=60% of the viewport with a selection active. */
   .fm-toolbar { row-gap: var(--space-2); margin-bottom: var(--space-2); }
   /* The card heading is redundant on a phone: keeping it forces the
      node/root/view controls onto a second row (JUS-135). The field captions
@@ -175,7 +186,6 @@
   .fm-path { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; }
   .fm-toolbar .search { max-width: none; margin-left: 0; flex: 1 1 120px; }
   .fm-toolbar-end { margin-left: 0; flex: 1 1 100%; justify-content: flex-start; flex-wrap: nowrap; }
-  .fm-bulk-count { min-width: 0; text-align: left; flex: 0 0 auto; }
   .fm-selection-actions { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; }
   .fm-selection-actions .btn { min-width: 44px; }
   .fm-foot .fm-foot-path, .fm-foot .fm-foot-free { display: none; }

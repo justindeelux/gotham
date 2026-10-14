@@ -123,26 +123,13 @@
                    menu; it mirrors the active column + direction. -->
               <button class="btn btn-sm btn-outline" type="button" data-toast="Sorted by Size — ascending.|info" aria-haspopup="menu" aria-expanded="false" aria-label="Sort: Size — Ascending" title="Sort: Size — Ascending"><svg aria-hidden="true"><use href="#i-sort"></use></svg><span class="fm-btn-label">Size</span></button>
               <div class="fm-toolbar-group fm-toolbar-end">
-                <!-- JUS-117: copy/cut land on a clipboard and Paste applies it
-                     into the current folder. The button only appears while the
-                     clipboard holds entries; the hint names the pending mode. -->
+                <!-- JUS-117/146: copy/cut land on a clipboard and Paste applies
+                     it into the current folder. The button only appears while
+                     the clipboard holds entries; the hint is a compact,
+                     non-wrapping chip on its own (JUS-146) so it never wraps
+                     into stacked words next to the bulk actions. -->
                 <button class="btn btn-sm btn-outline" type="button" data-toast="Pasted 2 items into this folder.|success" aria-label="Paste (2)" title="Paste"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Paste (2)</span></button>
-                <span class="small muted">Cut clipboard</span>
-                <!-- JUS-128/134: the selection count and every bulk action show
-                     only while entries are selected (the mockup shows 2
-                     selected). In the app the slot is reserved (visibility,
-                     not display) so the first click of a double-click selecting
-                     a row never shifts the list (JUS-130). Labels collapse to
-                     icon-only <=640px, each keeping a title + aria-label. -->
-                <span class="small muted fm-bulk-count">2 selected · 1.4 MiB</span>
-                <span class="fm-selection-actions is-visible">
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Preparing a single-use download ticket for 2 items…|info" aria-label="Download" title="Download"><svg aria-hidden="true"><use href="#i-download"></use></svg><span class="fm-btn-label">Download</span></button>
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Copied 2 items to the clipboard.|success" aria-label="Copy" title="Copy"><svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="fm-btn-label">Copy</span></button>
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Cut 2 items to the clipboard.|success" aria-label="Cut" title="Cut"><svg aria-hidden="true"><use href="#i-cut"></use></svg><span class="fm-btn-label">Cut</span></button>
-                <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress" aria-label="Compress…" title="Compress…"><svg aria-hidden="true"><use href="#i-archive"></use></svg><span class="fm-btn-label">Compress…</span></button>
-                <button class="btn btn-sm btn-danger-ghost" type="button" data-confirm="Move the 2 selected entries? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete 2 entries" data-confirm-label="Move to recycle bin" aria-label="Delete" title="Delete"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Delete</span></button>
-                <button class="btn btn-sm btn-ghost" type="button" data-toast="Selection cleared.|info" aria-label="Clear" title="Clear"><svg aria-hidden="true"><use href="#i-x"></use></svg><span class="fm-btn-label">Clear</span></button>
-                </span>
+                <span class="clipboard-hint small muted">Cut clipboard</span>
               </div>
             </div>
 
@@ -157,16 +144,38 @@
                  behaviour, every row rendered). -->
             <div class="table-wrap">
               <div class="fm-table" role="table">
+                <!-- JUS-146: the sticky header row swaps between the column
+                     headers and the bulk bar while entries are selected. Both
+                     occupy the SAME row and height, so nothing is permanently
+                     reserved (no blank band with nothing selected) and the list
+                     never shifts on select/clear (JUS-130/134). The leading
+                     select-all checkbox stays visible in both states; the sort
+                     buttons (and their aria-sort) come back on Clear. This
+                     mockup shows the SELECTED state (2 selected): the columns
+                     are hidden and the bar takes their place. -->
                 <div class="fm-row fm-head" role="row">
                   <span class="fm-select" role="columnheader"><label class="check"><input type="checkbox" aria-label="Select all entries" /></label></span>
-                  <div class="fm-name" role="columnheader" aria-sort="ascending">
-                    <button class="fm-sort is-active" type="button">Name <svg aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
+                  <div class="fm-head-cols is-hidden">
+                    <div class="fm-name" role="columnheader" aria-sort="ascending">
+                      <button class="fm-sort is-active" type="button">Name <svg aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
+                    </div>
+                    <div role="columnheader">Type</div>
+                    <div role="columnheader" class="fm-cell--size">Size</div>
+                    <div role="columnheader" aria-sort="none"><button class="fm-sort" type="button">Modified <svg aria-hidden="true"><use href="#i-chevron-down"></use></svg></button></div>
+                    <div role="columnheader">Mode</div>
+                    <div role="columnheader" class="right">Actions</div>
                   </div>
-                  <div role="columnheader">Type</div>
-                  <div role="columnheader" class="fm-cell--size">Size</div>
-                  <div role="columnheader" aria-sort="none"><button class="fm-sort" type="button">Modified <svg aria-hidden="true"><use href="#i-chevron-down"></use></svg></button></div>
-                  <div role="columnheader">Mode</div>
-                  <div role="columnheader" class="right">Actions</div>
+                  <div class="fm-head-bulk is-visible" role="columnheader">
+                    <span class="small muted fm-bulk-count">2 selected · 1.4 MiB</span>
+                    <span class="fm-selection-actions is-visible">
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Preparing a single-use download ticket for 2 items…|info" aria-label="Download" title="Download"><svg aria-hidden="true"><use href="#i-download"></use></svg><span class="fm-btn-label">Download</span></button>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Copied 2 items to the clipboard.|success" aria-label="Copy" title="Copy"><svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="fm-btn-label">Copy</span></button>
+                    <button class="btn btn-sm btn-outline" type="button" data-toast="Cut 2 items to the clipboard.|success" aria-label="Cut" title="Cut"><svg aria-hidden="true"><use href="#i-cut"></use></svg><span class="fm-btn-label">Cut</span></button>
+                    <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress" aria-label="Compress…" title="Compress…"><svg aria-hidden="true"><use href="#i-archive"></use></svg><span class="fm-btn-label">Compress…</span></button>
+                    <button class="btn btn-sm btn-danger-ghost" type="button" data-confirm="Move the 2 selected entries? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete 2 entries" data-confirm-label="Move to recycle bin" aria-label="Delete" title="Delete"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Delete</span></button>
+                    <button class="btn btn-sm btn-ghost" type="button" data-toast="Selection cleared.|info" aria-label="Clear" title="Clear"><svg aria-hidden="true"><use href="#i-x"></use></svg><span class="fm-btn-label">Clear</span></button>
+                    </span>
+                  </div>
                 </div>
 
                 <!-- Row actions (JUS-133): the inline actions reveal on row

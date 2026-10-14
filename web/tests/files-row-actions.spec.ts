@@ -282,9 +282,10 @@ test.describe("icon-only controls are accessible", () => {
   }) => {
     await openFiles(page);
     // Select the whole listing so every bulk action renders (enabled), then
-    // shrink to the icon-only toolbar layout.
+    // shrink to the icon-only layout. The bulk actions live in the header bar
+    // (JUS-146), so scope the lookup to the whole browser panel.
     await page.locator(".fm-head .n-checkbox").click();
-    const toolbar = page.locator(".fm-toolbar");
+    const toolbar = page.locator(".files-browser");
 
     // Row actions are always icon-only; each pairs an accessible name with a
     // tooltip.
@@ -410,7 +411,7 @@ test.describe("icon-only controls are accessible", () => {
       "Bỏ chọn",
     ]) {
       const button = page
-        .locator(".fm-toolbar")
+        .locator(".files-browser")
         .getByRole("button", { name, exact: true });
       await expect(button, name).toHaveAttribute("aria-label", name);
       await expect(button, name).toHaveAttribute("title", name);
@@ -717,9 +718,21 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expect(page.getByRole("menu")).toHaveCount(0);
     await page.locator(".fm-search input").fill("");
 
-    // The context menu closes on a sort change too (Space really sorts).
+    // JUS-146: a right-click selects the row, so the sticky header row becomes
+    // the bulk bar and the sort headers are replaced while a selection exists.
+    // Closing the menu (Escape) then Clear bring the sort headers back, and a
+    // sort change still closes any stale context menu through the same
+    // layout-change watcher.
     await rowFor(page, "app.yaml").click({ button: "right" });
     await expect(menuFor(page, "app.yaml")).toBeVisible();
+    await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "hidden");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await page
+      .locator(".fm-selection-actions")
+      .getByRole("button", { name: "Clear", exact: true })
+      .click();
+    await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "visible");
     await page.getByRole("button", { name: "Size", exact: true }).focus();
     await page.keyboard.press(" ");
     await expect(page.locator(".fm-head .fm-cell--size")).toHaveAttribute(

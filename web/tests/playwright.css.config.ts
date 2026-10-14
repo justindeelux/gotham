@@ -15,6 +15,7 @@ export default defineConfig({
     "files-recycle-bin.spec.ts",
     "files-row-actions.spec.ts",
     "files-tabs.spec.ts",
+    "files-virtual.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",
     "git-connect-modals-layout.spec.ts",

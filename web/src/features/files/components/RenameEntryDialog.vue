@@ -21,6 +21,8 @@ interface Props {
 const props = defineProps<Props>();
 const emit = defineEmits<{
   "update:show": [value: boolean];
+  /** renamed reports the entry's new name so the browser can reveal it. */
+  renamed: [name: string];
 }>();
 
 const { t } = useI18n();
@@ -73,6 +75,7 @@ async function submit(): Promise<void> {
         t("files.dialogs.renamed", { name: normalizeEntryName(name.value) }),
       ),
     );
+    emit("renamed", normalizeEntryName(name.value));
     emit("update:show", false);
   } catch (err) {
     message.error(describeFilesError(err));

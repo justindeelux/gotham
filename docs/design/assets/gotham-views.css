@@ -296,6 +296,17 @@
 .fm-row:hover .fm-actions .fm-action,
 .fm-row:focus-within .fm-actions .fm-action,
 .fm-row.is-selected .fm-actions .fm-action { opacity: 1; }
+/* JUS-145: the action cell is pinned to the right of the list's scrollport, so
+   the ⋮ stays reachable at every width where the table overflows horizontally.
+   The background is opaque (surface + the translucent row tint composited on
+   top) so the columns scrolling under it never show through. */
+.fm-row > .fm-actions, .fm-head .right {
+  position: sticky; right: 0; z-index: 1;
+  background-color: var(--surface); box-shadow: -1px 0 0 var(--border);
+}
+.fm-row:hover > .fm-actions { background-image: linear-gradient(var(--hover-row), var(--hover-row)); }
+.fm-row.is-selected > .fm-actions { background-image: linear-gradient(var(--accent-soft), var(--accent-soft)); }
+.fm-row.is-selected:hover > .fm-actions { background-image: linear-gradient(var(--accent-softer), var(--accent-softer)); }
 /* Touch devices have no hover → reveal the inline actions too. */
 @media (hover: none) {
   .fm-actions .fm-action, .fm-select { opacity: 1; }
@@ -323,6 +334,12 @@
   position: absolute; right: 6px; top: 6px; padding: 2px;
   background: var(--float); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
+/* JUS-145: the tile ⋮ menu trigger — a sibling of the tile button, top-right;
+   the selection checkbox shifts left of it so both stay tappable. Bare (no
+   chip surface), matching the app's quaternary icon button. */
+.fm-tile-actions {
+  position: absolute; right: 6px; top: 6px; z-index: 3;
+}
 .fm-tile .fm-meta { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
 /* Grid selection: the checkbox is a sibling of the tile button (never nested
    in it) in the top-right corner. Hidden by opacity — not display/visibility —
@@ -331,7 +348,7 @@
 .fm-tile-wrap .fm-tile { flex: 1 1 auto; width: 100%; }
 .fm-tile .row.between { padding-right: 26px; }
 .fm-tile-check {
-  position: absolute; top: 6px; right: 6px; z-index: 2;
+  position: absolute; top: 6px; right: 42px; z-index: 2;
   display: grid; place-items: center; width: 24px; height: 24px;
   border-radius: var(--radius-sm); background: var(--float); border: 1px solid var(--border);
   opacity: 0; pointer-events: none; transition: opacity var(--motion-fast) linear;
@@ -341,6 +358,26 @@
 .fm-tile-wrap:focus-within .fm-tile-check,
 .fm-tile-wrap:has(input:checked) .fm-tile-check { opacity: 1; pointer-events: auto; }
 .fm-tile-wrap:has(input:checked) .fm-tile { border-color: var(--accent); background: var(--accent-soft); }
+/* JUS-145: the pinned actions cell (above) keeps the ⋮ reachable at every
+   overflow width; this compact block is a density optimisation for phone /
+   tablet widths — the low-value columns collapse so Name + Size + ⋮ fit and the
+   listing needs no sideways scroll at all (390/768). The app hides the same
+   columns by their fm-cell--type / --modified / --mode classes. */
+@media (max-width: 860px) {
+  .fm-table { min-width: 0; }
+  .fm-row { grid-template-columns: 30px minmax(0, 1fr) 64px 64px; gap: var(--space-2); }
+  .fm-row > :nth-child(3),
+  .fm-row > :nth-child(5),
+  .fm-row > :nth-child(6) { display: none; }
+  .fm-actions .fm-action { display: none; }
+}
+/* JUS-145: a phone or any coarse pointer gets a 44px ⋮ and a taller row so a
+   windowed row still fits the target; the tile checkbox clears the trigger. */
+@media (max-width: 640px), (hover: none) {
+  .fm-row { min-height: 52px; }
+  .fm-actions .btn, .fm-tile-actions .btn { min-width: 44px; height: 44px; }
+  .fm-tile-check { right: 56px; }
+}
 /* Thanh trạng thái dưới cùng */
 .fm-foot {
   display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap;

@@ -2,7 +2,9 @@
 import {
   Archive,
   ArchiveRestore,
+  ArrowDown,
   ArrowUp,
+  Check,
   ChevronDown,
   ChevronRight,
   CircleAlert,
@@ -33,7 +35,7 @@ import {
   NSelect,
   useMessage,
 } from "naive-ui";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import ConflictDialog from "@/features/files/components/ConflictDialog.vue";
@@ -53,7 +55,7 @@ import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
 import type { FilesTab } from "@/features/files/stores/files";
 import { useTrashStore } from "@/features/files/stores/trash";
-import type { NameKind, TransferProblem } from "@/features/files/utils/files";
+import type { FilesSortKey, NameKind, TransferProblem } from "@/features/files/utils/files";
 import {
   disambiguatedTabLabels,
   entryAction,
@@ -84,6 +86,7 @@ import {
   windowRange,
 } from "@/features/files/utils/virtual";
 import { useTeamsStore } from "@/features/teams";
+import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
 
 interface Props {
@@ -383,7 +386,7 @@ function activate(entry: FilesEntry): void {
 function isRowControl(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
-    target.closest(".fm-select, .fm-actions, .fm-tile-check") !== null
+    target.closest(".fm-select, .fm-actions, .fm-tile-check, .fm-tile-actions") !== null
   );
 }
 
@@ -1591,6 +1594,102 @@ function onNewMenu(key: string): void {
   openCreate(key === "directory" ? "directory" : "file");
 }
 
+/**
+ * JUS-145: the list headers carry the sort controls, but the compact layout
+ * hides the Type / Modified / Mode headers — and the grid has no headers at
+ * all — so this toolbar control keeps every column sortable there. It is shown
+ * only when the headers are hidden and mirrors the active column + direction.
+ */
+const sortMenuOpen = ref(false);
+const isCompactList = useMediaQuery("(max-width: 860px)");
+const showSortControl = computed<boolean>(
+  () => isCompactList.value || files.viewMode === "grid",
+);
+
+/** sortColumnLabel maps a sort key to its column header copy. */
+function sortColumnLabel(key: FilesSortKey): string {
+  switch (key) {
+    case "name":
+      return String(t("files.browser.columnName"));
+    case "size":
+      return String(t("files.browser.columnSize"));
+    case "kind":
+      return String(t("files.browser.columnType"));
+    case "modified":
+      return String(t("files.browser.columnModified"));
+    case "mode":
+      return String(t("files.browser.columnMode"));
+  }
+}
+
+/** sortDirection is the localized active sort direction. */
+const sortDirection = computed<string>(() =>
+  String(
+    t(
+      files.sortDir === "asc"
+        ? "files.browser.sortAscending"
+        : "files.browser.sortDescending",
+    ),
+  ),
+);
+
+/** sortLabel mirrors the active sort in the control's visible + accessible name. */
+const sortLabel = computed<string>(
+  () =>
+    `${t("files.browser.sortBy")}: ${sortColumnLabel(files.sortKey)} — ${sortDirection.value}`,
+);
+
+/**
+ * sortMenuOptions lists the five sortable columns plus both directions, with
+ * the active column and direction checked. Choosing a different column goes
+ * through the store's setSort (which resets the range anchor); re-choosing the
+ * active column is a no-op so the direction only changes from a direction item.
+ */
+const sortMenuOptions = computed(() => {
+  const check = (): ReturnType<typeof h> => h(Check, { size: 14, "aria-hidden": "true" });
+  return [
+    ...(["name", "size", "kind", "modified", "mode"] as FilesSortKey[]).map(
+      (key) => ({
+        label: sortColumnLabel(key),
+        key: `key:${key}`,
+        icon: key === files.sortKey ? check : undefined,
+        props: { role: "menuitem" },
+      }),
+    ),
+    { type: "divider" as const, key: "divider" },
+    {
+      label: String(t("files.browser.sortAscending")),
+      key: "dir:asc",
+      icon: files.sortDir === "asc" ? check : undefined,
+      props: { role: "menuitem" },
+    },
+    {
+      label: String(t("files.browser.sortDescending")),
+      key: "dir:desc",
+      icon: files.sortDir === "desc" ? check : undefined,
+      props: { role: "menuitem" },
+    },
+  ];
+});
+
+/** onSortMenu applies a sort-menu choice (a column, or a direction). */
+function onSortMenu(key: string): void {
+  if (key === "dir:asc") {
+    files.sortDir = "asc";
+    return;
+  }
+  if (key === "dir:desc") {
+    files.sortDir = "desc";
+    return;
+  }
+  if (key.startsWith("key:")) {
+    const next = key.slice(4) as FilesSortKey;
+    if (next !== files.sortKey) {
+      files.setSort(next);
+    }
+  }
+}
+
 function openRename(entry: FilesEntry): void {
   if (blockedByDirty([entry.name])) {
     return;
@@ -2228,6 +2327,38 @@ function onFolderMenu(key: string): void {
         <span class="fm-btn-label">{{ $t("files.browser.recycleBin") }}</span>
       </NButton>
 
+      <!-- JUS-145: compact sort control. The list's Type / Modified / Mode
+           headers are hidden at compact widths, and the grid has no headers at
+           all, so this keeps every column sortable there and mirrors the active
+           column + direction. -->
+      <NDropdown
+        v-if="showSortControl"
+        v-model:show="sortMenuOpen"
+        trigger="click"
+        placement="bottom-end"
+        :options="sortMenuOptions"
+        :menu-props="() => ({
+          role: 'menu',
+          'aria-label': $t('files.browser.sortBy'),
+        })"
+        @select="onSortMenu"
+      >
+        <NButton
+          size="small"
+          secondary
+          aria-haspopup="menu"
+          :aria-expanded="sortMenuOpen"
+          :title="sortLabel"
+          :aria-label="sortLabel"
+        >
+          <template #icon>
+            <ArrowUp v-if="files.sortDir === 'asc'" :size="14" :stroke-width="1.8" aria-hidden="true" />
+            <ArrowDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ sortColumnLabel(files.sortKey) }}</span>
+        </NButton>
+      </NDropdown>
+
       <div class="fm-toolbar-group fm-toolbar-end">
         <NButton
           v-if="files.hasClipboard"
@@ -2441,7 +2572,7 @@ function onFolderMenu(key: string): void {
                 <ChevronDown v-if="files.sortKey === 'name'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </div>
-            <div role="columnheader" :aria-sort="ariaSort('kind')">
+            <div class="fm-cell--type" role="columnheader" :aria-sort="ariaSort('kind')">
               <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'kind' }" @click="files.setSort('kind')">
                 {{ $t("files.browser.columnType") }}
                 <ChevronDown v-if="files.sortKey === 'kind'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
@@ -2453,19 +2584,19 @@ function onFolderMenu(key: string): void {
                 <ChevronDown v-if="files.sortKey === 'size'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </div>
-            <div role="columnheader" :aria-sort="ariaSort('modified')">
+            <div class="fm-cell--modified" role="columnheader" :aria-sort="ariaSort('modified')">
               <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'modified' }" @click="files.setSort('modified')">
                 {{ $t("files.browser.columnModified") }}
                 <ChevronDown v-if="files.sortKey === 'modified'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </div>
-            <div role="columnheader" :aria-sort="ariaSort('mode')">
+            <div class="fm-cell--mode" role="columnheader" :aria-sort="ariaSort('mode')">
               <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'mode' }" @click="files.setSort('mode')">
                 {{ $t("files.browser.columnMode") }}
                 <ChevronDown v-if="files.sortKey === 'mode'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
               </button>
             </div>
-            <div role="columnheader" class="right">{{ $t("files.browser.columnActions") }}</div>
+            <div role="columnheader" class="right fm-actions-cell">{{ $t("files.browser.columnActions") }}</div>
           </div>
 
           <!-- Windowed list (JUS-137): the spacers stand in for the unrendered
@@ -2515,11 +2646,15 @@ function onFolderMenu(key: string): void {
                   {{ entryTarget(entry) }}
                 </span>
               </button>
+              <!-- JUS-145: the compact layout hides the Modified column, so the
+                   relative modified time rides under the name there (the
+                   absolute time stays in the roving row's description). -->
+              <span class="fm-row-sub">{{ modifiedLabel(entry) }}</span>
             </div>
-            <div class="fm-cell" role="cell">{{ typeLabel(entry) }}</div>
+            <div class="fm-cell fm-cell--type" role="cell">{{ typeLabel(entry) }}</div>
             <div class="fm-cell fm-cell--size" role="cell">{{ entry.kind === "directory" ? "—" : formatBytes(entry.size) }}</div>
-            <div class="fm-cell fm-date" role="cell" :title="formatTimestamp(entry.modified_at)">{{ modifiedLabel(entry) }}</div>
-            <div class="fm-cell fm-mode" role="cell" :title="formatMode(entry.mode)">{{ formatOctalModeFull(entry.mode) }}</div>
+            <div class="fm-cell fm-date fm-cell--modified" role="cell" :title="formatTimestamp(entry.modified_at)">{{ modifiedLabel(entry) }}</div>
+            <div class="fm-cell fm-mode fm-cell--mode" role="cell" :title="formatMode(entry.mode)">{{ formatOctalModeFull(entry.mode) }}</div>
             <div class="fm-actions" role="cell">
               <!-- The inline actions (.fm-action) stay hover/focus-revealed on
                    pointer devices; the ⋮ menu button below stays visible
@@ -2698,6 +2833,37 @@ function onFolderMenu(key: string): void {
               <template v-if="entry.kind !== 'directory'">{{ formatBytes(entry.size) }} · </template>{{ formatTimestamp(entry.modified_at) }}
             </span>
           </button>
+          <!-- JUS-145: the tile's ⋮ row menu — the same trigger contract as the
+               list (aria-haspopup/expanded, one open at a time, closes on a
+               layout change), as a sibling of the tile button (never nested
+               inside it) so a tap opens the menu without a hover. -->
+          <div v-if="rowMenu(entry).length > 0" class="fm-tile-actions">
+            <NDropdown
+              :key="`${layoutKey}:${entry.name}`"
+              trigger="click"
+              placement="bottom-end"
+              :options="rowMenu(entry)"
+              :menu-props="() => ({
+                role: 'menu',
+                'aria-label': $t('files.browser.moreActions', { name: entry.name }),
+              })"
+              @update:show="(show: boolean) => onRowMenuShow(entry.name, show)"
+              @select="(key: string) => onRowMenu(key, entry)"
+            >
+              <NButton
+                size="small"
+                quaternary
+                aria-haspopup="menu"
+                :aria-expanded="isRowMenuOpen(entry)"
+                :title="$t('files.browser.moreActions', { name: entry.name })"
+                :aria-label="$t('files.browser.moreActions', { name: entry.name })"
+              >
+                <template #icon>
+                  <MoreVertical :size="16" :stroke-width="1.8" aria-hidden="true" />
+                </template>
+              </NButton>
+            </NDropdown>
+          </div>
         </div>
         <div
           v-if="gridSpacerBottom > 0"
@@ -3221,10 +3387,13 @@ function onFolderMenu(key: string): void {
 }
 
 /* JUS-137: a windowed row takes exactly the token height so the fixed-size
-   window maths never drifts (the un-windowed list keeps its min-height). */
+   window maths never drifts (the un-windowed list keeps its min-height).
+   JUS-145: `overflow: clip`, not `hidden` — `hidden` would make the row (not
+   `.table-wrap`) the scroll container, so the pinned actions cell could not
+   stay pinned inside a windowed row. `clip` still clips to the exact height. */
 .fm-table.is-virtual .fm-row:not(.fm-head) {
   height: var(--fm-row-height);
-  overflow: hidden;
+  overflow: clip;
 }
 
 /* The pinned row (focus/menu holder) is rendered outside the flow window but at
@@ -3348,6 +3517,12 @@ function onFolderMenu(key: string): void {
   white-space: nowrap;
 }
 
+/* JUS-145: the compact row's secondary modified line. Hidden on the desktop
+   layout, where the Modified column shows it. */
+.fm-row-sub {
+  display: none;
+}
+
 /* The row checkbox is revealed on hover / focus / selection. */
 .fm-select {
   display: flex;
@@ -3388,6 +3563,35 @@ function onFolderMenu(key: string): void {
   align-items: center;
   gap: 2px;
   justify-content: flex-end;
+}
+
+/* JUS-145: the action cell (the ⋮ and its inline buttons) is pinned to the
+   right edge of the list's scrollport, so the row menu is reachable at EVERY
+   width where the desktop table overflows horizontally — the row's track
+   min-content is ~984px, far above the compact breakpoint the columns collapse
+   at. The background is OPAQUE: the card surface plus the row-state tint
+   composited on top (the tokens are translucent), so the columns scrolling
+   under the pinned cell never show through; the hairline marks the pinned
+   edge. */
+.fm-row > .fm-actions,
+.fm-head .fm-actions-cell {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background-color: var(--surface);
+  box-shadow: -1px 0 0 var(--border);
+}
+
+.fm-row:hover > .fm-actions {
+  background-image: linear-gradient(var(--hover-row), var(--hover-row));
+}
+
+.fm-row.is-selected > .fm-actions {
+  background-image: linear-gradient(var(--accent-soft), var(--accent-soft));
+}
+
+.fm-row.is-selected:hover > .fm-actions {
+  background-image: linear-gradient(var(--accent-softer), var(--accent-softer));
 }
 
 /* Inline row actions (open/download/extract/rename/delete) reveal on row hover
@@ -3509,10 +3713,26 @@ function onFolderMenu(key: string): void {
   color: var(--muted);
 }
 
-.fm-tile-check {
+/* JUS-145: the tile's ⋮ row menu sits in the top-right corner as a sibling of
+   the tile button (never nested inside it). The selection checkbox shifts left
+   of it so both stay tappable; on touch both grow to a 44px target (see the
+   compact media block below). */
+.fm-tile-actions {
   position: absolute;
   top: 6px;
   right: 6px;
+  z-index: 3;
+}
+
+.fm-tile-actions :deep(.n-button) {
+  min-width: 30px;
+  height: 30px;
+}
+
+.fm-tile-check {
+  position: absolute;
+  top: 6px;
+  right: 42px;
   z-index: 2;
   display: grid;
   place-items: center;
@@ -3696,6 +3916,111 @@ function onFolderMenu(key: string): void {
   .fm-foot-path,
   .fm-foot-free {
     display: none;
+  }
+}
+
+/* ── JUS-145: compact list (a density optimisation, not the reachability fix) ─
+   The Actions cell is pinned sticky at every width the table overflows (see
+   .fm-row > .fm-actions), so the ⋮ is always on screen. Below 860px the
+   low-value columns (Type, Modified, Mode) additionally collapse so Name, Size
+   and the ⋮ fit a phone scrollport without a sideways scroll and the rows stay
+   dense. Modified is not lost — it rides under the name as a muted line — and
+   the toolbar sort control keeps Type / Modified / Mode sortable because their
+   headers are hidden here. */
+@media (max-width: 860px) {
+  .fm-table {
+    min-width: 0;
+  }
+
+  .files-browser {
+    --fm-row-height: 52px;
+  }
+
+  .fm-row {
+    grid-template-columns: 30px minmax(0, 1fr) 64px 64px;
+    gap: var(--space-2);
+    /* 3px block padding so the 44px ⋮ fits inside a 52px windowed row (the
+       4px base would leave 43px of content and clip it by 1px). */
+    padding-block: 3px;
+  }
+
+  .fm-cell--type,
+  .fm-cell--modified,
+  .fm-cell--mode {
+    display: none;
+  }
+
+  /* The name cell becomes a two-row grid: the type icon spans both rows so the
+     relative modified time sits under the name (JUS-145). */
+  .fm-name {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "icon label"
+      "icon sub";
+    align-items: center;
+    column-gap: var(--space-3);
+    row-gap: 0;
+  }
+
+  .fm-name > .fm-mark {
+    grid-area: icon;
+  }
+
+  .fm-name .fm-label {
+    grid-area: label;
+  }
+
+  .fm-row-sub {
+    grid-area: sub;
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The inline buttons fold into the ⋮ menu (same actions) and the ⋮ is a 44px
+     target in every compact layout. */
+  .fm-actions .fm-action {
+    display: none;
+  }
+
+  .fm-actions :deep(.n-button) {
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
+/* JUS-145: above the compact range a coarse pointer still needs a 44px ⋮ and a
+   row tall enough for it; the inline actions keep their density, because a set
+   of 44px inline buttons would overflow the fixed actions track. */
+@media (hover: none) and (min-width: 861px) {
+  .files-browser {
+    --fm-row-height: 52px;
+  }
+
+  .fm-row:not(.fm-head) {
+    padding-block: 3px;
+  }
+
+  .fm-actions :deep(.n-button:not(.fm-action)) {
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
+@media (hover: none) {
+  .fm-tile-actions :deep(.n-button) {
+    min-width: 44px;
+    height: 44px;
+  }
+
+  /* The tile checkbox clears the wider 44px ⋮. */
+  .fm-tile-check {
+    right: 56px;
   }
 }
 

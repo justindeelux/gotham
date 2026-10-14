@@ -33,6 +33,7 @@ const en = {
     renameEntry: "Rename {name}",
     moreActions: "More actions for {name}",
     folderActions: "Folder actions",
+    rowDetails: "Mode {mode}, modified {modified}",
     fileNeedsRole: "Content requires the owner or admin role.",
     columnName: "Name",
     columnType: "Type",

@@ -257,6 +257,18 @@ const pasteProblemText = computed<string>(() =>
   pasteProblemMessage(files.pasteProblem),
 );
 
+/**
+ * pasteLabel is the Paste button's visible label ("Paste (2)"), optionally
+ * followed by the problem explaining why it is disabled. The accessible name
+ * must contain that visible text (WCAG label-in-name), so one computed feeds
+ * both the label and the aria-label/title (JUS-140).
+ */
+const pasteLabel = computed<string>(() => {
+  const count = files.clipboard?.names.length ?? 0;
+  const base = `${String(t("files.actions.paste"))} (${count})`;
+  return pasteProblemText.value ? `${base} — ${pasteProblemText.value}` : base;
+});
+
 /** typeLabel resolves the Type column through the active locale. */
 function typeLabel(entry: FilesEntry): string {
   return entryTypeLabel(entry, locale.value);
@@ -415,6 +427,12 @@ function onRowClick(event: MouseEvent, entry: FilesEntry): void {
     return;
   }
   files.selectOnly(entry.name);
+  // A plain click/tap on a selectable row also moves the roving row to the
+  // pressed entry, so the roving tab stop (and the shared accessible description
+  // that tracks it) describes the row the user just clicked (JUS-140). It moves
+  // the tab stop only — no scroll/focus nudge (JUS-130/137), unlike the
+  // Shift+click arm above, which has to restore the focus its press cancelled.
+  rovingName.value = entry.name;
 }
 
 /**
@@ -824,6 +842,51 @@ function modifiedLabel(entry: FilesEntry): string {
     locale.value === "vi" ? "vi" : "en",
     { long: true, now: coarseNow.value },
   );
+}
+
+/**
+ * rowDetails is the symbolic mode and the absolute modified time — the two
+ * values the Mode/Modified cells keep only in a native `title`, unreachable for
+ * keyboard and touch users (JUS-140).
+ */
+function rowDetails(entry: FilesEntry): string {
+  return String(
+    t("files.browser.rowDetails", {
+      mode: formatMode(entry.mode),
+      modified: formatTimestamp(entry.modified_at),
+    }),
+  );
+}
+
+/** ROW_DETAILS_ID is the single, visually hidden description target. */
+const ROW_DETAILS_ID = "fm-row-details";
+
+/**
+ * rovingEntry is the entry that owns the list's one tab stop. The description
+ * is exposed through `aria-describedby` at this ONE shared node rather than an
+ * `aria-description`/hidden node per row: `aria-describedby` is the widely
+ * supported mechanism (ARIA 1.3 `aria-description` is not announced by every
+ * screen reader), and one node keeps the windowed list at zero extra DOM per
+ * rendered row (JUS-140).
+ */
+const rovingEntry = computed<FilesEntry | null>(() => {
+  const name = rovingTabName.value;
+  if (name === null) {
+    return null;
+  }
+  const rendered = files.viewMode === "grid" ? gridRows.value : listRows.value;
+  return rendered.find((row) => row.entry.name === name)?.entry ?? null;
+});
+
+/** rovingDetails is the roving row's accessible description text (localized). */
+const rovingDetails = computed<string>(() => {
+  const entry = rovingEntry.value;
+  return entry === null ? "" : rowDetails(entry);
+});
+
+/** rowDescribedBy points only the roving row's control at the shared node. */
+function rowDescribedBy(entry: FilesEntry): string | undefined {
+  return entry.name === rovingTabName.value ? ROW_DETAILS_ID : undefined;
 }
 
 /** tabTitle is the tab tooltip / accessible name: the full root-relative path. */
@@ -1381,7 +1444,7 @@ watch(
     ] as const,
   () => {
     releaseFocus();
-    closeRowMenu();
+    closeRowContext();
     rovingName.value = null;
     resetTypeahead();
   },
@@ -1392,9 +1455,40 @@ watch(
 watch(pinnedIndex, (index) => {
   if (index === -1) {
     releaseFocus();
-    closeRowMenu();
+    closeRowContext();
   }
 });
+
+// A control inside the bulk-actions bar can hide with the selection (Clear, or
+// the bar collapsing when the last row is unchecked). The bar is hidden with
+// `visibility` — not removed — so Chromium blurs its focused control and focus
+// falls to <body>; hand it to the roving row instead (JUS-140). The pre-flush
+// watcher reads who held focus BEFORE the bar hides; the post-flush one moves
+// it, keeping the JUS-139 one-tab-stop rule (focusEntry targets the roving row).
+let selectionBarHadFocus = false;
+watch(
+  hasSelection,
+  (active, previous) => {
+    if (previous && !active) {
+      selectionBarHadFocus = Boolean(
+        document.activeElement?.closest(".fm-selection-actions"),
+      );
+    }
+  },
+  { flush: "pre" },
+);
+watch(
+  hasSelection,
+  async (active, previous) => {
+    if (!previous || active || !selectionBarHadFocus) {
+      return;
+    }
+    selectionBarHadFocus = false;
+    await nextTick();
+    focusEntry(rovingTabName.value);
+  },
+  { flush: "post" },
+);
 
 // Move focus to the active tab as soon as it changes (nextTick), never after
 // the tab's listing finishes loading — otherwise the roving tabindex lags
@@ -1715,6 +1809,89 @@ const contextAria = computed<string>(() =>
     ? String(t("files.browser.moreActions", { name: contextEntry.value.name }))
     : String(t("files.browser.folderActions")),
 );
+
+/** rowMenuOpenName is the row whose ⋮ dropdown is open (aria-expanded). */
+const rowMenuOpenName = ref<string | null>(null);
+
+/**
+ * closeRowContext closes the context / Shift+F10 row menu and releases its pin.
+ * The context menu is a separate controlled dropdown that shares the row's
+ * `rowMenu` options, so it must be closed through the same reset path.
+ */
+function closeRowContext(): void {
+  contextOpen.value = false;
+  contextEntry.value = null;
+  closeRowMenu();
+}
+
+/**
+ * resetRowMenu closes EVERY row-menu surface — the ⋮ dropdown, the context /
+ * Shift+F10 menu, and the menu pin — because they all show the same `rowMenu`
+ * options for one row. It runs on a listing LAYOUT change (view-mode flip,
+ * folder / tab / root change) and when the open row leaves the rendered set, so
+ * a menu can never survive into a listing where it would act on the wrong file.
+ *
+ * A reorder / filter that keeps the same row mounted is deliberately excluded:
+ * the ⋮ dropdown stays open with `aria-expanded="true"` (documented keep-open).
+ * The context menu, whose pin cannot survive a reorder, is closed separately by
+ * the listing-identity watcher via {@link closeRowContext}.
+ */
+function resetRowMenu(): void {
+  rowMenuOpenName.value = null;
+  closeRowContext();
+}
+
+/**
+ * layoutKey identifies the listing LAYOUT — a list↔grid flip or a folder / tab /
+ * root change — as opposed to a reorder / filter that keeps the same rows. It is
+ * bound as the per-row ⋮ dropdown's `key`, so a layout change remounts the
+ * uncontrolled dropdowns closed (they have no imperative close) while the
+ * watcher clears the tracked state, keeping the popup and `aria-expanded` in
+ * step (JUS-140).
+ */
+const layoutKey = computed<string>(
+  () =>
+    `${files.viewMode}:${files.activeTabId}:${files.rootName}:${files.path}`,
+);
+watch(layoutKey, resetRowMenu);
+
+// The open row can leave the rendered set without its dropdown closing (drawn
+// out of the window, deleted or renamed by a refresh): close the menus as soon
+// as that row is no longer rendered, so a later render of the same name is never
+// stale. Both surfaces count — the ⋮ dropdown and the context menu.
+watch(renderedKeys, () => {
+  const openName =
+    rowMenuOpenName.value ??
+    (contextOpen.value ? (contextEntry.value?.name ?? null) : null);
+  if (openName === null) {
+    return;
+  }
+  const rendered = files.viewMode === "grid" ? gridRows.value : listRows.value;
+  if (!rendered.some((row) => row.entry.name === openName)) {
+    resetRowMenu();
+  }
+});
+
+/**
+ * isRowMenuOpen reports whether a row's menu is open by EITHER trigger — the ⋮
+ * dropdown or the right-click / Shift+F10 context route (they show the same
+ * menu), so the ⋮'s aria-expanded reflects the real open state (JUS-140).
+ */
+function isRowMenuOpen(entry: FilesEntry): boolean {
+  return (
+    rowMenuOpenName.value === entry.name ||
+    (contextOpen.value && contextEntry.value?.name === entry.name)
+  );
+}
+
+/** onRowMenuShow tracks one row's ⋮ dropdown open/close (Escape, click-away, select). */
+function onRowMenuShow(name: string, show: boolean): void {
+  rowMenuOpenName.value = show
+    ? name
+    : rowMenuOpenName.value === name
+      ? null
+      : rowMenuOpenName.value;
+}
 
 /** openRowContext opens the row menu at the pointer and applies the selection rule. */
 function openRowContext(event: MouseEvent, entry: FilesEntry): void {
@@ -2057,8 +2234,8 @@ function onFolderMenu(key: string): void {
           size="small"
           secondary
           :disabled="files.acting || files.pasteProblem !== null"
-          :title="pasteProblemText || $t('files.actions.paste')"
-          :aria-label="pasteProblemText || $t('files.actions.paste')"
+          :title="pasteLabel"
+          :aria-label="pasteLabel"
           @click="() => void pasteAction()"
         >
           <template #icon>
@@ -2331,6 +2508,7 @@ function onFolderMenu(key: string): void {
                 type="button"
                 class="fm-label"
                 :tabindex="rowTabindex(entry.name)"
+                :aria-describedby="rowDescribedBy(entry)"
               >
                 <b>{{ entry.name }}</b>
                 <span v-if="entryTarget(entry)" class="fm-target" :title="entryTarget(entry)">
@@ -2417,6 +2595,7 @@ function onFolderMenu(key: string): void {
                    menu, so there is deliberately no ⋮ to open an empty menu. -->
               <NDropdown
                 v-if="rowMenu(entry).length > 0"
+                :key="`${layoutKey}:${entry.name}`"
                 trigger="click"
                 placement="bottom-end"
                 :options="rowMenu(entry)"
@@ -2424,11 +2603,14 @@ function onFolderMenu(key: string): void {
                   role: 'menu',
                   'aria-label': $t('files.browser.moreActions', { name: entry.name }),
                 })"
+                @update:show="(show: boolean) => onRowMenuShow(entry.name, show)"
                 @select="(key: string) => onRowMenu(key, entry)"
               >
                 <NButton
                   size="tiny"
                   quaternary
+                  aria-haspopup="menu"
+                  :aria-expanded="isRowMenuOpen(entry)"
                   :title="$t('files.browser.moreActions', { name: entry.name })"
                   :aria-label="$t('files.browser.moreActions', { name: entry.name })"
                 >
@@ -2503,6 +2685,7 @@ function onFolderMenu(key: string): void {
             class="fm-tile"
             :class="{ 'is-selected': files.isSelected(entry.name) }"
             :tabindex="rowTabindex(entry.name)"
+            :aria-describedby="rowDescribedBy(entry)"
           >
             <span class="fm-tile-top">
               <FileTypeIcon :kind="iconKind(entry)" />
@@ -2537,6 +2720,11 @@ function onFolderMenu(key: string): void {
       </div>
     </template>
     </div>
+
+    <!-- One shared, visually hidden description target for the roving row's
+         symbolic mode + absolute modified time (aria-describedby; JUS-140). A
+         single node — never one per row. -->
+    <span :id="ROW_DETAILS_ID" class="fm-sr-only">{{ rovingDetails }}</span>
 
     <div v-if="dragActive" class="fm-drop-overlay" aria-hidden="true">
       <Upload :size="26" :stroke-width="1.6" />
@@ -2720,6 +2908,20 @@ function onFolderMenu(key: string): void {
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* The single shared aria-describedby target for the roving row (JUS-140):
+   clipped out of view but still in the accessibility tree. */
+.fm-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .fm-toolbar {

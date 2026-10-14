@@ -121,7 +121,7 @@
                 <!-- JUS-117: copy/cut land on a clipboard and Paste applies it
                      into the current folder. The button only appears while the
                      clipboard holds entries; the hint names the pending mode. -->
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Pasted 2 items into this folder.|success" aria-label="Paste" title="Paste"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Paste (2)</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Pasted 2 items into this folder.|success" aria-label="Paste (2)" title="Paste"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Paste (2)</span></button>
                 <span class="small muted">Cut clipboard</span>
                 <!-- JUS-128/134: the selection count and every bulk action show
                      only while entries are selected (the mockup shows 2
@@ -166,9 +166,9 @@
 
                 <!-- Row actions (JUS-133): the inline actions reveal on row
                      hover, keyboard focus or selection, but the ⋮ menu button
-                     is always visible so touch users reach the row menu without
-                     a hover. Every icon-only control pairs an aria-label with a
-                     title (tooltip). -->
+                     stays visible whenever the row has actions, so touch and
+                     keyboard users reach the row menu without a hover. Every
+                     icon-only control pairs an aria-label with a title (tooltip). -->
 
                 <!-- folders -->
                 <div class="fm-row" role="row" data-tag="folder">

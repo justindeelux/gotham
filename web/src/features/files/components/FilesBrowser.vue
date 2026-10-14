@@ -839,10 +839,9 @@ function modifiedLabel(entry: FilesEntry): string {
 }
 
 /**
- * rowDetails is the roving row's accessible description: the symbolic mode and
- * the absolute modified time. The Mode/Modified cells keep them in `title`, but
- * a native title tooltip is unreachable for keyboard and touch users, so they
- * reach the same values through this description (JUS-140) — no extra tab stop.
+ * rowDetails is the symbolic mode and the absolute modified time — the two
+ * values the Mode/Modified cells keep only in a native `title`, unreachable for
+ * keyboard and touch users (JUS-140).
  */
 function rowDetails(entry: FilesEntry): string {
   return String(
@@ -851,6 +850,37 @@ function rowDetails(entry: FilesEntry): string {
       modified: formatTimestamp(entry.modified_at),
     }),
   );
+}
+
+/** ROW_DETAILS_ID is the single, visually hidden description target. */
+const ROW_DETAILS_ID = "fm-row-details";
+
+/**
+ * rovingEntry is the entry that owns the list's one tab stop. The description
+ * is exposed through `aria-describedby` at this ONE shared node rather than an
+ * `aria-description`/hidden node per row: `aria-describedby` is the widely
+ * supported mechanism (ARIA 1.3 `aria-description` is not announced by every
+ * screen reader), and one node keeps the windowed list at zero extra DOM per
+ * rendered row (JUS-140).
+ */
+const rovingEntry = computed<FilesEntry | null>(() => {
+  const name = rovingTabName.value;
+  if (name === null) {
+    return null;
+  }
+  const rendered = files.viewMode === "grid" ? gridRows.value : listRows.value;
+  return rendered.find((row) => row.entry.name === name)?.entry ?? null;
+});
+
+/** rovingDetails is the roving row's accessible description text (localized). */
+const rovingDetails = computed<string>(() => {
+  const entry = rovingEntry.value;
+  return entry === null ? "" : rowDetails(entry);
+});
+
+/** rowDescribedBy points only the roving row's control at the shared node. */
+function rowDescribedBy(entry: FilesEntry): string | undefined {
+  return entry.name === rovingTabName.value ? ROW_DETAILS_ID : undefined;
 }
 
 /** tabTitle is the tab tooltip / accessible name: the full root-relative path. */
@@ -1409,6 +1439,7 @@ watch(
   () => {
     releaseFocus();
     closeRowMenu();
+    resetRowMenu();
     rovingName.value = null;
     resetTypeahead();
   },
@@ -1420,6 +1451,7 @@ watch(pinnedIndex, (index) => {
   if (index === -1) {
     releaseFocus();
     closeRowMenu();
+    resetRowMenu();
   }
 });
 
@@ -1434,8 +1466,9 @@ watch(
   hasSelection,
   (active, previous) => {
     if (previous && !active) {
-      selectionBarHadFocus =
-        document.activeElement?.closest(".fm-selection-actions") !== null;
+      selectionBarHadFocus = Boolean(
+        document.activeElement?.closest(".fm-selection-actions"),
+      );
     }
   },
   { flush: "pre" },
@@ -1775,6 +1808,32 @@ const contextAria = computed<string>(() =>
 
 /** rowMenuOpenName is the row whose ⋮ dropdown is open (aria-expanded). */
 const rowMenuOpenName = ref<string | null>(null);
+
+/**
+ * resetRowMenu clears the ⋮ dropdown's tracked open name. An unmounting
+ * NDropdown never emits `update:show(false)`, so a name left behind would render
+ * `aria-expanded="true"` with nothing open. It is the ONE reset called by every
+ * listing invalidation — the listing-identity and pin watchers above, and the
+ * rendered-set watcher below (the dropdown's own Escape/click-away/select routes
+ * clear it through {@link onRowMenuShow}) — JUS-140.
+ */
+function resetRowMenu(): void {
+  rowMenuOpenName.value = null;
+}
+
+// The open row can leave the rendered set without its dropdown closing (drawn
+// out of the window, deleted or renamed by a refresh): clear the name as soon as
+// it is no longer rendered, so a later render of the same name is never stale.
+watch(renderedKeys, () => {
+  const name = rowMenuOpenName.value;
+  if (name === null) {
+    return;
+  }
+  const rendered = files.viewMode === "grid" ? gridRows.value : listRows.value;
+  if (!rendered.some((row) => row.entry.name === name)) {
+    resetRowMenu();
+  }
+});
 
 /**
  * isRowMenuOpen reports whether a row's menu is open by EITHER trigger — the ⋮
@@ -2412,7 +2471,7 @@ function onFolderMenu(key: string): void {
                 type="button"
                 class="fm-label"
                 :tabindex="rowTabindex(entry.name)"
-                :aria-description="rowDetails(entry)"
+                :aria-describedby="rowDescribedBy(entry)"
               >
                 <b>{{ entry.name }}</b>
                 <span v-if="entryTarget(entry)" class="fm-target" :title="entryTarget(entry)">
@@ -2588,7 +2647,7 @@ function onFolderMenu(key: string): void {
             class="fm-tile"
             :class="{ 'is-selected': files.isSelected(entry.name) }"
             :tabindex="rowTabindex(entry.name)"
-            :aria-description="rowDetails(entry)"
+            :aria-describedby="rowDescribedBy(entry)"
           >
             <span class="fm-tile-top">
               <FileTypeIcon :kind="iconKind(entry)" />
@@ -2623,6 +2682,11 @@ function onFolderMenu(key: string): void {
       </div>
     </template>
     </div>
+
+    <!-- One shared, visually hidden description target for the roving row's
+         symbolic mode + absolute modified time (aria-describedby; JUS-140). A
+         single node — never one per row. -->
+    <span :id="ROW_DETAILS_ID" class="fm-sr-only">{{ rovingDetails }}</span>
 
     <div v-if="dragActive" class="fm-drop-overlay" aria-hidden="true">
       <Upload :size="26" :stroke-width="1.6" />
@@ -2806,6 +2870,20 @@ function onFolderMenu(key: string): void {
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* The single shared aria-describedby target for the roving row (JUS-140):
+   clipped out of view but still in the accessibility tree. */
+.fm-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .fm-toolbar {

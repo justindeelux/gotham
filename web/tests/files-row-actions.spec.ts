@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global URL, window:readonly */
+/* global URL, document:readonly, HTMLElement:readonly, window:readonly */
 // JUS-133 discoverability proof: the committed webdist is served statically
 // with the control-plane file API mocked in real Chromium. Measured claims:
 //   - the ⋮ row-menu button is visible with no hover (touch reachable), while
@@ -406,26 +406,102 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expect(folderMore).toHaveAttribute("aria-expanded", "false");
   });
 
-  test("the roving row describes its symbolic mode and absolute modified time", async ({
+  test("the roving row's accessible description carries the mode and modified time", async ({
     page,
   }) => {
     await openFiles(page);
-    // The Mode/Modified cells keep their hover `title`, but a keyboard or touch
-    // user cannot reach those — the roving row carries them as its accessible
-    // description instead (no extra tab stop: JUS-139).
-    const label = rowFor(page, "app.yaml").locator(".fm-label");
-    await expect(label).toHaveAttribute("aria-description", /-rw-r--r--/);
-    await expect(label).toHaveAttribute("aria-description", /2026-10-12 09:02/);
-    await expect(
-      page.locator('.fm-table .fm-label[tabindex="0"]'),
-    ).toHaveCount(1);
+    // One shared, visually hidden description node — never one per row.
+    await expect(page.locator("#fm-row-details")).toHaveCount(1);
 
-    // The grid tile carries the same description (mode is not a visible cell).
-    await page.getByRole("button", { name: "Grid view" }).click();
+    /** entryOf returns the data-entry of the row/tile a control belongs to. */
+    const entryOf = (locator: Locator): Promise<string> =>
+      locator.evaluate(
+        (el) =>
+          (el.closest("[data-entry]") as HTMLElement | null)?.dataset.entry ?? "",
+      );
+    /** expectedDetails is the localized description for one entry. */
+    const expectedDetails = async (entry: string): Promise<string> => {
+      const row = page.locator(`.fm-row[data-entry="${entry}"]`);
+      const mode = await row.locator(".fm-mode").getAttribute("title");
+      const date = await row.locator(".fm-date").getAttribute("title");
+      return `Mode ${mode}, modified ${date}`;
+    };
+
+    const roving = page.locator('.fm-table .fm-label[tabindex="0"]');
+    await expect(roving).toHaveCount(1);
+    await expect(roving).toHaveAttribute("aria-describedby", "fm-row-details");
+    const first = await entryOf(roving);
+    await expect(roving).toHaveAccessibleDescription(await expectedDetails(first));
+    // The Mode/Modified cells keep their hover tooltips (mouse users).
     await expect(
-      page.locator('.fm-tile-wrap[data-entry="app.yaml"] .fm-tile'),
-    ).toHaveAttribute("aria-description", /-rw-r--r--/);
+      page.locator(`.fm-row[data-entry="${first}"] .fm-mode`),
+    ).toHaveAttribute("title", /./);
+
+    // Roving moves to the next row: the one shared node follows it (still exactly
+    // one tab stop — JUS-139) and the previous row loses the reference.
+    await roving.focus();
+    await page.keyboard.press("ArrowDown");
+    const moved = page.locator('.fm-table .fm-label[tabindex="0"]');
+    await expect(moved).toHaveCount(1);
+    const second = await entryOf(moved);
+    expect(second).not.toBe(first);
+    await expect(moved).toHaveAttribute("aria-describedby", "fm-row-details");
+    await expect(moved).toHaveAccessibleDescription(await expectedDetails(second));
+    await expect(
+      page.locator(`.fm-row[data-entry="${first}"] .fm-label`),
+    ).not.toHaveAttribute("aria-describedby", "fm-row-details");
+    await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
+
+    // The grid tile carries the same single-node description (mode is not a
+    // visible cell there).
+    await page.getByRole("button", { name: "Grid view" }).click();
     await expect(page.locator('.fm-tile[tabindex="0"]')).toHaveCount(1);
+    const tile = page.locator('.fm-tile[tabindex="0"]');
+    await expect(tile).toHaveAttribute("aria-describedby", "fm-row-details");
+    await expect(tile).toHaveAccessibleDescription(/Mode |Quyền /);
+  });
+
+  test("an open ⋮ is not stale after its row is filtered out and back", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const more = page.getByRole("button", { name: "More actions for app.yaml" });
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+
+    // Type in the folder filter: the row unmounts while its menu is open, and no
+    // dropdown close event fires for an unmounted trigger. Clearing the filter
+    // renders the row again — its ⋮ must not come back expanded.
+    const filter = page.locator(".fm-search input");
+    await filter.fill("config");
+    await expect(rowFor(page, "app.yaml")).toHaveCount(0);
+    await filter.fill("");
+    await expect(rowFor(page, "app.yaml")).toBeVisible();
+
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "More actions for app.yaml" }),
+    ).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("an open ⋮ is not inherited by a same-named row in another folder", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await page.getByRole("button", { name: "More actions for app.yaml" }).click();
+    await expect(
+      page.getByRole("button", { name: "More actions for app.yaml" }),
+    ).toHaveAttribute("aria-expanded", "true");
+
+    // Keyboard-open the `config` folder so no pointerdown closes the dropdown:
+    // the next listing also holds an `app.yaml`, which must not inherit the
+    // previous row's expanded state.
+    await rowFor(page, "config").locator(".fm-label").focus();
+    await page.keyboard.press("Enter");
+    await expect(rowFor(page, "app.yaml")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "More actions for app.yaml" }),
+    ).toHaveAttribute("aria-expanded", "false");
   });
 
   test("the selection bar hiding never drops focus to <body>", async ({ page }) => {
@@ -443,11 +519,18 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expect(page.locator("body")).not.toBeFocused();
     await expect(page.locator('.fm-label[tabindex="0"]')).toBeFocused();
 
-    // Unchecking the last row hides the bar again; the checkbox keeps focus.
+    // Unchecking the last row (the checkbox route) hides the bar too, but the
+    // hand-off only fires when focus was inside the bar, so it must not steal
+    // focus here: focus stays in the row the checkbox belongs to, never <body>.
     await checkbox.click();
     await expect(clear).toBeVisible();
     await checkbox.click();
     await expect(page.locator("body")).not.toBeFocused();
+    expect(
+      await page.evaluate(
+        () => document.activeElement?.closest('[data-entry="app.yaml"]') !== null,
+      ),
+    ).toBe(true);
   });
 
   test("the Paste button's accessible name contains its visible label", async ({

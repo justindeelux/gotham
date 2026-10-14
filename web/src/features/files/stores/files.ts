@@ -624,8 +624,10 @@ export const useFilesStore = defineStore("files", () => {
           item.path = "";
           // The tab drops to a fresh location, so its stale folder filter must
           // go too: keeping the needle would hide the new root's listing behind
-          // a query typed for the vanished root (JUS-141).
+          // a query typed for the vanished root. The range anchor goes with it
+          // (JUS-141).
           item.query = "";
+          item.anchor = null;
           item.loaded = false;
         }
       }

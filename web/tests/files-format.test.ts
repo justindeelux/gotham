@@ -1,7 +1,7 @@
 // Files footer pluralisation and the bulk-count reserve sizer (JUS-141 fix
-// round 1): the breakdown counts read "1 folder" / "2 folders" in en and vi,
-// and `widestBytesLabel` bounds a unit-boundary subset label (formatBytes is
-// non-monotonic: "1023.0 KiB" is wider than "1.00 MiB").
+// rounds 1-2): the breakdown counts read "1 folder" / "2 folders" in en and vi,
+// and `widestBytesLabel` must bound EVERY subset label (formatBytes is
+// non-monotonic across unit and decimal boundaries).
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { widestBytesLabel } from "@/features/files/utils/files";
@@ -14,29 +14,82 @@ import {
 import { formatBytes } from "@/shared/utils/format";
 
 describe("widestBytesLabel", () => {
-  it("is at least as wide as any subset label", () => {
+  it("bounds every label in [0, total] across the rounding bands", () => {
+    // The round-1 bound missed toFixed rounding up just below a 10^k boundary:
+    // 921,549 totals in 102400..1023948 were one char short of the widest
+    // subset label (a "100.00 KiB" subset of a "100.0 KiB" total).
+    const limit = 1_050_000;
+    let widestSoFar = 0;
+    const failures: number[] = [];
+    for (let value = 0; value <= limit; value += 1) {
+      widestSoFar = Math.max(widestSoFar, formatBytes(value).length);
+      if (widestBytesLabel(value).length < widestSoFar) {
+        failures.push(value);
+      }
+    }
+    expect(failures.slice(0, 5)).toEqual([]);
+  });
+
+  it("bounds the named boundary cases", () => {
     const cases: Array<[total: number, subset: number]> = [
-      [1048576, 1047552], // "1.00 MiB" total, "1023.0 KiB" subset
+      [102400, 102399], // "100.0 KiB" total, "100.00 KiB" subset (BLOCK-1)
+      [102400, 1],
+      [102399, 102398],
+      [1048576, 1047552], // "1023.0 KiB" subset vs "1.00 MiB" total
       [1048576, 1024],
       [1048576, 1],
       [14745, 14000],
       [500, 1],
       [0, 0],
       [1024, 1024],
-      [1073741824, 1048575], // "1.00 GiB" total, "1023.9 MiB" subset
+      [1073741824, 1048575], // "1023.9 MiB" subset vs "1.00 GiB" total
     ];
     for (const [total, subset] of cases) {
+      expect(
+        widestBytesLabel(total).length,
+        `total ${total} vs subset ${subset}`,
+      ).toBeGreaterThanOrEqual(formatBytes(subset).length);
+    }
+  });
+
+  it("covers the [99.995, 100) x unit bands for B/KiB/MiB/GiB", () => {
+    for (const base of [1, 1024, 1024 ** 2, 1024 ** 3]) {
+      // A subset whose value is 99.999 formats as the wider "100.00 X".
+      const peak = base * 100 - 1;
+      const total = base * 100;
       expect(widestBytesLabel(total).length).toBeGreaterThanOrEqual(
-        formatBytes(subset).length,
+        formatBytes(peak).length,
+      );
+      // Rounding up inside a unit (999.99 -> "1000.0") is covered too.
+      expect(widestBytesLabel(base * 1000).length).toBeGreaterThanOrEqual(
+        formatBytes(base * 1000 - 1).length,
       );
     }
   });
 
-  it("picks the widest reachable label", () => {
-    expect(widestBytesLabel(1048576)).toBe("1024.0 KiB");
-    expect(widestBytesLabel(1047552)).toBe("1023.0 KiB");
+  it("picks a label at least as wide as every reachable one", () => {
+    expect(widestBytesLabel(102400)).toBe("100.00 KiB");
+    expect(widestBytesLabel(1048576).length).toBe(10);
     expect(widestBytesLabel(1024)).toBe("1.00 KiB");
     expect(widestBytesLabel(0)).toBe("0 B");
+  });
+
+  it("bounds the reserve summary for 0/1/5000 entries", () => {
+    registerDiscoveredCatalogs();
+    resetLocaleState();
+    syncComposerLocale("en");
+    const summary = (count: number, bytes: number): string =>
+      `${i18n.global.t("files.browser.selectionCount", { count })} · ${formatBytes(bytes)}`;
+    const folders = [
+      { totalBytes: 102400, totalCount: 2, liveBytes: 102399, liveCount: 1 },
+      { totalBytes: 1048576, totalCount: 5000, liveBytes: 1024, liveCount: 1 },
+      { totalBytes: 0, totalCount: 0, liveBytes: 0, liveCount: 0 },
+    ];
+    for (const folder of folders) {
+      const reserve = `${i18n.global.t("files.browser.selectionCount", { count: folder.totalCount })} · ${widestBytesLabel(folder.totalBytes)}`;
+      const live = summary(folder.liveCount, folder.liveBytes);
+      expect(reserve.length).toBeGreaterThanOrEqual(live.length);
+    }
   });
 });
 

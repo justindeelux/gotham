@@ -418,6 +418,13 @@ async function firstRowY(page: Page): Promise<number> {
   );
 }
 
+/** installListing overrides the listing route with the given entries. */
+async function installListing(page: Page, entries: unknown[]): Promise<void> {
+  await page.route(`**/api/v1/servers/${server1}/files/list*`, async (route) => {
+    await route.fulfill({ json: { entries, truncated: false, cursor: "" } });
+  });
+}
+
 /** installBoundaryListing overrides the listing with a formatBytes boundary. */
 async function installBoundaryListing(page: Page, count: number): Promise<void> {
   const entries = Array.from({ length: count }, (_, index) =>
@@ -439,9 +446,7 @@ async function installBoundaryListing(page: Page, count: number): Promise<void> 
           etag: `"s${index}"`,
         },
   );
-  await page.route(`**/api/v1/servers/${server1}/files/list*`, async (route) => {
-    await route.fulfill({ json: { entries, truncated: false, cursor: "" } });
-  });
+  await installListing(page, entries);
 }
 
 /** settleLayout waits for the responsive re-layout after a viewport change. */
@@ -452,6 +457,45 @@ async function settleLayout(page: Page): Promise<void> {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       ),
   );
+}
+
+/** countCellWidth is the count cell's rendered width. */
+async function countCellWidth(page: Page): Promise<number> {
+  return page
+    .locator(".fm-bulk-count")
+    .evaluate((element) => element.getBoundingClientRect().width);
+}
+
+/** assertStableOnSelect measures the count-cell width and first-row y on select
+ *  and clear, so a reserve narrower than the live summary (a widened cell that
+ *  wraps the toolbar) fails loudly. */
+async function assertStableOnSelect(page: Page, widths: number[]): Promise<void> {
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 1024 });
+    await settleLayout(page);
+    const beforeY = await firstRowY(page);
+    const beforeWidth = await countCellWidth(page);
+
+    await page.locator(".fm-label").first().click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+    const selectedWidth = await countCellWidth(page);
+    expect(
+      Math.abs(selectedWidth - beforeWidth),
+      `count cell width delta on select at ${width}px`,
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      Math.abs((await firstRowY(page)) - beforeY),
+      `row shift on select at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+
+    // Clear via the last bulk button (locale-agnostic: its label is translated).
+    await page.locator(".fm-selection-actions .n-button").last().click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
+    expect(
+      Math.abs((await firstRowY(page)) - beforeY),
+      `row shift on clear at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+  }
 }
 
 /** assertNoRowShift measures the first-row y across select and clear. */
@@ -496,6 +540,45 @@ test("selecting a row never shifts the list across 700-1500px", async ({ page })
     widths.push(width);
   }
   await assertNoRowShift(page, widths);
+});
+
+test("the count cell never widens at the 100x-unit rounding boundary", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 1280, height: 1024 });
+  await mockApi(page);
+  // A folder of 102399 + 1 bytes: the total formats "100.0 KiB" but a subset
+  // (the 102399-byte entry) formats the WIDER "100.00 KiB" (formatBytes drops
+  // from 2 to 1 decimal at 100, and toFixed rounds 99.999 up). This is the
+  // round-2 BLOCK-1 counterexample; the guard must fail on it.
+  await installListing(page, [
+    {
+      name: "almost-one-hundred-kib.bin",
+      kind: "file",
+      size: 102399,
+      mode: 0o100644,
+      modified_at: "2026-10-12T09:02:00Z",
+      etag: '"a"',
+    },
+    {
+      name: "one-byte.bin",
+      kind: "file",
+      size: 1,
+      mode: 0o100644,
+      modified_at: "2026-10-12T09:02:00Z",
+      etag: '"b"',
+    },
+  ]);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(2);
+
+  // The reported band, then the full dense sweep.
+  const widths = [808, 810, 812, 1148, 1150, 1152];
+  for (let width = 700; width <= 1500; width += 2) {
+    widths.push(width);
+  }
+  await assertStableOnSelect(page, widths);
 });
 
 test("selecting a row never shifts the list in vi with a large count", async ({

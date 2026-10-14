@@ -2821,6 +2821,9 @@ function onFolderMenu(key: string): void {
   min-height: 22px;
   flex: 0 0 auto;
   white-space: nowrap;
+  /* Equal-width digits, so the reserve sizer and the live summary compare by
+     character count, not by per-glyph advance (JUS-141). */
+  font-variant-numeric: tabular-nums;
 }
 
 /* Both texts share one grid cell and overlap: the cell is as wide as the wider

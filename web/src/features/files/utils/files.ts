@@ -774,30 +774,48 @@ export function countByKind(entries: FilesEntry[]): Record<FileKind, number> {
 
 /**
  * widestBytesLabel is the widest `formatBytes` label any byte count in
- * `[0, total]` can produce. `formatBytes` is non-monotonic across unit
- * boundaries (a `1023.0 KiB` subset is wider than a `1.00 MiB` total), so the
- * bulk-count reserve is sized from this upper bound and is therefore never
- * narrower than the live selection summary at any width.
+ * `[0, total]` can produce — a true upper bound on the live selection summary.
+ * `formatBytes` is non-monotonic across unit boundaries twice over: it switches
+ * unit at powers of 1024, and it drops from 2 to 1 decimal at a value of 100,
+ * so `toFixed` rounds a value just below a `10^k` boundary *up* into a wider
+ * string (99.999 -> "100.00 KiB", 999.99 -> "1000.0 KiB"). Probing each
+ * reachable rounding peak (`10^k * unit - 1`) captures those, so the reserve
+ * built from this is never narrower than a subset's live label.
  */
 export function widestBytesLabel(total: number): string {
   if (!(total > 0)) {
     return formatBytes(total);
   }
-  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
   let widest = formatBytes(total);
-  for (let exponent = 0; exponent < units.length; exponent += 1) {
-    const low = 1024 ** exponent;
-    if (low > total) {
-      break;
-    }
-    const value = Math.min(total, 1024 ** (exponent + 1)) / low;
-    const decimals = exponent === 0 ? 0 : value >= 100 ? 1 : 2;
-    const label = `${value.toFixed(decimals)} ${units[exponent]}`;
-    if (label.length > widest.length) {
-      widest = label;
+  for (let base = 1; base <= total; base *= 1024) {
+    for (const boundary of [10, 100, 1000, 1024]) {
+      const peak = base * boundary - 1;
+      if (peak < base || peak > total) {
+        continue;
+      }
+      const label = formatBytes(peak);
+      if (
+        label.length > widest.length ||
+        // On a length tie prefer the widest unit glyph (MiB) so a
+        // proportional-font unit can never render wider than the reserve.
+        (label.length === widest.length &&
+          unitRank(label) > unitRank(widest))
+      ) {
+        widest = label;
+      }
     }
   }
   return widest;
+}
+
+/** unitRank orders `formatBytes` units by glyph width (MiB widest). */
+function unitRank(label: string): number {
+  const unit = label.split(" ")[1] ?? "";
+  // 'M' is the widest unit initial; the single-char byte unit is narrowest.
+  if (unit === "MiB") {
+    return 3;
+  }
+  return unit === "B" ? 0 : 1;
 }
 
 /** TabAddress is the root+path identity a browser tab's label is derived from. */

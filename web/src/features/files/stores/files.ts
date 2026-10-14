@@ -80,6 +80,15 @@ export interface TransferSummary {
 }
 
 /**
+ * SymlinkTargetResult classifies a "Go to target" attempt so the caller can
+ * explain a failure accurately (JUS-141): "opened" when the target is shown (or
+ * was already the current folder), "not-folder" when the target is a file, a
+ * broken link or a missing path inside the root (400/404), and "error" for a
+ * transient node/network failure a retry could clear.
+ */
+export type SymlinkTargetResult = "opened" | "not-folder" | "error";
+
+/**
  * FilesTab is one browser tab's independent view state: its own root, path,
  * listing, selection, sort/filter, view mode and scroll offset. The write
  * clipboard and the replace/skip prompt stay store-level (shared) so a cut in
@@ -367,6 +376,15 @@ export const useFilesStore = defineStore("files", () => {
   /** selectedNames is the current selection (insertion order). */
   const selectedNames = computed<string[]>(() => [...selected.value]);
 
+  /**
+   * visibleCounts tallies the rows actually on screen. While the folder filter
+   * narrows the list the footer breakdown reads from this, not {@link counts},
+   * so it never mixes the filtered rows with whole-folder totals (JUS-141).
+   */
+  const visibleCounts = computed<Record<FileKind, number>>(() =>
+    countByKind(visibleEntries.value),
+  );
+
   /** selectedEntries are the selected rows still present in the listing. */
   const selectedEntries = computed<FilesEntry[]>(() =>
     entries.value.filter((entry) => selected.value.has(entry.name)),
@@ -603,6 +621,10 @@ export const useFilesStore = defineStore("files", () => {
         if (!list.some((root) => root.name === item.rootName)) {
           item.rootName = list[0]?.name ?? "";
           item.path = "";
+          // The tab drops to a fresh location, so its stale folder filter must
+          // go too: keeping the needle would hide the new root's listing behind
+          // a query typed for the vanished root (JUS-141).
+          item.query = "";
           item.loaded = false;
         }
       }
@@ -1289,16 +1311,17 @@ export const useFilesStore = defineStore("files", () => {
    * row, the listing does not say whether the target is itself a directory, so
    * the target is fetched first and the view is committed only on success: a
    * target that is a regular file, a broken link or an unreadable folder leaves
-   * the current listing on screen (JUS-132). Returns true when the target is
-   * shown or was already the current folder.
+   * the current listing on screen (JUS-132). The result distinguishes that
+   * "not a folder" refusal from a transient failure, so the caller can show
+   * accurate copy for each (JUS-141).
    */
-  async function openSymlinkTarget(target: string): Promise<boolean> {
+  async function openSymlinkTarget(target: string): Promise<SymlinkTargetResult> {
     const tab = activeTab.value;
     if (!serverId.value || tab.rootName === "" || target === tab.path) {
       // Same folder (or no root): still drop the filter, which ends the range.
       tab.query = "";
       tab.anchor = null;
-      return true;
+      return "opened";
     }
     const gen = ++tab.generation;
     tab.loading = true;
@@ -1308,7 +1331,7 @@ export const useFilesStore = defineStore("files", () => {
         path: target,
       });
       if (gen !== tab.generation) {
-        return true;
+        return "opened";
       }
       tab.path = target;
       tab.scrollTop = 0;
@@ -1316,10 +1339,19 @@ export const useFilesStore = defineStore("files", () => {
       tab.errorRaw = null;
       clearSelection();
       applyListingTo(tab, listing.entries, listing.cursor ?? "", listing.truncated);
-      return true;
-    } catch {
-      // Not a browsable directory: keep the tab where it is.
-      return gen !== tab.generation;
+      return "opened";
+    } catch (err) {
+      // A newer navigation won: it owns the tab, so report the target as shown.
+      if (gen !== tab.generation) {
+        return "opened";
+      }
+      // A file target, a broken link or a missing path answers 400/404: the
+      // target is not a browsable folder inside this root. Anything else (500,
+      // 502/503, a network failure) is transient and gets the retry copy.
+      const key = filesErrorKey(err);
+      return key === "files.errors.notFound" || key === "files.errors.invalid"
+        ? "not-folder"
+        : "error";
     } finally {
       if (gen === tab.generation) {
         tab.loading = false;
@@ -1551,6 +1583,7 @@ export const useFilesStore = defineStore("files", () => {
     breadcrumb,
     hasMore,
     counts,
+    visibleCounts,
     visibleEntries,
     selectedNames,
     selectedEntries,

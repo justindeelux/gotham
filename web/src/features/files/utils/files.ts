@@ -770,3 +770,51 @@ export function countByKind(entries: FilesEntry[]): Record<FileKind, number> {
   }
   return counts;
 }
+
+/** TabAddress is the root+path identity a browser tab's label is derived from. */
+export interface TabAddress {
+  id: string;
+  rootName: string;
+  path: string;
+}
+
+/** tabSegments splits one tab's location into ordered root-relative segments. */
+function tabSegments(tab: TabAddress): string[] {
+  return tab.path === "" ? [tab.rootName] : [tab.rootName, ...tab.path.split("/")];
+}
+
+/**
+ * disambiguatedTabLabels maps every tab to a unique visible label: the folder's
+ * basename, or the root. When two tabs share a basename (two folders named
+ * "config" under different parents) the parent segments are prepended one by
+ * one until every label differs, so "a/x/config" and "b/x/config" no longer
+ * both read "x/config". The caller keeps the full path as the tab tooltip.
+ */
+export function disambiguatedTabLabels(tabs: TabAddress[]): Map<string, string> {
+  const labelAt = (segments: string[], depth: number): string =>
+    segments.slice(-depth).join("/");
+  const depth = new Map<string, number>(tabs.map((tab) => [tab.id, 1]));
+  // Grow the prefix of every colliding tab until all labels differ, or the
+  // label already spans the whole root-relative path (two identical locations
+  // cannot be told apart, so they keep the basename).
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const counts = new Map<string, number>();
+    for (const tab of tabs) {
+      const label = labelAt(tabSegments(tab), depth.get(tab.id) ?? 1);
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    for (const tab of tabs) {
+      const segments = tabSegments(tab);
+      const d = depth.get(tab.id) ?? 1;
+      if ((counts.get(labelAt(segments, d)) ?? 0) > 1 && d < segments.length) {
+        depth.set(tab.id, d + 1);
+        changed = true;
+      }
+    }
+  }
+  return new Map(
+    tabs.map((tab) => [tab.id, labelAt(tabSegments(tab), depth.get(tab.id) ?? 1)]),
+  );
+}

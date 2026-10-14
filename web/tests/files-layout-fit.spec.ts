@@ -405,6 +405,48 @@ test("bulk actions stay reachable with a selection at every width", async ({
 // JUS-135: the phone toolbar must not eat the list. With a selection active
 // (the tallest chrome state) the entry list keeps at least 60% of an iPhone-14
 // viewport.
+// JUS-134/JUS-141: selecting a row must not reflow the toolbar, or the second
+// click of a double-click lands on a different row. The count's width follows
+// the folder's content (its empty state reserves the folder's widest summary),
+// so the toolbar keeps the same height before and after the first click at
+// every width.
+test("selecting a row never shifts the list at any width", async ({ page }) => {
+  for (const width of [768, 900, 1024, 1100, 1180, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 1024 });
+    await mockApi(page);
+    await page.goto(`${baseURL}/servers/${server1}/files`);
+    await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+
+    const firstRowY = () =>
+      page.evaluate(
+        () =>
+          (
+            document.querySelector(
+              ".fm-table .fm-row:not(.fm-head)",
+            ) as HTMLElement
+          ).getBoundingClientRect().y,
+      );
+    const before = await firstRowY();
+
+    // The first click of a double-click selects the row (JUS-130).
+    await page.locator(".fm-label").first().click();
+    await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
+    const selected = await firstRowY();
+    expect(
+      Math.abs(selected - before),
+      `row shift on select at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+
+    // Clearing the selection returns to the reserved empty state.
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    const cleared = await firstRowY();
+    expect(
+      Math.abs(cleared - before),
+      `row shift on clear at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+  }
+});
+
 test("the entry list keeps at least 60% of a phone viewport with a selection", async ({
   page,
 }) => {
@@ -683,8 +725,13 @@ test("the folder filter resets on navigation and the footer counts the filtered 
   const search = page.locator(".fm-search input");
   await search.fill("etc");
 
-  // While filtering, the footer says how many of the folder's entries show.
+  // While filtering, the footer says how many of the folder's entries show,
+  // and the breakdown follows the filtered rows: only the matching directory
+  // is counted, so the whole folder's "2 folders · 1 symlink" is not mixed in
+  // (JUS-141).
   await expect(page.locator(".fm-foot")).toContainText("1 of 3 entries");
+  await expect(page.locator(".fm-foot")).toContainText("1 folders");
+  await expect(page.locator(".fm-foot")).not.toContainText("symlink");
 
   // Opening the filtered folder clears the needle: its own listing is not
   // silently hidden behind the stale filter.
@@ -692,6 +739,10 @@ test("the folder filter resets on navigation and the footer counts the filtered 
   await expect(page.locator(".fm-label").filter({ hasText: "hosts" })).toBeVisible();
   await expect(search).toHaveValue("");
   await expect(page.locator(".fm-foot")).toContainText("1 entries");
+
+  // A filtered single-entry folder reads "1 of 1 entry", not "1 of 1 entries".
+  await search.fill("hosts");
+  await expect(page.locator(".fm-foot")).toContainText("1 of 1 entry");
 });
 
 test("a symlink row shows its target and can jump to it", async ({ page }) => {

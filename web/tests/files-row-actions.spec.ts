@@ -562,7 +562,12 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expect(rowFor(page, "app.yaml")).toBeVisible();
     await expectMenuOpen(page, "app.yaml");
     await page.getByRole("button", { name: "Size", exact: true }).focus();
-    await page.keyboard.press("Enter");
+    await page.keyboard.press(" ");
+    // The sort really happened (Space activates the header) and the menu stayed.
+    await expect(page.locator(".fm-head .fm-cell--size")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
     await expectMenuOpen(page, "app.yaml");
   });
 
@@ -646,6 +651,88 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expectMenuOpen(page, "app.yaml");
     await page.keyboard.press("Escape");
     await expectMenuClosed(page, "app.yaml");
+  });
+
+  test("the context menu closes on a folder change, view switch and tab change", async ({
+    page,
+  }) => {
+    await openFiles(page);
+
+    // (a) folder change, keyboard: the context menu must not survive into the new
+    // directory where its Rename/Delete would act on the wrong file.
+    await rowFor(page, "app.yaml").click({ button: "right" });
+    await expect(menuFor(page, "app.yaml")).toBeVisible();
+    await rowFor(page, "config").locator(".fm-label").focus();
+    await page.keyboard.press("Enter");
+    await expect(rowFor(page, "app.yaml")).toBeVisible();
+    await expect(page.getByRole("menu")).toHaveCount(0);
+
+    // (b) list -> grid, keyboard: the list rows (and their context menu) unmount.
+    await rowFor(page, "app.yaml").click({ button: "right" });
+    await expect(menuFor(page, "app.yaml")).toBeVisible();
+    await page.getByRole("button", { name: "Grid view" }).focus();
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-grid")).toBeVisible();
+    await expect(page.getByRole("menu")).toHaveCount(0);
+
+    // (c) tab change via the tablist keyboard.
+    await page.getByRole("button", { name: "List view" }).focus();
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-table")).toBeVisible();
+    await page.getByRole("button", { name: "New tab" }).click();
+    await expect(page.getByRole("tab")).toHaveCount(2);
+    await rowFor(page, "app.yaml").click({ button: "right" });
+    await expect(menuFor(page, "app.yaml")).toBeVisible();
+    await page.locator('[role="tab"][aria-selected="true"]').focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+  });
+
+  test("the Shift+F10 row menu closes on a folder change", async ({ page }) => {
+    await openFiles(page);
+    await rowFor(page, "app.yaml").locator(".fm-label").focus();
+    await page.keyboard.press("Shift+F10");
+    await expectMenuOpen(page, "app.yaml");
+
+    await rowFor(page, "config").locator(".fm-label").focus();
+    await page.keyboard.press("Enter");
+    await expect(rowFor(page, "app.yaml")).toBeVisible();
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(moreFor(page, "app.yaml")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  test("a sort/filter keeps the ⋮ open but closes the context menu", async ({
+    page,
+  }) => {
+    await openFiles(page);
+
+    // The context menu closes on a filter change (its pin cannot survive a
+    // reorder), while the ⋮ dropdown below keeps its documented keep-open.
+    await rowFor(page, "app.yaml").click({ button: "right" });
+    await expect(menuFor(page, "app.yaml")).toBeVisible();
+    await page.locator(".fm-search input").fill("app");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await page.locator(".fm-search input").fill("");
+
+    // The context menu closes on a sort change too (Space really sorts).
+    await rowFor(page, "app.yaml").click({ button: "right" });
+    await expect(menuFor(page, "app.yaml")).toBeVisible();
+    await page.getByRole("button", { name: "Size", exact: true }).focus();
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-head .fm-cell--size")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+    await expect(page.getByRole("menu")).toHaveCount(0);
+
+    // The ⋮ dropdown stays open (and agrees) across a filter that keeps the row.
+    await moreFor(page, "app.yaml").click();
+    await expectMenuOpen(page, "app.yaml");
+    await page.locator(".fm-search input").fill("app");
+    await expectMenuOpen(page, "app.yaml");
   });
 
   test("deleting the open entry closes the menu and drops the trigger", async ({

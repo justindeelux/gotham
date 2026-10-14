@@ -1444,7 +1444,7 @@ watch(
     ] as const,
   () => {
     releaseFocus();
-    closeRowMenu();
+    closeRowContext();
     rovingName.value = null;
     resetTypeahead();
   },
@@ -1455,7 +1455,7 @@ watch(
 watch(pinnedIndex, (index) => {
   if (index === -1) {
     releaseFocus();
-    closeRowMenu();
+    closeRowContext();
   }
 });
 
@@ -1814,16 +1814,31 @@ const contextAria = computed<string>(() =>
 const rowMenuOpenName = ref<string | null>(null);
 
 /**
- * resetRowMenu clears the tracked ⋮ open name. It runs whenever the row menu
- * cannot legitimately stay open — the row left the rendered set, the listing
- * layout changed (view mode / folder / tab / root), or the row was replaced —
- * always paired with a remount of the dropdowns (see `layoutKey`), so the popup
- * and `aria-expanded` close together. It is NOT called for a reorder/filter that
- * keeps the same row mounted: that keeps the menu open with `aria-expanded="true"`
- * (documented behaviour, JUS-140).
+ * closeRowContext closes the context / Shift+F10 row menu and releases its pin.
+ * The context menu is a separate controlled dropdown that shares the row's
+ * `rowMenu` options, so it must be closed through the same reset path.
+ */
+function closeRowContext(): void {
+  contextOpen.value = false;
+  contextEntry.value = null;
+  closeRowMenu();
+}
+
+/**
+ * resetRowMenu closes EVERY row-menu surface — the ⋮ dropdown, the context /
+ * Shift+F10 menu, and the menu pin — because they all show the same `rowMenu`
+ * options for one row. It runs on a listing LAYOUT change (view-mode flip,
+ * folder / tab / root change) and when the open row leaves the rendered set, so
+ * a menu can never survive into a listing where it would act on the wrong file.
+ *
+ * A reorder / filter that keeps the same row mounted is deliberately excluded:
+ * the ⋮ dropdown stays open with `aria-expanded="true"` (documented keep-open).
+ * The context menu, whose pin cannot survive a reorder, is closed separately by
+ * the listing-identity watcher via {@link closeRowContext}.
  */
 function resetRowMenu(): void {
   rowMenuOpenName.value = null;
+  closeRowContext();
 }
 
 /**
@@ -1841,15 +1856,18 @@ const layoutKey = computed<string>(
 watch(layoutKey, resetRowMenu);
 
 // The open row can leave the rendered set without its dropdown closing (drawn
-// out of the window, deleted or renamed by a refresh): clear the name as soon as
-// it is no longer rendered, so a later render of the same name is never stale.
+// out of the window, deleted or renamed by a refresh): close the menus as soon
+// as that row is no longer rendered, so a later render of the same name is never
+// stale. Both surfaces count — the ⋮ dropdown and the context menu.
 watch(renderedKeys, () => {
-  const name = rowMenuOpenName.value;
-  if (name === null) {
+  const openName =
+    rowMenuOpenName.value ??
+    (contextOpen.value ? (contextEntry.value?.name ?? null) : null);
+  if (openName === null) {
     return;
   }
   const rendered = files.viewMode === "grid" ? gridRows.value : listRows.value;
-  if (!rendered.some((row) => row.entry.name === name)) {
+  if (!rendered.some((row) => row.entry.name === openName)) {
     resetRowMenu();
   }
 });

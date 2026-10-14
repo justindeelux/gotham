@@ -219,13 +219,19 @@ async function expectMenuAgrees(page: Page, name: string): Promise<void> {
     .toMatch(/^(open:true|closed:false)$/);
 }
 
-/** expectDescribes asserts the roving description node describes `entry`. */
+/** expectDescribes asserts ONLY the roving row is described by `entry`, and that
+ * the single shared node carries that entry's mode and absolute modified time. */
 async function expectDescribes(page: Page, entry: string): Promise<void> {
   const row = page.locator(`.fm-row[data-entry="${entry}"]`);
   await expect(row.locator(".fm-label")).toHaveAttribute(
     "aria-describedby",
     "fm-row-details",
   );
+  // Negative half: exactly one row references the node, so every other row's
+  // label carries no aria-describedby.
+  await expect(
+    page.locator('.fm-row .fm-label[aria-describedby="fm-row-details"]'),
+  ).toHaveCount(1);
   const mode = await row.locator(".fm-mode").getAttribute("title");
   const date = await row.locator(".fm-date").getAttribute("title");
   await expect(page.locator("#fm-row-details")).toHaveText(
@@ -511,11 +517,12 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expect(page.locator('.fm-label[tabindex="0"]')).toHaveCount(1);
 
     // The grid tile carries the same single-node description (mode is not a
-    // visible cell there).
+    // visible cell there), and again only the roving tile is described.
     await page.getByRole("button", { name: "Grid view" }).click();
     const tile = page.locator('.fm-tile[tabindex="0"]');
     await expect(tile).toHaveCount(1);
     await expect(tile).toHaveAttribute("aria-describedby", "fm-row-details");
+    await expect(page.locator('.fm-tile[aria-describedby="fm-row-details"]')).toHaveCount(1);
     await expect(tile).toHaveAccessibleDescription(/Mode |Quyền /);
   });
 
@@ -575,7 +582,7 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expectMenuClosed(page, "app.yaml");
   });
 
-  test("a listing change reusing a same-named row keeps popup and aria in agreement", async ({
+  test("a folder change closes the row menu (even when the row name is reused)", async ({
     page,
   }) => {
     await openFiles(page);
@@ -583,13 +590,36 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expectMenuOpen(page, "app.yaml");
 
     // Keyboard-open `config`; the mock returns the same listing, so the
-    // same-named `app.yaml` node (and its open popup) is reused. The trigger and
-    // the popup must still agree — never aria-expanded="false" while a menu shows.
+    // same-named `app.yaml` node is reused. A folder change is a different
+    // directory, so the menu must close (a leftover menu would act on the new
+    // file); the trigger and the popup close together.
     await rowFor(page, "config").locator(".fm-label").focus();
     await page.keyboard.press("Enter");
     await expect(rowFor(page, "app.yaml")).toBeVisible();
+    await expectMenuClosed(page, "app.yaml");
     await expectMenuAgrees(page, "app.yaml");
+  });
+
+  test("a keyboard list↔grid view switch with the menu open closes it", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await moreFor(page, "app.yaml").click();
     await expectMenuOpen(page, "app.yaml");
+
+    // Focus the Grid toggle and activate it with Space: no pointerdown, so the
+    // dropdown is not closed by click-away — the row unmounts (and remounts on
+    // return) without emitting a close.
+    await page.getByRole("button", { name: "Grid view" }).focus();
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-grid")).toBeVisible();
+
+    await page.getByRole("button", { name: "List view" }).focus();
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-table")).toBeVisible();
+    await expect(rowFor(page, "app.yaml")).toBeVisible();
+    await expectMenuClosed(page, "app.yaml");
+    await expectMenuAgrees(page, "app.yaml");
   });
 
   test("a tab switch closes the row menu", async ({ page }) => {

@@ -427,10 +427,10 @@ function onRowClick(event: MouseEvent, entry: FilesEntry): void {
     return;
   }
   files.selectOnly(entry.name);
-  // A plain click/tap also moves the roving row to the pressed entry, so the
-  // roving tab stop (and the shared accessible description that tracks it) never
-  // describes a different row than the one the user just clicked (JUS-140). It
-  // moves the tab stop only — no scroll/focus nudge (JUS-130/137), unlike the
+  // A plain click/tap on a selectable row also moves the roving row to the
+  // pressed entry, so the roving tab stop (and the shared accessible description
+  // that tracks it) describes the row the user just clicked (JUS-140). It moves
+  // the tab stop only — no scroll/focus nudge (JUS-130/137), unlike the
   // Shift+click arm above, which has to restore the focus its press cancelled.
   rovingName.value = entry.name;
 }
@@ -1814,18 +1814,31 @@ const contextAria = computed<string>(() =>
 const rowMenuOpenName = ref<string | null>(null);
 
 /**
- * resetRowMenu drops the tracked open name when its row leaves the rendered set
- * — the one case the dropdown cannot report itself: an unmounting NDropdown
- * never emits `update:show(false)`, so a name left behind would render
- * `aria-expanded="true"` with no menu. `rowMenuOpenName` mirrors the dropdown's
- * own `show` (set from `@update:show`), so this only ever runs once the popup
- * has already unmounted and the two always agree. A listing change that keeps
- * the owning row mounted (sort/filter/scroll, or a navigation that reuses the
- * same-named node) leaves the menu open and `aria-expanded` "true" (JUS-140).
+ * resetRowMenu clears the tracked ⋮ open name. It runs whenever the row menu
+ * cannot legitimately stay open — the row left the rendered set, the listing
+ * layout changed (view mode / folder / tab / root), or the row was replaced —
+ * always paired with a remount of the dropdowns (see `layoutKey`), so the popup
+ * and `aria-expanded` close together. It is NOT called for a reorder/filter that
+ * keeps the same row mounted: that keeps the menu open with `aria-expanded="true"`
+ * (documented behaviour, JUS-140).
  */
 function resetRowMenu(): void {
   rowMenuOpenName.value = null;
 }
+
+/**
+ * layoutKey identifies the listing LAYOUT — a list↔grid flip or a folder / tab /
+ * root change — as opposed to a reorder / filter that keeps the same rows. It is
+ * bound as the per-row ⋮ dropdown's `key`, so a layout change remounts the
+ * uncontrolled dropdowns closed (they have no imperative close) while the
+ * watcher clears the tracked state, keeping the popup and `aria-expanded` in
+ * step (JUS-140).
+ */
+const layoutKey = computed<string>(
+  () =>
+    `${files.viewMode}:${files.activeTabId}:${files.rootName}:${files.path}`,
+);
+watch(layoutKey, resetRowMenu);
 
 // The open row can leave the rendered set without its dropdown closing (drawn
 // out of the window, deleted or renamed by a refresh): clear the name as soon as
@@ -2564,6 +2577,7 @@ function onFolderMenu(key: string): void {
                    menu, so there is deliberately no ⋮ to open an empty menu. -->
               <NDropdown
                 v-if="rowMenu(entry).length > 0"
+                :key="`${layoutKey}:${entry.name}`"
                 trigger="click"
                 placement="bottom-end"
                 :options="rowMenu(entry)"

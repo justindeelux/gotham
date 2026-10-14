@@ -32,6 +32,7 @@ const vi = {
     renameEntry: "Đổi tên {name}",
     moreActions: "Thêm thao tác cho {name}",
     folderActions: "Thao tác thư mục",
+    rowDetails: "Quyền {mode}, sửa đổi {modified}",
     fileNeedsRole: "Nội dung tệp yêu cầu vai trò chủ sở hữu hoặc quản trị.",
     columnName: "Tên",
     columnType: "Loại",

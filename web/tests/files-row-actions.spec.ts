@@ -192,10 +192,9 @@ test.describe("icon-only controls are accessible", () => {
     const row = rowFor(page, "app.yaml");
     const inline = row.locator(".fm-action");
     const more = page.getByRole("button", { name: "More actions for app.yaml" });
+    const rowMenu = page.getByRole("menu", { name: "More actions for app.yaml" });
 
-    // No hover: the menu button is already visible (touch reachable), while the
-    // inline actions are hidden.
-    await expect(more).toHaveCSS("opacity", "1");
+    // No hover: the inline actions are hidden.
     await expect(inline.first()).toHaveCSS("opacity", "0");
 
     // Hovering the row reveals the inline actions.
@@ -213,6 +212,14 @@ test.describe("icon-only controls are accessible", () => {
     // Focusing the ⋮ also keeps the row's inline actions revealed (focus-within).
     await more.focus();
     await expect(inline.first()).toHaveCSS("opacity", "1");
+
+    // The ⋮ is reachable without a hover: a real click opens the row menu. (A
+    // bare `opacity: 1` here cannot fail — the ⋮ is never dimmed — so the
+    // assertion is the disclosure it actually drives.)
+    await more.click();
+    await expect(rowMenu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(rowMenu).toBeHidden();
   });
 
   test("every toolbar and row icon-only control has an aria-label and a title", async ({
@@ -353,6 +360,111 @@ test.describe("icon-only controls are accessible", () => {
       await expect(button, name).toHaveAttribute("aria-label", name);
       await expect(button, name).toHaveAttribute("title", name);
     }
+  });
+});
+
+// JUS-140: keyboard/touch reachability of the row menu state, the mode and
+// modified details, focus when the selection bar hides, and the Paste button's
+// accessible name (label-in-name). Every assertion fails before its fix.
+test.describe("row action accessibility nits (JUS-140)", () => {
+  test("the row ⋮ exposes its menu state (haspopup + expanded)", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const more = page.getByRole("button", { name: "More actions for app.yaml" });
+    const rowMenu = page.getByRole("menu", { name: "More actions for app.yaml" });
+
+    await expect(more).toHaveAttribute("aria-haspopup", "menu");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+
+    // A real click opens the menu and flips the state.
+    await more.click();
+    await expect(rowMenu).toBeVisible();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+
+    // Escape closes it on the dropdown's own route, resetting the state.
+    await page.keyboard.press("Escape");
+    await expect(rowMenu).toBeHidden();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+
+    // Click-away closes it too, on the dropdown's own route.
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    await page.locator(".fm-card-title").click();
+    await expect(rowMenu).toBeHidden();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+
+    // The same row menu opened by right-click (the context-menu route) is the
+    // ⋮'s controlled content, so its state reflects it.
+    const folderMore = page.getByRole("button", {
+      name: "More actions for config",
+    });
+    await rowFor(page, "config").click({ button: "right" });
+    await expect(page.getByRole("menu", { name: "More actions for config" })).toBeVisible();
+    await expect(folderMore).toHaveAttribute("aria-expanded", "true");
+    await page.keyboard.press("Escape");
+    await expect(folderMore).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("the roving row describes its symbolic mode and absolute modified time", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    // The Mode/Modified cells keep their hover `title`, but a keyboard or touch
+    // user cannot reach those — the roving row carries them as its accessible
+    // description instead (no extra tab stop: JUS-139).
+    const label = rowFor(page, "app.yaml").locator(".fm-label");
+    await expect(label).toHaveAttribute("aria-description", /-rw-r--r--/);
+    await expect(label).toHaveAttribute("aria-description", /2026-10-12 09:02/);
+    await expect(
+      page.locator('.fm-table .fm-label[tabindex="0"]'),
+    ).toHaveCount(1);
+
+    // The grid tile carries the same description (mode is not a visible cell).
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(
+      page.locator('.fm-tile-wrap[data-entry="app.yaml"] .fm-tile'),
+    ).toHaveAttribute("aria-description", /-rw-r--r--/);
+    await expect(page.locator('.fm-tile[tabindex="0"]')).toHaveCount(1);
+  });
+
+  test("the selection bar hiding never drops focus to <body>", async ({ page }) => {
+    await openFiles(page);
+    const checkbox = rowFor(page, "app.yaml").locator(".fm-select .n-checkbox");
+
+    // A real click selects the row, so the Clear control (which holds focus when
+    // clicked) is shown inside the bar.
+    await checkbox.click();
+    const clear = page.getByRole("button", { name: "Clear", exact: true });
+    await expect(clear).toBeVisible();
+    await clear.click();
+
+    // The bar hides; focus must land on the roving row, not the body.
+    await expect(page.locator("body")).not.toBeFocused();
+    await expect(page.locator('.fm-label[tabindex="0"]')).toBeFocused();
+
+    // Unchecking the last row hides the bar again; the checkbox keeps focus.
+    await checkbox.click();
+    await expect(clear).toBeVisible();
+    await checkbox.click();
+    await expect(page.locator("body")).not.toBeFocused();
+  });
+
+  test("the Paste button's accessible name contains its visible label", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    // Fill the clipboard so the Paste button (label "Paste (1)") renders.
+    await rowFor(page, "app.yaml").locator(".fm-select .n-checkbox").click();
+    await page.getByRole("button", { name: "Copy", exact: true }).click();
+
+    const paste = page.getByRole("button", { name: /^Paste \(1\)/ });
+    await expect(paste).toBeVisible();
+    await expect(paste).toHaveAttribute("aria-label", /^Paste \(1\)/);
+    // Label-in-name: the accessible name contains the visible label text. (Here
+    // the button is also disabled by the same-folder problem, whose text follows
+    // the visible label in the name.)
+    await expect(paste).toHaveAccessibleName(/Paste \(1\)/);
   });
 });
 

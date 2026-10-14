@@ -257,6 +257,18 @@ const pasteProblemText = computed<string>(() =>
   pasteProblemMessage(files.pasteProblem),
 );
 
+/**
+ * pasteLabel is the Paste button's visible label ("Paste (2)"), optionally
+ * followed by the problem explaining why it is disabled. The accessible name
+ * must contain that visible text (WCAG label-in-name), so one computed feeds
+ * both the label and the aria-label/title (JUS-140).
+ */
+const pasteLabel = computed<string>(() => {
+  const count = files.clipboard?.names.length ?? 0;
+  const base = `${String(t("files.actions.paste"))} (${count})`;
+  return pasteProblemText.value ? `${base} — ${pasteProblemText.value}` : base;
+});
+
 /** typeLabel resolves the Type column through the active locale. */
 function typeLabel(entry: FilesEntry): string {
   return entryTypeLabel(entry, locale.value);
@@ -823,6 +835,21 @@ function modifiedLabel(entry: FilesEntry): string {
     entry.modified_at,
     locale.value === "vi" ? "vi" : "en",
     { long: true, now: coarseNow.value },
+  );
+}
+
+/**
+ * rowDetails is the roving row's accessible description: the symbolic mode and
+ * the absolute modified time. The Mode/Modified cells keep them in `title`, but
+ * a native title tooltip is unreachable for keyboard and touch users, so they
+ * reach the same values through this description (JUS-140) — no extra tab stop.
+ */
+function rowDetails(entry: FilesEntry): string {
+  return String(
+    t("files.browser.rowDetails", {
+      mode: formatMode(entry.mode),
+      modified: formatTimestamp(entry.modified_at),
+    }),
   );
 }
 
@@ -1396,6 +1423,36 @@ watch(pinnedIndex, (index) => {
   }
 });
 
+// A control inside the bulk-actions bar can hide with the selection (Clear, or
+// the bar collapsing when the last row is unchecked). The bar is hidden with
+// `visibility` — not removed — so Chromium blurs its focused control and focus
+// falls to <body>; hand it to the roving row instead (JUS-140). The pre-flush
+// watcher reads who held focus BEFORE the bar hides; the post-flush one moves
+// it, keeping the JUS-139 one-tab-stop rule (focusEntry targets the roving row).
+let selectionBarHadFocus = false;
+watch(
+  hasSelection,
+  (active, previous) => {
+    if (previous && !active) {
+      selectionBarHadFocus =
+        document.activeElement?.closest(".fm-selection-actions") !== null;
+    }
+  },
+  { flush: "pre" },
+);
+watch(
+  hasSelection,
+  async (active, previous) => {
+    if (!previous || active || !selectionBarHadFocus) {
+      return;
+    }
+    selectionBarHadFocus = false;
+    await nextTick();
+    focusEntry(rovingTabName.value);
+  },
+  { flush: "post" },
+);
+
 // Move focus to the active tab as soon as it changes (nextTick), never after
 // the tab's listing finishes loading — otherwise the roving tabindex lags
 // behind and the next arrow press navigates from the stale tab. Also covers a
@@ -1715,6 +1772,30 @@ const contextAria = computed<string>(() =>
     ? String(t("files.browser.moreActions", { name: contextEntry.value.name }))
     : String(t("files.browser.folderActions")),
 );
+
+/** rowMenuOpenName is the row whose ⋮ dropdown is open (aria-expanded). */
+const rowMenuOpenName = ref<string | null>(null);
+
+/**
+ * isRowMenuOpen reports whether a row's menu is open by EITHER trigger — the ⋮
+ * dropdown or the right-click / Shift+F10 context route (they show the same
+ * menu), so the ⋮'s aria-expanded reflects the real open state (JUS-140).
+ */
+function isRowMenuOpen(entry: FilesEntry): boolean {
+  return (
+    rowMenuOpenName.value === entry.name ||
+    (contextOpen.value && contextEntry.value?.name === entry.name)
+  );
+}
+
+/** onRowMenuShow tracks one row's ⋮ dropdown open/close (Escape, click-away, select). */
+function onRowMenuShow(name: string, show: boolean): void {
+  rowMenuOpenName.value = show
+    ? name
+    : rowMenuOpenName.value === name
+      ? null
+      : rowMenuOpenName.value;
+}
 
 /** openRowContext opens the row menu at the pointer and applies the selection rule. */
 function openRowContext(event: MouseEvent, entry: FilesEntry): void {
@@ -2057,8 +2138,8 @@ function onFolderMenu(key: string): void {
           size="small"
           secondary
           :disabled="files.acting || files.pasteProblem !== null"
-          :title="pasteProblemText || $t('files.actions.paste')"
-          :aria-label="pasteProblemText || $t('files.actions.paste')"
+          :title="pasteLabel"
+          :aria-label="pasteLabel"
           @click="() => void pasteAction()"
         >
           <template #icon>
@@ -2331,6 +2412,7 @@ function onFolderMenu(key: string): void {
                 type="button"
                 class="fm-label"
                 :tabindex="rowTabindex(entry.name)"
+                :aria-description="rowDetails(entry)"
               >
                 <b>{{ entry.name }}</b>
                 <span v-if="entryTarget(entry)" class="fm-target" :title="entryTarget(entry)">
@@ -2424,11 +2506,14 @@ function onFolderMenu(key: string): void {
                   role: 'menu',
                   'aria-label': $t('files.browser.moreActions', { name: entry.name }),
                 })"
+                @update:show="(show: boolean) => onRowMenuShow(entry.name, show)"
                 @select="(key: string) => onRowMenu(key, entry)"
               >
                 <NButton
                   size="tiny"
                   quaternary
+                  aria-haspopup="menu"
+                  :aria-expanded="isRowMenuOpen(entry)"
                   :title="$t('files.browser.moreActions', { name: entry.name })"
                   :aria-label="$t('files.browser.moreActions', { name: entry.name })"
                 >
@@ -2503,6 +2588,7 @@ function onFolderMenu(key: string): void {
             class="fm-tile"
             :class="{ 'is-selected': files.isSelected(entry.name) }"
             :tabindex="rowTabindex(entry.name)"
+            :aria-description="rowDetails(entry)"
           >
             <span class="fm-tile-top">
               <FileTypeIcon :kind="iconKind(entry)" />

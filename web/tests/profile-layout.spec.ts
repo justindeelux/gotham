@@ -125,7 +125,11 @@ async function factBoxes(page: Page) {
   );
 }
 
-for (const width of [480, 520, 560, 600]) {
+// JUS-135: below the tablet breakpoint the app shell no longer reserves the
+// 72px server rail, so the content column (and this card) is ~60px wider at a
+// given viewport. The 480px container threshold therefore now sits at a
+// viewport of ~560px; the narrow cases below stay safely under it.
+for (const width of [420, 480, 540]) {
   test(`identity facts stack label-over-value at ${width}px viewport`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await openProfile(page);

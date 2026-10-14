@@ -76,6 +76,7 @@ const vi: CommonMessages = {
   },
   shell: {
     navToggle: "Bật/tắt điều hướng",
+    serversToggle: "Bật/tắt máy chủ",
     envTitle: "Môi trường phục vụ: {env}",
     cpPortTitle: "Cổng HTTP control-plane",
     grpcPortTitle: "Cổng gRPC agent",

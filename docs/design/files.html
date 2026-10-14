@@ -68,7 +68,11 @@
                  Compress/Delete/Clear) appear on it only while entries are
                  selected, so no permanently disabled row is rendered. Labels
                  collapse to icon-only <=640px, each keeping a title +
-                 aria-label. -->
+                 aria-label.
+                 JUS-135: on a phone the band is three compact rows and the
+                 selection cluster (with its count) is a full-width,
+                 horizontally scrolling row of 44px targets, so the entry list
+                 keeps >=60% of the viewport while a selection is active. -->
             <!-- JUS-123/126: browser tabs. Each tab owns its own root, path,
                  selection, sort/filter and scroll offset; the clipboard stays
                  shared across tabs. Middle-click or × closes a tab; + opens a
@@ -367,8 +371,8 @@
 
             <div class="fm-foot">
               <span class="grow">12 entries · 4 folders · 6 files · 1 symlink · 1 socket</span>
-              <span>Root: <span class="mono">/var/lib/gotham/volumes</span> · writable</span>
-              <span>Free space: <span class="mono">21.6 GiB</span> of 40 GiB</span>
+              <span class="fm-foot-path">Root: <span class="mono">/var/lib/gotham/volumes</span> · writable</span>
+              <span class="fm-foot-free">Free space: <span class="mono">21.6 GiB</span> of 40 GiB</span>
             </div>
           </div>
         </div>

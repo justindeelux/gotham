@@ -19,6 +19,10 @@ import type { Locator, Page } from "@playwright/test";
 //     small screens.
 //   - JUS-131 the permissions dialog shows the bits grid first with the octal
 //     field below it, and drops the explanatory copy.
+//   - JUS-135 the phone toolbar keeps the list at >=60% of the viewport with a
+//     selection active (the bulk actions become one scrolling 44px row) and
+//     the server rail collapses into a Naive UI drawer below the tablet
+//     breakpoint.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -348,10 +352,18 @@ test("bulk actions stay reachable with a selection at every width", async ({
     expect(toolbarBox, `toolbar missing at ${viewport.width}px`).not.toBeNull();
     await expect(page.locator(".fm-bulk-count")).toContainText("60 selected");
 
+    // JUS-135: on a phone the bulk actions live in one horizontally scrolling
+    // row (so the toolbar never wraps into the list), so each action is
+    // scrolled into view before it is measured.
+    const scrolling = viewport.width <= 640;
     for (const name of bulkActions) {
+      const button = toolbar.getByRole("button", { name, exact: true });
+      if (scrolling) {
+        await button.scrollIntoViewIfNeeded();
+      }
       await assertReachable(
         page,
-        toolbar.getByRole("button", { name, exact: true }),
+        button,
         toolbarBox!,
         viewport,
         name,
@@ -359,20 +371,88 @@ test("bulk actions stay reachable with a selection at every width", async ({
       );
     }
 
-    // Nothing in the toolbar (buttons or the count) spills past its right edge.
-    const spill = await page.evaluate(() => {
-      const bar = document.querySelector(".fm-toolbar") as HTMLElement | null;
-      if (bar === null) {
-        return null;
-      }
-      const right = bar.getBoundingClientRect().right;
-      return [...bar.querySelectorAll("button, .fm-bulk-count")]
-        .map((element) => element.getBoundingClientRect().right - right)
-        .reduce((max, value) => Math.max(max, value), Number.NEGATIVE_INFINITY);
-    });
-    expect(spill, `no toolbar spill at ${viewport.width}px`).not.toBeNull();
-    expect(spill!).toBeLessThanOrEqual(1);
+    if (scrolling) {
+      // The row is the intended scroll region: it must scroll so Delete/Clear
+      // stay reachable, and every action is a 44px touch target.
+      const overflow = await page.evaluate(() => {
+        const row = document.querySelector(".fm-selection-actions") as HTMLElement | null;
+        return row ? row.scrollWidth - row.clientWidth : null;
+      });
+      expect(overflow, "phone bulk row scrolls").not.toBeNull();
+      expect(overflow!).toBeGreaterThan(0);
+      const height = await toolbar
+        .getByRole("button", { name: "Delete", exact: true })
+        .evaluate((element) => element.getBoundingClientRect().height);
+      expect(height).toBeGreaterThanOrEqual(44);
+    } else {
+      // Nothing in the toolbar (buttons or the count) spills past its right edge.
+      const spill = await page.evaluate(() => {
+        const bar = document.querySelector(".fm-toolbar") as HTMLElement | null;
+        if (bar === null) {
+          return null;
+        }
+        const right = bar.getBoundingClientRect().right;
+        return [...bar.querySelectorAll("button, .fm-bulk-count")]
+          .map((element) => element.getBoundingClientRect().right - right)
+          .reduce((max, value) => Math.max(max, value), Number.NEGATIVE_INFINITY);
+      });
+      expect(spill, `no toolbar spill at ${viewport.width}px`).not.toBeNull();
+      expect(spill!).toBeLessThanOrEqual(1);
+    }
   }
+});
+
+// JUS-135: the phone toolbar must not eat the list. With a selection active
+// (the tallest chrome state) the entry list keeps at least 60% of an iPhone-14
+// viewport.
+test("the entry list keeps at least 60% of a phone viewport with a selection", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+
+  await page.locator(".fm-head .n-checkbox").click();
+  await expect(page.locator(".fm-bulk-count")).toContainText("60 selected");
+
+  const share = await page.evaluate(() => {
+    const wrap = document.querySelector(".table-wrap") as HTMLElement | null;
+    return wrap ? wrap.clientHeight / window.innerHeight : 0;
+  });
+  expect(share, "entry list share of the phone viewport").toBeGreaterThanOrEqual(0.6);
+});
+
+// JUS-135: below the tablet breakpoint the server rail is a Naive UI drawer
+// (focus trap / Escape / dialog semantics) instead of an always-on column, so
+// the content column owns the full width.
+test("the server rail collapses into a phone drawer", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-label").first()).toBeVisible();
+
+  // No always-on rail at a phone width, and no drawer until it is opened.
+  await expect(page.locator(".app > .rail")).toHaveCount(0);
+  await expect(page.locator(".rail-drawer")).toHaveCount(0);
+
+  const toggle = page.getByRole("button", { name: "Toggle servers" });
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const dialog = page.locator(".n-drawer[role='dialog']");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".rail")).toBeVisible();
+  await expect(
+    dialog.getByRole("link", { name: "Add server", exact: true }),
+  ).toBeVisible();
+
+  // Escape closes the drawer and focus returns to the trigger (NDrawer).
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(toggle).toBeFocused();
 });
 
 test("the toolbar groups New, keeps bulk tools right and is icon-only on small screens", async ({

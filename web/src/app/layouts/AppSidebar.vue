@@ -200,7 +200,9 @@ a.nav-item.is-active .nav-count {
 @media (max-width: 1024px) {
   .sidebar {
     position: fixed;
-    left: var(--rail-w);
+    /* JUS-135: the rail is a drawer below the tablet breakpoint, so the
+       sidebar drawer starts at the viewport's left edge. */
+    left: 0;
     top: 0;
     bottom: 0;
     width: var(--sidebar-w);

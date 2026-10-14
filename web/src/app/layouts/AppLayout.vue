@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useMediaQuery } from "@vueuse/core";
 import { computed } from "vue";
 import { RouterView, useRoute } from "vue-router";
 
@@ -9,6 +10,11 @@ import AppTopbar from "./AppTopbar.vue";
 import { provideMobileNav } from "./useMobileNav";
 
 const { mobileNavOpen, closeMobileNav } = provideMobileNav();
+
+// JUS-135: below the tablet breakpoint the rail leaves the grid column and
+// moves into the rail drawer (AppTopbar). Only one ServerRail is ever mounted
+// because the rail owns the shared server poll (ServerRail.vue).
+const isMobile = useMediaQuery("(max-width: 1024px)");
 
 // A route with `fillViewport` owns its own scrolling region (see the file
 // browser, JUS-118): the page spans the viewport and never scrolls itself.
@@ -21,7 +27,7 @@ const fillViewport = computed(() => route.meta.fillViewport === true);
     class="app"
     :class="{ 'is-open': mobileNavOpen }"
   >
-    <ServerRail />
+    <ServerRail v-if="!isMobile" />
 
     <AppSidebar />
 
@@ -102,8 +108,10 @@ const fillViewport = computed(() => route.meta.fillViewport === true);
 }
 
 @media (max-width: 1024px) {
+  /* JUS-135: the rail has left the grid (it is a drawer now), so the single
+     remaining in-flow column is the content; the fixed sidebar overlays it. */
   .app {
-    grid-template-columns: var(--rail-w) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .page {
@@ -118,6 +126,13 @@ const fillViewport = computed(() => route.meta.fillViewport === true);
 
   .page {
     padding: var(--space-4) var(--space-4) var(--space-8);
+  }
+
+  /* JUS-135: on a phone the fill page keeps a tighter band so the file list
+     (the only scrolling region) gets more of the viewport. */
+  .page.page--fill {
+    padding-top: var(--space-2);
+    padding-bottom: calc(var(--space-2) + var(--ed-dock-h, 0px));
   }
 }
 

@@ -109,7 +109,7 @@ function switchNode(next: string | number | null): void {
       <template #header-tools>
         <span class="fm-node" role="group" :aria-label="t('files.browser.switchNode')">
           <ServerIcon class="fm-node__icon" :size="15" :stroke-width="1.8" aria-hidden="true" />
-          <span class="small muted">{{ t("files.browser.nodeLabel") }}</span>
+          <span class="small muted fm-field-label">{{ t("files.browser.nodeLabel") }}</span>
           <NSelect
             class="fm-node__select"
             size="small"
@@ -168,6 +168,12 @@ function switchNode(next: string | number | null): void {
        above wins and the shrink never takes effect. */
     min-width: 0;
     flex: 0 1 120px;
+  }
+
+  /* JUS-135: the "Agent node" caption is redundant with the control's
+     aria-label, so the header keeps the node + root selectors on one row. */
+  .fm-field-label {
+    display: none;
   }
 }
 </style>

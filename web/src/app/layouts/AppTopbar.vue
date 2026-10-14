@@ -1,18 +1,40 @@
 <script setup lang="ts">
-import { NButton } from "naive-ui";
-import { computed } from "vue";
+import { useMediaQuery } from "@vueuse/core";
+import { NButton, NDrawer } from "naive-ui";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { RouterLink } from "vue-router";
+import { RouterLink, useRoute } from "vue-router";
 
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import LanguageSelect from "@/shared/ui/LanguageSelect.vue";
 import { useAuthStore } from "@/features/auth";
+import ServerRail from "@/features/servers/components/ServerRail.vue";
 import AccountMenu from "./AccountMenu.vue";
 import { useMobileNav } from "./useMobileNav";
 
 const { t } = useI18n();
 const authStore = useAuthStore();
+const route = useRoute();
 const { mobileNavOpen, toggleNav } = useMobileNav();
+
+/**
+ * JUS-135: below the tablet breakpoint the server rail is a Naive UI drawer
+ * (focus trap, Escape and aria come from NDrawer) instead of an always-on
+ * column. The drawer closes on navigation and when the viewport grows back.
+ */
+const isMobile = useMediaQuery("(max-width: 1024px)");
+const railOpen = ref(false);
+watch(isMobile, (value) => {
+  if (!value) {
+    railOpen.value = false;
+  }
+});
+watch(
+  () => route.path,
+  () => {
+    railOpen.value = false;
+  },
+);
 
 /**
  * Listener ports shown as topbar chips. They mirror the backend defaults in
@@ -36,6 +58,21 @@ const envLabel = computed<string>(() => {
 
 <template>
   <header class="topbar">
+    <!-- JUS-135: the server rail becomes this drawer below the tablet
+         breakpoint; the trigger replaces the rail column on phones/tablets. -->
+    <NButton
+      quaternary
+      circle
+      class="rail-toggle"
+      :aria-label="t('shell.serversToggle')"
+      aria-haspopup="dialog"
+      :aria-expanded="railOpen"
+      @click="railOpen = true"
+    >
+      <template #icon>
+        <GothamIcon name="server" />
+      </template>
+    </NButton>
     <NButton
       quaternary
       circle
@@ -63,6 +100,20 @@ const envLabel = computed<string>(() => {
       </RouterLink>
     </div>
   </header>
+
+  <!-- JUS-135: the phone/tablet server rail. Naive's NDrawer supplies the
+       focus trap, Escape-to-close and dialog semantics; the content only
+       mounts while open, so the rail's server poll is not duplicated. -->
+  <NDrawer
+    v-model:show="railOpen"
+    placement="left"
+    :width="72"
+    :aria-label="t('servers.rail.navLabel')"
+  >
+    <div class="rail-drawer">
+      <ServerRail />
+    </div>
+  </NDrawer>
 </template>
 
 <style scoped>
@@ -118,8 +169,27 @@ const envLabel = computed<string>(() => {
   display: none;
 }
 
+.rail-toggle {
+  display: none;
+}
+
+/* JUS-135: the rail drawer. The drawer body owns no padding, so it just needs
+   to hand the full height to the rail (whose foot sticks to the bottom). */
+.rail-drawer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-warm);
+}
+
+.rail-drawer :deep(.rail) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 @media (max-width: 1024px) {
-  .nav-toggle {
+  .nav-toggle,
+  .rail-toggle {
     display: inline-flex;
   }
 }

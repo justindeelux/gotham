@@ -70,14 +70,14 @@
 
             <div class="fm-toolbar">
               <div class="fm-toolbar-group">
-                <button class="btn btn-sm btn-outline" type="button" data-open="fm-newfolder" aria-haspopup="menu" aria-expanded="false"><svg aria-hidden="true"><use href="#i-plus"></use></svg><span class="fm-btn-label">New</span><svg class="fm-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
-                <button class="btn btn-sm btn-primary" type="button" data-open="fm-upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Upload</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-open="fm-newfolder" aria-haspopup="menu" aria-expanded="false" aria-label="New" title="New"><svg aria-hidden="true"><use href="#i-plus"></use></svg><span class="fm-btn-label">New</span><svg class="fm-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
+                <button class="btn btn-sm btn-primary" type="button" data-open="fm-upload" aria-label="Upload" title="Upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Upload</span></button>
               </div>
               <div class="fm-toolbar-group fm-toolbar-end">
                 <!-- JUS-117: copy/cut land on a clipboard and Paste applies it
                      into the current folder. The button only appears while the
                      clipboard holds entries; the hint names the pending mode. -->
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Pasted 2 items into this folder.|success"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Paste (2)</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Pasted 2 items into this folder.|success" aria-label="Paste" title="Paste"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Paste (2)</span></button>
                 <span class="small muted">Cut clipboard</span>
                 <!-- JUS-128: the former .fm-bulk bar is gone. The selection
                      count and every bulk action live on the right of the
@@ -85,12 +85,12 @@
                      mockup shows 2 selected). Labels collapse to icon-only
                      <=640px, each keeping a title + aria-label. -->
                 <span class="small muted fm-bulk-count">2 selected · 1.4 MiB</span>
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Preparing a single-use download ticket for 2 items…|info"><svg aria-hidden="true"><use href="#i-download"></use></svg><span class="fm-btn-label">Download</span></button>
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Copied 2 items to the clipboard.|success"><svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="fm-btn-label">Copy</span></button>
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Cut 2 items to the clipboard.|success"><svg aria-hidden="true"><use href="#i-cut"></use></svg><span class="fm-btn-label">Cut</span></button>
-                <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress"><svg aria-hidden="true"><use href="#i-archive"></use></svg><span class="fm-btn-label">Compress…</span></button>
-                <button class="btn btn-sm btn-danger-ghost" type="button" data-confirm="Move the 2 selected entries? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete 2 entries" data-confirm-label="Move to recycle bin"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Delete</span></button>
-                <button class="btn btn-sm btn-ghost" type="button" data-toast="Selection cleared.|info"><svg aria-hidden="true"><use href="#i-x"></use></svg><span class="fm-btn-label">Clear</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Preparing a single-use download ticket for 2 items…|info" aria-label="Download" title="Download"><svg aria-hidden="true"><use href="#i-download"></use></svg><span class="fm-btn-label">Download</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Copied 2 items to the clipboard.|success" aria-label="Copy" title="Copy"><svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="fm-btn-label">Copy</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Cut 2 items to the clipboard.|success" aria-label="Cut" title="Cut"><svg aria-hidden="true"><use href="#i-cut"></use></svg><span class="fm-btn-label">Cut</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress" aria-label="Compress…" title="Compress…"><svg aria-hidden="true"><use href="#i-archive"></use></svg><span class="fm-btn-label">Compress…</span></button>
+                <button class="btn btn-sm btn-danger-ghost" type="button" data-confirm="Move the 2 selected entries? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete 2 entries" data-confirm-label="Move to recycle bin" aria-label="Delete" title="Delete"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Delete</span></button>
+                <button class="btn btn-sm btn-ghost" type="button" data-toast="Selection cleared.|info" aria-label="Clear" title="Clear"><svg aria-hidden="true"><use href="#i-x"></use></svg><span class="fm-btn-label">Clear</span></button>
               </div>
             </div>
 
@@ -129,6 +129,12 @@
                   <div role="columnheader" class="right">Actions</div>
                 </div>
 
+                <!-- Row actions (JUS-133): the inline actions reveal on row
+                     hover, keyboard focus or selection, but the ⋮ menu button
+                     is always visible so touch users reach the row menu without
+                     a hover. Every icon-only control pairs an aria-label with a
+                     title (tooltip). -->
+
                 <!-- folders -->
                 <div class="fm-row" role="row" data-tag="folder">
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select config"></label></span>
@@ -141,10 +147,10 @@
                   <div class="fm-cell" role="cell">2026-10-12 09:14</div>
                   <div class="fm-cell fm-mode" role="cell"><span>drwxr-xr-x</span><span class="fm-mode-octal">755</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened config/|info" aria-label="Open config"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename config"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move folder config and the 12 files inside it? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete folder" data-confirm-label="Move to recycle bin" aria-label="Delete config"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for config"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened config/|info" aria-label="Open config" title="Open config"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename config" title="Rename config"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move folder config and the 12 files inside it? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete folder" data-confirm-label="Move to recycle bin" aria-label="Delete config" title="Delete config"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for config" title="More actions for config"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -159,10 +165,10 @@
                   <div class="fm-cell" role="cell">2026-10-12 08:51</div>
                   <div class="fm-cell fm-mode" role="cell"><span>drwxr-xr-x</span><span class="fm-mode-octal">755</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened data/|info" aria-label="Open data"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename data"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move folder data and everything inside it? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete folder" data-confirm-label="Move to recycle bin" aria-label="Delete data"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for data"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened data/|info" aria-label="Open data" title="Open data"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename data" title="Rename data"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move folder data and everything inside it? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete folder" data-confirm-label="Move to recycle bin" aria-label="Delete data" title="Delete data"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for data" title="More actions for data"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -177,10 +183,10 @@
                   <div class="fm-cell" role="cell">2026-10-12 09:20</div>
                   <div class="fm-cell fm-mode" role="cell"><span>drwxr-xr-x</span><span class="fm-mode-octal">755</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened logs/|info" aria-label="Open logs"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename logs"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move folder logs recursively and its 214 files? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete folder recursively" data-confirm-label="Move to recycle bin" aria-label="Delete logs"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for logs"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened logs/|info" aria-label="Open logs" title="Open logs"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename logs" title="Rename logs"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move folder logs recursively and its 214 files? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete folder recursively" data-confirm-label="Move to recycle bin" aria-label="Delete logs" title="Delete logs"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for logs" title="More actions for logs"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -196,10 +202,10 @@
                   <div class="fm-cell" role="cell">2026-10-12 09:02</div>
                   <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened app.yaml in the editor.|info" aria-label="Edit app.yaml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for app.yaml…|info" aria-label="Download app.yaml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move app.yaml? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete app.yaml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for app.yaml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened app.yaml in the editor.|info" aria-label="Edit app.yaml" title="Edit app.yaml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for app.yaml…|info" aria-label="Download app.yaml" title="Download app.yaml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move app.yaml? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete app.yaml" title="Delete app.yaml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for app.yaml" title="More actions for app.yaml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -214,10 +220,10 @@
                   <div class="fm-cell" role="cell">2026-10-12 09:14</div>
                   <div class="fm-cell fm-mode" role="cell"><span>-rw-------</span><span class="fm-mode-octal">600</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Open .env"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Download .env"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move .env? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete .env"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for .env"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Open .env" title="Open .env"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Download .env" title="Download .env"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move .env? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete .env" title="Delete .env"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for .env" title="More actions for .env"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -232,10 +238,10 @@
                   <div class="fm-cell" role="cell">2026-10-11 18:40</div>
                   <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened docker-compose.yml in the editor.|info" aria-label="Edit docker-compose.yml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket…|info" aria-label="Download docker-compose.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move docker-compose.yml? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete docker-compose.yml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for docker-compose.yml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened docker-compose.yml in the editor.|info" aria-label="Edit docker-compose.yml" title="Edit docker-compose.yml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket…|info" aria-label="Download docker-compose.yml" title="Download docker-compose.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move docker-compose.yml? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete docker-compose.yml" title="Delete docker-compose.yml"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for docker-compose.yml" title="More actions for docker-compose.yml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -250,10 +256,10 @@
                   <div class="fm-cell" role="cell">2026-10-10 11:05</div>
                   <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Binary file — download to open locally.|info" aria-label="Preview logo.png"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for logo.png…|info" aria-label="Download logo.png"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move logo.png? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete logo.png"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for logo.png"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Binary file — download to open locally.|info" aria-label="Preview logo.png" title="Preview logo.png"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for logo.png…|info" aria-label="Download logo.png" title="Download logo.png"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move logo.png? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete logo.png" title="Delete logo.png"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for logo.png" title="More actions for logo.png"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -268,10 +274,10 @@
                   <div class="fm-cell" role="cell">2026-10-11 03:00</div>
                   <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-extract" aria-label="Extract backup archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming 128.4 MiB to your browser…|info" aria-label="Download backup archive"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move backup-2026-10-11.tar.gz? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete backup archive"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: extract, download, rename, cut, copy, paste, delete.|info" aria-label="More actions for backup archive"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-extract" aria-label="Extract backup archive" title="Extract backup archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming 128.4 MiB to your browser…|info" aria-label="Download backup archive" title="Download backup archive"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move backup-2026-10-11.tar.gz? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete backup archive" title="Delete backup archive"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: extract, download, rename, cut, copy, paste, delete.|info" aria-label="More actions for backup archive" title="More actions for backup archive"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -286,10 +292,10 @@
                   <div class="fm-cell" role="cell">2026-10-12 09:20</div>
                   <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Over the 2 MiB editor limit — download only.|warn" aria-label="Open server.log"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming server.log to your browser…|info" aria-label="Download server.log"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move server.log? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete server.log"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for server.log"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Over the 2 MiB editor limit — download only.|warn" aria-label="Open server.log" title="Open server.log"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming server.log to your browser…|info" aria-label="Download server.log" title="Download server.log"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move server.log? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete file" data-confirm-label="Move to recycle bin" aria-label="Delete server.log" title="Delete server.log"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Context menu: open, rename, cut, copy, paste, delete.|info" aria-label="More actions for server.log" title="More actions for server.log"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -305,9 +311,9 @@
                   <div class="fm-cell" role="cell">2026-10-11 18:39</div>
                   <div class="fm-cell fm-mode" role="cell"><span>lrwxrwxrwx</span><span class="fm-mode-octal">777</span></div>
                   <div class="fm-actions" role="cell">
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Followed symlink to ../app-1190.|info" aria-label="Follow symlink current"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move symlink current to the recycle bin? The target is not removed." data-confirm-title="Delete symlink" data-confirm-label="Move to recycle bin" aria-label="Delete symlink current"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
-                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Symlinks are copied as links, never followed.|info" aria-label="More actions for current"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Followed symlink to ../app-1190.|info" aria-label="Follow symlink current" title="Follow symlink current"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move symlink current to the recycle bin? The target is not removed." data-confirm-title="Delete symlink" data-confirm-label="Move to recycle bin" aria-label="Delete symlink current" title="Delete symlink current"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
+                    <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Symlinks are copied as links, never followed.|info" aria-label="More actions for current" title="More actions for current"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                   </div>
                 </div>
 
@@ -397,14 +403,14 @@
                   <div class="fm-name"><span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-doc"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened docker-compose.yml (read-only).|info"><b>docker-compose.yml</b><span>validated at deploy</span></button></div>
                   <div class="fm-cell">YAML</div><div class="fm-cell fm-cell--size">2.8 KiB</div><div class="fm-cell">2026-10-08 14:02</div><div class="fm-cell">-rw-r--r--</div>
-                  <div class="fm-actions"><button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Downloading docker-compose.yml…|info" aria-label="Download docker-compose.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button></div>
+                  <div class="fm-actions"><button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Downloading docker-compose.yml…|info" aria-label="Download docker-compose.yml" title="Download docker-compose.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button></div>
                 </div>
                 <div class="fm-row">
                   <span class="fm-select" aria-hidden="true"></span>
                   <div class="fm-name"><span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-doc"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened override.yml (read-only).|info"><b>override.yml</b><span>validated at deploy</span></button></div>
                   <div class="fm-cell">YAML</div><div class="fm-cell fm-cell--size">640 B</div><div class="fm-cell">2026-10-08 14:02</div><div class="fm-cell">-rw-r--r--</div>
-                  <div class="fm-actions"><button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Downloading override.yml…|info" aria-label="Download override.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button></div>
+                  <div class="fm-actions"><button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Downloading override.yml…|info" aria-label="Download override.yml" title="Download override.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button></div>
                 </div>
               </div>
             </div>
@@ -487,7 +493,7 @@
                 <div class="fm-cell">2026-10-12 09:02</div>
                 <div class="fm-cell">-rw-r--r--</div>
                 <div class="fm-actions">
-                  <button class="btn btn-sm btn-icon btn-outline" type="button" data-menu-toggle="fm-menu-demo" aria-haspopup="menu" aria-expanded="true" aria-label="More actions for app.yaml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
+                  <button class="btn btn-sm btn-icon btn-outline" type="button" data-menu-toggle="fm-menu-demo" aria-haspopup="menu" aria-expanded="true" aria-label="More actions for app.yaml" title="More actions for app.yaml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>
                 </div>
               </div>
               <div class="fm-menu" id="fm-menu-demo" role="menu" aria-label="Actions for app.yaml">

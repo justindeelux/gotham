@@ -30,6 +30,7 @@ const en = {
     openFolder: "Open {name}",
     downloadFile: "Download {name}",
     deleteEntry: "Delete {name}",
+    renameEntry: "Rename {name}",
     moreActions: "More actions for {name}",
     folderActions: "Folder actions",
     fileNeedsRole: "Content requires the owner or admin role.",

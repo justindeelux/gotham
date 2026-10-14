@@ -653,8 +653,11 @@ test.describe("files chmod", () => {
       mode: 0o600,
     });
     await expect(page.getByText("Permissions of app.yaml set to 600.")).toBeVisible();
-    // The listing refreshed: the row's mode column now shows the new bits.
-    await expect(page.locator(".fm-table")).toContainText("-rw-------");
+    // The listing refreshed: the row's mode column now shows the new octal bits
+    // (JUS-134) with the rwx form in its tooltip.
+    const modeCell = page.locator(".fm-table .fm-mode").first();
+    await expect(modeCell).toHaveText("600");
+    await expect(modeCell).toHaveAttribute("title", "-rw-------");
   });
 });
 
@@ -1058,7 +1061,7 @@ test.describe("files filter and symlink target", () => {
 
     await page.goto(`/servers/${server.id}/files`);
     await expect(
-      page.locator(".fm-table").getByText("Symlink → usr/bin"),
+      page.locator(".fm-table").getByText("→ usr/bin"),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "More actions for bin" }).click();
@@ -1100,7 +1103,7 @@ test.describe("files symlink target failure", () => {
 
     await page.goto(`/servers/${server.id}/files`);
     await expect(
-      page.locator(".fm-table").getByText("Symlink → usr/bin"),
+      page.locator(".fm-table").getByText("→ usr/bin"),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "More actions for bin" }).click();
@@ -1111,7 +1114,7 @@ test.describe("files symlink target failure", () => {
     );
     // The listing is unchanged: no error/empty state replaced it.
     await expect(
-      page.locator(".fm-table").getByText("Symlink → usr/bin"),
+      page.locator(".fm-table").getByText("→ usr/bin"),
     ).toBeVisible();
     await expect(page.locator(".fm-state")).toHaveCount(0);
   });

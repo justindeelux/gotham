@@ -34,6 +34,18 @@
           <div class="card-head">
             <h3>File browser</h3>
             <span class="card-actions">
+              <!-- JUS-134: the agent-node selector decides the whole listing, so
+                   it sits next to the Root selector in the header instead of a
+                   bar at the page bottom. -->
+              <span class="fm-node" role="group" aria-label="Switch agent node">
+                <svg aria-hidden="true"><use href="#i-server"></use></svg>
+                <span class="small muted">Agent node</span>
+                <select class="select fm-node__select" aria-label="Switch agent node">
+                  <option value="prod-01" selected>gotham-prod-01</option>
+                  <option value="prod-02">gotham-prod-02</option>
+                  <option value="prod-03" disabled>gotham-prod-03 · Offline</option>
+                </select>
+              </span>
               <label class="small muted" for="fm-root">Root</label>
               <select class="select" id="fm-root" style="width:220px;min-height:32px" aria-label="Browsable root">
                 <option value="volumes" selected>Volume root · writable</option>
@@ -50,10 +62,13 @@
             <!-- JUS-118: in the app this panel fills the viewport — the card
                  body is the only scroll region, while the toolbar, path bar
                  and footer stay fixed. -->
-            <!-- Compact toolbar (JUS-120): New file / New folder collapse into
-                 one New dropdown, Upload sits beside it, and the bulk tools
-                 (Compress) move to the right. Labels collapse to icon-only
-                 <=640px, each keeping a title + aria-label. -->
+            <!-- JUS-120/128, merged in JUS-134: one wrapping row holds the
+                 create/upload actions, the breadcrumb, the folder filter and
+                 the per-root tools; the bulk actions (Download/Copy/Cut/
+                 Compress/Delete/Clear) appear on it only while entries are
+                 selected, so no permanently disabled row is rendered. Labels
+                 collapse to icon-only <=640px, each keeping a title +
+                 aria-label. -->
             <!-- JUS-123/126: browser tabs. Each tab owns its own root, path,
                  selection, sort/filter and scroll offset; the clipboard stays
                  shared across tabs. Middle-click or × closes a tab; + opens a
@@ -68,33 +83,11 @@
               <button class="fm-tab-add" type="button" aria-label="New tab" title="New tab"><svg aria-hidden="true"><use href="#i-plus"></use></svg></button>
             </div>
 
-            <div class="fm-toolbar">
+            <div class="fm-bar fm-toolbar">
               <div class="fm-toolbar-group">
                 <button class="btn btn-sm btn-outline" type="button" data-open="fm-newfolder" aria-haspopup="menu" aria-expanded="false" aria-label="New" title="New"><svg aria-hidden="true"><use href="#i-plus"></use></svg><span class="fm-btn-label">New</span><svg class="fm-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
                 <button class="btn btn-sm btn-primary" type="button" data-open="fm-upload" aria-label="Upload" title="Upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Upload</span></button>
               </div>
-              <div class="fm-toolbar-group fm-toolbar-end">
-                <!-- JUS-117: copy/cut land on a clipboard and Paste applies it
-                     into the current folder. The button only appears while the
-                     clipboard holds entries; the hint names the pending mode. -->
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Pasted 2 items into this folder.|success" aria-label="Paste" title="Paste"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Paste (2)</span></button>
-                <span class="small muted">Cut clipboard</span>
-                <!-- JUS-128: the former .fm-bulk bar is gone. The selection
-                     count and every bulk action live on the right of the
-                     toolbar and stay disabled until there is a selection (the
-                     mockup shows 2 selected). Labels collapse to icon-only
-                     <=640px, each keeping a title + aria-label. -->
-                <span class="small muted fm-bulk-count">2 selected · 1.4 MiB</span>
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Preparing a single-use download ticket for 2 items…|info" aria-label="Download" title="Download"><svg aria-hidden="true"><use href="#i-download"></use></svg><span class="fm-btn-label">Download</span></button>
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Copied 2 items to the clipboard.|success" aria-label="Copy" title="Copy"><svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="fm-btn-label">Copy</span></button>
-                <button class="btn btn-sm btn-outline" type="button" data-toast="Cut 2 items to the clipboard.|success" aria-label="Cut" title="Cut"><svg aria-hidden="true"><use href="#i-cut"></use></svg><span class="fm-btn-label">Cut</span></button>
-                <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress" aria-label="Compress…" title="Compress…"><svg aria-hidden="true"><use href="#i-archive"></use></svg><span class="fm-btn-label">Compress…</span></button>
-                <button class="btn btn-sm btn-danger-ghost" type="button" data-confirm="Move the 2 selected entries? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete 2 entries" data-confirm-label="Move to recycle bin" aria-label="Delete" title="Delete"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Delete</span></button>
-                <button class="btn btn-sm btn-ghost" type="button" data-toast="Selection cleared.|info" aria-label="Clear" title="Clear"><svg aria-hidden="true"><use href="#i-x"></use></svg><span class="fm-btn-label">Clear</span></button>
-              </div>
-            </div>
-
-            <div class="fm-bar">
               <nav class="fm-path" aria-label="Current path">
                 <a class="fm-crumb" href="#"><svg aria-hidden="true"><use href="#i-drive"></use></svg>volumes</a>
                 <span class="sep" aria-hidden="true">/</span>
@@ -113,6 +106,28 @@
                    (not the write-gated toolbar). Any member may browse it;
                    restore / purge / empty need owner/admin. -->
               <button class="btn btn-sm btn-outline" type="button" data-open="fm-recycle"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Recycle bin</span></button>
+              <div class="fm-toolbar-group fm-toolbar-end">
+                <!-- JUS-117: copy/cut land on a clipboard and Paste applies it
+                     into the current folder. The button only appears while the
+                     clipboard holds entries; the hint names the pending mode. -->
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Pasted 2 items into this folder.|success" aria-label="Paste" title="Paste"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Paste (2)</span></button>
+                <span class="small muted">Cut clipboard</span>
+                <!-- JUS-128/134: the selection count and every bulk action show
+                     only while entries are selected (the mockup shows 2
+                     selected). In the app the slot is reserved (visibility,
+                     not display) so the first click of a double-click selecting
+                     a row never shifts the list (JUS-130). Labels collapse to
+                     icon-only <=640px, each keeping a title + aria-label. -->
+                <span class="small muted fm-bulk-count">2 selected · 1.4 MiB</span>
+                <span class="fm-selection-actions is-visible">
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Preparing a single-use download ticket for 2 items…|info" aria-label="Download" title="Download"><svg aria-hidden="true"><use href="#i-download"></use></svg><span class="fm-btn-label">Download</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Copied 2 items to the clipboard.|success" aria-label="Copy" title="Copy"><svg aria-hidden="true"><use href="#i-copy"></use></svg><span class="fm-btn-label">Copy</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-toast="Cut 2 items to the clipboard.|success" aria-label="Cut" title="Cut"><svg aria-hidden="true"><use href="#i-cut"></use></svg><span class="fm-btn-label">Cut</span></button>
+                <button class="btn btn-sm btn-outline" type="button" data-open="fm-compress" aria-label="Compress…" title="Compress…"><svg aria-hidden="true"><use href="#i-archive"></use></svg><span class="fm-btn-label">Compress…</span></button>
+                <button class="btn btn-sm btn-danger-ghost" type="button" data-confirm="Move the 2 selected entries? Moves to the recycle bin, restorable until the bin is emptied." data-confirm-title="Delete 2 entries" data-confirm-label="Move to recycle bin" aria-label="Delete" title="Delete"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Delete</span></button>
+                <button class="btn btn-sm btn-ghost" type="button" data-toast="Selection cleared.|info" aria-label="Clear" title="Clear"><svg aria-hidden="true"><use href="#i-x"></use></svg><span class="fm-btn-label">Clear</span></button>
+                </span>
+              </div>
             </div>
 
             <div class="table-wrap">
@@ -140,12 +155,12 @@
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select config"></label></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Opened config/|info"><b>config</b><span>directory</span></button>
+                    <button class="fm-label" type="button" data-toast="Opened config/|info"><b>config</b></button>
                   </div>
                   <div class="fm-cell" role="cell">Folder</div>
                   <div class="fm-cell fm-cell--size" role="cell">—</div>
-                  <div class="fm-cell" role="cell">2026-10-12 09:14</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>drwxr-xr-x</span><span class="fm-mode-octal">755</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-12 09:14">2 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="drwxr-xr-x">755</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened config/|info" aria-label="Open config" title="Open config"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename config" title="Rename config"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
@@ -158,12 +173,12 @@
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select data"></label></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Opened data/|info"><b>data</b><span>directory</span></button>
+                    <button class="fm-label" type="button" data-toast="Opened data/|info"><b>data</b></button>
                   </div>
                   <div class="fm-cell" role="cell">Folder</div>
                   <div class="fm-cell fm-cell--size" role="cell">—</div>
-                  <div class="fm-cell" role="cell">2026-10-12 08:51</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>drwxr-xr-x</span><span class="fm-mode-octal">755</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-12 08:51">2 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="drwxr-xr-x">755</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened data/|info" aria-label="Open data" title="Open data"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename data" title="Rename data"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
@@ -176,12 +191,12 @@
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select logs"></label></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark" data-kind="folder"><svg aria-hidden="true"><use href="#i-folder"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Opened logs/|info"><b>logs</b><span>directory · 214 entries</span></button>
+                    <button class="fm-label" type="button" data-toast="Opened logs/|info"><b>logs</b></button>
                   </div>
                   <div class="fm-cell" role="cell">Folder</div>
                   <div class="fm-cell fm-cell--size" role="cell">—</div>
-                  <div class="fm-cell" role="cell">2026-10-12 09:20</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>drwxr-xr-x</span><span class="fm-mode-octal">755</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-12 09:20">2 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="drwxr-xr-x">755</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened logs/|info" aria-label="Open logs" title="Open logs"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-rename" aria-label="Rename logs" title="Rename logs"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
@@ -195,12 +210,12 @@
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" checked aria-label="Select app.yaml"></label></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Opened app.yaml in the editor.|info"><b>app.yaml</b><span>YAML · open in editor</span></button>
+                    <button class="fm-label" type="button" data-toast="Opened app.yaml in the editor.|info"><b>app.yaml</b></button>
                   </div>
                   <div class="fm-cell" role="cell">YAML</div>
                   <div class="fm-cell fm-cell--size" role="cell">2.4 KiB</div>
-                  <div class="fm-cell" role="cell">2026-10-12 09:02</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-12 09:02">2 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="-rw-r--r--">644</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened app.yaml in the editor.|info" aria-label="Edit app.yaml" title="Edit app.yaml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for app.yaml…|info" aria-label="Download app.yaml" title="Download app.yaml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
@@ -213,12 +228,12 @@
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select .env"></label></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-file"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Content requires the owner or admin role.|warn"><b>.env</b><span>dotenv · restricted 0600</span></button>
+                    <button class="fm-label" type="button" data-toast="Content requires the owner or admin role.|warn"><b>.env</b></button>
                   </div>
                   <div class="fm-cell" role="cell">ENV</div>
                   <div class="fm-cell fm-cell--size" role="cell">1.2 KiB</div>
-                  <div class="fm-cell" role="cell">2026-10-12 09:14</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>-rw-------</span><span class="fm-mode-octal">600</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-12 09:14">2 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="-rw-------">600</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Open .env" title="Open .env"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Content requires the owner or admin role.|warn" aria-label="Download .env" title="Download .env"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
@@ -231,12 +246,12 @@
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select docker-compose.yml"></label></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-doc"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Opened docker-compose.yml in the editor.|info"><b>docker-compose.yml</b><span>YAML · compose</span></button>
+                    <button class="fm-label" type="button" data-toast="Opened docker-compose.yml in the editor.|info"><b>docker-compose.yml</b></button>
                   </div>
                   <div class="fm-cell" role="cell">YAML</div>
                   <div class="fm-cell fm-cell--size" role="cell">3.1 KiB</div>
-                  <div class="fm-cell" role="cell">2026-10-11 18:40</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-11 18:40">3 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="-rw-r--r--">644</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Opened docker-compose.yml in the editor.|info" aria-label="Edit docker-compose.yml" title="Edit docker-compose.yml"><svg aria-hidden="true"><use href="#i-pencil"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket…|info" aria-label="Download docker-compose.yml" title="Download docker-compose.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
@@ -249,12 +264,12 @@
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" checked aria-label="Select logo.png"></label></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark" data-kind="image"><svg aria-hidden="true"><use href="#i-image"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Previewed logo.png.|info"><b>logo.png</b><span>PNG image · 512×512</span></button>
+                    <button class="fm-label" type="button" data-toast="Previewed logo.png.|info"><b>logo.png</b></button>
                   </div>
                   <div class="fm-cell" role="cell">Image</div>
                   <div class="fm-cell fm-cell--size" role="cell">24.6 KiB</div>
-                  <div class="fm-cell" role="cell">2026-10-10 11:05</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-10 11:05">4 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="-rw-r--r--">644</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Binary file — download to open locally.|info" aria-label="Preview logo.png" title="Preview logo.png"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Preparing a single-use download ticket for logo.png…|info" aria-label="Download logo.png" title="Download logo.png"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
@@ -267,12 +282,12 @@
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select backup archive"></label></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark" data-kind="archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="128.4 MiB — over the 2 MiB editor limit. Download only.|warn"><b>backup-2026-10-11.tar.gz</b><span>gzip archive · download only</span></button>
+                    <button class="fm-label" type="button" data-toast="128.4 MiB — over the 2 MiB editor limit. Download only.|warn"><b>backup-2026-10-11.tar.gz</b></button>
                   </div>
                   <div class="fm-cell" role="cell">Archive</div>
                   <div class="fm-cell fm-cell--size" role="cell">128.4 MiB</div>
-                  <div class="fm-cell" role="cell">2026-10-11 03:00</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-11 03:00">3 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="-rw-r--r--">644</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-open="fm-extract" aria-label="Extract backup archive" title="Extract backup archive"><svg aria-hidden="true"><use href="#i-archive"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming 128.4 MiB to your browser…|info" aria-label="Download backup archive" title="Download backup archive"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
@@ -285,12 +300,12 @@
                   <span class="fm-select" role="cell"><label class="check"><input type="checkbox" aria-label="Select server.log"></label></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-terminal"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="4.1 MiB — over the 2 MiB editor limit. Download only.|warn"><b>server.log</b><span>text · 4.1 MiB · download only</span></button>
+                    <button class="fm-label" type="button" data-toast="4.1 MiB — over the 2 MiB editor limit. Download only.|warn"><b>server.log</b></button>
                   </div>
                   <div class="fm-cell" role="cell">Log</div>
                   <div class="fm-cell fm-cell--size" role="cell">4.1 MiB</div>
-                  <div class="fm-cell" role="cell">2026-10-12 09:20</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>-rw-r--r--</span><span class="fm-mode-octal">644</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-12 09:20">2 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="-rw-r--r--">644</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Over the 2 MiB editor limit — download only.|warn" aria-label="Open server.log" title="Open server.log"><svg aria-hidden="true"><use href="#i-eye"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Streaming server.log to your browser…|info" aria-label="Download server.log" title="Download server.log"><svg aria-hidden="true"><use href="#i-download"></use></svg></button>
@@ -304,12 +319,12 @@
                   <span class="fm-select" role="cell"></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark"><svg aria-hidden="true"><use href="#i-link"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Symlink target: ../app-1190 (inside the same root).|info"><b>current</b><span>symlink → ../app-1190</span></button>
+                    <button class="fm-label" type="button" data-toast="Symlink target: ../app-1190 (inside the same root).|info"><b>current</b><span>→ ../app-1190</span></button>
                   </div>
                   <div class="fm-cell" role="cell">Symlink</div>
                   <div class="fm-cell fm-cell--size" role="cell">—</div>
-                  <div class="fm-cell" role="cell">2026-10-11 18:39</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>lrwxrwxrwx</span><span class="fm-mode-octal">777</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-11 18:39">3 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="lrwxrwxrwx">777</div>
                   <div class="fm-actions" role="cell">
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Followed symlink to ../app-1190.|info" aria-label="Follow symlink current" title="Follow symlink current"><svg aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
                     <button class="btn btn-sm btn-icon btn-ghost" type="button" data-confirm="Move symlink current to the recycle bin? The target is not removed." data-confirm-title="Delete symlink" data-confirm-label="Move to recycle bin" aria-label="Delete symlink current" title="Delete symlink current"><svg aria-hidden="true"><use href="#i-trash"></use></svg></button>
@@ -321,12 +336,12 @@
                   <span class="fm-select" role="cell"></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark"><svg aria-hidden="true"><use href="#i-terminal"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Special file (socket). List only — no read, write or copy.|warn"><b>run.sock</b><span>socket · special file, no actions</span></button>
+                    <button class="fm-label" type="button" data-toast="Special file (socket). List only — no read, write or copy.|warn"><b>run.sock</b></button>
                   </div>
                   <div class="fm-cell" role="cell">Socket</div>
                   <div class="fm-cell fm-cell--size" role="cell">—</div>
-                  <div class="fm-cell" role="cell">2026-10-12 09:19</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>srwxrwxrwx</span><span class="fm-mode-octal">777</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-12 09:19">2 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="srwxrwxrwx">777</div>
                   <div class="fm-actions" role="cell">
                     <span class="tag tag--warn">Special</span>
                   </div>
@@ -337,12 +352,12 @@
                   <span class="fm-select" role="cell"></span>
                   <div class="fm-name" role="cell">
                     <span class="fm-mark"><svg aria-hidden="true"><use href="#i-lock"></use></svg></span>
-                    <button class="fm-label" type="button" data-toast="Permission denied — gotham-agent cannot read this directory (owned by root, mode 0700).|warn"><b>secrets</b><span>directory · root-owned, unreadable</span></button>
+                    <button class="fm-label" type="button" data-toast="Permission denied — gotham-agent cannot read this directory (owned by root, mode 0700).|warn"><b>secrets</b></button>
                   </div>
                   <div class="fm-cell" role="cell">Folder</div>
                   <div class="fm-cell fm-cell--size" role="cell">—</div>
-                  <div class="fm-cell" role="cell">2026-10-09 22:41</div>
-                  <div class="fm-cell fm-mode" role="cell"><span>drwx------</span><span class="fm-mode-octal">700</span></div>
+                  <div class="fm-cell fm-date" role="cell" title="2026-10-09 22:41">5 days ago</div>
+                  <div class="fm-cell fm-mode" role="cell" title="drwx------">700</div>
                   <div class="fm-actions" role="cell">
                     <span class="tag tag--danger">Permission denied</span>
                   </div>
@@ -356,19 +371,6 @@
               <span>Free space: <span class="mono">21.6 GiB</span> of 40 GiB</span>
             </div>
           </div>
-        </div>
-
-        <!-- Bottom node bar (JUS-119/125): names the active agent node and
-             switches nodes. It sits below the viewport-fit panel so it stays
-             reachable. A node whose agent is not ready is listed with its
-             status but not selectable. In the app the switcher is a select at
-             75% of the bar width (JUS-125); this mockup shows its resting
-             value. -->
-        <div class="fm-node-bar" role="group" aria-label="Switch agent node">
-          <svg aria-hidden="true"><use href="#i-server"></use></svg>
-          <span class="small muted">Agent node</span>
-          <span class="fm-node-bar__value">gotham-prod-01</span>
-          <span class="fm-node-bar__caret" aria-hidden="true"><svg><use href="#i-chevron-down"></use></svg></span>
         </div>
 
         <!-- ── Read-only root (compose) ──────────────────────────────────── -->
@@ -402,14 +404,14 @@
                   <span class="fm-select" aria-hidden="true"></span>
                   <div class="fm-name"><span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-doc"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened docker-compose.yml (read-only).|info"><b>docker-compose.yml</b><span>validated at deploy</span></button></div>
-                  <div class="fm-cell">YAML</div><div class="fm-cell fm-cell--size">2.8 KiB</div><div class="fm-cell">2026-10-08 14:02</div><div class="fm-cell">-rw-r--r--</div>
+                  <div class="fm-cell">YAML</div><div class="fm-cell fm-cell--size">2.8 KiB</div><div class="fm-cell fm-date" title="2026-10-08 14:02">6 days ago</div><div class="fm-cell">-rw-r--r--</div>
                   <div class="fm-actions"><button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Downloading docker-compose.yml…|info" aria-label="Download docker-compose.yml" title="Download docker-compose.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button></div>
                 </div>
                 <div class="fm-row">
                   <span class="fm-select" aria-hidden="true"></span>
                   <div class="fm-name"><span class="fm-mark" data-kind="file"><svg aria-hidden="true"><use href="#i-doc"></use></svg></span>
                     <button class="fm-label" type="button" data-toast="Opened override.yml (read-only).|info"><b>override.yml</b><span>validated at deploy</span></button></div>
-                  <div class="fm-cell">YAML</div><div class="fm-cell fm-cell--size">640 B</div><div class="fm-cell">2026-10-08 14:02</div><div class="fm-cell">-rw-r--r--</div>
+                  <div class="fm-cell">YAML</div><div class="fm-cell fm-cell--size">640 B</div><div class="fm-cell fm-date" title="2026-10-08 14:02">6 days ago</div><div class="fm-cell">-rw-r--r--</div>
                   <div class="fm-actions"><button class="btn btn-sm btn-icon btn-ghost" type="button" data-toast="Downloading override.yml…|info" aria-label="Download override.yml" title="Download override.yml"><svg aria-hidden="true"><use href="#i-download"></use></svg></button></div>
                 </div>
               </div>
@@ -490,7 +492,7 @@
                 </div>
                 <div class="fm-cell">YAML</div>
                 <div class="fm-cell fm-cell--size">2.4 KiB</div>
-                <div class="fm-cell">2026-10-12 09:02</div>
+                <div class="fm-cell fm-date" title="2026-10-12 09:02">2 days ago</div>
                 <div class="fm-cell">-rw-r--r--</div>
                 <div class="fm-actions">
                   <button class="btn btn-sm btn-icon btn-outline" type="button" data-menu-toggle="fm-menu-demo" aria-haspopup="menu" aria-expanded="true" aria-label="More actions for app.yaml" title="More actions for app.yaml"><svg aria-hidden="true"><use href="#i-more"></use></svg></button>

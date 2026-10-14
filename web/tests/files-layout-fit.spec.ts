@@ -262,7 +262,7 @@ test("the browser fills the viewport and only the entry list scrolls", async ({
   }
 });
 
-test("the top breadcrumb is gone and the bottom node bar switches nodes", async ({
+test("the top breadcrumb is gone and the header node selector switches nodes", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -272,70 +272,46 @@ test("the top breadcrumb is gone and the bottom node bar switches nodes", async 
   // JUS-119: the page-top breadcrumb (Servers / node / Files) is removed.
   await expect(page.locator(".breadcrumb")).toHaveCount(0);
 
-  const bar = page.locator(".node-bar");
-  await expect(bar).toBeVisible();
-  await expect(bar).toContainText("prod-01");
-
-  // JUS-125: at desktop the node select is ~3/4 of the bar width (the mobile
-  // case is asserted in its own test).
-  const ratio = await page.evaluate(() => {
-    const barEl = document.querySelector(".node-bar") as HTMLElement | null;
-    const selectEl = document.querySelector(".node-bar__select") as HTMLElement | null;
-    if (barEl === null || selectEl === null) {
-      return null;
-    }
-    return selectEl.getBoundingClientRect().width / barEl.getBoundingClientRect().width;
-  });
-  expect(ratio).not.toBeNull();
-  expect(ratio!).toBeGreaterThan(0.6);
-  expect(ratio!).toBeLessThan(0.8);
+  // JUS-134: the agent-node selector decides the listing, so it lives in the
+  // browser card header next to the Root selector, not a bar at the page bottom.
+  const node = page.locator(".fm-node__select");
+  await expect(node).toBeVisible();
+  await expect(node).toContainText("prod-01");
+  const nodeBox = (await node.boundingBox())!;
+  const rootBox = (await page.locator(".fm-root-select").boundingBox())!;
+  expect(nodeBox.x).toBeLessThan(rootBox.x);
+  expect(nodeBox.y).toBeLessThan(rootBox.y + rootBox.height);
 
   // An offline node is listed with its status but cannot be selected.
-  await page.locator(".node-bar__select").click();
+  await node.click();
   const offline = page.locator(".n-base-select-option", { hasText: "prod-03" });
   await expect(offline).toHaveClass(/disabled/);
   await expect(offline).toContainText("Offline");
 
   // Switching nodes reloads that node's files.
   await page.locator(".n-base-select-option", { hasText: "prod-02" }).click();
-  await expect(page.locator(".node-bar__select")).toContainText("prod-02");
+  await expect(page.locator(".fm-node__select")).toContainText("prod-02");
   expect(new URL(page.url()).pathname).toContain(server2);
   await expect(page.locator(".fm-label").first()).toBeVisible();
 });
 
-test("the node select is ~3/4 width at desktop and on mobile", async ({ page }) => {
-  const measure = () =>
-    page.evaluate(() => {
-      const bar = document.querySelector(".node-bar") as HTMLElement | null;
-      const select = document.querySelector(".node-bar__select") as HTMLElement | null;
-      if (bar === null || select === null) {
-        return null;
-      }
-      return {
-        width: select.getBoundingClientRect().width,
-        ratio: select.getBoundingClientRect().width / bar.getBoundingClientRect().width,
-      };
-    });
-
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await mockApi(page);
-  await page.goto(`${baseURL}/servers/${server1}/files`);
-  await expect(page.locator(".node-bar__select")).toBeVisible();
-  const desktop = await measure();
-  expect(desktop).not.toBeNull();
-  // 75% of the bar, and far wider than the small-screen width.
-  expect(desktop!.ratio).toBeGreaterThan(0.6);
-  expect(desktop!.ratio).toBeLessThan(0.8);
-  expect(desktop!.width).toBeGreaterThan(400);
-
-  // Mobile: it used to grow to fill the row (~166px). JUS-125 wants 3/4 of
-  // that (~124px), so it must no longer fill the bar.
-  await page.setViewportSize({ width: 390, height: 844 });
-  const mobile = await measure();
-  expect(mobile).not.toBeNull();
-  expect(mobile!.width).toBeGreaterThan(100);
-  expect(mobile!.width).toBeLessThan(145);
-  expect(mobile!.ratio).toBeLessThan(0.6);
+test("the header node selector stays reachable at desktop and mobile", async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await mockApi(page);
+    await page.goto(`${baseURL}/servers/${server1}/files`);
+    const node = page.locator(".fm-node__select");
+    await expect(node).toBeVisible();
+    const box = (await node.boundingBox())!;
+    expect(box.width).toBeGreaterThan(90);
+    expect(box.x).toBeGreaterThanOrEqual(-1);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+  }
 });
 
 test("bulk actions stay reachable with a selection at every width", async ({
@@ -405,17 +381,16 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
   await expect(page.getByRole("menuitem", { name: "New folder", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  // JUS-128: no separate bulk bar — its actions live on the right of the
-  // toolbar and are enabled only with a selection.
+  // JUS-128/134: no separate bulk bar and no disabled row — the bulk actions
+  // are hidden (not disabled) until entries are selected.
   await expect(page.locator(".fm-bulk")).toHaveCount(0);
   const toolbar = page.locator(".fm-toolbar");
   const bulkDownload = toolbar.getByRole("button", { name: "Download", exact: true });
-  await expect(bulkDownload).toBeVisible();
-  await expect(bulkDownload).toBeDisabled();
+  await expect(bulkDownload).toBeHidden();
 
-  // Select the whole listing so the bulk actions enable and the count shows.
+  // Select the whole listing so the bulk actions appear and the count shows.
   await page.locator(".fm-head .n-checkbox").click();
-  await expect(bulkDownload).toBeEnabled();
+  await expect(bulkDownload).toBeVisible();
   await expect(toolbar.locator(".fm-bulk-count")).toContainText("60 selected");
 
   // Bulk tools sit to the right of the create/upload group.
@@ -447,7 +422,7 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
   }
 });
 
-test("the minimized editor dock never covers the node switcher", async ({
+test("the minimized editor dock never covers the header node switcher", async ({
   page,
 }) => {
   for (const viewport of [
@@ -458,16 +433,20 @@ test("the minimized editor dock never covers the node switcher", async ({
     await mockApi(page);
     await page.goto(`${baseURL}/servers/${server1}/files`);
 
-    // Open a file and collapse the editor into the fixed bottom dock.
-    await page.locator(".fm-label").first().dblclick();
+    // Open a file and collapse the editor into the fixed bottom dock. Enter on
+    // the focused row is the same JUS-130 activation path as a double-click and
+    // keeps this check independent of the selection toolbar's layout.
+    await page.locator(".fm-label").first().focus();
+    await page.keyboard.press("Enter");
     await expect(page.locator(".ed-window")).toBeVisible({ timeout: 15_000 });
     await page.locator(".ed-window-min").click();
     await expect(page.locator(".ed-dock")).toBeVisible();
 
-    // The dock band and the node bar stack: the switcher's centre is clickable.
+    // The header switcher sits above the bottom dock, so its centre is
+    // clickable and never captured by the dock band (JUS-134).
     const hit = await page.evaluate(() => {
       const dock = document.querySelector(".ed-dock");
-      const select = document.querySelector(".node-bar__select");
+      const select = document.querySelector(".fm-node__select");
       if (!(dock instanceof HTMLElement) || !(select instanceof HTMLElement)) {
         return null;
       }
@@ -486,7 +465,6 @@ test("the minimized editor dock never covers the node switcher", async ({
     expect(hit).not.toBeNull();
     expect(hit!.hitInsideDock).toBe(false);
     expect(hit!.hitInsideSelect).toBe(true);
-    // The whole node bar clears the dock, with the reserved gap.
     expect(hit!.selectBottom).toBeLessThanOrEqual(hit!.dockTop);
   }
 });
@@ -664,11 +642,11 @@ test("a symlink row shows its target and can jump to it", async ({ page }) => {
 
   // The target is shown next to the type, in list and grid, and a long target
   // truncates with an ellipsis instead of wrapping the name column.
-  await expect(page.locator(".fm-table").getByText("Symlink → usr/bin")).toBeVisible();
+  await expect(page.locator(".fm-table").getByText("→ usr/bin")).toBeVisible();
   const subtitle = page.locator(".fm-table .fm-label span").first();
   await expect(subtitle).toHaveCSS("text-overflow", "ellipsis");
   await expect(subtitle).toHaveCSS("white-space", "nowrap");
-  await expect(subtitle).toHaveAttribute("title", "Symlink → usr/bin");
+  await expect(subtitle).toHaveAttribute("title", "→ usr/bin");
   await page.getByRole("button", { name: "Grid view" }).click();
   await expect(page.locator(".fm-grid").getByText("Symlink → usr/bin")).toBeVisible();
   await page.getByRole("button", { name: "List view" }).click();
@@ -712,7 +690,7 @@ test("Go to target on a file or broken link keeps the view and warns", async ({ 
   });
 
   await page.goto(`${baseURL}/servers/${server1}/files`);
-  await expect(page.locator(".fm-table").getByText("Symlink → usr/bin")).toBeVisible();
+  await expect(page.locator(".fm-table").getByText("→ usr/bin")).toBeVisible();
 
   await page.getByRole("button", { name: "More actions for bin" }).click();
   await page.getByRole("menuitem", { name: "Go to target" }).click();
@@ -720,6 +698,6 @@ test("Go to target on a file or broken link keeps the view and warns", async ({ 
   // The list stays on the folder it was in; the failure is a warning, not an
   // error view.
   await expect(page.locator(".n-message")).toContainText("Could not open the target of bin");
-  await expect(page.locator(".fm-table").getByText("Symlink → usr/bin")).toBeVisible();
+  await expect(page.locator(".fm-table").getByText("→ usr/bin")).toBeVisible();
   await expect(page.locator(".fm-state")).toHaveCount(0);
 });

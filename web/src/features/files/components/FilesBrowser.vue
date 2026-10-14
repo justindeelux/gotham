@@ -59,6 +59,7 @@ import {
   filesFromDrop,
   formatMode,
   formatOctalModeFull,
+  formatRelativeTime,
   formatTimestamp,
   isExtractableArchive,
   isFileDrag,
@@ -232,7 +233,9 @@ function iconKind(entry: FilesEntry): ReturnType<typeof entryIconKind> {
   return entryIconKind(entry);
 }
 
-/** entrySubtitle is the second line under the name (type + symlink target). */
+/** entrySubtitle is the grid tile's second line (type + symlink target). The
+ * list view has a Type column and keeps only {@link entryTarget}, so the type
+ * is never repeated there. */
 function entrySubtitle(entry: FilesEntry): string {
   if (entry.kind === "symlink") {
     return entry.symlink_target
@@ -240,6 +243,17 @@ function entrySubtitle(entry: FilesEntry): string {
       : typeLabel(entry);
   }
   return typeLabel(entry);
+}
+
+/**
+ * entryTarget is the list row's inline hint: a symlink's target, or "" — the
+ * type already lives in the Type column, so it is not repeated under the name
+ * (JUS-134).
+ */
+function entryTarget(entry: FilesEntry): string {
+  return entry.kind === "symlink" && entry.symlink_target
+    ? `→ ${entry.symlink_target}`
+    : "";
 }
 
 /**
@@ -369,9 +383,42 @@ const tabListEl = ref<HTMLElement | null>(null);
 /** scrollEl is the mounted entry-list scroll container (list or grid). */
 const scrollEl = ref<HTMLElement | null>(null);
 
-/** tabLabel is the visible tab name: the folder's basename, or the root. */
+/**
+ * tabLabel is the visible tab name: the folder's basename, or the root. When
+ * two tabs show different locations that share a basename (two folders named
+ * "config" under different parents) the parent segment is prefixed so the tabs
+ * stay distinguishable; the full path is always the tab's tooltip
+ * ({@link tabTitle}).
+ */
 function tabLabel(tab: FilesTab): string {
+  const base = tabBasename(tab);
+  const here = tabLocation(tab);
+  const duplicate = files.tabs.some(
+    (other) =>
+      other.id !== tab.id &&
+      tabBasename(other) === base &&
+      tabLocation(other) !== here,
+  );
+  if (!duplicate) {
+    return base;
+  }
+  const parent = tab.path.split("/").slice(-2, -1)[0];
+  return parent ? `${parent}/${base}` : `${tab.rootName}/${base}`;
+}
+
+/** tabBasename is a tab's own folder name (the root name at the top level). */
+function tabBasename(tab: FilesTab): string {
   return tab.path === "" ? tab.rootName : (tab.path.split("/").pop() ?? tab.rootName);
+}
+
+/** tabLocation is the tab's full "root/path" identity. */
+function tabLocation(tab: FilesTab): string {
+  return tab.path === "" ? tab.rootName : `${tab.rootName}/${tab.path}`;
+}
+
+/** modifiedLabel renders the Modified column as a localized relative age. */
+function modifiedLabel(entry: FilesEntry): string {
+  return formatRelativeTime(entry.modified_at, locale.value);
 }
 
 /** tabTitle is the tab tooltip / accessible name: the full root-relative path. */
@@ -864,6 +911,10 @@ function onFolderMenu(key: string): void {
       <div class="fm-card-head">
         <h3 class="fm-card-title">{{ $t("files.browser.heading") }}</h3>
         <div class="fm-card-tools">
+          <!-- JUS-134: the agent-node selector (which decides the whole
+               listing) lives next to the Root selector instead of a bar at
+               the page bottom. -->
+          <slot name="header-tools" />
           <span class="small muted">{{ $t("files.browser.rootLabel") }}</span>
           <NSelect
             v-model:value="selectedRoot"
@@ -955,12 +1006,12 @@ function onFolderMenu(key: string): void {
       </button>
     </div>
 
-    <!-- Toolbar (JUS-120): create/upload on the left, clipboard Paste and the
-         JUS-128 bulk actions on the right. A writer (canWrite) always sees the
-         row, so selecting never shifts the list; a reader without write sees it
-         only once something is selected — the same appear-on-selection behaviour
-         the .fm-bulk bar it replaces had. -->
-    <div v-if="files.canWrite || hasSelection" class="fm-toolbar">
+    <!-- Toolbar + path bar (JUS-120/128, merged in JUS-134): one wrapping row
+         holds the create/upload actions, the breadcrumb, the folder filter and
+         the per-root tools; the bulk actions (Download/Copy/Cut/Compress/
+         Delete/Clear) appear on it only while entries are selected, so no
+         permanently disabled row is rendered. -->
+    <div class="fm-bar fm-toolbar">
       <div v-if="files.canWrite" class="fm-toolbar-group">
         <NDropdown
           v-model:show="newMenuOpen"
@@ -1004,6 +1055,68 @@ function onFolderMenu(key: string): void {
         </NButton>
       </div>
 
+      <nav class="fm-path" :aria-label="$t('files.browser.parent')">
+        <button
+          type="button"
+          class="fm-crumb fm-up"
+          :disabled="files.path === ''"
+          :aria-label="$t('files.browser.parent')"
+          :title="$t('files.browser.parent')"
+          @click="files.goUp()"
+        >
+          <ArrowUp :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+        <template v-for="(crumb, index) in files.breadcrumb" :key="crumb.path">
+          <span v-if="index > 0" class="sep" aria-hidden="true">/</span>
+          <button
+            type="button"
+            class="fm-crumb"
+            :class="{ 'is-current': index === files.breadcrumb.length - 1 }"
+            :aria-current="index === files.breadcrumb.length - 1 ? 'page' : undefined"
+            @click="files.goToPath(crumb.path)"
+          >
+            <HardDrive v-if="crumb.isRoot" :size="14" :stroke-width="1.8" aria-hidden="true" />
+            <span>{{ crumb.name }}</span>
+          </button>
+        </template>
+      </nav>
+
+      <NInput
+        v-model:value="filterModel"
+        class="fm-search"
+        size="small"
+        clearable
+        :placeholder="$t('files.browser.filter')"
+        :aria-label="$t('files.browser.filter')"
+      >
+        <template #prefix>
+          <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+      </NInput>
+
+      <NButton size="small" secondary :loading="files.loading" @click="files.refresh()">
+        <template #icon>
+          <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.browser.refresh") }}
+      </NButton>
+
+      <!-- The bin belongs to the root, not the folder, so it lives on the path
+           bar: any member may open it, while restore/purge inside need write. -->
+      <NButton
+        size="small"
+        secondary
+        :disabled="files.rootName === ''"
+        :title="$t('files.browser.recycleBin')"
+        :aria-label="$t('files.browser.recycleBin')"
+        @click="recycleOpen = true"
+      >
+        <template #icon>
+          <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        {{ $t("files.browser.recycleBin") }}
+      </NButton>
+
       <div class="fm-toolbar-group fm-toolbar-end">
         <NButton
           v-if="files.hasClipboard"
@@ -1025,17 +1138,18 @@ function onFolderMenu(key: string): void {
           {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
         </span>
 
-        <!-- Bulk actions (JUS-128): the selection count and every action the
-             former .fm-bulk bar offered now live on the right of the toolbar
-             and stay disabled until there is a selection. The count slot is
-             always reserved for a writer so selecting never re-wraps the
-             toolbar (which would shift the rows under a double-click). -->
-        <span v-if="files.canWrite || hasSelection" class="small muted fm-bulk-count">
+        <!-- Bulk actions (JUS-128, JUS-134): shown only while entries are
+             selected, so no disabled row is ever visible. They stay mounted
+             and are hidden with visibility — not removed — so the toolbar's
+             height never changes when the first click of a double-click
+             selects a row (JUS-130: selecting must not shift the rows). -->
+        <span class="small muted fm-bulk-count">
           <template v-if="hasSelection">
             {{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}
             · {{ formatBytes(files.selectedBytes) }}
           </template>
         </span>
+        <div class="fm-selection-actions" :class="{ 'is-visible': hasSelection }">
         <NButton
           size="small"
           secondary
@@ -1117,71 +1231,8 @@ function onFolderMenu(key: string): void {
           </template>
           <span class="fm-btn-label">{{ $t("files.browser.clear") }}</span>
         </NButton>
+        </div>
       </div>
-    </div>
-
-    <div class="fm-bar">
-      <nav class="fm-path" :aria-label="$t('files.browser.parent')">
-        <button
-          type="button"
-          class="fm-crumb fm-up"
-          :disabled="files.path === ''"
-          :aria-label="$t('files.browser.parent')"
-          :title="$t('files.browser.parent')"
-          @click="files.goUp()"
-        >
-          <ArrowUp :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-        <template v-for="(crumb, index) in files.breadcrumb" :key="crumb.path">
-          <span v-if="index > 0" class="sep" aria-hidden="true">/</span>
-          <button
-            type="button"
-            class="fm-crumb"
-            :class="{ 'is-current': index === files.breadcrumb.length - 1 }"
-            :aria-current="index === files.breadcrumb.length - 1 ? 'page' : undefined"
-            @click="files.goToPath(crumb.path)"
-          >
-            <HardDrive v-if="crumb.isRoot" :size="14" :stroke-width="1.8" aria-hidden="true" />
-            <span>{{ crumb.name }}</span>
-          </button>
-        </template>
-      </nav>
-
-      <NInput
-        v-model:value="filterModel"
-        class="fm-search"
-        size="small"
-        clearable
-        :placeholder="$t('files.browser.filter')"
-        :aria-label="$t('files.browser.filter')"
-      >
-        <template #prefix>
-          <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-      </NInput>
-
-      <NButton size="small" secondary :loading="files.loading" @click="files.refresh()">
-        <template #icon>
-          <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        {{ $t("files.browser.refresh") }}
-      </NButton>
-
-      <!-- The bin belongs to the root, not the folder, so it lives on the path
-           bar: any member may open it, while restore/purge inside need write. -->
-      <NButton
-        size="small"
-        secondary
-        :disabled="files.rootName === ''"
-        :title="$t('files.browser.recycleBin')"
-        :aria-label="$t('files.browser.recycleBin')"
-        @click="recycleOpen = true"
-      >
-        <template #icon>
-          <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        {{ $t("files.browser.recycleBin") }}
-      </NButton>
     </div>
 
     <!-- The tab's content region: one panel shared by every tab (aria-controls
@@ -1322,16 +1373,15 @@ function onFolderMenu(key: string): void {
                 @keydown.enter.prevent="activate(entry)"
               >
                 <b>{{ entry.name }}</b>
-                <span :title="entrySubtitle(entry)">{{ entrySubtitle(entry) }}</span>
+                <span v-if="entryTarget(entry)" class="fm-target" :title="entryTarget(entry)">
+                  {{ entryTarget(entry) }}
+                </span>
               </button>
             </div>
             <div class="fm-cell" role="cell">{{ typeLabel(entry) }}</div>
             <div class="fm-cell fm-cell--size" role="cell">{{ entry.kind === "directory" ? "—" : formatBytes(entry.size) }}</div>
-            <div class="fm-cell" role="cell">{{ formatTimestamp(entry.modified_at) }}</div>
-            <div class="fm-cell fm-mode" role="cell">
-              <span>{{ formatMode(entry.mode) }}</span>
-              <span class="fm-mode-octal">{{ formatOctalModeFull(entry.mode) }}</span>
-            </div>
+            <div class="fm-cell fm-date" role="cell" :title="formatTimestamp(entry.modified_at)">{{ modifiedLabel(entry) }}</div>
+            <div class="fm-cell fm-mode" role="cell" :title="formatMode(entry.mode)">{{ formatOctalModeFull(entry.mode) }}</div>
             <div class="fm-actions" role="cell">
               <!-- The inline actions (.fm-action) stay hover/focus-revealed on
                    pointer devices; the ⋮ menu button below stays visible
@@ -1523,6 +1573,10 @@ function onFolderMenu(key: string): void {
  * docs/design/files.html; only tokens from styles/tokens.css are used. */
 .files-browser {
   position: relative;
+  /* JUS-134: the single row-height token every list row reads. JUS-137 can
+   * size its virtual rows from it, so the compact desktop density stays a
+   * one-value change. */
+  --fm-row-height: 36px;
   /* The panel is a flex column that fills whatever height its parent gives it
    * (JUS-118): toolbar/bar/footer stay fixed while the entry list is the
    * only scrolling region (`flex: 1` on .table-wrap / .fm-grid / .fm-state). */
@@ -1687,8 +1741,10 @@ function onFolderMenu(key: string): void {
   min-width: 0;
 }
 
+/* The right-hand cluster follows the filter/refresh/bin; the filter's
+   margin-left:auto pushes the whole cluster right, so the group itself needs
+   no auto margin (which would split the free space with the filter). */
 .fm-toolbar-end {
-  margin-left: auto;
   justify-content: flex-end;
 }
 
@@ -1800,13 +1856,39 @@ function onFolderMenu(key: string): void {
 }
 
 /* Bulk selection count on the toolbar (JUS-128): the former .fm-bulk bar is
-   gone; the count and its actions live in .fm-toolbar-end. The min-width
-   reserves the slot even with nothing selected, so the count appearing never
-   re-wraps the toolbar and shifts the rows under a double-click (JUS-130). */
+   gone; the count and its actions live in .fm-toolbar-end. A fixed width (not
+   a min-width) keeps the slot the same size whether or not anything is
+   selected, so the count appearing never re-wraps the toolbar and shifts the
+   rows under a double-click (JUS-130). */
 .fm-bulk-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 10rem;
+  /* A constant height as well as width: with nothing selected the count is
+     empty, and an empty inline box would collapse and shift the rows. */
+  min-height: 22px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 9.5rem;
-  text-align: right;
+}
+
+/* JUS-134: the bulk actions stay mounted and are hidden with visibility (not
+   display) while nothing is selected — reserving the slot keeps the toolbar
+   height fixed, so the first click of a row double-click can never shift the
+   rows (JUS-130). They are not rendered as a disabled row. */
+.fm-selection-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  visibility: hidden;
+}
+
+.fm-selection-actions.is-visible {
+  visibility: visible;
 }
 
 .fm-state {
@@ -1876,8 +1958,9 @@ function onFolderMenu(key: string): void {
   grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 168px;
   gap: var(--space-3);
   align-items: center;
-  padding: 10px var(--space-3);
-  min-height: 52px;
+  padding: 4px var(--space-3);
+  /* JUS-134: one compact, tokenised row height instead of the old 52px. */
+  min-height: var(--fm-row-height);
   border-bottom: 1px solid var(--border);
   position: relative;
   transition: background var(--motion-base) var(--ease-standard);
@@ -1970,15 +2053,21 @@ function onFolderMenu(key: string): void {
   cursor: pointer;
 }
 
-/* JUS-127: the name/type lines get breathing room inside one list row. */
+/* JUS-134: the name and its (optional) symlink target share one line so every
+ * row keeps the single tokenised height and the type is not repeated (the Type
+ * column carries it). */
 .fm-name .fm-label {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .fm-label b {
   display: block;
+  flex: 0 1 auto;
+  min-width: 0;
   font-weight: 500;
   color: var(--fg);
   font-size: var(--text-xs);
@@ -1989,6 +2078,8 @@ function onFolderMenu(key: string): void {
 
 .fm-label span {
   display: block;
+  flex: 0 1 auto;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--muted);
@@ -2028,15 +2119,10 @@ function onFolderMenu(key: string): void {
   text-align: right;
 }
 
-.fm-mode {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  line-height: 1.3;
-}
-
-.fm-mode-octal {
-  color: var(--fg-2);
+/* JUS-134: the mode cell is one line ("755"); the rwx form is its tooltip. */
+.fm-mode,
+.fm-date {
+  white-space: nowrap;
 }
 
 .fm-actions {

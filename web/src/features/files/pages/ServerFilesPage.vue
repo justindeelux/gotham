@@ -102,20 +102,25 @@ function switchNode(next: string | number | null): void {
 
 <template>
   <div class="server-files">
-    <FilesBrowser class="server-files__browser" :server-id="serverId" />
-
-    <div class="node-bar" role="group" :aria-label="t('files.browser.switchNode')">
-      <ServerIcon class="node-bar__icon" :size="16" :stroke-width="1.8" aria-hidden="true" />
-      <span class="small muted">{{ t("files.browser.nodeLabel") }}</span>
-      <NSelect
-        class="node-bar__select"
-        size="small"
-        :value="serverId"
-        :options="nodeOptions"
-        :aria-label="t('files.browser.switchNode')"
-        @update:value="switchNode"
-      />
-    </div>
+    <FilesBrowser class="server-files__browser" :server-id="serverId">
+      <!-- JUS-134: the agent-node selector decides the whole listing, so it
+           sits next to the Root selector in the browser header (passed through
+           the header-tools slot) instead of a bar at the page bottom. -->
+      <template #header-tools>
+        <span class="fm-node" role="group" :aria-label="t('files.browser.switchNode')">
+          <ServerIcon class="fm-node__icon" :size="15" :stroke-width="1.8" aria-hidden="true" />
+          <span class="small muted">{{ t("files.browser.nodeLabel") }}</span>
+          <NSelect
+            class="fm-node__select"
+            size="small"
+            :value="serverId"
+            :options="nodeOptions"
+            :aria-label="t('files.browser.switchNode')"
+            @update:value="switchNode"
+          />
+        </span>
+      </template>
+    </FilesBrowser>
 
     <FilesEditor v-if="files.canReadContent" :server-id="serverId" />
   </div>
@@ -130,47 +135,38 @@ function switchNode(next: string | number | null): void {
   min-height: 0;
 }
 
-/* The browser owns the internal scroll; it takes every row the node bar and
-   the page padding leave (JUS-118). */
+/* The browser owns the internal scroll; it takes every row the editor and the
+   page padding leave (JUS-118). */
 .server-files__browser {
   flex: 1 1 auto;
   min-height: 0;
 }
 
-/* Bottom node switcher (JUS-119): names the agent node on screen and lets the
-   user jump to another node's files. */
-.node-bar {
-  flex: 0 0 auto;
-  display: flex;
+/* Agent-node switcher (JUS-119/134): names the node on screen and lets the user
+   jump to another node's files. It rides in the browser card header. */
+.fm-node {
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  min-width: 0;
 }
 
-.node-bar__icon {
+.fm-node__icon {
   color: var(--muted);
+  flex: 0 0 auto;
 }
 
-.node-bar__select {
-  /* JUS-125: 3/4 of the width it used to take (it stretched to ~full via the
-     select's own width:100%), with a readable floor for node names. */
-  width: 75%;
-  min-width: 150px;
+.fm-node__select {
+  width: 180px;
+  min-width: 140px;
 }
 
 @media (max-width: 640px) {
-  .node-bar {
-    flex-wrap: wrap;
-  }
-
-  .node-bar__select {
+  .fm-node__select {
     width: auto;
+    /* The 120px basis needs the floor reset too, or the base min-width: 140px
+       above wins and the shrink never takes effect. */
     min-width: 0;
-    /* JUS-125: ~3/4 of the former 160px basis; no grow, so the select stops
-       stretching to fill the row on mobile (it used to keep its main width). */
     flex: 0 1 120px;
   }
 }

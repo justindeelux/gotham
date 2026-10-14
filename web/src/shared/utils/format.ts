@@ -140,15 +140,46 @@ export function toPercent(value: number | null | undefined): number {
   return Math.round(Math.min(Math.max(scaled, 0), 100));
 }
 
+/** rtf caches Intl.RelativeTimeFormat per (tag, numeric) pair. */
+const rtfCache = new Map<string, Intl.RelativeTimeFormat>();
+
+function rtf(tag: string, numeric: "always" | "auto"): Intl.RelativeTimeFormat {
+  const key = `${tag}:${numeric}`;
+  let formatter = rtfCache.get(key);
+  if (!formatter) {
+    formatter = new Intl.RelativeTimeFormat(tag, { numeric });
+    rtfCache.set(key, formatter);
+  }
+  return formatter;
+}
+
+/** RelativeTimeOptions tunes the wording of {@link relativeTime}. */
+export interface RelativeTimeOptions {
+  /**
+   * long renders the spelled-out form ("2 days ago", "yesterday", "in 2 days")
+   * instead of the compact app dialect ("2d ago"). The file list's Modified
+   * column uses it (JUS-134).
+   */
+  long?: boolean;
+  /**
+   * now is the reference time in ms. A caller driving a coarse clock passes its
+   * tick so the rendered text refreshes, and tests pass a fixed instant;
+   * defaults to the wall clock.
+   */
+  now?: number;
+}
+
 /**
  * relativeTime renders an ISO timestamp as a short "x ago" / "in x" string.
  * English keeps the compact app dialect byte-identical; Vietnamese uses
  * native Intl.RelativeTimeFormat with the same thresholds and time zone.
  * Static labels come from the common `time` catalog, never inline copies.
+ * `options.long` spells the age out for the file list.
  */
 export function relativeTime(
   iso: string | null | undefined,
   locale?: Locale | null,
+  options: RelativeTimeOptions = {},
 ): string {
   const loc = locale ?? activeLocale.value;
   const time = loc === "vi" ? viCatalog.time : enCatalog.time;
@@ -161,9 +192,29 @@ export function relativeTime(
     return time.unknown;
   }
 
-  const deltaSeconds = Math.round((Date.now() - then) / 1000);
+  const deltaSeconds = Math.round(((options.now ?? Date.now()) - then) / 1000);
   const future = deltaSeconds < 0;
   const seconds = Math.abs(deltaSeconds);
+
+  if (options.long) {
+    // A sub-minute age — including the small clock skew where the agent's
+    // clock runs slightly ahead of the browser's — reads as "just now"
+    // rather than "in N seconds".
+    if (seconds < 60) {
+      return time.justNow;
+    }
+    const longUnits: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+      ["year", 31536000],
+      ["month", 2592000],
+      ["day", 86400],
+      ["hour", 3600],
+      ["minute", 60],
+    ];
+    const [unit, span] =
+      longUnits.find(([, size]) => seconds >= size) ?? ["minute", 60];
+    const value = Math.round(seconds / span);
+    return rtf(localeTag(loc), "auto").format(future ? value : -value, unit);
+  }
 
   if (loc === "en") {
     /** unit renders the magnitude with the direction that fits the timestamp. */
@@ -200,9 +251,7 @@ export function relativeTime(
   if (seconds < 45) {
     return future ? time.inMoment : time.justNow;
   }
-  const relative = new Intl.RelativeTimeFormat("vi-VN", {
-    numeric: "always",
-  });
+  const relative = rtf("vi-VN", "always");
   /** signed renders value with the direction that fits the timestamp. */
   const signed = (
     value: number,

@@ -122,32 +122,33 @@
 
 /* ══ FILE MANAGER (files.html) ═══════════════════════════════════════════
    Bố cục theo ảnh tham chiếu: một lưới danh sách nhiều cột, mỗi hàng cao
-   ~52px với marker loại file ở đầu hàng và cụm nút chức năng ở mép phải;
-   cụm nút chỉ hiện khi hover / focus / đang chọn. */
-/* Toolbar compact (JUS-120): create/upload on the left, bulk tools on the
-   right; labels collapse to icon-only on small screens (title + aria-label). */
+   ~36-40px (JUS-134) với marker loại file ở đầu hàng và cụm nút chức năng ở
+   mép phải; cụm nút chỉ hiện khi hover / focus / đang chọn. */
+/* Toolbar + path bar (JUS-120/128, gộp ở JUS-134): một hàng wrap chứa
+   create/upload, breadcrumb, filter, refresh và recycle bin; các bulk action
+   chỉ hiện khi có entry được chọn. Labels collapse to icon-only on small
+   screens (title + aria-label). */
 .fm-toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
 /* Groups wrap internally (and shrink) so the right-hand bulk actions never
    overflow the toolbar at narrow widths (JUS-128). */
 .fm-toolbar-group { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
 .fm-toolbar-end { margin-left: auto; justify-content: flex-end; }
 /* JUS-128: selection count shown with the toolbar's bulk actions. */
-.fm-bulk-count { white-space: nowrap; }
+.fm-bulk-count { white-space: nowrap; min-width: 10rem; text-align: right; }
+/* JUS-134: the bulk actions slot — shown only with a selection in the app,
+   where it is reserved (visibility, not display) so selecting a row never
+   shifts the toolbar and the list (JUS-130). */
+.fm-selection-actions { display: inline-flex; align-items: center; gap: var(--space-2); }
+.fm-selection-actions:not(.is-visible) { visibility: hidden; }
 .fm-caret { width: 12px; height: 12px; color: var(--muted); }
 @media (max-width: 640px) {
   .fm-toolbar .fm-btn-label { display: none; }
 }
-/* Bottom node bar (JUS-119): names the active agent node and switches nodes. */
-.fm-node-bar {
-  display: flex; align-items: center; gap: var(--space-2);
-  margin-top: var(--space-3); padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--surface);
-}
-.fm-node-bar > svg { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted); }
-.fm-node-bar__value { font-weight: 600; color: var(--fg-2); }
-.fm-node-bar__caret { margin-left: auto; display: inline-flex; color: var(--muted); }
-.fm-node-bar__caret svg { width: 14px; height: 14px; }
+/* Agent-node switcher (JUS-119/134): names the active node and switches nodes.
+   It lives in the browser card header next to the Root selector (JUS-134). */
+.fm-node { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.fm-node > svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--muted); }
+.fm-node__select { width: 180px; min-width: 140px; }
 /* Tab bar (JUS-123/126): one tab per open directory; each tab owns its own
    path, selection and scroll. The strip hugs its tabs so the + button sits
    right after the last one, and scrolls horizontally at narrow widths. */
@@ -193,7 +194,7 @@
      next to the name, never combined with the checkbox. */
   grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 168px;
   gap: var(--space-3); align-items: center;
-  padding: 10px var(--space-3); min-height: 52px;
+  padding: 4px var(--space-3); min-height: 36px;
   border-bottom: 1px solid var(--border); position: relative;
   transition: background var(--motion-base) var(--ease-standard);
 }
@@ -217,12 +218,13 @@
 .fm-head .fm-sort.is-active { color: var(--fg-2); }
 .fm-name { display: flex; align-items: center; gap: var(--space-3); min-width: 0; text-align: left; }
 .fm-label { background: none; text-align: left; min-width: 0; }
-/* JUS-127: the stacked name/type lines get breathing room inside a list row. */
-.fm-name .fm-label { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+/* JUS-134: the name and its (optional) symlink target share one line so the
+   row stays the compact single height and the Type column is not duplicated. */
+.fm-name .fm-label { display: flex; flex-direction: row; align-items: baseline; gap: var(--space-2); min-width: 0; }
 .fm-select .check { cursor: pointer; gap: 0; }
 .fm-select .check input { width: 16px; height: 16px; margin: 0; }
-.fm-name .fm-label b { display: block; font-weight: 500; color: var(--fg); font-size: var(--text-xs); }
-.fm-name .fm-label span { display: block; font-family: var(--font-mono); font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-name .fm-label b { display: block; flex: 0 1 auto; min-width: 0; font-weight: 500; color: var(--fg); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-name .fm-label span { display: block; flex: 0 1 auto; min-width: 0; font-family: var(--font-mono); font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fm-mark {
   position: relative; width: 28px; height: 28px; flex: 0 0 auto;
   display: grid; place-items: center; border-radius: 7px;
@@ -243,9 +245,8 @@
 .fm-head .fm-select { opacity: 1; }
 .fm-cell { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--muted); }
 .fm-cell--size { text-align: right; }
-/* JUS-121/127: the mode cell stacks the rwx form over its octal form. */
-.fm-mode { display: flex; flex-direction: column; gap: 4px; line-height: 1.3; }
-.fm-mode-octal { color: var(--fg-2); }
+/* JUS-134: the mode cell is one line ("755"); the rwx form is its tooltip. */
+.fm-mode, .fm-date { display: block; white-space: nowrap; }
 /* Row action cluster: the inline actions stay hidden until row hover, keyboard
    focus or selection; the ⋮ menu button is the last button in the cluster and
    is always visible so touch users reach it without hover (JUS-133). A cluster

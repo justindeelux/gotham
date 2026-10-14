@@ -321,6 +321,24 @@ describe("files store navigation", () => {
       expect(store.loading).toBe(false);
     });
 
+    it("treats a forbidden target as not a folder, never a retry", async () => {
+      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+        if (options.path === "conf/private") {
+          throw { message: "forbidden", status: 403 };
+        }
+        return listing;
+      });
+
+      const store = useFilesStore();
+      await store.init("server-1");
+
+      const opened = await store.openSymlinkTarget("conf/private");
+
+      expect(opened).toBe("not-folder");
+      expect(store.path).toBe("");
+      expect(store.error).toBeNull();
+    });
+
     it("reports a transient failure distinctly from a non-folder target", async () => {
       vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
         if (options.path === "usr/bin") {
@@ -339,6 +357,23 @@ describe("files store navigation", () => {
       expect(store.path).toBe("");
       expect(store.error).toBeNull();
       expect(store.loading).toBe(false);
+    });
+
+    it("stays silent for a target read the caller aborted", async () => {
+      vi.mocked(listEntries).mockImplementation(async (_s, _t, options) => {
+        if (options.path === "usr/bin") {
+          throw { message: "canceled", status: null };
+        }
+        return listing;
+      });
+
+      const store = useFilesStore();
+      await store.init("server-1");
+
+      const opened = await store.openSymlinkTarget("usr/bin");
+
+      expect(opened).toBe("opened");
+      expect(store.error).toBeNull();
     });
 
     it("treats the current folder as an already-open target", async () => {

@@ -11,6 +11,7 @@ import {
   describeFilesError,
   extractEntry,
   filesErrorKey,
+  isCanceledError,
   isConflictError,
   isFilesDisabled,
   listEntries,
@@ -1341,15 +1342,19 @@ export const useFilesStore = defineStore("files", () => {
       applyListingTo(tab, listing.entries, listing.cursor ?? "", listing.truncated);
       return "opened";
     } catch (err) {
-      // A newer navigation won: it owns the tab, so report the target as shown.
-      if (gen !== tab.generation) {
+      // A newer navigation won, or the caller aborted: report the target as
+      // shown rather than a failure (JUS-141).
+      if (gen !== tab.generation || isCanceledError(err)) {
         return "opened";
       }
-      // A file target, a broken link or a missing path answers 400/404: the
-      // target is not a browsable folder inside this root. Anything else (500,
-      // 502/503, a network failure) is transient and gets the retry copy.
+      // A file target, a broken link, a missing path (400/404) or an unreadable
+      // folder (403) is not a browsable folder inside this root — retrying will
+      // not help. Anything else (500, 501/502/503, a network failure) is
+      // transient and gets the retry copy.
       const key = filesErrorKey(err);
-      return key === "files.errors.notFound" || key === "files.errors.invalid"
+      return key === "files.errors.notFound" ||
+        key === "files.errors.invalid" ||
+        key === "files.errors.forbidden"
         ? "not-folder"
         : "error";
     } finally {

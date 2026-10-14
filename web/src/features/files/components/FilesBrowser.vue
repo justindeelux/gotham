@@ -69,6 +69,7 @@ import {
   joinPath,
   resolveSymlinkTarget,
   typeaheadIndex,
+  widestBytesLabel,
 } from "@/features/files/utils/files";
 import {
   folderMenuOptions,
@@ -175,16 +176,17 @@ const hasSelectedFiles = computed<boolean>(() =>
 const hasSelection = computed<boolean>(() => files.selectedNames.length > 0);
 
 /**
- * countReserve is the widest selection summary the current folder can produce
- * — its full entry count and total size, which any selection is a subset of.
- * It is rendered (invisible) in the count cell while nothing is selected, so
- * the count slot's width follows the folder's content without ever shrinking
- * below the selected text; that keeps the toolbar's height stable across the
- * first click of a row double-click (JUS-134/JUS-141).
+ * countReserve is the widest selection summary the current folder can produce:
+ * its full entry count (digit-monotonic, so never fewer digits than a subset)
+ * and the widest byte label any subset can format to ({@link widestBytesLabel},
+ * because formatBytes is non-monotonic across unit boundaries). It is a hidden
+ * sizer in the count cell in BOTH selection states, so the cell width is
+ * max(reserve, live) no matter what is selected and the toolbar's row count can
+ * never depend on the selection (JUS-134/JUS-141).
  */
 const countReserve = computed<string>(
   () =>
-    `${t("files.browser.selectionCount", { count: files.entries.length })} · ${formatBytes(
+    `${t("files.browser.selectionCount", { count: files.entries.length })} · ${widestBytesLabel(
       files.entries.reduce((sum, entry) => sum + entry.size, 0),
     )}`,
 );
@@ -2024,15 +2026,18 @@ function onFolderMenu(key: string): void {
              and are hidden with visibility — not removed — so the toolbar's
              height never changes when the first click of a double-click
              selects a row (JUS-130: selecting must not shift the rows). -->
-        <span
-          class="small muted fm-bulk-count"
-          :class="{ 'is-empty': !hasSelection }"
-          :data-reserve="countReserve"
-        >
-          <template v-if="hasSelection">
-            {{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}
-            · {{ formatBytes(files.selectedBytes) }}
-          </template>
+        <span class="small muted fm-bulk-count">
+          <!-- Both texts stay mounted in every selection state: the reserve is
+               a hidden sizer, so the cell is always as wide as the wider of
+               reserve and the live summary and the toolbar's row count never
+               depends on the selection (JUS-134/JUS-141). -->
+          <span class="fm-bulk-count-reserve" aria-hidden="true">{{ countReserve }}</span>
+          <span class="fm-bulk-count-live" :class="{ 'is-hidden': !hasSelection }">
+            <template v-if="hasSelection">
+              {{ $t("files.browser.selectionCount", { count: files.selectedNames.length }) }}
+              · {{ formatBytes(files.selectedBytes) }}
+            </template>
+          </span>
         </span>
         <div class="fm-selection-actions" :class="{ 'is-visible': hasSelection }">
           <NButton
@@ -2801,33 +2806,35 @@ function onFolderMenu(key: string): void {
 }
 
 /* Bulk selection count on the toolbar (JUS-128): the former .fm-bulk bar is
-   gone; the count and its actions live in .fm-toolbar-end. The slot keeps a
-   constant height (min-height, below) so the empty count never collapses and
-   shifts the rows. Its width follows the count text rather than a fixed 10rem
-   (JUS-141); while nothing is selected the cell reserves the folder's widest
-   summary through an invisible ::before, so the reserved width never shrinks
-   below the selected text and the toolbar's height stays stable across a
-   selection (JUS-134). The reserved action slot beside it holds the rest. */
+   gone; the count and its actions live in .fm-toolbar-end. The cell stacks a
+   hidden reserve sizer and the live selection summary in one grid area, so its
+   width is max(reserve, live) in every selection state and the toolbar's row
+   count (and therefore the list's position under a double-click) can never
+   depend on the selection (JUS-134/JUS-141). The reserve is the folder's widest
+   summary, so the cell width still follows the folder content. */
 .fm-bulk-count {
-  display: inline-flex;
+  display: inline-grid;
   align-items: center;
-  justify-content: flex-end;
-  /* A constant height, not width: with nothing selected the count is empty and
-     an empty inline box would collapse and shift the rows. */
+  justify-items: end;
+  /* A constant height, not width: an empty count would collapse and shift the
+     rows. */
   min-height: 22px;
   flex: 0 0 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* The empty state reserves the folder's widest summary (attribute text) so the
-   count cell's width tracks the content without ever shrinking below what a
-   selection will show (JUS-141). */
-.fm-bulk-count.is-empty::before {
-  content: attr(data-reserve);
+/* Both texts share one grid cell and overlap: the cell is as wide as the wider
+   of the two, in both states. */
+.fm-bulk-count > * {
+  grid-area: 1 / 1;
+}
+
+.fm-bulk-count-reserve {
   visibility: hidden;
-  white-space: nowrap;
+}
+
+.fm-bulk-count-live.is-hidden {
+  visibility: hidden;
 }
 
 /* JUS-134: the bulk actions stay mounted and are hidden with visibility (not
@@ -3396,7 +3403,6 @@ function onFolderMenu(key: string): void {
   }
 
   .fm-bulk-count {
-    width: auto;
     min-width: 0;
     /* Keep the count at its natural width; the scrolling action row absorbs
        the shrink instead of clipping the count text (JUS-135). */

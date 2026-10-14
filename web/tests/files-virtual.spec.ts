@@ -319,7 +319,9 @@ test.describe("windowed list", () => {
     await expect(page.locator(".fm-selection-actions")).toHaveCSS("visibility", "visible");
 
     await page.getByRole("button", { name: "Clear", exact: true }).click();
-    await expect(page.locator(".fm-bulk-count")).toHaveText("");
+    // The live summary empties; the hidden reserve sizer stays mounted.
+    await expect(page.locator(".fm-bulk-count-live")).toHaveText("");
+    await expect(page.locator(".fm-bulk-count-live")).toHaveCSS("visibility", "hidden");
   });
 
   test("ctrl/cmd-click and the per-row checkbox select inside the window", async ({

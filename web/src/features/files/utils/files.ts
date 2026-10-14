@@ -1,4 +1,5 @@
 import { activeLocale } from "@/shared/i18n/locale";
+import { formatBytes } from "@/shared/utils/format";
 import en from "@/features/files/locales/en";
 import vi from "@/features/files/locales/vi";
 
@@ -769,6 +770,34 @@ export function countByKind(entries: FilesEntry[]): Record<FileKind, number> {
     counts[entry.kind] += 1;
   }
   return counts;
+}
+
+/**
+ * widestBytesLabel is the widest `formatBytes` label any byte count in
+ * `[0, total]` can produce. `formatBytes` is non-monotonic across unit
+ * boundaries (a `1023.0 KiB` subset is wider than a `1.00 MiB` total), so the
+ * bulk-count reserve is sized from this upper bound and is therefore never
+ * narrower than the live selection summary at any width.
+ */
+export function widestBytesLabel(total: number): string {
+  if (!(total > 0)) {
+    return formatBytes(total);
+  }
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let widest = formatBytes(total);
+  for (let exponent = 0; exponent < units.length; exponent += 1) {
+    const low = 1024 ** exponent;
+    if (low > total) {
+      break;
+    }
+    const value = Math.min(total, 1024 ** (exponent + 1)) / low;
+    const decimals = exponent === 0 ? 0 : value >= 100 ? 1 : 2;
+    const label = `${value.toFixed(decimals)} ${units[exponent]}`;
+    if (label.length > widest.length) {
+      widest = label;
+    }
+  }
+  return widest;
 }
 
 /** TabAddress is the root+path identity a browser tab's label is derived from. */

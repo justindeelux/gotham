@@ -1268,7 +1268,7 @@ test.describe("files filter and symlink target", () => {
       page.locator(".fm-table").getByText("inside.txt"),
     ).toBeVisible();
     await expect(search).toHaveValue("");
-    await expect(page.locator(".fm-foot")).toContainText("1 entries");
+    await expect(page.locator(".fm-foot")).toContainText("1 entry");
   });
 
   test("a symlink row shows its target and Go to target follows it", async ({

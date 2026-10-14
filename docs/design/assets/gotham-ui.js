@@ -109,8 +109,7 @@
       label: "Nhóm",
       items: [
         { nav: "team", label: "Thành viên & quyền", icon: "i-users", href: "team-settings.html" },
-        { nav: "notifications", label: "Kênh thông báo", icon: "i-bell", href: "team-settings.html#notifications" },
-        { nav: "tokens", label: "API tokens", icon: "i-key", href: "team-settings.html#tokens" }
+        { nav: "notifications", label: "Kênh thông báo", icon: "i-bell", href: "team-settings.html#notifications" }
       ]
     },
     {
@@ -188,12 +187,7 @@
       '<button class="btn btn-ghost btn-icon nav-toggle" type="button" data-nav-toggle aria-label="Mở điều hướng">' + ic("i-grid") + "</button>" +
       '<span class="row gap-2"><span class="status-line">' + ic("i-shield") + 'production</span>' +
       '<span class="channel-chip">CP :8000</span><span class="channel-chip">gRPC :9442</span></span>' +
-      '<div class="search" style="margin-left:auto" role="search">' + ic("i-search") +
-      '<input type="search" placeholder="Tìm ứng dụng, máy chủ, database…" aria-label="Tìm kiếm" data-palette-open>' +
-      '<span class="kbd">⌘K</span></div>' +
       '<div class="topbar-right">' +
-      '<button class="btn btn-ghost btn-icon" type="button" data-open="alerts" aria-label="Cảnh báo">' + ic("i-bell") + "</button>" +
-      '<a class="btn btn-ghost btn-icon" href="index.html" aria-label="Tài liệu thiết kế">' + ic("i-doc") + "</a>" +
       '<button class="btn btn-ghost btn-icon" type="button" data-open="account" aria-label="Tài khoản">' +
       '<span class="avatar avatar--sm">NA</span></button>' +
       "</div>";
@@ -227,7 +221,6 @@
       '<button class="btn btn-ghost btn-icon modal-close" type="button" data-close aria-label="Đóng">' + ic("i-x") + "</button></div>" +
       '<div class="modal-body stack gap-2">' +
       '<a class="nav-item" href="team-settings.html">' + ic("i-users") + "<span>Thành viên & quyền</span></a>" +
-      '<a class="nav-item" href="team-settings.html#tokens">' + ic("i-key") + "<span>API tokens</span></a>" +
       '<a class="nav-item" href="team-settings.html#notifications">' + ic("i-bell") + "<span>Kênh thông báo</span></a>" +
       '<a class="nav-item" href="team-settings.html#update">' + ic("i-refresh") + "<span>Cập nhật control plane</span></a>" +
       "</div>" +
@@ -342,7 +335,6 @@
     { label: "Tên miền & SSL", hint: "9 router", href: "domains.html", icon: "i-globe" },
     { label: "Thành viên & quyền", hint: "Team", href: "team-settings.html", icon: "i-users" },
     { label: "Kênh thông báo", hint: "Discord · Slack · Telegram · Email", href: "team-settings.html#notifications", icon: "i-bell" },
-    { label: "API tokens", hint: "scope read/deploy/admin", href: "team-settings.html#tokens", icon: "i-key" },
     { label: "Cập nhật control plane", hint: "v0.10.0 · Ed25519", href: "team-settings.html#update", icon: "i-refresh" },
     { label: "Bản đồ giao diện", hint: "Toàn bộ màn hình + token", href: "index.html", icon: "i-sliders" }
   ];

@@ -6,11 +6,9 @@ import {
   Box,
   ChevronDown,
   Database,
-  FileText,
   Folder,
   Globe,
   History,
-  KeyRound,
   Layers,
   LayoutGrid,
   Play,
@@ -26,9 +24,9 @@ import {
   Users,
 } from "@lucide/vue";
 
-// Thin adapter over @lucide/vue: call sites keep using the 22 Gotham
-// names with no changes. Per-icon imports keep tree-shaking intact — never
-// import the whole library here.
+// Thin adapter over @lucide/vue: call sites keep using the Gotham names with
+// no changes. Per-icon imports keep tree-shaking intact — never import the
+// whole library here.
 export type IconName =
   | "server"
   | "shield"
@@ -42,10 +40,8 @@ export type IconName =
   | "users"
   | "bell"
   | "search"
-  | "doc"
   | "gear"
   | "folder"
-  | "key"
   | "plus"
   | "trash"
   | "chevron-down"
@@ -72,10 +68,8 @@ const components: Record<IconName, Component> = {
   users: Users,
   bell: Bell,
   search: Search,
-  doc: FileText,
   gear: Settings,
   folder: Folder,
-  key: KeyRound,
   plus: Plus,
   trash: Trash2,
   "chevron-down": ChevronDown,

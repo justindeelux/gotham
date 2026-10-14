@@ -279,29 +279,16 @@ for (const locale of ["en", "vi"]) {
       const selector = page.locator(".topbar-right .language-select");
       await expect(selector).toBeVisible();
 
-      if (width === 390) {
-        // Stubs yield room on phones; selector and account stay usable.
-        expect(await page.locator(".topbar .search").count()).toBe(1);
-        expect(await page.locator(".topbar .search").isVisible()).toBe(false);
-        const stubVisible = await page
-          .locator(".topbar .is-stub")
-          .evaluateAll((nodes) =>
-            nodes.filter(
-              (node) => (node as HTMLElement).offsetParent !== null,
-            ).length,
-          );
-        expect(stubVisible).toBe(0);
-      } else {
-        // Wide layouts keep every control visible.
-        const stubVisible = await page
-          .locator(".topbar .is-stub")
-          .evaluateAll((nodes) =>
-            nodes.filter(
-              (node) => (node as HTMLElement).offsetParent !== null,
-            ).length,
-          );
-        expect(stubVisible).toBe(2);
-      }
+      // JUS-136: features that have not shipped must not leave a disabled
+      // control in the shell. Each locator below matches a placeholder that
+      // used to render (search box, notifications/docs stubs, the inert
+      // "API tokens" nav entry) and can fail if one comes back.
+      expect(await page.locator(".topbar .search").count()).toBe(0);
+      expect(await page.locator(".topbar .is-stub").count()).toBe(0);
+      expect(await page.locator("#app-nav .is-disabled").count()).toBe(0);
+      expect(await page.locator("#app-nav").innerText()).not.toContain(
+        "API tokens",
+      );
     });
 
     test(`profile password pair stacks at ${width}px in ${locale}`, async ({ page }) => {

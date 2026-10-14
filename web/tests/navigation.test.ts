@@ -73,4 +73,14 @@ describe("navSections", () => {
       }
     }
   });
+
+  it("drops the API tokens entry until the feature ships (JUS-136)", () => {
+    // Every remaining entry links to a shipped route; an unshipped feature
+    // must not leave an inert stub behind.
+    const items = navSections.flatMap((section) => section.items);
+    expect(items.some((item) => item.key === "tokens")).toBe(false);
+    for (const item of items) {
+      expect(item.to).not.toBe("");
+    }
+  });
 });

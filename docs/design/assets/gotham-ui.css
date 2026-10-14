@@ -731,9 +731,6 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 0; }
   /* Keep the top bar from crowding: drop the environment chips first. */
   .topbar .channel-chip, .topbar .status-line { display: none; }
   .search { width: auto; }
-  /* Only the top-bar search collapses to an icon; toolbar search stays usable. */
-  .topbar .search input { width: 0; padding: 0; }
-  .topbar .search:focus-within input { width: 140px; }
 }
 @media (max-width: 640px) {
   :root { --rail-w: 60px; }

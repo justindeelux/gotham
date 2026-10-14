@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { NTooltip } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { RouterLink, useRoute } from "vue-router";
@@ -43,40 +42,17 @@ const activeKey = computed<string>(() => activeNavKey(route.path));
     <nav class="sidebar-body">
       <template v-for="section in navSections" :key="section.labelKey">
         <p class="nav-label">{{ t(section.labelKey) }}</p>
-        <template
+        <RouterLink
           v-for="item in section.items.filter((i) => !i.adminOnly || authStore.isPlatformAdmin)"
           :key="item.key"
+          class="nav-item"
+          :class="{ 'is-active': activeKey === item.key }"
+          :to="{ name: item.to }"
         >
-          <RouterLink
-            v-if="item.to"
-            class="nav-item"
-            :class="{ 'is-active': activeKey === item.key }"
-            :to="{ name: item.to }"
-          >
-            <GothamIcon :name="item.icon" />
-            <span>{{ t(item.labelKey) }}</span>
-            <span v-if="item.key === 'servers'" class="nav-count">{{ serversCount }}</span>
-          </RouterLink>
-          <NTooltip
-            v-else
-            trigger="hover"
-            :tooltip-style="{ maxWidth: '240px' }"
-          >
-            <template #trigger>
-              <button
-                type="button"
-                class="nav-item is-disabled"
-                aria-disabled="true"
-                :aria-label="`${t(item.labelKey)} ${t('nav.stubSuffix')}`"
-                @click.prevent
-              >
-                <GothamIcon :name="item.icon" />
-                <span>{{ t(item.labelKey) }}</span>
-              </button>
-            </template>
-            {{ t(item.labelKey) }} {{ t("nav.stubSuffix") }}
-          </NTooltip>
-        </template>
+          <GothamIcon :name="item.icon" />
+          <span>{{ t(item.labelKey) }}</span>
+          <span v-if="item.key === 'servers'" class="nav-count">{{ serversCount }}</span>
+        </RouterLink>
       </template>
     </nav>
     <div class="sidebar-foot">
@@ -209,21 +185,6 @@ a.nav-item.is-active :deep(svg) {
 
 a.nav-item.is-active .nav-count {
   color: var(--fg);
-}
-
-.nav-item.is-disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-/* Inert entries are real disabled buttons (not spans with role=link), so they
-   are announced as disabled controls; reset the UA button chrome. */
-button.nav-item {
-  border: 0;
-  background: none;
-  font-family: inherit;
-  text-align: left;
-  cursor: not-allowed;
 }
 
 .sidebar-foot {

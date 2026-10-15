@@ -140,6 +140,9 @@ type FileService interface {
 	List(ctx context.Context, serverID uuid.UUID, root, path, cursor string) (Listing, error)
 	Stat(ctx context.Context, serverID uuid.UUID, root, path string) (Entry, error)
 	Content(ctx context.Context, serverID uuid.UUID, root, path string) (Content, error)
+	// DirectorySize returns one folder's recursive size (JUS-162). It is a read:
+	// any team member may call it, like List and Stat.
+	DirectorySize(ctx context.Context, serverID uuid.UUID, root, path string) (FolderSize, error)
 	// IssueDownloadTicket authorizes an owner/admin read of (root, path) and
 	// returns a single-use, short-lived ticket for the unauthenticated
 	// download route (a native browser download cannot send the bearer token).

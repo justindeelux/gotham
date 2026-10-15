@@ -46,6 +46,7 @@ import type {
   TransferProblem,
 } from "@/features/files/utils/files";
 import { useTeamsStore } from "@/features/teams";
+import { resetFolderSizes } from "@/features/files/composables/useFolderSize";
 
 /** FilesClipboard is a pending copy/cut of named entries from one directory. */
 export interface FilesClipboard {
@@ -606,6 +607,9 @@ export const useFilesStore = defineStore("files", () => {
     tab.loading = true;
     tab.errorRaw = null;
     tab.disabled = false;
+    // A fresh listing invalidates every cached folder size: a refresh or a
+    // mutation may have changed what a folder holds.
+    resetFolderSizes();
     try {
       const list = await listRoots(server, teamId());
       // A node/team switch discards this tab and bumps its generation (see
@@ -666,6 +670,10 @@ export const useFilesStore = defineStore("files", () => {
     const gen = ++tab.generation;
     tab.loading = true;
     tab.errorRaw = null;
+    // Navigation, refresh and every mutation reload the listing through here,
+    // so the cached folder sizes are dropped: the directory on screen is new
+    // and a folder's contents may have changed.
+    resetFolderSizes();
     try {
       const listing = await listEntries(serverId.value, teamId(), {
         root: tab.rootName,
@@ -1328,6 +1336,9 @@ export const useFilesStore = defineStore("files", () => {
     }
     const gen = ++tab.generation;
     tab.loading = true;
+    // Navigating to the link's target lands on a different directory, so the
+    // cached sizes belong to the folder being left behind.
+    resetFolderSizes();
     try {
       const listing = await listEntries(serverId.value, teamId(), {
         root: tab.rootName,

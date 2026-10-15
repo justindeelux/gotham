@@ -127,6 +127,11 @@ type FileServer struct {
 	archiveMaxInputBytes int64
 	// transfers is a counting semaphore bounding concurrent file transfers.
 	transfers chan struct{}
+	// sizeWalks bounds concurrent DirectorySize walks. Each walk is up to the
+	// entry cap's worth of lstats, so a burst (many Calculate clicks, or many
+	// users) is throttled and the excess answers 429 (ResourceExhausted)
+	// instead of piling up unbounded work.
+	sizeWalks chan struct{}
 	// locks are striped mutexes serialising the commit of a write to one
 	// (root, path), so a concurrent writer sees the previous commit's etag.
 	locks []sync.Mutex
@@ -186,6 +191,7 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		archiveMaxEntries:    archiveMaxEntries,
 		archiveMaxInputBytes: archiveMaxInputBytes,
 		transfers:            make(chan struct{}, maxTransfers),
+		sizeWalks:            make(chan struct{}, fileSizeMaxConcurrent),
 		locks:                make([]sync.Mutex, fileLockStripes),
 		stop:                 make(chan struct{}),
 	}

@@ -42,12 +42,14 @@ import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog
 import ExtractDialog from "@/features/files/components/ExtractDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
 import FilesSelectionBar from "@/features/files/components/FilesSelectionBar.vue";
+import FolderSizeCell from "@/features/files/components/FolderSizeCell.vue";
 import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue";
 import RecycleBinDialog from "@/features/files/components/RecycleBinDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
 import UploadDialog from "@/features/files/components/UploadDialog.vue";
 import { useCoarseNow } from "@/features/files/composables/useCoarseNow";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
+import { resetFolderSizes } from "@/features/files/composables/useFolderSize";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
@@ -76,6 +78,7 @@ import {
   rowMenuOptions,
 } from "@/features/files/utils/filesMenu";
 import type { FilesMenuItem } from "@/features/files/utils/filesMenu";
+import { isRowControlTarget } from "@/features/files/utils/rowControls";
 import {
   clampScrollTop,
   gridColumnCount,
@@ -108,8 +111,10 @@ watch(
   () => props.serverId,
   (next) => {
     // A node switch changes the bin's scope; drop any loaded listing first so
-    // the dialog can never show (or act on) the previous node's entries.
+    // the dialog can never show (or act on) the previous node's entries. Cached
+    // folder sizes (and any in-flight walk) belong to the old node too.
     trash.reset();
+    resetFolderSizes();
     void files.init(next);
   },
 );
@@ -126,7 +131,10 @@ watch(
 // The bin is per root: a root switch invalidates the loaded listing.
 watch(
   () => files.rootName,
-  () => trash.reset(),
+  () => {
+    trash.reset();
+    resetFolderSizes();
+  },
 );
 onMounted(() => void files.init(props.serverId));
 
@@ -219,6 +227,10 @@ onBeforeUnmount(() => {
   if (selectionAnnounceTimer !== null) {
     clearTimeout(selectionAnnounceTimer);
   }
+  // Leaving the page aborts any in-flight size walk and drops the cached
+  // results. Done at browser level, never per row: row windowing unmounts cells
+  // that must keep their state.
+  resetFolderSizes();
 });
 
 /** footSummary is the "12 entries · 4 folders · 6 files…" footer line. */
@@ -420,10 +432,7 @@ function activate(entry: FilesEntry): void {
 
 /** isRowControl reports a press that belongs to a row's own control, not the row. */
 function isRowControl(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest(".fm-select, .fm-actions, .fm-tile-check, .fm-tile-actions") !== null
-  );
+  return isRowControlTarget(target);
 }
 
 /**
@@ -2895,7 +2904,14 @@ function onFolderMenu(key: string): void {
               </span>
             </div>
             <div class="fm-cell fm-mode fm-cell--mode" role="cell" :title="formatMode(entry.mode)">{{ formatOctalModeFull(entry.mode) }}</div>
-            <div class="fm-cell fm-cell--size" role="cell">{{ entry.kind === "directory" ? "—" : formatBytes(entry.size) }}</div>
+            <div class="fm-cell fm-cell--size" role="cell">
+              <FolderSizeCell
+                v-if="entry.kind === 'directory'"
+                :entry="entry"
+                :path="joinPath(files.path, entry.name)"
+              />
+              <template v-else>{{ formatBytes(entry.size) }}</template>
+            </div>
             <div class="fm-cell fm-date fm-cell--modified" role="cell" :title="formatTimestamp(entry.modified_at)">{{ modifiedLabel(entry) }}</div>
             <div class="fm-actions" role="cell">
               <!-- The inline actions (.fm-action) stay hover/focus-revealed on

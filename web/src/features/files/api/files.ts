@@ -6,6 +6,7 @@ import { parseWith } from "@/shared/validation/parse";
 import type {
   FilesContent,
   FilesEntry,
+  FilesFolderSize,
   FilesListing,
   FilesRoot,
   FilesUploadResult,
@@ -15,6 +16,7 @@ import {
   downloadTicketSchema,
   emptyTrashEnvelopeSchema,
   filesContentSchema,
+  filesFolderSizeSchema,
   filesListingSchema,
   filesRootListSchema,
   filesStatSchema,
@@ -120,6 +122,30 @@ export async function statEntry(
     context: "FilesStat",
   });
   return data.entry ?? null;
+}
+
+/**
+ * calculateFolderSize returns one folder's recursive size (JUS-162). It is a
+ * read; any team member may call it. The client timeout is disabled: the agent
+ * bounds the walk by an entry cap and the control plane cancels at its own RPC
+ * budget, so `signal` is the caller's cancel control.
+ */
+export async function calculateFolderSize(
+  serverId: string,
+  teamId: string,
+  root: string,
+  path: string,
+  signal?: AbortSignal,
+): Promise<FilesFolderSize> {
+  const response = await http.get(`/servers/${serverId}/files/size`, {
+    params: { root, path },
+    headers: teamHeaders(teamId),
+    timeout: fileTransferTimeoutMs,
+    signal,
+  });
+  return parseWith(filesFolderSizeSchema, response.data, {
+    context: "FilesFolderSize",
+  });
 }
 
 /** getContent reads one editable text body (owner/admin only, ≤ 2 MiB). */

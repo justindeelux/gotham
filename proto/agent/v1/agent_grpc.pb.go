@@ -1373,22 +1373,23 @@ var ComposeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	FileService_ListRoots_FullMethodName  = "/agent.v1.FileService/ListRoots"
-	FileService_List_FullMethodName       = "/agent.v1.FileService/List"
-	FileService_Stat_FullMethodName       = "/agent.v1.FileService/Stat"
-	FileService_Read_FullMethodName       = "/agent.v1.FileService/Read"
-	FileService_Write_FullMethodName      = "/agent.v1.FileService/Write"
-	FileService_Copy_FullMethodName       = "/agent.v1.FileService/Copy"
-	FileService_Delete_FullMethodName     = "/agent.v1.FileService/Delete"
-	FileService_Mkdir_FullMethodName      = "/agent.v1.FileService/Mkdir"
-	FileService_Rename_FullMethodName     = "/agent.v1.FileService/Rename"
-	FileService_Chmod_FullMethodName      = "/agent.v1.FileService/Chmod"
-	FileService_Compress_FullMethodName   = "/agent.v1.FileService/Compress"
-	FileService_Extract_FullMethodName    = "/agent.v1.FileService/Extract"
-	FileService_ListTrash_FullMethodName  = "/agent.v1.FileService/ListTrash"
-	FileService_Restore_FullMethodName    = "/agent.v1.FileService/Restore"
-	FileService_Purge_FullMethodName      = "/agent.v1.FileService/Purge"
-	FileService_EmptyTrash_FullMethodName = "/agent.v1.FileService/EmptyTrash"
+	FileService_ListRoots_FullMethodName     = "/agent.v1.FileService/ListRoots"
+	FileService_List_FullMethodName          = "/agent.v1.FileService/List"
+	FileService_Stat_FullMethodName          = "/agent.v1.FileService/Stat"
+	FileService_Read_FullMethodName          = "/agent.v1.FileService/Read"
+	FileService_DirectorySize_FullMethodName = "/agent.v1.FileService/DirectorySize"
+	FileService_Write_FullMethodName         = "/agent.v1.FileService/Write"
+	FileService_Copy_FullMethodName          = "/agent.v1.FileService/Copy"
+	FileService_Delete_FullMethodName        = "/agent.v1.FileService/Delete"
+	FileService_Mkdir_FullMethodName         = "/agent.v1.FileService/Mkdir"
+	FileService_Rename_FullMethodName        = "/agent.v1.FileService/Rename"
+	FileService_Chmod_FullMethodName         = "/agent.v1.FileService/Chmod"
+	FileService_Compress_FullMethodName      = "/agent.v1.FileService/Compress"
+	FileService_Extract_FullMethodName       = "/agent.v1.FileService/Extract"
+	FileService_ListTrash_FullMethodName     = "/agent.v1.FileService/ListTrash"
+	FileService_Restore_FullMethodName       = "/agent.v1.FileService/Restore"
+	FileService_Purge_FullMethodName         = "/agent.v1.FileService/Purge"
+	FileService_EmptyTrash_FullMethodName    = "/agent.v1.FileService/EmptyTrash"
 )
 
 // FileServiceClient is the client API for FileService service.
@@ -1417,6 +1418,10 @@ type FileServiceClient interface {
 	Stat(ctx context.Context, in *StatRequest, opts ...grpc.CallOption) (*StatResponse, error)
 	// Read streams one regular file in bounded chunks.
 	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadChunk], error)
+	// DirectorySize returns the recursive size of one directory (JUS-162). The
+	// walk never follows a symlink, stops at an entry cap and reports the partial
+	// result with truncated=true rather than failing.
+	DirectorySize(ctx context.Context, in *DirectorySizeRequest, opts ...grpc.CallOption) (*DirectorySizeResponse, error)
 	// Write creates or replaces one file. The first request must carry
 	// WriteHeader; the following requests stream the body; an optional final
 	// WriteCommit carries the whole body's sha256. The agent commits only when
@@ -1516,6 +1521,16 @@ func (c *fileServiceClient) Read(ctx context.Context, in *ReadRequest, opts ...g
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FileService_ReadClient = grpc.ServerStreamingClient[ReadChunk]
+
+func (c *fileServiceClient) DirectorySize(ctx context.Context, in *DirectorySizeRequest, opts ...grpc.CallOption) (*DirectorySizeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DirectorySizeResponse)
+	err := c.cc.Invoke(ctx, FileService_DirectorySize_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *fileServiceClient) Write(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteRequest, WriteResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -1702,6 +1717,10 @@ type FileServiceServer interface {
 	Stat(context.Context, *StatRequest) (*StatResponse, error)
 	// Read streams one regular file in bounded chunks.
 	Read(*ReadRequest, grpc.ServerStreamingServer[ReadChunk]) error
+	// DirectorySize returns the recursive size of one directory (JUS-162). The
+	// walk never follows a symlink, stops at an entry cap and reports the partial
+	// result with truncated=true rather than failing.
+	DirectorySize(context.Context, *DirectorySizeRequest) (*DirectorySizeResponse, error)
 	// Write creates or replaces one file. The first request must carry
 	// WriteHeader; the following requests stream the body; an optional final
 	// WriteCommit carries the whole body's sha256. The agent commits only when
@@ -1764,6 +1783,9 @@ func (UnimplementedFileServiceServer) Stat(context.Context, *StatRequest) (*Stat
 }
 func (UnimplementedFileServiceServer) Read(*ReadRequest, grpc.ServerStreamingServer[ReadChunk]) error {
 	return status.Error(codes.Unimplemented, "method Read not implemented")
+}
+func (UnimplementedFileServiceServer) DirectorySize(context.Context, *DirectorySizeRequest) (*DirectorySizeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DirectorySize not implemented")
 }
 func (UnimplementedFileServiceServer) Write(grpc.ClientStreamingServer[WriteRequest, WriteResponse]) error {
 	return status.Error(codes.Unimplemented, "method Write not implemented")
@@ -1886,6 +1908,24 @@ func _FileService_Read_Handler(srv interface{}, stream grpc.ServerStream) error 
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type FileService_ReadServer = grpc.ServerStreamingServer[ReadChunk]
+
+func _FileService_DirectorySize_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DirectorySizeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).DirectorySize(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_DirectorySize_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).DirectorySize(ctx, req.(*DirectorySizeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _FileService_Write_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(FileServiceServer).Write(&grpc.GenericServerStream[WriteRequest, WriteResponse]{ServerStream: stream})
@@ -2082,6 +2122,10 @@ var FileService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Stat",
 			Handler:    _FileService_Stat_Handler,
+		},
+		{
+			MethodName: "DirectorySize",
+			Handler:    _FileService_DirectorySize_Handler,
 		},
 		{
 			MethodName: "Mkdir",

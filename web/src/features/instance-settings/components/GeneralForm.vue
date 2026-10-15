@@ -6,6 +6,7 @@ import { useI18n } from "vue-i18n";
 
 import { saveGeneral } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
+import ControlPlaneDomainStatus from "@/features/instance-settings/components/ControlPlaneDomainStatus.vue";
 import { timezoneOptions } from "@/features/instance-settings/composables/useTimezoneOptions";
 import { useSectionForm } from "@/features/instance-settings/composables/useSectionForm";
 import {
@@ -84,6 +85,10 @@ function status(path: string): "error" | undefined {
           {{ t("instance-settings.general.urlHint") }}
         </template>
       </NFormItem>
+      <ControlPlaneDomainStatus
+        :url="form.url"
+        :saved-url="general.control_plane_url.value"
+      />
       <p v-if="general.control_plane_url.locked" class="lock-note">
         {{ t("instance-settings.locked", { name: general.control_plane_url.env_var }) }}
       </p>

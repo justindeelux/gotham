@@ -300,6 +300,41 @@ test.describe("row and tile menus are reachable without scrolling (JUS-145)", ()
     });
   }
 
+  // JUS-163 fix round 1: the search input, the "Include subdirectories" switch
+  // and the Search button share the nav row with Refresh. At every narrow width
+  // they must stay inside the viewport (no sideways scroll) — the group is
+  // allowed to wrap its switch under the input rather than overflow.
+  for (const width of [390, 480, 640]) {
+    test(`search controls fit the nav row at ${width}px`, async ({ page }) => {
+      await openFiles(page, { viewport: { width, height: 900 } });
+      await expectNoPageOverflow(page);
+
+      const groupBox = await page.locator(".fm-search-group").boundingBox();
+      expect(groupBox, "search group has no box").not.toBeNull();
+      expect(groupBox!.x, "search group left edge").toBeGreaterThanOrEqual(-1);
+      expect(
+        groupBox!.x + groupBox!.width,
+        "search group right edge",
+      ).toBeLessThanOrEqual(width + 1);
+
+      for (const selector of [
+        ".fm-search input",
+        ".fm-search-group .n-checkbox",
+        ".fm-search-submit",
+      ]) {
+        const control = page.locator(selector);
+        await expect(control, `${selector} visible`).toBeVisible();
+        const box = await control.boundingBox();
+        expect(box, `${selector} has no box`).not.toBeNull();
+        expect(box!.x, `${selector} left edge`).toBeGreaterThanOrEqual(-1);
+        expect(
+          box!.x + box!.width,
+          `${selector} right edge`,
+        ).toBeLessThanOrEqual(width + 1);
+      }
+    });
+  }
+
   test("the sticky actions cell keeps its row-state background and the header stays pinned", async ({
     page,
   }) => {

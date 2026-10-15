@@ -41,6 +41,7 @@ import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue
 import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog.vue";
 import ExtractDialog from "@/features/files/components/ExtractDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
+import FilesSearchResults from "@/features/files/components/FilesSearchResults.vue";
 import FilesSelectionBar from "@/features/files/components/FilesSelectionBar.vue";
 import FolderSizeCell from "@/features/files/components/FolderSizeCell.vue";
 import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue";
@@ -163,6 +164,30 @@ const filterModel = computed<string>({
   get: () => files.query,
   set: (value) => files.setQuery(value ?? ""),
 });
+
+/** recursiveModel binds the "Include subdirectories" checkbox (JUS-163). */
+const recursiveModel = computed<boolean>({
+  get: () => files.recursive,
+  set: (value) => files.setRecursive(value === true),
+});
+
+/** submitSearch runs the input as a bounded server-side name search. */
+function submitSearch(): void {
+  void files.runSearch();
+}
+
+/**
+ * onSearchKeydown submits on Enter, ignoring the Enter that ends an IME
+ * composition (Vietnamese Telex/VNI input) so a composition confirm never
+ * fires a search.
+ */
+function onSearchKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Enter" || event.isComposing) {
+    return;
+  }
+  event.preventDefault();
+  submitSearch();
+}
 
 /** rootOptions labels each root with its writable/read-only access. */
 const rootOptions = computed(() =>
@@ -2453,18 +2478,39 @@ function onFolderMenu(key: string): void {
         </AppTooltip>
       </div>
 
-      <NInput
-        v-model:value="filterModel"
-        class="fm-search"
-        size="small"
-        clearable
-        :placeholder="$t('files.browser.filter')"
-        :aria-label="$t('files.browser.filter')"
-      >
-        <template #prefix>
-          <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-      </NInput>
+      <div class="fm-search-group">
+        <NInput
+          v-model:value="filterModel"
+          class="fm-search"
+          size="small"
+          clearable
+          :placeholder="recursiveModel ? $t('files.search.placeholder') : $t('files.browser.filter')"
+          :aria-label="recursiveModel ? $t('files.search.placeholder') : $t('files.browser.filter')"
+          @keydown="onSearchKeydown"
+        >
+          <template #prefix>
+            <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+        </NInput>
+        <AppTooltip :label="$t('files.search.includeSubdirs')">
+          <NCheckbox v-model:checked="recursiveModel" size="small" class="fm-search-recursive">
+            {{ $t("files.search.includeSubdirs") }}
+          </NCheckbox>
+        </AppTooltip>
+        <AppTooltip :label="$t('files.search.action')">
+          <NButton
+            size="small"
+            secondary
+            class="fm-search-submit"
+            :aria-label="$t('files.search.action')"
+            @click="submitSearch"
+          >
+            <template #icon>
+              <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+          </NButton>
+        </AppTooltip>
+      </div>
     </div>
 
     <!-- Toolbar (JUS-160): the left group carries Upload, the New menu, a
@@ -2670,6 +2716,19 @@ function onFolderMenu(key: string): void {
         {{ $t("common.actions.retry") }}
       </NButton>
     </div>
+
+    <!-- Search results (JUS-163): while a name search is on screen it takes
+         over the content region. Any navigation or Clear ends it. -->
+    <FilesSearchResults
+      v-else-if="files.searchActive"
+      :results="files.searchResults"
+      :truncated="files.searchTruncated"
+      :loading="files.searchLoading"
+      :query="files.searchQuery"
+      :path="files.path"
+      @open="files.openSearchHit($event)"
+      @clear="files.clearSearch()"
+    />
 
     <div v-else-if="files.loading && files.entries.length === 0" class="empty fm-state" @contextmenu.prevent="openFolderContext">
       <span class="fm-spinner" aria-hidden="true"></span>
@@ -3623,6 +3682,41 @@ function onFolderMenu(key: string): void {
   color: var(--meta);
 }
 
+/* The nav-row right slot hosts the search input with its "Include
+   subdirectories" switch and submit button (JUS-163). The group takes the
+   right edge; the input keeps its own width. */
+.fm-search-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.fm-search-group .fm-search {
+  margin-left: 0;
+}
+
+/* The Include-subdirectories switch shrinks with its label ellipsized, so the
+   group never overflows the nav row at a phone width where it shares the row
+   with Refresh (JUS-163 fix round 2). */
+.fm-search-recursive {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.fm-search-recursive :deep(.n-checkbox__label) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-search-submit {
+  flex: 0 0 auto;
+}
+
 .fm-search {
   max-width: 260px;
   min-width: 180px;
@@ -4313,7 +4407,35 @@ function onFolderMenu(key: string): void {
     scrollbar-width: thin;
   }
 
-  /* Path bar row 2: the folder filter shares the row with Refresh. */
+  /* Path bar: at phone the navigation field gives the search group room so the
+     three controls share ONE row with Refresh (JUS-135 ≥60% list). The
+     breadcrumb scrolls, so it can shrink; the search group keeps the input and
+     the switch readable instead of overflowing (JUS-163 fix round 2). */
+  .fm-navfield {
+    flex: 1 1 110px;
+  }
+
+  .fm-search-group {
+    flex: 1 1 190px;
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  /* The switch keeps only its box on a phone: a full label would crowd the
+     input to nothing. The label text still names the control for assistive tech
+     (aria-labelledby) and the tooltip shows it for a pointer (JUS-163 round 2). */
+  .fm-search-recursive :deep(.n-checkbox__label) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   .fm-search {
     min-width: 0;
     max-width: none;

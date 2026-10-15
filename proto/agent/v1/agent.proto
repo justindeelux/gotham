@@ -147,6 +147,13 @@ service FileService {
   rpc List(ListRequest) returns (ListResponse);
   // Stat returns one entry.
   rpc Stat(StatRequest) returns (StatResponse);
+  // Search returns entries under one directory whose NAME contains a
+  // case-insensitive substring (name-only, never file content). The walk is
+  // bounded by a depth cap, a result cap and a scan cap; a search that hit any
+  // cap reports truncated=true rather than returning a silently partial set.
+  // It never follows a symbolic link, so it never leaves the requested
+  // directory's root, and the recycle bin is never searched.
+  rpc Search(SearchRequest) returns (SearchResponse);
   // Read streams one regular file in bounded chunks.
   rpc Read(ReadRequest) returns (stream ReadChunk);
   // DirectorySize returns the recursive size of one directory (JUS-162). The
@@ -293,6 +300,36 @@ message DirectorySizeResponse {
   int64 entries = 2;
   uint64 skipped = 3;
   bool truncated = 4;
+}
+
+// SearchRequest searches one directory tree by entry name.
+message SearchRequest {
+  string root = 1;
+  // path is the directory to search within, relative to the root; empty or "."
+  // searches the root itself.
+  string path = 2;
+  // query is the case-insensitive substring every returned name must contain.
+  // An empty or whitespace-only query is rejected with InvalidArgument.
+  string query = 3;
+  // recursive descends into subdirectories (bounded by the agent's depth cap)
+  // when true; when false only path's immediate entries are matched.
+  bool recursive = 4;
+}
+
+// SearchResult is one matching entry with its root-relative path.
+message SearchResult {
+  // path is the entry's root-relative path (its name when the search is not
+  // recursive), so two same-named files in different directories stay distinct.
+  string path = 1;
+  FileEntry entry = 2;
+}
+
+// SearchResponse is one bounded result set.
+message SearchResponse {
+  repeated SearchResult results = 1;
+  // truncated is true when the result, depth or scan cap stopped the search
+  // before it finished. A truncated set is never presented as complete.
+  bool truncated = 2;
 }
 
 // ReadRequest reads one file.

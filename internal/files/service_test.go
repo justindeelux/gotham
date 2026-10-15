@@ -79,16 +79,19 @@ func (s *fakeReadStream) Recv() (*agentv1.ReadChunk, error) {
 type fakeFileClient struct {
 	mu sync.Mutex
 
-	rootsResp *agentv1.ListRootsResponse
-	rootsErr  error
-	listResp  *agentv1.ListResponse
-	listErr   error
-	statResp  *agentv1.StatResponse
-	statErr   error
-	readBody  []byte
-	readErr   error
-	closes    int
-	seenList  *agentv1.ListRequest
+	rootsResp  *agentv1.ListRootsResponse
+	rootsErr   error
+	listResp   *agentv1.ListResponse
+	listErr    error
+	statResp   *agentv1.StatResponse
+	statErr    error
+	searchResp *agentv1.SearchResponse
+	searchErr  error
+	seenSearch *agentv1.SearchRequest
+	readBody   []byte
+	readErr    error
+	closes     int
+	seenList   *agentv1.ListRequest
 
 	sizeResp *agentv1.DirectorySizeResponse
 	sizeErr  error
@@ -180,6 +183,19 @@ func (f *fakeFileClient) DirectorySize(_ context.Context, in *agentv1.DirectoryS
 		return f.sizeResp, nil
 	}
 	return &agentv1.DirectorySizeResponse{}, nil
+}
+
+func (f *fakeFileClient) Search(_ context.Context, in *agentv1.SearchRequest, _ ...grpc.CallOption) (*agentv1.SearchResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenSearch = in
+	if f.searchErr != nil {
+		return nil, f.searchErr
+	}
+	if f.searchResp != nil {
+		return f.searchResp, nil
+	}
+	return &agentv1.SearchResponse{}, nil
 }
 
 func (f *fakeFileClient) Read(context.Context, *agentv1.ReadRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ReadChunk], error) {

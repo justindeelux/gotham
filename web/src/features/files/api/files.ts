@@ -9,6 +9,7 @@ import type {
   FilesFolderSize,
   FilesListing,
   FilesRoot,
+  FilesSearchListing,
   FilesUploadResult,
   TrashListing,
 } from "@/features/files/schemas/files";
@@ -19,6 +20,7 @@ import {
   filesFolderSizeSchema,
   filesListingSchema,
   filesRootListSchema,
+  filesSearchListingSchema,
   filesStatSchema,
   filesUploadEnvelopeSchema,
   filesWriteEnvelopeSchema,
@@ -32,6 +34,7 @@ import {
  *   GET  /servers/{id}/files/roots           any member
  *   GET  /servers/{id}/files/list            any member
  *   GET  /servers/{id}/files/stat            any member
+ *   GET  /servers/{id}/files/search          any member (name-only, bounded)
  *   GET  /servers/{id}/files/content         owner/admin
  *   POST /servers/{id}/files/download-ticket owner/admin -> single-use ticket
  *   GET  /servers/{id}/files/download?ticket ticket (native browser download)
@@ -146,6 +149,49 @@ export async function calculateFolderSize(
   return parseWith(filesFolderSizeSchema, response.data, {
     context: "FilesFolderSize",
   });
+}
+
+/** SearchEntriesOptions configures one name search (name-only, never content). */
+export interface SearchEntriesOptions {
+  root: string;
+  /** path is the directory to search within; "" searches the root itself. */
+  path?: string;
+  /** query is the case-insensitive substring every returned name must contain. */
+  query: string;
+  /** recursive descends into subdirectories (the agent bounds the walk). */
+  recursive?: boolean;
+  /** signal aborts a superseded/cleared search so the agent stops walking. */
+  signal?: AbortSignal;
+}
+
+/**
+ * searchEntries searches entry NAMES under one directory. It sends no cursor
+ * and no timeout override: the agent bounds the walk by depth, result and scan
+ * caps and reports a capped run with `truncated`, so the call is one bounded
+ * round trip. Any team member may read it, like stat and list.
+ */
+export async function searchEntries(
+  serverId: string,
+  teamId: string,
+  options: SearchEntriesOptions,
+): Promise<FilesSearchListing> {
+  const response = await http.get(`/servers/${serverId}/files/search`, {
+    params: {
+      root: options.root,
+      path: options.path ?? "",
+      query: options.query,
+      recursive: options.recursive === true ? "true" : "false",
+    },
+    headers: teamHeaders(teamId),
+    signal: options.signal,
+  });
+  const data = parseWith(filesSearchListingSchema, response.data, {
+    context: "FilesSearch",
+  });
+  return {
+    results: Array.isArray(data.results) ? data.results : [],
+    truncated: data.truncated === true,
+  };
 }
 
 /** getContent reads one editable text body (owner/admin only, ≤ 2 MiB). */

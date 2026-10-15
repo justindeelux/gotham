@@ -1376,6 +1376,7 @@ const (
 	FileService_ListRoots_FullMethodName     = "/agent.v1.FileService/ListRoots"
 	FileService_List_FullMethodName          = "/agent.v1.FileService/List"
 	FileService_Stat_FullMethodName          = "/agent.v1.FileService/Stat"
+	FileService_Search_FullMethodName        = "/agent.v1.FileService/Search"
 	FileService_Read_FullMethodName          = "/agent.v1.FileService/Read"
 	FileService_DirectorySize_FullMethodName = "/agent.v1.FileService/DirectorySize"
 	FileService_Write_FullMethodName         = "/agent.v1.FileService/Write"
@@ -1416,6 +1417,13 @@ type FileServiceClient interface {
 	List(ctx context.Context, in *ListRequest, opts ...grpc.CallOption) (*ListResponse, error)
 	// Stat returns one entry.
 	Stat(ctx context.Context, in *StatRequest, opts ...grpc.CallOption) (*StatResponse, error)
+	// Search returns entries under one directory whose NAME contains a
+	// case-insensitive substring (name-only, never file content). The walk is
+	// bounded by a depth cap, a result cap and a scan cap; a search that hit any
+	// cap reports truncated=true rather than returning a silently partial set.
+	// It never follows a symbolic link, so it never leaves the requested
+	// directory's root, and the recycle bin is never searched.
+	Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error)
 	// Read streams one regular file in bounded chunks.
 	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadChunk], error)
 	// DirectorySize returns the recursive size of one directory (JUS-162). The
@@ -1497,6 +1505,16 @@ func (c *fileServiceClient) Stat(ctx context.Context, in *StatRequest, opts ...g
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StatResponse)
 	err := c.cc.Invoke(ctx, FileService_Stat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileServiceClient) Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchResponse)
+	err := c.cc.Invoke(ctx, FileService_Search_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1715,6 +1733,13 @@ type FileServiceServer interface {
 	List(context.Context, *ListRequest) (*ListResponse, error)
 	// Stat returns one entry.
 	Stat(context.Context, *StatRequest) (*StatResponse, error)
+	// Search returns entries under one directory whose NAME contains a
+	// case-insensitive substring (name-only, never file content). The walk is
+	// bounded by a depth cap, a result cap and a scan cap; a search that hit any
+	// cap reports truncated=true rather than returning a silently partial set.
+	// It never follows a symbolic link, so it never leaves the requested
+	// directory's root, and the recycle bin is never searched.
+	Search(context.Context, *SearchRequest) (*SearchResponse, error)
 	// Read streams one regular file in bounded chunks.
 	Read(*ReadRequest, grpc.ServerStreamingServer[ReadChunk]) error
 	// DirectorySize returns the recursive size of one directory (JUS-162). The
@@ -1780,6 +1805,9 @@ func (UnimplementedFileServiceServer) List(context.Context, *ListRequest) (*List
 }
 func (UnimplementedFileServiceServer) Stat(context.Context, *StatRequest) (*StatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Stat not implemented")
+}
+func (UnimplementedFileServiceServer) Search(context.Context, *SearchRequest) (*SearchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Search not implemented")
 }
 func (UnimplementedFileServiceServer) Read(*ReadRequest, grpc.ServerStreamingServer[ReadChunk]) error {
 	return status.Error(codes.Unimplemented, "method Read not implemented")
@@ -1894,6 +1922,24 @@ func _FileService_Stat_Handler(srv interface{}, ctx context.Context, dec func(in
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FileServiceServer).Stat(ctx, req.(*StatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileService_Search_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileServiceServer).Search(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FileService_Search_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileServiceServer).Search(ctx, req.(*SearchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2122,6 +2168,10 @@ var FileService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Stat",
 			Handler:    _FileService_Stat_Handler,
+		},
+		{
+			MethodName: "Search",
+			Handler:    _FileService_Search_Handler,
 		},
 		{
 			MethodName: "DirectorySize",

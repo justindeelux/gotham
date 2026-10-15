@@ -18,11 +18,13 @@ import {
   listRoots,
   moveEntry,
   renameEntry,
+  searchEntries,
 } from "@/features/files/api/files";
 import type { ArchiveFormat } from "@/features/files/api/files";
 import type {
   FilesEntry,
   FilesRoot,
+  FilesSearchHit,
   FileKind,
 } from "@/features/files/schemas/files";
 import type { NameKind } from "@/features/files/utils/files";
@@ -113,6 +115,23 @@ export interface FilesTab {
   sortKey: FilesSortKey;
   sortDir: FilesSortDirection;
   query: string;
+  /** recursive is the "Include subdirectories" switch: false keeps the input as
+   *  the client-side folder filter, true turns it into a server-side recursive
+   *  name search (JUS-163). */
+  recursive: boolean;
+  /** searchActive is true while a server search's results are on screen. */
+  searchActive: boolean;
+  /** searchQuery is the query the showed results were run with. */
+  searchQuery: string;
+  /** searchResults are the matching entries with their root-relative paths. */
+  searchResults: FilesSearchHit[];
+  /** searchTruncated reports a capped search (depth/result/scan cap hit). */
+  searchTruncated: boolean;
+  searchLoading: boolean;
+  /** searchGeneration supersedes an in-flight search on its own counter, kept
+   *  separate from the listing `generation` so a search and a listing load can
+   *  never cancel each other's loading flags (JUS-163 fix round 1). */
+  searchGeneration: number;
   selected: Set<string>;
   /** anchor is the last row a selection gesture left the cursor on: the fixed
    *  end of a shift-click range (JUS-138). null until a row is clicked, and
@@ -200,6 +219,13 @@ export const useFilesStore = defineStore("files", () => {
       sortKey: "name",
       sortDir: "asc",
       query: "",
+      recursive: false,
+      searchActive: false,
+      searchQuery: "",
+      searchResults: [],
+      searchTruncated: false,
+      searchLoading: false,
+      searchGeneration: 0,
       selected: new Set(),
       anchor: null,
       scrollTop: 0,
@@ -316,6 +342,27 @@ export const useFilesStore = defineStore("files", () => {
       activeTab.value.query = value;
     },
   });
+  /** recursive drives the "Include subdirectories" checkbox (JUS-163). */
+  const recursive = computed<boolean>({
+    get: () => activeTab.value.recursive,
+    set: (value) => {
+      activeTab.value.recursive = value;
+    },
+  });
+  /** searchActive is true while a server search's results are on screen. */
+  const searchActive = computed<boolean>(() => activeTab.value.searchActive);
+  /** searchQuery is the query the shown results were run with. */
+  const searchQuery = computed<string>(() => activeTab.value.searchQuery);
+  /** searchResults are the matching entries with their root-relative paths. */
+  const searchResults = computed<FilesSearchHit[]>(
+    () => activeTab.value.searchResults,
+  );
+  /** searchTruncated reports a capped search. */
+  const searchTruncated = computed<boolean>(
+    () => activeTab.value.searchTruncated,
+  );
+  /** searchLoading is true while a server search is in flight. */
+  const searchLoading = computed<boolean>(() => activeTab.value.searchLoading);
   const selected = computed<Set<string>>({
     get: () => activeTab.value.selected,
     set: (value) => {
@@ -339,6 +386,13 @@ export const useFilesStore = defineStore("files", () => {
   const clipboard = ref<FilesClipboard | null>(null);
   /** conflictPrompt is set when a transfer met 409s and awaits replace/skip. */
   const conflictPrompt = ref<ConflictPrompt | null>(null);
+  /**
+   * searchAborts holds the in-flight search request per tab id, so a
+   * superseded, cleared or navigated-away search is aborted for real instead of
+   * only having its response ignored (JUS-163 fix round 1). It lives outside the
+   * reactive tab objects on purpose: the controller must not be proxied.
+   */
+  const searchAborts = new Map<string, AbortController>();
 
   /** error renders the retained read failure in the active locale. */
   const error = computed<string | null>(() =>
@@ -366,12 +420,18 @@ export const useFilesStore = defineStore("files", () => {
 
   const counts = computed(() => countByKind(entries.value));
 
-  /** visibleEntries applies the folder filter, then the active sort. */
+  /**
+   * visibleEntries applies the folder filter, then the active sort. The filter
+   * is a client-side one: it runs only when the input is in "filter this
+   * folder" mode (recursive off). With recursive on, the input drives a
+   * server-side search instead, so the underlying listing is shown unfiltered
+   * until the search runs (JUS-163).
+   */
   const visibleEntries = computed<FilesEntry[]>(() => {
-    const filtered =
-      query.value.trim() === ""
-        ? entries.value
-        : entries.value.filter((entry) => entryMatchesQuery(entry, query.value));
+    const filtering = !recursive.value && query.value.trim() !== "";
+    const filtered = filtering
+      ? entries.value.filter((entry) => entryMatchesQuery(entry, query.value))
+      : entries.value;
     return sortEntries(filtered, sortKey.value, sortDir.value);
   });
 
@@ -633,6 +693,9 @@ export const useFilesStore = defineStore("files", () => {
           item.query = "";
           item.anchor = null;
           item.loaded = false;
+          // A root that vanished also invalidates any search results the tab
+          // was showing for it (JUS-163 fix round 1).
+          resetSearch(item);
         }
       }
       if (tab.rootName === "") {
@@ -744,8 +807,13 @@ export const useFilesStore = defineStore("files", () => {
     await loadAll();
   }
 
-  /** refresh reloads the active tab's directory. */
+  /**
+   * refresh reloads the active tab's directory. It ends any active search first
+   * — a refresh supersedes the search (and aborts its walk), so the freshly
+   * loaded listing is not left hidden behind stale results.
+   */
   async function refresh(): Promise<void> {
+    clearSearch();
     await loadEntries();
   }
 
@@ -842,6 +910,9 @@ export const useFilesStore = defineStore("files", () => {
     if (index === -1) {
       return;
     }
+    // A closed tab must not leave its search walking on the node.
+    searchAborts.get(id)?.abort();
+    searchAborts.delete(id);
     const wasActive = activeTabId.value === id;
     const closedRoot = tabs.value[index].rootName;
     const remaining = tabs.value.filter((tab) => tab.id !== id);
@@ -1285,6 +1356,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.path = "";
     tab.scrollTop = 0;
     tab.query = "";
+    clearSearch();
     clearSelection();
     await loadEntriesFor(tab);
   }
@@ -1295,6 +1367,7 @@ export const useFilesStore = defineStore("files", () => {
     tab.path = joinPath(tab.path, name);
     tab.scrollTop = 0;
     tab.query = "";
+    clearSearch();
     clearSelection();
     await loadEntriesFor(tab);
   }
@@ -1308,11 +1381,13 @@ export const useFilesStore = defineStore("files", () => {
       // change resets the anchor).
       tab.query = "";
       tab.anchor = null;
+      clearSearch();
       return;
     }
     tab.path = next;
     tab.scrollTop = 0;
     tab.query = "";
+    clearSearch();
     clearSelection();
     await loadEntriesFor(tab);
   }
@@ -1409,6 +1484,117 @@ export const useFilesStore = defineStore("files", () => {
     // shift-click, so it ends the current range.
     activeTab.value.anchor = null;
     query.value = next;
+  }
+
+  // ── Search (JUS-163) ─────────────────────────────────────────────────
+  // The nav-row input has two modes. With "Include subdirectories" off it is
+  // the client-side folder filter (JUS-141); the listing never leaves the node.
+  // With it on, submitting the query runs a bounded, server-side NAME search
+  // under the active directory. Results render in the panel and a capped run
+  // shows the truncated state; any navigation clears the search.
+
+  /**
+   * resetSearch drops one tab's server-search state and aborts any search still
+   * in flight, so a superseded walk never lands and a stuck "Searching…" cannot
+   * outlive the search that set it. It supersedes on the tab's own
+   * searchGeneration, which is deliberately separate from the listing
+   * `generation`: a search and a listing load must not cancel each other's
+   * loading flags (JUS-163 fix round 1).
+   */
+  function resetSearch(tab: FilesTab): void {
+    tab.searchGeneration += 1;
+    searchAborts.get(tab.id)?.abort();
+    searchAborts.delete(tab.id);
+    tab.searchActive = false;
+    tab.searchQuery = "";
+    tab.searchResults = [];
+    tab.searchTruncated = false;
+    tab.searchLoading = false;
+  }
+
+  /** clearSearch ends a server search and empties its results on the tab. */
+  function clearSearch(): void {
+    resetSearch(activeTab.value);
+  }
+
+  /**
+   * setRecursive flips the "Include subdirectories" switch. Turning it off ends
+   * any server search and restores the folder filter; turning it on drops the
+   * filter text so the plain listing shows until a search runs.
+   */
+  function setRecursive(next: boolean): void {
+    const tab = activeTab.value;
+    tab.recursive = next;
+    clearSearch();
+    tab.query = "";
+    tab.anchor = null;
+  }
+
+  /**
+   * runSearch submits the input. With the subdirectories switch off it is a
+   * no-op (the client filter already applies) beyond ending a stale search;
+   * with it on the query runs a bounded server-side name search.
+   */
+  async function runSearch(): Promise<void> {
+    const tab = activeTab.value;
+    const submitted = tab.query.trim();
+    if (!tab.recursive || !serverId.value || tab.rootName === "" || submitted === "") {
+      clearSearch();
+      return;
+    }
+    // The search owns its own generation and its own request, so a Refresh or a
+    // listing load neither drops the search's loading flag nor is dropped by it.
+    const gen = ++tab.searchGeneration;
+    const controller = new AbortController();
+    searchAborts.get(tab.id)?.abort();
+    searchAborts.set(tab.id, controller);
+
+    tab.searchActive = true;
+    tab.searchLoading = true;
+    tab.searchQuery = submitted;
+    tab.searchResults = [];
+    tab.searchTruncated = false;
+    tab.errorRaw = null;
+    try {
+      const listing = await searchEntries(serverId.value, teamId(), {
+        root: tab.rootName,
+        path: tab.path,
+        query: submitted,
+        recursive: true,
+        signal: controller.signal,
+      });
+      if (gen !== tab.searchGeneration) {
+        return;
+      }
+      tab.searchResults = listing.results;
+      tab.searchTruncated = listing.truncated;
+    } catch (err) {
+      if (gen !== tab.searchGeneration || isCanceledError(err)) {
+        return;
+      }
+      tab.searchActive = false;
+      tab.searchResults = [];
+      applyErrorTo(tab, err);
+    } finally {
+      if (gen === tab.searchGeneration) {
+        tab.searchLoading = false;
+      }
+      if (searchAborts.get(tab.id) === controller) {
+        searchAborts.delete(tab.id);
+      }
+    }
+  }
+
+  /**
+   * openSearchHit opens the directory a result lives in: the hit itself when it
+   * is a folder, its parent otherwise. Either way the search ends and the
+   * folder is shown, so the result leads to a normal browse.
+   */
+  async function openSearchHit(hit: FilesSearchHit): Promise<void> {
+    const target =
+      hit.entry.kind === "directory" ? hit.path : parentPath(hit.path);
+    clearSearch();
+    await goToPath(target);
   }
 
   /** isSelected reports whether one entry name is selected. */
@@ -1545,6 +1731,8 @@ export const useFilesStore = defineStore("files", () => {
     // module-level counter bumped on reset; per-tab counters need the same bump.
     for (const discarded of tabs.value) {
       discarded.generation += 1;
+      searchAborts.get(discarded.id)?.abort();
+      searchAborts.delete(discarded.id);
     }
     const tab = createTab();
     tabs.value = [tab];
@@ -1592,6 +1780,12 @@ export const useFilesStore = defineStore("files", () => {
     sortKey,
     sortDir,
     query,
+    recursive,
+    searchActive,
+    searchQuery,
+    searchResults,
+    searchTruncated,
+    searchLoading,
     scrollTop,
     // derived
     error,
@@ -1634,6 +1828,10 @@ export const useFilesStore = defineStore("files", () => {
     setSort,
     setViewMode,
     setQuery,
+    setRecursive,
+    runSearch,
+    clearSearch,
+    openSearchHit,
     isSelected,
     targetsForRow,
     selectForRowContext,

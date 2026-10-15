@@ -25,6 +25,9 @@ type FileClient interface {
 	ListRoots(ctx context.Context, in *agentv1.ListRootsRequest, opts ...grpc.CallOption) (*agentv1.ListRootsResponse, error)
 	List(ctx context.Context, in *agentv1.ListRequest, opts ...grpc.CallOption) (*agentv1.ListResponse, error)
 	Stat(ctx context.Context, in *agentv1.StatRequest, opts ...grpc.CallOption) (*agentv1.StatResponse, error)
+	// Search is a bounded, name-only, non-symlink-following search under one
+	// directory.
+	Search(ctx context.Context, in *agentv1.SearchRequest, opts ...grpc.CallOption) (*agentv1.SearchResponse, error)
 	Read(ctx context.Context, in *agentv1.ReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ReadChunk], error)
 	// DirectorySize returns one folder's recursive size (JUS-162).
 	DirectorySize(ctx context.Context, in *agentv1.DirectorySizeRequest, opts ...grpc.CallOption) (*agentv1.DirectorySizeResponse, error)

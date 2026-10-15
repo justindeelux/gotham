@@ -28,6 +28,9 @@ type fakeService struct {
 	statErr     error
 	size        FolderSize
 	sizeErr     error
+	search      SearchListing
+	searchErr   error
+	seenSearch  *searchCall
 	content     Content
 	contentErr  error
 	ticket      string
@@ -118,6 +121,23 @@ func (f *fakeService) Stat(_ context.Context, _ uuid.UUID, _, _ string) (Entry, 
 func (f *fakeService) DirectorySize(_ context.Context, _ uuid.UUID, _, _ string) (FolderSize, error) {
 	f.record("size")
 	return f.size, f.sizeErr
+}
+
+// searchCall records one Search invocation so a route test can assert the
+// query/recursive wiring.
+type searchCall struct {
+	root      string
+	path      string
+	query     string
+	recursive bool
+}
+
+func (f *fakeService) Search(_ context.Context, _ uuid.UUID, root, path, query string, recursive bool) (SearchListing, error) {
+	f.record("search")
+	f.mu.Lock()
+	f.seenSearch = &searchCall{root: root, path: path, query: query, recursive: recursive}
+	f.mu.Unlock()
+	return f.search, f.searchErr
 }
 
 func (f *fakeService) Content(_ context.Context, _ uuid.UUID, _, _ string) (Content, error) {

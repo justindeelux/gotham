@@ -41,18 +41,10 @@ live only in [`TODO.md`](TODO.md).
 | Folder | Holds |
 |---|---|
 | [`plans/`](plans/) | Medium to large features and phases: goal, scope, backend + web design, work packages, risks |
-| [`sub-plans/`](sub-plans/) | Small, focused work: one UI fix or a single work package |
 
 ## How we work
 
-[`../AGENTS.md`](../AGENTS.md) — workflow, invariants, review gates and the phase gate.
-
-## Library decisions
-
-[`library-audit.md`](library-audit.md) — which third-party libraries replace
-hand-rolled code and which stay hand-written (JUS-23): zod for all web
-validation, @vueuse/core for media-query/clipboard only, everything else
-stays as-is.
+[`../AGENTS.md`](../AGENTS.md) — workflow and invariants.
 
 ## Test server
 
@@ -71,9 +63,3 @@ GoReleaser workflow).
 [`../templates/README.md`](../templates/README.md) — the template format
 (`template.yaml` + `compose.yaml`), the field types and validation rules, the
 render guarantees, and the HTTP contract the services gallery consumes.
-
-## UI design
-
-[`design/`](design/) is the UI source of truth: one `*.html` mockup per page
-plus shared tokens in `assets/gotham-ui.css` (+ page CSS in
-`assets/gotham-views.css`).

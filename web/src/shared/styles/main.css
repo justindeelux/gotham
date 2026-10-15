@@ -304,8 +304,7 @@ a {
   width: 100%;
 }
 
-/* Modal scroll contract (JUS-69, mirrors the Modals rule in
- * docs/design/README.md): every card modal is bounded to the viewport and
+/* Modal scroll contract (JUS-69): every card modal is bounded to the viewport and
  * only its body scrolls — the header (title/close) and any footer actions
  * stay pinned. Naive renders preset="card" as .n-card-header +
  * .n-card-content + .n-card__footer/.n-card__action siblings with no height
@@ -396,7 +395,7 @@ a {
 }
 
 /* Settings page head (JUS-97): eyebrow → title → description with one shared
- * 8px rhythm, mirroring .page-head in docs/design/assets/gotham-ui.css. Pages
+ * 8px rhythm. Pages
  * with their own scoped .page-head styles keep them. */
 .page-head {
   display: flex;

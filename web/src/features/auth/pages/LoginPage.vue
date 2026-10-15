@@ -176,15 +176,14 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* Ported from docs/design/assets/gotham-views.css: the design's card is a bare
+/* The design's card is a bare
    width limiter — no border, no background. The only filled element is the
    tab switch below. */
 .auth-card {
   width: min(420px, 100%);
 }
 
-/* Tab switch, divider, and footnote ported from docs/design/login.html +
-   docs/design/assets/gotham-views.css; tokens come from styles/tokens.css. */
+/* Tab switch, divider, and footnote; tokens come from styles/tokens.css. */
 .auth-title {
   margin: 0 0 4px;
   font-size: 20px;

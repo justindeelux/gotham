@@ -10,7 +10,7 @@ import SystemForm from "@/features/instance-settings/components/SystemForm.vue";
 import { useInstanceSettings } from "@/features/instance-settings/composables/useInstanceSettings";
 
 /**
- * Settings → Instance (JUS-92), ported from docs/design/instance-settings.html.
+ * Settings → Instance (JUS-92).
  * Platform operators only: a 403 renders a notice instead of the forms.
  */
 const { t } = useI18n();

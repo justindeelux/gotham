@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════════════
  * Gotham — design token contract.
  *
- * Ported from docs/design/assets/gotham-ui.css (the UI source of truth).
+ * The UI design-token source of truth.
  * Every later UI package builds on these tokens; do not introduce new
  * colors, radii, or type values in component CSS — add a token here first.
  *
@@ -56,7 +56,7 @@
     U+0329, U+032A, U+032E-032F, U+1EA0-1EF9;
 }
 
-/* ── Block 1 — design-system tokens (mirrors gotham-ui.css verbatim) ───── */
+/* ── Block 1 — design-system tokens ───── */
 :root {
   /* ─── Surface ──────────────────────────────────────────────────── */
   --bg: #313338; /* chat surface / primary dark */

@@ -29,7 +29,7 @@ import { activeLocale, i18n } from "@/shared/i18n";
 
 /**
  * Environment page (`/projects/:projectId/environments/:environmentId`,
- * PE-5 Linear JUS-34, shared variables PE-6 Linear JUS-35), ported from docs/design/environment.html: a
+ * PE-5 Linear JUS-34, shared variables PE-6 Linear JUS-35): a
  * `Projects / <project> / <environment>` breadcrumb, a unified resource
  * table with type tabs and a preview switch, and an Add resource dialog
  * that opens the existing create wizards with this route's scope.

@@ -1,5 +1,5 @@
 /**
- * Register password strength, following docs/design/login.html. Shared by
+ * Register password strength. Shared by
  * RegisterPage and the PasswordStrengthMeter component so the meter, the
  * label, and the submit validation agree on one definition. Labels resolve
  * from the auth feature catalog for the given locale (callers pass the
@@ -36,7 +36,7 @@ export function countCharClasses(value: string): number {
   return classes;
 }
 
-/** scorePassword rates the password 0-4 following docs/design/login.html. */
+/** scorePassword rates the password 0-4. */
 export function scorePassword(value: string): number {
   let score = 0;
   if (value.length >= 10) {

@@ -19,7 +19,7 @@ import BrandIcon from "./BrandIcon.vue";
 import { brandFor, templateBrand } from "../utils/brands";
 
 /**
- * Add-resource picker (GS-1, ported from docs/design/add-resource.html), shown
+ * Add-resource picker (GS-1), shown
  * inside a modal on the environment page: three groups — Application (one
  * card per wizard source type), Service (one card per template from the
  * templates API), Database (one card per supported engine). Each card shows

@@ -1,6 +1,6 @@
-# Phase 11 — UI Alignment with docs/design (side track)
+# Phase 11 — UI Alignment (side track)
 
-**Goal:** bring the Vue SPA in line with the `docs/design/` mockups without
+**Goal:** bring the Vue SPA in line with the design mockups without
 changing any backend API: port the dark-theme design tokens, re-theme Naive UI,
 and close the layout/copy gap on every page that exists today.
 
@@ -11,7 +11,7 @@ their backend phase lands, not here. No new backend route is required by any
 package in this phase; backend-dependent widgets ship as explicit stubs.
 
 **Exit criteria:**
-- Dark-theme token layer from `assets/gotham-ui.css` ported into `web/`;
+- Dark-theme token layer ported into `web/`;
   Naive UI renders the dark theme everywhere (no light-theme remnants).
 - Auth screens match `login.html`: two-column shell with brand aside,
   tab switch, divider, GitHub outline button, 10-char/2-class password rule

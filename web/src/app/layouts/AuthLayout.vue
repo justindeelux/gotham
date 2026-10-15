@@ -15,8 +15,7 @@ interface ValueProp {
   body: string;
 }
 
-// Value props rewritten from the Vietnamese mockup (docs/design/login.html,
-// the UI source of truth). Copy renders through the auth catalog so a
+// Value props for the auth shell. Copy renders through the auth catalog so a
 // language switch updates the shell without navigating; form copy stays with
 // UI-2 pages, only the shell lives here.
 const valueProps = computed<ValueProp[]>(() => [
@@ -100,9 +99,8 @@ const valueProps = computed<ValueProp[]>(() => [
 </template>
 
 <style scoped>
-/* Two-column shell ported from docs/design/login.html +
-   docs/design/assets/gotham-views.css. Tokens come from styles/tokens.css;
-   only mockup utilities missing from main.css are re-declared here, scoped. */
+/* Two-column auth shell. Tokens come from styles/tokens.css; only utilities
+   missing from main.css are re-declared here, scoped. */
 .auth {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

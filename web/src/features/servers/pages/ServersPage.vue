@@ -241,11 +241,10 @@ const emptyHint = computed<string>(() =>
   }
 }
 
-/* ── Node grid (docs/design/servers.html) ──
-   The list region is a grid of node cards, not a data table. These rules are
-   ported from docs/design/assets/gotham-views.css (.node-card family) and
-   docs/design/assets/gotham-ui.css (grid/avatar/tag/meter/kv utilities) that
-   the app does not carry globally; tokens come from styles/tokens.css. */
+/* ── Node grid ──
+   The list region is a grid of node cards, not a data table. These rules
+   (.node-card family, grid/avatar/tag/meter/kv utilities) are not carried
+   globally by the app; tokens come from styles/tokens.css. */
 .servers-pagination {
   display: flex;
   justify-content: flex-end;

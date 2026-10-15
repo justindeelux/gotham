@@ -16,7 +16,7 @@ import { formatDate, relativeTime } from "@/shared/utils/format";
  * persisted check / auto-apply schedule, and the admin-gated changelog viewer
  * (sanitized markdown, GitHub link, intermediate versions newest first, the
  * running version's entry when up to date, empty state for dev builds).
- * Mockup: docs/design/updates.html. Non-admins see status only.
+ * Non-admins see status only.
  */
 const { t } = useI18n();
 const dialog = useDialog();

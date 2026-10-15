@@ -36,7 +36,7 @@ export interface RuleFromOptions {
  * here must not contain async refinements. Success returns true; failure
  * returns Error(first issue message) so the schema's message string is what
  * the user sees. Trigger handling is unchanged by the caller. No form is
- * migrated yet; see docs/library-audit.md.
+ * migrated yet.
  *
  * The stored schema message resolves to display text at invocation time
  * (see resolveValidationMessage): namespaced message keys translate in the

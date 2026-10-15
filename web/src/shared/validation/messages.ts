@@ -1,6 +1,6 @@
 /**
  * Message catalog convention (phase 1 is message-preserving: zero
- * user-visible diff, see docs/library-audit.md).
+ * user-visible diff).
  *
  * A feature declares its strings as a plain object of rule-keyed messages
  * next to its schemas, and seeds every schema message from it:
@@ -16,7 +16,7 @@
  * Rules: keep EXACT existing strings (snapshot them in unit tests before the
  * swap); one catalog per feature schemas module; shared/validation holds no
  * user-facing strings except primitives.ts fallbacks. Phase 2 rewording is a
- * separate PR with mockup comparison per docs/design/.
+ * separate PR.
  *
  * Absent-value gap: bare `z.string().min(1, msg)` (or `.email(msg)`) reports
  * the custom message only for present-but-invalid values. `undefined` gives

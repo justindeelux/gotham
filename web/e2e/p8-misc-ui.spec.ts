@@ -1792,7 +1792,7 @@ test.describe("invite redirect across registration", () => {
 
 /**
  * P-A4 — the servers page is a grid of node cards, not a data table
- * (docs/design/servers.html). Guards the design port: a seeded node renders a
+ * Guards the design port: a seeded node renders a
  * card with its head, key/value rows, the three metric tiles and the footer
  * actions, and the old table is gone.
  */

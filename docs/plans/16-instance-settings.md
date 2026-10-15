@@ -51,7 +51,7 @@ Same model as `deploy/gotham-update.sh`: a **fixed, root-owned** script `/usr/li
 5. A second network write while one is pending is refused (409). *Revert now* is available while pending.
 
 ## Frontend (`web/src/features/instance-settings`)
-Pages `settings/instance` (tabs General / Network / System) in Naive UI, mockup `docs/design/instance-settings.html` ported first. API client + `parseWith` envelopes, zod schemas in `schemas/` driving `ruleFrom` rules and server field errors mapped back onto fields, en + vi locale catalogs, confirm dialog with countdown (`useNetworkConfirm`). The nav entry/route/titles are additive one-line edits to shared files (admin-only visibility follows the profile "platform admin" flag).
+Pages `settings/instance` (tabs General / Network / System) in Naive UI. API client + `parseWith` envelopes, zod schemas in `schemas/` driving `ruleFrom` rules and server field errors mapped back onto fields, en + vi locale catalogs, confirm dialog with countdown (`useNetworkConfirm`). The nav entry/route/titles are additive one-line edits to shared files (admin-only visibility follows the profile "platform admin" flag).
 
 ## Work packages
 | Id | Title | Migration |

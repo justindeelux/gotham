@@ -34,14 +34,12 @@ web/             # Vue 3 SPA (Vite; src/: app/ shell, features/<module>/, shared
 templates/       # one-click service templates (YAML)
 deploy/          # install scripts, systemd units, compose
 docs/plans/      # feature/phase plans (medium to large work)
-docs/sub-plans/  # small focused plans (single UI fix, one-off work package)
-docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
 ```
 
 ## Development Workflow
 
 - Docs index: `docs/README.md` (plan status, process, test server, design).
-- 10 phases defined in `docs/plans/00-roadmap.md`; each task = 1 work package in an orca workspace (`ws/p<phase>-<slug>`), merged via its own PR; CI must be green before merge.
+- Each task = 1 work package in its own worktree/branch (naming: `docs/ORCHESTRATION.md` → Naming rule), merged via its own PR; CI must be green before merge. Work is tracked in Linear; `docs/plans/` and `docs/TODO.md` are reference only.
 - Invariants (run after every task, before merge):
   1. `go build ./...` clean
   2. `go test ./...` green
@@ -49,10 +47,8 @@ docs/design/     # UI mockups (*.html) + design tokens (assets/gotham-ui.css)
   4. Migrations are **forward-only** — never edit a merged migration; schema change = new migration
   5. `npm run build` + `npm run type-check` clean (web/)
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
-- Mandatory review gates: G0 (end of Phase 0), G1 (Phase 4), G2 (Phase 9) — see `docs/plans/00-roadmap.md`.
-- Phase gate: after each phase meets its exit criteria, STOP and ask the project owner before starting the next phase.
 - Orchestration rules (worker dispatch, recipe, lessons): see `docs/ORCHESTRATION.md`.
-- UI e2e: a worker whose change touches the UI or the API behind it runs the **whole** Playwright smoke suite (`npm run e2e` in `web/`, not just the specs it added) against its own throwaway Postgres + Redis containers and its own `gotham serve` (see `docs/test-server.md`). Never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`. Remove the containers (and stop the server) when the run ends, pass or fail.
+- UI e2e: workers do NOT run Playwright/e2e — only lint/build/unit tests (see `docs/ORCHESTRATION.md` → Dispatch brief rule). The coordinator/reviewer runs the Playwright smoke suite (`npm run e2e` in `web/`) when needed, against throwaway Postgres + Redis containers and its own `gotham serve` (see `docs/test-server.md`); never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`, and remove the containers when the run ends.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
 ## Linear Issues
@@ -74,11 +70,9 @@ When creating an issue (via `orca-linear`), always set all of these:
 
 ## UI Design
 
-- `docs/design/` is the UI source of truth: one `*.html` mockup per page + shared tokens in `assets/gotham-ui.css` (+ page CSS in `assets/gotham-views.css`).
-- Any task touching `web/` MUST compare against the matching mockup first and port the gap: extract design tokens (colors, fonts, spacing, radii) from `gotham-ui.css` into the Vue app, theme Naive UI to match — keep Naive UI as the component base, do not rebuild components from raw CSS.
+- Keep Naive UI as the component base — do not rebuild components from raw CSS. Colors, fonts, spacing and radii come from the design tokens in `web/src/shared/styles/tokens.css`, not hard-coded hex/px.
 - UI copy follows the project's language policy (see Language below); rewrite from the mockups where they differ.
-- Every shipped page has a mockup in `docs/design/`.
-- Modals: header and footer stay fixed, only the content region scrolls, max-height is bounded to the viewport and a modal never exceeds it — see the Modals rule in `docs/design/README.md` (shared `.app-modal`/`.wizard-modal` contract in `web/src/shared/styles/main.css`).
+- Modals: header and footer stay fixed, only the content region scrolls, max-height is bounded to the viewport and a modal never exceeds it (shared `.app-modal`/`.wizard-modal` contract in `web/src/shared/styles/main.css`).
 - Rebuilt `internal/server/webdist` stays committed; the CI dist-drift check must pass.
 
 ## Language

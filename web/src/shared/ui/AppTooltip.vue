@@ -1,6 +1,16 @@
 <script lang="ts">
 import { NTooltip } from "naive-ui";
-import { cloneVNode, defineComponent, h, mergeProps, onBeforeUnmount, ref, watch } from "vue";
+import {
+  cloneVNode,
+  computed,
+  defineComponent,
+  h,
+  mergeProps,
+  nextTick,
+  onBeforeUnmount,
+  ref,
+  watch,
+} from "vue";
 import type { PropType, VNode } from "vue";
 
 /**
@@ -12,32 +22,47 @@ import type { PropType, VNode } from "vue";
  * NTooltip alone cannot: its `trigger` is a single value ("hover" xor "focus"),
  * so the tooltip here is driven through naive's controlled `show`
  * (trigger="manual") and the open/close state is wired to the child's own
- * events. The event policy is deliberate (JUS-156 review round 1):
+ * events. The event policy is deliberate:
  *
- *   · hover      — a real pointer device only ((hover: hover)), so a touch tap's
- *                  synthetic mouseenter never opens a stuck tooltip (F4);
- *   · focus      — a navigation key (Tab / arrow) moved focus here and the
- *                  control matches :focus-visible, so a programmatic focus return
- *                  (a dialog or dropdown handing focus back) does not pop it (F4);
- *   · Escape     — dismisses an open tooltip without swallowing the key, so an
- *                  enclosing dialog/dropdown still receives it (F3, WCAG 1.4.13);
- *   · pointer    — the tooltip stays open while the pointer crosses onto it and
- *                  closes when it leaves either the control or the tooltip (F3).
+ *   · hover   — a real pointer device only: not on (hover: none), and never for
+ *               a touch tap's compatibility mouseenter, so a tap cannot leave a
+ *               stuck tooltip (F4, round-2 G7);
+ *   · focus   — a navigation key (Tab / arrow) moved focus here and the control
+ *               matches :focus-visible, so a programmatic focus return (a dialog
+ *               or dropdown handing focus back) does not pop it (F4);
+ *   · Escape  — dismisses an open tooltip without swallowing the key, so an
+ *               enclosing dialog/dropdown still receives it (F3, WCAG 1.4.13);
+ *   · pointer — the tooltip stays open while the pointer crosses onto it and
+ *               closes when it leaves either the control or the tooltip (F3).
  *
- * The tooltip content carries role="tooltip" and is exposed through
- * aria-describedby on the control ONLY when the tooltip text differs from the
- * control's aria-label (a disabled-reason hint), so assistive tech reads the
- * extra copy without a double announcement of the name (F5).
+ * The popover is mounted LAZILY, on the control's first hover/focus (round-2
+ * G5): a virtualised list can mount thousands of rows while scrolling, and a
+ * naive popover per icon button made that measurably slower. Until then the
+ * control is rendered alone, with the same listeners.
+ *
+ * A control whose tooltip copy differs from its accessible name (a disabled
+ * reason) is described by an always-present, visually hidden node — so
+ * assistive tech gets the reason even while no tooltip is open — and the visual
+ * popover content is aria-hidden, so nothing is announced twice (F5 / round-2
+ * G4).
  *
  * It keeps naive's `__popover__` contract and forwards the two internal props a
  * wrapping NDropdown sets. naive uses that flag to route the dropdown's own
  * trigger handlers through `internalInheritedEventHandlers` and to sync the
  * dropdown's target through this nested popover, so a dropdown's trigger button
- * carries its tooltip without breaking the dropdown's open/close or focus return.
+ * carries its tooltip without breaking the dropdown's open/close or focus
+ * return. Nothing else about naive's popover internals is relied on.
  */
 
 /** HOVER_GAP_MS leaves a short window for the pointer to reach the tooltip. */
 const HOVER_GAP_MS = 120;
+
+/**
+ * TOUCH_TAP_MS is the window just after a touch tap in which a compatibility
+ * mouseenter is ignored: a tap fires mouseenter with no matching mouseleave, so
+ * without this a hybrid (touch + mouse) device could leave a stuck tooltip.
+ */
+const TOUCH_TAP_MS = 600;
 
 /** Keys that move focus; a focus right after one of these is user-intended. */
 const NAVIGATION_KEYS = new Set([
@@ -55,6 +80,8 @@ const NAVIGATION_KEYS = new Set([
  * stale value can never open a tooltip on a later programmatic focus.
  */
 let keyboardNavigation = false;
+/** lastTouchTapAt is when the last touch pointer went down (0 = never). */
+let lastTouchTapAt = 0;
 let modalityBound = false;
 function bindInputModality(): void {
   if (modalityBound || typeof document === "undefined") {
@@ -70,8 +97,11 @@ function bindInputModality(): void {
   );
   document.addEventListener(
     "pointerdown",
-    () => {
+    (event) => {
       keyboardNavigation = false;
+      if (event.pointerType === "touch") {
+        lastTouchTapAt = Date.now();
+      }
     },
     true,
   );
@@ -98,12 +128,33 @@ const AppTooltip = defineComponent({
       default: () => [],
     },
   },
-  setup(props, { slots, attrs }) {
+  setup(props, { slots }) {
     bindInputModality();
     const show = ref(false);
+    /**
+     * activated mounts the popover once, on the first hover/focus (G5). A
+     * nested popover is the exception: when a wrapping NDropdown routes its own
+     * trigger handlers through this tooltip (`internalInheritedEventHandlers`)
+     * and syncs its target through it, the inner popover must exist from the
+     * start or the dropdown can never open. Those are the few dropdown triggers
+     * (the row ⋮, the sort toggles, New, the recycle purge), not the row
+     * actions, so the virtualised scroll still mounts no extra popover per row.
+     */
+    const nested = computed(
+      () => props.internalInheritedEventHandlers.length > 0,
+    );
+    const activated = ref(nested.value);
+    watch(nested, (value) => {
+      if (value) {
+        activated.value = true;
+      }
+    });
     const contentId = `app-tooltip-${(tooltipSeq += 1)}`;
+    let child: Element | { $el?: unknown } | null = null;
     let hoveringContent = false;
     let hideTimer: ReturnType<typeof setTimeout> | null = null;
+    /** restoringFocus suppresses the focusout of an activation re-render. */
+    let restoringFocus = false;
 
     function cancelHide(): void {
       if (hideTimer !== null) {
@@ -128,7 +179,7 @@ const AppTooltip = defineComponent({
       }, HOVER_GAP_MS);
     }
 
-    /** hoverCapable is false on a touch-only device (also gated in CSS). */
+    /** hoverCapable is false on a touch-only device. */
     function hoverCapable(): boolean {
       return (
         typeof window !== "undefined" &&
@@ -136,11 +187,34 @@ const AppTooltip = defineComponent({
       );
     }
 
+    /** fromTouchTap reports a compatibility mouseenter synthesised by a tap. */
+    function fromTouchTap(event: MouseEvent): boolean {
+      const capabilities = (
+        event as MouseEvent & {
+          sourceCapabilities?: { firesTouchEvents?: boolean };
+        }
+      ).sourceCapabilities;
+      return (
+        capabilities?.firesTouchEvents === true ||
+        Date.now() - lastTouchTapAt < TOUCH_TAP_MS
+      );
+    }
+
+    /** childElement resolves the slotted control's DOM element for refocus. */
+    function childElement(): HTMLElement | null {
+      if (child instanceof HTMLElement) {
+        return child;
+      }
+      const el = (child as { $el?: unknown } | null)?.$el;
+      return el instanceof HTMLElement ? el : null;
+    }
+
     const triggerEvents = {
-      onMouseenter: () => {
-        if (!hoverCapable()) {
+      onMouseenter: (event: MouseEvent) => {
+        if (!hoverCapable() || fromTouchTap(event)) {
           return;
         }
+        activated.value = true;
         cancelHide();
         show.value = true;
       },
@@ -157,11 +231,27 @@ const AppTooltip = defineComponent({
         ) {
           return;
         }
+        const firstActivation = !activated.value;
+        activated.value = true;
         cancelHide();
         show.value = true;
+        if (firstActivation) {
+          // Mounting the popover rebuilds the control (the tree gains the
+          // tooltip), which drops focus to <body>; hand it back so a keyboard
+          // user keeps the tab stop — and the tooltip they just opened.
+          restoringFocus = true;
+          void nextTick(() => {
+            restoringFocus = false;
+            if (document.activeElement === document.body) {
+              childElement()?.focus({ preventScroll: true });
+            }
+          });
+        }
       },
       onFocusout: () => {
-        hideNow();
+        if (!restoringFocus) {
+          hideNow();
+        }
       },
       // Hide on press. Not `onClick`: naive's nested-popover path wraps the
       // trigger's own onClick and assumes a single function, so merging ours in
@@ -196,6 +286,7 @@ const AppTooltip = defineComponent({
       }
     });
     onBeforeUnmount(() => {
+      cancelHide();
       if (escapeBound) {
         document.removeEventListener("keydown", onEscape, true);
         escapeBound = false;
@@ -213,47 +304,72 @@ const AppTooltip = defineComponent({
       },
     };
 
-    return (): VNode | null => {
+    return (): VNode | VNode[] | null => {
       const node = slots.default?.()[0];
       if (!node) {
         return null;
       }
-      // Only describe the control when the tooltip adds copy beyond its name.
+      // A tooltip that adds copy beyond the accessible name describes the
+      // control; one that repeats the name does not (no double announcement).
       const ariaLabel = node.props?.["aria-label"];
-      const described =
-        typeof ariaLabel === "string" && ariaLabel !== props.label
-          ? { "aria-describedby": contentId }
-          : {};
-      return h(
-        NTooltip,
-        {
-          trigger: "manual",
-          // No fade: the body mounts/unmounts with `show`, so a TOGGLED tooltip
-          // can never linger mid-transition and no hidden body is left behind.
-          animated: false,
-          show: show.value,
-          internalSyncTargetWithParent: props.internalSyncTargetWithParent,
-          internalInheritedEventHandlers: props.internalInheritedEventHandlers,
-        },
-        {
-          trigger: () =>
-            cloneVNode(
-              node,
-              mergeProps(attrs, triggerEvents, described),
-            ),
-          default: () =>
+      const hasExtraCopy =
+        typeof ariaLabel === "string" && ariaLabel !== props.label;
+      const trigger = cloneVNode(
+        node,
+        // NOTE: only plain event handlers are merged. `attrs` is deliberately
+        // NOT merged: naive's nested-popover path calls the trigger's handlers
+        // assuming single functions, so a caller-supplied handler here would
+        // become an array and crash it.
+        mergeProps(
+          triggerEvents,
+          hasExtraCopy ? { "aria-describedby": contentId } : {},
+          {
+            ref: (el: unknown) => {
+              child = el as Element | { $el?: unknown } | null;
+            },
+          },
+        ),
+      );
+      const tooltip = activated.value
+        ? h(
+            NTooltip,
+            {
+              trigger: "manual",
+              // No fade: the body mounts/unmounts with `show`, so a TOGGLED
+              // tooltip can never linger mid-transition.
+              animated: false,
+              show: show.value,
+              internalSyncTargetWithParent: props.internalSyncTargetWithParent,
+              internalInheritedEventHandlers:
+                props.internalInheritedEventHandlers,
+            },
+            {
+              trigger: () => trigger,
+              default: () =>
+                h(
+                  "span",
+                  {
+                    class: "app-tooltip-content",
+                    // Purely visual: the description node below carries the
+                    // copy for assistive tech (and exists while closed).
+                    "aria-hidden": "true",
+                    ...contentEvents,
+                  },
+                  props.label,
+                ),
+            },
+          )
+        : trigger;
+      return hasExtraCopy
+        ? [
+            tooltip,
             h(
               "span",
-              {
-                id: contentId,
-                role: "tooltip",
-                class: "app-tooltip-content",
-                ...contentEvents,
-              },
+              { id: contentId, role: "tooltip", class: "app-tooltip-sr" },
               props.label,
             ),
-        },
-      );
+          ]
+        : tooltip;
     };
   },
 });

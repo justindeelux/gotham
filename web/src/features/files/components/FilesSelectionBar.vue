@@ -77,9 +77,16 @@ const deleteLabel = computed<string>(
   () => selectionBlocked() || String(t("common.actions.delete")),
 );
 
-/** canBulkDownload / canBulkAct mirror the two action groups' disabled state. */
+/**
+ * canBulkDownload / canBulkAct mirror the pre-PR disabled conditions, so the
+ * blocked state is unchanged: bulk Download (nothing downloadable selected, or
+ * no content role) and the selection actions (nothing writable selected, or a
+ * mutation running). Each is `aria-disabled` rather than `disabled` so the
+ * blocked control stays focusable and its tooltip explains why; the handlers
+ * guard on the same value, so a click is still a no-op.
+ */
 const canBulkDownload = computed<boolean>(
-  () => files.canReadContent && hasSelectedFiles.value && !files.acting,
+  () => files.canReadContent && hasSelectedFiles.value,
 );
 const canBulkAct = computed<boolean>(
   () => files.canWrite && !files.acting && selection.value.length > 0,
@@ -310,6 +317,15 @@ watch(hasSelection, async () => {
 
 .fm-selection-actions.is-visible {
   visibility: visible;
+}
+
+/* A blocked bulk action is still focusable — its tooltip explains why (JUS-156)
+   — but it must read as disabled, exactly as the row actions do. naive only
+   dims a native `disabled` button, so the [aria-disabled] state is styled here
+   to match. */
+.fm-selection-actions :deep(.n-button[aria-disabled="true"]) {
+  opacity: var(--n-opacity-disabled, 0.5);
+  cursor: not-allowed;
 }
 
 /* JUS-148: the pinned scroll affordance — a fade with a chevron that rides the

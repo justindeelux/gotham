@@ -246,9 +246,9 @@ function escapeRegex(value: string): string {
 }
 
 /**
- * tooltipFor locates the ONE tooltip whose copy is exactly `label`. naive keeps
- * every built tooltip body in the DOM (display:none) once created, so scoping by
- * exact text is what keeps the assertions unambiguous.
+ * tooltipFor locates the ONE tooltip whose copy is exactly `label`, so an
+ * assertion on one control's tooltip can never match another control's (the
+ * body is mounted only while shown — `animated: false`, controlled `show`).
  */
 function tooltipFor(page: Page, label: string): Locator {
   return page.locator(".n-tooltip", {
@@ -591,7 +591,9 @@ test.describe("tooltip behaviour (JUS-156 round 1)", () => {
     );
   });
 
-  test("a blocked bulk action's tooltip explains why", async ({ page }) => {
+  test("a blocked bulk action's tooltip explains why and still looks disabled", async ({
+    page,
+  }) => {
     await openFiles(page);
     // Select only the folder: nothing downloadable is selected.
     await rowFor(page, "config").locator(".fm-select .n-checkbox").click();
@@ -600,6 +602,68 @@ test.describe("tooltip behaviour (JUS-156 round 1)", () => {
       .getByRole("button", { name: "Download", exact: true });
     await expect(download).toHaveAttribute("aria-disabled", "true");
     await expectTooltipOnHover(page, download, "Select one or more entries first.");
+    // It is still focusable (the tooltip must be reachable) AND still reads as
+    // disabled — naive only dims a native `disabled` button (JUS-156 G1).
+    expect(
+      await download.evaluate((element) =>
+        Number(getComputedStyle(element).opacity),
+      ),
+    ).toBeLessThan(1);
+    await download.focus();
+    await expect(download).toBeFocused();
+  });
+
+  test("the pointer-events scoping leaves other naive tooltips hoverable", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    // The server rail renders its own naive tooltips (RailIconButton). They must
+    // keep naive's default, hoverable body (JUS-156 G2).
+    const rail = page.locator(".rail-btn").first();
+    await rail.hover();
+    const foreign = page
+      .locator(".n-tooltip:not(:has(.app-tooltip-content))")
+      .last();
+    await expect(foreign).toBeVisible();
+    expect(
+      await foreign.evaluate(
+        (element) => getComputedStyle(element).pointerEvents,
+      ),
+    ).not.toBe("none");
+
+    // The Files tooltip body itself never swallows a pointer.
+    const download = rowFor(page, "app.yaml").getByRole("button", {
+      name: "Download app.yaml",
+    });
+    await download.hover();
+    const own = tooltipFor(page, "Download app.yaml");
+    await expect(own).toBeVisible();
+    expect(
+      await own.evaluate((element) => getComputedStyle(element).pointerEvents),
+    ).toBe("none");
+  });
+
+  test("a reason tooltip describes its control even while the tooltip is closed", async ({
+    page,
+  }) => {
+    await openFiles(page, { role: "member" });
+    const download = rowFor(page, "app.yaml").getByRole("button", {
+      name: "Download app.yaml",
+    });
+    const described = await download.getAttribute("aria-describedby");
+    expect(described, "a reason tooltip is described").toBeTruthy();
+    // No hover, no focus: the description node still resolves (JUS-156 G4).
+    const tip = page.locator(`#${described}`);
+    await expect(tip).toHaveCount(1);
+    await expect(tip).toHaveRole("tooltip");
+    await expect(tip).toHaveText("Content requires the owner or admin role.");
+
+    // A tooltip whose text equals the accessible name adds nothing, so the
+    // control is not double-announced.
+    await expect(moreFor(page, "app.yaml")).not.toHaveAttribute(
+      "aria-describedby",
+      /.+/,
+    );
   });
 
   test("Escape dismisses an open tooltip and the tooltip stays hoverable", async ({
@@ -648,27 +712,6 @@ test.describe("tooltip behaviour (JUS-156 round 1)", () => {
     await expect(page.locator(".n-tooltip:visible")).toHaveCount(0);
   });
 
-  test("the tooltip is exposed to AT only when it adds copy beyond the name", async ({
-    page,
-  }) => {
-    await openFiles(page, { role: "member" });
-    const download = rowFor(page, "app.yaml").getByRole("button", {
-      name: "Download app.yaml",
-    });
-    const described = await download.getAttribute("aria-describedby");
-    expect(described, "a reason tooltip is described").toBeTruthy();
-    await download.hover();
-    const tip = page.locator(`#${described}`);
-    await expect(tip).toHaveRole("tooltip");
-    await expect(tip).toHaveText("Content requires the owner or admin role.");
-
-    // A tooltip whose text equals the accessible name adds nothing, so the
-    // control is not double-announced.
-    await expect(moreFor(page, "app.yaml")).not.toHaveAttribute(
-      "aria-describedby",
-      /.+/,
-    );
-  });
 });
 
 // JUS-140: keyboard/touch reachability of the row menu state, the mode and

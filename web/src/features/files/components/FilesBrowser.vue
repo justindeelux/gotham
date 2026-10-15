@@ -3101,15 +3101,23 @@ function onFolderMenu(key: string): void {
   width: 220px;
 }
 
-/* Tab bar (JUS-123): one tab per open directory. The strip scrolls
-   horizontally at narrow widths instead of wrapping the layout; the active tab
-   is filled, and each label ellipsises inside its own max width. */
+/* Tab bar (JUS-123/152): one tab per open directory. The whole tablist — the
+   tabs and the + button — rides in one bordered group so it reads as a single
+   unit (JUS-152); the strip scrolls horizontally at narrow widths instead of
+   wrapping the layout, and the active tab is filled inside the group. */
 .fm-tabs {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
+  /* Hug the tabs + the + button so the group rings exactly its content. */
+  width: fit-content;
+  max-width: 100%;
   margin-bottom: var(--space-3);
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px;
 }
 
 .fm-tabstrip {
@@ -3122,10 +3130,6 @@ function onFolderMenu(key: string): void {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 3px;
 }
 
 .fm-tab {
@@ -3175,16 +3179,16 @@ function onFolderMenu(key: string): void {
   place-items: center;
   width: 34px;
   height: 34px;
-  border: 1px solid var(--border);
-  background: var(--surface-warm);
+  border: 0;
+  background: none;
   border-radius: var(--radius-sm);
   color: var(--muted);
   cursor: pointer;
 }
 
 .fm-tab-add:hover:not(:disabled) {
+  background: var(--hover-row);
   color: var(--fg-2);
-  border-color: var(--accent);
 }
 
 .fm-tab-add:disabled {

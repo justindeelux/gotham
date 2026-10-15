@@ -243,6 +243,37 @@ test("two tabs keep independent paths and the tab bar is a real tablist", async 
   expect(addBox!.x).toBeGreaterThan(lastTab!.x + lastTab!.width);
 });
 
+test("the whole tablist rides in one bordered group (JUS-152)", async ({
+  page,
+}) => {
+  await openFiles(page);
+
+  // The tabs and the + button share one container that carries the group's
+  // background, border and padding.
+  await expect(page.locator(".fm-tabs > .fm-tabstrip")).toHaveCount(1);
+  await expect(page.locator(".fm-tabs > .fm-tab-add")).toHaveCount(1);
+  const group = await page.locator(".fm-tabs").evaluate((el) => {
+    const style = getComputedStyle(el as HTMLElement);
+    return {
+      background: style.backgroundColor,
+      borderWidth: style.borderTopWidth,
+      padding: style.paddingTop,
+    };
+  });
+  expect(group.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(Number.parseFloat(group.borderWidth)).toBeGreaterThan(0);
+  expect(Number.parseFloat(group.padding)).toBeGreaterThan(0);
+
+  // The strip is now only the scroll region: the group owns the surface, so a
+  // single tab no longer looks like its own detached button.
+  const strip = await page.locator(".fm-tabstrip").evaluate((el) => {
+    const style = getComputedStyle(el as HTMLElement);
+    return { background: style.backgroundColor, borderWidth: style.borderTopWidth };
+  });
+  expect(strip.background).toBe("rgba(0, 0, 0, 0)");
+  expect(Number.parseFloat(strip.borderWidth)).toBe(0);
+});
+
 test("a cut in one tab pastes into another tab (shared clipboard)", async ({
   page,
 }) => {

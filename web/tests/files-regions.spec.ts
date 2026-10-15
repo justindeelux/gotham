@@ -179,6 +179,8 @@ interface RegionBox {
   borderBottom: number;
   borderTopColor: string;
   borderBottomColor: string;
+  borderTopLeftRadius: string;
+  borderTopRightRadius: string;
   overflowX: string;
   overflowY: string;
 }
@@ -186,6 +188,7 @@ interface RegionBox {
 /** regionsOf measures the five browser regions and the two tokens in one pass. */
 async function regionsOf(page: Page): Promise<{
   regions: Record<string, RegionBox>;
+  cardRadius: string;
   surfaceWarm: string;
   border: string;
 }> {
@@ -203,6 +206,8 @@ async function regionsOf(page: Page): Promise<{
         borderBottom: Number.parseFloat(style.borderBottomWidth),
         borderTopColor: style.borderTopColor,
         borderBottomColor: style.borderBottomColor,
+        borderTopLeftRadius: style.borderTopLeftRadius,
+        borderTopRightRadius: style.borderTopRightRadius,
         overflowX: style.overflowX,
         overflowY: style.overflowY,
       };
@@ -221,6 +226,9 @@ async function regionsOf(page: Page): Promise<{
         toolbar: region(".fm-bar.fm-toolbar"),
         panel: region(".table-wrap"),
       },
+      cardRadius: getComputedStyle(
+        document.querySelector(".files-browser") as HTMLElement,
+      ).borderTopLeftRadius,
       surfaceWarm: rootStyle.getPropertyValue("--surface-warm").trim(),
       border: rootStyle.getPropertyValue("--border").trim(),
     };
@@ -238,7 +246,7 @@ for (const viewport of [
     page,
   }) => {
     await openFiles(page, viewport.width, viewport.height);
-    const { regions, surfaceWarm, border } = await regionsOf(page);
+    const { regions, cardRadius, surfaceWarm, border } = await regionsOf(page);
     const order = ["header", "tablist", "pathbar", "toolbar", "panel"] as const;
 
     // Every region has a height and stacks top-to-bottom without overlap.
@@ -253,17 +261,43 @@ for (const viewport of [
       }
     }
 
-    // Each adjacent pair is separated by a border or a background step.
+    // Each adjacent pair is separated by a real gap AND a boundary the eye can
+    // see: a border drawn at the shared edge in a colour that differs from its
+    // own fill, or a background step. Two regions with no border and the same
+    // fill fail, so this can only pass while the bands really separate them.
     for (let index = 1; index < order.length; index += 1) {
       const upper = regions[order[index - 1]];
       const lower = regions[order[index]];
-      const borderBetween = upper.borderBottom > 0 || lower.borderTop > 0;
+      const gap = lower.top - upper.bottom;
+      expect(
+        gap,
+        `${order[index - 1]} -> ${order[index]} gap at ${viewport.width}px`,
+      ).toBeGreaterThan(0);
+      const borderAtBoundary =
+        (upper.borderBottom > 0 &&
+          normalizeColor(upper.borderBottomColor) !==
+            normalizeColor(upper.background)) ||
+        (lower.borderTop > 0 &&
+          normalizeColor(lower.borderTopColor) !==
+            normalizeColor(lower.background));
       const backgroundDiffers = upper.background !== lower.background;
       expect(
-        borderBetween || backgroundDiffers,
+        borderAtBoundary || backgroundDiffers,
         `${order[index - 1]} -> ${order[index]} boundary at ${viewport.width}px`,
       ).toBe(true);
     }
+
+    // F1/JUS-157: the warm header band must follow the card's rounded top
+    // corners — a square band would bleed over the 8px radius.
+    expect(Number.parseFloat(cardRadius), "card has a top radius").toBeGreaterThan(0);
+    expect(
+      regions.header.borderTopLeftRadius,
+      "header top-left corner follows the card radius",
+    ).toBe(cardRadius);
+    expect(
+      regions.header.borderTopRightRadius,
+      "header top-right corner follows the card radius",
+    ).toBe(cardRadius);
 
     // The separation is token-derived: the header band and the two bars paint
     // the deepest surface token, and the bars are ringed with the border token.
@@ -329,6 +363,49 @@ test("the path band keeps the breadcrumb focus ring unclipped", async ({ page })
         box.bottom + offset + width - bounds.bottom,
         bounds.left - (box.left - offset - width),
         box.right + offset + width - bounds.right,
+      ),
+    };
+  });
+
+  expect(ring).not.toBeNull();
+  expect(ring!.outline).not.toBe("none");
+  expect(ring!.width).toBeGreaterThan(0);
+  expect(ring!.overhang).toBeLessThanOrEqual(0.5);
+});
+
+// JUS-157: the tab focus ring is drawn INSIDE the tab (outline-offset: -2px)
+// because the scrolling strip clips at its edge. A new border or overflow on
+// the region bands must never cut it: the whole ring paints inside the strip.
+test("the region bands never clip the tab focus ring", async ({ page }) => {
+  await openFiles(page, 1440, 900);
+  const tab = page.locator('.fm-tabstrip [role="tab"][aria-selected="true"]');
+  await tab.focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowRight");
+  await expect(tab).toBeFocused();
+
+  const ring = await page.evaluate(() => {
+    const strip = document.querySelector(".fm-tabstrip") as HTMLElement | null;
+    if (strip === null) return null;
+    const tabEl = strip.querySelector<HTMLElement>(
+      '[role="tab"][aria-selected="true"]',
+    );
+    if (tabEl === null) return null;
+    const style = getComputedStyle(tabEl);
+    const width = Number.parseFloat(style.outlineWidth);
+    const offset = Number.parseFloat(style.outlineOffset);
+    const box = tabEl.getBoundingClientRect();
+    // The strip is the scroll container, so it clips at its own border box.
+    const clip = strip.getBoundingClientRect();
+    return {
+      outline: style.outlineStyle,
+      width,
+      // Positive means the ring reaches past the clip edge (i.e. is cut off).
+      overhang: Math.max(
+        clip.top - (box.top - offset - width),
+        box.bottom + offset + width - clip.bottom,
+        clip.left - (box.left - offset - width),
+        box.right + offset + width - clip.right,
       ),
     };
   });

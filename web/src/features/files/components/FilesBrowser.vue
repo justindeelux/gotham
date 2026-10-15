@@ -3072,10 +3072,15 @@ function onFolderMenu(key: string): void {
  * tablist, the path bar, the toolbar and the entry list never read as one flat
  * surface. The header is a warm band with a solid divider; the path bar and the
  * toolbar are bordered warm bands below it. Tokens only (--surface-warm,
- * --border, --radius-sm, --space-*), so the separation holds in any theme. */
+ * --border, --radius-sm, --space-*), so the separation follows the theme's
+ * surface/border tokens (the app ships dark only). The header inherits the
+ * card's top corner radius, or its square fill would bleed over the rounded
+ * card corners. */
 .files-browser :deep(.n-card-header) {
   background: var(--surface-warm);
   border-bottom: 1px solid var(--border);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
 }
 
 .fm-card-head {
@@ -4086,9 +4091,10 @@ function onFolderMenu(key: string): void {
   }
 
   /* JUS-157: keep the bands compact on a phone — the entry list needs the
-     height (the >=60% guard). */
+     height (the >=60% guard). `row-gap` matches the mockup's phone rule. */
   .fm-toolbar,
   .fm-bar.fm-pathbar {
+    row-gap: var(--space-2);
     margin-bottom: var(--space-1);
     padding: var(--space-1) var(--space-2);
   }

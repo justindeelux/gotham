@@ -141,8 +141,15 @@
 /* JUS-157: every browser region gets its own boundary so the header, the
    tablist, the path bar, the toolbar and the entry list never read as one flat
    surface. The card header is a warm band; the path bar and the toolbar are
-   bordered warm bands. Token-derived, so the separation holds in any theme. */
-[data-od-id="files-browser"] .card-head { background: var(--surface-warm); }
+   bordered warm bands. Token-derived, so the separation follows the theme's
+   surface/border tokens (the mockup ships dark only). The header takes the
+   card's top corner radius (mirrors the app's border-radius: inherit), or its
+   square fill would bleed over the rounded card corners. */
+[data-od-id="files-browser"] .card-head { background: var(--surface-warm); border-radius: var(--radius-md) var(--radius-md) 0 0; }
+/* JUS-157: the app's card content has no top padding, so the gap under the
+   header band is the .fm-tabs margin-top; the mockup drops its card-body top
+   padding to the same effect, keeping the two rule sets reconciled. */
+[data-od-id="files-browser"] .card-body { padding-top: 0; }
 /* Toolbar + path bar (JUS-120/128, gộp ở JUS-134; tách ở JUS-153): path bar
    phía trên chứa breadcrumb, filter và refresh; toolbar giữ create/upload,
    recycle bin và các công cụ theo root; bulk action chỉ hiện khi có entry được
@@ -207,6 +214,7 @@
      row. The bulk actions live in the header bar (JUS-146), whose own row
      scrolls with 44px touch targets, so every action stays reachable and the
      list keeps >=60% of the viewport with a selection active. */
+  .fm-tabs { margin-top: var(--space-2); margin-bottom: var(--space-1); }
   .fm-toolbar, .fm-bar.fm-pathbar { row-gap: var(--space-2); margin-bottom: var(--space-1); padding: var(--space-1) var(--space-2); }
   /* The card heading is redundant on a phone: keeping it forces the
      node/root/view controls onto a second row (JUS-135). The field captions
@@ -232,7 +240,7 @@
    widths. The whole tablist (tabs + the + button) rides in one bordered group,
    mirroring the breadcrumb group, so it reads as a single unit. */
 .fm-tabs {
-  display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3);
+  display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); margin-bottom: var(--space-3);
   width: fit-content; max-width: 100%;
   background: var(--surface-warm); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 3px;

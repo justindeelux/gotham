@@ -675,10 +675,10 @@ test("the bulk bar replaces the header row with no reserved band", async ({
 
   // Nothing selected: the column headers show and the bulk bar is hidden (not
   // merely transparent), so it is not an extra empty columnheader in the a11y
-  // tree — exactly the seven real header cells are exposed.
+  // tree — exactly the six real header cells are exposed (JUS-161 dropped Type).
   await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "visible");
   await expect(page.locator(".fm-head-bulk")).toHaveCSS("visibility", "hidden");
-  expect(await axColumnHeaders(page), "one set of header cells (idle)").toBe(7);
+  expect(await axColumnHeaders(page), "one set of header cells (idle)").toBe(6);
   const spacing = await page.evaluate(() => {
     const toolbar = document.querySelector(".fm-toolbar") as HTMLElement;
     const head = document.querySelector(".fm-head") as HTMLElement;

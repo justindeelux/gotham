@@ -355,9 +355,16 @@ test("a cut in one tab pastes into another tab (shared clipboard)", async ({
   await expect(menu).toBeVisible();
   await menu.getByRole("menuitem", { name: "Cut" }).click();
 
-  // Tab B: a new tab at the root, still holding the clipboard.
+  // Tab B: a new tab at the root, still holding the clipboard. Paste lives in
+  // the toolbar's File operations menu since JUS-160.
   await openExtraTab(page);
-  const paste = page.locator(".fm-toolbar").getByRole("button", { name: "Paste" });
+  await page
+    .locator(".fm-toolbar")
+    .getByRole("button", { name: "File operations", exact: true })
+    .click();
+  const paste = page
+    .getByRole("menu", { name: "File operations" })
+    .getByRole("menuitem", { name: /^Paste \(1\)/ });
   await expect(paste).toBeVisible();
   await paste.click();
 

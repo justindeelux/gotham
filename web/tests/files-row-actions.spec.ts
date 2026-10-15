@@ -471,13 +471,15 @@ test.describe("icon-only controls are accessible", () => {
       "Mở config",
     );
 
-    // The toolbar's icon-only labels are localized too.
+    // The toolbar's icon-only labels are localized too (File operations joined
+    // the toolbar in JUS-160).
     await page.locator(".fm-head .n-checkbox").click();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator(".fm-btn-label").first()).toBeHidden();
     for (const name of [
       "Tạo mới",
       "Tải lên",
+      "Thao tác tệp",
       "Tải về",
       "Sao chép",
       "Cắt",
@@ -715,8 +717,8 @@ test.describe("tooltip behaviour (JUS-156 round 1)", () => {
 });
 
 // JUS-140: keyboard/touch reachability of the row menu state, the mode and
-// modified details, focus when the selection bar hides, and the Paste button's
-// accessible name (label-in-name). Every assertion fails before its fix.
+// modified details, focus when the selection bar hides, and the Paste menu
+// item's accessible name (label-in-name). Every assertion fails before its fix.
 test.describe("row action accessibility nits (JUS-140)", () => {
   test("the row ⋮ exposes its menu state (haspopup + expanded)", async ({
     page,
@@ -1247,19 +1249,24 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     ).toBe(true);
   });
 
-  test("the Paste button's accessible name contains its visible label", async ({
+  test("the Paste menu item's accessible name contains its visible label", async ({
     page,
   }) => {
     await openFiles(page);
-    // Fill the clipboard so the Paste button (label "Paste (1)") renders.
+    // Fill the clipboard, then open the File operations menu: Paste lives
+    // there since JUS-160 (label "Paste (1)" from pasteLabel).
     await rowFor(page, "app.yaml").locator(".fm-select .n-checkbox").click();
     await page.getByRole("button", { name: "Copy", exact: true }).click();
 
-    const paste = page.getByRole("button", { name: /^Paste \(1\)/ });
+    await page
+      .locator(".fm-toolbar")
+      .getByRole("button", { name: "File operations", exact: true })
+      .click();
+    const menu = page.getByRole("menu", { name: "File operations" });
+    const paste = menu.getByRole("menuitem", { name: /^Paste \(1\)/ });
     await expect(paste).toBeVisible();
-    await expect(paste).toHaveAttribute("aria-label", /^Paste \(1\)/);
     // Label-in-name: the accessible name contains the visible label text. (Here
-    // the button is also disabled by the same-folder problem, whose text follows
+    // the item is also disabled by the same-folder problem, whose text follows
     // the visible label in the name.)
     await expect(paste).toHaveAccessibleName(/Paste \(1\)/);
   });

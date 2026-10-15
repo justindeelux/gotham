@@ -8,13 +8,13 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL, window:readonly */
-// JUS-157 region-separation proof: the committed webdist is served statically
+// JUS-150 region-separation proof: the committed webdist is served statically
 // with the control-plane file API mocked in real Chromium. Measured claims: the
 // five browser regions (header, tablist, path bar, toolbar, entry list) stack
-// top-to-bottom and every adjacent pair has a distinct boundary — a border or a
-// different background, token-derived (no hard-coded colour) — at 1440, 1024
-// and 390px, and the path band must not clip the breadcrumb's shared
-// :focus-visible ring.
+// top-to-bottom, every adjacent pair is joined by a single 1px --border rule,
+// and the JUS-157 tinted bands are gone — the header, path bar and toolbar
+// paint no background of their own at 1440, 1024 and 390px. The path bar must
+// not clip the breadcrumb's shared :focus-visible ring.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -180,17 +180,14 @@ interface RegionBox {
   borderBottom: number;
   borderTopColor: string;
   borderBottomColor: string;
-  borderTopLeftRadius: string;
-  borderTopRightRadius: string;
   overflowX: string;
   overflowY: string;
 }
 
-/** regionsOf measures the five browser regions and the two tokens in one pass. */
+/** regionsOf measures the five browser regions and the tokens in one pass. */
 async function regionsOf(page: Page): Promise<{
   regions: Record<string, RegionBox>;
-  cardRadius: string;
-  surfaceWarm: string;
+  cardBackground: string;
   border: string;
 }> {
   return page.evaluate(() => {
@@ -207,8 +204,6 @@ async function regionsOf(page: Page): Promise<{
         borderBottom: Number.parseFloat(style.borderBottomWidth),
         borderTopColor: style.borderTopColor,
         borderBottomColor: style.borderBottomColor,
-        borderTopLeftRadius: style.borderTopLeftRadius,
-        borderTopRightRadius: style.borderTopRightRadius,
         overflowX: style.overflowX,
         overflowY: style.overflowY,
       };
@@ -225,29 +220,28 @@ async function regionsOf(page: Page): Promise<{
         tablist: region(".fm-tabs"),
         pathbar: region(".fm-bar.fm-pathbar"),
         toolbar: region(".fm-bar.fm-toolbar"),
-        panel: region(".table-wrap"),
+        panel: region(".fm-panel"),
       },
-      cardRadius: getComputedStyle(
+      cardBackground: getComputedStyle(
         document.querySelector(".files-browser") as HTMLElement,
-      ).borderTopLeftRadius,
-      surfaceWarm: rootStyle.getPropertyValue("--surface-warm").trim(),
+      ).backgroundColor,
       border: rootStyle.getPropertyValue("--border").trim(),
     };
   });
 }
 
-// JUS-157: the five regions stack in order and each adjacent pair has a visible
-// boundary (a border on either side, or a different background) at every width.
+// JUS-150: the five regions stack in order and each adjacent pair is joined by a
+// single 1px --border rule; the JUS-157 bands paint no background at every width.
 for (const viewport of [
   { width: 1440, height: 900 },
   { width: 1024, height: 768 },
   { width: 390, height: 844 },
 ]) {
-  test(`the browser regions have distinct boundaries at ${viewport.width}px`, async ({
+  test(`the browser regions are separated by divider rules at ${viewport.width}px`, async ({
     page,
   }) => {
     await openFiles(page, viewport.width, viewport.height);
-    const { regions, cardRadius, surfaceWarm, border } = await regionsOf(page);
+    const { regions, cardBackground, border } = await regionsOf(page);
     const order = ["header", "tablist", "pathbar", "toolbar", "panel"] as const;
 
     // Every region has a height and stacks top-to-bottom without overlap.
@@ -262,10 +256,10 @@ for (const viewport of [
       }
     }
 
-    // Each adjacent pair is separated by a real gap AND a boundary the eye can
-    // see: a border drawn at the shared edge in a colour that differs from its
-    // own fill, or a background step. Two regions with no border and the same
-    // fill fail, so this can only pass while the bands really separate them.
+    // Each adjacent pair is separated by a real gap AND a 1px --border rule the
+    // eye can see. The gap rules out a coincident double line; the pair must
+    // share at least one rule, drawn at the shared edge by the upper region's
+    // bottom border or the lower region's top border.
     for (let index = 1; index < order.length; index += 1) {
       const upper = regions[order[index - 1]];
       const lower = regions[order[index]];
@@ -274,54 +268,49 @@ for (const viewport of [
         gap,
         `${order[index - 1]} -> ${order[index]} gap at ${viewport.width}px`,
       ).toBeGreaterThan(0);
-      const borderAtBoundary =
-        (upper.borderBottom > 0 &&
-          normalizeColor(upper.borderBottomColor) !==
-            normalizeColor(upper.background)) ||
-        (lower.borderTop > 0 &&
-          normalizeColor(lower.borderTopColor) !==
-            normalizeColor(lower.background));
-      const backgroundDiffers = upper.background !== lower.background;
+      const upperRule = upper.borderBottom > 0;
+      const lowerRule = lower.borderTop > 0;
       expect(
-        borderAtBoundary || backgroundDiffers,
-        `${order[index - 1]} -> ${order[index]} boundary at ${viewport.width}px`,
+        upperRule || lowerRule,
+        `${order[index - 1]} -> ${order[index]} divider at ${viewport.width}px`,
+      ).toBe(true);
+      // A shared edge must not carry two stacked rules (one divider per boundary).
+      expect(
+        upperRule && lowerRule && gap < 2,
+        `${order[index - 1]} -> ${order[index]} double line at ${viewport.width}px`,
+      ).toBe(false);
+    }
+
+    // JUS-150: the four dividers are plain 1px --border rules, each owned by one
+    // region: the header's bottom edge, then the top edge of the path bar, the
+    // toolbar and the entry list.
+    const dividers = [
+      ["header", "borderBottom"],
+      ["pathbar", "borderTop"],
+      ["toolbar", "borderTop"],
+      ["panel", "borderTop"],
+    ] as const;
+    for (const [name, edge] of dividers) {
+      const box = regions[name];
+      expect(borderWidth(box, edge), `${name} ${edge} is 1px`).toBe(1);
+      const colour = edge === "borderTop" ? box.borderTopColor : box.borderBottomColor;
+      expect(normalizeColor(colour), `${name} ${edge} uses --border`).toBe(
+        normalizeColor(toRgb(border)),
+      );
+    }
+
+    // JUS-150: the JUS-157 tinted bands are gone — the header, path bar and
+    // toolbar paint no background of their own, so the card surface shows
+    // through (transparent) instead of a distinct band.
+    for (const name of ["header", "pathbar", "toolbar"] as const) {
+      const background = normalizeColor(regions[name].background);
+      expect(
+        background === "rgba(0,0,0,0)" || background === normalizeColor(cardBackground),
+        `${name} has no distinct band background at ${viewport.width}px`,
       ).toBe(true);
     }
 
-    // F1/JUS-157: the warm header band must follow the card's rounded top
-    // corners — a square band would bleed over the 8px radius.
-    expect(Number.parseFloat(cardRadius), "card has a top radius").toBeGreaterThan(0);
-    expect(
-      regions.header.borderTopLeftRadius,
-      "header top-left corner follows the card radius",
-    ).toBe(cardRadius);
-    expect(
-      regions.header.borderTopRightRadius,
-      "header top-right corner follows the card radius",
-    ).toBe(cardRadius);
-
-    // The separation is token-derived: the header band and the two bars paint
-    // the deepest surface token, and the bars are ringed with the border token.
-    expect(regions.header.background, "header uses --surface-warm").toBe(
-      toRgb(surfaceWarm),
-    );
-    expect(regions.pathbar.background, "path bar uses --surface-warm").toBe(
-      toRgb(surfaceWarm),
-    );
-    expect(regions.toolbar.background, "toolbar uses --surface-warm").toBe(
-      toRgb(surfaceWarm),
-    );
-    for (const name of ["pathbar", "toolbar"] as const) {
-      expect(regions[name].borderTop, `${name} has a top border`).toBeGreaterThan(0);
-      expect(regions[name].borderBottom, `${name} has a bottom border`).toBeGreaterThan(0);
-      expect(
-        normalizeColor(regions[name].borderTopColor),
-        `${name} border uses --border`,
-      ).toBe(normalizeColor(toRgb(border)));
-    }
-
-    // The new bands must not clip focus rings: none of the regions added by
-    // JUS-157 (header, tablist, path bar, toolbar) creates a clipping box.
+    // The regions must not clip focus rings: none of them creates a clipping box.
     for (const name of ["header", "tablist", "pathbar", "toolbar"] as const) {
       expect(regions[name].overflowX, `${name} overflow-x`).toBe("visible");
       expect(regions[name].overflowY, `${name} overflow-y`).toBe("visible");
@@ -329,10 +318,10 @@ for (const viewport of [
   });
 }
 
-// JUS-157: the path band must leave the breadcrumb's shared :focus-visible ring
-// room, so adding the band never clips the ring on the card's overflow-hidden
+// JUS-150: the path bar must leave the breadcrumb's shared :focus-visible ring
+// room, so the plain row never clips the ring on the card's overflow-hidden
 // content box (which is the real clip ancestor).
-test("the path band keeps the breadcrumb focus ring unclipped", async ({ page }) => {
+test("the path bar keeps the breadcrumb focus ring unclipped", async ({ page }) => {
   await openFiles(page, 1440, 900);
   const crumb = page.locator(".fm-crumb.is-current");
   await crumb.focus();
@@ -373,6 +362,11 @@ test("the path band keeps the breadcrumb focus ring unclipped", async ({ page })
   expect(ring!.width).toBeGreaterThan(0);
   expect(ring!.overhang).toBeLessThanOrEqual(0.5);
 });
+
+/** borderWidth reads the numeric border width for one edge of a region box. */
+function borderWidth(box: RegionBox, edge: "borderTop" | "borderBottom"): number {
+  return edge === "borderTop" ? box.borderTop : box.borderBottom;
+}
 
 /** toRgb normalises a `#rrggbb` token (or an already-rgb value) to `rgb(...)`. */
 function toRgb(value: string): string {

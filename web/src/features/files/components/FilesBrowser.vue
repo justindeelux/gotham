@@ -3360,8 +3360,16 @@ function onFolderMenu(key: string): void {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-8) 0;
+  padding: var(--space-8) var(--space-4);
   color: var(--muted);
+  /* JUS-151: the state view fills the panel, so center its content on both
+     axes (the mockup's .empty component). `safe` keeps the top reachable if
+     the panel is ever shorter than the state. */
+  display: grid;
+  justify-items: center;
+  align-content: safe center;
+  gap: var(--space-2);
+  text-align: center;
 }
 
 .fm-state h4 {

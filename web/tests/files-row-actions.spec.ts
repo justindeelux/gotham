@@ -873,6 +873,56 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expect(page.locator('.fm-label[tabindex="0"]')).toBeFocused();
   });
 
+  test("clearing a selection keeps focus off <body> in list and grid", async ({
+    page,
+  }) => {
+    await openFiles(page);
+
+    // LIST Clear (keyboard): the header bar hides and focus must land on the
+    // roving row.
+    await rowFor(page, "app.yaml").locator(".fm-label").click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+    await page.getByRole("button", { name: "Clear", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
+    await expect(page.locator("body")).not.toBeFocused();
+    await expect(page.locator('.fm-label[tabindex="0"]')).toBeFocused();
+
+    // LIST select-all → uncheck-all: focus stays on the header control.
+    const selectAll = page.locator(".fm-head .n-checkbox");
+    await selectAll.click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(3);
+    await selectAll.click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
+    await expect(page.locator("body")).not.toBeFocused();
+    expect(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest(".fm-head")),
+      ),
+      "focus stays on the header select-all",
+    ).toBe(true);
+
+    // GRID Clear: the grid's selection bar lives in the TOOLBAR, not the header
+    // row, so the clear-direction hand-off must cover `.fm-selection-actions`
+    // there too. Narrowing it to `.fm-head-bulk` dropped grid focus to <body>.
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+    await page.locator(".fm-tile-wrap").first().click();
+    await expect(page.locator(".fm-tile.is-selected")).toHaveCount(1);
+    const gridClear = page.getByRole("button", { name: "Clear", exact: true });
+    await expect(gridClear).toBeVisible();
+    await gridClear.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".fm-tile.is-selected")).toHaveCount(0);
+    await expect(page.locator("body"), "grid Clear keeps focus off <body>").not.toBeFocused();
+    expect(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest("[data-entry]")),
+      ),
+      "grid Clear hands focus to the roving tile",
+    ).toBe(true);
+  });
+
   test("the selection bar hiding never drops focus to <body>", async ({ page }) => {
     await openFiles(page);
     const checkbox = rowFor(page, "app.yaml").locator(".fm-select .n-checkbox");

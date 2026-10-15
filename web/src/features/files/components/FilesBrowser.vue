@@ -1517,8 +1517,12 @@ watch(
       return;
     }
     // The variant about to hide: the column headers when the selection appears,
-    // the whole bulk bar (count + sort + actions) when it clears (JUS-148).
-    const hiding = active ? ".fm-head-cols" : ".fm-head-bulk";
+    // the whole bulk bar when it clears. The selector must cover BOTH hosts of
+    // the selection bar — the list's `.fm-head-bulk` (count + sort + actions) and
+    // the grid's bar inside the toolbar, which only exposes `.fm-selection-actions`
+    // (JUS-148 fix round 1: narrowing it to `.fm-head-bulk` dropped grid focus to
+    // <body>).
+    const hiding = active ? ".fm-head-cols" : ".fm-head-bulk, .fm-selection-actions";
     swapHadFocus = Boolean(document.activeElement?.closest(hiding));
   },
   { flush: "pre" },
@@ -1644,6 +1648,12 @@ function onNewMenu(key: string): void {
  * only when the headers are hidden and mirrors the active column + direction.
  */
 const sortMenuOpen = ref(false);
+/**
+ * bulkSortMenuOpen is the bulk bar's sort dropdown open state, kept separate
+ * from `sortMenuOpen` (the toolbar toggle's) so the two can never open together
+ * if a future layout ever mounts both (JUS-148 fix round 1).
+ */
+const bulkSortMenuOpen = ref(false);
 const isCompactList = useMediaQuery("(max-width: 860px)");
 /**
  * isNarrowDesktop is the 861-1280px band where the desktop table overflows the
@@ -2029,14 +2039,16 @@ const layoutKey = computed<string>(
 watch(layoutKey, resetRowMenu);
 
 /**
- * resetSortMenu clears the compact sort menu's tracked open state. The NDropdown
- * is uncontrolled, so a layout change that remounts its trigger (a compact↔
- * desktop or list↔grid flip) or hides the bulk bar's copy would otherwise leave
- * it open — and the remounted trigger would reopen its menu by itself (JUS-148,
- * mirroring resetRowMenu).
+ * resetSortMenu clears the sort dropdowns' tracked open state. The NDropdowns are
+ * controlled through `v-model:show`, so clearing these refs closes them; a layout
+ * change that remounts a trigger (a compact↔desktop or list↔grid flip) or hides
+ * the bulk bar (all selections cleared) would otherwise leave one open — and the
+ * remounted trigger would reopen its menu by itself (JUS-148, mirroring
+ * resetRowMenu).
  */
 function resetSortMenu(): void {
   sortMenuOpen.value = false;
+  bulkSortMenuOpen.value = false;
 }
 watch([layoutKey, showSortControl, hasSelection], resetSortMenu);
 
@@ -2448,7 +2460,13 @@ function onFolderMenu(key: string): void {
         </NButton>
       </NDropdown>
 
-      <div class="fm-toolbar-group fm-toolbar-end">
+      <!-- JUS-148 fix round 1: render the right group only when it has content,
+           so an empty group never wraps the toolbar onto a second flex line
+           (a zero-height row whose row-gap still grew the toolbar). -->
+      <div
+        v-if="files.hasClipboard || files.viewMode === 'grid'"
+        class="fm-toolbar-group fm-toolbar-end"
+      >
         <NButton
           v-if="files.hasClipboard"
           size="small"
@@ -2640,7 +2658,7 @@ function onFolderMenu(key: string): void {
                    exactly one sort control is on screen at every width. -->
               <NDropdown
                 v-if="!isCompactList"
-                v-model:show="sortMenuOpen"
+                v-model:show="bulkSortMenuOpen"
                 trigger="click"
                 placement="bottom-end"
                 :options="sortMenuOptions"
@@ -2655,7 +2673,7 @@ function onFolderMenu(key: string): void {
                   secondary
                   class="fm-bulk-sort"
                   aria-haspopup="menu"
-                  :aria-expanded="sortMenuOpen"
+                  :aria-expanded="bulkSortMenuOpen"
                   :title="sortLabel"
                   :aria-label="sortLabel"
                 >
@@ -3220,10 +3238,6 @@ function onFolderMenu(key: string): void {
   white-space: nowrap;
 }
 
-/* JUS-147: the toolbar sort control is rendered only where the headers cannot
-   carry the sort, so it is never reserved while hidden and cannot wrap the first
-   toolbar row. */
-
 .fm-caret {
   margin-left: 2px;
   color: var(--muted);
@@ -3629,11 +3643,15 @@ function onFolderMenu(key: string): void {
  * share one line so every row keeps the single tokenised height and the type is
  * not repeated (the Type column carries it). `.fm-name-sub` dissolves into the
  * name's flex row on the desktop (`display: contents`), so the target sits right
- * after the name; on the compact row it becomes the secondary line. */
+ * after the name; on the compact row it becomes the secondary line.
+ * The name↔target offset keeps its original --space-2 (the flex gap that used to
+ * live inside `.fm-label`): the row gap is --space-3 (icon↔name), so trim the
+ * label's trailing gap back by 4px. */
 .fm-name .fm-label {
   display: block;
   flex: 0 1 auto;
   min-width: 0;
+  margin-right: calc(var(--space-2) - var(--space-3));
 }
 
 .fm-name-sub {
@@ -4097,6 +4115,8 @@ function onFolderMenu(key: string): void {
 
   .fm-name .fm-label {
     grid-area: label;
+    /* The desktop name↔target trim does not apply to the grid cell. */
+    margin-right: 0;
   }
 
   /* The secondary line: the target (when any) then the relative time. */

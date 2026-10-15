@@ -160,7 +160,8 @@
 .fm-selection-actions { display: inline-flex; align-items: center; gap: var(--space-2); flex-wrap: nowrap; overflow-x: auto; }
 .fm-selection-actions:not(.is-visible) { visibility: hidden; }
 /* JUS-148: the pinned scroll affordance — a fade with a chevron that rides the
-   scrollport's right edge (pointer-events: none, so it never eats a tap). */
+   scrollport's right edge (pointer-events: none, so it never eats a tap). In the
+   app it is rendered only while the action row really overflows to the right. */
 .fm-scroll-hint {
   position: sticky; right: 0; flex: 0 0 auto; align-self: stretch;
   display: grid; place-items: center; width: 28px; margin-left: -28px;
@@ -168,9 +169,6 @@
   background: linear-gradient(to right, transparent, var(--surface) 55%);
 }
 .fm-scroll-hint svg { width: 14px; height: 14px; }
-/* JUS-147: the bulk bar's sort control keeps the desktop selection sortable while
-   the bar replaces the column headers; it never shrinks. */
-.fm-bulk-sort { flex: 0 0 auto; }
 /* JUS-146: the column-header variant and the bulk bar overlap the same header
    row (columns 2-7; the leading select-all checkbox is column 1), so the row's
    height is max(columns, bar) in every selection state. */
@@ -287,8 +285,9 @@
 .fm-label { background: none; text-align: left; min-width: 0; }
 /* JUS-134/148: on the desktop row the name and its (optional) symlink target
    share one line (`.fm-name-sub` dissolves into the flex row); the compact row
-   moves the target to the secondary line next to the relative time. */
-.fm-name .fm-label { display: block; flex: 0 1 auto; min-width: 0; }
+   moves the target to the secondary line next to the relative time. The
+   name↔target offset stays --space-2 (the row gap is --space-3). */
+.fm-name .fm-label { display: block; flex: 0 1 auto; min-width: 0; margin-right: calc(var(--space-2) - var(--space-3)); }
 .fm-name-sub { display: contents; }
 .fm-select .check { cursor: pointer; gap: 0; }
 .fm-select .check input { width: 16px; height: 16px; margin: 0; }

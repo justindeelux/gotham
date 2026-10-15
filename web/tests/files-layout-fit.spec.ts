@@ -1302,7 +1302,7 @@ test("no blank band between the toolbar and the header at desktop widths", async
       return head.getBoundingClientRect().top - visibleBottom;
     });
 
-  for (const width of [1876, 1600, 1440, 1366, 1280]) {
+  for (const width of [1876, 1600, 1440, 1366, 1280, 1260, 920]) {
     await page.setViewportSize({ width, height: 900 });
     await settleLayout(page);
     const gap = await measure();
@@ -1346,6 +1346,72 @@ test("the phone selection bar marks its scrollable action row", async ({ page })
     const box = (await page.getByRole("button", { name, exact: true }).boundingBox())!;
     expect(box.x, `${name} left inside the viewport`).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width, `${name} right inside the viewport`).toBeLessThanOrEqual(391);
+  }
+});
+
+// JUS-148 fix round 1: the chevron is a real affordance only while the action row
+// actually overflows to the right — no false "more →" on a wide bar, and it hides
+// once the row is scrolled to its end.
+test("the scroll chevron shows only while the action row overflows", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1876, height: 1080 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+  await page.locator(".fm-head .n-checkbox").click();
+  await expect(page.locator(".fm-bulk-count")).toContainText("60 selected");
+
+  // Wide desktop: the row fits, so no chevron.
+  const row = page.locator(".fm-selection-actions");
+  expect(await row.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+  await expect(page.locator(".fm-scroll-hint")).toHaveCount(0);
+
+  // Phone: the row overflows, so the chevron shows...
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settleLayout(page);
+  await expect(page.locator(".fm-scroll-hint")).toBeVisible();
+
+  // ...and disappears once the row is scrolled to its end (no more to reveal).
+  await row.evaluate((el) => {
+    el.scrollLeft = el.scrollWidth;
+  });
+  await expect(page.locator(".fm-scroll-hint")).toHaveCount(0);
+});
+
+// JUS-148 fix round 1: the right-hand toolbar group used to wrap a zero-height
+// second flex line when it had no children (no clipboard, no grid selection),
+// growing the toolbar by a row-gap at exactly 920 and 1260px. With the group not
+// rendered the toolbar-to-header gap is the single-row value everywhere the
+// toolbar fits on one row.
+test("the empty right toolbar group never opens a second row", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+  await expect(page.locator(".fm-toolbar-end")).toHaveCount(0);
+
+  for (const width of [920, 1260, 1280, 1366, 1440, 1600, 1876]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settleLayout(page);
+    const gap = await page.evaluate(() => {
+      const toolbar = document.querySelector(".fm-toolbar") as HTMLElement;
+      const head = document.querySelector(".fm-head") as HTMLElement;
+      const t = toolbar.getBoundingClientRect();
+      let visibleBottom = t.top;
+      for (const child of toolbar.querySelectorAll<HTMLElement>("*")) {
+        const style = getComputedStyle(child);
+        if (style.visibility === "hidden" || style.display === "none") {
+          continue;
+        }
+        const box = child.getBoundingClientRect();
+        if (box.height > 0) {
+          visibleBottom = Math.max(visibleBottom, box.bottom);
+        }
+      }
+      return head.getBoundingClientRect().top - visibleBottom;
+    });
+    expect(gap, `toolbar-to-header gap at ${width}px`).toBeLessThanOrEqual(16);
   }
 });
 

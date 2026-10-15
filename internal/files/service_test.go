@@ -90,6 +90,10 @@ type fakeFileClient struct {
 	closes    int
 	seenList  *agentv1.ListRequest
 
+	sizeResp *agentv1.DirectorySizeResponse
+	sizeErr  error
+	seenSize *agentv1.DirectorySizeRequest
+
 	writeResp  *agentv1.WriteResponse
 	writeErr   error
 	lastWrite  *fakeWriteStream
@@ -163,6 +167,19 @@ func (f *fakeFileClient) Stat(context.Context, *agentv1.StatRequest, ...grpc.Cal
 		return f.statResp, nil
 	}
 	return &agentv1.StatResponse{}, nil
+}
+
+func (f *fakeFileClient) DirectorySize(_ context.Context, in *agentv1.DirectorySizeRequest, _ ...grpc.CallOption) (*agentv1.DirectorySizeResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seenSize = in
+	if f.sizeErr != nil {
+		return nil, f.sizeErr
+	}
+	if f.sizeResp != nil {
+		return f.sizeResp, nil
+	}
+	return &agentv1.DirectorySizeResponse{}, nil
 }
 
 func (f *fakeFileClient) Read(context.Context, *agentv1.ReadRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ReadChunk], error) {

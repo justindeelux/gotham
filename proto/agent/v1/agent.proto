@@ -149,6 +149,10 @@ service FileService {
   rpc Stat(StatRequest) returns (StatResponse);
   // Read streams one regular file in bounded chunks.
   rpc Read(ReadRequest) returns (stream ReadChunk);
+  // DirectorySize returns the recursive size of one directory (JUS-162). The
+  // walk never follows a symlink, stops at an entry cap and reports the partial
+  // result with truncated=true rather than failing.
+  rpc DirectorySize(DirectorySizeRequest) returns (DirectorySizeResponse);
   // Write creates or replaces one file. The first request must carry
   // WriteHeader; the following requests stream the body; an optional final
   // WriteCommit carries the whole body's sha256. The agent commits only when
@@ -269,6 +273,24 @@ message StatRequest {
 // StatResponse carries the entry.
 message StatResponse {
   FileEntry entry = 1;
+}
+
+// DirectorySizeRequest asks for one directory's recursive size.
+message DirectorySizeRequest {
+  string root = 1;
+  // path is relative to the root; empty or "." sizes the root itself.
+  string path = 2;
+}
+
+// DirectorySizeResponse is one folder's recursive size. bytes sums regular-file
+// sizes (lstat, not disk blocks); entries counts every name visited; symlinks
+// and special files are counted in skipped and never followed; truncated
+// reports a partial result the walk stopped at the entry or depth cap with.
+message DirectorySizeResponse {
+  int64 bytes = 1;
+  int64 entries = 2;
+  uint64 skipped = 3;
+  bool truncated = 4;
 }
 
 // ReadRequest reads one file.

@@ -64,6 +64,19 @@ export const filesStatSchema = z.object({
 });
 export type FilesStat = z.infer<typeof filesStatSchema>;
 
+/**
+ * folderSizeSchema validates GET /size (JUS-162): one folder's recursive size.
+ * `bytes` sums regular-file sizes; `truncated` marks a partial result the
+ * agent stopped at its entry cap with.
+ */
+export const filesFolderSizeSchema = z.object({
+  bytes: z.number(),
+  entries: z.number(),
+  skipped: z.number(),
+  truncated: z.boolean(),
+});
+export type FilesFolderSize = z.infer<typeof filesFolderSizeSchema>;
+
 /** contentSchema validates GET /content (owner/admin only, <= 2 MiB). */
 export const filesContentSchema = z.object({
   content: z.string(),

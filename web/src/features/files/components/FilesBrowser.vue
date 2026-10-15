@@ -42,6 +42,7 @@ import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog
 import ExtractDialog from "@/features/files/components/ExtractDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
 import FilesSelectionBar from "@/features/files/components/FilesSelectionBar.vue";
+import FolderSizeCell from "@/features/files/components/FolderSizeCell.vue";
 import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue";
 import RecycleBinDialog from "@/features/files/components/RecycleBinDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";
@@ -2895,7 +2896,14 @@ function onFolderMenu(key: string): void {
               </span>
             </div>
             <div class="fm-cell fm-mode fm-cell--mode" role="cell" :title="formatMode(entry.mode)">{{ formatOctalModeFull(entry.mode) }}</div>
-            <div class="fm-cell fm-cell--size" role="cell">{{ entry.kind === "directory" ? "—" : formatBytes(entry.size) }}</div>
+            <div class="fm-cell fm-cell--size" role="cell">
+              <FolderSizeCell
+                v-if="entry.kind === 'directory'"
+                :entry="entry"
+                :path="joinPath(files.path, entry.name)"
+              />
+              <template v-else>{{ formatBytes(entry.size) }}</template>
+            </div>
             <div class="fm-cell fm-date fm-cell--modified" role="cell" :title="formatTimestamp(entry.modified_at)">{{ modifiedLabel(entry) }}</div>
             <div class="fm-actions" role="cell">
               <!-- The inline actions (.fm-action) stay hover/focus-revealed on

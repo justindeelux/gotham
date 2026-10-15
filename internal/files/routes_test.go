@@ -26,6 +26,8 @@ type fakeService struct {
 	listErr     error
 	entry       Entry
 	statErr     error
+	size        FolderSize
+	sizeErr     error
 	content     Content
 	contentErr  error
 	ticket      string
@@ -111,6 +113,11 @@ func (f *fakeService) List(_ context.Context, _ uuid.UUID, _, _, _ string) (List
 func (f *fakeService) Stat(_ context.Context, _ uuid.UUID, _, _ string) (Entry, error) {
 	f.record("stat")
 	return f.entry, f.statErr
+}
+
+func (f *fakeService) DirectorySize(_ context.Context, _ uuid.UUID, _, _ string) (FolderSize, error) {
+	f.record("size")
+	return f.size, f.sizeErr
 }
 
 func (f *fakeService) Content(_ context.Context, _ uuid.UUID, _, _ string) (Content, error) {

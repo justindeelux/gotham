@@ -26,6 +26,8 @@ type FileClient interface {
 	List(ctx context.Context, in *agentv1.ListRequest, opts ...grpc.CallOption) (*agentv1.ListResponse, error)
 	Stat(ctx context.Context, in *agentv1.StatRequest, opts ...grpc.CallOption) (*agentv1.StatResponse, error)
 	Read(ctx context.Context, in *agentv1.ReadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ReadChunk], error)
+	// DirectorySize returns one folder's recursive size (JUS-162).
+	DirectorySize(ctx context.Context, in *agentv1.DirectorySizeRequest, opts ...grpc.CallOption) (*agentv1.DirectorySizeResponse, error)
 	// Write is a client stream: the first message is the header (path, size,
 	// expect_etag, overwrite, mode), the following messages carry the body in
 	// bounded chunks, and Write produces the committed entry.

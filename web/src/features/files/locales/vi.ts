@@ -76,6 +76,7 @@ const vi = {
     newFile: "Tệp mới",
     newFolder: "Thư mục mới",
     upload: "Tải lên",
+    fileOperations: "Thao tác tệp",
     compress: "Nén…",
     extract: "Giải nén tại đây…",
     rename: "Đổi tên",

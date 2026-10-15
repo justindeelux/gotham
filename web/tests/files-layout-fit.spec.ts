@@ -290,25 +290,34 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   // JUS-119: the page-top breadcrumb (Servers / node / Files) is removed.
   await expect(page.locator(".breadcrumb")).toHaveCount(0);
 
-  // JUS-154: the header field captions ("Agent node" / "Root") are 12px
-  // (--text-xs). They used to keep Naive's 18px card-title size because the
-  // `.small` class had no rule in either component's scoped styles.
-  const captions = page.locator(".fm-contextbar .fm-field-label");
-  await expect(captions).toHaveCount(2);
-  const captionSizes = await captions.evaluateAll((elements) =>
+  // JUS-154: the field captions ("Agent node" in the context bar, "Root" in
+  // the toolbar since JUS-160) are 12px (--text-xs). They used to keep
+  // Naive's 18px card-title size because the `.small` class had no rule in
+  // either component's scoped styles.
+  const headerCaptions = page.locator(".fm-contextbar .fm-field-label");
+  await expect(headerCaptions).toHaveCount(1);
+  const toolbarCaptions = page.locator(".fm-toolbar .fm-field-label");
+  await expect(toolbarCaptions).toHaveCount(1);
+  await expect(toolbarCaptions).toHaveText("Root");
+  const captionSizes = await headerCaptions
+    .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).fontSize));
+  const toolbarSizes = await toolbarCaptions.evaluateAll((elements) =>
     elements.map((element) => getComputedStyle(element).fontSize),
   );
-  expect(captionSizes).toEqual(["12px", "12px"]);
+  expect([...captionSizes, ...toolbarSizes]).toEqual(["12px", "12px"]);
 
-  // JUS-134: the agent-node selector decides the listing, so it lives in the
-  // browser context bar next to the Root selector, not a bar at the page bottom.
+  // JUS-134/JUS-160: the agent-node selector decides the listing, so it lives
+  // in the context bar, while the Root selector moved to the action toolbar
+  // below — not a bar at the page bottom.
   const node = page.locator(".fm-node__select");
   await expect(node).toBeVisible();
   await expect(node).toContainText("prod-01");
   const nodeBox = (await node.boundingBox())!;
   const rootBox = (await page.locator(".fm-root-select").boundingBox())!;
-  expect(nodeBox.x).toBeLessThan(rootBox.x);
-  expect(nodeBox.y).toBeLessThan(rootBox.y + rootBox.height);
+  const toolbarBox = (await page.locator(".fm-toolbar").boundingBox())!;
+  // Playwright boxes carry x/y/width/height (no top/bottom): derive edges.
+  expect(nodeBox.y + nodeBox.height).toBeLessThanOrEqual(toolbarBox.y + 1);
+  expect(rootBox.y).toBeGreaterThanOrEqual(toolbarBox.y);
 
   // An offline node is listed with its status but cannot be selected.
   await node.click();
@@ -1389,29 +1398,67 @@ test("the scroll chevron shows only while the action row overflows", async ({
   await expect(page.locator(".fm-scroll-hint")).toHaveCount(0);
 });
 
-// JUS-148 fix round 1: the right-hand toolbar group used to wrap a zero-height
-// second flex line when it had no children (no clipboard, no grid selection),
-// growing the toolbar by a row-gap at exactly 920 and 1260px. With the group not
-// rendered the toolbar-to-header gap is the single-row value everywhere the
-// toolbar fits on one row.
-test("the empty right toolbar group never opens a second row", async ({ page }) => {
+// JUS-148 fix round 1 + JUS-160: both toolbar groups (left actions, right
+// recycle bin + view toggle) always render content, so the toolbar can wrap
+// onto a second row at mid widths but never onto an EMPTY row (a content-free
+// line whose row-gap still grew the toolbar). Every flex row must hold a real
+// control, the toolbar height must be fully backed by content rows (no
+// unexplained row-gap), it must not spill past the panel, and the gap to the
+// header stays tight.
+test("the always-on toolbar groups never open an empty row", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
-  await expect(page.locator(".fm-toolbar-end")).toHaveCount(0);
+  // JUS-160: the right group (recycle bin + list/grid toggle) is always
+  // rendered — its conditional rendering was removed with the regroup.
+  await expect(page.locator(".fm-toolbar-end")).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Recycle bin", exact: true }),
+  ).toBeVisible();
 
-  for (const width of [920, 1260, 1280, 1366, 1440, 1600, 1876]) {
+  for (const width of [480, 640, 768, 920, 1260, 1280, 1366, 1440, 1600, 1876]) {
     await page.setViewportSize({ width, height: 900 });
     await settleLayout(page);
-    const gap = await page.evaluate(() => {
+    const layout = await page.evaluate(() => {
       const toolbar = document.querySelector(".fm-toolbar") as HTMLElement;
       const head = document.querySelector(".fm-head") as HTMLElement;
       const t = toolbar.getBoundingClientRect();
+      const style = getComputedStyle(toolbar);
+      // Cluster the laid-out controls into flex rows by vertical center. Two
+      // box families are structural, never rows, and must not band: an icon's
+      // SVG sub-paths (painted glyph geometry — e.g. a 2-unit menu dot renders
+      // at ~1.17px and bands alone, yet is not a row) and the group containers
+      // themselves (they span every wrapped line by construction).
+      const bands: { center: number; maxHeight: number }[] = [];
+      for (const child of toolbar.querySelectorAll<HTMLElement>("*")) {
+        const tag = child.tagName.toLowerCase();
+        if (tag !== "svg" && child.closest("svg") !== null) {
+          continue;
+        }
+        if (child.classList.contains("fm-toolbar-group")) {
+          continue;
+        }
+        const childStyle = getComputedStyle(child);
+        if (childStyle.visibility === "hidden" || childStyle.display === "none") {
+          continue;
+        }
+        const box = child.getBoundingClientRect();
+        if (box.width <= 0 || box.height <= 0) {
+          continue;
+        }
+        const center = box.top + box.height / 2;
+        const band = bands.find((candidate) => Math.abs(candidate.center - center) < 4);
+        if (band) {
+          band.maxHeight = Math.max(band.maxHeight, box.height);
+        } else {
+          bands.push({ center, maxHeight: box.height });
+        }
+      }
       let visibleBottom = t.top;
       for (const child of toolbar.querySelectorAll<HTMLElement>("*")) {
-        const style = getComputedStyle(child);
-        if (style.visibility === "hidden" || style.display === "none") {
+        const childStyle = getComputedStyle(child);
+        if (childStyle.visibility === "hidden" || childStyle.display === "none") {
           continue;
         }
         const box = child.getBoundingClientRect();
@@ -1419,9 +1466,35 @@ test("the empty right toolbar group never opens a second row", async ({ page }) 
           visibleBottom = Math.max(visibleBottom, box.bottom);
         }
       }
-      return head.getBoundingClientRect().top - visibleBottom;
+      const content = bands.reduce((sum, band) => sum + band.maxHeight, 0);
+      return {
+        rows: bands.length,
+        rowHeights: bands.map((band) => band.maxHeight),
+        // Every row-gap in the toolbar height must be backed by a content row:
+        // a content-free wrapped line adds a full row-gap of unexplained
+        // height (the JUS-148 defect), which this cap catches.
+        heightCap:
+          content +
+          Math.max(0, bands.length - 1) *
+            (Number.parseFloat(style.rowGap || "0") || 0) +
+          (Number.parseFloat(style.borderTopWidth || "0") || 0) +
+          2,
+        toolbarHeight: t.height,
+        gap: head.getBoundingClientRect().top - visibleBottom,
+        spill: toolbar.scrollWidth - toolbar.clientWidth,
+      };
     });
-    expect(gap, `toolbar-to-header gap at ${width}px`).toBeLessThanOrEqual(16);
+    expect(layout.rows, `toolbar has rows at ${width}px`).toBeGreaterThan(0);
+    for (const maxHeight of layout.rowHeights) {
+      // Every row holds a real control (a small button row is ~28px).
+      expect(maxHeight, `no empty toolbar row at ${width}px`).toBeGreaterThanOrEqual(20);
+    }
+    expect(
+      layout.toolbarHeight,
+      `toolbar height backed by content rows at ${width}px`,
+    ).toBeLessThanOrEqual(layout.heightCap);
+    expect(layout.spill, `no toolbar spill at ${width}px`).toBeLessThanOrEqual(1);
+    expect(layout.gap, `toolbar-to-header gap at ${width}px`).toBeLessThanOrEqual(16);
   }
 });
 
@@ -1630,9 +1703,14 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
   await expect(pathbar.locator(".fm-path")).toHaveCount(1);
   await expect(pathbar.locator(".fm-search")).toHaveCount(1);
   await expect(pathbar.getByRole("button", { name: "Refresh" })).toHaveCount(1);
-  // ...and the toolbar keeps only actions (New / Upload / Recycle bin).
+  // ...and the toolbar keeps only actions (JUS-160 left group: Upload, New,
+  // Root selector, File operations; right group: Recycle bin, view toggle).
   await expect(toolbar.locator(".fm-path")).toHaveCount(0);
   await expect(toolbar.locator(".fm-search")).toHaveCount(0);
+  await expect(
+    toolbar.getByRole("button", { name: "File operations", exact: true }),
+  ).toHaveCount(1);
+  await expect(toolbar.locator(".fm-root-select")).toHaveCount(1);
 
   for (const width of [1366, 1440, 1500]) {
     await page.setViewportSize({ width, height: 900 });

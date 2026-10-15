@@ -77,6 +77,7 @@ const en = {
     newFile: "New file",
     newFolder: "New folder",
     upload: "Upload",
+    fileOperations: "File operations",
     compress: "Compress…",
     extract: "Extract here…",
     rename: "Rename",

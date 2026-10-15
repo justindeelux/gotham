@@ -266,8 +266,8 @@ for (const viewport of [
     }
 
     // The plain context bar meets the tablist with a margin gap only (no rule
-    // on either edge) — it is a temporary row until JUS-160 moves its controls
-    // into the toolbar.
+    // on either edge) — since JUS-160 it keeps only the agent-node slot, the
+    // Root selector and the view toggle having moved into the toolbar.
     expect(
       regions.tablist.top - regions.contextbar.bottom,
       `contextbar -> tablist gap at ${viewport.width}px`,

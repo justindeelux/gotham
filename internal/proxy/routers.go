@@ -13,6 +13,8 @@ import (
 type RouterKind string
 
 const (
+	// RouterKindControlPlane serves the instance panel; it has no owning application.
+	RouterKindControlPlane RouterKind = "control_plane"
 	// RouterKindApplication is a router serving an application's base domain.
 	RouterKindApplication RouterKind = "application"
 	// RouterKindService is a router serving a compose service's declared host.
@@ -161,6 +163,12 @@ func (s *SyncService) ListRouters(ctx context.Context, serverID uuid.UUID) (Rout
 	appNames := applicationNames(apps)
 	serviceNames := proxiedServiceNames(proxiedServices)
 
+	if len(ids) == 0 {
+		_, diagnostics := s.controlPlaneRoute(ctx, apps, uuid.Nil, nil, access)
+		if len(diagnostics) > 0 {
+			return RouterListResponse{}, &PartialError{Diagnostics: diagnostics}
+		}
+	}
 	response := RouterListResponse{}
 	for _, id := range ids {
 		state := RouterNodeState{ServerID: id, ServerName: names[id], SyncStatus: RouterSyncUnknown}
@@ -192,19 +200,13 @@ func (s *SyncService) listNodeRouters(ctx context.Context, apps []ProxiedApplica
 	if err != nil {
 		return nil, state, mapNodeError(err)
 	}
-	routes, diagnostics := routesForServer(apps, serverID, s.backendHost, nodeList, access)
-	serviceRoutes, serviceDiagnostics, serviceHosts := serviceRoutesForServer(
-		proxiedServices, serverID, s.backendHost, nodeList, applicationHosts(apps, serverID))
-	routes = append(routes, serviceRoutes...)
-	diagnostics = append(diagnostics, serviceDiagnostics...)
-	redirects, redirectDiagnostics := redirectsForServer(apps, rules, serverID, serviceHosts...)
-	diagnostics = append(diagnostics, redirectDiagnostics...)
+	routes, redirects, diagnostics, appCount := s.gatherRoutes(ctx, apps, proxiedServices, rules, serverID, nodeList, access)
 	cfg := BuildConfig(routes, redirects, providers, s.acmeEmail, s.caServer)
 	files, err := Generate(cfg, s.format)
 	if err != nil {
 		return nil, state, err
 	}
-	routers := routersFromConfig(cfg, routes, len(routes)-len(serviceRoutes), redirects, redirectOwners(rules, serverID), serverID, serverName, appNames, serviceNames)
+	routers := routersFromConfig(cfg, routes, appCount, redirects, redirectOwners(rules, serverID), serverID, serverName, appNames, serviceNames)
 	state.Diagnostics = diagnostics
 	state.SyncStatus = s.routerSyncStatus(ctx, serverID, files)
 	return routers, state, nil
@@ -242,6 +244,10 @@ func routersFromConfig(cfg ProxyConfig, routes []Route, appRoutes int, redirects
 		if i >= appRoutes {
 			row.Kind = RouterKindService
 			row.OwnerName = serviceNames[route.AppID]
+		}
+		if route.Name == "panel" {
+			row.Kind = RouterKindControlPlane
+			row.OwnerName = "Gotham"
 		}
 		if websecure, ok := cfg.Routers[base+"-websecure"]; ok {
 			row.EntryPoints = append(row.EntryPoints, websecure.EntryPoints...)

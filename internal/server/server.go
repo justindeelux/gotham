@@ -414,6 +414,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// across a restart is settled here.
 		if s.persistence != nil {
 			instanceSvc := instance.NewService(instance.NewStoreRepository(s.persistence), instance.NewSudoApplier(), s.logger)
+			instanceSvc.ResyncProxy = s.resyncProxyNodes
 			if err := instanceSvc.Reconcile(context.Background()); err != nil {
 				s.logger.Warn("instance settings reconcile failed", "error", err)
 			}
@@ -834,6 +835,13 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		return nil
 	}
 	cfg := proxy.Config{
+		ControlPlaneURL: func(ctx context.Context) (string, error) {
+			if s.instanceSvc == nil {
+				return "", nil
+			}
+			return s.instanceSvc.ControlPlaneURL(ctx)
+		},
+		ServerPort: s.cfg.Snapshot().Server.Port,
 		Store:      s.persistence,
 		Containers: containerService,
 		Logger:     s.logger,

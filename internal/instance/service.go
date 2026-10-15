@@ -14,12 +14,14 @@ import (
 
 // Service reads and writes the instance settings.
 type Service struct {
-	repo    Repository
-	host    HostApplier
-	logger  *slog.Logger
-	now     func() time.Time
-	lookup  func(string) string
-	netLock sync.Mutex // serializes network apply / confirm / revert / reconcile
+	// ResyncProxy runs after a changed control-plane URL is saved. Configure before serving.
+	ResyncProxy func(context.Context) error
+	repo        Repository
+	host        HostApplier
+	logger      *slog.Logger
+	now         func() time.Time
+	lookup      func(string) string
+	netLock     sync.Mutex // serializes network apply / confirm / revert / reconcile
 }
 
 // NewService builds a Service. host may be nil (no host sections).
@@ -197,6 +199,11 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 		return State{}, err
 	}
 	s.logger.Info("instance general settings updated", "actor", actor, "changes", changes)
+	if _, changed := changes["control_plane_url"]; changed && s.ResyncProxy != nil {
+		if err := s.ResyncProxy(ctx); err != nil {
+			s.logger.Warn("instance control-plane URL saved; proxy resync failed", "error", err)
+		}
+	}
 	return s.Get(ctx)
 }
 

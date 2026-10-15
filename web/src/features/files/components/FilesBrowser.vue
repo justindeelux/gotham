@@ -2314,55 +2314,11 @@ function onFolderMenu(key: string): void {
       </button>
     </div>
 
-    <!-- Toolbar + path bar (JUS-120/128, merged in JUS-134): one wrapping row
-         holds the create/upload actions, the breadcrumb, the folder filter and
-         the per-root tools; the bulk actions (Download/Copy/Cut/Compress/
-         Delete/Clear) appear on it only while entries are selected, so no
-         permanently disabled row is rendered. -->
-    <div class="fm-bar fm-toolbar">
-      <div v-if="files.canWrite" class="fm-toolbar-group">
-        <NDropdown
-          v-model:show="newMenuOpen"
-          trigger="click"
-          placement="bottom-start"
-          :options="newMenuOptions"
-          :menu-props="() => ({
-            role: 'menu',
-            'aria-label': $t('files.actions.new'),
-          })"
-          @select="onNewMenu"
-        >
-          <NButton
-            size="small"
-            secondary
-            aria-haspopup="menu"
-            :aria-expanded="newMenuOpen"
-            :disabled="files.acting"
-            :title="$t('files.actions.new')"
-            :aria-label="$t('files.actions.new')"
-          >
-            <template #icon>
-              <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            <span class="fm-btn-label">{{ $t("files.actions.new") }}</span>
-            <ChevronDown class="fm-caret" :size="12" :stroke-width="1.8" aria-hidden="true" />
-          </NButton>
-        </NDropdown>
-        <NButton
-          size="small"
-          type="primary"
-          :disabled="files.acting"
-          :title="$t('files.actions.upload')"
-          :aria-label="$t('files.actions.upload')"
-          @click="openUpload()"
-        >
-          <template #icon>
-            <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          <span class="fm-btn-label">{{ $t("files.actions.upload") }}</span>
-        </NButton>
-      </div>
-
+    <!-- Path bar (JUS-153): the breadcrumb, the folder filter and Refresh have
+         their own bar above the toolbar, so the toolbar carries actions only.
+         It is a wrapping flex row, exactly like the toolbar, so widths where
+         the two bars fit still waste no row. -->
+    <div class="fm-bar fm-pathbar">
       <nav class="fm-path" :aria-label="$t('files.browser.parent')">
         <button
           type="button"
@@ -2408,9 +2364,60 @@ function onFolderMenu(key: string): void {
         </template>
         <span class="fm-btn-label">{{ $t("files.browser.refresh") }}</span>
       </NButton>
+    </div>
 
-      <!-- The bin belongs to the root, not the folder, so it lives on the path
-           bar: any member may open it, while restore/purge inside need write. -->
+    <!-- Toolbar (JUS-153): one wrapping row holds the create/upload actions and
+         the per-root tools; the breadcrumb, filter and Refresh moved to the
+         path bar above, and the bulk actions live in the header bar (JUS-146),
+         so the toolbar carries actions only. Labels collapse to icon-only
+         <=640px, each keeping a title + aria-label. -->
+    <div class="fm-bar fm-toolbar">
+      <div v-if="files.canWrite" class="fm-toolbar-group">
+        <NDropdown
+          v-model:show="newMenuOpen"
+          trigger="click"
+          placement="bottom-start"
+          :options="newMenuOptions"
+          :menu-props="() => ({
+            role: 'menu',
+            'aria-label': $t('files.actions.new'),
+          })"
+          @select="onNewMenu"
+        >
+          <NButton
+            size="small"
+            secondary
+            aria-haspopup="menu"
+            :aria-expanded="newMenuOpen"
+            :disabled="files.acting"
+            :title="$t('files.actions.new')"
+            :aria-label="$t('files.actions.new')"
+          >
+            <template #icon>
+              <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("files.actions.new") }}</span>
+            <ChevronDown class="fm-caret" :size="12" :stroke-width="1.8" aria-hidden="true" />
+          </NButton>
+        </NDropdown>
+        <NButton
+          size="small"
+          type="primary"
+          :disabled="files.acting"
+          :title="$t('files.actions.upload')"
+          :aria-label="$t('files.actions.upload')"
+          @click="openUpload()"
+        >
+          <template #icon>
+            <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ $t("files.actions.upload") }}</span>
+        </NButton>
+      </div>
+
+      <!-- The bin belongs to the root, not the folder, so it stays with the
+           per-root actions: any member may open it, while restore/purge inside
+           need write. -->
       <NButton
         size="small"
         secondary
@@ -3217,11 +3224,10 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-3);
 }
 
-/* Left group (New dropdown + Upload) and the right-aligned group: clipboard
-   Paste plus the JUS-128 bulk actions (Download/Copy/Cut/Compress/Delete/Clear)
-   that used to live in their own bar, JUS-120/128. Both groups wrap internally
-   and may shrink, so a long right group never overflows/clips at narrow
-   widths — every action stays reachable instead of spilling past the panel. */
+/* Left group (New dropdown + Upload) and the right-aligned group (the clipboard
+   Paste + hint and the grid selection bar). Both groups wrap internally and may
+   shrink, so a long right group never overflows/clips at narrow widths — every
+   action stays reachable instead of spilling past the panel. */
 .fm-toolbar-group {
   display: flex;
   align-items: center;
@@ -3230,10 +3236,11 @@ function onFolderMenu(key: string): void {
   min-width: 0;
 }
 
-/* The right-hand cluster follows the filter/refresh/bin; the filter's
-   margin-left:auto pushes the whole cluster right, so the group itself needs
-   no auto margin (which would split the free space with the filter). */
+/* JUS-153: the right-hand cluster now follows the per-root actions directly
+   (the filter/refresh that used to push it right moved to the path bar), so the
+   group carries its own auto margin to stay pinned to the right edge. */
 .fm-toolbar-end {
+  margin-left: auto;
   justify-content: flex-end;
 }
 
@@ -3297,6 +3304,13 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
   flex-wrap: wrap;
   margin-bottom: var(--space-3);
+}
+
+/* JUS-153: the path bar sits directly above the toolbar, so its bottom margin
+   is tighter than the default bar margin; the toolbar keeps the gap to the
+   list. `.fm-bar.fm-pathbar` outranks the single-class `.fm-bar` base. */
+.fm-bar.fm-pathbar {
+  margin-bottom: var(--space-2);
 }
 
 .fm-path {
@@ -4026,7 +4040,8 @@ function onFolderMenu(key: string): void {
   }
 
   .fm-tabs,
-  .fm-toolbar {
+  .fm-toolbar,
+  .fm-bar.fm-pathbar {
     margin-bottom: var(--space-1);
   }
 
@@ -4040,16 +4055,16 @@ function onFolderMenu(key: string): void {
     height: 30px;
   }
 
-  /* Row 1: create/upload group + the breadcrumb (scrolls, never wraps). */
+  /* Path bar row 1: the breadcrumb takes the whole row (scrolls, never wraps). */
   .fm-path {
-    flex: 1 1 auto;
+    flex: 1 1 100%;
     min-width: 0;
     flex-wrap: nowrap;
     overflow-x: auto;
     scrollbar-width: thin;
   }
 
-  /* Row 2: the folder filter, then Refresh and Recycle bin. */
+  /* Path bar row 2: the folder filter shares the row with Refresh. */
   .fm-search {
     min-width: 0;
     max-width: none;
@@ -4057,8 +4072,9 @@ function onFolderMenu(key: string): void {
     margin-left: 0;
   }
 
-  /* Row 3: the clipboard (Paste + its nowrap hint chip). The bulk actions
-     moved into the header bar (JUS-146), so nothing competes for this row. */
+  /* Toolbar: the clipboard (Paste + its nowrap hint chip) takes its own
+     full-width row. The bulk actions moved into the header bar (JUS-146), so
+     nothing competes for this row. */
   .fm-toolbar-end {
     flex: 1 1 100%;
     justify-content: flex-start;

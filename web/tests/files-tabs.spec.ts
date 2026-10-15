@@ -243,35 +243,54 @@ test("two tabs keep independent paths and the tab bar is a real tablist", async 
   expect(addBox!.x).toBeGreaterThan(lastTab!.x + lastTab!.width);
 });
 
-test("the whole tablist rides in one bordered group (JUS-152)", async ({
+test("the tablist rides on the card surface with the active tab highlighted (JUS-150)", async ({
   page,
 }) => {
   await openFiles(page);
+  await openExtraTab(page);
 
-  // The tabs and the + button share one container that carries the group's
-  // background, border and padding.
+  // The tabs and the + button share one container that carries no fill, border,
+  // radius or padding of its own — the region sits on the card surface (JUS-150).
   await expect(page.locator(".fm-tabs > .fm-tabstrip")).toHaveCount(1);
   await expect(page.locator(".fm-tabs > .fm-tab-add")).toHaveCount(1);
   const group = await page.locator(".fm-tabs").evaluate((el) => {
     const style = getComputedStyle(el as HTMLElement);
     return {
       background: style.backgroundColor,
-      borderWidth: style.borderTopWidth,
+      borderTop: style.borderTopWidth,
+      borderBottom: style.borderBottomWidth,
+      borderLeft: style.borderLeftWidth,
+      borderRight: style.borderRightWidth,
+      radius: style.borderTopLeftRadius,
       padding: style.paddingTop,
     };
   });
-  expect(group.background).not.toBe("rgba(0, 0, 0, 0)");
-  expect(Number.parseFloat(group.borderWidth)).toBeGreaterThan(0);
-  expect(Number.parseFloat(group.padding)).toBeGreaterThan(0);
+  expect(group.background).toBe("rgba(0, 0, 0, 0)");
+  for (const edge of ["borderTop", "borderBottom", "borderLeft", "borderRight"] as const) {
+    expect(Number.parseFloat(group[edge]), `tablist ${edge}`).toBe(0);
+  }
+  expect(Number.parseFloat(group.radius)).toBe(0);
+  expect(Number.parseFloat(group.padding)).toBe(0);
 
-  // The strip is now only the scroll region: the group owns the surface, so a
-  // single tab no longer looks like its own detached button.
-  const strip = await page.locator(".fm-tabstrip").evaluate((el) => {
-    const style = getComputedStyle(el as HTMLElement);
-    return { background: style.backgroundColor, borderWidth: style.borderTopWidth };
+  // Selection stays readable through the active tab's own indicator fill; the
+  // inactive tab and the strip stay transparent.
+  const indicator = await page.evaluate(() => {
+    const active = document.querySelector(".fm-tab.is-active") as HTMLElement;
+    const inactive = document.querySelector(".fm-tab:not(.is-active)") as HTMLElement;
+    const strip = document.querySelector(".fm-tabstrip") as HTMLElement;
+    return {
+      active: getComputedStyle(active).backgroundColor,
+      inactive: getComputedStyle(inactive).backgroundColor,
+      strip: getComputedStyle(strip).backgroundColor,
+      stripBorder: getComputedStyle(strip).borderTopWidth,
+    };
   });
-  expect(strip.background).toBe("rgba(0, 0, 0, 0)");
-  expect(Number.parseFloat(strip.borderWidth)).toBe(0);
+  expect(indicator.active, "active tab keeps its own indicator fill").not.toBe(
+    "rgba(0, 0, 0, 0)",
+  );
+  expect(indicator.inactive, "inactive tab has no fill").toBe("rgba(0, 0, 0, 0)");
+  expect(indicator.strip, "strip has no fill").toBe("rgba(0, 0, 0, 0)");
+  expect(Number.parseFloat(indicator.stripBorder), "strip has no border").toBe(0);
 });
 
 test("a focused tab draws its whole ring inside the scrolling strip (JUS-152)", async ({

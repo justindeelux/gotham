@@ -234,16 +234,14 @@
 .fm-node { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .fm-node > svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--muted); }
 .fm-node__select { width: 180px; min-width: 140px; }
-/* Tab bar (JUS-123/126, grouped in JUS-152): one tab per open directory; each
-   tab owns its own path, selection and scroll. The strip hugs its tabs so the
-   + button sits right after the last one, and scrolls horizontally at narrow
-   widths. The whole tablist (tabs + the + button) rides in one bordered group,
-   mirroring the breadcrumb group, so it reads as a single unit. */
+/* Tab bar (JUS-123/126/150): one tab per open directory; each tab owns its own
+   path, selection and scroll. The strip hugs its tabs so the + button sits right
+   after the last one, and scrolls horizontally at narrow widths. JUS-150: the
+   tabs sit on the card surface (no surrounding box) and the active tab carries
+   its own indicator fill, so the region needs no background of its own. */
 .fm-tabs {
   display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); margin-bottom: var(--space-3);
   width: fit-content; max-width: 100%;
-  background: var(--surface-warm); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 3px;
 }
 .fm-tabstrip {
   display: flex; align-items: stretch; gap: 2px; flex: 0 1 auto; min-width: 0;

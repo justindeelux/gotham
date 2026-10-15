@@ -3155,26 +3155,22 @@ function onFolderMenu(key: string): void {
   width: 220px;
 }
 
-/* Tab bar (JUS-123/152): one tab per open directory. The whole tablist — the
-   tabs and the + button — rides in one bordered group so it reads as a single
-   unit (JUS-152); the strip scrolls horizontally at narrow widths instead of
-   wrapping the layout, and the active tab is filled inside the group. */
+/* Tab bar (JUS-123/150): one tab per open directory. The tabs and the + button
+   ride on the card surface (no surrounding box — JUS-150), so the only filled
+   element is the active tab's own indicator; the strip scrolls horizontally at
+   narrow widths instead of wrapping the layout. */
 .fm-tabs {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
-  /* Hug the tabs + the + button so the group rings exactly its content. */
+  /* Hug the tabs + the + button so the row rings exactly its content. */
   width: fit-content;
   max-width: 100%;
-  /* JUS-150: clear the header's divider so the tab group's own border is not a
-     second line stacked right under it. */
+  /* JUS-150: breathing room on either side of the region's dividers (the
+     header rule above, the path bar rule below); no fill or box of its own. */
   margin-top: var(--space-3);
   margin-bottom: var(--space-3);
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 3px;
 }
 
 .fm-tabstrip {
@@ -3294,7 +3290,8 @@ function onFolderMenu(key: string): void {
   flex-wrap: wrap;
   /* JUS-150: a plain 1px rule separates the toolbar from the path bar above;
      the row itself stays on the card surface (no band), so it keeps the single
-     compact toolbar row (the toolbar-height guards). */
+     compact toolbar row (the toolbar-height guards) and the plain inter-block
+     margin to the list header. */
   border-top: 1px solid var(--border);
   margin-bottom: var(--space-3);
 }

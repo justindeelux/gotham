@@ -12,9 +12,10 @@ import type { Page } from "@playwright/test";
 // with the control-plane file API mocked in real Chromium. Measured claims: the
 // five browser regions (header, tablist, path bar, toolbar, entry list) stack
 // top-to-bottom, every adjacent pair is joined by a single 1px --border rule,
-// and the JUS-157 tinted bands are gone — the header, path bar and toolbar
-// paint no background of their own at 1440, 1024 and 390px. The path bar must
-// not clip the breadcrumb's shared :focus-visible ring.
+// and none of the regions paints a band of its own — the header, tablist, path
+// bar and toolbar stay on the card surface (the tablist also draws no boxed
+// border) at 1440, 1024 and 390px. The path bar must not clip the breadcrumb's
+// shared :focus-visible ring.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -178,6 +179,8 @@ interface RegionBox {
   background: string;
   borderTop: number;
   borderBottom: number;
+  borderLeft: number;
+  borderRight: number;
   borderTopColor: string;
   borderBottomColor: string;
   overflowX: string;
@@ -202,6 +205,8 @@ async function regionsOf(page: Page): Promise<{
         background: style.backgroundColor,
         borderTop: Number.parseFloat(style.borderTopWidth),
         borderBottom: Number.parseFloat(style.borderBottomWidth),
+        borderLeft: Number.parseFloat(style.borderLeftWidth),
+        borderRight: Number.parseFloat(style.borderRightWidth),
         borderTopColor: style.borderTopColor,
         borderBottomColor: style.borderBottomColor,
         overflowX: style.overflowX,
@@ -231,7 +236,7 @@ async function regionsOf(page: Page): Promise<{
 }
 
 // JUS-150: the five regions stack in order and each adjacent pair is joined by a
-// single 1px --border rule; the JUS-157 bands paint no background at every width.
+// single 1px --border rule; no region paints a band of its own at every width.
 for (const viewport of [
   { width: 1440, height: 900 },
   { width: 1024, height: 768 },
@@ -283,7 +288,7 @@ for (const viewport of [
 
     // JUS-150: the four dividers are plain 1px --border rules, each owned by one
     // region: the header's bottom edge, then the top edge of the path bar, the
-    // toolbar and the entry list.
+    // toolbar and the entry list. The tablist itself draws no rule of its own.
     const dividers = [
       ["header", "borderBottom"],
       ["pathbar", "borderTop"],
@@ -292,11 +297,26 @@ for (const viewport of [
     ] as const;
     for (const [name, edge] of dividers) {
       const box = regions[name];
-      expect(borderWidth(box, edge), `${name} ${edge} is 1px`).toBe(1);
+      const width = edge === "borderTop" ? box.borderTop : box.borderBottom;
+      expect(width, `${name} ${edge} is 1px`).toBe(1);
       const colour = edge === "borderTop" ? box.borderTopColor : box.borderBottomColor;
       expect(normalizeColor(colour), `${name} ${edge} uses --border`).toBe(
         normalizeColor(toRgb(border)),
       );
+    }
+
+    // JUS-150: the tablist region is a divider-separated row, not a boxed band —
+    // it paints no background of its own and draws no border on any edge (the
+    // dividers around it belong to the header above and the path bar below).
+    expect(
+      normalizeColor(regions.tablist.background),
+      `tablist has no band background at ${viewport.width}px`,
+    ).toBe("rgba(0,0,0,0)");
+    for (const edge of ["borderTop", "borderBottom", "borderLeft", "borderRight"] as const) {
+      expect(
+        regions.tablist[edge],
+        `tablist ${edge} draws no boxed border at ${viewport.width}px`,
+      ).toBe(0);
     }
 
     // JUS-150: the JUS-157 tinted bands are gone — the header, path bar and
@@ -362,11 +382,6 @@ test("the path bar keeps the breadcrumb focus ring unclipped", async ({ page }) 
   expect(ring!.width).toBeGreaterThan(0);
   expect(ring!.overhang).toBeLessThanOrEqual(0.5);
 });
-
-/** borderWidth reads the numeric border width for one edge of a region box. */
-function borderWidth(box: RegionBox, edge: "borderTop" | "borderBottom"): number {
-  return edge === "borderTop" ? box.borderTop : box.borderBottom;
-}
 
 /** toRgb normalises a `#rrggbb` token (or an already-rgb value) to `rgb(...)`. */
 function toRgb(value: string): string {

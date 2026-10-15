@@ -1517,8 +1517,8 @@ watch(
       return;
     }
     // The variant about to hide: the column headers when the selection appears,
-    // the bulk bar when it clears.
-    const hiding = active ? ".fm-head-cols" : ".fm-selection-actions";
+    // the whole bulk bar (count + sort + actions) when it clears (JUS-148).
+    const hiding = active ? ".fm-head-cols" : ".fm-head-bulk";
     swapHadFocus = Boolean(document.activeElement?.closest(hiding));
   },
   { flush: "pre" },
@@ -1646,16 +1646,39 @@ function onNewMenu(key: string): void {
 const sortMenuOpen = ref(false);
 const isCompactList = useMediaQuery("(max-width: 860px)");
 /**
- * showSortControl keeps the toolbar sort control reachable whenever the column
- * headers cannot carry the sort: the compact layout (headers hidden ≤860px),
- * the grid (no headers at all), and — JUS-146 — the list while the bulk bar
- * replaces the headers (>860px with a selection). It is mounted in every state
- * and only hidden with visibility, so its appearance never reflows the toolbar
- * and the first row never shifts (JUS-130/134).
+ * isNarrowDesktop is the 861-1280px band where the desktop table overflows the
+ * scroller but the compact columns have not collapsed. There the pinned Actions
+ * cell covers the low-value Mode column at rest, so Mode is dropped there too
+ * (JUS-148).
+ */
+const isNarrowDesktop = useMediaQuery(
+  "(min-width: 861px) and (max-width: 1280px)",
+);
+/**
+ * showSortControl keeps the toolbar sort control reachable exactly where the
+ * column headers cannot carry the sort: the compact layout (headers hidden
+ * ≤860px) and the grid (no headers at all). It is RENDERED only in those states
+ * (v-if), never merely reserved — a hidden control must not occupy a toolbar row
+ * (JUS-147). It never depends on the selection, so selecting never reflows the
+ * toolbar (JUS-130/134); while a selection hides the headers the bulk bar
+ * carries the sort instead.
  */
 const showSortControl = computed<boolean>(
-  () => isCompactList.value || files.viewMode === "grid" || hasSelection.value,
+  () => isCompactList.value || files.viewMode === "grid",
 );
+
+/**
+ * columnCount is the number of columns the table exposes to assistive tech
+ * (JUS-148): the leading select-all cell plus the columns not collapsed at this
+ * width. It keeps aria-colcount and the bulk bar's aria-colspan honest against
+ * the rendered body rows.
+ */
+const columnCount = computed<number>(() => {
+  if (isCompactList.value) {
+    return 4; // select + name + size + actions
+  }
+  return isNarrowDesktop.value ? 6 : 7;
+});
 
 /** sortColumnLabel maps a sort key to its column header copy. */
 function sortColumnLabel(key: FilesSortKey): string {
@@ -2004,6 +2027,18 @@ const layoutKey = computed<string>(
     `${files.viewMode}:${files.activeTabId}:${files.rootName}:${files.path}`,
 );
 watch(layoutKey, resetRowMenu);
+
+/**
+ * resetSortMenu clears the compact sort menu's tracked open state. The NDropdown
+ * is uncontrolled, so a layout change that remounts its trigger (a compact↔
+ * desktop or list↔grid flip) or hides the bulk bar's copy would otherwise leave
+ * it open — and the remounted trigger would reopen its menu by itself (JUS-148,
+ * mirroring resetRowMenu).
+ */
+function resetSortMenu(): void {
+  sortMenuOpen.value = false;
+}
+watch([layoutKey, showSortControl, hasSelection], resetSortMenu);
 
 // The open row can leave the rendered set without its dropdown closing (drawn
 // out of the window, deleted or renamed by a refresh): close the menus as soon
@@ -2378,11 +2413,14 @@ function onFolderMenu(key: string): void {
         <span class="fm-btn-label">{{ $t("files.browser.recycleBin") }}</span>
       </NButton>
 
-      <!-- JUS-145: compact sort control. The list's Type / Modified / Mode
-           headers are hidden at compact widths, and the grid has no headers at
-           all, so this keeps every column sortable there and mirrors the active
-           column + direction. -->
+      <!-- JUS-145/147: compact sort control, RENDERED only where the column
+           headers cannot carry the sort — the compact layout (Type / Modified /
+           Mode headers hidden) and the grid (no headers at all). It is never
+           reserved while hidden, so it can never tip the first toolbar row onto
+           an empty second row (JUS-147); while a selection hides the headers the
+           bulk bar carries its own sort control (below). -->
       <NDropdown
+        v-if="showSortControl"
         v-model:show="sortMenuOpen"
         trigger="click"
         placement="bottom-end"
@@ -2397,7 +2435,6 @@ function onFolderMenu(key: string): void {
           size="small"
           secondary
           class="fm-sort-toggle"
-          :class="{ 'is-hidden': !showSortControl }"
           aria-haspopup="menu"
           :aria-expanded="sortMenuOpen"
           :title="sortLabel"
@@ -2516,6 +2553,7 @@ function onFolderMenu(key: string): void {
           :class="{ 'is-virtual': isListVirtual }"
           role="table"
           :aria-rowcount="files.visibleEntries.length + 1"
+          :aria-colcount="columnCount"
         >
           <div
             ref="headEl"
@@ -2587,12 +2625,47 @@ function onFolderMenu(key: string): void {
                  entries are selected. It is always mounted (hidden with
                  visibility), so the row height stays put and the JUS-141 count
                  reserve keeps the count cell content-derived. Its count is
-                 announced politely (aria-live). -->
+                 announced politely (aria-live). JUS-148: it spans every column
+                 but the leading select-all cell, so aria-colspan keeps the row's
+                 semantics consistent with the body rows. -->
             <div
               class="fm-head-bulk"
               :class="{ 'is-visible': hasSelection }"
               role="columnheader"
+              :aria-colspan="columnCount - 1"
             >
+              <!-- JUS-147: while the bar replaces the headers the sort must live
+                   here. It is the desktop-list affordance only (≥861px); the
+                   compact layout and the grid keep the toolbar control above, so
+                   exactly one sort control is on screen at every width. -->
+              <NDropdown
+                v-if="!isCompactList"
+                v-model:show="sortMenuOpen"
+                trigger="click"
+                placement="bottom-end"
+                :options="sortMenuOptions"
+                :menu-props="() => ({
+                  role: 'menu',
+                  'aria-label': $t('files.browser.sortBy'),
+                })"
+                @select="onSortMenu"
+              >
+                <NButton
+                  size="small"
+                  secondary
+                  class="fm-bulk-sort"
+                  aria-haspopup="menu"
+                  :aria-expanded="sortMenuOpen"
+                  :title="sortLabel"
+                  :aria-label="sortLabel"
+                >
+                  <template #icon>
+                    <ArrowUp v-if="files.sortDir === 'asc'" :size="14" :stroke-width="1.8" aria-hidden="true" />
+                    <ArrowDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                  <span class="fm-btn-label">{{ sortColumnLabel(files.sortKey) }}</span>
+                </NButton>
+              </NDropdown>
               <FilesSelectionBar
                 :count-reserve="countReserve"
                 @download="() => void downloadSelected()"
@@ -2646,14 +2719,19 @@ function onFolderMenu(key: string): void {
                 :aria-describedby="rowDescribedBy(entry)"
               >
                 <b>{{ entry.name }}</b>
+              </button>
+              <!-- JUS-134/148: on the desktop row the name and its (optional)
+                   symlink target share one line (`.fm-name-sub` is
+                   `display: contents` there). On the compact row the target
+                   moves to the secondary line beside the relative modified time,
+                   so the name keeps priority instead of both truncating
+                   ("br… → /none…"). -->
+              <span class="fm-name-sub">
                 <span v-if="entryTarget(entry)" class="fm-target" :title="entryTarget(entry)">
                   {{ entryTarget(entry) }}
                 </span>
-              </button>
-              <!-- JUS-145: the compact layout hides the Modified column, so the
-                   relative modified time rides under the name there (the
-                   absolute time stays in the roving row's description). -->
-              <span class="fm-row-sub">{{ modifiedLabel(entry) }}</span>
+                <span class="fm-row-sub">{{ modifiedLabel(entry) }}</span>
+              </span>
             </div>
             <div class="fm-cell fm-cell--type" role="cell">{{ typeLabel(entry) }}</div>
             <div class="fm-cell fm-cell--size" role="cell">{{ entry.kind === "directory" ? "—" : formatBytes(entry.size) }}</div>
@@ -3142,12 +3220,9 @@ function onFolderMenu(key: string): void {
   white-space: nowrap;
 }
 
-/* JUS-146: the toolbar sort control stays mounted (so its appearance never
-   reflows the toolbar) and is hidden with visibility when the column headers
-   already carry the sort. */
-.fm-sort-toggle.is-hidden {
-  visibility: hidden;
-}
+/* JUS-147: the toolbar sort control is rendered only where the headers cannot
+   carry the sort, so it is never reserved while hidden and cannot wrap the first
+   toolbar row. */
 
 .fm-caret {
   margin-left: 2px;
@@ -3431,6 +3506,24 @@ function onFolderMenu(key: string): void {
   }
 }
 
+/* JUS-148: in the 861-1280px band the desktop table still overflows the scroller,
+   so the pinned Actions cell covers the low-value Mode column at rest. Drop Mode
+   there; the row and header grids lose its track so the remaining columns keep
+   their widths. */
+@media (min-width: 861px) and (max-width: 1280px) {
+  .fm-row {
+    grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 168px;
+  }
+
+  .fm-head-cols {
+    grid-template-columns: minmax(240px, 1.6fr) 118px 96px 148px 168px;
+  }
+
+  .fm-cell--mode {
+    display: none;
+  }
+}
+
 /* JUS-146: the bulk bar (count + bulk actions) replaces the column headers in
    the same sticky row while entries are selected. Its controls self-hide with
    visibility, so the row keeps the same height and the hidden controls are
@@ -3452,6 +3545,12 @@ function onFolderMenu(key: string): void {
 .fm-head-bulk.is-visible {
   visibility: visible;
   background: var(--surface);
+}
+
+/* JUS-147: the bulk bar's sort control keeps the desktop list sortable while the
+   bar replaces the column headers. It never shrinks — the action row scrolls. */
+.fm-bulk-sort {
+  flex: 0 0 auto;
 }
 
 /* JUS-146: above the compact breakpoint the desktop table can be wider than the
@@ -3526,20 +3625,23 @@ function onFolderMenu(key: string): void {
   cursor: pointer;
 }
 
-/* JUS-134: the name and its (optional) symlink target share one line so every
- * row keeps the single tokenised height and the type is not repeated (the Type
- * column carries it). */
+/* JUS-134/148: on the desktop row the name and its (optional) symlink target
+ * share one line so every row keeps the single tokenised height and the type is
+ * not repeated (the Type column carries it). `.fm-name-sub` dissolves into the
+ * name's flex row on the desktop (`display: contents`), so the target sits right
+ * after the name; on the compact row it becomes the secondary line. */
 .fm-name .fm-label {
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-  gap: var(--space-2);
+  display: block;
+  flex: 0 1 auto;
   min-width: 0;
+}
+
+.fm-name-sub {
+  display: contents;
 }
 
 .fm-label b {
   display: block;
-  flex: 0 1 auto;
   min-width: 0;
   font-weight: 500;
   color: var(--fg);
@@ -3549,7 +3651,7 @@ function onFolderMenu(key: string): void {
   white-space: nowrap;
 }
 
-.fm-label span {
+.fm-target {
   display: block;
   flex: 0 1 auto;
   min-width: 0;
@@ -3563,7 +3665,7 @@ function onFolderMenu(key: string): void {
   white-space: nowrap;
 }
 
-/* JUS-145: the compact row's secondary modified line. Hidden on the desktop
+/* JUS-145/148: the compact row's secondary modified line. Hidden on the desktop
    layout, where the Modified column shows it. */
 .fm-row-sub {
   display: none;
@@ -3974,8 +4076,10 @@ function onFolderMenu(key: string): void {
     display: none;
   }
 
-  /* The name cell becomes a two-row grid: the type icon spans both rows so the
-     relative modified time sits under the name (JUS-145). */
+  /* The name cell becomes a two-row grid: the type icon spans both rows, the
+     name takes the first line and the secondary line carries the symlink target
+     next to the relative modified time (JUS-145/148). The name no longer shares
+     its line with the target, so it is never squeezed to "br…". */
   .fm-name {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -3995,9 +4099,19 @@ function onFolderMenu(key: string): void {
     grid-area: label;
   }
 
-  .fm-row-sub {
+  /* The secondary line: the target (when any) then the relative time. */
+  .fm-name-sub {
     grid-area: sub;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .fm-row-sub {
     display: block;
+    flex: 0 1 auto;
+    min-width: 0;
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--muted);

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Archive, Copy, Download, Scissors, Trash2, X } from "@lucide/vue";
+import { Archive, ChevronRight, Copy, Download, Scissors, Trash2, X } from "@lucide/vue";
 import { NButton } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
@@ -138,6 +138,13 @@ const selection = computed<FilesEntry[]>(() =>
       </template>
       <span class="fm-btn-label">{{ t("files.browser.clear") }}</span>
     </NButton>
+    <!-- JUS-148: a pinned chevron + fade marks the action row as scrollable, so
+         the actions off the right edge (Delete/Clear on a phone) are obvious
+         rather than a weak fade. It is decorative (aria-hidden) and only rides
+         the row while a selection exists (the whole cluster hides otherwise). -->
+    <span class="fm-scroll-hint" aria-hidden="true">
+      <ChevronRight :size="14" :stroke-width="2" />
+    </span>
   </div>
 </template>
 
@@ -167,10 +174,11 @@ const selection = computed<FilesEntry[]>(() =>
   visibility: hidden;
 }
 
-/* JUS-134/146: the bulk actions stay mounted and are hidden with visibility
+/* JUS-134/146/148: the bulk actions stay mounted and are hidden with visibility
    (not display) while nothing is selected, so the row height is fixed and the
    first click of a double-click can never shift the list (JUS-130). They never
-   wrap — the row scrolls instead. */
+   wrap — the row scrolls instead, with the pinned chevron (below) marking it as
+   scrollable. */
 .fm-selection-actions {
   display: flex;
   align-items: center;
@@ -188,17 +196,21 @@ const selection = computed<FilesEntry[]>(() =>
   visibility: visible;
 }
 
-/* A right-edge fade hints that the action row scrolls (JUS-146). The sticky
-   pseudo-element rides the scrollport's right edge. */
-.fm-selection-actions::after {
-  content: "";
+/* JUS-148: the pinned scroll affordance — a fade with a chevron that rides the
+   scrollport's right edge (pointer-events: none, so it never eats a tap or a
+   hit test). It replaces the old bare gradient, which read as a weak hint. */
+.fm-scroll-hint {
   position: sticky;
   right: 0;
   flex: 0 0 auto;
-  width: 24px;
-  margin-left: -24px;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  margin-left: -28px;
   pointer-events: none;
-  background: linear-gradient(to right, transparent, var(--surface));
+  color: var(--fg-2);
+  background: linear-gradient(to right, transparent, var(--surface) 55%);
 }
 
 @media (max-width: 640px) {

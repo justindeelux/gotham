@@ -5,7 +5,7 @@ description: Review Vue 3 / TypeScript changes in gotham's web/ SPA (src/app, sr
 
 # Vue review (gotham web/)
 
-Report findings only; do not rewrite code. Stack: Vue 3.5 `<script setup lang="ts">`, Vite, Pinia 3 + axios, Naive UI, vue-router 4, vue-i18n, zod, Vitest, Playwright. Layout: `web/src/{app,features/<module>,shared}`. Project rules live in `AGENTS.md`; UI rules in `docs/design/README.md`.
+Report findings only; do not rewrite code. Stack: Vue 3.5 `<script setup lang="ts">`, Vite, Pinia 3 + axios, Naive UI, vue-router 4, vue-i18n, zod, Vitest, Playwright. Layout: `web/src/{app,features/<module>,shared}`. Project rules live in `AGENTS.md`.
 
 ## 1. Scope the diff
 
@@ -29,7 +29,7 @@ Red gate = BLOCK. If `web/` changed, also confirm `internal/server/webdist` was 
 - `interface` over `type` (except unions/intersections); strict TS; 2-space, double quotes, semicolons, trailing commas, ~100 cols; descriptive names (`isActive`, not `act`).
 - **Validation = zod** via `web/src/shared/validation` (`ruleFrom`, `parseWith`), schemas in `features/<m>/schemas/`. A new ad-hoc `validator:` closure is a finding.
 - Feature code stays in `features/<module>/`; reusable pieces go to `shared/`. Cross-feature deep imports (feature A reaching into feature B internals) are a finding.
-- **UI**: Naive UI is the component base — don't rebuild components from raw CSS; colors/spacing/radii come from the design tokens ported from `docs/design/assets/gotham-ui.css`, not hard-coded hex/px. The change must match its `docs/design/*.html` mockup; a new page needs a mockup.
+- **UI**: Naive UI is the component base — don't rebuild components from raw CSS; colors/spacing/radii come from the design tokens in `web/src/shared/styles/tokens.css`, not hard-coded hex/px.
 - **Modals**: header and footer fixed, only the content region scrolls, height bounded to viewport (`.app-modal` / `.wizard-modal` contract in `shared/styles/main.css`).
 - **Copy/i18n**: user-facing strings go through vue-i18n in the project language; no hard-coded literals in templates.
 - Icon-only buttons need a tooltip and an accessible name (recent JUS-156 work).

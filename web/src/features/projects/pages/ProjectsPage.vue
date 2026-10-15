@@ -31,7 +31,7 @@ import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
 /**
  * Projects list (`/projects`, PE-4 Linear JUS-33).
  *
- * Ported from docs/design/projects.html: a card per project (name,
+ * A card per project (name,
  * description, environment count, resource counts per type), a name search,
  * a create dialog, and an empty state inviting the first project. Viewers
  * see the list but no create button. The mockup's health line ("all

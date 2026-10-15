@@ -44,7 +44,7 @@ export function isDatabaseNameValid(value: unknown): boolean {
 /**
  * cronSchema replaces the trim-and-empty guard in handleCreateSchedule.
  * Non-empty only: there is deliberately NO client grammar check (the
- * numeric-only grammar lives server-side; see docs/library-audit.md F3).
+ * numeric-only grammar lives server-side).
  */
 export const cronSchema = requiredString(databaseMessages.cronRequired);
 

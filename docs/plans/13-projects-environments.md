@@ -83,7 +83,7 @@ The deploy spec merges shared variables beneath application variables
 
 - Sidebar: **Projects** replaces Applications / Services / Databases. Servers, Domains,
   Templates, Teams, Settings stay.
-- Pages (one mockup per page in `docs/design/`):
+- Pages:
   1. `/projects`: project cards (name, environments, resource counts), create dialog.
   2. `/projects/:p`: environment tabs, project shared variables.
   3. `/projects/:p/environments/:e`: tabs or sections for applications, services, databases, an
@@ -155,7 +155,6 @@ env surface).
 | PE-7 | e2e flows, docs, test-box redeploy and live check (create project → environment → app on a node → deploy) | M | all |
 
 PE-1 first; PE-4 can run in parallel with PE-2 because the API contract above is already frozen.
-Mockups: `docs/design/{projects,project-detail,environment}.html`.
 
 ## 8. Risks
 

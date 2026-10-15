@@ -3087,8 +3087,7 @@ function onFolderMenu(key: string): void {
 </template>
 
 <style scoped>
-/* Ported from docs/design/assets/gotham-views.css (FILE MANAGER section) and
- * docs/design/files.html; only tokens from styles/tokens.css are used. */
+/* File manager styles; only tokens from styles/tokens.css are used. */
 .files-browser {
   position: relative;
   /* JUS-134: the single row-height token every list row reads. JUS-137 can

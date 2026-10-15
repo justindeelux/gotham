@@ -40,7 +40,7 @@ function catalogFor(locale?: string | null): typeof en {
 }
 
 // Directories lead every listing regardless of direction, then regular files,
-// then symlinks and special files (mirrors docs/design/files.html).
+// then symlinks and special files.
 const kindRank: Record<FileKind, number> = {
   directory: 0,
   file: 1,

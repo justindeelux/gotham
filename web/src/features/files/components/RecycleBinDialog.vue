@@ -244,7 +244,7 @@ async function empty(): Promise<void> {
 </template>
 
 <style scoped>
-/* The modal contract (docs/design/README.md): header and footer are fixed,
+/* The modal contract (see main.css): header and footer are fixed,
  * only the entry list scrolls, and the card never exceeds the viewport. */
 .trash-hint {
   margin: 0 0 var(--space-2);

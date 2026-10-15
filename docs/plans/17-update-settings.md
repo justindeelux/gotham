@@ -25,7 +25,7 @@
 | `PUT /updates/schedule` | platform admin | validate, persist, hot reload |
 
 ## Web
-`web/src/features/updates/` (api, schemas (zod), composables, components, pages, locales en + vi). Route `settings/updates` (name `updates`), sidebar System → Updates entry becomes live. Non-admins see status read-only (actions hidden). Mockup: `docs/design/updates.html` (written before the port). Naive UI themed with existing tokens; destructive/irreversible apply uses a confirm modal following the `.app-modal` contract.
+`web/src/features/updates/` (api, schemas (zod), composables, components, pages, locales en + vi). Route `settings/updates` (name `updates`), sidebar System → Updates entry becomes live. Non-admins see status read-only (actions hidden). Naive UI themed with existing tokens; destructive/irreversible apply uses a confirm modal following the `.app-modal` contract.
 
 ## Work packages
 1. Migration + sqlc + store adapter. 2. `updates` schedule type, validation, holder, scheduler rewrite, tests. 3. Routes. 4. Mockup. 5. Vue port + i18n + rebuilt `webdist`. 6. Verify + PR.

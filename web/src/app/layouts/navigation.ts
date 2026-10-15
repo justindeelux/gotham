@@ -19,9 +19,8 @@ export interface NavSection {
   items: NavItem[];
 }
 
-// Group order and English labels follow the docs/design shell renderer
-// (docs/design/assets/gotham-ui.js SECTIONS). Every entry links to a shipped
-// route; features without a screen (API tokens) are absent until they ship.
+// Group order and English labels follow the app shell sections. Every entry
+// links to a shipped route; features without a screen (API tokens) are absent until they ship.
 // `label` keeps the English text for source checks; `labelKey` is what the
 // sidebar renders, so a language switch updates labels without remounting.
 export const navSections: NavSection[] = [

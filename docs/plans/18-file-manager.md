@@ -10,7 +10,6 @@
 - CP template module: `internal/containers` (`errors.go`, `client.go`, `service.go`, `routes.go`), wired in `internal/server/server.go:765-776` with `s.withTeam()`. `AuthorizeOptionalTeam` (`internal/teams/scope.go:67`) returns nil for servers **without** a team, even for writes — the files module must not inherit that.
 - HTTP server `ReadTimeout` is 30 s for the whole request (`internal/server/server.go:56`).
 - Web: HTTP client is `web/src/shared/api/http.ts` (Bearer header + `X-Team-Id`, 15 s default timeout). No editor library, no file components. `web/src/app/layouts/navigation.ts:32` has an inactive `files` nav stub. `internal/server/webdist` (2.4 MB) is committed and drift-checked.
-- No files mockup in `docs/design/`.
 
 ## Spike results (step 0 gate)
 
@@ -168,7 +167,7 @@ Pyramid's backend is an unrestricted filesystem API (single `resolvePath` = `fil
 - **Downloads:** `POST /download-ticket` → single-use ticket (60 s, bound to user, team, server, root, path); `GET /download?ticket=` consumes it so the browser can use a native streaming download. `ticket` is redacted from access logs. Sets `Content-Length`, `Content-Disposition: attachment`, `nosniff`; on a mid-stream agent error the handler aborts the connection (`http.ErrAbortHandler`) so the browser marks the download failed. Long transfers use `http.NewResponseController(w).SetReadDeadline/SetWriteDeadline`; the file API is served by the control plane directly, so no edge read timeout applies.
 - **Old agents:** `codes.Unimplemented` → `ErrAgentOutdated` (501, "update the agent").
 - **Audit:** structured `slog` (`actor_team_id`, `actor_user_id`, server, root, relpath, op, result); precedent `internal/servers/service.go`. No table.
-- **Editor:** CodeMirror 6, dynamic import (own chunk), explicit language set (json, yaml, js/ts, python, go, markdown, css, html, shell, dockerfile, toml) — **not** `language-data` (~100 committed chunks). Line separator and BOM detected on load and preserved on save (CRLF file round-trips byte-identical). Monaco rejected (multi-MB in a committed `webdist`). Recorded as `F22` in `docs/library-audit.md`. CodeMirror injects styles (CSP currently allows `style-src 'unsafe-inline'`; note so nobody tightens it blindly). Editor renders as a floating window that minimizes into a bottom app-dock inset to the content column (JUS-116), not an inline card on the page.
+- **Editor:** CodeMirror 6, dynamic import (own chunk), explicit language set (json, yaml, js/ts, python, go, markdown, css, html, shell, dockerfile, toml) — **not** `language-data` (~100 committed chunks). Line separator and BOM detected on load and preserved on save (CRLF file round-trips byte-identical). Monaco rejected (multi-MB in a committed `webdist`). CodeMirror injects styles (CSP currently allows `style-src 'unsafe-inline'`; note so nobody tightens it blindly). Editor renders as a floating window that minimizes into a bottom app-dock inset to the content column (JUS-116), not an inline card on the page.
 - **Entry points:** route `files` (`/files`, server chooser → last-used/only server) and `server-files` (`servers/:id/files`); server-detail "Files" tab links to it; nav item highlights on both.
 - **Deletion:** confirm modal, then the entry moves into a per-root recycle bin (`<root>/.gotham-trash/<id>/{data,meta.json}` recording the original path, deleted-at, size and kind) instead of being removed. The bin is listed through `GET /trash` and entries are restored, permanently deleted or the whole bin emptied through `POST /trash/*` (JUS-122); a permanent delete of an arbitrary entry stays available with `?permanent=true`. The reserved `.gotham-trash` name is hidden from `List` and refused by every ordinary file operation, and confinement is unchanged (a delete of a symlink moves the link, never follows it). **Retention: no auto-expiry in v1** — entries stay until restored, purged or the bin is emptied (known residual, not a background job).
 - **UX expectation:** volumes created by containers are usually root-owned, so many entries are read-only/unreadable for `gotham-agent`; the UI is read-mostly with clear per-entry "permission denied" states.
@@ -329,8 +328,8 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
   the error contract.
 
 ### Step 5 — Mockup
-- **Brief:** `docs/design/README.md` (modal rules), `assets/gotham-ui.css`, `server-detail.html`.
-- **Tasks:** `docs/design/files.html`: toolbar, breadcrumb + root switcher, list with empty/loading/error/permission-denied rows, selection bar, context menu, editor pane (tabs, dirty dot, status bar, binary/too-large state), conflict modal (`.app-modal`), delete confirm, upload panel, read-only root banner; link from `docs/design/index.html`; English copy.
+- **Brief:** modal rules in `web/src/shared/styles/main.css`, `web/src/shared/styles/tokens.css`.
+- **Tasks:** Files page: toolbar, breadcrumb + root switcher, list with empty/loading/error/permission-denied rows, selection bar, context menu, editor pane (tabs, dirty dot, status bar, binary/too-large state), conflict modal (`.app-modal`), delete confirm, upload panel, read-only root banner; English copy.
 - **Verify/Exit:** project owner approves before step 6.
 - **Rollback:** revert docs.
 
@@ -349,8 +348,8 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
 - **Rollback:** revert PR + rebuild webdist.
 
 ### Step 8 — Web code editor
-- **Brief:** steps 4, 6, 7 merged; `docs/library-audit.md` format; CSP note.
-- **Tasks:** CodeMirror 6 dynamic import with explicit languages; tabs in the Files page; dirty dot; Ctrl/Cmd+S save with `If-Match`; 409 → conflict modal (reload / overwrite / save as copy); 413/415 → read-only/download state; dirty cleared only if doc unchanged during save; tab sync on rename/move/delete (retarget/close, block on dirty); `beforeunload` guard; CRLF/BOM preserved; wrap toggle, search, go-to-line; library-audit `F22`; rebuild `webdist`, report size delta and chunk count.
+- **Brief:** steps 4, 6, 7 merged; CSP note.
+- **Tasks:** CodeMirror 6 dynamic import with explicit languages; tabs in the Files page; dirty dot; Ctrl/Cmd+S save with `If-Match`; 409 → conflict modal (reload / overwrite / save as copy); 413/415 → read-only/download state; dirty cleared only if doc unchanged during save; tab sync on rename/move/delete (retarget/close, block on dirty); `beforeunload` guard; CRLF/BOM preserved; wrap toggle, search, go-to-line; rebuild `webdist`, report size delta and chunk count.
 - **Verify:** common web + vitest (tab store dirty/sync/race, CRLF round-trip) + Playwright layout spec for conflict modal.
 - **Exit:** editor keys never reach the list; entry chunk size unchanged; new chunk files ≤ 15.
 - **Rollback:** revert PR + rebuild webdist.
@@ -412,8 +411,7 @@ Common verify for code steps: `go build ./...`, `go test ./...`, `golangci-lint 
   special bits are preserved (never editable); the grid is disabled while the
   octal field is invalid (so it never overwrites what was typed), Apply is
   disabled when the mode is unchanged or a directory would lose owner execute,
-  and the listing refreshes after success. The `docs/design/files.html` mockup
-  gained the menu entry and the modal before the Vue port.
+  and the listing refreshes after success.
 - **Verify:** `go build ./...`, `go test ./...`, `golangci-lint run`, `go vet`,
   `npm run build`, `npm run type-check`, `npm test` all green; mode-bit rejection
   (setuid/setgid/sticky/>0o777), missing-mode rejection, symlink-not-followed,
@@ -608,7 +606,7 @@ Deliberate, documented limits of the step-2 write path (JUS-106):
 
 Post-ship layout tickets for the files page, one package per PR:
 
-- **JUS-118 — viewport-fit panel.** The browser panel fills the viewport; the toolbar, path bar, selection bar and footer stay fixed and only the entry list (list or grid) scrolls. Implemented with a route `fillViewport` meta + `.page--fill` shell in `AppLayout.vue` and a flex-column card whose `.n-card-content` owns the overflow; `docs/design/files.html` mirrors it.
+- **JUS-118 — viewport-fit panel.** The browser panel fills the viewport; the toolbar, path bar, selection bar and footer stay fixed and only the entry list (list or grid) scrolls. Implemented with a route `fillViewport` meta + `.page--fill` shell in `AppLayout.vue` and a flex-column card whose `.n-card-content` owns the overflow.
 - **JUS-119 — bottom node bar.** The page-top breadcrumb is removed; a bottom bar names the current agent node and switches nodes (same route, param change → the files store resets, so the new node opens at its default root). Non-ready nodes are listed with their status and are not selectable.
 - **JUS-120 — compact toolbar.** `New file`/`New folder` collapse into one `New` dropdown, the bulk tools (Compress, Paste) sit on the right, and on `max-width: 640px` the toolbar buttons drop their labels but keep a `title` + `aria-label`.
 - **JUS-116 — editor window + dock.** The editor opens in a floating window over the panel and collapses into a fixed bottom dock; the dock height is published as `--ed-dock-h` so the fill page reserves room for it and the node bar stays clickable.

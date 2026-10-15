@@ -19,9 +19,7 @@ import { useTeamsStore } from "@/features/teams";
 /**
  * FE-8.1 (3) — notification channels.
  *
- * There is no mockup for this page; the layout follows the established
- * settings/form pattern and the channel cards of
- * docs/design/team-settings.html (which is the notifications reference).
+ * The layout follows the established settings/form pattern.
  * Secrets are write-only: reads show the masked value the API returns, and an
  * update only carries a value the operator actually typed.
  *

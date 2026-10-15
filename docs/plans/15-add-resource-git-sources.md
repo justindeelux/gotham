@@ -27,7 +27,7 @@
 - **GitLab has no manifest flow.** Automatic = OAuth authorization (PKCE) against gitlab.com or a self-hosted URL, with the OAuth application created through the API when the user supplies an admin token once; per-repo webhooks and deploy keys are created automatically on app creation. Document the self-hosted limits in the PR.
 - **Private git** reuses the per-application ed25519 deploy key (`private_keys`) from Phase 4; token-over-HTTPS as the alternative.
 - **Dockerfile / Compose / image** skip the build-pack detect step: Dockerfile = pasted content or repo path; Compose reuses the Services compose runner; image = `image:tag` with optional registry credential and optional digest pinning.
-- **UI** follows `docs/design/applications.html` and the Add-resource mockup (create one under `docs/design/` before GS-1 if missing); brand icons are inline SVG in `shared/` (no CDN), English copy plus `vi.ts` values.
+- **UI** follows the existing Naive UI patterns; brand icons are inline SVG in `shared/` (no CDN), English copy plus `vi.ts` values.
 
 ## Verify (per package)
 `go build ./...`, `go test ./...`, `golangci-lint run`, `go vet`, `npm run build`, `npm run type-check`, rebuilt `webdist` committed. GS-5/GS-6 get fake-provider integration tests; no external network in CI.

@@ -33,7 +33,7 @@ const icon = computed<Component>(() => icons[props.kind]);
 </template>
 
 <style scoped>
-/* Ported from docs/design/assets/gotham-views.css (.fm-mark family). */
+/* File-type marks (.fm-mark family). */
 .fm-mark {
   position: relative;
   width: 28px;

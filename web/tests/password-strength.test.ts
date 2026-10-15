@@ -1,4 +1,4 @@
-// Password strength contract for RegisterPage (follows docs/design/login.html).
+// Password strength contract for RegisterPage.
 import { describe, expect, it } from "vitest";
 
 import {

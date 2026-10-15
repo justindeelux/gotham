@@ -22,7 +22,7 @@ import { useTeamsStore } from "@/features/teams/stores/teams";
 /**
  * FE-8.1 (2) — teams, members and invites.
  *
- * Ported from docs/design/team-settings.html (members + invites panels) onto
+ * Members + invites panels on
  * the established settings page pattern. Every mutation is gated on the
  * caller's role as `GET /v1/teams` reports it, and the backend's protections
  * (last owner, personal team, non-empty team) surface as inline errors

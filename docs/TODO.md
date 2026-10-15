@@ -10,8 +10,7 @@ All phases are complete: 0–9 (roadmap; G0, G1 and G2 passed), 11 UI alignment,
 12 user profile, 13 projects and environments, 14 English/Vietnamese i18n,
 15 add-resource flow and Git sources, 16 instance settings, 17 update settings,
 18 remote file manager (hardening/e2e/docs done; step 9b archives built; optional step 9a chmod deferred).
-The retro review of Phases 0–5 closed 2026-10-03
-([`sub-plans/retro-review-p0-5-register.md`](sub-plans/retro-review-p0-5-register.md)).
+The retro review of Phases 0–5 closed 2026-10-03.
 Releases `v0.1.0` and `v0.1.1` are signed and published; the real `gotham update`
 and the real agent rollout from the GitHub CDN are proven.
 

@@ -42,7 +42,7 @@ import { submitOnEnter } from "@/features/projects/utils/submitOnEnter";
  * Project detail (`/projects/:projectId`, PE-4 Linear JUS-33, shared
  * variables PE-6 Linear JUS-35).
  *
- * Ported from docs/design/project-detail.html: a `Projects / <project>`
+ * A `Projects / <project>`
  * breadcrumb, rename and delete actions, an Environments tab (table with
  * resource counts, open, add, rename, delete) and a Shared variables tab
  * with the precedence hint. Secrets are write-only: stored values are never
@@ -572,7 +572,7 @@ function t(key: string, params?: Record<string, string | number>): string {
 
 /* Environment names link to the environment page (same target as Open):
    the global `a` rule supplies the link color and the :focus-visible
-   outline; the underline on hover matches docs/design .link:hover. */
+   outline; the underline on hover matches the global link style. */
 .env-link:hover {
   text-decoration: underline;
   text-underline-offset: 2px;

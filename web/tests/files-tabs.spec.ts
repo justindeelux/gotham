@@ -243,6 +243,81 @@ test("two tabs keep independent paths and the tab bar is a real tablist", async 
   expect(addBox!.x).toBeGreaterThan(lastTab!.x + lastTab!.width);
 });
 
+test("the whole tablist rides in one bordered group (JUS-152)", async ({
+  page,
+}) => {
+  await openFiles(page);
+
+  // The tabs and the + button share one container that carries the group's
+  // background, border and padding.
+  await expect(page.locator(".fm-tabs > .fm-tabstrip")).toHaveCount(1);
+  await expect(page.locator(".fm-tabs > .fm-tab-add")).toHaveCount(1);
+  const group = await page.locator(".fm-tabs").evaluate((el) => {
+    const style = getComputedStyle(el as HTMLElement);
+    return {
+      background: style.backgroundColor,
+      borderWidth: style.borderTopWidth,
+      padding: style.paddingTop,
+    };
+  });
+  expect(group.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(Number.parseFloat(group.borderWidth)).toBeGreaterThan(0);
+  expect(Number.parseFloat(group.padding)).toBeGreaterThan(0);
+
+  // The strip is now only the scroll region: the group owns the surface, so a
+  // single tab no longer looks like its own detached button.
+  const strip = await page.locator(".fm-tabstrip").evaluate((el) => {
+    const style = getComputedStyle(el as HTMLElement);
+    return { background: style.backgroundColor, borderWidth: style.borderTopWidth };
+  });
+  expect(strip.background).toBe("rgba(0, 0, 0, 0)");
+  expect(Number.parseFloat(strip.borderWidth)).toBe(0);
+});
+
+test("a focused tab draws its whole ring inside the scrolling strip (JUS-152)", async ({
+  page,
+}) => {
+  await openFiles(page);
+
+  // Keyboard focus (not a click) so :focus-visible matches. The arrow presses
+  // are no-ops on a lone tab; they only flag the keyboard modality.
+  await activeTab(page).focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowRight");
+  await expect(activeTab(page)).toBeFocused();
+
+  const ring = await page.locator(".fm-tabstrip").evaluate((strip) => {
+    const tab = strip.querySelector<HTMLElement>(
+      '[role="tab"][aria-selected="true"]',
+    );
+    if (tab === null) return null;
+    const style = getComputedStyle(tab);
+    const width = Number.parseFloat(style.outlineWidth);
+    const offset = Number.parseFloat(style.outlineOffset);
+    const box = tab.getBoundingClientRect();
+    // The strip is the scroll container, so it clips at its own border box.
+    const clip = strip.getBoundingClientRect();
+    return {
+      outline: style.outlineStyle,
+      width,
+      // Positive means the ring reaches past the clip edge (i.e. is cut off).
+      overhang: Math.max(
+        clip.top - (box.top - offset - width),
+        box.bottom + offset + width - clip.bottom,
+        clip.left - (box.left - offset - width),
+        box.right + offset + width - clip.right,
+      ),
+    };
+  });
+
+  expect(ring).not.toBeNull();
+  // The shared ring is present and painted entirely within the strip, so a
+  // focused tab is never left with a clipped (invisible) indicator.
+  expect(ring!.outline).not.toBe("none");
+  expect(ring!.width).toBeGreaterThan(0);
+  expect(ring!.overhang).toBeLessThanOrEqual(0.5);
+});
+
 test("a cut in one tab pastes into another tab (shared clipboard)", async ({
   page,
 }) => {

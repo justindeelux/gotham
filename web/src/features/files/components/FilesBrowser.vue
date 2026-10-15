@@ -179,7 +179,7 @@ const hasSelection = computed<boolean>(() => files.selectedNames.length > 0);
  * and the widest byte label any subset can format to ({@link widestBytesLabel},
  * because formatBytes is non-monotonic across unit boundaries). It is a hidden
  * sizer in the count cell in BOTH selection states, so the cell width is
- * max(reserve, live) no matter what is selected and the toolbar's row count can
+ * max(reserve, live) no matter what is selected and the bar's row height can
  * never depend on the selection (JUS-134/JUS-141).
  */
 const countReserve = computed<string>(
@@ -188,6 +188,38 @@ const countReserve = computed<string>(
       files.entries.reduce((sum, entry) => sum + entry.size, 0),
     )}`,
 );
+
+/**
+ * selectionAnnouncement is the text of the always-mounted polite live region
+ * (JUS-146). The region is in the tree before any selection (empty), so the
+ * first selection is announced — unlike a region that appears with its content.
+ * The text is debounced to the settled count, so a range select over thousands
+ * of rows announces once instead of chattering on every step.
+ */
+const selectionAnnouncement = ref("");
+let selectionAnnounceTimer: ReturnType<typeof setTimeout> | null = null;
+watch(
+  () => files.selectedNames.length,
+  (count) => {
+    if (selectionAnnounceTimer !== null) {
+      clearTimeout(selectionAnnounceTimer);
+    }
+    if (count === 0) {
+      selectionAnnouncement.value = "";
+      return;
+    }
+    selectionAnnounceTimer = setTimeout(() => {
+      selectionAnnouncement.value = String(
+        t("files.browser.selectionCount", { count }),
+      );
+    }, 400);
+  },
+);
+onBeforeUnmount(() => {
+  if (selectionAnnounceTimer !== null) {
+    clearTimeout(selectionAnnounceTimer);
+  }
+});
 
 /** footSummary is the "12 entries · 4 folders · 6 files…" footer line. */
 const footSummary = computed<string>(() => {
@@ -451,7 +483,17 @@ function onCheckboxCapture(event: MouseEvent, entry: FilesEntry): void {
  * (JUS-139), so the row the user clicks still becomes the focused row.
  */
 function onListMouseDown(event: MouseEvent): void {
-  if (event.shiftKey) {
+  // A Shift+press starts a range gesture, not a text selection (JUS-138).
+  // JUS-146: a press outside the header that would move focus OUT of a focused
+  // header control is prevented too — otherwise the press blurs the control to
+  // <body> BEFORE the header→bar swap runs, so the swap's focus hand-off could
+  // never see it. Keeping the focus lets the hand-off move it to the roving row.
+  const pressOutsideHeader =
+    (event.target as Element | null)?.closest(".fm-head") === null;
+  if (
+    event.shiftKey ||
+    (pressOutsideHeader && document.activeElement?.closest(".fm-head") !== null)
+  ) {
     event.preventDefault();
   }
 }
@@ -1458,31 +1500,36 @@ watch(pinnedIndex, (index) => {
   }
 });
 
-// A control inside the bulk-actions bar can hide with the selection (Clear, or
-// the bar collapsing when the last row is unchecked). The bar is hidden with
-// `visibility` — not removed — so Chromium blurs its focused control and focus
-// falls to <body>; hand it to the roving row instead (JUS-140). The pre-flush
-// watcher reads who held focus BEFORE the bar hides; the post-flush one moves
-// it, keeping the JUS-139 one-tab-stop rule (focusEntry targets the roving row).
-let selectionBarHadFocus = false;
+// Either variant of the header row can hide with the selection: the bulk bar
+// when the last row is unchecked (Clear, or the bar collapsing), the column
+// headers when the first row is selected (the bar replaces them). Both are
+// hidden with `visibility` — not removed — so Chromium blurs the focused
+// control and focus falls to <body>; hand it to the roving row instead
+// (JUS-140/146). The pre-flush watcher reads who held focus BEFORE the swap; the
+// post-flush one moves it, keeping the JUS-139 one-tab-stop rule (focusEntry
+// targets the roving row). The leading select-all checkbox lives outside both
+// variants, so focusing it is unaffected.
+let swapHadFocus = false;
 watch(
   hasSelection,
   (active, previous) => {
-    if (previous && !active) {
-      selectionBarHadFocus = Boolean(
-        document.activeElement?.closest(".fm-selection-actions"),
-      );
+    if (previous === active) {
+      return;
     }
+    // The variant about to hide: the column headers when the selection appears,
+    // the bulk bar when it clears.
+    const hiding = active ? ".fm-head-cols" : ".fm-selection-actions";
+    swapHadFocus = Boolean(document.activeElement?.closest(hiding));
   },
   { flush: "pre" },
 );
 watch(
   hasSelection,
   async (active, previous) => {
-    if (!previous || active || !selectionBarHadFocus) {
+    if (previous === active || !swapHadFocus) {
       return;
     }
-    selectionBarHadFocus = false;
+    swapHadFocus = false;
     await nextTick();
     focusEntry(rovingTabName.value);
   },
@@ -1598,8 +1645,16 @@ function onNewMenu(key: string): void {
  */
 const sortMenuOpen = ref(false);
 const isCompactList = useMediaQuery("(max-width: 860px)");
+/**
+ * showSortControl keeps the toolbar sort control reachable whenever the column
+ * headers cannot carry the sort: the compact layout (headers hidden ≤860px),
+ * the grid (no headers at all), and — JUS-146 — the list while the bulk bar
+ * replaces the headers (>860px with a selection). It is mounted in every state
+ * and only hidden with visibility, so its appearance never reflows the toolbar
+ * and the first row never shifts (JUS-130/134).
+ */
 const showSortControl = computed<boolean>(
-  () => isCompactList.value || files.viewMode === "grid",
+  () => isCompactList.value || files.viewMode === "grid" || hasSelection.value,
 );
 
 /** sortColumnLabel maps a sort key to its column header copy. */
@@ -2328,7 +2383,6 @@ function onFolderMenu(key: string): void {
            all, so this keeps every column sortable there and mirrors the active
            column + direction. -->
       <NDropdown
-        v-if="showSortControl"
         v-model:show="sortMenuOpen"
         trigger="click"
         placement="bottom-end"
@@ -2342,6 +2396,8 @@ function onFolderMenu(key: string): void {
         <NButton
           size="small"
           secondary
+          class="fm-sort-toggle"
+          :class="{ 'is-hidden': !showSortControl }"
           aria-haspopup="menu"
           :aria-expanded="sortMenuOpen"
           :title="sortLabel"
@@ -2381,7 +2437,7 @@ function onFolderMenu(key: string): void {
         <FilesSelectionBar
           v-if="files.viewMode === 'grid'"
           :count-reserve="countReserve"
-          @download="downloadSelected()"
+          @download="() => void downloadSelected()"
           @compress="openCompress"
           @remove="openDelete"
           @clear="files.clearSelection()"
@@ -2488,7 +2544,11 @@ function onFolderMenu(key: string): void {
                  bulk control. The leading select-all checkbox stays visible in
                  both states, so select-all/deselect-all stay reachable; the
                  sort buttons (and their aria-sort) come back on Clear. -->
-            <div class="fm-head-cols" :class="{ 'is-hidden': hasSelection }">
+            <div
+              class="fm-head-cols"
+              :class="{ 'is-hidden': hasSelection }"
+              role="presentation"
+            >
               <div class="fm-name" role="columnheader" :aria-sort="ariaSort('name')">
                 <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'name' }" @click="files.setSort('name')">
                   {{ $t("files.browser.columnName") }}
@@ -2535,7 +2595,7 @@ function onFolderMenu(key: string): void {
             >
               <FilesSelectionBar
                 :count-reserve="countReserve"
-                @download="downloadSelected()"
+                @download="() => void downloadSelected()"
                 @compress="openCompress"
                 @remove="openDelete"
                 @clear="files.clearSelection()"
@@ -2836,6 +2896,16 @@ function onFolderMenu(key: string): void {
          single node — never one per row. -->
     <span :id="ROW_DETAILS_ID" class="fm-sr-only">{{ rovingDetails }}</span>
 
+    <!-- JUS-146: the selection count is announced from an always-mounted polite
+         live region (empty until the selection settles), so the first selection
+         is announced and a range select does not chatter. -->
+    <span
+      class="fm-sr-only"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >{{ selectionAnnouncement }}</span>
+
     <div v-if="dragActive" class="fm-drop-overlay" aria-hidden="true">
       <Upload :size="26" :stroke-width="1.6" />
       <span>{{ $t("files.dialogs.uploadDrop") }}</span>
@@ -3070,6 +3140,13 @@ function onFolderMenu(key: string): void {
   margin-left: var(--space-1);
   flex: 0 0 auto;
   white-space: nowrap;
+}
+
+/* JUS-146: the toolbar sort control stays mounted (so its appearance never
+   reflows the toolbar) and is hidden with visibility when the column headers
+   already carry the sort. */
+.fm-sort-toggle.is-hidden {
+  visibility: hidden;
 }
 
 .fm-caret {
@@ -3365,13 +3442,15 @@ function onFolderMenu(key: string): void {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  /* The bar overlaps the column headers (same cells), so while nothing is
-     selected it is transparent and must not intercept their clicks. */
-  pointer-events: none;
+  /* JUS-146: the bar overlaps the column headers (same cells), so while nothing
+     is selected it is hidden with `visibility` — not just transparent — so it is
+     neither clickable nor an extra empty columnheader in the accessibility tree.
+     `visibility` keeps the layout, so the row height never changes. */
+  visibility: hidden;
 }
 
 .fm-head-bulk.is-visible {
-  pointer-events: auto;
+  visibility: visible;
   background: var(--surface);
 }
 

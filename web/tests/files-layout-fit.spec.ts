@@ -477,6 +477,19 @@ async function countCellWidth(page: Page): Promise<number> {
     .evaluate((element) => element.getBoundingClientRect().width);
 }
 
+/**
+ * axColumnHeaders counts the header row's columnheader cells in the
+ * ACCESSIBILITY tree (not the DOM), so a visibility-hidden variant is not
+ * counted — the a11y tree must expose exactly one set of header cells at a time
+ * (JUS-146).
+ */
+async function axColumnHeaders(page: Page): Promise<number> {
+  const snapshot = await page.locator(".fm-head").ariaSnapshot();
+  return snapshot
+    .split("\n")
+    .filter((line) => line.includes("columnheader")).length;
+}
+
 /** assertStableOnSelect measures the count-cell width and first-row y on select
  *  and clear, so a reserve narrower than the live summary (a widened cell that
  *  wraps the toolbar) fails loudly. */
@@ -641,9 +654,12 @@ test("the bulk bar replaces the header row with no reserved band", async ({
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
 
-  // Nothing selected: the column headers show and the bulk bar is inert.
+  // Nothing selected: the column headers show and the bulk bar is hidden (not
+  // merely transparent), so it is not an extra empty columnheader in the a11y
+  // tree — exactly the seven real header cells are exposed.
   await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "visible");
-  await expect(page.locator(".fm-selection-actions")).toHaveCSS("visibility", "hidden");
+  await expect(page.locator(".fm-head-bulk")).toHaveCSS("visibility", "hidden");
+  expect(await axColumnHeaders(page), "one set of header cells (idle)").toBe(7);
   const spacing = await page.evaluate(() => {
     const toolbar = document.querySelector(".fm-toolbar") as HTMLElement;
     const head = document.querySelector(".fm-head") as HTMLElement;
@@ -657,11 +673,14 @@ test("the bulk bar replaces the header row with no reserved band", async ({
   expect(spacing.toolbarHeight, "desktop toolbar is one row").toBeLessThanOrEqual(40);
   expect(spacing.gap, "no blank band above the header").toBeLessThanOrEqual(16);
 
-  // Selected: the column headers hide and the bulk bar takes their place.
+  // Selected: the column headers hide and the bulk bar takes their place — the
+  // a11y tree still exposes exactly one set of header cells (the select-all cell
+  // plus the bar).
   await page.locator(".fm-label").first().click();
   await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "hidden");
-  await expect(page.locator(".fm-selection-actions")).toHaveCSS("visibility", "visible");
+  await expect(page.locator(".fm-head-bulk")).toHaveCSS("visibility", "visible");
   await expect(page.locator(".fm-head-bulk")).toContainText("1 selected");
+  expect(await axColumnHeaders(page), "one set of header cells (selected)").toBe(2);
 
   // The leading select-all checkbox stays reachable while the bar shows; Clear
   // brings the sort buttons (and their aria-sort) back.
@@ -675,6 +694,110 @@ test("the bulk bar replaces the header row with no reserved band", async ({
     "aria-sort",
     "ascending",
   );
+});
+
+// JUS-146: the selection count is announced from an always-mounted polite live
+// region (mounted empty before any selection, updated once the selection
+// settles), so the first selection is announced and a range select does not
+// chatter; the select-all checkbox stays reachable while the bar shows.
+test("the selection count is announced politely while the bar shows", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1876, height: 1080 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+
+  const live = page.locator('[role="status"]');
+  await expect(live).toHaveCount(1);
+  await expect(live).toHaveText("");
+
+  await page.locator(".fm-head .n-checkbox").click();
+  await expect(page.locator(".fm-row.is-selected")).toHaveCount(60);
+  await expect(live).toHaveText("60 selected");
+});
+
+// JUS-146 fix: while the bulk bar replaces the column headers the sort must
+// stay reachable at EVERY width, not only the compact/grid layouts — otherwise a
+// desktop user with a selection cannot re-sort at all. The toolbar sort control
+// (JUS-145) stays mounted (so its appearance never shifts the toolbar) and
+// mirrors the active sort.
+test("sorting stays reachable while the bulk bar replaces the headers", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1876, height: 1080 });
+  await mockApi(page);
+  await installListing(page, [
+    { name: "aaa.txt", kind: "file", size: 300, mode: 0o100644, modified_at: "2026-10-12T09:02:00Z", etag: '"a"' },
+    { name: "bbb.txt", kind: "file", size: 100, mode: 0o100644, modified_at: "2026-10-12T09:02:00Z", etag: '"b"' },
+    { name: "ccc.txt", kind: "file", size: 200, mode: 0o100644, modified_at: "2026-10-12T09:02:00Z", etag: '"c"' },
+  ]);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(3);
+
+  // Nothing selected: the headers carry the sort, so the toolbar control is
+  // hidden (but mounted, so it never reflows the toolbar).
+  await expect(page.locator(".fm-sort-toggle")).toBeHidden();
+
+  await page.locator(".fm-label").first().click();
+  await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "hidden");
+  // The bar replaces the headers; the toolbar sort control is the reachable
+  // affordance and mirrors the active sort.
+  await expect(page.locator(".fm-sort-toggle")).toBeVisible();
+  await expect(page.locator(".fm-sort-toggle")).toHaveAttribute("aria-label", /Name/);
+
+  // It changes the order (click/touch path).
+  await page.locator(".fm-sort-toggle").click();
+  await page.getByRole("menuitem", { name: "Size", exact: true }).click();
+  await expect(page.locator(".fm-sort-toggle")).toHaveAttribute("aria-label", /Size/);
+  await expect(
+    page.locator(".fm-table .fm-row:not(.fm-head)").first().locator("b"),
+  ).toHaveText("bbb.txt");
+
+  // Keyboard path: Enter on the focused control opens its menu.
+  await page.locator(".fm-sort-toggle").focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("menuitem", { name: "Name", exact: true }).click();
+  await expect(
+    page.locator(".fm-table .fm-row:not(.fm-head)").first().locator("b"),
+  ).toHaveText("aaa.txt");
+
+  // Clear returns the headers and their truthful aria-sort.
+  await page
+    .locator(".fm-selection-actions")
+    .getByRole("button", { name: "Clear", exact: true })
+    .click();
+  await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "visible");
+  await expect(page.locator(".fm-head .fm-name[aria-sort]")).toHaveAttribute(
+    "aria-sort",
+    "ascending",
+  );
+});
+
+// JUS-146: the grid has no column-header row, so its bar stays in the toolbar —
+// selecting a tile must not shift the tiles (they open on double-click).
+test("the grid selection bar does not shift the tiles", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await page.getByRole("button", { name: "Grid view" }).click();
+  await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+
+  const firstTileY = (): Promise<number> =>
+    page.evaluate(() =>
+      Math.round(
+        (
+          document.querySelector(".fm-tile-wrap") as HTMLElement
+        ).getBoundingClientRect().y,
+      ),
+    );
+  const before = await firstTileY();
+  await page.locator(".fm-tile-wrap").first().click();
+  await expect(page.locator(".fm-tile.is-selected")).toHaveCount(1);
+  expect(
+    Math.abs((await firstTileY()) - before),
+    "tile shift on select",
+  ).toBeLessThanOrEqual(1);
 });
 
 // JUS-146: with a clipboard AND a selection on a phone, the clipboard hint and

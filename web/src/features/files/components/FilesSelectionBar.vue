@@ -49,7 +49,6 @@ const selection = computed<FilesEntry[]>(() =>
     <span
       class="fm-bulk-count-live"
       :class="{ 'is-hidden': !hasSelection }"
-      aria-live="polite"
     >
       <template v-if="hasSelection">
         {{ t("files.browser.selectionCount", { count: files.selectedNames.length }) }}

@@ -817,6 +817,39 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expectMenuClosed(page, "file-0000.txt");
   });
 
+  test("the header/bar swap never drops focus to <body> (keyboard)", async ({
+    page,
+  }) => {
+    await openFiles(page);
+
+    // Direction 1 (headers → bar): a real Tab reaches the Name sort button;
+    // selecting a row (a right-click does not move focus) then replaces the
+    // headers with the bar. JUS-146 hands the hidden button's focus to the
+    // roving row instead of letting it fall to <body>.
+    await page.locator(".fm-head .n-checkbox").focus();
+    await page.keyboard.press("Tab");
+    await expect(page.locator(".fm-head .fm-sort").first()).toBeFocused();
+    await rowFor(page, "app.yaml").click({ button: "right" });
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+    await expect(page.locator("body")).not.toBeFocused();
+    expect(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest("[data-entry]")),
+      ),
+      "focus lands on the roving row, not <body>",
+    ).toBe(true);
+
+    // Direction 2 (bar → headers): Enter on the focused Clear control hides the
+    // bar and hands focus to the roving row too (JUS-140).
+    const clear = page.getByRole("button", { name: "Clear", exact: true });
+    await clear.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
+    await expect(page.locator("body")).not.toBeFocused();
+    await expect(page.locator('.fm-label[tabindex="0"]')).toBeFocused();
+  });
+
   test("the selection bar hiding never drops focus to <body>", async ({ page }) => {
     await openFiles(page);
     const checkbox = rowFor(page, "app.yaml").locator(".fm-select .n-checkbox");

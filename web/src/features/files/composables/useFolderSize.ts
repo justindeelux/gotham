@@ -99,6 +99,12 @@ export async function requestFolderSize(
     state.truncated = size.truncated;
     state.status = "done";
   } catch (err) {
+    // A superseded request (cancelled then recalculated, or reset) must not
+    // touch the shared state object: its controller is gone from the map, so
+    // the newer request owns the state now.
+    if (controllers.get(key) !== controller) {
+      return;
+    }
     if (isCanceledError(err)) {
       state.status = "idle";
       return;

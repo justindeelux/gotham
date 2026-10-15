@@ -42,6 +42,8 @@ const vi = {
     sizePartialHint: "Kết quả một phần — thư mục có nhiều mục hơn giới hạn duyệt kích thước.",
     sizeFailed: "Thất bại",
     sizeErrorHint: "Không tính được kích thước. Chọn để thử lại.",
+    sizeAnnounceLoading: "Đang tính kích thước của {name}.",
+    sizeAnnounceError: "Không tính được kích thước của {name}: {error}",
     rowDetails: "Quyền {mode}, sửa đổi {modified}",
     fileNeedsRole: "Nội dung tệp yêu cầu vai trò chủ sở hữu hoặc quản trị.",
     columnName: "Tên",

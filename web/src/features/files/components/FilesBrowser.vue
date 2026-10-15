@@ -49,6 +49,7 @@ import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue
 import UploadDialog from "@/features/files/components/UploadDialog.vue";
 import { useCoarseNow } from "@/features/files/composables/useCoarseNow";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
+import { resetFolderSizes } from "@/features/files/composables/useFolderSize";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
@@ -109,8 +110,10 @@ watch(
   () => props.serverId,
   (next) => {
     // A node switch changes the bin's scope; drop any loaded listing first so
-    // the dialog can never show (or act on) the previous node's entries.
+    // the dialog can never show (or act on) the previous node's entries. Cached
+    // folder sizes (and any in-flight walk) belong to the old node too.
     trash.reset();
+    resetFolderSizes();
     void files.init(next);
   },
 );
@@ -127,7 +130,10 @@ watch(
 // The bin is per root: a root switch invalidates the loaded listing.
 watch(
   () => files.rootName,
-  () => trash.reset(),
+  () => {
+    trash.reset();
+    resetFolderSizes();
+  },
 );
 onMounted(() => void files.init(props.serverId));
 
@@ -220,6 +226,10 @@ onBeforeUnmount(() => {
   if (selectionAnnounceTimer !== null) {
     clearTimeout(selectionAnnounceTimer);
   }
+  // Leaving the page aborts any in-flight size walk and drops the cached
+  // results. Done at browser level, never per row: row windowing unmounts cells
+  // that must keep their state.
+  resetFolderSizes();
 });
 
 /** footSummary is the "12 entries · 4 folders · 6 files…" footer line. */

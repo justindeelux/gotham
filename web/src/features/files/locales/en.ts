@@ -43,6 +43,8 @@ const en = {
     sizePartialHint: "Partial result — the folder holds more entries than the size walk cap.",
     sizeFailed: "Failed",
     sizeErrorHint: "Could not calculate the size. Select to retry.",
+    sizeAnnounceLoading: "Calculating the size of {name}.",
+    sizeAnnounceError: "Could not calculate the size of {name}: {error}",
     rowDetails: "Mode {mode}, modified {modified}",
     fileNeedsRole: "Content requires the owner or admin role.",
     columnName: "Name",

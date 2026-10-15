@@ -19,12 +19,20 @@ import { formatBytes } from "@/shared/utils/format";
  * result (with a "partial" marker when the agent stopped at its entry cap), or
  * a retry affordance after a failure. The state lives in `useFolderSize`, keyed
  * by server/root/path, so it survives the list's row windowing.
+ *
+ * The cell stops click/dblclick bubbling: it is not one of the controls
+ * `isRowControl` recognises, so without stopping, clicking Calculate would also
+ * select the row and a double click would open the folder.
  */
 const props = defineProps<{ entry: FilesEntry; path: string }>();
+
+/** nextErrorId gives every instance a stable aria-describedby target id. */
+let nextErrorId = 0;
 
 const { t } = useI18n();
 const files = useFilesStore();
 const teams = useTeamsStore();
+const errorId = `fm-size-error-${(nextErrorId += 1)}`;
 
 const state = computed(() =>
   folderSizeState(files.serverId, files.rootName, props.path),
@@ -42,6 +50,26 @@ const resultLabel = computed(() =>
     : t("files.browser.sizeResultAria", { name: props.entry.name, size: resultText.value }),
 );
 
+/**
+ * announcement feeds the persistent polite live region, so a screen reader
+ * hears the completion or failure without the user hunting for the cell.
+ */
+const announcement = computed<string>(() => {
+  switch (state.value.status) {
+    case "loading":
+      return t("files.browser.sizeAnnounceLoading", { name: props.entry.name });
+    case "done":
+      return resultLabel.value;
+    case "error":
+      return t("files.browser.sizeAnnounceError", {
+        name: props.entry.name,
+        error: state.value.error ?? "",
+      });
+    default:
+      return "";
+  }
+});
+
 function calculate(): void {
   void requestFolderSize(files.serverId, teams.activeTeamId, files.rootName, props.path);
 }
@@ -52,7 +80,7 @@ function cancel(): void {
 </script>
 
 <template>
-  <span class="fm-size">
+  <span class="fm-size" @click.stop @dblclick.stop>
     <template v-if="state.status === 'loading'">
       <NSpin :size="12" aria-hidden="true" />
       <NButton
@@ -66,9 +94,7 @@ function cancel(): void {
       </NButton>
     </template>
     <template v-else-if="state.status === 'done'">
-      <span class="fm-size-value" :aria-label="resultLabel" :title="resultLabel">
-        {{ resultText }}
-      </span>
+      <span class="fm-size-value" :title="resultLabel">{{ resultText }}</span>
       <span v-if="state.truncated" class="fm-size-partial">
         {{ t("files.browser.sizePartial") }}
       </span>
@@ -80,6 +106,7 @@ function cancel(): void {
       class="fm-size-action fm-size-action--error"
       :title="state.error ?? t('files.browser.sizeErrorHint')"
       :aria-label="t('files.browser.sizeRetryAria', { name: entry.name })"
+      :aria-describedby="errorId"
       @click="calculate"
     >
       {{ t("files.browser.sizeFailed") }}
@@ -94,6 +121,12 @@ function cancel(): void {
     >
       {{ t("files.browser.sizeCalculate") }}
     </NButton>
+    <!-- Persistent live region: it exists in every state so a status change is
+         announced (a live region inserted already-full is not). -->
+    <span class="fm-sr-only" role="status" aria-live="polite">{{ announcement }}</span>
+    <span v-if="state.status === 'error' && state.error" :id="errorId" class="fm-sr-only">
+      {{ state.error }}
+    </span>
   </span>
 </template>
 
@@ -129,5 +162,19 @@ function cancel(): void {
 .fm-size-partial {
   color: var(--muted);
   font-style: italic;
+}
+
+/* Clipped out of view but still in the accessibility tree (mirrors the
+   browser's shared .fm-sr-only). */
+.fm-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 </style>

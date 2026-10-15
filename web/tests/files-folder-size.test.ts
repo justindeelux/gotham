@@ -2,6 +2,7 @@
 // composable's idle → loading → done / error / cancel state machine. The axios
 // layer is mocked, so the real api module runs without a DOM or network.
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
 
 vi.mock("@/shared/api/http", () => ({
   http: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -17,6 +18,8 @@ import {
   resetFolderSizes,
 } from "@/features/files/composables/useFolderSize";
 import { filesFolderSizeSchema } from "@/features/files/schemas/files";
+import { useFilesStore } from "@/features/files/stores/files";
+import { useTeamsStore } from "@/features/teams";
 
 const get = http.get as unknown as Mock;
 
@@ -113,5 +116,52 @@ describe("useFolderSize", () => {
     await requestFolderSize("srv", "team", "volumes", "apps");
 
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the new loading state when a walk is cancelled then recalculated", async () => {
+    get.mockImplementationOnce(
+      (_url: string, config: { signal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          config.signal.addEventListener("abort", () => reject(canceledError()));
+        }),
+    );
+
+    const first = requestFolderSize("srv", "team", "volumes", "apps");
+    cancelFolderSize("srv", "volumes", "apps");
+
+    // A fresh walk for the same key starts before the old one settles.
+    get.mockImplementationOnce(() => new Promise(() => {}));
+    void requestFolderSize("srv", "team", "volumes", "apps");
+
+    await first;
+
+    // The stale rejection must not flip the new walk back to idle.
+    expect(folderSizeState("srv", "volumes", "apps").status).toBe("loading");
+  });
+
+  it("clears cached sizes when the listing reloads", async () => {
+    setActivePinia(createPinia());
+    const teams = useTeamsStore();
+    teams.activeTeamId = "team";
+    const store = useFilesStore();
+
+    // init: roots, then the first listing.
+    get.mockResolvedValueOnce({
+      data: { roots: [{ name: "volumes", path: "/v", writable: true, free_bytes: 0 }] },
+    });
+    get.mockResolvedValueOnce({ data: { entries: [], truncated: false, cursor: "" } });
+    await store.init("server-1");
+
+    // Size one folder.
+    get.mockResolvedValueOnce({
+      data: { bytes: 42, entries: 1, skipped: 0, truncated: false },
+    });
+    await requestFolderSize("server-1", "team", "volumes", "apps");
+    expect(folderSizeState("server-1", "volumes", "apps").status).toBe("done");
+
+    // A refresh reloads the listing and must drop the cached size.
+    get.mockResolvedValueOnce({ data: { entries: [], truncated: false, cursor: "" } });
+    await store.refresh();
+    expect(folderSizeState("server-1", "volumes", "apps").status).toBe("idle");
   });
 });

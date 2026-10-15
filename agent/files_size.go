@@ -18,6 +18,12 @@ import (
 // instead of walking unbounded. It is a variable so a test can lower it.
 var fileSizeMaxEntries int64 = 100_000
 
+// fileSizeMaxConcurrent bounds how many DirectorySize walks run at once. A walk
+// is up to the entry cap's worth of lstats, so a burst is throttled and the
+// excess answers 429 (ResourceExhausted). It is a variable so a test can prove
+// the bound.
+var fileSizeMaxConcurrent = 4
+
 // errSizeLimit stops the walk once the entry cap is reached; DirectorySize
 // turns it into a truncated (partial) response.
 var errSizeLimit = errors.New("file size: entry cap reached")
@@ -27,7 +33,11 @@ var errSizeLimit = errors.New("file size: entry cap reached")
 // file is counted in skipped and never followed, and the walk never leaves the
 // root (fsroot). It stops at fileSizeMaxEntries or fileArchiveDepth and returns
 // the accumulated bytes with truncated=true, so a capped walk is a clear
-// partial result, never a silent full one.
+// partial result, never a silent full one. Concurrent walks are bounded
+// (fileSizeMaxConcurrent): the excess answers ResourceExhausted (429).
+//
+// bytes is the apparent size summed per name: a hard-linked file is counted
+// once per link, not once per inode, so it can exceed `du`'s shared-inode total.
 func (s *FileServer) DirectorySize(ctx context.Context, req *agentv1.DirectorySizeRequest) (*agentv1.DirectorySizeResponse, error) {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -47,6 +57,11 @@ func (s *FileServer) DirectorySize(ctx context.Context, req *agentv1.DirectorySi
 	if entry.Kind != fsroot.KindDirectory {
 		return nil, status.Errorf(codes.InvalidArgument, "size: %q is not a directory", req.GetPath())
 	}
+	release, err := s.beginSizeWalk()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	walk := &dirSizeWalk{root: root, maxEntries: fileSizeMaxEntries}
 	err = walk.walk(ctx, rel, 0)
@@ -59,6 +74,18 @@ func (s *FileServer) DirectorySize(ctx context.Context, req *agentv1.DirectorySi
 		Skipped:   walk.skipped,
 		Truncated: walk.truncated,
 	}, nil
+}
+
+// beginSizeWalk takes one of the size-walk slots, or reports the node busy
+// (ResourceExhausted, which the control plane maps to 429) when every slot is
+// in use.
+func (s *FileServer) beginSizeWalk() (func(), error) {
+	select {
+	case s.sizeWalks <- struct{}{}:
+		return func() { <-s.sizeWalks }, nil
+	default:
+		return nil, status.Error(codes.ResourceExhausted, "size: too many concurrent size walks")
+	}
 }
 
 // dirSizeWalk accumulates one DirectorySize walk's totals.

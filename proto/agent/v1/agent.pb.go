@@ -668,9 +668,11 @@ func (x *DirectorySizeRequest) GetPath() string {
 }
 
 // DirectorySizeResponse is one folder's recursive size. bytes sums regular-file
-// sizes (lstat, not disk blocks); symlinks and special files are counted in
-// skipped and never followed; truncated reports a partial result the walk
-// stopped at the entry or depth cap with.
+// sizes (lstat, not disk blocks) per name, so a hard-linked file is counted once
+// per link rather than once per inode (it may differ from `du`); entries counts
+// every name visited; symlinks and special files are counted in skipped and
+// never followed; truncated reports a partial result the walk stopped at the
+// entry or depth cap with.
 type DirectorySizeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Bytes         int64                  `protobuf:"varint,1,opt,name=bytes,proto3" json:"bytes,omitempty"`

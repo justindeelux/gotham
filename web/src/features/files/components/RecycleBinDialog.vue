@@ -162,7 +162,6 @@ async function empty(): Promise<void> {
       <div class="trash-table" role="table">
         <div class="trash-row trash-head" role="row">
           <div role="columnheader">{{ t("files.trash.columnName") }}</div>
-          <div role="columnheader">{{ t("files.trash.columnOriginal") }}</div>
           <div role="columnheader">{{ t("files.trash.columnDeleted") }}</div>
           <div role="columnheader" class="trash-size">{{ t("files.trash.columnSize") }}</div>
           <div role="columnheader">{{ t("files.trash.columnKind") }}</div>
@@ -172,9 +171,6 @@ async function empty(): Promise<void> {
         <div v-for="entry in trash.entries" :key="entry.id" class="trash-row" role="row">
           <div role="cell" class="trash-name mono">
             <b :title="entry.name">{{ entry.name }}</b>
-          </div>
-          <div role="cell" class="mono trash-path" :title="entry.original_path">
-            {{ entry.original_path }}
           </div>
           <div role="cell" class="trash-when">{{ formatTimestamp(entry.deleted_at) }}</div>
           <div role="cell" class="trash-size">{{ formatBytes(entry.size) }}</div>
@@ -298,7 +294,7 @@ async function empty(): Promise<void> {
 
 .trash-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1.2fr) minmax(160px, 2fr) 130px 84px 80px 160px;
+  grid-template-columns: minmax(160px, 2fr) 130px 84px 80px 160px;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
@@ -321,17 +317,11 @@ async function empty(): Promise<void> {
   color: var(--muted);
 }
 
-.trash-name b,
-.trash-path {
+.trash-name b {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   display: block;
-}
-
-.trash-path {
-  color: var(--muted);
-  font-size: var(--text-xs);
 }
 
 .trash-when,

@@ -566,7 +566,8 @@ test.describe("files recycle bin", () => {
     const dialog = page.locator(".n-modal").filter({ hasText: "Recycle bin" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTitle("old.txt", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("srv/old.txt")).toBeVisible();
+    // JUS-155: the bin no longer shows the entry's original path.
+    await expect(dialog.getByText("srv/old.txt")).toHaveCount(0);
 
     await dialog.getByRole("button", { name: "Restore old.txt" }).click();
     await expect.poll(() => restoreBodies.length).toBe(1);

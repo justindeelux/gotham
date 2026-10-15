@@ -192,7 +192,6 @@ const en = {
     hint: "Entries deleted from this root land here until they are restored or permanently deleted.",
     writeHint: "Restoring and permanently deleting require the owner or admin role on a writable root.",
     columnName: "Name",
-    columnOriginal: "Original path",
     columnDeleted: "Deleted",
     columnSize: "Size",
     columnKind: "Type",

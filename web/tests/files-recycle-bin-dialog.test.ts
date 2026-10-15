@@ -130,7 +130,8 @@ describe("recycle bin dialog", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("app.yaml");
-    expect(wrapper.text()).toContain("storefront-8f2c1ab/app.yaml");
+    // JUS-155: the origin path column is gone.
+    expect(wrapper.text()).not.toContain("storefront-8f2c1ab/app.yaml");
     expect(wrapper.text()).toContain("more entries than shown");
     expect(buttonWith(wrapper, "Restore")).toBeDefined();
     expect(buttonWith(wrapper, "Empty bin")).toBeDefined();

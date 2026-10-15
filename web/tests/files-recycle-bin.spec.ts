@@ -11,8 +11,9 @@ import type { Page } from "@playwright/test";
 // JUS-122 recycle-bin proof: the committed webdist is served statically with
 // the control-plane file API mocked in real Chromium. Measured claims:
 //   - the toolbar's Recycle bin button opens the bin dialog for the root.
-//   - the dialog lists entries (name, original path, size, kind) and says so
+//   - the dialog lists entries (name, size, kind, deleted-at) and says so
 //     when the listing is truncated, offering Restore / Delete / Empty bin.
+//     JUS-155: the entry's original path is no longer shown.
 //   - an empty bin shows the empty state, and the folder-level context menu
 //     also opens the bin.
 
@@ -191,12 +192,12 @@ test("the toolbar opens the recycle bin with entries and a truncation note", asy
 
   const dialog = page.locator(".n-modal.app-modal");
   await expect(dialog).toBeVisible();
-  // Column headers and the entry's name + recorded original path.
-  await expect(dialog.getByText("Original path")).toBeVisible();
+  // Column headers and the entry's name; the origin path is not shown (JUS-155).
+  await expect(dialog.getByText("Original path")).toHaveCount(0);
   await expect(dialog.getByRole("cell", { name: "app.yaml", exact: true })).toBeVisible();
   await expect(
     dialog.getByRole("cell", { name: "storefront-8f2c1ab/app.yaml" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   // The node's cap is stated, never hidden.
   await expect(dialog.getByText(/more entries than shown/)).toBeVisible();
   // Row actions and the bin-wide Empty action.

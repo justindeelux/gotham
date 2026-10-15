@@ -23,7 +23,8 @@ type syncRequest struct {
 
 // syncResponse reports the per-node outcome of a sync run.
 type syncResponse struct {
-	Results []syncResult `json:"results"`
+	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
+	Results     []syncResult `json:"results"`
 }
 
 // syncResult is one node's outcome on the wire. Diagnostics carry the
@@ -142,11 +143,15 @@ func (h *handler) sync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results, err := h.svc.SyncAll(r.Context())
-	if err != nil {
+	var partial *PartialError
+	if err != nil && !errors.As(err, &partial) {
 		h.writeServerError(w, "sync", err)
 		return
 	}
 	response := syncResponse{Results: make([]syncResult, 0, len(results))}
+	if partial != nil {
+		response.Diagnostics = partial.Diagnostics
+	}
 	failed := false
 	for _, result := range results {
 		entry := syncResult{

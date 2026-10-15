@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -122,6 +124,10 @@ func (e *PartialError) Error() string {
 		if diagnostic.Kind == "service" {
 			owner = "service"
 		}
+		if diagnostic.Kind == string(RouterKindControlPlane) {
+			parts = append(parts, "control plane ("+reason+")")
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%s %s (%s)", owner, diagnostic.ApplicationID, reason))
 	}
 	return ErrPartialSync.Error() + ": " + strings.Join(parts, "; ")
@@ -134,6 +140,10 @@ func (e *PartialError) Is(target error) bool { return target == ErrPartialSync }
 // Containers are required inputs; Dial may be nil until the mTLS dialer is
 // plugged in, and every tunable falls back to a documented default.
 type Config struct {
+	// ControlPlaneURL resolves the effective instance URL; nil disables the panel route.
+	ControlPlaneURL func(context.Context) (string, error)
+	// ServerPort is the effective HTTP listener port, reached through BackendHost.
+	ServerPort int
 	// Store is the PostgreSQL-backed routing input and server registry.
 	// Ignored when Applications/Nodes/History are set explicitly.
 	Store *store.Store
@@ -257,23 +267,25 @@ func (c Config) history() HistoryStore {
 // byte-identical files and the agent's atomic writes leave the running
 // configuration in place.
 type SyncService struct {
-	source      ApplicationSource
-	services    ServiceSource
-	redirects   RedirectSource
-	nodes       NodeSource
-	history     HistoryStore
-	providers   DNSProviderSource
-	containers  containers.ContainerService
-	dial        DialFunc
-	logger      *slog.Logger
-	format      Format
-	backendHost string
-	configDir   string
-	acmeDir     string
-	secret      string
-	acmeEmail   string
-	caServer    string
-	timeout     time.Duration
+	controlPlaneURL func(context.Context) (string, error)
+	serverPort      int
+	source          ApplicationSource
+	services        ServiceSource
+	redirects       RedirectSource
+	nodes           NodeSource
+	history         HistoryStore
+	providers       DNSProviderSource
+	containers      containers.ContainerService
+	dial            DialFunc
+	logger          *slog.Logger
+	format          Format
+	backendHost     string
+	configDir       string
+	acmeDir         string
+	secret          string
+	acmeEmail       string
+	caServer        string
+	timeout         time.Duration
 
 	// mu serializes one node's snapshot read through bootstrap and write, so
 	// a delayed older snapshot can never overwrite a newer one and two first
@@ -311,23 +323,25 @@ func NewService(cfg Config) *SyncService {
 		acmeDir = TraefikAcmeDir
 	}
 	return &SyncService{
-		source:      cfg.source(),
-		services:    cfg.services(),
-		redirects:   cfg.redirects(),
-		nodes:       cfg.nodes(),
-		history:     cfg.history(),
-		providers:   cfg.providers(),
-		containers:  cfg.Containers,
-		dial:        cfg.Dial,
-		logger:      logger,
-		format:      cfg.Format,
-		backendHost: backendHost,
-		configDir:   configDir,
-		acmeDir:     acmeDir,
-		secret:      cfg.Secret,
-		acmeEmail:   cfg.ACMEEmail,
-		caServer:    cfg.CAServer,
-		timeout:     timeout,
+		controlPlaneURL: cfg.ControlPlaneURL,
+		serverPort:      cfg.ServerPort,
+		source:          cfg.source(),
+		services:        cfg.services(),
+		redirects:       cfg.redirects(),
+		nodes:           cfg.nodes(),
+		history:         cfg.history(),
+		providers:       cfg.providers(),
+		containers:      cfg.Containers,
+		dial:            cfg.Dial,
+		logger:          logger,
+		format:          cfg.Format,
+		backendHost:     backendHost,
+		configDir:       configDir,
+		acmeDir:         acmeDir,
+		secret:          cfg.Secret,
+		acmeEmail:       cfg.ACMEEmail,
+		caServer:        cfg.CAServer,
+		timeout:         timeout,
 	}
 }
 
@@ -390,16 +404,7 @@ func (s *SyncService) SyncServer(ctx context.Context, serverID uuid.UUID) error 
 		return fmt.Errorf("proxy: list dns providers: %w", err)
 	}
 	access := s.openProviders(providers)
-	routes, diagnostics := routesForServer(apps, serverID, s.backendHost, nodeList, access)
-	serviceRoutes, serviceDiagnostics, serviceHosts := serviceRoutesForServer(
-		proxiedServices, serverID, s.backendHost, nodeList, applicationHosts(apps, serverID))
-	routes = append(routes, serviceRoutes...)
-	diagnostics = append(diagnostics, serviceDiagnostics...)
-	// Redirect sources must never shadow a compose service host either, so
-	// the declared service hosts join the application domains the redirect
-	// generator already protects.
-	redirects, redirectDiagnostics := redirectsForServer(apps, rules, serverID, serviceHosts...)
-	diagnostics = append(diagnostics, redirectDiagnostics...)
+	routes, redirects, diagnostics, _ := s.gatherRoutes(ctx, apps, proxiedServices, rules, serverID, nodeList, access)
 	files, err := Generate(BuildConfig(routes, redirects, providers, s.acmeEmail, s.caServer), s.format)
 	if err != nil {
 		return err
@@ -570,7 +575,110 @@ func (s *SyncService) SyncAll(ctx context.Context) ([]SyncResult, error) {
 		}
 		results = append(results, result)
 	}
+	_, diagnostics := s.controlPlaneRoute(ctx, apps, uuid.Nil, nil, nil)
+	if len(diagnostics) > 0 {
+		return results, &PartialError{Diagnostics: diagnostics}
+	}
 	return results, nil
+}
+
+// gatherRoutes is shared by sync and router listing so both expose identical state.
+func (s *SyncService) gatherRoutes(ctx context.Context, apps []ProxiedApplication, services []ProxiedService, rules []RedirectRule, serverID uuid.UUID, nodeList []containers.Container, access map[uuid.UUID]providerAccess) ([]Route, []Redirect, []Diagnostic, int) {
+	routes, diagnostics := routesForServer(apps, serverID, s.backendHost, nodeList, access)
+	appCount := len(routes)
+	claimed := applicationHosts(apps, serverID)
+	serviceRoutes, serviceDiagnostics, serviceHosts := serviceRoutesForServer(services, serverID, s.backendHost, nodeList, claimed)
+	routes = append(routes, serviceRoutes...)
+	diagnostics = append(diagnostics, serviceDiagnostics...)
+	redirects, redirectDiagnostics := redirectsForServer(apps, rules, serverID, serviceHosts...)
+	diagnostics = append(diagnostics, redirectDiagnostics...)
+	for _, host := range serviceHosts {
+		claimed[host] = true
+	}
+	for _, redirect := range redirects {
+		claimed[redirect.Source] = true
+	}
+	panel, panelDiagnostics := s.controlPlaneRoute(ctx, apps, serverID, claimed, access)
+	routes = append(routes, panel...)
+	diagnostics = append(diagnostics, panelDiagnostics...)
+	return routes, redirects, diagnostics, appCount
+}
+
+// controlPlaneRoute keeps a malformed panel setting from blocking healthy node routes.
+func (s *SyncService) controlPlaneRoute(ctx context.Context, apps []ProxiedApplication, serverID uuid.UUID, claimed map[string]bool, access map[uuid.UUID]providerAccess) ([]Route, []Diagnostic) {
+	if s.controlPlaneURL == nil {
+		return nil, nil
+	}
+	diagnostic := Diagnostic{Kind: string(RouterKindControlPlane)}
+	fail := func(reason string) ([]Route, []Diagnostic) {
+		diagnostic.Reason = reason
+		s.logger.Warn("proxy: control-plane route skipped", "reason", reason, "domain", diagnostic.Domain)
+		return nil, []Diagnostic{diagnostic}
+	}
+	localhost := uuid.Nil
+	nodeReason := "localhost node is not registered"
+	if named, ok := s.nodes.(namedNodeSource); ok {
+		nodes, err := named.ListNamedNodes(ctx)
+		if err != nil {
+			nodeReason = "cannot find localhost node: " + err.Error()
+		} else {
+			for _, node := range nodes {
+				if node.Name == "localhost" {
+					localhost = node.ID
+					break
+				}
+			}
+		}
+	}
+	// A nil server ID reports unowned settings problems once at the global level.
+	if serverID != localhost {
+		return nil, nil
+	}
+	raw, err := s.controlPlaneURL(ctx)
+	if err != nil {
+		return fail("cannot read control_plane_url: " + err.Error())
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	if localhost == uuid.Nil {
+		return fail(nodeReason)
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fail("control_plane_url must be an http(s) URL without credentials, query or fragment")
+	}
+	domain := NormalizeDomain(u.Hostname())
+	diagnostic.Domain = domain
+	if err := ValidateDomain(domain); err != nil {
+		return fail("invalid control_plane_url host: " + err.Error())
+	}
+	if claimed[domain] {
+		return fail("control_plane_url host is already claimed by an application, service or redirect on this node")
+	}
+	if s.serverPort < 1 || s.serverPort > 65535 {
+		return fail("invalid control-plane HTTP listener port")
+	}
+	// Reuse matching stored intents, without retargeting an unrelated certificate.
+	certApp := ProxiedApplication{}
+	for _, app := range apps {
+		intents := app.Certificates
+		if intents == nil && app.Certificate != nil {
+			intents = []*CertificateIntent{app.Certificate}
+		}
+		for _, intent := range intents {
+			if intent != nil && (intent.Domain == domain || (intent.Wildcard && wildcardCovers(intent, domain, access))) {
+				certApp.Certificates = append(certApp.Certificates, intent)
+			}
+		}
+	}
+	certificate, reason := resolveRouteCertificate(certApp, domain, access)
+	var diagnostics []Diagnostic
+	if reason != "" {
+		diagnostic.Reason = reason
+		diagnostics = append(diagnostics, diagnostic)
+	}
+	return []Route{{Name: "panel", Domain: domain, Target: "http://" + net.JoinHostPort(s.backendHost, strconv.Itoa(s.serverPort)), Certificate: certificate}}, diagnostics
 }
 
 // listServices lists the compose service routing input. A nil source leaves

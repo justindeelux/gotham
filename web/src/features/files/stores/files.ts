@@ -808,12 +808,13 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
-   * refresh reloads the active tab's directory. It ends any active search first
-   * — a refresh supersedes the search (and aborts its walk), so the freshly
-   * loaded listing is not left hidden behind stale results.
+   * refresh reloads the active tab's directory. It ends any active server search
+   * first — a refresh supersedes the search (and aborts its walk), so the freshly
+   * loaded listing is not left hidden behind stale results. The filter/search
+   * text is kept: a refresh re-runs against whatever the user typed.
    */
   async function refresh(): Promise<void> {
-    clearSearch();
+    resetSearch(activeTab.value);
     await loadEntries();
   }
 
@@ -1512,21 +1513,27 @@ export const useFilesStore = defineStore("files", () => {
     tab.searchLoading = false;
   }
 
-  /** clearSearch ends a server search and empties its results on the tab. */
+  /**
+   * clearSearch ends a server search and empties its results on the tab, and
+   * empties the nav input the query was typed into. It is the "Clear search"
+   * action and the navigation reset; the "Include subdirectories" switch is left
+   * untouched so only the text is cleared (JUS-163 round 3).
+   */
   function clearSearch(): void {
-    resetSearch(activeTab.value);
+    const tab = activeTab.value;
+    resetSearch(tab);
+    tab.query = "";
   }
 
   /**
-   * setRecursive flips the "Include subdirectories" switch. Turning it off ends
-   * any server search and restores the folder filter; turning it on drops the
-   * filter text so the plain listing shows until a search runs.
+   * setRecursive flips the "Include subdirectories" switch. Either way it ends
+   * any server search and empties the input (clearSearch), so the plain listing
+   * shows until a new query is typed or submitted.
    */
   function setRecursive(next: boolean): void {
     const tab = activeTab.value;
     tab.recursive = next;
     clearSearch();
-    tab.query = "";
     tab.anchor = null;
   }
 
@@ -1538,8 +1545,11 @@ export const useFilesStore = defineStore("files", () => {
   async function runSearch(): Promise<void> {
     const tab = activeTab.value;
     const submitted = tab.query.trim();
+    // The switch off means the input is the client-side filter: submitting ends
+    // any stale server search but keeps the typed text. A blank query or a
+    // missing server/root has nothing to search either.
     if (!tab.recursive || !serverId.value || tab.rootName === "" || submitted === "") {
-      clearSearch();
+      resetSearch(tab);
       return;
     }
     // The search owns its own generation and its own request, so a Refresh or a

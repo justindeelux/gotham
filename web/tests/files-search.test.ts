@@ -136,7 +136,7 @@ describe("files search", () => {
     expect(store.searchLoading).toBe(false);
   });
 
-  it("clears the search and its results", async () => {
+  it("clears the search, its results and the input text", async () => {
     const store = await seedStore();
     store.setRecursive(true);
     store.setQuery("conf");
@@ -145,11 +145,16 @@ describe("files search", () => {
       truncated: false,
     });
     await store.runSearch();
+    expect(store.query).toBe("conf");
     store.clearSearch();
     expect(store.searchActive).toBe(false);
     expect(store.searchResults).toEqual([]);
     expect(store.searchQuery).toBe("");
     expect(store.searchTruncated).toBe(false);
+    // The Clear action also empties the nav input, but the Include-subdirectories
+    // switch keeps its state (JUS-163 round 3).
+    expect(store.query).toBe("");
+    expect(store.recursive).toBe(true);
   });
 
   it("ignores a blank query", async () => {

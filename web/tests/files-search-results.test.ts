@@ -118,7 +118,7 @@ describe("files search results", () => {
     expect(wrapper.find(".fm-search-truncated").exists()).toBe(true);
   });
 
-  it("emits the hit on a row click and clear on the Clear button", async () => {
+  it("single click only selects a row, it never opens it", async () => {
     const target = hit("app/config.yaml", "config.yaml");
     const wrapper = mountResults({
       results: [target],
@@ -127,9 +127,55 @@ describe("files search results", () => {
       query: "config",
       path: "",
     });
-    await wrapper.find(".fm-search-row").trigger("click");
-    expect(wrapper.emitted("open")?.[0]).toEqual([target]);
+    const row = wrapper.find(".fm-search-row");
+    await row.trigger("click");
+    expect(wrapper.emitted("open")).toBeUndefined();
+    expect(row.classes()).toContain("is-selected");
+  });
 
+  it("double click opens the hit exactly once", async () => {
+    const target = hit("app/config.yaml", "config.yaml");
+    const wrapper = mountResults({
+      results: [target],
+      truncated: false,
+      loading: false,
+      query: "config",
+      path: "",
+    });
+    const row = wrapper.find(".fm-search-row");
+    // A real double-click is two clicks and then a dblclick. Only the dblclick
+    // opens, so the second click can never land on a new listing (JUS-163 round 3).
+    await row.trigger("click");
+    await row.trigger("click");
+    await row.trigger("dblclick");
+    const opens = wrapper.emitted("open");
+    expect(opens).toHaveLength(1);
+    expect(opens?.[0]).toEqual([target]);
+  });
+
+  it("Enter and Space open the focused row", async () => {
+    const target = hit("app/config.yaml", "config.yaml");
+    const wrapper = mountResults({
+      results: [target],
+      truncated: false,
+      loading: false,
+      query: "config",
+      path: "",
+    });
+    const row = wrapper.find(".fm-search-row");
+    await row.trigger("keydown", { key: "Enter" });
+    await row.trigger("keydown", { key: " " });
+    expect(wrapper.emitted("open")).toEqual([[target], [target]]);
+  });
+
+  it("emits clear on the Clear button", async () => {
+    const wrapper = mountResults({
+      results: [hit("app/config.yaml", "config.yaml")],
+      truncated: false,
+      loading: false,
+      query: "config",
+      path: "",
+    });
     const clear = wrapper
       .findAll("button")
       .find((button) => button.text().includes("Clear search"));

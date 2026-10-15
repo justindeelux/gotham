@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Search, X } from "@lucide/vue";
 import { NButton } from "naive-ui";
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
@@ -33,6 +33,24 @@ function folderOf(hit: FilesSearchHit): string {
 }
 
 const scope = computed<string>(() => props.path || "/");
+
+/**
+ * selectedPath is the row a single click (or focus) left active. Like the normal
+ * list, a single click only selects — it never opens — so a real double-click
+ * cannot fire its second click on the listing the first click navigated to
+ * (JUS-163 round 3). Opening is the double-click or Enter/Space.
+ */
+const selectedPath = ref<string | null>(null);
+
+/** selectHit marks one row as the current one without opening it. */
+function selectHit(hit: FilesSearchHit): void {
+  selectedPath.value = hit.path;
+}
+
+/** openHit opens one hit's location (double-click / Enter / Space). */
+function openHit(hit: FilesSearchHit): void {
+  emit("open", hit);
+}
 
 const { t } = useI18n();
 
@@ -105,7 +123,16 @@ const liveMessage = computed<string>(() => {
 
     <ul v-else class="fm-search-list" role="list">
       <li v-for="hit in results" :key="hit.path" role="listitem">
-        <button type="button" class="fm-search-row" @click="emit('open', hit)">
+        <button
+          type="button"
+          class="fm-search-row"
+          :class="{ 'is-selected': selectedPath === hit.path }"
+          :aria-current="selectedPath === hit.path ? 'true' : undefined"
+          @click="selectHit(hit)"
+          @dblclick="openHit(hit)"
+          @keydown.enter.prevent="openHit(hit)"
+          @keydown.space.prevent="openHit(hit)"
+        >
           <FileTypeIcon :kind="entryIconKind(hit.entry)" />
           <span class="fm-search-name">{{ hit.entry.name }}</span>
           <span class="fm-search-folder">
@@ -223,6 +250,11 @@ const liveMessage = computed<string>(() => {
 
 .fm-search-row:hover {
   background: var(--hover-row);
+}
+
+.fm-search-row.is-selected {
+  background: var(--selected-row);
+  color: var(--fg-2);
 }
 
 /* The shared ring is outward and would be clipped by the list's edge; keep it

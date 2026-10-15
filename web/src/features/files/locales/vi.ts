@@ -24,6 +24,7 @@ const vi = {
     filter: "Lọc thư mục này…",
     refresh: "Tải lại",
     parent: "Lên thư mục cha",
+    crumbs: "Đường dẫn",
     selectAll: "Chọn tất cả mục",
     selectEntry: "Chọn {name}",
     openFolder: "Mở {name}",

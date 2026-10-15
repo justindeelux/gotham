@@ -2226,6 +2226,8 @@ function onFolderMenu(key: string): void {
 <template>
   <NCard
     class="files-browser"
+    role="region"
+    :aria-label="$t('files.browser.heading')"
     :class="{ 'is-dragging': dragActive }"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
@@ -2346,7 +2348,7 @@ function onFolderMenu(key: string): void {
             <ArrowUp :size="14" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </AppTooltip>
-        <nav class="fm-path fm-navcrumbs" :aria-label="$t('files.browser.parent')">
+        <nav class="fm-path fm-navcrumbs" :aria-label="$t('files.browser.crumbs')">
           <template v-for="(crumb, index) in files.breadcrumb" :key="crumb.path">
             <span v-if="index > 0" class="sep" aria-hidden="true">/</span>
             <button
@@ -2362,7 +2364,14 @@ function onFolderMenu(key: string): void {
           </template>
         </nav>
         <AppTooltip :label="$t('files.browser.refresh')">
-          <NButton size="small" quaternary class="fm-navrefresh" :loading="files.loading" :aria-label="$t('files.browser.refresh')" @click="files.refresh()">
+          <NButton
+            size="small"
+            quaternary
+            class="fm-navrefresh"
+            :loading="files.loading"
+            :aria-label="$t('files.browser.refresh')"
+            @click="files.refresh()"
+          >
             <template #icon>
               <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
             </template>
@@ -3118,27 +3127,6 @@ function onFolderMenu(key: string): void {
   border-bottom: 1px solid var(--border);
 }
 
-.fm-card-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
-.fm-card-title {
-  margin: 0;
-  font-size: var(--text-lg);
-  color: var(--fg-2);
-}
-
-.fm-card-tools {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
 /* JUS-154: the header slot renders inside Naive's `.n-card-header`, whose
  * `.n-card-header__main` sets the card-title size (18px). The captions had no
  * `.small` rule of their own, so they inherited that 18px; this scoped rule
@@ -3420,7 +3408,7 @@ function onFolderMenu(key: string): void {
   display: inline-flex;
   align-items: center;
   flex: 0 0 auto;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   border: 0;
   border-right: 1px solid var(--border);
   background: none;
@@ -3445,8 +3433,8 @@ function onFolderMenu(key: string): void {
   justify-content: flex-end;
   overflow: hidden;
   border: 0;
-  padding: 2px var(--space-2);
-  min-height: 32px;
+  /* Vertical rhythm comes from the `.fm-path` base; only widen the sides. */
+  padding-inline: var(--space-2);
 }
 
 .fm-navcrumbs .fm-crumb {
@@ -4162,21 +4150,6 @@ function onFolderMenu(key: string): void {
 
   .files-browser :deep(.n-card-content) {
     padding: 0 var(--space-3) var(--space-2);
-  }
-
-  .fm-card-head {
-    gap: var(--space-2);
-  }
-
-  /* JUS-135: the card heading is redundant on a phone (the page/environment
-     already name the view) and keeping it forces the node/root/view controls
-     onto a second row. */
-  .fm-card-title {
-    display: none;
-  }
-
-  .fm-card-tools {
-    gap: var(--space-2);
   }
 
   /* The "Root" caption is redundant at this width: the control keeps its

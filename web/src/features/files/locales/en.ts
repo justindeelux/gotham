@@ -25,6 +25,7 @@ const en = {
     filter: "Filter this folder…",
     refresh: "Refresh",
     parent: "Go to parent folder",
+    crumbs: "Breadcrumb",
     selectAll: "Select all entries",
     selectEntry: "Select {name}",
     openFolder: "Open {name}",

@@ -293,7 +293,7 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   // JUS-154: the header field captions ("Agent node" / "Root") are 12px
   // (--text-xs). They used to keep Naive's 18px card-title size because the
   // `.small` class had no rule in either component's scoped styles.
-  const captions = page.locator(".fm-card-tools .fm-field-label");
+  const captions = page.locator(".fm-contextbar .fm-field-label");
   await expect(captions).toHaveCount(2);
   const captionSizes = await captions.evaluateAll((elements) =>
     elements.map((element) => getComputedStyle(element).fontSize),

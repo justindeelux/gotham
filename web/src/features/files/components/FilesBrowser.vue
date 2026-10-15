@@ -2231,51 +2231,47 @@ function onFolderMenu(key: string): void {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <template #header>
-      <div class="fm-card-head">
-        <h3 class="fm-card-title">{{ $t("files.browser.heading") }}</h3>
-        <div class="fm-card-tools">
-          <!-- JUS-134: the agent-node selector (which decides the whole
-               listing) lives next to the Root selector instead of a bar at
-               the page bottom. -->
-          <slot name="header-tools" />
-          <span class="small muted fm-field-label">{{ $t("files.browser.rootLabel") }}</span>
-          <NSelect
-            v-model:value="selectedRoot"
-            class="fm-root-select"
-            size="small"
-            :options="rootOptions"
-            :aria-label="$t('files.browser.rootLabel')"
-          />
-          <span class="segmented" role="group">
-            <AppTooltip :label="$t('files.browser.viewList')">
-              <button
-                type="button"
-                class="seg-btn"
-                :class="{ 'is-active': files.viewMode === 'list' }"
-                :aria-label="$t('files.browser.viewList')"
-                :aria-pressed="files.viewMode === 'list'"
-                @click="files.setViewMode('list')"
-              >
-                <List :size="15" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-            </AppTooltip>
-            <AppTooltip :label="$t('files.browser.viewGrid')">
-              <button
-                type="button"
-                class="seg-btn"
-                :class="{ 'is-active': files.viewMode === 'grid' }"
-                :aria-label="$t('files.browser.viewGrid')"
-                :aria-pressed="files.viewMode === 'grid'"
-                @click="files.setViewMode('grid')"
-              >
-                <LayoutGrid :size="15" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-            </AppTooltip>
-          </span>
-        </div>
-      </div>
-    </template>
+    <!-- Context bar (JUS-159): the NCard header (title chrome) is gone. The
+         agent-node slot, the Root selector and the view toggle stay reachable
+         here until JUS-160 moves the root selector and the toggle into the
+         toolbar. This row is intentionally plain (no card-header border). -->
+    <div class="fm-contextbar">
+      <slot name="header-tools" />
+      <span class="small muted fm-field-label">{{ $t("files.browser.rootLabel") }}</span>
+      <NSelect
+        v-model:value="selectedRoot"
+        class="fm-root-select"
+        size="small"
+        :options="rootOptions"
+        :aria-label="$t('files.browser.rootLabel')"
+      />
+      <span class="segmented" role="group">
+        <AppTooltip :label="$t('files.browser.viewList')">
+          <button
+            type="button"
+            class="seg-btn"
+            :class="{ 'is-active': files.viewMode === 'list' }"
+            :aria-label="$t('files.browser.viewList')"
+            :aria-pressed="files.viewMode === 'list'"
+            @click="files.setViewMode('list')"
+          >
+            <List :size="15" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </AppTooltip>
+        <AppTooltip :label="$t('files.browser.viewGrid')">
+          <button
+            type="button"
+            class="seg-btn"
+            :class="{ 'is-active': files.viewMode === 'grid' }"
+            :aria-label="$t('files.browser.viewGrid')"
+            :aria-pressed="files.viewMode === 'grid'"
+            @click="files.setViewMode('grid')"
+          >
+            <LayoutGrid :size="15" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </AppTooltip>
+      </span>
+    </div>
 
     <!-- Tab bar (JUS-123/126): one tab per open directory. A middle-click or
          the × closes a tab; the + opens a new one at the root top and sits
@@ -2333,16 +2329,16 @@ function onFolderMenu(key: string): void {
       </AppTooltip>
     </div>
 
-    <!-- Path bar (JUS-153): the breadcrumb, the folder filter and Refresh have
-         their own bar above the toolbar, so the toolbar carries actions only.
-         It is a wrapping flex row, exactly like the toolbar, so widths where
-         the two bars fit still waste no row. -->
+    <!-- Navigation row (JUS-159): one bordered field merges back, breadcrumb
+         and an attached refresh button; long paths truncate from the left
+         (the crumb strip clips at its start edge). The right side of the row
+         keeps only the folder filter — reserved for the JUS-163 search field. -->
     <div class="fm-bar fm-pathbar">
-      <nav class="fm-path" :aria-label="$t('files.browser.parent')">
+      <div class="fm-navfield">
         <AppTooltip :label="$t('files.browser.parent')">
           <button
             type="button"
-            class="fm-crumb fm-up"
+            class="fm-navback"
             :disabled="files.path === ''"
             :aria-label="$t('files.browser.parent')"
             @click="files.goUp()"
@@ -2350,20 +2346,30 @@ function onFolderMenu(key: string): void {
             <ArrowUp :size="14" :stroke-width="1.8" aria-hidden="true" />
           </button>
         </AppTooltip>
-        <template v-for="(crumb, index) in files.breadcrumb" :key="crumb.path">
-          <span v-if="index > 0" class="sep" aria-hidden="true">/</span>
-          <button
-            type="button"
-            class="fm-crumb"
-            :class="{ 'is-current': index === files.breadcrumb.length - 1 }"
-            :aria-current="index === files.breadcrumb.length - 1 ? 'page' : undefined"
-            @click="files.goToPath(crumb.path)"
-          >
-            <HardDrive v-if="crumb.isRoot" :size="14" :stroke-width="1.8" aria-hidden="true" />
-            <span>{{ crumb.name }}</span>
-          </button>
-        </template>
-      </nav>
+        <nav class="fm-path fm-navcrumbs" :aria-label="$t('files.browser.parent')">
+          <template v-for="(crumb, index) in files.breadcrumb" :key="crumb.path">
+            <span v-if="index > 0" class="sep" aria-hidden="true">/</span>
+            <button
+              type="button"
+              class="fm-crumb"
+              :class="{ 'is-current': index === files.breadcrumb.length - 1 }"
+              :aria-current="index === files.breadcrumb.length - 1 ? 'page' : undefined"
+              @click="files.goToPath(crumb.path)"
+            >
+              <HardDrive v-if="crumb.isRoot" :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <span>{{ crumb.name }}</span>
+            </button>
+          </template>
+        </nav>
+        <AppTooltip :label="$t('files.browser.refresh')">
+          <NButton size="small" quaternary class="fm-navrefresh" :loading="files.loading" :aria-label="$t('files.browser.refresh')" @click="files.refresh()">
+            <template #icon>
+              <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("files.browser.refresh") }}</span>
+          </NButton>
+        </AppTooltip>
+      </div>
 
       <NInput
         v-model:value="filterModel"
@@ -2377,15 +2383,6 @@ function onFolderMenu(key: string): void {
           <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
         </template>
       </NInput>
-
-      <AppTooltip :label="$t('files.browser.refresh')">
-        <NButton size="small" secondary :loading="files.loading" :aria-label="$t('files.browser.refresh')" @click="files.refresh()">
-          <template #icon>
-            <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          <span class="fm-btn-label">{{ $t("files.browser.refresh") }}</span>
-        </NButton>
-      </AppTooltip>
     </div>
 
     <!-- Toolbar (JUS-153): one wrapping row holds the create/upload actions and
@@ -3386,6 +3383,80 @@ function onFolderMenu(key: string): void {
 .fm-bar.fm-pathbar {
   border-top: 1px solid var(--border);
   margin-bottom: var(--space-2);
+}
+
+/* Context bar (JUS-159): the temporary home of the header-tools slot, the
+   Root selector and the view toggle after the card header went away. Plain
+   row, no border of its own; JUS-160 moves the selector and the toggle into
+   the toolbar and removes this row. */
+.fm-contextbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.fm-contextbar .segmented {
+  margin-left: auto;
+}
+
+/* Merged navigation field (JUS-159): back button, breadcrumb and the attached
+   refresh button share one border. The crumb strip takes the free width and
+   clips overflowing crumbs at its start edge, so long paths truncate from
+   the left while back and refresh stay pinned. */
+.fm-navfield {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.fm-navback {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: none;
+  border-radius: 0;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fm-navback:hover:not(:disabled) {
+  color: var(--fg-2);
+}
+
+.fm-navback:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.fm-navcrumbs {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  overflow: hidden;
+  border: 0;
+  padding: 2px var(--space-2);
+  min-height: 32px;
+}
+
+.fm-navcrumbs .fm-crumb {
+  flex: 0 0 auto;
+}
+
+.fm-navrefresh {
+  flex: 0 0 auto;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .fm-path {

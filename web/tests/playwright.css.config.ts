@@ -14,6 +14,7 @@ export default defineConfig({
     "files-layout-fit.spec.ts",
     "files-mobile-menus.spec.ts",
     "files-recycle-bin.spec.ts",
+    "files-regions.spec.ts",
     "files-row-actions.spec.ts",
     "files-tabs.spec.ts",
     "files-virtual.spec.ts",

@@ -3068,6 +3068,21 @@ function onFolderMenu(key: string): void {
   overflow: hidden;
 }
 
+/* JUS-157: every browser region gets its own boundary so the header, the
+ * tablist, the path bar, the toolbar and the entry list never read as one flat
+ * surface. The header is a warm band with a solid divider; the path bar and the
+ * toolbar are bordered warm bands below it. Tokens only (--surface-warm,
+ * --border, --radius-sm, --space-*), so the separation follows the theme's
+ * surface/border tokens (the app ships dark only). The header inherits the
+ * card's top corner radius, or its square fill would bleed over the rounded
+ * card corners. */
+.files-browser :deep(.n-card-header) {
+  background: var(--surface-warm);
+  border-bottom: 1px solid var(--border);
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+
 .fm-card-head {
   display: flex;
   align-items: center;
@@ -3113,6 +3128,8 @@ function onFolderMenu(key: string): void {
   /* Hug the tabs + the + button so the group rings exactly its content. */
   width: fit-content;
   max-width: 100%;
+  /* JUS-157: keep a gap below the header band that now borders the content. */
+  margin-top: var(--space-3);
   margin-bottom: var(--space-3);
   background: var(--surface-warm);
   border: 1px solid var(--border);
@@ -3233,7 +3250,16 @@ function onFolderMenu(key: string): void {
   gap: var(--space-2);
   flex: 0 0 auto;
   flex-wrap: wrap;
-  margin-bottom: var(--space-3);
+  /* JUS-157: its own bordered warm band, so the toolbar is distinct from the
+     path bar above and the entry list below. The band keeps the toolbar a
+     single compact row (the toolbar-height guards) while the tighter bottom
+     margin keeps the visible-control-to-header gap within the no-blank-band
+     guard. */
+  margin-bottom: var(--space-2);
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
 }
 
 /* Left group (New dropdown + Upload) and the right-aligned group (the clipboard
@@ -3309,20 +3335,29 @@ function onFolderMenu(key: string): void {
   color: var(--fg-2);
 }
 
+/* JUS-157: the bars are bordered bands, so their inter-block rhythm is the
+   tighter --space-2; both specific rules below pin the same value. */
 .fm-bar {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex: 0 0 auto;
   flex-wrap: wrap;
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-2);
 }
 
 /* JUS-153: the path bar sits directly above the toolbar, so its bottom margin
    is tighter than the default bar margin; the toolbar keeps the gap to the
-   list. `.fm-bar.fm-pathbar` outranks the single-class `.fm-bar` base. */
+   list. `.fm-bar.fm-pathbar` outranks the single-class `.fm-bar` base.
+   JUS-157: the bar is now its own bordered band and owns the breadcrumb's
+   surface (the group moved up from `.fm-path`), so it reads as a region
+   distinct from the tablist above and the toolbar below. */
 .fm-bar.fm-pathbar {
   margin-bottom: var(--space-2);
+  background: var(--surface-warm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
 }
 
 .fm-path {
@@ -3330,9 +3365,8 @@ function onFolderMenu(key: string): void {
   align-items: center;
   gap: 2px;
   flex-wrap: wrap;
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  /* JUS-157: the path band owns the surface; the breadcrumb row keeps its own
+     box metrics (the ring room) without a second background/border. */
   padding: 2px;
   min-height: 32px;
 }
@@ -4051,10 +4085,18 @@ function onFolderMenu(key: string): void {
     flex: 1 1 90px;
   }
 
-  .fm-tabs,
+  .fm-tabs {
+    margin-top: var(--space-2);
+    margin-bottom: var(--space-1);
+  }
+
+  /* JUS-157: keep the bands compact on a phone — the entry list needs the
+     height (the >=60% guard). `row-gap` matches the mockup's phone rule. */
   .fm-toolbar,
   .fm-bar.fm-pathbar {
+    row-gap: var(--space-2);
     margin-bottom: var(--space-1);
+    padding: var(--space-1) var(--space-2);
   }
 
   /* Slimmer tab strip/footer band: every pixel here is list height. */

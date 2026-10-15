@@ -239,6 +239,62 @@ async function expectDescribes(page: Page, entry: string): Promise<void> {
   );
 }
 
+/** escapeRegex makes one tooltip label safe to anchor in a RegExp. */
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * expectTooltip proves a control shows `label` as a real tooltip (JUS-156), on
+ * pointer hover AND on keyboard focus. naive keeps every tooltip body in the
+ * DOM (display:none) once built, so the assertion is scoped to THIS control's
+ * body by its exact text — never to "some visible tooltip".
+ */
+async function expectTooltip(
+  page: Page,
+  control: Locator,
+  label: string,
+): Promise<void> {
+  const tooltip = page.locator(".n-tooltip", {
+    hasText: new RegExp(`^\\s*${escapeRegex(label)}\\s*$`),
+  });
+  await control.hover();
+  await expect(tooltip, `hover tooltip for "${label}"`).toBeVisible();
+  await page.mouse.move(0, 0);
+  await expect(tooltip).toBeHidden();
+  await control.focus();
+  await expect(tooltip, `focus tooltip for "${label}"`).toBeVisible();
+  await control.blur();
+  await expect(tooltip).toBeHidden();
+}
+
+/**
+ * expectIconOnlyTooltips checks EVERY button inside one area: each button with
+ * no visible text (an icon-only control) must keep a non-empty aria-label and
+ * open that label as a tooltip on hover and on keyboard focus. A visible-label
+ * button is skipped — it needs no tooltip.
+ */
+async function expectIconOnlyTooltips(page: Page, area: string): Promise<void> {
+  const buttons = page.locator(`${area} button`);
+  const count = await buttons.count();
+  expect(count, `${area} renders controls`).toBeGreaterThan(0);
+  let checked = 0;
+  for (let index = 0; index < count; index += 1) {
+    const button = buttons.nth(index);
+    const iconOnly = await button.evaluate(
+      (element) => (element as HTMLElement).innerText.trim() === "",
+    );
+    if (!iconOnly) {
+      continue;
+    }
+    checked += 1;
+    const label = await button.getAttribute("aria-label");
+    expect(label, `${area} button ${index} keeps an accessible name`).toBeTruthy();
+    await expectTooltip(page, button, label as string);
+  }
+  expect(checked, `${area} has icon-only controls`).toBeGreaterThan(0);
+}
+
 test.describe("icon-only controls are accessible", () => {
   test("the ⋮ is visible at rest; inline actions reveal on hover, then focus", async ({
     page,
@@ -277,65 +333,29 @@ test.describe("icon-only controls are accessible", () => {
     await expect(rowMenu).toBeHidden();
   });
 
-  test("every toolbar and row icon-only control has an aria-label and a title", async ({
+  test("every icon-only button in the three areas keeps an aria-label and a tooltip", async ({
     page,
   }) => {
     await openFiles(page);
-    // Select the whole listing so every bulk action renders (enabled), then
-    // shrink to the icon-only layout. The bulk actions live in the header bar
-    // (JUS-146), so scope the lookup to the whole browser panel.
+
+    // Row actions are icon-only at every width; the desktop row is checked
+    // before the layout shrinks.
+    await expectIconOnlyTooltips(page, ".fm-table .fm-actions");
+
+    // Select the whole listing so every bulk action renders, then shrink to the
+    // icon-only layout: the toolbar and the bulk bar both drop their labels.
     await page.locator(".fm-head .n-checkbox").click();
-    const toolbar = page.locator(".files-browser");
-
-    // Row actions are always icon-only; each pairs an accessible name with a
-    // tooltip.
-    const fileRow = rowFor(page, "app.yaml");
-    for (const label of [
-      "Download app.yaml",
-      "Rename app.yaml",
-      "Delete app.yaml",
-      "More actions for app.yaml",
-    ]) {
-      const button = fileRow.getByRole("button", { name: label, exact: true });
-      await expect(button, label).toHaveAttribute("aria-label", label);
-      await expect(button, label).toHaveAttribute("title", label);
-    }
-    const archiveRow = rowFor(page, "backup.tar.gz");
-    for (const label of ["Extract here…", "More actions for backup.tar.gz"]) {
-      const button = archiveRow.getByRole("button", { name: label, exact: true });
-      await expect(button, label).toHaveAttribute("aria-label", label);
-      await expect(button, label).toHaveAttribute("title", label);
-    }
-    const folderRow = rowFor(page, "config");
-    for (const label of [
-      "Open config",
-      "Rename config",
-      "Delete config",
-      "More actions for config",
-    ]) {
-      const button = folderRow.getByRole("button", { name: label, exact: true });
-      await expect(button, label).toHaveAttribute("aria-label", label);
-      await expect(button, label).toHaveAttribute("title", label);
-    }
-
-    // The toolbar drops its labels on small screens; each icon-only button must
-    // keep both an accessible name and a tooltip.
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator(".fm-btn-label").first()).toBeHidden();
-    for (const name of [
-      "New",
-      "Upload",
-      "Download",
-      "Copy",
-      "Cut",
-      "Compress…",
-      "Delete",
-      "Clear",
-    ]) {
-      const button = toolbar.getByRole("button", { name, exact: true });
-      await expect(button, name).toHaveAttribute("aria-label", name);
-      await expect(button, name).toHaveAttribute("title", name);
-    }
+    await expectIconOnlyTooltips(page, ".fm-toolbar");
+    await expectIconOnlyTooltips(page, ".fm-selection-actions");
+
+    // The grid: tile ⋮ menus and the toolbar-hosted selection bar.
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+    await expectIconOnlyTooltips(page, ".fm-grid .fm-tile-actions");
+    await expectIconOnlyTooltips(page, ".fm-toolbar");
+    await expectIconOnlyTooltips(page, ".fm-selection-actions");
   });
 
   test("a special row offers no row menu", async ({ page }) => {
@@ -390,11 +410,13 @@ test.describe("icon-only controls are accessible", () => {
     ]) {
       const button = fileRow.getByRole("button", { name: label, exact: true });
       await expect(button, label).toHaveAttribute("aria-label", label);
-      await expect(button, label).toHaveAttribute("title", label);
+      await expectTooltip(page, button, label);
     }
-    await expect(
+    await expectTooltip(
+      page,
       rowFor(page, "config").getByRole("button", { name: "Mở config", exact: true }),
-    ).toHaveAttribute("title", "Mở config");
+      "Mở config",
+    );
 
     // The toolbar's icon-only labels are localized too.
     await page.locator(".fm-head .n-checkbox").click();
@@ -414,7 +436,7 @@ test.describe("icon-only controls are accessible", () => {
         .locator(".files-browser")
         .getByRole("button", { name, exact: true });
       await expect(button, name).toHaveAttribute("aria-label", name);
-      await expect(button, name).toHaveAttribute("title", name);
+      await expectTooltip(page, button, name);
     }
   });
 });

@@ -86,6 +86,7 @@ import {
 } from "@/features/files/utils/virtual";
 import { useTeamsStore } from "@/features/teams";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
+import AppTooltip from "@/shared/ui/AppTooltip.vue";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
 
 interface Props {
@@ -2384,53 +2385,56 @@ function onFolderMenu(key: string): void {
           })"
           @select="onNewMenu"
         >
+          <AppTooltip :label="$t('files.actions.new')">
+            <NButton
+              size="small"
+              secondary
+              aria-haspopup="menu"
+              :aria-expanded="newMenuOpen"
+              :disabled="files.acting"
+              :aria-label="$t('files.actions.new')"
+            >
+              <template #icon>
+                <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              <span class="fm-btn-label">{{ $t("files.actions.new") }}</span>
+              <ChevronDown class="fm-caret" :size="12" :stroke-width="1.8" aria-hidden="true" />
+            </NButton>
+          </AppTooltip>
+        </NDropdown>
+        <AppTooltip :label="$t('files.actions.upload')">
           <NButton
             size="small"
-            secondary
-            aria-haspopup="menu"
-            :aria-expanded="newMenuOpen"
+            type="primary"
             :disabled="files.acting"
-            :title="$t('files.actions.new')"
-            :aria-label="$t('files.actions.new')"
+            :aria-label="$t('files.actions.upload')"
+            @click="openUpload()"
           >
             <template #icon>
-              <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
             </template>
-            <span class="fm-btn-label">{{ $t("files.actions.new") }}</span>
-            <ChevronDown class="fm-caret" :size="12" :stroke-width="1.8" aria-hidden="true" />
+            <span class="fm-btn-label">{{ $t("files.actions.upload") }}</span>
           </NButton>
-        </NDropdown>
-        <NButton
-          size="small"
-          type="primary"
-          :disabled="files.acting"
-          :title="$t('files.actions.upload')"
-          :aria-label="$t('files.actions.upload')"
-          @click="openUpload()"
-        >
-          <template #icon>
-            <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          <span class="fm-btn-label">{{ $t("files.actions.upload") }}</span>
-        </NButton>
+        </AppTooltip>
       </div>
 
       <!-- The bin belongs to the root, not the folder, so it stays with the
            per-root actions: any member may open it, while restore/purge inside
            need write. -->
-      <NButton
-        size="small"
-        secondary
-        :disabled="files.rootName === ''"
-        :title="$t('files.browser.recycleBin')"
-        :aria-label="$t('files.browser.recycleBin')"
-        @click="recycleOpen = true"
-      >
-        <template #icon>
-          <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ $t("files.browser.recycleBin") }}</span>
-      </NButton>
+      <AppTooltip :label="$t('files.browser.recycleBin')">
+        <NButton
+          size="small"
+          secondary
+          :disabled="files.rootName === ''"
+          :aria-label="$t('files.browser.recycleBin')"
+          @click="recycleOpen = true"
+        >
+          <template #icon>
+            <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ $t("files.browser.recycleBin") }}</span>
+        </NButton>
+      </AppTooltip>
 
       <!-- JUS-145/147: compact sort control, RENDERED only where the column
            headers cannot carry the sort — the compact layout (Type / Modified /
@@ -2450,21 +2454,22 @@ function onFolderMenu(key: string): void {
         })"
         @select="onSortMenu"
       >
-        <NButton
-          size="small"
-          secondary
-          class="fm-sort-toggle"
-          aria-haspopup="menu"
-          :aria-expanded="sortMenuOpen"
-          :title="sortLabel"
-          :aria-label="sortLabel"
-        >
-          <template #icon>
-            <ArrowUp v-if="files.sortDir === 'asc'" :size="14" :stroke-width="1.8" aria-hidden="true" />
-            <ArrowDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          <span class="fm-btn-label">{{ sortColumnLabel(files.sortKey) }}</span>
-        </NButton>
+        <AppTooltip :label="sortLabel">
+          <NButton
+            size="small"
+            secondary
+            class="fm-sort-toggle"
+            aria-haspopup="menu"
+            :aria-expanded="sortMenuOpen"
+            :aria-label="sortLabel"
+          >
+            <template #icon>
+              <ArrowUp v-if="files.sortDir === 'asc'" :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <ArrowDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ sortColumnLabel(files.sortKey) }}</span>
+          </NButton>
+        </AppTooltip>
       </NDropdown>
 
       <!-- JUS-148 fix round 1: render the right group only when it has content,
@@ -2474,22 +2479,22 @@ function onFolderMenu(key: string): void {
         v-if="files.hasClipboard || files.viewMode === 'grid'"
         class="fm-toolbar-group fm-toolbar-end"
       >
-        <NButton
-          v-if="files.hasClipboard"
-          size="small"
-          secondary
-          :disabled="files.acting || files.pasteProblem !== null"
-          :title="pasteLabel"
-          :aria-label="pasteLabel"
-          @click="() => void pasteAction()"
-        >
-          <template #icon>
-            <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          <span class="fm-btn-label">
-            {{ $t("files.actions.paste") }} ({{ files.clipboard?.names.length ?? 0 }})
-          </span>
-        </NButton>
+        <AppTooltip v-if="files.hasClipboard" :label="pasteLabel">
+          <NButton
+            size="small"
+            secondary
+            :disabled="files.acting || files.pasteProblem !== null"
+            :aria-label="pasteLabel"
+            @click="() => void pasteAction()"
+          >
+            <template #icon>
+              <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">
+              {{ $t("files.actions.paste") }} ({{ files.clipboard?.names.length ?? 0 }})
+            </span>
+          </NButton>
+        </AppTooltip>
         <span v-if="files.hasClipboard" class="small muted clipboard-hint">
           {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
         </span>
@@ -2675,21 +2680,22 @@ function onFolderMenu(key: string): void {
                 })"
                 @select="onSortMenu"
               >
-                <NButton
-                  size="small"
-                  secondary
-                  class="fm-bulk-sort"
-                  aria-haspopup="menu"
-                  :aria-expanded="bulkSortMenuOpen"
-                  :title="sortLabel"
-                  :aria-label="sortLabel"
-                >
-                  <template #icon>
-                    <ArrowUp v-if="files.sortDir === 'asc'" :size="14" :stroke-width="1.8" aria-hidden="true" />
-                    <ArrowDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
-                  </template>
-                  <span class="fm-btn-label">{{ sortColumnLabel(files.sortKey) }}</span>
-                </NButton>
+                <AppTooltip :label="sortLabel">
+                  <NButton
+                    size="small"
+                    secondary
+                    class="fm-bulk-sort"
+                    aria-haspopup="menu"
+                    :aria-expanded="bulkSortMenuOpen"
+                    :aria-label="sortLabel"
+                  >
+                    <template #icon>
+                      <ArrowUp v-if="files.sortDir === 'asc'" :size="14" :stroke-width="1.8" aria-hidden="true" />
+                      <ArrowDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+                    </template>
+                    <span class="fm-btn-label">{{ sortColumnLabel(files.sortKey) }}</span>
+                  </NButton>
+                </AppTooltip>
               </NDropdown>
               <FilesSelectionBar
                 :count-reserve="countReserve"
@@ -2767,72 +2773,87 @@ function onFolderMenu(key: string): void {
                    pointer devices; the ⋮ menu button below stays visible
                    whenever the row has actions, so touch and keyboard users
                    reach the row menu without a hover (JUS-133). -->
-              <NButton
+              <AppTooltip
                 v-if="entry.kind === 'directory'"
-                class="fm-action"
-                size="tiny"
-                quaternary
-                :title="$t('files.browser.openFolder', { name: entry.name })"
-                :aria-label="$t('files.browser.openFolder', { name: entry.name })"
-                @click="files.openDirectory(entry.name)"
+                :label="$t('files.browser.openFolder', { name: entry.name })"
               >
-                <template #icon>
-                  <ChevronRight :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </template>
-              </NButton>
-              <NButton
+                <NButton
+                  class="fm-action"
+                  size="tiny"
+                  quaternary
+                  :aria-label="$t('files.browser.openFolder', { name: entry.name })"
+                  @click="files.openDirectory(entry.name)"
+                >
+                  <template #icon>
+                    <ChevronRight :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                </NButton>
+              </AppTooltip>
+              <AppTooltip
                 v-else-if="entry.kind === 'file'"
-                class="fm-action"
-                size="tiny"
-                quaternary
-                :disabled="!files.canReadContent"
-                :title="files.canReadContent ? $t('files.browser.downloadFile', { name: entry.name }) : $t('files.browser.fileNeedsRole')"
-                :aria-label="$t('files.browser.downloadFile', { name: entry.name })"
-                @click="startDownload(entry)"
+                :label="$t('files.browser.downloadFile', { name: entry.name })"
               >
-                <template #icon>
-                  <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </template>
-              </NButton>
-              <NButton
+                <NButton
+                  class="fm-action"
+                  size="tiny"
+                  quaternary
+                  :disabled="!files.canReadContent"
+                  :aria-label="$t('files.browser.downloadFile', { name: entry.name })"
+                  @click="startDownload(entry)"
+                >
+                  <template #icon>
+                    <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                </NButton>
+              </AppTooltip>
+              <AppTooltip
                 v-if="files.canWrite && isExtractableArchive(entry)"
-                class="fm-action"
-                size="tiny"
-                quaternary
-                :title="$t('files.actions.extract')"
-                :aria-label="$t('files.actions.extract')"
-                @click="openExtract(entry)"
+                :label="$t('files.actions.extract')"
               >
-                <template #icon>
-                  <ArchiveRestore :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </template>
-              </NButton>
-              <NButton
+                <NButton
+                  class="fm-action"
+                  size="tiny"
+                  quaternary
+                  :aria-label="$t('files.actions.extract')"
+                  @click="openExtract(entry)"
+                >
+                  <template #icon>
+                    <ArchiveRestore :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                </NButton>
+              </AppTooltip>
+              <AppTooltip
                 v-if="files.canWrite && isSelectable(entry)"
-                class="fm-action"
-                size="tiny"
-                quaternary
-                :title="$t('files.browser.renameEntry', { name: entry.name })"
-                :aria-label="$t('files.browser.renameEntry', { name: entry.name })"
-                @click="openRename(entry)"
+                :label="$t('files.browser.renameEntry', { name: entry.name })"
               >
-                <template #icon>
-                  <Pencil :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </template>
-              </NButton>
-              <NButton
+                <NButton
+                  class="fm-action"
+                  size="tiny"
+                  quaternary
+                  :aria-label="$t('files.browser.renameEntry', { name: entry.name })"
+                  @click="openRename(entry)"
+                >
+                  <template #icon>
+                    <Pencil :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                </NButton>
+              </AppTooltip>
+              <AppTooltip
                 v-if="files.canWrite && isSelectable(entry)"
-                class="fm-action"
-                size="tiny"
-                quaternary
-                :title="$t('files.browser.deleteEntry', { name: entry.name })"
-                :aria-label="$t('files.browser.deleteEntry', { name: entry.name })"
-                @click="openDelete([entry])"
+                :label="$t('files.browser.deleteEntry', { name: entry.name })"
               >
-                <template #icon>
-                  <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-                </template>
-              </NButton>
+                <NButton
+                  class="fm-action"
+                  size="tiny"
+                  quaternary
+                  :aria-label="$t('files.browser.deleteEntry', { name: entry.name })"
+                  @click="openDelete([entry])"
+                >
+                  <template #icon>
+                    <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                </NButton>
+              </AppTooltip>
               <!-- A row with no actions (a special/unspecified entry) has no
                    menu, so there is deliberately no ⋮ to open an empty menu. -->
               <NDropdown
@@ -2848,18 +2869,19 @@ function onFolderMenu(key: string): void {
                 @update:show="(show: boolean) => onRowMenuShow(entry.name, show)"
                 @select="(key: string) => onRowMenu(key, entry)"
               >
-                <NButton
-                  size="tiny"
-                  quaternary
-                  aria-haspopup="menu"
-                  :aria-expanded="isRowMenuOpen(entry)"
-                  :title="$t('files.browser.moreActions', { name: entry.name })"
-                  :aria-label="$t('files.browser.moreActions', { name: entry.name })"
-                >
-                  <template #icon>
-                    <MoreVertical :size="14" :stroke-width="1.8" aria-hidden="true" />
-                  </template>
-                </NButton>
+                <AppTooltip :label="$t('files.browser.moreActions', { name: entry.name })">
+                  <NButton
+                    size="tiny"
+                    quaternary
+                    aria-haspopup="menu"
+                    :aria-expanded="isRowMenuOpen(entry)"
+                    :aria-label="$t('files.browser.moreActions', { name: entry.name })"
+                  >
+                    <template #icon>
+                      <MoreVertical :size="14" :stroke-width="1.8" aria-hidden="true" />
+                    </template>
+                  </NButton>
+                </AppTooltip>
               </NDropdown>
             </div>
           </div>
@@ -2957,18 +2979,19 @@ function onFolderMenu(key: string): void {
               @update:show="(show: boolean) => onRowMenuShow(entry.name, show)"
               @select="(key: string) => onRowMenu(key, entry)"
             >
-              <NButton
-                size="small"
-                quaternary
-                aria-haspopup="menu"
-                :aria-expanded="isRowMenuOpen(entry)"
-                :title="$t('files.browser.moreActions', { name: entry.name })"
-                :aria-label="$t('files.browser.moreActions', { name: entry.name })"
-              >
-                <template #icon>
-                  <MoreVertical :size="16" :stroke-width="1.8" aria-hidden="true" />
-                </template>
-              </NButton>
+              <AppTooltip :label="$t('files.browser.moreActions', { name: entry.name })">
+                <NButton
+                  size="small"
+                  quaternary
+                  aria-haspopup="menu"
+                  :aria-expanded="isRowMenuOpen(entry)"
+                  :aria-label="$t('files.browser.moreActions', { name: entry.name })"
+                >
+                  <template #icon>
+                    <MoreVertical :size="16" :stroke-width="1.8" aria-hidden="true" />
+                  </template>
+                </NButton>
+              </AppTooltip>
             </NDropdown>
           </div>
         </div>

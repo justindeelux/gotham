@@ -72,7 +72,8 @@
                  per-root tools; the bulk actions (Download/Copy/Cut/Compress/
                  Delete/Clear) appear on it only while entries are selected, so
                  no permanently disabled row is rendered. Labels collapse to
-                 icon-only <=640px, each keeping a title + aria-label.
+                 icon-only <=640px, each keeping a tooltip (on hover and
+                 keyboard focus) + aria-label.
                  JUS-135: on a phone the band is three compact rows and the
                  selection cluster (with its count) is a full-width,
                  horizontally scrolling row of 44px targets, so the entry list
@@ -195,7 +196,8 @@
                      hover, keyboard focus or selection, but the ⋮ menu button
                      stays visible whenever the row has actions, so touch and
                      keyboard users reach the row menu without a hover. Every
-                     icon-only control pairs an aria-label with a title (tooltip). -->
+                     icon-only control pairs an aria-label with a tooltip that
+                     opens on hover and on keyboard focus (JUS-156). -->
 
                 <!-- folders -->
                 <div class="fm-row" role="row" data-tag="folder">

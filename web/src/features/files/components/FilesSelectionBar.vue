@@ -7,6 +7,7 @@ import { useI18n } from "vue-i18n";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import { isSelectable } from "@/features/files/utils/files";
+import AppTooltip from "@/shared/ui/AppTooltip.vue";
 import { formatBytes } from "@/shared/utils/format";
 
 /**
@@ -98,87 +99,93 @@ watch(hasSelection, async () => {
     :class="{ 'is-visible': hasSelection }"
     @scroll="updateScrollHint"
   >
-    <NButton
-      size="small"
-      secondary
-      :disabled="!files.canReadContent || !hasSelectedFiles"
-      :title="!files.canReadContent ? t('files.browser.fileNeedsRole') : (hasSelectedFiles ? t('files.browser.downloadSelected') : t('files.dialogs.compressSelect'))"
-      :aria-label="t('files.browser.downloadSelected')"
-      @click="emit('download')"
-    >
-      <template #icon>
-        <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
-      </template>
-      <span class="fm-btn-label">{{ t("files.browser.downloadSelected") }}</span>
-    </NButton>
+    <AppTooltip :label="t('files.browser.downloadSelected')">
+      <NButton
+        size="small"
+        secondary
+        :disabled="!files.canReadContent || !hasSelectedFiles"
+        :aria-label="t('files.browser.downloadSelected')"
+        @click="emit('download')"
+      >
+        <template #icon>
+          <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        <span class="fm-btn-label">{{ t("files.browser.downloadSelected") }}</span>
+      </NButton>
+    </AppTooltip>
     <template v-if="files.canWrite">
-      <NButton
-        size="small"
-        secondary
-        :disabled="files.acting || selection.length === 0"
-        :title="selection.length === 0 ? t('files.dialogs.compressSelect') : t('files.actions.copy')"
-        :aria-label="t('files.actions.copy')"
-        @click="files.copySelection(selection.map((item) => item.name))"
-      >
-        <template #icon>
-          <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ t("files.actions.copy") }}</span>
-      </NButton>
-      <NButton
-        size="small"
-        secondary
-        :disabled="files.acting || selection.length === 0"
-        :title="selection.length === 0 ? t('files.dialogs.compressSelect') : t('files.actions.cut')"
-        :aria-label="t('files.actions.cut')"
-        @click="files.cutSelection(selection.map((item) => item.name))"
-      >
-        <template #icon>
-          <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ t("files.actions.cut") }}</span>
-      </NButton>
-      <NButton
-        size="small"
-        secondary
-        :disabled="files.acting || selection.length === 0"
-        :title="selection.length === 0 ? t('files.dialogs.compressSelect') : t('files.actions.compress')"
-        :aria-label="t('files.actions.compress')"
-        @click="emit('compress', selection)"
-      >
-        <template #icon>
-          <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ t("files.actions.compress") }}</span>
-      </NButton>
-      <NButton
-        size="small"
-        type="error"
-        secondary
-        :disabled="files.acting || selection.length === 0"
-        :title="selection.length === 0 ? t('files.dialogs.compressSelect') : t('common.actions.delete')"
-        :aria-label="t('common.actions.delete')"
-        @click="emit('remove', selection)"
-      >
-        <template #icon>
-          <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ t("common.actions.delete") }}</span>
-      </NButton>
+      <AppTooltip :label="t('files.actions.copy')">
+        <NButton
+          size="small"
+          secondary
+          :disabled="files.acting || selection.length === 0"
+          :aria-label="t('files.actions.copy')"
+          @click="files.copySelection(selection.map((item) => item.name))"
+        >
+          <template #icon>
+            <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ t("files.actions.copy") }}</span>
+        </NButton>
+      </AppTooltip>
+      <AppTooltip :label="t('files.actions.cut')">
+        <NButton
+          size="small"
+          secondary
+          :disabled="files.acting || selection.length === 0"
+          :aria-label="t('files.actions.cut')"
+          @click="files.cutSelection(selection.map((item) => item.name))"
+        >
+          <template #icon>
+            <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ t("files.actions.cut") }}</span>
+        </NButton>
+      </AppTooltip>
+      <AppTooltip :label="t('files.actions.compress')">
+        <NButton
+          size="small"
+          secondary
+          :disabled="files.acting || selection.length === 0"
+          :aria-label="t('files.actions.compress')"
+          @click="emit('compress', selection)"
+        >
+          <template #icon>
+            <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ t("files.actions.compress") }}</span>
+        </NButton>
+      </AppTooltip>
+      <AppTooltip :label="t('common.actions.delete')">
+        <NButton
+          size="small"
+          type="error"
+          secondary
+          :disabled="files.acting || selection.length === 0"
+          :aria-label="t('common.actions.delete')"
+          @click="emit('remove', selection)"
+        >
+          <template #icon>
+            <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ t("common.actions.delete") }}</span>
+        </NButton>
+      </AppTooltip>
     </template>
-    <NButton
-      :disabled="!hasSelection"
-      size="small"
-      quaternary
-      :title="t('files.browser.clear')"
-      :aria-label="t('files.browser.clear')"
-      @click="emit('clear')"
-    >
-      <template #icon>
-        <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-      </template>
-      <span class="fm-btn-label">{{ t("files.browser.clear") }}</span>
-    </NButton>
+    <AppTooltip :label="t('files.browser.clear')">
+      <NButton
+        :disabled="!hasSelection"
+        size="small"
+        quaternary
+        :aria-label="t('files.browser.clear')"
+        @click="emit('clear')"
+      >
+        <template #icon>
+          <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        <span class="fm-btn-label">{{ t("files.browser.clear") }}</span>
+      </NButton>
+    </AppTooltip>
     <!-- JUS-148: a pinned chevron + fade marks the action row as scrollable, so
          the actions off the right edge (Delete/Clear on a phone) are obvious
          rather than a weak fade. It is decorative (aria-hidden) and is rendered

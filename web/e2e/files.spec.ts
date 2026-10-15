@@ -172,7 +172,7 @@ test.describe("files browse", () => {
 
     await page.goto(`/servers/${server.id}/files`);
     await expect(
-      page.getByRole("heading", { name: "File browser", exact: true }),
+      page.getByRole("region", { name: "File browser" }),
     ).toBeVisible();
 
     // The default root is the first writable one and its access is labelled.
@@ -202,7 +202,7 @@ test.describe("files browse", () => {
     await expect(
       page
         .getByRole("heading", { name: "File manager" })
-        .or(page.getByRole("heading", { name: "File browser", exact: true })),
+        .or(page.getByRole("region", { name: "File browser" })),
     ).toBeVisible();
   });
 });
@@ -787,7 +787,7 @@ plainTest.describe("files disabled", () => {
 
     await page.goto(`/servers/${server.id}/files`);
     await expect(
-      page.getByRole("heading", { name: "File browser", exact: true }),
+      page.getByRole("region", { name: "File browser" }),
     ).toBeVisible();
     await expect(page.getByText("Files are disabled")).toBeVisible();
     await expect(
@@ -833,7 +833,7 @@ test.describe("files read-only role", () => {
 
     await page.goto(`/servers/${server.id}/files`);
     await expect(
-      page.getByRole("heading", { name: "File browser", exact: true }),
+      page.getByRole("region", { name: "File browser" }),
     ).toBeVisible();
 
     // No mutation affordances and no editor for a read-only member.

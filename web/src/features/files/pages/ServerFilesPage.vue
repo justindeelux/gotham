@@ -151,6 +151,13 @@ function switchNode(next: string | number | null): void {
   min-width: 0;
 }
 
+/* JUS-154: the "Agent node" caption rides in the browser card header, which
+ * sets the Naive card-title size (18px); with no `.small` rule of its own the
+ * caption inherited it. This scoped rule restores the mockup's 12px caption. */
+.small {
+  font-size: var(--text-xs);
+}
+
 .fm-node__icon {
   color: var(--muted);
   flex: 0 0 auto;

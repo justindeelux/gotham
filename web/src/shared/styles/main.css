@@ -430,3 +430,33 @@ a {
   align-items: flex-start;
   gap: var(--space-3);
 }
+
+/* AppTooltip's own tooltips (JUS-156): the popover body never intercepts a
+   pointer, so a tooltip that lingers over the control beneath it can never
+   swallow a click meant for that control — while its copy stays hoverable, so
+   the pointer can cross onto the tooltip without dismissing it (WCAG 1.4.13).
+   Scoped with :has() to this wrapper's popovers: every other naive tooltip in
+   the app (servers rail, application header, service logs) keeps naive's
+   default, hoverable body. */
+.n-tooltip:has(.app-tooltip-content) {
+  pointer-events: none;
+}
+
+.n-tooltip:has(.app-tooltip-content) .app-tooltip-content {
+  pointer-events: auto;
+}
+
+/* The always-present description node a reason tooltip points aria-describedby
+   at (JUS-156 round 2): clipped out of view but kept in the accessibility tree
+   even while no tooltip is open. */
+.app-tooltip-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

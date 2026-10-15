@@ -207,6 +207,15 @@ test("the toolbar opens the recycle bin with entries and a truncation note", asy
   await expect(
     dialog.getByRole("button", { name: "Delete app.yaml permanently" }),
   ).toBeVisible();
+  // JUS-156: the icon-only purge control pairs its aria-label with a tooltip.
+  await dialog
+    .getByRole("button", { name: "Delete app.yaml permanently" })
+    .hover();
+  await expect(
+    page.locator(".n-tooltip", {
+      hasText: /^\s*Delete app\.yaml permanently\s*$/,
+    }),
+  ).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Empty bin" })).toBeVisible();
 });
 

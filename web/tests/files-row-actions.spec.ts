@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global URL, document:readonly, HTMLElement:readonly, window:readonly, HTMLButtonElement:readonly */
+/* global URL, document:readonly, HTMLElement:readonly, window:readonly, HTMLButtonElement:readonly, getComputedStyle:readonly */
 // JUS-133 discoverability proof: the committed webdist is served statically
 // with the control-plane file API mocked in real Chromium. Measured claims:
 //   - the ⋮ row-menu button is visible with no hover (touch reachable), while
@@ -17,7 +17,8 @@ import type { Locator, Page } from "@playwright/test";
 //   - on a touch device (hover: none) the whole action set is visible and the
 //     ⋮ opens the row menu;
 //   - every icon-only control (toolbar + row actions) has an accessible name
-//     (aria-label) and a tooltip (title), in English and Vietnamese;
+//     (aria-label) and a tooltip (the shared AppTooltip), in English and
+//     Vietnamese;
 //   - a disabled row action (a file's Download without the content role) stays
 //     dimmed when revealed instead of being forced fully opaque.
 
@@ -239,6 +240,102 @@ async function expectDescribes(page: Page, entry: string): Promise<void> {
   );
 }
 
+/** escapeRegex makes one tooltip label safe to anchor in a RegExp. */
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * tooltipFor locates the ONE tooltip whose copy is exactly `label`, so an
+ * assertion on one control's tooltip can never match another control's (the
+ * body is mounted only while shown — `animated: false`, controlled `show`).
+ */
+function tooltipFor(page: Page, label: string): Locator {
+  return page.locator(".n-tooltip", {
+    hasText: new RegExp(`^\\s*${escapeRegex(label)}\\s*$`),
+  });
+}
+
+/** expectTooltipOnHover proves the control's `label` opens as a hover tooltip. */
+async function expectTooltipOnHover(
+  page: Page,
+  control: Locator,
+  label: string,
+): Promise<void> {
+  const tooltip = tooltipFor(page, label);
+  await control.hover();
+  await expect(tooltip, `hover tooltip for "${label}"`).toBeVisible();
+  await page.mouse.move(0, 0);
+  await expect(tooltip).toBeHidden();
+}
+
+/**
+ * focusViaKeyboard moves focus onto `control` with a REAL Tab from the element
+ * just before it, so the focus is keyboard-originated (JUS-156 F4): a
+ * programmatic .focus() must NOT open the tooltip, a Tab must.
+ */
+async function focusViaKeyboard(
+  page: Page,
+  control: Locator,
+): Promise<void> {
+  await control.evaluate((element) => {
+    const focusables = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        'a[href], button, input, select, textarea, [tabindex]',
+      ),
+    );
+    const index = focusables.indexOf(element as HTMLElement);
+    const previous = index > 0 ? focusables[index - 1] : null;
+    (previous ?? document.body).focus();
+  });
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await page.keyboard.press("Tab");
+    if (await control.evaluate((element) => element === document.activeElement)) {
+      return;
+    }
+  }
+  throw new Error("focusViaKeyboard: control never received focus");
+}
+
+/** expectTooltipOnFocus proves `label` opens for a keyboard-originated focus. */
+async function expectTooltipOnFocus(
+  page: Page,
+  control: Locator,
+  label: string,
+): Promise<void> {
+  const tooltip = tooltipFor(page, label);
+  await focusViaKeyboard(page, control);
+  await expect(tooltip, `focus tooltip for "${label}"`).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(tooltip).toBeHidden();
+}
+
+/**
+ * expectIconOnlyTooltips checks EVERY button inside one area: each button with
+ * no visible text (an icon-only control) must keep a non-empty aria-label and
+ * open that label as a hover tooltip. A visible-label button is skipped.
+ */
+async function expectIconOnlyTooltips(page: Page, area: string): Promise<void> {
+  const buttons = page.locator(`${area} button`);
+  const count = await buttons.count();
+  expect(count, `${area} renders controls`).toBeGreaterThan(0);
+  let checked = 0;
+  for (let index = 0; index < count; index += 1) {
+    const button = buttons.nth(index);
+    const iconOnly = await button.evaluate(
+      (element) => (element as HTMLElement).innerText.trim() === "",
+    );
+    if (!iconOnly) {
+      continue;
+    }
+    checked += 1;
+    const label = await button.getAttribute("aria-label");
+    expect(label, `${area} button ${index} keeps an accessible name`).toBeTruthy();
+    await expectTooltipOnHover(page, button, label as string);
+  }
+  expect(checked, `${area} has icon-only controls`).toBeGreaterThan(0);
+}
+
 test.describe("icon-only controls are accessible", () => {
   test("the ⋮ is visible at rest; inline actions reveal on hover, then focus", async ({
     page,
@@ -277,65 +374,41 @@ test.describe("icon-only controls are accessible", () => {
     await expect(rowMenu).toBeHidden();
   });
 
-  test("every toolbar and row icon-only control has an aria-label and a title", async ({
+  test("every icon-only button in the three areas keeps an aria-label and a tooltip", async ({
     page,
   }) => {
     await openFiles(page);
-    // Select the whole listing so every bulk action renders (enabled), then
-    // shrink to the icon-only layout. The bulk actions live in the header bar
-    // (JUS-146), so scope the lookup to the whole browser panel.
-    await page.locator(".fm-head .n-checkbox").click();
-    const toolbar = page.locator(".files-browser");
 
-    // Row actions are always icon-only; each pairs an accessible name with a
-    // tooltip.
-    const fileRow = rowFor(page, "app.yaml");
-    for (const label of [
+    // Row actions are icon-only at every width; the desktop row is checked
+    // before the layout shrinks.
+    await expectIconOnlyTooltips(page, ".fm-table .fm-actions");
+    await expectTooltipOnFocus(
+      page,
+      rowFor(page, "app.yaml").getByRole("button", {
+        name: "Download app.yaml",
+      }),
       "Download app.yaml",
-      "Rename app.yaml",
-      "Delete app.yaml",
-      "More actions for app.yaml",
-    ]) {
-      const button = fileRow.getByRole("button", { name: label, exact: true });
-      await expect(button, label).toHaveAttribute("aria-label", label);
-      await expect(button, label).toHaveAttribute("title", label);
-    }
-    const archiveRow = rowFor(page, "backup.tar.gz");
-    for (const label of ["Extract here…", "More actions for backup.tar.gz"]) {
-      const button = archiveRow.getByRole("button", { name: label, exact: true });
-      await expect(button, label).toHaveAttribute("aria-label", label);
-      await expect(button, label).toHaveAttribute("title", label);
-    }
-    const folderRow = rowFor(page, "config");
-    for (const label of [
-      "Open config",
-      "Rename config",
-      "Delete config",
-      "More actions for config",
-    ]) {
-      const button = folderRow.getByRole("button", { name: label, exact: true });
-      await expect(button, label).toHaveAttribute("aria-label", label);
-      await expect(button, label).toHaveAttribute("title", label);
-    }
+    );
 
-    // The toolbar drops its labels on small screens; each icon-only button must
-    // keep both an accessible name and a tooltip.
+    // Select the whole listing so every bulk action renders, then shrink to the
+    // icon-only layout: the toolbar and the bulk bar both drop their labels.
+    await page.locator(".fm-head .n-checkbox").click();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.locator(".fm-btn-label").first()).toBeHidden();
-    for (const name of [
-      "New",
+    await expectIconOnlyTooltips(page, ".fm-toolbar");
+    await expectIconOnlyTooltips(page, ".fm-selection-actions");
+    await expectTooltipOnFocus(
+      page,
+      page.getByRole("button", { name: "Upload", exact: true }),
       "Upload",
-      "Download",
-      "Copy",
-      "Cut",
-      "Compress…",
-      "Delete",
-      "Clear",
-    ]) {
-      const button = toolbar.getByRole("button", { name, exact: true });
-      await expect(button, name).toHaveAttribute("aria-label", name);
-      await expect(button, name).toHaveAttribute("title", name);
-    }
+    );
+
+    // The grid: tile ⋮ menus and the toolbar-hosted selection bar.
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+    await expectIconOnlyTooltips(page, ".fm-grid .fm-tile-actions");
+    await expectIconOnlyTooltips(page, ".fm-toolbar");
+    await expectIconOnlyTooltips(page, ".fm-selection-actions");
   });
 
   test("a special row offers no row menu", async ({ page }) => {
@@ -390,11 +463,13 @@ test.describe("icon-only controls are accessible", () => {
     ]) {
       const button = fileRow.getByRole("button", { name: label, exact: true });
       await expect(button, label).toHaveAttribute("aria-label", label);
-      await expect(button, label).toHaveAttribute("title", label);
+      await expectTooltipOnHover(page, button, label);
     }
-    await expect(
+    await expectTooltipOnHover(
+      page,
       rowFor(page, "config").getByRole("button", { name: "Mở config", exact: true }),
-    ).toHaveAttribute("title", "Mở config");
+      "Mở config",
+    );
 
     // The toolbar's icon-only labels are localized too.
     await page.locator(".fm-head .n-checkbox").click();
@@ -414,9 +489,229 @@ test.describe("icon-only controls are accessible", () => {
         .locator(".files-browser")
         .getByRole("button", { name, exact: true });
       await expect(button, name).toHaveAttribute("aria-label", name);
-      await expect(button, name).toHaveAttribute("title", name);
+      await expectTooltipOnHover(page, button, name);
     }
   });
+});
+
+// JUS-156 review round 1: the tooltip contract beyond a plain hover — the
+// chrome controls (F2), the disabled-reason copy (F1), Escape dismissal and
+// hoverability (F3), no over-triggering on focus-return or touch (F4), and the
+// assistive-tech exposure (F5).
+test.describe("tooltip behaviour (JUS-156 round 1)", () => {
+  test("the Files chrome icon-only controls show a tooltip, not a bare title", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    await expectTooltipOnHover(
+      page,
+      page.getByRole("button", { name: "List view" }),
+      "List view",
+    );
+    await expectTooltipOnHover(
+      page,
+      page.getByRole("button", { name: "Grid view" }),
+      "Grid view",
+    );
+    await expectTooltipOnHover(
+      page,
+      page.getByRole("button", { name: "New tab" }),
+      "New tab",
+    );
+    await expectTooltipOnHover(
+      page,
+      page.getByRole("button", { name: "Refresh", exact: true }),
+      "Refresh",
+    );
+    // The parent "up" control is disabled at the root; open a folder first.
+    await rowFor(page, "config").locator(".fm-label").dblclick();
+    await expectTooltipOnHover(
+      page,
+      page.getByRole("button", { name: "Go to parent folder" }),
+      "Go to parent folder",
+    );
+  });
+
+  test("no icon-only button in the Files browser relies on a bare title", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    // The tooltip is the shared AppTooltip now, so a RENDERED icon-only button
+    // must carry an aria-label and must NOT fall back to a native title.
+    const scan = (): Promise<
+      Array<{ aria: string | null; title: string | null }>
+    > =>
+      page.locator(".files-browser button").evaluateAll((elements) =>
+        elements
+          .filter((element) => {
+            const el = element as HTMLElement;
+            const style = getComputedStyle(el);
+            if (style.visibility === "hidden" || style.display === "none") {
+              return false;
+            }
+            if (el.getClientRects().length === 0) {
+              return false;
+            }
+            return el.innerText.trim() === "";
+          })
+          .map((element) => ({
+            aria: element.getAttribute("aria-label"),
+            title: element.getAttribute("title"),
+          }))
+          .filter((button) => button.title !== null || !button.aria),
+      );
+    expect(await scan()).toEqual([]);
+
+    // Same scan with the toolbar/bulk labels collapsed to icon-only.
+    await page.locator(".fm-head .n-checkbox").click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator(".fm-btn-label").first()).toBeHidden();
+    expect(await scan()).toEqual([]);
+  });
+
+  test("a blocked row action's tooltip explains why and stays reachable", async ({
+    page,
+  }) => {
+    // A member cannot read content, so a file's Download is blocked.
+    await openFiles(page, { role: "member" });
+    const download = rowFor(page, "app.yaml").getByRole("button", {
+      name: "Download app.yaml",
+    });
+    await expect(download).toHaveAttribute("aria-disabled", "true");
+    await expectTooltipOnHover(
+      page,
+      download,
+      "Content requires the owner or admin role.",
+    );
+    // Focusable, so a keyboard user reaches the reason too.
+    await expectTooltipOnFocus(
+      page,
+      download,
+      "Content requires the owner or admin role.",
+    );
+  });
+
+  test("a blocked bulk action's tooltip explains why and still looks disabled", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    // Select only the folder: nothing downloadable is selected.
+    await rowFor(page, "config").locator(".fm-select .n-checkbox").click();
+    const download = page
+      .locator(".fm-selection-actions")
+      .getByRole("button", { name: "Download", exact: true });
+    await expect(download).toHaveAttribute("aria-disabled", "true");
+    await expectTooltipOnHover(page, download, "Select one or more entries first.");
+    // It is still focusable (the tooltip must be reachable) AND still reads as
+    // disabled — naive only dims a native `disabled` button (JUS-156 G1).
+    expect(
+      await download.evaluate((element) =>
+        Number(getComputedStyle(element).opacity),
+      ),
+    ).toBeLessThan(1);
+    await download.focus();
+    await expect(download).toBeFocused();
+  });
+
+  test("the pointer-events scoping leaves other naive tooltips hoverable", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    // The server rail renders its own naive tooltips (RailIconButton). They must
+    // keep naive's default, hoverable body (JUS-156 G2).
+    const rail = page.locator(".rail-btn").first();
+    await rail.hover();
+    const foreign = page
+      .locator(".n-tooltip:not(:has(.app-tooltip-content))")
+      .last();
+    await expect(foreign).toBeVisible();
+    expect(
+      await foreign.evaluate(
+        (element) => getComputedStyle(element).pointerEvents,
+      ),
+    ).not.toBe("none");
+
+    // The Files tooltip body itself never swallows a pointer.
+    const download = rowFor(page, "app.yaml").getByRole("button", {
+      name: "Download app.yaml",
+    });
+    await download.hover();
+    const own = tooltipFor(page, "Download app.yaml");
+    await expect(own).toBeVisible();
+    expect(
+      await own.evaluate((element) => getComputedStyle(element).pointerEvents),
+    ).toBe("none");
+  });
+
+  test("a reason tooltip describes its control even while the tooltip is closed", async ({
+    page,
+  }) => {
+    await openFiles(page, { role: "member" });
+    const download = rowFor(page, "app.yaml").getByRole("button", {
+      name: "Download app.yaml",
+    });
+    const described = await download.getAttribute("aria-describedby");
+    expect(described, "a reason tooltip is described").toBeTruthy();
+    // No hover, no focus: the description node still resolves (JUS-156 G4).
+    const tip = page.locator(`#${described}`);
+    await expect(tip).toHaveCount(1);
+    await expect(tip).toHaveRole("tooltip");
+    await expect(tip).toHaveText("Content requires the owner or admin role.");
+
+    // A tooltip whose text equals the accessible name adds nothing, so the
+    // control is not double-announced.
+    await expect(moreFor(page, "app.yaml")).not.toHaveAttribute(
+      "aria-describedby",
+      /.+/,
+    );
+  });
+
+  test("Escape dismisses an open tooltip and the tooltip stays hoverable", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const download = rowFor(page, "app.yaml").getByRole("button", {
+      name: "Download app.yaml",
+    });
+    const tooltip = tooltipFor(page, "Download app.yaml");
+
+    // Escape dismisses an open tooltip (WCAG 1.4.13, JUS-156 F3).
+    await download.hover();
+    await expect(tooltip).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(tooltip).toBeHidden();
+
+    // The pointer can move onto the tooltip without dismissing it (hoverable).
+    await page.mouse.move(0, 0);
+    await download.hover();
+    await expect(tooltip).toBeVisible();
+    await tooltip.locator(".app-tooltip-content").hover();
+    await expect(tooltip).toBeVisible();
+    await page.mouse.move(0, 0);
+    await expect(tooltip).toBeHidden();
+  });
+
+  test("closing a dialog with Escape does not pop the tooltip on focus return", async ({
+    page,
+  }) => {
+    await openFiles(page);
+    const rename = rowFor(page, "config").getByRole("button", {
+      name: "Rename config",
+    });
+    await rename.click();
+    // Park the pointer away from the trigger so the pointer's own hover can't
+    // be what shows the tooltip — this isolates the focus-return path.
+    await page.mouse.move(0, 0);
+    await expect(page.getByText("Rename entry")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByText("Rename entry")).toBeHidden();
+
+    // Focus returns to the Rename trigger; a programmatic return is not a
+    // keyboard-originated focus, so the tooltip must NOT reopen (JUS-156 F4).
+    await expect(rename).toBeFocused();
+    await expect(page.locator(".n-tooltip:visible")).toHaveCount(0);
+  });
+
 });
 
 // JUS-140: keyboard/touch reachability of the row menu state, the mode and
@@ -999,6 +1294,23 @@ test.describe("touch devices", () => {
       page.getByRole("menu", { name: "More actions for app.yaml" }),
     ).toBeVisible();
     await expect(page.getByRole("menuitem", { name: "Edit in editor" })).toBeVisible();
+  });
+
+  test("a tap never leaves a stuck tooltip (JUS-156 F4)", async ({ page }) => {
+    await openFiles(page);
+    expect(
+      await page.evaluate(() => window.matchMedia("(hover: none)").matches),
+    ).toBe(true);
+
+    await moreFor(page, "app.yaml").tap();
+    await expect(
+      page.getByRole("menu", { name: "More actions for app.yaml" }),
+    ).toBeVisible();
+    // A tap fires a synthetic mouseenter; it must not open a tooltip that then
+    // sticks (there is no mouseleave on a touch device).
+    await expect(page.locator(".n-tooltip:visible")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".n-tooltip:visible")).toHaveCount(0);
   });
 
   test("a disabled row action stays dimmed under hover:none", async ({ page }) => {

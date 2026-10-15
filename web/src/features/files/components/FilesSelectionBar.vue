@@ -7,6 +7,7 @@ import { useI18n } from "vue-i18n";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import { isSelectable } from "@/features/files/utils/files";
+import AppTooltip from "@/shared/ui/AppTooltip.vue";
 import { formatBytes } from "@/shared/utils/format";
 
 /**
@@ -41,6 +42,81 @@ const hasSelectedFiles = computed<boolean>(() =>
 const selection = computed<FilesEntry[]>(() =>
   files.selectedEntries.filter(isSelectable),
 );
+
+/**
+ * JUS-156 F1: a blocked bulk action spells out WHY in its tooltip (the old
+ * native title did), while its aria-label stays the action name (label-in-name).
+ * The buttons use [aria-disabled] rather than [disabled] so the blocked control
+ * stays focusable and a keyboard user can read the reason; each handler guards
+ * on the same condition, so a click stays a no-op exactly as before.
+ */
+const downloadLabel = computed<string>(() => {
+  if (!files.canReadContent) {
+    return String(t("files.browser.fileNeedsRole"));
+  }
+  return hasSelectedFiles.value
+    ? String(t("files.browser.downloadSelected"))
+    : String(t("files.dialogs.compressSelect"));
+});
+/** selectionBlocked is the "nothing writable selected" reason, or "". */
+function selectionBlocked(): string {
+  return selection.value.length === 0
+    ? String(t("files.dialogs.compressSelect"))
+    : "";
+}
+const copyLabel = computed<string>(
+  () => selectionBlocked() || String(t("files.actions.copy")),
+);
+const cutLabel = computed<string>(
+  () => selectionBlocked() || String(t("files.actions.cut")),
+);
+const compressLabel = computed<string>(
+  () => selectionBlocked() || String(t("files.actions.compress")),
+);
+const deleteLabel = computed<string>(
+  () => selectionBlocked() || String(t("common.actions.delete")),
+);
+
+/**
+ * canBulkDownload / canBulkAct mirror the pre-PR disabled conditions, so the
+ * blocked state is unchanged: bulk Download (nothing downloadable selected, or
+ * no content role) and the selection actions (nothing writable selected, or a
+ * mutation running). Each is `aria-disabled` rather than `disabled` so the
+ * blocked control stays focusable and its tooltip explains why; the handlers
+ * guard on the same value, so a click is still a no-op.
+ */
+const canBulkDownload = computed<boolean>(
+  () => files.canReadContent && hasSelectedFiles.value,
+);
+const canBulkAct = computed<boolean>(
+  () => files.canWrite && !files.acting && selection.value.length > 0,
+);
+
+function onBulkDownload(): void {
+  if (canBulkDownload.value) {
+    emit("download");
+  }
+}
+function onBulkCopy(): void {
+  if (canBulkAct.value) {
+    files.copySelection(selection.value.map((item) => item.name));
+  }
+}
+function onBulkCut(): void {
+  if (canBulkAct.value) {
+    files.cutSelection(selection.value.map((item) => item.name));
+  }
+}
+function onBulkCompress(): void {
+  if (canBulkAct.value) {
+    emit("compress", selection.value);
+  }
+}
+function onBulkDelete(): void {
+  if (canBulkAct.value) {
+    emit("remove", selection.value);
+  }
+}
 
 /**
  * JUS-148: the chevron is a real affordance only while the action row actually
@@ -98,87 +174,93 @@ watch(hasSelection, async () => {
     :class="{ 'is-visible': hasSelection }"
     @scroll="updateScrollHint"
   >
-    <NButton
-      size="small"
-      secondary
-      :disabled="!files.canReadContent || !hasSelectedFiles"
-      :title="!files.canReadContent ? t('files.browser.fileNeedsRole') : (hasSelectedFiles ? t('files.browser.downloadSelected') : t('files.dialogs.compressSelect'))"
-      :aria-label="t('files.browser.downloadSelected')"
-      @click="emit('download')"
-    >
-      <template #icon>
-        <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
-      </template>
-      <span class="fm-btn-label">{{ t("files.browser.downloadSelected") }}</span>
-    </NButton>
+    <AppTooltip :label="downloadLabel">
+      <NButton
+        size="small"
+        secondary
+        :aria-disabled="!canBulkDownload"
+        :aria-label="t('files.browser.downloadSelected')"
+        @click="onBulkDownload"
+      >
+        <template #icon>
+          <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        <span class="fm-btn-label">{{ t("files.browser.downloadSelected") }}</span>
+      </NButton>
+    </AppTooltip>
     <template v-if="files.canWrite">
-      <NButton
-        size="small"
-        secondary
-        :disabled="files.acting || selection.length === 0"
-        :title="selection.length === 0 ? t('files.dialogs.compressSelect') : t('files.actions.copy')"
-        :aria-label="t('files.actions.copy')"
-        @click="files.copySelection(selection.map((item) => item.name))"
-      >
-        <template #icon>
-          <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ t("files.actions.copy") }}</span>
-      </NButton>
-      <NButton
-        size="small"
-        secondary
-        :disabled="files.acting || selection.length === 0"
-        :title="selection.length === 0 ? t('files.dialogs.compressSelect') : t('files.actions.cut')"
-        :aria-label="t('files.actions.cut')"
-        @click="files.cutSelection(selection.map((item) => item.name))"
-      >
-        <template #icon>
-          <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ t("files.actions.cut") }}</span>
-      </NButton>
-      <NButton
-        size="small"
-        secondary
-        :disabled="files.acting || selection.length === 0"
-        :title="selection.length === 0 ? t('files.dialogs.compressSelect') : t('files.actions.compress')"
-        :aria-label="t('files.actions.compress')"
-        @click="emit('compress', selection)"
-      >
-        <template #icon>
-          <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ t("files.actions.compress") }}</span>
-      </NButton>
-      <NButton
-        size="small"
-        type="error"
-        secondary
-        :disabled="files.acting || selection.length === 0"
-        :title="selection.length === 0 ? t('files.dialogs.compressSelect') : t('common.actions.delete')"
-        :aria-label="t('common.actions.delete')"
-        @click="emit('remove', selection)"
-      >
-        <template #icon>
-          <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ t("common.actions.delete") }}</span>
-      </NButton>
+      <AppTooltip :label="copyLabel">
+        <NButton
+          size="small"
+          secondary
+          :aria-disabled="!canBulkAct"
+          :aria-label="t('files.actions.copy')"
+          @click="onBulkCopy"
+        >
+          <template #icon>
+            <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ t("files.actions.copy") }}</span>
+        </NButton>
+      </AppTooltip>
+      <AppTooltip :label="cutLabel">
+        <NButton
+          size="small"
+          secondary
+          :aria-disabled="!canBulkAct"
+          :aria-label="t('files.actions.cut')"
+          @click="onBulkCut"
+        >
+          <template #icon>
+            <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ t("files.actions.cut") }}</span>
+        </NButton>
+      </AppTooltip>
+      <AppTooltip :label="compressLabel">
+        <NButton
+          size="small"
+          secondary
+          :aria-disabled="!canBulkAct"
+          :aria-label="t('files.actions.compress')"
+          @click="onBulkCompress"
+        >
+          <template #icon>
+            <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ t("files.actions.compress") }}</span>
+        </NButton>
+      </AppTooltip>
+      <AppTooltip :label="deleteLabel">
+        <NButton
+          size="small"
+          type="error"
+          secondary
+          :aria-disabled="!canBulkAct"
+          :aria-label="t('common.actions.delete')"
+          @click="onBulkDelete"
+        >
+          <template #icon>
+            <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ t("common.actions.delete") }}</span>
+        </NButton>
+      </AppTooltip>
     </template>
-    <NButton
-      :disabled="!hasSelection"
-      size="small"
-      quaternary
-      :title="t('files.browser.clear')"
-      :aria-label="t('files.browser.clear')"
-      @click="emit('clear')"
-    >
-      <template #icon>
-        <X :size="14" :stroke-width="1.8" aria-hidden="true" />
-      </template>
-      <span class="fm-btn-label">{{ t("files.browser.clear") }}</span>
-    </NButton>
+    <AppTooltip :label="t('files.browser.clear')">
+      <NButton
+        :disabled="!hasSelection"
+        size="small"
+        quaternary
+        :aria-label="t('files.browser.clear')"
+        @click="emit('clear')"
+      >
+        <template #icon>
+          <X :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+        <span class="fm-btn-label">{{ t("files.browser.clear") }}</span>
+      </NButton>
+    </AppTooltip>
     <!-- JUS-148: a pinned chevron + fade marks the action row as scrollable, so
          the actions off the right edge (Delete/Clear on a phone) are obvious
          rather than a weak fade. It is decorative (aria-hidden) and is rendered
@@ -237,6 +319,15 @@ watch(hasSelection, async () => {
   visibility: visible;
 }
 
+/* A blocked bulk action is still focusable — its tooltip explains why (JUS-156)
+   — but it must read as disabled, exactly as the row actions do. naive only
+   dims a native `disabled` button, so the [aria-disabled] state is styled here
+   to match. */
+.fm-selection-actions :deep(.n-button[aria-disabled="true"]) {
+  opacity: var(--n-opacity-disabled, 0.5);
+  cursor: not-allowed;
+}
+
 /* JUS-148: the pinned scroll affordance — a fade with a chevron that rides the
    scrollport's right edge (pointer-events: none, so it never eats a tap or a
    hit test). It replaces the old bare gradient, which read as a weak hint. */
@@ -256,7 +347,8 @@ watch(hasSelection, async () => {
 
 @media (max-width: 640px) {
   /* The bulk actions are icon-only on a phone, like the rest of the toolbar
-     (each button keeps its accessible name through aria-label + title). */
+     (each button keeps its accessible name through aria-label, and its
+     tooltip is the shared AppTooltip, JUS-156). */
   .fm-btn-label {
     display: none;
   }

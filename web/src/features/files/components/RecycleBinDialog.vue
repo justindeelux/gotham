@@ -9,6 +9,7 @@ import type { TrashEntry } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import { useTrashStore } from "@/features/files/stores/trash";
 import { entryTypeLabel, formatTimestamp } from "@/features/files/utils/files";
+import AppTooltip from "@/shared/ui/AppTooltip.vue";
 import { formatBytes } from "@/shared/utils/format";
 
 interface Props {
@@ -192,17 +193,19 @@ async function empty(): Promise<void> {
               @positive-click="() => void purge(entry)"
             >
               <template #trigger>
-                <NButton
-                  size="tiny"
-                  type="error"
-                  secondary
-                  :disabled="!canAct || trash.acting"
-                  :aria-label="t('files.trash.purgeAria', { name: entry.name })"
-                >
-                  <template #icon>
-                    <Trash2 :size="13" :stroke-width="1.8" aria-hidden="true" />
-                  </template>
-                </NButton>
+                <AppTooltip :label="t('files.trash.purgeAria', { name: entry.name })">
+                  <NButton
+                    size="tiny"
+                    type="error"
+                    secondary
+                    :disabled="!canAct || trash.acting"
+                    :aria-label="t('files.trash.purgeAria', { name: entry.name })"
+                  >
+                    <template #icon>
+                      <Trash2 :size="13" :stroke-width="1.8" aria-hidden="true" />
+                    </template>
+                  </NButton>
+                </AppTooltip>
               </template>
               {{ t("files.trash.purgeMessage", { name: entry.name }) }}
             </NPopconfirm>

@@ -143,7 +143,8 @@ function switchNode(next: string | number | null): void {
 }
 
 /* Agent-node switcher (JUS-119/134): names the node on screen and lets the user
-   jump to another node's files. It rides in the browser card header. */
+   jump to another node's files. It rides in the browser context bar (JUS-159;
+   previously the card header) next to the Root selector. */
 .fm-node {
   display: inline-flex;
   align-items: center;
@@ -171,9 +172,10 @@ function switchNode(next: string | number | null): void {
 @media (max-width: 640px) {
   .fm-node__select {
     width: auto;
-    /* The 120px basis needs the floor reset too, or the base min-width: 140px
-       above wins and the shrink never takes effect. */
-    min-width: 0;
+    /* Floor the shrink (the JUS-159 context bar is tighter than the old card
+       header): the 120px basis needs the min reset to shrink at all, but never
+       below a usable target. */
+    min-width: 96px;
     flex: 0 1 120px;
   }
 

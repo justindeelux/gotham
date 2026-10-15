@@ -354,7 +354,7 @@ test.describe("icon-only controls are accessible", () => {
     await expect(inline.first()).toHaveCSS("opacity", "1");
 
     // Moving the pointer away hides them again.
-    await page.locator(".fm-card-title").hover();
+    await page.locator(".fm-contextbar").hover();
     await expect(inline.first()).toHaveCSS("opacity", "0");
 
     // Keyboard focus reveals them too, with no pointer involved.
@@ -741,7 +741,7 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     // Click-away closes it too, on the dropdown's own route.
     await more.click();
     await expect(more).toHaveAttribute("aria-expanded", "true");
-    await page.locator(".fm-card-title").click();
+    await page.locator(".fm-contextbar").click();
     await expect(rowMenu).toBeHidden();
     await expect(more).toHaveAttribute("aria-expanded", "false");
 
@@ -835,7 +835,7 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expectMenuClosed(page, "app.yaml");
     await more.click();
     await expectMenuOpen(page, "app.yaml");
-    await page.locator(".fm-card-title").click();
+    await page.locator(".fm-contextbar").click();
     await expectMenuClosed(page, "app.yaml");
 
     // Selecting a menu item closes both.

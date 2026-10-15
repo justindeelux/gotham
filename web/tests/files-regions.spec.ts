@@ -8,14 +8,16 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL, window:readonly */
-// JUS-150 region-separation proof: the committed webdist is served statically
-// with the control-plane file API mocked in real Chromium. Measured claims: the
-// five browser regions (header, tablist, path bar, toolbar, entry list) stack
-// top-to-bottom, every adjacent pair is joined by a single 1px --border rule,
-// and none of the regions paints a band of its own — the header, tablist, path
-// bar and toolbar stay on the card surface (the tablist also draws no boxed
-// border) at 1440, 1024 and 390px. The path bar must not clip the breadcrumb's
-// shared :focus-visible ring.
+// JUS-150 region-separation proof (JUS-159: the card header is gone, so the
+// five browser regions are now the context bar, tablist, path bar, toolbar and
+// entry list): the committed webdist is served statically with the
+// control-plane file API mocked in real Chromium. Measured claims: the regions
+// stack top-to-bottom, every adjacent pair below the tablist is joined by a
+// single 1px --border rule (the context bar meets the tablist with a margin
+// gap only), and none of the regions paints a band of its own — the context
+// bar, tablist, path bar and toolbar stay on the card surface (the tablist also
+// draws no boxed border) at 1440, 1024 and 390px. The path bar must not clip
+// the breadcrumb's shared :focus-visible ring.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -221,7 +223,7 @@ async function regionsOf(page: Page): Promise<{
     };
     return {
       regions: {
-        header: region(".files-browser .n-card-header"),
+        contextbar: region(".fm-contextbar"),
         tablist: region(".fm-tabs"),
         pathbar: region(".fm-bar.fm-pathbar"),
         toolbar: region(".fm-bar.fm-toolbar"),
@@ -235,8 +237,10 @@ async function regionsOf(page: Page): Promise<{
   });
 }
 
-// JUS-150: the five regions stack in order and each adjacent pair is joined by a
-// single 1px --border rule; no region paints a band of its own at every width.
+// JUS-150 (JUS-159: the card header is gone — the context bar replaces it and
+// draws no rule of its own): the five regions stack in order and each adjacent
+// pair below the tablist is joined by a single 1px --border rule; no region
+// paints a band of its own at every width.
 for (const viewport of [
   { width: 1440, height: 900 },
   { width: 1024, height: 768 },
@@ -247,7 +251,7 @@ for (const viewport of [
   }) => {
     await openFiles(page, viewport.width, viewport.height);
     const { regions, cardBackground, border } = await regionsOf(page);
-    const order = ["header", "tablist", "pathbar", "toolbar", "panel"] as const;
+    const order = ["contextbar", "tablist", "pathbar", "toolbar", "panel"] as const;
 
     // Every region has a height and stacks top-to-bottom without overlap.
     for (let index = 0; index < order.length; index += 1) {
@@ -261,11 +265,27 @@ for (const viewport of [
       }
     }
 
-    // Each adjacent pair is separated by a real gap AND a 1px --border rule the
-    // eye can see. The gap rules out a coincident double line; the pair must
-    // share at least one rule, drawn at the shared edge by the upper region's
-    // bottom border or the lower region's top border.
-    for (let index = 1; index < order.length; index += 1) {
+    // The plain context bar meets the tablist with a margin gap only (no rule
+    // on either edge) — it is a temporary row until JUS-160 moves its controls
+    // into the toolbar.
+    expect(
+      regions.tablist.top - regions.contextbar.bottom,
+      `contextbar -> tablist gap at ${viewport.width}px`,
+    ).toBeGreaterThan(0);
+    expect(
+      regions.contextbar.borderBottom,
+      `contextbar draws no bottom rule at ${viewport.width}px`,
+    ).toBe(0);
+    expect(
+      regions.tablist.borderTop,
+      `tablist draws no top rule at ${viewport.width}px`,
+    ).toBe(0);
+
+    // Each remaining adjacent pair is separated by a real gap AND a 1px
+    // --border rule the eye can see. The gap rules out a coincident double
+    // line; the pair must share at least one rule, drawn at the shared edge by
+    // the upper region's bottom border or the lower region's top border.
+    for (let index = 2; index < order.length; index += 1) {
       const upper = regions[order[index - 1]];
       const lower = regions[order[index]];
       const gap = lower.top - upper.bottom;
@@ -286,11 +306,10 @@ for (const viewport of [
       ).toBe(false);
     }
 
-    // JUS-150: the four dividers are plain 1px --border rules, each owned by one
-    // region: the header's bottom edge, then the top edge of the path bar, the
-    // toolbar and the entry list. The tablist itself draws no rule of its own.
+    // JUS-150: the three dividers are plain 1px --border rules, each owned by
+    // the top edge of the path bar, the toolbar and the entry list. The
+    // tablist itself draws no rule of its own.
     const dividers = [
-      ["header", "borderBottom"],
       ["pathbar", "borderTop"],
       ["toolbar", "borderTop"],
       ["panel", "borderTop"],
@@ -307,7 +326,8 @@ for (const viewport of [
 
     // JUS-150: the tablist region is a divider-separated row, not a boxed band —
     // it paints no background of its own and draws no border on any edge (the
-    // dividers around it belong to the header above and the path bar below).
+    // divider below it belongs to the path bar; above it sits the rule-free
+    // context-bar gap).
     expect(
       normalizeColor(regions.tablist.background),
       `tablist has no band background at ${viewport.width}px`,
@@ -319,10 +339,10 @@ for (const viewport of [
       ).toBe(0);
     }
 
-    // JUS-150: the JUS-157 tinted bands are gone — the header, path bar and
-    // toolbar paint no background of their own, so the card surface shows
+    // JUS-150: the JUS-157 tinted bands are gone — the context bar, path bar
+    // and toolbar paint no background of their own, so the card surface shows
     // through (transparent) instead of a distinct band.
-    for (const name of ["header", "pathbar", "toolbar"] as const) {
+    for (const name of ["contextbar", "pathbar", "toolbar"] as const) {
       const background = normalizeColor(regions[name].background);
       expect(
         background === "rgba(0,0,0,0)" || background === normalizeColor(cardBackground),
@@ -331,7 +351,7 @@ for (const viewport of [
     }
 
     // The regions must not clip focus rings: none of them creates a clipping box.
-    for (const name of ["header", "tablist", "pathbar", "toolbar"] as const) {
+    for (const name of ["contextbar", "tablist", "pathbar", "toolbar"] as const) {
       expect(regions[name].overflowX, `${name} overflow-x`).toBe("visible");
       expect(regions[name].overflowY, `${name} overflow-y`).toBe("visible");
     }

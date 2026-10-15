@@ -13,7 +13,7 @@ import type { Locator, Page } from "@playwright/test";
 //   - JUS-118 the browser panel fills the viewport and only the entry list
 //     scrolls (no page-level scroll) at desktop and mobile widths.
 //   - JUS-119/134 the page-top breadcrumb is gone and the agent-node selector
-//     lives in the browser card header (it switches to another node's files).
+//     lives in the browser context bar (it switches to another node's files).
 //   - JUS-120 the toolbar groups New file/New folder under one dropdown, keeps
 //     bulk tools on the right, and collapses to labelled icon-only buttons on
 //     small screens.
@@ -293,7 +293,7 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   // JUS-154: the header field captions ("Agent node" / "Root") are 12px
   // (--text-xs). They used to keep Naive's 18px card-title size because the
   // `.small` class had no rule in either component's scoped styles.
-  const captions = page.locator(".fm-card-tools .fm-field-label");
+  const captions = page.locator(".fm-contextbar .fm-field-label");
   await expect(captions).toHaveCount(2);
   const captionSizes = await captions.evaluateAll((elements) =>
     elements.map((element) => getComputedStyle(element).fontSize),
@@ -301,7 +301,7 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   expect(captionSizes).toEqual(["12px", "12px"]);
 
   // JUS-134: the agent-node selector decides the listing, so it lives in the
-  // browser card header next to the Root selector, not a bar at the page bottom.
+  // browser context bar next to the Root selector, not a bar at the page bottom.
   const node = page.locator(".fm-node__select");
   await expect(node).toBeVisible();
   await expect(node).toContainText("prod-01");
@@ -323,7 +323,7 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   await expect(page.locator(".fm-label").first()).toBeVisible();
 });
 
-test("the header node selector stays reachable at desktop and mobile", async ({
+test("the context-bar node selector stays reachable at desktop and mobile", async ({
   page,
 }) => {
   for (const viewport of [

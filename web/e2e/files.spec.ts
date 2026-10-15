@@ -711,13 +711,13 @@ test.describe("files archive", () => {
     // Compress the selected folder.
     await page.getByLabel("Select conf").check();
 
-    // JUS-128: bulk actions live on the right of the toolbar; the former
-    // .fm-bulk bar is gone and the selection count shows.
+    // JUS-128/146: the bulk actions and their count live in the header bar
+    // that replaces the column-header row; the former .fm-bulk bar is gone.
     await expect(page.locator(".fm-bulk")).toHaveCount(0);
-    const toolbar = page.locator(".fm-toolbar");
-    await expect(toolbar).toContainText("1 selected");
+    const bar = page.locator(".fm-head-bulk");
+    await expect(bar).toContainText("1 selected");
     await expect(
-      toolbar.getByRole("button", { name: "Download", exact: true }),
+      bar.getByRole("button", { name: "Download", exact: true }),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Compress…", exact: true }).click();
@@ -1092,7 +1092,10 @@ test.describe("files shift-click range selection", () => {
     await expect(page.locator(".fm-bulk-count")).toContainText("5000 selected");
   });
 
-  test("a sort change ends the run", async ({ page, request }) => {
+  test("the sort headers return on Clear while a selection hides them", async ({
+    page,
+    request,
+  }) => {
     const server = await seedServer(request, uniqueSuffix());
     await routeFiles(page, {
       roots: (route) => json(route, 200, { roots: [writableRoot] }),
@@ -1100,13 +1103,36 @@ test.describe("files shift-click range selection", () => {
     });
 
     await page.goto(`/servers/${server.id}/files`);
-    await listRow(page, "conf").click();
-    // Reorder: the anchor no longer points at the same neighbours.
-    await page.getByRole("button", { name: "Size", exact: true }).click();
-    await listRow(page, "notes.md").click({ modifiers: ["Shift"] });
 
+    // JUS-146: with nothing selected the sticky header row is the column
+    // headers, so a sort is reachable and its aria-sort updates. (The store's
+    // "a sort change resets the range anchor" rule is covered directly by
+    // web/tests/files-range.test.ts — a sort is no longer reachable while a
+    // selection exists.)
+    await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "visible");
+    await page.getByRole("button", { name: "Size", exact: true }).click();
+    await expect(page.locator(".fm-head .fm-cell--size")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+
+    // Selecting a row replaces the column headers with the bulk bar, so the
+    // sort control (and its aria-sort) is no longer shown...
+    await listRow(page, "conf").click();
     await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
-    await expect(page.locator(".fm-bulk-count")).toContainText("1 selected");
+    await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "hidden");
+    await expect(page.locator(".fm-head-bulk")).toContainText("1 selected");
+
+    // ...and Clear brings the sort headers back.
+    await page
+      .locator(".fm-selection-actions")
+      .getByRole("button", { name: "Clear", exact: true })
+      .click();
+    await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "visible");
+    await expect(page.locator(".fm-head .fm-cell--size")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
   });
 
   test("shift-click on a row's own controls runs the control and leaves the selection alone", async ({

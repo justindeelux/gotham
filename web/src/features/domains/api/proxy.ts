@@ -350,7 +350,7 @@ export async function deleteRedirect(id: string): Promise<void> {
  * entrypoints, the TLS resolver (empty for plain HTTP) and the owning
  * control-plane row (an application, a compose service, or a redirect rule).
  */
-export type RouterKind = "application" | "service" | "redirect";
+export type RouterKind = "application" | "service" | "redirect" | "control_plane";
 
 /** Node sync state observed on read (generated vs last synced version). */
 export type RouterSyncStatus = "synced" | "pending" | "unknown";

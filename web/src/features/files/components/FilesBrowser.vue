@@ -3153,6 +3153,14 @@ function onFolderMenu(key: string): void {
   font-weight: 600;
 }
 
+/* The strip scrolls (overflow-x: auto) and clips its descendants at its edge,
+   so the shared outward :focus-visible ring would be cut off entirely on the
+   default single tab. Draw the same ring just inside the tab instead (JUS-152);
+   the ring keeps the shared colour and width, only the offset flips inward. */
+.fm-tab:focus-visible {
+  outline-offset: -2px;
+}
+
 .fm-tab-name {
   overflow: hidden;
   text-overflow: ellipsis;

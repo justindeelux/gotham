@@ -6,7 +6,7 @@ import { useI18n } from "vue-i18n";
 
 import { saveGeneral } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
-import ControlPlaneDomainStatus from "./ControlPlaneDomainStatus.vue";
+import ControlPlaneDomainStatus from "@/features/instance-settings/components/ControlPlaneDomainStatus.vue";
 import { timezoneOptions } from "@/features/instance-settings/composables/useTimezoneOptions";
 import { useSectionForm } from "@/features/instance-settings/composables/useSectionForm";
 import {

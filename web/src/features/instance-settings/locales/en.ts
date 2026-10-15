@@ -33,12 +33,15 @@ const en = {
     dnsUnknown: "DNS: not reported",
     certUnknown: "Certificate: not reported",
     certNotApplicable: "Certificate: not applicable (HTTP)",
-    observationHint: "The routers API does not report DNS resolution or panel certificate issuance.",
+    observationHint:
+      "The routers API does not report DNS resolution or panel certificate issuance.",
     loading: "Router: checking…",
     synced: "Router: synced",
     pending: "Router: sync pending",
     unknown: "Router: unknown",
-    missingLocalhost: "The localhost node is not registered. Register it before syncing the control-plane router.",
+    missingLocalhost:
+      "The localhost node is not registered. " +
+      "Register it before syncing the control-plane router.",
     readFailed: "Could not read the localhost router status. Check the node and retry.",
     unsaved: "Save the URL before its router can be generated and synced.",
     refresh: "Refresh status",

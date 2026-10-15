@@ -3,7 +3,7 @@ import { storageStatePath } from "./support";
 
 test.use({ storageState: storageStatePath });
 
-test("control-plane URL status follows edits and warns when localhost is missing", async ({ page }) => {
+test("URL status follows edits and warns when localhost is missing", async ({ page }) => {
   const field = (value: string) => ({ value, source: "db", locked: false });
   const settings = {
     general: {

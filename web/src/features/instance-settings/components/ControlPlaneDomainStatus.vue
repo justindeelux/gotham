@@ -13,10 +13,12 @@ const reload = ref(0);
 const loading = ref(false);
 const routerStatus = ref<RouterSyncStatus>("unknown");
 const warning = ref<"missingLocalhost" | "readFailed" | "unsaved" | null>(null);
-const parsedUrl = computed(() => {
-  const result = controlPlaneUrlSchema.safeParse(props.url);
+function parseUrl(value: string): URL | null {
+  const result = controlPlaneUrlSchema.safeParse(value);
   return result.success && result.data ? new URL(result.data) : null;
-});
+}
+
+const parsedUrl = computed(() => parseUrl(props.url));
 
 watch(
   [() => props.url, () => props.savedUrl, reload],
@@ -36,13 +38,13 @@ watch(
           warning.value = "missingLocalhost";
         } else if (node.error) {
           warning.value = "readFailed";
-        } else if (props.url.trim() !== props.savedUrl.trim()) {
+        } else if (url.origin !== parseUrl(props.savedUrl)?.origin) {
           warning.value = "unsaved";
           routerStatus.value = "pending";
         } else {
           const router = result.routers.find((entry) =>
             entry.kind === "control_plane" && entry.server_id === node.server_id &&
-            entry.host === url.hostname &&
+            new URL(`${url.protocol}//${entry.host}`).origin === url.origin &&
             entry.entrypoints.includes(url.protocol === "https:" ? "websecure" : "web"),
           );
           routerStatus.value = router ? node.sync_status : "pending";

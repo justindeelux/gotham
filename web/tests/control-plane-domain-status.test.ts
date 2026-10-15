@@ -44,7 +44,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("control-plane domain status", () => {
-  it("reports synced without inventing DNS or certificate observations, in both locales", async () => {
+  it("reports synced and unreported observations in both locales", async () => {
     expect(checkCatalogParity(en, vietnamese)).toEqual([]);
     const wrapper = mountStatus();
     expect(wrapper.text()).toContain(en.domainStatus.loading);
@@ -61,11 +61,14 @@ describe("control-plane domain status", () => {
 
   it.each([
     [{ ...envelope, nodes: [] }, "missingLocalhost", "unknown"],
-    [{ ...envelope, nodes: [{ ...envelope.nodes[0], error: "offline" }] }, "readFailed", "unknown"],
+    [
+      { ...envelope, nodes: [{ ...envelope.nodes[0], error: "offline" }] },
+      "readFailed", "unknown",
+    ],
     [{ ...envelope, routers: [] }, null, "pending"],
     [{ ...envelope, nodes: [{ ...envelope.nodes[0], sync_status: "pending" }] }, null, "pending"],
     [{ ...envelope, nodes: [{ ...envelope.nodes[0], sync_status: "unknown" }] }, null, "unknown"],
-  ] as const)("handles missing, unreadable, pending and unknown routers", async (result, warning, status) => {
+  ] as const)("handles router state: %j", async (result, warning, status) => {
     vi.mocked(listRouters).mockResolvedValue(result as Awaited<ReturnType<typeof listRouters>>);
     const wrapper = mountStatus();
     await settle();
@@ -76,7 +79,9 @@ describe("control-plane domain status", () => {
 
   it("rejects old responses after URL changes and refreshes after save", async () => {
     let resolveOld!: (_value: typeof envelope) => void;
-    vi.mocked(listRouters).mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    vi.mocked(listRouters).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveOld = resolve;
+    }));
     const wrapper = mountStatus();
     await settle();
     await wrapper.setProps({ url: "http://new.example.com" });
@@ -121,6 +126,32 @@ describe("control-plane domain status", () => {
     const wrapper = mountStatus();
     await settle();
     expect(wrapper.text()).toContain(en.domainStatus.pending);
+    wrapper.unmount();
+  });
+
+  it.each([
+    "https://panel.example.com/",
+    "https://PANEL.EXAMPLE.COM",
+    "https://panel.example.com:443/",
+  ])("accepts equivalent URL origins: %s", async (draft) => {
+    const wrapper = mountStatus();
+    await wrapper.setProps({ url: draft });
+    await settle();
+    expect(wrapper.text()).toContain(en.domainStatus.synced);
+    expect(wrapper.text()).not.toContain(en.domainStatus.unsaved);
+    wrapper.unmount();
+  });
+
+  it("does not report a different port as synced, even after save", async () => {
+    const wrapper = mountStatus();
+    await wrapper.setProps({ url: "https://panel.example.com:8443/" });
+    await settle();
+    expect(wrapper.text()).toContain(en.domainStatus.unsaved);
+    expect(wrapper.text()).not.toContain(en.domainStatus.synced);
+    await wrapper.setProps({ savedUrl: "https://panel.example.com:8443" });
+    await settle();
+    expect(wrapper.text()).toContain(en.domainStatus.pending);
+    expect(wrapper.text()).not.toContain(en.domainStatus.unsaved);
     wrapper.unmount();
   });
 });

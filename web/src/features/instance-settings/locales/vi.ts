@@ -31,12 +31,16 @@ const vi: typeof en = {
     dnsUnknown: "DNS: chưa báo cáo",
     certUnknown: "Chứng chỉ: chưa báo cáo",
     certNotApplicable: "Chứng chỉ: không áp dụng (HTTP)",
-    observationHint: "API router không báo cáo kết quả phân giải DNS hay việc cấp chứng chỉ cho bảng điều khiển.",
+    observationHint:
+      "API router không báo cáo kết quả phân giải DNS " +
+      "hay việc cấp chứng chỉ cho bảng điều khiển.",
     loading: "Router: đang kiểm tra…",
     synced: "Router: đã đồng bộ",
     pending: "Router: chờ đồng bộ",
     unknown: "Router: không rõ",
-    missingLocalhost: "Node localhost chưa được đăng ký. Hãy đăng ký node trước khi đồng bộ router control plane.",
+    missingLocalhost:
+      "Node localhost chưa được đăng ký. " +
+      "Hãy đăng ký node trước khi đồng bộ router control plane.",
     readFailed: "Không đọc được trạng thái router localhost. Hãy kiểm tra node và thử lại.",
     unsaved: "Lưu URL trước khi tạo và đồng bộ router tương ứng.",
     refresh: "Làm mới trạng thái",

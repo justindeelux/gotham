@@ -39,7 +39,7 @@ const vi = {
     columnType: "Loại",
     columnSize: "Kích thước",
     columnModified: "Sửa đổi",
-    columnMode: "Quyền",
+    columnMode: "Chủ/Quyền",
     columnActions: "Thao tác",
     sortBy: "Sắp xếp",
     sortAscending: "Tăng dần",

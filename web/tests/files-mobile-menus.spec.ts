@@ -11,7 +11,7 @@ import type { Locator, Page } from "@playwright/test";
 // JUS-145 proof, round 1: at EVERY width where the list overflows horizontally
 // the row/tile menu trigger is on screen and hit-testable (the actions cell is
 // pinned sticky-right), the compact layout keeps Modified visible and the
-// Type/Modified/Mode columns sortable, and the windowed list keeps its exact
+// Modified/Owner-Mode columns sortable, and the windowed list keeps its exact
 // scroll maths. The committed webdist is served statically with the
 // control-plane file API mocked in real Chromium.
 
@@ -464,9 +464,8 @@ test.describe("folded row actions and compact sort (JUS-145)", () => {
           els.map((el) => (el as HTMLElement).dataset.entry ?? ""),
         );
 
-    // Headers for Type / Modified / Mode are hidden, so the toolbar control is
+    // Headers for Modified / Owner-Mode are hidden, so the toolbar control is
     // the only way to sort by them.
-    await expect(page.locator(".fm-head .fm-cell--type")).toBeHidden();
     await expect(page.locator(".fm-head .fm-cell--modified")).toBeHidden();
     await expect(page.locator(".fm-head .fm-cell--mode")).toBeHidden();
 

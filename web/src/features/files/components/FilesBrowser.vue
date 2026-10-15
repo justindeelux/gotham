@@ -1765,7 +1765,7 @@ function onFileOps(key: string): void {
 
 /**
  * JUS-145: the list headers carry the sort controls, but the compact layout
- * hides the Type / Modified / Mode headers — and the grid has no headers at
+ * hides the Modified / Owner-Mode headers — and the grid has no headers at
  * all — so this toolbar control keeps every column sortable there. It is shown
  * only when the headers are hidden and mirrors the active column + direction.
  */
@@ -1777,15 +1777,6 @@ const sortMenuOpen = ref(false);
  */
 const bulkSortMenuOpen = ref(false);
 const isCompactList = useMediaQuery("(max-width: 860px)");
-/**
- * isNarrowDesktop is the 861-1280px band where the desktop table overflows the
- * scroller but the compact columns have not collapsed. There the pinned Actions
- * cell covers the low-value Mode column at rest, so Mode is dropped there too
- * (JUS-148).
- */
-const isNarrowDesktop = useMediaQuery(
-  "(min-width: 861px) and (max-width: 1280px)",
-);
 /**
  * showSortControl keeps the toolbar sort control reachable exactly where the
  * column headers cannot carry the sort: the compact layout (headers hidden
@@ -1803,13 +1794,14 @@ const showSortControl = computed<boolean>(
  * columnCount is the number of columns the table exposes to assistive tech
  * (JUS-148): the leading select-all cell plus the columns not collapsed at this
  * width. It keeps aria-colcount and the bulk bar's aria-colspan honest against
- * the rendered body rows.
+ * the rendered body rows. JUS-161: the desktop table is select + name +
+ * owner/mode + size + modified + actions.
  */
 const columnCount = computed<number>(() => {
   if (isCompactList.value) {
     return 4; // select + name + size + actions
   }
-  return isNarrowDesktop.value ? 6 : 7;
+  return 6;
 });
 
 /** sortColumnLabel maps a sort key to its column header copy. */
@@ -2560,8 +2552,8 @@ function onFolderMenu(key: string): void {
           {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
         </span>
         <!-- JUS-145/147: compact sort control, RENDERED only where the column
-             headers cannot carry the sort — the compact layout (Type / Modified /
-             Mode headers hidden) and the grid (no headers at all). It is never
+             headers cannot carry the sort — the compact layout (Modified / Owner-Mode
+             headers hidden) and the grid (no headers at all). It is never
              reserved while hidden, so it can never tip the first toolbar row onto
              an empty second row (JUS-147); while a selection hides the headers the
              bulk bar carries its own sort control (below). -->
@@ -2764,10 +2756,13 @@ function onFolderMenu(key: string): void {
                   <ChevronDown v-if="files.sortKey === 'name'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
-              <div class="fm-cell--type" role="columnheader" :aria-sort="ariaSort('kind')">
-                <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'kind' }" @click="files.setSort('kind')">
-                  {{ $t("files.browser.columnType") }}
-                  <ChevronDown v-if="files.sortKey === 'kind'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
+              <!-- JUS-161: Name, Owner/Mode, Size, Modified, Operation. The
+                   owner name has no API field yet, so the cell shows the octal
+                   mode until the listing carries it. -->
+              <div class="fm-cell--mode" role="columnheader" :aria-sort="ariaSort('mode')">
+                <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'mode' }" @click="files.setSort('mode')">
+                  {{ $t("files.browser.columnMode") }}
+                  <ChevronDown v-if="files.sortKey === 'mode'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
               <div role="columnheader" class="fm-cell--size" :aria-sort="ariaSort('size')">
@@ -2780,12 +2775,6 @@ function onFolderMenu(key: string): void {
                 <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'modified' }" @click="files.setSort('modified')">
                   {{ $t("files.browser.columnModified") }}
                   <ChevronDown v-if="files.sortKey === 'modified'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
-                </button>
-              </div>
-              <div class="fm-cell--mode" role="columnheader" :aria-sort="ariaSort('mode')">
-                <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'mode' }" @click="files.setSort('mode')">
-                  {{ $t("files.browser.columnMode") }}
-                  <ChevronDown v-if="files.sortKey === 'mode'" class="fm-sort-arrow" :class="{ 'is-desc': files.sortDir === 'desc' }" :size="12" :stroke-width="1.8" aria-hidden="true" />
                 </button>
               </div>
               <div role="columnheader" class="right fm-actions-cell">{{ $t("files.browser.columnActions") }}</div>
@@ -2905,10 +2894,9 @@ function onFolderMenu(key: string): void {
                 <span class="fm-row-sub">{{ modifiedLabel(entry) }}</span>
               </span>
             </div>
-            <div class="fm-cell fm-cell--type" role="cell">{{ typeLabel(entry) }}</div>
+            <div class="fm-cell fm-mode fm-cell--mode" role="cell" :title="formatMode(entry.mode)">{{ formatOctalModeFull(entry.mode) }}</div>
             <div class="fm-cell fm-cell--size" role="cell">{{ entry.kind === "directory" ? "—" : formatBytes(entry.size) }}</div>
             <div class="fm-cell fm-date fm-cell--modified" role="cell" :title="formatTimestamp(entry.modified_at)">{{ modifiedLabel(entry) }}</div>
-            <div class="fm-cell fm-mode fm-cell--mode" role="cell" :title="formatMode(entry.mode)">{{ formatOctalModeFull(entry.mode) }}</div>
             <div class="fm-actions" role="cell">
               <!-- The inline actions (.fm-action) stay hover/focus-revealed on
                    pointer devices; the ⋮ menu button below stays visible
@@ -3686,15 +3674,18 @@ function onFolderMenu(key: string): void {
 }
 
 .table-wrap {
-  /* The entry list is the panel's single scrolling region (JUS-118). */
+  /* The entry list is the panel's single scrolling region (JUS-118). JUS-161:
+     the framed card around the table — a thin token border + radius. */
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: auto;
   overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
 }
 
 .fm-table {
-  min-width: 820px;
+  min-width: 760px;
 }
 
 /* JUS-137: the pinned (out-of-window) row is absolutely positioned, so the
@@ -3718,8 +3709,8 @@ function onFolderMenu(key: string): void {
 
 .fm-row {
   display: grid;
-  /* Leading checkbox column, then the type icon beside the name. */
-  grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 84px 168px;
+  /* JUS-161: checkbox, Name, Owner/Mode, Size, Modified, Operation. */
+  grid-template-columns: 34px minmax(240px, 1.6fr) 110px 96px 148px 168px;
   gap: var(--space-3);
   align-items: center;
   padding: 4px var(--space-3);
@@ -3787,7 +3778,7 @@ function onFolderMenu(key: string): void {
   grid-column: 2 / -1;
   grid-row: 1;
   display: grid;
-  grid-template-columns: minmax(240px, 1.6fr) 118px 96px 148px 84px 168px;
+  grid-template-columns: minmax(240px, 1.6fr) 110px 96px 148px 168px;
   gap: var(--space-3);
   align-items: center;
   font-family: var(--font-mono);
@@ -3801,30 +3792,12 @@ function onFolderMenu(key: string): void {
 }
 
 /* JUS-145/146: mirror the compact row grid inside the column-header variant so
-   the header columns line up with the rows at ≤860px (Type/Modified/Mode are
+   the header columns line up with the rows at ≤860px (Modified/Owner-Mode are
    hidden there; the name/size/actions tracks match .fm-row). */
 @media (max-width: 860px) {
   .fm-head-cols {
     grid-template-columns: minmax(0, 1fr) 64px 64px;
     gap: var(--space-2);
-  }
-}
-
-/* JUS-148: in the 861-1280px band the desktop table still overflows the scroller,
-   so the pinned Actions cell covers the low-value Mode column at rest. Drop Mode
-   there; the row and header grids lose its track so the remaining columns keep
-   their widths. */
-@media (min-width: 861px) and (max-width: 1280px) {
-  .fm-row {
-    grid-template-columns: 34px minmax(240px, 1.6fr) 118px 96px 148px 168px;
-  }
-
-  .fm-head-cols {
-    grid-template-columns: minmax(240px, 1.6fr) 118px 96px 148px 168px;
-  }
-
-  .fm-cell--mode {
-    display: none;
   }
 }
 
@@ -4358,10 +4331,10 @@ function onFolderMenu(key: string): void {
 /* ── JUS-145: compact list (a density optimisation, not the reachability fix) ─
    The Actions cell is pinned sticky at every width the table overflows (see
    .fm-row > .fm-actions), so the ⋮ is always on screen. Below 860px the
-   low-value columns (Type, Modified, Mode) additionally collapse so Name, Size
+   low-value columns (Modified, Owner/Mode) additionally collapse so Name, Size
    and the ⋮ fit a phone scrollport without a sideways scroll and the rows stay
    dense. Modified is not lost — it rides under the name as a muted line — and
-   the toolbar sort control keeps Type / Modified / Mode sortable because their
+   the toolbar sort control keeps Modified / Owner-Mode sortable because their
    headers are hidden here. */
 @media (max-width: 860px) {
   .fm-table {
@@ -4380,7 +4353,6 @@ function onFolderMenu(key: string): void {
     padding-block: 3px;
   }
 
-  .fm-cell--type,
   .fm-cell--modified,
   .fm-cell--mode {
     display: none;

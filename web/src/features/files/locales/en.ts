@@ -40,7 +40,7 @@ const en = {
     columnType: "Type",
     columnSize: "Size",
     columnModified: "Modified",
-    columnMode: "Mode",
+    columnMode: "Owner/Mode",
     columnActions: "Actions",
     sortBy: "Sort",
     sortAscending: "Ascending",

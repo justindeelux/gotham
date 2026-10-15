@@ -1562,9 +1562,10 @@ test("the compact sort menu does not reopen after a width change", async ({ page
   await expect(page.getByRole("menu", { name: "Sort" })).toHaveCount(0);
 });
 
-// JUS-148: in the 861-1280px band the pinned Actions cell covers the Mode column
-// at rest, so Mode is dropped there (and restored on both sides of the band).
-test("the Mode column drops out where the pinned actions cover it", async ({ page }) => {
+// JUS-161: the Owner/Mode column sits right after Name and stays visible at
+// every desktop width (the JUS-148 861-1280 drop is gone with the old Mode
+// column position); it collapses only in the compact layout (<=860px).
+test("the Owner/Mode column stays visible across desktop widths", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${server1}/files`);
@@ -1576,24 +1577,22 @@ test("the Mode column drops out where the pinned actions cover it", async ({ pag
     .first()
     .locator(".fm-cell--mode");
 
-  await expect(headMode, "Mode shows above the band").toBeVisible();
-  await expect(rowMode, "Mode shows above the band").toBeVisible();
-
-  for (const width of [1280, 1024, 861]) {
+  for (const width of [1440, 1280, 1024, 861]) {
     await page.setViewportSize({ width, height: 768 });
     await settleLayout(page);
-    await expect(headMode, `Mode header hidden at ${width}px`).toBeHidden();
-    await expect(rowMode, `Mode cell hidden at ${width}px`).toBeHidden();
+    await expect(headMode, `Owner/Mode header visible at ${width}px`).toBeVisible();
+    await expect(rowMode, `Owner/Mode cell visible at ${width}px`).toBeVisible();
   }
 
-  await page.setViewportSize({ width: 1281, height: 900 });
+  await page.setViewportSize({ width: 860, height: 844 });
   await settleLayout(page);
-  await expect(headMode, "Mode returns at 1281px").toBeVisible();
+  await expect(headMode, "Owner/Mode header hidden in compact layout").toBeHidden();
+  await expect(rowMode, "Owner/Mode cell hidden in compact layout").toBeHidden();
 });
 
-// JUS-148: while the bar replaces the headers the row exposed 2 cells against 7
-// body cells. aria-colcount on the table and aria-colspan on the bar keep the
-// semantics consistent at every width.
+// JUS-148/JUS-161: while the bar replaces the headers the row exposes 2 cells
+// against 6 body cells. aria-colcount on the table and aria-colspan on the bar
+// keep the semantics consistent at every width.
 test("the table and bulk bar agree on the column count", async ({ page }) => {
   await page.setViewportSize({ width: 1876, height: 1080 });
   await mockApi(page);
@@ -1602,8 +1601,8 @@ test("the table and bulk bar agree on the column count", async ({ page }) => {
 
   const table = page.locator(".fm-table");
   const bar = page.locator(".fm-head-bulk");
-  await expect(table).toHaveAttribute("aria-colcount", "7");
-  await expect(bar).toHaveAttribute("aria-colspan", "6");
+  await expect(table).toHaveAttribute("aria-colcount", "6");
+  await expect(bar).toHaveAttribute("aria-colspan", "5");
   expect(
     await page
       .locator(".fm-table .fm-row:not(.fm-head)")
@@ -1611,15 +1610,15 @@ test("the table and bulk bar agree on the column count", async ({ page }) => {
       .locator('[role="cell"]')
       .count(),
     "a body row exposes one cell per column",
-  ).toBe(7);
+  ).toBe(6);
 
-  // The narrow desktop band drops Mode.
+  // No narrow-desktop band change anymore: Owner/Mode stays at 1024px.
   await page.setViewportSize({ width: 1024, height: 768 });
   await settleLayout(page);
   await expect(table).toHaveAttribute("aria-colcount", "6");
   await expect(bar).toHaveAttribute("aria-colspan", "5");
 
-  // The compact layout collapses Type/Modified/Mode.
+  // The compact layout collapses Modified/Owner-Mode.
   await page.setViewportSize({ width: 390, height: 844 });
   await settleLayout(page);
   await expect(table).toHaveAttribute("aria-colcount", "4");

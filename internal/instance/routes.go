@@ -41,6 +41,8 @@ type handler struct {
 //	PUT  /v1/instance/settings/network
 //	POST /v1/instance/settings/network/confirm
 //	POST /v1/instance/settings/network/revert
+//	POST /v1/instance/settings/control-plane-url/confirm
+//	POST /v1/instance/settings/control-plane-url/revert
 //
 // admin wraps the group with authentication and the platform-operator gate
 // (non-operators get 403 before any handler runs). A nil svc mounts nothing.
@@ -57,6 +59,8 @@ func Mount(r chi.Router, admin func(http.Handler) http.Handler, userID UserIDFun
 		g.Put("/v1/instance/settings/network", h.putNetwork)
 		g.Post("/v1/instance/settings/network/confirm", h.confirm)
 		g.Post("/v1/instance/settings/network/revert", h.revert)
+		g.Post("/v1/instance/settings/control-plane-url/confirm", h.confirmControlPlaneURL)
+		g.Post("/v1/instance/settings/control-plane-url/revert", h.revertControlPlaneURL)
 	})
 }
 
@@ -107,6 +111,16 @@ func (h *handler) revert(w http.ResponseWriter, r *http.Request) {
 	h.reply(w, st, err)
 }
 
+func (h *handler) confirmControlPlaneURL(w http.ResponseWriter, r *http.Request) {
+	st, err := h.svc.ConfirmControlPlaneURL(r.Context(), h.actor(r), r.Host)
+	h.reply(w, st, err)
+}
+
+func (h *handler) revertControlPlaneURL(w http.ResponseWriter, r *http.Request) {
+	st, err := h.svc.RevertControlPlaneURL(r.Context(), h.actor(r))
+	h.reply(w, st, err)
+}
+
 func (h *handler) reply(w http.ResponseWriter, st State, err error) {
 	var fe FieldErrors
 	switch {
@@ -116,7 +130,7 @@ func (h *handler) reply(w http.ResponseWriter, st State, err error) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "validation failed", Errors: fe})
 	case errors.Is(err, ErrUnsupported):
 		writeJSON(w, http.StatusConflict, errorBody{Message: "this host does not support applying these settings from Gotham"})
-	case errors.Is(err, ErrPending), errors.Is(err, ErrNoPending), errors.Is(err, ErrRiskyNetwork):
+	case errors.Is(err, ErrDomainPending), errors.Is(err, ErrNoDomainPending), errors.Is(err, ErrDomainNotSynced), errors.Is(err, ErrConfirmDomainHost), errors.Is(err, ErrPending), errors.Is(err, ErrNoPending), errors.Is(err, ErrRiskyNetwork):
 		writeJSON(w, http.StatusConflict, errorBody{Message: err.Error()})
 	case errors.Is(err, ErrHost):
 		h.logger.Error("instance host helper failed", "error", err)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/teams"
 )
@@ -122,6 +123,7 @@ type DialFunc func(ctx context.Context, serverID uuid.UUID) (ComposeAgent, error
 // Config wires a Service. Store (or an explicit Repository) and Dial are
 // required for anything beyond tests.
 type Config struct {
+	GuardDomains proxy.DomainGuard
 	// Store is the PostgreSQL-backed repository. Ignored when Repository is
 	// set.
 	Store *store.Store
@@ -155,6 +157,7 @@ func (c Config) repository() Repository {
 // documents, renders them per deploy and drives the node agent's compose
 // surface. It is safe for concurrent use.
 type service struct {
+	guardDomains  proxy.DomainGuard
 	repo          Repository
 	dial          DialFunc
 	proxy         RouteSync
@@ -179,6 +182,7 @@ func NewService(cfg Config) ServiceService {
 		timeout = defaultDeployTimeout
 	}
 	return &service{
+		guardDomains:  cfg.GuardDomains,
 		repo:          cfg.repository(),
 		dial:          cfg.Dial,
 		proxy:         cfg.Proxy,
@@ -274,6 +278,11 @@ func (s *service) Create(ctx context.Context, userID uuid.UUID, req CreateReques
 	if err := Validate(req.ComposeYAML, req.Env); err != nil {
 		return Service{}, RedactError(err, req.Env)
 	}
+	releaseDomain, err := s.guardComposeDomains(ctx, req.ComposeYAML, req.Env)
+	if err != nil {
+		return Service{}, err
+	}
+	defer releaseDomain()
 	exists, err := s.repo.ServerExists(ctx, req.ServerID, teams.ScopeFor(ctx, userID))
 	if err != nil {
 		return Service{}, err
@@ -415,6 +424,11 @@ func (s *service) Update(ctx context.Context, userID, serviceID uuid.UUID, req U
 	if err := Validate(service.ComposeYAML, service.Env); err != nil {
 		return Service{}, RedactError(err, service.Env)
 	}
+	releaseDomain, err := s.guardComposeDomains(ctx, service.ComposeYAML, service.Env)
+	if err != nil {
+		return Service{}, err
+	}
+	defer releaseDomain()
 	// Placement columns the request leaves alone are zeroed, so the
 	// conditional write below keeps the freshly read values instead of a
 	// possibly stale snapshot (a Nil UUID never persists: both columns are

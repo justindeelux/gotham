@@ -55,6 +55,13 @@ func (r *storeRepository) Load(ctx context.Context) (Stored, error) {
 		},
 		System: System{Hostname: row.Hostname, NTPEnabled: row.NtpEnabled, NTPServers: row.NtpServers},
 	}
+	if len(row.PendingControlPlaneUrl) > 0 {
+		var pending PendingControlPlaneURL
+		if err := json.Unmarshal(row.PendingControlPlaneUrl, &pending); err != nil {
+			return Stored{}, fmt.Errorf("instance: decode pending control-plane URL: %w", err)
+		}
+		rec.PendingControlPlaneURL = &pending
+	}
 	if len(row.PendingNetwork) > 0 {
 		var p Pending
 		if err := json.Unmarshal(row.PendingNetwork, &p); err != nil {
@@ -79,8 +86,15 @@ func (r *storeRepository) Save(ctx context.Context, actor uuid.UUID, section str
 	}
 	switch section {
 	case SectionGeneral:
+		var pending []byte
+		if rec.PendingControlPlaneURL != nil {
+			pending, err = json.Marshal(rec.PendingControlPlaneURL)
+			if err != nil {
+				return fmt.Errorf("instance: encode pending control-plane URL: %w", err)
+			}
+		}
 		err = r.store.UpdateInstanceGeneral(ctx, sqlc.UpdateInstanceGeneralParams{
-			ControlPlaneUrl: rec.ControlPlaneURL, InstanceName: rec.InstanceName, Timezone: rec.Timezone,
+			ControlPlaneUrl: rec.ControlPlaneURL, InstanceName: rec.InstanceName, Timezone: rec.Timezone, PendingControlPlaneUrl: pending,
 		}, audit)
 	case SectionSystem:
 		err = r.store.UpdateInstanceSystem(ctx, sqlc.UpdateInstanceSystemParams{

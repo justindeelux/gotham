@@ -395,7 +395,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// Redirect rules (BE-6.3) and the certificate status read path share
 		// the same store and the same best-effort resync as the SSL surface;
 		// the status service dials the node agent lazily per read.
-		redirectConfig := proxy.RedirectConfig{Logger: s.logger, Resync: s.resyncProxyNodes}
+		redirectConfig := proxy.RedirectConfig{Logger: s.logger, Resync: s.resyncProxyNodes, GuardDomains: s.guardDomains}
 		statusConfig := proxy.CertificateStatusConfig{Logger: s.logger}
 		if s.persistence != nil {
 			redirectConfig.Store = proxy.NewStoreRedirect(s.persistence)
@@ -414,11 +414,25 @@ func (s *Server) routes() (http.Handler, error) {
 		// across a restart is settled here.
 		if s.persistence != nil {
 			instanceSvc := instance.NewService(instance.NewStoreRepository(s.persistence), instance.NewSudoApplier(), s.logger)
-			instanceSvc.ResyncProxy = s.resyncProxyNodes
+			instanceSvc.ResyncProxy = func(ctx context.Context) error {
+				if s.proxy == nil {
+					return instance.ErrDomainNotSynced
+				}
+				return s.resyncProxyNodes(ctx)
+			}
+			if checker, ok := s.proxy.(interface {
+				CheckControlPlaneHost(context.Context, string) error
+			}); ok {
+				instanceSvc.CheckControlPlaneHost = checker.CheckControlPlaneHost
+			} else {
+				// Ownership validation remains active when FEATURE_PROXY disables synchronization.
+				checker := proxy.NewService(proxy.Config{Store: s.persistence, Services: services.NewProxySource(s.persistence)})
+				instanceSvc.CheckControlPlaneHost = checker.CheckControlPlaneHost
+			}
+			s.instanceSvc = instanceSvc
 			if err := instanceSvc.Reconcile(context.Background()); err != nil {
 				s.logger.Warn("instance settings reconcile failed", "error", err)
 			}
-			s.instanceSvc = instanceSvc
 			instance.Mount(api, platformOnly, UserIDFromContext, instanceSvc)
 			// The GitHub OAuth redirect derives from the instance control-plane
 			// URL when the explicit redirect env is unset; the provider resolves
@@ -585,6 +599,7 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		return nil
 	}
 	cfg := deploy.Config{
+		GuardDomains:         s.guardDomains,
 		Store:                s.persistence,
 		Secret:               s.secretKey,
 		RedisAddr:            s.cfg.Snapshot().Redis.Addr,
@@ -835,6 +850,12 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		return nil
 	}
 	cfg := proxy.Config{
+		ControlPlaneURLs: func(ctx context.Context) ([]string, error) {
+			if s.instanceSvc == nil {
+				return nil, nil
+			}
+			return s.instanceSvc.ControlPlaneURLs(ctx)
+		},
 		ControlPlaneURL: func(ctx context.Context) (string, error) {
 			if s.instanceSvc == nil {
 				return "", nil
@@ -1040,8 +1061,9 @@ func (s *Server) composeService() services.ServiceService {
 		return nil
 	}
 	cfg := services.Config{
-		Store:  s.persistence,
-		Logger: s.logger,
+		GuardDomains: s.guardDomains,
+		Store:        s.persistence,
+		Logger:       s.logger,
 	}
 	if dialer, ok := s.servers.(composeDialer); ok {
 		cfg.Dial = func(ctx context.Context, serverID uuid.UUID) (services.ComposeAgent, error) {
@@ -1193,6 +1215,9 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 func (s *Server) Run(ctx context.Context) error {
 	if s.closer != nil {
 		defer s.closer()
+	}
+	if s.instanceSvc != nil {
+		defer s.instanceSvc.Close()
 	}
 
 	// Resume a staged update left behind by a crash/reboot during the health

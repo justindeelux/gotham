@@ -3,7 +3,8 @@ SELECT * FROM instance_settings WHERE id = 1;
 
 -- name: UpdateInstanceGeneral :one
 UPDATE instance_settings
-SET control_plane_url = $1, instance_name = $2, timezone = $3, updated_at = now()
+SET control_plane_url = $1, instance_name = $2, timezone = $3,
+    pending_control_plane_url = $4, updated_at = now()
 WHERE id = 1
 RETURNING *;
 

@@ -12,7 +12,7 @@ import (
 )
 
 const getInstanceSettings = `-- name: GetInstanceSettings :one
-SELECT id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at FROM instance_settings WHERE id = 1
+SELECT id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url FROM instance_settings WHERE id = 1
 `
 
 func (q *Queries) GetInstanceSettings(ctx context.Context) (InstanceSetting, error) {
@@ -37,6 +37,7 @@ func (q *Queries) GetInstanceSettings(ctx context.Context) (InstanceSetting, err
 		&i.PendingNetwork,
 		&i.PendingDeadline,
 		&i.UpdatedAt,
+		&i.PendingControlPlaneUrl,
 	)
 	return i, err
 }
@@ -58,19 +59,26 @@ func (q *Queries) InsertInstanceAudit(ctx context.Context, arg InsertInstanceAud
 
 const updateInstanceGeneral = `-- name: UpdateInstanceGeneral :one
 UPDATE instance_settings
-SET control_plane_url = $1, instance_name = $2, timezone = $3, updated_at = now()
+SET control_plane_url = $1, instance_name = $2, timezone = $3,
+    pending_control_plane_url = $4, updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url
 `
 
 type UpdateInstanceGeneralParams struct {
-	ControlPlaneUrl *string `json:"control_plane_url"`
-	InstanceName    *string `json:"instance_name"`
-	Timezone        *string `json:"timezone"`
+	ControlPlaneUrl        *string `json:"control_plane_url"`
+	InstanceName           *string `json:"instance_name"`
+	Timezone               *string `json:"timezone"`
+	PendingControlPlaneUrl []byte  `json:"pending_control_plane_url"`
 }
 
 func (q *Queries) UpdateInstanceGeneral(ctx context.Context, arg UpdateInstanceGeneralParams) (InstanceSetting, error) {
-	row := q.db.QueryRow(ctx, updateInstanceGeneral, arg.ControlPlaneUrl, arg.InstanceName, arg.Timezone)
+	row := q.db.QueryRow(ctx, updateInstanceGeneral,
+		arg.ControlPlaneUrl,
+		arg.InstanceName,
+		arg.Timezone,
+		arg.PendingControlPlaneUrl,
+	)
 	var i InstanceSetting
 	err := row.Scan(
 		&i.ID,
@@ -91,6 +99,7 @@ func (q *Queries) UpdateInstanceGeneral(ctx context.Context, arg UpdateInstanceG
 		&i.PendingNetwork,
 		&i.PendingDeadline,
 		&i.UpdatedAt,
+		&i.PendingControlPlaneUrl,
 	)
 	return i, err
 }
@@ -103,7 +112,7 @@ SET dns_servers = $1,
     pending_network = $9, pending_deadline = $10,
     updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url
 `
 
 type UpdateInstanceNetworkParams struct {
@@ -152,6 +161,7 @@ func (q *Queries) UpdateInstanceNetwork(ctx context.Context, arg UpdateInstanceN
 		&i.PendingNetwork,
 		&i.PendingDeadline,
 		&i.UpdatedAt,
+		&i.PendingControlPlaneUrl,
 	)
 	return i, err
 }
@@ -160,7 +170,7 @@ const updateInstanceSystem = `-- name: UpdateInstanceSystem :one
 UPDATE instance_settings
 SET hostname = $1, ntp_enabled = $2, ntp_servers = $3, updated_at = now()
 WHERE id = 1
-RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at
+RETURNING id, control_plane_url, instance_name, timezone, dns_servers, ipv4_mode, ipv4_address, ipv4_gateway, ipv6_enabled, ipv6_mode, ipv6_address, ipv6_gateway, hostname, ntp_enabled, ntp_servers, pending_network, pending_deadline, updated_at, pending_control_plane_url
 `
 
 type UpdateInstanceSystemParams struct {
@@ -191,6 +201,7 @@ func (q *Queries) UpdateInstanceSystem(ctx context.Context, arg UpdateInstanceSy
 		&i.PendingNetwork,
 		&i.PendingDeadline,
 		&i.UpdatedAt,
+		&i.PendingControlPlaneUrl,
 	)
 	return i, err
 }

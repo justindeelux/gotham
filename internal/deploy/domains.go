@@ -50,6 +50,11 @@ func (s *Service) AddDomain(ctx context.Context, userID, appID uuid.UUID, domain
 	if app, err = s.repo.GetApplication(ctx, app.ID); err != nil {
 		return ApplicationDomain{}, err
 	}
+	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, next)
+	if domainErr != nil {
+		return ApplicationDomain{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)
+	}
+	defer releaseDomain()
 	if err := s.checkDomainClaim(ctx, app.ID, next); err != nil {
 		return ApplicationDomain{}, err
 	}
@@ -204,6 +209,12 @@ func (s *Service) SetPrimaryDomain(ctx context.Context, userID, appID, domainID 
 	if target.IsPrimary {
 		return app, nil
 	}
+	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, target.Domain)
+	if domainErr != nil {
+		return Application{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)
+	}
+	defer releaseDomain()
+
 	var updated Application
 	err = s.repo.InTx(ctx, func(tx Repository) error {
 		if err := tx.ClearPrimaryApplicationDomains(ctx, app.ID); err != nil {

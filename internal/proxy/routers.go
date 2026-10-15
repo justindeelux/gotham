@@ -243,7 +243,7 @@ func routersFromConfig(cfg ProxyConfig, routes []Route, appRoutes int, redirects
 			row.Kind = RouterKindService
 			row.OwnerName = serviceNames[route.AppID]
 		}
-		if route.Name == "panel" {
+		if route.Name == "panel" || route.Name == "panel-previous" {
 			row.Kind = RouterKindControlPlane
 			row.OwnerName = "Gotham"
 		}

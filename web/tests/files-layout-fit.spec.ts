@@ -1552,3 +1552,60 @@ test("the table and bulk bar agree on the column count", async ({ page }) => {
   await expect(table).toHaveAttribute("aria-colcount", "4");
   await expect(bar).toHaveAttribute("aria-colspan", "3");
 });
+
+// JUS-151: the empty state fills the browser panel, so its content group must
+// sit on both of the panel's centre lines — horizontally AND vertically — at
+// desktop and phone widths, instead of hugging the top-left.
+test("the empty state is centered in the browser panel", async ({ page }) => {
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1024, height: 768 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await mockApi(page);
+    await installListing(page, []);
+    await page.goto(`${baseURL}/servers/${server1}/files`);
+
+    const state = page.locator(".fm-state");
+    await expect(state).toBeVisible();
+    await expect(state.locator("h4")).toHaveText("This folder is empty");
+
+    // The group's centre (the union of the state's own children) against the
+    // panel's centre. A top-left anchored state is hundreds of px off in y and
+    // roughly half the panel wide in x.
+    const measure = (): Promise<{
+      panelCentreX: number;
+      panelCentreY: number;
+      contentCentreX: number;
+      contentCentreY: number;
+    }> =>
+      page.evaluate(() => {
+        const el = document.querySelector(".fm-state") as HTMLElement;
+        const box = el.getBoundingClientRect();
+        const children = [...el.children].map(
+          (child) => (child as HTMLElement).getBoundingClientRect(),
+        );
+        const top = Math.min(...children.map((child) => child.top));
+        const bottom = Math.max(...children.map((child) => child.bottom));
+        const left = Math.min(...children.map((child) => child.left));
+        const right = Math.max(...children.map((child) => child.right));
+        return {
+          panelCentreX: box.left + box.width / 2,
+          panelCentreY: box.top + box.height / 2,
+          contentCentreX: (left + right) / 2,
+          contentCentreY: (top + bottom) / 2,
+        };
+      });
+
+    const m = await measure();
+    expect(
+      Math.abs(m.contentCentreX - m.panelCentreX),
+      `empty state horizontally centered at ${viewport.width}px`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(m.contentCentreY - m.panelCentreY),
+      `empty state vertically centered at ${viewport.width}px`,
+    ).toBeLessThanOrEqual(1);
+  }
+});

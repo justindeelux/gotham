@@ -191,7 +191,6 @@ const vi = {
     hint: "Các mục bị xóa khỏi thư mục gốc này nằm ở đây cho tới khi được khôi phục hoặc xóa vĩnh viễn.",
     writeHint: "Khôi phục và xóa vĩnh viễn yêu cầu vai trò chủ sở hữu hoặc quản trị trên thư mục gốc ghi được.",
     columnName: "Tên",
-    columnOriginal: "Đường dẫn gốc",
     columnDeleted: "Đã xóa",
     columnSize: "Kích thước",
     columnKind: "Loại",

@@ -74,8 +74,9 @@ type RouterNodeState struct {
 
 // RouterListResponse is the body of GET /v1/proxy/routers.
 type RouterListResponse struct {
-	Routers []RouterInfo      `json:"routers"`
-	Nodes   []RouterNodeState `json:"nodes"`
+	Diagnostics []Diagnostic      `json:"diagnostics,omitempty"`
+	Routers     []RouterInfo      `json:"routers"`
+	Nodes       []RouterNodeState `json:"nodes"`
 }
 
 // RouterService lists the generated Traefik routers of one node (or every
@@ -163,13 +164,10 @@ func (s *SyncService) ListRouters(ctx context.Context, serverID uuid.UUID) (Rout
 	appNames := applicationNames(apps)
 	serviceNames := proxiedServiceNames(proxiedServices)
 
-	if len(ids) == 0 {
-		_, diagnostics := s.controlPlaneRoute(ctx, apps, uuid.Nil, nil, access)
-		if len(diagnostics) > 0 {
-			return RouterListResponse{}, &PartialError{Diagnostics: diagnostics}
-		}
-	}
 	response := RouterListResponse{}
+	if serverID == uuid.Nil {
+		_, response.Diagnostics = s.controlPlaneRoute(ctx, apps, uuid.Nil, nil, access)
+	}
 	for _, id := range ids {
 		state := RouterNodeState{ServerID: id, ServerName: names[id], SyncStatus: RouterSyncUnknown}
 		routers, nodeState, err := s.listNodeRouters(ctx, apps, proxiedServices, rules, providers, access, appNames, serviceNames, id, names[id])

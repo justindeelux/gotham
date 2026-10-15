@@ -88,7 +88,6 @@ func TestControlPlaneDiagnosticsPreserveOtherRoutes(t *testing.T) {
 		{"invalid host", "https://bad_host.example.com", "localhost", "invalid control_plane_url host"},
 		{"missing host", "https:///path", "localhost", "invalid control_plane_url host"},
 		{"credentials", "https://user:pass@panel.example.com", "localhost", "without credentials"},
-		{"missing localhost", "https://panel.example.com", "remote", "localhost node is not registered"},
 		{"application clash", "https://app.example.com", "localhost", "already claimed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -149,12 +148,12 @@ func TestControlPlaneEmptyRegistryDiagnostic(t *testing.T) {
 	f := panelFixture(t)
 	f.service.nodes = panelNodes{}
 	_, err := f.service.SyncAll(context.Background())
-	if !errors.Is(err, ErrPartialSync) || !strings.Contains(err.Error(), "control plane (panel.example.com: localhost node is not registered)") {
+	if !errors.Is(err, ErrPartialSync) || !strings.Contains(err.Error(), "control plane (localhost node is not registered)") {
 		t.Fatalf("SyncAll=%v", err)
 	}
-	_, err = f.service.ListRouters(context.Background(), uuid.Nil)
-	if !errors.Is(err, ErrPartialSync) {
-		t.Fatalf("ListRouters=%v", err)
+	rows, err := f.service.ListRouters(context.Background(), uuid.Nil)
+	if err != nil || len(rows.Diagnostics) != 1 || !strings.Contains(rows.Diagnostics[0].Reason, "localhost node is not registered") {
+		t.Fatalf("ListRouters=%+v err=%v", rows, err)
 	}
 }
 

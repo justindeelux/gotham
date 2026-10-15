@@ -563,12 +563,6 @@ func (s *SyncService) SyncAll(ctx context.Context) ([]SyncResult, error) {
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
 
-	if len(ids) == 0 {
-		_, diagnostics := s.controlPlaneRoute(ctx, apps, uuid.Nil, nil, nil)
-		if len(diagnostics) > 0 {
-			return nil, &PartialError{Diagnostics: diagnostics}
-		}
-	}
 	results := make([]SyncResult, 0, len(ids))
 	for _, id := range ids {
 		result := SyncResult{ServerID: id}
@@ -580,6 +574,10 @@ func (s *SyncService) SyncAll(ctx context.Context) ([]SyncResult, error) {
 			}
 		}
 		results = append(results, result)
+	}
+	_, diagnostics := s.controlPlaneRoute(ctx, apps, uuid.Nil, nil, nil)
+	if len(diagnostics) > 0 {
+		return results, &PartialError{Diagnostics: diagnostics}
 	}
 	return results, nil
 }
@@ -617,12 +615,34 @@ func (s *SyncService) controlPlaneRoute(ctx context.Context, apps []ProxiedAppli
 		s.logger.Warn("proxy: control-plane route skipped", "reason", reason, "domain", diagnostic.Domain)
 		return nil, []Diagnostic{diagnostic}
 	}
+	localhost := uuid.Nil
+	nodeReason := "localhost node is not registered"
+	if named, ok := s.nodes.(namedNodeSource); ok {
+		nodes, err := named.ListNamedNodes(ctx)
+		if err != nil {
+			nodeReason = "cannot find localhost node: " + err.Error()
+		} else {
+			for _, node := range nodes {
+				if node.Name == "localhost" {
+					localhost = node.ID
+					break
+				}
+			}
+		}
+	}
+	// A nil server ID reports unowned settings problems once at the global level.
+	if serverID != localhost {
+		return nil, nil
+	}
 	raw, err := s.controlPlaneURL(ctx)
 	if err != nil {
 		return fail("cannot read control_plane_url: " + err.Error())
 	}
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
+	}
+	if localhost == uuid.Nil {
+		return fail(nodeReason)
 	}
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -632,27 +652,6 @@ func (s *SyncService) controlPlaneRoute(ctx context.Context, apps []ProxiedAppli
 	diagnostic.Domain = domain
 	if err := ValidateDomain(domain); err != nil {
 		return fail("invalid control_plane_url host: " + err.Error())
-	}
-	named, ok := s.nodes.(namedNodeSource)
-	if !ok {
-		return fail("localhost node is not registered")
-	}
-	nodes, err := named.ListNamedNodes(ctx)
-	if err != nil {
-		return fail("cannot find localhost node: " + err.Error())
-	}
-	localhost := uuid.Nil
-	for _, node := range nodes {
-		if node.Name == "localhost" {
-			localhost = node.ID
-			break
-		}
-	}
-	if localhost == uuid.Nil {
-		return fail("localhost node is not registered")
-	}
-	if serverID != localhost {
-		return nil, nil
 	}
 	if claimed[domain] {
 		return fail("control_plane_url host is already claimed by an application, service or redirect on this node")

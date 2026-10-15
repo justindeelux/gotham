@@ -869,19 +869,22 @@ func (s *Server) resyncProxyNodes(ctx context.Context) error {
 		return nil
 	}
 	results, err := s.proxy.SyncAll(ctx)
-	if err != nil {
-		return err
-	}
+	failures := []error{err}
 	failed := 0
+	var diagnostics []proxy.Diagnostic
 	for _, result := range results {
-		if result.Error != "" {
+		if result.Error != "" && len(result.Diagnostics) == 0 {
 			failed++
 		}
+		diagnostics = append(diagnostics, result.Diagnostics...)
 	}
 	if failed > 0 {
-		return fmt.Errorf("proxy: SSL resync failed on %d of %d node(s)", failed, len(results))
+		failures = append(failures, fmt.Errorf("proxy: resync failed on %d of %d node(s)", failed, len(results)))
 	}
-	return nil
+	if len(diagnostics) > 0 {
+		failures = append(failures, &proxy.PartialError{Diagnostics: diagnostics})
+	}
+	return errors.Join(failures...)
 }
 
 // databaseService builds the databases domain service for the HTTP wiring: the

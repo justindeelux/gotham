@@ -20,9 +20,9 @@ import { formatBytes } from "@/shared/utils/format";
  * a retry affordance after a failure. The state lives in `useFolderSize`, keyed
  * by server/root/path, so it survives the list's row windowing.
  *
- * The cell stops click/dblclick bubbling: it is not one of the controls
- * `isRowControl` recognises, so without stopping, clicking Calculate would also
- * select the row and a double click would open the folder.
+ * The cell's `.fm-size` wrapper is one of the browser's row controls
+ * (`isRowControl`), so a press or key on Calculate/Cancel/Retry never reaches
+ * the row's selection handler and the buttons keep their native Enter/Space.
  */
 const props = defineProps<{ entry: FilesEntry; path: string }>();
 
@@ -80,7 +80,7 @@ function cancel(): void {
 </script>
 
 <template>
-  <span class="fm-size" @click.stop @dblclick.stop>
+  <span class="fm-size">
     <template v-if="state.status === 'loading'">
       <NSpin :size="12" aria-hidden="true" />
       <NButton

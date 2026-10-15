@@ -78,6 +78,7 @@ import {
   rowMenuOptions,
 } from "@/features/files/utils/filesMenu";
 import type { FilesMenuItem } from "@/features/files/utils/filesMenu";
+import { isRowControlTarget } from "@/features/files/utils/rowControls";
 import {
   clampScrollTop,
   gridColumnCount,
@@ -431,10 +432,7 @@ function activate(entry: FilesEntry): void {
 
 /** isRowControl reports a press that belongs to a row's own control, not the row. */
 function isRowControl(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest(".fm-select, .fm-actions, .fm-tile-check, .fm-tile-actions") !== null
-  );
+  return isRowControlTarget(target);
 }
 
 /**

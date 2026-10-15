@@ -398,8 +398,8 @@ test.describe("windowed list", () => {
     // Name asc: the first file row is the smallest name.
     await expect(rows(page).nth(1)).toContainText("file-0000.txt");
     // Size desc: the largest file sorts first, taken from the far end of 5,000.
-    await page.getByRole("button", { name: "Size" }).click();
-    await page.getByRole("button", { name: "Size" }).click();
+    await page.getByRole("button", { name: "Size", exact: true }).click();
+    await page.getByRole("button", { name: "Size", exact: true }).click();
     await expect(rows(page).nth(1)).toContainText("file-4998.txt");
     expect(await rows(page).count()).toBeLessThan(60);
   });

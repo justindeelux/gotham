@@ -315,8 +315,9 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   const nodeBox = (await node.boundingBox())!;
   const rootBox = (await page.locator(".fm-root-select").boundingBox())!;
   const toolbarBox = (await page.locator(".fm-toolbar").boundingBox())!;
-  expect(nodeBox.bottom).toBeLessThanOrEqual(toolbarBox.top + 1);
-  expect(rootBox.top).toBeGreaterThanOrEqual(toolbarBox.top);
+  // Playwright boxes carry x/y/width/height (no top/bottom): derive edges.
+  expect(nodeBox.y + nodeBox.height).toBeLessThanOrEqual(toolbarBox.y + 1);
+  expect(rootBox.y).toBeGreaterThanOrEqual(toolbarBox.y);
 
   // An offline node is listed with its status but cannot be selected.
   await node.click();
@@ -1399,9 +1400,10 @@ test("the scroll chevron shows only while the action row overflows", async ({
 
 // JUS-148 fix round 1 + JUS-160: both toolbar groups (left actions, right
 // recycle bin + view toggle) always render content, so the toolbar can wrap
-// onto a second row at mid widths but never onto an EMPTY row (a zero-height
+// onto a second row at mid widths but never onto an EMPTY row (a content-free
 // line whose row-gap still grew the toolbar). Every flex row must hold a real
-// control, the toolbar must not spill past the panel, and the gap to the
+// control, the toolbar height must be fully backed by content rows (no
+// unexplained row-gap), it must not spill past the panel, and the gap to the
 // header stays tight.
 test("the always-on toolbar groups never open an empty row", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -1415,18 +1417,30 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
     page.getByRole("button", { name: "Recycle bin", exact: true }),
   ).toBeVisible();
 
-  for (const width of [480, 920, 1260, 1280, 1366, 1440, 1600, 1876]) {
+  for (const width of [480, 640, 768, 920, 1260, 1280, 1366, 1440, 1600, 1876]) {
     await page.setViewportSize({ width, height: 900 });
     await settleLayout(page);
     const layout = await page.evaluate(() => {
       const toolbar = document.querySelector(".fm-toolbar") as HTMLElement;
       const head = document.querySelector(".fm-head") as HTMLElement;
       const t = toolbar.getBoundingClientRect();
-      // Cluster every visible descendant into flex rows by vertical center.
+      const style = getComputedStyle(toolbar);
+      // Cluster the laid-out controls into flex rows by vertical center. Two
+      // box families are structural, never rows, and must not band: an icon's
+      // SVG sub-paths (painted glyph geometry — e.g. a 2-unit menu dot renders
+      // at ~1.17px and bands alone, yet is not a row) and the group containers
+      // themselves (they span every wrapped line by construction).
       const bands: { center: number; maxHeight: number }[] = [];
       for (const child of toolbar.querySelectorAll<HTMLElement>("*")) {
-        const style = getComputedStyle(child);
-        if (style.visibility === "hidden" || style.display === "none") {
+        const tag = child.tagName.toLowerCase();
+        if (tag !== "svg" && child.closest("svg") !== null) {
+          continue;
+        }
+        if (child.classList.contains("fm-toolbar-group")) {
+          continue;
+        }
+        const childStyle = getComputedStyle(child);
+        if (childStyle.visibility === "hidden" || childStyle.display === "none") {
           continue;
         }
         const box = child.getBoundingClientRect();
@@ -1443,8 +1457,8 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
       }
       let visibleBottom = t.top;
       for (const child of toolbar.querySelectorAll<HTMLElement>("*")) {
-        const style = getComputedStyle(child);
-        if (style.visibility === "hidden" || style.display === "none") {
+        const childStyle = getComputedStyle(child);
+        if (childStyle.visibility === "hidden" || childStyle.display === "none") {
           continue;
         }
         const box = child.getBoundingClientRect();
@@ -1452,18 +1466,33 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
           visibleBottom = Math.max(visibleBottom, box.bottom);
         }
       }
+      const content = bands.reduce((sum, band) => sum + band.maxHeight, 0);
       return {
-        bands: bands.map((band) => band.maxHeight),
+        rows: bands.length,
+        rowHeights: bands.map((band) => band.maxHeight),
+        // Every row-gap in the toolbar height must be backed by a content row:
+        // a content-free wrapped line adds a full row-gap of unexplained
+        // height (the JUS-148 defect), which this cap catches.
+        heightCap:
+          content +
+          Math.max(0, bands.length - 1) *
+            (Number.parseFloat(style.rowGap || "0") || 0) +
+          (Number.parseFloat(style.borderTopWidth || "0") || 0) +
+          2,
+        toolbarHeight: t.height,
         gap: head.getBoundingClientRect().top - visibleBottom,
         spill: toolbar.scrollWidth - toolbar.clientWidth,
       };
     });
-    expect(layout.bands.length, `toolbar has rows at ${width}px`).toBeGreaterThan(0);
-    for (const maxHeight of layout.bands) {
-      // Every row holds a real control (a small button row is ~28px); an
-      // empty wrapped line would band on its own with ~0px content.
+    expect(layout.rows, `toolbar has rows at ${width}px`).toBeGreaterThan(0);
+    for (const maxHeight of layout.rowHeights) {
+      // Every row holds a real control (a small button row is ~28px).
       expect(maxHeight, `no empty toolbar row at ${width}px`).toBeGreaterThanOrEqual(20);
     }
+    expect(
+      layout.toolbarHeight,
+      `toolbar height backed by content rows at ${width}px`,
+    ).toBeLessThanOrEqual(layout.heightCap);
     expect(layout.spill, `no toolbar spill at ${width}px`).toBeLessThanOrEqual(1);
     expect(layout.gap, `toolbar-to-header gap at ${width}px`).toBeLessThanOrEqual(16);
   }

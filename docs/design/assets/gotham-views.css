@@ -138,13 +138,20 @@
    Bố cục theo ảnh tham chiếu: một lưới danh sách nhiều cột, mỗi hàng cao
    ~36-40px (JUS-134) với marker loại file ở đầu hàng và cụm nút chức năng ở
    mép phải; cụm nút chỉ hiện khi hover / focus / đang chọn. */
+/* JUS-157: every browser region gets its own boundary so the header, the
+   tablist, the path bar, the toolbar and the entry list never read as one flat
+   surface. The card header is a warm band; the path bar and the toolbar are
+   bordered warm bands. Token-derived, so the separation holds in any theme. */
+[data-od-id="files-browser"] .card-head { background: var(--surface-warm); }
 /* Toolbar + path bar (JUS-120/128, gộp ở JUS-134; tách ở JUS-153): path bar
    phía trên chứa breadcrumb, filter và refresh; toolbar giữ create/upload,
    recycle bin và các công cụ theo root; bulk action chỉ hiện khi có entry được
-   chọn. Labels collapse to icon-only on small screens (title + aria-label). */
-.fm-toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
-/* JUS-153: path bar nằm ngay trên toolbar nên margin dưới của nó khít hơn. */
-.fm-bar.fm-pathbar { margin-bottom: var(--space-2); }
+   chọn. Labels collapse to icon-only on small screens (title + aria-label).
+   JUS-157: both bars are bordered warm bands below the header band. */
+.fm-toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-2); background: var(--surface-warm); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); }
+/* JUS-153: path bar nằm ngay trên toolbar nên margin dưới của nó khít hơn.
+   JUS-157: it is its own band and owns the breadcrumb's surface. */
+.fm-bar.fm-pathbar { margin-bottom: var(--space-2); background: var(--surface-warm); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); }
 /* Groups wrap internally (and shrink) so the right-hand bulk actions never
    overflow the toolbar at narrow widths (JUS-128). */
 .fm-toolbar-group { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
@@ -200,7 +207,7 @@
      row. The bulk actions live in the header bar (JUS-146), whose own row
      scrolls with 44px touch targets, so every action stays reachable and the
      list keeps >=60% of the viewport with a selection active. */
-  .fm-toolbar, .fm-bar.fm-pathbar { row-gap: var(--space-2); margin-bottom: var(--space-2); }
+  .fm-toolbar, .fm-bar.fm-pathbar { row-gap: var(--space-2); margin-bottom: var(--space-1); padding: var(--space-1) var(--space-2); }
   /* The card heading is redundant on a phone: keeping it forces the
      node/root/view controls onto a second row (JUS-135). The field captions
      go with it — each control keeps its accessible name through aria-label. */
@@ -250,11 +257,12 @@
 }
 .fm-tab-add:hover { background: var(--hover-row); color: var(--fg-2); }
 .fm-tab-add svg { width: 16px; height: 16px; }
-.fm-bar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-3); }
+.fm-bar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2); }
 .fm-path {
+  /* JUS-157: the path band owns the surface; the breadcrumb row keeps its box
+     metrics (ring room) without a second background/border. */
   display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
-  background: var(--surface-warm); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 2px; min-height: 32px;
+  padding: 2px; min-height: 32px;
 }
 .fm-crumb {
   display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px;

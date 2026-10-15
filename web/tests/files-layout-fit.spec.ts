@@ -290,6 +290,16 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   // JUS-119: the page-top breadcrumb (Servers / node / Files) is removed.
   await expect(page.locator(".breadcrumb")).toHaveCount(0);
 
+  // JUS-154: the header field captions ("Agent node" / "Root") are 12px
+  // (--text-xs). They used to keep Naive's 18px card-title size because the
+  // `.small` class had no rule in either component's scoped styles.
+  const captions = page.locator(".fm-card-tools .fm-field-label");
+  await expect(captions).toHaveCount(2);
+  const captionSizes = await captions.evaluateAll((elements) =>
+    elements.map((element) => getComputedStyle(element).fontSize),
+  );
+  expect(captionSizes).toEqual(["12px", "12px"]);
+
   // JUS-134: the agent-node selector decides the listing, so it lives in the
   // browser card header next to the Root selector, not a bar at the page bottom.
   const node = page.locator(".fm-node__select");

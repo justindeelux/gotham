@@ -3082,6 +3082,14 @@ function onFolderMenu(key: string): void {
   flex-wrap: wrap;
 }
 
+/* JUS-154: the header slot renders inside Naive's `.n-card-header`, whose
+ * `.n-card-header__main` sets the card-title size (18px). The captions had no
+ * `.small` rule of their own, so they inherited that 18px; this scoped rule
+ * sets the mockup's `--text-xs` (12px) caption directly. */
+.small {
+  font-size: var(--text-xs);
+}
+
 .fm-root-select {
   width: 220px;
 }

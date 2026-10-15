@@ -138,27 +138,25 @@
    Bố cục theo ảnh tham chiếu: một lưới danh sách nhiều cột, mỗi hàng cao
    ~36-40px (JUS-134) với marker loại file ở đầu hàng và cụm nút chức năng ở
    mép phải; cụm nút chỉ hiện khi hover / focus / đang chọn. */
-/* JUS-157: every browser region gets its own boundary so the header, the
-   tablist, the path bar, the toolbar and the entry list never read as one flat
-   surface. The card header is a warm band; the path bar and the toolbar are
-   bordered warm bands. Token-derived, so the separation follows the theme's
-   surface/border tokens (the mockup ships dark only). The header takes the
-   card's top corner radius (mirrors the app's border-radius: inherit), or its
-   square fill would bleed over the rounded card corners. */
-[data-od-id="files-browser"] .card-head { background: var(--surface-warm); border-radius: var(--radius-md) var(--radius-md) 0 0; }
-/* JUS-157: the app's card content has no top padding, so the gap under the
-   header band is the .fm-tabs margin-top; the mockup drops its card-body top
+/* JUS-150: the browser regions are separated by plain 1px --border rules, not
+   by tinted bands. Every region sits on the card's normal surface, and each
+   adjacent pair — card header, tablist, path bar, toolbar, entry list — shares
+   a single divider. The card header keeps the base .card-head border-bottom as
+   its rule down to the tablist; the bars and the list own theirs (below). */
+/* JUS-150: the app's card content has no top padding, so the gap under the
+   header's rule is the .fm-tabs margin-top; the mockup drops its card-body top
    padding to the same effect, keeping the two rule sets reconciled. */
 [data-od-id="files-browser"] .card-body { padding-top: 0; }
 /* Toolbar + path bar (JUS-120/128, gộp ở JUS-134; tách ở JUS-153): path bar
    phía trên chứa breadcrumb, filter và refresh; toolbar giữ create/upload,
    recycle bin và các công cụ theo root; bulk action chỉ hiện khi có entry được
    chọn. Labels collapse to icon-only on small screens (title + aria-label).
-   JUS-157: both bars are bordered warm bands below the header band. */
-.fm-toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-2); background: var(--surface-warm); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); }
+   JUS-150: each bar is a plain row on the card surface; a 1px rule separates
+   it from the region above, so there is no background step. */
+.fm-toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; border-top: 1px solid var(--border); margin-bottom: var(--space-3); }
 /* JUS-153: path bar nằm ngay trên toolbar nên margin dưới của nó khít hơn.
-   JUS-157: it is its own band and owns the breadcrumb's surface. */
-.fm-bar.fm-pathbar { margin-bottom: var(--space-2); background: var(--surface-warm); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-1) var(--space-3); }
+   JUS-150: a 1px rule separates it from the tablist above. */
+.fm-bar.fm-pathbar { border-top: 1px solid var(--border); margin-bottom: var(--space-2); }
 /* Groups wrap internally (and shrink) so the right-hand bulk actions never
    overflow the toolbar at narrow widths (JUS-128). */
 .fm-toolbar-group { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
@@ -208,13 +206,13 @@
 @media (max-width: 640px) {
   .fm-toolbar .fm-btn-label { display: none; }
   /* JUS-135/146/153: the phone chrome must not eat the list. The path bar is
-     its own band — row 1 the (scrolling) breadcrumb, row 2 the filter and
+     its own row group — row 1 the (scrolling) breadcrumb, row 2 the filter and
      Refresh; the toolbar keeps the create/upload group and the recycle bin,
      with the clipboard (Paste + its nowrap hint chip) on its own full-width
      row. The bulk actions live in the header bar (JUS-146), whose own row
      scrolls with 44px touch targets, so every action stays reachable and the
      list keeps >=60% of the viewport with a selection active. */
-  /* JUS-157: the .fm-tabs/.fm-toolbar phone margins and the toolbar row-gap
+  /* JUS-150: the .fm-tabs/.fm-toolbar phone margins and the toolbar row-gap
      live in the later @media (max-width: 640px) block, after the base
      .fm-tabs/.fm-bar rules — a @media block adds no specificity, so a rule
      placed here would be shadowed by those base rules. */
@@ -236,16 +234,14 @@
 .fm-node { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .fm-node > svg { width: 15px; height: 15px; flex: 0 0 auto; color: var(--muted); }
 .fm-node__select { width: 180px; min-width: 140px; }
-/* Tab bar (JUS-123/126, grouped in JUS-152): one tab per open directory; each
-   tab owns its own path, selection and scroll. The strip hugs its tabs so the
-   + button sits right after the last one, and scrolls horizontally at narrow
-   widths. The whole tablist (tabs + the + button) rides in one bordered group,
-   mirroring the breadcrumb group, so it reads as a single unit. */
+/* Tab bar (JUS-123/126/150): one tab per open directory; each tab owns its own
+   path, selection and scroll. The strip hugs its tabs so the + button sits right
+   after the last one, and scrolls horizontally at narrow widths. JUS-150: the
+   tabs sit on the card surface (no surrounding box) and the active tab carries
+   its own indicator fill, so the region needs no background of its own. */
 .fm-tabs {
   display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); margin-bottom: var(--space-3);
   width: fit-content; max-width: 100%;
-  background: var(--surface-warm); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 3px;
 }
 .fm-tabstrip {
   display: flex; align-items: stretch; gap: 2px; flex: 0 1 auto; min-width: 0;
@@ -267,10 +263,13 @@
 }
 .fm-tab-add:hover { background: var(--hover-row); color: var(--fg-2); }
 .fm-tab-add svg { width: 16px; height: 16px; }
-.fm-bar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2); }
+.fm-bar { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-3); }
+/* JUS-150: the 1px rule between the toolbar and the entry list (the app draws
+   it on .fm-panel, the mockup's list region is the bare .table-wrap). */
+[data-od-id="files-browser"] .table-wrap { border-top: 1px solid var(--border); }
 .fm-path {
-  /* JUS-157: the path band owns the surface; the breadcrumb row keeps its box
-     metrics (ring room) without a second background/border. */
+  /* JUS-150: the breadcrumb rides the card surface — no background or border —
+     but keeps its box metrics (ring room). */
   display: flex; align-items: center; gap: 2px; flex-wrap: wrap;
   padding: 2px; min-height: 32px;
 }
@@ -283,13 +282,13 @@
 .fm-crumb.is-current { background: var(--selected-row); color: var(--fg-2); font-weight: 600; }
 .fm-crumb svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .fm-crumb .sep { color: var(--meta); }
-/* JUS-157: the phone overrides for the tablist and the bands must sit AFTER
+/* JUS-150: the phone overrides for the tablist and the bars must sit AFTER
    the base .fm-tabs/.fm-bar/.fm-path rules above — a @media block adds no
    specificity, so source order alone decides; placed earlier they were dead and
    the mockup rendered 12/12 and row-gap 12 where the app renders 8/4 and 8. */
 @media (max-width: 640px) {
   .fm-tabs { margin-top: var(--space-2); margin-bottom: var(--space-1); }
-  .fm-toolbar, .fm-bar.fm-pathbar { row-gap: var(--space-2); margin-bottom: var(--space-1); padding: var(--space-1) var(--space-2); }
+  .fm-toolbar, .fm-bar.fm-pathbar { row-gap: var(--space-2); margin-bottom: var(--space-1); }
 }
 .fm-table { min-width: 820px; }
 .fm-row {

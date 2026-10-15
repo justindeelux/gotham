@@ -60,6 +60,7 @@ type handler struct {
 //	GET    /v1/servers/{id}/files/list?root=&path=&cursor=
 //	GET    /v1/servers/{id}/files/stat?root=&path=
 //	GET    /v1/servers/{id}/files/size?root=&path=
+//	GET    /v1/servers/{id}/files/search?root=&path=&query=&recursive=
 //	GET    /v1/servers/{id}/files/content?root=&path=
 //	PUT    /v1/servers/{id}/files/content?root=&path=          (If-Match / ?overwrite)
 //	POST   /v1/servers/{id}/files/upload?root=&path=&overwrite=
@@ -106,6 +107,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, 
 		protected.Get("/v1/servers/{id}/files/list", h.list)
 		protected.Get("/v1/servers/{id}/files/stat", h.stat)
 		protected.Get("/v1/servers/{id}/files/size", h.size)
+		protected.Get("/v1/servers/{id}/files/search", h.search)
 		protected.Get("/v1/servers/{id}/files/content", h.content)
 		protected.Put("/v1/servers/{id}/files/content", h.putContent)
 		protected.Post("/v1/servers/{id}/files/upload", h.upload)

@@ -139,6 +139,10 @@ type FileService interface {
 	Roots(ctx context.Context, serverID uuid.UUID) ([]Root, error)
 	List(ctx context.Context, serverID uuid.UUID, root, path, cursor string) (Listing, error)
 	Stat(ctx context.Context, serverID uuid.UUID, root, path string) (Entry, error)
+	// Search returns the entries under one directory whose name contains query
+	// (case-insensitive, name-only). Any team member may read it; the agent
+	// bounds and confines the walk.
+	Search(ctx context.Context, serverID uuid.UUID, root, path, query string, recursive bool) (SearchListing, error)
 	Content(ctx context.Context, serverID uuid.UUID, root, path string) (Content, error)
 	// DirectorySize returns one folder's recursive size (JUS-162). It is a read:
 	// any team member may call it, like List and Stat.

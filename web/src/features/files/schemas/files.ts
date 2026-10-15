@@ -7,6 +7,7 @@ import { z } from "zod";
  *   GET  /servers/{id}/files/roots            -> { roots: Root[] }
  *   GET  /servers/{id}/files/list             -> Listing
  *   GET  /servers/{id}/files/stat             -> { entry: Entry }
+ *   GET  /servers/{id}/files/search           -> { results: { path, entry }[], truncated }
  *   GET  /servers/{id}/files/content          -> Content
  *   POST /servers/{id}/files/download-ticket  -> { ticket } (201)
  *
@@ -76,6 +77,28 @@ export const filesFolderSizeSchema = z.object({
   truncated: z.boolean(),
 });
 export type FilesFolderSize = z.infer<typeof filesFolderSizeSchema>;
+
+/**
+ * filesSearchHitSchema validates one entry in GET /search: the matching entry
+ * plus its root-relative `path`, so two same-named files in different
+ * directories stay distinct.
+ */
+export const filesSearchHitSchema = z.object({
+  path: z.string(),
+  entry: filesEntrySchema,
+});
+export type FilesSearchHit = z.infer<typeof filesSearchHitSchema>;
+
+/**
+ * filesSearchListingSchema validates GET /search. `truncated` reports that a
+ * depth, result or scan cap stopped the walk, so the UI can say the list is
+ * partial instead of showing it as complete.
+ */
+export const filesSearchListingSchema = z.object({
+  results: z.array(filesSearchHitSchema),
+  truncated: z.boolean(),
+});
+export type FilesSearchListing = z.infer<typeof filesSearchListingSchema>;
 
 /** contentSchema validates GET /content (owner/admin only, <= 2 MiB). */
 export const filesContentSchema = z.object({

@@ -1,6 +1,7 @@
 // Folder size "Calculate" (JUS-162): the API client's route/params and the
 // composable's idle → loading → done / error / cancel state machine. The axios
 // layer is mocked, so the real api module runs without a DOM or network.
+/* global AbortSignal: readonly */
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 

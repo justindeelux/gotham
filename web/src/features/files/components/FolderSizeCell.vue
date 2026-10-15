@@ -1,3 +1,18 @@
+<script lang="ts">
+/**
+ * nextErrorId numbers each cell's aria-describedby target. It lives at module
+ * scope, not in setup: a counter inside <script setup> restarts at 0 for every
+ * instance, so every row would reuse `fm-size-error-1` and the ids would clash.
+ */
+let nextErrorId = 0;
+
+/** nextFolderSizeErrorId hands out the next unique error-id suffix. */
+function nextFolderSizeErrorId(): number {
+  nextErrorId += 1;
+  return nextErrorId;
+}
+</script>
+
 <script setup lang="ts">
 import { NButton, NSpin } from "naive-ui";
 import { computed } from "vue";
@@ -26,13 +41,10 @@ import { formatBytes } from "@/shared/utils/format";
  */
 const props = defineProps<{ entry: FilesEntry; path: string }>();
 
-/** nextErrorId gives every instance a stable aria-describedby target id. */
-let nextErrorId = 0;
-
 const { t } = useI18n();
 const files = useFilesStore();
 const teams = useTeamsStore();
-const errorId = `fm-size-error-${(nextErrorId += 1)}`;
+const errorId = `fm-size-error-${nextFolderSizeErrorId()}`;
 
 const state = computed(() =>
   folderSizeState(files.serverId, files.rootName, props.path),

@@ -3,6 +3,7 @@
 // missing from the selector, so Enter/Space on Calculate/Cancel/Retry bubbled
 // to the list keydown handler (preventDefault + open/select). This pins the
 // selector so that cannot regress.
+/* global document, Element: readonly */
 import { describe, expect, it } from "vitest";
 
 import {

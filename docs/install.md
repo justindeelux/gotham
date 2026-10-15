@@ -356,15 +356,24 @@ its local agent as `localhost`, connected to `127.0.0.1:9442`.
 
 The control plane creates or repairs the shared `localhost` node on startup;
 its status becomes ready only after an agent heartbeat. Deleting it returns
-HTTP 409. Upgrade migration 49 renames the current host's `<hostname>-agent`
-identity in place, preserving the server UUID, apps, deployments and routers.
-Run migrations on the control-plane host before changing its hostname. If a
-`localhost` entry already exists, the migration leaves both rows intact rather
-than merging workloads automatically.
+HTTP 409; PATCH is rejected too. Upgrade migration 49 renames the saved local
+agent identity in place, preserving the server UUID, apps, deployments and
+routers. The installer passes the previous `agent.env` ID to the migration,
+so changing the hostname or running migrations in a container is safe. For a
+manual migration, set `GOTHAM_LEGACY_LOCAL_NODE_ID` to that saved node ID.
+Without it, only a single legacy `*-agent` node with a loopback address can
+be identified automatically; blank addresses, multiple candidates and an
+existing `localhost` collision fail with an actionable error. Reconcile
+colliding nodes' workloads before retrying; no data is merged or deleted.
 
 The Git URL host policy's denial of the name `localhost` applies to Git
 remotes only; it does not validate node IDs or the agent's loopback dial path.
-The exact `localhost` node ID is accepted only from a loopback peer. Other
+The exact `localhost` node ID is accepted only from a loopback peer. Its
+certificate uses the separate SAN `localhost.agent.gotham.invalid`, and the
+control plane verifies that name when dialing `127.0.0.1:9443`. It cannot be
+used as a control-plane certificate for `localhost` or a loopback IP. Do not
+include the agent SAN in the control-plane listener hosts; enrollment refuses
+that collision. Other
 control-plane listener identities and aliases remain reserved. Remote agents
 must set their own distinct node ID and control-plane address:
 

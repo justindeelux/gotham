@@ -5,6 +5,9 @@ import (
 	"fmt"
 )
 
+// localhostAgentServerName separates the local agent certificate from CP listener SANs.
+const localhostAgentServerName = "localhost.agent.gotham.invalid"
+
 // EnsureLocalhost repairs the mandatory registry entry without replacing its
 // UUID, inventory or heartbeat status. Readiness still requires a live agent.
 func (s *ServerService) EnsureLocalhost(ctx context.Context) error {

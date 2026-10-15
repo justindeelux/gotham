@@ -1176,7 +1176,7 @@ RR_SHIM="${SCRATCH}/rr-shim"
 RR_BOX="${SCRATCH}/realrun"
 mkdir -p "${RR_SHIM}" "${RR_BOX}/tmp"
 RR_AGENT_ENV="${SCRATCH}/rr-agent.env"
-rm -f "${RR_AGENT_ENV}"
+printf 'GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442\nGOTHAM_AGENT_NODE_ID=old-installed-host-agent\n' >"${RR_AGENT_ENV}"
 RR_INSTALLER="${SCRATCH}/install-rr.sh"
 # Sandbox the five writable roots (the rest derive from them) and bake the
 # platform/agent.env lookups to fixtures (the one early block feeds both the
@@ -1322,6 +1322,8 @@ SHIM
         echo "FAIL: a hostile seam value leaked into the real run (R4)" >&2
         exit 1
     fi
+    grep -q 'GOTHAM_LEGACY_LOCAL_NODE_ID=.*gotham-migrate.*old-installed-host-agent' "${SCRATCH}/rr-systemctl.log" \
+        || { echo "FAIL: migration did not receive the saved local agent identity" >&2; exit 1; }
     echo "PASS: a real run reaches the agent step on the real script and never runs the seam fake (R4)"
 
 # ---- JUS-22: the installer creates the first admin account ---------------

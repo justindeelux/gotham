@@ -329,6 +329,9 @@ func agentTargetFor(server *Server) (target, serverName string, err error) {
 	}
 
 	serverName = nodeID
+	if nodeID == "localhost" {
+		serverName = localhostAgentServerName
+	}
 	if serverName == "" {
 		serverName = serverNameFromTarget(target)
 	}

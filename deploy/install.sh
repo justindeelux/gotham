@@ -399,6 +399,10 @@ esac
     [ -z "${GOTHAM_AGENT_CP_ADDR:-}" ] || [ "${GOTHAM_AGENT_CP_ADDR}" = "127.0.0.1:9442" ] \
         || die "GOTHAM_AGENT_CP_ADDR must be 127.0.0.1:9442 for the control-plane installer"
     # Override the prior local identity before validating the effective config.
+    LEGACY_LOCAL_NODE_ID=""
+    if [ -f "${_la_agent_env}" ]; then
+        LEGACY_LOCAL_NODE_ID="$(sed -n 's/^[[:space:]]*GOTHAM_AGENT_NODE_ID=//p' "${_la_agent_env}" | tail -n1)"
+    fi
     GOTHAM_AGENT_NODE_ID=localhost
     GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442
     export GOTHAM_AGENT_NODE_ID GOTHAM_AGENT_CP_ADDR
@@ -1180,7 +1184,7 @@ if [ "${DRY_RUN}" -eq 0 ] && [ "${TEST_MODE}" -eq 0 ]; then
     # single-quoted sh -c would let a quote in the DSN run commands as the
     # service user.
     runuser -u "${SERVICE_USER}" -- sh -c \
-        'cd / && GOTHAM_DATABASE_DSN="$1" exec "$2" migrate up' gotham-migrate "${DSN}" "${INSTALL_PATH}" \
+        'cd / && GOTHAM_DATABASE_DSN="$1" GOTHAM_LEGACY_LOCAL_NODE_ID="$3" exec "$2" migrate up' gotham-migrate "${DSN}" "${INSTALL_PATH}" "${LEGACY_LOCAL_NODE_ID}" \
         || die "database migrations failed (check PostgreSQL and GOTHAM_DATABASE_DSN)"
 fi
 

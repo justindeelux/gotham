@@ -117,14 +117,19 @@ agent or explicitly repoint it before retrying. Re-running upgrades the local
 agent identity to `localhost` while preserving its other settings.
 
 The control plane ensures the shared `localhost` registry entry on startup
-and rejects its deletion with HTTP 409. Readiness requires agent heartbeats.
-Migration 49 runs on the control-plane host and renames its legacy
-`<hostname>-agent` identity in place, preserving its UUID and all workload
-references. Run the upgrade before changing the host's hostname. If both
-identities already exist, they are preserved without merging workloads.
+and rejects deletion and PATCH with HTTP 409. Readiness requires agent
+heartbeats. Migration 49 uses the saved `agent.env` identity supplied by the
+installer, preserving the UUID and workload references even after a hostname
+change. For manual migrations, set `GOTHAM_LEGACY_LOCAL_NODE_ID` to that ID;
+without a hint, only one loopback-addressed legacy `*-agent` is automatically
+selected. Unknown addresses, ambiguous candidates and an existing `localhost`
+collision fail for operator reconciliation rather than silently stranding data.
 
 The exact `localhost` identity may register only from a loopback peer. Other
-listener identities and aliases stay reserved. The Git remote host policy
+listener identities and aliases stay reserved. Its server certificate uses
+`localhost.agent.gotham.invalid`, verified by the CP on its local-agent dial,
+instead of any CP listener SAN. Enrollment rejects a configuration that also
+assigns that SAN to the CP. The Git remote host policy
 is independent of node identity validation. First registration still uses
 server-authenticated TLS (see "The agent channel is not mutual yet" below).
 An agent install failure leaves the control plane running and exits nonzero
@@ -165,10 +170,7 @@ accepts only `true`/`false` (the agent only honours `true`), and the
 interval must match Go durations (surrounding whitespace trimmed as the
 agent trims it; day/week units and overflowing values Go errors on are
 refused) while the channel must match channel names. `install.sh` runs the
-same agent checks — but only when the localhost agent step will actually
-run (the distro/arch/systemd/remote-`agent.env` skip decisions are computed
-before the first mutation, so a value the skipped step would never use
-cannot abort the control-plane install) — plus the DSN/Redis gate (control
+same agent checks before its mandatory local agent step, plus the DSN/Redis gate (control
 characters, a trailing backslash, quotes), which always runs before the first
 mutation, so a bad value fails the run with nothing created; a failing agent
 step itself still keeps the control plane. `GOTHAM_DATABASE_DSN` and

@@ -228,7 +228,7 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 	}
 	// Only the co-located agent may enroll the mandatory localhost identity.
 	localPeer := net.ParseIP(peerHost(ctx))
-	if g.isReservedNodeID(nodeID) && (nodeID != "localhost" || localPeer == nil || !localPeer.IsLoopback()) {
+	if g.isReservedNodeID(nodeID) && (nodeID != "localhost" || localPeer == nil || !localPeer.IsLoopback() || g.isReservedNodeID(localhostAgentServerName)) {
 		g.logger.Warn("servers: register node_id is reserved for the control plane listener",
 			"node_id", nodeID, "peer", peerAddress(ctx))
 		return nil, status.Error(codes.PermissionDenied, reservedNodeIDMessage)

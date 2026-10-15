@@ -97,31 +97,14 @@
 # hostname are always included. On a reinstall, omitting them keeps the list
 # already persisted next to the CA.
 #
-# Localhost agent (on by default). The installer also installs and starts the
-# node agent on this host and registers it as the control plane's first node,
-# over the mTLS channel above (127.0.0.1 is always a listener SAN, so no
-# --cp-host is needed for it). It calls install-agent.sh --full --ca with the
-# provisioned CA, so Docker Engine and the compose plugin are set up too, and
-# pins the agent to the same release tag the control plane just installed. The
-# node id defaults to "<hostname>-agent" (a default, not a reserved id: only
-# the control plane's own listener identities are refused) and may be
-# overridden with GOTHAM_AGENT_NODE_ID; the dial address defaults to
-# 127.0.0.1:9442 and may be overridden with GOTHAM_AGENT_CP_ADDR. Both are
-# passed only when agent.env does not already define them, so re-running the
-# installer keeps a remote-agent setup or operator edits and never repoints or
-# duplicates the node (a hostname change is safe). Registration is automatic:
-# the agent registers on first contact and its heartbeats flip the server row
-# the UI lists to ready. The localhost agent needs Ubuntu/Debian + systemd +
-# a supported architecture: anywhere else it is skipped with a notice and the
-# control plane install still succeeds. If the agent step fails on a supported
-# platform the control plane is left installed and running (nothing is rolled
-# back) and the installer exits nonzero with the exact retry command.
-# Re-running the installer re-runs the agent install, which is idempotent (the
-# unit is restarted onto the new binary). Pass --no-local-agent (or
-# GOTHAM_NO_LOCAL_AGENT=1) to skip it for a remote-only control plane.
+# The localhost agent is mandatory and uses node id localhost, dialing the
+# control plane at 127.0.0.1:9442. Upgrades replace the old local node identity;
+# the forward-only migration preserves its UUID and workload references.
+# Unsupported platforms or an existing remote agent fail before mutation.
+# An agent install failure leaves the control plane running and exits nonzero.
 #
 # Usage:
-#   sudo ./install.sh [--cp-host <name-or-ip>]... [--no-local-agent] [--dry-run]
+#   sudo ./install.sh [--cp-host <name-or-ip>]... [--dry-run]
 #                     [--file-manager | --no-file-manager]
 
 set -eu
@@ -144,12 +127,10 @@ DEFAULT_REPO="justindeelux/gotham"
 GOTHAM_RELEASE_PUBLIC_KEY_B64="Yt6nz1gGQWF7Bfc9MCt/gQXbPMzhN9OygrUkOEFYdwQ="
 
 DRY_RUN=0
-NO_LOCAL_AGENT=0
 CP_HOSTS_OPT=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1 ;;
-        --no-local-agent) NO_LOCAL_AGENT=1 ;;
         --file-manager) GOTHAM_AGENT_FILE_MANAGER=yes; export GOTHAM_AGENT_FILE_MANAGER ;;
         --no-file-manager) GOTHAM_AGENT_FILE_MANAGER=no; export GOTHAM_AGENT_FILE_MANAGER ;;
         --cp-host)
@@ -171,11 +152,6 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
-# GOTHAM_NO_LOCAL_AGENT=1 is the environment form of --no-local-agent.
-if [ "${GOTHAM_NO_LOCAL_AGENT:-0}" = "1" ]; then
-    NO_LOCAL_AGENT=1
-fi
-
 # gRPC listener SAN hosts: --cp-host values plus GOTHAM_GRPC_HOSTS
 # (comma-separated). Empty is fine; serve always adds the loopback names and the
 # machine hostname.
@@ -259,29 +235,10 @@ _is_loopback_cp_addr() {
     [ "${_lc_ok}" -eq 1 ] && [ "${_lc_n}" -eq 4 ]
 }
 
-# derive_agent_defaults computes the node id / dial address the localhost
-# agent step will use and stores them in _derived_node_id / _derived_cp_addr:
-# an explicit GOTHAM_AGENT_* value wins, otherwise a prior agent.env value is
-# kept (by passing nothing, so the result stays empty), otherwise the derived
-# default (<hostname>-agent, 127.0.0.1:9442). It reads the agent.env path the
-# early decision baked (_la_agent_env). Both the early validation and the
-# late agent step call it, so the validated values are the used values.
+# Both early validation and the agent step use these mandatory values.
 derive_agent_defaults() {
-    _dad_prev_node_id=""
-    _dad_prev_cp_addr=""
-    if [ -f "${_la_agent_env}" ]; then
-        _dad_prev_node_id="$(sed -n "s/^[[:space:]]*GOTHAM_AGENT_NODE_ID=//p" "${_la_agent_env}" | tail -n1)"
-        _dad_prev_cp_addr="$(sed -n "s/^[[:space:]]*GOTHAM_AGENT_CP_ADDR=//p" "${_la_agent_env}" | tail -n1)"
-    fi
-    _derived_node_id="${GOTHAM_AGENT_NODE_ID:-}"
-    if [ -z "${_derived_node_id}" ] && [ -z "${_dad_prev_node_id}" ]; then
-        _derived_node_id="$(hostname 2>/dev/null || true)-agent"
-        [ "${_derived_node_id}" != "-agent" ] || _derived_node_id="local-agent"
-    fi
-    _derived_cp_addr="${GOTHAM_AGENT_CP_ADDR:-}"
-    if [ -z "${_derived_cp_addr}" ] && [ -z "${_dad_prev_cp_addr}" ]; then
-        _derived_cp_addr="127.0.0.1:9442"
-    fi
+    _derived_node_id="localhost"
+    _derived_cp_addr="127.0.0.1:9442"
 }
 
 # Install prefix. Empty = the production layout from deploy/README.md. A
@@ -345,18 +302,9 @@ ENV_FILE="${ETC_DIR}/gotham.env"
 SERVICE_FILE="${PREFIX}/etc/systemd/system/gotham.service"
 
 # ---- Validate every input before the first mutation -------------------------
-# The DSN/Redis values are checked here, before the service user,
-# directories, binary or any env file is created, so a bad value fails with
-# nothing created. Whether the localhost agent step will run is decided here
-# too: every skip reason (--no-local-agent, distro, systemd, architecture, a
-# remote prior agent.env) only reads files, so the decision moves above the
-# first mutation as well. The agent values go through the same validator
-# functions install-agent.sh runs (agent_env_validate also covers values a
-# previous agent.env would preserve for keys this run leaves unset), but only
-# when the agent step will actually run: a value the skipped step would never
-# use must not abort the control-plane install. A failing agent step itself
-# still never rolls the control plane back (see the localhost-agent section
-# below).
+# Validate the control plane and mandatory local agent before changing files.
+# Unsupported platforms and remote agent configurations fail without mutation.
+# A later agent install failure leaves the already started control plane intact.
 DEFAULT_DSN="postgres://gotham:gotham@localhost:5432/gotham?sslmode=disable"
 DEFAULT_REDIS="localhost:6379"
 
@@ -398,11 +346,9 @@ case "${REDIS_ADDR}" in
     *\'* | *\"*) die "GOTHAM_REDIS_ADDR must not contain quotes (got '${REDIS_ADDR}')" ;;
 esac
 
-if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
-    # The skip decision lives here, before the first mutation, and the
-    # localhost-agent section below reuses it: the platform/env lookups only
-    # read files. _la_agent_env is the path install-agent.sh actually
-    # writes; the GOTHAM_AGENT_ENV_FILE / GOTHAM_OS_RELEASE_FILE /
+{
+    # Platform and prior-agent lookups only read files. _la_agent_env is the
+    # path install-agent.sh writes; the GOTHAM_AGENT_ENV_FILE / GOTHAM_OS_RELEASE_FILE /
     # GOTHAM_TEST_UNAME_M seams redirect it only on a dry run in test mode
     # (a sandbox real run uses a scratch installer copy with the paths baked
     # in — see deploy/test-release-install.sh).
@@ -441,22 +387,25 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
     if [ -z "${LOCAL_AGENT_SKIP}" ] && [ -z "${GOTHAM_AGENT_CP_ADDR:-}" ] && [ -f "${_la_agent_env}" ]; then
         # Never touch another control plane's agent: when the prior agent.env
         # points at a remote control plane (an explicit address this run
-        # still wins and repoints deliberately), the whole step is skipped.
+        # still wins and repoints deliberately), refuse before mutation.
         _la_prior_cp_addr="$(sed -n 's/^[[:space:]]*GOTHAM_AGENT_CP_ADDR=//p' "${_la_agent_env}" | tail -n1)"
         if [ -n "${_la_prior_cp_addr}" ] && ! _is_loopback_cp_addr "${_la_prior_cp_addr}"; then
             LOCAL_AGENT_SKIP="agent.env points at a remote control plane (${_la_prior_cp_addr}); leaving it untouched"
         fi
     fi
+    [ -z "${LOCAL_AGENT_SKIP}" ] || die "mandatory localhost agent: ${LOCAL_AGENT_SKIP}"
+    [ -z "${GOTHAM_AGENT_NODE_ID:-}" ] || [ "${GOTHAM_AGENT_NODE_ID}" = "localhost" ] \
+        || die "GOTHAM_AGENT_NODE_ID must be localhost for the control-plane installer"
+    [ -z "${GOTHAM_AGENT_CP_ADDR:-}" ] || [ "${GOTHAM_AGENT_CP_ADDR}" = "127.0.0.1:9442" ] \
+        || die "GOTHAM_AGENT_CP_ADDR must be 127.0.0.1:9442 for the control-plane installer"
+    # Override the prior local identity before validating the effective config.
+    GOTHAM_AGENT_NODE_ID=localhost
+    GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442
+    export GOTHAM_AGENT_NODE_ID GOTHAM_AGENT_CP_ADDR
     if [ -z "${LOCAL_AGENT_SKIP}" ]; then
         agent_env_validate "${_la_agent_env}" "${CA_DIR}/ca.crt" 0 \
             || die "invalid agent configuration (see above); refusing to install"
-        # The derived defaults (<hostname>-agent, 127.0.0.1:9442) are
-        # installer-computed, not operator input, but a hostile hostname (or a
-        # mutant default) must still fail closed with the key named — here,
-        # before the first mutation, so "refusing to install" is true: no
-        # migrate, no start, no "installed" summary, no retry banner.
-        # derive_agent_defaults is the same function the agent step calls
-        # below, so the validated values are the used values.
+        # Validate the same mandatory defaults the agent step will use.
         derive_agent_defaults
         [ -z "${_derived_node_id}" ] \
             || _env_check_value GOTHAM_AGENT_NODE_ID "${_derived_node_id}" \
@@ -465,7 +414,7 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
             || _env_check_value GOTHAM_AGENT_CP_ADDR "${_derived_cp_addr}" \
                 || die "invalid derived agent address (see above); refusing to install"
     fi
-fi
+}
 
 # render_file installs a root-owned config/unit file, rewriting the production
 # absolute roots onto GOTHAM_INSTALL_ROOT when one is set (test mode only).
@@ -1250,36 +1199,15 @@ run systemctl enable "${BINARY_NAME}.service"
 run systemctl restart "${BINARY_NAME}.service"
 
 # ---- Localhost agent (the control plane's first node) -----------------------
-# On by default: install and start the agent on this host, pointed at the
-# loopback gRPC listener over the mTLS channel provisioned above. The dial
-# address needs no --cp-host because the loopback names are always listener
-# SANs. Idempotent: the agent installer keeps the prior node id and address and
-# restarts the unit onto the newly installed binary. Opt out with
-# --no-local-agent for a remote-only control plane.
-if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
-    # The skip decision was computed before the first mutation (see above)
-    # and is reused here; only the sibling check still runs at this point.
-    # The production paths below are fixed; a sandbox real run uses a scratch
-    # installer copy with them baked in, and the dry-run test seams were
-    # already honoured by the early decision (see
-    # deploy/test-release-install.sh).
-    if [ -n "${LOCAL_AGENT_SKIP}" ]; then
-        log "skipping the localhost agent install: ${LOCAL_AGENT_SKIP}"
-        log "install the agent manually with deploy/install-agent.sh once the platform supports it"
-    else
+# Install over the CA-protected loopback channel. Platform/config checks above
+# already passed; an agent failure below must make this install fail.
+{
         for agent_sibling in install-agent.sh install-agent-lib.sh gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service; do
             if [ ! -f "${SCRIPT_DIR}/${agent_sibling}" ]; then
-                die "install.sh: ${agent_sibling} must be next to this script for the localhost agent install (--no-local-agent to skip)"
+                die "install.sh: ${agent_sibling} must be next to this script for the localhost agent install"
             fi
         done
-        # A re-run keeps the operator's agent: GOTHAM_AGENT_NODE_ID /
-        # GOTHAM_AGENT_CP_ADDR are passed only when agent.env does not already
-        # define them. A value set in this run's environment still wins;
-        # otherwise the prior file's values are kept by passing nothing, so a
-        # hostname change is never repointed and no duplicate node is created.
-        # The values come from derive_agent_defaults — the same function the
-        # early decision block validated before the first mutation — so no
-        # re-validation happens here.
+        # Use the same mandatory identity and address validated before mutation.
         derive_agent_defaults
         LOCAL_AGENT_NODE_ID="${_derived_node_id}"
         LOCAL_AGENT_CP_ADDR="${_derived_cp_addr}"
@@ -1307,9 +1235,9 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
         if [ "${DRY_RUN}" -eq 1 ]; then
             echo "[dry-run] ${LOCAL_AGENT_RETRY}"
         else
-            _agent_label="${LOCAL_AGENT_NODE_ID:-${_dad_prev_node_id}}"
+            _agent_label="${LOCAL_AGENT_NODE_ID}"
             [ -n "${_agent_label}" ] || _agent_label="the existing node"
-            log "installing the localhost agent node ${_agent_label} (--no-local-agent to skip)"
+            log "installing the localhost agent node ${_agent_label}"
             # Invoke via sh so a checkout that lost the exec bit still installs.
             # The release location (mirror/base URL, repo) is inherited from the
             # environment; the tag is pinned to the control plane's so both
@@ -1343,10 +1271,7 @@ if [ "${NO_LOCAL_AGENT}" -eq 0 ]; then
                     "$@" sh "${_agent_script}" --full --ca "${CA_DIR}/ca.crt"
             ) || LOCAL_AGENT_FAILED=1
         fi
-    fi
-else
-    log "skipping the localhost agent install (--no-local-agent)"
-fi
+}
 
 # ---- First admin account: summary -------------------------------------------
 # Credentials were collected in phase 1 (before the first mutation); the

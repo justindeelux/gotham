@@ -309,6 +309,9 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 		return ErrNotFound
 	}
+	if row.NodeID != nil && *row.NodeID == "localhost" {
+		return fmt.Errorf("%w: the localhost node cannot be deleted", ErrConflict)
+	}
 	if blocking, err := s.blockingResources(ctx, id); err != nil {
 		return err
 	} else if blocking != "" {

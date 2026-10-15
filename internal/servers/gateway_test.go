@@ -948,7 +948,7 @@ func TestGatewayRegisterRejectsReservedNodeID(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	client := agentv1.NewAgentServiceClient(conn)
 
-	reserved := []string{"cp.example.com", "localhost", "127.0.0.1"}
+	reserved := []string{"cp.example.com", "127.0.0.1"}
 	for _, nodeID := range reserved {
 		_, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"})
 		if status.Code(err) != codes.PermissionDenied {

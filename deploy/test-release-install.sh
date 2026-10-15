@@ -321,8 +321,9 @@ echo "PASS: agent installer fails closed without a CA and accepts --ca/--insecur
 # ---- JUS-5: localhost agent by default, --full opt-in -----------------------
 # install.sh installs and starts the agent on the same host unless
 # --no-local-agent is given; install-agent.sh only sets up Docker with --full.
-sh "${INSTALL_SH}" --help 2>&1 | grep -q -- '--no-local-agent' \
-    || { echo "FAIL: install.sh --help does not document --no-local-agent" >&2; exit 1; }
+if sh "${INSTALL_SH}" --help 2>&1 | grep -q -- '--no-local-agent'; then
+    echo "FAIL: obsolete --no-local-agent still documented" >&2; exit 1
+fi
 sh "${AGENT_INSTALLER}" --help 2>&1 | grep -q -- '--full' \
     || { echo "FAIL: install-agent.sh --help does not document --full" >&2; exit 1; }
 grep -q 'LOCAL_AGENT_RETRY=.*--full --ca' "${INSTALL_SH}" \
@@ -663,14 +664,13 @@ PATH="${SYS_SHIM}:${PATH}" \
     sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-agent.log" 2>&1
 grep -q 'install-agent.sh --full --ca' "${SCRATCH}/dry-agent.log" \
     || { echo "FAIL: --dry-run does not show the localhost agent install" >&2; cat "${SCRATCH}/dry-agent.log" >&2; exit 1; }
-dry_run --no-local-agent >"${SCRATCH}/dry-no-agent.log" 2>&1
-grep -q 'skipping the localhost agent install (--no-local-agent)' "${SCRATCH}/dry-no-agent.log" \
-    || { echo "FAIL: --no-local-agent --dry-run does not show the skip" >&2; exit 1; }
-if grep -q 'install-agent.sh --full' "${SCRATCH}/dry-no-agent.log"; then
-    echo "FAIL: --no-local-agent still schedules the agent install" >&2
-    exit 1
+if dry_run --no-local-agent >"${SCRATCH}/dry-no-agent.log" 2>&1; then
+    echo "FAIL: --no-local-agent was accepted" >&2; exit 1
 fi
-echo "PASS: --dry-run shows the localhost agent install and its --no-local-agent skip (JUS-5)"
+GOTHAM_NO_LOCAL_AGENT=1 dry_run >"${SCRATCH}/env-no-agent.log" 2>&1
+grep -q 'GOTHAM_AGENT_NODE_ID=localhost' "${SCRATCH}/env-no-agent.log" \
+    || { echo "FAIL: legacy env skipped mandatory localhost agent" >&2; exit 1; }
+echo "PASS: localhost agent is mandatory"
 
 # ---- R1: unsupported platform skips the agent; a failed agent step keeps CP -
 # An unsupported platform (non-Ubuntu/Debian here) skips the localhost agent
@@ -681,8 +681,8 @@ GOTHAM_SKIP_DEPS=1 \
 GOTHAM_INSTALL_TEST=1 \
 GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
 PATH="${SYS_SHIM}:${PATH}" \
-    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-skip-arch.log" 2>&1
-grep -q 'skipping the localhost agent install' "${SCRATCH}/dry-skip-arch.log" \
+    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-skip-arch.log" 2>&1 && { echo "FAIL: unsupported platform succeeded" >&2; exit 1; }
+grep -q 'mandatory localhost agent' "${SCRATCH}/dry-skip-arch.log" \
     || { echo "FAIL: unsupported platform did not skip the localhost agent (R1)" >&2; cat "${SCRATCH}/dry-skip-arch.log" >&2; exit 1; }
 grep -q 'supports Ubuntu/Debian only' "${SCRATCH}/dry-skip-arch.log" \
     || { echo "FAIL: the skip notice does not name the supported distros (R1)" >&2; exit 1; }
@@ -690,7 +690,7 @@ if grep -q 'install-agent.sh --full' "${SCRATCH}/dry-skip-arch.log"; then
     echo "FAIL: unsupported platform still schedules the agent install (R1)" >&2
     exit 1
 fi
-echo "PASS: unsupported platform skips the localhost agent with a notice (R1)"
+echo "PASS: unsupported platform refuses before mutation (R1)"
 # An unsupported architecture skips the same way (seam: GOTHAM_TEST_UNAME_M).
 GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
 GOTHAM_VERSION="${VERSION}" \
@@ -699,14 +699,14 @@ GOTHAM_INSTALL_TEST=1 \
 GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
 GOTHAM_TEST_UNAME_M=sparc64 \
 PATH="${SYS_SHIM}:${PATH}" \
-    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-skip-cpu.log" 2>&1
-grep -q 'skipping the localhost agent install: unsupported architecture' "${SCRATCH}/dry-skip-cpu.log" \
+    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-skip-cpu.log" 2>&1 && { echo "FAIL: unsupported architecture succeeded" >&2; exit 1; }
+grep -q 'mandatory localhost agent: unsupported architecture' "${SCRATCH}/dry-skip-cpu.log" \
     || { echo "FAIL: unsupported architecture did not skip the localhost agent (R1)" >&2; exit 1; }
 if grep -q 'install-agent.sh --full' "${SCRATCH}/dry-skip-cpu.log"; then
     echo "FAIL: unsupported architecture still schedules the agent install (R1)" >&2
     exit 1
 fi
-echo "PASS: unsupported architecture skips the localhost agent (R1)"
+echo "PASS: unsupported architecture refuses before mutation (R1)"
 # A failed agent step must never roll the control plane back: the old
 # abort-the-install message is gone, replaced by a warning that leaves the
 # control plane installed and running plus the exact retry command.
@@ -722,145 +722,25 @@ grep -q 'LOCAL_AGENT_RETRY=.*--full --ca' "${INSTALL_SH}" \
     || { echo "FAIL: install.sh retry does not cover the --full --ca agent step (R1)" >&2; exit 1; }
 echo "PASS: a failed localhost agent step keeps the control plane and prints the retry (R1)"
 
-# ---- R2: re-run with a pre-existing agent.env never repoints the agent ------
-# GOTHAM_AGENT_NODE_ID / GOTHAM_AGENT_CP_ADDR are passed only when agent.env
-# does not already define them, so the dry-run line omits them when the file
-# has them (kept), shows the defaults when it does not, and honours an
-# explicit override. GOTHAM_AGENT_ENV_FILE points the lookup at scratch
-# (test seam, honoured with GOTHAM_INSTALL_TEST=1 here).
+# ---- Mandatory localhost defaults and safe refusal of remote agent config ---
 R2_ENV="${SCRATCH}/prior-agent.env"
-printf 'GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442\nGOTHAM_AGENT_NODE_ID=kept-node\n' >"${R2_ENV}"
-dry_run_agent_line() {
-    GOTHAM_AGENT_ENV_FILE="$1" \
-    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-    GOTHAM_VERSION="${VERSION}" \
-    GOTHAM_SKIP_DEPS=1 \
-    GOTHAM_INSTALL_TEST=1 \
-    GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
-    PATH="${SYS_SHIM}:${PATH}" \
-        sh "${INSTALL_SH}" --dry-run 2>/dev/null | grep 'install-agent.sh --full' || true
-}
-PRIOR_LINE="$(dry_run_agent_line "${R2_ENV}")"
-[ -n "${PRIOR_LINE}" ] || { echo "FAIL: no agent step scheduled with a prior agent.env (R2)" >&2; exit 1; }
-case "${PRIOR_LINE}" in
-    *GOTHAM_AGENT_NODE_ID* | *GOTHAM_AGENT_CP_ADDR*)
-        echo "FAIL: re-run passes NODE_ID/CP_ADDR although agent.env defines them (R2): ${PRIOR_LINE}" >&2
-        exit 1
-        ;;
-esac
-echo "PASS: re-run with a pre-existing agent.env passes neither NODE_ID nor CP_ADDR (R2)"
-FRESH_LINE="$(dry_run_agent_line "${SCRATCH}/no-such-agent.env")"
-case "${FRESH_LINE}" in
-    *GOTHAM_AGENT_NODE_ID=*-agent*GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442*)
-        echo "PASS: fresh install still passes the default node id and loopback address (R2)"
-        ;;
-    *)
-        echo "FAIL: fresh install does not pass the defaults (R2): ${FRESH_LINE}" >&2
-        exit 1
-        ;;
-esac
-EXPLICIT_LINE="$(GOTHAM_AGENT_NODE_ID=explicit-override dry_run_agent_line "${R2_ENV}")"
-case "${EXPLICIT_LINE}" in
-    *GOTHAM_AGENT_NODE_ID=explicit-override*)
-        case "${EXPLICIT_LINE}" in
-            *GOTHAM_AGENT_CP_ADDR*)
-                echo "FAIL: explicit NODE_ID leaked in CP_ADDR too (R2): ${EXPLICIT_LINE}" >&2
-                exit 1
-                ;;
-        esac
-        echo "PASS: an explicit GOTHAM_AGENT_NODE_ID still wins over agent.env (R2)"
-        ;;
-    *)
-        echo "FAIL: explicit GOTHAM_AGENT_NODE_ID did not win (R2): ${EXPLICIT_LINE}" >&2
-        exit 1
-        ;;
-esac
-
-# ---- Remote agent.env: a re-run leaves another control plane's agent alone -
-# When the prior agent.env points at a remote control plane, the localhost
-# step is skipped entirely: --ca must not overwrite that host's ca.crt and
-# its agent config must not be repointed. An explicit address this run still
-# repoints deliberately.
-R2R_ENV="${SCRATCH}/remote-agent.env"
-printf 'GOTHAM_AGENT_CP_ADDR=remote.example.com:9443\nGOTHAM_AGENT_NODE_ID=remote-node\n' >"${R2R_ENV}"
-GOTHAM_AGENT_ENV_FILE="${R2R_ENV}" \
-GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-GOTHAM_VERSION="${VERSION}" \
-GOTHAM_SKIP_DEPS=1 \
-GOTHAM_INSTALL_TEST=1 \
-GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
-PATH="${SYS_SHIM}:${PATH}" \
-    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/dry-remote.log" 2>&1
-grep -q 'leaving it untouched' "${SCRATCH}/dry-remote.log" \
-    || { echo "FAIL: a remote agent.env was not left untouched" >&2; cat "${SCRATCH}/dry-remote.log" >&2; exit 1; }
-if grep -q 'install-agent.sh --full' "${SCRATCH}/dry-remote.log"; then
-    echo "FAIL: a remote agent.env still schedules the agent install" >&2
-    exit 1
+printf 'GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442\nGOTHAM_AGENT_NODE_ID=old-host-agent\n' >"${R2_ENV}"
+GOTHAM_AGENT_ENV_FILE="${R2_ENV}" dry_run >"${SCRATCH}/localhost-upgrade.log" 2>&1
+grep -q 'GOTHAM_AGENT_NODE_ID=localhost GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442' "${SCRATCH}/localhost-upgrade.log" \
+    || { echo "FAIL: upgrade does not install mandatory identity/address" >&2; exit 1; }
+printf 'GOTHAM_AGENT_CP_ADDR=remote.example.com:9443\nGOTHAM_AGENT_NODE_ID=remote-node\n' >"${R2_ENV}"
+if GOTHAM_AGENT_ENV_FILE="${R2_ENV}" dry_run >"${SCRATCH}/remote-refusal.log" 2>&1; then
+    echo "FAIL: remote agent setup silently succeeded" >&2; exit 1
 fi
-echo "PASS: a remote agent.env skips the localhost step untouched"
-REMOTE_EXPLICIT="$(GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442 dry_run_agent_line "${R2R_ENV}")"
-[ -n "${REMOTE_EXPLICIT}" ] \
-    || { echo "FAIL: an explicit CP_ADDR did not repoint a remote agent.env" >&2; exit 1; }
-echo "PASS: an explicit GOTHAM_AGENT_CP_ADDR still repoints deliberately"
-
-# ---- L2: only loopback literals count as local ------------------------------
-# 127.evil.example.com is NOT local (it merely starts with 127.); only
-# numeric 127.0.0.0/8, localhost and ::1 keep the localhost step, everything
-# else is left untouched like a remote control plane. All values here are
-# host:port: a bare 127.0.0.1 never reaches this classifier — the agent
-# itself refuses a port-less dial address, so the installer rejects it up
-# front (covered in C2).
-L2_ENV="${SCRATCH}/l2-agent.env"
-l2_case() {
-    # $1 addr, $2 want (local/remote)
-    printf 'GOTHAM_AGENT_CP_ADDR=%s\nGOTHAM_AGENT_NODE_ID=l2-node\n' "$1" >"${L2_ENV}"
-    GOTHAM_AGENT_ENV_FILE="${L2_ENV}" \
-    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-    GOTHAM_VERSION="${VERSION}" \
-    GOTHAM_SKIP_DEPS=1 \
-    GOTHAM_INSTALL_TEST=1 \
-    GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
-    PATH="${SYS_SHIM}:${PATH}" \
-        sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/l2.log" 2>&1
-    if [ "$2" = "local" ]; then
-        grep -q 'install-agent.sh --full' "${SCRATCH}/l2.log" \
-            || { echo "FAIL: loopback ${1} skipped the localhost step (L2)" >&2; exit 1; }
-        if grep -q 'leaving it untouched' "${SCRATCH}/l2.log"; then
-            echo "FAIL: loopback ${1} treated as a remote control plane (L2)" >&2
-            exit 1
-        fi
-    else
-        grep -q 'leaving it untouched' "${SCRATCH}/l2.log" \
-            || { echo "FAIL: non-loopback ${1} was not left untouched (L2)" >&2; cat "${SCRATCH}/l2.log" >&2; exit 1; }
-        if grep -q 'install-agent.sh --full' "${SCRATCH}/l2.log"; then
-            echo "FAIL: non-loopback ${1} still schedules the agent install (L2)" >&2
-            exit 1
-        fi
+grep -q 'leaving it untouched' "${SCRATCH}/remote-refusal.log" \
+    || { echo "FAIL: remote refusal lacks explanation" >&2; exit 1; }
+for override in GOTHAM_AGENT_NODE_ID=other GOTHAM_AGENT_CP_ADDR=remote:9442; do
+    if env "${override}" GOTHAM_INSTALL_TEST=1 GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
+        PATH="${SYS_SHIM}:${PATH}" sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/override.log" 2>&1; then
+        echo "FAIL: mandatory local defaults could be overridden" >&2; exit 1
     fi
-}
-for _local in 127.0.0.1:9442 127.1.2.3:9442 localhost:9443 \
-    LOCALHOST:9443 '[::1]:9443'; do
-    l2_case "${_local}" local
 done
-for _remote in 127.evil.example.com:9443 remote.example.com:9443 \
-    128.0.0.1:9442 192.168.1.1:9442 127.0.0.300:9442 10.0.0.1:9442; do
-    l2_case "${_remote}" remote
-done
-echo "PASS: only loopback literals count as local (127.evil.example.com is remote) (L2)"
-
-# ---- Retry quoting: values with spaces/specials stay one re-runnable word --
-# (A node id can no longer hold a space — the installer mirrors the agent's
-# own gate — so this schedules an agent-valid but still quoting-hostile id.)
-QUOTED_LINE="$(GOTHAM_AGENT_NODE_ID="odd;\$(id>xq);a=b" dry_run_agent_line "${SCRATCH}/no-such-agent.env")"
-case "${QUOTED_LINE}" in
-    *"GOTHAM_AGENT_NODE_ID='odd;\$(id>xq);a=b'"*)
-        echo "PASS: the retry command shell-quotes values with spaces/specials"
-        ;;
-    *)
-        echo "FAIL: the retry command is not safely quoted: ${QUOTED_LINE}" >&2
-        exit 1
-        ;;
-esac
+echo "PASS: mandatory defaults on upgrade and remote configuration refusal"
 
 # ---- agent.env default parity: install.sh reads what install-agent.sh writes
 # The lookup default must stay the path install-agent.sh actually writes
@@ -870,78 +750,6 @@ grep -q 'ENV_FILE="${ENV_DIR}/agent.env"' "${AGENT_INSTALLER}" \
 grep -q '_la_agent_env="/etc/gotham/agent.env"' "${INSTALL_SH}" \
     || { echo "FAIL: install.sh lookup default is not /etc/gotham/agent.env" >&2; exit 1; }
 echo "PASS: the agent.env lookup default matches the path install-agent.sh writes"
-
-# ---- JUS-14/6: the derived defaults are validated in install.sh too ---------
-# A hostile hostname makes the derived <hostname>-agent default fail closed
-# here — the dry run aborts naming GOTHAM_AGENT_NODE_ID instead of reaching
-# install-agent.sh. Removing the install.sh check lets this run succeed, so
-# the case pins it (run it with INSTALL_SH_OVERRIDE=<mutant> to see it fail).
-BADHOST_SHIM="${SCRATCH}/badhost-shim"
-mkdir -p "${BADHOST_SHIM}"
-cat >"${BADHOST_SHIM}/hostname" <<'SHIM'
-#!/bin/sh
-printf 'bad id\n'
-SHIM
-chmod +x "${BADHOST_SHIM}/hostname"
-BADHOST_RC=0
-GOTHAM_AGENT_ENV_FILE="${SCRATCH}/no-such-jus14-agent.env" \
-GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-GOTHAM_VERSION="${VERSION}" \
-GOTHAM_SKIP_DEPS=1 \
-GOTHAM_INSTALL_TEST=1 \
-GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
-PATH="${BADHOST_SHIM}:${SYS_SHIM}:${PATH}" \
-    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/badhost.log" 2>&1 || BADHOST_RC=$?
-[ "${BADHOST_RC}" -ne 0 ] \
-    || { echo "FAIL: a hostile hostname produced no validation failure (JUS-14/6)" >&2; exit 1; }
-grep -q 'GOTHAM_AGENT_NODE_ID' "${SCRATCH}/badhost.log" \
-    || { echo "FAIL: the hostile-hostname rejection does not name the key (JUS-14/6)" >&2; cat "${SCRATCH}/badhost.log" >&2; exit 1; }
-if grep -q 'install-agent.sh --full' "${SCRATCH}/badhost.log"; then
-    echo "FAIL: the agent step was scheduled although the derived node id is invalid (JUS-14/6)" >&2
-    exit 1
-fi
-echo "PASS: a hostile hostname fails the derived node-id validation up front (JUS-14/6)"
-
-# ---- JUS-14/6b (fix round 1): the early refusal holds on a real sandbox run
-# The derived-default validation lives in the early decision block, before
-# the first mutation, so a NON-dry-run sandbox run with a hostile hostname
-# must refuse with nothing created: no migrate/start (no etc/var under the
-# sandbox root), no "Gotham is installed" summary, no agent retry banner.
-# Removing the early check (INSTALL_SH_OVERRIDE=<mutant>) lets the run
-# proceed into the control-plane install, so the case pins it.
-echo "==> hostile derived defaults refuse a real sandbox run before any mutation"
-EARLY_ROOT="${SCRATCH}/root-early-refuse"
-EARLY_INSTALLER="${SCRATCH}/install-early-refuse.sh"
-EARLY_AGENT_ENV="${SCRATCH}/early-refuse-agent.env"
-rm -f "${EARLY_AGENT_ENV}"
-bake_installer "${EARLY_INSTALLER}" "${FIXTURES}/ubuntu-release" "${EARLY_AGENT_ENV}"
-EARLY_RC=0
-GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-GOTHAM_VERSION="${VERSION}" \
-GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
-GOTHAM_INSTALL_ROOT="${EARLY_ROOT}" \
-GOTHAM_SKIP_DEPS=1 \
-PATH="${BADHOST_SHIM}:${SYS_SHIM}:${PATH}" \
-    sh "${EARLY_INSTALLER}" >"${SCRATCH}/early-refuse-out.log" 2>"${SCRATCH}/early-refuse-err.log" || EARLY_RC=$?
-[ "${EARLY_RC}" -ne 0 ] \
-    || { echo "FAIL: a hostile hostname let a real sandbox run proceed (JUS-14/6b)" >&2; exit 1; }
-grep -q 'GOTHAM_AGENT_NODE_ID' "${SCRATCH}/early-refuse-err.log" \
-    || { echo "FAIL: the early refusal does not name the key (JUS-14/6b)" >&2; cat "${SCRATCH}/early-refuse-err.log" >&2; exit 1; }
-grep -q 'refusing to install' "${SCRATCH}/early-refuse-err.log" \
-    || { echo "FAIL: the early refusal does not refuse the install (JUS-14/6b)" >&2; cat "${SCRATCH}/early-refuse-err.log" >&2; exit 1; }
-for _early_path in etc var; do
-    [ ! -e "${EARLY_ROOT}/${_early_path}" ] \
-        || { echo "FAIL: ${EARLY_ROOT}/${_early_path} was created although the install was refused (JUS-14/6b)" >&2; exit 1; }
-done
-if grep -q 'is installed\.' "${SCRATCH}/early-refuse-out.log"; then
-    echo "FAIL: the refused run printed the installed summary (JUS-14/6b)" >&2
-    exit 1
-fi
-if grep -q 'Retry only the agent step' "${SCRATCH}/early-refuse-err.log"; then
-    echo "FAIL: the refused run printed the agent retry banner (JUS-14/6b)" >&2
-    exit 1
-fi
-echo "PASS: hostile derived defaults refuse a real sandbox run before any mutation (JUS-14/6b)"
 
 # ---- H1/M1/L3: production dry-run ignores every test seam (hermetic) ------
 # Differential: the same production-mode dry-run (no GOTHAM_INSTALL_TEST, no
@@ -966,7 +774,7 @@ prod_dry() {
 prod_dry >"${SCRATCH}/prod-clean.log" 2>&1
 GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
 GOTHAM_TEST_UNAME_M=sparc64 \
-GOTHAM_AGENT_ENV_FILE="${R2R_ENV}" \
+GOTHAM_AGENT_ENV_FILE="${R2_ENV}" \
 GOTHAM_APT_ROOT="${SCRATCH}/hostile-apt-root" \
 GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/hostile-agent.sh" \
 GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
@@ -1195,7 +1003,7 @@ GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
 GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/dump-agent.sh" \
 GOTHAM_OS_RELEASE_FILE="${FIXTURES}/arch-release" \
 GOTHAM_TEST_UNAME_M=sparc64 \
-GOTHAM_AGENT_ENV_FILE="${R2R_ENV}" \
+GOTHAM_AGENT_ENV_FILE="${R2_ENV}" \
 GOTHAM_APT_ROOT="${SCRATCH}/hostile-apt-root" \
 GOTHAM_INSTALL_TEST=1 \
 SYSTEMCTL_LOG="${SCRATCH}/dump-systemctl.log" \
@@ -1221,57 +1029,6 @@ if grep -q 'hostile-apt-root\|sparc64\|arch-release' "${DUMP_CAPTURE}"; then
     exit 1
 fi
 echo "PASS: the agent child runs scrubbed and hostile path seams change nothing on a real run"
-
-# ---- M2: a metachar node id reaches the agent step verbatim -----------------
-# The agent step must not word-split its assignments: a node id holding
-# $(), ;, = and > (spaces, quotes, * and / are refused up front now — the
-# installer mirrors the agent's own gate, and quotes are refused because
-# systemd's EnvironmentFile parser would strip or regroup them, proven on
-# Ubuntu 22.04 systemd 249) is passed as one env value, no command in it
-# runs, and no glob expands. The fake captures what it receives. The
-# execution probe stays slash- and space-free so the id itself is valid: if
-# it were ever expanded, ./m2-pwned-jus12 would appear in the suite's
-# working directory.
-echo "==> metachar node id passes through the agent step verbatim (M2)"
-M2_ROOT="${SCRATCH}/root-m2"
-M2_PWNED="m2-pwned-jus12"
-M2_CAPTURE="${SCRATCH}/m2-captured-node-id"
-M2_NODE="odd;\$(id>${M2_PWNED});a=b"
-cat >"${SCRATCH}/capture-agent.sh" <<'SHIM'
-#!/bin/sh
-printf '%s' "${GOTHAM_AGENT_NODE_ID}" >"${CAPTURE:?}"
-exit 0
-SHIM
-chmod +x "${SCRATCH}/capture-agent.sh"
-rm -f "${M2_PWNED}" "${M2_CAPTURE}"
-: >"${SCRATCH}/m2-systemctl.log"
-# Same baked-copy mechanism as R3: fixed paths on a real run.
-M2_INSTALLER="${SCRATCH}/install-m2.sh"
-bake_installer "${M2_INSTALLER}" "${FIXTURES}/ubuntu-release" "${SCRATCH}/m2-agent.env"
-M2_RC=0
-GOTHAM_AGENT_NODE_ID="${M2_NODE}" \
-GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-GOTHAM_VERSION="${VERSION}" \
-GOTHAM_INSTALL_TEST_PUBLIC_KEY="${PUB_B64}" \
-GOTHAM_INSTALL_ROOT="${M2_ROOT}" \
-GOTHAM_SKIP_DEPS=1 \
-GOTHAM_INSTALL_TEST_RUN_AGENT=1 \
-GOTHAM_INSTALL_TEST_AGENT_SCRIPT="${SCRATCH}/capture-agent.sh" \
-SYSTEMCTL_LOG="${SCRATCH}/m2-systemctl.log" \
-CAPTURE="${M2_CAPTURE}" \
-PATH="${R3_SHIM}:${PATH}" \
-    sh "${M2_INSTALLER}" >"${SCRATCH}/m2-out.log" 2>"${SCRATCH}/m2-err.log" || M2_RC=$?
-[ "${M2_RC}" -eq 0 ] \
-    || { echo "FAIL: the install failed although the agent step succeeded (M2)" >&2; cat "${SCRATCH}/m2-err.log" >&2; exit 1; }
-[ -f "${M2_CAPTURE}" ] \
-    || { echo "FAIL: the agent step never ran (M2)" >&2; exit 1; }
-printf '%s' "${M2_NODE}" >"${SCRATCH}/m2-expected"
-cmp -s "${SCRATCH}/m2-expected" "${M2_CAPTURE}" \
-    || { echo "FAIL: the node id did not arrive verbatim (M2)" >&2; echo "want: ${M2_NODE}" >&2; echo "got:  $(cat "${M2_CAPTURE}")" >&2; exit 1; }
-[ ! -e "${M2_PWNED}" ] \
-    || { echo "FAIL: a command inside the node id was executed (M2)" >&2; exit 1; }
-rm -f "${M2_PWNED}"
-echo "PASS: a metachar node id arrives verbatim and nothing in it runs (M2)"
 
 # ---- C2: bad input fails before the first mutation, nothing created --------
 # The DSN and the Redis address are validated unconditionally, before the
@@ -1363,117 +1120,12 @@ _c2_agent_must_reject listen-dquote GOTHAM_AGENT_LISTEN_ADDR ':94"43'
 _c2_agent_must_reject listen-eq GOTHAM_AGENT_LISTEN_ADDR ':94=43'
 echo "PASS: bad DSN / Redis / agent values fail closed with nothing created (C2)"
 
-# ---- C2b: a skipped agent step is never blocked by agent values ------------
-# The skip decisions (distro, arch, systemd, a remote prior agent.env,
-# --no-local-agent) are computed before the first mutation, and the agent
-# validation runs only when the agent step will run. Each case below carries
-# a would-be-invalid agent value (AUTO_UPDATE=yes) that aborted the install
-# before this fix; now the install succeeds and the agent step stays
-# skipped. --no-local-agent behaviour is unchanged (still skipped, still
-# green).
-echo "==> a skipped agent step is never blocked by agent values (C2b)"
-_c2b_must_skip() { # $1 case name, $2 os-release fixture, $3 extra agent setup
-    C2B_RC=0
-    # shellcheck disable=SC2086  # $3 is an intentional extra env prefix
-    env $3 \
-    GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-    GOTHAM_VERSION="${VERSION}" \
-    GOTHAM_SKIP_DEPS=1 \
-    GOTHAM_INSTALL_TEST=1 \
-    GOTHAM_OS_RELEASE_FILE="$2" \
-    PATH="${SYS_SHIM}:${PATH}" \
-        sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/c2b-$1.log" 2>&1 || C2B_RC=$?
-    [ "${C2B_RC}" -eq 0 ] \
-        || { echo "FAIL: a skipped agent step was blocked by agent values (C2b/$1)" >&2; cat "${SCRATCH}/c2b-$1.log" >&2; exit 1; }
-    if grep -q 'install-agent.sh --full' "${SCRATCH}/c2b-$1.log"; then
-        echo "FAIL: the agent step ran although it must stay skipped (C2b/$1)" >&2
-        exit 1
-    fi
-}
-# Remote agent.env holding a would-be-invalid value: untouched, install green.
-C2B_REMOTE="${SCRATCH}/c2b-remote-agent.env"
-printf 'GOTHAM_AGENT_CP_ADDR=remote.example.com:9443\nGOTHAM_AGENT_NODE_ID=remote-node\nGOTHAM_AGENT_AUTO_UPDATE=yes\n' >"${C2B_REMOTE}"
-C2B_SUM_BEFORE="$(sha "${C2B_REMOTE}")"
-_c2b_must_skip remote-invalid "${FIXTURES}/ubuntu-release" "GOTHAM_AGENT_ENV_FILE=${C2B_REMOTE} GOTHAM_AGENT_AUTO_UPDATE=yes"
-grep -q 'leaving it untouched' "${SCRATCH}/c2b-remote-invalid.log" \
-    || { echo "FAIL: a remote agent.env with a bad value was not left untouched (C2b)" >&2; exit 1; }
-[ "$(sha "${C2B_REMOTE}")" = "${C2B_SUM_BEFORE}" ] \
-    || { echo "FAIL: the remote agent.env was modified (C2b)" >&2; exit 1; }
-echo "PASS: a remote agent.env with a would-be-invalid value stays untouched and green (C2b)"
-# Unsupported distro plus a bad ambient agent value: skipped, install green.
-_c2b_must_skip distro-invalid "${FIXTURES}/arch-release" "GOTHAM_AGENT_AUTO_UPDATE=yes GOTHAM_AGENT_ENV_FILE=${SCRATCH}/no-such-c2b-agent.env"
-grep -q 'supports Ubuntu/Debian only' "${SCRATCH}/c2b-distro-invalid.log" \
-    || { echo "FAIL: the distro skip notice is missing (C2b)" >&2; exit 1; }
-echo "PASS: an unsupported distro plus a bad ambient agent value stays green (C2b)"
-# Unsupported architecture plus a bad ambient agent value: skipped, green. The
-# arch pins a riscv64 kernel (no such build exists) rather than reusing the R1
-# sparc64 probe, so a mutant that validates despite the arch skip fails here.
-_c2b_must_skip arch-invalid "${FIXTURES}/ubuntu-release" "GOTHAM_TEST_UNAME_M=riscv64 GOTHAM_AGENT_AUTO_UPDATE=yes GOTHAM_AGENT_ENV_FILE=${SCRATCH}/no-such-c2b-agent.env"
-grep -q 'skipping the localhost agent install: unsupported architecture: riscv64' "${SCRATCH}/c2b-arch-invalid.log" \
-    || { echo "FAIL: the arch skip notice is missing or names the wrong arch (C2b)" >&2; exit 1; }
-echo "PASS: an unsupported architecture plus a bad ambient agent value stays green (C2b)"
-# systemctl missing from PATH plus a bad ambient agent value: skipped, green.
-# The shim dir links every PATH entry except systemctl, so the dry run keeps
-# all its tools (curl, openssl, awk, ...) while the platform probe finds no
-# systemd host; a mutant that validates despite the systemctl skip fails here.
-NOSYS_SHIM="${SCRATCH}/nosys-shim"
-mkdir -p "${NOSYS_SHIM}"
-_nosys_rest="${PATH}"
-while [ -n "${_nosys_rest}" ]; do
-    case "${_nosys_rest}" in
-        *:* ) _nosys_dir="${_nosys_rest%%:*}"; _nosys_rest="${_nosys_rest#*:}" ;;
-        * ) _nosys_dir="${_nosys_rest}"; _nosys_rest="" ;;
-    esac
-    [ -d "${_nosys_dir}" ] || continue
-    for _nosys_tool in "${_nosys_dir}"/*; do
-        [ -f "${_nosys_tool}" ] || continue
-        _nosys_base="${_nosys_tool##*/}"
-        [ "${_nosys_base}" = "systemctl" ] && continue
-        [ -e "${NOSYS_SHIM}/${_nosys_base}" ] && continue
-        ln -s "${_nosys_tool}" "${NOSYS_SHIM}/${_nosys_base}" 2>/dev/null || true
-    done
-done
-unset _nosys_rest _nosys_dir _nosys_tool _nosys_base
-command -v systemctl >/dev/null 2>&1 || true
-if PATH="${NOSYS_SHIM}" command -v systemctl >/dev/null 2>&1; then
-    echo "FAIL: the no-systemctl PATH shim still finds systemctl (C2b)" >&2
-    exit 1
+# ---- Unsupported platforms fail before any mutation ------------------------
+if GOTHAM_TEST_UNAME_M=riscv64 dry_run >"${SCRATCH}/arch-refuse.log" 2>&1; then
+    echo "FAIL: unsupported architecture succeeded without local agent" >&2; exit 1
 fi
-C2B_NOSYS_RC=0
-env GOTHAM_AGENT_AUTO_UPDATE=yes \
-GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-GOTHAM_VERSION="${VERSION}" \
-GOTHAM_SKIP_DEPS=1 \
-GOTHAM_INSTALL_TEST=1 \
-GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
-GOTHAM_AGENT_ENV_FILE="${SCRATCH}/no-such-c2b-agent.env" \
-PATH="${NOSYS_SHIM}" \
-    sh "${INSTALL_SH}" --dry-run >"${SCRATCH}/c2b-nosystemctl.log" 2>&1 || C2B_NOSYS_RC=$?
-[ "${C2B_NOSYS_RC}" -eq 0 ] \
-    || { echo "FAIL: missing systemctl was blocked by an agent value (C2b)" >&2; cat "${SCRATCH}/c2b-nosystemctl.log" >&2; exit 1; }
-grep -q 'systemctl not found' "${SCRATCH}/c2b-nosystemctl.log" \
-    || { echo "FAIL: the systemctl skip notice is missing (C2b)" >&2; exit 1; }
-if grep -q 'install-agent.sh --full' "${SCRATCH}/c2b-nosystemctl.log"; then
-    echo "FAIL: the agent step ran although systemctl is missing (C2b)" >&2
-    exit 1
-fi
-echo "PASS: missing systemctl plus a bad ambient agent value stays green (C2b)"
-# --no-local-agent with a bad ambient agent value: unchanged skip, green.
-C2B_NLAG="--no-local-agent"
-C2B_RC=0
-env GOTHAM_AGENT_AUTO_UPDATE=yes \
-GOTHAM_BASE_URL="http://127.0.0.1:${PORT}" \
-GOTHAM_VERSION="${VERSION}" \
-GOTHAM_SKIP_DEPS=1 \
-GOTHAM_INSTALL_TEST=1 \
-GOTHAM_OS_RELEASE_FILE="${FIXTURES}/ubuntu-release" \
-PATH="${SYS_SHIM}:${PATH}" \
-    sh "${INSTALL_SH}" --dry-run "${C2B_NLAG}" >"${SCRATCH}/c2b-nolocal.log" 2>&1 || C2B_RC=$?
-[ "${C2B_RC}" -eq 0 ] \
-    || { echo "FAIL: --no-local-agent was blocked by an agent value (C2b)" >&2; exit 1; }
-grep -q 'skipping the localhost agent install (--no-local-agent)' "${SCRATCH}/c2b-nolocal.log" \
-    || { echo "FAIL: --no-local-agent skip message changed (C2b)" >&2; exit 1; }
-echo "PASS: --no-local-agent with a bad ambient agent value stays green (C2b)"
+grep -q 'unsupported architecture' "${SCRATCH}/arch-refuse.log" \
+    || { echo "FAIL: missing unsupported architecture reason" >&2; exit 1; }
 
 # ---- C2c: DSN/Redis shapes the installer passes through --------------------
 # The DSN/Redis gate is control characters only by design: the installer

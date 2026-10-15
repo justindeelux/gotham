@@ -159,6 +159,11 @@ func runServe() int {
 		Updater:   agentUpdater(logger),
 	})
 
+	if err := serverService.EnsureLocalhost(ctx); err != nil {
+		logger.Error("failed to ensure localhost node", "error", err)
+		return exitError
+	}
+
 	// The gRPC listener certificate carries the operator-configured SAN hosts
 	// (GOTHAM_GRPC_HOSTS, or the list `gotham ca init --host` persisted next to
 	// the CA). The loopback names and the machine hostname are always added, so

@@ -310,6 +310,9 @@ func agentTargetFor(server *Server) (target, serverName string, err error) {
 	if server.NodeID != nil {
 		nodeID = strings.TrimSpace(*server.NodeID)
 	}
+	if nodeID == "localhost" {
+		host = "127.0.0.1"
+	}
 	if host == "" {
 		host = nodeID
 	}

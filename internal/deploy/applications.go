@@ -236,6 +236,11 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
 	}
+	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, app.BaseDomain)
+	if domainErr != nil {
+		return Application{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)
+	}
+	defer releaseDomain()
 	// A link names a GitHub App connection the caller must own; a foreign
 	// id answers not-found, like any other foreign resource.
 	if app.GitHubAppID != uuid.Nil {
@@ -601,6 +606,11 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if err := validateApplication(app, false); err != nil {
 		return Application{}, err
 	}
+	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, app.BaseDomain)
+	if domainErr != nil {
+		return Application{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)
+	}
+	defer releaseDomain()
 	// A base_domain write reconciles the domain rows first: the rows enforce
 	// the platform-wide uniqueness, so a conflicting host fails here before
 	// the application row is touched. Clearing the primary while aliases

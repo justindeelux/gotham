@@ -126,6 +126,23 @@ type Pending struct {
 	Deadline time.Time `json:"deadline"`
 }
 
+// PendingControlPlaneURL survives restarts and keeps the previous route until confirmed.
+type PendingControlPlaneURL struct {
+	Previous *string   `json:"previous"`
+	Proposed string    `json:"proposed"`
+	Deadline time.Time `json:"deadline"`
+	Synced   bool      `json:"synced"`
+}
+
+var (
+	ErrDomainPending     = errors.New("instance: a control-plane URL change is awaiting confirmation")
+	ErrNoDomainPending   = errors.New("instance: no control-plane URL change is awaiting confirmation")
+	ErrDomainNotSynced   = errors.New("instance: the new control-plane router has not synced")
+	ErrConfirmDomainHost = errors.New("instance: confirm through the new control-plane host")
+)
+
+const ControlPlaneConfirmWindow = 120 * time.Second
+
 // Capabilities report what the host helper can apply.
 type Capabilities struct {
 	Network bool `json:"network"`
@@ -134,21 +151,23 @@ type Capabilities struct {
 
 // State is the full read model.
 type State struct {
-	General      General      `json:"general"`
-	Network      Network      `json:"network"`
-	System       System       `json:"system"`
-	Capabilities Capabilities `json:"capabilities"`
-	Pending      *Pending     `json:"pending"`
+	PendingControlPlaneURL *PendingControlPlaneURL `json:"pending_control_plane_url"`
+	General                General                 `json:"general"`
+	Network                Network                 `json:"network"`
+	System                 System                  `json:"system"`
+	Capabilities           Capabilities            `json:"capabilities"`
+	Pending                *Pending                `json:"pending"`
 }
 
 // Stored is the persisted record. General values are nil when unset.
 type Stored struct {
-	ControlPlaneURL *string
-	InstanceName    *string
-	Timezone        *string
-	Network         Network
-	System          System
-	Pending         *Pending
+	PendingControlPlaneURL *PendingControlPlaneURL
+	ControlPlaneURL        *string
+	InstanceName           *string
+	Timezone               *string
+	Network                Network
+	System                 System
+	Pending                *Pending
 }
 
 // Built-in defaults and the confirmation window of a network change.

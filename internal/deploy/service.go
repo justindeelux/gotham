@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/builds"
+	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/taskevents"
 	"github.com/justindeelux/gotham/internal/teams"
@@ -156,6 +157,7 @@ type HookLifecycle interface {
 // feeds the realtime publisher, and Dial is the mTLS agent dialer. Every
 // tunable falls back to a documented default.
 type Config struct {
+	GuardDomains proxy.DomainGuard
 	// Store is the PostgreSQL-backed repository. Ignored when Repository is set.
 	Store *store.Store
 	// Repository overrides Store (tests).
@@ -253,6 +255,7 @@ func (c Config) repository() Repository {
 // (installing/removing the Git-host integration with the application). It is
 // safe for concurrent use.
 type Service struct {
+	guardDomains proxy.DomainGuard
 	*Orchestrator
 	// registrar talks to the Git host for deploy keys; nil when no provider
 	// service is wired (creation then answers a clear error instead of a nil
@@ -321,6 +324,7 @@ func NewService(cfg Config) *Service {
 		controlTimeout = containerCleanupTimeout
 	}
 	return &Service{
+		guardDomains:   cfg.GuardDomains,
 		Orchestrator:   o,
 		registrar:      cfg.KeyRegistrar,
 		previewCleanup: cfg.PreviewCleanup,

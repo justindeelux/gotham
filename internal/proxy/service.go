@@ -141,7 +141,8 @@ func (e *PartialError) Is(target error) bool { return target == ErrPartialSync }
 // plugged in, and every tunable falls back to a documented default.
 type Config struct {
 	// ControlPlaneURL resolves the effective instance URL; nil disables the panel route.
-	ControlPlaneURL func(context.Context) (string, error)
+	ControlPlaneURL  func(context.Context) (string, error)
+	ControlPlaneURLs func(context.Context) ([]string, error)
 	// ServerPort is the effective HTTP listener port, reached through BackendHost.
 	ServerPort int
 	// Store is the PostgreSQL-backed routing input and server registry.
@@ -267,25 +268,26 @@ func (c Config) history() HistoryStore {
 // byte-identical files and the agent's atomic writes leave the running
 // configuration in place.
 type SyncService struct {
-	controlPlaneURL func(context.Context) (string, error)
-	serverPort      int
-	source          ApplicationSource
-	services        ServiceSource
-	redirects       RedirectSource
-	nodes           NodeSource
-	history         HistoryStore
-	providers       DNSProviderSource
-	containers      containers.ContainerService
-	dial            DialFunc
-	logger          *slog.Logger
-	format          Format
-	backendHost     string
-	configDir       string
-	acmeDir         string
-	secret          string
-	acmeEmail       string
-	caServer        string
-	timeout         time.Duration
+	controlPlaneURL  func(context.Context) (string, error)
+	controlPlaneURLs func(context.Context) ([]string, error)
+	serverPort       int
+	source           ApplicationSource
+	services         ServiceSource
+	redirects        RedirectSource
+	nodes            NodeSource
+	history          HistoryStore
+	providers        DNSProviderSource
+	containers       containers.ContainerService
+	dial             DialFunc
+	logger           *slog.Logger
+	format           Format
+	backendHost      string
+	configDir        string
+	acmeDir          string
+	secret           string
+	acmeEmail        string
+	caServer         string
+	timeout          time.Duration
 
 	// mu serializes one node's snapshot read through bootstrap and write, so
 	// a delayed older snapshot can never overwrite a newer one and two first
@@ -323,25 +325,26 @@ func NewService(cfg Config) *SyncService {
 		acmeDir = TraefikAcmeDir
 	}
 	return &SyncService{
-		controlPlaneURL: cfg.ControlPlaneURL,
-		serverPort:      cfg.ServerPort,
-		source:          cfg.source(),
-		services:        cfg.services(),
-		redirects:       cfg.redirects(),
-		nodes:           cfg.nodes(),
-		history:         cfg.history(),
-		providers:       cfg.providers(),
-		containers:      cfg.Containers,
-		dial:            cfg.Dial,
-		logger:          logger,
-		format:          cfg.Format,
-		backendHost:     backendHost,
-		configDir:       configDir,
-		acmeDir:         acmeDir,
-		secret:          cfg.Secret,
-		acmeEmail:       cfg.ACMEEmail,
-		caServer:        cfg.CAServer,
-		timeout:         timeout,
+		controlPlaneURL:  cfg.ControlPlaneURL,
+		controlPlaneURLs: cfg.ControlPlaneURLs,
+		serverPort:       cfg.ServerPort,
+		source:           cfg.source(),
+		services:         cfg.services(),
+		redirects:        cfg.redirects(),
+		nodes:            cfg.nodes(),
+		history:          cfg.history(),
+		providers:        cfg.providers(),
+		containers:       cfg.Containers,
+		dial:             cfg.Dial,
+		logger:           logger,
+		format:           cfg.Format,
+		backendHost:      backendHost,
+		configDir:        configDir,
+		acmeDir:          acmeDir,
+		secret:           cfg.Secret,
+		acmeEmail:        cfg.ACMEEmail,
+		caServer:         cfg.CAServer,
+		timeout:          timeout,
 	}
 }
 
@@ -606,7 +609,35 @@ func (s *SyncService) gatherRoutes(ctx context.Context, apps []ProxiedApplicatio
 
 // controlPlaneRoute keeps a malformed panel setting from blocking healthy node routes.
 func (s *SyncService) controlPlaneRoute(ctx context.Context, apps []ProxiedApplication, serverID uuid.UUID, claimed map[string]bool, access map[uuid.UUID]providerAccess) ([]Route, []Diagnostic) {
-	if s.controlPlaneURL == nil {
+	if s.controlPlaneURLs == nil {
+		return s.controlPlaneRouteForURL(ctx, apps, serverID, claimed, access, s.controlPlaneURL)
+	}
+	urls, err := s.controlPlaneURLs(ctx)
+	if err != nil {
+		return s.controlPlaneRouteForURL(ctx, apps, serverID, claimed, access, func(context.Context) (string, error) { return "", err })
+	}
+	var routes []Route
+	var diagnostics []Diagnostic
+	seen := map[string]bool{}
+	for i, raw := range urls {
+		entries, problems := s.controlPlaneRouteForURL(ctx, apps, serverID, claimed, access, func(context.Context) (string, error) { return raw, nil })
+		for _, route := range entries {
+			if seen[route.Domain] {
+				continue
+			}
+			seen[route.Domain] = true
+			if i > 0 {
+				route.Name = "panel-previous"
+			}
+			routes = append(routes, route)
+		}
+		diagnostics = append(diagnostics, problems...)
+	}
+	return routes, diagnostics
+}
+
+func (s *SyncService) controlPlaneRouteForURL(ctx context.Context, apps []ProxiedApplication, serverID uuid.UUID, claimed map[string]bool, access map[uuid.UUID]providerAccess, resolveURL func(context.Context) (string, error)) ([]Route, []Diagnostic) {
+	if resolveURL == nil {
 		return nil, nil
 	}
 	diagnostic := Diagnostic{Kind: string(RouterKindControlPlane)}
@@ -634,7 +665,7 @@ func (s *SyncService) controlPlaneRoute(ctx context.Context, apps []ProxiedAppli
 	if serverID != localhost {
 		return nil, nil
 	}
-	raw, err := s.controlPlaneURL(ctx)
+	raw, err := resolveURL(ctx)
 	if err != nil {
 		return fail("cannot read control_plane_url: " + err.Error())
 	}

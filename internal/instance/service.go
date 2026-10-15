@@ -16,12 +16,17 @@ import (
 type Service struct {
 	// ResyncProxy runs after a changed control-plane URL is saved. Configure before serving.
 	ResyncProxy func(context.Context) error
-	repo        Repository
-	host        HostApplier
-	logger      *slog.Logger
-	now         func() time.Time
-	lookup      func(string) string
-	netLock     sync.Mutex // serializes network apply / confirm / revert / reconcile
+	// CheckControlPlaneHost checks application, service and redirect ownership.
+	CheckControlPlaneHost func(context.Context, string) error
+	domainLock            sync.Mutex
+	domainTimer           *time.Timer
+	domainClosed          bool
+	repo                  Repository
+	host                  HostApplier
+	logger                *slog.Logger
+	now                   func() time.Time
+	lookup                func(string) string
+	netLock               sync.Mutex // serializes network apply / confirm / revert / reconcile
 }
 
 // NewService builds a Service. host may be nil (no host sections).
@@ -73,6 +78,9 @@ func (s *Service) capabilities(ctx context.Context) Capabilities {
 // truth) whenever no change is pending and the helper can probe it, so the
 // form never offers stale stored defaults such as DHCP on a static host.
 func (s *Service) Get(ctx context.Context) (State, error) {
+	if err := s.reconcileControlPlaneURL(ctx); err != nil {
+		return State{}, err
+	}
 	rec, err := s.reconcile(ctx)
 	if err != nil {
 		return State{}, err
@@ -89,7 +97,7 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 	}
 	return State{
 		General: s.general(rec), Network: rec.Network, System: rec.System,
-		Capabilities: s.capabilities(ctx), Pending: rec.Pending,
+		Capabilities: s.capabilities(ctx), Pending: rec.Pending, PendingControlPlaneURL: rec.PendingControlPlaneURL,
 	}, nil
 }
 
@@ -139,6 +147,9 @@ func riskyInterfaceChange(live HostNetwork, req Network) bool {
 
 // Reconcile settles an expired pending network change; call it at startup.
 func (s *Service) Reconcile(ctx context.Context) error {
+	if err := s.reconcileControlPlaneURL(ctx); err != nil {
+		return err
+	}
 	_, err := s.reconcile(ctx)
 	return err
 }
@@ -162,6 +173,11 @@ func (s *Service) reconcile(ctx context.Context) (Stored, error) {
 
 // UpdateGeneral validates and stores the general section.
 func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in GeneralInput) (State, error) {
+	if err := s.reconcileControlPlaneURL(ctx); err != nil {
+		return State{}, err
+	}
+	s.domainLock.Lock()
+	defer s.domainLock.Unlock()
 	in, errs := normalizeGeneral(in)
 	rec, err := s.repo.Load(ctx)
 	if err != nil {
@@ -186,7 +202,19 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 	if len(errs) > 0 {
 		return State{}, errs
 	}
+	changedURL := cur.ControlPlaneURL.Value != in.ControlPlaneURL
+	if changedURL && rec.PendingControlPlaneURL != nil {
+		return State{}, ErrDomainPending
+	}
+	if changedURL && s.CheckControlPlaneHost != nil {
+		if err := s.CheckControlPlaneHost(ctx, in.ControlPlaneURL); err != nil {
+			return State{}, FieldErrors{"control_plane_url": err.Error()}
+		}
+	}
 	next := rec
+	if changedURL {
+		next.PendingControlPlaneURL = &PendingControlPlaneURL{Previous: rec.ControlPlaneURL, Proposed: in.ControlPlaneURL, Deadline: s.now().Add(ControlPlaneConfirmWindow)}
+	}
 	next.ControlPlaneURL = ptrOrNil(in.ControlPlaneURL, cur.ControlPlaneURL.Locked, rec.ControlPlaneURL)
 	next.InstanceName = ptrOrNil(in.InstanceName, cur.InstanceName.Locked, rec.InstanceName)
 	next.Timezone = ptrOrNil(in.Timezone, cur.Timezone.Locked, rec.Timezone)
@@ -199,12 +227,20 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 		return State{}, err
 	}
 	s.logger.Info("instance general settings updated", "actor", actor, "changes", changes)
-	if _, changed := changes["control_plane_url"]; changed && s.ResyncProxy != nil {
-		if err := s.ResyncProxy(ctx); err != nil {
-			s.logger.Warn("instance control-plane URL saved; proxy resync failed", "error", err)
+	if changedURL {
+		s.scheduleDomainRevert(next.PendingControlPlaneURL.Deadline)
+		if err := s.syncControlPlaneURL(ctx); err != nil {
+			s.logger.Warn("instance control-plane URL pending; proxy resync failed", "error", err)
+		} else {
+			pending := *next.PendingControlPlaneURL
+			pending.Synced = true
+			next.PendingControlPlaneURL = &pending
+			if err := s.repo.Save(ctx, actor, SectionGeneral, next, map[string]any{"event": "control-plane routers synced"}); err != nil {
+				return State{}, err
+			}
 		}
 	}
-	return s.Get(ctx)
+	return s.stateLocked(ctx, next), nil
 }
 
 // ptrOrNil keeps the stored value for a locked field and stores the rest.
@@ -343,7 +379,7 @@ func (s *Service) settle(ctx context.Context, actor uuid.UUID, confirm bool) (St
 func (s *Service) stateLocked(ctx context.Context, rec Stored) State {
 	return State{
 		General: s.general(rec), Network: rec.Network, System: rec.System,
-		Capabilities: s.capabilities(ctx), Pending: rec.Pending,
+		Capabilities: s.capabilities(ctx), Pending: rec.Pending, PendingControlPlaneURL: rec.PendingControlPlaneURL,
 	}
 }
 

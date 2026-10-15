@@ -117,6 +117,11 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
 	}
+	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, app.BaseDomain)
+	if domainErr != nil {
+		return Application{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)
+	}
+	defer releaseDomain()
 
 	envVars, err := s.repo.ListEnvVars(ctx, base.ID)
 	if err != nil {

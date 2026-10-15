@@ -293,6 +293,7 @@ func mapRedirectWriteError(err error) error {
 // optional and receives a best-effort trigger after every successful mutation
 // (a failed resync never fails the mutation).
 type RedirectConfig struct {
+	GuardDomains DomainGuard
 	// Store is the redirect persistence seam.
 	Store RedirectStore
 	// Logger defaults to slog.Default.
@@ -305,6 +306,7 @@ type RedirectConfig struct {
 
 // redirectService implements RedirectService over one store and resync hook.
 type redirectService struct {
+	guardDomains  DomainGuard
 	store         RedirectStore
 	logger        *slog.Logger
 	resync        func(ctx context.Context) error
@@ -329,7 +331,7 @@ func NewDefaultRedirectService(cfg RedirectConfig) RedirectService {
 	if timeout <= 0 {
 		timeout = defaultResyncTimeout
 	}
-	return &redirectService{store: cfg.Store, logger: logger, resync: cfg.Resync, resyncTimeout: timeout}
+	return &redirectService{guardDomains: cfg.GuardDomains, store: cfg.Store, logger: logger, resync: cfg.Resync, resyncTimeout: timeout}
 }
 
 // CreateRedirect validates and stores one rule: the application must exist, be
@@ -377,6 +379,11 @@ func (s *redirectService) CreateRedirect(ctx context.Context, in CreateRedirectI
 	if err != nil {
 		return DomainRedirect{}, err
 	}
+	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, source)
+	if domainErr != nil {
+		return DomainRedirect{}, fmt.Errorf("%w: %v", ErrConflict, domainErr)
+	}
+	defer releaseDomain()
 	if err := s.checkRedirectWrites(ctx, uuid.Nil, source, target, enabled); err != nil {
 		return DomainRedirect{}, err
 	}
@@ -495,6 +502,11 @@ func (s *redirectService) UpdateRedirect(ctx context.Context, id uuid.UUID, in U
 		return DomainRedirect{}, err
 	}
 	draft.SourceDomain, draft.TargetDomain = source, target
+	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, source)
+	if domainErr != nil {
+		return DomainRedirect{}, fmt.Errorf("%w: %v", ErrConflict, domainErr)
+	}
+	defer releaseDomain()
 	if err := s.checkRedirectWrites(ctx, id, source, target, draft.Enabled); err != nil {
 		return DomainRedirect{}, err
 	}

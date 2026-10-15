@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/Spin-DSooYyW6.js
 import{a2 as g,a3 as a,aT as $,aR as b,d as w,f_ as T,a4 as k,o as d,c as u,a6 as p,az as i,a as z,au as f,x as B,dJ as R,f as V,aH as N,a7 as P,aX as _,aK as W,g as y,p as E,f$ as I,aa as O,a9 as j}from"./index-DqqcpOr1.js";import{u as H}from"./use-compitable-CC9OmcYe.js";var K=g([g("@keyframes spin-rotate",`
+========
+import{a2 as g,a3 as a,aT as $,aR as b,d as w,f_ as T,a4 as k,o as d,c as u,a6 as p,az as i,a as z,au as f,x as B,dJ as R,f as V,aH as N,a7 as P,aX as _,aK as W,g as y,p as E,f$ as I,aa as O,a9 as j}from"./index-DpYT1dLR.js";import{u as H}from"./use-compitable-DJnPm7ks.js";var K=g([g("@keyframes spin-rotate",`
+>>>>>>>> 99603b61e (feat(files): JUS-160 — regroup action toolbar to the reference layout):internal/server/webdist/assets/Spin-DXZv1WsA.js
  from {
  transform: rotate(0);
  }

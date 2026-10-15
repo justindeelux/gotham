@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/InputNumber-BB-S248R.js
 import{d as oe,dE as Oe,a as X,eN as Fe,eO as ke,eP as Ae,a1 as Ue,a2 as ze,a3 as q,a4 as se,o,c as $,x as p,az as L,a7 as Ee,ex as _e,p as V,dK as g,L as $e,aJ as Le,g as He,aZ as x,Z as Ke,dI as Y,da as ee,a6 as te,eQ as je,dc as ne,dd as re,eR as ie,b0 as Ge}from"./index-DqqcpOr1.js";import{u as We}from"./use-locale-B1zW5uXE.js";import{A as Ze}from"./Add-C7rtbk8s.js";import{I as Je}from"./Input-Dfa8pBGw.js";import{u as Qe}from"./use-merged-state-Jgu-JAzt.js";var Xe=oe({name:"Remove",render(){return(()=>{const e=Oe("a77472467b8adb0a");return e[0]||(e[0]=X("svg",{xmlns:"http://www.w3.org/2000/svg",viewBox:"0 0 512 512"},[X("line",{x1:"400",y1:"256",x2:"112",y2:"256",style:`
+========
+import{d as oe,dE as Oe,a as X,eN as Fe,eO as ke,eP as Ae,a1 as Ue,a2 as ze,a3 as q,a4 as se,o,c as $,x as p,az as L,a7 as Ee,ex as _e,p as V,dK as g,L as $e,aJ as Le,g as He,aZ as x,Z as Ke,dI as Y,da as ee,a6 as te,eQ as je,dc as ne,dd as re,eR as ie,b0 as Ge}from"./index-DpYT1dLR.js";import{u as We}from"./use-locale-DYh23LHb.js";import{A as Ze}from"./Add-leZiSuC_.js";import{I as Je}from"./Input-wMYtJiv5.js";import{u as Qe}from"./use-merged-state-BGmpklsb.js";var Xe=oe({name:"Remove",render(){return(()=>{const e=Oe("a77472467b8adb0a");return e[0]||(e[0]=X("svg",{xmlns:"http://www.w3.org/2000/svg",viewBox:"0 0 512 512"},[X("line",{x1:"400",y1:"256",x2:"112",y2:"256",style:`
+>>>>>>>> 99603b61e (feat(files): JUS-160 — regroup action toolbar to the reference layout):internal/server/webdist/assets/InputNumber-OyiTLiNr.js
         fill: none;
         stroke: currentColor;
         stroke-linecap: round;

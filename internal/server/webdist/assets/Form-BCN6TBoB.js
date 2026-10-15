@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/Form-BCN6TBoB.js
 import{a3 as h,aR as S,a2 as P,d as k,a4 as v,o as A,c as C,a6 as F,az as L,a7 as j,dT as m,fI as M,_ as p,p as V}from"./index-DqqcpOr1.js";import{f as _,a as z}from"./FormItem-5HSgK9K4.js";var O=h("form",[S("inline",`
+========
+import{a3 as h,aR as S,a2 as P,d as k,a4 as v,o as A,c as C,a6 as F,az as L,a7 as j,dT as m,fI as M,_ as p,p as V}from"./index-DpYT1dLR.js";import{f as _,a as z}from"./FormItem-smYuv_t4.js";var O=h("form",[S("inline",`
+>>>>>>>> 99603b61e (feat(files): JUS-160 — regroup action toolbar to the reference layout):internal/server/webdist/assets/Form-DHri17V8.js
  width: 100%;
  display: inline-flex;
  align-items: flex-start;

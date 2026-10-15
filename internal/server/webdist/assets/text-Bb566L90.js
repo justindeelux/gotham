@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/text-Bb566L90.js
 import{a3 as k,aR as r,d as R,a4 as g,o as s,c as a,a6 as n,F as T,au as h,az as m,W as S,a7 as V,aX as P,g as u,fZ as w,a9 as D}from"./index-DqqcpOr1.js";import{u as F}from"./use-compitable-CC9OmcYe.js";var _=k("text",`
+========
+import{a3 as k,aR as r,d as R,a4 as g,o as s,c as a,a6 as n,F as T,au as h,az as m,W as S,a7 as V,aX as P,g as u,fZ as w,a9 as D}from"./index-DpYT1dLR.js";import{u as F}from"./use-compitable-DJnPm7ks.js";var _=k("text",`
+>>>>>>>> 99603b61e (feat(files): JUS-160 — regroup action toolbar to the reference layout):internal/server/webdist/assets/text-BT7slbFJ.js
  transition: color .3s var(--n-bezier);
  color: var(--n-text-color);
 `,[r("strong",`

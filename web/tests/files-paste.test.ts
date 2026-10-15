@@ -32,7 +32,7 @@ vi.mock("@/features/files/api/files", async (importOriginal) => {
 });
 
 import { createPinia, setActivePinia } from "pinia";
-import { flushPromises, mount } from "@vue/test-utils";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 
 import { listEntries, listRoots, moveEntry } from "@/features/files/api/files";
 import FilesBrowser from "@/features/files/components/FilesBrowser.vue";
@@ -85,6 +85,23 @@ beforeEach(() => {
 });
 
 describe("files browser paste feedback", () => {
+  /**
+   * openFileOps opens the toolbar's File Operations menu (JUS-160: paste lives
+   * there instead of a standalone button) and returns its rendered item
+   * bodies (naive-ui binds the select on the inner body div).
+   */
+  async function openFileOps(
+    wrapper: VueWrapper,
+  ): Promise<ReturnType<VueWrapper["findAll"]>> {
+    const trigger = wrapper
+      .findAll("button")
+      .find((button) => button.attributes("aria-label") === "File operations");
+    expect(trigger).toBeTruthy();
+    await trigger!.trigger("click");
+    await flushPromises();
+    return wrapper.findAll(".n-dropdown-option-body");
+  }
+
   it("toasts the transfer summary after a cut paste", async () => {
     vi.mocked(moveEntry).mockResolvedValue(entry({ name: "app.yaml" }));
 
@@ -100,11 +117,11 @@ describe("files browser paste feedback", () => {
     });
     await flushPromises();
 
-    const pasteButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("Paste"));
-    expect(pasteButton).toBeTruthy();
-    await pasteButton!.trigger("click");
+    const pasteItem = (await openFileOps(wrapper)).find((item) =>
+      item.text().includes("Paste"),
+    );
+    expect(pasteItem).toBeTruthy();
+    await pasteItem!.trigger("click");
     await flushPromises();
 
     expect(vi.mocked(moveEntry)).toHaveBeenCalledWith("server-1", "team-1", {
@@ -128,15 +145,17 @@ describe("files browser paste feedback", () => {
     });
     await flushPromises();
 
-    const pasteButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("Paste"));
-    expect(pasteButton).toBeTruthy();
-    expect(pasteButton!.attributes("disabled")).toBeDefined();
+    const pasteItem = (await openFileOps(wrapper)).find((item) =>
+      item.text().includes("Paste"),
+    );
+    expect(pasteItem).toBeTruthy();
+    expect(pasteItem!.classes()).toContain(
+      "n-dropdown-option-body--disabled",
+    );
     expect(store.pasteProblem).toBe("same-folder");
   });
 
-  it("hides paste when the clipboard is empty", async () => {
+  it("disables paste when the clipboard is empty", async () => {
     const store = useFilesStore();
     await store.init("server-1");
 
@@ -147,9 +166,13 @@ describe("files browser paste feedback", () => {
     await flushPromises();
 
     expect(store.hasClipboard).toBe(false);
-    expect(
-      wrapper.findAll("button").find((button) => button.text().includes("Paste")),
-    ).toBeUndefined();
+    const pasteItem = (await openFileOps(wrapper)).find((item) =>
+      item.text().includes("Paste"),
+    );
+    expect(pasteItem).toBeTruthy();
+    expect(pasteItem!.classes()).toContain(
+      "n-dropdown-option-body--disabled",
+    );
   });
 
   it("refuses a cut paste while the source has unsaved editor changes", async () => {
@@ -185,11 +208,11 @@ describe("files browser paste feedback", () => {
     });
     await flushPromises();
 
-    const pasteButton = wrapper
-      .findAll("button")
-      .find((button) => button.text().includes("Paste"));
-    expect(pasteButton).toBeTruthy();
-    await pasteButton!.trigger("click");
+    const pasteItem = (await openFileOps(wrapper)).find((item) =>
+      item.text().includes("Paste"),
+    );
+    expect(pasteItem).toBeTruthy();
+    await pasteItem!.trigger("click");
     await flushPromises();
 
     // The move is refused before the agent call and the cut stays on the

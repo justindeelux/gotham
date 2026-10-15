@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/submitOnEnter-cM8K32dY.js
+import{bU as i,g as a,p as l,S as s,bo as c}from"./index-DqqcpOr1.js";function v(){const e=l(null),n=a(()=>{if(e.value!==null)return s.value,String(c.global.t("projects.conflict.nameTaken"))}),r=a(()=>e.value===null?void 0:"error");function u(){e.value=null}function o(t){return i(t)?(e.value=t,!0):!1}return{feedback:n,status:r,clear:u,take:o}}function m(e,n){e.isComposing||e.repeat||(e.preventDefault(),n())}export{m as s,v as u};
+========
+import{bU as i,g as a,p as l,S as s,bo as c}from"./index-DpYT1dLR.js";function v(){const e=l(null),n=a(()=>{if(e.value!==null)return s.value,String(c.global.t("projects.conflict.nameTaken"))}),r=a(()=>e.value===null?void 0:"error");function u(){e.value=null}function o(t){return i(t)?(e.value=t,!0):!1}return{feedback:n,status:r,clear:u,take:o}}function m(e,n){e.isComposing||e.repeat||(e.preventDefault(),n())}export{m as s,v as u};
+>>>>>>>> 99603b61e (feat(files): JUS-160 — regroup action toolbar to the reference layout):internal/server/webdist/assets/submitOnEnter-DePGTbsS.js

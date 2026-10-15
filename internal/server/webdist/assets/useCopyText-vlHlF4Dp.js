@@ -1,1 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-vlHlF4Dp.js
 import{d as i}from"./index-BucvhlIl.js";import{u as n}from"./use-message-DuFJtjiS.js";import{bo as e}from"./index-DqqcpOr1.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+========
+import{d as i}from"./index-apQDg9i9.js";import{u as n}from"./use-message-B4_hcxUx.js";import{bo as e}from"./index-DpYT1dLR.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+>>>>>>>> 99603b61e (feat(files): JUS-160 — regroup action toolbar to the reference layout):internal/server/webdist/assets/useCopyText-DcEVO-sE.js

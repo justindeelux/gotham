@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronRight,
   CircleAlert,
-  Copy,
   Download,
   Folder,
   HardDrive,
@@ -1657,6 +1656,113 @@ function onNewMenu(key: string): void {
   openCreate(key === "directory" ? "directory" : "file");
 }
 
+/** fileOpsOpen tracks the File Operations dropdown disclosure state (aria-expanded). */
+const fileOpsOpen = ref(false);
+
+/**
+ * fileOpsSelection are the writable-safe selected entries the toolbar's File
+ * Operations dropdown acts on — the same set the bulk bar (FilesSelectionBar)
+ * uses, so both surfaces target identical entries (JUS-160).
+ */
+const fileOpsSelection = computed<FilesEntry[]>(() =>
+  files.selectedEntries.filter(isSelectable),
+);
+
+/** fileOpsExtractTarget is the first selected extractable archive, or null. */
+const fileOpsExtractTarget = computed<FilesEntry | null>(
+  () =>
+    fileOpsSelection.value.find((entry) => isExtractableArchive(entry)) ??
+    null,
+);
+
+/** fileOpsPermissionsTarget is the first selected chmod-able entry, or null. */
+const fileOpsPermissionsTarget = computed<FilesEntry | null>(
+  () =>
+    fileOpsSelection.value.find(
+      (entry) => entry.kind === "file" || entry.kind === "directory",
+    ) ?? null,
+);
+
+/**
+ * fileOpsOptions lists the selection-scoped file operations (JUS-160): cut,
+ * copy, paste (into the directory on screen), compress, extract and
+ * permissions. Disabled states mirror the row menu (write-gated, paste validity
+ * from the store) and the bulk bar (a selectable selection, no mutation
+ * running), so no surface offers an action another would refuse.
+ */
+const fileOpsOptions = computed(() => {
+  const names = fileOpsSelection.value.map((entry) => entry.name);
+  const canAct = files.canWrite && !files.acting && names.length > 0;
+  const item = (label: string, key: string, disabled: boolean) => ({
+    label,
+    key,
+    disabled,
+    props: { role: "menuitem" },
+  });
+  return [
+    item(String(t("files.actions.cut")), "cut", !canAct),
+    item(String(t("files.actions.copy")), "copy", !canAct),
+    // Paste lands in the directory on screen; its label carries the blocked
+    // reason exactly like the old toolbar button ({@link pasteLabel}). With an
+    // empty clipboard there is nothing to paste, so it stays disabled too.
+    item(
+      files.hasClipboard
+        ? pasteLabel.value
+        : String(t("files.actions.paste")),
+      "paste",
+      files.acting || !files.hasClipboard || files.pasteProblem !== null,
+    ),
+    item(String(t("files.actions.compress")), "compress", !canAct),
+    item(
+      String(t("files.actions.extract")),
+      "extract",
+      !canAct || fileOpsExtractTarget.value === null,
+    ),
+    item(
+      String(t("files.menu.permissions")),
+      "permissions",
+      !canAct || fileOpsPermissionsTarget.value === null,
+    ),
+  ];
+});
+
+/** onFileOps dispatches one File Operations dropdown action on the selection. */
+function onFileOps(key: string): void {
+  const names = fileOpsSelection.value.map((entry) => entry.name);
+  switch (key) {
+    case "cut":
+      if (names.length > 0) {
+        files.cutSelection(names);
+      }
+      break;
+    case "copy":
+      if (names.length > 0) {
+        files.copySelection(names);
+      }
+      break;
+    case "paste":
+      void pasteAction();
+      break;
+    case "compress":
+      openCompress(fileOpsSelection.value);
+      break;
+    case "extract": {
+      const target = fileOpsExtractTarget.value;
+      if (target !== null) {
+        openExtract(target);
+      }
+      break;
+    }
+    case "permissions": {
+      const target = fileOpsPermissionsTarget.value;
+      if (target !== null) {
+        openPermissions(target);
+      }
+      break;
+    }
+  }
+}
+
 /**
  * JUS-145: the list headers carry the sort controls, but the compact layout
  * hides the Type / Modified / Mode headers — and the grid has no headers at
@@ -2234,45 +2340,11 @@ function onFolderMenu(key: string): void {
     @drop="onDrop"
   >
     <!-- Context bar (JUS-159): the NCard header (title chrome) is gone. The
-         agent-node slot, the Root selector and the view toggle stay reachable
-         here until JUS-160 moves the root selector and the toggle into the
-         toolbar. This row is intentionally plain (no card-header border). -->
+         agent-node slot stays reachable here; the Root selector and the view
+         toggle moved into the action toolbar below (JUS-160). This row is
+         intentionally plain (no card-header border). -->
     <div class="fm-contextbar">
       <slot name="header-tools" />
-      <span class="small muted fm-field-label">{{ $t("files.browser.rootLabel") }}</span>
-      <NSelect
-        v-model:value="selectedRoot"
-        class="fm-root-select"
-        size="small"
-        :options="rootOptions"
-        :aria-label="$t('files.browser.rootLabel')"
-      />
-      <span class="segmented" role="group">
-        <AppTooltip :label="$t('files.browser.viewList')">
-          <button
-            type="button"
-            class="seg-btn"
-            :class="{ 'is-active': files.viewMode === 'list' }"
-            :aria-label="$t('files.browser.viewList')"
-            :aria-pressed="files.viewMode === 'list'"
-            @click="files.setViewMode('list')"
-          >
-            <List :size="15" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-        </AppTooltip>
-        <AppTooltip :label="$t('files.browser.viewGrid')">
-          <button
-            type="button"
-            class="seg-btn"
-            :class="{ 'is-active': files.viewMode === 'grid' }"
-            :aria-label="$t('files.browser.viewGrid')"
-            :aria-pressed="files.viewMode === 'grid'"
-            @click="files.setViewMode('grid')"
-          >
-            <LayoutGrid :size="15" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-        </AppTooltip>
-      </span>
     </div>
 
     <!-- Tab bar (JUS-123/126): one tab per open directory. A middle-click or
@@ -2394,14 +2466,32 @@ function onFolderMenu(key: string): void {
       </NInput>
     </div>
 
-    <!-- Toolbar (JUS-153): one wrapping row holds the create/upload actions and
-         the per-root tools; the breadcrumb, filter and Refresh moved to the
-         path bar above, and the bulk actions live in the header bar (JUS-146),
-         so the toolbar carries actions only. Labels collapse to icon-only
-         <=640px, each keeping a tooltip + aria-label. -->
+    <!-- Toolbar (JUS-160): the left group carries Upload, the New menu, a
+         separator, the Root selector and the File Operations dropdown (cut,
+         copy, paste, compress, extract, permissions); the right group pins
+         the recycle bin and the list/grid toggle to the right edge.
+         Favorite/Terminal slots stay hidden until those features are approved
+         (no buttons rendered). Both groups always have content, so the toolbar
+         can never wrap onto an empty second row (JUS-147). Labels collapse to
+         icon-only <=640px, each keeping a tooltip + aria-label. -->
     <div class="fm-bar fm-toolbar">
-      <div v-if="files.canWrite" class="fm-toolbar-group">
+      <div class="fm-toolbar-group">
+        <AppTooltip v-if="files.canWrite" :label="$t('files.actions.upload')">
+          <NButton
+            size="small"
+            type="primary"
+            :disabled="files.acting"
+            :aria-label="$t('files.actions.upload')"
+            @click="openUpload()"
+          >
+            <template #icon>
+              <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("files.actions.upload") }}</span>
+          </NButton>
+        </AppTooltip>
         <NDropdown
+          v-if="files.canWrite"
           v-model:show="newMenuOpen"
           trigger="click"
           placement="bottom-start"
@@ -2429,101 +2519,125 @@ function onFolderMenu(key: string): void {
             </NButton>
           </AppTooltip>
         </NDropdown>
-        <AppTooltip :label="$t('files.actions.upload')">
-          <NButton
-            size="small"
-            type="primary"
-            :disabled="files.acting"
-            :aria-label="$t('files.actions.upload')"
-            @click="openUpload()"
-          >
-            <template #icon>
-              <Upload :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            <span class="fm-btn-label">{{ $t("files.actions.upload") }}</span>
-          </NButton>
-        </AppTooltip>
-      </div>
-
-      <!-- The bin belongs to the root, not the folder, so it stays with the
-           per-root actions: any member may open it, while restore/purge inside
-           need write. -->
-      <AppTooltip :label="$t('files.browser.recycleBin')">
-        <NButton
+        <span v-if="files.canWrite" class="fm-toolbar-sep" aria-hidden="true" />
+        <span class="small muted fm-field-label">{{ $t("files.browser.rootLabel") }}</span>
+        <NSelect
+          v-model:value="selectedRoot"
+          class="fm-root-select"
           size="small"
-          secondary
-          :disabled="files.rootName === ''"
-          :aria-label="$t('files.browser.recycleBin')"
-          @click="recycleOpen = true"
+          :options="rootOptions"
+          :aria-label="$t('files.browser.rootLabel')"
+        />
+        <NDropdown
+          v-model:show="fileOpsOpen"
+          trigger="click"
+          placement="bottom-start"
+          :options="fileOpsOptions"
+          :menu-props="() => ({
+            role: 'menu',
+            'aria-label': $t('files.actions.fileOperations'),
+          })"
+          @select="onFileOps"
         >
-          <template #icon>
-            <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          <span class="fm-btn-label">{{ $t("files.browser.recycleBin") }}</span>
-        </NButton>
-      </AppTooltip>
-
-      <!-- JUS-145/147: compact sort control, RENDERED only where the column
-           headers cannot carry the sort — the compact layout (Type / Modified /
-           Mode headers hidden) and the grid (no headers at all). It is never
-           reserved while hidden, so it can never tip the first toolbar row onto
-           an empty second row (JUS-147); while a selection hides the headers the
-           bulk bar carries its own sort control (below). -->
-      <NDropdown
-        v-if="showSortControl"
-        v-model:show="sortMenuOpen"
-        trigger="click"
-        placement="bottom-end"
-        :options="sortMenuOptions"
-        :menu-props="() => ({
-          role: 'menu',
-          'aria-label': $t('files.browser.sortBy'),
-        })"
-        @select="onSortMenu"
-      >
-        <AppTooltip :label="sortLabel">
-          <NButton
-            size="small"
-            secondary
-            class="fm-sort-toggle"
-            aria-haspopup="menu"
-            :aria-expanded="sortMenuOpen"
-            :aria-label="sortLabel"
-          >
-            <template #icon>
-              <ArrowUp v-if="files.sortDir === 'asc'" :size="14" :stroke-width="1.8" aria-hidden="true" />
-              <ArrowDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            <span class="fm-btn-label">{{ sortColumnLabel(files.sortKey) }}</span>
-          </NButton>
-        </AppTooltip>
-      </NDropdown>
-
-      <!-- JUS-148 fix round 1: render the right group only when it has content,
-           so an empty group never wraps the toolbar onto a second flex line
-           (a zero-height row whose row-gap still grew the toolbar). -->
-      <div
-        v-if="files.hasClipboard || files.viewMode === 'grid'"
-        class="fm-toolbar-group fm-toolbar-end"
-      >
-        <AppTooltip v-if="files.hasClipboard" :label="pasteLabel">
-          <NButton
-            size="small"
-            secondary
-            :disabled="files.acting || files.pasteProblem !== null"
-            :aria-label="pasteLabel"
-            @click="() => void pasteAction()"
-          >
-            <template #icon>
-              <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
-            </template>
-            <span class="fm-btn-label">
-              {{ $t("files.actions.paste") }} ({{ files.clipboard?.names.length ?? 0 }})
-            </span>
-          </NButton>
-        </AppTooltip>
+          <AppTooltip :label="$t('files.actions.fileOperations')">
+            <NButton
+              size="small"
+              secondary
+              aria-haspopup="menu"
+              :aria-expanded="fileOpsOpen"
+              :disabled="files.acting"
+              :aria-label="$t('files.actions.fileOperations')"
+            >
+              <template #icon>
+                <MoreVertical :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              <span class="fm-btn-label">{{ $t("files.actions.fileOperations") }}</span>
+              <ChevronDown class="fm-caret" :size="12" :stroke-width="1.8" aria-hidden="true" />
+            </NButton>
+          </AppTooltip>
+        </NDropdown>
         <span v-if="files.hasClipboard" class="small muted clipboard-hint">
           {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
+        </span>
+        <!-- JUS-145/147: compact sort control, RENDERED only where the column
+             headers cannot carry the sort — the compact layout (Type / Modified /
+             Mode headers hidden) and the grid (no headers at all). It is never
+             reserved while hidden, so it can never tip the first toolbar row onto
+             an empty second row (JUS-147); while a selection hides the headers the
+             bulk bar carries its own sort control (below). -->
+        <NDropdown
+          v-if="showSortControl"
+          v-model:show="sortMenuOpen"
+          trigger="click"
+          placement="bottom-end"
+          :options="sortMenuOptions"
+          :menu-props="() => ({
+            role: 'menu',
+            'aria-label': $t('files.browser.sortBy'),
+          })"
+          @select="onSortMenu"
+        >
+          <AppTooltip :label="sortLabel">
+            <NButton
+              size="small"
+              secondary
+              class="fm-sort-toggle"
+              aria-haspopup="menu"
+              :aria-expanded="sortMenuOpen"
+              :aria-label="sortLabel"
+            >
+              <template #icon>
+                <ArrowUp v-if="files.sortDir === 'asc'" :size="14" :stroke-width="1.8" aria-hidden="true" />
+                <ArrowDown v-else :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              <span class="fm-btn-label">{{ sortColumnLabel(files.sortKey) }}</span>
+            </NButton>
+          </AppTooltip>
+        </NDropdown>
+      </div>
+
+      <div class="fm-toolbar-group fm-toolbar-end">
+        <!-- The bin belongs to the root, not the folder: any member may open
+             it, while restore/purge inside need write. -->
+        <AppTooltip :label="$t('files.browser.recycleBin')">
+          <NButton
+            size="small"
+            secondary
+            :disabled="files.rootName === ''"
+            :aria-label="$t('files.browser.recycleBin')"
+            @click="recycleOpen = true"
+          >
+            <template #icon>
+              <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+            <span class="fm-btn-label">{{ $t("files.browser.recycleBin") }}</span>
+          </NButton>
+        </AppTooltip>
+        <span class="segmented" role="group">
+          <AppTooltip :label="$t('files.browser.viewList')">
+            <button
+              type="button"
+              class="seg-btn"
+              :class="{ 'is-active': files.viewMode === 'list' }"
+              :aria-label="$t('files.browser.viewList')"
+              :aria-pressed="files.viewMode === 'list'"
+              @click="files.setViewMode('list')"
+            >
+              <List :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+          </AppTooltip>
+          <AppTooltip :label="$t('files.browser.viewGrid')">
+            <button
+              type="button"
+              class="seg-btn"
+              :class="{ 'is-active': files.viewMode === 'grid' }"
+              :aria-label="$t('files.browser.viewGrid')"
+              :aria-pressed="files.viewMode === 'grid'"
+              @click="files.setViewMode('grid')"
+            >
+              <LayoutGrid :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+          </AppTooltip>
         </span>
         <!-- JUS-146: the grid has no column-header row to replace, so its
              selection bar stays in the toolbar (as before) while the list's
@@ -3280,16 +3394,34 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-3);
 }
 
-/* Left group (New dropdown + Upload) and the right-aligned group (the clipboard
-   Paste + hint and the grid selection bar). Both groups wrap internally and may
-   shrink, so a long right group never overflows/clips at narrow widths — every
-   action stays reachable instead of spilling past the panel. */
+/* Left group (Upload, New menu, Root selector, File Operations) and the
+   right-aligned group (recycle bin, list/grid toggle, grid selection bar).
+   Both groups wrap internally and may shrink, so a long group never
+   overflows/clips at narrow widths — every action stays reachable instead of
+   spilling past the panel. Both groups always have content, so the toolbar can
+   never wrap onto an empty second row (JUS-147/JUS-160). */
 .fm-toolbar-group {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex-wrap: wrap;
   min-width: 0;
+}
+
+/* JUS-160: the divider between the New menu and the Root selector in the left
+   group. A token-only 1px rule, hidden with the create actions on read-only
+   roots so it never leads a row. */
+.fm-toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+}
+
+/* The toolbar's Root selector keeps its desktop width but never forces the
+   toolbar past the panel: it may shrink to its content on narrow rows (the
+   phone rule below takes over <=640px). */
+.fm-toolbar .fm-root-select {
+  max-width: 100%;
 }
 
 /* JUS-153: the right-hand cluster now follows the per-root actions directly
@@ -3373,10 +3505,9 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-2);
 }
 
-/* Context bar (JUS-159): the temporary home of the header-tools slot, the
-   Root selector and the view toggle after the card header went away. Plain
-   row, no border of its own; JUS-160 moves the selector and the toggle into
-   the toolbar and removes this row. */
+/* Context bar (JUS-159): the home of the header-tools slot (the agent-node
+   selector) after the card header went away. Plain row, no border of its own;
+   the Root selector and the view toggle moved into the toolbar (JUS-160). */
 .fm-contextbar {
   display: flex;
   align-items: center;
@@ -3384,10 +3515,6 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
   flex-wrap: wrap;
   margin-bottom: var(--space-3);
-}
-
-.fm-contextbar .segmented {
-  margin-left: auto;
 }
 
 /* Merged navigation field (JUS-159): back button, breadcrumb and the attached

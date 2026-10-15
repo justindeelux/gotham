@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { Archive, Copy, Download, Scissors, Trash2, X } from "@lucide/vue";
+import { Archive, ChevronRight, Copy, Download, Scissors, Trash2, X } from "@lucide/vue";
 import { NButton } from "naive-ui";
-import { computed } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { FilesEntry } from "@/features/files/schemas/files";
@@ -41,6 +41,42 @@ const hasSelectedFiles = computed<boolean>(() =>
 const selection = computed<FilesEntry[]>(() =>
   files.selectedEntries.filter(isSelectable),
 );
+
+/**
+ * JUS-148: the chevron is a real affordance only while the action row actually
+ * overflows to the right, so it is hidden when the row fits and once the row is
+ * scrolled to its end. The metrics are read from the row itself and re-evaluated
+ * on mount, on resize, on scroll and whenever the selection appears or clears.
+ */
+const actionsEl = ref<HTMLElement | null>(null);
+const showScrollHint = ref(false);
+
+/** updateScrollHint derives the chevron's visibility from the row's scroll state. */
+function updateScrollHint(): void {
+  const el = actionsEl.value;
+  showScrollHint.value =
+    el !== null && el.scrollWidth - el.clientWidth - el.scrollLeft > 1;
+}
+
+let scrollHintObserver: ResizeObserver | null = null;
+onMounted(async () => {
+  await nextTick();
+  updateScrollHint();
+  window.addEventListener("resize", updateScrollHint);
+  if (typeof ResizeObserver !== "undefined" && actionsEl.value !== null) {
+    scrollHintObserver = new ResizeObserver(updateScrollHint);
+    scrollHintObserver.observe(actionsEl.value);
+  }
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", updateScrollHint);
+  scrollHintObserver?.disconnect();
+  scrollHintObserver = null;
+});
+watch(hasSelection, async () => {
+  await nextTick();
+  updateScrollHint();
+});
 </script>
 
 <template>
@@ -56,7 +92,12 @@ const selection = computed<FilesEntry[]>(() =>
       </template>
     </span>
   </span>
-  <div class="fm-selection-actions" :class="{ 'is-visible': hasSelection }">
+  <div
+    ref="actionsEl"
+    class="fm-selection-actions"
+    :class="{ 'is-visible': hasSelection }"
+    @scroll="updateScrollHint"
+  >
     <NButton
       size="small"
       secondary
@@ -138,6 +179,13 @@ const selection = computed<FilesEntry[]>(() =>
       </template>
       <span class="fm-btn-label">{{ t("files.browser.clear") }}</span>
     </NButton>
+    <!-- JUS-148: a pinned chevron + fade marks the action row as scrollable, so
+         the actions off the right edge (Delete/Clear on a phone) are obvious
+         rather than a weak fade. It is decorative (aria-hidden) and is rendered
+         only while the row really overflows to the right. -->
+    <span v-if="showScrollHint" class="fm-scroll-hint" aria-hidden="true">
+      <ChevronRight :size="14" :stroke-width="2" />
+    </span>
   </div>
 </template>
 
@@ -167,10 +215,11 @@ const selection = computed<FilesEntry[]>(() =>
   visibility: hidden;
 }
 
-/* JUS-134/146: the bulk actions stay mounted and are hidden with visibility
+/* JUS-134/146/148: the bulk actions stay mounted and are hidden with visibility
    (not display) while nothing is selected, so the row height is fixed and the
    first click of a double-click can never shift the list (JUS-130). They never
-   wrap — the row scrolls instead. */
+   wrap — the row scrolls instead, with the pinned chevron (below) marking it as
+   scrollable. */
 .fm-selection-actions {
   display: flex;
   align-items: center;
@@ -188,17 +237,21 @@ const selection = computed<FilesEntry[]>(() =>
   visibility: visible;
 }
 
-/* A right-edge fade hints that the action row scrolls (JUS-146). The sticky
-   pseudo-element rides the scrollport's right edge. */
-.fm-selection-actions::after {
-  content: "";
+/* JUS-148: the pinned scroll affordance — a fade with a chevron that rides the
+   scrollport's right edge (pointer-events: none, so it never eats a tap or a
+   hit test). It replaces the old bare gradient, which read as a weak hint. */
+.fm-scroll-hint {
   position: sticky;
   right: 0;
   flex: 0 0 auto;
-  width: 24px;
-  margin-left: -24px;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  margin-left: -28px;
   pointer-events: none;
-  background: linear-gradient(to right, transparent, var(--surface));
+  color: var(--fg-2);
+  background: linear-gradient(to right, transparent, var(--surface) 55%);
 }
 
 @media (max-width: 640px) {

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global URL, document:readonly, HTMLElement:readonly, window:readonly */
+/* global URL, document:readonly, HTMLElement:readonly, window:readonly, HTMLButtonElement:readonly */
 // JUS-133 discoverability proof: the committed webdist is served statically
 // with the control-plane file API mocked in real Chromium. Measured claims:
 //   - the ⋮ row-menu button is visible with no hover (touch reachable), while
@@ -848,6 +848,79 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
     await expect(page.locator("body")).not.toBeFocused();
     await expect(page.locator('.fm-label[tabindex="0"]')).toBeFocused();
+  });
+
+  test("a non-click Clear hands focus from the bar to the roving row", async ({ page }) => {
+    await openFiles(page);
+    // Select a row so the bulk bar (and its sort control) shows.
+    await rowFor(page, "app.yaml").locator(".fm-label").click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+
+    // Put focus on the bar's sort control, then clear the selection WITHOUT
+    // moving focus (a programmatic click stands in for a keyboard-activated
+    // control that keeps focus). JUS-148: focus must land on the roving row, not
+    // <body>, even though the sort control is not the Clear button.
+    await page.locator(".fm-bulk-sort").focus();
+    await expect(page.locator(".fm-bulk-sort")).toBeFocused();
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll(
+        ".fm-head-bulk .fm-selection-actions button",
+      );
+      (buttons[buttons.length - 1] as HTMLButtonElement).click();
+    });
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
+    await expect(page.locator("body")).not.toBeFocused();
+    await expect(page.locator('.fm-label[tabindex="0"]')).toBeFocused();
+  });
+
+  test("clearing a selection keeps focus off <body> in list and grid", async ({
+    page,
+  }) => {
+    await openFiles(page);
+
+    // LIST Clear (keyboard): the header bar hides and focus must land on the
+    // roving row.
+    await rowFor(page, "app.yaml").locator(".fm-label").click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(1);
+    await page.getByRole("button", { name: "Clear", exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
+    await expect(page.locator("body")).not.toBeFocused();
+    await expect(page.locator('.fm-label[tabindex="0"]')).toBeFocused();
+
+    // LIST select-all → uncheck-all: focus stays on the header control.
+    const selectAll = page.locator(".fm-head .n-checkbox");
+    await selectAll.click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(3);
+    await selectAll.click();
+    await expect(page.locator(".fm-row.is-selected")).toHaveCount(0);
+    await expect(page.locator("body")).not.toBeFocused();
+    expect(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest(".fm-head")),
+      ),
+      "focus stays on the header select-all",
+    ).toBe(true);
+
+    // GRID Clear: the grid's selection bar lives in the TOOLBAR, not the header
+    // row, so the clear-direction hand-off must cover `.fm-selection-actions`
+    // there too. Narrowing it to `.fm-head-bulk` dropped grid focus to <body>.
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+    await page.locator(".fm-tile-wrap").first().click();
+    await expect(page.locator(".fm-tile.is-selected")).toHaveCount(1);
+    const gridClear = page.getByRole("button", { name: "Clear", exact: true });
+    await expect(gridClear).toBeVisible();
+    await gridClear.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".fm-tile.is-selected")).toHaveCount(0);
+    await expect(page.locator("body"), "grid Clear keeps focus off <body>").not.toBeFocused();
+    expect(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest("[data-entry]")),
+      ),
+      "grid Clear hands focus to the roving tile",
+    ).toBe(true);
   });
 
   test("the selection bar hiding never drops focus to <body>", async ({ page }) => {

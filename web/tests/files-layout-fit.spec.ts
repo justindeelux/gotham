@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global document:readonly, HTMLElement:readonly, requestAnimationFrame:readonly, URL, window:readonly */
+/* global document:readonly, HTMLElement:readonly, requestAnimationFrame:readonly, URL, window:readonly, getComputedStyle:readonly */
 // JUS-118/119/120 layout proof: the committed webdist is served statically with
 // the control-plane file API mocked in real Chromium. Measured claims:
 //   - JUS-118 the browser panel fills the viewport and only the entry list
@@ -717,11 +717,11 @@ test("the selection count is announced politely while the bar shows", async ({
   await expect(live).toHaveText("60 selected");
 });
 
-// JUS-146 fix: while the bulk bar replaces the column headers the sort must
-// stay reachable at EVERY width, not only the compact/grid layouts — otherwise a
-// desktop user with a selection cannot re-sort at all. The toolbar sort control
-// (JUS-145) stays mounted (so its appearance never shifts the toolbar) and
-// mirrors the active sort.
+// JUS-146/147: while the bulk bar replaces the column headers the sort must stay
+// reachable at EVERY width, not only the compact/grid layouts. JUS-147 moved the
+// selection-time sort OUT of the toolbar (where as a hidden control it wrapped
+// the toolbar onto an empty row) and INTO the bulk bar, which already replaces
+// the header row.
 test("sorting stays reachable while the bulk bar replaces the headers", async ({
   page,
 }) => {
@@ -735,34 +735,38 @@ test("sorting stays reachable while the bulk bar replaces the headers", async ({
   await page.goto(`${baseURL}/servers/${server1}/files`);
   await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(3);
 
-  // Nothing selected: the headers carry the sort, so the toolbar control is
-  // hidden (but mounted, so it never reflows the toolbar).
-  await expect(page.locator(".fm-sort-toggle")).toBeHidden();
+  // Nothing selected: the headers carry the sort. The toolbar control is not
+  // rendered at all on desktop (JUS-147 — no reserved space) and the bar's own
+  // sort rides the hidden bar.
+  await expect(page.locator(".fm-sort-toggle")).toHaveCount(0);
+  await expect(page.locator(".fm-bulk-sort")).toBeHidden();
 
   await page.locator(".fm-label").first().click();
   await expect(page.locator(".fm-head-cols")).toHaveCSS("visibility", "hidden");
-  // The bar replaces the headers; the toolbar sort control is the reachable
-  // affordance and mirrors the active sort.
-  await expect(page.locator(".fm-sort-toggle")).toBeVisible();
-  await expect(page.locator(".fm-sort-toggle")).toHaveAttribute("aria-label", /Name/);
+  // The bar replaces the headers; its sort control is the reachable affordance
+  // and mirrors the active sort.
+  const sort = page.locator(".fm-bulk-sort");
+  await expect(sort).toBeVisible();
+  await expect(sort).toHaveAttribute("aria-label", /Name/);
 
   // It changes the order (click/touch path).
-  await page.locator(".fm-sort-toggle").click();
+  await sort.click();
   await page.getByRole("menuitem", { name: "Size", exact: true }).click();
-  await expect(page.locator(".fm-sort-toggle")).toHaveAttribute("aria-label", /Size/);
+  await expect(sort).toHaveAttribute("aria-label", /Size/);
   await expect(
     page.locator(".fm-table .fm-row:not(.fm-head)").first().locator("b"),
   ).toHaveText("bbb.txt");
 
   // Keyboard path: Enter on the focused control opens its menu.
-  await page.locator(".fm-sort-toggle").focus();
+  await sort.focus();
   await page.keyboard.press("Enter");
   await page.getByRole("menuitem", { name: "Name", exact: true }).click();
   await expect(
     page.locator(".fm-table .fm-row:not(.fm-head)").first().locator("b"),
   ).toHaveText("aaa.txt");
 
-  // Clear returns the headers and their truthful aria-sort.
+  // Clear returns the headers and their truthful aria-sort; the bar (and its
+  // sort) hides again.
   await page
     .locator(".fm-selection-actions")
     .getByRole("button", { name: "Clear", exact: true })
@@ -772,6 +776,7 @@ test("sorting stays reachable while the bulk bar replaces the headers", async ({
     "aria-sort",
     "ascending",
   );
+  await expect(sort).toBeHidden();
 });
 
 // JUS-146: the grid has no column-header row, so its bar stays in the toolbar —
@@ -1197,7 +1202,7 @@ test("a symlink row shows its target and can jump to it", async ({ page }) => {
   // The target is shown next to the type, in list and grid, and a long target
   // truncates with an ellipsis instead of wrapping the name column.
   await expect(page.locator(".fm-table").getByText("→ usr/bin")).toBeVisible();
-  const subtitle = page.locator(".fm-table .fm-label span").first();
+  const subtitle = page.locator(".fm-table .fm-target").first();
   await expect(subtitle).toHaveCSS("text-overflow", "ellipsis");
   await expect(subtitle).toHaveCSS("white-space", "nowrap");
   await expect(subtitle).toHaveAttribute("title", "→ usr/bin");
@@ -1254,4 +1259,286 @@ test("Go to target on a file or broken link keeps the view and warns", async ({ 
   await expect(page.locator(".n-message")).toContainText("Could not open the target of bin");
   await expect(page.locator(".fm-table").getByText("→ usr/bin")).toBeVisible();
   await expect(page.locator(".fm-state")).toHaveCount(0);
+});
+
+// JUS-147: the toolbar must not reserve room for a hidden control, so the first
+// toolbar row cannot wrap onto an empty second row at laptop widths. Nothing is
+// selected here, so the gap from the LOWEST VISIBLE toolbar control to the header
+// must be the plain inter-block rhythm (~12-14px) at EVERY desktop width, never
+// the ~54px blank band the always-mounted hidden sort toggle used to open at
+// 1366-1500px (a visibility:hidden control still occupies its row).
+test("no blank band between the toolbar and the header at desktop widths", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  // A nested folder: the breadcrumb is as long as on a real box, which is what
+  // brings the toolbar to the width where the hidden toggle tipped it over.
+  await installListing(page, [
+    { name: "storefront-8f2c1ab", kind: "directory", size: 4096, mode: 0o040755, modified_at: "2026-10-12T09:02:00Z", etag: '"d"' },
+    ...manyEntries(),
+  ]);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await page.locator(".fm-label", { hasText: "storefront-8f2c1ab" }).dblclick();
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(61);
+
+  /** gap is the header top minus the bottom of the lowest VISIBLE toolbar cell. */
+  const measure = (): Promise<number> =>
+    page.evaluate(() => {
+      const toolbar = document.querySelector(".fm-toolbar") as HTMLElement;
+      const head = document.querySelector(".fm-head") as HTMLElement;
+      const t = toolbar.getBoundingClientRect();
+      let visibleBottom = t.top;
+      for (const child of toolbar.querySelectorAll<HTMLElement>("*")) {
+        const style = getComputedStyle(child);
+        if (style.visibility === "hidden" || style.display === "none") {
+          continue;
+        }
+        const box = child.getBoundingClientRect();
+        if (box.height > 0) {
+          visibleBottom = Math.max(visibleBottom, box.bottom);
+        }
+      }
+      return head.getBoundingClientRect().top - visibleBottom;
+    });
+
+  for (const width of [1876, 1600, 1440, 1366, 1280, 1260, 920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settleLayout(page);
+    const gap = await measure();
+    expect(gap, `toolbar-to-header blank band at ${width}px`).toBeLessThanOrEqual(16);
+  }
+});
+
+// JUS-148: on a phone the selection bar's action row scrolls, but Delete/Clear
+// used to sit off the right edge behind only a weak fade. A pinned chevron now
+// marks the row as scrollable (and never eats a tap).
+test("the phone selection bar marks its scrollable action row", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+  await page.locator(".fm-head .n-checkbox").click();
+  await expect(page.locator(".fm-bulk-count")).toContainText("60 selected");
+
+  const row = page.locator(".fm-selection-actions");
+  const overflow = await row.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(overflow, "action row overflows on a phone").toBeGreaterThan(0);
+
+  const hint = page.locator(".fm-scroll-hint");
+  await expect(hint).toBeVisible();
+  expect(
+    await hint.evaluate((el) => getComputedStyle(el).pointerEvents),
+    "the hint never steals a tap",
+  ).toBe("none");
+  // It rides the row's right edge.
+  const hintBox = (await hint.boundingBox())!;
+  const rowBox = (await row.boundingBox())!;
+  expect(hintBox.x + hintBox.width).toBeGreaterThanOrEqual(
+    rowBox.x + rowBox.width - 2,
+  );
+
+  // Scrolling the row's own region brings Delete/Clear into the viewport.
+  await row.evaluate((el) => {
+    el.scrollLeft = el.scrollWidth;
+  });
+  for (const name of ["Delete", "Clear"]) {
+    const box = (await page.getByRole("button", { name, exact: true }).boundingBox())!;
+    expect(box.x, `${name} left inside the viewport`).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width, `${name} right inside the viewport`).toBeLessThanOrEqual(391);
+  }
+});
+
+// JUS-148 fix round 1: the chevron is a real affordance only while the action row
+// actually overflows to the right — no false "more →" on a wide bar, and it hides
+// once the row is scrolled to its end.
+test("the scroll chevron shows only while the action row overflows", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1876, height: 1080 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+  await page.locator(".fm-head .n-checkbox").click();
+  await expect(page.locator(".fm-bulk-count")).toContainText("60 selected");
+
+  // Wide desktop: the row fits, so no chevron.
+  const row = page.locator(".fm-selection-actions");
+  expect(await row.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+  await expect(page.locator(".fm-scroll-hint")).toHaveCount(0);
+
+  // Phone: the row overflows, so the chevron shows...
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settleLayout(page);
+  await expect(page.locator(".fm-scroll-hint")).toBeVisible();
+
+  // ...and disappears once the row is scrolled to its end (no more to reveal).
+  await row.evaluate((el) => {
+    el.scrollLeft = el.scrollWidth;
+  });
+  await expect(page.locator(".fm-scroll-hint")).toHaveCount(0);
+});
+
+// JUS-148 fix round 1: the right-hand toolbar group used to wrap a zero-height
+// second flex line when it had no children (no clipboard, no grid selection),
+// growing the toolbar by a row-gap at exactly 920 and 1260px. With the group not
+// rendered the toolbar-to-header gap is the single-row value everywhere the
+// toolbar fits on one row.
+test("the empty right toolbar group never opens a second row", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+  await expect(page.locator(".fm-toolbar-end")).toHaveCount(0);
+
+  for (const width of [920, 1260, 1280, 1366, 1440, 1600, 1876]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settleLayout(page);
+    const gap = await page.evaluate(() => {
+      const toolbar = document.querySelector(".fm-toolbar") as HTMLElement;
+      const head = document.querySelector(".fm-head") as HTMLElement;
+      const t = toolbar.getBoundingClientRect();
+      let visibleBottom = t.top;
+      for (const child of toolbar.querySelectorAll<HTMLElement>("*")) {
+        const style = getComputedStyle(child);
+        if (style.visibility === "hidden" || style.display === "none") {
+          continue;
+        }
+        const box = child.getBoundingClientRect();
+        if (box.height > 0) {
+          visibleBottom = Math.max(visibleBottom, box.bottom);
+        }
+      }
+      return head.getBoundingClientRect().top - visibleBottom;
+    });
+    expect(gap, `toolbar-to-header gap at ${width}px`).toBeLessThanOrEqual(16);
+  }
+});
+
+// JUS-148: on a phone a symlink row truncated the NAME more than its target
+// ("br… → /none…"). The name now owns the first line and the target rides the
+// secondary line next to the relative time.
+test("a phone symlink row keeps the name and moves the target under it", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page);
+  await installListing(page, [
+    {
+      name: "broken-link",
+      kind: "symlink",
+      size: 7,
+      mode: 0o120777,
+      symlink_target: "/nonexistent/pretty-long-target",
+      modified_at: "2026-10-12T09:02:00Z",
+      etag: '"l"',
+    },
+  ]);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  const row = page.locator('.fm-table .fm-row:not(.fm-head)[data-entry="broken-link"]');
+  await expect(row).toBeVisible();
+
+  // The target lives on the secondary line, not squeezed beside the name.
+  const sub = row.locator(".fm-name-sub");
+  await expect(sub.locator(".fm-target")).toHaveText("→ /nonexistent/pretty-long-target");
+  await expect(sub.locator(".fm-row-sub")).toHaveText(/\S/);
+  const labelBox = (await row.locator(".fm-label").boundingBox())!;
+  const subBox = (await sub.boundingBox())!;
+  expect(
+    subBox.y,
+    "the target + time sit below the name",
+  ).toBeGreaterThanOrEqual(labelBox.y + labelBox.height - 2);
+
+  // The name is not truncated.
+  const name = row.locator(".fm-label b");
+  const truncated = await name.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+  expect(truncated, "the symlink name is fully readable").toBe(false);
+});
+
+// JUS-148: the compact sort menu is uncontrolled; a width change that remounts
+// its trigger (compact ↔ desktop) used to reopen it by itself.
+test("the compact sort menu does not reopen after a width change", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  const sort = page.getByRole("button", { name: /^Sort:/ });
+  await sort.click();
+  await expect(page.getByRole("menu", { name: "Sort" })).toBeVisible();
+  await expect(sort).toHaveAttribute("aria-expanded", "true");
+
+  // Widen past the compact breakpoint and back.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await settleLayout(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settleLayout(page);
+
+  await expect(
+    page.getByRole("button", { name: /^Sort:/ }),
+    "the remounted sort trigger stays closed",
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("menu", { name: "Sort" })).toHaveCount(0);
+});
+
+// JUS-148: in the 861-1280px band the pinned Actions cell covers the Mode column
+// at rest, so Mode is dropped there (and restored on both sides of the band).
+test("the Mode column drops out where the pinned actions cover it", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+
+  const headMode = page.locator(".fm-head .fm-cell--mode");
+  const rowMode = page
+    .locator(".fm-table .fm-row:not(.fm-head)")
+    .first()
+    .locator(".fm-cell--mode");
+
+  await expect(headMode, "Mode shows above the band").toBeVisible();
+  await expect(rowMode, "Mode shows above the band").toBeVisible();
+
+  for (const width of [1280, 1024, 861]) {
+    await page.setViewportSize({ width, height: 768 });
+    await settleLayout(page);
+    await expect(headMode, `Mode header hidden at ${width}px`).toBeHidden();
+    await expect(rowMode, `Mode cell hidden at ${width}px`).toBeHidden();
+  }
+
+  await page.setViewportSize({ width: 1281, height: 900 });
+  await settleLayout(page);
+  await expect(headMode, "Mode returns at 1281px").toBeVisible();
+});
+
+// JUS-148: while the bar replaces the headers the row exposed 2 cells against 7
+// body cells. aria-colcount on the table and aria-colspan on the bar keep the
+// semantics consistent at every width.
+test("the table and bulk bar agree on the column count", async ({ page }) => {
+  await page.setViewportSize({ width: 1876, height: 1080 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+
+  const table = page.locator(".fm-table");
+  const bar = page.locator(".fm-head-bulk");
+  await expect(table).toHaveAttribute("aria-colcount", "7");
+  await expect(bar).toHaveAttribute("aria-colspan", "6");
+  expect(
+    await page
+      .locator(".fm-table .fm-row:not(.fm-head)")
+      .first()
+      .locator('[role="cell"]')
+      .count(),
+    "a body row exposes one cell per column",
+  ).toBe(7);
+
+  // The narrow desktop band drops Mode.
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await settleLayout(page);
+  await expect(table).toHaveAttribute("aria-colcount", "6");
+  await expect(bar).toHaveAttribute("aria-colspan", "5");
+
+  // The compact layout collapses Type/Modified/Mode.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await settleLayout(page);
+  await expect(table).toHaveAttribute("aria-colcount", "4");
+  await expect(bar).toHaveAttribute("aria-colspan", "3");
 });

@@ -65,7 +65,7 @@ const (
 
 // Defaults applied when the matching environment variable is unset.
 const (
-	defaultCPAddr     = "127.0.0.1:9090"
+	defaultCPAddr     = "127.0.0.1:9442"
 	defaultListenAddr = ":9443"
 	defaultCertDir    = "./data/agent"
 	defaultDockerSock = "/var/run/docker.sock"
@@ -130,7 +130,7 @@ const (
 type Config struct {
 	// CPAddr is the control-plane gRPC address the agent connects to.
 	CPAddr string
-	// NodeID identifies this node; it defaults to the hostname.
+	// NodeID identifies this node; it defaults to localhost.
 	NodeID string
 	// ListenAddr is the address the agent's DockerService gRPC server binds.
 	ListenAddr string
@@ -226,7 +226,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		CPAddr:      envOr(envCPAddr, defaultCPAddr),
-		NodeID:      envOr(envNodeID, hostname()),
+		NodeID:      envOr(envNodeID, "localhost"),
 		ListenAddr:  envOr(envListenAddr, defaultListenAddr),
 		CA:          os.Getenv(envCA),
 		Insecure:    strings.EqualFold(strings.TrimSpace(os.Getenv(envInsecure)), "true"),
@@ -317,15 +317,6 @@ func parseLevel(name string) (slog.Level, error) {
 // variable, then DOCKER_HOST, then the platform default socket.
 func dockerSock() string {
 	return envOr(envDockerSock, envOr(envDockerHost, defaultDockerSock))
-}
-
-// hostname returns the local hostname, or "unknown" when it cannot be read.
-func hostname() string {
-	name, err := os.Hostname()
-	if err != nil || name == "" {
-		return "unknown"
-	}
-	return name
 }
 
 // envOr returns the value of key, or fallback when it is unset.

@@ -105,31 +105,35 @@ To add a node, copy `ca.crt` (never `ca.key`) to it and install the agent with
 
 ```sh
 scp root@<cp-host>:/var/lib/gotham/ca/ca.crt .
-sudo deploy/install-agent.sh --ca ./ca.crt
+sudo GOTHAM_AGENT_NODE_ID=worker-1 GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 \
+    deploy/install-agent.sh --ca ./ca.crt
 ```
 
-The control plane installer already did this for the local host: `install.sh`
-installs and starts the agent on the same machine by default (same release
-tag, `--full` so Docker Engine and the compose plugin are set up too) and the
-agent registers itself as the first node — the Servers page lists it once its
-heartbeats land. Pass `--no-local-agent` (or `GOTHAM_NO_LOCAL_AGENT=1`) for a
-remote-only control plane.
+The control plane installer always installs and starts the local agent with
+`--full`, using the same release tag, node ID `localhost` and control-plane
+address `127.0.0.1:9442`. There is no option to skip it. Unsupported platforms
+and an existing remote `agent.env` fail before mutation; move that remote
+agent or explicitly repoint it before retrying. Re-running upgrades the local
+agent identity to `localhost` while preserving its other settings.
 
-First registration of the local node is server-authenticated TLS: the agent
-verifies the control plane against the provisioned CA, but the control plane
-does not yet verify the agent's client credential on first contact (known
-limitation; see "The agent channel is not mutual yet" below). `<host>-agent`
-is only the default node id, not a reserved one: any id other than the control
-plane's own listener identities (its hostname and addresses) is accepted. Set
-`GOTHAM_AGENT_NODE_ID` on a fresh install to pick another id; re-running
-`install.sh` never repoints an existing `agent.env` (a hostname change is
-kept as-is, so no duplicate node appears). When that `agent.env` points at a
-remote control plane, the localhost step is skipped entirely, so a re-run
-never overwrites that host's `ca.crt` or agent config with the local ones.
-If the local agent step fails on a supported platform, the control plane is
-left installed and running (nothing is rolled back) and the installer exits
-nonzero with the exact agent-only retry command (values shell-quoted, so it
-re-runs as shown).
+The control plane ensures the shared `localhost` registry entry on startup
+and rejects deletion and PATCH with HTTP 409. Readiness requires agent
+heartbeats. Migration 49 uses the saved `agent.env` identity supplied by the
+installer, preserving the UUID and workload references even after a hostname
+change. For manual migrations, set `GOTHAM_LEGACY_LOCAL_NODE_ID` to that ID;
+without a hint, only one loopback-addressed legacy `*-agent` is automatically
+selected. Unknown addresses, ambiguous candidates and an existing `localhost`
+collision fail for operator reconciliation rather than silently stranding data.
+
+The exact `localhost` identity may register only from a loopback peer. Other
+listener identities and aliases stay reserved. Its server certificate uses
+`localhost.agent.gotham.invalid`, verified by the CP on its local-agent dial,
+instead of any CP listener SAN. Enrollment rejects a configuration that also
+assigns that SAN to the CP. The Git remote host policy
+is independent of node identity validation. First registration still uses
+server-authenticated TLS (see "The agent channel is not mutual yet" below).
+An agent install failure leaves the control plane running and exits nonzero
+with a shell-quoted agent-only retry command.
 
 `install-agent.sh` fails closed without a CA; `--insecure` is the
 development-only override that leaves the agent channel in plaintext. The agent
@@ -137,10 +141,9 @@ itself also fails closed: with no CA it refuses to start unless
 `GOTHAM_AGENT_INSECURE=true`, and its plaintext listener is confined to
 loopback.
 
-`GOTHAM_AGENT_NODE_ID` must differ from the control plane's own listener
-identities (its hostname and addresses): the CP refuses to register those, so a
-co-located install must set an explicit distinct node id. See `docs/install.md`,
-"Node agent".
+Remote `install-agent.sh` runs must set a distinct `GOTHAM_AGENT_NODE_ID`
+and the remote `GOTHAM_AGENT_CP_ADDR`; the agent's default identity is
+`localhost`. See `docs/install.md`, "Node agent".
 
 Re-running `install-agent.sh` is a safe reinstall: values the invocation does not
 set (for example the control plane address and node id) are kept from the
@@ -167,10 +170,7 @@ accepts only `true`/`false` (the agent only honours `true`), and the
 interval must match Go durations (surrounding whitespace trimmed as the
 agent trims it; day/week units and overflowing values Go errors on are
 refused) while the channel must match channel names. `install.sh` runs the
-same agent checks — but only when the localhost agent step will actually
-run (the distro/arch/systemd/remote-`agent.env` skip decisions are computed
-before the first mutation, so a value the skipped step would never use
-cannot abort the control-plane install) — plus the DSN/Redis gate (control
+same agent checks before its mandatory local agent step, plus the DSN/Redis gate (control
 characters, a trailing backslash, quotes), which always runs before the first
 mutation, so a bad value fails the run with nothing created; a failing agent
 step itself still keeps the control plane. `GOTHAM_DATABASE_DSN` and

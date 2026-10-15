@@ -210,6 +210,10 @@ func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte, nodeID string) ([]byte,
 	}
 
 	dns, ips := identitySANs(nodeID)
+	if nodeID == "localhost" {
+		// The agent must never receive a SAN accepted for the CP loopback listener.
+		dns = []string{localhostAgentServerName}
+	}
 	cert, err := a.sign(nodeID, dns, ips, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, agentCertValidity, csr.PublicKey)
 	if err != nil {
 		return nil, err

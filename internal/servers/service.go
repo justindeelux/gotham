@@ -309,6 +309,9 @@ func (s *ServerService) Delete(ctx context.Context, id uuid.UUID) error {
 		}
 		return ErrNotFound
 	}
+	if row.NodeID != nil && *row.NodeID == "localhost" {
+		return fmt.Errorf("%w: the localhost node cannot be deleted", ErrConflict)
+	}
 	if blocking, err := s.blockingResources(ctx, id); err != nil {
 		return err
 	} else if blocking != "" {
@@ -457,6 +460,10 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 		return nil, ErrNotFound
 	}
 
+	if row.NodeID != nil && *row.NodeID == "localhost" {
+		return nil, fmt.Errorf("%w: the localhost node cannot be edited", ErrConflict)
+	}
+
 	// Scalar validation depends only on the request, so it runs before the
 	// row lock. A nil field leaves the column unchanged.
 	var newName, newIP, newUser *string
@@ -525,6 +532,9 @@ func (s *ServerService) Update(ctx context.Context, id uuid.UUID, params UpdateP
 	}
 
 	updated, err := s.store.UpdateServerGuarded(ctx, pgUUID(id), func(locked sqlc.Server) (sqlc.UpdateServerParams, error) {
+		if locked.NodeID != nil && *locked.NodeID == "localhost" {
+			return sqlc.UpdateServerParams{}, fmt.Errorf("%w: the localhost node cannot be edited", ErrConflict)
+		}
 		name, ip, sshUser, port := locked.Name, locked.Ip, locked.SshUser, int(locked.Port)
 		if newName != nil {
 			name = *newName

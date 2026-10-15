@@ -44,8 +44,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.LogLevel != defaultLogLevel {
 		t.Errorf("LogLevel = %q; want %q", cfg.LogLevel, defaultLogLevel)
 	}
-	if cfg.NodeID == "" {
-		t.Error("NodeID is empty; want hostname fallback")
+	if cfg.NodeID != "localhost" {
+		t.Errorf("NodeID = %q; want localhost", cfg.NodeID)
 	}
 	if cfg.CA != "/etc/gotham/ca.pem" {
 		t.Errorf("CA = %q", cfg.CA)

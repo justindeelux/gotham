@@ -214,8 +214,10 @@
      row. The bulk actions live in the header bar (JUS-146), whose own row
      scrolls with 44px touch targets, so every action stays reachable and the
      list keeps >=60% of the viewport with a selection active. */
-  .fm-tabs { margin-top: var(--space-2); margin-bottom: var(--space-1); }
-  .fm-toolbar, .fm-bar.fm-pathbar { row-gap: var(--space-2); margin-bottom: var(--space-1); padding: var(--space-1) var(--space-2); }
+  /* JUS-157: the .fm-tabs/.fm-toolbar phone margins and the toolbar row-gap
+     live in the later @media (max-width: 640px) block, after the base
+     .fm-tabs/.fm-bar rules — a @media block adds no specificity, so a rule
+     placed here would be shadowed by those base rules. */
   /* The card heading is redundant on a phone: keeping it forces the
      node/root/view controls onto a second row (JUS-135). The field captions
      go with it — each control keeps its accessible name through aria-label. */
@@ -281,6 +283,14 @@
 .fm-crumb.is-current { background: var(--selected-row); color: var(--fg-2); font-weight: 600; }
 .fm-crumb svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .fm-crumb .sep { color: var(--meta); }
+/* JUS-157: the phone overrides for the tablist and the bands must sit AFTER
+   the base .fm-tabs/.fm-bar/.fm-path rules above — a @media block adds no
+   specificity, so source order alone decides; placed earlier they were dead and
+   the mockup rendered 12/12 and row-gap 12 where the app renders 8/4 and 8. */
+@media (max-width: 640px) {
+  .fm-tabs { margin-top: var(--space-2); margin-bottom: var(--space-1); }
+  .fm-toolbar, .fm-bar.fm-pathbar { row-gap: var(--space-2); margin-bottom: var(--space-1); padding: var(--space-1) var(--space-2); }
+}
 .fm-table { min-width: 820px; }
 .fm-row {
   display: grid;

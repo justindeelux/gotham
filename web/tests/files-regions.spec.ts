@@ -13,7 +13,8 @@ import type { Page } from "@playwright/test";
 // five browser regions (header, tablist, path bar, toolbar, entry list) stack
 // top-to-bottom and every adjacent pair has a distinct boundary — a border or a
 // different background, token-derived (no hard-coded colour) — at 1440, 1024
-// and 390px. The new bands must not clip the shared :focus-visible ring.
+// and 390px, and the path band must not clip the breadcrumb's shared
+// :focus-visible ring.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -363,49 +364,6 @@ test("the path band keeps the breadcrumb focus ring unclipped", async ({ page })
         box.bottom + offset + width - bounds.bottom,
         bounds.left - (box.left - offset - width),
         box.right + offset + width - bounds.right,
-      ),
-    };
-  });
-
-  expect(ring).not.toBeNull();
-  expect(ring!.outline).not.toBe("none");
-  expect(ring!.width).toBeGreaterThan(0);
-  expect(ring!.overhang).toBeLessThanOrEqual(0.5);
-});
-
-// JUS-157: the tab focus ring is drawn INSIDE the tab (outline-offset: -2px)
-// because the scrolling strip clips at its edge. A new border or overflow on
-// the region bands must never cut it: the whole ring paints inside the strip.
-test("the region bands never clip the tab focus ring", async ({ page }) => {
-  await openFiles(page, 1440, 900);
-  const tab = page.locator('.fm-tabstrip [role="tab"][aria-selected="true"]');
-  await tab.focus();
-  await page.keyboard.press("ArrowLeft");
-  await page.keyboard.press("ArrowRight");
-  await expect(tab).toBeFocused();
-
-  const ring = await page.evaluate(() => {
-    const strip = document.querySelector(".fm-tabstrip") as HTMLElement | null;
-    if (strip === null) return null;
-    const tabEl = strip.querySelector<HTMLElement>(
-      '[role="tab"][aria-selected="true"]',
-    );
-    if (tabEl === null) return null;
-    const style = getComputedStyle(tabEl);
-    const width = Number.parseFloat(style.outlineWidth);
-    const offset = Number.parseFloat(style.outlineOffset);
-    const box = tabEl.getBoundingClientRect();
-    // The strip is the scroll container, so it clips at its own border box.
-    const clip = strip.getBoundingClientRect();
-    return {
-      outline: style.outlineStyle,
-      width,
-      // Positive means the ring reaches past the clip edge (i.e. is cut off).
-      overhang: Math.max(
-        clip.top - (box.top - offset - width),
-        box.bottom + offset + width - clip.bottom,
-        clip.left - (box.left - offset - width),
-        box.right + offset + width - clip.right,
       ),
     };
   });

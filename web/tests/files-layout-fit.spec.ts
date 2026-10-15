@@ -1609,3 +1609,59 @@ test("the empty state is centered in the browser panel", async ({ page }) => {
     ).toBeLessThanOrEqual(1);
   }
 });
+
+// JUS-153: the breadcrumb, the folder filter and Refresh moved out of the
+// toolbar into their own bar directly above it, so the toolbar carries actions
+// only. Both bars stay one row with no blank band or unintended wrap across the
+// 1366-1500px band the issue calls out.
+test("the path bar sits above the toolbar with no blank band at 1366-1500px", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(60);
+
+  const pathbar = page.locator(".fm-pathbar");
+  const toolbar = page.locator(".fm-toolbar");
+  await expect(pathbar).toHaveCount(1);
+
+  // The path bar owns the breadcrumb, the filter and Refresh...
+  await expect(pathbar.locator(".fm-path")).toHaveCount(1);
+  await expect(pathbar.locator(".fm-search")).toHaveCount(1);
+  await expect(pathbar.getByRole("button", { name: "Refresh" })).toHaveCount(1);
+  // ...and the toolbar keeps only actions (New / Upload / Recycle bin).
+  await expect(toolbar.locator(".fm-path")).toHaveCount(0);
+  await expect(toolbar.locator(".fm-search")).toHaveCount(0);
+
+  for (const width of [1366, 1440, 1500]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settleLayout(page);
+    const m = await page.evaluate(() => {
+      const pb = document.querySelector(".fm-pathbar") as HTMLElement;
+      const tb = document.querySelector(".fm-toolbar") as HTMLElement;
+      const head = document.querySelector(".fm-head") as HTMLElement;
+      const pr = pb.getBoundingClientRect();
+      const tr = tb.getBoundingClientRect();
+      return {
+        aboveToolbar: pr.bottom <= tr.top + 1,
+        pathbarToToolbar: tr.top - pr.bottom,
+        toolbarToHeader: head.getBoundingClientRect().top - tr.bottom,
+        // a wrapped extra row would roughly double a single small-control row
+        pathbarHeight: pr.height,
+        toolbarHeight: tr.height,
+      };
+    });
+    expect(m.aboveToolbar, `path bar above the toolbar at ${width}px`).toBe(true);
+    expect(
+      m.pathbarToToolbar,
+      `path-bar-to-toolbar blank band at ${width}px`,
+    ).toBeLessThanOrEqual(16);
+    expect(
+      m.toolbarToHeader,
+      `toolbar-to-header blank band at ${width}px`,
+    ).toBeLessThanOrEqual(16);
+    expect(m.pathbarHeight, `path bar is one row at ${width}px`).toBeLessThanOrEqual(44);
+    expect(m.toolbarHeight, `toolbar is one row at ${width}px`).toBeLessThanOrEqual(44);
+  }
+});

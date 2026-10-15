@@ -138,14 +138,18 @@
    Bố cục theo ảnh tham chiếu: một lưới danh sách nhiều cột, mỗi hàng cao
    ~36-40px (JUS-134) với marker loại file ở đầu hàng và cụm nút chức năng ở
    mép phải; cụm nút chỉ hiện khi hover / focus / đang chọn. */
-/* Toolbar + path bar (JUS-120/128, gộp ở JUS-134): một hàng wrap chứa
-   create/upload, breadcrumb, filter, refresh và recycle bin; các bulk action
-   chỉ hiện khi có entry được chọn. Labels collapse to icon-only on small
-   screens (title + aria-label). */
+/* Toolbar + path bar (JUS-120/128, gộp ở JUS-134; tách ở JUS-153): path bar
+   phía trên chứa breadcrumb, filter và refresh; toolbar giữ create/upload,
+   recycle bin và các công cụ theo root; bulk action chỉ hiện khi có entry được
+   chọn. Labels collapse to icon-only on small screens (title + aria-label). */
 .fm-toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
+/* JUS-153: path bar nằm ngay trên toolbar nên margin dưới của nó khít hơn. */
+.fm-bar.fm-pathbar { margin-bottom: var(--space-2); }
 /* Groups wrap internally (and shrink) so the right-hand bulk actions never
    overflow the toolbar at narrow widths (JUS-128). */
 .fm-toolbar-group { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
+/* JUS-153: the filter/refresh that used to push this cluster right moved to the
+   path bar, so the group now carries its own auto margin. */
 .fm-toolbar-end { margin-left: auto; justify-content: flex-end; }
 /* JUS-146: the clipboard hint is its own compact chip so its words never wrap
    vertically next to the bulk actions. */
@@ -189,21 +193,22 @@
 .fm-caret { width: 12px; height: 12px; color: var(--muted); }
 @media (max-width: 640px) {
   .fm-toolbar .fm-btn-label { display: none; }
-  /* JUS-135/146: the phone toolbar must not eat the list. Row 1 keeps the
-     create/upload group and the (scrolling) breadcrumb; row 2 the filter and
-     the per-root tools; row 3 the clipboard (Paste + its nowrap hint chip).
-     The bulk actions live in the header bar (JUS-146), whose own row scrolls
-     with 44px touch targets, so every action stays reachable and the list
-     keeps >=60% of the viewport with a selection active. */
-  .fm-toolbar { row-gap: var(--space-2); margin-bottom: var(--space-2); }
+  /* JUS-135/146/153: the phone chrome must not eat the list. The path bar is
+     its own band — row 1 the (scrolling) breadcrumb, row 2 the filter and
+     Refresh; the toolbar keeps the create/upload group and the recycle bin,
+     with the clipboard (Paste + its nowrap hint chip) on its own full-width
+     row. The bulk actions live in the header bar (JUS-146), whose own row
+     scrolls with 44px touch targets, so every action stays reachable and the
+     list keeps >=60% of the viewport with a selection active. */
+  .fm-toolbar, .fm-bar.fm-pathbar { row-gap: var(--space-2); margin-bottom: var(--space-2); }
   /* The card heading is redundant on a phone: keeping it forces the
      node/root/view controls onto a second row (JUS-135). The field captions
      go with it — each control keeps its accessible name through aria-label. */
   [data-od-id="files-browser"] .card-head h3,
   [data-od-id="files-browser"] .card-head .small.muted,
   [data-od-id="files-browser"] .card-head label { display: none; }
-  .fm-path { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; }
-  .fm-toolbar .search { max-width: none; margin-left: 0; flex: 1 1 120px; }
+  .fm-path { flex: 1 1 100%; min-width: 0; flex-wrap: nowrap; overflow-x: auto; }
+  .fm-pathbar .search { max-width: none; margin-left: 0; flex: 1 1 120px; }
   .fm-toolbar-end { margin-left: 0; flex: 1 1 100%; justify-content: flex-start; flex-wrap: nowrap; }
   .fm-selection-actions { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; }
   .fm-selection-actions .btn { min-width: 44px; }

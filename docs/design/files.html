@@ -66,13 +66,13 @@
             <!-- JUS-118: in the app this panel fills the viewport — the card
                  body is the only scroll region, while the toolbar, path bar
                  and footer stay fixed. -->
-            <!-- JUS-120/128, merged in JUS-134: one wrapping row holds the
-                 create/upload actions, the breadcrumb, the folder filter and
-                 the per-root tools; the bulk actions (Download/Copy/Cut/
-                 Compress/Delete/Clear) appear on it only while entries are
-                 selected, so no permanently disabled row is rendered. Labels
-                 collapse to icon-only <=640px, each keeping a title +
-                 aria-label.
+            <!-- JUS-120/128, merged in JUS-134; split in JUS-153: the path bar
+                 (above) holds the breadcrumb, the folder filter and Refresh,
+                 while the toolbar holds the create/upload actions and the
+                 per-root tools; the bulk actions (Download/Copy/Cut/Compress/
+                 Delete/Clear) appear on it only while entries are selected, so
+                 no permanently disabled row is rendered. Labels collapse to
+                 icon-only <=640px, each keeping a title + aria-label.
                  JUS-135: on a phone the band is three compact rows and the
                  selection cluster (with its count) is a full-width,
                  horizontally scrolling row of 44px targets, so the entry list
@@ -94,11 +94,10 @@
               <button class="fm-tab-add" type="button" aria-label="New tab" title="New tab"><svg aria-hidden="true"><use href="#i-plus"></use></svg></button>
             </div>
 
-            <div class="fm-bar fm-toolbar">
-              <div class="fm-toolbar-group">
-                <button class="btn btn-sm btn-outline" type="button" data-open="fm-newfolder" aria-haspopup="menu" aria-expanded="false" aria-label="New" title="New"><svg aria-hidden="true"><use href="#i-plus"></use></svg><span class="fm-btn-label">New</span><svg class="fm-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
-                <button class="btn btn-sm btn-primary" type="button" data-open="fm-upload" aria-label="Upload" title="Upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Upload</span></button>
-              </div>
+            <!-- JUS-153: the path bar holds the breadcrumb, the folder filter
+                 and Refresh on their own bar above the toolbar, so the toolbar
+                 carries actions only. -->
+            <div class="fm-bar fm-pathbar">
               <nav class="fm-path" aria-label="Current path">
                 <a class="fm-crumb" href="#"><svg aria-hidden="true"><use href="#i-drive"></use></svg>volumes</a>
                 <span class="sep" aria-hidden="true">/</span>
@@ -113,9 +112,17 @@
                    hides a newly opened listing; while one is active the footer
                    reads "N of M entries" instead of the whole-folder total. -->
               <button class="btn btn-sm btn-ghost btn-icon" type="button" data-toast="Reloaded entries from the agent (List).|info" aria-label="Refresh" title="Refresh"><svg aria-hidden="true"><use href="#i-refresh"></use></svg></button>
-              <!-- JUS-122: the bin is per root, so it lives on the path bar
-                   (not the write-gated toolbar). Any member may browse it;
-                   restore / purge / empty need owner/admin. -->
+            </div>
+
+            <!-- Toolbar (JUS-153): actions only. -->
+            <div class="fm-bar fm-toolbar">
+              <div class="fm-toolbar-group">
+                <button class="btn btn-sm btn-outline" type="button" data-open="fm-newfolder" aria-haspopup="menu" aria-expanded="false" aria-label="New" title="New"><svg aria-hidden="true"><use href="#i-plus"></use></svg><span class="fm-btn-label">New</span><svg class="fm-caret" aria-hidden="true"><use href="#i-chevron-down"></use></svg></button>
+                <button class="btn btn-sm btn-primary" type="button" data-open="fm-upload" aria-label="Upload" title="Upload"><svg aria-hidden="true"><use href="#i-upload"></use></svg><span class="fm-btn-label">Upload</span></button>
+              </div>
+              <!-- JUS-122: the bin is per root, so it stays with the per-root
+                   actions (the write-gated New/Upload sit beside it). Any member
+                   may browse it; restore / purge / empty need owner/admin. -->
               <button class="btn btn-sm btn-outline" type="button" data-open="fm-recycle"><svg aria-hidden="true"><use href="#i-trash"></use></svg><span class="fm-btn-label">Recycle bin</span></button>
               <!-- JUS-145/147: the compact sort control is RENDERED only where
                    the column headers cannot carry the sort (the compact layout

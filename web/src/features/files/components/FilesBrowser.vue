@@ -286,13 +286,28 @@ const pasteProblemText = computed<string>(() =>
  * pasteLabel is the Paste button's visible label ("Paste (2)"), optionally
  * followed by the problem explaining why it is disabled. The accessible name
  * must contain that visible text (WCAG label-in-name), so one computed feeds
- * both the label and the aria-label/title (JUS-140).
+ * the visible label and the accessible name (JUS-140).
  */
 const pasteLabel = computed<string>(() => {
   const count = files.clipboard?.names.length ?? 0;
   const base = `${String(t("files.actions.paste"))} (${count})`;
   return pasteProblemText.value ? `${base} — ${pasteProblemText.value}` : base;
 });
+
+/**
+ * downloadActionLabel is the row Download's tooltip (JUS-156 F1): the action
+ * name normally, the role explanation while the action is blocked. It mirrors
+ * {@link pasteLabel} — one value drives the tooltip — but the button keeps its
+ * own aria-label (the action name), so a sighted user reads the reason and an
+ * assistive-tech user keeps the label-in-name.
+ */
+function downloadActionLabel(entry: FilesEntry): string {
+  return String(
+    files.canReadContent
+      ? t("files.browser.downloadFile", { name: entry.name })
+      : t("files.browser.fileNeedsRole"),
+  );
+}
 
 /** typeLabel resolves the Type column through the active locale. */
 function typeLabel(entry: FilesEntry): string {
@@ -2233,28 +2248,30 @@ function onFolderMenu(key: string): void {
             :aria-label="$t('files.browser.rootLabel')"
           />
           <span class="segmented" role="group">
-            <button
-              type="button"
-              class="seg-btn"
-              :class="{ 'is-active': files.viewMode === 'list' }"
-              :aria-label="$t('files.browser.viewList')"
-              :title="$t('files.browser.viewList')"
-              :aria-pressed="files.viewMode === 'list'"
-              @click="files.setViewMode('list')"
-            >
-              <List :size="15" :stroke-width="1.8" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              class="seg-btn"
-              :class="{ 'is-active': files.viewMode === 'grid' }"
-              :aria-label="$t('files.browser.viewGrid')"
-              :title="$t('files.browser.viewGrid')"
-              :aria-pressed="files.viewMode === 'grid'"
-              @click="files.setViewMode('grid')"
-            >
-              <LayoutGrid :size="15" :stroke-width="1.8" aria-hidden="true" />
-            </button>
+            <AppTooltip :label="$t('files.browser.viewList')">
+              <button
+                type="button"
+                class="seg-btn"
+                :class="{ 'is-active': files.viewMode === 'list' }"
+                :aria-label="$t('files.browser.viewList')"
+                :aria-pressed="files.viewMode === 'list'"
+                @click="files.setViewMode('list')"
+              >
+                <List :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+            </AppTooltip>
+            <AppTooltip :label="$t('files.browser.viewGrid')">
+              <button
+                type="button"
+                class="seg-btn"
+                :class="{ 'is-active': files.viewMode === 'grid' }"
+                :aria-label="$t('files.browser.viewGrid')"
+                :aria-pressed="files.viewMode === 'grid'"
+                @click="files.setViewMode('grid')"
+              >
+                <LayoutGrid :size="15" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+            </AppTooltip>
           </span>
         </div>
       </div>
@@ -2303,16 +2320,17 @@ function onFolderMenu(key: string): void {
           </span>
         </button>
       </div>
-      <button
-        type="button"
-        class="fm-tab-add"
-        :disabled="files.rootName === ''"
-        :aria-label="$t('files.tabs.new')"
-        :title="$t('files.tabs.new')"
-        @click="openNewTab()"
-      >
-        <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
-      </button>
+      <AppTooltip :label="$t('files.tabs.new')">
+        <button
+          type="button"
+          class="fm-tab-add"
+          :disabled="files.rootName === ''"
+          :aria-label="$t('files.tabs.new')"
+          @click="openNewTab()"
+        >
+          <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
+        </button>
+      </AppTooltip>
     </div>
 
     <!-- Path bar (JUS-153): the breadcrumb, the folder filter and Refresh have
@@ -2321,16 +2339,17 @@ function onFolderMenu(key: string): void {
          the two bars fit still waste no row. -->
     <div class="fm-bar fm-pathbar">
       <nav class="fm-path" :aria-label="$t('files.browser.parent')">
-        <button
-          type="button"
-          class="fm-crumb fm-up"
-          :disabled="files.path === ''"
-          :aria-label="$t('files.browser.parent')"
-          :title="$t('files.browser.parent')"
-          @click="files.goUp()"
-        >
-          <ArrowUp :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </button>
+        <AppTooltip :label="$t('files.browser.parent')">
+          <button
+            type="button"
+            class="fm-crumb fm-up"
+            :disabled="files.path === ''"
+            :aria-label="$t('files.browser.parent')"
+            @click="files.goUp()"
+          >
+            <ArrowUp :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </AppTooltip>
         <template v-for="(crumb, index) in files.breadcrumb" :key="crumb.path">
           <span v-if="index > 0" class="sep" aria-hidden="true">/</span>
           <button
@@ -2359,19 +2378,21 @@ function onFolderMenu(key: string): void {
         </template>
       </NInput>
 
-      <NButton size="small" secondary :loading="files.loading" :title="$t('files.browser.refresh')" :aria-label="$t('files.browser.refresh')" @click="files.refresh()">
-        <template #icon>
-          <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </template>
-        <span class="fm-btn-label">{{ $t("files.browser.refresh") }}</span>
-      </NButton>
+      <AppTooltip :label="$t('files.browser.refresh')">
+        <NButton size="small" secondary :loading="files.loading" :aria-label="$t('files.browser.refresh')" @click="files.refresh()">
+          <template #icon>
+            <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          <span class="fm-btn-label">{{ $t("files.browser.refresh") }}</span>
+        </NButton>
+      </AppTooltip>
     </div>
 
     <!-- Toolbar (JUS-153): one wrapping row holds the create/upload actions and
          the per-root tools; the breadcrumb, filter and Refresh moved to the
          path bar above, and the bulk actions live in the header bar (JUS-146),
          so the toolbar carries actions only. Labels collapse to icon-only
-         <=640px, each keeping a title + aria-label. -->
+         <=640px, each keeping a tooltip + aria-label. -->
     <div class="fm-bar fm-toolbar">
       <div v-if="files.canWrite" class="fm-toolbar-group">
         <NDropdown
@@ -2791,13 +2812,13 @@ function onFolderMenu(key: string): void {
               </AppTooltip>
               <AppTooltip
                 v-else-if="entry.kind === 'file'"
-                :label="$t('files.browser.downloadFile', { name: entry.name })"
+                :label="downloadActionLabel(entry)"
               >
                 <NButton
                   class="fm-action"
                   size="tiny"
                   quaternary
-                  :disabled="!files.canReadContent"
+                  :aria-disabled="!files.canReadContent"
                   :aria-label="$t('files.browser.downloadFile', { name: entry.name })"
                   @click="startDownload(entry)"
                 >
@@ -3320,7 +3341,8 @@ function onFolderMenu(key: string): void {
 }
 
 /* Small screens drop the toolbar labels, leaving icon-only buttons whose
-   accessible name comes from each button's aria-label + title (JUS-120).
+   accessible name comes from each button's aria-label, and its tooltip is
+   the shared AppTooltip (JUS-156).
    JUS-135's phone layout rules live at the end of this stylesheet (after the
    base rules they override). */
 @media (max-width: 640px) {
@@ -3874,13 +3896,21 @@ function onFolderMenu(key: string): void {
   opacity: 1;
 }
 
-/* A disabled action (a file's Download without the content role) keeps naive's
+/* A blocked action (a file's Download without the content role) keeps naive's
    dimmed opacity when revealed: these selectors out-specify both the reveal
-   rule above and naive's own .n-button--disabled rule. */
+   rule above and naive's own .n-button--disabled rule. The action stays
+   focusable ([aria-disabled], not [disabled]) so its tooltip can explain why. */
 .fm-row:hover .fm-actions .fm-action.n-button--disabled,
+.fm-row:hover .fm-actions .fm-action[aria-disabled="true"],
 .fm-row:focus-within .fm-actions .fm-action.n-button--disabled,
-.fm-row.is-selected .fm-actions .fm-action.n-button--disabled {
+.fm-row:focus-within .fm-actions .fm-action[aria-disabled="true"],
+.fm-row.is-selected .fm-actions .fm-action.n-button--disabled,
+.fm-row.is-selected .fm-actions .fm-action[aria-disabled="true"] {
   opacity: var(--n-opacity-disabled, 0.5);
+}
+
+.fm-actions .fm-action[aria-disabled="true"] {
+  cursor: not-allowed;
 }
 
 .fm-grid {
@@ -4296,7 +4326,8 @@ function onFolderMenu(key: string): void {
     opacity: 1;
   }
 
-  .fm-actions .fm-action.n-button--disabled {
+  .fm-actions .fm-action.n-button--disabled,
+  .fm-actions .fm-action[aria-disabled="true"] {
     opacity: var(--n-opacity-disabled, 0.5);
   }
 

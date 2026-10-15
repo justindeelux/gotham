@@ -431,9 +431,14 @@ a {
   gap: var(--space-3);
 }
 
-/* Tooltips are purely informational (JUS-156), so they never intercept a
-   pointer: a tooltip that lingers over the control beneath it can never
-   swallow a click meant for that control. */
+/* Tooltips are informational (JUS-156), so the popover body never intercepts a
+   pointer: a tooltip that lingers over the control beneath it can never swallow
+   a click meant for that control. Its own copy stays hoverable though, so the
+   pointer can cross onto the tooltip without dismissing it (WCAG 1.4.13). */
 .n-tooltip {
   pointer-events: none;
+}
+
+.n-tooltip .app-tooltip-content {
+  pointer-events: auto;
 }

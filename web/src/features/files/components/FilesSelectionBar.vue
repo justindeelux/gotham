@@ -44,6 +44,74 @@ const selection = computed<FilesEntry[]>(() =>
 );
 
 /**
+ * JUS-156 F1: a blocked bulk action spells out WHY in its tooltip (the old
+ * native title did), while its aria-label stays the action name (label-in-name).
+ * The buttons use [aria-disabled] rather than [disabled] so the blocked control
+ * stays focusable and a keyboard user can read the reason; each handler guards
+ * on the same condition, so a click stays a no-op exactly as before.
+ */
+const downloadLabel = computed<string>(() => {
+  if (!files.canReadContent) {
+    return String(t("files.browser.fileNeedsRole"));
+  }
+  return hasSelectedFiles.value
+    ? String(t("files.browser.downloadSelected"))
+    : String(t("files.dialogs.compressSelect"));
+});
+/** selectionBlocked is the "nothing writable selected" reason, or "". */
+function selectionBlocked(): string {
+  return selection.value.length === 0
+    ? String(t("files.dialogs.compressSelect"))
+    : "";
+}
+const copyLabel = computed<string>(
+  () => selectionBlocked() || String(t("files.actions.copy")),
+);
+const cutLabel = computed<string>(
+  () => selectionBlocked() || String(t("files.actions.cut")),
+);
+const compressLabel = computed<string>(
+  () => selectionBlocked() || String(t("files.actions.compress")),
+);
+const deleteLabel = computed<string>(
+  () => selectionBlocked() || String(t("common.actions.delete")),
+);
+
+/** canBulkDownload / canBulkAct mirror the two action groups' disabled state. */
+const canBulkDownload = computed<boolean>(
+  () => files.canReadContent && hasSelectedFiles.value && !files.acting,
+);
+const canBulkAct = computed<boolean>(
+  () => files.canWrite && !files.acting && selection.value.length > 0,
+);
+
+function onBulkDownload(): void {
+  if (canBulkDownload.value) {
+    emit("download");
+  }
+}
+function onBulkCopy(): void {
+  if (canBulkAct.value) {
+    files.copySelection(selection.value.map((item) => item.name));
+  }
+}
+function onBulkCut(): void {
+  if (canBulkAct.value) {
+    files.cutSelection(selection.value.map((item) => item.name));
+  }
+}
+function onBulkCompress(): void {
+  if (canBulkAct.value) {
+    emit("compress", selection.value);
+  }
+}
+function onBulkDelete(): void {
+  if (canBulkAct.value) {
+    emit("remove", selection.value);
+  }
+}
+
+/**
  * JUS-148: the chevron is a real affordance only while the action row actually
  * overflows to the right, so it is hidden when the row fits and once the row is
  * scrolled to its end. The metrics are read from the row itself and re-evaluated
@@ -99,13 +167,13 @@ watch(hasSelection, async () => {
     :class="{ 'is-visible': hasSelection }"
     @scroll="updateScrollHint"
   >
-    <AppTooltip :label="t('files.browser.downloadSelected')">
+    <AppTooltip :label="downloadLabel">
       <NButton
         size="small"
         secondary
-        :disabled="!files.canReadContent || !hasSelectedFiles"
+        :aria-disabled="!canBulkDownload"
         :aria-label="t('files.browser.downloadSelected')"
-        @click="emit('download')"
+        @click="onBulkDownload"
       >
         <template #icon>
           <Download :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -114,13 +182,13 @@ watch(hasSelection, async () => {
       </NButton>
     </AppTooltip>
     <template v-if="files.canWrite">
-      <AppTooltip :label="t('files.actions.copy')">
+      <AppTooltip :label="copyLabel">
         <NButton
           size="small"
           secondary
-          :disabled="files.acting || selection.length === 0"
+          :aria-disabled="!canBulkAct"
           :aria-label="t('files.actions.copy')"
-          @click="files.copySelection(selection.map((item) => item.name))"
+          @click="onBulkCopy"
         >
           <template #icon>
             <Copy :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -128,13 +196,13 @@ watch(hasSelection, async () => {
           <span class="fm-btn-label">{{ t("files.actions.copy") }}</span>
         </NButton>
       </AppTooltip>
-      <AppTooltip :label="t('files.actions.cut')">
+      <AppTooltip :label="cutLabel">
         <NButton
           size="small"
           secondary
-          :disabled="files.acting || selection.length === 0"
+          :aria-disabled="!canBulkAct"
           :aria-label="t('files.actions.cut')"
-          @click="files.cutSelection(selection.map((item) => item.name))"
+          @click="onBulkCut"
         >
           <template #icon>
             <Scissors :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -142,13 +210,13 @@ watch(hasSelection, async () => {
           <span class="fm-btn-label">{{ t("files.actions.cut") }}</span>
         </NButton>
       </AppTooltip>
-      <AppTooltip :label="t('files.actions.compress')">
+      <AppTooltip :label="compressLabel">
         <NButton
           size="small"
           secondary
-          :disabled="files.acting || selection.length === 0"
+          :aria-disabled="!canBulkAct"
           :aria-label="t('files.actions.compress')"
-          @click="emit('compress', selection)"
+          @click="onBulkCompress"
         >
           <template #icon>
             <Archive :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -156,14 +224,14 @@ watch(hasSelection, async () => {
           <span class="fm-btn-label">{{ t("files.actions.compress") }}</span>
         </NButton>
       </AppTooltip>
-      <AppTooltip :label="t('common.actions.delete')">
+      <AppTooltip :label="deleteLabel">
         <NButton
           size="small"
           type="error"
           secondary
-          :disabled="files.acting || selection.length === 0"
+          :aria-disabled="!canBulkAct"
           :aria-label="t('common.actions.delete')"
-          @click="emit('remove', selection)"
+          @click="onBulkDelete"
         >
           <template #icon>
             <Trash2 :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -263,7 +331,8 @@ watch(hasSelection, async () => {
 
 @media (max-width: 640px) {
   /* The bulk actions are icon-only on a phone, like the rest of the toolbar
-     (each button keeps its accessible name through aria-label + title). */
+     (each button keeps its accessible name through aria-label, and its
+     tooltip is the shared AppTooltip, JUS-156). */
   .fm-btn-label {
     display: none;
   }

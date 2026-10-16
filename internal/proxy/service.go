@@ -140,6 +140,8 @@ func (e *PartialError) Is(target error) bool { return target == ErrPartialSync }
 // Containers are required inputs; Dial may be nil until the mTLS dialer is
 // plugged in, and every tunable falls back to a documented default.
 type Config struct {
+	PanelCertificates SSLStore
+	CertificateStatus CertificateStatusService
 	// ControlPlaneURL resolves the effective instance URL; nil disables the panel route.
 	ControlPlaneURL  func(context.Context) (string, error)
 	ControlPlaneURLs func(context.Context) ([]string, error)
@@ -268,26 +270,28 @@ func (c Config) history() HistoryStore {
 // byte-identical files and the agent's atomic writes leave the running
 // configuration in place.
 type SyncService struct {
-	controlPlaneURL  func(context.Context) (string, error)
-	controlPlaneURLs func(context.Context) ([]string, error)
-	serverPort       int
-	source           ApplicationSource
-	services         ServiceSource
-	redirects        RedirectSource
-	nodes            NodeSource
-	history          HistoryStore
-	providers        DNSProviderSource
-	containers       containers.ContainerService
-	dial             DialFunc
-	logger           *slog.Logger
-	format           Format
-	backendHost      string
-	configDir        string
-	acmeDir          string
-	secret           string
-	acmeEmail        string
-	caServer         string
-	timeout          time.Duration
+	panelCertificates SSLStore
+	certificateStatus CertificateStatusService
+	controlPlaneURL   func(context.Context) (string, error)
+	controlPlaneURLs  func(context.Context) ([]string, error)
+	serverPort        int
+	source            ApplicationSource
+	services          ServiceSource
+	redirects         RedirectSource
+	nodes             NodeSource
+	history           HistoryStore
+	providers         DNSProviderSource
+	containers        containers.ContainerService
+	dial              DialFunc
+	logger            *slog.Logger
+	format            Format
+	backendHost       string
+	configDir         string
+	acmeDir           string
+	secret            string
+	acmeEmail         string
+	caServer          string
+	timeout           time.Duration
 
 	// mu serializes one node's snapshot read through bootstrap and write, so
 	// a delayed older snapshot can never overwrite a newer one and two first
@@ -324,27 +328,51 @@ func NewService(cfg Config) *SyncService {
 	if acmeDir == "" {
 		acmeDir = TraefikAcmeDir
 	}
+	if cfg.PanelCertificates == nil && cfg.Store != nil {
+		cfg.PanelCertificates = NewStoreSSL(cfg.Store)
+	}
+	if cfg.CertificateStatus == nil && cfg.Store != nil {
+		cfg.CertificateStatus = NewDefaultCertificateStatusService(CertificateStatusConfig{
+			Store: NewStoreCertificateStatus(cfg.Store), Logger: logger,
+			Dial: func(ctx context.Context, id uuid.UUID) (ACMEReader, error) {
+				if cfg.Dial == nil {
+					return nil, errStatusDialerUnconfigured
+				}
+				client, err := cfg.Dial(ctx, id)
+				if err != nil {
+					return nil, err
+				}
+				if reader, ok := client.(ACMEReader); ok {
+					return reader, nil
+				}
+				_ = client.Close()
+				return nil, errStatusDialerUnconfigured
+			},
+		})
+	}
 	return &SyncService{
-		controlPlaneURL:  cfg.ControlPlaneURL,
-		controlPlaneURLs: cfg.ControlPlaneURLs,
-		serverPort:       cfg.ServerPort,
-		source:           cfg.source(),
-		services:         cfg.services(),
-		redirects:        cfg.redirects(),
-		nodes:            cfg.nodes(),
-		history:          cfg.history(),
-		providers:        cfg.providers(),
-		containers:       cfg.Containers,
-		dial:             cfg.Dial,
-		logger:           logger,
-		format:           cfg.Format,
-		backendHost:      backendHost,
-		configDir:        configDir,
-		acmeDir:          acmeDir,
-		secret:           cfg.Secret,
-		acmeEmail:        cfg.ACMEEmail,
-		caServer:         cfg.CAServer,
-		timeout:          timeout,
+		panelCertificates: cfg.PanelCertificates,
+		certificateStatus: cfg.CertificateStatus,
+		controlPlaneURL:   cfg.ControlPlaneURL,
+		controlPlaneURLs:  cfg.ControlPlaneURLs,
+		serverPort:        cfg.ServerPort,
+		source:            cfg.source(),
+		services:          cfg.services(),
+		redirects:         cfg.redirects(),
+		nodes:             cfg.nodes(),
+		history:           cfg.history(),
+		providers:         cfg.providers(),
+		containers:        cfg.Containers,
+		dial:              cfg.Dial,
+		logger:            logger,
+		format:            cfg.Format,
+		backendHost:       backendHost,
+		configDir:         configDir,
+		acmeDir:           acmeDir,
+		secret:            cfg.Secret,
+		acmeEmail:         cfg.ACMEEmail,
+		caServer:          cfg.CAServer,
+		timeout:           timeout,
 	}
 }
 
@@ -608,7 +636,7 @@ func (s *SyncService) SyncAll(ctx context.Context) ([]SyncResult, error) {
 		}
 		results = append(results, result)
 	}
-	_, diagnostics := s.controlPlaneRoute(ctx, apps, uuid.Nil, nil, nil)
+	_, diagnostics := s.controlPlaneRoute(ctx, uuid.Nil, nil, nil)
 	if len(diagnostics) > 0 {
 		return results, &PartialError{Diagnostics: diagnostics}
 	}
@@ -631,26 +659,26 @@ func (s *SyncService) gatherRoutes(ctx context.Context, apps []ProxiedApplicatio
 	for _, redirect := range redirects {
 		claimed[redirect.Source] = true
 	}
-	panel, panelDiagnostics := s.controlPlaneRoute(ctx, apps, serverID, claimed, access)
+	panel, panelDiagnostics := s.controlPlaneRoute(ctx, serverID, claimed, access)
 	routes = append(routes, panel...)
 	diagnostics = append(diagnostics, panelDiagnostics...)
 	return routes, redirects, diagnostics, appCount
 }
 
 // controlPlaneRoute keeps a malformed panel setting from blocking healthy node routes.
-func (s *SyncService) controlPlaneRoute(ctx context.Context, apps []ProxiedApplication, serverID uuid.UUID, claimed map[string]bool, access map[uuid.UUID]providerAccess) ([]Route, []Diagnostic) {
+func (s *SyncService) controlPlaneRoute(ctx context.Context, serverID uuid.UUID, claimed map[string]bool, access map[uuid.UUID]providerAccess) ([]Route, []Diagnostic) {
 	if s.controlPlaneURLs == nil {
-		return s.controlPlaneRouteForURL(ctx, apps, serverID, claimed, access, s.controlPlaneURL)
+		return s.controlPlaneRouteForURL(ctx, serverID, claimed, access, s.controlPlaneURL)
 	}
 	urls, err := s.controlPlaneURLs(ctx)
 	if err != nil {
-		return s.controlPlaneRouteForURL(ctx, apps, serverID, claimed, access, func(context.Context) (string, error) { return "", err })
+		return s.controlPlaneRouteForURL(ctx, serverID, claimed, access, func(context.Context) (string, error) { return "", err })
 	}
 	var routes []Route
 	var diagnostics []Diagnostic
 	seen := map[string]bool{}
 	for i, raw := range urls {
-		entries, problems := s.controlPlaneRouteForURL(ctx, apps, serverID, claimed, access, func(context.Context) (string, error) { return raw, nil })
+		entries, problems := s.controlPlaneRouteForURL(ctx, serverID, claimed, access, func(context.Context) (string, error) { return raw, nil })
 		for _, route := range entries {
 			if seen[route.Domain] {
 				continue
@@ -666,7 +694,7 @@ func (s *SyncService) controlPlaneRoute(ctx context.Context, apps []ProxiedAppli
 	return routes, diagnostics
 }
 
-func (s *SyncService) controlPlaneRouteForURL(ctx context.Context, apps []ProxiedApplication, serverID uuid.UUID, claimed map[string]bool, access map[uuid.UUID]providerAccess, resolveURL func(context.Context) (string, error)) ([]Route, []Diagnostic) {
+func (s *SyncService) controlPlaneRouteForURL(ctx context.Context, serverID uuid.UUID, claimed map[string]bool, access map[uuid.UUID]providerAccess, resolveURL func(context.Context) (string, error)) ([]Route, []Diagnostic) {
 	if resolveURL == nil {
 		return nil, nil
 	}
@@ -720,26 +748,35 @@ func (s *SyncService) controlPlaneRouteForURL(ctx context.Context, apps []Proxie
 	if s.serverPort < 1 || s.serverPort > 65535 {
 		return fail("invalid control-plane HTTP listener port")
 	}
-	// Reuse matching stored intents, without retargeting an unrelated certificate.
-	certApp := ProxiedApplication{}
-	for _, app := range apps {
-		intents := app.Certificates
-		if intents == nil && app.Certificate != nil {
-			intents = []*CertificateIntent{app.Certificate}
-		}
-		for _, intent := range intents {
-			if intent != nil && (intent.Domain == domain || (intent.Wildcard && wildcardCovers(intent, domain, access))) {
-				certApp.Certificates = append(certApp.Certificates, intent)
+	route := Route{Name: "panel", Domain: domain, Target: "http://" + net.JoinHostPort(s.backendHost, strconv.Itoa(s.serverPort))}
+	if u.Scheme == "https" {
+		state := PanelCertificateState{Status: "pending"}
+		route.PanelCertificate = &state
+		if s.panelCertificates != nil {
+			certs, err := s.panelCertificates.ListCertificates(ctx)
+			if err != nil {
+				state.Status = "failed"
+				s.logger.Warn("proxy: read panel certificates", "error", err)
+			} else {
+				for _, cert := range certs {
+					if cert.ApplicationID != uuid.Nil || cert.Domain != domain {
+						continue
+					}
+					intent := &CertificateIntent{Domain: cert.Domain, Enabled: cert.Enabled, Challenge: cert.Challenge, DNSProviderID: cert.DNSProviderID, Wildcard: cert.Wildcard}
+					certificate, reason := resolveRouteCertificate(ProxiedApplication{Certificate: intent}, domain, access)
+					observation := CertificateStatusObservation{}
+					if s.certificateStatus != nil {
+						observation = s.certificateStatus.CertificateStatuses(ctx, []DomainCertificate{cert})[cert.ID]
+					}
+					state = panelCertificateState(observation, certificate != nil && reason == "")
+					route.Certificate = certificate
+					route.PanelCertificate = &state
+					break
+				}
 			}
 		}
 	}
-	certificate, reason := resolveRouteCertificate(certApp, domain, access)
-	var diagnostics []Diagnostic
-	if reason != "" {
-		diagnostic.Reason = reason
-		diagnostics = append(diagnostics, diagnostic)
-	}
-	return []Route{{Name: "panel", Domain: domain, Target: "http://" + net.JoinHostPort(s.backendHost, strconv.Itoa(s.serverPort)), Certificate: certificate}}, diagnostics
+	return []Route{route}, nil
 }
 
 // listServices lists the compose service routing input. A nil source leaves

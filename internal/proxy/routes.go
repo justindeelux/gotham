@@ -62,6 +62,14 @@ func Mount(r chi.Router, teamAuth func(http.Handler) http.Handler, platformAuth 
 	r.Group(func(global chi.Router) {
 		global.Use(platformAuth)
 		global.Post("/v1/proxy/sync", h.sync)
+		if certs != nil {
+			global.Group(func(panel chi.Router) {
+				panel.Use(panelCertificateAuth)
+				panel.Get("/v1/proxy/panel-certificates", h.listCertificates)
+				panel.Get("/v1/proxy/panel-certificates/{id}", h.getCertificate)
+				panel.Patch("/v1/proxy/panel-certificates/{id}", h.updateCertificate)
+			})
+		}
 		if dns != nil {
 			global.Post("/v1/proxy/dns-providers", h.createDNSProvider)
 			global.Get("/v1/proxy/dns-providers", h.listDNSProviders)

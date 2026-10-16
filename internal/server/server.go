@@ -414,6 +414,11 @@ func (s *Server) routes() (http.Handler, error) {
 		// across a restart is settled here.
 		if s.persistence != nil {
 			instanceSvc := instance.NewService(instance.NewStoreRepository(s.persistence), instance.NewSudoApplier(), s.logger)
+			if panel, ok := s.proxy.(interface {
+				ReconcilePanelCertificates(context.Context, []string) error
+			}); ok {
+				instanceSvc.SyncPanelCertificates = panel.ReconcilePanelCertificates
+			}
 			instanceSvc.ResyncProxy = func(ctx context.Context) error {
 				if syncer, ok := s.proxy.(interface {
 					SyncControlPlane(context.Context) error
@@ -1215,6 +1220,11 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 // Run starts the HTTP server and blocks until ctx is cancelled (typically by a
 // signal handler) or the listener fails, then shuts down gracefully.
 func (s *Server) Run(ctx context.Context) error {
+	if panel, ok := s.proxy.(interface{ RunPanelCertificates(context.Context) }); ok {
+		panelCtx, cancelPanel := context.WithCancel(ctx)
+		defer cancelPanel()
+		go panel.RunPanelCertificates(panelCtx)
+	}
 	if s.closer != nil {
 		defer s.closer()
 	}

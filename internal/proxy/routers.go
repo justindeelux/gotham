@@ -47,18 +47,19 @@ const (
 // hosts. OwnerID is the owning application or service id, or the redirect
 // rule id for RouterKindRedirect.
 type RouterInfo struct {
-	Host        string     `json:"host"`
-	Rule        string     `json:"rule"`
-	Service     string     `json:"service"`
-	Target      string     `json:"target,omitempty"`
-	EntryPoints []string   `json:"entrypoints"`
-	Middlewares []string   `json:"middlewares,omitempty"`
-	TLSResolver string     `json:"tls_resolver,omitempty"`
-	Kind        RouterKind `json:"kind"`
-	OwnerID     uuid.UUID  `json:"owner_id"`
-	OwnerName   string     `json:"owner_name,omitempty"`
-	ServerID    uuid.UUID  `json:"server_id"`
-	ServerName  string     `json:"server_name,omitempty"`
+	Certificate *PanelCertificateState `json:"certificate,omitempty"`
+	Host        string                 `json:"host"`
+	Rule        string                 `json:"rule"`
+	Service     string                 `json:"service"`
+	Target      string                 `json:"target,omitempty"`
+	EntryPoints []string               `json:"entrypoints"`
+	Middlewares []string               `json:"middlewares,omitempty"`
+	TLSResolver string                 `json:"tls_resolver,omitempty"`
+	Kind        RouterKind             `json:"kind"`
+	OwnerID     uuid.UUID              `json:"owner_id"`
+	OwnerName   string                 `json:"owner_name,omitempty"`
+	ServerID    uuid.UUID              `json:"server_id"`
+	ServerName  string                 `json:"server_name,omitempty"`
 }
 
 // RouterNodeState is one node's read outcome. Error is set (and no rows are
@@ -166,7 +167,7 @@ func (s *SyncService) ListRouters(ctx context.Context, serverID uuid.UUID) (Rout
 
 	response := RouterListResponse{}
 	if serverID == uuid.Nil {
-		_, response.Diagnostics = s.controlPlaneRoute(ctx, apps, uuid.Nil, nil, access)
+		_, response.Diagnostics = s.controlPlaneRoute(ctx, uuid.Nil, nil, access)
 	}
 	for _, id := range ids {
 		state := RouterNodeState{ServerID: id, ServerName: names[id], SyncStatus: RouterSyncUnknown}
@@ -228,6 +229,7 @@ func routersFromConfig(cfg ProxyConfig, routes []Route, appRoutes int, redirects
 		}
 		row := RouterInfo{
 			Host:        route.Domain,
+			Certificate: route.PanelCertificate,
 			Rule:        web.Rule,
 			Service:     web.Service,
 			Target:      route.Target,

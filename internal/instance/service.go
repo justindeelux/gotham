@@ -14,6 +14,8 @@ import (
 
 // Service reads and writes the instance settings.
 type Service struct {
+	// SyncPanelCertificates reconciles intent independently of proxy/trial success.
+	SyncPanelCertificates func(context.Context, []string) error
 	// ResyncProxy runs after a changed control-plane URL is saved. Configure before serving.
 	ResyncProxy func(context.Context) error
 	// CheckControlPlaneHost checks application, service and redirect ownership.
@@ -227,6 +229,9 @@ func (s *Service) UpdateGeneral(ctx context.Context, actor uuid.UUID, in General
 		return State{}, err
 	}
 	s.logger.Info("instance general settings updated", "actor", actor, "changes", changes)
+	if !changedURL {
+		s.syncPanelCertificates(ctx, next)
+	}
 	if changedURL {
 		s.scheduleDomainRevert(next.PendingControlPlaneURL.Deadline)
 		if err := s.syncControlPlaneURL(ctx); err != nil {

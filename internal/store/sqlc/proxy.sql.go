@@ -90,7 +90,7 @@ func (q *Queries) CreateDNSProvider(ctx context.Context, arg CreateDNSProviderPa
 const createDomainCertificate = `-- name: CreateDomainCertificate :one
 INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at
+RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind
 `
 
 type CreateDomainCertificateParams struct {
@@ -122,6 +122,7 @@ func (q *Queries) CreateDomainCertificate(ctx context.Context, arg CreateDomainC
 		&i.Wildcard,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerKind,
 	)
 	return i, err
 }
@@ -230,7 +231,7 @@ func (q *Queries) GetDNSProvider(ctx context.Context, id pgtype.UUID) (DnsProvid
 }
 
 const getDomainCertificate = `-- name: GetDomainCertificate :one
-SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates WHERE id = $1
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind FROM domain_certificates WHERE id = $1
 `
 
 func (q *Queries) GetDomainCertificate(ctx context.Context, id pgtype.UUID) (DomainCertificate, error) {
@@ -246,6 +247,7 @@ func (q *Queries) GetDomainCertificate(ctx context.Context, id pgtype.UUID) (Dom
 		&i.Wildcard,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerKind,
 	)
 	return i, err
 }
@@ -364,9 +366,11 @@ func (q *Queries) ListApplicationBaseDomains(ctx context.Context) ([]ListApplica
 }
 
 const listCertificateStatusTargets = `-- name: ListCertificateStatusTargets :many
-SELECT c.id AS certificate_id, c.domain, a.server_id
+SELECT c.id AS certificate_id, c.domain,
+       COALESCE(a.server_id, panel.id) AS server_id
 FROM domain_certificates c
-JOIN applications a ON a.id = c.application_id
+LEFT JOIN applications a ON a.id = c.application_id
+LEFT JOIN servers panel ON c.application_id IS NULL AND panel.name = 'localhost'
 ORDER BY c.id
 `
 
@@ -438,7 +442,7 @@ func (q *Queries) ListDNSProviders(ctx context.Context) ([]DnsProvider, error) {
 }
 
 const listDomainCertificates = `-- name: ListDomainCertificates :many
-SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind FROM domain_certificates
 ORDER BY created_at DESC, id DESC
 `
 
@@ -461,6 +465,7 @@ func (q *Queries) ListDomainCertificates(ctx context.Context) ([]DomainCertifica
 			&i.Wildcard,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerKind,
 		); err != nil {
 			return nil, err
 		}
@@ -473,7 +478,7 @@ func (q *Queries) ListDomainCertificates(ctx context.Context) ([]DomainCertifica
 }
 
 const listDomainCertificatesByApplication = `-- name: ListDomainCertificatesByApplication :many
-SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind FROM domain_certificates
 WHERE application_id = $1
 ORDER BY created_at, id
 `
@@ -499,6 +504,7 @@ func (q *Queries) ListDomainCertificatesByApplication(ctx context.Context, appli
 			&i.Wildcard,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerKind,
 		); err != nil {
 			return nil, err
 		}
@@ -585,7 +591,7 @@ func (q *Queries) ListDomainRedirectsByApplication(ctx context.Context, applicat
 }
 
 const listEnabledDomainCertificatesByProvider = `-- name: ListEnabledDomainCertificatesByProvider :many
-SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at FROM domain_certificates
+SELECT id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind FROM domain_certificates
 WHERE dns_provider_id = $1 AND enabled
 ORDER BY created_at, id
 `
@@ -610,6 +616,7 @@ func (q *Queries) ListEnabledDomainCertificatesByProvider(ctx context.Context, d
 			&i.Wildcard,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerKind,
 		); err != nil {
 			return nil, err
 		}
@@ -1038,7 +1045,7 @@ SET domain = $2,
     wildcard = $6,
     updated_at = now()
 WHERE id = $1
-RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at
+RETURNING id, application_id, domain, enabled, challenge, dns_provider_id, wildcard, created_at, updated_at, owner_kind
 `
 
 type UpdateDomainCertificateParams struct {
@@ -1070,6 +1077,7 @@ func (q *Queries) UpdateDomainCertificate(ctx context.Context, arg UpdateDomainC
 		&i.Wildcard,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerKind,
 	)
 	return i, err
 }

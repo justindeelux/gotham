@@ -47,6 +47,8 @@ const (
 // service domain: the router name comes from Name (or the application
 // convention when empty), the rule from Domain, and the backend from Target.
 type Route struct {
+	// PanelCertificate gates redirects on observed issuance for panel routes.
+	PanelCertificate *PanelCertificateState
 	// Name is the Traefik router base name. Empty keeps the application
 	// convention "app-<AppID>"; alias domains of a multi-domain application
 	// (JUS-89) set "app-<AppID>-<domain>" through AliasRouteName, and compose
@@ -237,9 +239,11 @@ func BuildConfig(routes []Route, redirects []Redirect, providers []DNSProvider, 
 			EntryPoints: []string{EntryPointWeb},
 		}
 		if route.Certificate != nil {
-			web.Middlewares = []string{HTTPRedirectMiddleware}
-			cfg.Middlewares[HTTPRedirectMiddleware] = Middleware{
-				RedirectScheme: &RedirectScheme{Scheme: "https", Permanent: true},
+			if route.PanelCertificate == nil || route.PanelCertificate.Status == "issued" {
+				web.Middlewares = []string{HTTPRedirectMiddleware}
+				cfg.Middlewares[HTTPRedirectMiddleware] = Middleware{
+					RedirectScheme: &RedirectScheme{Scheme: "https", Permanent: true},
+				}
 			}
 			tls := &RouterTLS{CertResolver: route.Certificate.Resolver}
 			if route.Certificate.WildcardBase != "" {

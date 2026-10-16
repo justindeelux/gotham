@@ -4,10 +4,13 @@ import { computed, ref } from "vue";
 
 import type {
   NotificationChannel,
+  NotificationDelivery,
   TestResult,
 } from "@/features/notifications/api/notifications";
 import {
   channelText,
+  deliveryEventLabel,
+  deliveryStatusLabel,
   describeChannelError,
   eventLabel,
   kindLabel,
@@ -45,6 +48,43 @@ const testFailure = computed<string | null>(() =>
     : describeChannelError(testErrorRaw.value),
 );
 
+/**
+ * Delivery-history panel state. The panel is lazy: it reads the history only
+ * when the operator opens it (and again after a send-test), so the page never
+ * fetches history for channels nobody inspects.
+ */
+const historyOpen = ref(false);
+const historyLoading = ref(false);
+const deliveries = ref<NotificationDelivery[]>([]);
+const historyErrorRaw = ref<unknown>(null);
+const historyError = computed<string | null>(() =>
+  historyErrorRaw.value === null
+    ? null
+    : describeChannelError(historyErrorRaw.value),
+);
+
+/** toggleHistory opens/closes the panel, loading the history on open. */
+async function toggleHistory(channel: NotificationChannel): Promise<void> {
+  historyOpen.value = !historyOpen.value;
+  if (historyOpen.value) {
+    await loadHistory(channel);
+  }
+}
+
+/** loadHistory reloads one channel's newest attempts. */
+async function loadHistory(channel: NotificationChannel): Promise<void> {
+  historyLoading.value = true;
+  historyErrorRaw.value = null;
+  try {
+    deliveries.value = await channelsStore.history(channel.id);
+  } catch (error) {
+    historyErrorRaw.value = error;
+    deliveries.value = [];
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
 /** handleToggle flips a channel's enabled flag in place. */
 async function handleToggle(channel: NotificationChannel, enabled: boolean): Promise<void> {
   try {
@@ -79,6 +119,10 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
     testErrorRaw.value = error;
   } finally {
     testing.value = false;
+  }
+  // A test leaves a history row; refresh an open panel so it appears.
+  if (historyOpen.value) {
+    await loadHistory(channel);
   }
 }
 </script>
@@ -168,6 +212,70 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
             {{ $t("notifications.card.noTest") }}
           </NText>
         </NSpace>
+        <div class="history" data-test-channel-history>
+          <NButton
+            size="small"
+            text
+            :loading="historyLoading"
+            @click="void toggleHistory(props.channel)"
+          >
+            {{
+              historyOpen
+                ? $t("notifications.history.hide")
+                : $t("notifications.history.show")
+            }}
+          </NButton>
+          <template v-if="historyOpen">
+            <NText
+              v-if="historyError"
+              type="error"
+              depth="1"
+              class="small"
+              data-test-channel-history-error
+            >
+              {{ historyError }}
+            </NText>
+            <NText
+              v-else-if="!historyLoading && deliveries.length === 0"
+              depth="3"
+              class="small"
+            >
+              {{ $t("notifications.history.empty") }}
+            </NText>
+            <ul v-else class="history-list">
+              <li
+                v-for="attempt in deliveries"
+                :key="attempt.id"
+                class="history-row"
+                data-test-channel-history-row
+              >
+                <NSpace align="center" :size="8" wrap>
+                  <NTag
+                    size="tiny"
+                    :bordered="false"
+                    :type="attempt.status === 'success' ? 'success' : 'error'"
+                  >
+                    {{ deliveryStatusLabel(attempt.status) }}
+                  </NTag>
+                  <NText depth="3" class="small">
+                    {{ deliveryEventLabel(attempt.event_type) }}
+                  </NText>
+                  <NText depth="3" class="small">
+                    {{ relativeTime(attempt.created_at) }}
+                  </NText>
+                </NSpace>
+                <NText
+                  v-if="attempt.error_summary"
+                  type="error"
+                  depth="2"
+                  class="small history-error"
+                >
+                  {{ attempt.error_summary }}
+                </NText>
+              </li>
+            </ul>
+          </template>
+        </div>
         <NSpace align="center" :size="12">
           <NButton
             size="small"
@@ -208,5 +316,33 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
 
 .small {
   font-size: var(--text-xs);
+}
+
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.history-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.history-error {
+  font-family: var(--font-mono);
+  word-break: break-word;
 }
 </style>

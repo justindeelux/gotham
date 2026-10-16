@@ -7,12 +7,14 @@ import {
   describeChannelError,
   isFeatureDisabled,
   listChannels,
+  listDeliveries,
   testChannel,
   updateChannel,
 } from "@/features/notifications/api/notifications";
 import type {
   ChannelInput,
   NotificationChannel,
+  NotificationDelivery,
   TestResult,
 } from "@/features/notifications/api/notifications";
 import { useTeamsStore } from "@/features/teams";
@@ -161,6 +163,11 @@ export const useNotificationsStore = defineStore("notifications", () => {
     return testChannel(activeTeamId(), id);
   }
 
+  /** history loads one channel's newest delivery attempts, newest first. */
+  function history(id: string): Promise<NotificationDelivery[]> {
+    return listDeliveries(activeTeamId(), id);
+  }
+
   /**
    * reset drops the held list and its team binding, so the next sign-in
    * never sees the previous account's channels. Called on sign-out (see the
@@ -184,6 +191,7 @@ export const useNotificationsStore = defineStore("notifications", () => {
     update,
     remove,
     test,
+    history,
     reset,
   };
 });

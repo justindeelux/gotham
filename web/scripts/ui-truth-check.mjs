@@ -1089,6 +1089,7 @@ async function main() {
           "export const describeChannelError = (e) => String((e && e.message) || e);",
           "export const isFeatureDisabled = () => false;",
           "export const listChannels = async () => [];",
+          "export const listDeliveries = async () => [];",
           "export const testChannel = async () => { throw new Error('unused'); };",
           "export const updateChannel = async () => { throw new Error('unused'); };",
         ].join("\n"),

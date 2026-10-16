@@ -46,6 +46,14 @@ const en = {
       "immediately.",
     updated: "Updated",
   },
+  history: {
+    show: "Delivery history",
+    hide: "Hide delivery history",
+    empty: "No delivery attempts yet.",
+    testEvent: "Test message",
+    delivered: "Delivered",
+    failed: "Failed",
+  },
   kinds: {
     discord: "Discord webhook",
     slack: "Slack incoming webhook",

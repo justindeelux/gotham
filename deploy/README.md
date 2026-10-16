@@ -135,7 +135,8 @@ existing node keeps working with no operator action; it receives a dual-EKU leaf
 on its next renewal. The node key and leaf live in `GOTHAM_AGENT_CERT_DIR` and are
 untouched by a self-update, so an update cannot brick an enrolled agent. A node
 whose key cannot be proven (for example its registry row was deleted) must be
-re-enrolled — with `--enrollment-token` when the control plane requires one.
+re-enrolled — with the enrollment token (environment or `--enrollment-token-file`)
+when the control plane requires one.
 
 The listener certificate SANs are the operator-declared hosts
 (`install.sh --cp-host <name-or-ip>` repeated, or `GOTHAM_GRPC_HOSTS=<a,b>`)

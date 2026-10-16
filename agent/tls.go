@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -28,12 +29,72 @@ const (
 // selfSignedValidity is how long a generated development certificate lasts.
 const selfSignedValidity = 365 * 24 * time.Hour
 
+// controlPlaneURI mirrors internal/servers.ControlPlaneURI: the URI SAN of the
+// control-plane client credential. The agent cannot import internal/servers
+// (cross-scope rule), so the literal is duplicated and pinned by
+// TestControlPlaneIdentityLiteral plus the end-to-end CP dial test.
+const controlPlaneURI = "spiffe://gotham/control-plane"
+
+// controlPlaneClientName is the legacy control-plane client common name,
+// accepted only during the rollout window (see verifyControlPlanePeer).
+const controlPlaneClientName = "gotham-control-plane"
+
+// verifyControlPlanePeer is the agent-side half of the two-role identity model
+// (JUS-194 fix round 1). Agents run the Docker, Compose, File, Build, Proxy and
+// Tool services (RCE-class), so the listener must accept ONLY the control plane:
+// a node leaf chains to the same CA and now carries clientAuth, so without this
+// check any enrolled node could act as the CP toward every other agent.
+func verifyControlPlanePeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	if len(rawCerts) == 0 {
+		return fmt.Errorf("agent: no client certificate presented")
+	}
+	cert, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		return fmt.Errorf("agent: parse client certificate: %w", err)
+	}
+	_, err = verifyControlPlaneCert(cert)
+	return err
+}
+
+// verifyControlPlaneCert is the certificate-level check behind
+// verifyControlPlanePeer and the gRPC interceptor. It reports whether the
+// credential was accepted through the legacy rollout branch, so the caller can
+// log it.
+func verifyControlPlaneCert(cert *x509.Certificate) (legacy bool, err error) {
+	if cert.IsCA {
+		return false, fmt.Errorf("agent: a CA certificate is not a control-plane credential")
+	}
+	for _, uri := range cert.URIs {
+		if uri != nil && uri.String() == controlPlaneURI {
+			return false, nil
+		}
+	}
+	// Rollout grace: a control plane upgraded after this agent still presents the
+	// pre-change credential, which has no URI SAN. It is unambiguous because
+	// only the control plane can obtain it: its extended key usage is clientAuth
+	// ALONE (a node leaf always carries serverAuth too) and its identity is the
+	// reserved control-plane name. A node cannot present a matching certificate.
+	// shortcut: this branch is bounded and non-exploitable (only the CA mints
+	// such a credential); drop it once the CP-side URI SAN is mandatory, in the
+	// same release that tightens the gateway's legacy-leaf sunset (docs/TODO.md).
+	if len(cert.ExtKeyUsage) == 1 && cert.ExtKeyUsage[0] == x509.ExtKeyUsageClientAuth &&
+		cert.Subject.CommonName == controlPlaneClientName {
+		return true, nil
+	}
+	return false, fmt.Errorf("agent: client certificate is not the control plane")
+}
+
 // clientCredentials returns transport credentials that verify the CP server
-// certificate against the PEM bundle at caPath. An empty caPath returns
-// insecure credentials for local development; Config.Load only accepts an empty
-// CA when GOTHAM_AGENT_INSECURE=true, so this path is reachable only through the
+// certificate against the PEM bundle at caPath and present the node's own
+// certificate as a mutual-TLS client certificate (JUS-194) when certPath/keyPath
+// point at an existing pair. The pair is loaded on every handshake, so a
+// certificate renewed at re-registration takes effect without a restart; a
+// missing pair presents none, which is the one certificate-less bootstrap
+// connection. An empty caPath returns insecure credentials for local
+// development; Config.Load only accepts an empty CA when
+// GOTHAM_AGENT_INSECURE=true, so this path is reachable only through the
 // explicit development opt-in. It reports dev = true in that case.
-func clientCredentials(caPath string) (credentials.TransportCredentials, bool, error) {
+func clientCredentials(caPath, certPath, keyPath string) (credentials.TransportCredentials, bool, error) {
 	if caPath == "" {
 		return insecure.NewCredentials(), true, nil
 	}
@@ -41,7 +102,29 @@ func clientCredentials(caPath string) (credentials.TransportCredentials, bool, e
 	if err != nil {
 		return nil, false, err
 	}
-	return credentials.NewClientTLSFromCert(pool, ""), false, nil
+	config := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	if certPath != "" && keyPath != "" {
+		config.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					// No certificate issued yet: present none so the control
+					// plane treats this as a bootstrap registration.
+					return &tls.Certificate{}, nil
+				}
+				return nil, fmt.Errorf("agent: load client keypair: %w", err)
+			}
+			return &pair, nil
+		}
+	}
+	return credentials.NewTLS(config), false, nil
+}
+
+// ClientCertPath returns the path of the node certificate the agent presents to
+// the control plane and serves its own listeners with: the file SaveAgentCert
+// writes.
+func ClientCertPath(certDir string) string {
+	return filepath.Join(certDir, certFileName)
 }
 
 // ServerCredentials builds credentials for the agent's DockerService server.
@@ -88,6 +171,7 @@ func ServerCredentials(certPEM, keyPEM []byte, caPath string, allowInsecure bool
 		}
 		config.ClientCAs = pool
 		config.ClientAuth = tls.RequireAndVerifyClientCert
+		config.VerifyPeerCertificate = verifyControlPlanePeer
 	}
 	return credentials.NewTLS(config), nil
 }
@@ -123,6 +207,7 @@ func ServerCredentialsFromFiles(certPath, keyPath, caPath string) (credentials.T
 	if pool != nil {
 		config.ClientCAs = pool
 		config.ClientAuth = tls.RequireAndVerifyClientCert
+		config.VerifyPeerCertificate = verifyControlPlanePeer
 	}
 	return credentials.NewTLS(config), nil
 }

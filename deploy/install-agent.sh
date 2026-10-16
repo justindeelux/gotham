@@ -33,6 +33,18 @@
 # leaves GOTHAM_AGENT_CA unset, so the agent connects without TLS. Never use it
 # on a real node.
 #
+# Enrollment token: the bootstrap credential a node presents on its first
+# registration. Prefer --enrollment-token-file <path> with a root-owned file
+# (mode 0600, no symlink, not a directory) — the installer reads the value and
+# never echoes it. The environment variable GOTHAM_AGENT_ENROLLMENT_TOKEN also
+# works, but never as `sudo GOTHAM_AGENT_ENROLLMENT_TOKEN=<token> ...`: that puts
+# the secret in sudo's argv (/proc/<pid>/cmdline, `ps`) and in shell history.
+# Read it without echo and export it for `sudo -E`, or use the file. The value is
+# written to agent.env as GOTHAM_AGENT_ENROLLMENT_TOKEN (a secret: keep that file
+# at its 0640 root-owned mode). The agent sends it only until it holds a
+# certificate, over a CA-pinned TLS channel only, after which the operator may
+# delete it from agent.env.
+#
 # Docker Engine and the compose plugin (which the agent shells out to) are
 # required at runtime but are NOT installed by default: pass --full (or set
 # GOTHAM_AGENT_FULL=1) to install them from the official Docker apt repository
@@ -43,7 +55,8 @@
 # localhost agent automatically.
 #
 # Usage:
-#   sudo ./install-agent.sh [--ca <path>] [--insecure] [--full] [--dry-run]
+#   sudo ./install-agent.sh [--ca <path>] [--enrollment-token-file <path>]
+#                           [--insecure] [--full] [--dry-run]
 #                           [--file-manager | --no-file-manager]
 #
 # Environment variables written to /etc/gotham/agent.env. A key left unset keeps
@@ -61,6 +74,7 @@
 #   GOTHAM_AGENT_AUTO_UPDATE
 #   GOTHAM_AGENT_UPDATE_INTERVAL
 #   GOTHAM_AGENT_UPDATE_CHANNEL
+#   GOTHAM_AGENT_ENROLLMENT_TOKEN  (from the environment or --enrollment-token-file; a secret)
 #   GOTHAM_AGENT_FILES         (true/false; written from the file-manager answer)
 #
 # File manager (remote file browser/editor in the web UI): the installer asks
@@ -99,6 +113,7 @@ DRY_RUN=0
 INSECURE=0
 FULL=0
 CA_SOURCE=""
+ENROLLMENT_TOKEN_FILE=""
 # File manager answer: yes | no | "" (ask). The environment form is the default
 # for a non-interactive run.
 FILE_MANAGER="${GOTHAM_AGENT_FILE_MANAGER:-}"
@@ -129,6 +144,14 @@ while [ "$#" -gt 0 ]; do
             ;;
         --ca=*)
             CA_SOURCE="${1#--ca=}"
+            ;;
+        --enrollment-token-file)
+            [ "$#" -ge 2 ] || { echo "--enrollment-token-file requires a path" >&2; exit 2; }
+            ENROLLMENT_TOKEN_FILE="$2"
+            shift
+            ;;
+        --enrollment-token-file=*)
+            ENROLLMENT_TOKEN_FILE="${1#--enrollment-token-file=}"
             ;;
         -h | --help)
             # Print every leading comment line (the header), not a fixed range,
@@ -222,6 +245,21 @@ if [ -z "${AGENT_CA_PATH}" ] && [ "${INSECURE}" -ne 1 ]; then
 fi
 if [ "${INSECURE}" -eq 1 ]; then
     echo "==> WARNING: --insecure: the agent will connect to the control plane WITHOUT TLS (development only)" >&2
+fi
+
+# ---- Enrollment token: read it off the command line -------------------------
+# The bootstrap credential is a secret; accept it from the environment or a
+# root-only file, never as an argv value (which /proc/<pid>/cmdline, `ps` and
+# shell history expose). The value is only written to agent.env and never logged
+# or echoed. read_enrollment_token_file enforces the root-only file rules.
+if [ -n "${ENROLLMENT_TOKEN_FILE}" ]; then
+    _as_root=0
+    if [ "$(id -u 2>/dev/null)" = "0" ]; then
+        _as_root=1
+    fi
+    GOTHAM_AGENT_ENROLLMENT_TOKEN="$(read_enrollment_token_file "${ENROLLMENT_TOKEN_FILE}" "${_as_root}")" || exit 1
+    export GOTHAM_AGENT_ENROLLMENT_TOKEN
+    unset _as_root
 fi
 
 # --full defaults off; GOTHAM_AGENT_FULL=1 is the environment form (the

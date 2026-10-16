@@ -460,14 +460,13 @@ func seedEnvColumns(t *testing.T, ctx context.Context, st *store.Store, pool *pg
 	if err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
-	server, err := st.CreateServer(ctx, sqlc.CreateServerParams{
-		Name:    fmt.Sprintf("store-seed-node-%d", suffix),
-		Ip:      "127.0.0.1",
-		Port:    22,
-		SshUser: "root",
-	})
-	if err != nil {
-		t.Fatalf("CreateServer: %v", err)
+	// SQL rather than the generated CreateServer: some callers pin the schema to
+	// a version before the newest servers column exists, and RETURNING * would
+	// then select a column the schema does not have yet.
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO servers (name, ip, port, ssh_user) VALUES ($1, '127.0.0.1', 22, 'root') RETURNING id`,
+		fmt.Sprintf("store-seed-node-%d", suffix)).Scan(&serverID); err != nil {
+		t.Fatalf("create server: %v", err)
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -484,11 +483,11 @@ func seedEnvColumns(t *testing.T, ctx context.Context, st *store.Store, pool *pg
 		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", team.ID); err != nil {
 			t.Logf("cleanup team: %v", err)
 		}
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", server.ID); err != nil {
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", serverID); err != nil {
 			t.Logf("cleanup server: %v", err)
 		}
 	})
-	return team.ID, environment.ID, server.ID
+	return team.ID, environment.ID, serverID
 }
 
 // keysOf returns the sorted env-var keys.

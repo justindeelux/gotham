@@ -3,7 +3,6 @@ package servers
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
@@ -250,10 +249,11 @@ func TestGatewayRegisterRejectsInvalidCSR(t *testing.T) {
 	defer cancel()
 
 	gateway, err := NewGateway(GatewayConfig{
-		Addr:      "127.0.0.1:0",
-		Authority: authority,
-		Service:   service,
-		Logger:    discardLogger(),
+		Addr:                "127.0.0.1:0",
+		Authority:           authority,
+		Service:             service,
+		Logger:              discardLogger(),
+		AllowOpenEnrollment: true,
 	})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -609,6 +609,9 @@ func startAuthorityGateway(t *testing.T, service *ServerService, authority *Auth
 		Authority: authority,
 		Service:   service,
 		Logger:    discardLogger(),
+		// Open enrollment so the certificate-less bootstrap these tests rely on
+		// is allowed; the fail-closed default has its own tests.
+		AllowOpenEnrollment: true,
 	})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -717,7 +720,8 @@ func TestCanonicalNodeID(t *testing.T) {
 }
 
 // TestGatewayHeartbeatRejectsIdentityMismatch rejects a heartbeat whose
-// metadata node id contradicts the authenticated peer certificate (FX-3 item 3).
+// metadata node id contradicts the authenticated peer certificate (FX-3 item 3):
+// a real node leaf authenticates, but claiming another node id is refused.
 func TestGatewayHeartbeatRejectsIdentityMismatch(t *testing.T) {
 	service, _, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -725,27 +729,12 @@ func TestGatewayHeartbeatRejectsIdentityMismatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	clientCertPEM, clientKeyPEM, err := authority.IssueClientCert("attacker")
-	if err != nil {
-		t.Fatalf("IssueClientCert: %v", err)
-	}
-	keyPair, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
-	if err != nil {
-		t.Fatalf("load client keypair: %v", err)
-	}
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{keyPair},
-		RootCAs:      authority.Pool(),
-		ServerName:   "localhost",
-		MinVersion:   tls.VersionTLS12,
-	})))
-	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
+	nodeID := uniqueNodeID("node-hb-mismatch")
+	certPEM, keyPEM := enrollNode(t, addr, authority, nodeID)
+	cleanupNode(t, service, nodeID)
 
 	streamCtx := metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, "victim")
-	stream, err := agentv1.NewAgentServiceClient(conn).Heartbeat(streamCtx)
+	stream, err := agentv1.NewAgentServiceClient(dialWithClientCert(t, addr, authority, certPEM, keyPEM)).Heartbeat(streamCtx)
 	if err == nil {
 		_ = stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()})
 		_, err = stream.CloseAndRecv()
@@ -807,8 +796,9 @@ func TestGatewayRegisterWithCSRIssuesBoundCert(t *testing.T) {
 	})
 }
 
-// TestGatewayRegisterRejectsIdentityMismatch is the FX-3 item-3 guard: a peer
-// that presents a client certificate cannot register under another node id.
+// TestGatewayRegisterRejectsIdentityMismatch is the FX-3 item-3 guard (JUS-194):
+// a peer that authenticated as one node cannot register under another node id,
+// while its own identity is accepted.
 func TestGatewayRegisterRejectsIdentityMismatch(t *testing.T) {
 	service, st, authority := newTestServiceWithAuthority(t)
 	addr := startAuthorityGateway(t, service, authority)
@@ -816,36 +806,28 @@ func TestGatewayRegisterRejectsIdentityMismatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	clientCertPEM, clientKeyPEM, err := authority.IssueClientCert("attacker")
+	// Enroll the node once (bootstrap: no client certificate, so a CSR) and use
+	// the issued certificate for the authenticated attempt below.
+	nodeID := uniqueNodeID("node-identity")
+	key := testKey(t)
+	csr := testCSR(t, key, &x509.CertificateRequest{Subject: pkix.Name{CommonName: nodeID}, DNSNames: []string{nodeID}})
+	resp, err := agentv1.NewAgentServiceClient(dialNoClientCert(t, addr, authority)).Register(ctx, &agentv1.RegisterRequest{
+		NodeId: nodeID, Os: "linux", Csr: csr,
+	})
 	if err != nil {
-		t.Fatalf("IssueClientCert: %v", err)
+		t.Fatalf("bootstrap Register: %v", err)
 	}
-	keyPair, err := tls.X509KeyPair(clientCertPEM, clientKeyPEM)
-	if err != nil {
-		t.Fatalf("load client keypair: %v", err)
-	}
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-		Certificates: []tls.Certificate{keyPair},
-		RootCAs:      authority.Pool(),
-		ServerName:   "localhost",
-		MinVersion:   tls.VersionTLS12,
-	})))
-	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
+	client := agentv1.NewAgentServiceClient(dialWithClientCert(t, addr, authority, resp.GetCert(), testKeyPEM(t, key)))
 
-	client := agentv1.NewAgentServiceClient(conn)
-	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: "victim", Os: "linux"}); status.Code(err) != codes.PermissionDenied {
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: uniqueNodeID("victim"), Os: "linux", Csr: csr}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("Register as victim = %v, want PermissionDenied", err)
 	}
 
-	// The authenticated identity itself is accepted.
-	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: "attacker", Os: "linux"}); err != nil {
+	// The authenticated identity itself is accepted (a normal renewal).
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux", Csr: csr}); err != nil {
 		t.Fatalf("Register as the authenticated identity: %v", err)
 	}
-	identity := "attacker"
-	row, err := st.GetServerByNodeID(ctx, &identity)
+	row, err := st.GetServerByNodeID(ctx, &nodeID)
 	if err != nil {
 		t.Fatalf("GetServerByNodeID: %v", err)
 	}
@@ -926,11 +908,12 @@ func TestGatewayRegisterRejectsReservedNodeID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	gateway, err := NewGateway(GatewayConfig{
-		Addr:      "127.0.0.1:0",
-		Hosts:     []string{"cp.example.com"},
-		Authority: authority,
-		Service:   service,
-		Logger:    discardLogger(),
+		Addr:                "127.0.0.1:0",
+		Hosts:               []string{"cp.example.com"},
+		Authority:           authority,
+		Service:             service,
+		Logger:              discardLogger(),
+		AllowOpenEnrollment: true,
 	})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
@@ -959,9 +942,11 @@ func TestGatewayRegisterRejectsReservedNodeID(t *testing.T) {
 		}
 	}
 
-	// A non-reserved id is unaffected.
+	// A non-reserved id is unaffected. It bootstraps like any first
+	// enrollment: no client certificate yet, so it must carry a CSR.
 	nodeID := uniqueNodeID("node-not-reserved")
-	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux"}); err != nil {
+	csr := testCSR(t, testKey(t), &x509.CertificateRequest{Subject: pkix.Name{CommonName: nodeID}, DNSNames: []string{nodeID}})
+	if _, err := client.Register(ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux", Csr: csr}); err != nil {
 		t.Fatalf("Register(%q) = %v, want success", nodeID, err)
 	}
 	row, err := st.GetServerByNodeID(ctx, &nodeID)

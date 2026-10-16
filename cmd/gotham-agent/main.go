@@ -163,6 +163,20 @@ func runServe() int {
 				startErr = err
 				return
 			}
+			// A TLS listener must authenticate the control plane: either it
+			// verifies client certificates against the CA (mandatory
+			// control-plane peer check), or the operator explicitly opted into
+			// the plaintext development mode. Anything else is a misconfiguration
+			// that would expose the Docker/File/Build services to any peer.
+			allowAnyPeer := false
+			if creds != nil && cfg.CA == "" {
+				if !cfg.Insecure {
+					startErr = fmt.Errorf("agent: refusing a TLS listener without GOTHAM_AGENT_CA; it cannot authenticate the control plane")
+					return
+				}
+				allowAnyPeer = true
+				log.Warn("agent: DEV-INSECURE (GOTHAM_AGENT_INSECURE=true): the listener does not require the control-plane identity")
+			}
 			toolUse := agent.NewToolUseTracker()
 			serverOptions := []agent.ServerOption{
 				agent.WithBuildService(agent.NewBuildServer(docker, log, agent.WithToolUseTracker(toolUse))),
@@ -177,6 +191,10 @@ func runServe() int {
 			}
 			if fileServer != nil {
 				serverOptions = append(serverOptions, agent.WithFileService(fileServer))
+			}
+			if allowAnyPeer {
+				// The only opt-out is the explicit, loudly-logged dev-insecure mode.
+				serverOptions = append(serverOptions, agent.WithoutControlPlanePeer())
 			}
 			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log,
 				agent.WithManagedVolumeRoot(cfg.ManagedVolumeRoot)), log, serverOptions...)

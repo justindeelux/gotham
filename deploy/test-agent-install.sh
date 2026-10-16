@@ -103,6 +103,7 @@ unset_agent_env() {
         GOTHAM_AGENT_CERT_DIR GOTHAM_AGENT_KEY GOTHAM_AGENT_DOCKER_SOCK \
         GOTHAM_AGENT_LOG_LEVEL GOTHAM_AGENT_AUTO_UPDATE \
         GOTHAM_AGENT_UPDATE_INTERVAL GOTHAM_AGENT_UPDATE_CHANNEL \
+        GOTHAM_AGENT_ENROLLMENT_TOKEN \
         GOTHAM_AGENT_CA GOTHAM_AGENT_INSECURE
 }
 unset_agent_env
@@ -331,7 +332,8 @@ for _key in \
     GOTHAM_AGENT_LOG_LEVEL \
     GOTHAM_AGENT_AUTO_UPDATE \
     GOTHAM_AGENT_UPDATE_INTERVAL \
-    GOTHAM_AGENT_UPDATE_CHANNEL; do
+    GOTHAM_AGENT_UPDATE_CHANNEL \
+    GOTHAM_AGENT_ENROLLMENT_TOKEN; do
     printf '%s' "${HELP_OUT}" | grep -q "${_key}" \
         || fail "--help does not document ${_key}"
 done
@@ -1247,6 +1249,7 @@ CC_BAD="$(printf 'ok\nGOTHAM_AGENT_INSECURE=true')"
 for _cckey in GOTHAM_AGENT_CERT_DIR GOTHAM_AGENT_KEY GOTHAM_AGENT_DOCKER_SOCK \
     GOTHAM_AGENT_LOG_LEVEL GOTHAM_AGENT_AUTO_UPDATE \
     GOTHAM_AGENT_UPDATE_INTERVAL GOTHAM_AGENT_UPDATE_CHANNEL \
+    GOTHAM_AGENT_ENROLLMENT_TOKEN \
     GOTHAM_AGENT_LISTEN_ADDR; do
     CC_KENV="${CC_DIR}/k-${_cckey}.env"
     printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\nGOTHAM_AGENT_NODE_ID=node-ok\n' >"${CC_KENV}"
@@ -1335,7 +1338,11 @@ for _spec in 'GOTHAM_AGENT_LOG_LEVEL|verbose|reject' 'GOTHAM_AGENT_AUTO_UPDATE|m
     'GOTHAM_AGENT_UPDATE_INTERVAL|1µs|pass' \
     'GOTHAM_AGENT_UPDATE_INTERVAL|1μs|pass' \
     'GOTHAM_AGENT_UPDATE_CHANNEL|a b|reject' \
-    'GOTHAM_AGENT_UPDATE_CHANNEL|a/b|reject' 'GOTHAM_AGENT_LISTEN_ADDR|9443|reject' \
+    'GOTHAM_AGENT_UPDATE_CHANNEL|a/b|reject' \
+    'GOTHAM_AGENT_ENROLLMENT_TOKEN|s3cret-Enroll_token.1|pass' \
+    'GOTHAM_AGENT_ENROLLMENT_TOKEN|a b|reject' \
+    'GOTHAM_AGENT_ENROLLMENT_TOKEN|a=b|reject' \
+    'GOTHAM_AGENT_LISTEN_ADDR|9443|reject' \
     'GOTHAM_AGENT_LISTEN_ADDR|0.0.0.0: 9443|reject' \
     "GOTHAM_AGENT_LISTEN_ADDR|:94'43|reject" \
     'GOTHAM_AGENT_LISTEN_ADDR|:94"43|reject' \
@@ -1506,6 +1513,94 @@ _v1_must_fail() { # $1 key=value assignment, $2 key name
 _v1_must_fail "GOTHAM_AGENT_LOG_LEVEL=$(printf 'info\nGOTHAM_AGENT_INSECURE=true')" GOTHAM_AGENT_LOG_LEVEL
 _v1_must_fail "GOTHAM_AGENT_NODE_ID=bad id" GOTHAM_AGENT_NODE_ID
 _v1_must_fail "GOTHAM_AGENT_AUTO_UPDATE=yes" GOTHAM_AGENT_AUTO_UPDATE
+# The enrollment token (JUS-194) is a secret: it is accepted only from the
+# environment or a root-only file, never from argv, and is validated like every
+# other managed key before the first mutation.
+if grep -q 'GOTHAM_AGENT_ENROLLMENT_TOKEN="\$2"' "${AGENT_INSTALLER}"; then
+    fail "V1: the enrollment token is still read from argv"
+fi
+printf 's3cret-Enroll_token.1\n' >"${V1_DIR}/token"
+chmod 600 "${V1_DIR}/token"
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token-file "${V1_DIR}/token" --dry-run >"${V1_DIR}/tok-good.log" 2>&1 \
+    || fail "V1: a valid --enrollment-token-file was rejected"
+printf '%s' "${HELP_OUT}" | grep -q -- '--enrollment-token-file' \
+    || fail "V1: --help does not document --enrollment-token-file"
+# The installer writes the file's value and never echoes it in a log.
+grep -q 's3cret-Enroll_token.1' "${V1_DIR}/tok-good.log" \
+    && fail "V1: the dry-run log echoed the enrollment token"
+# A missing file is refused.
+if env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token-file "${V1_DIR}/absent" --dry-run >/dev/null 2>&1; then
+    fail "V1: a missing enrollment token file was accepted"
+fi
+# A mangled value fails validation, names the key, and does not echo the secret.
+printf 'bad token\n' >"${V1_DIR}/token-bad"
+chmod 600 "${V1_DIR}/token-bad"
+if env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token-file "${V1_DIR}/token-bad" --dry-run >"${V1_DIR}/tok-bad.log" 2>&1; then
+    fail "V1: a mangled enrollment token succeeded"
+fi
+grep -q 'GOTHAM_AGENT_ENROLLMENT_TOKEN' "${V1_DIR}/tok-bad.log" \
+    || fail "V1: the enrollment token rejection does not name the key"
+grep -q 'bad token' "${V1_DIR}/tok-bad.log" \
+    && fail "V1: the enrollment token rejection echoed the value"
+# read_enrollment_token_file enforces the root-only file rules directly. Each
+# case is exercised through the sourced lib so the harness needs no root.
+_tok_case() { # $1 description, $2 expected (accept|reject), $3 path, $4 root(0|1)
+    _tc_out="${V1_DIR}/tok-case.out"
+    if ( . "${SCRIPT_DIR}/install-agent-lib.sh"; read_enrollment_token_file "$3" "$4" ) >"${_tc_out}" 2>"${V1_DIR}/tok-case.err"; then
+        _tc_got=accept
+    else
+        _tc_got=reject
+    fi
+    [ "${_tc_got}" = "$2" ] || fail "V1 token file: $1 was ${_tc_got}, want $2"
+    if grep -q 's3cret-Enroll_token.1' "${V1_DIR}/tok-case.err"; then
+        fail "V1 token file: $1 echoed the token in the error"
+    fi
+}
+_tok_case "a root-only 0600 file" accept "${V1_DIR}/token" 0
+printf 's3cret-Enroll_token.1\n' >"${V1_DIR}/token-640"
+chmod 640 "${V1_DIR}/token-640"
+_tok_case "a group-readable file" reject "${V1_DIR}/token-640" 0
+printf 's3cret-Enroll_token.1\n' >"${V1_DIR}/token-644"
+chmod 644 "${V1_DIR}/token-644"
+_tok_case "a world-readable file" reject "${V1_DIR}/token-644" 0
+# The harness runs as a non-root user, so require_root=1 must refuse this file.
+if [ "$(id -u)" != "0" ]; then
+    _tok_case "a non-root owner when running as root" reject "${V1_DIR}/token" 1
+fi
+ln -sf "${V1_DIR}/token" "${V1_DIR}/token-link"
+_tok_case "a symlink" reject "${V1_DIR}/token-link" 0
+mkdir -p "${V1_DIR}/token-dir"
+_tok_case "a directory" reject "${V1_DIR}/token-dir" 0
+_tok_case "a missing file" reject "${V1_DIR}/absent" 0
+# An unparsable stat is a hard error (fail closed), proven with a stub stat.
+mkdir -p "${V1_DIR}/nostat"
+printf '#!/bin/sh\nexit 1\n' >"${V1_DIR}/nostat/stat"
+chmod 755 "${V1_DIR}/nostat/stat"
+if ( PATH="${V1_DIR}/nostat:${PATH}"; . "${SCRIPT_DIR}/install-agent-lib.sh"; read_enrollment_token_file "${V1_DIR}/token" 0 ) >/dev/null 2>"${V1_DIR}/tok-nostat.err"; then
+    fail "V1 token file: an unparsable stat was accepted"
+fi
+# An environment value is validated without echoing it either.
+if ( . "${SCRIPT_DIR}/install-agent-lib.sh"; _env_check_value GOTHAM_AGENT_ENROLLMENT_TOKEN "bad token" ) >/dev/null 2>"${V1_DIR}/tok-env.err"; then
+    fail "V1: a malformed environment token was accepted"
+fi
+grep -q 'GOTHAM_AGENT_ENROLLMENT_TOKEN' "${V1_DIR}/tok-env.err" \
+    || fail "V1: the environment token rejection does not name the key"
+grep -q 'bad token' "${V1_DIR}/tok-env.err" \
+    && fail "V1: the environment token rejection echoed the value"
+# The value must reach agent.env, and survive a reinstall that omits it.
+V1_ENV="${V1_DIR}/flag.env"
+env GOTHAM_AGENT_ENROLLMENT_TOKEN="s3cret-Enroll_token.1" \
+    sh -c '. '"${SCRIPT_DIR}"'/install-agent-lib.sh; agent_env_write "'"${V1_ENV}"'" "/etc/gotham/ca.crt" 0' 2>/dev/null \
+    || fail "V1: writing the enrollment token failed"
+grep -qxF 'GOTHAM_AGENT_ENROLLMENT_TOKEN=s3cret-Enroll_token.1' "${V1_ENV}" \
+    || fail "V1: the enrollment token did not reach agent.env"
+sh -c '. '"${SCRIPT_DIR}"'/install-agent-lib.sh; agent_env_write "'"${V1_ENV}"'" "/etc/gotham/ca.crt" 0' 2>/dev/null \
+    || fail "V1: re-writing without the token failed"
+grep -qxF 'GOTHAM_AGENT_ENROLLMENT_TOKEN=s3cret-Enroll_token.1' "${V1_ENV}" \
+    || fail "V1: a reinstall dropped the stored enrollment token"
 # Valid input still passes validation (no behaviour change for good values).
 GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
     TMPDIR="${V1_DIR}/tmp" \

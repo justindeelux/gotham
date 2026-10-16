@@ -471,6 +471,27 @@ func (s *Store) GetServerByNodeID(ctx context.Context, nodeID *string) (sqlc.Ser
 	return s.queries.GetServerByNodeID(ctx, nodeID)
 }
 
+// SetServerAgentLeaf binds (or confirms) the client key fingerprint a node
+// authenticated with and records whether its accepted leaf was legacy
+// (JUS-194). It answers pgx.ErrNoRows when the node is bound to a different key,
+// so a reassigned node cannot keep authenticating.
+func (s *Store) SetServerAgentLeaf(ctx context.Context, params sqlc.SetServerAgentLeafParams) (sqlc.Server, error) {
+	return s.queries.SetServerAgentLeaf(ctx, params)
+}
+
+// CountLegacyAgentLeaves returns how many nodes last authenticated with a legacy
+// serverAuth-only leaf (JUS-194 M5): the nodes that must renew before the sunset.
+func (s *Store) CountLegacyAgentLeaves(ctx context.Context) (int64, error) {
+	return s.queries.CountLegacyAgentLeaves(ctx)
+}
+
+// CountUnobservedAgentLeaves returns how many enrolled nodes have not presented a
+// certificate since the legacy-leaf column was added (JUS-194 N1): they are
+// possibly legacy and must be reported too.
+func (s *Store) CountUnobservedAgentLeaves(ctx context.Context) (int64, error) {
+	return s.queries.CountUnobservedAgentLeaves(ctx)
+}
+
 // UpsertServerByNodeID inserts or refreshes the node registered under its node
 // id and returns the single canonical row. Concurrent registrations of the same
 // node converge through the node_id unique constraint instead of duplicating.

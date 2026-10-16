@@ -50,8 +50,21 @@ const (
 	EnvGRPCAddr     = "GOTHAM_GRPC_ADDR"
 	EnvGRPCHosts    = "GOTHAM_GRPC_HOSTS"
 	EnvGRPCInsecure = "GOTHAM_GRPC_INSECURE"
-	EnvCADir        = "GOTHAM_CA_DIR"
-	EnvSecretKey    = "GOTHAM_SECRET_KEY"
+	// EnvGRPCEnrollmentToken is the bootstrap credential (JUS-194) a node must
+	// present on its first-ever registration, before it holds a client
+	// certificate. When unset, serve generates and persists one next to the CA,
+	// so first enrollment fails closed; open enrollment is a separate opt-in.
+	EnvGRPCEnrollmentToken = "GOTHAM_GRPC_ENROLLMENT_TOKEN"
+	// EnvGRPCAllowOpenEnrollment is the explicit opt-in that lets a node's
+	// first-ever registration enroll with no enrollment token (trust-on-first-
+	// use). Without it, a TLS control plane requires a token (JUS-194).
+	EnvGRPCAllowOpenEnrollment = "GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT"
+	// EnvGRPCLegacyLeafUntil is the sunset for pre-mutual-TLS (serverAuth-only)
+	// node certificates: RFC 3339, or "none" to disable. Empty selects the
+	// built-in default (JUS-194 M5).
+	EnvGRPCLegacyLeafUntil = "GOTHAM_GRPC_LEGACY_LEAF_UNTIL"
+	EnvCADir               = "GOTHAM_CA_DIR"
+	EnvSecretKey           = "GOTHAM_SECRET_KEY"
 
 	// EnvDeployGitAllowPrivateHosts lifts the git SSRF host policy for
 	// RFC1918, ULA and loopback remotes (self-hosted git servers). Default
@@ -127,6 +140,21 @@ type GRPC struct {
 	// and without this flag, serve refuses to start the agent channel in
 	// plaintext. Set from GOTHAM_GRPC_INSECURE=true.
 	Insecure bool `mapstructure:"insecure"`
+	// EnrollmentToken is the bootstrap credential a node must present on its
+	// first-ever registration (JUS-194), before it holds a client certificate.
+	// When empty, serve generates and persists one next to the CA (fail closed);
+	// set it from GOTHAM_GRPC_ENROLLMENT_TOKEN to pin your own value.
+	EnrollmentToken string `mapstructure:"enrollment_token"`
+	// AllowOpenEnrollment opts into trust-on-first-use first enrollment with no
+	// token. It must be an explicit operator choice; without a token and without
+	// this, first enrollment is refused. Set from
+	// GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true.
+	AllowOpenEnrollment bool `mapstructure:"allow_open_enrollment"`
+	// LegacyLeafUntil is the sunset for a pre-mutual-TLS (serverAuth-only) node
+	// certificate: an RFC 3339 timestamp, or "none" to disable the sunset. Empty
+	// selects servers.DefaultLegacyLeafDeadline. Set from
+	// GOTHAM_GRPC_LEGACY_LEAF_UNTIL (JUS-194 M5).
+	LegacyLeafUntil string `mapstructure:"legacy_leaf_until"`
 }
 
 // CA holds the certificate authority settings.
@@ -347,6 +375,9 @@ func newViper() *viper.Viper {
 		"grpc.addr":                      EnvGRPCAddr,
 		"grpc.hosts":                     EnvGRPCHosts,
 		"grpc.insecure":                  EnvGRPCInsecure,
+		"grpc.enrollment_token":          EnvGRPCEnrollmentToken,
+		"grpc.allow_open_enrollment":     EnvGRPCAllowOpenEnrollment,
+		"grpc.legacy_leaf_until":         EnvGRPCLegacyLeafUntil,
 		"ca.dir":                         EnvCADir,
 		"secret_key":                     EnvSecretKey,
 		"deploy.git_allow_private_hosts": EnvDeployGitAllowPrivateHosts,

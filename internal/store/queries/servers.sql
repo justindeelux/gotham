@@ -81,6 +81,40 @@ SET os = EXCLUDED.os,
     updated_at = now()
 RETURNING *;
 
+-- name: SetServerAgentLeaf :one
+-- Binds a node's client key fingerprint, or confirms the presented one, records
+-- whether the accepted leaf was a legacy serverAuth-only one, and refuses any
+-- other key (JUS-194): the guarded UPDATE affects 0 rows (pgx ErrNoRows) when the
+-- node is already bound to a different key, so a stale read cannot let a
+-- reassigned node keep heartbeating. updated_at moves only when a value actually
+-- changes, so the per-heartbeat authorization check is a no-op write once the
+-- node is bound and its leaf kind is known.
+UPDATE servers
+SET agent_key_fingerprint = $2,
+    agent_legacy_leaf = $3,
+    updated_at = CASE
+        WHEN agent_key_fingerprint IS DISTINCT FROM $2
+          OR agent_legacy_leaf IS DISTINCT FROM $3 THEN now()
+        ELSE updated_at
+    END
+WHERE id = $1
+  AND (agent_key_fingerprint IS NULL OR agent_key_fingerprint = $2)
+RETURNING *;
+
+-- name: CountLegacyAgentLeaves :one
+-- How many enrolled nodes last authenticated with a legacy serverAuth-only leaf
+-- (JUS-194 M5): the nodes that still have to renew before the sunset date.
+SELECT count(*) FROM servers WHERE agent_legacy_leaf;
+
+-- name: CountUnobservedAgentLeaves :one
+-- How many enrolled nodes have not presented a certificate since the legacy-leaf
+-- sunset column was added (JUS-194 N1). Right after an upgrade this is every
+-- existing node: the column is NULL until the gateway observes a connection, so
+-- the startup warning must count them as "not yet known, possibly legacy"
+-- instead of leaving `legacy_leaf IS NULL` nodes invisible. A localhost-only
+-- install with no agent connection is the same case.
+SELECT count(*) FROM servers WHERE node_id IS NOT NULL AND agent_legacy_leaf IS NULL;
+
 -- name: ClaimServerByNodeID :one
 -- Claims an operator-created server row (node_id still NULL) whose address
 -- matches the registering node, so enrollment updates that existing row instead

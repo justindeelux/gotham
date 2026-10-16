@@ -64,11 +64,14 @@ func TestPanelCertificatesMigrationPreservesExistingIntents(t *testing.T) {
 		t.Fatal(err)
 	}
 	team, environment, _ := seedEnvColumns(t, ctx, st, pool)
-	node, err := st.CreateServer(ctx, sqlc.CreateServerParams{Name: "localhost", Ip: "127.0.0.1", Port: 22, SshUser: "root"})
-	if err != nil {
+	// Seed the server with SQL: the generated queries target the current schema,
+	// which carries columns a later migration adds (agent_key_fingerprint, 57),
+	// while this test pins the schema at 51 (see the sibling migration tests).
+	var nodeID pgtype.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO servers (name, ip, port, ssh_user) VALUES ('localhost', '127.0.0.1', 22, 'root') RETURNING id`).Scan(&nodeID); err != nil {
 		t.Fatal(err)
 	}
-	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{UserID: user.ID, TeamID: team, EnvironmentID: environment, ServerID: node.ID, Name: "existing-app", CloneUrl: "https://example.com/repo.git", Branch: "main", BuildPack: "dockerfile", BaseDomain: "app.example.com", Port: 3000})
+	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{UserID: user.ID, TeamID: team, EnvironmentID: environment, ServerID: nodeID, Name: "existing-app", CloneUrl: "https://example.com/repo.git", Branch: "main", BuildPack: "dockerfile", BaseDomain: "app.example.com", Port: 3000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +114,7 @@ func TestPanelCertificatesMigrationPreservesExistingIntents(t *testing.T) {
 	for _, target := range targets {
 		if target.CertificateID == panel.ID {
 			found = true
-			if target.ServerID != node.ID {
+			if target.ServerID != nodeID {
 				t.Fatalf("panel status target=%+v", target)
 			}
 		}

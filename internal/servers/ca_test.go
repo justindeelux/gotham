@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestAuthorityGeneratePersistReload(t *testing.T) {
@@ -423,5 +424,133 @@ func TestUniqueStringsTrims(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("uniqueStrings = %q, want %q", got, want)
 		}
+	}
+}
+
+// TestIssueClientCertCarriesControlPlaneIdentity pins the two-role model: the
+// control-plane client credential carries the ControlPlaneURI URI SAN and is
+// refused as a node credential, while a node leaf is not accepted as the CP
+// credential (agent-side test).
+func TestIssueClientCertCarriesControlPlaneIdentity(t *testing.T) {
+	if ControlPlaneURI != "spiffe://gotham/control-plane" {
+		t.Fatalf("ControlPlaneURI = %q, want spiffe://gotham/control-plane", ControlPlaneURI)
+	}
+	authority, err := LoadOrCreateAuthority(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+	certPEM, _, err := authority.IssueClientCert("")
+	if err != nil {
+		t.Fatalf("IssueClientCert: %v", err)
+	}
+	cert := parseCertPEM(t, certPEM)
+	if !hasControlPlaneURI(cert) {
+		t.Fatal("the control-plane credential does not carry the control-plane URI SAN")
+	}
+	if _, err := authority.VerifyNodeClientCert(cert); err == nil {
+		t.Fatal("the control-plane credential was accepted as a node credential")
+	}
+	if _, err := authority.VerifyNodeClientCert(authority.cert); err == nil {
+		t.Fatal("the CA certificate was accepted as a node credential")
+	}
+}
+
+// TestVerifyNodeClientCertReportsLegacy pins the sunset input: a pre-mTLS
+// (serverAuth-only) leaf is reported legacy, a dual-EKU leaf is not.
+func TestVerifyNodeClientCertReportsLegacy(t *testing.T) {
+	authority, err := LoadOrCreateAuthority(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+	key := testKey(t)
+	legacyPEM, err := authority.IssueAgentCertFromCSR(testCSR(t, key, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "legacy"}, DNSNames: []string{"legacy"},
+	}), "legacy")
+	if err != nil {
+		t.Fatalf("IssueAgentCertFromCSR: %v", err)
+	}
+	if legacy, err := authority.VerifyNodeClientCert(parseCertPEM(t, legacyPEM)); err != nil || legacy {
+		t.Fatalf("dual-EKU leaf: legacy=%v err=%v, want false/nil", legacy, err)
+	}
+	// A pre-mTLS leaf (serverAuth only) is what the sunset is about.
+	legacyLeaf, err := authority.sign("legacy", []string{"legacy"}, nil, nil,
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, time.Hour, &key.PublicKey)
+	if err != nil {
+		t.Fatalf("sign legacy leaf: %v", err)
+	}
+	if legacy, err := authority.VerifyNodeClientCert(legacyLeaf); err != nil || !legacy {
+		t.Fatalf("serverAuth-only leaf: legacy=%v err=%v, want true/nil", legacy, err)
+	}
+}
+
+// TestParseLegacyLeafDeadline pins the sunset configuration: a default, an
+// explicit date, a disabled sunset and a malformed value that must not default.
+func TestParseLegacyLeafDeadline(t *testing.T) {
+	deflt, err := ParseLegacyLeafDeadline("")
+	if err != nil || deflt.IsZero() {
+		t.Fatalf("ParseLegacyLeafDeadline(\"\") = (%v, %v), want the built-in default", deflt, err)
+	}
+	want, _ := time.Parse(time.RFC3339, "2030-06-01T12:00:00Z")
+	if got, err := ParseLegacyLeafDeadline("2030-06-01T12:00:00Z"); err != nil || !got.Equal(want) {
+		t.Fatalf("explicit deadline = (%v, %v), want %v", got, err, want)
+	}
+	if got, err := ParseLegacyLeafDeadline("none"); err != nil || !got.IsZero() {
+		t.Fatalf("ParseLegacyLeafDeadline(none) = (%v, %v), want the zero time", got, err)
+	}
+	if _, err := ParseLegacyLeafDeadline("soon"); err == nil {
+		t.Fatal("a malformed deadline must be an error, not a silent default")
+	}
+}
+
+// TestLoadOrCreateEnrollmentToken proves the fail-closed default: a token is
+// generated, persisted 0600, and reused unchanged on the next call.
+func TestLoadOrCreateEnrollmentToken(t *testing.T) {
+	dir := t.TempDir()
+	token, path, err := LoadOrCreateEnrollmentToken(dir)
+	if err != nil {
+		t.Fatalf("LoadOrCreateEnrollmentToken: %v", err)
+	}
+	if len(token) < 43 {
+		t.Fatalf("generated token %q is too short", token)
+	}
+	if want := filepath.Join(dir, enrollmentTokenFile); path != want {
+		t.Fatalf("token path = %q, want %q", path, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat token: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("token file mode = %04o, want 0600", perm)
+	}
+	again, _, err := LoadOrCreateEnrollmentToken(dir)
+	if err != nil || again != token {
+		t.Fatalf("second call = (%q, %v), want the persisted token", again, err)
+	}
+	// An empty file is treated as absent and regenerated.
+	if err := os.WriteFile(path, []byte("\n"), 0o600); err != nil {
+		t.Fatalf("write empty token: %v", err)
+	}
+	regenerated, _, err := LoadOrCreateEnrollmentToken(dir)
+	if err != nil || regenerated == "" || regenerated == token {
+		t.Fatalf("regenerated = (%q, %v), want a fresh token", regenerated, err)
+	}
+	// A token readable beyond its owner is refused rather than trusted.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod token: %v", err)
+	}
+	if _, _, err := LoadOrCreateEnrollmentToken(dir); err == nil {
+		t.Fatal("a group/world-readable enrollment token was accepted")
+	}
+	// A symlinked token file is refused.
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("chmod token: %v", err)
+	}
+	link := filepath.Join(dir, "token-link")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if _, err := readEnrollmentToken(link); err == nil {
+		t.Fatal("a symlinked enrollment token was accepted")
 	}
 }

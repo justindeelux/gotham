@@ -116,6 +116,22 @@ grpc:
   # plaintext when no CA is present. Without a CA serve refuses to start unless
   # this is true. Set from GOTHAM_GRPC_INSECURE=true.
   # insecure: false
+  # EnrollmentToken is the bootstrap credential a node presents on its first
+  # registration, before it holds a client certificate (JUS-194). When empty,
+  # serve generates one next to the CA (<ca.dir>/enrollment-token) so first
+  # enrollment fails closed; pass that value to the node with
+  # GOTHAM_AGENT_ENROLLMENT_TOKEN or install-agent.sh --enrollment-token-file.
+  # Set from GOTHAM_GRPC_ENROLLMENT_TOKEN.
+  # enrollment_token: <random secret>
+  # AllowOpenEnrollment is the explicit opt-in for trust-on-first-use first
+  # enrollment with no token. Leave false on a real instance. Set from
+  # GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true.
+  # allow_open_enrollment: false
+  # LegacyLeafUntil is when a node certificate issued before mutual TLS
+  # (serverAuth-only) stops being accepted (JUS-194 sunset). RFC 3339, or "none"
+  # to disable. Empty selects the built-in default; serve logs the date and how
+  # many nodes still present one. Set from GOTHAM_GRPC_LEGACY_LEAF_UNTIL.
+  # legacy_leaf_until: "2027-01-15T00:00:00Z"
 
 # Certificate authority used to issue agent and control-plane mTLS certificates.
 # Without one, serve refuses to start unless GOTHAM_GRPC_INSECURE=true

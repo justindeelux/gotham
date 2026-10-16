@@ -224,14 +224,22 @@ func TestEnsureLocalhost(t *testing.T) {
 
 func TestLocalhostRegistration(t *testing.T) {
 	s, st, authority := newTestServiceWithAuthority(t)
-	g, err := NewGateway(GatewayConfig{Addr: "127.0.0.1:9442", Authority: authority, Service: s, Logger: discardLogger()})
+	g, err := NewGateway(GatewayConfig{Addr: "127.0.0.1:9442", Authority: authority, Service: s, Logger: discardLogger(), AllowOpenEnrollment: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = st.DB.Exec(context.Background(), "DELETE FROM servers WHERE node_id = 'localhost'") })
+	// One agent key across the loopback attempts (JUS-194): the first loopback
+	// attempt is the certificate-less bootstrap, the next ones present the
+	// issued certificate (a re-registration of the same node).
+	key := testKey(t)
+	csr := testCSR(t, key, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "localhost"}, DNSNames: []string{"localhost"}})
+	var issued []byte
 	for _, host := range []string{"192.0.2.1", "127.0.0.1", "::1"} {
 		ctx := peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.ParseIP(host), Port: 1234}})
-		csr := testCSR(t, testKey(t), &x509.CertificateRequest{Subject: pkix.Name{CommonName: "localhost"}, DNSNames: []string{"localhost"}})
+		if issued != nil {
+			ctx = peerWithClientCert(ctx, issued)
+		}
 		resp, err := g.Register(ctx, &agentv1.RegisterRequest{NodeId: "localhost", Os: "linux", Csr: csr})
 		if host == "192.0.2.1" {
 			if status.Code(err) != codes.PermissionDenied {
@@ -242,6 +250,7 @@ func TestLocalhostRegistration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("loopback registration: %v", err)
 		}
+		issued = resp.GetCert()
 		cert := parseCertPEM(t, resp.GetCert())
 		for _, cpHost := range serverHosts("127.0.0.1:9442", []string{"cp.example.com"}) {
 			if _, err := cert.Verify(x509.VerifyOptions{DNSName: cpHost, Roots: authority.Pool()}); err == nil {

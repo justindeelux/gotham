@@ -77,7 +77,10 @@ func TestEnsureLocalhostLegacyNode(t *testing.T) {
 			}
 			err := s.EnsureLocalhost(ctx)
 			if scenario.ambiguous || scenario.collision {
-				if err == nil || !strings.Contains(err.Error(), "reconcile") {
+				if scenario.collision && err != nil {
+					t.Fatalf("late duplicate prevented restart: %v", err)
+				}
+				if scenario.ambiguous && (err == nil || !strings.Contains(err.Error(), "reconcile")) {
 					t.Fatalf("EnsureLocalhost = %v; want actionable reconciliation error", err)
 				}
 				var unchanged bool
@@ -101,6 +104,36 @@ func TestEnsureLocalhostLegacyNode(t *testing.T) {
 			if err := st.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE id::text=$1
 				AND node_id='localhost' AND name='localhost' AND ip='127.0.0.1' AND status='ready')`, originalID).Scan(&preserved); err != nil || !preserved {
 				t.Fatalf("local identity lost: preserved=%v, err=%v", preserved, err)
+			}
+		})
+	}
+}
+
+func TestEnsureLocalhostAgentChosenIP(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("existing localhost %v", existing), func(t *testing.T) {
+			s, st := newLocalhostTestService(t)
+			ctx := context.Background()
+			if existing {
+				if err := s.EnsureLocalhost(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := s.RegisterNode(ctx, &agentv1.RegisterRequest{NodeId: "127.0.0.1", Os: "linux"}); err != nil {
+				t.Fatal(err)
+			}
+			var originalID string
+			if err := st.DB.QueryRow(ctx, `SELECT id::text FROM servers WHERE node_id='127.0.0.1'`).Scan(&originalID); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := s.EnsureLocalhost(ctx); err != nil {
+					t.Fatalf("agent-chosen IP prevented startup: %v", err)
+				}
+			}
+			var unchanged bool
+			if err := st.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE id::text=$1 AND node_id='127.0.0.1')`, originalID).Scan(&unchanged); err != nil || !unchanged {
+				t.Fatalf("agent-chosen IP was renamed: preserved=%v, err=%v", unchanged, err)
 			}
 		})
 	}

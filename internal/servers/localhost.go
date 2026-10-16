@@ -18,8 +18,15 @@ func (s *ServerService) EnsureLocalhost(ctx context.Context) error {
 		return fmt.Errorf("ensure localhost node: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, store.ReconcileLocalhostSQL); err != nil {
-		return fmt.Errorf("reconcile localhost node: %w", err)
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM servers WHERE node_id = 'localhost')`).Scan(&exists); err != nil {
+		return fmt.Errorf("find localhost node: %w", err)
+	}
+	// An agent's later registration must not prevent restarting an established CP.
+	if !exists {
+		if _, err := tx.Exec(ctx, store.ReconcileLocalhostSQL); err != nil {
+			return fmt.Errorf("reconcile localhost node: %w", err)
+		}
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO servers (name, ip, port, ssh_user, node_id)

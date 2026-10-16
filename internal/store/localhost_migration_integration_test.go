@@ -18,7 +18,9 @@ import (
 func TestLocalhostNodeMigration(t *testing.T) {
 	for _, scenario := range []struct {
 		name, ip, hint, wantError, nodeID string
+		collisionState, collisionRef      string
 		collision, ambiguous              bool
+		ignore                            bool
 		startVersion                      int64
 	}{
 		{name: "saved identity after hostname change", hint: "original-host-agent"},
@@ -32,7 +34,23 @@ func TestLocalhostNodeMigration(t *testing.T) {
 		{name: "custom identity local agent address", nodeID: "test-node-1", ip: "127.0.0.1:9443", startVersion: 50},
 		{name: "custom identity IPv6", nodeID: "test-node-1", ip: "::1", startVersion: 50},
 		{name: "custom identity ambiguity", nodeID: "test-node-1", ip: "127.0.0.1", ambiguous: true, startVersion: 50, wantError: "reconcile nodes"},
-		{name: "custom identity localhost collision", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, startVersion: 50, wantError: "reconcile their workloads"},
+		{name: "ambiguity preserves placeholder", nodeID: "test-node-1", ip: "127.0.0.1", ambiguous: true, collision: true, startVersion: 50, wantError: "reconcile nodes"},
+		{name: "test box empty pending localhost", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, startVersion: 50},
+		{name: "registered localhost", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, collisionState: "registered", startVersion: 50, wantError: "reconcile their workloads"},
+		{name: "heartbeated localhost", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, collisionState: "heartbeated", startVersion: 50, wantError: "reconcile their workloads"},
+		{name: "localhost app", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, collisionRef: "application", startVersion: 50, wantError: "references in applications"},
+		{name: "localhost database", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, collisionRef: "database", startVersion: 50, wantError: "references in databases"},
+		{name: "localhost service", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, collisionRef: "service", startVersion: 50, wantError: "references in services"},
+		{name: "localhost routers", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, collisionRef: "proxy", startVersion: 50, wantError: "references in proxy_config_versions"},
+		{name: "localhost metrics", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, collisionRef: "metrics", startVersion: 50, wantError: "references in server_metrics"},
+		{name: "uppercase localhost", nodeID: "test-node-1", ip: "LOCALHOST:9443", startVersion: 50},
+		{name: "agent scheme", nodeID: "test-node-1", ip: "tcp://LOCALHOST:9443", startVersion: 50},
+		{name: "loopback subnet", nodeID: "test-node-1", ip: "127.0.0.2", startVersion: 50},
+		{name: "mapped loopback", nodeID: "test-node-1", ip: "::ffff:127.0.0.1", startVersion: 50},
+		{name: "bracketed loopback", nodeID: "test-node-1", ip: "[::1]", startVersion: 50},
+		{name: "agent chosen IP", nodeID: "127.0.0.1", ip: "127.0.0.1", startVersion: 50, ignore: true},
+		{name: "agent chosen address without IP", nodeID: "localhost:9443", startVersion: 50, ignore: true},
+		{name: "invalid loopback address", nodeID: "test-node-1", ip: "127.0.0.999", startVersion: 50, ignore: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			t.Setenv("GOTHAM_LEGACY_LOCAL_NODE_ID", scenario.hint)
@@ -96,7 +114,7 @@ func TestLocalhostNodeMigration(t *testing.T) {
 				args  []any
 				dest  *string
 			}{
-				{`INSERT INTO servers (name, ip, ssh_user, node_id) VALUES ('old', $2, '', $1) RETURNING id`, []any{scenario.nodeID, scenario.ip}, &serverID},
+				{`INSERT INTO servers (name, ip, ssh_user, node_id, status, last_seen) VALUES ('old', $2, '', $1, 'ready', now()) RETURNING id`, []any{scenario.nodeID, scenario.ip}, &serverID},
 				{`INSERT INTO users (email) VALUES ('localhost-migration@example.com') RETURNING id`, nil, &userID},
 			} {
 				if err := db.QueryRowContext(ctx, seed.query, seed.args...).Scan(seed.dest); err != nil {
@@ -132,7 +150,32 @@ func TestLocalhostNodeMigration(t *testing.T) {
 			}
 
 			if scenario.collision {
-				if _, err := db.ExecContext(ctx, `INSERT INTO servers (name,ip,ssh_user,node_id) VALUES ('localhost','127.0.0.1','','localhost')`); err != nil {
+				var placeholderID string
+				if err := db.QueryRowContext(ctx, `INSERT INTO servers (name,ip,ssh_user,node_id) VALUES ('localhost','127.0.0.1','','localhost') RETURNING id`).Scan(&placeholderID); err != nil {
+					t.Fatal(err)
+				}
+				switch scenario.collisionState {
+				case "registered":
+					_, err = db.ExecContext(ctx, `UPDATE servers SET os='linux' WHERE id=$1`, placeholderID)
+				case "heartbeated":
+					_, err = db.ExecContext(ctx, `UPDATE servers SET last_seen=now() WHERE id=$1`, placeholderID)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch scenario.collisionRef {
+				case "application":
+					_, err = db.ExecContext(ctx, `INSERT INTO applications (name,user_id,team_id,server_id,environment_id) VALUES ('placeholder',$1,$1,$2,$3)`, userID, placeholderID, environmentID)
+				case "database":
+					_, err = db.ExecContext(ctx, `INSERT INTO databases (name,user_id,team_id,server_id,environment_id,engine) VALUES ('placeholder',$1,$1,$2,$3,'postgres')`, userID, placeholderID, environmentID)
+				case "service":
+					_, err = db.ExecContext(ctx, `INSERT INTO services (name,user_id,team_id,server_id,environment_id,compose_yaml) VALUES ('placeholder',$1,$1,$2,$3,'services: {}')`, userID, placeholderID, environmentID)
+				case "proxy":
+					_, err = db.ExecContext(ctx, `INSERT INTO proxy_config_versions (server_id,files,content_hash) VALUES ($1,'{"routers":"preserved"}','hash')`, placeholderID)
+				case "metrics":
+					_, err = db.ExecContext(ctx, `INSERT INTO server_metrics (server_id,recorded_at,cpu_usage,mem_usage,disk_usage,net_rx_bps,net_tx_bps,disk_read_bps,disk_write_bps,container_count) VALUES ($1,now(),0,0,0,0,0,0,0,0)`, placeholderID)
+				}
+				if err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -150,10 +193,26 @@ func TestLocalhostNodeMigration(t *testing.T) {
 				if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM servers s JOIN applications a ON a.server_id=s.id JOIN deployments d ON d.application_id=a.id JOIN proxy_config_versions p ON p.server_id=s.id WHERE s.id=$1 AND s.node_id=$2)`, serverID, scenario.nodeID).Scan(&unchanged); err != nil || !unchanged {
 					t.Fatalf("failed migration lost workloads: %v", err)
 				}
+				if scenario.collision {
+					var exists bool
+					if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE node_id='localhost')`).Scan(&exists); err != nil || !exists {
+						t.Fatalf("failed migration removed localhost: exists=%v, err=%v", exists, err)
+					}
+				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
+			}
+			if scenario.ignore {
+				var unchanged bool
+				if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE id=$1 AND node_id=$2 AND ip=$3)`, serverID, scenario.nodeID, scenario.ip).Scan(&unchanged); err != nil || !unchanged {
+					t.Fatalf("agent-chosen identity changed: preserved=%v, err=%v", unchanged, err)
+				}
+				return
+			}
+			if _, err := db.ExecContext(ctx, store.ReconcileLocalhostSQL); err != nil {
+				t.Fatalf("rerun reconciliation: %v", err)
 			}
 
 			var preserved bool
@@ -164,6 +223,7 @@ func TestLocalhostNodeMigration(t *testing.T) {
  JOIN databases db ON db.server_id=s.id
  JOIN services svc ON svc.server_id=s.id
  WHERE s.id=$1 AND s.node_id='localhost' AND s.ip='127.0.0.1'
+ AND s.status='ready' AND s.last_seen IS NOT NULL
  AND a.id=$2 AND d.id=$3 AND p.files='{"routers":"preserved"}'::jsonb)`, serverID, appID, deployID).Scan(&preserved); err != nil {
 				t.Fatal(err)
 			}

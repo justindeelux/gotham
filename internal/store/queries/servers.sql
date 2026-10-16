@@ -106,6 +106,15 @@ RETURNING *;
 -- (JUS-194 M5): the nodes that still have to renew before the sunset date.
 SELECT count(*) FROM servers WHERE agent_legacy_leaf;
 
+-- name: CountUnobservedAgentLeaves :one
+-- How many enrolled nodes have not presented a certificate since the legacy-leaf
+-- sunset column was added (JUS-194 N1). Right after an upgrade this is every
+-- existing node: the column is NULL until the gateway observes a connection, so
+-- the startup warning must count them as "not yet known, possibly legacy"
+-- instead of leaving `legacy_leaf IS NULL` nodes invisible. A localhost-only
+-- install with no agent connection is the same case.
+SELECT count(*) FROM servers WHERE node_id IS NOT NULL AND agent_legacy_leaf IS NULL;
+
 -- name: ClaimServerByNodeID :one
 -- Claims an operator-created server row (node_id still NULL) whose address
 -- matches the registering node, so enrollment updates that existing row instead

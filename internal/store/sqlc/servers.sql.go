@@ -124,6 +124,23 @@ func (q *Queries) CountLegacyAgentLeaves(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const countUnobservedAgentLeaves = `-- name: CountUnobservedAgentLeaves :one
+SELECT count(*) FROM servers WHERE node_id IS NOT NULL AND agent_legacy_leaf IS NULL
+`
+
+// How many enrolled nodes have not presented a certificate since the legacy-leaf
+// sunset column was added (JUS-194 N1). Right after an upgrade this is every
+// existing node: the column is NULL until the gateway observes a connection, so
+// the startup warning must count them as "not yet known, possibly legacy"
+// instead of leaving `legacy_leaf IS NULL` nodes invisible. A localhost-only
+// install with no agent connection is the same case.
+func (q *Queries) CountUnobservedAgentLeaves(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnobservedAgentLeaves)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createServer = `-- name: CreateServer :one
 INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, team_id, encrypted_password)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

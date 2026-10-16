@@ -485,6 +485,13 @@ func (s *Store) CountLegacyAgentLeaves(ctx context.Context) (int64, error) {
 	return s.queries.CountLegacyAgentLeaves(ctx)
 }
 
+// CountUnobservedAgentLeaves returns how many enrolled nodes have not presented a
+// certificate since the legacy-leaf column was added (JUS-194 N1): they are
+// possibly legacy and must be reported too.
+func (s *Store) CountUnobservedAgentLeaves(ctx context.Context) (int64, error) {
+	return s.queries.CountUnobservedAgentLeaves(ctx)
+}
+
 // UpsertServerByNodeID inserts or refreshes the node registered under its node
 // id and returns the single canonical row. Concurrent registrations of the same
 // node converge through the node_id unique constraint instead of duplicating.

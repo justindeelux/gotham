@@ -217,10 +217,19 @@ func runServe() int {
 		if countErr != nil {
 			logger.Warn("failed to count nodes with a legacy certificate", "error", countErr)
 		}
+		// A node is unclassified (agent_legacy_leaf NULL) until it connects once,
+		// so on the first boot after an upgrade — or for a node that is offline —
+		// every existing node is unobserved. Count them as possibly legacy: a
+		// bare legacy_nodes=0 must not read as "nothing to renew" (JUS-194 N1).
+		unobservedNodes, unobservedErr := serverService.UnobservedLeafNodeCount(ctx)
+		if unobservedErr != nil {
+			logger.Warn("failed to count nodes with an unclassified certificate", "error", unobservedErr)
+		}
 		logger.Warn("node certificates issued before mutual TLS (serverAuth-only) stop being accepted after the sunset; "+
-			"online nodes renew automatically",
+			"unobserved nodes may still be legacy (they renew when they next connect)",
 			"deadline", legacyLeafDeadline.Format(time.RFC3339),
 			"legacy_nodes", legacyNodes,
+			"unobserved_nodes", unobservedNodes,
 			"override", config.EnvGRPCLegacyLeafUntil)
 	}
 	gateway, err := servers.NewGateway(servers.GatewayConfig{

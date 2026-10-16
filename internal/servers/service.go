@@ -1172,6 +1172,18 @@ func (s *ServerService) LegacyLeafNodeCount(ctx context.Context) (int64, error) 
 	return count, nil
 }
 
+// UnobservedLeafNodeCount returns how many enrolled nodes have not presented a
+// certificate since the legacy-leaf column was added (JUS-194 N1). They are
+// unclassified — possibly legacy — so the sunset warning must not read as "zero
+// legacy nodes" on the first boot after an upgrade.
+func (s *ServerService) UnobservedLeafNodeCount(ctx context.Context) (int64, error) {
+	count, err := s.store.CountUnobservedAgentLeaves(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count unobserved agent leaves: %w", err)
+	}
+	return count, nil
+}
+
 // RegisterNode handles an agent Register call: it finds or creates the server
 // for the node, records the reported capabilities, and returns the CP version.
 //

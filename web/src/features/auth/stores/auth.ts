@@ -48,6 +48,15 @@ export const useAuthStore = defineStore("auth", () => {
   const refreshToken = ref<string | null>(initial.refreshToken);
 
   /**
+   * mfaToken holds the half-authenticated token between the password (or OAuth)
+   * step and the code step (JUS-196). It is in memory only, never persisted, and
+   * grants no access on its own: a reload abandons it and the user signs in
+   * again. mfaPending is true while a challenge is waiting to be completed.
+   */
+  const mfaToken = ref<string | null>(null);
+  const mfaPending = computed<boolean>(() => mfaToken.value !== null);
+
+  /**
    * userSeq orders local account writes (setSession, setUser, clearSession).
    * fetchMe captures it at start and discards a response that resolves after
    * a newer local write, so a slow read cannot overwrite it. Reads that land
@@ -132,6 +141,7 @@ export const useAuthStore = defineStore("auth", () => {
     user.value = null;
     accessToken.value = null;
     refreshToken.value = null;
+    mfaToken.value = null;
     userSeq += 1;
     clearStoredSession();
     resetUserStores();
@@ -203,12 +213,49 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  /** login exchanges credentials for a session. */
-  async function login(email: string, password: string): Promise<void> {
+  /** login exchanges credentials for a session, or opens the code step. */
+  async function login(
+    email: string,
+    password: string,
+  ): Promise<{ mfaRequired: boolean }> {
     const response = await http.post<AuthResult>("/auth/login", {
       email,
       password,
     });
+    if (response.data.mfa_required) {
+      // The account has two-factor on: no session is issued. The caller must
+      // show the code step and call completeMfaLogin.
+      mfaToken.value = response.data.mfa_token ?? null;
+      return { mfaRequired: true };
+    }
+    mfaToken.value = null;
+    setSession(response.data);
+    return { mfaRequired: false };
+  }
+
+  /**
+   * setMfaChallenge remembers a half-authenticated token minted elsewhere (an
+   * OAuth callback) so the code step can complete it without another password.
+   */
+  function setMfaChallenge(token: string): void {
+    mfaToken.value = token;
+  }
+
+  /**
+   * completeMfaLogin redeems the pending challenge with an authenticator or
+   * recovery code and starts the session. It throws when no challenge is
+   * pending, so it can never mint a session out of order.
+   */
+  async function completeMfaLogin(code: string): Promise<void> {
+    const token = mfaToken.value;
+    if (token === null) {
+      throw new Error("auth: no pending two-factor challenge");
+    }
+    const response = await http.post<AuthResult>("/auth/login/totp", {
+      mfa_token: token,
+      code,
+    });
+    mfaToken.value = null;
     setSession(response.data);
   }
 
@@ -280,6 +327,7 @@ export const useAuthStore = defineStore("auth", () => {
     isAuthenticated,
     isPlatformAdmin,
     registrationOpen,
+    mfaPending,
     setSession,
     setUser,
     clearSession,
@@ -288,6 +336,8 @@ export const useAuthStore = defineStore("auth", () => {
     fetchAuthConfig,
     validateInvite,
     login,
+    setMfaChallenge,
+    completeMfaLogin,
     register,
     logout,
   };

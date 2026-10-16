@@ -76,6 +76,17 @@ const en = {
       "This link carries no invite token. Open the link from the invite exactly as it was shared.",
     hint: "Accepting uses the session you are signed in with — sign in with the invited address. Invites are single-use.",
   },
+  mfa: {
+    title: "Two-factor authentication",
+    subtitle: "Your password was accepted. Enter the code from your authenticator app to finish signing in.",
+    codeLabel: "Code",
+    codePlaceholder: "6-digit code",
+    hint: "From your authenticator app, or one of your recovery codes.",
+    recoveryHint: "Lost your device? Enter a recovery code instead.",
+    submit: "Verify",
+    back: "Back",
+    invalidCode: "That code did not match. Try again.",
+  },
   footnote: {
     text: "Your password is stored securely. Sign in with GitHub or your team email.",
   },
@@ -95,6 +106,8 @@ const en = {
     confirmRequired: "Please confirm your password",
     confirmMismatch: "Passwords do not match",
     termsRequired: "You must accept the terms to create an account",
+    twoFactorCodeRequired: "Enter the code from your authenticator app",
+    twoFactorCodeInvalid: "Enter the 6-digit code or a recovery code",
   },
 };
 

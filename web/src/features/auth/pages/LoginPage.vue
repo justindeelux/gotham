@@ -21,6 +21,7 @@ import { createVisibleValidation } from "@/features/auth/utils/visibleValidation
 import { onLocaleChange } from "@/shared/i18n";
 import AuthFootnote from "@/features/auth/components/AuthFootnote.vue";
 import GitHubOAuthButton from "@/features/auth/components/GitHubOAuthButton.vue";
+import MfaChallengeForm from "@/features/auth/components/MfaChallengeForm.vue";
 
 // Error convention (shared with RegisterPage): client-side validation errors
 // render inline on the field via NFormItem; server-side submit failures keep
@@ -44,6 +45,14 @@ const errorMessage = computed<string>(() =>
   rawError.value === null ? "" : describeAuthError(rawError.value),
 );
 const form = reactive<LoginForm>({ email: "", password: "" });
+
+/**
+ * step is the two-factor login stage (JUS-196): credentials first, then the
+ * code when the account has TOTP enabled. The control plane issues no session
+ * between the two, so the password is dropped when moving to the code step and
+ * the user is never half-signed-in.
+ */
+const step = ref<"credentials" | "code">("credentials");
 
 const rules: FormRules = loginRules();
 
@@ -78,7 +87,13 @@ async function handleSubmit(): Promise<void> {
 
   submitting.value = true;
   try {
-    await authStore.login(form.email, form.password);
+    const { mfaRequired } = await authStore.login(form.email, form.password);
+    if (mfaRequired) {
+      // No session was issued: drop the password and show the code step.
+      step.value = "code";
+      form.password = "";
+      return;
+    }
     await redirectAfterAuth();
   } catch (error) {
     rawError.value = error;
@@ -87,10 +102,21 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
+/** backToCredentials abandons a pending challenge and returns to the form. */
+function backToCredentials(): void {
+  step.value = "credentials";
+}
+
 onMounted(() => {
   // Registration is open only on a fresh instance; the create-account tab is
   // hidden otherwise and members join through an admin invite link (P-A2).
   void authStore.fetchAuthConfig();
+
+  // An OAuth callback that hit a TOTP-enabled account leaves a pending
+  // challenge; land directly on the code step (JUS-196).
+  if (authStore.mfaPending) {
+    step.value = "code";
+  }
 
   if (route.query.error === "oauth_failed") {
     message.error(t("auth.login.oauthFailed"));
@@ -117,12 +143,21 @@ onMounted(() => {
         </nav>
 
         <div>
-          <h2 class="auth-title">{{ t("auth.login.title") }}</h2>
+          <h2 class="auth-title">
+            {{ step === "code" ? t("auth.mfa.title") : t("auth.login.title") }}
+          </h2>
           <NText depth="3">
-            {{ t("auth.login.subtitle") }}
+            {{ step === "code" ? t("auth.mfa.subtitle") : t("auth.login.subtitle") }}
           </NText>
         </div>
 
+        <MfaChallengeForm
+          v-if="step === 'code'"
+          @success="redirectAfterAuth"
+          @cancel="backToCredentials"
+        />
+
+        <template v-else>
         <NAlert v-if="errorMessage" type="error" :show-icon="true">
           {{ errorMessage }}
         </NAlert>
@@ -165,6 +200,7 @@ onMounted(() => {
 
           <GitHubOAuthButton mode="signin" />
         </NForm>
+        </template>
 
         <AuthFootnote />
       </NSpace>

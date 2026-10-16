@@ -29,6 +29,14 @@ export interface AuthResult {
   token_type: string;
   expires_in: number;
   refresh_token: string;
+  /**
+   * Set by a login (password or OAuth) whose account has TOTP enabled: no
+   * token pair is issued and `mfa_token` must be redeemed with a code through
+   * POST /auth/login/totp. Optional: older control planes omit it.
+   */
+  mfa_required?: boolean;
+  /** Half-authenticated token for the second login step. Omitted otherwise. */
+  mfa_token?: string;
 }
 
 /** Persisted session snapshot kept in localStorage. */

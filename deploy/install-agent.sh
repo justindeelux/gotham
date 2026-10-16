@@ -162,7 +162,7 @@ log() {
 # config and the sudoers installer). Fail early with a clear message rather than
 # aborting after the user has been created and the binary installed.
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh install-agent-lib.sh gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostctl.sh install-hostctl-sudoers.sh; do
+for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh install-agent-lib.sh gotham-toolctl.sh install-toolctl-sudoers.sh; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install-agent.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2
@@ -462,27 +462,6 @@ else
     install -m 0755 -o root -g root "${SCRIPT_DIR}/gotham-toolctl.sh" "${TOOLCTL_PATH}"
     # Invoke via sh so a checkout that lost the exec bit still installs.
     sh "${SCRIPT_DIR}/install-toolctl-sudoers.sh" "${SERVICE_USER}"
-fi
-
-# Host helper (Instance > Network/System): the control plane — not the agent —
-# invokes ${HOSTCTL_PATH}, so its verb-pinned sudoers rule names the
-# control-plane user (GOTHAM_HOSTCTL_USER, default gotham), never the agent
-# user. The .dist copy stays root-owned next to gotham-toolctl so the tool
-# installer can repair the helper in-product after it is removed.
-HOSTCTL_PATH="/usr/libexec/gotham/gotham-hostctl"
-HOSTCTL_USER="${GOTHAM_HOSTCTL_USER:-gotham}"
-log "installing the host-settings helper ${HOSTCTL_PATH}"
-if [ "${DRY_RUN}" -eq 1 ]; then
-    echo "[dry-run] install -m 0755 ${SCRIPT_DIR}/gotham-hostctl.sh ${HOSTCTL_PATH}"
-    echo "[dry-run] install -m 0755 ${SCRIPT_DIR}/gotham-hostctl.sh ${HOSTCTL_PATH}.dist"
-    echo "[dry-run] install -m 0755 ${SCRIPT_DIR}/install-hostctl-sudoers.sh /usr/libexec/gotham/install-hostctl-sudoers.sh"
-    echo "[dry-run] sh ${SCRIPT_DIR}/install-hostctl-sudoers.sh ${HOSTCTL_USER}"
-else
-    install -m 0755 -o root -g root "${SCRIPT_DIR}/gotham-hostctl.sh" "${HOSTCTL_PATH}"
-    install -m 0755 -o root -g root "${SCRIPT_DIR}/gotham-hostctl.sh" "${HOSTCTL_PATH}.dist"
-    install -m 0755 -o root -g root "${SCRIPT_DIR}/install-hostctl-sudoers.sh" /usr/libexec/gotham/install-hostctl-sudoers.sh
-    # Invoke via sh so a checkout that lost the exec bit still installs.
-    sh "${SCRIPT_DIR}/install-hostctl-sudoers.sh" "${HOSTCTL_USER}"
 fi
 
 log "installing systemd unit ${SERVICE_FILE}"

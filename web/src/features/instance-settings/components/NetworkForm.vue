@@ -7,7 +7,6 @@ import {
   NForm,
   NFormItem,
   NInput,
-  NModal,
   NRadioButton,
   NRadioGroup,
   NSwitch,
@@ -16,8 +15,10 @@ import type { FormInst, FormRules } from "naive-ui";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { saveNetwork, installHostHelper, errorText, hostHelperErrorLog } from "@/features/instance-settings/api/instance";
+import { saveNetwork } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
+import HostHelperGate from "@/features/instance-settings/components/HostHelperGate.vue";
+import { useHostUnlock } from "@/features/instance-settings/composables/useHostUnlock";
 import { useSectionForm } from "@/features/instance-settings/composables/useSectionForm";
 import {
   dnsPrimaryServerSchema,
@@ -174,72 +175,21 @@ function status(path: string): "error" | undefined {
 
 const disabled = (): boolean => !props.state.capabilities.network || props.state.pending !== null;
 
-// ---- host helper (JUS-185) -------------------------------------------------
-// The network section needs the fixed host helper. When it is missing or not
-// permitted, the page offers an in-product install instead of a dead end; when
-// the host does not run the stack at all, nothing can be installed.
-const installing = ref(false);
-const installLog = ref("");
-const showInstallLog = ref(false);
-
-/** canInstall is true when offering the helper install can make the section work. */
-const canInstall = computed<boolean>(
-  () => props.state.host.helper !== "ready" && props.state.host.network_stack,
-);
-
-/** stackUnsupported is true when no install can enable the section. */
-const stackUnsupported = computed<boolean>(
-  () =>
-    !props.state.capabilities.network &&
-    (props.state.host.helper === "ready" || !props.state.host.network_stack),
-);
-
-/** helperMessageKey names the accurate cause: missing file vs refused rule. */
-const helperMessageKey = computed<string>(() =>
-  props.state.host.helper === "denied"
-    ? "instance-settings.network.helperDenied"
-    : "instance-settings.network.helperMissing",
-);
-
-async function handleInstall(): Promise<void> {
-  if (installing.value) {
-    return;
-  }
-  installing.value = true;
-  errorMessage.value = "";
-  try {
-    const result = await installHostHelper();
-    installLog.value = result.log;
-    showInstallLog.value = true;
-    emit("saved", result.settings);
-  } catch (error) {
-    errorMessage.value = errorText(error) || t("instance-settings.network.installFailed");
-    const log = hostHelperErrorLog(error);
-    if (log !== "") {
-      installLog.value = log;
-      showInstallLog.value = true;
-    }
-  } finally {
-    installing.value = false;
-  }
-}
+// Announcing + focusing when the helper install unlocks the section (JUS-185).
+const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.network);
 </script>
 
 <template>
   <NCard :title="t('instance-settings.network.title')">
-    <NAlert v-if="stackUnsupported" type="info" :show-icon="true" class="form-alert">
-      {{ t("instance-settings.network.stackUnsupported") }}
-    </NAlert>
-    <template v-else-if="canInstall">
-      <NAlert type="warning" :show-icon="true" class="form-alert">
-        {{ t(helperMessageKey) }}
-      </NAlert>
-      <div class="form-alert">
-        <NButton type="primary" :loading="installing" @click="() => void handleInstall()">
-          {{ t("instance-settings.network.installHelper") }}
-        </NButton>
-      </div>
-    </template>
+    <p class="sr-only" role="status" aria-live="polite">
+      {{ unlocked ? t("instance-settings.helper.installed") : "" }}
+    </p>
+    <HostHelperGate
+      v-if="!state.capabilities.network"
+      :state="state"
+      section="network"
+      @saved="emit('saved', $event)"
+    />
     <NAlert v-else-if="state.pending" type="warning" :show-icon="true" class="form-alert">
       {{ t("instance-settings.network.pendingNote") }}
     </NAlert>
@@ -251,7 +201,7 @@ async function handleInstall(): Promise<void> {
         :validation-status="status('dns_servers')"
         :feedback="serverErrors.dns_servers"
       >
-        <NInput v-model:value="form.dns0" :disabled="disabled()" placeholder="1.1.1.1" />
+        <NInput ref="focusTarget" v-model:value="form.dns0" :disabled="disabled()" placeholder="1.1.1.1" />
       </NFormItem>
       <NFormItem
         path="dns1"
@@ -350,20 +300,6 @@ async function handleInstall(): Promise<void> {
         {{ t("instance-settings.network.confirmLabel") }}
       </NCheckbox>
     </NForm>
-
-    <NModal
-      v-model:show="showInstallLog"
-      preset="card"
-      :title="t('instance-settings.network.installLogTitle')"
-      class="app-modal"
-      style="width: 720px; max-width: 96vw"
-    >
-      <p class="field-hint">{{ t("instance-settings.network.installLogHint") }}</p>
-      <pre class="host-helper-log">{{ installLog }}</pre>
-      <template #footer>
-        <NButton @click="showInstallLog = false">{{ t("instance-settings.network.close") }}</NButton>
-      </template>
-    </NModal>
   </NCard>
 </template>
 
@@ -383,15 +319,17 @@ h4 {
   margin: 8px 0;
 }
 
-.host-helper-log {
-  max-height: 40vh;
-  overflow: auto;
-  margin: 0;
-  padding: var(--space-2);
-  background: var(--bg-2, #f5f5f5);
-  border-radius: var(--radius-sm, 4px);
-  font-size: var(--text-xs);
-  white-space: pre-wrap;
-  word-break: break-all;
+/* Visually-hidden polite live region (JUS-185): a shared .sr-only utility does
+ * not exist yet, so the section owns this one. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 </style>

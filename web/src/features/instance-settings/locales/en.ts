@@ -13,6 +13,19 @@ const en = {
   tabs: { general: "General", network: "Network", system: "System" },
   forbidden: "Only platform operators can view or change instance settings.",
   locked: "Locked by the environment variable {name}.",
+  helper: {
+    missing:
+      "The host helper is not installed, so these values are read-only. Install it to manage host settings from Gotham.",
+    denied:
+      "The host helper is installed but not permitted to run, so these values are read-only. Install it again to refresh its permission.",
+    restart: "Restart or update the control plane to enable host changes.",
+    install: "Install host helper",
+    installed: "Host helper installed. These settings are now editable.",
+    installFailed: "The host helper could not be installed.",
+    logTitleFailed: "Host helper install failed",
+    logHint: "Output from the installer on this host.",
+    close: "Close",
+  },
   general: {
     title: "General",
     url: "Control-plane URL",
@@ -74,17 +87,8 @@ const en = {
       "This changes the address of the interface you are connected through. The host may become unreachable until the change is confirmed or reverted.",
     confirmLabel: "I understand this may interrupt the connection",
     confirmRequired: "Tick the confirmation box to apply this change.",
-    helperMissing:
-      "The host helper is not installed, so these values are read-only. Install it to manage the host network from Gotham.",
-    helperDenied:
-      "The host helper is installed but not permitted to run, so these values are read-only. Install it again to refresh its permission.",
     stackUnsupported:
       "This host does not run systemd-networkd and systemd-resolved, so Gotham cannot manage its network. Values are shown read-only.",
-    installHelper: "Install host helper",
-    installFailed: "The host helper could not be installed.",
-    installLogTitle: "Host helper install",
-    installLogHint: "Output from the installer on this host.",
-    close: "Close",
   },
   confirm: {
     title: "Keep these network changes?",
@@ -100,7 +104,6 @@ const en = {
     ntpHint: "Up to 4, comma separated. Leave empty for the system defaults.",
     submit: "Save system settings",
     saved: "System settings saved.",
-    installHint: "Install it from the Network tab.",
     stackUnsupported:
       "This host lacks the tools Gotham uses for system settings. Values are shown read-only.",
   },

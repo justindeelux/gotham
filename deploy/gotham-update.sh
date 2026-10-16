@@ -52,6 +52,7 @@ fi
 # paths it acts on.
 case "$(basename "$0")" in
     gotham-agent-update)
+        IS_AGENT=1
         DEFAULT_CONF="/etc/gotham/agent-updater.conf"
         # The agent wrapper fails closed on a missing config: it must never
         # fall back to the control-plane defaults and restart/swap the wrong
@@ -62,6 +63,7 @@ case "$(basename "$0")" in
         fi
         ;;
     *)
+        IS_AGENT=0
         DEFAULT_CONF="/etc/gotham/updater.conf"
         ;;
 esac
@@ -312,6 +314,53 @@ restart_service() {
     return 1
 }
 
+# ensure_host_bootstrap_dropin wires an existing control-plane unit to run
+# `gotham host-bootstrap` as root at start (JUS-185), so instances installed
+# before that directive existed self-heal on their next update. A no-op for the
+# agent wrapper, when the unit or a drop-in already references host-bootstrap,
+# or when the systemd unit directory is unusable. It only adds drop-in lines
+# (ExecStartPre and two ReadWritePaths), never edits the shipped unit.
+ensure_host_bootstrap_dropin() {
+    [ "${IS_AGENT}" -eq 0 ] || return 0
+    unit_dir="/etc/systemd/system/${SERVICE}.service.d"
+    dropin="${unit_dir}/host-bootstrap.conf"
+    for f in "/etc/systemd/system/${SERVICE}.service" "${unit_dir}"/*.conf; do
+        [ -f "${f}" ] || continue
+        if grep -q 'host-bootstrap' "${f}" 2>/dev/null; then
+            return 0
+        fi
+    done
+    if [ ! -d "${unit_dir}" ]; then
+        mkdir -p "${unit_dir}" 2>/dev/null || { log "could not create ${unit_dir}; skipping host-bootstrap drop-in"; return 0; }
+    fi
+    tmp="$(mktemp "${unit_dir}/.host-bootstrap.conf.XXXXXX" 2>/dev/null)" || {
+        log "could not create a drop-in temp file in ${unit_dir}; skipping host-bootstrap drop-in"
+        return 0
+    }
+    if ! cat >"${tmp}" 2>/dev/null <<EOF
+[Service]
+# JUS-185: install/refresh the root-owned host helper and tool installer at
+# start. Added by the self-update wrapper for units that predate this directive.
+ExecStartPre=+${BINARY} host-bootstrap
+ReadWritePaths=/usr/libexec/gotham
+ReadWritePaths=/etc/sudoers.d
+EOF
+    then
+        log "could not write ${tmp}; skipping host-bootstrap drop-in"
+        rm -f "${tmp}" 2>/dev/null || true
+        return 0
+    fi
+    chmod 0644 "${tmp}" 2>/dev/null || true
+    if mv -T "${tmp}" "${dropin}" 2>/dev/null || mv -f "${tmp}" "${dropin}" 2>/dev/null; then
+        log "added host-bootstrap drop-in ${dropin}"
+        systemctl daemon-reload 2>/dev/null || log "systemctl daemon-reload failed; the drop-in applies on the next reload"
+    else
+        log "could not install ${dropin}; skipping host-bootstrap drop-in"
+        rm -f "${tmp}" 2>/dev/null || true
+    fi
+    return 0
+}
+
 # restore moves the backup over the target atomically. It refuses a symlinked
 # backup so a planted link cannot redirect the root move.
 restore() {
@@ -382,6 +431,7 @@ if [ ! -f "${BINARY}" ]; then
 fi
 
 log "waiting ${GRACE}s before restarting ${SERVICE}"
+ensure_host_bootstrap_dropin
 sleep "${GRACE}"
 
 # A failed restart must still attempt a rollback; never exit before that.

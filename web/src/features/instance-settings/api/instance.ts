@@ -77,6 +77,9 @@ export type HostHelperState = "ready" | "missing" | "denied";
 /** Host readiness: one accurate message per cause instead of one merged blur. */
 export interface HostState {
   helper: HostHelperState;
+  /** True when the root-owned bootstrap artifacts exist (the tool installer
+   * exists), so the in-product install can run; false means restart/update. */
+  bootstrap: boolean;
   /** The host runs systemd-networkd + systemd-resolved + networkctl. */
   network_stack: boolean;
   /** The host has systemctl and hostnamectl. */

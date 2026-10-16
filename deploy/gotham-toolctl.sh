@@ -13,9 +13,9 @@
 # validates the id against an allow-list, so a compromised agent cannot widen
 # what runs as root: it cannot name a package, a URL or an extra flag. The
 # control plane uses the same helper to repair the host helper
-# (`install-tool gotham-hostctl`), reaching it through the verb-pinned rule in
-# install-hostctl-sudoers.sh; the content it installs is the root-owned staged
-# copy next to this script, never caller-supplied bytes.
+# (`install-tool gotham-hostctl`), reaching it through the verb-pinned rule the
+# `gotham host-bootstrap` step writes; the content it installs is the root-owned
+# staged copy next to this script, never caller-supplied bytes.
 #
 # Versions and their sha256 digests are pinned below. Downloads are verified
 # before a binary is installed; a mismatch aborts (exit 4).
@@ -315,33 +315,33 @@ install_git() {
 # ---- host helper (gotham-hostctl) ------------------------------------------
 # Installs the fixed, root-owned host helper the CONTROL PLANE (not the agent)
 # uses for instance settings, plus its verb-pinned sudoers drop-in. Content is
-# the root-owned staged copy the installers place next to this helper, so a
-# caller naming only the catalog id cannot substitute the script.
+# the root-owned staged copy (gotham-hostctl.dist) and staged sudoers
+# (gotham-hostctl.sudoers) that the binary's `host-bootstrap` writes next to
+# this helper, so a caller naming only the catalog id cannot substitute either.
 HOSTCTL_LIVE="${ROOT}/usr/libexec/gotham/gotham-hostctl"
 HOSTCTL_DIST="${ROOT}/usr/libexec/gotham/gotham-hostctl.dist"
-HOSTCTL_SUDOERS="${ROOT}/usr/libexec/gotham/install-hostctl-sudoers.sh"
-
-# hostctl_user is the service user the sudoers rule must grant: the control
-# plane runs as the service user, so a custom one needs /etc/gotham/hostctl.user
-# (written by the installer). shortcut: defaults to "gotham".
-hostctl_user() {
-    if [ -r "${ROOT}/etc/gotham/hostctl.user" ]; then
-        sed -n '1p' "${ROOT}/etc/gotham/hostctl.user"
-    else
-        echo gotham
-    fi
-}
+HOSTCTL_SUDOERS="${ROOT}/usr/libexec/gotham/gotham-hostctl.sudoers"
+HOSTCTL_DROPIN="${ROOT}/etc/sudoers.d/gotham-hostctl"
 
 install_hostctl() {
     [ -f "${HOSTCTL_DIST}" ] || die "gotham-hostctl content is missing (${HOSTCTL_DIST})" 5
-    [ -f "${HOSTCTL_SUDOERS}" ] || die "gotham-hostctl sudoers installer is missing (${HOSTCTL_SUDOERS})" 5
+    [ -f "${HOSTCTL_SUDOERS}" ] || die "gotham-hostctl sudoers is missing (${HOSTCTL_SUDOERS})" 5
     run install -m 0755 -o root -g root "${HOSTCTL_DIST}" "${HOSTCTL_LIVE}"
-    user="$(hostctl_user)"
     if [ "${DRYRUN}" = "1" ]; then
-        echo "+ sh ${HOSTCTL_SUDOERS} ${user}"
+        echo "+ visudo -cf <temp>"
+        echo "+ install -m 0440 ${HOSTCTL_SUDOERS} ${HOSTCTL_DROPIN}"
         return 0
     fi
-    sh "${HOSTCTL_SUDOERS}" "${user}"
+    command -v visudo >/dev/null 2>&1 || die "visudo is required to validate the sudoers drop-in" 1
+    tmp="$(mktemp "${ROOT}/etc/sudoers.d/.gotham-hostctl.XXXXXX")" \
+        || die "could not create a sudoers temp file" 1
+    cp "${HOSTCTL_SUDOERS}" "${tmp}"
+    chmod 0440 "${tmp}"
+    if ! visudo -cf "${tmp}"; then
+        rm -f "${tmp}"
+        die "generated host-helper sudoers failed visudo; nothing installed" 1
+    fi
+    mv -f "${tmp}" "${HOSTCTL_DROPIN}"
 }
 
 case "${VERB}:${TOOL}" in

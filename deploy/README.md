@@ -618,22 +618,30 @@ and by NEG1 end to end; the wrapper rollback status is covered by NEG2.
 settings through `gotham-hostctl.sh`, a fixed root-owned helper with the same
 privilege model as the update wrapper.
 
-`install-agent.sh` installs the helper root-owned together with its verb-pinned
-sudoers rule (the rule names the **control-plane** service user, default
-`gotham`; override with `GOTHAM_HOSTCTL_USER`) and keeps a root-owned
-`gotham-hostctl.dist` copy next to `gotham-toolctl`. `install.sh` runs that
-agent step for this host, so a normal install needs no extra action.
+**Bootstrap (no manual step).** `gotham.service` runs `gotham host-bootstrap` as
+root on every start (`ExecStartPre=+`). The subcommand installs/refreshes the
+fixed, root-owned `gotham-hostctl` and `gotham-toolctl` at
+`/usr/libexec/gotham/` (0755), the staged repair copies
+(`gotham-hostctl.dist`, `gotham-hostctl.sudoers`, `gotham-toolctl.sudoers`) and
+the two verb-pinned sudoers drop-ins (`/etc/sudoers.d/gotham-hostctl` for the
+control-plane user, `/etc/sudoers.d/gotham-toolctl` for the agent user), each
+validated with `visudo` before it is moved into place. It reads no configuration
+and writes only those fixed paths from the helper scripts embedded in the binary
+(`go:embed`), so an instance self-heals with no manual step — including a box
+whose agent was never installed with `install-agent.sh`. Instances whose unit
+predates this get the directive from a drop-in the self-update wrapper writes
+(`/etc/systemd/system/gotham.service.d/host-bootstrap.conf`) before restarting.
 
 When the helper is missing or not permitted, `Settings → Instance` reports the
 cause and offers **Install host helper**: the control plane runs
 `gotham-toolctl install-tool gotham-hostctl` (one pinned sudoers rule, no blanket
-sudo — the same helper/`install-tool` model as node tools), which reinstalls the
-helper from the staged copy and rewrites the sudoers rule. Manual recovery, if
-ever needed:
+sudo), which reinstalls the helper and its drop-in from the staged copies. If the
+bootstrap has never run (an old unit), the page says to restart or update the
+control plane instead of offering an install that cannot succeed. Manual
+recovery, if ever needed, is the same fixed command:
 
 ```sh
-sudo install -D -m 0755 -o root -g root deploy/gotham-hostctl.sh /usr/libexec/gotham/gotham-hostctl
-sudo deploy/install-hostctl-sudoers.sh gotham
+sudo /var/lib/gotham/bin/gotham host-bootstrap
 ```
 
 - sudoers grants exactly five verbs (`status`, `apply-network`, `confirm-network`,

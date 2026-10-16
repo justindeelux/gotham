@@ -209,6 +209,7 @@ const networkSchema = z.object({
 /** hostSchema reports the host-helper probe states (JUS-185). */
 const hostSchema = z.object({
   helper: z.enum(["ready", "missing", "denied"]),
+  bootstrap: z.boolean(),
   network_stack: z.boolean(),
   system_stack: z.boolean(),
   network: z.boolean(),

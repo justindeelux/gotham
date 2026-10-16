@@ -108,7 +108,12 @@ func (a *sudoApplier) run(ctx context.Context, verb, stdin string) (string, erro
 
 // Probe reports the host's readiness without ever failing.
 func (a *sudoApplier) Probe(ctx context.Context) Host {
-	h := Host{Helper: HelperReady, NetworkStack: networkStackAvailable(), SystemStack: systemStackAvailable()}
+	h := Host{
+		Helper:       HelperReady,
+		Bootstrap:    toolctlPresent(a.toolctl),
+		NetworkStack: networkStackAvailable(),
+		SystemStack:  systemStackAvailable(),
+	}
 	if _, err := os.Stat(a.path); err != nil {
 		h.Helper = HelperMissing
 		return h
@@ -123,6 +128,13 @@ func (a *sudoApplier) Probe(ctx context.Context) Host {
 	h.Network = p.Network
 	h.System = p.System
 	return h
+}
+
+// toolctlPresent reports whether the bootstrap wrote the root-owned tool
+// installer, i.e. whether the in-product install has a privileged path to run.
+func toolctlPresent(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // InstallHostHelper runs the fixed tool installer to place the host helper and

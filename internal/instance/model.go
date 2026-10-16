@@ -167,6 +167,11 @@ const (
 type Host struct {
 	// Helper is the install state of the fixed host helper.
 	Helper HelperState `json:"helper"`
+	// Bootstrap is true when the root-owned bootstrap artifacts are present
+	// (the tool installer exists), i.e. the control plane ran `host-bootstrap`
+	// at start. When false the in-product install cannot run and the operator
+	// must restart/update the control plane first.
+	Bootstrap bool `json:"bootstrap"`
 	// NetworkStack is true when the host runs what the network section needs
 	// (systemd-networkd + systemd-resolved + networkctl), detected without the
 	// helper. When false, installing the helper cannot make the section work.
@@ -179,10 +184,11 @@ type Host struct {
 	System bool `json:"system"`
 }
 
-// Installable reports whether offering the in-product helper install can help:
-// only when the helper is not ready but the host supports the stack.
+// Installable reports whether the in-product helper install could help at all:
+// the helper is not ready, the bootstrap artifacts exist, and the host supports
+// at least one section. The UI refines this per section.
 func (h Host) Installable() bool {
-	return h.Helper != HelperReady && h.NetworkStack
+	return h.Helper != HelperReady && h.Bootstrap && (h.NetworkStack || h.SystemStack)
 }
 
 // State is the full read model.

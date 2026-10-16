@@ -71,8 +71,8 @@ func TestToolctlRefusesPlatformToolUninstall(t *testing.T) {
 }
 
 // TestToolctlHostctlInstall proves the control-plane host helper installs from
-// the root-owned staged copy and grants the control-plane user its rule; a
-// missing staged copy is refused (JUS-185).
+// the root-owned staged copy + sudoers and a missing staged file is refused
+// (JUS-185).
 func TestToolctlHostctlInstall(t *testing.T) {
 	missing, err := runToolctl(t, t.TempDir(), nil, "install-tool", "gotham-hostctl")
 	if err == nil || !strings.Contains(missing, "content is missing") {
@@ -84,7 +84,7 @@ func TestToolctlHostctlInstall(t *testing.T) {
 	if err := os.MkdirAll(staged, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"gotham-hostctl.dist", "install-hostctl-sudoers.sh"} {
+	for _, name := range []string{"gotham-hostctl.dist", "gotham-hostctl.sudoers"} {
 		if err := os.WriteFile(filepath.Join(staged, name), []byte("x"), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -94,8 +94,9 @@ func TestToolctlHostctlInstall(t *testing.T) {
 		t.Fatalf("install-tool gotham-hostctl: %v: %s", err, out)
 	}
 	if !strings.Contains(out, "gotham-hostctl.dist") ||
-		!strings.Contains(out, "install-hostctl-sudoers.sh gotham") {
-		t.Errorf("host helper install did not stage and grant: %q", out)
+		!strings.Contains(out, "gotham-hostctl.sudoers") ||
+		!strings.Contains(out, "visudo -cf") {
+		t.Errorf("host helper install did not stage, validate and install: %q", out)
 	}
 }
 

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSwitch } from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
-import { computed, reactive, ref, watch } from "vue";
+import { reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { saveSystem } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
+import HostHelperGate from "@/features/instance-settings/components/HostHelperGate.vue";
+import { useHostUnlock } from "@/features/instance-settings/composables/useHostUnlock";
 import { useSectionForm } from "@/features/instance-settings/composables/useSectionForm";
 import {
   hostnameSchema,
@@ -60,27 +62,21 @@ function status(path: string): "error" | undefined {
   return serverErrors.value[path] ? "error" : undefined;
 }
 
-// systemNotice names the accurate cause when the system section is read-only:
-// a missing/refused helper (installable from the Network tab) or a host
-// without the required system tools (not fixable).
-const systemNotice = computed<string>(() => {
-  if (props.state.host.helper === "denied" || props.state.host.helper === "missing") {
-    const cause = t(
-      props.state.host.helper === "denied"
-        ? "instance-settings.network.helperDenied"
-        : "instance-settings.network.helperMissing",
-    );
-    return `${cause} ${t("instance-settings.system.installHint")}`;
-  }
-  return t("instance-settings.system.stackUnsupported");
-});
+// Announcing + focusing when the helper install unlocks the section (JUS-185).
+const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.system);
 </script>
 
 <template>
   <NCard :title="t('instance-settings.system.title')">
-    <NAlert v-if="!state.capabilities.system" type="info" :show-icon="true" class="form-alert">
-      {{ systemNotice }}
-    </NAlert>
+    <p class="sr-only" role="status" aria-live="polite">
+      {{ unlocked ? t("instance-settings.helper.installed") : "" }}
+    </p>
+    <HostHelperGate
+      v-if="!state.capabilities.system"
+      :state="state"
+      section="system"
+      @saved="emit('saved', $event)"
+    />
     <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert">{{ errorMessage }}</NAlert>
     <NForm ref="formRef" :model="form" :rules="rules" class="instance-form" @submit.prevent="handleSubmit">
       <NFormItem
@@ -89,7 +85,12 @@ const systemNotice = computed<string>(() => {
         :validation-status="status('hostname')"
         :feedback="serverErrors.hostname"
       >
-        <NInput v-model:value="form.hostname" :disabled="!state.capabilities.system" placeholder="gotham-1" />
+        <NInput
+          ref="focusTarget"
+          v-model:value="form.hostname"
+          :disabled="!state.capabilities.system"
+          placeholder="gotham-1"
+        />
       </NFormItem>
       <NFormItem :label="t('instance-settings.system.ntpEnabled')">
         <NSwitch v-model:value="form.ntpEnabled" :disabled="!state.capabilities.system" />
@@ -124,5 +125,18 @@ const systemNotice = computed<string>(() => {
 <style scoped>
 .instance-form {
   max-width: 640px;
+}
+
+/* Visually-hidden polite live region (JUS-185). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 </style>

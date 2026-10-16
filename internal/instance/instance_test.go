@@ -44,7 +44,7 @@ func (h *fakeHost) Probe(context.Context) Host {
 	if h.host.Helper != "" {
 		return h.host
 	}
-	return Host{Helper: HelperReady, Network: h.caps.Network, System: h.caps.System, NetworkStack: true, SystemStack: true}
+	return Host{Helper: HelperReady, Network: h.caps.Network, System: h.caps.System, Bootstrap: true, NetworkStack: true, SystemStack: true}
 }
 func (h *fakeHost) InstallHostHelper(context.Context) (string, error) {
 	h.installs++
@@ -332,10 +332,12 @@ func TestHostStates(t *testing.T) {
 		wantInstall bool
 		wantHelper  HelperState
 	}{
-		{"ready", Host{Helper: HelperReady, NetworkStack: true, SystemStack: true, Network: true, System: true}, true, false, HelperReady},
-		{"missing-with-stack", Host{Helper: HelperMissing, NetworkStack: true}, false, true, HelperMissing},
-		{"denied-with-stack", Host{Helper: HelperDenied, NetworkStack: true}, false, true, HelperDenied},
-		{"missing-without-stack", Host{Helper: HelperMissing, NetworkStack: false}, false, false, HelperMissing},
+		{"ready", Host{Helper: HelperReady, Bootstrap: true, NetworkStack: true, SystemStack: true, Network: true, System: true}, true, false, HelperReady},
+		{"missing-with-stack", Host{Helper: HelperMissing, Bootstrap: true, NetworkStack: true}, false, true, HelperMissing},
+		{"denied-with-stack", Host{Helper: HelperDenied, Bootstrap: true, NetworkStack: true}, false, true, HelperDenied},
+		{"missing-without-stack", Host{Helper: HelperMissing, Bootstrap: true, NetworkStack: false}, false, false, HelperMissing},
+		{"missing-no-bootstrap", Host{Helper: HelperMissing, Bootstrap: false, NetworkStack: true}, false, false, HelperMissing},
+		{"missing-system-only", Host{Helper: HelperMissing, Bootstrap: true, NetworkStack: false, SystemStack: true}, false, true, HelperMissing},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

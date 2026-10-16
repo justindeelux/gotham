@@ -51,6 +51,8 @@ func run(args []string) int {
 		return runCA(args[1:])
 	case "update":
 		return runUpdate(args[1:])
+	case "host-bootstrap":
+		return runHostBootstrap(args[1:])
 	case "version", "-v", "--version":
 		fmt.Printf("gotham %s\n", version)
 		return exitOK
@@ -313,6 +315,7 @@ Usage:
   gotham migrate [verb]     Run database migrations (up, down, status; default up)
   gotham ca init            Create the gRPC mTLS certificate authority
   gotham update [command]   Check, apply or roll back a self-update
+  gotham host-bootstrap     Install the root-owned host helper and tool installer
   gotham version            Print the version
   gotham help               Show this help
 

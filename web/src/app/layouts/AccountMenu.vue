@@ -32,6 +32,16 @@ const userInitial = computed<string>(() =>
 );
 
 /**
+ * hasDisplayName tells the header whether a real display name exists. Without
+ * one displayName falls back to the email, so the email line is dropped —
+ * otherwise the menu shows the address twice (JUS-197).
+ */
+const hasDisplayName = computed<boolean>(() => {
+  const name = authStore.user?.display_name?.trim();
+  return name !== undefined && name !== "";
+});
+
+/**
  * roleText derives the footer label from the caller's raw team role through
  * the shared common role catalog (reactive in the active locale). The
  * teams-owned meRoleLabel helper stays untouched (I18N-8 owns it); an
@@ -123,7 +133,9 @@ const accountOptions = computed<DropdownOption[]>(() => [
       }),
       h("div", { class: "account-menu-info" }, [
         h("strong", { class: "account-menu-name" }, displayName.value),
-        h("span", { class: "account-menu-email" }, authStore.user?.email),
+        ...(hasDisplayName.value
+          ? [h("span", { class: "account-menu-email" }, authStore.user?.email)]
+          : []),
         h("span", { class: "account-menu-role" }, roleText.value),
       ]),
     ]),

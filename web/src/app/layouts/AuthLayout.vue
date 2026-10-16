@@ -93,6 +93,25 @@ const valueProps = computed<ValueProp[]>(() => [
       <div class="auth-lang">
         <LanguageSelect />
       </div>
+      <!-- JUS-197: the aside (with the brand) hides below 940px, so phones
+           would sign in on a logo-less card. This compact lockup renders only
+           there. -->
+      <div class="auth-mobile-brand" aria-hidden="true">
+        <span class="brand-mark">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <path d="M5 19V11a7 7 0 0114 0v8" />
+            <path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19" />
+          </svg>
+        </span>
+        <span class="wordmark">Gotham</span>
+      </div>
       <RouterView />
     </main>
   </div>
@@ -123,6 +142,14 @@ const valueProps = computed<ValueProp[]>(() => [
   padding: var(--space-8) var(--space-6);
   background: var(--bg);
   position: relative;
+  align-content: center;
+  gap: var(--space-6);
+}
+
+.auth-mobile-brand {
+  display: none;
+  align-items: center;
+  gap: var(--space-3);
 }
 
 .auth-lang {
@@ -233,6 +260,15 @@ const valueProps = computed<ValueProp[]>(() => [
 
   .auth-aside {
     display: none;
+  }
+}
+
+/* JUS-197: phones lose the aside entirely, so the compact brand lockup in
+   the main column carries the logo there. Tablets keep the full-width card
+   without it. */
+@media (max-width: 640px) {
+  .auth-mobile-brand {
+    display: flex;
   }
 }
 </style>

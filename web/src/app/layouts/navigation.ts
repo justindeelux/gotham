@@ -34,7 +34,7 @@ export const navSections: NavSection[] = [
       { key: "templates", label: "Template library", labelKey: "nav.items.templates", icon: "rocket", to: "templates" },
       { key: "toolchain", label: "App Store", labelKey: "nav.items.toolchain", icon: "box", to: "toolchain" },
       { key: "servers", label: "Servers", labelKey: "nav.items.servers", icon: "server", to: "servers" },
-      { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains" },
+      { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains", adminOnly: true },
     ],
   },
   {
@@ -62,8 +62,8 @@ export const navSections: NavSection[] = [
     label: "System",
     labelKey: "nav.sections.system",
     items: [
-      { key: "instance", label: "Instance", labelKey: "nav.items.instance", icon: "gear", to: "instance" },
-      { key: "updates", label: "Updates & settings", labelKey: "nav.items.updates", icon: "gear", to: "updates" },
+      { key: "instance", label: "Instance", labelKey: "nav.items.instance", icon: "gear", to: "instance", adminOnly: true },
+      { key: "updates", label: "Updates & settings", labelKey: "nav.items.updates", icon: "gear", to: "updates", adminOnly: true },
     ],
   },
 ];

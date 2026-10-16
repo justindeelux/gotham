@@ -157,10 +157,7 @@ onMounted(() => {
             {{ t("auth.login.submit") }}
           </NButton>
 
-          <div class="auth-row">
-            <NButton text disabled>{{ t("auth.login.forgot") }}</NButton>
-            <span class="auth-hint">{{ t("auth.login.resetHint") }}</span>
-          </div>
+          <p class="auth-contact">{{ t("auth.login.contactAdmin") }}</p>
 
           <div class="auth-divider" aria-hidden="true">
             <span>{{ t("auth.login.divider") }}</span>
@@ -219,18 +216,10 @@ onMounted(() => {
   font-weight: 600;
 }
 
-.auth-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-/* The reason the disabled control is inert is visible, not hover-only, so it
-   reaches keyboard and touch users too (B4-17). */
-.auth-hint {
+.auth-contact {
   font-size: var(--text-xs);
   color: var(--muted);
+  margin: 12px 0 0;
 }
 
 .auth-divider {

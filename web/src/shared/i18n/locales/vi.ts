@@ -115,6 +115,13 @@ const vi: CommonMessages = {
     updates: "Cập nhật",
     inviteAccept: "Lời mời vào nhóm",
     notFound: "Không tìm thấy trang",
+    forbidden: "Không có quyền",
+  },
+  denied: {
+    eyebrow: "Kiểm soát truy cập",
+    title: "Bạn không có quyền xem trang này",
+    body: "Chỉ Platform admin mới mở được mục này. Hãy xin cấp quyền, hoặc quay lại bảng điều khiển.",
+    back: "Quay lại bảng điều khiển",
   },
   time: {
     justNow: "vừa xong",

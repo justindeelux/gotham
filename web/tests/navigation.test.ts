@@ -83,4 +83,15 @@ describe("navSections", () => {
       expect(item.to).not.toBe("");
     }
   });
+
+  it("marks exactly the platform-admin sections adminOnly (JUS-197)", () => {
+    const items = navSections.flatMap((section) => section.items);
+    const flagged = new Set(
+      items.filter((item) => item.adminOnly).map((item) => item.key),
+    );
+    // Domains & SSL, Instance and Updates need the instance-level Platform
+    // admin flag; everything else (including the team-scoped Members page)
+    // stays visible to every signed-in account.
+    expect(flagged).toEqual(new Set(["files", "domains", "instance", "updates"]));
+  });
 });

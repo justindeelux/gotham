@@ -145,5 +145,8 @@ const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
     <NText depth="3">
       {{ $t("teams.members.footnote") }}
     </NText>
+    <NText depth="3">
+      {{ $t("teams.members.platformAdminNote") }}
+    </NText>
   </NSpace>
 </template>

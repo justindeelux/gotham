@@ -51,6 +51,9 @@ const vi = {
       "Một nhóm luôn giữ ít nhất một chủ sở hữu: hạ cấp hay gỡ người cuối " +
       "cùng sẽ bị từ chối kèm thông báo của backend. Tư cách chủ sở hữu của " +
       "nhóm cá nhân là bất biến.",
+    platformAdminNote:
+      "Vai trò nhóm chỉ có hiệu lực trong một nhóm. Tên miền & SSL, Cập " +
+      "nhật và Cài đặt instance cần cờ Platform admin ở cấp instance.",
   },
   invites: {
     email: "Email",

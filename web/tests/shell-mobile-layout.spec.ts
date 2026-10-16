@@ -60,8 +60,10 @@ const serverRow = {
 };
 
 // Every shell surface that has its own page: the drawer/gutter regression must
-// not depend on which page is open.
-const shellRoutes = ["/dashboard", "/servers", "/projects", "/settings/profile"];
+// not depend on which page is open. Teams (members table) and Domains (tab
+// strip) are included so their wide content never pushes the page sideways
+// at phone widths (JUS-197).
+const shellRoutes = ["/dashboard", "/servers", "/projects", "/teams", "/domains", "/settings/profile"];
 
 let server: Server;
 let baseURL = "";

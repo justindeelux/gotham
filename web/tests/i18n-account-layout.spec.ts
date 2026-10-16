@@ -243,6 +243,15 @@ for (const locale of ["en", "vi"]) {
         .locator("#login-email")
         .getAttribute("placeholder");
       expect(placeholder?.trim().length).toBeGreaterThan(0);
+      // JUS-197: phones lose the auth aside, so the compact brand lockup
+      // in the main column must carry the logo instead (tablet widths and
+      // up keep the full-width card without it).
+      const brand = page.locator(".auth-mobile-brand");
+      if (width === 390) {
+        await expect(brand).toBeVisible();
+      } else {
+        await expect(brand).toBeHidden();
+      }
       if (locale === "en") {
         expect(heading).toContain("Sign in");
         expect(await page.title()).toBe("Sign in — Gotham");

@@ -46,7 +46,7 @@ import {
   buildApplicationTileInput,
   incompleteTileHint,
 } from "@/features/dashboard/utils/dashboard";
-import { checkCatalogParity } from "@/shared/i18n/catalog";
+import { checkCatalogParity, leafEntries } from "@/shared/i18n/catalog";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -122,6 +122,16 @@ describe("feature catalog parity", () => {
   it("ships equal en/vi key sets with matching params and valid syntax", () => {
     expect(checkCatalogParity(enServers, viServers)).toEqual([]);
     expect(checkCatalogParity(enDashboard, viDashboard)).toEqual([]);
+  });
+
+  it("keeps node untranslated in Vietnamese dashboard copy (JUS-197)", () => {
+    for (const [key, value] of leafEntries(
+      viDashboard as unknown as Record<string, unknown>,
+    )) {
+      if (typeof value === "string") {
+        expect(value, key).not.toMatch(/nút/);
+      }
+    }
   });
 });
 

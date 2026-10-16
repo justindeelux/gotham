@@ -134,7 +134,7 @@ const routes: RouteRecordRaw[] = [
         path: "domains",
         name: "domains",
         component: () => import("@/features/domains/pages/DomainsPage.vue"),
-        meta: { titleKey: "titles.domains", requiresAuth: true },
+        meta: { titleKey: "titles.domains", requiresAuth: true, requiresPlatformAdmin: true },
       },
       {
         path: "projects/:projectId/environments/:environmentId/services/:id",
@@ -182,13 +182,13 @@ const routes: RouteRecordRaw[] = [
         path: "settings/instance",
         name: "instance",
         component: () => import("@/features/instance-settings/pages/InstanceSettingsPage.vue"),
-        meta: { titleKey: "titles.instance", requiresAuth: true },
+        meta: { titleKey: "titles.instance", requiresAuth: true, requiresPlatformAdmin: true },
       },
       {
         path: "settings/updates",
         name: "updates",
         component: () => import("@/features/updates/pages/UpdatesPage.vue"),
-        meta: { titleKey: "titles.updates", requiresAuth: true },
+        meta: { titleKey: "titles.updates", requiresAuth: true, requiresPlatformAdmin: true },
       },
       // The bare settings path keeps landing on notifications now that the
       // settings section holds more than one page.
@@ -204,6 +204,15 @@ const routes: RouteRecordRaw[] = [
         name: "invite-accept",
         component: () => import("@/features/auth/pages/InviteAcceptPage.vue"),
         meta: { titleKey: "titles.inviteAccept", requiresAuth: true },
+      },
+      // JUS-197: platform-admin-only routes land here instead of a silent
+      // dashboard redirect. This is not the 404 page (JUS-193 owns unknown
+      // routes); only the guard targets this name.
+      {
+        path: "forbidden",
+        name: "forbidden",
+        component: () => import("@/app/pages/NoPermissionPage.vue"),
+        meta: { titleKey: "titles.forbidden", requiresAuth: true },
       },
       // Unknown URLs render a real 404 inside the app shell instead of
       // silently redirecting to the dashboard (JUS-193). The parent group's
@@ -236,7 +245,7 @@ router.beforeEach(async (to) => {
     // /auth/me adds, so re-read the profile once before refusing.
     await authStore.fetchMe().catch(() => undefined);
     if (!authStore.isPlatformAdmin) {
-      return { name: "dashboard" };
+      return { name: "forbidden" };
     }
   }
 

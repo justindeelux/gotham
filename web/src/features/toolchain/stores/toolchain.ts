@@ -159,6 +159,12 @@ export const useToolchainStore = defineStore("toolchain", () => {
         const job = parseToolchainJobFrame(message.raw);
         if (job) {
           applyJob(job);
+          // A succeeded install changes the node's catalog, so reload it: the
+          // picker re-enables the option as soon as the tool lands (the frame
+          // itself carries only the job, never the tool list).
+          if (job.status === "succeeded") {
+            void refresh().catch(() => {});
+          }
           return;
         }
         const line = parseToolchainLogFrame(message.raw);

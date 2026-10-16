@@ -233,7 +233,7 @@ describe("wizard dockerfile source", () => {
     expect(w.buildPackLabel.value).toBe("Dockerfile");
     expect([w.stepTotal.value, w.stepPosition.value]).toEqual([4, 1]);
     w.nextStep();
-    expect(w.step.value).toBe(2);
+    expect(w.step.value).toBe(1);
     expect(w.stepPosition.value).toBe(2);
     w.prevStep();
     expect(w.step.value).toBe(0);

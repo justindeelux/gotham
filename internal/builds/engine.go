@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/toolcatalog"
 )
 
 // EngineKind identifies one of the four build engines. EngineAuto is the
@@ -31,6 +33,37 @@ const (
 
 // EngineKinds lists the canonical engines in auto-detection priority order.
 var EngineKinds = []EngineKind{EngineDockerfile, EngineRailpack, EngineBuildpacks, EngineStatic}
+
+// EngineTool returns the catalog tool id an engine shells out to on the node
+// (the CLI it runs), or "" for engines that need none: Dockerfile builds
+// through the node Docker daemon, static is served by nginx, and EngineAuto
+// resolves at build time. The deploy gate, the auto error and the Web picker
+// share it.
+func EngineTool(kind EngineKind) string {
+	switch kind {
+	case EngineRailpack:
+		return toolcatalog.IDRailpack
+	case EngineBuildpacks:
+		return toolcatalog.IDPack
+	default:
+		return ""
+	}
+}
+
+// EngineTools returns the catalog tool ids a build engine needs installed on
+// the node, dependencies first (the same order toolcatalog.InstallOrder
+// produces). It is empty for the engines that shell out to no external CLI.
+func EngineTools(kind EngineKind) []string {
+	toolID := EngineTool(kind)
+	if toolID == "" {
+		return nil
+	}
+	order, err := toolcatalog.InstallOrder(toolID)
+	if err != nil {
+		return nil
+	}
+	return order
+}
 
 // ParseEngineKind normalises a build_pack value from a request or the database
 // into an EngineKind. Nixpacks and herokuish are accepted as aliases for their
@@ -65,6 +98,11 @@ type BuildOptions struct {
 	Target    string
 	// LogWriter, when non-nil, receives the builder's captured build output.
 	LogWriter io.Writer
+	// InstalledTools, when non-nil, is the target node's catalog tool state
+	// (id -> present). EngineAuto then only considers engines whose tools are
+	// all present, so a build pack missing on the node is never auto-selected.
+	// nil keeps marker-only detection (the control-plane local dev path).
+	InstalledTools map[string]bool
 }
 
 // ImageRef is the result of a successful engine Build.
@@ -124,9 +162,19 @@ func (r *Registry) Engine(kind EngineKind) (BuildEngine, bool) {
 	return engine, ok
 }
 
-// Detect returns the engine that should build repoDir. An explicit hint is
-// honoured directly; EngineAuto walks the priority order in EngineKinds.
+// Detect returns the engine that should build repoDir with marker-only
+// detection (no target-node tool state). An explicit hint is honoured
+// directly; EngineAuto walks the priority order in EngineKinds.
 func (r *Registry) Detect(repoDir string, hint EngineKind) (BuildEngine, bool) {
+	return r.detect(repoDir, hint, nil)
+}
+
+// detect is Detect with the target node's installed tools. When installed is
+// non-nil, the auto walk skips engines whose tools are not all present, so a
+// pack missing on the node is never auto-selected; an explicit hint is still
+// honoured (buildtool.Available is the last guard at build time). A nil set
+// keeps marker-only detection (the control-plane local dev path).
+func (r *Registry) detect(repoDir string, hint EngineKind, installed map[string]bool) (BuildEngine, bool) {
 	if strings.TrimSpace(repoDir) == "" {
 		return nil, false
 	}
@@ -138,11 +186,30 @@ func (r *Registry) Detect(repoDir string, hint EngineKind) (BuildEngine, bool) {
 		return engine, true
 	}
 	for _, kind := range r.order {
+		if !engineToolsInstalled(kind, installed) {
+			continue
+		}
 		if engine, ok := r.engines[kind]; ok && engine.Detect(repoDir, EngineAuto) {
 			return engine, true
 		}
 	}
 	return nil, false
+}
+
+// engineToolsInstalled reports whether every tool an engine needs is present.
+// A nil set means "unknown": the engine is considered, so marker-only
+// detection is unchanged. Engines with no external CLI (Dockerfile, static)
+// are always considered.
+func engineToolsInstalled(kind EngineKind, installed map[string]bool) bool {
+	if installed == nil {
+		return true
+	}
+	for _, toolID := range EngineTools(kind) {
+		if !installed[toolID] {
+			return false
+		}
+	}
+	return true
 }
 
 // Build resolves an engine from opts.BuildPack (auto-detecting when empty) and
@@ -151,15 +218,42 @@ func (r *Registry) Build(ctx context.Context, opts BuildOptions) (ImageRef, erro
 	if err := validateOptions(opts); err != nil {
 		return ImageRef{}, err
 	}
-	engine, ok := r.Detect(opts.RepoDir, opts.BuildPack)
+	engine, ok := r.detect(opts.RepoDir, opts.BuildPack, opts.InstalledTools)
 	if !ok {
 		if opts.BuildPack != EngineAuto {
 			return ImageRef{}, fmt.Errorf("%w: engine %q cannot build %s", ErrNoEngine, opts.BuildPack, opts.RepoDir)
+		}
+		// Auto only resolves among installed engines; when the only reason it
+		// found nothing is a missing tool, name it so the deploy log is
+		// actionable instead of reading as a repo problem.
+		if engine, missing, found := r.autoMissingTool(opts.RepoDir, opts.InstalledTools); found {
+			return ImageRef{}, fmt.Errorf("%w: %s is not installed on this node; install it (or pick a different build pack) to build with the %s engine",
+				ErrNoEngine, missing, engine)
 		}
 		return ImageRef{}, fmt.Errorf("%w: %s", ErrNoEngine, opts.RepoDir)
 	}
 	opts.BuildPack = engine.Kind()
 	return engine.Build(ctx, opts)
+}
+
+// autoMissingTool reports the engine marker-only auto-detection would pick and
+// the tool of that engine that is missing on the node, when installed is
+// non-nil and the missing tool is the only reason auto found nothing. It
+// returns found=false when auto genuinely matches nothing (a repo problem) or
+// the node's tools are unknown.
+func (r *Registry) autoMissingTool(repoDir string, installed map[string]bool) (EngineKind, string, bool) {
+	if installed == nil {
+		return EngineAuto, "", false
+	}
+	engine, ok := r.detect(repoDir, EngineAuto, nil)
+	if !ok {
+		return EngineAuto, "", false
+	}
+	toolID := EngineTool(engine.Kind())
+	if toolID == "" || installed[toolID] {
+		return EngineAuto, "", false
+	}
+	return engine.Kind(), toolID, true
 }
 
 // validateOptions rejects a build request that cannot produce a tag.

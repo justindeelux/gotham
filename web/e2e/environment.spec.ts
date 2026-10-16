@@ -137,8 +137,6 @@ test.describe("environment page", () => {
     await wizard.locator("input[placeholder='https://github.com/owner/repo.git']").fill(cloneURL);
     await wizard.locator("input[placeholder='storefront']").fill(wizardAppName);
     await wizard.getByRole("button", { name: "Continue" }).click();
-    // Build pack step: auto-detect.
-    await wizard.getByRole("button", { name: "Continue" }).click();
     // Runtime step: the seeded node is pending (no agent validated it);
     // pending nodes stay selectable, only offline ones are disabled.
     await wizard.locator(".form-row .n-select").first().click();
@@ -146,6 +144,10 @@ test.describe("environment page", () => {
       .locator(".n-base-select-option")
       .filter({ hasText: node.name })
       .click();
+    await wizard.getByRole("button", { name: "Continue" }).click();
+    // Build pack step: keep the default auto-detect. The pending node's tool
+    // catalog cannot be fetched, so every pack stays selectable (the gate is
+    // fail-open while the tools are unknown) and the default is unchanged.
     await wizard.getByRole("button", { name: "Continue" }).click();
     // Env step: keep the NODE_ENV default.
     await wizard.getByRole("button", { name: "Continue" }).click();

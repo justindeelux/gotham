@@ -237,6 +237,23 @@ func (s *Service) ListTools(ctx context.Context, serverID uuid.UUID) ([]Tool, er
 	return s.catalog(ctx, serverID)
 }
 
+// InstalledToolIDs returns the catalog ids installed on the node, dialing its
+// agent without re-checking the caller's team scope (the caller has already
+// resolved the node). The deploy gate uses it to refuse a build pack whose tool
+// is absent, so the create answers a clear 4xx instead of a build that fails at
+// "railpack is not on PATH".
+func (s *Service) InstalledToolIDs(ctx context.Context, serverID uuid.UUID) (map[string]bool, error) {
+	catalog, err := s.catalog(ctx, serverID)
+	if err != nil {
+		return nil, err
+	}
+	installed := make(map[string]bool, len(catalog))
+	for _, tool := range catalog {
+		installed[tool.ID] = tool.Installed
+	}
+	return installed, nil
+}
+
 // catalog dials the node's agent and returns its tool list, without authorizing
 // (the caller has already resolved the node).
 func (s *Service) catalog(ctx context.Context, serverID uuid.UUID) ([]Tool, error) {

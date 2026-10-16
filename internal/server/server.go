@@ -648,6 +648,13 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 	if dialer, ok := s.servers.(deploy.AgentDialer); ok {
 		cfg.Dial = deploy.AgentDial(dialer)
 	}
+	// The toolchain service (built earlier in this chain) gates a deploy on the
+	// target node's installed build toolchains, so a pack that is not on the
+	// node is refused with a clear 4xx instead of failing at "railpack is not
+	// on PATH". A nil service (no database) leaves the gate disabled.
+	if ts, ok := s.toolchain.(deploy.ToolStatus); ok {
+		cfg.ToolStatus = ts
+	}
 	if proxySvc != nil {
 		cfg.Proxy = proxySvc
 	}

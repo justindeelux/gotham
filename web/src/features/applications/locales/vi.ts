@@ -358,6 +358,19 @@ const vi: ApplicationsMessages = {
     packBuildpacksHint: "Buildpack kiểu Heroku cho ứng dụng cũ.",
     packStatic: "Tĩnh",
     packStaticHint: "Build thư mục tĩnh và phục vụ qua Traefik. Không chạy tiến trình nào.",
+    packInstall: "Cài đặt",
+    packInstalling: "Đang cài đặt {tool}…",
+    packMissing: "{tool} chưa được cài trên node này",
+    packTooltip:
+      "Gói build này chạy một công cụ trên node đích. Hãy cài đặt để chọn được gói; tùy chọn sẽ tự bật lại khi cài xong.",
+    packNoEngine:
+      "Chưa có engine build nào trên node này. Cài Railpack để build không cần Dockerfile, hoặc chọn Dockerfile/Static bên dưới.",
+    packInstallRailpack: "Cài Railpack",
+    packChecking: "Đang kiểm tra công cụ build đã cài trên node này…",
+    packCheckError:
+      "Không kiểm tra được công cụ build trên node này. Các gói build vẫn hiển thị là khả dụng; máy chủ vẫn xác minh toolchain khi triển khai.",
+    packRetry: "Thử lại",
+    packInstallNamed: "Cài đặt {pack}",
     node: "Node",
     domainOptional: "Tên miền (tùy chọn)",
     domainHint: "Để trống để truy cập ứng dụng qua cổng trước.",

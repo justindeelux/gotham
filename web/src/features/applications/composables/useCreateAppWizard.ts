@@ -20,6 +20,8 @@ import { useApplicationsStore } from "@/features/applications/stores/application
 import { useGitHubAppStore } from "@/features/applications/stores/githubApp";
 import { useProvidersStore } from "@/features/applications/stores/providers";
 import { useServersStore } from "@/features/servers";
+import { describeToolchainError, useToolchainStore } from "@/features/toolchain";
+import type { ToolchainTool } from "@/features/toolchain";
 import { cloneUrlFor, suggestAppName } from "@/features/applications/utils/wizardSource";
 import { activeLocale, i18n } from "@/shared/i18n";
 import {
@@ -101,12 +103,37 @@ export interface WizardForm {
   storage: StorageMapping[];
 }
 
-export const STEP_NAMES = ["Source", "Build pack", "Runtime", "Env & storage", "Deploy"];
+export const STEP_NAMES = ["Source", "Runtime", "Build pack", "Env & storage", "Deploy"];
 
 export interface BuildPackOption {
   value: BuildPack;
   label: string;
   hint: string;
+}
+
+/**
+ * BUILD_PACK_TOOLS maps a build pack to the catalog tools its engine shells
+ * out to on the node, dependencies first (the Web mirror of
+ * builds.EngineTools / toolcatalog.InstallOrder). Dockerfile and static need no
+ * external CLI, and auto resolves at build time, so they carry none.
+ */
+export const BUILD_PACK_TOOLS: Record<string, string[]> = {
+  railpack: ["docker", "buildkit", "railpack"],
+  buildpacks: ["pack"],
+};
+
+/** One build-pack row augmented with the target node's toolchain state. */
+export interface BuildPackChoice extends BuildPackOption {
+  /** Catalog tools the engine needs on the node (empty when it needs none). */
+  tools: string[];
+  /** True when every needed tool is installed on the target node. */
+  installed: boolean;
+  /** False when the row cannot be selected (a needed tool is missing). */
+  selectable: boolean;
+  /** The first needed tool that is missing, or null when none is. */
+  missing: string | null;
+  /** True while an install job for a needed tool is queued or running. */
+  installing: boolean;
 }
 
 export const BUILD_PACKS: BuildPackOption[] = [
@@ -197,6 +224,7 @@ export function useCreateAppWizard(
   const githubAppStore = useGitHubAppStore();
   const serversStore = useServersStore();
   const appsStore = useApplicationsStore();
+  const toolchainStore = useToolchainStore();
   const message = useMessage();
 
   const step = ref(0);
@@ -266,8 +294,8 @@ export function useCreateAppWizard(
   /** stepNames renders the rail labels in the current locale. */
   const stepNames = computed<string[]>(() => [
     tr("applications.wizard.steps.source"),
-    tr("applications.wizard.steps.buildPack"),
     tr("applications.wizard.steps.runtime"),
+    tr("applications.wizard.steps.buildPack"),
     tr("applications.wizard.steps.envStorage"),
     tr("applications.wizard.steps.deploy"),
   ]);
@@ -300,6 +328,129 @@ export function useCreateAppWizard(
       hint: tr("applications.wizard.packStaticHint"),
     },
   ]);
+
+  /**
+   * nodeTools is the target node's catalog as the toolchain store holds it.
+   * Empty until the store has subscribed to the wizard's node (the build-pack
+   * step calls subscribeNodeTools), which the gate reads as "unknown" and lets
+   * through so a slow fetch never blocks a valid choice.
+   */
+  const nodeTools = computed<Map<string, ToolchainTool>>(() => {
+    const map = new Map<string, ToolchainTool>();
+    if (toolchainStore.serverId !== form.serverId || form.serverId === "") {
+      return map;
+    }
+    for (const tool of toolchainStore.tools) {
+      map.set(tool.id, tool);
+    }
+    return map;
+  });
+
+  /** toolInstalled reports a tool's detected state, or undefined when unknown. */
+  function toolInstalled(toolId: string): boolean | undefined {
+    const tool = nodeTools.value.get(toolId);
+    return tool ? tool.installed : undefined;
+  }
+
+  /** engineInstalled reports whether every tool of one engine is present. */
+  function engineInstalled(tools: string[]): boolean | undefined {
+    let unknown = false;
+    for (const toolId of tools) {
+      const state = toolInstalled(toolId);
+      if (state === undefined) {
+        unknown = true;
+      } else if (!state) {
+        return false;
+      }
+    }
+    return unknown ? undefined : true;
+  }
+
+  /**
+   * cliEngineInstalled reports whether the node can run a build pack that needs
+   * an external CLI: true when Railpack or Buildpacks is fully installed, false
+   * when both are known-missing, undefined while the catalog is still loading.
+   * Auto resolves only among installed engines, so it remains available exactly
+   * while this is not false.
+   */
+  const cliEngineInstalled = computed<boolean | undefined>(() => {
+    const states = [
+      engineInstalled(BUILD_PACK_TOOLS.railpack),
+      engineInstalled(BUILD_PACK_TOOLS.buildpacks),
+    ];
+    if (states.some((state) => state === true)) {
+      return true;
+    }
+    return states.some((state) => state === undefined) ? undefined : false;
+  });
+
+  /** noBuildEngine is true when neither CLI build engine is on the node. */
+  const noBuildEngine = computed<boolean>(() => cliEngineInstalled.value === false);
+
+  /** nodeToolsLoading is true while the target node's catalog is being fetched. */
+  const nodeToolsLoading = computed<boolean>(
+    () =>
+      form.serverId !== "" &&
+      toolchainStore.serverId === form.serverId &&
+      toolchainStore.loading,
+  );
+
+  /**
+   * nodeToolsError is true when the target node's catalog could not be fetched.
+   * The gate stays fail-open (options remain selectable) and the step shows a
+   * retry, so a node the agent cannot be reached on never silently disables
+   * every pack.
+   */
+  const nodeToolsError = computed<boolean>(
+    () =>
+      form.serverId !== "" &&
+      toolchainStore.serverId === form.serverId &&
+      toolchainStore.failure !== null,
+  );
+
+  /**
+   * buildPackChoices augments every build-pack row with the target node's
+   * toolchain state. A row whose tool is missing is not selectable and offers
+   * an Install button; auto stays selectable only while some CLI engine is
+   * installed (or still unknown); Dockerfile and static always stay available.
+   */
+  const buildPackChoices = computed<BuildPackChoice[]>(() =>
+    buildPacks.value.map((pack) => {
+      const tools = BUILD_PACK_TOOLS[pack.value] ?? [];
+      if (tools.length === 0) {
+        const selectable =
+          pack.value === "" ? cliEngineInstalled.value !== false : true;
+        return { ...pack, tools, installed: selectable, selectable, missing: null, installing: false };
+      }
+      const installed = engineInstalled(tools);
+      const installing = tools.some((toolId) =>
+        toolchainStore.activeJobs.some(
+          (job) => job.tool_id === toolId && job.action === "install",
+        ),
+      );
+      return {
+        ...pack,
+        tools,
+        installed: installed === true,
+        selectable: installed !== false,
+        missing: tools.find((toolId) => toolInstalled(toolId) === false) ?? null,
+        installing,
+      };
+    }),
+  );
+
+  /**
+   * buildPackValid gates the build-pack step and submit: the chosen pack must
+   * be selectable on the target node. Sources with no build pack (Dockerfile,
+   * image, compose) are always valid.
+   */
+  const buildPackValid = computed<boolean>(() => {
+    if (buildPackSkipped.value || isCompose.value) {
+      return true;
+    }
+    const choice = buildPackChoices.value.find((item) => item.value === form.buildPack);
+    return choice ? choice.selectable : true;
+  });
 
   /**
    * preselectedSourceType is the caller's valid preselect (an Add-resource
@@ -667,8 +818,10 @@ export function useCreateAppWizard(
     switch (step.value) {
       case 0:
         return sourceValid.value;
-      case 2:
+      case 1:
         return runtimeValid.value;
+      case 2:
+        return buildPackValid.value;
       default:
         return true;
     }
@@ -695,7 +848,7 @@ export function useCreateAppWizard(
   /** nextStep advances, jumping over the hidden build-pack step. */
   function nextStep(): void {
     step.value += 1;
-    if (step.value === 1 && buildPackSkipped.value) {
+    if (step.value === 2 && buildPackSkipped.value) {
       step.value += 1;
     }
   }
@@ -703,7 +856,7 @@ export function useCreateAppWizard(
   /** prevStep goes back, jumping over the hidden build-pack step. */
   function prevStep(): void {
     step.value -= 1;
-    if (step.value === 1 && buildPackSkipped.value) {
+    if (step.value === 2 && buildPackSkipped.value) {
       step.value -= 1;
     }
   }
@@ -720,7 +873,7 @@ export function useCreateAppWizard(
    */
   const visibleStepNames = computed<string[]>(() =>
     buildPackSkipped.value
-      ? [stepNames.value[0], stepNames.value[2], stepNames.value[3], stepNames.value[4]]
+      ? [stepNames.value[0], stepNames.value[1], stepNames.value[3], stepNames.value[4]]
       : stepNames.value,
   );
 
@@ -855,6 +1008,59 @@ export function useCreateAppWizard(
     await providersStore
       .fetchBranches(form.providerId, form.repoFullName)
       .catch(() => undefined);
+  }
+
+  /** subscribeNodeTools points the toolchain store at the wizard's node, so the
+   * build-pack step can gate on that node's installed tools and enqueue an
+   * install through the same store (and its JUS-178 progress modal). Only a
+   * `ready` node has a live agent to report a catalog: a pending/offline node
+   * would 502 the tools route, so the picker stays fail-open for it. */
+  function subscribeNodeTools(): void {
+    const id = form.serverId;
+    if (id === "" || toolchainStore.serverId === id) {
+      return;
+    }
+    const status = serversStore.servers.find((item) => item.id === id)?.status;
+    if (status !== "ready") {
+      return;
+    }
+    void toolchainStore.subscribe(id).catch(() => undefined);
+  }
+
+  /** installBuildPack enqueues the pack's tools (deps first) and opens the
+   * install-progress modal; the option re-enables when the store reloads the
+   * catalog after the job succeeds. */
+  async function installBuildPack(value: BuildPack): Promise<void> {
+    const tools = BUILD_PACK_TOOLS[value] ?? [];
+    if (tools.length === 0 || form.serverId === "") {
+      return;
+    }
+    try {
+      await toolchainStore.enqueue(tools, "install");
+      toolchainStore.openQueueModal();
+    } catch (error) {
+      message.warning(describeToolchainError(error), { duration: 8000 });
+    }
+  }
+
+  /** retryNodeTools re-fetches the target node's catalog after a failed check. */
+  async function retryNodeTools(): Promise<void> {
+    if (form.serverId === "") {
+      return;
+    }
+    try {
+      await toolchainStore.refresh();
+    } catch {
+      // The failure surfaces through toolchainStore.failure (nodeToolsError).
+    }
+  }
+
+  /** disconnectNodeTools releases the toolchain socket the wizard opened and
+   * forgets the node, so the next open re-subscribes instead of reusing a dead
+   * socket. */
+  function disconnectNodeTools(): void {
+    toolchainStore.disconnect();
+    toolchainStore.serverId = "";
   }
 
   /** handleRepoSelect prefills branch, clone URL and a name from the repo. */
@@ -1238,6 +1444,10 @@ export function useCreateAppWizard(
     providersStore.reposError = null;
     githubAppStore.clearErrors();
     providersStore.reposErrorRaw = null;
+    // Release the toolchain socket/subscription and the install modal the
+    // wizard opened, so closing it leaves nothing live in the background.
+    toolchainStore.closeQueueModal();
+    disconnectNodeTools();
   }
 
   return {
@@ -1245,6 +1455,14 @@ export function useCreateAppWizard(
     step,
     stepNames,
     buildPacks,
+    buildPackChoices,
+    buildPackValid,
+    noBuildEngine,
+    nodeToolsLoading,
+    nodeToolsError,
+    installBuildPack,
+    retryNodeTools,
+    subscribeNodeTools,
     submitting,
     errorMessage,
     sourceError,

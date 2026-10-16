@@ -17,8 +17,9 @@ import (
 // TestLocalhostNodeMigration preserves workload references and leaves remote nodes alone.
 func TestLocalhostNodeMigration(t *testing.T) {
 	for _, scenario := range []struct {
-		name, ip, hint, wantError string
-		collision, ambiguous      bool
+		name, ip, hint, wantError, nodeID string
+		collision, ambiguous              bool
+		startVersion                      int64
 	}{
 		{name: "saved identity after hostname change", hint: "original-host-agent"},
 		{name: "unambiguous loopback fallback", ip: "127.0.0.1"},
@@ -26,9 +27,18 @@ func TestLocalhostNodeMigration(t *testing.T) {
 		{name: "multiple loopback candidates", ip: "127.0.0.1", ambiguous: true, wantError: "cannot identify"},
 		{name: "localhost collision", hint: "original-host-agent", collision: true, wantError: "reconcile"},
 		{name: "saved identity missing", hint: "missing-agent", wantError: "not found"},
+		{name: "custom identity loopback", nodeID: "test-node-1", ip: "127.0.0.1"},
+		{name: "custom identity after migration 49", nodeID: "test-node-1", ip: "127.0.0.1", startVersion: 50},
+		{name: "custom identity local agent address", nodeID: "test-node-1", ip: "127.0.0.1:9443", startVersion: 50},
+		{name: "custom identity IPv6", nodeID: "test-node-1", ip: "::1", startVersion: 50},
+		{name: "custom identity ambiguity", nodeID: "test-node-1", ip: "127.0.0.1", ambiguous: true, startVersion: 50, wantError: "reconcile nodes"},
+		{name: "custom identity localhost collision", nodeID: "test-node-1", ip: "127.0.0.1", collision: true, startVersion: 50, wantError: "reconcile their workloads"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			t.Setenv("GOTHAM_LEGACY_LOCAL_NODE_ID", scenario.hint)
+			if scenario.nodeID == "" {
+				scenario.nodeID = "original-host-agent"
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
@@ -73,8 +83,11 @@ func TestLocalhostNodeMigration(t *testing.T) {
 				t.Fatalf("init migrations: %v", err)
 			}
 			// Stop at the last release before the localhost identity migration.
-			if _, err := provider.UpTo(ctx, 48); err != nil {
-				t.Fatalf("migrate to 00048: %v", err)
+			if scenario.startVersion == 0 {
+				scenario.startVersion = 48
+			}
+			if _, err := provider.UpTo(ctx, scenario.startVersion); err != nil {
+				t.Fatalf("migrate to %d: %v", scenario.startVersion, err)
 			}
 
 			var serverID, userID, appID, deployID, projectID, environmentID string
@@ -83,7 +96,7 @@ func TestLocalhostNodeMigration(t *testing.T) {
 				args  []any
 				dest  *string
 			}{
-				{`INSERT INTO servers (name, ip, ssh_user, node_id) VALUES ('old', $2, '', $1) RETURNING id`, []any{"original-host-agent", scenario.ip}, &serverID},
+				{`INSERT INTO servers (name, ip, ssh_user, node_id) VALUES ('old', $2, '', $1) RETURNING id`, []any{scenario.nodeID, scenario.ip}, &serverID},
 				{`INSERT INTO users (email) VALUES ('localhost-migration@example.com') RETURNING id`, nil, &userID},
 			} {
 				if err := db.QueryRowContext(ctx, seed.query, seed.args...).Scan(seed.dest); err != nil {
@@ -108,6 +121,12 @@ func TestLocalhostNodeMigration(t *testing.T) {
 			if _, err := db.ExecContext(ctx, `INSERT INTO proxy_config_versions (server_id,files,content_hash) VALUES ($1,'{"routers":"preserved"}','hash')`, serverID); err != nil {
 				t.Fatal(err)
 			}
+			if _, err := db.ExecContext(ctx, `INSERT INTO databases (name,user_id,team_id,server_id,environment_id,engine) VALUES ('db',$1,$1,$2,$3,'postgres')`, userID, serverID, environmentID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(ctx, `INSERT INTO services (name,user_id,team_id,server_id,environment_id,compose_yaml) VALUES ('service',$1,$1,$2,$3,'services: {}')`, userID, serverID, environmentID); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := db.ExecContext(ctx, `INSERT INTO servers (name,ip,ssh_user,node_id) VALUES ('remote','192.0.2.5','','unrelated-agent')`); err != nil {
 				t.Fatal(err)
 			}
@@ -128,7 +147,7 @@ func TestLocalhostNodeMigration(t *testing.T) {
 					t.Fatalf("migration error=%v; want %s", err, scenario.wantError)
 				}
 				var unchanged bool
-				if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM servers s JOIN applications a ON a.server_id=s.id JOIN deployments d ON d.application_id=a.id JOIN proxy_config_versions p ON p.server_id=s.id WHERE s.id=$1 AND s.node_id='original-host-agent')`, serverID).Scan(&unchanged); err != nil || !unchanged {
+				if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM servers s JOIN applications a ON a.server_id=s.id JOIN deployments d ON d.application_id=a.id JOIN proxy_config_versions p ON p.server_id=s.id WHERE s.id=$1 AND s.node_id=$2)`, serverID, scenario.nodeID).Scan(&unchanged); err != nil || !unchanged {
 					t.Fatalf("failed migration lost workloads: %v", err)
 				}
 				return
@@ -142,6 +161,8 @@ func TestLocalhostNodeMigration(t *testing.T) {
  SELECT 1 FROM servers s JOIN applications a ON a.server_id=s.id
  JOIN deployments d ON d.application_id=a.id
  JOIN proxy_config_versions p ON p.server_id=s.id
+ JOIN databases db ON db.server_id=s.id
+ JOIN services svc ON svc.server_id=s.id
  WHERE s.id=$1 AND s.node_id='localhost' AND s.ip='127.0.0.1'
  AND a.id=$2 AND d.id=$3 AND p.files='{"routers":"preserved"}'::jsonb)`, serverID, appID, deployID).Scan(&preserved); err != nil {
 				t.Fatal(err)
@@ -150,6 +171,9 @@ func TestLocalhostNodeMigration(t *testing.T) {
 				t.Fatal("migration lost node identity or workload references")
 			}
 			var count int
+			if err := db.QueryRowContext(ctx, `SELECT count(*) FROM servers WHERE node_id <> 'unrelated-agent'`).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("duplicate local node: count=%d, err=%v", count, err)
+			}
 			if err := db.QueryRowContext(ctx, `SELECT count(*) FROM servers WHERE node_id='unrelated-agent'`).Scan(&count); err != nil || count != 1 {
 				t.Fatalf("remote node changed: count=%d, err=%v", count, err)
 			}

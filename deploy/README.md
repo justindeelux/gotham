@@ -121,9 +121,18 @@ and rejects deletion and PATCH with HTTP 409. Readiness requires agent
 heartbeats. Migration 49 uses the saved `agent.env` identity supplied by the
 installer, preserving the UUID and workload references even after a hostname
 change. For manual migrations, set `GOTHAM_LEGACY_LOCAL_NODE_ID` to that ID;
-without a hint, only one loopback-addressed legacy `*-agent` is automatically
-selected. Unknown addresses, ambiguous candidates and an existing `localhost`
-collision fail for operator reconciliation rather than silently stranding data.
+forward migration 51 additionally selects a single loopback-addressed node with
+any custom ID, including agent addresses such as `localhost:9443` or `[::1]:9443`.
+Startup repeats that check before creating a node. Apps, databases, services and
+routers keep their existing server UUID. Multiple local candidates or a legacy
+local node alongside `localhost` fail with reconciliation guidance: inspect the
+saved `agent.env` and server records, reconcile workloads and remove duplicate
+local-agent entries before retrying. No workloads are merged or deleted for you.
+
+After a manual upgrade, set `GOTHAM_AGENT_NODE_ID=localhost` in the local agent's
+saved environment (normally `/etc/gotham/agent.env`) and restart the agent. The
+installer updates it automatically; retaining the old ID can register a duplicate
+legacy node again.
 
 The exact `localhost` identity may register only from a loopback peer. Other
 listener identities and aliases stay reserved. Its server certificate uses

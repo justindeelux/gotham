@@ -3,6 +3,8 @@ package servers
 import (
 	"context"
 	"fmt"
+
+	"github.com/justindeelux/gotham/internal/store"
 )
 
 // localhostAgentServerName separates the local agent certificate from CP listener SANs.
@@ -11,7 +13,15 @@ const localhostAgentServerName = "localhost.agent.gotham.invalid"
 // EnsureLocalhost repairs the mandatory registry entry without replacing its
 // UUID, inventory or heartbeat status. Readiness still requires a live agent.
 func (s *ServerService) EnsureLocalhost(ctx context.Context) error {
-	_, err := s.store.DB.Exec(ctx, `
+	tx, err := s.store.DB.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("ensure localhost node: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, store.ReconcileLocalhostSQL); err != nil {
+		return fmt.Errorf("reconcile localhost node: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
 		INSERT INTO servers (name, ip, port, ssh_user, node_id)
 		VALUES ('localhost', '127.0.0.1', 22, '', 'localhost')
 		ON CONFLICT (node_id) DO UPDATE
@@ -19,5 +29,5 @@ func (s *ServerService) EnsureLocalhost(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ensure localhost node: %w", err)
 	}
-	return nil
+	return tx.Commit(ctx)
 }

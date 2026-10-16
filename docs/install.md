@@ -361,10 +361,19 @@ agent identity in place, preserving the server UUID, apps, deployments and
 routers. The installer passes the previous `agent.env` ID to the migration,
 so changing the hostname or running migrations in a container is safe. For a
 manual migration, set `GOTHAM_LEGACY_LOCAL_NODE_ID` to that saved node ID.
-Without it, only a single legacy `*-agent` node with a loopback address can
-be identified automatically; blank addresses, multiple candidates and an
-existing `localhost` collision fail with an actionable error. Reconcile
-colliding nodes' workloads before retrying; no data is merged or deleted.
+Forward migration 51 also detects a single loopback-addressed node with a custom
+ID (for example, `test-node-1` at `127.0.0.1`), including local agent addresses
+such as `localhost:9443` and `[::1]:9443`. Startup repeats this check before
+creating `localhost`, preserving the UUID, apps, databases, services and routers.
+Multiple local candidates or an existing `localhost` alongside a legacy local
+node stop migration/startup with an actionable error. Inspect the saved
+`agent.env` and server records, reconcile their workloads and remove duplicate
+local-agent entries before retrying; no data is merged or deleted automatically.
+
+After a manual upgrade, change `GOTHAM_AGENT_NODE_ID` in the local agent's saved
+environment (normally `/etc/gotham/agent.env`) to `localhost` and restart the
+agent. The installer does this automatically; keeping the old ID can register
+the legacy node again and make startup fail on the duplicate.
 
 The Git URL host policy's denial of the name `localhost` applies to Git
 remotes only; it does not validate node IDs or the agent's loopback dial path.

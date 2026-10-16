@@ -31,6 +31,16 @@ const show = computed<boolean>({
 /** selectedJobId names the job whose log renders; null shows the hint. */
 const selectedJobId = ref<string | null>(null);
 
+/**
+ * manualJobId names the job the user pinned after opening (a click, or the
+ * open-request id). A pin survives status changes and progress frames and
+ * is released only when the job leaves the list or the modal reopens.
+ */
+const manualJobId = ref<string | null>(null);
+
+/** lastWanted tracks the open-request id already honored (open only). */
+const lastWanted = ref<string | null | undefined>(undefined);
+
 /** selectedJob resolves the selection against the live queue. */
 const selectedJob = computed<ToolchainJob | null>(
   () => store.jobs[selectedJobId.value ?? ""] ?? null,
@@ -101,26 +111,76 @@ const paneState = computed<InstallLogPaneState>(() => {
   return "ready";
 });
 
-// Opening (re)focuses the requested job, the first active job, or the
-// newest job; a selection that outlives its job (or an empty queue that
-// gains jobs) falls back the same way.
+// pickFollowedId prefers the newest running job, else the newest queued
+// job, else the newest job (jobsList is newest first).
+function pickFollowedId(jobs: ToolchainJob[]): string | null {
+  return (
+    jobs.find((job) => job.status === "running")?.id ??
+    jobs.find((job) => job.status === "queued")?.id ??
+    jobs[0]?.id ??
+    null
+  );
+}
+
+/**
+ * onSelect pins a user pick after opening; the jobs watcher keeps it while
+ * the job still exists, whatever its status.
+ */
+function onSelect(id: string | null): void {
+  selectedJobId.value = id;
+  manualJobId.value = id;
+}
+
+// Opening follows the requested job (or the active job); closing resets so
+// a reopen never lands on a stale finished job (JUS-184).
 watch(
-  [show, () => store.jobsList],
-  ([open, jobs]) => {
+  show,
+  (open) => {
     if (!open) {
+      selectedJobId.value = null;
+      manualJobId.value = null;
+      lastWanted.value = undefined;
       return;
     }
-    if (selectedJobId.value !== null && jobs.some((job) => job.id === selectedJobId.value)) {
-      return;
-    }
+    lastWanted.value = store.queueModalJobId;
+    const jobs = store.jobsList;
     const wanted = store.queueModalJobId;
-    selectedJobId.value =
-      (wanted !== null && jobs.some((job) => job.id === wanted) ? wanted : undefined) ??
-      store.activeJobs[0]?.id ??
-      jobs[0]?.id ??
-      null;
+    // An explicitly requested job is pinned like a user pick, so it
+    // survives later frames; otherwise follow the active job.
+    const pinned = wanted !== null && jobs.some((job) => job.id === wanted) ? wanted : null;
+    manualJobId.value = pinned;
+    selectedJobId.value = pinned ?? pickFollowedId(jobs);
   },
   { immediate: true },
+);
+
+// While open, a new open-request wins once; otherwise a pinned job is kept
+// while it still exists (any status, so a finished log stays readable
+// while the queue runs) and everything else follows the active job, so a
+// fresh open or a new enqueue lands on the running job (JUS-184).
+watch(
+  [() => store.jobsList, () => store.queueModalJobId],
+  ([jobs, wanted]) => {
+    if (!show.value) {
+      return;
+    }
+    if (wanted !== lastWanted.value) {
+      lastWanted.value = wanted;
+      if (wanted !== null && jobs.some((job) => job.id === wanted)) {
+        manualJobId.value = wanted;
+        selectedJobId.value = wanted;
+        return;
+      }
+    }
+    if (manualJobId.value !== null) {
+      if (jobs.some((job) => job.id === manualJobId.value)) {
+        selectedJobId.value = manualJobId.value;
+        return;
+      }
+      manualJobId.value = null;
+    }
+    selectedJobId.value = pickFollowedId(jobs);
+  },
 );
 </script>
 
@@ -137,7 +197,7 @@ watch(
       <section :aria-label="$t('toolchain.modal.queueLabel')">
         <InstallQueueList
           :selected-id="selectedJobId"
-          @select="selectedJobId = $event"
+          @select="onSelect"
         />
         <p class="modal-sr" aria-live="polite">{{ voiceStatus }}</p>
       </section>

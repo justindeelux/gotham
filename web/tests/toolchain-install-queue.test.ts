@@ -41,7 +41,7 @@ import {
   listJobs,
   listTools,
 } from "@/features/toolchain/api/toolchain";
-import type { ToolchainJob } from "@/features/toolchain/api/toolchain";
+import type { ToolchainJob, ToolchainTool } from "@/features/toolchain/api/toolchain";
 import InstallJobLogPane from "@/features/toolchain/components/InstallJobLogPane.vue";
 import InstallQueueList from "@/features/toolchain/components/InstallQueueList.vue";
 import InstallQueueModal from "@/features/toolchain/components/InstallQueueModal.vue";
@@ -564,6 +564,186 @@ describe("git update failure", () => {
     expect(wrapper.text()).toContain("Failed");
     expect(wrapper.find(".log-pane").text()).toContain(guidance);
     expect(wrapper.text()).not.toContain("Succeeded");
+    wrapper.unmount();
+  });
+});
+
+describe("InstallQueueModal selection (JUS-184)", () => {
+  function catalogTool(id: string, name: string): ToolchainTool {
+    return {
+      id,
+      name,
+      installed: false,
+      installable: true,
+      uninstallable: false,
+      needs_root: false,
+      version_ok: true,
+    };
+  }
+
+  function mountModal() {
+    const shell = defineComponent({
+      setup: () => () => h(NMessageProvider, null, { default: () => h(InstallQueueModal) }),
+    });
+    return mount(shell, {
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    });
+  }
+
+  /** selectedToolName reads the highlighted queue row's tool name. */
+  function selectedToolName(wrapper: ReturnType<typeof mount>): string {
+    return wrapper.find(".queue-row.selected .queue-tool").text();
+  }
+
+  function selectRow(wrapper: ReturnType<typeof mount>, toolName: string) {
+    const button = wrapper
+      .findAll(".queue-select")
+      .find((entry) => entry.attributes("aria-label") === toolName);
+    expect(button).toBeDefined();
+    return button?.trigger("click");
+  }
+
+  it("moves from a finished job to a newly enqueued running job", async () => {
+    listToolsMock.mockResolvedValue([catalogTool("git", "Git"), catalogTool("railpack", "Railpack")]);
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    const finished = job({ id: "job-git", tool_id: "git", status: "succeeded" });
+    store.applyJob(finished);
+    getJobMock.mockResolvedValue({ job: finished, log: "done\n", next_seq: 1 });
+
+    store.openQueueModal();
+    const wrapper = mountModal();
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+
+    store.applyJob(
+      job({ id: "job-rail", tool_id: "railpack", status: "running", created_at: "2026-10-16T12:05:00Z" }),
+    );
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Railpack");
+    wrapper.unmount();
+  });
+
+  it("lands on the running job after close and reopen (stale git repro)", async () => {
+    listToolsMock.mockResolvedValue([catalogTool("git", "Git"), catalogTool("railpack", "Railpack")]);
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    const finished = job({ id: "job-git", tool_id: "git", status: "succeeded" });
+    store.applyJob(finished);
+    getJobMock.mockResolvedValue({ job: finished, log: "done\n", next_seq: 1 });
+
+    store.openQueueModal();
+    const wrapper = mountModal();
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+
+    store.closeQueueModal();
+    await flushPromises();
+    store.applyJob(
+      job({ id: "job-rail", tool_id: "railpack", status: "running", created_at: "2026-10-16T12:05:00Z" }),
+    );
+    await flushPromises();
+    store.openQueueModal();
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Railpack");
+    wrapper.unmount();
+  });
+
+  it("keeps a manual pick of a running job when a newer job is queued", async () => {
+    listToolsMock.mockResolvedValue([
+      catalogTool("git", "Git"),
+      catalogTool("railpack", "Railpack"),
+      catalogTool("node", "Node"),
+    ]);
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    store.applyJob(job({ id: "job-git", tool_id: "git", status: "running" }));
+    store.applyJob(
+      job({ id: "job-rail", tool_id: "railpack", status: "running", created_at: "2026-10-16T12:05:00Z" }),
+    );
+    getJobMock.mockResolvedValue({ job: job(), log: "", next_seq: 0 });
+
+    store.openQueueModal();
+    const wrapper = mountModal();
+    await flushPromises();
+    // Newest running job is followed by default.
+    expect(selectedToolName(wrapper)).toBe("Railpack");
+
+    await selectRow(wrapper, "Git");
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+
+    store.applyJob(
+      job({ id: "job-node", tool_id: "node", status: "queued", created_at: "2026-10-16T12:10:00Z" }),
+    );
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+    wrapper.unmount();
+  });
+
+  it("keeps a manual pick of a finished job when another job progresses", async () => {
+    listToolsMock.mockResolvedValue([catalogTool("git", "Git"), catalogTool("railpack", "Railpack")]);
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    const finished = job({ id: "job-git", tool_id: "git", status: "failed" });
+    store.applyJob(finished);
+    store.applyJob(
+      job({ id: "job-rail", tool_id: "railpack", status: "running", created_at: "2026-10-16T12:05:00Z" }),
+    );
+    getJobMock.mockResolvedValue({ job: finished, log: "why it failed\n", next_seq: 1 });
+
+    store.openQueueModal();
+    const wrapper = mountModal();
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Railpack");
+
+    // The user pins the failed job to read its log…
+    await selectRow(wrapper, "Git");
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+
+    // …and a progress frame for the running job must not steal it back.
+    store.applyJob(
+      job({
+        id: "job-rail",
+        tool_id: "railpack",
+        status: "running",
+        created_at: "2026-10-16T12:05:00Z",
+        started_at: "2026-10-16T12:05:01Z",
+      }),
+    );
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+    wrapper.unmount();
+  });
+
+  it("keeps an open-requested finished job across later frames", async () => {
+    listToolsMock.mockResolvedValue([catalogTool("git", "Git"), catalogTool("railpack", "Railpack")]);
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    const finished = job({ id: "job-git", tool_id: "git", status: "failed" });
+    store.applyJob(finished);
+    store.applyJob(
+      job({ id: "job-rail", tool_id: "railpack", status: "running", created_at: "2026-10-16T12:05:00Z" }),
+    );
+    getJobMock.mockResolvedValue({ job: finished, log: "why it failed\n", next_seq: 1 });
+
+    store.openQueueModal("job-git");
+    const wrapper = mountModal();
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+
+    store.applyJob(
+      job({
+        id: "job-rail",
+        tool_id: "railpack",
+        status: "running",
+        created_at: "2026-10-16T12:05:00Z",
+        started_at: "2026-10-16T12:05:01Z",
+      }),
+    );
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
     wrapper.unmount();
   });
 });

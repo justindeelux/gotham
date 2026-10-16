@@ -17,6 +17,8 @@ import {
   regenerateTotpRecoveryCodes,
 } from "@/features/profile/api/totp";
 
+/* global window: readonly */
+
 const get = vi.mocked(http.get);
 const post = vi.mocked(http.post);
 

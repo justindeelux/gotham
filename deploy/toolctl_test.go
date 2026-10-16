@@ -62,11 +62,40 @@ func TestToolctlUsage(t *testing.T) {
 }
 
 func TestToolctlRefusesPlatformToolUninstall(t *testing.T) {
-	for _, id := range []string{"git", "docker"} {
+	for _, id := range []string{"git", "docker", "gotham-hostctl"} {
 		out, err := runToolctl(t, t.TempDir(), nil, "uninstall-tool", id)
 		if err == nil || !strings.Contains(out, "required by the platform") || strings.Contains(out, "+ ") {
 			t.Errorf("uninstall %s = %q, %v; want refusal without executing commands", id, out, err)
 		}
+	}
+}
+
+// TestToolctlHostctlInstall proves the control-plane host helper installs from
+// the root-owned payload and a missing payload is refused (JUS-185).
+func TestToolctlHostctlInstall(t *testing.T) {
+	missing, err := runToolctl(t, t.TempDir(), nil, "install-tool", "gotham-hostctl")
+	if err == nil || !strings.Contains(missing, "payload is missing") {
+		t.Fatalf("missing payload = %q, %v; want refusal", missing, err)
+	}
+
+	root := t.TempDir()
+	payload := filepath.Join(root, "usr/libexec/gotham/hostbootstrap")
+	if err := os.MkdirAll(payload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"gotham-hostctl", "gotham-hostctl.sudoers"} {
+		if err := os.WriteFile(filepath.Join(payload, name), []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := runToolctl(t, root, nil, "install-tool", "gotham-hostctl")
+	if err != nil {
+		t.Fatalf("install-tool gotham-hostctl: %v: %s", err, out)
+	}
+	if !strings.Contains(out, "hostbootstrap/gotham-hostctl") ||
+		!strings.Contains(out, "gotham-hostctl.sudoers") ||
+		!strings.Contains(out, "visudo -cf") {
+		t.Errorf("host helper install did not stage, validate and install: %q", out)
 	}
 }
 

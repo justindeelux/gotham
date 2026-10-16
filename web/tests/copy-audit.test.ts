@@ -34,10 +34,6 @@ const DENYLIST: Array<{ label: string; pattern: RegExp }> = [
  * explicit and tiny: it is the whole record of where the rule is waived.
  */
 const ALLOWLIST: Record<string, string> = {
-  "instance-settings.unsupported [repo file path]":
-    "Handled by JUS-185 (instance-settings Network message); that parallel change owns this string, not this one.",
-  "instance-settings.unsupported [repo directory]":
-    "Handled by JUS-185 (instance-settings Network message); that parallel change owns this string, not this one.",
   "servers.wizard.installHowto [gotham env var]":
     "The install wizard's one-time manual agent bootstrap, kept as the explicit alternative; it names the installer's own env var on purpose.",
   "features/servers/components/AddServerWizard.vue [repo directory]":

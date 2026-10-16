@@ -6,7 +6,8 @@
 #
 #   sudo deploy/install-toolctl-sudoers.sh [service-user]
 #
-# Same privilege model as install-hostctl-sudoers.sh: every rule pins the verb
+# Same privilege model as the host-helper drop-in written by
+# gotham-hostbootstrap.sh: every rule pins the verb
 # and the catalog id, so the service user cannot pass any other argument. The
 # helper itself validates the id against the same allow-list and owns every
 # executable argv.

@@ -11,7 +11,11 @@
 #
 # The agent passes only a catalog id. This script owns every executable argv and
 # validates the id against an allow-list, so a compromised agent cannot widen
-# what runs as root: it cannot name a package, a URL or an extra flag.
+# what runs as root: it cannot name a package, a URL or an extra flag. The
+# control plane uses the same helper to repair the host helper
+# (`install-tool gotham-hostctl`), reaching it through the verb-pinned rule the
+# `gotham-hostbootstrap` step writes; the content it installs is the root-owned
+# staged copy next to this script, never caller-supplied bytes.
 #
 # Versions and their sha256 digests are pinned below. Downloads are verified
 # before a binary is installed; a mismatch aborts (exit 4).
@@ -89,7 +93,7 @@ TOOL="$2"
 
 allow_install() {
     case "$1" in
-        railpack | buildkit | pack | docker | git) return 0 ;;
+        railpack | buildkit | pack | docker | git | gotham-hostctl) return 0 ;;
         *) die "tool is not installable: $1" 3 ;;
     esac
 }
@@ -98,6 +102,7 @@ allow_uninstall() {
         railpack | buildkit | pack) return 0 ;;
         git) die "cannot uninstall git: required by the platform for source deployments" 3 ;;
         docker) die "cannot uninstall docker: required by the platform to run workloads" 3 ;;
+        gotham-hostctl) die "cannot uninstall gotham-hostctl: required by the platform for host network and system settings" 3 ;;
         *) die "tool is not uninstallable: $1" 3 ;;
     esac
 }
@@ -307,12 +312,53 @@ install_git() {
     esac
 }
 
+# ---- host helper (gotham-hostctl) ------------------------------------------
+# Installs the fixed, root-owned host helper the CONTROL PLANE (not the agent)
+# uses for instance settings, plus its verb-pinned sudoers drop-in. Content is
+# the root-owned payload that gotham-hostbootstrap wrote next to this helper
+# (/usr/libexec/gotham/hostbootstrap), so a caller naming only the catalog id
+# cannot substitute the script or the rules. See gotham-hostbootstrap.sh.
+HOSTCTL_PAYLOAD="${ROOT}/usr/libexec/gotham/hostbootstrap"
+HOSTCTL_LIVE="${ROOT}/usr/libexec/gotham/gotham-hostctl"
+HOSTCTL_SRC="${HOSTCTL_PAYLOAD}/gotham-hostctl"
+HOSTCTL_SUDOERS="${HOSTCTL_PAYLOAD}/gotham-hostctl.sudoers"
+HOSTCTL_DROPIN="${ROOT}/etc/sudoers.d/gotham-hostctl"
+
+install_hostctl() {
+    [ -f "${HOSTCTL_SRC}" ] || die "gotham-hostctl payload is missing (${HOSTCTL_SRC}); run the control-plane installer" 5
+    [ -f "${HOSTCTL_SUDOERS}" ] || die "gotham-hostctl sudoers payload is missing (${HOSTCTL_SUDOERS})" 5
+    if [ "${DRYRUN}" = "1" ]; then
+        echo "+ install -m 0755 ${HOSTCTL_SRC} ${HOSTCTL_LIVE}"
+        echo "+ visudo -cf <temp>"
+        echo "+ install -m 0440 ${HOSTCTL_SUDOERS} ${HOSTCTL_DROPIN}"
+        return 0
+    fi
+    [ -L "${HOSTCTL_LIVE}" ] && die "refusing to replace symlink ${HOSTCTL_LIVE}" 3
+    command -v visudo >/dev/null 2>&1 || die "visudo is required to validate the sudoers drop-in" 1
+    # Stage + rename the helper, so the live path is never briefly absent.
+    tmp="$(mktemp "${ROOT}/usr/libexec/gotham/.hostctl.XXXXXX")" || die "could not stage the host helper" 1
+    cp "${HOSTCTL_SRC}" "${tmp}" || { rm -f "${tmp}"; die "could not copy the host helper" 1; }
+    chmod 0755 "${tmp}"
+    mv -f "${tmp}" "${HOSTCTL_LIVE}" || { rm -f "${tmp}"; die "could not install the host helper" 1; }
+    [ -L "${HOSTCTL_DROPIN}" ] && die "refusing to replace symlink ${HOSTCTL_DROPIN}" 3
+    tmp="$(mktemp "${ROOT}/etc/sudoers.d/.gotham-hostctl.XXXXXX")" \
+        || die "could not create a sudoers temp file" 1
+    cp "${HOSTCTL_SUDOERS}" "${tmp}" || { rm -f "${tmp}"; die "could not copy the sudoers drop-in" 1; }
+    chmod 0440 "${tmp}"
+    if ! visudo -cf "${tmp}"; then
+        rm -f "${tmp}"
+        die "generated host-helper sudoers failed visudo; nothing installed" 1
+    fi
+    mv -f "${tmp}" "${HOSTCTL_DROPIN}"
+}
+
 case "${VERB}:${TOOL}" in
     install-tool:railpack) install_railpack ;;
     install-tool:buildkit) install_buildkit ;;
     install-tool:pack) install_pack ;;
     install-tool:docker) install_docker ;;
     install-tool:git) install_git ;;
+    install-tool:gotham-hostctl) install_hostctl ;;
     uninstall-tool:railpack) uninstall_railpack ;;
     uninstall-tool:buildkit) uninstall_buildkit ;;
     uninstall-tool:pack) uninstall_pack ;;

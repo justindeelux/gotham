@@ -1,7 +1,10 @@
 import { http } from "@/shared/api/http";
 import { parseWith } from "@/shared/validation/parse";
 
-import { stateEnvelopeSchema } from "@/features/instance-settings/schemas/instance";
+import {
+  hostHelperEnvelopeSchema,
+  stateEnvelopeSchema,
+} from "@/features/instance-settings/schemas/instance";
 
 /**
  * Typed client for the instance-settings routes served by `internal/instance`
@@ -68,12 +71,39 @@ export interface PendingNetwork {
   deadline: string;
 }
 
+/** Install/probe state of the fixed host helper (JUS-185). */
+export type HostHelperState = "ready" | "missing" | "denied";
+
+/** Host readiness: one accurate message per cause instead of one merged blur. */
+export interface HostState {
+  helper: HostHelperState;
+  /** True when the in-product Install can run: the root-owned payload and the
+   * hostctl drop-in (with the pinned repair verb) are both present. False means
+   * only a control-plane update can help. */
+  repair: boolean;
+  /** The host runs systemd-networkd + systemd-resolved + networkctl. */
+  network_stack: boolean;
+  /** The host has systemctl and hostnamectl. */
+  system_stack: boolean;
+  /** The network section can be applied right now (helper ready). */
+  network: boolean;
+  /** The system section can be applied right now (helper ready). */
+  system: boolean;
+}
+
 export interface InstanceState {
   general: GeneralSettings;
   network: NetworkSettings;
   system: SystemSettings;
   capabilities: { network: boolean; system: boolean };
+  host: HostState;
   pending: PendingNetwork | null;
+}
+
+/** Result of the in-product host-helper install. */
+export interface HostHelperResult {
+  settings: InstanceState;
+  log: string;
 }
 
 async function unwrap(request: Promise<{ data: unknown }>): Promise<InstanceState> {
@@ -100,15 +130,38 @@ export const confirmNetwork = (): Promise<InstanceState> =>
 export const revertNetwork = (): Promise<InstanceState> =>
   unwrap(http.post("/instance/settings/network/revert"));
 
+/**
+ * installHostHelper installs the fixed host helper and its verb-pinned sudoers
+ * rule through the root-owned tool installer, returning the fresh state and the
+ * installer output. It is the in-product action offered when the helper is
+ * missing or not permitted; the caller re-renders from the returned settings.
+ */
+export async function installHostHelper(): Promise<HostHelperResult> {
+  const response = await http.post("/instance/settings/host-helper");
+  const parsed = parseWith(hostHelperEnvelopeSchema, response.data, {
+    context: "HostHelperEnvelope",
+  });
+  return { settings: parsed.settings as InstanceState, log: parsed.log };
+}
+
 interface ErrorShape {
   status?: number | null;
   message?: string;
-  cause?: { response?: { data?: { errors?: Record<string, string> } } };
+  cause?: {
+    response?: {
+      data?: { errors?: Record<string, string>; log?: string };
+    };
+  };
 }
 
 /** serverFieldErrors extracts the 400 per-field messages ({} when none). */
 export function serverFieldErrors(error: unknown): Record<string, string> {
   return (error as ErrorShape)?.cause?.response?.data?.errors ?? {};
+}
+
+/** hostHelperErrorLog returns the installer output of a failed install (""). */
+export function hostHelperErrorLog(error: unknown): string {
+  return (error as ErrorShape)?.cause?.response?.data?.log ?? "";
 }
 
 /** isForbidden reports the 403 a non-operator receives. */

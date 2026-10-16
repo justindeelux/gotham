@@ -149,6 +149,51 @@ type Capabilities struct {
 	System  bool `json:"system"`
 }
 
+// HelperState says how the control-plane host answered the helper probe.
+type HelperState string
+
+const (
+	// HelperReady — the fixed helper is installed and runnable.
+	HelperReady HelperState = "ready"
+	// HelperMissing — the helper file is absent.
+	HelperMissing HelperState = "missing"
+	// HelperDenied — the helper is present but sudo refused it (its
+	// verb-pinned sudoers rule is missing).
+	HelperDenied HelperState = "denied"
+)
+
+// Host reports the control-plane host's readiness, so the operator gets one
+// accurate message per cause instead of a single merged "not available".
+type Host struct {
+	// Helper is the install state of the fixed host helper.
+	Helper HelperState `json:"helper"`
+	// Repair is true when the in-product Install can actually run: the
+	// root-owned payload exists AND sudo permits the exact pinned repair
+	// command. It is false whenever that privileged path is absent — an old
+	// install, or a Denied host whose drop-in is gone — in which case only
+	// re-running the control-plane installer can help.
+	Repair bool `json:"repair"`
+	// NetworkStack is true when the host runs what the network section needs
+	// (systemd-networkd + systemd-resolved + networkctl), detected without the
+	// helper. When false, installing the helper cannot make the section work.
+	NetworkStack bool `json:"network_stack"`
+	// SystemStack is true when the host has what the system section needs.
+	SystemStack bool `json:"system_stack"`
+	// Network is true when the network section can be applied right now.
+	Network bool `json:"network"`
+	// System is true when the system section can be applied right now.
+	System bool `json:"system"`
+}
+
+// Installable reports whether the in-product helper install can succeed: the
+// helper file is missing (the drop-in with the repair rule is still in place),
+// the repair path exists, and the host supports at least one section. A Denied
+// host, or one without the payload, is not installable — only a control-plane
+// update can help.
+func (h Host) Installable() bool {
+	return h.Helper == HelperMissing && h.Repair && (h.NetworkStack || h.SystemStack)
+}
+
 // State is the full read model.
 type State struct {
 	PendingControlPlaneURL *PendingControlPlaneURL `json:"pending_control_plane_url"`
@@ -156,6 +201,7 @@ type State struct {
 	Network                Network                 `json:"network"`
 	System                 System                  `json:"system"`
 	Capabilities           Capabilities            `json:"capabilities"`
+	Host                   Host                    `json:"host"`
 	Pending                *Pending                `json:"pending"`
 }
 

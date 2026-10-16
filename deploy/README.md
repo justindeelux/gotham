@@ -616,16 +616,80 @@ and by NEG1 end to end; the wrapper rollback status is covered by NEG2.
 
 `Settings → Instance` applies network (DNS, IPv4/IPv6) and system (hostname, NTP)
 settings through `gotham-hostctl.sh`, a fixed root-owned helper with the same
-privilege model as the update wrapper. It is optional: without it the General
-section still works and the host sections are read-only.
+privilege model as the update wrapper. The control plane (never the agent) runs
+`/usr/libexec/gotham/gotham-hostctl <verb>` through its verb-pinned sudoers rule.
+
+**Install (root-trusted source only).** `deploy/gotham-hostbootstrap.sh` is the
+single installer of the helper. `install.sh` (run by the operator as root) runs
+it once as `sh deploy/gotham-hostbootstrap.sh create <control-plane-user>`; the
+self-update wrapper re-applies it on every update from the root-owned payload at
+`/usr/libexec/gotham/hostbootstrap/`. It writes only fixed root-owned paths:
+
+- `/usr/libexec/gotham/gotham-hostctl` and `gotham-toolctl` (root:root 0755);
+- the payload `/usr/libexec/gotham/hostbootstrap/` (the same scripts, the
+  rendered `gotham-hostctl.sudoers`, and its own installer copy);
+- `/etc/sudoers.d/gotham-hostctl` for the actual control-plane user: the five
+  hostctl verbs plus the single pinned `gotham-toolctl install-tool
+  gotham-hostctl` repair verb.
+
+Each file is written to a `mktemp` file in its destination directory and renamed
+atomically; a symlinked destination is refused; a sudoers drop-in is validated
+with `visudo -cf` before the rename, so a broken file is never left behind. It is
+idempotent and reads no environment or configuration (the console name is the
+control-plane user the installer passes). No root process ever executes or reads
+as code a file the service user can write: the wrapper only re-reads the
+root-owned payload, and the service binary (owned by the service user) is never
+run as root.
+
+The agent's `/etc/sudoers.d/gotham-toolctl` is installed by `install-agent.sh`
+(`install-toolctl-sudoers.sh`), unchanged; the control plane only re-applies the
+host-helper payload, so a custom service user's hostctl grant is never rewritten
+for `gotham`.
+
+**In-product install: only where it can succeed.** The pinned repair rule
+(`gotham-toolctl install-tool gotham-hostctl`) lives in the same drop-in as the
+hostctl verbs, so it is only reachable while that drop-in exists. The control
+plane cannot read `/etc/sudoers.d` (root 0750) to test that directly, so it asks
+the sudo policy itself (`sudo -n -l <pinned command>`, read-only, no password for
+the NOPASSWD rule). It offers **Install host helper** only when the helper file
+is missing *and* that probe succeeds *and* the root-owned payload is present —
+then the pinned repair verb reinstalls the helper and its drop-in from the
+payload.
+
+In every other read-only state there is no privileged path from the control plane
+by design, and re-running the (root, operator) installer is the recovery. The page
+states plainly: **"Host changes are provisioned by the control-plane installer, so
+a platform administrator must re-run it (or upgrade) to enable them."** That
+covers:
+
+- the drop-in is gone or names another user ("Denied") — the repair rule is
+  refused with it;
+- the payload was never installed (a host installed before this feature).
+
+**Helper refresh (honest limitation).** The payload is written only by the
+(root, operator-run) installer, and the self-update wrapper itself is rendered by
+`install.sh` only. So:
+
+- a **deleted** helper or drop-in is restored only on a host whose wrapper already
+  has the `apply_host_bootstrap_payload` step and whose payload exists (re-applied
+  before every restart);
+- a host that predates this feature has an **old wrapper with no apply step** and
+  **no payload**, so no self-update can install the helper — only re-running the
+  installer can;
+- the helper *content* never upgrades through self-update at all (the release
+  ships binaries only, and a root-owned payload must not be replaced from a
+  service-writable artifact). Upgrading the helper means re-running the installer.
+
+Manual recovery/upgrade is the same fixed command:
 
 ```sh
-sudo install -D -m 0755 -o root -g root deploy/gotham-hostctl.sh /usr/libexec/gotham/gotham-hostctl
-sudo deploy/install-hostctl-sudoers.sh gotham
+sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user>
 ```
 
 - sudoers grants exactly five verbs (`status`, `apply-network`, `confirm-network`,
-  `revert-network`, `apply-system`); values arrive on stdin and are re-validated.
+  `revert-network`, `apply-system`), plus the single repair verb
+  `gotham-toolctl install-tool gotham-hostctl`; values arrive on stdin and are
+  re-validated.
 - Supported stack: systemd-networkd + systemd-resolved + systemd-timesyncd. Gotham
   owns only `05-gotham.network`, `resolved.conf.d/05-gotham.conf` and
   `timesyncd.conf.d/05-gotham.conf`; other hosts report the sections as unsupported.

@@ -312,6 +312,31 @@ restart_service() {
     return 1
 }
 
+# apply_host_bootstrap_payload re-applies the root-owned host-helper payload
+# (JUS-185) that install.sh wrote under /usr/libexec/gotham/hostbootstrap, so the
+# host helper, the tool installer and their verb-pinned sudoers drop-in stay in
+# place across a self-update. It runs the payload's own installer script, which
+# is root-owned (never a service-writable path), and is a no-op when the payload
+# is absent (a host installed before this feature shows the honest "update the
+# control plane" state instead). A failure is logged and never blocks the
+# restart.
+apply_host_bootstrap_payload() {
+    payload="/usr/libexec/gotham/hostbootstrap"
+    script="${payload}/gotham-hostbootstrap.sh"
+    [ -d "${payload}" ] || return 0
+    [ -f "${script}" ] || return 0
+    if [ -L "${script}" ]; then
+        log "refusing symlinked ${script}; skipping host-bootstrap payload"
+        return 0
+    fi
+    if output="$(sh "${script}" apply 2>&1)"; then
+        log "re-applied the host-bootstrap payload"
+    else
+        log "host-bootstrap payload apply failed: ${output}"
+    fi
+    return 0
+}
+
 # restore moves the backup over the target atomically. It refuses a symlinked
 # backup so a planted link cannot redirect the root move.
 restore() {
@@ -382,6 +407,7 @@ if [ ! -f "${BINARY}" ]; then
 fi
 
 log "waiting ${GRACE}s before restarting ${SERVICE}"
+apply_host_bootstrap_payload
 sleep "${GRACE}"
 
 # A failed restart must still attempt a rollback; never exit before that.

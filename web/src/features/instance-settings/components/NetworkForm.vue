@@ -17,6 +17,8 @@ import { useI18n } from "vue-i18n";
 
 import { saveNetwork } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
+import HostHelperGate from "@/features/instance-settings/components/HostHelperGate.vue";
+import { useHostUnlock } from "@/features/instance-settings/composables/useHostUnlock";
 import { useSectionForm } from "@/features/instance-settings/composables/useSectionForm";
 import {
   dnsPrimaryServerSchema,
@@ -172,13 +174,22 @@ function status(path: string): "error" | undefined {
 }
 
 const disabled = (): boolean => !props.state.capabilities.network || props.state.pending !== null;
+
+// Announcing + focusing when the helper install unlocks the section (JUS-185).
+const { focusTarget, unlocked } = useHostUnlock(() => props.state.capabilities.network);
 </script>
 
 <template>
   <NCard :title="t('instance-settings.network.title')">
-    <NAlert v-if="!state.capabilities.network" type="info" :show-icon="true" class="form-alert">
-      {{ t("instance-settings.unsupported") }}
-    </NAlert>
+    <p class="sr-only" role="status" aria-live="polite">
+      {{ unlocked ? t("instance-settings.helper.installed") : "" }}
+    </p>
+    <HostHelperGate
+      v-if="!state.capabilities.network"
+      :state="state"
+      section="network"
+      @saved="emit('saved', $event)"
+    />
     <NAlert v-else-if="state.pending" type="warning" :show-icon="true" class="form-alert">
       {{ t("instance-settings.network.pendingNote") }}
     </NAlert>
@@ -190,7 +201,7 @@ const disabled = (): boolean => !props.state.capabilities.network || props.state
         :validation-status="status('dns_servers')"
         :feedback="serverErrors.dns_servers"
       >
-        <NInput v-model:value="form.dns0" :disabled="disabled()" placeholder="1.1.1.1" />
+        <NInput ref="focusTarget" v-model:value="form.dns0" :disabled="disabled()" placeholder="1.1.1.1" />
       </NFormItem>
       <NFormItem
         path="dns1"
@@ -306,5 +317,19 @@ const disabled = (): boolean => !props.state.capabilities.network || props.state
 
 h4 {
   margin: 8px 0;
+}
+
+/* Visually-hidden polite live region (JUS-185): a shared .sr-only utility does
+ * not exist yet, so the section owns this one. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 </style>

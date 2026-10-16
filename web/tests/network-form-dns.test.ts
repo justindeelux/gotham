@@ -30,6 +30,14 @@ function stateWith(dns: string[]): InstanceState {
       ipv6: { enabled: false, mode: "dhcp", address: "", gateway: "" },
     },
     capabilities: { network: true, system: true },
+    host: {
+      helper: "ready",
+      repair: true,
+      network_stack: true,
+      system_stack: true,
+      network: true,
+      system: true,
+    },
     pending: null,
   } as unknown as InstanceState;
 }

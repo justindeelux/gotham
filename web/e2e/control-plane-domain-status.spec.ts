@@ -16,7 +16,12 @@ test("URL status follows edits and warns when localhost is missing", async ({ pa
       ipv6: { enabled: false, mode: "dhcp", address: "", gateway: "" },
     },
     system: { hostname: "gotham", ntp_enabled: true, ntp_servers: [] },
-    capabilities: { network: false, system: false }, pending: null,
+    capabilities: { network: false, system: false },
+    host: {
+      helper: "missing", repair: true,
+      network_stack: true, system_stack: true, network: false, system: false,
+    },
+    pending: null,
   };
   await page.route("**/api/v1/instance/settings", (route) =>
     route.fulfill({ json: { settings } }),

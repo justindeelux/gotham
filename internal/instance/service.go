@@ -68,11 +68,11 @@ func (s *Service) ControlPlaneURL(ctx context.Context) (string, error) {
 	return s.general(rec).ControlPlaneURL.Value, nil
 }
 
-func (s *Service) capabilities(ctx context.Context) Capabilities {
+func (s *Service) hostState(ctx context.Context) Host {
 	if s.host == nil {
-		return Capabilities{}
+		return Host{}
 	}
-	return s.host.Capabilities(ctx)
+	return s.host.Probe(ctx)
 }
 
 // Get returns the full state, first reconciling an expired network change.
@@ -97,9 +97,11 @@ func (s *Service) Get(ctx context.Context) (State, error) {
 			}
 		}
 	}
+	host := s.hostState(ctx)
 	return State{
 		General: s.general(rec), Network: rec.Network, System: rec.System,
-		Capabilities: s.capabilities(ctx), Pending: rec.Pending, PendingControlPlaneURL: rec.PendingControlPlaneURL,
+		Capabilities: Capabilities{Network: host.Network, System: host.System},
+		Host:         host, Pending: rec.Pending, PendingControlPlaneURL: rec.PendingControlPlaneURL,
 	}, nil
 }
 
@@ -265,7 +267,7 @@ func (s *Service) UpdateSystem(ctx context.Context, actor uuid.UUID, in System) 
 	if errs != nil {
 		return State{}, errs
 	}
-	if !s.capabilities(ctx).System {
+	if !s.hostState(ctx).System {
 		return State{}, ErrUnsupported
 	}
 	rec, err := s.repo.Load(ctx)
@@ -295,7 +297,7 @@ func (s *Service) UpdateNetwork(ctx context.Context, actor uuid.UUID, in Network
 	if errs != nil {
 		return State{}, errs
 	}
-	if !s.capabilities(ctx).Network {
+	if !s.hostState(ctx).Network {
 		return State{}, ErrUnsupported
 	}
 	if _, err := s.reconcile(ctx); err != nil {
@@ -382,10 +384,45 @@ func (s *Service) settle(ctx context.Context, actor uuid.UUID, confirm bool) (St
 }
 
 func (s *Service) stateLocked(ctx context.Context, rec Stored) State {
+	host := s.hostState(ctx)
 	return State{
 		General: s.general(rec), Network: rec.Network, System: rec.System,
-		Capabilities: s.capabilities(ctx), Pending: rec.Pending, PendingControlPlaneURL: rec.PendingControlPlaneURL,
+		Capabilities: Capabilities{Network: host.Network, System: host.System},
+		Host:         host, Pending: rec.Pending, PendingControlPlaneURL: rec.PendingControlPlaneURL,
 	}
+}
+
+// InstallHostHelper installs the fixed host helper and its verb-pinned sudoers
+// rule through the root-owned tool installer, then re-probes so the caller gets
+// the fresh state. It answers the command output for the operator to read.
+//
+// It refuses when the repair path cannot run (no payload, or a Denied host
+// whose drop-in with the pinned repair verb is gone): no privileged path exists
+// by design in that state, so an install could only fail — the UI shows the
+// honest "update the control plane" state instead, and a direct call answers a
+// conflict rather than a sudo failure.
+func (s *Service) InstallHostHelper(ctx context.Context, actor uuid.UUID) (State, string, error) {
+	if s.host == nil {
+		return State{}, "", ErrUnsupported
+	}
+	probe := s.host.Probe(ctx)
+	if probe.Helper == HelperReady {
+		st, err := s.Get(ctx)
+		return st, "", err
+	}
+	if !probe.Repair {
+		s.logger.Info("instance host helper install refused: no repair path",
+			"actor", actor, "helper", probe.Helper)
+		return State{}, "", ErrUnsupported
+	}
+	log, err := s.host.InstallHostHelper(ctx)
+	s.logger.Info("instance host helper install",
+		"actor", actor, "ok", err == nil, "helper_before", probe.Helper, "output", strings.TrimSpace(log))
+	if err != nil {
+		return State{}, log, err
+	}
+	st, err := s.Get(ctx)
+	return st, log, err
 }
 
 // diff returns {field: {from, to}} for the audit trail; for struct values it

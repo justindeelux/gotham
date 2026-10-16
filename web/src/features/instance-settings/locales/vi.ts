@@ -10,9 +10,19 @@ const vi: typeof en = {
   },
   tabs: { general: "Chung", network: "Mạng", system: "Hệ thống" },
   forbidden: "Chỉ quản trị viên nền tảng mới xem hoặc thay đổi được cài đặt instance.",
-  unsupported:
-    "Máy này chưa hỗ trợ thay đổi cấu hình máy chủ: chưa cài helper hoặc máy không dùng systemd-networkd. Giá trị chỉ hiển thị, không sửa được. Xem deploy/README.md.",
   locked: "Bị khóa bởi biến môi trường {name}.",
+  helper: {
+    missing:
+      "Helper máy chủ chưa được cài, nên các giá trị chỉ hiển thị. Hãy cài để quản lý cài đặt máy chủ từ Gotham.",
+    restart:
+      "Thay đổi máy chủ do trình cài đặt control plane thiết lập, nên quản trị viên nền tảng phải chạy lại trình cài đặt (hoặc nâng cấp) để bật chúng.",
+    install: "Cài helper máy chủ",
+    installed: "Đã cài helper máy chủ. Các cài đặt này giờ có thể chỉnh sửa.",
+    installFailed: "Không cài được helper máy chủ.",
+    logTitleFailed: "Cài helper máy chủ thất bại",
+    logHint: "Kết quả từ trình cài trên máy chủ này.",
+    close: "Đóng",
+  },
   general: {
     title: "Chung",
     url: "URL control plane",
@@ -74,6 +84,8 @@ const vi: typeof en = {
       "Thay đổi này can thiệp vào địa chỉ của interface bạn đang kết nối. Máy chủ có thể mất kết nối cho đến khi bạn xác nhận hoặc hoàn tác.",
     confirmLabel: "Tôi hiểu thay đổi này có thể làm gián đoạn kết nối",
     confirmRequired: "Hãy tích vào ô xác nhận để áp dụng thay đổi này.",
+    stackUnsupported:
+      "Máy chủ này không chạy systemd-networkd và systemd-resolved, nên Gotham không thể quản lý mạng. Giá trị chỉ hiển thị.",
   },
   confirm: {
     title: "Giữ các thay đổi mạng này?",
@@ -89,6 +101,8 @@ const vi: typeof en = {
     ntpHint: "Tối đa 4, cách nhau bằng dấu phẩy. Để trống để dùng mặc định của hệ thống.",
     submit: "Lưu cài đặt hệ thống",
     saved: "Đã lưu cài đặt hệ thống.",
+    stackUnsupported:
+      "Máy chủ này thiếu các công cụ Gotham dùng cho cài đặt hệ thống. Giá trị chỉ hiển thị.",
   },
   validation: {
     url: "Nhập URL http(s) có tên máy chủ, không kèm thông tin đăng nhập, query hay fragment.",

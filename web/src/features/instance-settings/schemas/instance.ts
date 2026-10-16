@@ -206,23 +206,41 @@ const networkSchema = z.object({
   }),
 });
 
-/** stateEnvelopeSchema checks the {settings} response envelope. */
-export const stateEnvelopeSchema = z.object({
-  settings: z.object({
-    general: z.object({
-      control_plane_url: settingFieldSchema,
-      instance_name: settingFieldSchema,
-      timezone: settingFieldSchema,
-    }),
-    network: networkSchema,
-    system: z.object({
-      hostname: z.string(),
-      ntp_enabled: z.boolean(),
-      ntp_servers: z.array(z.string()),
-    }),
-    capabilities: z.object({ network: z.boolean(), system: z.boolean() }),
-    pending: z
-      .object({ previous: networkSchema, proposed: networkSchema, deadline: z.string() })
-      .nullable(),
+/** hostSchema reports the host-helper probe states (JUS-185). */
+const hostSchema = z.object({
+  helper: z.enum(["ready", "missing", "denied"]),
+  repair: z.boolean(),
+  network_stack: z.boolean(),
+  system_stack: z.boolean(),
+  network: z.boolean(),
+  system: z.boolean(),
+});
+
+/** stateSettingsSchema is the shared settings shape of every instance response. */
+const stateSettingsSchema = z.object({
+  general: z.object({
+    control_plane_url: settingFieldSchema,
+    instance_name: settingFieldSchema,
+    timezone: settingFieldSchema,
   }),
+  network: networkSchema,
+  system: z.object({
+    hostname: z.string(),
+    ntp_enabled: z.boolean(),
+    ntp_servers: z.array(z.string()),
+  }),
+  capabilities: z.object({ network: z.boolean(), system: z.boolean() }),
+  host: hostSchema,
+  pending: z
+    .object({ previous: networkSchema, proposed: networkSchema, deadline: z.string() })
+    .nullable(),
+});
+
+/** stateEnvelopeSchema checks the {settings} response envelope. */
+export const stateEnvelopeSchema = z.object({ settings: stateSettingsSchema });
+
+/** hostHelperEnvelopeSchema checks the {settings, log} install response. */
+export const hostHelperEnvelopeSchema = z.object({
+  settings: stateSettingsSchema,
+  log: z.string(),
 });

@@ -79,7 +79,6 @@ const en = {
     serversToggle: "Toggle servers",
     envTitle: "Serving environment: {env}",
     cpPortTitle: "Control-plane HTTP port",
-    grpcPortTitle: "Agent gRPC port",
     account: "Account",
     signIn: "Sign in",
     profile: "Profile",
@@ -114,6 +113,7 @@ const en = {
     profile: "Profile",
     updates: "Updates",
     inviteAccept: "Team invite",
+    notFound: "Page not found",
   },
   time: {
     justNow: "just now",

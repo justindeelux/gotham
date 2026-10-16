@@ -62,6 +62,24 @@ type deploymentListEnvelope struct {
 	Deployments []deploymentResponse `json:"deployments"`
 }
 
+// recentDeploymentResponse is one dashboard-feed row (JUS-193): the deployment
+// plus the identifying fields of the application it ran for.
+type recentDeploymentResponse struct {
+	deploymentResponse
+	ApplicationName   string `json:"application_name"`
+	ApplicationRepo   string `json:"application_repo"`
+	ApplicationBranch string `json:"application_branch"`
+}
+
+// recentDeploymentListEnvelope wraps the dashboard feed.
+type recentDeploymentListEnvelope struct {
+	Deployments []recentDeploymentResponse `json:"deployments"`
+}
+
+// defaultRecentDeploymentLimit bounds the dashboard feed when ?limit= is
+// absent; an explicit ?limit= must be at least 1.
+const defaultRecentDeploymentLimit = 20
+
 // rollbackRequest is the optional body of POST .../rollback. With no body the
 // server picks the previous successful release.
 type rollbackRequest struct {
@@ -384,6 +402,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Get("/v1/applications", h.listApplications)
 		protected.Get("/v1/applications/{id}", h.getApplication)
 		protected.Put("/v1/applications/{id}", h.updateApplication)
+		protected.Get("/v1/deployments", h.listRecentDeployments)
 		protected.Delete("/v1/applications/{id}", h.deleteApplication)
 		protected.Get("/v1/applications/{id}/env", h.getEnv)
 		protected.Put("/v1/applications/{id}/env", h.putEnv)
@@ -742,6 +761,33 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 		response = append(response, newDeploymentResponse(deployment))
 	}
 	writeJSON(w, http.StatusOK, deploymentListEnvelope{Deployments: response})
+}
+
+// listRecentDeployments serves GET /v1/deployments: the newest deployments
+// across every application the caller can see, newest first, bounded by
+// ?limit= (default defaultRecentDeploymentLimit, clamped server-side).
+func (h *handler) listRecentDeployments(w http.ResponseWriter, r *http.Request) {
+	userID, ok := h.currentUser(w, r)
+	if !ok {
+		return
+	}
+	limit, ok := limitParam(w, r)
+	if !ok {
+		return
+	}
+	if limit == 0 {
+		limit = defaultRecentDeploymentLimit
+	}
+	deployments, err := h.svc.ListRecentDeployments(r.Context(), userID, limit)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	response := make([]recentDeploymentResponse, 0, len(deployments))
+	for _, deployment := range deployments {
+		response = append(response, newRecentDeploymentResponse(deployment))
+	}
+	writeJSON(w, http.StatusOK, recentDeploymentListEnvelope{Deployments: response})
 }
 
 // deploymentLogEnvelope wraps one persisted build log (JUS-84). The log is
@@ -1437,6 +1483,16 @@ func newDeploymentResponse(d Deployment) deploymentResponse {
 		response.FinishedAt = &finished
 	}
 	return response
+}
+
+// newRecentDeploymentResponse maps a domain feed row to its wire shape.
+func newRecentDeploymentResponse(d ApplicationDeployment) recentDeploymentResponse {
+	return recentDeploymentResponse{
+		deploymentResponse: newDeploymentResponse(d.Deployment),
+		ApplicationName:    d.ApplicationName,
+		ApplicationRepo:    d.ApplicationRepo,
+		ApplicationBranch:  d.ApplicationBranch,
+	}
 }
 
 // writeJSON serialises payload with the given HTTP status.

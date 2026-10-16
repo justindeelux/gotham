@@ -4,11 +4,79 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/teams"
 )
+
+// TestListRecentDeploymentsRespectsTeamScope is the JUS-193 dashboard-feed
+// scoping regression: the aggregate never lists a deployment of another
+// team's application (nor a preview), the creator-scoped fallback stays
+// inside the caller's own rows, and the page is bounded by limit.
+func TestListRecentDeploymentsRespectsTeamScope(t *testing.T) {
+	teamA, teamB := uuid.New(), uuid.New()
+	alice := uuid.New()
+
+	repo := &fakeRepository{}
+	appA := testApplication(alice)
+	appA.TeamID = teamA
+	appA.Name = "team-a-app"
+	appB := testApplication(uuid.New())
+	appB.TeamID = teamB
+	appB.Name = "team-b-app"
+	preview := testApplication(alice)
+	preview.TeamID = teamA
+	preview.Name = "team-a-preview"
+	preview.IsPreview = true
+	repo.apps = []Application{appA, appB, preview}
+
+	base := time.Now().UTC()
+	repo.deployments = []Deployment{
+		{ID: uuid.New(), ApplicationID: appA.ID, Kind: KindDeploy, State: StateRunning, CreatedAt: base},
+		{ID: uuid.New(), ApplicationID: appB.ID, Kind: KindDeploy, State: StateRunning, CreatedAt: base.Add(time.Minute)},
+		{ID: uuid.New(), ApplicationID: appB.ID, Kind: KindDeploy, State: StateFailed, CreatedAt: base.Add(2 * time.Minute)},
+		{ID: uuid.New(), ApplicationID: preview.ID, Kind: KindDeploy, State: StateRunning, CreatedAt: base.Add(3 * time.Minute)},
+	}
+	svc := newTestService(t, repo)
+	ctxA := teams.WithScope(context.Background(), teams.Scope{UserID: alice, TeamID: teamA, Role: teams.RoleOwner})
+	ctxB := teams.WithScope(context.Background(), teams.Scope{UserID: uuid.New(), TeamID: teamB, Role: teams.RoleOwner})
+
+	got, err := svc.ListRecentDeployments(ctxA, alice, 10)
+	if err != nil {
+		t.Fatalf("team A feed: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("team A rows = %d, want 1 (its own non-preview app only)", len(got))
+	}
+	if got[0].ApplicationID != appA.ID || got[0].ApplicationName != "team-a-app" {
+		t.Errorf("team A row = %s/%q, want team A's app only (no cross-team leak)",
+			got[0].ApplicationID, got[0].ApplicationName)
+	}
+
+	// team B sees its own two rows, newest first, bounded by limit.
+	gotB, err := svc.ListRecentDeployments(ctxB, teamB, 1)
+	if err != nil {
+		t.Fatalf("team B feed: %v", err)
+	}
+	if len(gotB) != 1 {
+		t.Fatalf("team B rows = %d, want 1 (limit)", len(gotB))
+	}
+	if gotB[0].ApplicationID != appB.ID || gotB[0].State != StateFailed {
+		t.Errorf("team B row = %s/%s, want the newest failed row of its own app",
+			gotB[0].ApplicationID, gotB[0].State)
+	}
+
+	// Without a team context the feed falls back to the creator's own rows.
+	gotUser, err := svc.ListRecentDeployments(context.Background(), alice, 10)
+	if err != nil {
+		t.Fatalf("creator feed: %v", err)
+	}
+	if len(gotUser) != 1 || gotUser[0].ApplicationID != appA.ID {
+		t.Fatalf("creator rows = %d, want alice's own non-preview app only", len(gotUser))
+	}
+}
 
 // TestRollbackRefusesApplicationBoundToForeignNode is the R1 regression: the
 // stored application→node check runs at the shared queue boundary, so a

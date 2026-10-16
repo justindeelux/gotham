@@ -162,6 +162,25 @@ WHERE application_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2;
 
+-- name: ListRecentDeploymentsByTeam :many
+-- The newest deployments across one team's applications (dashboard feed,
+-- JUS-193), newest first. Previews stay out, matching the applications list.
+SELECT d.*, a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
+FROM deployments d
+JOIN applications a ON a.id = d.application_id
+WHERE a.team_id = $1 AND a.is_preview = false
+ORDER BY d.created_at DESC, d.id DESC
+LIMIT $2;
+
+-- name: ListRecentDeploymentsByUser :many
+-- The creator-scoped fallback of ListRecentDeploymentsByTeam (no team context).
+SELECT d.*, a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
+FROM deployments d
+JOIN applications a ON a.id = d.application_id
+WHERE a.user_id = $1 AND a.is_preview = false
+ORDER BY d.created_at DESC, d.id DESC
+LIMIT $2;
+
 -- name: GetActiveDeploymentByApp :one
 SELECT * FROM deployments
 WHERE application_id = $1 AND state NOT IN ('running', 'failed')

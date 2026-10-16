@@ -36,7 +36,7 @@ const en = {
     viewAll: "view all servers",
     empty: "No servers yet",
     emptyHint: "Add your first node to see CPU, RAM, and disk health here.",
-    heartbeatMeta: "heartbeat every 10s over gRPC server-authenticated TLS",
+    heartbeatMeta: "Live status, updated every 10 seconds",
     addServer: "Add server",
     containersOne: "{count} container",
     containersOther: "{count} containers",
@@ -56,13 +56,14 @@ const en = {
     unreachableTitle: "{name} unreachable",
     heartbeatLost: "Agent heartbeat lost. Last seen {time}.",
     noAlerts: "No alerts — all nodes healthy",
+    refreshNote: "Updates every 10 seconds",
   },
   deploys: {
     title: "Recent deploys",
     empty: "No deployments yet",
     emptyHint: "Push an application to see build history, durations, and statuses here.",
-    queue: "Queue: no data yet",
-    noHistory: "No build history to show",
+    loadFailed: "Could not load recent deploys",
+    retry: "Retry",
   },
 };
 

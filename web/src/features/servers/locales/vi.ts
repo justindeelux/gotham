@@ -32,10 +32,9 @@ const vi: ServersMessages = {
   page: {
     eyebrow: "Vận hành · Danh mục nút",
     title: "Máy chủ",
-    descLead: "Mỗi nút chạy",
-    descMid: "được kết nối tới cổng gRPC",
+    descLead: "Mỗi nút chạy một",
     descTail:
-      "qua TLS xác thực máy chủ. Control plane không bao giờ gọi Docker trực tiếp — mọi lệnh đều đi qua agent.",
+      "báo cáo tình trạng và chạy khối lượng công việc của bạn. Control plane không bao giờ gọi Docker trực tiếp — mọi lệnh đều đi qua agent.",
     checkSsh: "Kiểm tra SSH",
     addServer: "Thêm máy chủ",
     emptyNone: "Chưa có máy chủ nào",
@@ -261,7 +260,7 @@ const vi: ServersMessages = {
     summaryFailed: "{passed}/{total} đợt dò đã đạt — hãy sửa các mục lỗi rồi thử lại.",
     finishPassed: "{name} đã vượt qua kiểm tra",
     finishHint:
-      "Cài agent lên nút để nó báo cáo qua gRPC. Máy chủ chỉ hiện {status} sau nhịp tim đầu tiên.",
+      "Cài agent lên nút và nó sẽ tự động báo cáo. Máy chủ chỉ hiện {status} sau nhịp tim đầu tiên.",
   },
   validation: {
     nameRequired: "Nhập tên nút.",

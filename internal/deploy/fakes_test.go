@@ -218,6 +218,59 @@ func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (App
 	return app, nil
 }
 
+// ListRecentDeployments implements Repository: the newest deployments across
+// the scope's applications, newest first, at most limit rows. Previews stay
+// out, matching the applications listing.
+func (r *fakeRepository) ListRecentDeployments(_ context.Context, scope teams.Scope, limit int) ([]ApplicationDeployment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	apps := make(map[uuid.UUID]Application)
+	if r.app.ID != uuid.Nil {
+		apps[r.app.ID] = r.app
+	}
+	for _, app := range r.apps {
+		apps[app.ID] = app
+	}
+	matches := func(app Application) bool {
+		if app.IsPreview {
+			return false
+		}
+		if scope.Active() {
+			return app.TeamID == scope.TeamID
+		}
+		return app.UserID == scope.UserID
+	}
+	out := make([]ApplicationDeployment, 0, len(r.deployments))
+	for _, d := range r.deployments {
+		app, ok := apps[d.ApplicationID]
+		if !ok || !matches(app) {
+			continue
+		}
+		out = append(out, ApplicationDeployment{
+			Deployment:        d,
+			ApplicationName:   app.Name,
+			ApplicationRepo:   app.Repo,
+			ApplicationBranch: app.Branch,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID.String() > out[j].ID.String()
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // ListApplications implements Repository: the active team's applications, or
 // the creator's when the scope has no team context (pre-teams behavior),
 // newest first (created_at DESC, id DESC).

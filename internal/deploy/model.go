@@ -210,6 +210,16 @@ type Deployment struct {
 	UpdatedAt  time.Time
 }
 
+// ApplicationDeployment pairs one deployment with the identifying fields of
+// the application it ran for, for the cross-application dashboard feed
+// (JUS-193).
+type ApplicationDeployment struct {
+	Deployment
+	ApplicationName   string
+	ApplicationRepo   string
+	ApplicationBranch string
+}
+
 // EnvironmentRef is the slice of an environment row resource validation and
 // response enrichment needs: which project it belongs to and its name.
 type EnvironmentRef struct {

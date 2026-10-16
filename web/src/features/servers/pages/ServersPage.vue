@@ -72,8 +72,6 @@ const emptyHint = computed<string>(() =>
         <p class="page-desc">
           {{ $t("servers.page.descLead") }}
           <code class="inline-code">gotham-agent</code>
-          {{ $t("servers.page.descMid") }}
-          <span class="mono">:9442</span>
           {{ $t("servers.page.descTail") }}
         </p>
       </div>

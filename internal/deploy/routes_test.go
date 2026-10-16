@@ -28,16 +28,20 @@ type fakeDeployService struct {
 	listApps    []Application
 	listAppsErr error
 	getErr      error
-	updateErr   error
-	deleteErr   error
-	env         []EnvEntry
-	envErr      error
-	storages    []Storage
-	storagesErr error
-	stop        Deployment
-	stopErr     error
-	start       Deployment
-	startErr    error
+	// dashboard feed (JUS-193).
+	recentDeployments []ApplicationDeployment
+	recentErr         error
+	seenRecentLimit   int
+	updateErr         error
+	deleteErr         error
+	env               []EnvEntry
+	envErr            error
+	storages          []Storage
+	storagesErr       error
+	stop              Deployment
+	stopErr           error
+	start             Deployment
+	startErr          error
 
 	// deploy keys.
 	deployKey       DeployKey
@@ -103,6 +107,15 @@ func (f *fakeDeployService) ListApplications(_ context.Context, userID uuid.UUID
 		return nil, f.listAppsErr
 	}
 	return f.listApps, nil
+}
+
+// ListRecentDeployments implements DeployService.
+func (f *fakeDeployService) ListRecentDeployments(_ context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error) {
+	f.seenUser, f.seenRecentLimit = userID, limit
+	if f.recentErr != nil {
+		return nil, f.recentErr
+	}
+	return f.recentDeployments, nil
 }
 
 // GetApplication implements DeployService.
@@ -472,6 +485,73 @@ func TestRoutesListDeploymentsLimit(t *testing.T) {
 	t.Run("zero limit is a 400, never the full history", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, deploymentPath(appID, "")+"?limit=0", nil))
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400", rec.Code)
+		}
+	})
+}
+
+// TestRoutesRecentDeployments covers the dashboard feed: the aggregate
+// endpoint forwards the caller and a bounded limit and names the application
+// each row ran for.
+func TestRoutesRecentDeployments(t *testing.T) {
+	userID, appID := uuid.New(), uuid.New()
+	svc := &fakeDeployService{recentDeployments: []ApplicationDeployment{
+		{
+			Deployment:        Deployment{ID: uuid.New(), ApplicationID: appID, Kind: KindDeploy, State: StateRunning},
+			ApplicationName:   "storefront",
+			ApplicationRepo:   "acme/storefront",
+			ApplicationBranch: "main",
+		},
+	}}
+	srv := newRouteServer(svc, alwaysUser(userID))
+
+	t.Run("absent limit uses the default and names the application", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/deployments", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		var body recentDeploymentListEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(body.Deployments) != 1 {
+			t.Fatalf("deployments = %d, want 1", len(body.Deployments))
+		}
+		row := body.Deployments[0]
+		if row.ApplicationName != "storefront" || row.ApplicationRepo != "acme/storefront" || row.ApplicationBranch != "main" {
+			t.Errorf("application fields = %q/%q/%q, want storefront/acme/storefront/main",
+				row.ApplicationName, row.ApplicationRepo, row.ApplicationBranch)
+		}
+		if row.State != StateRunning {
+			t.Errorf("state = %s, want running", row.State)
+		}
+		if svc.seenUser != userID {
+			t.Errorf("service saw user %s, want %s", svc.seenUser, userID)
+		}
+		if svc.seenRecentLimit != defaultRecentDeploymentLimit {
+			t.Errorf("limit = %d, want %d", svc.seenRecentLimit, defaultRecentDeploymentLimit)
+		}
+	})
+
+	t.Run("explicit limit is forwarded", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/deployments?limit=5", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if svc.seenRecentLimit != 5 {
+			t.Errorf("limit = %d, want 5", svc.seenRecentLimit)
+		}
+	})
+
+	t.Run("non-numeric limit is a 400", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/deployments?limit=ten", nil))
 
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400", rec.Code)

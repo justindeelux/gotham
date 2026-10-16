@@ -32,9 +32,8 @@ const en = {
     eyebrow: "Operations · Node registry",
     title: "Servers",
     descLead: "Each node runs a",
-    descMid: "connected to the gRPC gateway",
     descTail:
-      "over server-authenticated TLS. The control plane never calls Docker directly — every command goes through the agent.",
+      "that reports health and runs your workloads. The control plane never calls Docker directly — every command goes through the agent.",
     checkSsh: "Check SSH",
     addServer: "Add server",
     emptyNone: "No servers yet",
@@ -260,7 +259,7 @@ const en = {
     summaryFailed: "{passed}/{total} probes passed — fix the failing checks, then retry.",
     finishPassed: "{name} passed validation",
     finishHint:
-      "Install the agent on the node and it will check in over gRPC. The server shows {status} only after its first heartbeat.",
+      "Install the agent on the node and it will check in automatically. The server shows {status} only after its first heartbeat.",
   },
   validation: {
     nameRequired: "Enter a node name.",

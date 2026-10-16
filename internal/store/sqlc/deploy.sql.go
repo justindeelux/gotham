@@ -960,6 +960,185 @@ func (q *Queries) ListEnvVarsByApp(ctx context.Context, applicationID pgtype.UUI
 	return items, nil
 }
 
+const listRecentDeploymentsByTeam = `-- name: ListRecentDeploymentsByTeam :many
+SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image, d.digest, d.error, d.attempt, d.container_id, d.rollback_from, d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_document, d.compose_commit, d.commit_sha, d.commit_message, d.commit_author, d.committed_at, d.build_log, a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
+FROM deployments d
+JOIN applications a ON a.id = d.application_id
+WHERE a.team_id = $1 AND a.is_preview = false
+ORDER BY d.created_at DESC, d.id DESC
+LIMIT $2
+`
+
+type ListRecentDeploymentsByTeamParams struct {
+	TeamID pgtype.UUID `json:"team_id"`
+	Limit  int32       `json:"limit"`
+}
+
+type ListRecentDeploymentsByTeamRow struct {
+	ID                pgtype.UUID        `json:"id"`
+	ApplicationID     pgtype.UUID        `json:"application_id"`
+	Kind              string             `json:"kind"`
+	State             string             `json:"state"`
+	ImageTag          string             `json:"image_tag"`
+	RegistryImage     string             `json:"registry_image"`
+	Digest            string             `json:"digest"`
+	Error             string             `json:"error"`
+	Attempt           int32              `json:"attempt"`
+	ContainerID       string             `json:"container_id"`
+	RollbackFrom      pgtype.UUID        `json:"rollback_from"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ComposeDocument   string             `json:"compose_document"`
+	ComposeCommit     string             `json:"compose_commit"`
+	CommitSha         string             `json:"commit_sha"`
+	CommitMessage     string             `json:"commit_message"`
+	CommitAuthor      string             `json:"commit_author"`
+	CommittedAt       string             `json:"committed_at"`
+	BuildLog          string             `json:"build_log"`
+	ApplicationName   string             `json:"application_name"`
+	ApplicationRepo   string             `json:"application_repo"`
+	ApplicationBranch string             `json:"application_branch"`
+}
+
+// The newest deployments across one team's applications (dashboard feed,
+// JUS-193), newest first. Previews stay out, matching the applications list.
+func (q *Queries) ListRecentDeploymentsByTeam(ctx context.Context, arg ListRecentDeploymentsByTeamParams) ([]ListRecentDeploymentsByTeamRow, error) {
+	rows, err := q.db.Query(ctx, listRecentDeploymentsByTeam, arg.TeamID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentDeploymentsByTeamRow{}
+	for rows.Next() {
+		var i ListRecentDeploymentsByTeamRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.Kind,
+			&i.State,
+			&i.ImageTag,
+			&i.RegistryImage,
+			&i.Digest,
+			&i.Error,
+			&i.Attempt,
+			&i.ContainerID,
+			&i.RollbackFrom,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ComposeDocument,
+			&i.ComposeCommit,
+			&i.CommitSha,
+			&i.CommitMessage,
+			&i.CommitAuthor,
+			&i.CommittedAt,
+			&i.BuildLog,
+			&i.ApplicationName,
+			&i.ApplicationRepo,
+			&i.ApplicationBranch,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentDeploymentsByUser = `-- name: ListRecentDeploymentsByUser :many
+SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image, d.digest, d.error, d.attempt, d.container_id, d.rollback_from, d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_document, d.compose_commit, d.commit_sha, d.commit_message, d.commit_author, d.committed_at, d.build_log, a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
+FROM deployments d
+JOIN applications a ON a.id = d.application_id
+WHERE a.user_id = $1 AND a.is_preview = false
+ORDER BY d.created_at DESC, d.id DESC
+LIMIT $2
+`
+
+type ListRecentDeploymentsByUserParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	Limit  int32       `json:"limit"`
+}
+
+type ListRecentDeploymentsByUserRow struct {
+	ID                pgtype.UUID        `json:"id"`
+	ApplicationID     pgtype.UUID        `json:"application_id"`
+	Kind              string             `json:"kind"`
+	State             string             `json:"state"`
+	ImageTag          string             `json:"image_tag"`
+	RegistryImage     string             `json:"registry_image"`
+	Digest            string             `json:"digest"`
+	Error             string             `json:"error"`
+	Attempt           int32              `json:"attempt"`
+	ContainerID       string             `json:"container_id"`
+	RollbackFrom      pgtype.UUID        `json:"rollback_from"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ComposeDocument   string             `json:"compose_document"`
+	ComposeCommit     string             `json:"compose_commit"`
+	CommitSha         string             `json:"commit_sha"`
+	CommitMessage     string             `json:"commit_message"`
+	CommitAuthor      string             `json:"commit_author"`
+	CommittedAt       string             `json:"committed_at"`
+	BuildLog          string             `json:"build_log"`
+	ApplicationName   string             `json:"application_name"`
+	ApplicationRepo   string             `json:"application_repo"`
+	ApplicationBranch string             `json:"application_branch"`
+}
+
+// The creator-scoped fallback of ListRecentDeploymentsByTeam (no team context).
+func (q *Queries) ListRecentDeploymentsByUser(ctx context.Context, arg ListRecentDeploymentsByUserParams) ([]ListRecentDeploymentsByUserRow, error) {
+	rows, err := q.db.Query(ctx, listRecentDeploymentsByUser, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentDeploymentsByUserRow{}
+	for rows.Next() {
+		var i ListRecentDeploymentsByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.Kind,
+			&i.State,
+			&i.ImageTag,
+			&i.RegistryImage,
+			&i.Digest,
+			&i.Error,
+			&i.Attempt,
+			&i.ContainerID,
+			&i.RollbackFrom,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ComposeDocument,
+			&i.ComposeCommit,
+			&i.CommitSha,
+			&i.CommitMessage,
+			&i.CommitAuthor,
+			&i.CommittedAt,
+			&i.BuildLog,
+			&i.ApplicationName,
+			&i.ApplicationRepo,
+			&i.ApplicationBranch,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSecretsByApp = `-- name: ListSecretsByApp :many
 SELECT id, application_id, key, ciphertext, created_at FROM secrets
 WHERE application_id = $1

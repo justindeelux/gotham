@@ -39,12 +39,10 @@ watch(
 
 /**
  * Listener ports shown as topbar chips. They mirror the backend defaults in
- * `internal/config/config.go` (`defaultServerPort = 8000`,
- * `defaultGRPCAddr = ":9442"`); the SPA itself is served from the same
- * origin, so these are labels, not live config.
+ * `internal/config/config.go` (`defaultServerPort = 8000`); the SPA itself is
+ * served from the same origin, so these are labels, not live config.
  */
 const cpPort = 8000;
-const grpcPort = 9442;
 
 // The control plane exposes no environment endpoint, so the chip reflects
 // where the SPA itself is served from: loopback means a local setup.
@@ -92,7 +90,6 @@ const envLabel = computed<string>(() => {
       {{ envLabel }}
     </span>
     <span class="channel-chip" :title="t('shell.cpPortTitle')">CP :{{ cpPort }}</span>
-    <span class="channel-chip" :title="t('shell.grpcPortTitle')">gRPC :{{ grpcPort }}</span>
     <div class="topbar-right">
       <LanguageSelect />
       <AccountMenu v-if="authStore.isAuthenticated" compact />

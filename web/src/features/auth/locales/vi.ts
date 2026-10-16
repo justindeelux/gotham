@@ -13,10 +13,10 @@ const vi: AuthMessages = {
     footnote: "Control plane tự host · hạ tầng của bạn, dữ liệu của bạn.",
     selfHostedTitle: "Tự host trên VPS chỉ với 1 GB RAM",
     selfHostedBody:
-      "Control plane là một file nhị phân Go duy nhất cùng PostgreSQL và Redis; 1 vCPU và 1 GB RAM là đủ để bắt đầu.",
-    tlsTitle: "Kênh điều khiển qua gRPC TLS xác thực máy chủ",
+      "Control plane là một file nhị phân Go duy nhất cùng cơ sở dữ liệu PostgreSQL; 1 vCPU và 1 GB RAM là đủ để bắt đầu.",
+    tlsTitle: "Kênh điều khiển agent được mã hóa",
     tlsBody:
-      "Agent điều khiển Docker Engine trên mỗi node; control plane và agent trao đổi protobuf phiên bản qua :9442, với chứng chỉ từ CA nội bộ.",
+      "Agent điều khiển Docker trên mỗi node và trao đổi với control plane qua kênh mã hóa có xác minh chứng chỉ.",
     updatesTitle: "Cập nhật ký Ed25519 có rollback",
     updatesBody:
       "Control plane và agent tự cập nhật từ GitHub Releases, xác minh chữ ký trước khi thay file nhị phân và giữ bản cũ để rollback.",
@@ -28,7 +28,7 @@ const vi: AuthMessages = {
     switchLabel: "Đăng nhập hoặc tạo tài khoản",
     title: "Đăng nhập",
     subtitle:
-      "Dùng tài khoản nhóm Gotham của bạn. Phiên dùng JWT ngắn hạn với refresh token xoay vòng.",
+      "Dùng tài khoản nhóm Gotham của bạn để đăng nhập.",
     emailLabel: "Email",
     emailPlaceholder: "you{'@'}gotham.dev",
     passwordLabel: "Mật khẩu",
@@ -79,10 +79,7 @@ const vi: AuthMessages = {
     hint: "Việc chấp nhận dùng phiên bạn đang đăng nhập — hãy đăng nhập bằng địa chỉ được mời. Mỗi lời mời chỉ dùng một lần.",
   },
   footnote: {
-    hashPrefix: "Mật khẩu được băm bằng",
-    tokenMid:
-      "· JWT truy cập 15 phút với refresh token xoay vòng 30 ngày · GitHub OAuth qua giao diện",
-    interfaceSuffix: ".",
+    text: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng GitHub hoặc email nhóm của bạn.",
   },
   strength: {
     level0: "Chưa nhập",

@@ -5,6 +5,7 @@ import { RouterLink } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import type { ServerNodeCardModel } from "@/features/dashboard/utils/serverNode";
+import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import ServerNodeCard from "./ServerNodeCard.vue";
 
 interface Props {
@@ -36,6 +37,9 @@ const moreNodesText = computed<string>(() =>
     v-if="!loading && totalCount === 0"
     :description="$t('dashboard.health.empty')"
   >
+    <template #icon>
+      <GothamIcon name="server" />
+    </template>
     <template #extra>
       <NSpace vertical :size="8" align="center">
         <NText depth="3">

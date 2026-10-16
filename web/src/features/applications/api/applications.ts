@@ -315,6 +315,36 @@ interface DeploymentListEnvelope {
   deployments: Deployment[];
 }
 
+/**
+ * One row of the cross-application dashboard feed (JUS-193): a deployment plus
+ * the identifying fields of the application it ran for.
+ */
+export interface RecentDeployment extends Deployment {
+  application_name: string;
+  application_repo: string;
+  application_branch: string;
+}
+
+/** Wire envelope for the dashboard deployment feed. */
+interface RecentDeploymentListEnvelope {
+  deployments: RecentDeployment[];
+}
+
+/**
+ * listRecentDeployments returns the newest deployments across every
+ * application the caller can see (their active team), newest first, at most
+ * `limit` rows (GET /deployments → 200). The server applies its own cap; an
+ * omitted or non-positive limit asks for the server default.
+ */
+export async function listRecentDeployments(
+  limit = 0,
+): Promise<RecentDeployment[]> {
+  const response = await http.get<RecentDeploymentListEnvelope>("/deployments", {
+    params: limit > 0 ? { limit } : {},
+  });
+  return response.data.deployments ?? [];
+}
+
 /** Wire envelope for an application list. */
 interface ApplicationListEnvelope {
   applications: Application[];

@@ -304,6 +304,24 @@ func (s *Store) ListDeploymentsByAppLimit(ctx context.Context, applicationID pgt
 	})
 }
 
+// ListRecentDeploymentsByTeam returns the newest deployments across one
+// team's applications (dashboard feed, JUS-193), newest first, at most limit.
+func (s *Store) ListRecentDeploymentsByTeam(ctx context.Context, teamID pgtype.UUID, limit int32) ([]sqlc.ListRecentDeploymentsByTeamRow, error) {
+	return s.queries.ListRecentDeploymentsByTeam(ctx, sqlc.ListRecentDeploymentsByTeamParams{
+		TeamID: teamID,
+		Limit:  limit,
+	})
+}
+
+// ListRecentDeploymentsByUser is the creator-scoped fallback of
+// ListRecentDeploymentsByTeam (no team context).
+func (s *Store) ListRecentDeploymentsByUser(ctx context.Context, userID pgtype.UUID, limit int32) ([]sqlc.ListRecentDeploymentsByUserRow, error) {
+	return s.queries.ListRecentDeploymentsByUser(ctx, sqlc.ListRecentDeploymentsByUserParams{
+		UserID: userID,
+		Limit:  limit,
+	})
+}
+
 // FailStaleDeployments marks deployments left non-terminal by a previous
 // control plane process as failed and reports how many rows were recovered.
 func (s *Store) FailStaleDeployments(ctx context.Context) (int64, error) {

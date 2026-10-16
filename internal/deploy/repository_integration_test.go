@@ -16,6 +16,7 @@ import (
 	"github.com/justindeelux/gotham/internal/servers"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/teams"
 )
 
 // defaultIntegrationDSN points at the dev database from deploy/compose.dev.yml.
@@ -967,5 +968,138 @@ func TestStoreRepositoryGitCredentialRoundtrip(t *testing.T) {
 	}
 	if err := repo.DeleteGitCredential(ctx, appID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second delete error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestStoreRepositoryListRecentDeploymentsScope proves the dashboard feed
+// (JUS-193) never crosses the team boundary on the real store: the team feed
+// returns only that team's non-preview deployments newest first, the limit
+// bounds the page, and the creator fallback stays inside the caller's rows.
+func TestStoreRepositoryListRecentDeploymentsScope(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dsn := integrationDSN()
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if integrationDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	const secret = "integration-secret"
+	st := store.New(pool)
+	repo := newStoreRepository(st, secret)
+
+	newUser := func(tag string) uuid.UUID {
+		t.Helper()
+		email := fmt.Sprintf("feed-%s-%d@example.com", tag, time.Now().UnixNano())
+		user, err := st.CreateUser(ctx, email, nil)
+		if err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		id := uuid.UUID(user.ID.Bytes)
+		t.Cleanup(func() {
+			cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer ccancel()
+			if _, err := pool.Exec(cctx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+				t.Logf("cleanup delete user: %v", err)
+			}
+		})
+		return id
+	}
+	userA, userB := newUser("a"), newUser("b")
+
+	teamA, envA, serverA := seedProjectEnvironment(t, ctx, st)
+	teamB, envB, serverB := seedProjectEnvironment(t, ctx, st)
+
+	newApp := func(user, team, env, server uuid.UUID, name string, preview bool) uuid.UUID {
+		t.Helper()
+		app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
+			UserID:        pgUUID(user),
+			TeamID:        pgUUID(team),
+			ServerID:      pgUUID(server),
+			EnvironmentID: pgUUID(env),
+			Name:          name,
+			Provider:      "github",
+			Repo:          "acme/demo",
+			CloneUrl:      "https://github.com/acme/demo.git",
+			Branch:        "main",
+			BuildPack:     "dockerfile",
+			IsPreview:     preview,
+		})
+		if err != nil {
+			t.Fatalf("CreateApplication(%s): %v", name, err)
+		}
+		return uuid.UUID(app.ID.Bytes)
+	}
+	appA := newApp(userA, teamA, envA, serverA, "feed-a", false)
+	appB := newApp(userB, teamB, envB, serverB, "feed-b", false)
+	previewA := newApp(userA, teamA, envA, serverA, "feed-a-preview", true)
+
+	// Terminal states only: a second active row would trip the
+	// deployments_active_app_idx partial unique index.
+	seedRows := []Deployment{
+		{ApplicationID: appA, Kind: KindDeploy, State: StateFailed},
+		{ApplicationID: appB, Kind: KindDeploy, State: StateFailed},
+		{ApplicationID: previewA, Kind: KindDeploy, State: StateFailed},
+	}
+	created := make([]Deployment, 0, len(seedRows))
+	for i, dep := range seedRows {
+		row, err := repo.CreateDeployment(ctx, dep)
+		if err != nil {
+			t.Fatalf("CreateDeployment(%d): %v", i, err)
+		}
+		created = append(created, row)
+	}
+	// Distinct timestamps so created_at DESC is unambiguous.
+	base := time.Now().UTC().Truncate(time.Second)
+	for i, row := range created {
+		ts := base.Add(time.Duration(i) * time.Second)
+		if _, err := pool.Exec(ctx,
+			"UPDATE deployments SET created_at = $1, updated_at = $1 WHERE id = $2",
+			ts, pgUUID(row.ID)); err != nil {
+			t.Fatalf("stamp deployment %d: %v", i, err)
+		}
+	}
+
+	rows, err := repo.ListRecentDeployments(ctx,
+		teams.Scope{UserID: userA, TeamID: teamA, Role: teams.RoleOwner}, 10)
+	if err != nil {
+		t.Fatalf("ListRecentDeployments: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("team A rows = %d, want 1 (its own non-preview app only)", len(rows))
+	}
+	if rows[0].ApplicationID != appA || rows[0].ApplicationName != "feed-a" {
+		t.Errorf("team A row = %s/%q, want feed-a only (no cross-team leak)",
+			rows[0].ApplicationID, rows[0].ApplicationName)
+	}
+
+	// The creator fallback (no team context) stays inside user A's rows.
+	userFeed, err := repo.ListRecentDeployments(ctx, teams.Scope{UserID: userA}, 10)
+	if err != nil {
+		t.Fatalf("creator feed: %v", err)
+	}
+	if len(userFeed) != 1 || userFeed[0].ApplicationID != appA {
+		t.Fatalf("creator rows = %d, want user A's non-preview app only", len(userFeed))
+	}
+
+	// A non-positive limit selects one row, bounding the page.
+	limited, err := repo.ListRecentDeployments(ctx,
+		teams.Scope{UserID: userB, TeamID: teamB, Role: teams.RoleOwner}, 0)
+	if err != nil {
+		t.Fatalf("team B feed: %v", err)
+	}
+	if len(limited) != 1 || limited[0].ApplicationID != appB {
+		t.Errorf("team B rows = %d, want exactly its own app", len(limited))
 	}
 }

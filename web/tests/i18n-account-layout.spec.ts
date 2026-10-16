@@ -350,8 +350,8 @@ test("auth footnote renders exact sentence per locale", async ({ page }) => {
   const state: MockState = { apiCalls: 0 };
   await mockApi(page, state);
   const exact = {
-    en: "Passwords are hashed with argon2id · 15-minute JWT access tokens with 30-day rotating refresh tokens · GitHub OAuth via the OAuthProvider interface.",
-    vi: "Mật khẩu được băm bằng argon2id · JWT truy cập 15 phút với refresh token xoay vòng 30 ngày · GitHub OAuth qua giao diện OAuthProvider.",
+    en: "Your password is stored securely. Sign in with GitHub or your team email.",
+    vi: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng GitHub hoặc email nhóm của bạn.",
   };
   for (const locale of ["en", "vi"] as const) {
     await seedStorage(page, locale, false);

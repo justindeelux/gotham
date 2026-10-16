@@ -124,6 +124,11 @@ type DeployService interface {
 	// deployments (clamped server-side), so latest-state readers never pull
 	// the full history.
 	ListDeploymentsLimit(ctx context.Context, userID, appID uuid.UUID, limit int) ([]Deployment, error)
+	// ListRecentDeployments returns the newest deployments across every
+	// application the caller can see (their active team, or their own rows
+	// without a team context), newest first, at most limit rows (clamped).
+	// It backs the dashboard feed and never crosses the team boundary.
+	ListRecentDeployments(ctx context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error)
 	// GetDeploymentBuildLog returns the persisted build log of one
 	// deployment (JUS-84). Same ownership as the deployment reads: a foreign
 	// deployment answers ErrNotFound. Empty while the run is in flight.
@@ -631,6 +636,30 @@ func (s *Service) ListDeploymentsLimit(ctx context.Context, userID, appID uuid.U
 	}
 	if deployments == nil {
 		return []Deployment{}, nil
+	}
+	return deployments, nil
+}
+
+// ListRecentDeployments returns the newest deployments across every
+// application the caller can see (their active team, or their own rows without
+// a team context), newest first, at most limit rows (clamped). It backs the
+// dashboard feed and never crosses the team boundary.
+func (s *Service) ListRecentDeployments(ctx context.Context, userID uuid.UUID, limit int) ([]ApplicationDeployment, error) {
+	if s == nil || s.repo == nil {
+		return nil, errors.New("deploy: repository is not configured")
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > maxDeploymentListLimit {
+		limit = maxDeploymentListLimit
+	}
+	deployments, err := s.repo.ListRecentDeployments(ctx, teams.ScopeFor(ctx, userID), limit)
+	if err != nil {
+		return nil, err
+	}
+	if deployments == nil {
+		return []ApplicationDeployment{}, nil
 	}
 	return deployments, nil
 }

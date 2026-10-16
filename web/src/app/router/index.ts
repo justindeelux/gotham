@@ -205,9 +205,18 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/features/auth/pages/InviteAcceptPage.vue"),
         meta: { titleKey: "titles.inviteAccept", requiresAuth: true },
       },
+      // Unknown URLs render a real 404 inside the app shell instead of
+      // silently redirecting to the dashboard (JUS-193). The parent group's
+      // requiresAuth keeps the auth redirect intact: a signed-out visitor is
+      // still sent to login.
+      {
+        path: ":pathMatch(.*)*",
+        name: "not-found",
+        component: () => import("@/features/not-found/pages/NotFoundPage.vue"),
+        meta: { titleKey: "titles.notFound" },
+      },
     ],
   },
-  { path: "/:pathMatch(.*)*", redirect: { name: "dashboard" } },
 ];
 
 export const router = createRouter({

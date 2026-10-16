@@ -12,10 +12,10 @@ const en = {
     footnote: "Self-hosted control plane · your infrastructure, your data.",
     selfHostedTitle: "Self-hosted on a VPS with 1 GB of RAM",
     selfHostedBody:
-      "The control plane is a single Go binary with PostgreSQL and Redis; 1 vCPU and 1 GB of RAM is enough to start.",
-    tlsTitle: "Control channel over server-authenticated gRPC TLS",
+      "The control plane is a single Go binary with a PostgreSQL database; 1 vCPU and 1 GB of RAM is enough to start.",
+    tlsTitle: "Encrypted agent control channel",
     tlsBody:
-      "The agent drives the Docker Engine on each node; the control plane and the agent speak versioned protobuf over :9442, with certificates from the internal CA.",
+      "The agent drives Docker on each node and talks to the control plane over an encrypted, certificate-verified channel.",
     updatesTitle: "Signed Ed25519 updates with rollback",
     updatesBody:
       "The control plane and the agent self-update from GitHub Releases, verifying the signature before swapping the binary and keeping the old one for rollback.",
@@ -27,7 +27,7 @@ const en = {
     switchLabel: "Sign in or create an account",
     title: "Sign in",
     subtitle:
-      "Use your Gotham team account. Sessions use short-lived JWTs with rotating refresh tokens.",
+      "Use your Gotham team account to sign in.",
     emailLabel: "Email",
     emailPlaceholder: "you{'@'}gotham.dev",
     passwordLabel: "Password",
@@ -78,10 +78,7 @@ const en = {
     hint: "Accepting uses the session you are signed in with — sign in with the invited address. Invites are single-use.",
   },
   footnote: {
-    hashPrefix: "Passwords are hashed with",
-    tokenMid:
-      "· 15-minute JWT access tokens with 30-day rotating refresh tokens · GitHub OAuth via the",
-    interfaceSuffix: " interface.",
+    text: "Your password is stored securely. Sign in with GitHub or your team email.",
   },
   strength: {
     level0: "Not entered",

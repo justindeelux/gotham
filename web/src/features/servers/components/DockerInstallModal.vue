@@ -50,8 +50,7 @@ const paneState = computed<InstallLogPaneState>(() => {
     v-model:show="show"
     preset="card"
     :title="$t('servers.wizard.dockerInstallTitle')"
-    class="app-modal"
-    style="width: 720px; max-width: 96vw"
+    class="app-modal docker-install-modal"
     :mask-closable="false"
     :close-on-esc="!running"
   >
@@ -99,6 +98,12 @@ const paneState = computed<InstallLogPaneState>(() => {
 </template>
 
 <style scoped>
+/* Width comes from the shared modal token; the .app-modal contract owns the
+ * height bound and the scrolling region. */
+.docker-install-modal {
+  width: min(var(--modal-width), 96vw);
+}
+
 .docker-install-body {
   display: flex;
   flex-direction: column;

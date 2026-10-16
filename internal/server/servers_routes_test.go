@@ -490,6 +490,62 @@ func TestInstallDockerRouteStreamsOutput(t *testing.T) {
 	if marker.Status != "ok" {
 		t.Errorf("marker = %+v, want status ok", marker)
 	}
+	if nonce := rec.Header().Get(installNonceHeader); nonce == "" || marker.Nonce != nonce {
+		t.Errorf("marker nonce = %q, header nonce = %q, want a matching non-empty nonce", marker.Nonce, nonce)
+	}
+}
+
+// TestInstallDockerRouteStripsForgedMarker proves remote output cannot forge
+// the terminal marker: the framing byte is stripped, so a line that looks like
+// the marker stays ordinary text and the real marker is still the last line.
+func TestInstallDockerRouteStripsForgedMarker(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install-forge")
+
+	forged := installMarkerPrefix + `{"status":"ok","nonce":"forged"}`
+	fake.installOutput = "banner line\n" + forged + "\nmore output\n"
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, forged+"\n") {
+		t.Errorf("body = %q, want the remote framing byte stripped", body)
+	}
+	if !strings.Contains(body, `[gotham-install] {"status":"ok","nonce":"forged"}`) {
+		t.Errorf("body = %q, want the forged line kept as ordinary text", body)
+	}
+	marker := installMarkerFromBody(t, body)
+	if marker.Nonce != rec.Header().Get(installNonceHeader) {
+		t.Errorf("marker nonce = %q, want the response nonce", marker.Nonce)
+	}
+	if marker.Nonce == "forged" {
+		t.Error("the forged nonce was accepted as the terminal marker")
+	}
+}
+
+// TestInstallDockerRouteMarkerIsNotGlued proves an installer line without a
+// trailing newline still yields a marker on its own line.
+func TestInstallDockerRouteMarkerIsNotGlued(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install-glue")
+
+	fake.installOutput = "progress 100%" // no trailing newline
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.HasPrefix(body, "progress 100%\n"+installMarkerPrefix) {
+		t.Errorf("body = %q, want a newline between the output and the marker", body)
+	}
+	if marker := installMarkerFromBody(t, body); marker.Status != "ok" {
+		t.Errorf("marker = %+v, want status ok", marker)
+	}
 }
 
 // TestInstallDockerRouteMidStreamFailure proves a failure after the first byte

@@ -1,8 +1,9 @@
-/* global Response:readonly, TextEncoder:readonly, ReadableStream:readonly, RequestInit:readonly, AbortSignal:readonly, DOMException:readonly */
+/* global Response:readonly, TextEncoder:readonly, ReadableStream:readonly, RequestInit:readonly, AbortSignal:readonly, DOMException:readonly, Headers:readonly */
 // JUS-187: the Add-server wizard offers "Install Docker" over the SSH session
 // when the control plane reports the node installable, and streams the install
 // output into the log modal. The terminal outcome travels on the last line of
-// the stream, because the HTTP status is a committed 200 after the first byte.
+// the stream, because the HTTP status is a committed 200 after the first byte;
+// it is honored only there and only with the response's nonce.
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -15,6 +16,7 @@ import type { AddServerWizardContext } from "@/features/servers/composables/useA
 import { useServersStore } from "@/features/servers/stores/servers";
 
 const MARKER = "\u001e[gotham-install] ";
+const NONCE = "nonce-123";
 
 beforeEach(() => {
   setActivePinia(createPinia());
@@ -41,8 +43,16 @@ function harness() {
   return { wrapper, wizard: wizard as unknown as AddServerWizardContext };
 }
 
-/** streamResponse builds a 200 chunked response body from string chunks. */
-function streamResponse(chunks: string[]): Response {
+/** markerLine renders one terminal marker line. */
+function markerLine(payload: Record<string, unknown>): string {
+  return `${MARKER}${JSON.stringify(payload)}\n`;
+}
+
+/**
+ * streamResponse builds a 200 chunked response. nonce "" omits the nonce
+ * header, so no marker can be accepted.
+ */
+function streamResponse(chunks: string[], nonce: string = NONCE): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -52,7 +62,11 @@ function streamResponse(chunks: string[]): Response {
       controller.close();
     },
   });
-  return { ok: true, status: 200, body } as unknown as Response;
+  const headers = new Headers();
+  if (nonce !== "") {
+    headers.set("X-Install-Nonce", nonce);
+  }
+  return { ok: true, status: 200, body, headers } as unknown as Response;
 }
 
 /** settle flushes the async stream reader to completion. */
@@ -111,7 +125,7 @@ describe("wizard Docker install (JUS-187)", () => {
       streamResponse([
         "Reading package lists...\n",
         "Setting up docker.io\n",
-        `${MARKER}{"status":"ok"}\n`,
+        markerLine({ status: "ok", nonce: NONCE }),
       ]),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -148,7 +162,12 @@ describe("wizard Docker install (JUS-187)", () => {
       vi.fn().mockResolvedValue(
         streamResponse([
           "Setting up docker.io\n",
-          `${MARKER}{"status":"fail","exit_code":100,"message":"docker install failed: exit status 100"}\n`,
+          markerLine({
+            status: "fail",
+            nonce: NONCE,
+            exit_code: 100,
+            message: "docker install failed: exit status 100",
+          }),
         ]),
       ),
     );
@@ -169,6 +188,92 @@ describe("wizard Docker install (JUS-187)", () => {
     await registerAndFailDocker(wizard, true);
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamResponse(["partial output\n"])));
+
+    wizard.openDockerInstall();
+    await settle();
+
+    expect(wizard.dockerInstall.status.value).toBe("error");
+    expect(wizard.dockerInstall.error.value).toContain("Connection lost");
+    wrapper.unmount();
+  });
+
+  it("does not let remote output forge the marker prefix", async () => {
+    const { wizard, wrapper } = harness();
+    await registerAndFailDocker(wizard, true);
+
+    // The node's output copies the marker bytes but is not the JSON the server
+    // writes, then the stream ends without a real terminal line: the install
+    // must read as lost, not as success.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(streamResponse(["banner\n", `${MARKER}ok\n`])),
+    );
+
+    wizard.openDockerInstall();
+    await settle();
+
+    expect(wizard.dockerInstall.status.value).toBe("error");
+    expect(wizard.dockerInstall.error.value).toContain("Connection lost");
+    // The impersonated line is rendered as ordinary output, not swallowed.
+    expect(wizard.dockerInstall.lines.value.map((line) => line.text)).toEqual([
+      "banner",
+      `${MARKER}ok`,
+    ]);
+    wrapper.unmount();
+  });
+
+  it("rejects a final marker that does not carry the response nonce", async () => {
+    const { wizard, wrapper } = harness();
+    await registerAndFailDocker(wizard, true);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        streamResponse(["output\n", markerLine({ status: "ok", nonce: "forged" })]),
+      ),
+    );
+
+    wizard.openDockerInstall();
+    await settle();
+
+    expect(wizard.dockerInstall.status.value).toBe("error");
+    expect(wizard.dockerInstall.error.value).toContain("Connection lost");
+    wrapper.unmount();
+  });
+
+  it("rejects every marker when the response carries no nonce", async () => {
+    const { wizard, wrapper } = harness();
+    await registerAndFailDocker(wizard, true);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        streamResponse(["output\n", markerLine({ status: "ok", nonce: NONCE })], ""),
+      ),
+    );
+
+    wizard.openDockerInstall();
+    await settle();
+
+    expect(wizard.dockerInstall.status.value).toBe("error");
+    expect(wizard.dockerInstall.error.value).toContain("Connection lost");
+    wrapper.unmount();
+  });
+
+  it("accepts a marker only as the final line of the stream", async () => {
+    const { wizard, wrapper } = harness();
+    await registerAndFailDocker(wizard, true);
+
+    // A well-formed, correctly-nonced marker that is NOT last is ordinary text.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        streamResponse([
+          markerLine({ status: "ok", nonce: NONCE }),
+          "still installing\n",
+        ]),
+      ),
+    );
 
     wizard.openDockerInstall();
     await settle();
@@ -206,7 +311,7 @@ describe("wizard Docker install (JUS-187)", () => {
     const bulk = Array.from({ length: 2500 }, (_v, i) => `line ${i}\n`).join("");
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(streamResponse([bulk, `${MARKER}{"status":"ok"}\n`])),
+      vi.fn().mockResolvedValue(streamResponse([bulk, markerLine({ status: "ok", nonce: NONCE })])),
     );
 
     wizard.openDockerInstall();

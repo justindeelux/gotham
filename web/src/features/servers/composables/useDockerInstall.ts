@@ -31,6 +31,14 @@ export type DockerInstallStatus = "idle" | "running" | "done" | "error";
  */
 const installMarkerPrefix = "\x1e[gotham-install] ";
 
+/**
+ * Response header carrying the per-request marker nonce. The marker is only
+ * honored when its nonce matches, so remote output that impersonates the
+ * prefix cannot fake a terminal status. Keep in sync with installNonceHeader
+ * in internal/server/servers_routes.go.
+ */
+const installNonceHeader = "X-Install-Nonce";
+
 /** Locale key for a stream that ended without a terminal marker. */
 const streamLostKey = "servers.wizard.dockerInstallLost";
 
@@ -44,8 +52,16 @@ const maxBufferChars = 64 * 1024;
 /** Terminal marker payload written by the control plane. */
 interface InstallMarker {
   status?: string;
+  nonce?: string;
   exit_code?: number;
   message?: string;
+}
+
+/** A marker line held back until the stream proves it was the final line. */
+interface PendingMarker {
+  /** The raw line, kept so a demoted marker still renders as ordinary text. */
+  raw: string;
+  marker: InstallMarker;
 }
 
 export interface DockerInstallSource {
@@ -92,6 +108,10 @@ export function useDockerInstall(source: DockerInstallSource): DockerInstallStat
   let controller: AbortController | null = null;
   let nextSeq = 0;
   let terminal: "ok" | "fail" | null = null;
+  /** nonce is the response's marker nonce; a marker without it is plain text. */
+  let nonce = "";
+  /** pending holds the last marker-looking line until the stream ends. */
+  let pending: PendingMarker | null = null;
 
   /** reset clears the buffer and the failure, returning to idle. */
   function reset(): void {
@@ -100,6 +120,8 @@ export function useDockerInstall(source: DockerInstallSource): DockerInstallStat
     failure.value = null;
     status.value = "idle";
     terminal = null;
+    nonce = "";
+    pending = null;
   }
 
   function stop(): void {
@@ -130,27 +152,69 @@ export function useDockerInstall(source: DockerInstallSource): DockerInstallStat
   function handleLine(raw: string): void {
     const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
     if (line.startsWith(installMarkerPrefix)) {
-      applyMarker(line.slice(installMarkerPrefix.length));
+      // Hold it: only the FINAL line of the stream is a terminal marker, so a
+      // line that only looks like one must not decide the outcome yet.
+      const marker = parseMarker(line.slice(installMarkerPrefix.length));
+      if (marker === null) {
+        appendLine(line); // not JSON: ordinary remote text
+        return;
+      }
+      pending = { raw: line, marker };
       return;
+    }
+    if (pending !== null) {
+      // A further non-blank line proves the held marker was not terminal.
+      if (line.trim() !== "") {
+        demotePending();
+      } else {
+        return; // a blank separator does not disown the marker
+      }
     }
     appendLine(line);
   }
 
-  /** applyMarker records the terminal outcome carried by the final line. */
-  function applyMarker(payload: string): void {
-    let parsed: InstallMarker;
+  /** parseMarker decodes a marker payload, or null when it is not one. */
+  function parseMarker(payload: string): InstallMarker | null {
     try {
-      parsed = JSON.parse(payload) as InstallMarker;
+      const parsed = JSON.parse(payload) as InstallMarker;
+      return parsed !== null && typeof parsed === "object" ? parsed : null;
     } catch {
-      return; // a malformed marker is not a terminal outcome
+      return null;
     }
-    if (parsed.status === "fail") {
+  }
+
+  /** demotePending renders a held marker line as ordinary remote text. */
+  function demotePending(): void {
+    if (pending === null) {
+      return;
+    }
+    appendLine(pending.raw);
+    pending = null;
+  }
+
+  /**
+   * finalizeTerminal accepts the held line as the terminal marker only when it
+   * was the last line and carries the response nonce. Anything else is remote
+   * text, and the absent marker leaves the stream outcome unknown.
+   */
+  function finalizeTerminal(): void {
+    const held = pending;
+    pending = null;
+    if (held === null) {
+      return;
+    }
+    if (nonce === "" || held.marker.nonce !== nonce) {
+      appendLine(held.raw); // impersonated marker: ordinary text
+      return;
+    }
+    if (held.marker.status === "fail") {
       terminal = "fail";
       failure.value =
-        parsed.message && parsed.message !== "" ? parsed.message : streamLostKey;
+        held.marker.message && held.marker.message !== "" ? held.marker.message : streamLostKey;
       return;
     }
     terminal = "ok";
+    failure.value = null;
   }
 
   /** start runs one install and consumes its streamed output. */
@@ -164,6 +228,8 @@ export function useDockerInstall(source: DockerInstallSource): DockerInstallStat
     failure.value = null;
     nextSeq = 0;
     terminal = null;
+    nonce = "";
+    pending = null;
     status.value = "running";
 
     const abort = new AbortController();
@@ -175,12 +241,16 @@ export function useDockerInstall(source: DockerInstallSource): DockerInstallStat
         status.value = "error";
         return;
       }
+      nonce = response.headers?.get?.(installNonceHeader) ?? "";
       await readBody(response.body, abort);
       if (abort.signal.aborted || controller !== abort) {
         return;
       }
-      // No marker means the stream was truncated: the outcome is unknown, so
-      // it is a failure rather than a silent success.
+      // Accept the held line as the terminal marker only here: the stream has
+      // ended, so it really was the last line.
+      finalizeTerminal();
+      // No valid marker means the stream was truncated: the outcome is unknown,
+      // so it is a failure rather than a silent success.
       if (terminal === "ok") {
         status.value = "done";
       } else {
@@ -214,9 +284,11 @@ export function useDockerInstall(source: DockerInstallSource): DockerInstallStat
     if (source.trustHostKey.value) {
       body.trust_host_key = true;
     }
-    const token = getAccessToken();
-    const request = (): Promise<Response> =>
-      fetch(dockerInstallPath(serverId), {
+    // The token is read per attempt, so a retry after refreshSession() uses the
+    // refreshed token rather than the stale one that earned the 401.
+    const request = (): Promise<Response> => {
+      const token = getAccessToken();
+      return fetch(dockerInstallPath(serverId), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -225,6 +297,7 @@ export function useDockerInstall(source: DockerInstallSource): DockerInstallStat
         body: JSON.stringify(body),
         signal,
       });
+    };
 
     let response = await request();
     if (response.status !== 401) {

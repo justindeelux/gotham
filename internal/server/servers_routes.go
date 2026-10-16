@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -387,26 +390,39 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 
 // installMarkerPrefix begins the final line of a docker-install stream. Once
 // the stream is committed the HTTP status cannot change, so the terminal
-// outcome travels in-band as a JSON object on this last line. The leading
-// record-separator control character cannot appear in package-manager output,
-// so a normal line can never be mistaken for the marker. Keep in sync with
-// installMarkerPrefix in web/src/features/servers/composables/useDockerInstall.ts.
-const installMarkerPrefix = "\x1e[gotham-install] "
+// outcome travels in-band as a JSON object on this last line. Remote output can
+// never carry the prefix: the stream writer strips the framing byte from every
+// remote chunk, and the marker also carries a per-request nonce delivered in
+// the nonce header, so a framing-strip bug alone still cannot forge it. Keep
+// the prefix and the header name in sync with installMarkerPrefix and
+// installNonceHeader in
+// web/src/features/servers/composables/useDockerInstall.ts.
+const (
+	installMarkerPrefix = "\x1e[gotham-install] "
+	// installNonceHeader carries the per-request marker nonce. It is set before
+	// the first body byte, so the client always has it before the marker.
+	installNonceHeader = "X-Install-Nonce"
+	// installFramingByte is the record separator the marker prefix starts with.
+	installFramingByte = 0x1e
+)
 
 // installMarker is the terminal status of one install stream.
 type installMarker struct {
 	Status   string `json:"status"` // "ok" | "fail"
+	Nonce    string `json:"nonce"`
 	ExitCode int    `json:"exit_code,omitempty"`
 	Message  string `json:"message,omitempty"`
 }
 
-// writeInstallMarker writes the terminal status line of an install stream.
-func writeInstallMarker(w io.Writer, marker installMarker) {
-	payload, err := json.Marshal(marker)
-	if err != nil {
-		return
+// newInstallNonce returns an unguessable per-request marker nonce. A failure to
+// read randomness yields an empty nonce, which the client rejects (safe
+// direction: an install with no valid nonce reads as a lost connection).
+func newInstallNonce() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return ""
 	}
-	_, _ = io.WriteString(w, installMarkerPrefix+string(payload)+"\n")
+	return hex.EncodeToString(buf)
 }
 
 // handleInstallDocker installs Docker Engine on a node over SSH and streams the
@@ -427,7 +443,8 @@ func (s *Server) handleInstallDocker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := &streamWriter{w: w, flusher: flusherOf(w)}
+	nonce := newInstallNonce()
+	out := &streamWriter{w: w, flusher: flusherOf(w), nonce: nonce}
 	err := s.servers.InstallDocker(r.Context(), id, auth, out)
 	if !out.started {
 		if err != nil {
@@ -436,17 +453,18 @@ func (s *Server) handleInstallDocker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	marker := installMarker{Status: "ok"}
+	marker := installMarker{Status: "ok", Nonce: nonce}
 	if err != nil {
 		marker = installMarker{
 			Status:   "fail",
+			Nonce:    nonce,
 			ExitCode: servers.DockerInstallExitCode(err),
 			Message:  err.Error(),
 		}
 		s.logger.Warn("servers: docker install failed after the stream started",
 			"server_id", id.String(), "exit_code", marker.ExitCode, "error", err)
 	}
-	writeInstallMarker(out, marker)
+	out.writeMarker(marker)
 }
 
 // streamWriter defers the response status until the first byte, so a handler
@@ -455,17 +473,67 @@ func (s *Server) handleInstallDocker(w http.ResponseWriter, r *http.Request) {
 type streamWriter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
+	nonce   string
 	started bool
+	// lastByte is the last byte sent to the client, so the terminal marker can
+	// be separated by a newline when the installer's output did not end in one.
+	lastByte byte
 }
 
-// Write starts the stream on the first byte and flushes every chunk.
+// Write streams remote output. The framing byte is stripped, so remote output
+// can never contain the terminal marker prefix; the whole slice is reported as
+// written because every byte of it was consumed (only framing was dropped).
 func (s *streamWriter) Write(p []byte) (int, error) {
 	s.start()
-	n, err := s.w.Write(p)
+	clean := stripInstallFraming(p)
+	if len(clean) > 0 {
+		if _, err := s.w.Write(clean); err != nil {
+			return 0, err
+		}
+		s.lastByte = clean[len(clean)-1]
+	}
 	if s.flusher != nil {
 		s.flusher.Flush()
 	}
-	return n, err
+	return len(p), nil
+}
+
+// writeMarker writes the terminal status line on the frame-writer's own path
+// (never stripped), separated from remote output by a newline so it can never
+// be glued to an unterminated line.
+func (s *streamWriter) writeMarker(marker installMarker) {
+	s.start()
+	if s.lastByte != '\n' {
+		if _, err := io.WriteString(s.w, "\n"); err != nil {
+			return
+		}
+	}
+	payload, err := json.Marshal(marker)
+	if err != nil {
+		return
+	}
+	if _, err := io.WriteString(s.w, installMarkerPrefix+string(payload)+"\n"); err != nil {
+		return
+	}
+	s.lastByte = '\n'
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+}
+
+// stripInstallFraming removes the marker framing byte from remote output. It
+// returns the input unchanged when there is nothing to strip.
+func stripInstallFraming(p []byte) []byte {
+	if bytes.IndexByte(p, installFramingByte) < 0 {
+		return p
+	}
+	clean := make([]byte, 0, len(p))
+	for _, b := range p {
+		if b != installFramingByte {
+			clean = append(clean, b)
+		}
+	}
+	return clean
 }
 
 // start commits the 200 and the streaming headers once.
@@ -476,6 +544,9 @@ func (s *streamWriter) start() {
 	s.started = true
 	s.w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	s.w.Header().Set("Cache-Control", "no-store")
+	if s.nonce != "" {
+		s.w.Header().Set(installNonceHeader, s.nonce)
+	}
 	s.w.WriteHeader(http.StatusOK)
 	if s.flusher != nil {
 		s.flusher.Flush()

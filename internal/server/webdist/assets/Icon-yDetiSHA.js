@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/Icon-yDetiSHA.js
 import{f as u}from"./format-length-B-p6aW7q.js";import{a4 as v,aZ as l,a3 as d,d as b,a5 as h,dZ as y,X as m,a6 as C,a8 as _,b3 as $,g as a,f4 as z}from"./index-T4jQN_qO.js";var x=v("icon",`
+========
+import{f as u}from"./format-length-B-p6aW7q.js";import{a4 as v,aY as l,a3 as d,d as b,a5 as h,dY as y,X as m,a6 as C,a8 as _,b2 as $,g as a,f3 as z}from"./index-DQj-8EQg.js";var x=v("icon",`
+>>>>>>>> c1c4ce5ef (fix(web): round-1 review fixes — empty nav groups, Platform admin label, real table/tabs overflow (JUS-197)):internal/server/webdist/assets/Icon-BMcV0Oe4.js
  height: 1em;
  width: 1em;
  line-height: 1em;

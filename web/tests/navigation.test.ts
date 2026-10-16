@@ -1,7 +1,8 @@
 // Shell navigation data: section routing and key uniqueness.
 import { describe, expect, it } from "vitest";
 
-import { activeNavKey, navSections } from "../src/app/layouts/navigation";
+import { activeNavKey, navSections, visibleNavSections } from "../src/app/layouts/navigation";
+import type { NavSection } from "../src/app/layouts/navigation";
 
 describe("activeNavKey", () => {
   it("follows the first path segment", () => {
@@ -84,14 +85,43 @@ describe("navSections", () => {
     }
   });
 
-  it("marks exactly the platform-admin sections adminOnly (JUS-197)", () => {
+  it("marks exactly the platform-admin entries adminOnly (JUS-197)", () => {
     const items = navSections.flatMap((section) => section.items);
     const flagged = new Set(
       items.filter((item) => item.adminOnly).map((item) => item.key),
     );
-    // Domains & SSL, Instance and Updates need the instance-level Platform
-    // admin flag; everything else (including the team-scoped Members page)
-    // stays visible to every signed-in account.
     expect(flagged).toEqual(new Set(["files", "domains", "instance", "updates"]));
+  });
+
+  it("drops groups whose items are all hidden from non-admins (JUS-197)", () => {
+    const mixed: NavSection[] = [
+      {
+        label: "Open",
+        labelKey: "nav.sections.open",
+        items: [
+          { key: "a", label: "A", labelKey: "nav.items.a", icon: "grid", to: "a" },
+          { key: "b", label: "B", labelKey: "nav.items.b", icon: "grid", to: "b", adminOnly: true },
+        ],
+      },
+      {
+        label: "Locked",
+        labelKey: "nav.sections.locked",
+        items: [
+          { key: "c", label: "C", labelKey: "nav.items.c", icon: "gear", to: "c", adminOnly: true },
+        ],
+      },
+    ];
+    const hidden = visibleNavSections(mixed, false);
+    // The all-admin group (and its orphan heading) is gone; the mixed group
+    // keeps only its public item.
+    expect(hidden.map((section) => section.label)).toEqual(["Open"]);
+    expect(hidden[0]!.items.map((item) => item.key)).toEqual(["a"]);
+    const shown = visibleNavSections(mixed, true);
+    expect(shown.map((section) => section.label)).toEqual(["Open", "Locked"]);
+    expect(shown[1]!.items.map((item) => item.key)).toEqual(["c"]);
+    // The real catalog: System is all-admin, so non-admins lose the heading.
+    const real = visibleNavSections(navSections, false);
+    expect(real.some((section) => section.labelKey === "nav.sections.system")).toBe(false);
+    expect(visibleNavSections(navSections, true)).toHaveLength(navSections.length);
   });
 });

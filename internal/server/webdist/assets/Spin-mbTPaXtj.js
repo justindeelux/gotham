@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/Spin-mbTPaXtj.js
 import{a3 as g,a4 as a,a$ as $,aZ as b,d as w,g5 as B,a5 as S,o as d,c as u,a7 as p,aH as i,a as z,aC as m,x as T,dW as P,f as R,aP as V,a8 as N,b3 as W,aS as _,g as y,p as E,g6 as I,ab as O,aa as j}from"./index-T4jQN_qO.js";import{u as H}from"./use-compitable-CbL7YZPj.js";var L=g([g("@keyframes spin-rotate",`
+========
+import{a3 as g,a4 as a,a_ as $,aY as b,d as w,gb as B,a5 as k,o as d,c as u,a7 as p,aG as i,a as z,aB as m,x as R,dV as T,f as V,aO as N,a8 as P,b2 as _,aR as O,g as y,p as W,gc as E,ab as I,aa as j}from"./index-DQj-8EQg.js";import{u as L}from"./use-compitable-DVO8e7NJ.js";var D=g([g("@keyframes spin-rotate",`
+>>>>>>>> c1c4ce5ef (fix(web): round-1 review fixes — empty nav groups, Platform admin label, real table/tabs overflow (JUS-197)):internal/server/webdist/assets/Spin-CfRyicG8.js
  from {
  transform: rotate(0);
  }

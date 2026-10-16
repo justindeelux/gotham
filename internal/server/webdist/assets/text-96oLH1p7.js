@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/text-96oLH1p7.js
 import{a4 as k,aZ as r,d as T,a5 as u,o as s,c as a,a7 as n,F as R,aC as h,aH as m,X as S,a8 as V,b3 as P,g,gf as w,aa as D}from"./index-T4jQN_qO.js";import{u as F}from"./use-compitable-CbL7YZPj.js";var _=k("text",`
+========
+import{a4 as k,aY as r,d as T,a5 as u,o as s,c as a,a7 as n,F as R,aB as h,aG as m,X as S,a8 as V,b2 as P,g,ga as w,aa as D}from"./index-DQj-8EQg.js";import{u as F}from"./use-compitable-DVO8e7NJ.js";var _=k("text",`
+>>>>>>>> c1c4ce5ef (fix(web): round-1 review fixes — empty nav groups, Platform admin label, real table/tabs overflow (JUS-197)):internal/server/webdist/assets/text-DST8H6AE.js
  transition: color .3s var(--n-bezier);
  color: var(--n-text-color);
 `,[r("strong",`

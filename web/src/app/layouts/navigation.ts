@@ -72,6 +72,32 @@ export const navSections: NavSection[] = [
 export const sectionAliases: Record<string, string> = { settings: "notifications" };
 
 /**
+ * visibleNavItems is the per-section filter: platform-admin-only entries
+ * stay hidden from callers without the instance flag.
+ */
+export function visibleNavItems(items: NavItem[], isPlatformAdmin: boolean): NavItem[] {
+  return items.filter((item) => !item.adminOnly || isPlatformAdmin);
+}
+
+/**
+ * visibleNavSections drops whole groups whose items are all hidden, so a
+ * non-admin never sees an orphan section heading (e.g. System) with nothing
+ * under it. Generic over the section list: groups with no adminOnly items
+ * pass through untouched.
+ */
+export function visibleNavSections(
+  sections: NavSection[],
+  isPlatformAdmin: boolean,
+): NavSection[] {
+  return sections
+    .map((section) => ({
+      ...section,
+      items: visibleNavItems(section.items, isPlatformAdmin),
+    }))
+    .filter((section) => section.items.length > 0);
+}
+
+/**
  * activeNavKey is the sidebar entry for a route path. It follows the first
  * path segment, so detail routes (/servers/:id, /projects/:projectId and
  * the nested /projects/:projectId/environments/:environmentId/... pages)

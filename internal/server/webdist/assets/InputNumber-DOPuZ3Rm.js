@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/InputNumber-DOPuZ3Rm.js
 import{d as oe,dR as Oe,a as Q,e$ as Fe,f0 as ke,f1 as Ae,a2 as Ue,a3 as _e,a4 as Y,a5 as se,o,c as E,x as p,aH as H,a8 as $e,eL as ze,p as V,dX as g,M as Ee,aR as He,g as Le,b5 as x,_ as je,dV as Z,dn as ee,a7 as te,f2 as Ge,dq as ne,dr as re,f3 as ie,b8 as Ke}from"./index-T4jQN_qO.js";import{u as We}from"./use-locale-BOwwsqFg.js";import{A as Xe}from"./Add-zBaDUHno.js";import{I as qe}from"./Input-B3nHCE_E.js";import{u as Je}from"./use-merged-state-CPu8N04w.js";var Qe=oe({name:"Remove",render(){return(()=>{const e=Oe("a77472467b8adb0a");return e[0]||(e[0]=Q("svg",{xmlns:"http://www.w3.org/2000/svg",viewBox:"0 0 512 512"},[Q("line",{x1:"400",y1:"256",x2:"112",y2:"256",style:`
+========
+import{d as oe,dQ as Oe,a as J,e_ as Fe,e$ as ke,f0 as Ae,a2 as Ue,a3 as _e,a4 as Y,a5 as se,o,c as E,x as p,aG as H,a8 as $e,eK as ze,p as V,dW as g,M as Ee,aQ as He,g as Le,b4 as x,_ as Ge,dU as Z,dm as ee,a7 as te,f1 as Ke,dp as ne,dq as re,f2 as ie,b7 as je}from"./index-DQj-8EQg.js";import{u as We}from"./use-locale-D2ho9QE_.js";import{A as Qe}from"./Add-Cqdtk2RP.js";import{I as qe}from"./Input-Oy33WHyv.js";import{u as Xe}from"./use-merged-state-BSso_lhj.js";var Je=oe({name:"Remove",render(){return(()=>{const e=Oe("a77472467b8adb0a");return e[0]||(e[0]=J("svg",{xmlns:"http://www.w3.org/2000/svg",viewBox:"0 0 512 512"},[J("line",{x1:"400",y1:"256",x2:"112",y2:"256",style:`
+>>>>>>>> c1c4ce5ef (fix(web): round-1 review fixes — empty nav groups, Platform admin label, real table/tabs overflow (JUS-197)):internal/server/webdist/assets/InputNumber-BILz0ghL.js
         fill: none;
         stroke: currentColor;
         stroke-linecap: round;

@@ -24,6 +24,7 @@ const vi: CommonMessages = {
       admin: "quản trị viên",
       readOnly: "chỉ đọc",
       member: "Thành viên nhóm",
+      platformAdmin: "Quản trị nền tảng",
     },
     status: {
       unknown: "không rõ",

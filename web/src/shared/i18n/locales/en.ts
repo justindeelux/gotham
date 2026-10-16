@@ -23,6 +23,7 @@ const en = {
       admin: "admin",
       readOnly: "read-only",
       member: "Team member",
+      platformAdmin: "Platform admin",
     },
     status: {
       unknown: "unknown",

@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/Form-DUtI-fMp.js
 import{a4 as h,aZ as S,a3 as P,d as k,a5 as v,o as A,c as C,a7 as F,aH as L,a8 as j,e4 as m,fW as M,$ as p,p as V}from"./index-T4jQN_qO.js";import{f as W,a as O}from"./FormItem-BavEFXmD.js";var _=h("form",[S("inline",`
+========
+import{a4 as h,aY as S,a3 as P,d as k,a5 as v,o as A,c as C,a7 as F,aG as L,a8 as V,e3 as m,fV as j,$ as p,p as M}from"./index-DQj-8EQg.js";import{f as O,a as W}from"./FormItem-9KJFQALz.js";var _=h("form",[S("inline",`
+>>>>>>>> c1c4ce5ef (fix(web): round-1 review fixes — empty nav groups, Platform admin label, real table/tabs overflow (JUS-197)):internal/server/webdist/assets/Form-DSVz9g7F.js
  width: 100%;
  display: inline-flex;
  align-items: flex-start;

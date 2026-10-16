@@ -7,7 +7,7 @@ import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers";
 import MeCard from "./MeCard.vue";
-import { activeNavKey, navSections } from "./navigation";
+import { activeNavKey, navSections, visibleNavSections } from "./navigation";
 import { useAppVersion } from "./useAppVersion";
 import { useMobileNav } from "./useMobileNav";
 
@@ -23,6 +23,12 @@ const { versionTag } = useAppVersion();
 const serversCount = computed<number>(() => serversStore.servers.length);
 
 const activeKey = computed<string>(() => activeNavKey(route.path));
+
+/**
+ * sections hides whole groups whose items are all admin-only for this
+ * caller, so no orphan heading (e.g. System) renders with nothing under it.
+ */
+const sections = computed(() => visibleNavSections(navSections, authStore.isPlatformAdmin));
 </script>
 
 <template>
@@ -40,10 +46,10 @@ const activeKey = computed<string>(() => activeNavKey(route.path));
       }}</span>
     </div>
     <nav class="sidebar-body">
-      <template v-for="section in navSections" :key="section.labelKey">
+      <template v-for="section in sections" :key="section.labelKey">
         <p class="nav-label">{{ t(section.labelKey) }}</p>
         <RouterLink
-          v-for="item in section.items.filter((i) => !i.adminOnly || authStore.isPlatformAdmin)"
+          v-for="item in section.items"
           :key="item.key"
           class="nav-item"
           :class="{ 'is-active': activeKey === item.key }"

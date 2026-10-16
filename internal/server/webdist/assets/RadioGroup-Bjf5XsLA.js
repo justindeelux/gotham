@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/RadioGroup-Bjf5XsLA.js
 import{a4 as _,aZ as p,a_ as c,a3 as x,dj as j,Z as le,a8 as K,eL as O,p as F,dX as L,b5 as $,dm as ce,b8 as M,d as W,a5 as P,dR as ue,o as I,c as D,a as G,a7 as V,aH as y,aC as Z,f5 as X,aR as Y,b3 as q,g as T,dn as be,aa as E,x as he,dk as fe,$ as ve}from"./index-T4jQN_qO.js";import{g as ge}from"./Space-BMo-eqxG.js";import{u as J}from"./use-merged-state-CPu8N04w.js";var pe=_("radio",`
+========
+import{a4 as _,aY as p,aZ as c,a3 as x,di as j,Z as le,a8 as M,eK as W,p as F,dW as O,b4 as $,dl as ce,b7 as K,d as L,a5 as P,dQ as ue,o as I,c as D,a as H,a7 as V,aG as y,aB as Q,f4 as Y,aQ as Z,b2 as q,g as T,dm as be,aa as E,x as he,dj as fe,$ as ve}from"./index-DQj-8EQg.js";import{g as ge}from"./Space-Fl6ZBXTn.js";import{u as J}from"./use-merged-state-BSso_lhj.js";var pe=_("radio",`
+>>>>>>>> c1c4ce5ef (fix(web): round-1 review fixes — empty nav groups, Platform admin label, real table/tabs overflow (JUS-197)):internal/server/webdist/assets/RadioGroup-C1BY-ceC.js
  line-height: var(--n-label-line-height);
  outline: none;
  position: relative;

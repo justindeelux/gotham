@@ -107,6 +107,23 @@ describe("shared account menu", () => {
     wrapper.unmount();
   });
 
+  it("appends the instance Platform admin flag to the team role (JUS-197)", async () => {
+    const { wrapper, auth } = await mountMenu(false);
+    auth.user = { ...auth.user!, is_platform_admin: true };
+    await flushPromises();
+    const header = globalThis.document.querySelector(".account-menu-header")!;
+    // The team role stays first; the instance flag reads "Platform admin"
+    // so it cannot be confused with the team admin role.
+    expect(header.querySelector(".account-menu-role")!.textContent)
+      .toBe("admin · Platform admin");
+    syncComposerLocale("vi");
+    await nextTick();
+    await flushPromises();
+    expect(header.querySelector(".account-menu-role")!.textContent)
+      .toBe("quản trị viên · Quản trị nền tảng");
+    wrapper.unmount();
+  });
+
   it("supports keyboard selection", async () => {
     const { wrapper, router } = await mountMenu(true);
     globalThis.document.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));

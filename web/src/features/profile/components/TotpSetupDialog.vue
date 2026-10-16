@@ -158,6 +158,7 @@ function downloadCodes(): void {
     :title="t('profile.totp.setupTitle')"
     class="app-modal"
     style="width: 520px; max-width: 94vw"
+    :closable="!gateCodes"
     :mask-closable="!gateCodes"
     :close-on-esc="!gateCodes"
     @update:show="emit('update:show', $event)"

@@ -102,6 +102,7 @@ describe("TotpSetupDialog", () => {
   it("shows the codes with the modal locked, then closes on acknowledge", async () => {
     const dialog = await openDialog(TotpSetupDialog);
     // The scan step is dismissable.
+    expect(dialog.findComponent(NModal).props("closable")).toBe(true);
     expect(dialog.findComponent(NModal).props("maskClosable")).toBe(true);
 
     await dialog.find("input#totp-enroll-password").setValue("password123");
@@ -113,6 +114,9 @@ describe("TotpSetupDialog", () => {
     expect(dialog.emitted("done")).toBeTruthy();
     expect(dialog.text()).toContain("ABCDE-FGHJK");
     const modal = dialog.findComponent(NModal);
+    // Every dismiss path is off while the one-time codes are unacknowledged,
+    // including the header close "X".
+    expect(modal.props("closable")).toBe(false);
     expect(modal.props("maskClosable")).toBe(false);
     expect(modal.props("closeOnEsc")).toBe(false);
 
@@ -146,6 +150,7 @@ describe("TotpSetupDialog", () => {
 describe("TotpConfirmDialog", () => {
   it("locks the modal while the regenerated codes are shown", async () => {
     const dialog = await openDialog(TotpConfirmDialog, { mode: "regenerate" });
+    expect(dialog.findComponent(NModal).props("closable")).toBe(true);
     expect(dialog.findComponent(NModal).props("maskClosable")).toBe(true);
 
     await dialog.find("input#totp-confirm-password").setValue("password123");
@@ -155,6 +160,7 @@ describe("TotpConfirmDialog", () => {
 
     expect(dialog.text()).toContain("NEW-CODE-01");
     const modal = dialog.findComponent(NModal);
+    expect(modal.props("closable")).toBe(false);
     expect(modal.props("maskClosable")).toBe(false);
     expect(modal.props("closeOnEsc")).toBe(false);
 

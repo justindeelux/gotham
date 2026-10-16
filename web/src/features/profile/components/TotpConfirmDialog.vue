@@ -150,6 +150,7 @@ function close(changed: boolean): void {
     :title="title"
     class="app-modal"
     style="width: 480px; max-width: 94vw"
+    :closable="!gateCodes"
     :mask-closable="!gateCodes"
     :close-on-esc="!gateCodes"
     @update:show="emit('update:show', $event)"

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { NAlert, NCheckbox, NSpace, NText } from "naive-ui";
+import { NAlert, NButton, NCheckbox, NSpace, NText } from "naive-ui";
 import { computed, inject } from "vue";
 
 import { WizardKey } from "@/features/servers/composables/useAddServerWizard";
+import DockerInstallModal from "@/features/servers/components/DockerInstallModal.vue";
 import WizardCheckRow from "@/features/servers/components/wizard/WizardCheckRow.vue";
 
 const wizard = inject(WizardKey);
@@ -54,9 +55,22 @@ const dotClass = computed<string>(() => {
     </div>
     <NText depth="3">{{ wizard.checkSummary.value }}</NText>
 
+    <!-- The node has no agent yet, so the App Store cannot help here: the
+         install runs over the same SSH session the probes use. -->
+    <NButton
+      v-if="wizard.dockerInstallOffer.value"
+      type="primary"
+      secondary
+      @click="wizard.openDockerInstall()"
+    >
+      {{ $t("servers.wizard.installDocker") }}
+    </NButton>
+
     <NAlert v-if="wizard.validationPassed.value" type="success" :show-icon="true">
       {{ $t("servers.wizard.validatePassed") }}
     </NAlert>
+
+    <DockerInstallModal />
   </NSpace>
 </template>
 

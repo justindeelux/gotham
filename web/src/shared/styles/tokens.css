@@ -157,6 +157,10 @@
   --container-gutter-desktop: 24px;
   --container-gutter-tablet: 16px;
   --container-gutter-phone: 16px;
+
+  /* Card modal width for a single-column body (a form or a streamed log).
+     Modals that set an explicit width use this instead of a bare px value. */
+  --modal-width: 720px;
 }
 
 /* ── Block 2 — app shell aliases (layout geometry + derived tones) ─────── */

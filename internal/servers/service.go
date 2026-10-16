@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -135,6 +136,10 @@ type ServerService struct {
 	// flood's growth of server_metrics without touching the live snapshot.
 	metricMu     sync.Mutex
 	lastMetricAt map[string]time.Time
+	// installs marks the servers with a Docker install in flight, so a double
+	// click, a second tab, or an install racing another holds one run per node
+	// (the node package manager is not concurrency-safe) and answers 409.
+	installs sync.Map // map[uuid.UUID]struct{}
 	// now is the clock, overridable in tests.
 	now func() time.Time
 }
@@ -1029,6 +1034,61 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 
 	s.logger.Info("servers: validation succeeded", "server_id", id.String(), "docker_version", info.DockerVersion)
 	return &ValidationResult{Checks: checks, Server: serverFromRow(updated)}, nil
+}
+
+// InstallDocker installs Docker Engine on a server over SSH, streaming the
+// installer output to out. It resolves the credentials and host-key policy the
+// same way Validate does but never writes to the database: the operator re-runs
+// the probe afterwards, and that run records the outcome. It is the in-product
+// alternative to the App Store install for a node whose agent is not installed
+// yet, which is exactly the state the Add-server wizard validates in.
+func (s *ServerService) InstallDocker(ctx context.Context, id uuid.UUID, auth ValidateAuth, out io.Writer) error {
+	row, err := s.store.GetServerByID(ctx, pgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("get server: %w", err)
+	}
+	server := serverFromRow(row)
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, true); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return err
+		}
+		return ErrNotFound
+	}
+
+	// One install per node: a second concurrent run would race the node's
+	// package manager (lock contention, half-started services). A duplicate
+	// submit is a conflict, not a second install.
+	if !s.lockInstall(id) {
+		return fmt.Errorf("%w: a Docker install is already running for this server", ErrConflict)
+	}
+	defer s.unlockInstall(id)
+
+	credentials, err := s.credentials(ctx, row, auth)
+	if err != nil {
+		return err
+	}
+
+	policy := HostKeyPolicy{Pinned: fingerprintOf(row.HostKeyFingerprint)}
+	if policy.Pinned == "" {
+		policy.AcceptUnpinned = len(credentials.PrivateKeyPEM) > 0 || auth.TrustHostKey
+	}
+
+	return InstallDockerNode(ctx, server.IP, server.Port, server.SSHUser, credentials, policy, out)
+}
+
+// lockInstall claims the single install slot for a server, reporting false when
+// one is already running.
+func (s *ServerService) lockInstall(id uuid.UUID) bool {
+	_, running := s.installs.LoadOrStore(id, struct{}{})
+	return !running
+}
+
+// unlockInstall releases a server's install slot.
+func (s *ServerService) unlockInstall(id uuid.UUID) {
+	s.installs.Delete(id)
 }
 
 // RegisterNode handles an agent Register call: it finds or creates the server

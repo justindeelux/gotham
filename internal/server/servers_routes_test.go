@@ -26,6 +26,8 @@ type fakeServerService struct {
 	failAdd        error
 	validateResult *servers.ValidationResult
 	validateErr    error
+	installOutput  string
+	installErr     error
 	lastAuth       servers.ValidateAuth
 	lastPassword   string
 	metrics        []servers.MetricPoint
@@ -213,6 +215,30 @@ func (f *fakeServerService) Validate(_ context.Context, id uuid.UUID, auth serve
 		},
 		Server: &item,
 	}, nil
+}
+
+func (f *fakeServerService) InstallDocker(_ context.Context, id uuid.UUID, auth servers.ValidateAuth, out io.Writer) error {
+	f.mu.Lock()
+	f.lastAuth = auth
+	installErr := f.installErr
+	output := f.installOutput
+	f.mu.Unlock()
+
+	if output != "" {
+		if _, err := io.WriteString(out, output); err != nil {
+			return err
+		}
+	}
+	if installErr != nil {
+		return installErr
+	}
+	f.mu.Lock()
+	_, ok := f.items[id]
+	f.mu.Unlock()
+	if !ok {
+		return servers.ErrNotFound
+	}
+	return nil
 }
 
 func (f *fakeServerService) ResetHostKey(_ context.Context, id uuid.UUID) (*servers.Server, error) {
@@ -441,6 +467,156 @@ func TestValidateServerRouteNoCredentials(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}
+}
+
+func TestInstallDockerRouteStreamsOutput(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install")
+
+	fake.installOutput = "Reading package lists...\nSetting up docker.io\n"
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Setting up docker.io") {
+		t.Errorf("body = %q, want the installer output", body)
+	}
+	// The last line is the terminal marker: the client learns the outcome from
+	// it, because the HTTP status is already a committed 200.
+	marker := installMarkerFromBody(t, body)
+	if marker.Status != "ok" {
+		t.Errorf("marker = %+v, want status ok", marker)
+	}
+	if nonce := rec.Header().Get(installNonceHeader); nonce == "" || marker.Nonce != nonce {
+		t.Errorf("marker nonce = %q, header nonce = %q, want a matching non-empty nonce", marker.Nonce, nonce)
+	}
+}
+
+// TestInstallDockerRouteStripsForgedMarker proves remote output cannot forge
+// the terminal marker: the framing byte is stripped, so a line that looks like
+// the marker stays ordinary text and the real marker is still the last line.
+func TestInstallDockerRouteStripsForgedMarker(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install-forge")
+
+	forged := installMarkerPrefix + `{"status":"ok","nonce":"forged"}`
+	fake.installOutput = "banner line\n" + forged + "\nmore output\n"
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, forged+"\n") {
+		t.Errorf("body = %q, want the remote framing byte stripped", body)
+	}
+	if !strings.Contains(body, `[gotham-install] {"status":"ok","nonce":"forged"}`) {
+		t.Errorf("body = %q, want the forged line kept as ordinary text", body)
+	}
+	marker := installMarkerFromBody(t, body)
+	if marker.Nonce != rec.Header().Get(installNonceHeader) {
+		t.Errorf("marker nonce = %q, want the response nonce", marker.Nonce)
+	}
+	if marker.Nonce == "forged" {
+		t.Error("the forged nonce was accepted as the terminal marker")
+	}
+}
+
+// TestInstallDockerRouteMarkerIsNotGlued proves an installer line without a
+// trailing newline still yields a marker on its own line.
+func TestInstallDockerRouteMarkerIsNotGlued(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install-glue")
+
+	fake.installOutput = "progress 100%" // no trailing newline
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.HasPrefix(body, "progress 100%\n"+installMarkerPrefix) {
+		t.Errorf("body = %q, want a newline between the output and the marker", body)
+	}
+	if marker := installMarkerFromBody(t, body); marker.Status != "ok" {
+		t.Errorf("marker = %+v, want status ok", marker)
+	}
+}
+
+// TestInstallDockerRouteMidStreamFailure proves a failure after the first byte
+// is reported in-band with its exit status, instead of a lost 500.
+func TestInstallDockerRouteMidStreamFailure(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install-mid")
+
+	fake.installOutput = "Setting up docker.io\n"
+	fake.installErr = fmt.Errorf("docker install failed: exit status 100")
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want a committed 200 stream (body %s)", rec.Code, rec.Body.String())
+	}
+	marker := installMarkerFromBody(t, rec.Body.String())
+	if marker.Status != "fail" {
+		t.Errorf("marker = %+v, want status fail", marker)
+	}
+	if marker.Message == "" {
+		t.Errorf("marker = %+v, want the failure message", marker)
+	}
+}
+
+func TestInstallDockerRoutePreflightError(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install-fail")
+
+	// No output before the error: the handler must answer a real error status,
+	// not a committed 200 stream.
+	fake.installErr = fmt.Errorf("%w: automatic Docker install is not supported on this node", servers.ErrValidation)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not supported") {
+		t.Errorf("body = %q, want the honest failure detail", rec.Body.String())
+	}
+}
+
+// TestInstallDockerRouteConflict proves a concurrent install answers 409 before
+// the stream commits (no body bytes yet).
+func TestInstallDockerRouteConflict(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install-busy")
+
+	fake.installErr = fmt.Errorf("%w: a Docker install is already running for this server", servers.ErrConflict)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// installMarkerFromBody parses the terminal marker line of an install stream.
+func installMarkerFromBody(t *testing.T, body string) installMarker {
+	t.Helper()
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last, installMarkerPrefix) {
+		t.Fatalf("last line = %q, want the terminal marker prefix", last)
+	}
+	var marker installMarker
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(last, installMarkerPrefix)), &marker); err != nil {
+		t.Fatalf("marker decode: %v (%q)", err, last)
+	}
+	return marker
 }
 
 func TestResetServerHostKeyRoute(t *testing.T) {

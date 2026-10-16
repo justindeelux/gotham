@@ -1,7 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -25,6 +29,7 @@ type ServerService interface {
 	Update(ctx context.Context, id uuid.UUID, params servers.UpdateParams) (*servers.Server, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	Validate(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth) (*servers.ValidationResult, error)
+	InstallDocker(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth, out io.Writer) error
 	ResetHostKey(ctx context.Context, id uuid.UUID) (*servers.Server, error)
 	AddPrivateKey(ctx context.Context, name, privateKeyPEM string) (*servers.PrivateKey, error)
 	Metrics(ctx context.Context, id uuid.UUID, from, to time.Time, step string) ([]servers.MetricPoint, error)
@@ -201,6 +206,7 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 		protected.Patch("/v1/servers/{id}", s.handleUpdateServer)
 		protected.Delete("/v1/servers/{id}", s.handleDeleteServer)
 		protected.Post("/v1/servers/{id}/validate", s.handleValidateServer)
+		protected.Post("/v1/servers/{id}/docker-install", s.handleInstallDocker)
 		protected.Delete("/v1/servers/{id}/host-key", s.handleResetHostKey)
 		protected.Post("/v1/private-keys", s.handleCreatePrivateKey)
 		// The metrics range route is part of the servers surface but rides its
@@ -336,22 +342,12 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req validateServerRequest
-	if !s.decodeOptionalJSON(w, r, &req) {
-		return
-	}
-
-	keyID, ok := parseOptionalUUID(w, req.SSHKeyID, "ssh_key_id")
+	auth, ok := s.validateAuthFromBody(w, r)
 	if !ok {
 		return
 	}
 
-	result, err := s.servers.Validate(r.Context(), id, servers.ValidateAuth{
-		KeyID:        keyID,
-		Password:     req.Password,
-		Passphrase:   req.Passphrase,
-		TrustHostKey: req.TrustHostKey,
-	})
+	result, err := s.servers.Validate(r.Context(), id, auth)
 	if err != nil {
 		// A failed check is a 422 with the structured check list; a missing
 		// server or bad request maps to 404/400.
@@ -390,6 +386,177 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 		Checks: result.Checks,
 		Server: serverDTOPtr(result.Server),
 	})
+}
+
+// installMarkerPrefix begins the final line of a docker-install stream. Once
+// the stream is committed the HTTP status cannot change, so the terminal
+// outcome travels in-band as a JSON object on this last line. Remote output can
+// never carry the prefix: the stream writer strips the framing byte from every
+// remote chunk, and the marker also carries a per-request nonce delivered in
+// the nonce header, so a framing-strip bug alone still cannot forge it. Keep
+// the prefix and the header name in sync with installMarkerPrefix and
+// installNonceHeader in
+// web/src/features/servers/composables/useDockerInstall.ts.
+const (
+	installMarkerPrefix = "\x1e[gotham-install] "
+	// installNonceHeader carries the per-request marker nonce. It is set before
+	// the first body byte, so the client always has it before the marker.
+	installNonceHeader = "X-Install-Nonce"
+	// installFramingByte is the record separator the marker prefix starts with.
+	installFramingByte = 0x1e
+)
+
+// installMarker is the terminal status of one install stream.
+type installMarker struct {
+	Status   string `json:"status"` // "ok" | "fail"
+	Nonce    string `json:"nonce"`
+	ExitCode int    `json:"exit_code,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+// newInstallNonce returns an unguessable per-request marker nonce. A failure to
+// read randomness yields an empty nonce, which the client rejects (safe
+// direction: an install with no valid nonce reads as a lost connection).
+func newInstallNonce() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(buf)
+}
+
+// handleInstallDocker installs Docker Engine on a node over SSH and streams the
+// installer output as a plain-text chunked body (POST
+// /v1/servers/{id}/docker-install). The 200 is deferred until the first output
+// byte, so a failure before the install starts (SSH, privilege, unsupported
+// distribution or architecture, or a concurrent install) is still answered as a
+// real JSON error. Once the stream is committed the outcome is carried by the
+// terminal marker line, because the status can no longer change.
+func (s *Server) handleInstallDocker(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	auth, ok := s.validateAuthFromBody(w, r)
+	if !ok {
+		return
+	}
+
+	nonce := newInstallNonce()
+	out := &streamWriter{w: w, flusher: flusherOf(w), nonce: nonce}
+	err := s.servers.InstallDocker(r.Context(), id, auth, out)
+	if !out.started {
+		if err != nil {
+			s.writeServerError(w, "install docker", err)
+		}
+		return
+	}
+
+	marker := installMarker{Status: "ok", Nonce: nonce}
+	if err != nil {
+		marker = installMarker{
+			Status:   "fail",
+			Nonce:    nonce,
+			ExitCode: servers.DockerInstallExitCode(err),
+			Message:  err.Error(),
+		}
+		s.logger.Warn("servers: docker install failed after the stream started",
+			"server_id", id.String(), "exit_code", marker.ExitCode, "error", err)
+	}
+	out.writeMarker(marker)
+}
+
+// streamWriter defers the response status until the first byte, so a handler
+// that can fail before producing output still answers a real error status. Once
+// the first byte is written the response is a committed 200 text stream.
+type streamWriter struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+	nonce   string
+	started bool
+	// lastByte is the last byte sent to the client, so the terminal marker can
+	// be separated by a newline when the installer's output did not end in one.
+	lastByte byte
+}
+
+// Write streams remote output. The framing byte is stripped, so remote output
+// can never contain the terminal marker prefix; the whole slice is reported as
+// written because every byte of it was consumed (only framing was dropped).
+func (s *streamWriter) Write(p []byte) (int, error) {
+	s.start()
+	clean := stripInstallFraming(p)
+	if len(clean) > 0 {
+		if _, err := s.w.Write(clean); err != nil {
+			return 0, err
+		}
+		s.lastByte = clean[len(clean)-1]
+	}
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+	return len(p), nil
+}
+
+// writeMarker writes the terminal status line on the frame-writer's own path
+// (never stripped), separated from remote output by a newline so it can never
+// be glued to an unterminated line.
+func (s *streamWriter) writeMarker(marker installMarker) {
+	s.start()
+	if s.lastByte != '\n' {
+		if _, err := io.WriteString(s.w, "\n"); err != nil {
+			return
+		}
+	}
+	payload, err := json.Marshal(marker)
+	if err != nil {
+		return
+	}
+	if _, err := io.WriteString(s.w, installMarkerPrefix+string(payload)+"\n"); err != nil {
+		return
+	}
+	s.lastByte = '\n'
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+}
+
+// stripInstallFraming removes the marker framing byte from remote output. It
+// returns the input unchanged when there is nothing to strip.
+func stripInstallFraming(p []byte) []byte {
+	if bytes.IndexByte(p, installFramingByte) < 0 {
+		return p
+	}
+	clean := make([]byte, 0, len(p))
+	for _, b := range p {
+		if b != installFramingByte {
+			clean = append(clean, b)
+		}
+	}
+	return clean
+}
+
+// start commits the 200 and the streaming headers once.
+func (s *streamWriter) start() {
+	if s.started {
+		return
+	}
+	s.started = true
+	s.w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	s.w.Header().Set("Cache-Control", "no-store")
+	if s.nonce != "" {
+		s.w.Header().Set(installNonceHeader, s.nonce)
+	}
+	s.w.WriteHeader(http.StatusOK)
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+}
+
+// flusherOf returns the response's Flusher when it has one.
+func flusherOf(w http.ResponseWriter) http.Flusher {
+	flusher, _ := w.(http.Flusher)
+	return flusher
 }
 
 // handleResetHostKey forgets a server's pinned SSH host key, so the next
@@ -622,6 +789,26 @@ func parseOptionalUUID(w http.ResponseWriter, raw, field string) (uuid.UUID, boo
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// validateAuthFromBody decodes the optional body shared by the validation and
+// Docker-install routes and resolves the credentials selection. It answers the
+// request itself (400) and reports false on a malformed body.
+func (s *Server) validateAuthFromBody(w http.ResponseWriter, r *http.Request) (servers.ValidateAuth, bool) {
+	var req validateServerRequest
+	if !s.decodeOptionalJSON(w, r, &req) {
+		return servers.ValidateAuth{}, false
+	}
+	keyID, ok := parseOptionalUUID(w, req.SSHKeyID, "ssh_key_id")
+	if !ok {
+		return servers.ValidateAuth{}, false
+	}
+	return servers.ValidateAuth{
+		KeyID:        keyID,
+		Password:     req.Password,
+		Passphrase:   req.Passphrase,
+		TrustHostKey: req.TrustHostKey,
+	}, true
 }
 
 // decodeOptionalJSON decodes an optional body, treating an empty body as an

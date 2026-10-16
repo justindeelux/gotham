@@ -14,11 +14,20 @@ export type InstallLogPaneState =
   | "empty"
   | "ready";
 
-const props = defineProps<{
-  title: string;
-  state: InstallLogPaneState;
-  lines: QueuedLogLine[];
-}>();
+const props = withDefaults(
+  defineProps<{
+    title: string;
+    state: InstallLogPaneState;
+    lines: QueuedLogLine[];
+    /**
+     * When false the pane is read-only: the reload control is hidden, because
+     * the consumer has no separate log source to re-fetch (the stream itself is
+     * the source, and re-running the installer is not a log refresh).
+     */
+    showReload?: boolean;
+  }>(),
+  { showReload: true },
+);
 
 const emit = defineEmits<{ reload: [] }>();
 
@@ -88,6 +97,7 @@ watch(lastSeq, () => {
           {{ following ? $t("toolchain.modal.following") : $t("toolchain.modal.follow") }}
         </NButton>
         <NButton
+          v-if="props.showReload"
           size="tiny"
           secondary
           :disabled="props.state === 'idle' || props.state === 'loading'"

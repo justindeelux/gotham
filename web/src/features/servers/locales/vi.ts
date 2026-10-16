@@ -237,6 +237,18 @@ const vi: ServersMessages = {
     trustHint: "Chỉ cần một lần: nút mật khẩu chưa có khóa để ghim cho tới khi được tin cậy.",
     validateTitle: "Kiểm tra nút",
     validatePassed: "Mọi đợt kiểm tra đã đạt. Tiếp tục để cài agent cho nút.",
+    installDocker: "Cài Docker",
+    dockerInstallTitle: "Đang cài Docker",
+    dockerInstallHint:
+      "Control plane cài Docker Engine lên nút này qua phiên SSH, dùng trình quản lý gói của chính nút, và bật dịch vụ Docker. Kết quả hiển thị trực tiếp bên dưới.",
+    dockerInstallLog: "Kết quả cài đặt",
+    dockerInstallRecheck: "Kiểm tra lại nút",
+    dockerInstallClose: "Đóng",
+    dockerInstallStop: "Dừng cài đặt",
+    dockerInstallStopConfirm:
+      "Dừng bản cài đang chạy? Nút sẽ dừng trình quản lý gói giữa chừng và có thể cần sửa lại các gói sau đó.",
+    dockerInstallLost:
+      "Mất kết nối — chưa rõ kết quả cài đặt. Hãy kiểm tra nút rồi kiểm tra lại tại đây.",
     checkDocker: "Docker Engine đã cài và đang chạy",
     checkCpu: "Kiến trúc CPU và số nhân",
     checkRam: "RAM khả dụng",

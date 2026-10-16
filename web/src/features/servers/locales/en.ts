@@ -236,6 +236,18 @@ const en = {
     trustHint: "Required once: a password node has no key to pin until it is trusted.",
     validateTitle: "Validate node",
     validatePassed: "All checks passed. Continue to install the node agent.",
+    installDocker: "Install Docker",
+    dockerInstallTitle: "Installing Docker",
+    dockerInstallHint:
+      "The control plane installs Docker Engine on this node over the SSH session, using the node's own package manager, and enables the Docker service. Output streams below.",
+    dockerInstallLog: "Install output",
+    dockerInstallRecheck: "Re-check node",
+    dockerInstallClose: "Close",
+    dockerInstallStop: "Stop install",
+    dockerInstallStopConfirm:
+      "Stop the running install? The node stops the package manager mid-run and may need its packages repaired afterwards.",
+    dockerInstallLost:
+      "Connection lost — the install result is unknown. Check the node, then re-check it here.",
     checkDocker: "Docker Engine installed and running",
     checkCpu: "CPU architecture and core count",
     checkRam: "Available RAM",

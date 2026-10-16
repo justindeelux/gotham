@@ -358,6 +358,14 @@ const en = {
     packBuildpacksHint: "Heroku-style buildpacks for legacy apps.",
     packStatic: "Static",
     packStaticHint: "Builds a static directory and serves it via Traefik. No process runs.",
+    packInstall: "Install",
+    packInstalling: "Installing {tool}…",
+    packMissing: "{tool} is not installed on this node",
+    packTooltip:
+      "This build pack runs a tool on the target node. Install it to make the pack selectable; the option re-enables when the install finishes.",
+    packNoEngine:
+      "No build engine is installed on this node. Install Railpack to build without a Dockerfile, or pick Dockerfile/Static below.",
+    packInstallRailpack: "Install Railpack",
     node: "Node",
     domainOptional: "Domain (optional)",
     domainHint: "Leave empty to reach the app by port first.",

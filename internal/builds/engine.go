@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/toolcatalog"
 )
 
 // EngineKind identifies one of the four build engines. EngineAuto is the
@@ -31,6 +33,29 @@ const (
 
 // EngineKinds lists the canonical engines in auto-detection priority order.
 var EngineKinds = []EngineKind{EngineDockerfile, EngineRailpack, EngineBuildpacks, EngineStatic}
+
+// EngineTools returns the catalog tool ids a build engine needs installed on
+// the node, dependencies first (the same order toolcatalog.InstallOrder
+// produces). It is empty for the engines that shell out to no external CLI:
+// Dockerfile builds through the node Docker daemon and static is served by
+// nginx, so both always run; EngineAuto resolves at build time and names no
+// single tool. The deploy gate and the Web picker share this mapping.
+func EngineTools(kind EngineKind) []string {
+	var toolID string
+	switch kind {
+	case EngineRailpack:
+		toolID = toolcatalog.IDRailpack
+	case EngineBuildpacks:
+		toolID = toolcatalog.IDPack
+	default:
+		return nil
+	}
+	order, err := toolcatalog.InstallOrder(toolID)
+	if err != nil {
+		return nil
+	}
+	return order
+}
 
 // ParseEngineKind normalises a build_pack value from a request or the database
 // into an EngineKind. Nixpacks and herokuish are accepted as aliases for their
@@ -65,6 +90,11 @@ type BuildOptions struct {
 	Target    string
 	// LogWriter, when non-nil, receives the builder's captured build output.
 	LogWriter io.Writer
+	// InstalledTools, when non-nil, is the target node's catalog tool state
+	// (id -> present). EngineAuto then only considers engines whose tools are
+	// all present, so a build pack missing on the node is never auto-selected.
+	// nil keeps marker-only detection (the control-plane local dev path).
+	InstalledTools map[string]bool
 }
 
 // ImageRef is the result of a successful engine Build.
@@ -124,9 +154,19 @@ func (r *Registry) Engine(kind EngineKind) (BuildEngine, bool) {
 	return engine, ok
 }
 
-// Detect returns the engine that should build repoDir. An explicit hint is
-// honoured directly; EngineAuto walks the priority order in EngineKinds.
+// Detect returns the engine that should build repoDir with marker-only
+// detection (no target-node tool state). An explicit hint is honoured
+// directly; EngineAuto walks the priority order in EngineKinds.
 func (r *Registry) Detect(repoDir string, hint EngineKind) (BuildEngine, bool) {
+	return r.detect(repoDir, hint, nil)
+}
+
+// detect is Detect with the target node's installed tools. When installed is
+// non-nil, the auto walk skips engines whose tools are not all present, so a
+// pack missing on the node is never auto-selected; an explicit hint is still
+// honoured (buildtool.Available is the last guard at build time). A nil set
+// keeps marker-only detection (the control-plane local dev path).
+func (r *Registry) detect(repoDir string, hint EngineKind, installed map[string]bool) (BuildEngine, bool) {
 	if strings.TrimSpace(repoDir) == "" {
 		return nil, false
 	}
@@ -138,11 +178,30 @@ func (r *Registry) Detect(repoDir string, hint EngineKind) (BuildEngine, bool) {
 		return engine, true
 	}
 	for _, kind := range r.order {
+		if !engineToolsInstalled(kind, installed) {
+			continue
+		}
 		if engine, ok := r.engines[kind]; ok && engine.Detect(repoDir, EngineAuto) {
 			return engine, true
 		}
 	}
 	return nil, false
+}
+
+// engineToolsInstalled reports whether every tool an engine needs is present.
+// A nil set means "unknown": the engine is considered, so marker-only
+// detection is unchanged. Engines with no external CLI (Dockerfile, static)
+// are always considered.
+func engineToolsInstalled(kind EngineKind, installed map[string]bool) bool {
+	if installed == nil {
+		return true
+	}
+	for _, toolID := range EngineTools(kind) {
+		if !installed[toolID] {
+			return false
+		}
+	}
+	return true
 }
 
 // Build resolves an engine from opts.BuildPack (auto-detecting when empty) and
@@ -151,7 +210,7 @@ func (r *Registry) Build(ctx context.Context, opts BuildOptions) (ImageRef, erro
 	if err := validateOptions(opts); err != nil {
 		return ImageRef{}, err
 	}
-	engine, ok := r.Detect(opts.RepoDir, opts.BuildPack)
+	engine, ok := r.detect(opts.RepoDir, opts.BuildPack, opts.InstalledTools)
 	if !ok {
 		if opts.BuildPack != EngineAuto {
 			return ImageRef{}, fmt.Errorf("%w: engine %q cannot build %s", ErrNoEngine, opts.BuildPack, opts.RepoDir)

@@ -152,6 +152,14 @@ type HookLifecycle interface {
 	RemoveHook(ctx context.Context, userID, appID uuid.UUID) error
 }
 
+// ToolStatus reports the catalog tools detected on one node. The toolchain
+// service implements it by dialing the node agent; a nil status disables the
+// build-pack gate (buildtool.Available stays the last guard at build time).
+type ToolStatus interface {
+	// InstalledToolIDs returns the catalog ids installed on the node.
+	InstalledToolIDs(ctx context.Context, serverID uuid.UUID) (map[string]bool, error)
+}
+
 // Config wires a Service. Store (or an explicit Repository) is required for
 // anything beyond tests; Secret opens sealed application secrets, RedisAddr
 // feeds the realtime publisher, and Dial is the mTLS agent dialer. Every
@@ -236,6 +244,9 @@ type Config struct {
 	// cannot pin the application lock indefinitely. Zero selects
 	// containerCleanupTimeout (15s).
 	ControlTimeout time.Duration
+	// ToolStatus, when set, gates a deploy on the target node's installed
+	// build toolchains (see ToolStatus). nil disables the gate.
+	ToolStatus ToolStatus
 }
 
 // repository resolves the configured repository implementation.
@@ -432,7 +443,45 @@ func (s *Service) deployApplication(ctx context.Context, app Application) (Deplo
 	if err := validateDeployTarget(app); err != nil {
 		return Deployment{}, err
 	}
+	if err := s.validateBuildToolchain(ctx, app); err != nil {
+		return Deployment{}, err
+	}
 	return s.submit(ctx, app, Deployment{Kind: KindDeploy, State: StateQueued})
+}
+
+// validateBuildToolchain refuses an explicit build pack whose external tool is
+// not installed on the target node, so the create answers a clear 4xx instead
+// of a deployment that fails at "railpack is not on PATH". The Dockerfile and
+// static engines need no external CLI and are always allowed; EngineAuto
+// resolves at build time and is left to buildtool.Available, the last guard. A
+// lookup that cannot complete (no toolchain surface, or an unreachable agent)
+// is skipped rather than blocking an otherwise valid deploy.
+func (s *Service) validateBuildToolchain(ctx context.Context, app Application) error {
+	if s.toolStatus == nil || app.ServerID == uuid.Nil {
+		return nil
+	}
+	kind, err := builds.ParseEngineKind(app.BuildPack)
+	if err != nil {
+		// validateDeployTarget already reports an unknown build pack.
+		return nil
+	}
+	required := builds.EngineTools(kind)
+	if len(required) == 0 {
+		return nil
+	}
+	installed, err := s.toolStatus.InstalledToolIDs(ctx, app.ServerID)
+	if err != nil {
+		s.logger.Warn("deploy: build-pack gate lookup failed; allowing the deploy",
+			"application_id", app.ID, "server_id", app.ServerID, "error", err)
+		return nil
+	}
+	for _, toolID := range required {
+		if !installed[toolID] {
+			return fmt.Errorf("%w: build pack %q needs %q, which is not installed on the target node; install it from the App Store",
+				ErrValidation, kind, toolID)
+		}
+	}
+	return nil
 }
 
 // checkStoredTarget enforces the stored application→node invariant at the queue

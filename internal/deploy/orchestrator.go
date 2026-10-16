@@ -98,6 +98,10 @@ type Orchestrator struct {
 	secret   string
 	logger   *slog.Logger
 	proxy    ProxySync
+	// toolStatus gates a deploy on the target node's installed build
+	// toolchains and steers auto-detection away from a missing engine (see
+	// Config.ToolStatus); nil disables both.
+	toolStatus ToolStatus
 	// gitLookup resolves git remote hostnames for the SSRF host policy
 	// (see pinGitRemoteHost); nil selects the system resolver.
 	gitLookup gitHostLookupFunc
@@ -192,6 +196,7 @@ func newOrchestrator(cfg Config) *Orchestrator {
 		secret:        cfg.Secret,
 		logger:        logger,
 		proxy:         cfg.Proxy,
+		toolStatus:    cfg.ToolStatus,
 		gitLookup:     cfg.GitLookupHost,
 		queue:         make(chan job, queueSize),
 		workers:       workers,
@@ -539,6 +544,21 @@ func (o *Orchestrator) attempt(ctx context.Context, st *runState, what string, o
 	return err
 }
 
+// installedTools returns the target node's catalog tool state for
+// auto-detection, or nil when the node is unset, the pack is not EngineAuto,
+// the toolchain surface is unwired, or the lookup fails. A nil set leaves
+// detection marker-only and buildtool.Available the last guard.
+func (o *Orchestrator) installedTools(ctx context.Context, serverID uuid.UUID, kind builds.EngineKind) map[string]bool {
+	if o.toolStatus == nil || kind != builds.EngineAuto || serverID == uuid.Nil {
+		return nil
+	}
+	tools, err := o.toolStatus.InstalledToolIDs(ctx, serverID)
+	if err != nil {
+		return nil
+	}
+	return tools
+}
+
 // build runs the application's build engine over the cloned tree. The node
 // builder streams the context to the agent (BuildImage), which builds and
 // pushes to the node-local registry; toolchain engines (railpack, buildpacks)
@@ -566,11 +586,12 @@ func (o *Orchestrator) build(ctx context.Context, st *runState) error {
 
 	st.log("building with engine " + string(kind))
 	ref, err := registry.Build(ctx, builds.BuildOptions{
-		RepoDir:   st.repoDir,
-		AppID:     st.app.ID,
-		DeployID:  st.dep.ID,
-		BuildPack: kind,
-		BuildArgs: buildArgs,
+		RepoDir:        st.repoDir,
+		AppID:          st.app.ID,
+		DeployID:       st.dep.ID,
+		BuildPack:      kind,
+		BuildArgs:      buildArgs,
+		InstalledTools: o.installedTools(ctx, st.app.ServerID, kind),
 		Labels: map[string]string{
 			labelAppID:        st.app.ID.String(),
 			labelDeploymentID: st.dep.ID.String(),

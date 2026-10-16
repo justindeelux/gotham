@@ -113,8 +113,8 @@ const stepCounter = computed<string>(() =>
           <WizardKeyStep v-if="wizard.createdKey.value" />
           <template v-else>
             <WizardSourceStep v-if="wizard.step.value === 0" />
-            <WizardBuildPackStep v-else-if="wizard.step.value === 1" />
-            <WizardRuntimeStep v-else-if="wizard.step.value === 2" />
+            <WizardRuntimeStep v-else-if="wizard.step.value === 1" />
+            <WizardBuildPackStep v-else-if="wizard.step.value === 2" />
             <WizardEnvStep v-else-if="wizard.step.value === 3" />
             <WizardReviewStep v-else />
           </template>
@@ -148,7 +148,7 @@ const stepCounter = computed<string>(() =>
             <NButton
               type="primary"
               :loading="wizard.submitting.value"
-              :disabled="!wizard.sourceValid.value || !wizard.runtimeValid.value || !wizard.scopeValid.value"
+              :disabled="!wizard.sourceValid.value || !wizard.runtimeValid.value || !wizard.scopeValid.value || !wizard.buildPackValid.value"
               @click="wizard.handleSubmit"
             >
               {{ t("applications.wizard.create") }}

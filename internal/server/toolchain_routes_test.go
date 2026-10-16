@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -12,6 +13,21 @@ import (
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/toolchain"
 )
+
+func TestToolchainUninstallRefusalReturnsBadRequestWithImpact(t *testing.T) {
+	for _, id := range []string{"git", "docker"} {
+		s, _ := newToolchainTestServer(t, &fakeToolchainService{})
+		// The real service must refuse before dialing an agent or creating a job.
+		service := toolchain.NewService(toolchain.Config{})
+		s.toolchain = service
+		t.Cleanup(func() { _ = service.Close() })
+		rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+uuid.NewString()+"/toolchain/jobs",
+			`{"tools":["`+id+`"],"action":"uninstall"}`, "Bearer valid-token")
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "required by the platform") {
+			t.Fatalf("uninstall %s = %d %s; want 400 with platform impact", id, rec.Code, rec.Body.String())
+		}
+	}
+}
 
 // fakeToolchainService is an in-memory ToolchainService for the route tests.
 type fakeToolchainService struct {
@@ -154,15 +170,15 @@ func TestToolchainEnqueueParsesActionAndTools(t *testing.T) {
 
 	serverID := uuid.New().String()
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+serverID+"/toolchain/jobs",
-		`{"tools":["docker","git"],"action":"uninstall"}`, "Bearer valid-token")
+		`{"tools":["pack","railpack"],"action":"uninstall"}`, "Bearer valid-token")
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
 	if fake.lastAction != toolchain.ActionUninstall {
 		t.Fatalf("action = %q, want uninstall", fake.lastAction)
 	}
-	if len(fake.lastTools) != 2 || fake.lastTools[0] != "docker" || fake.lastTools[1] != "git" {
-		t.Fatalf("tools = %v, want [docker git]", fake.lastTools)
+	if len(fake.lastTools) != 2 || fake.lastTools[0] != "pack" || fake.lastTools[1] != "railpack" {
+		t.Fatalf("tools = %v, want [pack railpack]", fake.lastTools)
 	}
 }
 

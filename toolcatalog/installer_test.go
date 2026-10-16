@@ -3,8 +3,22 @@ package toolcatalog
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
+
+func TestPlatformToolsCannotBeUninstalled(t *testing.T) {
+	for _, id := range []string{IDGit, IDDocker} {
+		tool := mustLookup(t, id)
+		if !tool.Installable || tool.Uninstallable {
+			t.Errorf("%s must remain installable and not uninstallable", id)
+		}
+		_, err := UninstallOrder(id)
+		if !errors.Is(err, ErrNotUninstallable) || !strings.Contains(err.Error(), "required by the platform") || !strings.Contains(err.Error(), tool.Description) {
+			t.Errorf("UninstallOrder(%s) = %v; want refusal with platform impact", id, err)
+		}
+	}
+}
 
 // TestInstallOrderOrdersDependencies proves railpack is preceded by buildkit,
 // which is preceded by docker: the install runs in dependency order.

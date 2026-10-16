@@ -526,6 +526,32 @@ func TestEnqueueRejectsUnknownAndDetectOnlyTools(t *testing.T) {
 	}
 }
 
+func TestEnqueueRejectsPlatformToolUninstallFromOlderAgent(t *testing.T) {
+	agent := &fakeAgent{catalog: []*agentv1.ToolInfo{
+		catalogTool("git", true, true),
+		catalogTool("docker", true, true),
+		catalogTool("pack", true, true),
+	}}
+	st := newFakeStore()
+	svc := testService(st, agent, &fakeRegistry{}, nil)
+	serverID := uuid.New()
+	for _, id := range []string{"git", "docker"} {
+		_, err := svc.Enqueue(context.Background(), serverID, ActionUninstall, []string{"pack", " " + id + " "})
+		if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "required by the platform") {
+			t.Fatalf("uninstall %s = %v; want platform validation refusal", id, err)
+		}
+	}
+	if len(st.order) != 0 {
+		t.Fatalf("refused mixed request queued %d jobs", len(st.order))
+	}
+	if _, err := svc.Enqueue(context.Background(), serverID, ActionInstall, []string{"git"}); err != nil {
+		t.Fatalf("git install/update was refused: %v", err)
+	}
+	if _, err := svc.Enqueue(context.Background(), serverID, ActionUninstall, []string{"pack"}); err != nil {
+		t.Fatalf("optional tool uninstall was refused: %v", err)
+	}
+}
+
 func TestEnqueueDedupesWithinRequestAndAgainstActiveJobs(t *testing.T) {
 	agent := &fakeAgent{catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)}}
 	st := newFakeStore()

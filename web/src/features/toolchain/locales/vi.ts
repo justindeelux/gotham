@@ -22,6 +22,10 @@ const vi: typeof en = {
     emptySearch: "Không có công cụ nào khớp tìm kiếm",
     emptySearchHint: "Hãy thử từ khóa khác.",
     detectOnlyNote: "Chỉ phát hiện: agent báo cáo công cụ này nhưng không thể cài đặt.",
+    required: {
+      git: "Cần thiết để triển khai mã nguồn. Không thể gỡ bỏ.",
+      docker: "Cần thiết để chạy container ứng dụng, cơ sở dữ liệu và proxy. Không thể gỡ bỏ.",
+    },
     skipped: "Đã bỏ qua {tools}: đã có trong hàng đợi",
     enqueued: "Đã xếp hàng {count}",
     uncategorized: "Khác",
@@ -40,6 +44,7 @@ const vi: typeof en = {
   },
   actions: {
     install: "Cài đặt",
+    installUpdate: "Cài đặt / Cập nhật",
     uninstall: "Gỡ bỏ",
     cancel: "Hủy",
     details: "Chi tiết",

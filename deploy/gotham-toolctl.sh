@@ -95,7 +95,9 @@ allow_install() {
 }
 allow_uninstall() {
     case "$1" in
-        railpack | buildkit | pack | git) return 0 ;;
+        railpack | buildkit | pack) return 0 ;;
+        git) die "cannot uninstall git: required by the platform for source deployments" 3 ;;
+        docker) die "cannot uninstall docker: required by the platform to run workloads" 3 ;;
         *) die "tool is not uninstallable: $1" 3 ;;
     esac
 }
@@ -295,20 +297,12 @@ install_git() {
     # git has no service: unlike docker, never enable a unit for it.
     case "${DISTRO}" in
         apt)
-            run env DEBIAN_FRONTEND=noninteractive apt-get update
+            run env DEBIAN_FRONTEND=noninteractive apt-get update || return $?
+            # install also upgrades an existing package, while allowing a first install.
             run env DEBIAN_FRONTEND=noninteractive apt-get install -y git
             ;;
-        dnf) run dnf install -y git ;;
-        apk) run apk add --no-cache git ;;
-        *) die "git: unsupported distribution" 5 ;;
-    esac
-}
-
-uninstall_git() {
-    case "${DISTRO}" in
-        apt) run env DEBIAN_FRONTEND=noninteractive apt-get remove -y git ;;
-        dnf) run dnf remove -y git ;;
-        apk) run apk del git ;;
+        dnf) run dnf install -y git && run dnf upgrade -y git ;;
+        apk) run apk add --no-cache --upgrade git ;;
         *) die "git: unsupported distribution" 5 ;;
     esac
 }
@@ -322,6 +316,5 @@ case "${VERB}:${TOOL}" in
     uninstall-tool:railpack) uninstall_railpack ;;
     uninstall-tool:buildkit) uninstall_buildkit ;;
     uninstall-tool:pack) uninstall_pack ;;
-    uninstall-tool:git) uninstall_git ;;
     *) die "unhandled request: ${VERB} ${TOOL}" 3 ;;
 esac

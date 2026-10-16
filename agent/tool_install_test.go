@@ -126,6 +126,79 @@ func (r *fakeToolRunner) invoked(verb string) []string {
 // named tools present.
 func installedNone(string) bool { return false }
 
+func TestToolServerRefusesPlatformToolUninstall(t *testing.T) {
+	for _, id := range []string{toolcatalog.IDGit, toolcatalog.IDDocker} {
+		for _, present := range []bool{false, true} {
+			runner := &fakeToolRunner{}
+			server := NewToolServer(withToolRunner(runner), withToolInstalled(func(string) bool { return present }))
+			err := server.UninstallTool(&agentv1.InstallToolRequest{Id: id}, newFakeToolStream(context.Background()))
+			if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "required by the platform") {
+				t.Fatalf("UninstallTool(%s, installed=%v) = %v; want platform refusal", id, present, err)
+			}
+			if len(runner.commands()) != 0 {
+				t.Fatal("platform tool uninstall invoked the helper")
+			}
+		}
+	}
+}
+
+func TestToolServerInstallUpdatesOutdatedGit(t *testing.T) {
+	for _, version := range []string{"2.34.1", "2.37.0", "2.43.0"} {
+		t.Run(version, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\necho 'git version "+version+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir)
+			runner := &fakeToolRunner{}
+			runner.step = func(context.Context, []string, bool, func(string, string) error) (int, error) {
+				return 0, os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\necho 'git version 2.43.0'\n"), 0o755)
+			}
+			server := NewToolServer(withToolRunner(runner))
+			stream := newFakeToolStream(context.Background())
+			if err := server.InstallTool(&agentv1.InstallToolRequest{Id: toolcatalog.IDGit}, stream); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if version == "2.34.1" {
+				want = 1
+			}
+			if got := len(runner.invoked(helperInstallVerb)); got != want {
+				t.Fatalf("git %s ran %d install commands; want %d", version, got, want)
+			}
+			if result := stream.result(); result == nil || result.GetStatus() != toolStatusSucceeded {
+				t.Fatalf("result = %v; want succeeded", result)
+			}
+		})
+	}
+}
+
+func TestToolServerInstallRejectsUnchangedOldGit(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\necho 'git version 2.34.1'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	runner := &fakeToolRunner{}
+	server := NewToolServer(withToolRunner(runner))
+	stream := newFakeToolStream(context.Background())
+	if err := server.InstallTool(&agentv1.InstallToolRequest{Id: toolcatalog.IDGit}, stream); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.invoked(helperInstallVerb)) != 1 {
+		t.Fatal("outdated git did not run the installer")
+	}
+	if result := stream.result(); result == nil || result.GetStatus() != toolStatusFailed || result.GetExitCode() == 0 {
+		t.Fatalf("unchanged git result = %v; want failed with nonzero exit code", result)
+	}
+	log := strings.Join(stream.lines(), "\n")
+	for _, text := range []string{"git 2.34.1", ">= 2.37 required", "distro repository", "newer repository / PPA"} {
+		if !strings.Contains(log, text) {
+			t.Errorf("log %q does not explain %q", log, text)
+		}
+	}
+}
+
 func installedOnly(ids ...string) func(string) bool {
 	present := make(map[string]bool, len(ids))
 	for _, id := range ids {

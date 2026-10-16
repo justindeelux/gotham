@@ -61,6 +61,15 @@ func TestToolctlUsage(t *testing.T) {
 	}
 }
 
+func TestToolctlRefusesPlatformToolUninstall(t *testing.T) {
+	for _, id := range []string{"git", "docker"} {
+		out, err := runToolctl(t, t.TempDir(), nil, "uninstall-tool", id)
+		if err == nil || !strings.Contains(out, "required by the platform") || strings.Contains(out, "+ ") {
+			t.Errorf("uninstall %s = %q, %v; want refusal without executing commands", id, out, err)
+		}
+	}
+}
+
 // TestToolctlGitHasNoServiceUnit is the regression for the bogus
 // `systemctl enable --now git` step: git is a package only, docker gets the
 // enable.
@@ -86,6 +95,19 @@ func TestToolctlGitHasNoServiceUnit(t *testing.T) {
 	}
 	if !strings.Contains(out, "DEBIAN_FRONTEND=noninteractive") {
 		t.Errorf("docker install is not non-interactive for apt: %q", out)
+	}
+}
+
+func TestToolctlGitPackageUpgradeCommands(t *testing.T) {
+	for distro, command := range map[string]string{
+		"apt": "apt-get install -y git",
+		"dnf": "dnf upgrade -y git",
+		"apk": "apk add --no-cache --upgrade git",
+	} {
+		out, err := runToolctl(t, t.TempDir(), []string{"GOTHAM_TOOLCTL_DISTRO=" + distro}, "install-tool", "git")
+		if err != nil || !strings.Contains(out, command) {
+			t.Errorf("git install/update on %s = %q, %v; want %q", distro, out, err, command)
+		}
 	}
 }
 

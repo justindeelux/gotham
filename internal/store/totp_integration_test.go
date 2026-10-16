@@ -127,3 +127,88 @@ func concurrentBool(t *testing.T, workers int, fn func() (bool, error)) int {
 	}
 	return winners
 }
+
+// TestUserTOTPFailureCounterIsAtomic: every concurrent miss is counted, so
+// parallel guessing cannot lose a failure under the threshold, and the lock is
+// armed once the count reaches it. Clearing resets both.
+func TestUserTOTPFailureCounterIsAtomic(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	dsn := testDSN()
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+	s := store.New(pool)
+
+	email := fmt.Sprintf("totp-lockout-%d@example.com", time.Now().UnixNano())
+	user, err := s.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := s.DB.Exec(cleanup, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup user: %v", err)
+		}
+	})
+	if err := s.UpsertUserTOTPSecret(ctx, user.ID, "sealed-secret"); err != nil {
+		t.Fatalf("UpsertUserTOTPSecret: %v", err)
+	}
+	if _, err := s.EnableUserTOTP(ctx, user.ID, 100, []string{"hash-one"}); err != nil {
+		t.Fatalf("EnableUserTOTP: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Minute)
+	const threshold = 5
+	for i := 0; i < threshold-1; i++ {
+		if _, err := s.RecordUserTOTPFailure(ctx, user.ID, threshold, deadline); err != nil {
+			t.Fatalf("RecordUserTOTPFailure: %v", err)
+		}
+	}
+	row, err := s.GetUserTOTP(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetUserTOTP: %v", err)
+	}
+	if row.FailedAttempts != threshold-1 || row.LockedUntil.Valid {
+		t.Fatalf("below threshold = %+v, want %d attempts and no lock", row, threshold-1)
+	}
+
+	// Eight concurrent misses all count and arm the lock.
+	if got := concurrentBool(t, 8, func() (bool, error) {
+		_, err := s.RecordUserTOTPFailure(ctx, user.ID, threshold, deadline)
+		return err == nil, err
+	}); got != 8 {
+		t.Fatalf("concurrent misses recorded = %d, want 8", got)
+	}
+	row, err = s.GetUserTOTP(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetUserTOTP after misses: %v", err)
+	}
+	if row.FailedAttempts != threshold-1+8 || !row.LockedUntil.Valid {
+		t.Fatalf("locked row = %+v, want %d attempts and a lock", row, threshold-1+8)
+	}
+
+	if err := s.ClearUserTOTPFailures(ctx, user.ID); err != nil {
+		t.Fatalf("ClearUserTOTPFailures: %v", err)
+	}
+	row, err = s.GetUserTOTP(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetUserTOTP after clear: %v", err)
+	}
+	if row.FailedAttempts != 0 || row.LockedUntil.Valid {
+		t.Fatalf("cleared row = %+v, want 0 attempts and no lock", row)
+	}
+}

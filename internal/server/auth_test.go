@@ -208,6 +208,9 @@ func (f *fakeAuthService) DisableTOTP(_ context.Context, _ uuid.UUID, password, 
 	if password == "wrong-password" {
 		return auth.ErrCurrentPasswordIncorrect
 	}
+	if code == "locked" {
+		return auth.ErrTOTPLocked
+	}
 	if code != "123456" {
 		return auth.ErrInvalidCode
 	}
@@ -227,6 +230,9 @@ func (f *fakeAuthService) RegenerateTOTPRecoveryCodes(_ context.Context, _ uuid.
 func (f *fakeAuthService) CompleteMFALogin(_ context.Context, mfaToken, code string, _ auth.SessionMeta) (*auth.AuthResult, error) {
 	if mfaToken != "mfa-token" {
 		return nil, auth.ErrInvalidCredentials
+	}
+	if code == "locked" {
+		return nil, auth.ErrTOTPLocked
 	}
 	if code != "123456" {
 		return nil, auth.ErrInvalidCode

@@ -65,6 +65,29 @@ func TestLoginSecondFactorChallenge(t *testing.T) {
 	}
 }
 
+// TestTOTPLockoutMapsTo429: an account locked out after repeated wrong codes
+// answers 429 on both the login step and the profile routes, so the SPA shows
+// its rate-limit message rather than a plain "invalid code".
+func TestTOTPLockoutMapsTo429(t *testing.T) {
+	s := newTestAuthServer(t)
+	unlimitAuthLimiter(t, s)
+
+	login := doRequest(t, s, http.MethodPost, "/api/v1/auth/login/totp",
+		`{"mfa_token":"mfa-token","code":"locked"}`, "")
+	if login.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked login/totp = %d %s, want 429", login.Code, login.Body.String())
+	}
+	if !strings.Contains(login.Body.String(), "too many incorrect codes") {
+		t.Fatalf("locked login/totp body = %s, want the lockout message", login.Body.String())
+	}
+
+	disable := doRequest(t, s, http.MethodPost, "/api/v1/auth/me/totp/disable",
+		`{"password":"password123","code":"locked"}`, "Bearer valid-token")
+	if disable.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked disable = %d %s, want 429", disable.Code, disable.Body.String())
+	}
+}
+
 // TestLoginSecondFactorRateLimit: the second step shares the credential bucket,
 // so a six-digit code cannot be brute forced.
 func TestLoginSecondFactorRateLimit(t *testing.T) {

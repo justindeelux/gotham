@@ -177,11 +177,19 @@ Accounts can add a time-based second factor (RFC 6238, HMAC-SHA1, 6 digits,
    never a way around 2FA. (There is no "trust this device" option yet, so every
    sign-in asks for a code.)
 5. **Turn off** requires the password plus a current code or recovery code.
+6. **Lockout.** Five consecutive wrong codes (TOTP or recovery, from any source
+   address or half-authenticated token) lock the account's second factor for
+   five minutes; the lock answers `429`. Guessing is therefore bound to the
+   account, not to the caller's IP, and IPv6 callers are rate limited by `/64`.
+   A correct code clears the counter.
 
 The TOTP secret is encrypted at rest with the same key that seals provider and
 SSH credentials (`GOTHAM_SECRET_KEY`, or the key file beside the CA directory
 when that is unset), and recovery codes are stored only as argon2id hashes. A
-used code step cannot be replayed.
+used code step cannot be replayed. Enabling or disabling TOTP, regenerating
+recovery codes, and signing in with a recovery code end the account's other
+sessions — the caller's own session is kept except for a recovery-code sign-in,
+whose new session is the only one left.
 
 **Lost your device and your recovery codes?** Reset the account from the host:
 
@@ -192,7 +200,9 @@ sudo -u gotham -- /usr/local/bin/gotham admin reset-password --email you@example
 That replaces the password, ends the account's sessions **and clears its
 two-factor configuration** in the same transaction — host access is the
 recovery authority. Sign in with the new password and set the second factor up
-again.
+again. Losing or rotating `GOTHAM_SECRET_KEY` also breaks every 2FA sign-in
+(the secret can no longer be unsealed); the reset command above is the way
+back.
 
 ## Naming conventions
 

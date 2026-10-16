@@ -43,14 +43,21 @@ test.describe("auth shell", () => {
     expect(overflow).toBeLessThanOrEqual(0);
   });
 
-  test("the disabled password-reset control states why it is inert", async ({
+  test("the password-reset guidance tells the user what to do", async ({
     page,
   }) => {
-    // B4-17: the reason must be visible text, not a hover-only tooltip.
+    // B4-17 / JUS-197: the old disabled "Forgot password?" control is gone.
+    // The reason is visible text telling a locked-out user to contact their
+    // admin — not a hover-only tooltip and not an inert button.
     await page.goto("/login");
     await expect(
-      page.getByText("Password reset is not available yet.", { exact: true }),
+      page.getByText("Forgot your password? Contact your admin to reset it.", {
+        exact: true,
+      }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /forgot password/i }),
+    ).toHaveCount(0);
   });
 });
 

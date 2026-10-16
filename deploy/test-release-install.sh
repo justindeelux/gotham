@@ -186,7 +186,8 @@ bake_installer() {
     # siblings next to it; the copy itself stays the file under test.
     for _sib in release-verify.sh gotham-update.sh gotham-updater.conf \
         install-sudoers.sh gotham.service install-agent.sh install-agent-lib.sh \
-        gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service; do
+        gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service \
+        gotham-toolctl.sh install-toolctl-sudoers.sh; do
         ln -sf "${SCRIPT_DIR}/${_sib}" "$(dirname "$1")/${_sib}"
     done
 }
@@ -343,12 +344,14 @@ echo "PASS: localhost agent wiring present and test mode skips it (JUS-5)"
 # scripts directly. A missing bit makes the install die at its last step with
 # "bad interpreter: Permission denied".
 for script in install.sh install-agent.sh install-sudoers.sh install-agent-sudoers.sh \
+    gotham-toolctl.sh install-toolctl-sudoers.sh \
     test-release-install.sh verify-systemd.sh verify-agent-update.sh; do
     [ -x "${SCRIPT_DIR}/${script}" ] \
         || { echo "FAIL: ${script} is not executable (chmod +x it)" >&2; exit 1; }
 done
 if git -C "${REPO_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
-    for script in install.sh install-agent.sh install-sudoers.sh install-agent-sudoers.sh; do
+    for script in install.sh install-agent.sh install-sudoers.sh install-agent-sudoers.sh \
+        gotham-toolctl.sh install-toolctl-sudoers.sh; do
         mode="$(git -C "${REPO_DIR}" ls-files -s -- "deploy/${script}" | awk '{print $1}')"
         [ "${mode}" = "100755" ] \
             || { echo "FAIL: deploy/${script} is committed mode ${mode}, want 100755" >&2; exit 1; }
@@ -1206,7 +1209,8 @@ _rr_extra="$(diff "${INSTALL_SH}" "${RR_INSTALLER}" | grep '^>' | grep -vcE '^> 
     # siblings next to it; the copy itself stays the file under test.
     for _sib in release-verify.sh gotham-update.sh gotham-updater.conf \
         install-sudoers.sh gotham.service install-agent.sh install-agent-lib.sh \
-        gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service; do
+        gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service \
+        gotham-toolctl.sh install-toolctl-sudoers.sh; do
         ln -sf "${SCRIPT_DIR}/${_sib}" "$(dirname "${RR_INSTALLER}")/${_sib}"
     done
     REAL_OPENSSL="$(command -v openssl)"

@@ -163,10 +163,11 @@ func runServe() int {
 				startErr = err
 				return
 			}
+			toolUse := agent.NewToolUseTracker()
 			serverOptions := []agent.ServerOption{
-				agent.WithBuildService(agent.NewBuildServer(docker, log)),
+				agent.WithBuildService(agent.NewBuildServer(docker, log, agent.WithToolUseTracker(toolUse))),
 				agent.WithProxyService(agent.NewProxyServer(agent.ProxyServerConfig{Logger: log})),
-				agent.WithToolService(agent.NewToolServer()),
+				agent.WithToolService(agent.NewToolServer(agent.WithToolUse(toolUse))),
 				agent.WithComposeService(agent.NewComposeServer(agent.ComposeServerConfig{
 					Root:       cfg.ComposeRoot,
 					DockerHost: cfg.DockerSock,

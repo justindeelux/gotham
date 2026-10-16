@@ -429,6 +429,79 @@ sudo GOTHAM_AGENT_CP_ADDR=<cp-host>:9442 GOTHAM_AGENT_NODE_ID=worker-1 \
     gotham/deploy/install-agent.sh --ca ./ca.crt
 ```
 
+### Node host tools (install / uninstall)
+
+The agent exposes the `ToolService` (ListTools/InstallTool/UninstallTool) over
+mTLS; the control plane drives it from the node's tool manager. Every
+privileged step runs through one fixed, root-owned helper — the same model as
+`gotham-hostctl` — never a blanket `sudo`:
+
+```sh
+sudo install -D -m 0755 -o root -g root deploy/gotham-toolctl.sh /usr/libexec/gotham/gotham-toolctl
+sudo deploy/install-toolctl-sudoers.sh gotham-agent
+```
+
+`install-agent.sh` installs both, so a normal agent install needs no extra
+step. The sudoers drop-in (`/etc/sudoers.d/gotham-toolctl`) grants exactly one
+rule per verb **and** tool id:
+
+- `install-tool <id>` — `railpack`, `buildkit`, `pack`, `docker`, `git`;
+- `uninstall-tool <id>` — `railpack`, `buildkit`, `pack`, `git`
+  (`docker` is never removed: it would destroy every workload on the node).
+
+The agent passes only a catalog id; the helper owns every executable argv and
+re-validates the id against the same allow-list, so a compromised agent cannot
+name a package, a URL or an extra flag. Detect-only host units
+(`systemd-networkd`, `systemd-resolved`, `networkctl`, `systemctl`, …) are
+refused with `FAILED_PRECONDITION` and have no installer at all.
+
+Behaviour:
+
+- **Dependencies are resolved** by the agent, dependency-first:
+  `railpack → buildkit → docker`. Each tool is installed by one helper call.
+- **Pinned and verified.** Railpack and pack are installed from a versioned
+  release tarball whose sha256 is hard-coded in the helper (never the unpinned
+  `install.sh` piped to a shell); BuildKit is the digest-pinned
+  `moby/buildkit:v0.34.0` image run as the managed privileged `buildkit`
+  container. A checksum mismatch aborts.
+- **Idempotent.** A tool already detected on the node is skipped. The BuildKit
+  install clears a stale container before recreating it and tags the detection
+  reference only after the container runs, so a failed run does not leave the
+  tool looking installed.
+- **One at a time.** A node-wide lock allows one install or uninstall at a
+  time; a second call is refused with `RESOURCE_EXHAUSTED`. The request is
+  cancelled when the control plane drops the stream, and bounded by a 15-minute
+  timeout. The helper holds its own `flock` for the whole job, so even a job
+  whose agent request was cancelled (the transient unit keeps running until it
+  finishes or its `RuntimeMaxSec=840` bound fires, whichever is first) blocks a
+  retry with a clear "already running" refusal instead of overlapping it; a
+  graceful cancel (`SIGTERM`) makes the helper stop its unit immediately.
+- **Upgrading a node.** The helper and its sudoers rule are installed by
+  `install-agent.sh`, not by the self-update binary swap: a node that updated
+  only through `gotham-agent` self-update keeps the old install and its tool
+  install/uninstall calls fail with sudo's "not allowed". Re-run
+  `deploy/install-agent.sh` on the node (idempotent) to install them.
+- **Uninstall refuses while a tool is in use** (`FAILED_PRECONDITION`): while a
+  build runs, and while another installed tool depends on it (for example
+  BuildKit cannot go while Railpack is installed). Only in-flight *builds* are
+  tracked as "in use"; a compose service or a plain container using Docker is
+  not (Docker is not uninstallable, so only `buildkit`/`git` removals need the
+  guard).
+- **Sandbox.** The agent unit runs with `ProtectSystem=full`, so `/usr`, `/etc`
+  and `/boot` are read-only in its mount namespace and a `sudo` child inherits
+  that. The helper therefore re-executes itself through
+  `systemd-run --pipe --wait --collect`, which starts a fresh transient unit
+  outside the agent's namespace; the node needs systemd (already required by
+  the agent unit). Streamed output is the helper's own stdout/stderr, then a
+  final `ToolResult{status, exit_code}`.
+
+The helper also runs standalone for debugging (as root, without `systemd-run`):
+
+```sh
+sudo GOTHAM_TOOLCTL_DRYRUN=1 GOTHAM_TOOLCTL_ARCH=amd64 GOTHAM_TOOLCTL_DISTRO=apt \
+    /usr/libexec/gotham/gotham-toolctl install-tool railpack
+```
+
 ## Remote file service
 
 **Whole-filesystem mode (default).** The file service is on unless

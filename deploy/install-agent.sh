@@ -89,6 +89,7 @@ STATE_DIR="/var/lib/gotham-agent"
 STATUS_DIR="/var/lib/gotham-agent-updater"
 WRAPPER_PATH="/usr/libexec/gotham/gotham-agent-update"
 WRAPPER_CONF="/etc/gotham/agent-updater.conf"
+TOOLCTL_PATH="/usr/libexec/gotham/gotham-toolctl"
 SERVICE_USER="gotham-agent"
 DEFAULT_REPO="justindeelux/gotham"
 # Release trust anchor: the base64 raw Ed25519 public key (same as install.sh
@@ -161,7 +162,7 @@ log() {
 # config and the sudoers installer). Fail early with a clear message rather than
 # aborting after the user has been created and the binary installed.
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh install-agent-lib.sh; do
+for sibling in release-verify.sh gotham-update.sh gotham-agent-updater.conf install-agent-sudoers.sh install-agent-lib.sh gotham-toolctl.sh install-toolctl-sudoers.sh; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install-agent.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2
@@ -438,6 +439,19 @@ if [ "${DRY_RUN}" -eq 1 ]; then
 else
     # Invoke via sh so a checkout that lost the exec bit still installs.
     sh "${SCRIPT_DIR}/install-agent-sudoers.sh" "${SERVICE_USER}"
+fi
+
+# Host-tool helper: the fixed root-owned installer the agent reaches through
+# sudoers for InstallTool/UninstallTool. Without it the tool manager reports a
+# refusal instead of running an unbacked sudo.
+log "installing the host-tool helper ${TOOLCTL_PATH}"
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] install -m 0755 ${SCRIPT_DIR}/gotham-toolctl.sh ${TOOLCTL_PATH}"
+    echo "[dry-run] sh ${SCRIPT_DIR}/install-toolctl-sudoers.sh ${SERVICE_USER}"
+else
+    install -m 0755 -o root -g root "${SCRIPT_DIR}/gotham-toolctl.sh" "${TOOLCTL_PATH}"
+    # Invoke via sh so a checkout that lost the exec bit still installs.
+    sh "${SCRIPT_DIR}/install-toolctl-sudoers.sh" "${SERVICE_USER}"
 fi
 
 log "installing systemd unit ${SERVICE_FILE}"

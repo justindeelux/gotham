@@ -1,0 +1,75 @@
+package toolcatalog
+
+import (
+	"errors"
+	"slices"
+	"testing"
+)
+
+// TestInstallOrderOrdersDependencies proves railpack is preceded by buildkit,
+// which is preceded by docker: the install runs in dependency order.
+func TestInstallOrderOrdersDependencies(t *testing.T) {
+	order, err := InstallOrder(IDRailpack)
+	if err != nil {
+		t.Fatalf("InstallOrder(railpack): %v", err)
+	}
+	want := []string{IDDocker, IDBuildKit, IDRailpack}
+	if !slices.Equal(order, want) {
+		t.Fatalf("InstallOrder(railpack) = %v; want %v", order, want)
+	}
+
+	// A dependency that is already the target appears once.
+	order, err = InstallOrder(IDDocker)
+	if err != nil {
+		t.Fatalf("InstallOrder(docker): %v", err)
+	}
+	if !slices.Equal(order, []string{IDDocker}) {
+		t.Fatalf("InstallOrder(docker) = %v; want [docker]", order)
+	}
+}
+
+// TestInstallOrderRefusesDetectOnly proves a host unit the platform never
+// installs is refused, not silently planned.
+func TestInstallOrderRefusesDetectOnly(t *testing.T) {
+	for _, id := range []string{IDSystemdNetworkd, IDSystemdResolved, IDNetworkctl, IDSystemctl} {
+		if _, err := InstallOrder(id); !errors.Is(err, ErrNotInstallable) {
+			t.Errorf("InstallOrder(%s) = %v; want ErrNotInstallable", id, err)
+		}
+	}
+}
+
+// TestUninstallOrderRefusesUndeletable proves docker and the detect-only units
+// cannot be removed.
+func TestUninstallOrderRefusesUndeletable(t *testing.T) {
+	for _, id := range []string{IDDocker, IDSystemdNetworkd, IDNetworkctl, IDSystemctl, IDCurl} {
+		if _, err := UninstallOrder(id); !errors.Is(err, ErrNotUninstallable) {
+			t.Errorf("UninstallOrder(%s) = %v; want ErrNotUninstallable", id, err)
+		}
+	}
+	if order, err := UninstallOrder(IDRailpack); err != nil || !slices.Equal(order, []string{IDRailpack}) {
+		t.Fatalf("UninstallOrder(railpack) = %v, %v; want [railpack], nil", order, err)
+	}
+}
+
+// TestOrdersRefuseUnknownTool proves an unknown id is reported as such.
+func TestOrdersRefuseUnknownTool(t *testing.T) {
+	if _, err := InstallOrder("nope"); !errors.Is(err, ErrUnknownTool) {
+		t.Errorf("InstallOrder(nope) = %v; want ErrUnknownTool", err)
+	}
+	if _, err := UninstallOrder("nope"); !errors.Is(err, ErrUnknownTool) {
+		t.Errorf("UninstallOrder(nope) = %v; want ErrUnknownTool", err)
+	}
+}
+
+// TestDependents proves the reverse-dependency lookup the uninstall guard uses.
+func TestDependents(t *testing.T) {
+	if got := Dependents(IDDocker); !slices.Equal(got, []string{IDBuildKit}) {
+		t.Errorf("Dependents(docker) = %v; want [buildkit]", got)
+	}
+	if got := Dependents(IDBuildKit); !slices.Equal(got, []string{IDRailpack}) {
+		t.Errorf("Dependents(buildkit) = %v; want [railpack]", got)
+	}
+	if got := Dependents(IDRailpack); len(got) != 0 {
+		t.Errorf("Dependents(railpack) = %v; want none", got)
+	}
+}

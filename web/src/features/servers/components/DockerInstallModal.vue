@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NModal, NText } from "naive-ui";
+import { NAlert, NButton, NModal, NPopconfirm, NText } from "naive-ui";
 import { computed, inject } from "vue";
 
 import { WizardKey } from "@/features/servers/composables/useAddServerWizard";
@@ -8,7 +8,8 @@ import type { InstallLogPaneState } from "@/features/toolchain/components/Instal
 
 /**
  * Streamed log modal for the pre-agent Docker install (JUS-187). It reuses the
- * App Store's log pane: the install runs on the node over the wizard's SSH
+ * App Store's log pane (read-only: the stream is the source, so there is
+ * nothing to refresh). The install runs on the node over the wizard's SSH
  * session, so no agent is required.
  */
 const wizard = inject(WizardKey);
@@ -42,11 +43,6 @@ const paneState = computed<InstallLogPaneState>(() => {
   }
   return "idle";
 });
-
-/** reload re-runs the install, so "Refresh log" always shows fresh output. */
-const reload = (): void => {
-  void wizard.dockerInstall.start();
-};
 </script>
 
 <template>
@@ -57,6 +53,7 @@ const reload = (): void => {
     class="app-modal"
     style="width: 720px; max-width: 96vw"
     :mask-closable="false"
+    :close-on-esc="!running"
   >
     <div class="docker-install-body">
       <NText depth="2">{{ $t("servers.wizard.dockerInstallHint") }}</NText>
@@ -65,19 +62,28 @@ const reload = (): void => {
         {{ wizard.dockerInstall.error.value }}
       </NAlert>
 
+      <!-- Read-only: re-running the installer is not a log refresh. -->
       <InstallJobLogPane
         :title="$t('servers.wizard.dockerInstallLog')"
         :state="paneState"
         :lines="wizard.dockerInstall.lines.value"
-        @reload="reload"
+        :show-reload="false"
       />
     </div>
 
     <template #footer>
       <div class="docker-install-foot">
         <span class="grow" />
-        <NButton @click="wizard.closeDockerInstall()">
-          {{ $t("servers.wizard.cancel") }}
+        <!-- Closing while running aborts the remote install, so the control
+             asks first instead of implying the node stopped work. -->
+        <NPopconfirm v-if="running" @positive-click="wizard.closeDockerInstall()">
+          <template #trigger>
+            <NButton>{{ $t("servers.wizard.dockerInstallStop") }}</NButton>
+          </template>
+          {{ $t("servers.wizard.dockerInstallStopConfirm") }}
+        </NPopconfirm>
+        <NButton v-else @click="wizard.closeDockerInstall()">
+          {{ $t("servers.wizard.dockerInstallClose") }}
         </NButton>
         <NButton
           type="primary"

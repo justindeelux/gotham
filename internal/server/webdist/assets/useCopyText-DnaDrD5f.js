@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-DMv03Rn2.js
-import{e as i}from"./index-BMDZs9CD.js";import{u as n}from"./use-message-CDVLYCaT.js";import{bu as e}from"./index-hBi8xgOL.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
-========
-import{e as i}from"./index-Ip5_hhW0.js";import{u as n}from"./use-message-DVrPHDK2.js";import{bz as e}from"./index-hbog02ie.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
->>>>>>>> 22d3e376d (feat(servers): install Docker from the Add-server wizard (JUS-187)):internal/server/webdist/assets/useCopyText-DnaDrD5f.js

@@ -51,6 +51,8 @@ export interface FixedCheck {
   label: string;
   state: CheckState;
   detail: string;
+  /** True when the control plane can fix this failed check automatically. */
+  installable: boolean;
 }
 
 export interface AddServerWizardContext {
@@ -191,7 +193,11 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     if (createdServer.value === null || validating.value) {
       return false;
     }
-    return fixedChecks.value.find((check) => check.name === "docker")?.state === "fail";
+    const docker = fixedChecks.value.find((check) => check.name === "docker");
+    // Only offer the automatic install where the control plane reports it can
+    // actually run: an unsupported distro, arch or privilege path stays hidden
+    // instead of failing after a click.
+    return docker?.state === "fail" && docker.installable;
   });
 
   /** openDockerInstall opens the log modal and starts the streamed install. */
@@ -341,6 +347,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       label: checkLabel(name),
       state: "idle" as CheckState,
       detail: t("servers.wizard.checkPending"),
+      installable: false,
     }));
   }
 
@@ -350,13 +357,20 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     fixedChecks.value = FIXED_CHECK_NAMES.map((name) => {
       const result = byName.get(name);
       if (!result) {
-        return { name, label: checkLabel(name), state: "idle" as CheckState, detail: t("servers.wizard.checkPending") };
+        return {
+          name,
+          label: checkLabel(name),
+          state: "idle" as CheckState,
+          detail: t("servers.wizard.checkPending"),
+          installable: false,
+        };
       }
       return {
         name,
         label: checkLabel(name),
         state: (result.ok ? "ok" : "fail") as CheckState,
         detail: result.detail,
+        installable: result.installable === true,
       };
     });
   }
@@ -457,6 +471,7 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
       label: checkLabel(name),
       state: "running" as CheckState,
       detail: t("servers.wizard.checkRunning"),
+      installable: false,
     }));
     try {
       const outcome = await serversStore.validate(server.id, form.passphrase || undefined, {

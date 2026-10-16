@@ -29,9 +29,19 @@ const (
 	meminfoCmd       = "cat /proc/meminfo"
 	diskCmd          = "df -Pk / | tail -1"
 
+	// dockerPrepareTimeout bounds the install handshake and its preflight
+	// probes (uid, architecture, distribution). It is wider than a probe run so
+	// a slow node is not refused before the install even starts.
+	dockerPrepareTimeout = 30 * time.Second
+
 	// dockerInstallTimeout bounds one Docker install; an apt/dnf install can
 	// legitimately run for minutes, so it is far wider than a probe run.
 	dockerInstallTimeout = 30 * time.Minute
+
+	// dockerInstallableTimeout bounds the extra detection the docker probe runs
+	// to decide whether to offer the automatic install, so a slow node cannot
+	// spend the whole validation budget on it.
+	dockerInstallableTimeout = 5 * time.Second
 
 	// Docker-install probes. All are fixed commands: no caller value is ever
 	// interpolated into a command line.
@@ -69,6 +79,11 @@ type CheckResult struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
 	Detail string `json:"detail"`
+	// Installable reports that a failed docker check can be fixed automatically
+	// on this node (a supported distribution and architecture). The wizard only
+	// offers the install when it is set, so a node the installer cannot handle
+	// is never offered an action that would fail.
+	Installable bool `json:"installable,omitempty"`
 }
 
 // HostKeyPolicy is the host-key trust decision for one validation run.
@@ -148,7 +163,14 @@ func ValidateNode(ctx context.Context, ip string, port int, user string, auth SS
 	// docker: the only probe whose failure is terminal for the node's purpose.
 	out, err := runRemote(ctx, client, dockerVersionCmd)
 	if err != nil {
-		checks = append(checks, CheckResult{Name: checkDocker, OK: false, Detail: dockerFailure(out, err)})
+		checks = append(checks, CheckResult{
+			Name:   checkDocker,
+			OK:     false,
+			Detail: dockerFailure(out, err),
+			// Only a missing binary can be installed; a present but broken or
+			// stopped daemon is not something this installer fixes.
+			Installable: dockerMissing(out) && dockerInstallable(ctx, client),
+		})
 	} else if version := firstLine(out); version == "" {
 		checks = append(checks, CheckResult{Name: checkDocker, OK: false, Detail: "docker returned an empty version"})
 	} else {
@@ -345,11 +367,17 @@ func parseDiskTotal(out string) (int64, bool) {
 	return kb * 1024, true
 }
 
+// dockerMissing reports whether a failed docker probe failed because the
+// binary is absent (rather than a broken or stopped daemon).
+func dockerMissing(out string) bool {
+	lower := strings.ToLower(out)
+	return strings.Contains(lower, "not found") || strings.Contains(lower, "no such file")
+}
+
 // dockerFailure renders a clear message for a failed docker probe.
 func dockerFailure(out string, err error) string {
 	detail := detailOrError(out, err)
-	lower := strings.ToLower(detail)
-	if strings.Contains(lower, "not found") || strings.Contains(lower, "no such file") {
+	if dockerMissing(out) {
 		// The wizard offers an in-product install over this same SSH session
 		// (JUS-187); a registered node can install it from the App Store. Point
 		// at those actions instead of naming PATH.
@@ -418,36 +446,41 @@ func InstallDockerNode(ctx context.Context, ip string, port int, user string, au
 		return err
 	}
 
-	// The handshake is bounded like a probe run; the install session below is
-	// given the caller's context and the wider install deadline instead.
-	dialCtx, cancel := context.WithTimeout(ctx, sshDialTimeout)
+	// The handshake and preflight are bounded like a probe run; the install
+	// session below is given the caller's context and the wider install
+	// deadline instead.
+	prepCtx, cancel := context.WithTimeout(ctx, dockerPrepareTimeout)
 	defer cancel()
 
 	addr := net.JoinHostPort(ip, strconv.Itoa(port))
-	client, conn, err := dialSSH(dialCtx, addr, cfg)
+	client, conn, err := dialSSH(prepCtx, addr, cfg)
 	if err != nil {
 		return fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
 	defer func() { _ = client.Close() }()
 
-	prefix, err := dockerPrivilege(dialCtx, client, user)
+	// The distribution decides support; a distro the installer does not cover
+	// is refused before any privilege probe, so the operator gets the honest
+	// reason rather than a privilege error.
+	family, distroID, ok := dockerDetect(prepCtx, client)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrValidation, dockerUnsupportedReason(distroID))
+	}
+	archSupported, err := dockerArchOK(prepCtx, client)
 	if err != nil {
 		return err
 	}
-	if err := dockerCheckArch(dialCtx, client); err != nil {
-		return err
+	if !archSupported {
+		return fmt.Errorf("%w: automatic Docker install is not supported on this architecture", ErrValidation)
 	}
-	distro, err := dockerDistro(dialCtx, client)
+	prefix, err := dockerPrivilege(prepCtx, client, user)
 	if err != nil {
 		return err
 	}
-	script, err := dockerInstallScript(distro, prefix)
-	if err != nil {
-		return err
-	}
+	script := dockerFamilyScript(family, prefix)
 
 	// Extend the connection deadline for the install, never past the caller's
-	// own deadline, and run the fixed install argv.
+	// own deadline.
 	deadline := time.Now().Add(dockerInstallTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
@@ -455,10 +488,26 @@ func InstallDockerNode(ctx context.Context, ip string, port int, user string, au
 	if err := conn.SetDeadline(deadline); err != nil {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	}
+
+	// Commit the stream before the package manager runs: once the first byte is
+	// out an HTTP caller can no longer change its status, so a failure from
+	// here on must be reported in-band (the handler's terminal marker).
+	if _, err := fmt.Fprintf(out, "Installing Docker with %s\n", family); err != nil {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
 	if err := runRemoteStream(ctx, client, script, out); err != nil {
 		return fmt.Errorf("docker install failed: %w", err)
 	}
 	return nil
+}
+
+// dockerUnsupportedReason names the detected distribution when the automatic
+// installer does not cover it, so the failure is honest about the node.
+func dockerUnsupportedReason(distroID string) string {
+	if distroID != "" {
+		return "automatic Docker install is not supported on " + distroID
+	}
+	return "automatic Docker install is not supported on this node: no supported apt, apk or dnf package manager was found"
 }
 
 // dockerPrivilege reports the fixed command prefix the install argv needs: "" as
@@ -478,76 +527,138 @@ func dockerPrivilege(ctx context.Context, client *ssh.Client, user string) (stri
 	return dockerSudoPrefix, nil
 }
 
-// dockerCheckArch refuses architectures the allow-listed install material does
-// not cover, so the failure is honest instead of a partial install.
-func dockerCheckArch(ctx context.Context, client *ssh.Client) error {
-	out, err := runRemote(ctx, client, dockerArchCmd)
-	if err != nil {
-		return fmt.Errorf("%w: could not determine the node architecture: %s", ErrValidation, detailOrError(out, err))
-	}
-	switch firstLine(out) {
+// dockerArchSupported reports whether the allow-listed install material covers
+// an architecture.
+func dockerArchSupported(arch string) bool {
+	switch arch {
 	case "x86_64", "amd64", "aarch64", "arm64":
-		return nil
+		return true
 	default:
-		return fmt.Errorf("%w: Docker install is not supported on this architecture (%s)", ErrValidation, firstLine(out))
+		return false
 	}
 }
 
-// dockerDistro resolves the node's package-manager family from /etc/os-release,
-// falling back to probing the package managers in a fixed order. The returned
-// token is one of apt, dnf or apk, or an honest error.
-func dockerDistro(ctx context.Context, client *ssh.Client) (string, error) {
-	if out, err := runRemote(ctx, client, dockerDistroCmd); err == nil {
-		if distro := matchDistroFamily(out); distro != "" {
-			return distro, nil
+// dockerArchOK reads the node's architecture and reports whether the automatic
+// install covers it.
+func dockerArchOK(ctx context.Context, client *ssh.Client) (bool, error) {
+	out, err := runRemote(ctx, client, dockerArchCmd)
+	if err != nil {
+		return false, fmt.Errorf("%w: could not determine the node architecture: %s", ErrValidation, detailOrError(out, err))
+	}
+	return dockerArchSupported(firstLine(out)), nil
+}
+
+// dockerInstallable reports whether the automatic install covers this node, so
+// the validate response can gate the offer on it. It is bounded and never
+// fails the probe: a detection failure is simply "not offered".
+func dockerInstallable(ctx context.Context, client *ssh.Client) bool {
+	detectCtx, cancel := context.WithTimeout(ctx, dockerInstallableTimeout)
+	defer cancel()
+	// Check the distribution first: an unsupported one skips the arch probe.
+	if _, _, ok := dockerDetect(detectCtx, client); !ok {
+		return false
+	}
+	ok, err := dockerArchOK(detectCtx, client)
+	return err == nil && ok
+}
+
+// dockerSupportedIDs maps the lowercase ID/ID_LIKE tokens of /etc/os-release to
+// the package-manager family whose own repository ships a real Docker Engine.
+// The RHEL family (rhel, centos, rocky, almalinux, oracle, amzn) is
+// deliberately absent: their base repositories do not carry Docker Engine, so
+// `dnf install docker` either resolves to a podman shim or fails. Installing
+// those would need a third-party repository and a key we will not fetch, so
+// they are reported as unsupported instead.
+var dockerSupportedIDs = map[string]string{
+	"debian":    "apt",
+	"ubuntu":    "apt",
+	"raspbian":  "apt",
+	"linuxmint": "apt",
+	"pop":       "apt",
+	"kali":      "apt",
+	"alpine":    "apk",
+	// Fedora's moby-engine is the upstream Docker Engine build shipped in
+	// Fedora's own repositories (the packaged `docker` was a podman alias).
+	"fedora": "dnf",
+}
+
+// dockerRHELFamily is the set of ids whose base repos have no Docker Engine;
+// naming them keeps the "unsupported" message specific.
+var dockerRHELFamily = map[string]bool{
+	"rhel": true, "centos": true, "rocky": true, "almalinux": true,
+	"oracle": true, "amzn": true, "ol": true,
+}
+
+// matchDistro reads the first recognized ID/ID_LIKE token of /etc/os-release and
+// returns the install family plus the token. The token is "" when nothing is
+// recognized. Tokens are scanned in file order, so a distribution is classified
+// by its own ID before any ID_LIKE fallback (Rocky is "rocky", not "fedora").
+func matchDistro(out string) (family, id string) {
+	for _, token := range strings.Fields(out) {
+		if family, ok := dockerSupportedIDs[token]; ok {
+			return family, token
+		}
+		if dockerRHELFamily[token] {
+			return "", token
 		}
 	}
-	for _, candidate := range []struct{ probe, distro string }{
+	return "", ""
+}
+
+// dockerDetect resolves the install family and the distribution id used in
+// messages. It reads /etc/os-release and falls back to a fixed package-manager
+// probe only for the families whose own repository ships a real engine.
+func dockerDetect(ctx context.Context, client *ssh.Client) (family, distroID string, ok bool) {
+	if out, err := runRemote(ctx, client, dockerDistroCmd); err == nil {
+		if family, id := matchDistro(out); family != "" {
+			return family, id, true
+		} else if id != "" {
+			return "", id, false
+		}
+	}
+	for _, candidate := range []struct{ probe, family string }{
 		{"apt-get", "apt"},
-		{"dnf", "dnf"},
 		{"apk", "apk"},
 	} {
 		if _, err := runRemote(ctx, client, "command -v "+candidate.probe); err == nil {
-			return candidate.distro, nil
+			return candidate.family, "", true
 		}
 	}
-	return "", fmt.Errorf("%w: Docker install is not supported on this node: no apt, dnf or apk package manager was found", ErrValidation)
+	return "", "", false
 }
 
-// matchDistroFamily maps the lowercase ID/ID_LIKE tokens of /etc/os-release to
-// the package-manager family the installer knows.
-func matchDistroFamily(out string) string {
-	for _, id := range strings.Fields(out) {
-		switch id {
-		case "debian", "ubuntu", "raspbian", "linuxmint", "pop", "kali":
-			return "apt"
-		case "fedora", "rhel", "centos", "rocky", "almalinux", "amzn", "oracle":
-			return "dnf"
-		case "alpine":
-			return "apk"
-		}
-	}
-	return ""
-}
-
-// dockerInstallScript returns the fixed, allow-listed install argv for a
-// distribution, prefixed with the privilege command when one is needed. The
-// command is noninteractive and enables the docker service where the
-// distribution ships one.
-func dockerInstallScript(distro, prefix string) (string, error) {
-	switch distro {
+// dockerFamilyScript returns the fixed, allow-listed install argv for a family,
+// prefixed with the privilege command when one is needed. Every install is
+// noninteractive and enables and starts the Docker service, so the follow-up
+// probe sees a running daemon.
+func dockerFamilyScript(family, prefix string) string {
+	switch family {
 	case "apt":
 		return prefix + "env DEBIAN_FRONTEND=noninteractive apt-get update && " +
 			prefix + "env DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io && " +
-			prefix + "systemctl enable --now docker", nil
+			prefix + "systemctl enable --now docker"
 	case "dnf":
-		return prefix + "dnf install -y docker && " +
-			prefix + "systemctl enable --now docker", nil
+		return prefix + "dnf install -y moby-engine && " +
+			prefix + "systemctl enable --now docker"
 	case "apk":
-		return prefix + "apk add --no-cache docker", nil
+		return prefix + "apk add --no-cache docker && " +
+			prefix + "rc-update add docker boot && " +
+			prefix + "service docker start"
 	default:
-		return "", fmt.Errorf("%w: Docker install is not supported on this distribution", ErrValidation)
+		// dockerDetect only ever returns a family from dockerSupportedIDs.
+		return ""
 	}
+}
+
+// DockerInstallExitCode reports the remote exit status of a failed install, or
+// 0 when the failure carried none (a preflight error or a cancellation). The
+// HTTP layer relays it in the stream's terminal marker.
+func DockerInstallExitCode(err error) int {
+	var exit *ssh.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitStatus()
+	}
+	return 0
 }
 
 // runRemoteStream runs cmd and streams its combined output to out, closing the
@@ -566,12 +677,21 @@ func runRemoteStream(ctx context.Context, client *ssh.Client, cmd string, out io
 	sink := &syncWriter{w: out}
 	session.Stdout = sink
 	session.Stderr = sink
+	// A pty makes sshd deliver SIGHUP to the install's process group when the
+	// channel closes, so a cancelled request does not leave a package manager
+	// running (and holding the dpkg/dnf lock) on the node. It is best-effort: a
+	// server that refuses the request still gets the signal + close below.
+	_ = session.RequestPty("xterm", 40, 120, ssh.TerminalModes{})
 
 	done := make(chan error, 1)
 	go func() { done <- session.Run(cmd) }()
 
 	select {
 	case <-ctx.Done():
+		// Ask the remote to stop, then close: with a pty the close also hangs up
+		// the process group. Many sshd servers ignore a signal on a non-pty
+		// session, so both are attempted.
+		_ = session.Signal(ssh.SIGTERM)
 		_ = session.Close()
 		// Wait for Run to unwind before returning, so it never writes to the
 		// response after the handler has handed it back.

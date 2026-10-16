@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -253,7 +254,7 @@ func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyID, ok := parseOptionalUUID(w, req.SSHKeyID)
+	keyID, ok := parseOptionalUUID(w, req.SSHKeyID, "ssh_key_id")
 	if !ok {
 		return
 	}
@@ -301,7 +302,7 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 		SSHUser: req.SSHUser,
 	}
 	if req.SSHKeyID != nil {
-		keyID, ok := parseOptionalUUID(w, *req.SSHKeyID)
+		keyID, ok := parseOptionalUUID(w, *req.SSHKeyID, "ssh_key_id")
 		if !ok {
 			return
 		}
@@ -338,22 +339,12 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req validateServerRequest
-	if !s.decodeOptionalJSON(w, r, &req) {
-		return
-	}
-
-	keyID, ok := parseOptionalUUID(w, req.SSHKeyID)
+	auth, ok := s.validateAuthFromBody(w, r)
 	if !ok {
 		return
 	}
 
-	result, err := s.servers.Validate(r.Context(), id, servers.ValidateAuth{
-		KeyID:        keyID,
-		Password:     req.Password,
-		Passphrase:   req.Passphrase,
-		TrustHostKey: req.TrustHostKey,
-	})
+	result, err := s.servers.Validate(r.Context(), id, auth)
 	if err != nil {
 		// A failed check is a 422 with the structured check list; a missing
 		// server or bad request maps to 404/400.
@@ -394,46 +385,68 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// installMarkerPrefix begins the final line of a docker-install stream. Once
+// the stream is committed the HTTP status cannot change, so the terminal
+// outcome travels in-band as a JSON object on this last line. The leading
+// record-separator control character cannot appear in package-manager output,
+// so a normal line can never be mistaken for the marker. Keep in sync with
+// installMarkerPrefix in web/src/features/servers/composables/useDockerInstall.ts.
+const installMarkerPrefix = "\x1e[gotham-install] "
+
+// installMarker is the terminal status of one install stream.
+type installMarker struct {
+	Status   string `json:"status"` // "ok" | "fail"
+	ExitCode int    `json:"exit_code,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+// writeInstallMarker writes the terminal status line of an install stream.
+func writeInstallMarker(w io.Writer, marker installMarker) {
+	payload, err := json.Marshal(marker)
+	if err != nil {
+		return
+	}
+	_, _ = io.WriteString(w, installMarkerPrefix+string(payload)+"\n")
+}
+
 // handleInstallDocker installs Docker Engine on a node over SSH and streams the
 // installer output as a plain-text chunked body (POST
 // /v1/servers/{id}/docker-install). The 200 is deferred until the first output
 // byte, so a failure before the install starts (SSH, privilege, unsupported
-// distribution or architecture) is still answered as a real JSON error; a
-// failure once the stream has started is appended to the body and logged.
+// distribution or architecture, or a concurrent install) is still answered as a
+// real JSON error. Once the stream is committed the outcome is carried by the
+// terminal marker line, because the status can no longer change.
 func (s *Server) handleInstallDocker(w http.ResponseWriter, r *http.Request) {
 	id, ok := serverIDParam(w, r)
 	if !ok {
 		return
 	}
 
-	var req validateServerRequest
-	if !s.decodeOptionalJSON(w, r, &req) {
-		return
-	}
-	keyID, ok := parseOptionalUUID(w, req.SSHKeyID)
+	auth, ok := s.validateAuthFromBody(w, r)
 	if !ok {
 		return
 	}
 
 	out := &streamWriter{w: w, flusher: flusherOf(w)}
-	err := s.servers.InstallDocker(r.Context(), id, servers.ValidateAuth{
-		KeyID:        keyID,
-		Password:     req.Password,
-		Passphrase:   req.Passphrase,
-		TrustHostKey: req.TrustHostKey,
-	}, out)
-	if err == nil {
+	err := s.servers.InstallDocker(r.Context(), id, auth, out)
+	if !out.started {
+		if err != nil {
+			s.writeServerError(w, "install docker", err)
+		}
 		return
 	}
-	if out.started {
-		// The status is already sent: the log shows the command output, so a
-		// short marker keeps the cause visible instead of silently truncating.
-		_, _ = io.WriteString(out, "\n"+err.Error()+"\n")
+
+	marker := installMarker{Status: "ok"}
+	if err != nil {
+		marker = installMarker{
+			Status:   "fail",
+			ExitCode: servers.DockerInstallExitCode(err),
+			Message:  err.Error(),
+		}
 		s.logger.Warn("servers: docker install failed after the stream started",
-			"server_id", id.String(), "error", err)
-		return
+			"server_id", id.String(), "exit_code", marker.ExitCode, "error", err)
 	}
-	s.writeServerError(w, "install docker", err)
+	writeInstallMarker(out, marker)
 }
 
 // streamWriter defers the response status until the first byte, so a handler
@@ -693,18 +706,38 @@ func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// parseOptionalUUID parses an optional ssh_key_id, answering 400 when it is
+// parseOptionalUUID parses an optional UUID string, answering 400 when it is
 // neither empty nor a valid UUID.
-func parseOptionalUUID(w http.ResponseWriter, raw string) (uuid.UUID, bool) {
+func parseOptionalUUID(w http.ResponseWriter, raw, field string) (uuid.UUID, bool) {
 	if raw == "" {
 		return uuid.Nil, true
 	}
 	id, err := uuid.Parse(raw)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid ssh_key_id"})
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid " + field})
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// validateAuthFromBody decodes the optional body shared by the validation and
+// Docker-install routes and resolves the credentials selection. It answers the
+// request itself (400) and reports false on a malformed body.
+func (s *Server) validateAuthFromBody(w http.ResponseWriter, r *http.Request) (servers.ValidateAuth, bool) {
+	var req validateServerRequest
+	if !s.decodeOptionalJSON(w, r, &req) {
+		return servers.ValidateAuth{}, false
+	}
+	keyID, ok := parseOptionalUUID(w, req.SSHKeyID, "ssh_key_id")
+	if !ok {
+		return servers.ValidateAuth{}, false
+	}
+	return servers.ValidateAuth{
+		KeyID:        keyID,
+		Password:     req.Password,
+		Passphrase:   req.Passphrase,
+		TrustHostKey: req.TrustHostKey,
+	}, true
 }
 
 // decodeOptionalJSON decodes an optional body, treating an empty body as an

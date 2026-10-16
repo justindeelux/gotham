@@ -54,6 +54,12 @@ export interface CheckResult {
   name: ServerCheckName;
   ok: boolean;
   detail: string;
+  /**
+   * True when a failed docker check can be fixed automatically on this node
+   * (a supported distribution and architecture). The wizard only offers the
+   * install when it is set.
+   */
+  installable?: boolean;
 }
 
 /** Private-key metadata; key material is never returned. */

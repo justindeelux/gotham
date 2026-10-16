@@ -28,12 +28,12 @@ func TestGeneralProxyResync(t *testing.T) {
 		t.Fatalf("save=%+v err=%v calls=%d", state, err, calls)
 	}
 	input.InstanceName = "renamed"
-	if _, err = svc.UpdateGeneral(context.Background(), uuid.Nil, input); err != nil || calls != 1 {
-		t.Fatalf("unchanged URL resynced: %v calls=%d", err, calls)
+	if _, err = svc.UpdateGeneral(context.Background(), uuid.Nil, input); err != nil || calls != 2 {
+		t.Fatalf("pending URL retry: %v calls=%d", err, calls)
 	}
 	input.ControlPlaneURL = "invalid"
-	if _, err = svc.UpdateGeneral(context.Background(), uuid.Nil, input); err == nil || calls != 1 {
-		t.Fatalf("invalid URL resynced: %v calls=%d", err, calls)
+	if _, err = svc.UpdateGeneral(context.Background(), uuid.Nil, input); err == nil || calls != 3 {
+		t.Fatalf("pending URL retry before validation: %v calls=%d", err, calls)
 	}
 }
 

@@ -186,7 +186,7 @@ func (r *timerRepo) Save(_ context.Context, _ uuid.UUID, _ string, rec Stored, _
 
 func TestControlPlaneURLRestartRearmsAutomaticRollback(t *testing.T) {
 	old, next := "https://old.example.com", "https://new.example.com"
-	repo := &timerRepo{rec: Stored{ControlPlaneURL: &next, PendingControlPlaneURL: &PendingControlPlaneURL{Previous: &old, Proposed: next, Deadline: time.Now().Add(20 * time.Millisecond)}}}
+	repo := &timerRepo{rec: Stored{ControlPlaneURL: &next, PendingControlPlaneURL: &PendingControlPlaneURL{Previous: &old, Proposed: next, Deadline: time.Now().Add(20 * time.Millisecond), Synced: true}}}
 	svc := NewService(repo, nil, nil)
 	svc.lookup = func(string) string { return "" }
 	done := make(chan struct{}, 1)
@@ -298,7 +298,7 @@ func TestControlPlaneURLSerializesWithDomainWrites(t *testing.T) {
 
 func TestControlPlaneURLClosePreservesTrialForRestart(t *testing.T) {
 	old, next := "https://old.example.com", "https://new.example.com"
-	repo := &timerRepo{rec: Stored{ControlPlaneURL: &next, PendingControlPlaneURL: &PendingControlPlaneURL{Previous: &old, Proposed: next, Deadline: time.Now().Add(20 * time.Millisecond)}}}
+	repo := &timerRepo{rec: Stored{ControlPlaneURL: &next, PendingControlPlaneURL: &PendingControlPlaneURL{Previous: &old, Proposed: next, Deadline: time.Now().Add(20 * time.Millisecond), Synced: true}}}
 	svc := NewService(repo, nil, nil)
 	synced := make(chan struct{}, 1)
 	svc.ResyncProxy = func(context.Context) error { synced <- struct{}{}; return nil }

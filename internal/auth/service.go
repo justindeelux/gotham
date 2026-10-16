@@ -46,11 +46,19 @@ type User struct {
 }
 
 // AuthResult bundles the account and the freshly issued token pair.
+//
+// MFARequired/ (with MFAToken) is the half-authenticated state (JUS-196): the
+// password was correct (or the OAuth identity resolved) but the account has
+// TOTP enabled, so no session, access token or refresh token is issued until
+// CompleteMFALogin verifies the second factor. The token is a signed
+// single-purpose JWT that VerifyAccessToken refuses.
 type AuthResult struct {
 	User         *User  `json:"user"`
 	AccessToken  string `json:"access_token"`
 	ExpiresIn    int64  `json:"expires_in"`
 	RefreshToken string `json:"refresh_token"`
+	MFARequired  bool   `json:"mfa_required,omitempty"`
+	MFAToken     string `json:"mfa_token,omitempty"`
 }
 
 // Service implements the core authentication flows on top of the store and the
@@ -60,6 +68,10 @@ type Service struct {
 	signer *Signer
 	logger *slog.Logger
 	now    func() time.Time
+	// secretKey seals TOTP secrets at rest, via the shared credential-encryption
+	// facility (providers.SealSecret). Set at startup with WithSecretKey; an
+	// empty key makes enrollment fail closed.
+	secretKey string
 	// AllowOpenRegistration reopens self-registration after the first account.
 	// Test/dev only (GOTHAM_AUTH_ALLOW_REGISTRATION): production relies on the
 	// closed default, where members join through admin invites (P-A2).
@@ -252,7 +264,7 @@ func (s *Service) Login(ctx context.Context, email, password string, meta Sessio
 		return nil, ErrInvalidCredentials
 	}
 
-	return s.issue(ctx, current, meta)
+	return s.issueOrChallenge(ctx, current, meta)
 }
 
 // dummyPasswordHash is a fixed argon2id hash with the production parameters,
@@ -431,10 +443,31 @@ func (s *Service) VerifyAccessToken(token string) (*Claims, error) {
 // IssueSession creates a refresh session and signs an access token for user. It
 // exposes the internal issue path so alternative flows (for example OAuth2
 // logins) mint sessions exactly like a password login, without duplicating the
-// token logic. A zero meta records unknown device metadata (the OAuth HTTP
-// layer lives outside this package's session contract); the first refresh
-// rotation backfills it.
+// token logic — including the half-authenticated challenge when the account has
+// TOTP enabled (the second factor is then verified through CompleteMFALogin).
+// A zero meta records unknown device metadata (the OAuth HTTP layer lives
+// outside this package's session contract); the first refresh rotation
+// backfills it.
 func (s *Service) IssueSession(ctx context.Context, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
+	return s.issueOrChallenge(ctx, user, meta)
+}
+
+// issueOrChallenge mints a session, or a half-authenticated MFA challenge when
+// the account has TOTP enabled: no refresh session, access token or WS token is
+// created until the second factor is verified (JUS-196). Every login path
+// (password and OAuth) goes through here, so enabling TOTP cannot be bypassed.
+func (s *Service) issueOrChallenge(ctx context.Context, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
+	row, err := s.store.GetUserTOTP(ctx, user.ID)
+	switch {
+	case err == nil && row.Enabled:
+		token, err := s.signer.IssueMFAToken(uuid.UUID(user.ID.Bytes), user.CredentialVersion)
+		if err != nil {
+			return nil, err
+		}
+		return &AuthResult{User: toUser(user), MFARequired: true, MFAToken: token}, nil
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return nil, fmt.Errorf("auth: get totp: %w", err)
+	}
 	return s.issue(ctx, user, meta)
 }
 

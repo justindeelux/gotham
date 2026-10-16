@@ -397,3 +397,50 @@ func TestChannelRoutesUnmountWhenDisabled(t *testing.T) {
 		t.Fatalf("nil service list = %d, want 404", rec.Code)
 	}
 }
+
+// TestChannelRouteDeliveriesHistory proves the history endpoint serves the
+// newest attempts, lets a read_only member read it, 404s a foreign channel and
+// never carries a channel secret.
+func TestChannelRouteDeliveriesHistory(t *testing.T) {
+	userID, teamID := uuid.New(), uuid.New()
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t, teamID))
+	empty := repo.seed(sampleChannel(t, teamID))
+	service := newTestService(t, repo)
+	if err := repo.CreateDelivery(context.Background(), Delivery{
+		ID:           uuid.New(),
+		ChannelID:    channel.ID,
+		EventType:    testEventType,
+		Status:       DeliveryFailed,
+		ErrorSummary: "connection failed",
+		CreatedAt:    time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("CreateDelivery: %v", err)
+	}
+
+	handler := newRouteServer(userID, teamID, teams.RoleReadOnly, service)
+	rec := doRequest(handler, http.MethodGet, "/v1/notification-channels/"+channel.ID.String()+"/deliveries", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("deliveries = %d (body %s), want 200", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "8f2c-secret") {
+		t.Fatalf("history response leaks the webhook: %s", rec.Body.String())
+	}
+	var envelope deliveryListEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode deliveries %q: %v", rec.Body.String(), err)
+	}
+	if len(envelope.Deliveries) != 1 || envelope.Deliveries[0].ErrorSummary != "connection failed" {
+		t.Errorf("deliveries = %+v, want the recorded attempt", envelope.Deliveries)
+	}
+
+	emptyRec := doRequest(handler, http.MethodGet, "/v1/notification-channels/"+empty.ID.String()+"/deliveries", "")
+	if body := strings.TrimSpace(emptyRec.Body.String()); body != `{"deliveries":[]}` {
+		t.Errorf("empty history = %s, want an empty array", body)
+	}
+
+	foreign := newRouteServer(uuid.New(), uuid.New(), teams.RoleOwner, service)
+	if rec := doRequest(foreign, http.MethodGet, "/v1/notification-channels/"+channel.ID.String()+"/deliveries", ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign deliveries = %d, want 404", rec.Code)
+	}
+}

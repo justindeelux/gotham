@@ -525,6 +525,61 @@ type TestResult struct {
 	Message string `json:"message"`
 }
 
+// Delivery-history bounds and labels (JUS-195).
+
+const (
+	// maxDeliveryError bounds the failure summary stored in a delivery row and
+	// returned by the history endpoint. The notifier already classifies and
+	// strips credentials from its error text; the cap keeps a pathological
+	// message from bloating a row.
+	maxDeliveryError = 300
+	// deliveryRetention is the per-channel history cap. The repository trims a
+	// channel to its newest deliveryRetention rows on every write, so history
+	// is bounded by a row count and not by a background janitor.
+	deliveryRetention = 50
+	// deliveryHistoryLimit is how many recent attempts the history endpoint
+	// returns to the UI.
+	deliveryHistoryLimit = 20
+	// testEventType labels a send-test attempt in the history; dispatched
+	// events store their EventKey instead.
+	testEventType = "test"
+)
+
+// DeliveryStatus is the terminal result of one delivery attempt.
+type DeliveryStatus string
+
+// Delivery statuses.
+const (
+	// DeliverySucceeded — the transport accepted the message.
+	DeliverySucceeded DeliveryStatus = "success"
+	// DeliveryFailed — the transport refused or the connection failed; the
+	// row carries a classified summary.
+	DeliveryFailed DeliveryStatus = "failure"
+)
+
+// Delivery is one persisted delivery attempt: a dispatched deploy/backup event
+// or an operator's send-test. It holds no secret — only the event type, the
+// terminal status and a bounded failure summary.
+type Delivery struct {
+	ID           uuid.UUID
+	ChannelID    uuid.UUID
+	EventType    string
+	Status       DeliveryStatus
+	ErrorSummary string
+	CreatedAt    time.Time
+}
+
+// DeliveryView is the read representation of a delivery attempt, the wire DTO
+// the history endpoint serves. It never carries the channel's secrets.
+type DeliveryView struct {
+	ID           uuid.UUID      `json:"id"`
+	ChannelID    uuid.UUID      `json:"channel_id"`
+	EventType    string         `json:"event_type"`
+	Status       DeliveryStatus `json:"status"`
+	ErrorSummary string         `json:"error_summary,omitempty"`
+	CreatedAt    time.Time      `json:"created_at"`
+}
+
 // parseResource validates a resource override pair: both empty means
 // team-wide, otherwise the type must be known and the id a UUID.
 func parseResource(resourceType, resourceID string) (string, uuid.UUID, error) {

@@ -32,6 +32,12 @@ type Repository interface {
 	// DeleteChannel removes one channel of a team, or ErrNotFound when no row
 	// matched.
 	DeleteChannel(ctx context.Context, teamID, channelID uuid.UUID) error
+	// CreateDelivery appends one attempt and trims the channel's history to
+	// the retention cap, in one transaction.
+	CreateDelivery(ctx context.Context, delivery Delivery) error
+	// ListDeliveries returns the newest attempts of one team-scoped channel,
+	// newest first. A foreign team's channel matches no row.
+	ListDeliveries(ctx context.Context, teamID, channelID uuid.UUID, limit int) ([]Delivery, error)
 }
 
 // storeRepository adapts *store.Store to Repository.
@@ -139,6 +145,60 @@ func (r *storeRepository) DeleteChannel(ctx context.Context, teamID, channelID u
 		return ErrNotFound
 	}
 	return nil
+}
+
+// CreateDelivery implements Repository: it appends one attempt and trims the
+// channel's history to the retention cap in a single transaction, so a write
+// can never leave the channel over the cap.
+func (r *storeRepository) CreateDelivery(ctx context.Context, delivery Delivery) error {
+	return r.store.InTx(ctx, func(tx *store.Store) error {
+		if _, err := tx.CreateNotificationDelivery(ctx, sqlc.CreateNotificationDeliveryParams{
+			ID:           pgUUID(delivery.ID),
+			ChannelID:    pgUUID(delivery.ChannelID),
+			EventType:    delivery.EventType,
+			Status:       string(delivery.Status),
+			ErrorSummary: delivery.ErrorSummary,
+			CreatedAt:    pgtype.Timestamptz{Time: delivery.CreatedAt, Valid: true},
+		}); err != nil {
+			return fmt.Errorf("notifications: create delivery: %w", err)
+		}
+		if _, err := tx.PruneNotificationDeliveries(ctx, sqlc.PruneNotificationDeliveriesParams{
+			ChannelID: pgUUID(delivery.ChannelID),
+			Limit:     deliveryRetention,
+		}); err != nil {
+			return fmt.Errorf("notifications: prune deliveries: %w", err)
+		}
+		return nil
+	})
+}
+
+// ListDeliveries implements Repository.
+func (r *storeRepository) ListDeliveries(ctx context.Context, teamID, channelID uuid.UUID, limit int) ([]Delivery, error) {
+	rows, err := r.store.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
+		ChannelID: pgUUID(channelID),
+		TeamID:    pgUUID(teamID),
+		Limit:     int32(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("notifications: list deliveries: %w", err)
+	}
+	deliveries := make([]Delivery, 0, len(rows))
+	for _, row := range rows {
+		deliveries = append(deliveries, deliveryFromRow(row))
+	}
+	return deliveries, nil
+}
+
+// deliveryFromRow maps a sqlc row to the domain delivery.
+func deliveryFromRow(row sqlc.NotificationDelivery) Delivery {
+	return Delivery{
+		ID:           uuidFromPG(row.ID),
+		ChannelID:    uuidFromPG(row.ChannelID),
+		EventType:    row.EventType,
+		Status:       DeliveryStatus(row.Status),
+		ErrorSummary: row.ErrorSummary,
+		CreatedAt:    row.CreatedAt.Time,
+	}
 }
 
 // channelFromRow maps a sqlc row to the domain channel.

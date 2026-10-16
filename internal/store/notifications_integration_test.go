@@ -183,6 +183,51 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Errorf("channels = %d, want 2", len(all))
 	}
 
+	// Delivery history is bounded per channel and team-scoped on read.
+	for i := 0; i < 55; i++ {
+		if _, err := st.CreateNotificationDelivery(ctx, sqlc.CreateNotificationDeliveryParams{
+			ID:           pgtype.UUID{Bytes: uuid.New(), Valid: true},
+			ChannelID:    created.ID,
+			EventType:    "deploy_failure",
+			Status:       "failure",
+			ErrorSummary: "connection failed",
+			CreatedAt:    pgtype.Timestamptz{Time: time.Now().UTC().Add(time.Duration(i) * time.Second), Valid: true},
+		}); err != nil {
+			t.Fatalf("CreateNotificationDelivery: %v", err)
+		}
+		if _, err := st.PruneNotificationDeliveries(ctx, sqlc.PruneNotificationDeliveriesParams{
+			ChannelID: created.ID,
+			Limit:     50,
+		}); err != nil {
+			t.Fatalf("PruneNotificationDeliveries: %v", err)
+		}
+	}
+	history, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
+		ChannelID: created.ID,
+		TeamID:    teamID,
+		Limit:     100,
+	})
+	if err != nil {
+		t.Fatalf("ListNotificationDeliveries: %v", err)
+	}
+	if len(history) != 50 {
+		t.Fatalf("history = %d rows, want the 50-row cap", len(history))
+	}
+	if !history[0].CreatedAt.Time.After(history[len(history)-1].CreatedAt.Time) {
+		t.Error("history is not newest-first")
+	}
+	foreignHistory, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
+		ChannelID: created.ID,
+		TeamID:    pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Limit:     100,
+	})
+	if err != nil {
+		t.Fatalf("foreign ListNotificationDeliveries: %v", err)
+	}
+	if len(foreignHistory) != 0 {
+		t.Errorf("foreign history = %d rows, want 0", len(foreignHistory))
+	}
+
 	// Delete is team-scoped and reports the affected rows.
 	affected, err := st.DeleteNotificationChannel(ctx, sqlc.DeleteNotificationChannelParams{
 		ID:     override.ID,
@@ -215,6 +260,17 @@ func TestNotificationChannelPersistence(t *testing.T) {
 	}
 	if len(remaining) != 0 {
 		t.Errorf("channels after team delete = %d, want 0 (ON DELETE CASCADE)", len(remaining))
+	}
+	remainingHistory, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
+		ChannelID: created.ID,
+		TeamID:    teamID,
+		Limit:     100,
+	})
+	if err != nil {
+		t.Fatalf("ListNotificationDeliveries after team delete: %v", err)
+	}
+	if len(remainingHistory) != 0 {
+		t.Errorf("deliveries after team delete = %d, want 0 (ON DELETE CASCADE)", len(remainingHistory))
 	}
 }
 

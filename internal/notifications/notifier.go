@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -24,6 +25,16 @@ type Notifier interface {
 // httptest server through newTelegramNotifier.
 const defaultTelegramBaseURL = "https://api.telegram.org"
 
+// Per-transport message caps. Each provider rejects an over-long payload, so
+// the message is truncated at the transport's own limit; email is uncapped.
+// The event message is short in practice (the failure text is already bounded
+// by maxEventError), so this only guards a pathological resource name.
+const (
+	discordContentLimit = 2000
+	slackTextLimit      = 4000
+	telegramTextLimit   = 4096
+)
+
 // discordNotifier posts {"content": ...} to a Discord incoming webhook.
 type discordNotifier struct {
 	url    string
@@ -37,7 +48,7 @@ func newDiscordNotifier(webhookURL string, client *http.Client) *discordNotifier
 
 // Notify implements Notifier.
 func (n *discordNotifier) Notify(ctx context.Context, event Event) error {
-	return postJSON(ctx, n.client, n.url, map[string]string{"content": event.Message()})
+	return postJSON(ctx, n.client, n.url, map[string]string{"content": truncateText(event.Message(), discordContentLimit)})
 }
 
 // slackNotifier posts {"text": ...} to a Slack incoming webhook.
@@ -53,7 +64,7 @@ func newSlackNotifier(webhookURL string, client *http.Client) *slackNotifier {
 
 // Notify implements Notifier.
 func (n *slackNotifier) Notify(ctx context.Context, event Event) error {
-	return postJSON(ctx, n.client, n.url, map[string]string{"text": event.Message()})
+	return postJSON(ctx, n.client, n.url, map[string]string{"text": truncateText(event.Message(), slackTextLimit)})
 }
 
 // telegramNotifier calls the Bot API sendMessage method.
@@ -84,7 +95,7 @@ func (n *telegramNotifier) Notify(ctx context.Context, event Event) error {
 	endpoint := n.baseURL + "/bot" + url.PathEscape(n.token) + "/sendMessage"
 	return postJSON(ctx, n.client, endpoint, map[string]string{
 		"chat_id": n.chatID,
-		"text":    event.Message(),
+		"text":    truncateText(event.Message(), telegramTextLimit),
 	})
 }
 
@@ -156,11 +167,32 @@ func postJSON(ctx context.Context, client *http.Client, endpoint string, payload
 	// never echoed because a remote server may reflect the request path.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if seconds, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {
+				return fmt.Errorf("notifications: %s rate limited (retry after %ds)", endpointHost(endpoint), seconds)
+			}
+			return fmt.Errorf("notifications: %s rate limited", endpointHost(endpoint))
+		}
 		// resp.Status carries the reason phrase, which the remote endpoint
 		// controls; only the numeric code is safe to report.
 		return fmt.Errorf("notifications: %s answered status %d", endpointHost(endpoint), resp.StatusCode)
 	}
 	return nil
+}
+
+// maxRetryAfterSeconds caps a parsed Retry-After so a hostile header cannot
+// produce an absurd hint.
+const maxRetryAfterSeconds = 86400
+
+// parseRetryAfter reads the delta-seconds form of Retry-After. The HTTP-date
+// form is deliberately ignored: it is remote-controlled text and the error
+// must carry only the numeric hint.
+func parseRetryAfter(raw string) (int, bool) {
+	seconds, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || seconds <= 0 || seconds > maxRetryAfterSeconds {
+		return 0, false
+	}
+	return seconds, true
 }
 
 // redirectLimit bounds followed redirects; the stdlib default is 10.

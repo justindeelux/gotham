@@ -910,3 +910,135 @@ func TestEmptySecretKeyUsesEphemeralSecret(t *testing.T) {
 		t.Errorf("OpenSecret(ephemeral) = %v, want a roundtrip", err)
 	}
 }
+
+// TestDispatchRecordsDeliveryHistory proves every dispatched attempt lands in
+// the channel's history: a success with no summary and a failure with the
+// classified reason.
+func TestDispatchRecordsDeliveryHistory(t *testing.T) {
+	teamID := uuid.New()
+	repo := newFakeRepository()
+	healthyChannel := repo.seed(sampleChannel(t, teamID))
+	brokenChannel := repo.seed(sampleChannel(t, teamID))
+	service := newTestService(t, repo)
+	healthy := newFakeNotifier()
+	broken := newFakeNotifier()
+	broken.err = errors.New("endpoint is down")
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{healthyChannel.ID: healthy, brokenChannel.ID: broken})
+
+	service.Dispatch(sampleEvent(teamID))
+
+	waitFor(t, "both history rows", func() bool {
+		return len(repo.deliveriesFor(healthyChannel.ID)) == 1 && len(repo.deliveriesFor(brokenChannel.ID)) == 1
+	})
+	success := repo.deliveriesFor(healthyChannel.ID)[0]
+	if success.Status != DeliverySucceeded || success.EventType != string(EventDeployFailure) || success.ErrorSummary != "" {
+		t.Errorf("success row = %+v, want a successful deploy_failure with no summary", success)
+	}
+	failed := repo.deliveriesFor(brokenChannel.ID)[0]
+	if failed.Status != DeliveryFailed || failed.EventType != string(EventDeployFailure) || failed.ErrorSummary == "" {
+		t.Errorf("failure row = %+v, want a failed deploy_failure with a summary", failed)
+	}
+}
+
+// TestTestChannelRecordsDelivery proves the send-test action leaves a history
+// row labelled as a test, for both outcomes, and that its summary is bounded.
+func TestTestChannelRecordsDelivery(t *testing.T) {
+	userID, teamID := uuid.New(), uuid.New()
+	ctx := scopedCtx(userID, teamID, teams.RoleOwner)
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t, teamID))
+	service := newTestService(t, repo)
+	notifier := newFakeNotifier()
+	setFactory(t, service, map[uuid.UUID]*fakeNotifier{channel.ID: notifier})
+
+	if _, err := service.TestChannel(ctx, userID, channel.ID); err != nil {
+		t.Fatalf("TestChannel: %v", err)
+	}
+	rows := repo.deliveriesFor(channel.ID)
+	if len(rows) != 1 || rows[0].EventType != testEventType || rows[0].Status != DeliverySucceeded {
+		t.Fatalf("history = %+v, want one successful test row", rows)
+	}
+
+	notifier.err = errors.New(strings.Repeat("x", maxDeliveryError*2))
+	result, err := service.TestChannel(ctx, userID, channel.ID)
+	if err != nil || result.OK {
+		t.Fatalf("TestChannel(failing) = %+v, %v; want a failure result", result, err)
+	}
+	rows = repo.deliveriesFor(channel.ID)
+	if len(rows) != 2 {
+		t.Fatalf("history rows = %d, want 2", len(rows))
+	}
+	var failed *Delivery
+	for i := range rows {
+		if rows[i].Status == DeliveryFailed {
+			failed = &rows[i]
+		}
+	}
+	if failed == nil {
+		t.Fatalf("history = %+v, want a failed row", rows)
+	}
+	if len(failed.ErrorSummary) > maxDeliveryError+3 {
+		t.Errorf("summary = %d bytes, want it bounded at %d", len(failed.ErrorSummary), maxDeliveryError)
+	}
+}
+
+// TestListDeliveriesIsTeamScopedAndReadable proves the history read needs no
+// write role, returns newest-first, and hides another team's channel.
+func TestListDeliveriesIsTeamScoped(t *testing.T) {
+	ownerID, teamA := uuid.New(), uuid.New()
+	strangerID, teamB := uuid.New(), uuid.New()
+	repo := newFakeRepository()
+	channel := repo.seed(sampleChannel(t, teamA))
+	service := newTestService(t, repo)
+
+	for i := 0; i < 3; i++ {
+		if err := repo.CreateDelivery(context.Background(), Delivery{
+			ID:        uuid.New(),
+			ChannelID: channel.ID,
+			EventType: string(EventDeploySuccess),
+			Status:    DeliverySucceeded,
+			CreatedAt: time.Date(2026, 9, 29, 12, 0, i, 0, time.UTC),
+		}); err != nil {
+			t.Fatalf("CreateDelivery: %v", err)
+		}
+	}
+
+	views, err := service.ListDeliveries(scopedCtx(ownerID, teamA, teams.RoleReadOnly), ownerID, channel.ID)
+	if err != nil {
+		t.Fatalf("ListDeliveries (read_only): %v", err)
+	}
+	if len(views) != 3 {
+		t.Fatalf("views = %d, want 3", len(views))
+	}
+	newest := time.Date(2026, 9, 29, 12, 0, 2, 0, time.UTC)
+	if !views[0].CreatedAt.Equal(newest) {
+		t.Errorf("first view = %s, want the newest at %s", views[0].CreatedAt, newest)
+	}
+
+	if _, err := service.ListDeliveries(scopedCtx(strangerID, teamB, teams.RoleOwner), strangerID, channel.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("foreign history err = %v, want ErrNotFound", err)
+	}
+	if _, err := service.ListDeliveries(context.Background(), ownerID, uuid.New()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unknown channel err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestDeliveryHistoryIsBounded proves the repository caps a channel's history
+// at the retention limit.
+func TestDeliveryHistoryIsBounded(t *testing.T) {
+	repo := newFakeRepository()
+	channelID := uuid.New()
+	for i := 0; i < deliveryRetention+5; i++ {
+		if err := repo.CreateDelivery(context.Background(), Delivery{
+			ChannelID: channelID,
+			EventType: testEventType,
+			Status:    DeliverySucceeded,
+			CreatedAt: time.Now().UTC().Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("CreateDelivery: %v", err)
+		}
+	}
+	if got := len(repo.deliveriesFor(channelID)); got != deliveryRetention {
+		t.Errorf("history = %d rows, want the %d cap", got, deliveryRetention)
+	}
+}

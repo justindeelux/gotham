@@ -33,6 +33,12 @@
 # leaves GOTHAM_AGENT_CA unset, so the agent connects without TLS. Never use it
 # on a real node.
 #
+# --enrollment-token <token> supplies the bootstrap credential a node presents
+# on its first registration when the control plane sets
+# GOTHAM_GRPC_ENROLLMENT_TOKEN. It is written to agent.env as
+# GOTHAM_AGENT_ENROLLMENT_TOKEN (a secret: keep the file at its 0640 root-owned
+# mode). Omit it when the control plane has no enrollment token.
+#
 # Docker Engine and the compose plugin (which the agent shells out to) are
 # required at runtime but are NOT installed by default: pass --full (or set
 # GOTHAM_AGENT_FULL=1) to install them from the official Docker apt repository
@@ -43,7 +49,8 @@
 # localhost agent automatically.
 #
 # Usage:
-#   sudo ./install-agent.sh [--ca <path>] [--insecure] [--full] [--dry-run]
+#   sudo ./install-agent.sh [--ca <path>] [--enrollment-token <token>]
+#                           [--insecure] [--full] [--dry-run]
 #                           [--file-manager | --no-file-manager]
 #
 # Environment variables written to /etc/gotham/agent.env. A key left unset keeps
@@ -61,6 +68,7 @@
 #   GOTHAM_AGENT_AUTO_UPDATE
 #   GOTHAM_AGENT_UPDATE_INTERVAL
 #   GOTHAM_AGENT_UPDATE_CHANNEL
+#   GOTHAM_AGENT_ENROLLMENT_TOKEN  (set only with --enrollment-token; a secret)
 #   GOTHAM_AGENT_FILES         (true/false; written from the file-manager answer)
 #
 # File manager (remote file browser/editor in the web UI): the installer asks
@@ -129,6 +137,16 @@ while [ "$#" -gt 0 ]; do
             ;;
         --ca=*)
             CA_SOURCE="${1#--ca=}"
+            ;;
+        --enrollment-token)
+            [ "$#" -ge 2 ] || { echo "--enrollment-token requires a value" >&2; exit 2; }
+            GOTHAM_AGENT_ENROLLMENT_TOKEN="$2"
+            export GOTHAM_AGENT_ENROLLMENT_TOKEN
+            shift
+            ;;
+        --enrollment-token=*)
+            GOTHAM_AGENT_ENROLLMENT_TOKEN="${1#--enrollment-token=}"
+            export GOTHAM_AGENT_ENROLLMENT_TOKEN
             ;;
         -h | --help)
             # Print every leading comment line (the header), not a fixed range,

@@ -116,6 +116,12 @@ grpc:
   # plaintext when no CA is present. Without a CA serve refuses to start unless
   # this is true. Set from GOTHAM_GRPC_INSECURE=true.
   # insecure: false
+  # EnrollmentToken is the bootstrap credential a node presents on its first
+  # registration, before it holds a client certificate (JUS-194). When empty,
+  # first enrollment is trust-on-first-use and logged; set it on a real instance
+  # (and pass the same value to install-agent.sh --enrollment-token). Set from
+  # GOTHAM_GRPC_ENROLLMENT_TOKEN.
+  # enrollment_token: <random secret>
 
 # Certificate authority used to issue agent and control-plane mTLS certificates.
 # Without one, serve refuses to start unless GOTHAM_GRPC_INSECURE=true

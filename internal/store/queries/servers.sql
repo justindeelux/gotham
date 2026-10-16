@@ -81,6 +81,20 @@ SET os = EXCLUDED.os,
     updated_at = now()
 RETURNING *;
 
+-- name: SetServerAgentKey :one
+-- Binds a node's client key fingerprint, or confirms the presented one, and
+-- refuses any other key (JUS-194): the guarded UPDATE affects 0 rows (pgx
+-- ErrNoRows) when the node is already bound to a different key, so a stale read
+-- cannot let a reassigned node keep heartbeating. updated_at moves only when the
+-- value actually changes, so the per-heartbeat authorization check is a no-op
+-- write once the node is bound.
+UPDATE servers
+SET agent_key_fingerprint = $2,
+    updated_at = CASE WHEN agent_key_fingerprint IS DISTINCT FROM $2 THEN now() ELSE updated_at END
+WHERE id = $1
+  AND (agent_key_fingerprint IS NULL OR agent_key_fingerprint = $2)
+RETURNING *;
+
 -- name: ClaimServerByNodeID :one
 -- Claims an operator-created server row (node_id still NULL) whose address
 -- matches the registering node, so enrollment updates that existing row instead

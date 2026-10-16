@@ -108,15 +108,15 @@ func TestClientCredentials(t *testing.T) {
 		t.Fatalf("write CA: %v", err)
 	}
 
-	creds, dev, err := clientCredentials("")
+	creds, dev, err := clientCredentials("", "", "")
 	if err != nil || !dev || creds == nil {
 		t.Errorf("clientCredentials(empty) = (%v, %v, %v); want insecure dev creds", creds, dev, err)
 	}
-	creds, dev, err = clientCredentials(caPath)
+	creds, dev, err = clientCredentials(caPath, "", "")
 	if err != nil || dev || creds == nil {
 		t.Errorf("clientCredentials(ca) = (%v, %v, %v); want TLS creds", creds, dev, err)
 	}
-	if _, _, err := clientCredentials(filepath.Join(dir, "missing.pem")); err == nil {
+	if _, _, err := clientCredentials(filepath.Join(dir, "missing.pem"), "", ""); err == nil {
 		t.Error("clientCredentials(missing) = nil error; want error")
 	}
 }

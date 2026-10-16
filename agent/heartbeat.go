@@ -44,6 +44,9 @@ const (
 	// nodeIDMetadataKey carries the node identity on RPCs where the gateway
 	// cannot read it from a client certificate (the bootstrap connection).
 	nodeIDMetadataKey = "node-id"
+	// enrollmentTokenMetadataKey carries the bootstrap credential on the first
+	// Register, before the node holds a client certificate (JUS-194).
+	enrollmentTokenMetadataKey = "enrollment-token"
 )
 
 // Agent connects to the control plane, registers this node and streams
@@ -230,15 +233,31 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 			slog.String("node_id", a.cfg.NodeID),
 			slog.String("cp_version", response.GetCpVersion()),
 		)
+		newCert := false
 		if cert := response.GetCert(); len(cert) > 0 {
 			if _, err := SaveAgentCert(a.cfg.CertDir, cert); err != nil {
 				a.log.Warn("failed to persist agent certificate", "error", err)
+			} else {
+				newCert = true
 			}
 		}
 		if onRegister != nil {
 			if err := onRegister(response); err != nil {
 				return err
 			}
+		}
+		// A freshly issued certificate is presented on the next TLS handshake.
+		// Reconnect so this connection carries it: the bootstrap connection had
+		// no client certificate, and a renewed leaf must replace the old one the
+		// control plane no longer accepts for a stream.
+		if newCert {
+			_ = conn.Close()
+			conn, err = grpc.NewClient(a.cfg.CPAddr, options...)
+			if err != nil {
+				return fmt.Errorf("agent: dial control plane %s: %w", a.cfg.CPAddr, err)
+			}
+			client = agentv1.NewAgentServiceClient(conn)
+			updateClient = agentv1.NewUpdateServiceClient(conn)
 		}
 
 		// Run the current registration for a bounded session: when the issued
@@ -296,9 +315,14 @@ func (a *Agent) Run(ctx context.Context, onRegister func(*agentv1.RegisterRespon
 }
 
 // dialOptionsFor builds the gRPC dial options, including transport credentials
-// derived from Config.CA.
+// derived from Config.CA and the node certificate the agent presents as a
+// mutual-TLS client.
 func (a *Agent) dialOptionsFor() ([]grpc.DialOption, error) {
-	creds, dev, err := clientCredentials(a.cfg.CA)
+	certPath := ""
+	if a.cfg.CA != "" {
+		certPath = ClientCertPath(a.cfg.CertDir)
+	}
+	creds, dev, err := clientCredentials(a.cfg.CA, certPath, KeyPath(a.cfg.KeyFile, a.cfg.CertDir))
 	if err != nil {
 		return nil, err
 	}
@@ -310,10 +334,15 @@ func (a *Agent) dialOptionsFor() ([]grpc.DialOption, error) {
 }
 
 // register sends a single Register RPC bounded by the per-attempt deadline so
-// a stalled control plane cannot block the reconnect loop.
+// a stalled control plane cannot block the reconnect loop. The enrollment token,
+// when configured, rides along in metadata for the first (certificate-less)
+// registration.
 func (a *Agent) register(ctx context.Context, client agentv1.AgentServiceClient) (*agentv1.RegisterResponse, error) {
 	callCtx, cancel := context.WithTimeout(ctx, a.registerTimeout)
 	defer cancel()
+	if a.cfg.EnrollmentToken != "" {
+		callCtx = metadata.AppendToOutgoingContext(callCtx, enrollmentTokenMetadataKey, a.cfg.EnrollmentToken)
+	}
 	return client.Register(callCtx, a.registerRequest(callCtx))
 }
 

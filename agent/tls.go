@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -29,11 +30,16 @@ const (
 const selfSignedValidity = 365 * 24 * time.Hour
 
 // clientCredentials returns transport credentials that verify the CP server
-// certificate against the PEM bundle at caPath. An empty caPath returns
-// insecure credentials for local development; Config.Load only accepts an empty
-// CA when GOTHAM_AGENT_INSECURE=true, so this path is reachable only through the
+// certificate against the PEM bundle at caPath and present the node's own
+// certificate as a mutual-TLS client certificate (JUS-194) when certPath/keyPath
+// point at an existing pair. The pair is loaded on every handshake, so a
+// certificate renewed at re-registration takes effect without a restart; a
+// missing pair presents none, which is the one certificate-less bootstrap
+// connection. An empty caPath returns insecure credentials for local
+// development; Config.Load only accepts an empty CA when
+// GOTHAM_AGENT_INSECURE=true, so this path is reachable only through the
 // explicit development opt-in. It reports dev = true in that case.
-func clientCredentials(caPath string) (credentials.TransportCredentials, bool, error) {
+func clientCredentials(caPath, certPath, keyPath string) (credentials.TransportCredentials, bool, error) {
 	if caPath == "" {
 		return insecure.NewCredentials(), true, nil
 	}
@@ -41,7 +47,29 @@ func clientCredentials(caPath string) (credentials.TransportCredentials, bool, e
 	if err != nil {
 		return nil, false, err
 	}
-	return credentials.NewClientTLSFromCert(pool, ""), false, nil
+	config := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+	if certPath != "" && keyPath != "" {
+		config.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					// No certificate issued yet: present none so the control
+					// plane treats this as a bootstrap registration.
+					return &tls.Certificate{}, nil
+				}
+				return nil, fmt.Errorf("agent: load client keypair: %w", err)
+			}
+			return &pair, nil
+		}
+	}
+	return credentials.NewTLS(config), false, nil
+}
+
+// ClientCertPath returns the path of the node certificate the agent presents to
+// the control plane and serves its own listeners with: the file SaveAgentCert
+// writes.
+func ClientCertPath(certDir string) string {
+	return filepath.Join(certDir, certFileName)
 }
 
 // ServerCredentials builds credentials for the agent's DockerService server.

@@ -1091,6 +1091,63 @@ func (s *ServerService) unlockInstall(id uuid.UUID) {
 	s.installs.Delete(id)
 }
 
+// NodeKeyFingerprint returns the client key fingerprint bound to a node ("" when
+// none is bound yet) and whether the node is enrolled at all. It backs the
+// gateway's bootstrap decision: only a node that is not yet key-bound may enroll
+// without a client certificate.
+func (s *ServerService) NodeKeyFingerprint(ctx context.Context, nodeID string) (string, bool, error) {
+	row, err := s.store.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("lookup node key: %w", err)
+	}
+	if row.AgentKeyFingerprint == nil {
+		return "", true, nil
+	}
+	return *row.AgentKeyFingerprint, true, nil
+}
+
+// AuthorizeNodeKey checks the fingerprint of the client key an agent
+// authenticated with against the key bound to its node, binding the key on the
+// first authenticated use (a node enrolled before mutual TLS has no stored key —
+// the upgrade path) and refusing a different key thereafter (JUS-194). It returns
+// ErrNotFound for an unknown node and ErrConflict for a key that does not match,
+// so a rotated or reassigned node cannot keep acting as this node.
+func (s *ServerService) AuthorizeNodeKey(ctx context.Context, nodeID, fingerprint string) error {
+	if nodeID == "" {
+		return fmt.Errorf("%w: node id is required", ErrValidation)
+	}
+	if fingerprint == "" {
+		return fmt.Errorf("%w: node key fingerprint is required", ErrValidation)
+	}
+	row, err := s.store.GetServerByNodeID(ctx, &nodeID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lookup node key: %w", err)
+	}
+	if row.AgentKeyFingerprint != nil && *row.AgentKeyFingerprint == fingerprint {
+		return nil
+	}
+	if row.AgentKeyFingerprint != nil {
+		s.logger.Warn("servers: agent key does not match the enrolled node",
+			"node_id", nodeID, "server_id", row.ID.String())
+		return fmt.Errorf("%w: node is bound to a different agent key", ErrConflict)
+	}
+	if _, err := s.store.SetServerAgentKey(ctx, sqlc.SetServerAgentKeyParams{ID: row.ID, AgentKeyFingerprint: &fingerprint}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Bounded by a concurrent bind to a different key.
+			return fmt.Errorf("%w: node is bound to a different agent key", ErrConflict)
+		}
+		return fmt.Errorf("bind node key: %w", err)
+	}
+	s.logger.Info("servers: bound agent key to node", "node_id", nodeID, "server_id", row.ID.String())
+	return nil
+}
+
 // RegisterNode handles an agent Register call: it finds or creates the server
 // for the node, records the reported capabilities, and returns the CP version.
 //

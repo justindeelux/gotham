@@ -103,6 +103,7 @@ unset_agent_env() {
         GOTHAM_AGENT_CERT_DIR GOTHAM_AGENT_KEY GOTHAM_AGENT_DOCKER_SOCK \
         GOTHAM_AGENT_LOG_LEVEL GOTHAM_AGENT_AUTO_UPDATE \
         GOTHAM_AGENT_UPDATE_INTERVAL GOTHAM_AGENT_UPDATE_CHANNEL \
+        GOTHAM_AGENT_ENROLLMENT_TOKEN \
         GOTHAM_AGENT_CA GOTHAM_AGENT_INSECURE
 }
 unset_agent_env
@@ -331,7 +332,8 @@ for _key in \
     GOTHAM_AGENT_LOG_LEVEL \
     GOTHAM_AGENT_AUTO_UPDATE \
     GOTHAM_AGENT_UPDATE_INTERVAL \
-    GOTHAM_AGENT_UPDATE_CHANNEL; do
+    GOTHAM_AGENT_UPDATE_CHANNEL \
+    GOTHAM_AGENT_ENROLLMENT_TOKEN; do
     printf '%s' "${HELP_OUT}" | grep -q "${_key}" \
         || fail "--help does not document ${_key}"
 done
@@ -1247,6 +1249,7 @@ CC_BAD="$(printf 'ok\nGOTHAM_AGENT_INSECURE=true')"
 for _cckey in GOTHAM_AGENT_CERT_DIR GOTHAM_AGENT_KEY GOTHAM_AGENT_DOCKER_SOCK \
     GOTHAM_AGENT_LOG_LEVEL GOTHAM_AGENT_AUTO_UPDATE \
     GOTHAM_AGENT_UPDATE_INTERVAL GOTHAM_AGENT_UPDATE_CHANNEL \
+    GOTHAM_AGENT_ENROLLMENT_TOKEN \
     GOTHAM_AGENT_LISTEN_ADDR; do
     CC_KENV="${CC_DIR}/k-${_cckey}.env"
     printf 'GOTHAM_AGENT_CP_ADDR=cp.example.com:9443\nGOTHAM_AGENT_NODE_ID=node-ok\n' >"${CC_KENV}"
@@ -1335,7 +1338,11 @@ for _spec in 'GOTHAM_AGENT_LOG_LEVEL|verbose|reject' 'GOTHAM_AGENT_AUTO_UPDATE|m
     'GOTHAM_AGENT_UPDATE_INTERVAL|1µs|pass' \
     'GOTHAM_AGENT_UPDATE_INTERVAL|1μs|pass' \
     'GOTHAM_AGENT_UPDATE_CHANNEL|a b|reject' \
-    'GOTHAM_AGENT_UPDATE_CHANNEL|a/b|reject' 'GOTHAM_AGENT_LISTEN_ADDR|9443|reject' \
+    'GOTHAM_AGENT_UPDATE_CHANNEL|a/b|reject' \
+    'GOTHAM_AGENT_ENROLLMENT_TOKEN|s3cret-Enroll_token.1|pass' \
+    'GOTHAM_AGENT_ENROLLMENT_TOKEN|a b|reject' \
+    'GOTHAM_AGENT_ENROLLMENT_TOKEN|a=b|reject' \
+    'GOTHAM_AGENT_LISTEN_ADDR|9443|reject' \
     'GOTHAM_AGENT_LISTEN_ADDR|0.0.0.0: 9443|reject' \
     "GOTHAM_AGENT_LISTEN_ADDR|:94'43|reject" \
     'GOTHAM_AGENT_LISTEN_ADDR|:94"43|reject' \
@@ -1506,6 +1513,29 @@ _v1_must_fail() { # $1 key=value assignment, $2 key name
 _v1_must_fail "GOTHAM_AGENT_LOG_LEVEL=$(printf 'info\nGOTHAM_AGENT_INSECURE=true')" GOTHAM_AGENT_LOG_LEVEL
 _v1_must_fail "GOTHAM_AGENT_NODE_ID=bad id" GOTHAM_AGENT_NODE_ID
 _v1_must_fail "GOTHAM_AGENT_AUTO_UPDATE=yes" GOTHAM_AGENT_AUTO_UPDATE
+# The --enrollment-token flag (JUS-194) is validated like every other managed
+# key: a mangled secret fails before the first mutation, a clean one passes.
+if env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token "bad token" --dry-run >"${V1_DIR}/tok-bad.log" 2>&1; then
+    fail "V1: a direct run with a mangled --enrollment-token succeeded"
+fi
+grep -q 'GOTHAM_AGENT_ENROLLMENT_TOKEN' "${V1_DIR}/tok-bad.log" \
+    || fail "V1: the --enrollment-token rejection does not name the key"
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token "s3cret-Enroll_token.1" --dry-run >"${V1_DIR}/tok-good.log" 2>&1 \
+    || fail "V1: a valid --enrollment-token was rejected"
+# The flag's value must reach agent.env, not only the environment.
+V1_ENV="${V1_DIR}/flag.env"
+env GOTHAM_AGENT_ENROLLMENT_TOKEN="s3cret-Enroll_token.1" \
+    sh -c '. '"${SCRIPT_DIR}"'/install-agent-lib.sh; agent_env_write "'"${V1_ENV}"'" "/etc/gotham/ca.crt" 0' 2>/dev/null \
+    || fail "V1: writing the enrollment token failed"
+grep -qxF 'GOTHAM_AGENT_ENROLLMENT_TOKEN=s3cret-Enroll_token.1' "${V1_ENV}" \
+    || fail "V1: --enrollment-token did not reach agent.env"
+# A later install without the flag keeps the stored token (operator set it once).
+sh -c '. '"${SCRIPT_DIR}"'/install-agent-lib.sh; agent_env_write "'"${V1_ENV}"'" "/etc/gotham/ca.crt" 0' 2>/dev/null \
+    || fail "V1: re-writing without the token failed"
+grep -qxF 'GOTHAM_AGENT_ENROLLMENT_TOKEN=s3cret-Enroll_token.1' "${V1_ENV}" \
+    || fail "V1: a reinstall dropped the stored enrollment token"
 # Valid input still passes validation (no behaviour change for good values).
 GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test \
     TMPDIR="${V1_DIR}/tmp" \

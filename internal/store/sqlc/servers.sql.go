@@ -22,7 +22,7 @@ WHERE id = (
     LIMIT 1
     FOR UPDATE
 )
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type ClaimServerByNodeIDParams struct {
@@ -62,6 +62,7 @@ func (q *Queries) ClaimServerByNodeID(ctx context.Context, arg ClaimServerByNode
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -71,7 +72,7 @@ UPDATE servers
 SET host_key_fingerprint = NULL,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 // Forgets the pinned host key so the next validation re-pins it (operator reset
@@ -103,6 +104,7 @@ func (q *Queries) ClearServerHostKey(ctx context.Context, id pgtype.UUID) (Serve
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -110,7 +112,7 @@ func (q *Queries) ClearServerHostKey(ctx context.Context, id pgtype.UUID) (Serve
 const createServer = `-- name: CreateServer :one
 INSERT INTO servers (name, ip, port, ssh_user, ssh_key_id, team_id, encrypted_password)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type CreateServerParams struct {
@@ -158,6 +160,7 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -172,7 +175,7 @@ func (q *Queries) DeleteServer(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getServerByID = `-- name: GetServerByID :one
-SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password FROM servers WHERE id = $1
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint FROM servers WHERE id = $1
 `
 
 func (q *Queries) GetServerByID(ctx context.Context, id pgtype.UUID) (Server, error) {
@@ -202,12 +205,13 @@ func (q *Queries) GetServerByID(ctx context.Context, id pgtype.UUID) (Server, er
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
 
 const getServerByIDForUpdate = `-- name: GetServerByIDForUpdate :one
-SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password FROM servers WHERE id = $1 FOR UPDATE
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint FROM servers WHERE id = $1 FOR UPDATE
 `
 
 // Locks the node row for a PATCH edit (Update): the service re-reads under
@@ -241,12 +245,13 @@ func (q *Queries) GetServerByIDForUpdate(ctx context.Context, id pgtype.UUID) (S
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
 
 const getServerByNodeID = `-- name: GetServerByNodeID :one
-SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password FROM servers WHERE node_id = $1
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint FROM servers WHERE node_id = $1
 `
 
 func (q *Queries) GetServerByNodeID(ctx context.Context, nodeID *string) (Server, error) {
@@ -276,12 +281,13 @@ func (q *Queries) GetServerByNodeID(ctx context.Context, nodeID *string) (Server
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
 
 const listServers = `-- name: ListServers :many
-SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password FROM servers ORDER BY created_at DESC, id DESC
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint FROM servers ORDER BY created_at DESC, id DESC
 `
 
 func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
@@ -317,6 +323,7 @@ func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
 			&i.TeamID,
 			&i.HostKeyFingerprint,
 			&i.EncryptedPassword,
+			&i.AgentKeyFingerprint,
 		); err != nil {
 			return nil, err
 		}
@@ -329,7 +336,7 @@ func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
 }
 
 const listServersByTeam = `-- name: ListServersByTeam :many
-SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password FROM servers
+SELECT id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint FROM servers
 WHERE team_id = $1 OR team_id IS NULL
 ORDER BY created_at DESC, id DESC
 `
@@ -369,6 +376,7 @@ func (q *Queries) ListServersByTeam(ctx context.Context, teamID pgtype.UUID) ([]
 			&i.TeamID,
 			&i.HostKeyFingerprint,
 			&i.EncryptedPassword,
+			&i.AgentKeyFingerprint,
 		); err != nil {
 			return nil, err
 		}
@@ -400,7 +408,7 @@ UPDATE servers
 SET host_key_fingerprint = $2,
     updated_at = now()
 WHERE id = $1 AND host_key_fingerprint IS NULL
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type PinServerHostKeyParams struct {
@@ -439,6 +447,7 @@ func (q *Queries) PinServerHostKey(ctx context.Context, arg PinServerHostKeyPara
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -453,7 +462,7 @@ WHERE id = $1 AND host_key_fingerprint IS NULL
   AND ssh_user = $5
   AND ssh_key_id IS NOT DISTINCT FROM $6
   AND encrypted_password IS NOT DISTINCT FROM $7
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type PinServerHostKeyGuardedParams struct {
@@ -508,6 +517,59 @@ func (q *Queries) PinServerHostKeyGuarded(ctx context.Context, arg PinServerHost
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
+	)
+	return i, err
+}
+
+const setServerAgentKey = `-- name: SetServerAgentKey :one
+UPDATE servers
+SET agent_key_fingerprint = $2,
+    updated_at = CASE WHEN agent_key_fingerprint IS DISTINCT FROM $2 THEN now() ELSE updated_at END
+WHERE id = $1
+  AND (agent_key_fingerprint IS NULL OR agent_key_fingerprint = $2)
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
+`
+
+type SetServerAgentKeyParams struct {
+	ID                  pgtype.UUID `json:"id"`
+	AgentKeyFingerprint *string     `json:"agent_key_fingerprint"`
+}
+
+// Binds a node's client key fingerprint, or confirms the presented one, and
+// refuses any other key (JUS-194): the guarded UPDATE affects 0 rows (pgx
+// ErrNoRows) when the node is already bound to a different key, so a stale read
+// cannot let a reassigned node keep heartbeating. updated_at moves only when the
+// value actually changes, so the per-heartbeat authorization check is a no-op
+// write once the node is bound.
+func (q *Queries) SetServerAgentKey(ctx context.Context, arg SetServerAgentKeyParams) (Server, error) {
+	row := q.db.QueryRow(ctx, setServerAgentKey, arg.ID, arg.AgentKeyFingerprint)
+	var i Server
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Ip,
+		&i.Port,
+		&i.SshUser,
+		&i.SshKeyID,
+		&i.Status,
+		&i.NodeID,
+		&i.Os,
+		&i.DockerVersion,
+		&i.Arch,
+		&i.TotalMem,
+		&i.TotalDisk,
+		&i.CpuUsage,
+		&i.MemUsage,
+		&i.DiskUsage,
+		&i.ContainerCount,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TeamID,
+		&i.HostKeyFingerprint,
+		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -517,7 +579,7 @@ UPDATE servers
 SET status = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type SetServerStatusParams struct {
@@ -552,6 +614,7 @@ func (q *Queries) SetServerStatus(ctx context.Context, arg SetServerStatusParams
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -565,7 +628,7 @@ SET status = CASE
     END,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type SetServerStatusAfterValidationParams struct {
@@ -607,6 +670,7 @@ func (q *Queries) SetServerStatusAfterValidation(ctx context.Context, arg SetSer
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -625,7 +689,7 @@ WHERE id = $1
   AND ssh_user = $5
   AND ssh_key_id IS NOT DISTINCT FROM $6
   AND encrypted_password IS NOT DISTINCT FROM $7
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type SetServerStatusAfterValidationGuardedParams struct {
@@ -680,6 +744,7 @@ func (q *Queries) SetServerStatusAfterValidationGuarded(ctx context.Context, arg
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -694,7 +759,7 @@ WHERE id = $1
   AND ssh_user = $5
   AND ssh_key_id IS NOT DISTINCT FROM $6
   AND encrypted_password IS NOT DISTINCT FROM $7
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type SetServerStatusGuardedParams struct {
@@ -746,6 +811,7 @@ func (q *Queries) SetServerStatusGuarded(ctx context.Context, arg SetServerStatu
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -762,7 +828,7 @@ SET name = $2,
     status = $9,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type UpdateServerParams struct {
@@ -819,6 +885,7 @@ func (q *Queries) UpdateServer(ctx context.Context, arg UpdateServerParams) (Ser
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -833,7 +900,7 @@ SET node_id = $2,
     total_disk = $7,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type UpdateServerAgentInfoParams struct {
@@ -885,6 +952,7 @@ func (q *Queries) UpdateServerAgentInfo(ctx context.Context, arg UpdateServerAge
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -904,7 +972,7 @@ WHERE id = $1
   AND ssh_user = $10
   AND ssh_key_id IS NOT DISTINCT FROM $11
   AND encrypted_password IS NOT DISTINCT FROM $12
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type UpdateServerAgentInfoGuardedParams struct {
@@ -966,6 +1034,7 @@ func (q *Queries) UpdateServerAgentInfoGuarded(ctx context.Context, arg UpdateSe
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -980,7 +1049,7 @@ SET cpu_usage = $2,
     last_seen = now(),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type UpdateServerMetricsParams struct {
@@ -1024,6 +1093,7 @@ func (q *Queries) UpdateServerMetrics(ctx context.Context, arg UpdateServerMetri
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }
@@ -1038,7 +1108,7 @@ SET os = EXCLUDED.os,
     total_mem = EXCLUDED.total_mem,
     total_disk = EXCLUDED.total_disk,
     updated_at = now()
-RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password
+RETURNING id, name, ip, port, ssh_user, ssh_key_id, status, node_id, os, docker_version, arch, total_mem, total_disk, cpu_usage, mem_usage, disk_usage, container_count, last_seen, created_at, updated_at, team_id, host_key_fingerprint, encrypted_password, agent_key_fingerprint
 `
 
 type UpsertServerByNodeIDParams struct {
@@ -1095,6 +1165,7 @@ func (q *Queries) UpsertServerByNodeID(ctx context.Context, arg UpsertServerByNo
 		&i.TeamID,
 		&i.HostKeyFingerprint,
 		&i.EncryptedPassword,
+		&i.AgentKeyFingerprint,
 	)
 	return i, err
 }

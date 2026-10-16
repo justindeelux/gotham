@@ -180,12 +180,21 @@ func runServe() int {
 		logger.Info("gRPC listener certificate hosts", "hosts", grpcHosts)
 	}
 
+	// Mutual TLS (JUS-194): agents authenticate to the gateway with a per-node
+	// certificate, and a node's first-ever enrollment needs the bootstrap
+	// credential when one is configured. Without it that one enrollment is
+	// trust-on-first-use and logged by the gateway.
+	if authority != nil && snap.GRPC.EnrollmentToken == "" {
+		logger.Warn("no GOTHAM_GRPC_ENROLLMENT_TOKEN configured; a node's first-ever registration is trust-on-first-use " +
+			"(subsequent registrations, heartbeats and streams still require a per-node certificate)")
+	}
 	gateway, err := servers.NewGateway(servers.GatewayConfig{
-		Addr:      snap.GRPC.Addr,
-		Authority: authority,
-		Service:   serverService,
-		Logger:    logger,
-		Hosts:     grpcHosts,
+		Addr:            snap.GRPC.Addr,
+		Authority:       authority,
+		Service:         serverService,
+		Logger:          logger,
+		Hosts:           grpcHosts,
+		EnrollmentToken: snap.GRPC.EnrollmentToken,
 	})
 	if err != nil {
 		logger.Error("failed to create grpc gateway", "error", err)

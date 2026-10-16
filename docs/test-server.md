@@ -422,7 +422,12 @@ repeated against this shared box's CP/agent yet.
 - Development mode: when there is no CA (empty `GOTHAM_CA_DIR`), the control
   plane refuses to start unless `GOTHAM_GRPC_INSECURE=true`, and the agent
   unless `GOTHAM_AGENT_INSECURE=true`; both then dial/serve plaintext. As soon
-  as a CA exists, registration issues certificates and both sides use mTLS.
+  as a CA exists, registration issues a node certificate and both sides use
+  mutual TLS (JUS-194): the agent presents that certificate on every later
+  connection. A node's first registration has no certificate yet, so on a TLS
+  install set `GOTHAM_GRPC_ENROLLMENT_TOKEN` on the control plane and pass
+  `--enrollment-token <token>` to `install-agent.sh`; the plaintext dev box above
+  needs neither.
 - Go toolchain: install a Go release matching `go.mod` before `make build`.
 - Ports used on this host: 8000 (CP HTTP), 9442 (CP gRPC), 9443 (agent
   DockerService), 5432 (Postgres), 6379 (Redis).

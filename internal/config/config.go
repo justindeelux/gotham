@@ -50,8 +50,13 @@ const (
 	EnvGRPCAddr     = "GOTHAM_GRPC_ADDR"
 	EnvGRPCHosts    = "GOTHAM_GRPC_HOSTS"
 	EnvGRPCInsecure = "GOTHAM_GRPC_INSECURE"
-	EnvCADir        = "GOTHAM_CA_DIR"
-	EnvSecretKey    = "GOTHAM_SECRET_KEY"
+	// EnvGRPCEnrollmentToken is the bootstrap credential (JUS-194) a node must
+	// present on its first-ever registration, before it holds a client
+	// certificate. When unset, first enrollment is trust-on-first-use and
+	// logged; set it on a production instance.
+	EnvGRPCEnrollmentToken = "GOTHAM_GRPC_ENROLLMENT_TOKEN"
+	EnvCADir               = "GOTHAM_CA_DIR"
+	EnvSecretKey           = "GOTHAM_SECRET_KEY"
 
 	// EnvDeployGitAllowPrivateHosts lifts the git SSRF host policy for
 	// RFC1918, ULA and loopback remotes (self-hosted git servers). Default
@@ -127,6 +132,11 @@ type GRPC struct {
 	// and without this flag, serve refuses to start the agent channel in
 	// plaintext. Set from GOTHAM_GRPC_INSECURE=true.
 	Insecure bool `mapstructure:"insecure"`
+	// EnrollmentToken is the bootstrap credential a node must present on its
+	// first-ever registration (JUS-194), before it holds a client certificate.
+	// Empty leaves first enrollment trust-on-first-use, which is logged. Set
+	// from GOTHAM_GRPC_ENROLLMENT_TOKEN.
+	EnrollmentToken string `mapstructure:"enrollment_token"`
 }
 
 // CA holds the certificate authority settings.
@@ -347,6 +357,7 @@ func newViper() *viper.Viper {
 		"grpc.addr":                      EnvGRPCAddr,
 		"grpc.hosts":                     EnvGRPCHosts,
 		"grpc.insecure":                  EnvGRPCInsecure,
+		"grpc.enrollment_token":          EnvGRPCEnrollmentToken,
 		"ca.dir":                         EnvCADir,
 		"secret_key":                     EnvSecretKey,
 		"deploy.git_allow_private_hosts": EnvDeployGitAllowPrivateHosts,

@@ -15,16 +15,17 @@ import (
 
 // Environment variables understood by the agent.
 const (
-	envCPAddr      = "GOTHAM_AGENT_CP_ADDR"
-	envNodeID      = "GOTHAM_AGENT_NODE_ID"
-	envListenAddr  = "GOTHAM_AGENT_LISTEN_ADDR"
-	envCA          = "GOTHAM_AGENT_CA"
-	envCertDir     = "GOTHAM_AGENT_CERT_DIR"
-	envKey         = "GOTHAM_AGENT_KEY"
-	envInsecure    = "GOTHAM_AGENT_INSECURE"
-	envDockerSock  = "GOTHAM_AGENT_DOCKER_SOCK"
-	envComposeRoot = "GOTHAM_AGENT_COMPOSE_ROOT"
-	envLogLevel    = "GOTHAM_AGENT_LOG_LEVEL"
+	envCPAddr          = "GOTHAM_AGENT_CP_ADDR"
+	envNodeID          = "GOTHAM_AGENT_NODE_ID"
+	envListenAddr      = "GOTHAM_AGENT_LISTEN_ADDR"
+	envCA              = "GOTHAM_AGENT_CA"
+	envCertDir         = "GOTHAM_AGENT_CERT_DIR"
+	envKey             = "GOTHAM_AGENT_KEY"
+	envInsecure        = "GOTHAM_AGENT_INSECURE"
+	envEnrollmentToken = "GOTHAM_AGENT_ENROLLMENT_TOKEN"
+	envDockerSock      = "GOTHAM_AGENT_DOCKER_SOCK"
+	envComposeRoot     = "GOTHAM_AGENT_COMPOSE_ROOT"
+	envLogLevel        = "GOTHAM_AGENT_LOG_LEVEL"
 
 	envManagedVolumeRoot = "GOTHAM_AGENT_MANAGED_VOLUME_ROOT"
 	// envSharedManagedVolumeRoot lets a node reuse the control plane's root
@@ -142,6 +143,11 @@ type Config struct {
 	// it allows plaintext and requires the listener to stay on loopback. It is
 	// set from GOTHAM_AGENT_INSECURE=true; there is no implicit plaintext path.
 	Insecure bool
+	// EnrollmentToken is the bootstrap credential presented on the node's
+	// first-ever Register, before it holds a client certificate. Set from
+	// GOTHAM_AGENT_ENROLLMENT_TOKEN; needed only when the control plane sets
+	// GOTHAM_GRPC_ENROLLMENT_TOKEN. It is a secret: never logged.
+	EnrollmentToken string
 	// CertDir stores the certificate and private key received or generated at
 	// registration.
 	CertDir string
@@ -225,16 +231,18 @@ type Config struct {
 // used, such as an invalid CP address or log level.
 func Load() (Config, error) {
 	cfg := Config{
-		CPAddr:      envOr(envCPAddr, defaultCPAddr),
-		NodeID:      envOr(envNodeID, "localhost"),
-		ListenAddr:  envOr(envListenAddr, defaultListenAddr),
-		CA:          os.Getenv(envCA),
-		Insecure:    strings.EqualFold(strings.TrimSpace(os.Getenv(envInsecure)), "true"),
-		CertDir:     envOr(envCertDir, defaultCertDir),
-		KeyFile:     os.Getenv(envKey),
-		DockerSock:  dockerSock(),
-		ComposeRoot: envOr(envComposeRoot, defaultComposeRoot),
-		LogLevel:    envOr(envLogLevel, defaultLogLevel),
+		CPAddr:     envOr(envCPAddr, defaultCPAddr),
+		NodeID:     envOr(envNodeID, "localhost"),
+		ListenAddr: envOr(envListenAddr, defaultListenAddr),
+		CA:         os.Getenv(envCA),
+		Insecure:   strings.EqualFold(strings.TrimSpace(os.Getenv(envInsecure)), "true"),
+
+		EnrollmentToken: strings.TrimSpace(os.Getenv(envEnrollmentToken)),
+		CertDir:         envOr(envCertDir, defaultCertDir),
+		KeyFile:         os.Getenv(envKey),
+		DockerSock:      dockerSock(),
+		ComposeRoot:     envOr(envComposeRoot, defaultComposeRoot),
+		LogLevel:        envOr(envLogLevel, defaultLogLevel),
 
 		ManagedVolumeRoot: envOr(envManagedVolumeRoot, envOr(envSharedManagedVolumeRoot, defaultManagedVolumeRoot)),
 

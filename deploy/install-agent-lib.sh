@@ -225,6 +225,23 @@ _env_check_value() {
                     ;;
             esac
             ;;
+        GOTHAM_AGENT_ENROLLMENT_TOKEN)
+            # The bootstrap credential for a node's first registration (JUS-194).
+            # It is opaque, but it must survive systemd's EnvironmentFile parse
+            # unchanged: no whitespace, quotes, backslash or '=' (an unquoted
+            # value would be mangled), and it is bounded so an accidental paste
+            # of a whole file fails instead of being written.
+            if [ "${#_ck_value}" -gt 512 ]; then
+                echo "install-agent.sh: ${_ck_key} exceeds 512 bytes (got ${#_ck_value})" >&2
+                return 1
+            fi
+            case "${_ck_value}" in
+                *" "* | *"$_ck_tab"* | *"'"* | *'"'* | *\\* | *=*)
+                    echo "install-agent.sh: ${_ck_key} must not contain whitespace, quotes, backslashes or = (got '${_ck_value}')" >&2
+                    return 1
+                    ;;
+            esac
+            ;;
         GOTHAM_AGENT_LOG_LEVEL)
             _ck_norm="$(printf '%s' "${_ck_value}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
             case "${_ck_norm}" in
@@ -402,6 +419,7 @@ agent_env_validate() (
         GOTHAM_AGENT_AUTO_UPDATE \
         GOTHAM_AGENT_UPDATE_INTERVAL \
         GOTHAM_AGENT_UPDATE_CHANNEL \
+        GOTHAM_AGENT_ENROLLMENT_TOKEN \
         GOTHAM_AGENT_FILES; do
         _v_val="$(_v_value "${_v_key}")"
         _env_check_value "${_v_key}" "${_v_val}" || exit 1
@@ -552,6 +570,7 @@ agent_env_write() {
             GOTHAM_AGENT_AUTO_UPDATE \
             GOTHAM_AGENT_UPDATE_INTERVAL \
             GOTHAM_AGENT_UPDATE_CHANNEL \
+            GOTHAM_AGENT_ENROLLMENT_TOKEN \
             GOTHAM_AGENT_FILES; do
             _value="$(_env_value "${_key}")"
             if [ -n "${_value}" ]; then
@@ -576,7 +595,7 @@ agent_env_write() {
         # else aborts rather than silently dropping operator settings.
         _filter_status=0
         _preserved=$(printf '%s\n' "${_env_prev}" \
-            | grep -v -E '^[[:space:]]*GOTHAM_AGENT_(CP_ADDR|NODE_ID|LISTEN_ADDR|CERT_DIR|KEY|DOCKER_SOCK|LOG_LEVEL|AUTO_UPDATE|UPDATE_INTERVAL|UPDATE_CHANNEL|FILES|CA|INSECURE)=') \
+            | grep -v -E '^[[:space:]]*GOTHAM_AGENT_(CP_ADDR|NODE_ID|LISTEN_ADDR|CERT_DIR|KEY|DOCKER_SOCK|LOG_LEVEL|AUTO_UPDATE|UPDATE_INTERVAL|UPDATE_CHANNEL|ENROLLMENT_TOKEN|FILES|CA|INSECURE)=') \
             || _filter_status=$?
         case "${_filter_status}" in
             0) ;;

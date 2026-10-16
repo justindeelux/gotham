@@ -5,8 +5,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -179,9 +181,17 @@ func (a *Authority) Pool() *x509.CertPool {
 	return pool
 }
 
+// nodeCertUsages is the extended key usage of a node identity certificate. One
+// leaf serves both directions of the agent channel: the control plane dials the
+// node as a server (Docker/Compose/File/Build services) and, since JUS-194, the
+// node dials the control plane as a mutual-TLS client.
+var nodeCertUsages = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+
 // IssueAgentCertFromCSR verifies a PEM-encoded PKCS#10 CSR, checks that it is
-// bound to the enrolled node identity, and issues a server-auth certificate
-// (90 days) for the public key it carries.
+// bound to the enrolled node identity, and issues a mutual-TLS certificate
+// (90 days) for the public key it carries: serverAuth so the control plane can
+// dial the node's services, clientAuth so the node authenticates to the agent
+// channel.
 //
 // The certificate is issued for nodeID — the authenticated identity — and
 // never for the CSR's self-asserted SAN set: the CSR supplies only the public
@@ -214,11 +224,56 @@ func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte, nodeID string) ([]byte,
 		// The agent must never receive a SAN accepted for the CP loopback listener.
 		dns = []string{localhostAgentServerName}
 	}
-	cert, err := a.sign(nodeID, dns, ips, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, agentCertValidity, csr.PublicKey)
+	cert, err := a.sign(nodeID, dns, ips, nodeCertUsages, agentCertValidity, csr.PublicKey)
 	if err != nil {
 		return nil, err
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}), nil
+}
+
+// VerifyNodeClientCert verifies a certificate an agent presented on the mutual-
+// TLS agent channel: it must chain to this authority, be inside its validity
+// window and not be a CA. The extended key usage is deliberately NOT constrained
+// (x509.ExtKeyUsageAny): a leaf issued before mutual TLS carries only serverAuth
+// and the upgrade path must keep accepting it until the node renews.
+func (a *Authority) VerifyNodeClientCert(cert *x509.Certificate) error {
+	if cert == nil {
+		return errors.New("servers: no client certificate presented")
+	}
+	if cert.IsCA {
+		return errors.New("servers: a CA certificate is not a node credential")
+	}
+	if _, err := cert.Verify(x509.VerifyOptions{
+		Roots:     a.Pool(),
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}); err != nil {
+		return fmt.Errorf("servers: node certificate: %w", err)
+	}
+	return nil
+}
+
+// NodeKeyFingerprint returns a stable fingerprint of a public key (the SHA-256
+// of its PKIX encoding, hex). The control plane records it to bind an enrolled
+// node to exactly one key pair, so a certificate for another node's key can
+// never act as this node.
+func NodeKeyFingerprint(pub crypto.PublicKey) (string, error) {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return "", fmt.Errorf("marshal public key: %w", err)
+	}
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// CSRKeyFingerprint returns the fingerprint of the public key a PEM CSR carries,
+// so registration can check that a renewal signs for the same key the node
+// already authenticated with.
+func CSRKeyFingerprint(csrPEM []byte) (string, error) {
+	csr, err := parseCSR(csrPEM)
+	if err != nil {
+		return "", err
+	}
+	return NodeKeyFingerprint(csr.PublicKey)
 }
 
 // validateNodeID rejects node identities that are unusable or hostile: empty,

@@ -84,13 +84,50 @@ closed and refuses to update rather than running unserialized.
 which writes `ca.crt` + `ca.key` (`0600`) into `GOTHAM_CA_DIR`
 (`/var/lib/gotham/ca`, owned by the `gotham` service user) and is idempotent — a
 reinstall keeps the existing CA. `gotham serve` loads it and the gRPC gateway
-runs TLS, presenting a server certificate signed by the CA and accepting a client
-certificate when one is presented. A directory holding exactly one of
-`ca.crt`/`ca.key` is an **incomplete CA** and is refused at startup rather than
-silently downgraded to plaintext, and a `ca.key` readable by group or others is
-refused too (it signs every agent certificate). With no CA at all, serve refuses
-to start unless the operator sets `GOTHAM_GRPC_INSECURE=true` (development only);
-only then does the gateway run plaintext and log a warning.
+runs TLS, presenting a server certificate signed by the CA and **requiring** the
+agent to authenticate with the node certificate issued at enrollment (JUS-194).
+A directory holding exactly one of `ca.crt`/`ca.key` is an **incomplete CA** and
+is refused at startup rather than silently downgraded to plaintext, and a
+`ca.key` readable by group or others is refused too (it signs every agent
+certificate). With no CA at all, serve refuses to start unless the operator sets
+`GOTHAM_GRPC_INSECURE=true` (development only); only then does the gateway run
+plaintext and log a warning.
+
+### Mutual TLS: enrollment and the enrollment token
+
+The agent generates a key, sends a CSR on `Register`, and receives a node leaf
+with both `serverAuth` (the CP dials the node's services) and `clientAuth` (the
+node authenticates to the agent channel). It presents that leaf on every
+subsequent connection. The gateway binds the leaf to the node: the certificate
+identity must equal the claimed `node-id`, and its public key must be the key
+recorded for that node (bound on the first authenticated connection), so a
+certificate for node A cannot act as node B, a foreign, expired or CA certificate
+is refused, and removing or re-keying a node closes its live stream.
+
+A node's **first ever** registration carries no certificate. It is gated by
+`GOTHAM_GRPC_ENROLLMENT_TOKEN`: set it on the control plane and pass the same
+value to the installer.
+
+```sh
+# control plane (service environment or gotham.yaml: grpc.enrollment_token)
+GOTHAM_GRPC_ENROLLMENT_TOKEN=<random-secret>
+# each node
+sudo deploy/install-agent.sh --ca ./ca.crt --enrollment-token <random-secret>
+```
+
+With no token configured the first enrollment is trust-on-first-use (TLS + CSR +
+CA, no caller authentication) and the control plane logs it loudly; set the token
+on a real instance. Only the first enrollment needs it — every later `Register`,
+`Heartbeat` and `RequestUpdate` requires the node certificate.
+
+**Upgrading an already-enrolled node.** Nodes enrolled before mutual TLS hold a
+`serverAuth`-only leaf. The gateway keeps accepting it (the extended key usage is
+not constrained) and binds its key on the first authenticated connection, so an
+existing node keeps working with no operator action; it receives a dual-EKU leaf
+on its next renewal. The node key and leaf live in `GOTHAM_AGENT_CERT_DIR` and are
+untouched by a self-update, so an update cannot brick an enrolled agent. A node
+whose key cannot be proven (for example its registry row was deleted) must be
+re-enrolled — with `--enrollment-token` when the control plane requires one.
 
 The listener certificate SANs are the operator-declared hosts
 (`install.sh --cp-host <name-or-ip>` repeated, or `GOTHAM_GRPC_HOSTS=<a,b>`)
@@ -160,8 +197,9 @@ listener identities and aliases stay reserved. Its server certificate uses
 `localhost.agent.gotham.invalid`, verified by the CP on its local-agent dial,
 instead of any CP listener SAN. Enrollment rejects a configuration that also
 assigns that SAN to the CP. The Git remote host policy
-is independent of node identity validation. First registration still uses
-server-authenticated TLS (see "The agent channel is not mutual yet" below).
+is independent of node identity validation. A node's first registration is the
+one certificate-less connection and is gated by the enrollment token (see
+"Mutual TLS" above); every later connection presents the node certificate.
 An agent install failure leaves the control plane running and exits nonzero
 with a shell-quoted agent-only retry command.
 
@@ -431,12 +469,15 @@ the body).
   newer stable release; stable nodes still never see prereleases and the
   offer→manifest channel binding stays enforced (`internal/updates/checker.go`,
   `agent/updater.go`).
-- **The agent channel is not mutual yet (LOW-4).** The gRPC listener uses
-  `VerifyClientCertIfGiven`, so any peer that can reach the port can ask for
-  (signed) update offers and force cached release lookups. The agent verifies the
-  control plane; the control plane does not yet verify a client certificate.
-  Making the channel mutual waits on the registration bootstrap acquiring a
-  client credential.
+- **The agent channel is mutual (LOW-4, JUS-194) — resolved.** The TLS listener
+  requires a client certificate and the gateway verifies it per RPC: identity must
+  match the claimed node id and the key must match the key bound to the node, for
+  `Register`, `Heartbeat` (re-checked per message) and `RequestUpdate`. Removing
+  or re-keying a node invalidates the credential and closes its live stream.
+  Residuals: a first-ever enrollment without `GOTHAM_GRPC_ENROLLMENT_TOKEN` is
+  trust-on-first-use (logged); there is no CRL/serial set, so revocation is
+  key-based (delete/rotate) plus the 90-day leaf; and the per-IP limiter stays
+  keyed per peer IP (agents behind one NAT share a bucket). See "Mutual TLS" above.
 - **Key ring shipped; remote revocation of a compromised key still needs
   upgrades (R1, residual).** Every release binary now embeds the current plus an
   optional pre-positioned next key (`updatecore.NextPublicKey`), verifies
@@ -901,9 +942,10 @@ sudo deploy/install-toolctl-sudoers.sh gotham-agent
   equal/older versions, and never trust metadata for the digest.
 - Bind an offered artifact to its **family** (agent vs control plane) and channel; an
   empty channel must not skip the check.
-- Agent→CP registration has no bootstrap credential yet, so that direction is
-  server-authenticated TLS — document it instead of claiming mTLS; the node-control
-  listener can and should require client certs (mutual) once a CA exists.
+- Agent→CP registration is mutual (JUS-194): the agent presents the node leaf the
+  CP issued at enrollment and the gateway verifies it per RPC, binding the
+  certificate identity and key to the node; the node-control listener requires
+  client certs when a CA exists.
 - Creating the CA must be part of the install (the serve path only *loads* it), and the
   certificate SANs must include the address agents actually dial, not just loopback.
 

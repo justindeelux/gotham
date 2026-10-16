@@ -471,6 +471,13 @@ func (s *Store) GetServerByNodeID(ctx context.Context, nodeID *string) (sqlc.Ser
 	return s.queries.GetServerByNodeID(ctx, nodeID)
 }
 
+// SetServerAgentKey binds (or confirms) the client key fingerprint a node
+// authenticated with (JUS-194). It answers pgx.ErrNoRows when the node is bound
+// to a different key, so a reassigned node cannot keep authenticating.
+func (s *Store) SetServerAgentKey(ctx context.Context, params sqlc.SetServerAgentKeyParams) (sqlc.Server, error) {
+	return s.queries.SetServerAgentKey(ctx, params)
+}
+
 // UpsertServerByNodeID inserts or refreshes the node registered under its node
 // id and returns the single canonical row. Concurrent registrations of the same
 // node converge through the node_id unique constraint instead of duplicating.

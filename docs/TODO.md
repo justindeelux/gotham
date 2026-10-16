@@ -29,25 +29,30 @@ and the real agent rollout from the GitHub CDN are proven.
 
 ## Security / design decisions
 
-- [ ] **LOW-4 agent channel not mutual.** The gRPC listener accepts any peer
-  (`VerifyClientCertIfGiven`); mutual TLS waits on the registration bootstrap
-  acquiring a client credential. No bootstrap credential exists yet — the
-  remaining owner/design decision, not a polishing task. Residuals that still
-  need it (details: `deploy/README.md` → Known residuals):
-  - **Every** bootstrap Register/heartbeat is self-asserted (metadata
-    `node-id`); a caller can impersonate any enrolled node id at any time.
-  - **CP-impersonation.** An unauthenticated peer can enroll any node id and
-    receive a CA-signed `serverAuth` certificate. The short-term guard (FX-3 R1)
-    refuses the CP's own listener ids (`serverHosts`) at Register; the real fix
-    is a role-separated CA or a bootstrap credential binding the caller to the
-    identity.
-  - **Revocation absent.** No CRL/OCSP or revoked-serial set at agent-dial time;
-    mitigated by the 90-day agent leaf and early renewal.
+- [x] **LOW-4 agent channel is now mutual (JUS-194 / #327).** The TLS listener
+  requests a client certificate and the gateway verifies it per RPC: the agent
+  presents the node leaf issued at enrollment (`ExtKeyUsage{serverAuth,
+  clientAuth}`), the identity must match the claimed node id, and the presented
+  key must match the key bound to the node. Register, Heartbeat (re-checked on
+  every message) and RequestUpdate all require it; removing or re-keying a node
+  invalidates the credential and closes its live stream. First-ever enrollment is
+  the one certificate-less registration and is gated by
+  `GOTHAM_GRPC_ENROLLMENT_TOKEN` when configured. Details and the upgrade path:
+  `deploy/README.md` → Known residuals.
+  - **Residual: first enrollment is trust-on-first-use without a token.** With no
+    `GOTHAM_GRPC_ENROLLMENT_TOKEN`, a caller that can reach the listener may
+    enroll an unused node id (TLS + CSR + CA, no caller authentication); the CP
+    logs it loudly, and every later RPC still needs the node's key. Set the token
+    on a real instance. A per-node, single-use enrollment token surfaced in the
+    add-server wizard would close it (future work).
+  - **Residual: no CRL/serial set.** Revocation is key-based (delete the node or
+    rotate its key) plus the 90-day leaf; a superseded leaf of the *same* key
+    stays valid until it expires.
   - **Per-IP limiter keying.** Register/heartbeat limits are keyed per peer IP;
     agents behind one NAT/egress IP share a bucket.
-  - **Unknown-node Register rows.** Each Register creates a registry row, so an
-    unauthenticated peer can grow `servers` within its rate limit; a future
-    bootstrap credential should gate row creation.
+  - **Unknown-node Register rows.** A certificate-less bootstrap still creates a
+    registry row, so a peer holding the enrollment token (or an open first
+    enrollment) can grow `servers` within its rate limit.
 - [ ] **Teams:** legacy `servers.team_id IS NULL` nodes, their containers and logs
   stay shared with every authenticated caller; a pre-fix self-minted admin-scoped
   API token would need rotation (none shipped); global DNS/proxy management needs

@@ -335,6 +335,17 @@ with no CA it refuses to start unless `GOTHAM_AGENT_INSECURE=true`, and a
 plaintext listener is confined to loopback (the installer defaults the address
 to `127.0.0.1:9443`). Never use it on a real node.
 
+Over TLS the channel is mutual (JUS-194): the agent generates a key, sends a CSR
+on `Register`, receives a node certificate, and presents it on every later
+connection; the control plane binds the certificate identity and key to the
+node. A node's first registration has no certificate yet, so set
+`GOTHAM_GRPC_ENROLLMENT_TOKEN` on the control plane and pass the same value to
+`install-agent.sh --enrollment-token <token>`; without it the first enrollment is
+trust-on-first-use and the control plane logs it. Only the first registration
+needs it. Nodes enrolled before this change keep working (the control plane
+accepts their existing certificate and binds its key), and a self-update never
+touches the node key or certificate.
+
 The agent installer uses the same signed-manifest verification
 (`deploy/release-verify.sh`) for `gotham-agent-linux-<arch>` and
 `gotham-agent-manifest-<arch>.txt`, with the pinned release public key and no

@@ -37,6 +37,19 @@ func (q *Queries) AdvanceUserTOTPStep(ctx context.Context, arg AdvanceUserTOTPSt
 	return user_id, err
 }
 
+const clearUserTOTPFailures = `-- name: ClearUserTOTPFailures :exec
+UPDATE user_totp
+SET failed_attempts = 0, locked_until = NULL, updated_at = now()
+WHERE user_id = $1
+`
+
+// ClearUserTOTPFailures resets the counter and drops any lock after a correct
+// code (TOTP or recovery), so the threshold counts consecutive failures only.
+func (q *Queries) ClearUserTOTPFailures(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearUserTOTPFailures, userID)
+	return err
+}
+
 const consumeRecoveryCode = `-- name: ConsumeRecoveryCode :one
 UPDATE user_totp
 SET recovery_codes = array_remove(recovery_codes, $1::text),
@@ -80,6 +93,8 @@ UPDATE user_totp
 SET enabled = true,
     last_step = $1::bigint,
     recovery_codes = $2,
+    failed_attempts = 0,
+    locked_until = NULL,
     updated_at = now()
 WHERE user_id = $3
   AND enabled = false
@@ -105,17 +120,19 @@ func (q *Queries) EnableUserTOTP(ctx context.Context, arg EnableUserTOTPParams) 
 }
 
 const getUserTOTP = `-- name: GetUserTOTP :one
-SELECT user_id, secret_enc, enabled, last_step, recovery_codes
+SELECT user_id, secret_enc, enabled, last_step, recovery_codes, failed_attempts, locked_until
 FROM user_totp
 WHERE user_id = $1
 `
 
 type GetUserTOTPRow struct {
-	UserID        pgtype.UUID `json:"user_id"`
-	SecretEnc     string      `json:"secret_enc"`
-	Enabled       bool        `json:"enabled"`
-	LastStep      *int64      `json:"last_step"`
-	RecoveryCodes []string    `json:"recovery_codes"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	SecretEnc      string             `json:"secret_enc"`
+	Enabled        bool               `json:"enabled"`
+	LastStep       *int64             `json:"last_step"`
+	RecoveryCodes  []string           `json:"recovery_codes"`
+	FailedAttempts int32              `json:"failed_attempts"`
+	LockedUntil    pgtype.Timestamptz `json:"locked_until"`
 }
 
 // GetUserTOTP returns the account's TOTP row. pgx.ErrNoRows means two-factor
@@ -129,7 +146,44 @@ func (q *Queries) GetUserTOTP(ctx context.Context, userID pgtype.UUID) (GetUserT
 		&i.Enabled,
 		&i.LastStep,
 		&i.RecoveryCodes,
+		&i.FailedAttempts,
+		&i.LockedUntil,
 	)
+	return i, err
+}
+
+const recordUserTOTPFailure = `-- name: RecordUserTOTPFailure :one
+UPDATE user_totp
+SET failed_attempts = failed_attempts + 1,
+    locked_until = CASE
+        WHEN failed_attempts + 1 >= $1::integer THEN $2::timestamptz
+        ELSE locked_until
+    END,
+    updated_at = now()
+WHERE user_id = $3
+RETURNING failed_attempts, locked_until
+`
+
+type RecordUserTOTPFailureParams struct {
+	Threshold   int32              `json:"threshold"`
+	LockedUntil pgtype.Timestamptz `json:"locked_until"`
+	UserID      pgtype.UUID        `json:"user_id"`
+}
+
+type RecordUserTOTPFailureRow struct {
+	FailedAttempts int32              `json:"failed_attempts"`
+	LockedUntil    pgtype.Timestamptz `json:"locked_until"`
+}
+
+// RecordUserTOTPFailure increments the account's consecutive second-factor
+// failures and sets the lock deadline once the threshold is reached, in one
+// statement so concurrent guesses cannot lose a count. The caller computes the
+// deadline from its own clock (so tests can drive it); a row still below the
+// threshold keeps any existing deadline.
+func (q *Queries) RecordUserTOTPFailure(ctx context.Context, arg RecordUserTOTPFailureParams) (RecordUserTOTPFailureRow, error) {
+	row := q.db.QueryRow(ctx, recordUserTOTPFailure, arg.Threshold, arg.LockedUntil, arg.UserID)
+	var i RecordUserTOTPFailureRow
+	err := row.Scan(&i.FailedAttempts, &i.LockedUntil)
 	return i, err
 }
 

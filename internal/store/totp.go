@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -68,6 +69,24 @@ func (s *Store) ReplaceUserTOTPRecoveryCodes(ctx context.Context, userID pgtype.
 		RecoveryCodes: recoveryCodes,
 	})
 	return matched(err)
+}
+
+// RecordUserTOTPFailure increments the account's consecutive second-factor
+// failures and arms the lockout until lockedUntil once threshold is reached, in
+// one statement so two concurrent guesses cannot lose a count. A row still
+// below the threshold keeps any existing deadline.
+func (s *Store) RecordUserTOTPFailure(ctx context.Context, userID pgtype.UUID, threshold int, lockedUntil time.Time) (sqlc.RecordUserTOTPFailureRow, error) {
+	return s.queries.RecordUserTOTPFailure(ctx, sqlc.RecordUserTOTPFailureParams{
+		UserID:      userID,
+		Threshold:   int32(threshold),
+		LockedUntil: pgtype.Timestamptz{Time: lockedUntil, Valid: true},
+	})
+}
+
+// ClearUserTOTPFailures resets the consecutive-failure counter and drops any
+// lock after a correct code (TOTP or recovery).
+func (s *Store) ClearUserTOTPFailures(ctx context.Context, userID pgtype.UUID) error {
+	return s.queries.ClearUserTOTPFailures(ctx, userID)
 }
 
 // DeleteUserTOTP removes the account's TOTP configuration. It is idempotent.

@@ -17,7 +17,15 @@ CREATE TABLE user_totp (
     -- code). A code is consumed by removing its hash; regenerating replaces
     -- the whole array.
     recovery_codes text[]      NOT NULL DEFAULT '{}',
-    updated_at     timestamptz NOT NULL DEFAULT now()
+    -- Per-account second-factor lockout (fix round 1). Counting failures on
+    -- this row rather than in the per-IP limiter means a rotating source
+    -- address, a fresh half-authenticated token or an IPv6 /64 cannot reset
+    -- the count: it is keyed by the user id alone.
+    failed_attempts integer    NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+    -- NULL means unlocked; a value in the past is an expired lock, which the
+    -- service treats as unlocked and clears on the next successful attempt.
+    locked_until    timestamptz,
+    updated_at      timestamptz NOT NULL DEFAULT now()
 );
 
 -- +goose Down

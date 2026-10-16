@@ -615,12 +615,14 @@ type User struct {
 }
 
 type UserTotp struct {
-	UserID        pgtype.UUID        `json:"user_id"`
-	SecretEnc     string             `json:"secret_enc"`
-	Enabled       bool               `json:"enabled"`
-	LastStep      *int64             `json:"last_step"`
-	RecoveryCodes []string           `json:"recovery_codes"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	SecretEnc      string             `json:"secret_enc"`
+	Enabled        bool               `json:"enabled"`
+	LastStep       *int64             `json:"last_step"`
+	RecoveryCodes  []string           `json:"recovery_codes"`
+	FailedAttempts int32              `json:"failed_attempts"`
+	LockedUntil    pgtype.Timestamptz `json:"locked_until"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WebhookEvent struct {

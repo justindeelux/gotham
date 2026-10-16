@@ -1,7 +1,7 @@
 -- name: GetUserTOTP :one
 -- GetUserTOTP returns the account's TOTP row. pgx.ErrNoRows means two-factor
 -- authentication was never configured (or was reset).
-SELECT user_id, secret_enc, enabled, last_step, recovery_codes
+SELECT user_id, secret_enc, enabled, last_step, recovery_codes, failed_attempts, locked_until
 FROM user_totp
 WHERE user_id = $1;
 
@@ -25,10 +25,35 @@ UPDATE user_totp
 SET enabled = true,
     last_step = sqlc.arg(last_step)::bigint,
     recovery_codes = sqlc.arg(recovery_codes),
+    failed_attempts = 0,
+    locked_until = NULL,
     updated_at = now()
 WHERE user_id = sqlc.arg(user_id)
   AND enabled = false
 RETURNING user_id;
+
+-- name: RecordUserTOTPFailure :one
+-- RecordUserTOTPFailure increments the account's consecutive second-factor
+-- failures and sets the lock deadline once the threshold is reached, in one
+-- statement so concurrent guesses cannot lose a count. The caller computes the
+-- deadline from its own clock (so tests can drive it); a row still below the
+-- threshold keeps any existing deadline.
+UPDATE user_totp
+SET failed_attempts = failed_attempts + 1,
+    locked_until = CASE
+        WHEN failed_attempts + 1 >= sqlc.arg(threshold)::integer THEN sqlc.arg(locked_until)::timestamptz
+        ELSE locked_until
+    END,
+    updated_at = now()
+WHERE user_id = sqlc.arg(user_id)
+RETURNING failed_attempts, locked_until;
+
+-- name: ClearUserTOTPFailures :exec
+-- ClearUserTOTPFailures resets the counter and drops any lock after a correct
+-- code (TOTP or recovery), so the threshold counts consecutive failures only.
+UPDATE user_totp
+SET failed_attempts = 0, locked_until = NULL, updated_at = now()
+WHERE user_id = $1;
 
 -- name: AdvanceUserTOTPStep :one
 -- AdvanceUserTOTPStep records the step a valid code was accepted at, but only

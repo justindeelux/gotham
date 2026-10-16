@@ -46,3 +46,20 @@ func (s *Store) UpdateNotificationChannel(ctx context.Context, params sqlc.Updat
 func (s *Store) DeleteNotificationChannel(ctx context.Context, params sqlc.DeleteNotificationChannelParams) (int64, error) {
 	return s.queries.DeleteNotificationChannel(ctx, params)
 }
+
+// CreateNotificationDelivery stores one delivery attempt and returns the row.
+func (s *Store) CreateNotificationDelivery(ctx context.Context, params sqlc.CreateNotificationDeliveryParams) (sqlc.NotificationDelivery, error) {
+	return s.queries.CreateNotificationDelivery(ctx, params)
+}
+
+// ListNotificationDeliveries returns the newest attempts of one team-scoped
+// channel. A channel of another team matches no row.
+func (s *Store) ListNotificationDeliveries(ctx context.Context, params sqlc.ListNotificationDeliveriesParams) ([]sqlc.NotificationDelivery, error) {
+	return s.queries.ListNotificationDeliveries(ctx, params)
+}
+
+// PruneNotificationDeliveries trims one channel's history to the newest
+// params.Limit rows and reports how many rows were removed.
+func (s *Store) PruneNotificationDeliveries(ctx context.Context, params sqlc.PruneNotificationDeliveriesParams) (int64, error) {
+	return s.queries.PruneNotificationDeliveries(ctx, params)
+}

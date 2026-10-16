@@ -59,6 +59,42 @@ func (q *Queries) CreateNotificationChannel(ctx context.Context, arg CreateNotif
 	return i, err
 }
 
+const createNotificationDelivery = `-- name: CreateNotificationDelivery :one
+INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_summary, created_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, channel_id, event_type, status, error_summary, created_at
+`
+
+type CreateNotificationDeliveryParams struct {
+	ID           pgtype.UUID        `json:"id"`
+	ChannelID    pgtype.UUID        `json:"channel_id"`
+	EventType    string             `json:"event_type"`
+	Status       string             `json:"status"`
+	ErrorSummary string             `json:"error_summary"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreateNotificationDelivery(ctx context.Context, arg CreateNotificationDeliveryParams) (NotificationDelivery, error) {
+	row := q.db.QueryRow(ctx, createNotificationDelivery,
+		arg.ID,
+		arg.ChannelID,
+		arg.EventType,
+		arg.Status,
+		arg.ErrorSummary,
+		arg.CreatedAt,
+	)
+	var i NotificationDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.EventType,
+		&i.Status,
+		&i.ErrorSummary,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const deleteNotificationChannel = `-- name: DeleteNotificationChannel :execrows
 DELETE FROM notification_channels WHERE id = $1 AND team_id = $2
 `
@@ -191,6 +227,76 @@ func (q *Queries) ListNotificationChannelsForEvent(ctx context.Context, arg List
 		return nil, err
 	}
 	return items, nil
+}
+
+const listNotificationDeliveries = `-- name: ListNotificationDeliveries :many
+SELECT d.id, d.channel_id, d.event_type, d.status, d.error_summary, d.created_at FROM notification_deliveries d
+JOIN notification_channels c ON c.id = d.channel_id
+WHERE d.channel_id = $1 AND c.team_id = $2
+ORDER BY d.created_at DESC, d.id DESC
+LIMIT $3
+`
+
+type ListNotificationDeliveriesParams struct {
+	ChannelID pgtype.UUID `json:"channel_id"`
+	TeamID    pgtype.UUID `json:"team_id"`
+	Limit     int32       `json:"limit"`
+}
+
+// The history panel read: the newest attempts of one channel, joined to its
+// channel so a foreign team's channel can never be read (the join matches no
+// row). created_at DESC, id DESC is the retention order too.
+func (q *Queries) ListNotificationDeliveries(ctx context.Context, arg ListNotificationDeliveriesParams) ([]NotificationDelivery, error) {
+	rows, err := q.db.Query(ctx, listNotificationDeliveries, arg.ChannelID, arg.TeamID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NotificationDelivery{}
+	for rows.Next() {
+		var i NotificationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.EventType,
+			&i.Status,
+			&i.ErrorSummary,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pruneNotificationDeliveries = `-- name: PruneNotificationDeliveries :execrows
+DELETE FROM notification_deliveries AS d
+WHERE d.channel_id = $1
+  AND d.id NOT IN (
+      SELECT keep.id FROM notification_deliveries AS keep
+      WHERE keep.channel_id = $1
+      ORDER BY keep.created_at DESC, keep.id DESC
+      LIMIT $2
+  )
+`
+
+type PruneNotificationDeliveriesParams struct {
+	ChannelID pgtype.UUID `json:"channel_id"`
+	Limit     int32       `json:"limit"`
+}
+
+// Retention: keep only the newest $2 attempts of one channel, dropping the
+// rest. Run in the same transaction as the insert so history stays bounded.
+func (q *Queries) PruneNotificationDeliveries(ctx context.Context, arg PruneNotificationDeliveriesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneNotificationDeliveries, arg.ChannelID, arg.Limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateNotificationChannel = `-- name: UpdateNotificationChannel :one

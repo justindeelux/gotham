@@ -114,6 +114,9 @@ const (
 	EventDeploy EventKind = "deploy"
 	// EventBackup — a backup lifecycle event.
 	EventBackup EventKind = "backup"
+	// EventTest — the synthetic send-test event; it carries no subscription
+	// key and is only ever delivered to the one channel a test targets.
+	EventTest EventKind = "test"
 )
 
 // Outcome is the terminal result of an event source.
@@ -167,8 +170,12 @@ func (e Event) Key() EventKey {
 }
 
 // Summary is the one-line headline of the event, used as the email subject
-// and the first line of every message body.
+// and the first line of every message body. A send-test renders its own
+// headline so a recipient cannot mistake it for a real deploy or backup.
 func (e Event) Summary() string {
+	if e.Kind == EventTest {
+		return "Test notification: " + e.Name
+	}
 	noun := "Deploy"
 	if e.Kind == EventBackup {
 		noun = "Backup"

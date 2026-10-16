@@ -613,8 +613,8 @@ func TestTestChannelDelivers(t *testing.T) {
 		t.Fatalf("result = %+v, want OK", result)
 	}
 	mails := mailer.delivered()
-	if len(mails) != 1 || !strings.Contains(mails[0].Subject, "Deploy succeeded") {
-		t.Fatalf("mails = %+v, want one test mail", mails)
+	if len(mails) != 1 || !strings.Contains(mails[0].Subject, "Test notification") {
+		t.Fatalf("mails = %+v, want one clearly-labelled test mail", mails)
 	}
 	if strings.Contains(result.Message, "smtp") {
 		t.Errorf("message = %q, want no transport detail", result.Message)
@@ -1040,5 +1040,21 @@ func TestDeliveryHistoryIsBounded(t *testing.T) {
 	}
 	if got := len(repo.deliveriesFor(channelID)); got != deliveryRetention {
 		t.Errorf("history = %d rows, want the %d cap", got, deliveryRetention)
+	}
+}
+
+// TestTestEventIsClearlyLabelledAndNeverDispatched pins the send-test event: a
+// recipient sees a test headline and the event maps to no subscription key, so
+// it can never fan out to other channels.
+func TestTestEventIsClearlyLabelledAndNeverDispatched(t *testing.T) {
+	event := Event{Kind: EventTest, Outcome: OutcomeSuccess, Name: "Deploy alerts", At: time.Now().UTC()}
+	if got := event.Summary(); got != "Test notification: Deploy alerts" {
+		t.Errorf("Summary = %q, want a test headline", got)
+	}
+	if key := event.Key(); key != "" {
+		t.Errorf("Key = %q, want no subscription key", key)
+	}
+	if !strings.Contains(event.Message(), "Test notification: Deploy alerts") {
+		t.Errorf("Message = %q, want the test headline", event.Message())
 	}
 }

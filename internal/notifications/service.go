@@ -529,12 +529,12 @@ func (s *Service) TestChannel(ctx context.Context, userID, channelID uuid.UUID) 
 		return TestResult{}, err
 	}
 	event := Event{
-		Kind:         EventDeploy,
+		Kind:         EventTest,
 		Outcome:      OutcomeSuccess,
 		TeamID:       channel.TeamID,
 		ResourceType: channel.ResourceType,
 		ResourceID:   channel.ResourceID,
-		Name:         "notifications test",
+		Name:         channel.Name,
 		At:           s.now().UTC(),
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, s.sendTimeout)

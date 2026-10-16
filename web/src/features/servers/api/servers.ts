@@ -289,6 +289,7 @@ const errorPrefixPackages = new Set([
   "store",
   "teams",
   "templates",
+  "toolchain",
   "updates",
   "webhooks",
   "ws",

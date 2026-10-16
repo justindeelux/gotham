@@ -7,6 +7,12 @@ import { defineComponent, h } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useWebSocket } from "@/shared/composables/useWebSocket";
+
+vi.mock("@/shared/composables/useWebSocket", () => ({
+  useWebSocket: vi.fn(),
+}));
+
 vi.mock("@/features/toolchain/api/toolchain", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/features/toolchain/api/toolchain")>();
@@ -27,7 +33,7 @@ vi.mock("@/features/servers/api/servers", async (importOriginal) => {
 
 import { useServersStore } from "@/features/servers/stores/servers";
 import type { Server } from "@/features/servers";
-import { listJobs, listTools } from "@/features/toolchain/api/toolchain";
+import { listJobs, listTools, enqueueJobs } from "@/features/toolchain/api/toolchain";
 import type { ToolchainTool } from "@/features/toolchain/api/toolchain";
 import toolchainEn from "@/features/toolchain/locales/en";
 import ToolchainPage from "@/features/toolchain/pages/ToolchainPage.vue";
@@ -36,6 +42,14 @@ import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 const listToolsMock = vi.mocked(listTools);
 const listJobsMock = vi.mocked(listJobs);
+const enqueueJobsMock = vi.mocked(enqueueJobs);
+const useWebSocketMock = vi.mocked(useWebSocket);
+
+const socketStub = {
+  subscribe: vi.fn(),
+  unsubscribe: vi.fn(),
+  close: vi.fn(),
+};
 
 function server(): Server {
   return {
@@ -89,6 +103,13 @@ beforeEach(() => {
   listToolsMock.mockReset();
   listJobsMock.mockReset();
   listJobsMock.mockResolvedValue([]);
+  enqueueJobsMock.mockReset();
+  enqueueJobsMock.mockResolvedValue({ jobs: [], skipped: [] });
+  socketStub.subscribe.mockClear();
+  socketStub.unsubscribe.mockClear();
+  socketStub.close.mockClear();
+  useWebSocketMock.mockReset();
+  useWebSocketMock.mockReturnValue(socketStub as never);
 });
 
 async function mountPage() {
@@ -107,6 +128,62 @@ describe("error state", () => {
     expect(wrapper.find(".n-data-table").exists()).toBe(false);
     expect(wrapper.find(".n-empty").exists()).toBe(false);
     expect(wrapper.text()).toContain("Retry");
+  });
+});
+
+describe("socket lifecycle", () => {
+  it("releases the socket on unmount and re-establishes it on remount", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([tool({ id: "git", name: "Git" })]);
+    const first = await mountPage();
+    expect(useWebSocketMock).toHaveBeenCalledTimes(1);
+    expect(socketStub.subscribe).toHaveBeenCalledWith("logs:srv-1:toolchain");
+    expect(useToolchainStore().tools).toHaveLength(1);
+    first.unmount();
+    expect(socketStub.unsubscribe).toHaveBeenCalledWith("logs:srv-1:toolchain");
+    expect(socketStub.close).toHaveBeenCalledTimes(1);
+    // Remount keeps the node: the page must resubscribe (not just refresh),
+    // opening exactly one new socket and one new channel subscription.
+    useServersStore().servers = [server()];
+    const second = await mountPage();
+    expect(useWebSocketMock).toHaveBeenCalledTimes(2);
+    expect(socketStub.subscribe).toHaveBeenCalledTimes(2);
+    expect(useToolchainStore().tools).toHaveLength(1);
+    second.unmount();
+    expect(socketStub.close).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("install selected", () => {
+  it("enqueues only the selectable checked rows", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git" }),
+      tool({ id: "docker", name: "Docker", installed: true, version: "27.1.1" }),
+      tool({
+        id: "probe",
+        name: "Probe",
+        installed: false,
+        installable: false,
+        uninstallable: false,
+      }),
+    ]);
+    const wrapper = await mountPage();
+    // Rows sort by name (Docker, Git, Probe); the header checkbox is first.
+    // Table checkboxes are role=checkbox divs, not native inputs.
+    const boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
+    expect(boxes.length).toBe(4);
+    await boxes[2].trigger("click");
+    await flushPromises();
+    expect(boxes[2].attributes("aria-checked")).toBe("true");
+    const action = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Install selected"));
+    expect(action).toBeDefined();
+    await action?.trigger("click");
+    await flushPromises();
+    // The checked installed + detect-only rows are excluded server-side too.
+    expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git"], "install");
   });
 });
 

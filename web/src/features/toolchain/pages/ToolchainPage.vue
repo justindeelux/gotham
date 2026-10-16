@@ -289,7 +289,12 @@ onMounted(() => {
   if (serversStore.servers.length > 0 && store.serverId === "") {
     void selectNode(serversStore.servers[0].id);
   } else if (store.serverId !== "") {
-    void store.refresh().catch((err: unknown) => message.error(describeToolchainError(err)));
+    // Remount with a kept node (route leave + return): disconnect() released
+    // the socket on unmount, so a bare refresh() would leave realtime dead —
+    // resubscribe to re-establish the socket and channel, then reload.
+    void store
+      .subscribe(store.serverId)
+      .catch((err: unknown) => message.error(describeToolchainError(err)));
   }
 });
 

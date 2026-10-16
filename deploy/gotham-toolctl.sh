@@ -266,17 +266,26 @@ install_buildkit() {
 
 uninstall_buildkit() {
     run docker rm -f "${BUILDKIT_CONTAINER}" || true
-    # Removing the detection tag may also delete the image. Use the repository
-    # digest left by pull for partial installs, and quietly accept absent refs.
+    # Removing the detection tag may also delete the image, and the ref left by
+    # pull covers a partial install. An absent ref is not an error, but
+    # `docker rmi -f` reports it as "No such image" on stderr *while exiting 0*
+    # (docker 29, containerd store), so it is matched by text: the status alone
+    # cannot tell a missing ref from a removed one, and echoing the captured
+    # output would print that error line into a successful uninstall's log.
     for ref in "${BUILDKIT_DETECT_REF}:latest" "${BUILDKIT_DETECT_REF}@${BUILDKIT_DIGEST}"; do
-        if output="$(run docker rmi -f "${ref}" 2>&1)"; then
-            [ -z "${output}" ] || printf '%s\n' "${output}"
-        else
-            case "${output}" in
-                *"No such image:"*) ;;
-                *) printf '%s\n' "${output}" >&2; return 1 ;;
-            esac
-        fi
+        output="$(run docker rmi -f "${ref}" 2>&1)"
+        status=$?
+        case "${output}" in
+            *"No such image:"*) ;;
+            *)
+                if [ "${status}" -eq 0 ]; then
+                    [ -z "${output}" ] || printf '%s\n' "${output}"
+                else
+                    printf '%s\n' "${output}" >&2
+                    return 1
+                fi
+                ;;
+        esac
     done
 }
 

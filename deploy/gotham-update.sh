@@ -348,15 +348,21 @@ helper_arch() {
 # Trust: the control plane stages nothing. Root fetches the release's signed
 # manifest, its detached Ed25519 signature and the payload archive into a
 # root-only staging directory, verifies the manifest against the root-owned
-# release public key and the payload digest against the signed manifest, and only
-# then runs the payload's own installer (apply-release) from that verified
-# directory. No byte the service or agent user can write is fetched, read as code
-# or executed. Every failure is logged and skipped, and a missing anchor/fetch
-# helper (a host installed before the one-time bridge) is a clean no-op, so a
-# helper refresh can never block or brick an update.
+# release public key, binds the manifest to the very binary root is about to
+# restart (the manifest's signed sha256 must equal the staged binary's digest)
+# and checks the payload digest against the signed manifest, and only then runs
+# the payload's own installer (apply-release) from that verified directory. The
+# marker's version only locates the release; the version that gates the apply is
+# the signature-verified one, which apply-release refuses to install below the
+# root-owned high-water mark (anti-rollback). No byte the service or agent user
+# can write is fetched, read as code or executed. Every failure is logged and
+# skipped, and a missing anchor/fetch helper (a host installed before the
+# one-time bridge) is a clean no-op, so a helper refresh can never block or brick
+# an update.
 refresh_host_helpers() {
     [ "${IS_AGENT}" -eq 0 ] || return 0
     [ -f "${FETCH_SCRIPT}" ] || return 0
+    [ -f "${BINARY}" ] || return 0
     if [ ! -f "${SIGNING_KEY}" ] || [ -L "${SIGNING_KEY}" ]; then
         log "no root-owned release key at ${SIGNING_KEY}; skipping the host-helper refresh"
         return 0
@@ -382,10 +388,14 @@ refresh_host_helpers() {
         log "could not create a staging directory in ${STAGING_ROOT}; skipping the host-helper refresh"
         return 0
     }
-    if payload="$(sh "${FETCH_SCRIPT}" "${RELEASE_BASE}" "${VERSION}" "${arch}" "${SIGNING_KEY}" "${staging}" 2>&1)" \
-        && [ -f "${payload}/gotham-hostbootstrap.sh" ]; then
-        if sh "${payload}/gotham-hostbootstrap.sh" apply-release "${payload}" >/dev/null 2>&1; then
-            log "refreshed the host-helper payload from the verified release"
+    if payload="$(sh "${FETCH_SCRIPT}" "${RELEASE_BASE}" "${VERSION}" "${arch}" "${SIGNING_KEY}" "${staging}" "${BINARY}" 2>&1)" \
+        && [ -f "${payload}/gotham-hostbootstrap.sh" ] && [ -f "${staging}/version" ]; then
+        # The verified signed version (the fetch proved it equals the candidate
+        # and that the manifest describes ${BINARY}); apply-release refuses a
+        # version below the root-owned high-water mark.
+        signed_version="$(sed -n '1p' "${staging}/version" | tr -d '\r\n')"
+        if sh "${payload}/gotham-hostbootstrap.sh" apply-release "${payload}" "${signed_version}" >/dev/null 2>&1; then
+            log "refreshed the host-helper payload from the verified release ${signed_version}"
         else
             log "host-helper apply failed; the installed helpers are left in place"
         fi

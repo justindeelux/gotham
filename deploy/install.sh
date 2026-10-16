@@ -1147,9 +1147,11 @@ fi
 # state).
 log "installing the host helper"
 if [ "${DRY_RUN}" -eq 1 ]; then
-    echo "[dry-run] sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER}"
+    echo "[dry-run] sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER} ${VERSION}"
 elif [ "${TEST_MODE}" -eq 0 ]; then
-    if ! sh "${SCRIPT_DIR}/gotham-hostbootstrap.sh" create "${SERVICE_USER}"; then
+    # Pass the release version so the helper's high-water mark is seeded from the
+    # root-trusted installer: the first self-update cannot go below it.
+    if ! sh "${SCRIPT_DIR}/gotham-hostbootstrap.sh" create "${SERVICE_USER}" "${VERSION}"; then
         log "WARNING: host helper install failed; retry with: sudo sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER}"
     fi
 fi

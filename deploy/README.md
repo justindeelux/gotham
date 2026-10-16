@@ -676,17 +676,33 @@ a payload staged by the service user is exactly the root-escalation path the
 helper design forbids. Instead:
 
 1. the release ships `gotham-hosthelpers.tar.gz`, and the control-plane manifest
-   binds its sha256 (`helper_file`, `helper_sha256`) inside the same Ed25519
-   signature that already authenticates the release;
+   binds its sha256 (`helper_file`, `helper_sha256`) **inside the signed bytes**,
+   in the same Ed25519 signature that already authenticates the release. The
+   fields cannot be added or stripped without invalidating the signature;
 2. `gotham-update` (root) fetches the manifest, its signature and the payload into
    a root-owned 0700 directory (`deploy/gotham-hostbootstrap-fetch.sh`), verifies
    the manifest against the **root-owned** release public key
-   (`/usr/libexec/gotham/gotham-signing-key.pub`) and the payload digest against
-   the signed manifest, refusing absolute/`..`/symlink archive entries;
-3. only then does it run the verified payload's `apply-release`, which installs
-   the live `gotham-hostctl`/`gotham-toolctl`, refreshes the root-owned payload
-   and the wrapper itself, and re-applies the rendered drop-in (the release never
-   carries the drop-in, so the control-plane user is preserved).
+   (`/usr/libexec/gotham/gotham-signing-key.pub`), checks that the signed manifest
+   describes the very binary root is about to restart (its signed `sha256` must
+   equal the staged binary's digest) and that the payload digest matches the
+   signed `helper_sha256`, refusing absolute/`..`/symlink/non-regular/duplicate
+   archive entries. A manifest with no helper binding is a clean no-op, never an
+   unverified install;
+3. only then does it run the verified payload's `apply-release <dir> <version>`,
+   which installs the live `gotham-hostctl`/`gotham-toolctl`, refreshes the
+   root-owned payload and the wrapper itself, and **regenerates** the drop-in from
+   the recorded control-plane user with the released hostbootstrap's verb set
+   (`visudo -cf` before anything live is touched, so a bad drop-in changes
+   nothing).
+
+**Anti-rollback.** The version used to gate the apply is the signature-verified
+one, not the value in the service-writable pending marker: the marker only
+locates the release, and any value that does not match the staged binary's signed
+manifest fails closed. `apply-release` keeps a root-owned monotonic high-water
+mark at `/usr/libexec/gotham/hostbootstrap/version` (written atomically) and
+refuses any payload whose signed version is lower than the installed one (equal
+re-applies idempotently), so a compromised control plane cannot replay an older
+validly-signed helper. `install.sh` seeds the mark with the release it installs.
 
 Every failure is logged and skipped, so a broken or tampered payload can never
 block or roll back an update. A host that predates the refresh support (no

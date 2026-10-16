@@ -69,6 +69,7 @@ const en = {
     closeHint: "Closing keeps the queue running in the background.",
     retryQueued: "Queued {count}",
     selectedJob: "{tool} · {action}",
+    jobStatus: "{job}: {status}",
   },
   errors: {
     sessionExpired: "Your session expired. Please sign in again.",

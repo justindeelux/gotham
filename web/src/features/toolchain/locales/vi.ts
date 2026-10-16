@@ -70,6 +70,7 @@ const vi: typeof en = {
     closeHint: "Đóng cửa sổ vẫn giữ hàng đợi chạy ngầm.",
     retryQueued: "Đã xếp hàng {count}",
     selectedJob: "{tool} · {action}",
+    jobStatus: "{job}: {status}",
   },
   errors: {
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",

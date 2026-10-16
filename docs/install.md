@@ -475,7 +475,8 @@ Behaviour:
   whose agent request was cancelled (the transient unit keeps running until it
   finishes or its `RuntimeMaxSec=840` bound fires, whichever is first) blocks a
   retry with a clear "already running" refusal instead of overlapping it; a
-  graceful cancel (`SIGTERM`) makes the helper stop its unit immediately.
+  graceful cancel (`SIGTERM`) may defer the helper's stop trap until the
+  foreground `systemd-run` returns, so it does not guarantee an immediate stop.
 - **Upgrading a node.** The helper and its sudoers rule are installed by
   `install-agent.sh`, not by the self-update binary swap: a node that updated
   only through `gotham-agent` self-update keeps the old install and its tool

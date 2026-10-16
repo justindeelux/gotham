@@ -715,8 +715,10 @@ sudo deploy/install-toolctl-sudoers.sh gotham-agent
   stdout/stderr.
 - The transient unit carries `RuntimeMaxSec=840` (under the agent's 15-minute
   request timeout), the helper holds a `flock` for the whole job so two jobs
-  can never overlap, and a graceful cancel stops the unit; a node that updated
-  only via agent self-update must re-run `deploy/install-agent.sh` to get the
+  can never overlap. The shell may defer the graceful-cancel trap until
+  foreground `systemd-run` returns, so cancellation can leave the unit running
+  until it finishes or reaches its runtime bound. A node that updated only via
+  agent self-update must re-run `deploy/install-agent.sh` to get the
   helper and sudoers rule.
 - Standalone dry-run for a debugging host (as root):
   `GOTHAM_TOOLCTL_DRYRUN=1 GOTHAM_TOOLCTL_ARCH=amd64 GOTHAM_TOOLCTL_DISTRO=apt

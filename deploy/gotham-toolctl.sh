@@ -337,13 +337,13 @@ install_hostctl() {
     command -v visudo >/dev/null 2>&1 || die "visudo is required to validate the sudoers drop-in" 1
     # Stage + rename the helper, so the live path is never briefly absent.
     tmp="$(mktemp "${ROOT}/usr/libexec/gotham/.hostctl.XXXXXX")" || die "could not stage the host helper" 1
-    cp "${HOSTCTL_SRC}" "${tmp}"
+    cp "${HOSTCTL_SRC}" "${tmp}" || { rm -f "${tmp}"; die "could not copy the host helper" 1; }
     chmod 0755 "${tmp}"
     mv -f "${tmp}" "${HOSTCTL_LIVE}" || { rm -f "${tmp}"; die "could not install the host helper" 1; }
     [ -L "${HOSTCTL_DROPIN}" ] && die "refusing to replace symlink ${HOSTCTL_DROPIN}" 3
     tmp="$(mktemp "${ROOT}/etc/sudoers.d/.gotham-hostctl.XXXXXX")" \
         || die "could not create a sudoers temp file" 1
-    cp "${HOSTCTL_SUDOERS}" "${tmp}"
+    cp "${HOSTCTL_SUDOERS}" "${tmp}" || { rm -f "${tmp}"; die "could not copy the sudoers drop-in" 1; }
     chmod 0440 "${tmp}"
     if ! visudo -cf "${tmp}"; then
         rm -f "${tmp}"

@@ -168,11 +168,10 @@ type Host struct {
 	// Helper is the install state of the fixed host helper.
 	Helper HelperState `json:"helper"`
 	// Repair is true when the in-product Install can actually run: the
-	// root-owned payload exists AND the hostctl drop-in (which carries the
-	// pinned repair verb) is present. It is false whenever the pinned rule
-	// cannot exist — an old install, or a Denied host whose drop-in is gone —
-	// in which case only a control-plane update (which re-applies the payload)
-	// can help.
+	// root-owned payload exists AND sudo permits the exact pinned repair
+	// command. It is false whenever that privileged path is absent — an old
+	// install, or a Denied host whose drop-in is gone — in which case only
+	// re-running the control-plane installer can help.
 	Repair bool `json:"repair"`
 	// NetworkStack is true when the host runs what the network section needs
 	// (systemd-networkd + systemd-resolved + networkctl), detected without the

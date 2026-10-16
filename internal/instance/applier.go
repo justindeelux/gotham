@@ -68,13 +68,16 @@ const DefaultToolctl = "/usr/libexec/gotham/gotham-toolctl"
 // self-update wrapper install (deploy/gotham-hostbootstrap.sh).
 const DefaultBootstrapPayload = "/usr/libexec/gotham/hostbootstrap"
 
-// DefaultSudoersDropIn is the hostctl sudoers drop-in that carries the pinned
-// repair verb the in-product install needs.
-const DefaultSudoersDropIn = "/etc/sudoers.d/gotham-hostctl"
+// PayloadEnv overrides the payload path (tests, non-standard layouts).
+const PayloadEnv = "GOTHAM_HOSTBOOTSTRAP_PAYLOAD"
 
 // hostctlToolID is the tool-installer id that maps to the host-helper install
 // (see the allow-list in deploy/gotham-toolctl.sh).
 const hostctlToolID = "gotham-hostctl"
+
+// repairProbeTimeout bounds the sudo policy probe so a wedged sudo cannot stall
+// a read.
+const repairProbeTimeout = 5 * time.Second
 
 // sudoApplier runs the helper through `sudo -n` with a closed verb set; the
 // values travel on stdin as key=value lines and are re-validated by the
@@ -82,6 +85,7 @@ const hostctlToolID = "gotham-hostctl"
 type sudoApplier struct {
 	path    string
 	toolctl string
+	payload string
 }
 
 // NewSudoApplier returns the production applier. Without the helper file it
@@ -90,6 +94,7 @@ func NewSudoApplier() HostApplier {
 	return &sudoApplier{
 		path:    envOr(HelperEnv, DefaultHelper),
 		toolctl: envOr(ToolctlEnv, DefaultToolctl),
+		payload: envOr(PayloadEnv, DefaultBootstrapPayload),
 	}
 }
 
@@ -119,19 +124,22 @@ func (a *sudoApplier) run(ctx context.Context, verb, stdin string) (string, erro
 func (a *sudoApplier) Probe(ctx context.Context) Host {
 	h := Host{
 		Helper:       HelperReady,
-		Repair:       payloadPresent(DefaultBootstrapPayload) && regularFile(DefaultSudoersDropIn),
 		NetworkStack: networkStackAvailable(),
 		SystemStack:  systemStackAvailable(),
 	}
 	if _, err := os.Stat(a.path); err != nil {
 		h.Helper = HelperMissing
+		h.Repair = a.repairPossible(ctx)
 		return h
 	}
 	p, ok := a.fetchStatus(ctx)
 	if !ok {
 		// The file is there but the helper did not answer: sudo -n refused it
-		// because its verb-pinned sudoers rule is missing.
+		// because its verb-pinned sudoers rule is missing or names another
+		// user. The repair rule lives in that same drop-in, so it is refused
+		// too — but ask the policy rather than assume.
 		h.Helper = HelperDenied
+		h.Repair = a.repairPossible(ctx)
 		return h
 	}
 	h.Network = p.Network
@@ -139,15 +147,32 @@ func (a *sudoApplier) Probe(ctx context.Context) Host {
 	return h
 }
 
-// payloadPresent reports whether the root-owned host-helper payload is
-// installed, i.e. whether the in-product install has a privileged path to run.
-func payloadPresent(dir string) bool {
-	return regularFile(filepath.Join(dir, "gotham-hostctl"))
+// repairPossible reports whether the in-product install has a privileged path:
+// the root-owned payload exists AND sudo permits the exact pinned repair
+// command. It never stats the sudoers drop-in: that lives under
+// /etc/sudoers.d, a root-only (0750) directory the service user cannot read, so
+// a stat would fail with EACCES and wrongly report "no repair". It asks the
+// sudo policy itself instead, with absolute paths, no request data, and a
+// bounded timeout.
+func (a *sudoApplier) repairPossible(ctx context.Context) bool {
+	if !payloadPresent(a.payload) {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, repairProbeTimeout)
+	defer cancel()
+	// The list form is read-only and needs no password for a NOPASSWD grant.
+	cmd := exec.CommandContext(ctx, "sudo", "-n", "-l", a.toolctl, "install-tool", hostctlToolID) //nolint:gosec // fixed paths and id
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	return cmd.Run() == nil
 }
 
-// regularFile reports whether path is an existing regular (non-symlink) file.
-func regularFile(path string) bool {
-	fi, err := os.Lstat(path)
+// payloadPresent reports whether the root-owned host-helper payload is
+// installed, i.e. whether the in-product install has a privileged path to run.
+// The payload lives under /usr/libexec/gotham (0755 root), which is traversable
+// by the service user, so this stat succeeds unprivileged.
+func payloadPresent(dir string) bool {
+	fi, err := os.Lstat(filepath.Join(dir, "gotham-hostctl"))
 	return err == nil && fi.Mode().IsRegular()
 }
 

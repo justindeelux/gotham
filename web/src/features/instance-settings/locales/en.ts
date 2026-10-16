@@ -16,7 +16,8 @@ const en = {
   helper: {
     missing:
       "The host helper is not installed, so these values are read-only. Install it to manage host settings from Gotham.",
-    restart: "Update the control plane to enable host changes.",
+    restart:
+      "Host changes are provisioned by the control-plane installer, so a platform administrator must re-run it (or upgrade) to enable them.",
     install: "Install host helper",
     installed: "Host helper installed. These settings are now editable.",
     installFailed: "The host helper could not be installed.",

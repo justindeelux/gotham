@@ -14,7 +14,8 @@ const vi: typeof en = {
   helper: {
     missing:
       "Helper máy chủ chưa được cài, nên các giá trị chỉ hiển thị. Hãy cài để quản lý cài đặt máy chủ từ Gotham.",
-    restart: "Hãy cập nhật control plane để bật thay đổi máy chủ.",
+    restart:
+      "Thay đổi máy chủ do trình cài đặt control plane thiết lập, nên quản trị viên nền tảng phải chạy lại trình cài đặt (hoặc nâng cấp) để bật chúng.",
     install: "Cài helper máy chủ",
     installed: "Đã cài helper máy chủ. Các cài đặt này giờ có thể chỉnh sửa.",
     installFailed: "Không cài được helper máy chủ.",

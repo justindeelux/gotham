@@ -648,25 +648,39 @@ for `gotham`.
 
 **In-product install: only where it can succeed.** The pinned repair rule
 (`gotham-toolctl install-tool gotham-hostctl`) lives in the same drop-in as the
-hostctl verbs, so it is only reachable while that drop-in exists. The page
-therefore offers **Install host helper** only when the helper file is missing but
-the root-owned payload and the drop-in are still present (the control plane runs
-the pinned repair verb, which reinstalls the helper and its drop-in from the
-payload). In every other read-only state — the drop-in is gone or names another
-user ("Denied"), or the payload was never installed (a host that predates this
-feature) — there is no privileged path from the control plane by design, so the
-page states plainly **"Update the control plane to enable host changes"** instead
-of offering an install that cannot work. A control-plane update re-applies the
-payload (restoring the drop-in), which is the supported recovery.
+hostctl verbs, so it is only reachable while that drop-in exists. The control
+plane cannot read `/etc/sudoers.d` (root 0750) to test that directly, so it asks
+the sudo policy itself (`sudo -n -l <pinned command>`, read-only, no password for
+the NOPASSWD rule). It offers **Install host helper** only when the helper file
+is missing *and* that probe succeeds *and* the root-owned payload is present —
+then the pinned repair verb reinstalls the helper and its drop-in from the
+payload.
 
-**Helper upgrades.** The payload is written by the (root, operator-run)
-installer, so its content — the helper scripts — is refreshed when
-`install.sh`/`gotham-hostbootstrap.sh create` next runs. The self-update wrapper
-re-applies whatever payload is installed on every update (so a deleted helper or
-drop-in is restored), but it cannot fetch a *newer* helper from the release: the
-release ships binaries only, and a root-owned payload cannot be replaced from a
-service-writable artifact without reintroducing the escalation removed in this
-change. Manual recovery/upgrade is the same fixed command:
+In every other read-only state there is no privileged path from the control plane
+by design, and re-running the (root, operator) installer is the recovery. The page
+states plainly: **"Host changes are provisioned by the control-plane installer, so
+a platform administrator must re-run it (or upgrade) to enable them."** That
+covers:
+
+- the drop-in is gone or names another user ("Denied") — the repair rule is
+  refused with it;
+- the payload was never installed (a host installed before this feature).
+
+**Helper refresh (honest limitation).** The payload is written only by the
+(root, operator-run) installer, and the self-update wrapper itself is rendered by
+`install.sh` only. So:
+
+- a **deleted** helper or drop-in is restored only on a host whose wrapper already
+  has the `apply_host_bootstrap_payload` step and whose payload exists (re-applied
+  before every restart);
+- a host that predates this feature has an **old wrapper with no apply step** and
+  **no payload**, so no self-update can install the helper — only re-running the
+  installer can;
+- the helper *content* never upgrades through self-update at all (the release
+  ships binaries only, and a root-owned payload must not be replaced from a
+  service-writable artifact). Upgrading the helper means re-running the installer.
+
+Manual recovery/upgrade is the same fixed command:
 
 ```sh
 sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user>

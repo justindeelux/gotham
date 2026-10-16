@@ -93,18 +93,19 @@ install_sudoers() {
 }
 
 # ensure_dir dir mode: create the directory root-owned with the given mode, and
-# refuse a symlink. On a real root it also re-asserts root ownership of an
-# existing directory, so a payload directory that is not root-owned is refused.
+# refuse a symlink. A pre-existing directory that is not root-owned (and so
+# could be swapped or written) is refused before anything is installed.
 ensure_dir() {
     d="$1"; m="$2"
     symlink_free "${d}"
     if [ -z "${ROOT}" ]; then
+        if [ -e "${d}" ]; then
+            # test -O is supported by dash/bash (the shells these installers run
+            # under) and is already used in gotham-update.sh.
+            # shellcheck disable=SC3067
+            [ -O "${d}" ] || die "${d} is not root-owned"
+        fi
         install -d -m "${m}" -o root -g root "${d}" || die "cannot prepare ${d}"
-        # test -O is supported by dash/bash (the shells these installers run
-        # under) and is already used in gotham-update.sh; shellcheck's POSIX
-        # portability note does not apply here.
-        # shellcheck disable=SC3067
-        [ -O "${d}" ] || die "${d} is not root-owned"
     else
         [ -d "${d}" ] || mkdir -p "${d}" || die "cannot create ${d}"
     fi

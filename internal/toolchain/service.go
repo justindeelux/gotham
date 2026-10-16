@@ -151,6 +151,9 @@ type Service struct {
 	instanceID   string
 	lease        time.Duration
 	workers      int
+	// renewInterval is how often a running job's lease is renewed (lease/3,
+	// floored at a second); a field so tests can shorten it.
+	renewInterval time.Duration
 	// maxLogBytes caps a job's persisted log (a field so tests can shrink it).
 	maxLogBytes int
 
@@ -203,20 +206,25 @@ func NewService(cfg Config) *Service {
 	if instanceID == "" {
 		instanceID = defaultInstanceID()
 	}
+	renewInterval := lease / 3
+	if renewInterval < time.Second {
+		renewInterval = time.Second
+	}
 	return &Service{
-		store:        cfg.Store,
-		registry:     cfg.Registry,
-		dial:         cfg.Dial,
-		events:       NewEmitter(pub),
-		publisher:    pub,
-		logger:       logger,
-		rpcTimeout:   rpcTimeout,
-		pollInterval: poll,
-		instanceID:   instanceID,
-		lease:        lease,
-		workers:      workers,
-		maxLogBytes:  maxJobLogBytes,
-		wake:         make(chan struct{}, workers),
+		store:         cfg.Store,
+		registry:      cfg.Registry,
+		dial:          cfg.Dial,
+		events:        NewEmitter(pub),
+		publisher:     pub,
+		logger:        logger,
+		rpcTimeout:    rpcTimeout,
+		pollInterval:  poll,
+		instanceID:    instanceID,
+		lease:         lease,
+		workers:       workers,
+		renewInterval: renewInterval,
+		maxLogBytes:   maxJobLogBytes,
+		wake:          make(chan struct{}, workers),
 	}
 }
 

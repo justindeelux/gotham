@@ -310,8 +310,8 @@ func TestToolchainClaimIsPerNodeSerializedUnderConcurrency(t *testing.T) {
 				switch {
 				case err == nil:
 					claimed++
-				case errors.Is(err, pgx.ErrNoRows):
-					// expected for losers and for losers of the node race
+				case errors.Is(err, pgx.ErrNoRows), errors.Is(err, store.ErrClaimContended):
+					// expected: an empty queue, or a lost node race
 				default:
 					claimErr = err
 				}

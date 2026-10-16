@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/justindeelux/gotham/internal/servers"
+	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -39,6 +40,11 @@ type fakeStore struct {
 	// finishFailures makes the next N FinishToolchainJob calls fail.
 	finishFailures int
 	failStaleErr   error
+	// renewZero makes RenewToolchainJobLease report 0 rows (lost lease).
+	renewZero bool
+	// contendedOnce makes the next claim of a real candidate report the
+	// per-node race once, so the worker's immediate retry can be exercised.
+	contendedOnce bool
 }
 
 func newFakeStore() *fakeStore {
@@ -121,6 +127,10 @@ func (f *fakeStore) ClaimNextQueuedToolchainJob(_ context.Context, p sqlc.ClaimN
 		if job.Status != string(StatusQueued) || running[job.ServerID] {
 			continue
 		}
+		if f.contendedOnce {
+			f.contendedOnce = false
+			return sqlc.ToolchainJob{}, store.ErrClaimContended
+		}
 		job.Status = string(StatusRunning)
 		job.StartedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
 		job.ClaimedBy = p.ClaimedBy
@@ -133,6 +143,9 @@ func (f *fakeStore) ClaimNextQueuedToolchainJob(_ context.Context, p sqlc.ClaimN
 func (f *fakeStore) RenewToolchainJobLease(_ context.Context, p sqlc.RenewToolchainJobLeaseParams) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.renewZero {
+		return 0, nil
+	}
 	job, ok := f.jobs[p.ID.Bytes]
 	if !ok || job.Status != string(StatusRunning) || job.ClaimedBy != p.ClaimedBy {
 		return 0, nil
@@ -329,13 +342,15 @@ func (s *fakeStream) SendMsg(any) error            { return nil }
 func (s *fakeStream) RecvMsg(any) error            { return nil }
 
 // fakeAgent is an AgentConn serving a fixed catalog and per-tool event streams.
-// delay lets a test make one tool slow so parallel-vs-sequential behaviour is
+// delay lets a test make one tool slow, and block makes one tool's stream hang
+// until its context is cancelled, so parallel/lost-lease behaviour is
 // observable.
 type fakeAgent struct {
 	mu      sync.Mutex
 	catalog []*agentv1.ToolInfo
 	events  map[string][]*agentv1.ToolEvent
 	delay   map[string]time.Duration
+	block   map[string]bool
 	openErr map[string]error
 	listErr error
 }
@@ -347,22 +362,26 @@ func (f *fakeAgent) ListTools(context.Context, *agentv1.ListToolsRequest, ...grp
 	return &agentv1.ListToolsResponse{Tools: f.catalog}, nil
 }
 
-func (f *fakeAgent) InstallTool(_ context.Context, in *agentv1.InstallToolRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ToolEvent], error) {
-	return f.open("install:" + in.GetId())
+func (f *fakeAgent) InstallTool(ctx context.Context, in *agentv1.InstallToolRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ToolEvent], error) {
+	return f.open(ctx, "install:"+in.GetId())
 }
 
-func (f *fakeAgent) UninstallTool(_ context.Context, in *agentv1.InstallToolRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ToolEvent], error) {
-	return f.open("uninstall:" + in.GetId())
+func (f *fakeAgent) UninstallTool(ctx context.Context, in *agentv1.InstallToolRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ToolEvent], error) {
+	return f.open(ctx, "uninstall:"+in.GetId())
 }
 
-func (f *fakeAgent) open(key string) (grpc.ServerStreamingClient[agentv1.ToolEvent], error) {
+func (f *fakeAgent) open(ctx context.Context, key string) (grpc.ServerStreamingClient[agentv1.ToolEvent], error) {
 	f.mu.Lock()
 	err := f.openErr[key]
 	delay := f.delay[key]
+	block := f.block[key]
 	events := f.events[key]
 	f.mu.Unlock()
 	if err != nil {
 		return nil, err
+	}
+	if block {
+		return &blockingStream{ctx: ctx}, nil
 	}
 	if delay > 0 {
 		time.Sleep(delay)
@@ -373,6 +392,24 @@ func (f *fakeAgent) open(key string) (grpc.ServerStreamingClient[agentv1.ToolEve
 func (f *fakeAgent) Close() error {
 	return nil
 }
+
+// blockingStream hangs on Recv until its context is cancelled, then returns the
+// cancellation error — used to exercise the lease-lost abort.
+type blockingStream struct {
+	ctx context.Context
+}
+
+func (s *blockingStream) Recv() (*agentv1.ToolEvent, error) {
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func (s *blockingStream) Header() (metadata.MD, error) { return nil, nil }
+func (s *blockingStream) Trailer() metadata.MD         { return nil }
+func (s *blockingStream) CloseSend() error             { return nil }
+func (s *blockingStream) Context() context.Context     { return s.ctx }
+func (s *blockingStream) SendMsg(any) error            { return nil }
+func (s *blockingStream) RecvMsg(any) error            { return nil }
 
 // fakeRegistry resolves every id to a server, optionally on a team.
 type fakeRegistry struct {

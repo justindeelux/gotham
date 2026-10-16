@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/grpc"
 
+	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
@@ -98,6 +99,10 @@ func (s *Service) worker(ctx context.Context, ready <-chan struct{}) {
 			if !s.idle(ctx, ticker) {
 				return
 			}
+		case errors.Is(err, store.ErrClaimContended):
+			// Another claimer won that node; try the next claimable job at once
+			// instead of sleeping a whole poll interval.
+			continue
 		case err != nil:
 			s.logger.Error("toolchain: claim queued job", "error", err)
 			if !s.idle(ctx, ticker) {
@@ -264,8 +269,8 @@ func (s *Service) run(ctx context.Context, job Job) {
 // function that cancels the renewer and waits.
 func (s *Service) startLeaseRenewal(ctx context.Context, jobID uuid.UUID, onLost func()) func() {
 	leaseCtx, cancel := context.WithCancel(ctx)
-	interval := s.lease / 3
-	if interval < time.Second {
+	interval := s.renewInterval
+	if interval <= 0 {
 		interval = time.Second
 	}
 	var wg sync.WaitGroup

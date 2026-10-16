@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -14,6 +13,11 @@ import (
 // runningServerUniqueIndex is the partial unique index that serializes a node's
 // jobs (migration 00055).
 const runningServerUniqueIndex = "toolchain_jobs_running_server_unique"
+
+// ErrClaimContended reports that a claim lost the per-node race: another claim
+// took the node first. It is distinct from pgx.ErrNoRows ("nothing claimable")
+// so a worker can retry immediately instead of idling a poll interval.
+var ErrClaimContended = errors.New("store: toolchain claim lost the per-node race")
 
 // isUniqueViolation reports whether err is a Postgres unique-violation (23505),
 // optionally on a specific constraint/index name.
@@ -51,12 +55,12 @@ func (s *Store) ListToolchainJobsByServer(ctx context.Context, params sqlc.ListT
 
 // ClaimNextQueuedToolchainJob atomically claims the oldest queued job whose
 // node has no running job, recording the claiming instance and a lease. A
-// concurrent claim that loses the per-node unique-index race (23505) is a
-// no-op: it reports pgx.ErrNoRows, the same as an empty queue.
+// concurrent claim that loses the per-node unique-index race (23505) returns
+// ErrClaimContended; an empty queue returns pgx.ErrNoRows.
 func (s *Store) ClaimNextQueuedToolchainJob(ctx context.Context, params sqlc.ClaimNextQueuedToolchainJobParams) (sqlc.ToolchainJob, error) {
 	job, err := s.queries.ClaimNextQueuedToolchainJob(ctx, params)
 	if err != nil && isUniqueViolation(err, runningServerUniqueIndex) {
-		return sqlc.ToolchainJob{}, pgx.ErrNoRows
+		return sqlc.ToolchainJob{}, ErrClaimContended
 	}
 	return job, err
 }

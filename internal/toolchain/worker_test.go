@@ -263,3 +263,62 @@ func TestRealtimeFramesCarryOnlyNewLines(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkerAbortsOnLostLease pins the lease-lost abort: when a renewal reports
+// that the lease is gone (the job was recovered), the worker cancels the stream
+// and returns without finishing, so it never overwrites a recovered job.
+func TestWorkerAbortsOnLostLease(t *testing.T) {
+	agent := &fakeAgent{
+		catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)},
+		block:   map[string]bool{"install:docker": true},
+	}
+	st := newFakeStore()
+	st.renewZero = true
+	svc := testService(st, agent, &fakeRegistry{}, nil)
+	svc.renewInterval = 20 * time.Millisecond
+
+	// A running job this instance owns, so only the "0 rows renewed" signal can
+	// stop it.
+	id := st.seedRunning(uuid.New(), "docker", "test-instance", time.Now().Add(time.Hour))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		svc.run(context.Background(), jobFromRow(st.job(id)))
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not abort after its lease was lost")
+	}
+	if got := st.status(t, id); got != StatusRunning {
+		t.Fatalf("job status = %s, want running (a lost lease must not finish the job)", got)
+	}
+	if n := len(st.finishOrder()); n != 0 {
+		t.Fatalf("recorded %d terminal writes, want 0 (run must not finish an unowned job)", n)
+	}
+}
+
+// TestWorkerRetriesContendedClaimImmediately pins the lost-claim retry: when a
+// claim loses the per-node race the worker tries the next claimable job at once
+// instead of sleeping a poll interval.
+func TestWorkerRetriesContendedClaimImmediately(t *testing.T) {
+	agent := &fakeAgent{
+		catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)},
+		events:  map[string][]*agentv1.ToolEvent{"install:docker": okStream("done")},
+	}
+	st := newFakeStore()
+	st.contendedOnce = true
+	svc := testService(st, agent, &fakeRegistry{}, nil)
+	svc.pollInterval = 30 * time.Second // a stall would blow waitTerminal's deadline
+	svc.Start()
+	defer func() { _ = svc.Close() }()
+
+	result, err := svc.Enqueue(context.Background(), uuid.New(), ActionInstall, []string{"docker"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if got := waitTerminal(t, st, result.Jobs[0].ID); got != StatusSucceeded {
+		t.Fatalf("job status = %s, want succeeded (contended claim must retry immediately)", got)
+	}
+}

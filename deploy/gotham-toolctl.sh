@@ -24,10 +24,27 @@
 # GOTHAM_TOOLCTL_* test overrides below are honoured only without sudo, like
 # gotham-hostctl.
 #
+# One job at a time: the transient unit holds a flock for its whole life, so a
+# retry after a cancelled or lingering job fails fast instead of overlapping
+# it, and the unit carries a RuntimeMaxSec bound so it cannot outlive the
+# request.
+#
 # Exit codes: 0 = success, 1 = a command failed, 2 = usage, 3 = tool not
-# allowed, 4 = checksum mismatch, 5 = unsupported platform or distribution.
+# allowed, 4 = checksum mismatch, 5 = unsupported platform or distribution,
+# 6 = another job is already running.
 set -u
 umask 022
+
+# A fixed PATH: with systemd-run the transient unit gets systemd's clean
+# default, but the no-systemd-run fallback would inherit sudo's PATH (Alpine's
+# sudo has no secure_path). A fixed list keeps a writable directory off it.
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
+# Hard wall-clock bound for the transient unit, kept under the agent's install
+# timeout (agent/tool_server.go defaultToolTimeout, 15m) so a job cannot
+# outlive its request even if the agent is killed mid-run.
+RUNTIME_MAX_SEC="840"
 
 # ---- test overrides (honoured only without sudo) ---------------------------
 ROOT=""
@@ -35,11 +52,18 @@ DRYRUN="0"
 INNER="${GOTHAM_TOOLCTL_INNER:-0}"
 ARCH_OVERRIDE=""
 DISTRO_OVERRIDE=""
+# Test-only seams (like gotham-hostctl's GOTHAM_HOSTCTL_*): they can redirect
+# where the helper looks for systemd-run or its lock, but never grant privilege
+# — under sudo they are ignored, and the helper is only ever reached via sudo.
+SYSTEMD_RUN="systemd-run"
+LOCK_OVERRIDE=""
 if [ -z "${SUDO_USER:-}${SUDO_UID:-}" ]; then
     ROOT="${GOTHAM_TOOLCTL_ROOT:-}"
     DRYRUN="${GOTHAM_TOOLCTL_DRYRUN:-0}"
     ARCH_OVERRIDE="${GOTHAM_TOOLCTL_ARCH:-}"
     DISTRO_OVERRIDE="${GOTHAM_TOOLCTL_DISTRO:-}"
+    SYSTEMD_RUN="${GOTHAM_TOOLCTL_SYSTEMD_RUN:-systemd-run}"
+    LOCK_OVERRIDE="${GOTHAM_TOOLCTL_LOCK:-}"
 fi
 
 # ---- pinned install material ----------------------------------------------
@@ -85,15 +109,39 @@ esac
 # Root's systemd-run creates a transient unit with a clean namespace (no
 # ProtectSystem), which is what lets the install write /usr and /etc. It is
 # attempted only for the installed, absolute helper path.
+#
+# --wait only waits: it does not stop the unit when this process is killed. The
+# RuntimeMaxSec property bounds a job whose agent went away, and the TERM/INT
+# trap below stops the unit on a graceful cancel.
 SELF="$0"
 case "${SELF}" in /*) SELF_OK=1 ;; *) SELF_OK=0 ;; esac
 if [ "${DRYRUN}" != "1" ] && [ "${INNER}" != "1" ] && [ "${SELF_OK}" = "1" ] \
-    && command -v systemd-run >/dev/null 2>&1; then
-    systemd-run --quiet --pipe --wait --collect \
-        --unit="gotham-toolctl-$$" \
+    && command -v "${SYSTEMD_RUN}" >/dev/null 2>&1; then
+    UNIT="gotham-toolctl-${VERB}-${TOOL}-$$"
+    # Stops the transient unit on a graceful cancel (SIGTERM from the agent).
+    # systemd-run --wait does not stop the unit when this process dies; a
+    # missing systemctl is tolerated by the `|| true`.
+    trap 'systemctl stop "$UNIT" >/dev/null 2>&1 || true; exit 130' TERM INT HUP
+    "${SYSTEMD_RUN}" --quiet --pipe --wait --collect \
+        --unit="${UNIT}" \
+        --property="RuntimeMaxSec=${RUNTIME_MAX_SEC}" \
         --setenv=GOTHAM_TOOLCTL_INNER=1 \
         "${SELF}" "$@"
     exit $?
+fi
+
+# ---- one job at a time on the node ----------------------------------------
+# Held for the whole job (the transient unit's process, or this process when
+# systemd-run is unavailable). A concurrent second job is refused, so two units
+# can never overlap even if a previous one outlived its agent request. Skipped
+# in a dry-run unless a test pins the lock path.
+if [ "${DRYRUN}" != "1" ] || [ -n "${LOCK_OVERRIDE}" ]; then
+    LOCK="${LOCK_OVERRIDE:-/run/gotham-toolctl.lock}"
+    command -v flock >/dev/null 2>&1 \
+        || die "flock is unavailable; refusing to run without the node lock" 6
+    : >>"${LOCK}" 2>/dev/null || die "cannot open the node lock ${LOCK}" 6
+    exec 9>>"${LOCK}"
+    flock -n 9 || die "another tool install or uninstall is already running on this node" 6
 fi
 
 # ---- platform -------------------------------------------------------------
@@ -198,20 +246,24 @@ uninstall_pack() {
 }
 
 install_buildkit() {
-    # Pull the digest-pinned image, then (re)create the container. The detection
-    # reference is tagged LAST: an image present from a failed run must not make
-    # the tool look installed while no container runs.
+    # Docker stores a digest-qualified pull digest-only: the tag
+    # `moby/buildkit:v0.34.0` does not exist locally afterwards, so every
+    # reference after the pull must use the digest ref.
     run docker pull "${BUILDKIT_IMAGE}"
     run docker rm -f "${BUILDKIT_CONTAINER}" || true
     run docker run -d --privileged --restart unless-stopped --name "${BUILDKIT_CONTAINER}" "${BUILDKIT_IMAGE}"
-    run docker tag "${BUILDKIT_TAG}" "${BUILDKIT_DETECT_REF}"
+    # Tag LAST, from the digest ref, so detection only flips to installed once
+    # the container is actually running (a failed run leaves no detection tag).
+    run docker tag "${BUILDKIT_IMAGE}" "${BUILDKIT_DETECT_REF}"
 }
 
 uninstall_buildkit() {
-    # Removing the missing container is not an error; removing the image is what
-    # flips detection back to "not installed", so a real failure surfaces.
+    # Symmetric with install: the detection ref is what the agent probes, so
+    # removing it untags the image (and, because the pull stored it digest-only,
+    # deletes it); the digest ref rmi is then a tolerated no-op.
     run docker rm -f "${BUILDKIT_CONTAINER}" || true
-    run docker rmi -f "${BUILDKIT_TAG}" "${BUILDKIT_DETECT_REF}"
+    run docker rmi -f "${BUILDKIT_DETECT_REF}"
+    run docker rmi -f "${BUILDKIT_IMAGE}" || true
 }
 
 install_docker() {

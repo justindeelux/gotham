@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -140,7 +141,9 @@ func TestToolctlPackIsVerifiedAndExtractsOneMember(t *testing.T) {
 }
 
 // TestToolctlBuildkitTagsLastAndIsIdempotent proves the detection tag is set
-// only after the container runs, and the container is cleared first so a retry
+// only after the container runs, that the tag source is the digest ref
+// (docker drops the tag on a digest-qualified pull, so `moby/buildkit:v0.34.0`
+// would not exist locally), and that the container is cleared first so a retry
 // after a failed run recovers.
 func TestToolctlBuildkitTagsLastAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
@@ -158,9 +161,48 @@ func TestToolctlBuildkitTagsLastAndIsIdempotent(t *testing.T) {
 	case pull >= rm || rm >= run || run >= tag:
 		t.Fatalf("buildkit steps out of order (pull=%d rm=%d run=%d tag=%d): %q", pull, rm, run, tag, out)
 	}
-	if !strings.Contains(out, "moby/buildkit:v0.34.0@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c") {
+	const buildkitTagOnly = "moby/buildkit:v0.34.0"
+	const buildkitDigestRef = buildkitTagOnly + "@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c"
+	if !strings.Contains(out, buildkitDigestRef) {
 		t.Errorf("buildkit image is not digest-pinned: %q", out)
 	}
+	// The tag step must source the digest ref: after a digest-qualified pull the
+	// tag-only ref does not exist locally, so `docker tag moby/buildkit:v0.34.0`
+	// would always fail and leave the tool permanently "not installed".
+	tagLine := commandLine(out, "docker tag")
+	if tagLine == "" {
+		t.Fatalf("no docker tag step: %q", out)
+	}
+	if !strings.Contains(tagLine, buildkitDigestRef) {
+		t.Errorf("docker tag does not source the digest ref (a digest-qualified pull drops the tag): %q", tagLine)
+	}
+
+	// Uninstall must be symmetric: drop the detection ref first (it is what the
+	// agent probes) and then the digest image.
+	uninstall, err := runToolctl(t, root, nil, "uninstall-tool", "buildkit")
+	if err != nil {
+		t.Fatalf("uninstall-tool buildkit: %v: %s", err, uninstall)
+	}
+	rmiDetect := strings.Index(uninstall, "docker rmi -f moby/buildkit\n")
+	rmiImage := strings.Index(uninstall, "docker rmi -f "+buildkitDigestRef)
+	rmContainer := strings.Index(uninstall, "docker rm -f buildkit")
+	switch {
+	case rmContainer < 0 || rmiDetect < 0 || rmiImage < 0:
+		t.Fatalf("buildkit uninstall steps missing: %q", uninstall)
+	case rmContainer >= rmiDetect || rmiDetect >= rmiImage:
+		t.Fatalf("buildkit uninstall out of order: %q", uninstall)
+	}
+}
+
+// commandLine returns the first "+ " output line whose command contains
+// fragment, including the full line so a caller can inspect its arguments.
+func commandLine(out, fragment string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "+ ") && strings.Contains(line, fragment) {
+			return line
+		}
+	}
+	return ""
 }
 
 // TestToolctlRootRedirects proves the test root redirects the install target,
@@ -174,6 +216,77 @@ func TestToolctlRootRedirects(t *testing.T) {
 	want := filepath.Join(root, "usr", "local", "bin", "pack")
 	if !strings.Contains(out, want) {
 		t.Errorf("install target is not under the root %s: %q", root, out)
+	}
+}
+
+// TestToolctlReexecBoundsAndStopsUnit proves the sandbox escape runs the job in
+// a transient unit that is name-scoped, wall-clock bounded (RuntimeMaxSec) and
+// marked so it does not re-exec again.
+func TestToolctlReexecBoundsAndStopsUnit(t *testing.T) {
+	dir := t.TempDir()
+	record := filepath.Join(dir, "argv")
+	fake := filepath.Join(dir, "fake-systemd-run")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE_RECORD\"\nexit 0\n"
+	if err := os.WriteFile(fake, []byte(body), 0o755); err != nil {
+		t.Fatalf("write fake systemd-run: %v", err)
+	}
+	self, err := filepath.Abs("gotham-toolctl.sh")
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	cmd := exec.Command("sh", self, "install-tool", "buildkit")
+	cmd.Env = append(os.Environ(),
+		"GOTHAM_TOOLCTL_SYSTEMD_RUN="+fake,
+		"FAKE_RECORD="+record,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("helper re-exec: %v: %s", err, out)
+	}
+	recorded, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("fake systemd-run did not run: %v", err)
+	}
+	got := string(recorded)
+	for _, want := range []string{
+		"--unit=gotham-toolctl-install-tool-buildkit-",
+		"--property=RuntimeMaxSec=840",
+		"--setenv=GOTHAM_TOOLCTL_INNER=1",
+		self,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("systemd-run argv missing %q: %q", want, got)
+		}
+	}
+}
+
+// TestToolctlRefusesConcurrentJob proves the node lock: a second job while the
+// lock is held is refused instead of overlapping the running one. It needs
+// flock, so it skips on a host without it (macOS).
+func TestToolctlRefusesConcurrentJob(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("flock is not available on this host")
+	}
+	root := t.TempDir()
+	lock := filepath.Join(root, "toolctl.lock")
+	file, err := os.OpenFile(lock, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatalf("open lock: %v", err)
+	}
+	defer func() { _ = file.Close() }()
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("hold lock: %v", err)
+	}
+
+	out, err := runToolctl(t, root, []string{"GOTHAM_TOOLCTL_LOCK=" + lock}, "install-tool", "pack")
+	if err == nil {
+		t.Fatalf("install with the lock held = %q; want a busy refusal", out)
+	}
+	if !strings.Contains(out, "already running") {
+		t.Errorf("busy refusal did not name the running job: %q", out)
+	}
+	if strings.Contains(out, "+ ") {
+		t.Errorf("a locked-out job still planned a command: %q", out)
 	}
 }
 

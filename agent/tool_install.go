@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/grpc"
@@ -64,6 +66,16 @@ func (execRunner) Run(ctx context.Context, argv []string, root bool, emit func(s
 
 	command := exec.CommandContext(ctx, elevated[0], elevated[1:]...)
 	command.Env = os.Environ()
+	// A cancelled request must not orphan the helper's transient unit: SIGKILL
+	// (the CommandContext default) would leave it running. Ask the helper to
+	// stop the unit, then bound how long a wedged child may delay the return.
+	command.Cancel = func() error {
+		if command.Process == nil {
+			return nil
+		}
+		return command.Process.Signal(syscall.SIGTERM)
+	}
+	command.WaitDelay = 5 * time.Second
 
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -111,6 +123,11 @@ func (execRunner) Run(ctx context.Context, argv []string, root bool, emit func(s
 	defer mu.Unlock()
 	if emitErr != nil {
 		return -1, emitErr
+	}
+	// A cancelled or timed-out context is not a successful command, even if the
+	// child exited 0 on its own (a graceful SIGTERM lets it run an exit trap).
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return -1, ctxErr
 	}
 	if waitErr == nil {
 		return 0, nil

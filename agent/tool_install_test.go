@@ -496,6 +496,55 @@ func TestExecRunnerElevatesRootSteps(t *testing.T) {
 	}
 }
 
+// TestExecRunnerStopsChildGracefullyOnCancel proves a cancelled request sends
+// SIGTERM (not SIGKILL), so the helper can stop its transient unit; the child's
+// TERM trap must run and the runner must still report the cancellation.
+func TestExecRunnerStopsChildGracefullyOnCancel(t *testing.T) {
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	termed := filepath.Join(dir, "termed")
+	script := filepath.Join(dir, "loop.sh")
+	body := "#!/bin/sh\n" +
+		"echo ready > \"" + ready + "\"\n" +
+		"trap 'echo term > \"" + termed + "\"; exit 0' TERM\n" +
+		"while :; do sleep 0.2; done\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatalf("write child script: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := execRunner{}.Run(ctx, []string{"sh", script}, false, func(string, string) error { return nil })
+		done <- err
+	}()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("child never became ready")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Run after cancel = nil; want the context error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+	if _, err := os.Stat(termed); err != nil {
+		t.Fatalf("child did not run its TERM trap (SIGKILL instead of SIGTERM?): %v", err)
+	}
+}
+
 // equalStrings compares two string slices without importing slices in every
 // test file.
 func equalStrings(a, b []string) bool {

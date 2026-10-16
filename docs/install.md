@@ -471,7 +471,16 @@ Behaviour:
 - **One at a time.** A node-wide lock allows one install or uninstall at a
   time; a second call is refused with `RESOURCE_EXHAUSTED`. The request is
   cancelled when the control plane drops the stream, and bounded by a 15-minute
-  timeout.
+  timeout. The helper holds its own `flock` for the whole job, so even a job
+  whose agent request was cancelled (the transient unit keeps running until it
+  finishes or its `RuntimeMaxSec=840` bound fires, whichever is first) blocks a
+  retry with a clear "already running" refusal instead of overlapping it; a
+  graceful cancel (`SIGTERM`) makes the helper stop its unit immediately.
+- **Upgrading a node.** The helper and its sudoers rule are installed by
+  `install-agent.sh`, not by the self-update binary swap: a node that updated
+  only through `gotham-agent` self-update keeps the old install and its tool
+  install/uninstall calls fail with sudo's "not allowed". Re-run
+  `deploy/install-agent.sh` on the node (idempotent) to install them.
 - **Uninstall refuses while a tool is in use** (`FAILED_PRECONDITION`): while a
   build runs, and while another installed tool depends on it (for example
   BuildKit cannot go while Railpack is installed). Only in-flight *builds* are

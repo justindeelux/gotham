@@ -199,7 +199,7 @@ describe("HostHelperGate", () => {
       networkState(hostWith({ helper: "missing", bootstrap: false, network_stack: true })),
       "network",
     );
-    expect(wrapper.text()).toContain("Restart or update the control plane");
+    expect(wrapper.text()).toContain("Update the control plane");
     expect(installButton(wrapper)).toBeUndefined();
     wrapper.unmount();
   });
@@ -269,7 +269,7 @@ describe("SystemForm host states", () => {
       SystemForm,
       systemState(hostWith({ helper: "missing", bootstrap: false, system_stack: true })),
     );
-    expect(wrapper.text()).toContain("Restart or update the control plane");
+    expect(wrapper.text()).toContain("Update the control plane");
     expect(installButton(wrapper)).toBeUndefined();
     wrapper.unmount();
   });

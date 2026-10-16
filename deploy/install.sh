@@ -160,7 +160,7 @@ CP_HOSTS="${CP_HOSTS}${CP_HOSTS_OPT}"
 CP_HOSTS="$(printf '%s' "${CP_HOSTS}" | tr ',' ' ')"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in release-verify.sh install-agent-lib.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service; do
+for sibling in release-verify.sh install-agent-lib.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service gotham-hostbootstrap.sh gotham-hostctl.sh gotham-toolctl.sh; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2
@@ -1136,6 +1136,22 @@ if [ "${TEST_MODE}" -eq 0 ] && [ "${DRY_RUN}" -eq 0 ]; then
     log "installing the sudoers rule"
     # Invoke via sh so a checkout that lost the exec bit still installs.
     sh "${SCRIPT_DIR}/install-sudoers.sh" "${SERVICE_USER}"
+fi
+
+# Host helper (JUS-185): the fixed, root-owned gotham-hostctl + gotham-toolctl
+# and the verb+id-pinned sudoers drop-in for the control-plane user, plus the
+# root-owned payload the self-update wrapper re-applies on later updates. This
+# is the trusted root install step, so no root process ever runs the
+# service-owned binary. A failure is reported but does not roll back the
+# control plane (the Instance page shows the honest "update the control plane"
+# state).
+log "installing the host helper"
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER}"
+elif [ "${TEST_MODE}" -eq 0 ]; then
+    if ! sh "${SCRIPT_DIR}/gotham-hostbootstrap.sh" create "${SERVICE_USER}"; then
+        log "WARNING: host helper install failed; retry with: sudo sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER}"
+    fi
 fi
 
 log "installing systemd unit ${SERVICE_FILE}"

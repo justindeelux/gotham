@@ -14,7 +14,7 @@
 # what runs as root: it cannot name a package, a URL or an extra flag. The
 # control plane uses the same helper to repair the host helper
 # (`install-tool gotham-hostctl`), reaching it through the verb-pinned rule the
-# `gotham host-bootstrap` step writes; the content it installs is the root-owned
+# `gotham-hostbootstrap` step writes; the content it installs is the root-owned
 # staged copy next to this script, never caller-supplied bytes.
 #
 # Versions and their sha256 digests are pinned below. Downloads are verified
@@ -315,18 +315,19 @@ install_git() {
 # ---- host helper (gotham-hostctl) ------------------------------------------
 # Installs the fixed, root-owned host helper the CONTROL PLANE (not the agent)
 # uses for instance settings, plus its verb-pinned sudoers drop-in. Content is
-# the root-owned staged copy (gotham-hostctl.dist) and staged sudoers
-# (gotham-hostctl.sudoers) that the binary's `host-bootstrap` writes next to
-# this helper, so a caller naming only the catalog id cannot substitute either.
+# the root-owned payload that gotham-hostbootstrap wrote next to this helper
+# (/usr/libexec/gotham/hostbootstrap), so a caller naming only the catalog id
+# cannot substitute the script or the rules. See gotham-hostbootstrap.sh.
+HOSTCTL_PAYLOAD="${ROOT}/usr/libexec/gotham/hostbootstrap"
 HOSTCTL_LIVE="${ROOT}/usr/libexec/gotham/gotham-hostctl"
-HOSTCTL_DIST="${ROOT}/usr/libexec/gotham/gotham-hostctl.dist"
-HOSTCTL_SUDOERS="${ROOT}/usr/libexec/gotham/gotham-hostctl.sudoers"
+HOSTCTL_SRC="${HOSTCTL_PAYLOAD}/gotham-hostctl"
+HOSTCTL_SUDOERS="${HOSTCTL_PAYLOAD}/gotham-hostctl.sudoers"
 HOSTCTL_DROPIN="${ROOT}/etc/sudoers.d/gotham-hostctl"
 
 install_hostctl() {
-    [ -f "${HOSTCTL_DIST}" ] || die "gotham-hostctl content is missing (${HOSTCTL_DIST})" 5
-    [ -f "${HOSTCTL_SUDOERS}" ] || die "gotham-hostctl sudoers is missing (${HOSTCTL_SUDOERS})" 5
-    run install -m 0755 -o root -g root "${HOSTCTL_DIST}" "${HOSTCTL_LIVE}"
+    [ -f "${HOSTCTL_SRC}" ] || die "gotham-hostctl payload is missing (${HOSTCTL_SRC}); run the control-plane installer" 5
+    [ -f "${HOSTCTL_SUDOERS}" ] || die "gotham-hostctl sudoers payload is missing (${HOSTCTL_SUDOERS})" 5
+    run install -m 0755 -o root -g root "${HOSTCTL_SRC}" "${HOSTCTL_LIVE}"
     if [ "${DRYRUN}" = "1" ]; then
         echo "+ visudo -cf <temp>"
         echo "+ install -m 0440 ${HOSTCTL_SUDOERS} ${HOSTCTL_DROPIN}"

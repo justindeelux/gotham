@@ -71,21 +71,20 @@ func TestToolctlRefusesPlatformToolUninstall(t *testing.T) {
 }
 
 // TestToolctlHostctlInstall proves the control-plane host helper installs from
-// the root-owned staged copy + sudoers and a missing staged file is refused
-// (JUS-185).
+// the root-owned payload and a missing payload is refused (JUS-185).
 func TestToolctlHostctlInstall(t *testing.T) {
 	missing, err := runToolctl(t, t.TempDir(), nil, "install-tool", "gotham-hostctl")
-	if err == nil || !strings.Contains(missing, "content is missing") {
-		t.Fatalf("missing staged content = %q, %v; want refusal", missing, err)
+	if err == nil || !strings.Contains(missing, "payload is missing") {
+		t.Fatalf("missing payload = %q, %v; want refusal", missing, err)
 	}
 
 	root := t.TempDir()
-	staged := filepath.Join(root, "usr/libexec/gotham")
-	if err := os.MkdirAll(staged, 0o755); err != nil {
+	payload := filepath.Join(root, "usr/libexec/gotham/hostbootstrap")
+	if err := os.MkdirAll(payload, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"gotham-hostctl.dist", "gotham-hostctl.sudoers"} {
-		if err := os.WriteFile(filepath.Join(staged, name), []byte("x"), 0o755); err != nil {
+	for _, name := range []string{"gotham-hostctl", "gotham-hostctl.sudoers"} {
+		if err := os.WriteFile(filepath.Join(payload, name), []byte("x"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -93,7 +92,7 @@ func TestToolctlHostctlInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install-tool gotham-hostctl: %v: %s", err, out)
 	}
-	if !strings.Contains(out, "gotham-hostctl.dist") ||
+	if !strings.Contains(out, "hostbootstrap/gotham-hostctl") ||
 		!strings.Contains(out, "gotham-hostctl.sudoers") ||
 		!strings.Contains(out, "visudo -cf") {
 		t.Errorf("host helper install did not stage, validate and install: %q", out)

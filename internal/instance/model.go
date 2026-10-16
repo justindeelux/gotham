@@ -167,10 +167,10 @@ const (
 type Host struct {
 	// Helper is the install state of the fixed host helper.
 	Helper HelperState `json:"helper"`
-	// Bootstrap is true when the root-owned bootstrap artifacts are present
-	// (the tool installer exists), i.e. the control plane ran `host-bootstrap`
-	// at start. When false the in-product install cannot run and the operator
-	// must restart/update the control plane first.
+	// Bootstrap is true when the root-owned host-helper payload is installed
+	// (install.sh / the self-update wrapper wrote it), i.e. the in-product
+	// install has a privileged path to run. When false the operator must
+	// update the control plane first.
 	Bootstrap bool `json:"bootstrap"`
 	// NetworkStack is true when the host runs what the network section needs
 	// (systemd-networkd + systemd-resolved + networkctl), detected without the

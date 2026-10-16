@@ -275,7 +275,6 @@ const errorPrefixPackages = new Set([
   "docker",
   "files",
   "githubapp",
-  "host-bootstrap",
   "instance",
   "notifications",
   "oauth",

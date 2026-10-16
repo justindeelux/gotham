@@ -32,12 +32,6 @@ Environment=GOTHAM_UPDATE_SCRIPT=/usr/libexec/gotham/gotham-update
 EnvironmentFile=-/etc/gotham/gotham.env
 # AUTO_UPDATE=true enables the in-process scheduled check/apply loop.
 # Environment=AUTO_UPDATE=true
-# Install/refresh the fixed, root-owned host helper + host-tool installer and
-# their verb-pinned sudoers drop-ins on every start (JUS-185). The "+" runs it
-# as root even though the service runs as User=gotham, so the bootstrap needs no
-# sudoers of its own; the artifacts it writes are what the service user later
-# reaches through pinned rules, so an instance self-heals with no manual step.
-ExecStartPre=+/var/lib/gotham/bin/gotham host-bootstrap
 ExecStart=/var/lib/gotham/bin/gotham serve
 Restart=always
 RestartSec=5
@@ -64,13 +58,7 @@ StateDirectoryMode=0755
 ProtectSystem=full
 ProtectHome=true
 PrivateTmp=true
-# /var/lib/gotham is the service user's own StateDirectory. The other two are
-# root-owned (0755/0750), so re-opening their mounts read-write only lets the
-# root ExecStartPre write them: the gotham user still cannot, because the
-# directories are not gotham-writable.
 ReadWritePaths=/var/lib/gotham
-ReadWritePaths=/usr/libexec/gotham
-ReadWritePaths=/etc/sudoers.d
 
 [Install]
 WantedBy=multi-user.target

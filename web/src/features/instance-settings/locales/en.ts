@@ -18,7 +18,7 @@ const en = {
       "The host helper is not installed, so these values are read-only. Install it to manage host settings from Gotham.",
     denied:
       "The host helper is installed but not permitted to run, so these values are read-only. Install it again to refresh its permission.",
-    restart: "Restart or update the control plane to enable host changes.",
+    restart: "Update the control plane to enable host changes.",
     install: "Install host helper",
     installed: "Host helper installed. These settings are now editable.",
     installFailed: "The host helper could not be installed.",

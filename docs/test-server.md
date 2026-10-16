@@ -104,15 +104,20 @@ tag (no separate clone), driven by two systemd units.
 - **Control plane** — `gotham.service`: `WorkingDirectory=/root/gotham`,
   `ExecStart=/root/gotham/bin/gotham serve`; Postgres is the **native** server
   (`postgres` role, database `gotham`), not the compose dev stack.
-- **Host bootstrap (JUS-185):** `gotham.service` also needs
-  `ExecStartPre=+/root/gotham/bin/gotham host-bootstrap` and
-  `ReadWritePaths=/usr/libexec/gotham /etc/sudoers.d` (the `+` runs it as root)
-  so the root-owned `gotham-hostctl` / `gotham-toolctl` and their verb-pinned
-  sudoers drop-ins are (re)installed at every start. Instances installed by
-  `install.sh` ship this in the unit; an existing hand-written unit gets it from
-  the drop-in the self-update wrapper writes, or by adding the two lines above
-  and running `systemctl daemon-reload && systemctl restart gotham`. Without it
-  the Instance → Network section stays read-only and offers no install.
+- **Host bootstrap (JUS-185):** the Instance → Network section needs the
+  root-owned `gotham-hostctl` / `gotham-toolctl` and their verb-pinned sudoers
+  drop-in. There is no unit directive for this; install them with the root
+  installer from the checkout, which also writes the root-owned payload the
+  self-update wrapper re-applies:
+
+  ```sh
+  sudo sh deploy/gotham-hostbootstrap.sh create gotham
+  ```
+
+  (Use the actual service user if it is not `gotham`.) Until this runs on a box
+  that predates the feature, the section stays read-only and says to update the
+  control plane. Do not add an `ExecStartPre=+` that runs the service-owned
+  binary as root — that would let any control-plane code execution become root.
 - **Node agent** — `gotham-agent.service`: runs
   `/var/lib/gotham-agent/bin/gotham-agent`, config in `/etc/gotham/agent.env`
   (`GOTHAM_AGENT_NODE_ID=test-node-1`, plus `GOTHAM_AGENT_CP_ADDR=127.0.0.1:9442`

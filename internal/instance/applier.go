@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -63,6 +64,11 @@ const ToolctlEnv = "GOTHAM_TOOLCTL"
 // DefaultToolctl is the fixed, root-owned tool installer (deploy/gotham-toolctl.sh).
 const DefaultToolctl = "/usr/libexec/gotham/gotham-toolctl"
 
+// DefaultBootstrapPayload is the root-owned payload the installer and the
+// self-update wrapper install (deploy/gotham-hostbootstrap.sh). Its presence is
+// what makes the in-product helper install possible.
+const DefaultBootstrapPayload = "/usr/libexec/gotham/hostbootstrap"
+
 // hostctlToolID is the tool-installer id that maps to the host-helper install
 // (see the allow-list in deploy/gotham-toolctl.sh).
 const hostctlToolID = "gotham-hostctl"
@@ -110,7 +116,7 @@ func (a *sudoApplier) run(ctx context.Context, verb, stdin string) (string, erro
 func (a *sudoApplier) Probe(ctx context.Context) Host {
 	h := Host{
 		Helper:       HelperReady,
-		Bootstrap:    toolctlPresent(a.toolctl),
+		Bootstrap:    payloadPresent(DefaultBootstrapPayload),
 		NetworkStack: networkStackAvailable(),
 		SystemStack:  systemStackAvailable(),
 	}
@@ -130,10 +136,10 @@ func (a *sudoApplier) Probe(ctx context.Context) Host {
 	return h
 }
 
-// toolctlPresent reports whether the bootstrap wrote the root-owned tool
-// installer, i.e. whether the in-product install has a privileged path to run.
-func toolctlPresent(path string) bool {
-	fi, err := os.Stat(path)
+// payloadPresent reports whether the root-owned host-helper payload is
+// installed, i.e. whether the in-product install has a privileged path to run.
+func payloadPresent(dir string) bool {
+	fi, err := os.Stat(filepath.Join(dir, "gotham-hostctl"))
 	return err == nil && fi.Mode().IsRegular()
 }
 

@@ -3,7 +3,7 @@
 # gotham-hostctl: privileged host settings helper for the Gotham control plane.
 #
 # Installed root-owned at /usr/libexec/gotham/gotham-hostctl and reached only
-# through the sudoers drop-in written by install-hostctl-sudoers.sh, which grants
+# through the sudoers drop-in written by gotham-hostbootstrap.sh, which grants
 # the gotham service user exactly these verbs (one rule each, no wildcards):
 #
 #   status | apply-network | confirm-network | revert-network | apply-system

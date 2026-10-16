@@ -616,32 +616,47 @@ and by NEG1 end to end; the wrapper rollback status is covered by NEG2.
 
 `Settings → Instance` applies network (DNS, IPv4/IPv6) and system (hostname, NTP)
 settings through `gotham-hostctl.sh`, a fixed root-owned helper with the same
-privilege model as the update wrapper.
+privilege model as the update wrapper. The control plane (never the agent) runs
+`/usr/libexec/gotham/gotham-hostctl <verb>` through its verb-pinned sudoers rule.
 
-**Bootstrap (no manual step).** `gotham.service` runs `gotham host-bootstrap` as
-root on every start (`ExecStartPre=+`). The subcommand installs/refreshes the
-fixed, root-owned `gotham-hostctl` and `gotham-toolctl` at
-`/usr/libexec/gotham/` (0755), the staged repair copies
-(`gotham-hostctl.dist`, `gotham-hostctl.sudoers`, `gotham-toolctl.sudoers`) and
-the two verb-pinned sudoers drop-ins (`/etc/sudoers.d/gotham-hostctl` for the
-control-plane user, `/etc/sudoers.d/gotham-toolctl` for the agent user), each
-validated with `visudo` before it is moved into place. It reads no configuration
-and writes only those fixed paths from the helper scripts embedded in the binary
-(`go:embed`), so an instance self-heals with no manual step — including a box
-whose agent was never installed with `install-agent.sh`. Instances whose unit
-predates this get the directive from a drop-in the self-update wrapper writes
-(`/etc/systemd/system/gotham.service.d/host-bootstrap.conf`) before restarting.
+**Install (root-trusted source only).** `deploy/gotham-hostbootstrap.sh` is the
+single installer of the helper. `install.sh` (run by the operator as root) runs
+it once as `sh deploy/gotham-hostbootstrap.sh create <control-plane-user>`; the
+self-update wrapper re-applies it on every update from the root-owned payload at
+`/usr/libexec/gotham/hostbootstrap/`. It writes only fixed root-owned paths:
+
+- `/usr/libexec/gotham/gotham-hostctl` and `gotham-toolctl` (root:root 0755);
+- the payload `/usr/libexec/gotham/hostbootstrap/` (the same scripts, the
+  rendered `gotham-hostctl.sudoers`, and its own installer copy);
+- `/etc/sudoers.d/gotham-hostctl` for the actual control-plane user: the five
+  hostctl verbs plus the single pinned `gotham-toolctl install-tool
+  gotham-hostctl` repair verb.
+
+Each file is written to a `mktemp` file in its destination directory and renamed
+atomically; a symlinked destination is refused; a sudoers drop-in is validated
+with `visudo -cf` before the rename, so a broken file is never left behind. It is
+idempotent and reads no environment or configuration (the console name is the
+control-plane user the installer passes). No root process ever executes or reads
+as code a file the service user can write: the wrapper only re-reads the
+root-owned payload, and the service binary (owned by the service user) is never
+run as root.
+
+The agent's `/etc/sudoers.d/gotham-toolctl` is installed by `install-agent.sh`
+(`install-toolctl-sudoers.sh`), unchanged; the control plane only re-applies the
+host-helper payload, so a custom service user's hostctl grant is never rewritten
+for `gotham`.
 
 When the helper is missing or not permitted, `Settings → Instance` reports the
 cause and offers **Install host helper**: the control plane runs
 `gotham-toolctl install-tool gotham-hostctl` (one pinned sudoers rule, no blanket
-sudo), which reinstalls the helper and its drop-in from the staged copies. If the
-bootstrap has never run (an old unit), the page says to restart or update the
-control plane instead of offering an install that cannot succeed. Manual
-recovery, if ever needed, is the same fixed command:
+sudo), which reinstalls the helper and its drop-in from the payload. When the
+payload has never been installed (a host that predates this feature and has not
+run the new installer), the page says to update the control plane instead of
+offering an install that cannot succeed. Manual recovery is the same fixed
+command:
 
 ```sh
-sudo /var/lib/gotham/bin/gotham host-bootstrap
+sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user>
 ```
 
 - sudoers grants exactly five verbs (`status`, `apply-network`, `confirm-network`,

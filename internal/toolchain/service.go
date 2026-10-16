@@ -20,6 +20,7 @@ import (
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
+	"github.com/justindeelux/gotham/toolcatalog"
 )
 
 // Timeouts and limits.
@@ -292,6 +293,14 @@ func (s *Service) Enqueue(ctx context.Context, serverID uuid.UUID, action Action
 	}
 	if err := s.resolve(ctx, serverID, true); err != nil {
 		return EnqueueResult{}, err
+	}
+	// Keep platform policy authoritative even when an older agent allows removal.
+	if action == ActionUninstall {
+		for _, id := range ids {
+			if tool, known := toolcatalog.Lookup(id); known && !tool.Uninstallable {
+				return EnqueueResult{}, fmt.Errorf("%w: cannot uninstall %q: required by the platform; %s", ErrValidation, id, tool.Description)
+			}
+		}
 	}
 
 	catalog, err := s.catalog(ctx, serverID)

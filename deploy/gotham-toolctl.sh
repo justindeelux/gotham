@@ -95,7 +95,9 @@ allow_install() {
 }
 allow_uninstall() {
     case "$1" in
-        railpack | buildkit | pack | git) return 0 ;;
+        railpack | buildkit | pack) return 0 ;;
+        git) die "cannot uninstall git: required by the platform for source deployments" 3 ;;
+        docker) die "cannot uninstall docker: required by the platform to run workloads" 3 ;;
         *) die "tool is not uninstallable: $1" 3 ;;
     esac
 }
@@ -304,15 +306,6 @@ install_git() {
     esac
 }
 
-uninstall_git() {
-    case "${DISTRO}" in
-        apt) run env DEBIAN_FRONTEND=noninteractive apt-get remove -y git ;;
-        dnf) run dnf remove -y git ;;
-        apk) run apk del git ;;
-        *) die "git: unsupported distribution" 5 ;;
-    esac
-}
-
 case "${VERB}:${TOOL}" in
     install-tool:railpack) install_railpack ;;
     install-tool:buildkit) install_buildkit ;;
@@ -322,6 +315,5 @@ case "${VERB}:${TOOL}" in
     uninstall-tool:railpack) uninstall_railpack ;;
     uninstall-tool:buildkit) uninstall_buildkit ;;
     uninstall-tool:pack) uninstall_pack ;;
-    uninstall-tool:git) uninstall_git ;;
     *) die "unhandled request: ${VERB} ${TOOL}" 3 ;;
 esac

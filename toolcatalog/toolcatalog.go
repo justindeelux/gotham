@@ -129,7 +129,7 @@ var Catalog = []Tool{
 		Category:    CategoryBuild,
 		Detect:      Detect{Binaries: []string{"git"}, Version: []string{"--version"}},
 		NeedsRoot:   true,
-		Installable: true, Uninstallable: true,
+		Installable: true, Uninstallable: false,
 		MinVersion: "2.37",
 	},
 	{

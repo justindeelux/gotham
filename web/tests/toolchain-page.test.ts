@@ -214,3 +214,43 @@ describe("row selectability", () => {
     expect(useToolchainStore().tools).toHaveLength(3);
   });
 });
+
+describe("platform tools", () => {
+  it("hides uninstall even for an older agent and explains the impact", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", installed: true, uninstallable: true }),
+      tool({ installed: true, uninstallable: true }),
+      tool({ id: "pack", name: "Pack", installed: true, uninstallable: true }),
+    ]);
+    const wrapper = await mountPage();
+    const rows = wrapper.findAll("tbody tr");
+    for (const name of ["Git", "Docker"]) {
+      const row = rows.find((item) => item.text().includes(name));
+      expect(row?.text()).toContain("Required");
+      expect(row?.text()).toContain("Cannot be uninstalled");
+      expect(row?.findAll("button")).toHaveLength(0);
+    }
+    const uninstall = wrapper.findAll("button").filter((button) => button.text() === "Uninstall");
+    expect(uninstall).toHaveLength(1);
+    await uninstall[0].trigger("click");
+    await flushPromises();
+    expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["pack"], "uninstall");
+    wrapper.unmount();
+  });
+
+  it("offers install/update for outdated git through the existing install action", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", installed: true, version: "2.34.1", version_ok: false }),
+    ]);
+    const wrapper = await mountPage();
+    expect(wrapper.text()).toContain("Update available");
+    const update = wrapper.findAll("button").find((button) => button.text() === "Install / Update");
+    expect(update).toBeDefined();
+    await update?.trigger("click");
+    await flushPromises();
+    expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git"], "install");
+    wrapper.unmount();
+  });
+});

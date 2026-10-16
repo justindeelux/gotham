@@ -211,6 +211,9 @@ const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
         row.description
           ? h("span", { class: "muted tool-meta" }, row.description)
           : null,
+        row.id === "git" || row.id === "docker"
+          ? h("span", { class: "muted tool-meta" }, t(`toolchain.page.required.${row.id}`))
+          : null,
         !row.installable && !row.uninstallable
           ? h("span", { class: "muted tool-meta" }, t("toolchain.page.detectOnlyNote"))
           : null,
@@ -258,7 +261,8 @@ const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
     width: 200,
     render: (row) => {
       const buttons: VNode[] = [];
-      if (!row.installed && row.installable) {
+      const updateGit = row.id === "git" && row.installed && !row.version_ok;
+      if ((!row.installed || updateGit) && row.installable) {
         buttons.push(
           h(NButton, {
             size: "small",
@@ -266,10 +270,10 @@ const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
             ghost: true,
             loading: pendingTools.value[row.id] === true,
             onClick: () => void runToolAction(row, "install"),
-          }, { default: () => t("toolchain.actions.install") }),
+          }, { default: () => t(updateGit ? "toolchain.actions.installUpdate" : "toolchain.actions.install") }),
         );
       }
-      if (row.installed && row.uninstallable) {
+      if (row.installed && row.uninstallable && row.id !== "git" && row.id !== "docker") {
         buttons.push(
           h(NButton, {
             size: "small",

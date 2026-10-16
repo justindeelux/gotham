@@ -21,6 +21,10 @@ const en = {
     emptySearch: "No tools match the current search",
     emptySearchHint: "Try a different search term.",
     detectOnlyNote: "Detect-only: the agent reports this tool but cannot install it.",
+    required: {
+      git: "Required for source deployments. Cannot be uninstalled.",
+      docker: "Required to run application, database and proxy containers. Cannot be uninstalled.",
+    },
     skipped: "Skipped {tools}: already queued",
     enqueued: "Queued {count}",
     uncategorized: "Other",
@@ -39,6 +43,7 @@ const en = {
   },
   actions: {
     install: "Install",
+    installUpdate: "Install / Update",
     uninstall: "Uninstall",
     cancel: "Cancel",
     details: "Details",

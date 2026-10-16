@@ -14,7 +14,7 @@ var (
 	// ErrNotInstallable reports a detect-only tool (a systemd unit) or one the
 	// platform does not manage. Installing it is refused.
 	ErrNotInstallable = errors.New("toolcatalog: tool is not installable")
-	// ErrNotUninstallable reports a tool the platform keeps (docker) or one it
+	// ErrNotUninstallable reports a tool the platform keeps (git, docker) or one it
 	// never removes (systemd units, systemctl). Removing it is refused.
 	ErrNotUninstallable = errors.New("toolcatalog: tool is not uninstallable")
 )
@@ -76,6 +76,9 @@ func UninstallOrder(id string) ([]string, error) {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownTool, id)
 	}
 	if !tool.Uninstallable {
+		if id == IDGit || id == IDDocker {
+			return nil, fmt.Errorf("%w: %q is required by the platform; %s", ErrNotUninstallable, id, tool.Description)
+		}
 		return nil, fmt.Errorf("%w: %q", ErrNotUninstallable, id)
 	}
 	return []string{id}, nil

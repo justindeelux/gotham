@@ -214,8 +214,11 @@ func (s *ToolServer) execute(id string, install bool, stream grpc.ServerStreamin
 	for _, toolID := range ids {
 		switch present := s.installed(toolID); {
 		case install && present:
-			sender.note(toolID + " is already installed")
-			continue
+			tool, _ := toolcatalog.Lookup(toolID)
+			if tool.MinVersion == "" || toolcatalog.DetectTool(tool).VersionOK {
+				sender.note(toolID + " is already installed")
+				continue
+			}
 		case !install && !present:
 			sender.note(toolID + " is not installed")
 			continue

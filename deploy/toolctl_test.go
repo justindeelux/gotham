@@ -61,6 +61,15 @@ func TestToolctlUsage(t *testing.T) {
 	}
 }
 
+func TestToolctlRefusesPlatformToolUninstall(t *testing.T) {
+	for _, id := range []string{"git", "docker"} {
+		out, err := runToolctl(t, t.TempDir(), nil, "uninstall-tool", id)
+		if err == nil || !strings.Contains(out, "required by the platform") || strings.Contains(out, "+ ") {
+			t.Errorf("uninstall %s = %q, %v; want refusal without executing commands", id, out, err)
+		}
+	}
+}
+
 // TestToolctlGitHasNoServiceUnit is the regression for the bogus
 // `systemctl enable --now git` step: git is a package only, docker gets the
 // enable.

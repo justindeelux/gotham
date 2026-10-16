@@ -162,6 +162,35 @@ WHERE application_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2;
 
+-- name: ListRecentDeploymentsByTeam :many
+-- The newest deployments across one team's applications (dashboard feed,
+-- JUS-193), newest first. Previews stay out, matching the applications list.
+-- The heavy columns the feed never returns (build_log, compose_document) are
+-- left out on purpose.
+SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
+       d.digest, d.error, d.attempt, d.container_id, d.rollback_from,
+       d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_commit,
+       d.commit_sha, d.commit_message, d.commit_author, d.committed_at,
+       a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
+FROM deployments d
+JOIN applications a ON a.id = d.application_id
+WHERE a.team_id = $1 AND a.is_preview = false
+ORDER BY d.created_at DESC, d.id DESC
+LIMIT $2;
+
+-- name: ListRecentDeploymentsByUser :many
+-- The creator-scoped fallback of ListRecentDeploymentsByTeam (no team context).
+SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
+       d.digest, d.error, d.attempt, d.container_id, d.rollback_from,
+       d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_commit,
+       d.commit_sha, d.commit_message, d.commit_author, d.committed_at,
+       a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
+FROM deployments d
+JOIN applications a ON a.id = d.application_id
+WHERE a.user_id = $1 AND a.is_preview = false
+ORDER BY d.created_at DESC, d.id DESC
+LIMIT $2;
+
 -- name: GetActiveDeploymentByApp :one
 SELECT * FROM deployments
 WHERE application_id = $1 AND state NOT IN ('running', 'failed')

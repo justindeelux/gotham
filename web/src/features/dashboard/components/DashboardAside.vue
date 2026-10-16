@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 
 import type { Server } from "@/features/servers";
 import { useServersStore } from "@/features/servers";
+import GothamIcon from "@/shared/ui/GothamIcon.vue";
 import { relativeTime } from "@/shared/utils/format";
 
 const serversStore = useServersStore();
@@ -44,7 +45,11 @@ const moreNodesText = computed<string>(() =>
       v-if="totalCount === 0"
       size="small"
       :description="$t('dashboard.aside.noHeartbeats')"
-    />
+    >
+      <template #icon>
+        <GothamIcon name="server" />
+      </template>
+    </NEmpty>
     <NSpace v-else vertical :size="8">
       <div
         v-for="server in visibleHeartbeats"
@@ -59,7 +64,7 @@ const moreNodesText = computed<string>(() =>
       </NText>
     </NSpace>
     <template #footer>
-      <NText depth="3" class="mono meta">10s cycle · Heartbeat(stream) in agent.v1</NText>
+      <NText depth="3" class="meta">{{ $t("dashboard.aside.refreshNote") }}</NText>
     </template>
   </NCard>
 
@@ -68,6 +73,9 @@ const moreNodesText = computed<string>(() =>
       size="small"
       :description="$t('dashboard.aside.noTelemetry')"
     >
+      <template #icon>
+        <GothamIcon name="layers" />
+      </template>
       <template #extra>
         <NText depth="3">
           {{ $t("dashboard.aside.telemetryNote") }}
@@ -80,7 +88,11 @@ const moreNodesText = computed<string>(() =>
     <NEmpty
       size="small"
       :description="$t('dashboard.aside.noActivity')"
-    />
+    >
+      <template #icon>
+        <GothamIcon name="users" />
+      </template>
+    </NEmpty>
   </NCard>
 
   <NCard size="small" :title="$t('dashboard.aside.alerts')" class="aside-card">
@@ -95,7 +107,11 @@ const moreNodesText = computed<string>(() =>
         {{ $t("dashboard.aside.heartbeatLost", { time: relativeTime(server.last_seen) }) }}
       </NAlert>
     </NSpace>
-    <NEmpty v-else size="small" :description="$t('dashboard.aside.noAlerts')" />
+    <NEmpty v-else size="small" :description="$t('dashboard.aside.noAlerts')">
+      <template #icon>
+        <GothamIcon name="bell" />
+      </template>
+    </NEmpty>
   </NCard>
 </template>
 

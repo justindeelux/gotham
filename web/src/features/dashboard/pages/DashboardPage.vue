@@ -27,6 +27,7 @@ import DashboardHeader from "@/features/dashboard/components/DashboardHeader.vue
 import RecentDeploysPanel from "@/features/dashboard/components/RecentDeploysPanel.vue";
 import ServerHealthSection from "@/features/dashboard/components/ServerHealthSection.vue";
 import ServersReadyKpi from "@/features/dashboard/components/ServersReadyKpi.vue";
+import GothamIcon from "@/shared/ui/GothamIcon.vue";
 
 const serversStore = useServersStore();
 const { locale, t } = useI18n();
@@ -199,15 +200,27 @@ onMounted(() => {
             <NText v-if="tile.hint" depth="3">{{ tile.hint }}</NText>
           </p>
         </template>
-        <NEmpty v-else size="small" :description="$t('dashboard.kpi.noApplications')" />
+        <NEmpty v-else size="small" :description="$t('dashboard.kpi.noApplications')">
+          <template #icon>
+            <GothamIcon name="grid" />
+          </template>
+        </NEmpty>
       </NCard>
 
       <NCard class="kpi" :title="$t('dashboard.kpi.deploys')" size="small">
-        <NEmpty size="small" :description="$t('dashboard.kpi.noDeploys')" />
+        <NEmpty size="small" :description="$t('dashboard.kpi.noDeploys')">
+          <template #icon>
+            <GothamIcon name="rocket" />
+          </template>
+        </NEmpty>
       </NCard>
 
       <NCard class="kpi" :title="$t('dashboard.kpi.ssl')" size="small">
-        <NEmpty size="small" :description="$t('dashboard.kpi.noSsl')" />
+        <NEmpty size="small" :description="$t('dashboard.kpi.noSsl')">
+          <template #icon>
+            <GothamIcon name="shield" />
+          </template>
+        </NEmpty>
       </NCard>
     </div>
 

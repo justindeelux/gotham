@@ -80,7 +80,6 @@ const vi: CommonMessages = {
     serversToggle: "Bật/tắt máy chủ",
     envTitle: "Môi trường phục vụ: {env}",
     cpPortTitle: "Cổng HTTP control-plane",
-    grpcPortTitle: "Cổng gRPC agent",
     account: "Tài khoản",
     signIn: "Đăng nhập",
     profile: "Hồ sơ",
@@ -115,6 +114,7 @@ const vi: CommonMessages = {
     profile: "Hồ sơ",
     updates: "Cập nhật",
     inviteAccept: "Lời mời vào nhóm",
+    notFound: "Không tìm thấy trang",
   },
   time: {
     justNow: "vừa xong",

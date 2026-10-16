@@ -82,6 +82,11 @@ type Repository interface {
 	// deployments, so readers that only need the latest state (the dashboard
 	// running count) never pull the full history.
 	ListDeploymentsLimit(ctx context.Context, appID uuid.UUID, limit int) ([]Deployment, error)
+	// ListRecentDeployments returns the newest deployments across the
+	// applications of the scope's active team (or, without a team context, of
+	// the creator), newest first, at most limit rows. It backs the dashboard
+	// feed and never crosses the team boundary.
+	ListRecentDeployments(ctx context.Context, scope teams.Scope, limit int) ([]ApplicationDeployment, error)
 	// FailStaleDeployments marks deployments left non-terminal by a previous
 	// control plane process as failed and reports how many were recovered.
 	FailStaleDeployments(ctx context.Context) (int64, error)
@@ -643,6 +648,38 @@ func (r *storeRepository) ListDeploymentsLimit(ctx context.Context, appID uuid.U
 		deployments = append(deployments, deploymentFromRow(row))
 	}
 	return deployments, nil
+}
+
+// ListRecentDeployments loads the newest deployments across the scope's
+// applications, newest first, at most limit rows. Previews stay out of the
+// feed, matching the applications listing.
+func (r *storeRepository) ListRecentDeployments(ctx context.Context, scope teams.Scope, limit int) ([]ApplicationDeployment, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > maxDeploymentListLimit {
+		limit = maxDeploymentListLimit
+	}
+	if scope.Active() {
+		rows, err := r.store.ListRecentDeploymentsByTeam(ctx, pgUUID(scope.TeamID), int32(limit))
+		if err != nil {
+			return nil, fmt.Errorf("deploy: list recent deployments: %w", err)
+		}
+		out := make([]ApplicationDeployment, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, applicationDeploymentFromTeamRow(row))
+		}
+		return out, nil
+	}
+	rows, err := r.store.ListRecentDeploymentsByUser(ctx, pgUUID(scope.UserID), int32(limit))
+	if err != nil {
+		return nil, fmt.Errorf("deploy: list recent deployments: %w", err)
+	}
+	out := make([]ApplicationDeployment, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, applicationDeploymentFromUserRow(row))
+	}
+	return out, nil
 }
 
 // FailStaleDeployments marks deployments a previous control plane process
@@ -1348,6 +1385,69 @@ func deploymentFromRow(row sqlc.Deployment) Deployment {
 		CommittedAt:   row.CommittedAt,
 		// The capped build log stored at the terminal state (JUS-84).
 		BuildLog: row.BuildLog,
+	}
+}
+
+// applicationDeploymentFromTeamRow maps one joined team-feed row (JUS-193).
+func applicationDeploymentFromTeamRow(row sqlc.ListRecentDeploymentsByTeamRow) ApplicationDeployment {
+	return ApplicationDeployment{
+		Deployment: deploymentFromRow(sqlc.Deployment{
+			ID:            row.ID,
+			ApplicationID: row.ApplicationID,
+			Kind:          row.Kind,
+			State:         row.State,
+			ImageTag:      row.ImageTag,
+			RegistryImage: row.RegistryImage,
+			Digest:        row.Digest,
+			Error:         row.Error,
+			Attempt:       row.Attempt,
+			ContainerID:   row.ContainerID,
+			RollbackFrom:  row.RollbackFrom,
+			StartedAt:     row.StartedAt,
+			FinishedAt:    row.FinishedAt,
+			CreatedAt:     row.CreatedAt,
+			UpdatedAt:     row.UpdatedAt,
+			ComposeCommit: row.ComposeCommit,
+			CommitSha:     row.CommitSha,
+			CommitMessage: row.CommitMessage,
+			CommitAuthor:  row.CommitAuthor,
+			CommittedAt:   row.CommittedAt,
+		}),
+		ApplicationName:   row.ApplicationName,
+		ApplicationRepo:   row.ApplicationRepo,
+		ApplicationBranch: row.ApplicationBranch,
+	}
+}
+
+// applicationDeploymentFromUserRow is the creator-scoped mirror of
+// applicationDeploymentFromTeamRow.
+func applicationDeploymentFromUserRow(row sqlc.ListRecentDeploymentsByUserRow) ApplicationDeployment {
+	return ApplicationDeployment{
+		Deployment: deploymentFromRow(sqlc.Deployment{
+			ID:            row.ID,
+			ApplicationID: row.ApplicationID,
+			Kind:          row.Kind,
+			State:         row.State,
+			ImageTag:      row.ImageTag,
+			RegistryImage: row.RegistryImage,
+			Digest:        row.Digest,
+			Error:         row.Error,
+			Attempt:       row.Attempt,
+			ContainerID:   row.ContainerID,
+			RollbackFrom:  row.RollbackFrom,
+			StartedAt:     row.StartedAt,
+			FinishedAt:    row.FinishedAt,
+			CreatedAt:     row.CreatedAt,
+			UpdatedAt:     row.UpdatedAt,
+			ComposeCommit: row.ComposeCommit,
+			CommitSha:     row.CommitSha,
+			CommitMessage: row.CommitMessage,
+			CommitAuthor:  row.CommitAuthor,
+			CommittedAt:   row.CommittedAt,
+		}),
+		ApplicationName:   row.ApplicationName,
+		ApplicationRepo:   row.ApplicationRepo,
+		ApplicationBranch: row.ApplicationBranch,
 	}
 }
 

@@ -1,49 +1,85 @@
 <script setup lang="ts">
-import { NCard, NEmpty, NSpace, NText } from "naive-ui";
+import { NCard, NButton, NEmpty, NSkeleton, NSpace, NText } from "naive-ui";
+import { computed, onMounted, onUnmounted } from "vue";
 
-/**
- * Deployment is the typed seam for a deployments store that does not exist
- * yet. The recent-deploys widget renders an explicit empty state until that
- * store exists — never fabricated rows.
- *
- * TODO: add features/dashboard/stores/deployments.ts backed by the deployments API,
- * replace `deployments` below with live data, and remove the empty state.
- */
-interface Deployment {
-  id: string;
-  appName: string;
-  repo: string;
-  branch: string;
-  commit: string;
-  trigger: string;
-  duration: string;
-  status: "running" | "failed" | "paused";
+import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
+import type { RecentDeployment } from "@/features/applications";
+import { commitSubject, durationText, shortCommitSha } from "@/features/applications";
+import { useRecentDeploymentsStore } from "@/features/dashboard/stores/deployments";
+import GothamIcon from "@/shared/ui/GothamIcon.vue";
+import { relativeTime } from "@/shared/utils/format";
+
+const store = useRecentDeploymentsStore();
+
+onMounted(() => {
+  void store.fetchRecentDeployments();
+  // Light refresh while the panel is visible; the store stops the timer and
+  // the focus listener on unmount (and on sign-out reset).
+  store.startRefresh();
+});
+
+onUnmounted(() => {
+  store.stopRefresh();
+});
+
+/** commitLine renders the short hash plus subject, falling back to the branch. */
+function commitLine(deployment: RecentDeployment): string {
+  if (!deployment.commit_sha) {
+    return deployment.application_branch;
+  }
+  const subject = commitSubject(deployment.commit_message);
+  const sha = shortCommitSha(deployment.commit_sha);
+  return subject ? `${sha} ${subject}` : sha;
 }
 
-/** No backend serves deployments yet, so the list is always empty. */
-const deployments: Deployment[] = [];
+/** startedAt is the row's reference time: run start, else creation. */
+const startedAt = (deployment: RecentDeployment): string =>
+  deployment.started_at ?? deployment.created_at;
+
+const rows = computed<RecentDeployment[]>(() => store.deployments);
 </script>
 
 <template>
   <div class="section-title">
     <h2>{{ $t("dashboard.deploys.title") }}</h2>
-    <NText depth="3" class="mono meta">source: deployments · realtime via Redis</NText>
   </div>
   <NCard size="small">
+    <NSkeleton v-if="store.loading" text :repeat="3" />
+    <template v-else-if="store.error">
+      <NText depth="2">{{ $t("dashboard.deploys.loadFailed") }}</NText>
+      <NText depth="3" class="error-detail">{{ store.error }}</NText>
+      <div class="panel-action">
+        <NButton size="small" quaternary @click="() => void store.fetchRecentDeployments()">
+          {{ $t("dashboard.deploys.retry") }}
+        </NButton>
+      </div>
+    </template>
     <NEmpty
-      v-if="deployments.length === 0"
+      v-else-if="rows.length === 0"
       :description="$t('dashboard.deploys.empty')"
     >
+      <template #icon>
+        <GothamIcon name="history" />
+      </template>
       <template #extra>
         <NText depth="3">
           {{ $t("dashboard.deploys.emptyHint") }}
         </NText>
       </template>
     </NEmpty>
-    <NSpace vertical :size="12">
-      <div class="card-foot">
-        <NText depth="3">{{ $t("dashboard.deploys.queue") }}</NText>
-        <NText depth="3">{{ $t("dashboard.deploys.noHistory") }}</NText>
+    <NSpace v-else vertical :size="12">
+      <div v-for="deployment in rows" :key="deployment.id" class="deploy-row">
+        <div class="deploy-main">
+          <NText strong class="deploy-app">{{ deployment.application_name }}</NText>
+          <NText depth="3" class="mono deploy-commit" :title="deployment.commit_message">
+            {{ commitLine(deployment) }}
+          </NText>
+        </div>
+        <div class="deploy-meta">
+          <NText depth="3" class="mono">{{ durationText(deployment) }}</NText>
+          <NText depth="3">{{ relativeTime(startedAt(deployment)) }}</NText>
+          <DeploymentStatusTag :state="deployment.state" />
+        </div>
       </div>
     </NSpace>
   </NCard>
@@ -67,15 +103,48 @@ const deployments: Deployment[] = [];
   font-family: var(--font-mono);
 }
 
-.meta {
-  font-size: var(--text-xs);
-  color: var(--muted);
+.panel-action {
+  margin-top: var(--space-2);
 }
 
-.card-foot {
+.error-detail {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+}
+
+.deploy-row {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   flex-wrap: wrap;
+}
+
+.deploy-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.deploy-app {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deploy-commit {
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deploy-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-xs);
+  flex: 0 0 auto;
 }
 </style>

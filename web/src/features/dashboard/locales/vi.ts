@@ -37,7 +37,7 @@ const vi: DashboardMessages = {
     viewAll: "xem tất cả máy chủ",
     empty: "Chưa có máy chủ nào",
     emptyHint: "Thêm nút đầu tiên để xem tình trạng CPU, RAM và đĩa tại đây.",
-    heartbeatMeta: "heartbeat mỗi 10s qua gRPC server-authenticated TLS",
+    heartbeatMeta: "Cập nhật trực tiếp mỗi 10 giây",
     addServer: "Thêm máy chủ",
     containersOne: "{count} container",
     containersOther: "{count} container",
@@ -57,13 +57,14 @@ const vi: DashboardMessages = {
     unreachableTitle: "{name} không thể kết nối",
     heartbeatLost: "Mất nhịp tim agent. Thấy lần cuối {time}.",
     noAlerts: "Không có cảnh báo — mọi nút đều ổn",
+    refreshNote: "Cập nhật mỗi 10 giây",
   },
   deploys: {
     title: "Lượt triển khai gần đây",
     empty: "Chưa có lượt triển khai nào",
     emptyHint: "Đẩy một ứng dụng để xem lịch sử build, thời lượng và trạng thái tại đây.",
-    queue: "Hàng đợi: chưa có dữ liệu",
-    noHistory: "Chưa có lịch sử build để hiện",
+    loadFailed: "Không thể tải các lượt triển khai gần đây",
+    retry: "Thử lại",
   },
 };
 

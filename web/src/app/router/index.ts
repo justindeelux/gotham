@@ -149,6 +149,12 @@ const routes: RouteRecordRaw[] = [
         meta: { titleKey: "titles.templates", requiresAuth: true },
       },
       {
+        path: "toolchain",
+        name: "toolchain",
+        component: () => import("@/features/toolchain/pages/ToolchainPage.vue"),
+        meta: { titleKey: "titles.toolchain", requiresAuth: true },
+      },
+      {
         path: "providers/callback",
         name: "provider-callback",
         component: () => import("@/features/applications/pages/ProviderCallbackPage.vue"),

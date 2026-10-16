@@ -19,8 +19,10 @@ func TestLocalhostNodeMigration(t *testing.T) {
 	for _, scenario := range []struct {
 		name, ip, hint, wantError, nodeID string
 		collisionState, collisionRef      string
+		ssh                               string
 		collision, ambiguous              bool
 		ignore                            bool
+		unregistered                      bool
 		startVersion                      int64
 	}{
 		{name: "saved identity after hostname change", hint: "original-host-agent"},
@@ -51,6 +53,10 @@ func TestLocalhostNodeMigration(t *testing.T) {
 		{name: "agent chosen IP", nodeID: "127.0.0.1", ip: "127.0.0.1", startVersion: 50, ignore: true},
 		{name: "agent chosen address without IP", nodeID: "localhost:9443", startVersion: 50, ignore: true},
 		{name: "invalid loopback address", nodeID: "test-node-1", ip: "127.0.0.999", startVersion: 50, ignore: true},
+		{name: "SSH user", nodeID: "tunnel-agent", ip: "127.0.0.1", startVersion: 50, ssh: "user", ignore: true},
+		{name: "SSH key", nodeID: "tunnel-agent", ip: "127.0.0.1", startVersion: 50, ssh: "key", ignore: true},
+		{name: "SSH password", nodeID: "tunnel-agent", ip: "127.0.0.1", startVersion: 50, ssh: "password", ignore: true},
+		{name: "not agent registered", nodeID: "tunnel-agent", ip: "127.0.0.1", startVersion: 50, unregistered: true, ignore: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			t.Setenv("GOTHAM_LEGACY_LOCAL_NODE_ID", scenario.hint)
@@ -114,7 +120,7 @@ func TestLocalhostNodeMigration(t *testing.T) {
 				args  []any
 				dest  *string
 			}{
-				{`INSERT INTO servers (name, ip, ssh_user, node_id, status, last_seen) VALUES ('old', $2, '', $1, 'ready', now()) RETURNING id`, []any{scenario.nodeID, scenario.ip}, &serverID},
+				{`INSERT INTO servers (name, ip, ssh_user, node_id, status, last_seen, os) VALUES ('old', $2, '', $1, 'ready', now(), 'linux') RETURNING id`, []any{scenario.nodeID, scenario.ip}, &serverID},
 				{`INSERT INTO users (email) VALUES ('localhost-migration@example.com') RETURNING id`, nil, &userID},
 			} {
 				if err := db.QueryRowContext(ctx, seed.query, seed.args...).Scan(seed.dest); err != nil {
@@ -123,6 +129,29 @@ func TestLocalhostNodeMigration(t *testing.T) {
 			}
 			if _, err := db.ExecContext(ctx, `INSERT INTO teams (id,name,is_personal) VALUES ($1,'owner',true)`, userID); err != nil {
 				t.Fatal(err)
+			}
+			var protectedTeam any
+			if scenario.ssh != "" || scenario.unregistered {
+				protectedTeam = userID
+				if _, err := db.ExecContext(ctx, `UPDATE servers SET team_id=$1 WHERE id=$2`, userID, serverID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch scenario.ssh {
+			case "user":
+				_, err = db.ExecContext(ctx, `UPDATE servers SET ssh_user='root' WHERE id=$1`, serverID)
+			case "password":
+				_, err = db.ExecContext(ctx, `UPDATE servers SET encrypted_password='sealed' WHERE id=$1`, serverID)
+			case "key":
+				_, err = db.ExecContext(ctx, `WITH key AS (INSERT INTO private_keys (name,encrypted_key) VALUES ('key','sealed') RETURNING id) UPDATE servers SET ssh_key_id=key.id FROM key WHERE servers.id=$1`, serverID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario.unregistered {
+				if _, err := db.ExecContext(ctx, `UPDATE servers SET os=NULL, last_seen=NULL, status='pending' WHERE id=$1`, serverID); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := db.QueryRowContext(ctx, `INSERT INTO projects (team_id,name) VALUES ($1,'project') RETURNING id`, userID).Scan(&projectID); err != nil {
 				t.Fatal(err)
@@ -180,7 +209,7 @@ func TestLocalhostNodeMigration(t *testing.T) {
 				}
 			}
 			if scenario.ambiguous {
-				if _, err := db.ExecContext(ctx, `INSERT INTO servers (name,ip,ssh_user,node_id) VALUES ('other','127.0.0.1','','other-agent')`); err != nil {
+				if _, err := db.ExecContext(ctx, `INSERT INTO servers (name,ip,ssh_user,node_id,os) VALUES ('other','127.0.0.1','','other-agent','linux')`); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -206,7 +235,7 @@ func TestLocalhostNodeMigration(t *testing.T) {
 			}
 			if scenario.ignore {
 				var unchanged bool
-				if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE id=$1 AND node_id=$2 AND ip=$3)`, serverID, scenario.nodeID, scenario.ip).Scan(&unchanged); err != nil || !unchanged {
+				if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE id=$1 AND node_id=$2 AND ip=$3 AND ($4::uuid IS NULL OR team_id=$4))`, serverID, scenario.nodeID, scenario.ip, protectedTeam).Scan(&unchanged); err != nil || !unchanged {
 					t.Fatalf("agent-chosen identity changed: preserved=%v, err=%v", unchanged, err)
 				}
 				return

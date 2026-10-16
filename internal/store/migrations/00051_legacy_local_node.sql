@@ -16,6 +16,9 @@ DECLARE
 BEGIN
     FOR candidate IN SELECT id, node_id, ip FROM servers
         WHERE node_id <> 'localhost' AND btrim(ip) <> ''
+          -- SSH loopback targets may be remote tunnels, not the local agent.
+          AND os IS NOT NULL AND ssh_user = ''
+          AND ssh_key_id IS NULL AND encrypted_password IS NULL
           -- Registration derives IP literals from the agent-chosen node ID.
           AND btrim(ip) <> btrim(node_id)
     LOOP

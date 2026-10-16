@@ -132,8 +132,10 @@ saved `agent.env` and server records, reconcile workloads and remove duplicate
 local-agent entries before retrying. No workloads are merged or deleted for you.
 Startup scans only when `localhost` is absent, so a later registration cannot
 block a restart. Detection uses the recorded IP/agent address, excluding IPs
-copied from agent-chosen IP node IDs. Non-loopback or missing legacy addresses
-still require the saved identity hint for migration 49; migration 51 ignores it.
+copied from agent-chosen IP node IDs. Nodes without agent registration data or
+with an SSH user, key, or password are not candidates. Non-loopback or missing
+legacy addresses still require the saved identity hint for migration 49;
+migration 51 ignores it.
 
 After a manual upgrade, set `GOTHAM_AGENT_NODE_ID=localhost` in the local agent's
 saved environment (normally `/etc/gotham/agent.env`) and restart the agent. The

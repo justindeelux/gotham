@@ -680,6 +680,72 @@ describe("InstallQueueModal selection (JUS-184)", () => {
     expect(selectedToolName(wrapper)).toBe("Git");
     wrapper.unmount();
   });
+
+  it("keeps a manual pick of a finished job when another job progresses", async () => {
+    listToolsMock.mockResolvedValue([catalogTool("git", "Git"), catalogTool("railpack", "Railpack")]);
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    const finished = job({ id: "job-git", tool_id: "git", status: "failed" });
+    store.applyJob(finished);
+    store.applyJob(
+      job({ id: "job-rail", tool_id: "railpack", status: "running", created_at: "2026-10-16T12:05:00Z" }),
+    );
+    getJobMock.mockResolvedValue({ job: finished, log: "why it failed\n", next_seq: 1 });
+
+    store.openQueueModal();
+    const wrapper = mountModal();
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Railpack");
+
+    // The user pins the failed job to read its log…
+    await selectRow(wrapper, "Git");
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+
+    // …and a progress frame for the running job must not steal it back.
+    store.applyJob(
+      job({
+        id: "job-rail",
+        tool_id: "railpack",
+        status: "running",
+        created_at: "2026-10-16T12:05:00Z",
+        started_at: "2026-10-16T12:05:01Z",
+      }),
+    );
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+    wrapper.unmount();
+  });
+
+  it("keeps an open-requested finished job across later frames", async () => {
+    listToolsMock.mockResolvedValue([catalogTool("git", "Git"), catalogTool("railpack", "Railpack")]);
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    const finished = job({ id: "job-git", tool_id: "git", status: "failed" });
+    store.applyJob(finished);
+    store.applyJob(
+      job({ id: "job-rail", tool_id: "railpack", status: "running", created_at: "2026-10-16T12:05:00Z" }),
+    );
+    getJobMock.mockResolvedValue({ job: finished, log: "why it failed\n", next_seq: 1 });
+
+    store.openQueueModal("job-git");
+    const wrapper = mountModal();
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+
+    store.applyJob(
+      job({
+        id: "job-rail",
+        tool_id: "railpack",
+        status: "running",
+        created_at: "2026-10-16T12:05:00Z",
+        started_at: "2026-10-16T12:05:01Z",
+      }),
+    );
+    await flushPromises();
+    expect(selectedToolName(wrapper)).toBe("Git");
+    wrapper.unmount();
+  });
 });
 
 describe("InstallJobLogPane", () => {

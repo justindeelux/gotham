@@ -32,9 +32,9 @@ const show = computed<boolean>({
 const selectedJobId = ref<string | null>(null);
 
 /**
- * manualJobId names the job the user picked after opening. Follow-active
- * (JUS-184) keeps it only while that job is still active; any terminal or
- * missing manual pick falls back to the active job.
+ * manualJobId names the job the user pinned after opening (a click, or the
+ * open-request id). A pin survives status changes and progress frames and
+ * is released only when the job leaves the list or the modal reopens.
  */
 const manualJobId = ref<string | null>(null);
 
@@ -123,8 +123,8 @@ function pickFollowedId(jobs: ToolchainJob[]): string | null {
 }
 
 /**
- * onSelect records a user pick after opening; the jobs watcher keeps it
- * only while the picked job is still active.
+ * onSelect pins a user pick after opening; the jobs watcher keeps it while
+ * the job still exists, whatever its status.
  */
 function onSelect(id: string | null): void {
   selectedJobId.value = id;
@@ -145,17 +145,19 @@ watch(
     lastWanted.value = store.queueModalJobId;
     const jobs = store.jobsList;
     const wanted = store.queueModalJobId;
-    manualJobId.value = null;
-    selectedJobId.value =
-      (wanted !== null && jobs.some((job) => job.id === wanted) ? wanted : undefined) ??
-      pickFollowedId(jobs);
+    // An explicitly requested job is pinned like a user pick, so it
+    // survives later frames; otherwise follow the active job.
+    const pinned = wanted !== null && jobs.some((job) => job.id === wanted) ? wanted : null;
+    manualJobId.value = pinned;
+    selectedJobId.value = pinned ?? pickFollowedId(jobs);
   },
   { immediate: true },
 );
 
-// While open, a new open-request wins once; otherwise a manual pick of a
-// still-active job is kept and everything else follows the active job, so
-// a finished selection moves to a newly enqueued job (JUS-184).
+// While open, a new open-request wins once; otherwise a pinned job is kept
+// while it still exists (any status, so a finished log stays readable
+// while the queue runs) and everything else follows the active job, so a
+// fresh open or a new enqueue lands on the running job (JUS-184).
 watch(
   [() => store.jobsList, () => store.queueModalJobId],
   ([jobs, wanted]) => {
@@ -165,19 +167,18 @@ watch(
     if (wanted !== lastWanted.value) {
       lastWanted.value = wanted;
       if (wanted !== null && jobs.some((job) => job.id === wanted)) {
-        manualJobId.value = null;
+        manualJobId.value = wanted;
         selectedJobId.value = wanted;
         return;
       }
     }
-    const manual = manualJobId.value !== null
-      ? jobs.find((job) => job.id === manualJobId.value)
-      : undefined;
-    if (manual && !isTerminalJobStatus(manual.status)) {
-      selectedJobId.value = manual.id;
-      return;
+    if (manualJobId.value !== null) {
+      if (jobs.some((job) => job.id === manualJobId.value)) {
+        selectedJobId.value = manualJobId.value;
+        return;
+      }
+      manualJobId.value = null;
     }
-    manualJobId.value = null;
     selectedJobId.value = pickFollowedId(jobs);
   },
 );

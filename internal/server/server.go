@@ -415,10 +415,12 @@ func (s *Server) routes() (http.Handler, error) {
 		if s.persistence != nil {
 			instanceSvc := instance.NewService(instance.NewStoreRepository(s.persistence), instance.NewSudoApplier(), s.logger)
 			instanceSvc.ResyncProxy = func(ctx context.Context) error {
-				if s.proxy == nil {
-					return instance.ErrDomainNotSynced
+				if syncer, ok := s.proxy.(interface {
+					SyncControlPlane(context.Context) error
+				}); ok {
+					return syncer.SyncControlPlane(ctx)
 				}
-				return s.resyncProxyNodes(ctx)
+				return instance.ErrDomainNotSynced
 			}
 			if checker, ok := s.proxy.(interface {
 				CheckControlPlaneHost(context.Context, string) error

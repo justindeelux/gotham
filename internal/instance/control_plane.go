@@ -97,6 +97,16 @@ func (s *Service) reconcileControlPlaneURL(ctx context.Context) error {
 	}
 	if s.now().Before(rec.PendingControlPlaneURL.Deadline) {
 		s.scheduleDomainRevert(rec.PendingControlPlaneURL.Deadline)
+		if !rec.PendingControlPlaneURL.Synced {
+			if err := s.syncControlPlaneURL(ctx); err != nil {
+				s.logger.Warn("instance control-plane URL pending; proxy resync failed", "error", err)
+				return nil
+			}
+			pending := *rec.PendingControlPlaneURL
+			pending.Synced = true
+			rec.PendingControlPlaneURL = &pending
+			return s.repo.Save(ctx, uuid.Nil, SectionGeneral, rec, map[string]any{"event": "control-plane routers synced"})
+		}
 		return nil
 	}
 	return s.revertControlPlaneURL(ctx, uuid.Nil, rec)

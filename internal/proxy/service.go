@@ -531,6 +531,36 @@ func (s *SyncService) RevertServer(ctx context.Context, serverID uuid.UUID) erro
 	return nil
 }
 
+// SyncControlPlane writes localhost's configuration, ignoring skipped routes
+// belonging to other applications. A panel diagnostic or node failure still fails.
+func (s *SyncService) SyncControlPlane(ctx context.Context) error {
+	named, ok := s.nodes.(namedNodeSource)
+	if !ok {
+		return errors.New("proxy: localhost node is not registered")
+	}
+	nodes, err := named.ListNamedNodes(ctx)
+	if err != nil {
+		return fmt.Errorf("proxy: find localhost node: %w", err)
+	}
+	for _, node := range nodes {
+		if node.Name != "localhost" || node.ID == uuid.Nil {
+			continue
+		}
+		err := s.SyncServer(ctx, node.ID)
+		var partial *PartialError
+		if errors.As(err, &partial) {
+			for _, diagnostic := range partial.Diagnostics {
+				if diagnostic.Kind == string(RouterKindControlPlane) {
+					return err
+				}
+			}
+			return nil
+		}
+		return err
+	}
+	return errors.New("proxy: localhost node is not registered")
+}
+
 // SyncAll regenerates every registered node plus every node hosting a proxied
 // application, so removing the last domain is repaired by a global sync too
 // (BE-6.1 F9). Per-node failures are reported in the results so one

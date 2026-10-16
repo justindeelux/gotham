@@ -32,26 +32,41 @@ const userInitial = computed<string>(() =>
 );
 
 /**
+ * hasDisplayName tells the header whether a real display name exists. Without
+ * one displayName falls back to the email, so the email line is dropped —
+ * otherwise the menu shows the address twice (JUS-197).
+ */
+const hasDisplayName = computed<boolean>(() => {
+  const name = authStore.user?.display_name?.trim();
+  return name !== undefined && name !== "";
+});
+
+/**
  * roleText derives the footer label from the caller's raw team role through
  * the shared common role catalog (reactive in the active locale). The
  * teams-owned meRoleLabel helper stays untouched (I18N-8 owns it); an
  * unknown future role falls back to the raw value, never a guessed label.
+ * A platform admin additionally carries the instance-level flag, which reads
+ * "Platform admin" so it cannot be confused with the team admin role.
  */
 const roleText = computed<string>(() => {
   const role: TeamRole | null = teamsStore.activeTeam?.role ?? null;
+  let base: string;
   if (role === null) {
-    return t("common.roles.member");
+    base = t("common.roles.member");
+  } else if (role === "owner") {
+    base = t("common.roles.owner");
+  } else if (role === "admin") {
+    base = t("common.roles.admin");
+  } else if (role === "read_only") {
+    base = t("common.roles.readOnly");
+  } else {
+    base = role;
   }
-  if (role === "owner") {
-    return t("common.roles.owner");
+  if (authStore.isPlatformAdmin) {
+    return `${base} · ${t("common.roles.platformAdmin")}`;
   }
-  if (role === "admin") {
-    return t("common.roles.admin");
-  }
-  if (role === "read_only") {
-    return t("common.roles.readOnly");
-  }
-  return role;
+  return base;
 });
 
 /**
@@ -123,7 +138,9 @@ const accountOptions = computed<DropdownOption[]>(() => [
       }),
       h("div", { class: "account-menu-info" }, [
         h("strong", { class: "account-menu-name" }, displayName.value),
-        h("span", { class: "account-menu-email" }, authStore.user?.email),
+        ...(hasDisplayName.value
+          ? [h("span", { class: "account-menu-email" }, authStore.user?.email)]
+          : []),
         h("span", { class: "account-menu-role" }, roleText.value),
       ]),
     ]),

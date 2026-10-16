@@ -29,7 +29,7 @@ const en = {
     empty: "No templates in the catalog.",
   },
   page: {
-    eyebrow: "Operations · one-click templates",
+    eyebrow: "Operations · One-click templates",
     title: "Template library",
     description:
       "Pick a template, fill the form, and the control plane renders the compose document before deploying it through the node agent. The form is generated from the template schema, so a new template needs no UI change.",

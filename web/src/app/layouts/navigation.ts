@@ -34,7 +34,7 @@ export const navSections: NavSection[] = [
       { key: "templates", label: "Template library", labelKey: "nav.items.templates", icon: "rocket", to: "templates" },
       { key: "toolchain", label: "App Store", labelKey: "nav.items.toolchain", icon: "box", to: "toolchain" },
       { key: "servers", label: "Servers", labelKey: "nav.items.servers", icon: "server", to: "servers" },
-      { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains" },
+      { key: "domains", label: "Domains & SSL", labelKey: "nav.items.domains", icon: "globe", to: "domains", adminOnly: true },
     ],
   },
   {
@@ -62,14 +62,40 @@ export const navSections: NavSection[] = [
     label: "System",
     labelKey: "nav.sections.system",
     items: [
-      { key: "instance", label: "Instance", labelKey: "nav.items.instance", icon: "gear", to: "instance" },
-      { key: "updates", label: "Updates & settings", labelKey: "nav.items.updates", icon: "gear", to: "updates" },
+      { key: "instance", label: "Instance", labelKey: "nav.items.instance", icon: "gear", to: "instance", adminOnly: true },
+      { key: "updates", label: "Updates & settings", labelKey: "nav.items.updates", icon: "gear", to: "updates", adminOnly: true },
     ],
   },
 ];
 
 // Section aliases for paths whose first segment is not the sidebar key.
 export const sectionAliases: Record<string, string> = { settings: "notifications" };
+
+/**
+ * visibleNavItems is the per-section filter: platform-admin-only entries
+ * stay hidden from callers without the instance flag.
+ */
+export function visibleNavItems(items: NavItem[], isPlatformAdmin: boolean): NavItem[] {
+  return items.filter((item) => !item.adminOnly || isPlatformAdmin);
+}
+
+/**
+ * visibleNavSections drops whole groups whose items are all hidden, so a
+ * non-admin never sees an orphan section heading (e.g. System) with nothing
+ * under it. Generic over the section list: groups with no adminOnly items
+ * pass through untouched.
+ */
+export function visibleNavSections(
+  sections: NavSection[],
+  isPlatformAdmin: boolean,
+): NavSection[] {
+  return sections
+    .map((section) => ({
+      ...section,
+      items: visibleNavItems(section.items, isPlatformAdmin),
+    }))
+    .filter((section) => section.items.length > 0);
+}
 
 /**
  * activeNavKey is the sidebar entry for a route path. It follows the first

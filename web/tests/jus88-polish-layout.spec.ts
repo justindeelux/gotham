@@ -38,7 +38,9 @@ const session = {
     created_at: "2026-03-04T12:00:00Z",
     display_name: "Ada Lovelace",
     has_password: true,
-    is_platform_admin: false,
+    // JUS-197: these specs walk the platform-admin-gated Domains page, so
+    // the fixture account carries the instance flag (assertions unchanged).
+    is_platform_admin: true,
   },
   accessToken: "test-access",
   refreshToken: "test-refresh",

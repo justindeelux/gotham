@@ -29,7 +29,7 @@ const vi: typeof en = {
     empty: "Danh mục chưa có mẫu nào.",
   },
   page: {
-    eyebrow: "Vận hành · mẫu một chạm",
+    eyebrow: "Vận hành · Mẫu một chạm",
     title: "Thư viện mẫu",
     description:
       "Chọn một mẫu, điền biểu mẫu, control plane sẽ dựng tài liệu compose rồi triển khai qua node agent. Biểu mẫu sinh từ schema của mẫu nên thêm mẫu mới không cần đổi giao diện.",

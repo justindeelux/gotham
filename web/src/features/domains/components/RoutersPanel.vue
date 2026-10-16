@@ -183,10 +183,12 @@ const emptyText = computed(() => proxyText("domains.routers.empty", "No routers 
       <NDataTable
         v-else
         class="router-table"
+        data-testid="routers-table"
         :columns="columns"
         :data="filteredRouters"
         :bordered="false"
         :single-line="false"
+        :scroll-x="720"
       >
         <template #empty>
           <NEmpty :description="emptyText">

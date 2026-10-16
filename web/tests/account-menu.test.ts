@@ -74,6 +74,9 @@ describe("shared account menu", () => {
     expect(header.textContent).toContain("Ada Lovelace");
     expect(header.textContent).toContain("ada@gotham.dev");
     expect(header.textContent).toContain("admin");
+    // With a real display name the name and email lines differ, so both stay.
+    expect(header.querySelector(".account-menu-name")!.textContent).toBe("Ada Lovelace");
+    expect(header.querySelector(".account-menu-email")!.textContent).toBe("ada@gotham.dev");
     expect(header.querySelector("button, a, [tabindex]")).toBeNull();
     const dropdown = wrapper.findComponent(NDropdown);
     expect(dropdown.props("options").map((option) => option.key)).toEqual([
@@ -89,6 +92,10 @@ describe("shared account menu", () => {
     const { wrapper } = await mountMenu(true, "   ");
     const header = globalThis.document.querySelector(".account-menu-header")!;
     expect(header.querySelector(".account-menu-name")!.textContent).toBe("ada@gotham.dev");
+    // JUS-197: without a display name the header shows the address once —
+    // the email line is dropped instead of duplicating the name line.
+    expect(header.querySelector(".account-menu-email")).toBeNull();
+    expect(header.textContent!.match(/ada@gotham\.dev/g)).toHaveLength(1);
     syncComposerLocale("vi");
     await nextTick();
     await flushPromises();
@@ -97,6 +104,23 @@ describe("shared account menu", () => {
     const labels = [...globalThis.document.querySelectorAll(".n-dropdown-option")]
       .map((node) => node.textContent?.trim());
     expect(labels).toEqual([i18n.global.t("shell.profile"), i18n.global.t("shell.signOut")]);
+    wrapper.unmount();
+  });
+
+  it("appends the instance Platform admin flag to the team role (JUS-197)", async () => {
+    const { wrapper, auth } = await mountMenu(false);
+    auth.user = { ...auth.user!, is_platform_admin: true };
+    await flushPromises();
+    const header = globalThis.document.querySelector(".account-menu-header")!;
+    // The team role stays first; the instance flag reads "Platform admin"
+    // so it cannot be confused with the team admin role.
+    expect(header.querySelector(".account-menu-role")!.textContent)
+      .toBe("admin · Platform admin");
+    syncComposerLocale("vi");
+    await nextTick();
+    await flushPromises();
+    expect(header.querySelector(".account-menu-role")!.textContent)
+      .toBe("quản trị viên · Quản trị nền tảng");
     wrapper.unmount();
   });
 

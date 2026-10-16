@@ -17,6 +17,7 @@ import TeamInvitesPanel from "@/features/teams/components/TeamInvitesPanel.vue";
 import TeamMembersPanel from "@/features/teams/components/TeamMembersPanel.vue";
 import TeamsListCard from "@/features/teams/components/TeamsListCard.vue";
 import { teamsPageKey, useTeamsPage } from "@/features/teams/composables/useTeamsPage";
+import { useAuthStore } from "@/features/auth";
 import { useTeamsStore } from "@/features/teams/stores/teams";
 
 /**
@@ -32,6 +33,7 @@ import { useTeamsStore } from "@/features/teams/stores/teams";
  * to the panels and dialogs below), sections render through them.
  */
 const teamsStore = useTeamsStore();
+const authStore = useAuthStore();
 const page = useTeamsPage();
 provide(teamsPageKey, page);
 const {
@@ -97,6 +99,11 @@ const {
             <NTag v-if="isPersonal" size="small" round>{{ $t("teams.page.personal") }}</NTag>
             <NTag :type="roleTagType(selectedTeam.role)" size="small" round>
               {{ $t("teams.page.yourRole", { role: roleLabel(selectedTeam.role) }) }}
+            </NTag>
+            <!-- The instance-level flag is not a team role and never appears
+                 in the members table: label it separately for the viewer. -->
+            <NTag v-if="authStore.isPlatformAdmin" type="info" size="small" round>
+              {{ $t("common.roles.platformAdmin") }}
             </NTag>
           </NSpace>
         </template>

@@ -23,6 +23,7 @@ const en = {
       admin: "admin",
       readOnly: "read-only",
       member: "Team member",
+      platformAdmin: "Platform admin",
     },
     status: {
       unknown: "unknown",
@@ -114,6 +115,13 @@ const en = {
     updates: "Updates",
     inviteAccept: "Team invite",
     notFound: "Page not found",
+    forbidden: "No permission",
+  },
+  denied: {
+    eyebrow: "Access control",
+    title: "You don't have permission to view this",
+    body: "Only a Platform admin can open this section. Ask yours for access, or go back to the dashboard.",
+    back: "Back to dashboard",
   },
   time: {
     justNow: "just now",

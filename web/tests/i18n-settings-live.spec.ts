@@ -27,6 +27,9 @@ const user = {
   id: "u1",
   email: "owner@example.com",
   created_at: "2026-01-01T00:00:00Z",
+  // JUS-197: the domains/teams pages under test are platform-admin-gated,
+  // so the fixture owner carries the instance flag (as on a real instance).
+  is_platform_admin: true,
 };
 
 const personalTeam = {

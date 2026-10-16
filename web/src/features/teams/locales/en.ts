@@ -51,6 +51,9 @@ const en = {
       "A team always keeps at least one owner: demoting or removing the " +
       "last one is refused with the backend's message. The personal team's " +
       "owner membership is immutable.",
+    platformAdminNote:
+      "Team roles apply inside one team only. Domains & SSL, Updates, and " +
+      "Instance settings need the instance-level Platform admin flag.",
   },
   invites: {
     email: "Email",

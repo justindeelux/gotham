@@ -132,18 +132,34 @@ const memberColumns = computed<DataTableColumns<TeamMember>>(() => [
     >
       {{ memberActionError }}
     </NAlert>
-    <NDataTable
-      :columns="memberColumns"
-      :data="members"
-      :loading="membersLoading"
-      :row-key="(row: TeamMember) => row.user_id"
-      :bordered="false"
-      :scroll-x="760"
-      :pagination="false"
-      data-testid="members-table"
-    />
+    <div class="table-scroll">
+      <NDataTable
+        :columns="memberColumns"
+        :data="members"
+        :loading="membersLoading"
+        :row-key="(row: TeamMember) => row.user_id"
+        :bordered="false"
+        :scroll-x="760"
+        :pagination="false"
+        data-testid="members-table"
+      />
+    </div>
     <NText depth="3">
       {{ $t("teams.members.footnote") }}
     </NText>
+    <NText depth="3">
+      {{ $t("teams.members.platformAdminNote") }}
+    </NText>
   </NSpace>
 </template>
+
+<style scoped>
+/* JUS-197: the members table scrolls inside this wrapper (not the page).
+   The table's own scroll-x floor handles the columns; this wrapper is the
+   dedicated overflow container so a wide table can never push the page
+   sideways at phone widths, independent of any global overflow mask. */
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+</style>

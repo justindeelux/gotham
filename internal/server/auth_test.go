@@ -29,6 +29,12 @@ type fakeAuthService struct {
 	// logoutErr, when set, is returned by Logout to exercise persistence
 	// failures.
 	logoutErr error
+	// totpEnabled/recoveryCodesLeft shape the TOTP status the fake reports.
+	totpEnabled       bool
+	recoveryCodesLeft int
+	// mfaLogin makes Login return the half-authenticated challenge (the
+	// account has TOTP enabled) instead of a token pair.
+	mfaLogin bool
 }
 
 func newFakeAuthService() *fakeAuthService {
@@ -62,6 +68,10 @@ func (f *fakeAuthService) Register(_ context.Context, email string, _ string, _ 
 func (f *fakeAuthService) Login(_ context.Context, _ string, password string, _ auth.SessionMeta) (*auth.AuthResult, error) {
 	if password == "wrong-password" {
 		return nil, auth.ErrInvalidCredentials
+	}
+	if f.mfaLogin {
+		// The account has TOTP enabled: the half-authenticated challenge.
+		return &auth.AuthResult{User: f.user, MFARequired: true, MFAToken: "mfa-token"}, nil
 	}
 	return f.result(), nil
 }
@@ -171,6 +181,57 @@ func (f *fakeAuthService) VerifyAccessToken(token string) (*auth.Claims, error) 
 	default:
 		return nil, auth.ErrInvalidToken
 	}
+}
+
+// The TOTP methods keep the fake's default behavior simple: enrollment returns
+// fixed setup material and the code "123456" is the only accepted second
+// factor. Handler tests override the fields they need.
+func (f *fakeAuthService) TOTPStatus(_ context.Context, _ uuid.UUID) (*auth.TOTPStatus, error) {
+	return &auth.TOTPStatus{Enabled: f.totpEnabled, RecoveryCodesRemaining: f.recoveryCodesLeft}, nil
+}
+
+func (f *fakeAuthService) BeginTOTPEnrollment(_ context.Context, _ uuid.UUID) (*auth.TOTPEnrollment, error) {
+	return &auth.TOTPEnrollment{Secret: "JBSWY3DPEHPK3PXP", OTPAuthURL: "otpauth://totp/Gotham:user@example.com?secret=JBSWY3DPEHPK3PXP"}, nil
+}
+
+func (f *fakeAuthService) EnableTOTP(_ context.Context, _ uuid.UUID, password, code string) ([]string, error) {
+	if password == "wrong-password" {
+		return nil, auth.ErrCurrentPasswordIncorrect
+	}
+	if code != "123456" {
+		return nil, auth.ErrInvalidCode
+	}
+	return []string{"ABCDE-FGHJK"}, nil
+}
+
+func (f *fakeAuthService) DisableTOTP(_ context.Context, _ uuid.UUID, password, code string) error {
+	if password == "wrong-password" {
+		return auth.ErrCurrentPasswordIncorrect
+	}
+	if code != "123456" {
+		return auth.ErrInvalidCode
+	}
+	return nil
+}
+
+func (f *fakeAuthService) RegenerateTOTPRecoveryCodes(_ context.Context, _ uuid.UUID, password, code string) ([]string, error) {
+	if password == "wrong-password" {
+		return nil, auth.ErrCurrentPasswordIncorrect
+	}
+	if code != "123456" {
+		return nil, auth.ErrInvalidCode
+	}
+	return []string{"ABCDE-FGHJK"}, nil
+}
+
+func (f *fakeAuthService) CompleteMFALogin(_ context.Context, mfaToken, code string, _ auth.SessionMeta) (*auth.AuthResult, error) {
+	if mfaToken != "mfa-token" {
+		return nil, auth.ErrInvalidCredentials
+	}
+	if code != "123456" {
+		return nil, auth.ErrInvalidCode
+	}
+	return f.result(), nil
 }
 
 // fakeInvites is a deterministic auth.InviteAcceptor for handler tests.

@@ -34,6 +34,13 @@ type AuthService interface {
 	RevokeSession(ctx context.Context, userID, id uuid.UUID) error
 	RevokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error
 	VerifyAccessToken(token string) (*auth.Claims, error)
+	// Two-factor authentication (JUS-196).
+	TOTPStatus(ctx context.Context, userID uuid.UUID) (*auth.TOTPStatus, error)
+	BeginTOTPEnrollment(ctx context.Context, userID uuid.UUID) (*auth.TOTPEnrollment, error)
+	EnableTOTP(ctx context.Context, userID uuid.UUID, password, code string) ([]string, error)
+	DisableTOTP(ctx context.Context, userID uuid.UUID, password, code string) error
+	RegenerateTOTPRecoveryCodes(ctx context.Context, userID uuid.UUID, password, code string) ([]string, error)
+	CompleteMFALogin(ctx context.Context, mfaToken, code string, meta auth.SessionMeta) (*auth.AuthResult, error)
 }
 
 // contextKey is the unexported type for authenticated-request context values.
@@ -113,12 +120,16 @@ type refreshTokenRequest struct {
 }
 
 // authResponse is the token-pair body returned by register, login, and refresh.
+// When the account has TOTP enabled, login returns mfa_required with an empty
+// token pair and a half-authenticated mfa_token instead (JUS-196).
 type authResponse struct {
 	User         *auth.User `json:"user"`
 	AccessToken  string     `json:"access_token"`
 	TokenType    string     `json:"token_type"`
 	ExpiresIn    int64      `json:"expires_in"`
 	RefreshToken string     `json:"refresh_token"`
+	MFARequired  bool       `json:"mfa_required,omitempty"`
+	MFAToken     string     `json:"mfa_token,omitempty"`
 }
 
 // meResponse is the body returned by /auth/me.
@@ -152,6 +163,10 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 
 		r.With(s.rateLimit).Post("/register", s.handleRegister)
 		r.With(s.rateLimit).Post("/login", s.handleLogin)
+		// The second factor of a login is rate limited by the same credential
+		// bucket as the password step, so a six-digit code cannot be brute
+		// forced (JUS-196).
+		r.With(s.rateLimit).Post("/login/totp", s.handleLoginTOTP)
 		r.With(s.refreshRateLimit).Post("/refresh", s.handleRefresh)
 		r.With(s.refreshRateLimit).Post("/logout", s.handleLogout)
 
@@ -171,6 +186,14 @@ func (s *Server) mountAuthRoutes(api chi.Router) {
 				profile.Get("/me/sessions", s.handleListSessions)
 				profile.Delete("/me/sessions/{id}", s.handleRevokeSession)
 				profile.Post("/me/sessions/revoke-others", s.handleRevokeOtherSessions)
+				// Two-factor authentication (JUS-196): status, enrollment and
+				// management. These routes are interactive-session only (the
+				// API-token guard is the group middleware above).
+				profile.Get("/me/totp", s.handleTOTPStatus)
+				profile.Post("/me/totp/enroll", s.handleTOTPEnroll)
+				profile.Post("/me/totp/enable", s.handleTOTPEnable)
+				profile.Post("/me/totp/disable", s.handleTOTPDisable)
+				profile.Post("/me/totp/recovery-codes", s.handleTOTPRegenerate)
 			})
 		})
 	})
@@ -455,5 +478,7 @@ func newAuthResponse(result *auth.AuthResult) authResponse {
 		TokenType:    tokenTypeBearer,
 		ExpiresIn:    result.ExpiresIn,
 		RefreshToken: result.RefreshToken,
+		MFARequired:  result.MFARequired,
+		MFAToken:     result.MFAToken,
 	}
 }

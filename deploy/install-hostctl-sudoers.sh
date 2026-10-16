@@ -13,6 +13,7 @@ set -eu
 
 SERVICE_USER="${1:-gotham}"
 HELPER="/usr/libexec/gotham/gotham-hostctl"
+TOOLCTL="/usr/libexec/gotham/gotham-toolctl"
 SUDOERS_FILE="/etc/sudoers.d/gotham-hostctl"
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -42,6 +43,12 @@ TMP="$(mktemp /etc/sudoers.d/.gotham-hostctl.XXXXXX)" \
     for verb in status apply-network confirm-network revert-network apply-system; do
         echo "${SERVICE_USER} ALL=(root) NOPASSWD: ${HELPER} ${verb}"
     done
+    # The control plane repairs a missing helper in-product by naming only the
+    # catalog id; the tool installer owns the content and re-validates the id.
+    # Pinned to that single verb+id so this is not a general install grant.
+    if [ -x "${TOOLCTL}" ]; then
+        echo "${SERVICE_USER} ALL=(root) NOPASSWD: ${TOOLCTL} install-tool gotham-hostctl"
+    fi
 } >"${TMP}"
 chmod 0440 "${TMP}"
 if ! visudo -cf "${TMP}"; then

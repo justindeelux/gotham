@@ -29,6 +29,10 @@ func (f *fakeRepo) Save(_ context.Context, _ uuid.UUID, section string, rec Stor
 
 type fakeHost struct {
 	caps                        Capabilities
+	host                        Host
+	installLog                  string
+	installErr                  error
+	installs                    int
 	live                        HostNetwork
 	hasLive                     bool
 	applied, confirmed, reverts int
@@ -36,7 +40,16 @@ type fakeHost struct {
 	err                         error
 }
 
-func (h *fakeHost) Capabilities(context.Context) Capabilities { return h.caps }
+func (h *fakeHost) Probe(context.Context) Host {
+	if h.host.Helper != "" {
+		return h.host
+	}
+	return Host{Helper: HelperReady, Network: h.caps.Network, System: h.caps.System, NetworkStack: true, SystemStack: true}
+}
+func (h *fakeHost) InstallHostHelper(context.Context) (string, error) {
+	h.installs++
+	return h.installLog, h.installErr
+}
 func (h *fakeHost) HostNetwork(context.Context) (HostNetwork, bool) {
 	return h.live, h.hasLive
 }
@@ -305,6 +318,71 @@ func TestUnsupportedHostAndHelperFailure(t *testing.T) {
 	host.caps, host.err = Capabilities{Network: true, System: true}, ErrHost
 	if _, err := svc.UpdateSystem(context.Background(), uuid.Nil, System{Hostname: "gotham-1", NTPEnabled: true}); !errors.Is(err, ErrHost) {
 		t.Fatalf("want host error: %v", err)
+	}
+}
+
+// TestHostStates covers the four capability-probe outcomes (JUS-185): a ready
+// helper, a missing helper file, a helper present but refused by sudo, and a
+// host that does not run the network stack.
+func TestHostStates(t *testing.T) {
+	cases := []struct {
+		name        string
+		host        Host
+		wantNetwork bool
+		wantInstall bool
+		wantHelper  HelperState
+	}{
+		{"ready", Host{Helper: HelperReady, NetworkStack: true, SystemStack: true, Network: true, System: true}, true, false, HelperReady},
+		{"missing-with-stack", Host{Helper: HelperMissing, NetworkStack: true}, false, true, HelperMissing},
+		{"denied-with-stack", Host{Helper: HelperDenied, NetworkStack: true}, false, true, HelperDenied},
+		{"missing-without-stack", Host{Helper: HelperMissing, NetworkStack: false}, false, false, HelperMissing},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _ := newSvc(&fakeHost{host: tc.host})
+			st, err := svc.Get(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st.Host != tc.host {
+				t.Fatalf("host not reported verbatim: %+v", st.Host)
+			}
+			if st.Capabilities.Network != tc.wantNetwork {
+				t.Fatalf("network capability: %v", st.Capabilities.Network)
+			}
+			if st.Host.Installable() != tc.wantInstall {
+				t.Fatalf("installable: %v", st.Host.Installable())
+			}
+			if st.Host.Helper != tc.wantHelper {
+				t.Fatalf("helper: %q", st.Host.Helper)
+			}
+		})
+	}
+}
+
+// TestInstallHostHelper installs the helper when it is not ready and re-probes;
+// a ready helper is a no-op.
+func TestInstallHostHelper(t *testing.T) {
+	host := &fakeHost{host: Host{Helper: HelperMissing, NetworkStack: true}, installLog: "installed gotham-hostctl\n"}
+	svc, _ := newSvc(host)
+	st, log, err := svc.InstallHostHelper(context.Background(), uuid.Nil)
+	if err != nil || host.installs != 1 || log == "" {
+		t.Fatalf("install: %+v %q %v", st, log, err)
+	}
+
+	host.installLog, host.installErr = "", ErrHost
+	if _, _, err := svc.InstallHostHelper(context.Background(), uuid.Nil); !errors.Is(err, ErrHost) {
+		t.Fatalf("want host error: %v", err)
+	}
+
+	ready := &fakeHost{host: Host{Helper: HelperReady, Network: true, System: true}}
+	svc = NewService(&fakeRepo{}, ready, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc.lookup = func(string) string { return "" }
+	if _, _, err := svc.InstallHostHelper(context.Background(), uuid.Nil); err != nil {
+		t.Fatalf("ready helper install: %v", err)
+	}
+	if ready.installs != 0 {
+		t.Fatalf("ready helper must not reinstall: %d", ready.installs)
 	}
 }
 

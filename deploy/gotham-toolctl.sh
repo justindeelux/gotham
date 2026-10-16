@@ -11,7 +11,11 @@
 #
 # The agent passes only a catalog id. This script owns every executable argv and
 # validates the id against an allow-list, so a compromised agent cannot widen
-# what runs as root: it cannot name a package, a URL or an extra flag.
+# what runs as root: it cannot name a package, a URL or an extra flag. The
+# control plane uses the same helper to repair the host helper
+# (`install-tool gotham-hostctl`), reaching it through the verb-pinned rule in
+# install-hostctl-sudoers.sh; the content it installs is the root-owned staged
+# copy next to this script, never caller-supplied bytes.
 #
 # Versions and their sha256 digests are pinned below. Downloads are verified
 # before a binary is installed; a mismatch aborts (exit 4).
@@ -89,7 +93,7 @@ TOOL="$2"
 
 allow_install() {
     case "$1" in
-        railpack | buildkit | pack | docker | git) return 0 ;;
+        railpack | buildkit | pack | docker | git | gotham-hostctl) return 0 ;;
         *) die "tool is not installable: $1" 3 ;;
     esac
 }
@@ -98,6 +102,7 @@ allow_uninstall() {
         railpack | buildkit | pack) return 0 ;;
         git) die "cannot uninstall git: required by the platform for source deployments" 3 ;;
         docker) die "cannot uninstall docker: required by the platform to run workloads" 3 ;;
+        gotham-hostctl) die "cannot uninstall gotham-hostctl: required by the platform for host network and system settings" 3 ;;
         *) die "tool is not uninstallable: $1" 3 ;;
     esac
 }
@@ -307,12 +312,45 @@ install_git() {
     esac
 }
 
+# ---- host helper (gotham-hostctl) ------------------------------------------
+# Installs the fixed, root-owned host helper the CONTROL PLANE (not the agent)
+# uses for instance settings, plus its verb-pinned sudoers drop-in. Content is
+# the root-owned staged copy the installers place next to this helper, so a
+# caller naming only the catalog id cannot substitute the script.
+HOSTCTL_LIVE="${ROOT}/usr/libexec/gotham/gotham-hostctl"
+HOSTCTL_DIST="${ROOT}/usr/libexec/gotham/gotham-hostctl.dist"
+HOSTCTL_SUDOERS="${ROOT}/usr/libexec/gotham/install-hostctl-sudoers.sh"
+
+# hostctl_user is the service user the sudoers rule must grant: the control
+# plane runs as the service user, so a custom one needs /etc/gotham/hostctl.user
+# (written by the installer). shortcut: defaults to "gotham".
+hostctl_user() {
+    if [ -r "${ROOT}/etc/gotham/hostctl.user" ]; then
+        sed -n '1p' "${ROOT}/etc/gotham/hostctl.user"
+    else
+        echo gotham
+    fi
+}
+
+install_hostctl() {
+    [ -f "${HOSTCTL_DIST}" ] || die "gotham-hostctl content is missing (${HOSTCTL_DIST})" 5
+    [ -f "${HOSTCTL_SUDOERS}" ] || die "gotham-hostctl sudoers installer is missing (${HOSTCTL_SUDOERS})" 5
+    run install -m 0755 -o root -g root "${HOSTCTL_DIST}" "${HOSTCTL_LIVE}"
+    user="$(hostctl_user)"
+    if [ "${DRYRUN}" = "1" ]; then
+        echo "+ sh ${HOSTCTL_SUDOERS} ${user}"
+        return 0
+    fi
+    sh "${HOSTCTL_SUDOERS}" "${user}"
+}
+
 case "${VERB}:${TOOL}" in
     install-tool:railpack) install_railpack ;;
     install-tool:buildkit) install_buildkit ;;
     install-tool:pack) install_pack ;;
     install-tool:docker) install_docker ;;
     install-tool:git) install_git ;;
+    install-tool:gotham-hostctl) install_hostctl ;;
     uninstall-tool:railpack) uninstall_railpack ;;
     uninstall-tool:buildkit) uninstall_buildkit ;;
     uninstall-tool:pack) uninstall_pack ;;

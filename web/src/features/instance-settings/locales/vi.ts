@@ -10,8 +10,6 @@ const vi: typeof en = {
   },
   tabs: { general: "Chung", network: "Mạng", system: "Hệ thống" },
   forbidden: "Chỉ quản trị viên nền tảng mới xem hoặc thay đổi được cài đặt instance.",
-  unsupported:
-    "Máy này chưa hỗ trợ thay đổi cấu hình máy chủ: chưa cài helper hoặc máy không dùng systemd-networkd. Giá trị chỉ hiển thị, không sửa được. Xem deploy/README.md.",
   locked: "Bị khóa bởi biến môi trường {name}.",
   general: {
     title: "Chung",
@@ -74,6 +72,17 @@ const vi: typeof en = {
       "Thay đổi này can thiệp vào địa chỉ của interface bạn đang kết nối. Máy chủ có thể mất kết nối cho đến khi bạn xác nhận hoặc hoàn tác.",
     confirmLabel: "Tôi hiểu thay đổi này có thể làm gián đoạn kết nối",
     confirmRequired: "Hãy tích vào ô xác nhận để áp dụng thay đổi này.",
+    helperMissing:
+      "Helper máy chủ chưa được cài, nên các giá trị chỉ hiển thị. Hãy cài helper để quản lý mạng máy chủ từ Gotham.",
+    helperDenied:
+      "Helper máy chủ đã cài nhưng không được phép chạy, nên các giá trị chỉ hiển thị. Hãy cài lại để làm mới quyền.",
+    stackUnsupported:
+      "Máy chủ này không chạy systemd-networkd và systemd-resolved, nên Gotham không thể quản lý mạng. Giá trị chỉ hiển thị.",
+    installHelper: "Cài helper máy chủ",
+    installFailed: "Không cài được helper máy chủ.",
+    installLogTitle: "Cài helper máy chủ",
+    installLogHint: "Kết quả từ trình cài trên máy chủ này.",
+    close: "Đóng",
   },
   confirm: {
     title: "Giữ các thay đổi mạng này?",
@@ -89,6 +98,9 @@ const vi: typeof en = {
     ntpHint: "Tối đa 4, cách nhau bằng dấu phẩy. Để trống để dùng mặc định của hệ thống.",
     submit: "Lưu cài đặt hệ thống",
     saved: "Đã lưu cài đặt hệ thống.",
+    installHint: "Hãy cài trong tab Mạng.",
+    stackUnsupported:
+      "Máy chủ này thiếu các công cụ Gotham dùng cho cài đặt hệ thống. Giá trị chỉ hiển thị.",
   },
   validation: {
     url: "Nhập URL http(s) có tên máy chủ, không kèm thông tin đăng nhập, query hay fragment.",

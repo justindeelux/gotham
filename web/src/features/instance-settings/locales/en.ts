@@ -12,8 +12,6 @@ const en = {
   },
   tabs: { general: "General", network: "Network", system: "System" },
   forbidden: "Only platform operators can view or change instance settings.",
-  unsupported:
-    "Host changes are not available on this machine: the host helper is not installed or the host does not use systemd-networkd. Values are shown read-only. See deploy/README.md.",
   locked: "Locked by the environment variable {name}.",
   general: {
     title: "General",
@@ -76,6 +74,17 @@ const en = {
       "This changes the address of the interface you are connected through. The host may become unreachable until the change is confirmed or reverted.",
     confirmLabel: "I understand this may interrupt the connection",
     confirmRequired: "Tick the confirmation box to apply this change.",
+    helperMissing:
+      "The host helper is not installed, so these values are read-only. Install it to manage the host network from Gotham.",
+    helperDenied:
+      "The host helper is installed but not permitted to run, so these values are read-only. Install it again to refresh its permission.",
+    stackUnsupported:
+      "This host does not run systemd-networkd and systemd-resolved, so Gotham cannot manage its network. Values are shown read-only.",
+    installHelper: "Install host helper",
+    installFailed: "The host helper could not be installed.",
+    installLogTitle: "Host helper install",
+    installLogHint: "Output from the installer on this host.",
+    close: "Close",
   },
   confirm: {
     title: "Keep these network changes?",
@@ -91,6 +100,9 @@ const en = {
     ntpHint: "Up to 4, comma separated. Leave empty for the system defaults.",
     submit: "Save system settings",
     saved: "System settings saved.",
+    installHint: "Install it from the Network tab.",
+    stackUnsupported:
+      "This host lacks the tools Gotham uses for system settings. Values are shown read-only.",
   },
   validation: {
     url: "Enter an http(s) URL with a host, without credentials, query or fragment.",

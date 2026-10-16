@@ -616,8 +616,20 @@ and by NEG1 end to end; the wrapper rollback status is covered by NEG2.
 
 `Settings → Instance` applies network (DNS, IPv4/IPv6) and system (hostname, NTP)
 settings through `gotham-hostctl.sh`, a fixed root-owned helper with the same
-privilege model as the update wrapper. It is optional: without it the General
-section still works and the host sections are read-only.
+privilege model as the update wrapper.
+
+`install-agent.sh` installs the helper root-owned together with its verb-pinned
+sudoers rule (the rule names the **control-plane** service user, default
+`gotham`; override with `GOTHAM_HOSTCTL_USER`) and keeps a root-owned
+`gotham-hostctl.dist` copy next to `gotham-toolctl`. `install.sh` runs that
+agent step for this host, so a normal install needs no extra action.
+
+When the helper is missing or not permitted, `Settings → Instance` reports the
+cause and offers **Install host helper**: the control plane runs
+`gotham-toolctl install-tool gotham-hostctl` (one pinned sudoers rule, no blanket
+sudo — the same helper/`install-tool` model as node tools), which reinstalls the
+helper from the staged copy and rewrites the sudoers rule. Manual recovery, if
+ever needed:
 
 ```sh
 sudo install -D -m 0755 -o root -g root deploy/gotham-hostctl.sh /usr/libexec/gotham/gotham-hostctl
@@ -625,7 +637,9 @@ sudo deploy/install-hostctl-sudoers.sh gotham
 ```
 
 - sudoers grants exactly five verbs (`status`, `apply-network`, `confirm-network`,
-  `revert-network`, `apply-system`); values arrive on stdin and are re-validated.
+  `revert-network`, `apply-system`), plus the single repair verb
+  `gotham-toolctl install-tool gotham-hostctl`; values arrive on stdin and are
+  re-validated.
 - Supported stack: systemd-networkd + systemd-resolved + systemd-timesyncd. Gotham
   owns only `05-gotham.network`, `resolved.conf.d/05-gotham.conf` and
   `timesyncd.conf.d/05-gotham.conf`; other hosts report the sections as unsupported.

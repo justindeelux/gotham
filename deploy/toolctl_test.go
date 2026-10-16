@@ -62,11 +62,40 @@ func TestToolctlUsage(t *testing.T) {
 }
 
 func TestToolctlRefusesPlatformToolUninstall(t *testing.T) {
-	for _, id := range []string{"git", "docker"} {
+	for _, id := range []string{"git", "docker", "gotham-hostctl"} {
 		out, err := runToolctl(t, t.TempDir(), nil, "uninstall-tool", id)
 		if err == nil || !strings.Contains(out, "required by the platform") || strings.Contains(out, "+ ") {
 			t.Errorf("uninstall %s = %q, %v; want refusal without executing commands", id, out, err)
 		}
+	}
+}
+
+// TestToolctlHostctlInstall proves the control-plane host helper installs from
+// the root-owned staged copy and grants the control-plane user its rule; a
+// missing staged copy is refused (JUS-185).
+func TestToolctlHostctlInstall(t *testing.T) {
+	missing, err := runToolctl(t, t.TempDir(), nil, "install-tool", "gotham-hostctl")
+	if err == nil || !strings.Contains(missing, "content is missing") {
+		t.Fatalf("missing staged content = %q, %v; want refusal", missing, err)
+	}
+
+	root := t.TempDir()
+	staged := filepath.Join(root, "usr/libexec/gotham")
+	if err := os.MkdirAll(staged, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"gotham-hostctl.dist", "install-hostctl-sudoers.sh"} {
+		if err := os.WriteFile(filepath.Join(staged, name), []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := runToolctl(t, root, nil, "install-tool", "gotham-hostctl")
+	if err != nil {
+		t.Fatalf("install-tool gotham-hostctl: %v: %s", err, out)
+	}
+	if !strings.Contains(out, "gotham-hostctl.dist") ||
+		!strings.Contains(out, "install-hostctl-sudoers.sh gotham") {
+		t.Errorf("host helper install did not stage and grant: %q", out)
 	}
 }
 

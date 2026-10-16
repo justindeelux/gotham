@@ -149,6 +149,42 @@ type Capabilities struct {
 	System  bool `json:"system"`
 }
 
+// HelperState says how the control-plane host answered the helper probe.
+type HelperState string
+
+const (
+	// HelperReady — the fixed helper is installed and runnable.
+	HelperReady HelperState = "ready"
+	// HelperMissing — the helper file is absent.
+	HelperMissing HelperState = "missing"
+	// HelperDenied — the helper is present but sudo refused it (its
+	// verb-pinned sudoers rule is missing).
+	HelperDenied HelperState = "denied"
+)
+
+// Host reports the control-plane host's readiness, so the operator gets one
+// accurate message per cause instead of a single merged "not available".
+type Host struct {
+	// Helper is the install state of the fixed host helper.
+	Helper HelperState `json:"helper"`
+	// NetworkStack is true when the host runs what the network section needs
+	// (systemd-networkd + systemd-resolved + networkctl), detected without the
+	// helper. When false, installing the helper cannot make the section work.
+	NetworkStack bool `json:"network_stack"`
+	// SystemStack is true when the host has what the system section needs.
+	SystemStack bool `json:"system_stack"`
+	// Network is true when the network section can be applied right now.
+	Network bool `json:"network"`
+	// System is true when the system section can be applied right now.
+	System bool `json:"system"`
+}
+
+// Installable reports whether offering the in-product helper install can help:
+// only when the helper is not ready but the host supports the stack.
+func (h Host) Installable() bool {
+	return h.Helper != HelperReady && h.NetworkStack
+}
+
 // State is the full read model.
 type State struct {
 	PendingControlPlaneURL *PendingControlPlaneURL `json:"pending_control_plane_url"`
@@ -156,6 +192,7 @@ type State struct {
 	Network                Network                 `json:"network"`
 	System                 System                  `json:"system"`
 	Capabilities           Capabilities            `json:"capabilities"`
+	Host                   Host                    `json:"host"`
 	Pending                *Pending                `json:"pending"`
 }
 

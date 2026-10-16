@@ -21,10 +21,20 @@ type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 type errorBody struct {
 	Message string      `json:"message"`
 	Errors  FieldErrors `json:"errors,omitempty"`
+	// Log carries the installer output when a host-helper install failed, so
+	// the operator can read what the tool installer reported.
+	Log string `json:"log,omitempty"`
 }
 
 type stateEnvelope struct {
 	Settings State `json:"settings"`
+}
+
+// hostHelperEnvelope is the POST .../host-helper body: the freshly probed state
+// plus the installer output.
+type hostHelperEnvelope struct {
+	Settings State  `json:"settings"`
+	Log      string `json:"log"`
 }
 
 type handler struct {
@@ -59,6 +69,7 @@ func Mount(r chi.Router, admin func(http.Handler) http.Handler, userID UserIDFun
 		g.Put("/v1/instance/settings/network", h.putNetwork)
 		g.Post("/v1/instance/settings/network/confirm", h.confirm)
 		g.Post("/v1/instance/settings/network/revert", h.revert)
+		g.Post("/v1/instance/settings/host-helper", h.installHostHelper)
 		g.Post("/v1/instance/settings/control-plane-url/confirm", h.confirmControlPlaneURL)
 		g.Post("/v1/instance/settings/control-plane-url/revert", h.revertControlPlaneURL)
 	})
@@ -109,6 +120,25 @@ func (h *handler) confirm(w http.ResponseWriter, r *http.Request) {
 func (h *handler) revert(w http.ResponseWriter, r *http.Request) {
 	st, err := h.svc.RevertNetwork(r.Context(), h.actor(r))
 	h.reply(w, st, err)
+}
+
+// installHostHelper installs the host helper and its sudoers rule, then returns
+// the re-probed state and the installer output. A failed install answers 502
+// with the installer output, so the operator can read the cause.
+func (h *handler) installHostHelper(w http.ResponseWriter, r *http.Request) {
+	st, log, err := h.svc.InstallHostHelper(r.Context(), h.actor(r))
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, hostHelperEnvelope{Settings: st, Log: log})
+	case errors.Is(err, ErrUnsupported):
+		writeJSON(w, http.StatusConflict, errorBody{Message: "this host does not support applying these settings from Gotham"})
+	default:
+		h.logger.Error("instance host helper install failed", "error", err)
+		writeJSON(w, http.StatusBadGateway, errorBody{
+			Message: "the host helper could not be installed",
+			Log:     log,
+		})
+	}
 }
 
 func (h *handler) confirmControlPlaneURL(w http.ResponseWriter, r *http.Request) {

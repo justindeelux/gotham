@@ -7,6 +7,7 @@ import {
   NForm,
   NFormItem,
   NInput,
+  NModal,
   NRadioButton,
   NRadioGroup,
   NSwitch,
@@ -15,7 +16,7 @@ import type { FormInst, FormRules } from "naive-ui";
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
-import { saveNetwork } from "@/features/instance-settings/api/instance";
+import { saveNetwork, installHostHelper, errorText, hostHelperErrorLog } from "@/features/instance-settings/api/instance";
 import type { InstanceState } from "@/features/instance-settings/api/instance";
 import { useSectionForm } from "@/features/instance-settings/composables/useSectionForm";
 import {
@@ -172,13 +173,73 @@ function status(path: string): "error" | undefined {
 }
 
 const disabled = (): boolean => !props.state.capabilities.network || props.state.pending !== null;
+
+// ---- host helper (JUS-185) -------------------------------------------------
+// The network section needs the fixed host helper. When it is missing or not
+// permitted, the page offers an in-product install instead of a dead end; when
+// the host does not run the stack at all, nothing can be installed.
+const installing = ref(false);
+const installLog = ref("");
+const showInstallLog = ref(false);
+
+/** canInstall is true when offering the helper install can make the section work. */
+const canInstall = computed<boolean>(
+  () => props.state.host.helper !== "ready" && props.state.host.network_stack,
+);
+
+/** stackUnsupported is true when no install can enable the section. */
+const stackUnsupported = computed<boolean>(
+  () =>
+    !props.state.capabilities.network &&
+    (props.state.host.helper === "ready" || !props.state.host.network_stack),
+);
+
+/** helperMessageKey names the accurate cause: missing file vs refused rule. */
+const helperMessageKey = computed<string>(() =>
+  props.state.host.helper === "denied"
+    ? "instance-settings.network.helperDenied"
+    : "instance-settings.network.helperMissing",
+);
+
+async function handleInstall(): Promise<void> {
+  if (installing.value) {
+    return;
+  }
+  installing.value = true;
+  errorMessage.value = "";
+  try {
+    const result = await installHostHelper();
+    installLog.value = result.log;
+    showInstallLog.value = true;
+    emit("saved", result.settings);
+  } catch (error) {
+    errorMessage.value = errorText(error) || t("instance-settings.network.installFailed");
+    const log = hostHelperErrorLog(error);
+    if (log !== "") {
+      installLog.value = log;
+      showInstallLog.value = true;
+    }
+  } finally {
+    installing.value = false;
+  }
+}
 </script>
 
 <template>
   <NCard :title="t('instance-settings.network.title')">
-    <NAlert v-if="!state.capabilities.network" type="info" :show-icon="true" class="form-alert">
-      {{ t("instance-settings.unsupported") }}
+    <NAlert v-if="stackUnsupported" type="info" :show-icon="true" class="form-alert">
+      {{ t("instance-settings.network.stackUnsupported") }}
     </NAlert>
+    <template v-else-if="canInstall">
+      <NAlert type="warning" :show-icon="true" class="form-alert">
+        {{ t(helperMessageKey) }}
+      </NAlert>
+      <div class="form-alert">
+        <NButton type="primary" :loading="installing" @click="() => void handleInstall()">
+          {{ t("instance-settings.network.installHelper") }}
+        </NButton>
+      </div>
+    </template>
     <NAlert v-else-if="state.pending" type="warning" :show-icon="true" class="form-alert">
       {{ t("instance-settings.network.pendingNote") }}
     </NAlert>
@@ -289,6 +350,20 @@ const disabled = (): boolean => !props.state.capabilities.network || props.state
         {{ t("instance-settings.network.confirmLabel") }}
       </NCheckbox>
     </NForm>
+
+    <NModal
+      v-model:show="showInstallLog"
+      preset="card"
+      :title="t('instance-settings.network.installLogTitle')"
+      class="app-modal"
+      style="width: 720px; max-width: 96vw"
+    >
+      <p class="field-hint">{{ t("instance-settings.network.installLogHint") }}</p>
+      <pre class="host-helper-log">{{ installLog }}</pre>
+      <template #footer>
+        <NButton @click="showInstallLog = false">{{ t("instance-settings.network.close") }}</NButton>
+      </template>
+    </NModal>
   </NCard>
 </template>
 
@@ -306,5 +381,17 @@ const disabled = (): boolean => !props.state.capabilities.network || props.state
 
 h4 {
   margin: 8px 0;
+}
+
+.host-helper-log {
+  max-height: 40vh;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--bg-2, #f5f5f5);
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 </style>

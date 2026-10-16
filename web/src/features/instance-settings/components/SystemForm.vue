@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSwitch } from "naive-ui";
 import type { FormInst, FormRules } from "naive-ui";
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { saveSystem } from "@/features/instance-settings/api/instance";
@@ -59,12 +59,27 @@ async function handleSubmit(): Promise<void> {
 function status(path: string): "error" | undefined {
   return serverErrors.value[path] ? "error" : undefined;
 }
+
+// systemNotice names the accurate cause when the system section is read-only:
+// a missing/refused helper (installable from the Network tab) or a host
+// without the required system tools (not fixable).
+const systemNotice = computed<string>(() => {
+  if (props.state.host.helper === "denied" || props.state.host.helper === "missing") {
+    const cause = t(
+      props.state.host.helper === "denied"
+        ? "instance-settings.network.helperDenied"
+        : "instance-settings.network.helperMissing",
+    );
+    return `${cause} ${t("instance-settings.system.installHint")}`;
+  }
+  return t("instance-settings.system.stackUnsupported");
+});
 </script>
 
 <template>
   <NCard :title="t('instance-settings.system.title')">
     <NAlert v-if="!state.capabilities.system" type="info" :show-icon="true" class="form-alert">
-      {{ t("instance-settings.unsupported") }}
+      {{ systemNotice }}
     </NAlert>
     <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert">{{ errorMessage }}</NAlert>
     <NForm ref="formRef" :model="form" :rules="rules" class="instance-form" @submit.prevent="handleSubmit">

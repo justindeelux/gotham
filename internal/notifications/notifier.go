@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -24,10 +25,33 @@ type Notifier interface {
 // httptest server through newTelegramNotifier.
 const defaultTelegramBaseURL = "https://api.telegram.org"
 
+// Per-transport message caps. Each provider rejects an over-long payload, so
+// the message is truncated at the transport's own limit; email is uncapped.
+// The event message is short in practice (the failure text is already bounded
+// by maxEventError), so this only guards a pathological resource name.
+const (
+	discordContentLimit = 2000
+	slackTextLimit      = 4000
+	telegramTextLimit   = 4096
+)
+
 // discordNotifier posts {"content": ...} to a Discord incoming webhook.
 type discordNotifier struct {
 	url    string
 	client *http.Client
+}
+
+// discordPayload is the Discord webhook body. allowed_mentions with an empty
+// parse list disables every mention, so a resource name (or commit text) that
+// contains "@everyone", "@here" or a role mention can never ping a channel.
+type discordPayload struct {
+	Content         string          `json:"content"`
+	AllowedMentions discordMentions `json:"allowed_mentions"`
+}
+
+// discordMentions mirrors the allowed_mentions object Discord expects.
+type discordMentions struct {
+	Parse []string `json:"parse"`
 }
 
 // newDiscordNotifier builds a Discord notifier for a webhook URL.
@@ -37,7 +61,11 @@ func newDiscordNotifier(webhookURL string, client *http.Client) *discordNotifier
 
 // Notify implements Notifier.
 func (n *discordNotifier) Notify(ctx context.Context, event Event) error {
-	return postJSON(ctx, n.client, n.url, map[string]string{"content": event.Message()})
+	payload := discordPayload{
+		Content:         truncateText(event.Message(), discordContentLimit),
+		AllowedMentions: discordMentions{Parse: []string{}},
+	}
+	return postJSON(ctx, n.client, n.url, payload)
 }
 
 // slackNotifier posts {"text": ...} to a Slack incoming webhook.
@@ -53,7 +81,38 @@ func newSlackNotifier(webhookURL string, client *http.Client) *slackNotifier {
 
 // Notify implements Notifier.
 func (n *slackNotifier) Notify(ctx context.Context, event Event) error {
-	return postJSON(ctx, n.client, n.url, map[string]string{"text": event.Message()})
+	// Every field of the message is user-controlled (resource name, host,
+	// engine error), so the whole message is escaped before it becomes Slack
+	// mrkdwn: a name containing "<!channel>", "<@U123>", "<#C1|x>" or an
+	// "<https://evil|click>" link travels as inert text instead of pinging or
+	// phishing. Slack's rule is ampersand-first, which a single-pass replacer
+	// handles without re-escaping the inserted entities. Escaping runs before
+	// the cap so the limit bounds what is actually sent.
+	return postJSON(ctx, n.client, n.url, slackPayload{
+		Text:        truncateText(slackEscape(event.Message()), slackTextLimit),
+		LinkNames:   false,
+		UnfurlLinks: false,
+		UnfurlMedia: false,
+	})
+}
+
+// slackPayload is the Slack incoming-webhook body. link_names stays off so
+// Slack never turns an "@here" in user text into a mention, and the unfurl
+// flags stay off so Slack never fetches a user-controlled URL to preview it.
+// mrkdwn is left at Slack's default: the escaped text is already inert, and
+// disabling mrkdwn would render the escape sequences literally.
+type slackPayload struct {
+	Text        string `json:"text"`
+	LinkNames   bool   `json:"link_names"`
+	UnfurlLinks bool   `json:"unfurl_links"`
+	UnfurlMedia bool   `json:"unfurl_media"`
+}
+
+// slackEscape escapes the three characters Slack's mrkdwn parser treats as
+// markup, in the order the rule requires (ampersand first). The result is data,
+// never markup; intentional formatting would be composed from escaped parts.
+func slackEscape(text string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(text)
 }
 
 // telegramNotifier calls the Bot API sendMessage method.
@@ -80,11 +139,16 @@ func newTelegramNotifier(token, chatID, baseURL string, client *http.Client) *te
 
 // Notify implements Notifier. The token travels in the URL path (the Bot API
 // contract), so a failed call never reports the endpoint, only the host.
+//
+// No parse_mode is sent, so the Bot API treats the text as plain: a resource
+// name or error containing "<b>", "*bold*" or "[x](y)" is delivered verbatim
+// and never parsed as HTML or Markdown. If a parse_mode is ever added, the
+// dynamic text must be escaped for that mode first.
 func (n *telegramNotifier) Notify(ctx context.Context, event Event) error {
 	endpoint := n.baseURL + "/bot" + url.PathEscape(n.token) + "/sendMessage"
 	return postJSON(ctx, n.client, endpoint, map[string]string{
 		"chat_id": n.chatID,
-		"text":    event.Message(),
+		"text":    truncateText(event.Message(), telegramTextLimit),
 	})
 }
 
@@ -156,11 +220,32 @@ func postJSON(ctx context.Context, client *http.Client, endpoint string, payload
 	// never echoed because a remote server may reflect the request path.
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if seconds, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {
+				return fmt.Errorf("notifications: %s rate limited (retry after %ds)", endpointHost(endpoint), seconds)
+			}
+			return fmt.Errorf("notifications: %s rate limited", endpointHost(endpoint))
+		}
 		// resp.Status carries the reason phrase, which the remote endpoint
 		// controls; only the numeric code is safe to report.
 		return fmt.Errorf("notifications: %s answered status %d", endpointHost(endpoint), resp.StatusCode)
 	}
 	return nil
+}
+
+// maxRetryAfterSeconds caps a parsed Retry-After so a hostile header cannot
+// produce an absurd hint.
+const maxRetryAfterSeconds = 86400
+
+// parseRetryAfter reads the delta-seconds form of Retry-After. The HTTP-date
+// form is deliberately ignored: it is remote-controlled text and the error
+// must carry only the numeric hint.
+func parseRetryAfter(raw string) (int, bool) {
+	seconds, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || seconds <= 0 || seconds > maxRetryAfterSeconds {
+		return 0, false
+	}
+	return seconds, true
 }
 
 // redirectLimit bounds followed redirects; the stdlib default is 10.

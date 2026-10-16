@@ -341,6 +341,15 @@ type NotificationChannel struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
+type NotificationDelivery struct {
+	ID           pgtype.UUID        `json:"id"`
+	ChannelID    pgtype.UUID        `json:"channel_id"`
+	EventType    string             `json:"event_type"`
+	Status       string             `json:"status"`
+	ErrorSummary string             `json:"error_summary"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type PreviewDelivery struct {
 	ID            pgtype.UUID        `json:"id"`
 	ApplicationID pgtype.UUID        `json:"application_id"`

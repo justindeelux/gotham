@@ -167,6 +167,36 @@ export async function testChannel(
   return response.data.check;
 }
 
+/** Terminal result of one delivery attempt (DeliveryStatus in model.go). */
+export type DeliveryStatus = "success" | "failure";
+
+/** One persisted delivery attempt (DeliveryView in model.go). */
+export interface NotificationDelivery {
+  id: string;
+  channel_id: string;
+  event_type: string;
+  status: DeliveryStatus;
+  /** A bounded, classified failure reason; empty on success. Never a secret. */
+  error_summary?: string;
+  created_at: string;
+}
+
+interface DeliveryListEnvelope {
+  deliveries: NotificationDelivery[];
+}
+
+/** listDeliveries returns a channel's newest attempts, newest first. */
+export async function listDeliveries(
+  teamId: string,
+  id: string,
+): Promise<NotificationDelivery[]> {
+  const response = await http.get<DeliveryListEnvelope>(
+    `/notification-channels/${id}/deliveries`,
+    { headers: teamHeaders(teamId) },
+  );
+  return response.data.deliveries ?? [];
+}
+
 /**
  * TextParams interpolates one curated display string (e.g. `{name}`).
  * Wire values (event keys, kinds, URLs) are never keys: they travel as
@@ -242,6 +272,28 @@ export function eventLabel(event: NotificationEventKey): string {
     default:
       return event;
   }
+}
+
+/**
+ * deliveryEventLabel renders a delivery row's event type. A send-test row
+ * carries the "test" marker instead of an event key; an unknown key renders
+ * verbatim, like eventLabel.
+ */
+export function deliveryEventLabel(eventType: string): string {
+  if (eventType === "test") {
+    return channelText("notifications.history.testEvent", "Test message");
+  }
+  if ((allNotificationEvents as string[]).includes(eventType)) {
+    return eventLabel(eventType as NotificationEventKey);
+  }
+  return eventType;
+}
+
+/** deliveryStatusLabel renders a delivery row's terminal status. */
+export function deliveryStatusLabel(status: DeliveryStatus): string {
+  return status === "success"
+    ? channelText("notifications.history.delivered", "Delivered")
+    : channelText("notifications.history.failed", "Failed");
 }
 
 /** isFeatureDisabled reports whether an error is the notifications 404. */

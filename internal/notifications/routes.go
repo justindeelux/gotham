@@ -37,6 +37,11 @@ type testEnvelope struct {
 	Check TestResult `json:"check"`
 }
 
+// deliveryListEnvelope wraps a channel's delivery history.
+type deliveryListEnvelope struct {
+	Deliveries []DeliveryView `json:"deliveries"`
+}
+
 // errorBody is the JSON body returned for failures.
 type errorBody struct {
 	Message string `json:"message"`
@@ -58,6 +63,7 @@ type handler struct {
 //	PATCH  /v1/notification-channels/{id}
 //	DELETE /v1/notification-channels/{id}
 //	POST   /v1/notification-channels/{id}/test
+//	GET    /v1/notification-channels/{id}/deliveries
 //
 // auth wraps the group (the server passes its team chain: RequireAuth,
 // RequireTeam and the owner/admin gate for mutating methods, so a read_only
@@ -77,6 +83,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Patch("/v1/notification-channels/{id}", h.update)
 		protected.Delete("/v1/notification-channels/{id}", h.delete)
 		protected.Post("/v1/notification-channels/{id}/test", h.test)
+		protected.Get("/v1/notification-channels/{id}/deliveries", h.deliveries)
 	})
 }
 
@@ -173,6 +180,25 @@ func (h *handler) test(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, testEnvelope{Check: result})
+}
+
+// deliveries serves GET /v1/notification-channels/{id}/deliveries: the
+// channel's newest delivery attempts, newest first. It is a read, so any team
+// member may call it.
+func (h *handler) deliveries(w http.ResponseWriter, r *http.Request) {
+	userID, channelID, ok := h.channelParams(w, r)
+	if !ok {
+		return
+	}
+	deliveries, err := h.svc.ListDeliveries(r.Context(), userID, channelID)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	if deliveries == nil {
+		deliveries = []DeliveryView{}
+	}
+	writeJSON(w, http.StatusOK, deliveryListEnvelope{Deliveries: deliveries})
 }
 
 // currentUser resolves the authenticated user, answering 401 when absent.

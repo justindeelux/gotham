@@ -60,12 +60,17 @@ type fakeRepository struct {
 	channels map[uuid.UUID]Channel
 	order    []uuid.UUID
 
+	deliveries map[uuid.UUID][]Delivery
+
 	createErr       error
 	getErr          error
 	listErr         error
 	listForEventErr error
 	updateErr       error
 	deleteErr       error
+
+	createDeliveryErr error
+	listDeliveriesErr error
 
 	// listForEventCalls and the last resource arguments let a test prove the
 	// dispatcher asked for exactly the event's resource.
@@ -78,7 +83,10 @@ type fakeRepository struct {
 var _ Repository = (*fakeRepository)(nil)
 
 func newFakeRepository() *fakeRepository {
-	return &fakeRepository{channels: make(map[uuid.UUID]Channel)}
+	return &fakeRepository{
+		channels:   make(map[uuid.UUID]Channel),
+		deliveries: make(map[uuid.UUID][]Delivery),
+	}
 }
 
 // seed stores a channel directly, filling the fields the service would.
@@ -194,6 +202,63 @@ func (r *fakeRepository) DeleteChannel(_ context.Context, teamID, channelID uuid
 	}
 	delete(r.channels, channelID)
 	return nil
+}
+
+// CreateDelivery implements Repository: it appends one attempt, applying the
+// same newest-first cap the SQL retention runs so unit tests see bounded rows.
+func (r *fakeRepository) CreateDelivery(_ context.Context, delivery Delivery) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.createDeliveryErr != nil {
+		return r.createDeliveryErr
+	}
+	if delivery.ID == uuid.Nil {
+		delivery.ID = uuid.New()
+	}
+	history := append(r.deliveries[delivery.ChannelID], delivery)
+	sortDeliveries(history)
+	if len(history) > deliveryRetention {
+		history = history[:deliveryRetention]
+	}
+	r.deliveries[delivery.ChannelID] = history
+	return nil
+}
+
+// ListDeliveries implements Repository with the SQL read's semantics: the
+// newest attempts of a channel that belongs to the team, newest first.
+func (r *fakeRepository) ListDeliveries(_ context.Context, teamID, channelID uuid.UUID, limit int) ([]Delivery, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.listDeliveriesErr != nil {
+		return nil, r.listDeliveriesErr
+	}
+	channel, ok := r.channels[channelID]
+	if !ok || channel.TeamID != teamID {
+		return []Delivery{}, nil
+	}
+	history := append([]Delivery(nil), r.deliveries[channelID]...)
+	sortDeliveries(history)
+	if limit > 0 && len(history) > limit {
+		history = history[:limit]
+	}
+	return history, nil
+}
+
+// deliveriesFor is the test-side accessor for one channel's stored attempts.
+func (r *fakeRepository) deliveriesFor(channelID uuid.UUID) []Delivery {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]Delivery(nil), r.deliveries[channelID]...)
+}
+
+// sortDeliveries orders attempts newest first, matching the SQL read.
+func sortDeliveries(deliveries []Delivery) {
+	sort.Slice(deliveries, func(i, j int) bool {
+		if !deliveries[i].CreatedAt.Equal(deliveries[j].CreatedAt) {
+			return deliveries[i].CreatedAt.After(deliveries[j].CreatedAt)
+		}
+		return deliveries[i].ID.String() > deliveries[j].ID.String()
+	})
 }
 
 // byTeam returns a team's channels oldest first. Callers hold the lock.

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/google/uuid"
 
@@ -114,6 +115,9 @@ const (
 	EventDeploy EventKind = "deploy"
 	// EventBackup — a backup lifecycle event.
 	EventBackup EventKind = "backup"
+	// EventTest — the synthetic send-test event; it carries no subscription
+	// key and is only ever delivered to the one channel a test targets.
+	EventTest EventKind = "test"
 )
 
 // Outcome is the terminal result of an event source.
@@ -167,8 +171,12 @@ func (e Event) Key() EventKey {
 }
 
 // Summary is the one-line headline of the event, used as the email subject
-// and the first line of every message body.
+// and the first line of every message body. A send-test renders its own
+// headline so a recipient cannot mistake it for a real deploy or backup.
 func (e Event) Summary() string {
+	if e.Kind == EventTest {
+		return "Test notification: " + e.Name
+	}
 	noun := "Deploy"
 	if e.Kind == EventBackup {
 		noun = "Backup"
@@ -203,13 +211,53 @@ func (e Event) Message() string {
 	return strings.Join(lines, "\n")
 }
 
-// truncateText trims text and caps it, keeping the head.
+// truncateText trims text and caps it to at most limit UTF-16 code units,
+// keeping the head. When it truncates, the budget includes the trailing
+// ellipsis, so the result never exceeds the limit the caller passed.
+//
+// UTF-16 code units are the conservative unit for every transport: Discord and
+// Slack count characters the way JavaScript does, and the Telegram Bot API
+// counts UTF-16 code units after entity parsing. A message that fits here fits
+// all three. Truncation walks rune boundaries, so it can never split a UTF-8
+// sequence (Postgres rejects an invalid-UTF-8 delivery row).
 func truncateText(text string, limit int) string {
 	text = strings.TrimSpace(text)
-	if len(text) <= limit {
+	if limit <= 0 {
+		return ""
+	}
+	if utf16Length(text) <= limit {
 		return text
 	}
-	return text[:limit] + "…"
+	// One unit is reserved for the ellipsis; it is itself one UTF-16 unit.
+	budget := limit - 1
+	var b strings.Builder
+	used := 0
+	for _, r := range text {
+		width := utf16.RuneLen(r)
+		if width <= 0 {
+			width = 1
+		}
+		if used+width > budget {
+			break
+		}
+		b.WriteRune(r)
+		used += width
+	}
+	return b.String() + "…"
+}
+
+// utf16Length counts the UTF-16 code units of text, the unit the providers
+// bound a message by.
+func utf16Length(text string) int {
+	total := 0
+	for _, r := range text {
+		width := utf16.RuneLen(r)
+		if width <= 0 {
+			width = 1
+		}
+		total += width
+	}
+	return total
 }
 
 // ChannelConfig is the transport configuration of one channel. A single struct keeps
@@ -523,6 +571,61 @@ type ChannelRequest struct {
 type TestResult struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message"`
+}
+
+// Delivery-history bounds and labels (JUS-195).
+
+const (
+	// maxDeliveryError bounds the failure summary stored in a delivery row and
+	// returned by the history endpoint. The notifier already classifies and
+	// strips credentials from its error text; the cap keeps a pathological
+	// message from bloating a row.
+	maxDeliveryError = 300
+	// deliveryRetention is the per-channel history cap. The repository trims a
+	// channel to its newest deliveryRetention rows on every write, so history
+	// is bounded by a row count and not by a background janitor.
+	deliveryRetention = 50
+	// deliveryHistoryLimit is how many recent attempts the history endpoint
+	// returns to the UI.
+	deliveryHistoryLimit = 20
+	// testEventType labels a send-test attempt in the history; dispatched
+	// events store their EventKey instead.
+	testEventType = "test"
+)
+
+// DeliveryStatus is the terminal result of one delivery attempt.
+type DeliveryStatus string
+
+// Delivery statuses.
+const (
+	// DeliverySucceeded — the transport accepted the message.
+	DeliverySucceeded DeliveryStatus = "success"
+	// DeliveryFailed — the transport refused or the connection failed; the
+	// row carries a classified summary.
+	DeliveryFailed DeliveryStatus = "failure"
+)
+
+// Delivery is one persisted delivery attempt: a dispatched deploy/backup event
+// or an operator's send-test. It holds no secret — only the event type, the
+// terminal status and a bounded failure summary.
+type Delivery struct {
+	ID           uuid.UUID
+	ChannelID    uuid.UUID
+	EventType    string
+	Status       DeliveryStatus
+	ErrorSummary string
+	CreatedAt    time.Time
+}
+
+// DeliveryView is the read representation of a delivery attempt, the wire DTO
+// the history endpoint serves. It never carries the channel's secrets.
+type DeliveryView struct {
+	ID           uuid.UUID      `json:"id"`
+	ChannelID    uuid.UUID      `json:"channel_id"`
+	EventType    string         `json:"event_type"`
+	Status       DeliveryStatus `json:"status"`
+	ErrorSummary string         `json:"error_summary,omitempty"`
+	CreatedAt    time.Time      `json:"created_at"`
 }
 
 // parseResource validates a resource override pair: both empty means

@@ -44,6 +44,14 @@ const vi = {
       'Xóa kênh "{name}"? Thông báo triển khai và sao lưu dừng ngay lập tức.',
     updated: "Cập nhật",
   },
+  history: {
+    show: "Lịch sử gửi",
+    hide: "Ẩn lịch sử gửi",
+    empty: "Chưa có lần gửi nào.",
+    testEvent: "Tin nhắn thử",
+    delivered: "Đã gửi",
+    failed: "Thất bại",
+  },
   kinds: {
     discord: "Webhook Discord",
     slack: "Webhook Slack",

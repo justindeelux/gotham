@@ -29,6 +29,9 @@ const (
 	defaultSendTimeout = 10 * time.Second
 	// dispatchReadTimeout bounds the channel lookup of one dispatched event.
 	dispatchReadTimeout = 5 * time.Second
+	// deliveryRecordTimeout bounds the history write of one attempt, so a slow
+	// database never holds a worker or a request.
+	deliveryRecordTimeout = 5 * time.Second
 )
 
 // NotificationService is the control-plane surface the HTTP layer depends on.
@@ -47,6 +50,9 @@ type NotificationService interface {
 	// TestChannel sends a synthetic deploy-success event to one channel and
 	// reports the delivery result without exposing any secret.
 	TestChannel(ctx context.Context, userID, channelID uuid.UUID) (TestResult, error)
+	// ListDeliveries returns one channel's newest delivery attempts, newest
+	// first (404 for another team's channel).
+	ListDeliveries(ctx context.Context, userID, channelID uuid.UUID) ([]DeliveryView, error)
 }
 
 // Config wires a Service. Store (or an explicit Repository) is required for
@@ -523,20 +529,73 @@ func (s *Service) TestChannel(ctx context.Context, userID, channelID uuid.UUID) 
 		return TestResult{}, err
 	}
 	event := Event{
-		Kind:         EventDeploy,
+		Kind:         EventTest,
 		Outcome:      OutcomeSuccess,
 		TeamID:       channel.TeamID,
 		ResourceType: channel.ResourceType,
 		ResourceID:   channel.ResourceID,
-		Name:         "notifications test",
+		Name:         channel.Name,
 		At:           s.now().UTC(),
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, s.sendTimeout)
 	defer cancel()
 	if err := notifier.Notify(sendCtx, event); err != nil {
-		return TestResult{OK: false, Message: truncateText(err.Error(), 300)}, nil
+		summary := truncateText(err.Error(), maxDeliveryError)
+		s.recordDelivery(ctx, channel.ID, testEventType, DeliveryFailed, summary)
+		return TestResult{OK: false, Message: truncateText(err.Error(), maxDeliveryError)}, nil
 	}
+	s.recordDelivery(ctx, channel.ID, testEventType, DeliverySucceeded, "")
 	return TestResult{OK: true, Message: "test event delivered"}, nil
+}
+
+// ListDeliveries implements NotificationService: the newest delivery attempts
+// of one channel, newest first. It is a read, so it needs no write role; a
+// channel of another team is a 404, exactly like a missing one.
+func (s *Service) ListDeliveries(ctx context.Context, userID, channelID uuid.UUID) ([]DeliveryView, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	if userID == uuid.Nil || channelID == uuid.Nil {
+		return nil, ErrNotFound
+	}
+	teamID := teamIDFor(ctx, userID)
+	if _, err := s.repo.GetChannel(ctx, teamID, channelID); err != nil {
+		return nil, err
+	}
+	deliveries, err := s.repo.ListDeliveries(ctx, teamID, channelID, deliveryHistoryLimit)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]DeliveryView, 0, len(deliveries))
+	for _, delivery := range deliveries {
+		views = append(views, DeliveryView(delivery))
+	}
+	return views, nil
+}
+
+// recordDelivery persists one attempt, trimming the channel's history to the
+// retention cap. A write failure is logged, never surfaced: history is
+// diagnostic and must never change the delivery outcome or the answer an
+// operator sees.
+func (s *Service) recordDelivery(ctx context.Context, channelID uuid.UUID, eventType string, status DeliveryStatus, errorSummary string) {
+	if s == nil || s.repo == nil || channelID == uuid.Nil {
+		return
+	}
+	// Detached from the caller's cancellation so a response that is already
+	// being written cannot abort the record.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deliveryRecordTimeout)
+	defer cancel()
+	if err := s.repo.CreateDelivery(writeCtx, Delivery{
+		ID:           uuid.New(),
+		ChannelID:    channelID,
+		EventType:    eventType,
+		Status:       status,
+		ErrorSummary: truncateText(errorSummary, maxDeliveryError),
+		CreatedAt:    s.now().UTC(),
+	}); err != nil {
+		s.logger.Warn("notifications: record delivery",
+			"channel_id", channelID.String(), "status", string(status), "error", err)
+	}
 }
 
 // DeployFinished implements deploy.Notifier: one terminal deployment result,
@@ -672,10 +731,12 @@ func (s *Service) send(channel Channel, event Event) {
 		s.logger.Warn("notifications: delivery failed",
 			"channel_id", channel.ID.String(), "kind", string(channel.Kind),
 			"event", string(event.Key()), "error", err)
+		s.recordDelivery(s.baseCtx, channel.ID, string(event.Key()), DeliveryFailed, err.Error())
 		return
 	}
 	s.logger.Info("notifications: delivered",
 		"channel_id", channel.ID.String(), "kind", string(channel.Kind), "event", string(event.Key()))
+	s.recordDelivery(s.baseCtx, channel.ID, string(event.Key()), DeliverySucceeded, "")
 }
 
 // notifierFor builds the transport notifier of one stored channel, opening

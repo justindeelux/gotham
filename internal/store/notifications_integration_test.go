@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,6 +184,51 @@ func TestNotificationChannelPersistence(t *testing.T) {
 		t.Errorf("channels = %d, want 2", len(all))
 	}
 
+	// Delivery history is bounded per channel and team-scoped on read.
+	for i := 0; i < 55; i++ {
+		if _, err := st.CreateNotificationDelivery(ctx, sqlc.CreateNotificationDeliveryParams{
+			ID:           pgtype.UUID{Bytes: uuid.New(), Valid: true},
+			ChannelID:    created.ID,
+			EventType:    "deploy_failure",
+			Status:       "failure",
+			ErrorSummary: "connection failed",
+			CreatedAt:    pgtype.Timestamptz{Time: time.Now().UTC().Add(time.Duration(i) * time.Second), Valid: true},
+		}); err != nil {
+			t.Fatalf("CreateNotificationDelivery: %v", err)
+		}
+		if _, err := st.PruneNotificationDeliveries(ctx, sqlc.PruneNotificationDeliveriesParams{
+			ChannelID: created.ID,
+			Limit:     50,
+		}); err != nil {
+			t.Fatalf("PruneNotificationDeliveries: %v", err)
+		}
+	}
+	history, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
+		ChannelID: created.ID,
+		TeamID:    teamID,
+		Limit:     100,
+	})
+	if err != nil {
+		t.Fatalf("ListNotificationDeliveries: %v", err)
+	}
+	if len(history) != 50 {
+		t.Fatalf("history = %d rows, want the 50-row cap", len(history))
+	}
+	if !history[0].CreatedAt.Time.After(history[len(history)-1].CreatedAt.Time) {
+		t.Error("history is not newest-first")
+	}
+	foreignHistory, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
+		ChannelID: created.ID,
+		TeamID:    pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Limit:     100,
+	})
+	if err != nil {
+		t.Fatalf("foreign ListNotificationDeliveries: %v", err)
+	}
+	if len(foreignHistory) != 0 {
+		t.Errorf("foreign history = %d rows, want 0", len(foreignHistory))
+	}
+
 	// Delete is team-scoped and reports the affected rows.
 	affected, err := st.DeleteNotificationChannel(ctx, sqlc.DeleteNotificationChannelParams{
 		ID:     override.ID,
@@ -215,6 +261,17 @@ func TestNotificationChannelPersistence(t *testing.T) {
 	}
 	if len(remaining) != 0 {
 		t.Errorf("channels after team delete = %d, want 0 (ON DELETE CASCADE)", len(remaining))
+	}
+	remainingHistory, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
+		ChannelID: created.ID,
+		TeamID:    teamID,
+		Limit:     100,
+	})
+	if err != nil {
+		t.Fatalf("ListNotificationDeliveries after team delete: %v", err)
+	}
+	if len(remainingHistory) != 0 {
+		t.Errorf("deliveries after team delete = %d, want 0 (ON DELETE CASCADE)", len(remainingHistory))
 	}
 }
 
@@ -296,5 +353,131 @@ func TestNotificationChannelResourceConstraint(t *testing.T) {
 	}
 	if err := insert("override", "database", pgtype.UUID{Bytes: uuid.New(), Valid: true}); err != nil {
 		t.Fatalf("override insert: %v", err)
+	}
+}
+
+// newDeliveryTestChannel opens the test database, applies the migrations, and
+// returns a Store plus a team and a channel to hang delivery rows on. It skips
+// when no database is reachable.
+func newDeliveryTestChannel(t *testing.T) (*store.Store, pgtype.UUID, uuid.UUID) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	dsn := testDSN()
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+	st := store.New(pool)
+
+	email := fmt.Sprintf("jus195-delivery-%d@example.com", time.Now().UnixNano())
+	user, err := st.CreateUser(ctx, email, nil)
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM users WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup user: %v", err)
+		}
+		if _, err := pool.Exec(cleanupCtx, "DELETE FROM teams WHERE id = $1", user.ID); err != nil {
+			t.Logf("cleanup team: %v", err)
+		}
+	})
+
+	channelID := uuid.New()
+	if _, err := st.CreateNotificationChannel(ctx, sqlc.CreateNotificationChannelParams{
+		ID:           pgtype.UUID{Bytes: channelID, Valid: true},
+		TeamID:       user.ID,
+		Name:         "history",
+		Kind:         "discord",
+		Config:       "sealed",
+		Enabled:      true,
+		ResourceType: nil,
+		ResourceID:   pgtype.UUID{},
+		Events:       []string{"deploy_failure"},
+	}); err != nil {
+		t.Fatalf("CreateNotificationChannel: %v", err)
+	}
+	return st, user.ID, channelID
+}
+
+// TestNotificationDeliveryRetentionUnderConcurrency proves the per-channel
+// advisory lock bounds history even when writers race. Each goroutine runs the
+// exact transaction the storeRepository uses (lock, insert, prune): under READ
+// COMMITTED without the lock, two writers would each keep their own newest row
+// and the channel would settle above the cap.
+func TestNotificationDeliveryRetentionUnderConcurrency(t *testing.T) {
+	st, teamID, channelID := newDeliveryTestChannel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	const cap = 50
+	const writers = 8
+	const each = 25
+	channelKey := pgtype.UUID{Bytes: channelID, Valid: true}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < each; i++ {
+				err := st.InTx(ctx, func(tx *store.Store) error {
+					if err := tx.LockNotificationChannelHistory(ctx, channelID.String()); err != nil {
+						return err
+					}
+					if _, err := tx.CreateNotificationDelivery(ctx, sqlc.CreateNotificationDeliveryParams{
+						ID:           pgtype.UUID{Bytes: uuid.New(), Valid: true},
+						ChannelID:    channelKey,
+						EventType:    "deploy_failure",
+						Status:       "failure",
+						ErrorSummary: "connection failed",
+						CreatedAt:    pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+					}); err != nil {
+						return err
+					}
+					_, err := tx.PruneNotificationDeliveries(ctx, sqlc.PruneNotificationDeliveriesParams{
+						ChannelID: channelKey,
+						Limit:     cap,
+					})
+					return err
+				})
+				if err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	if err := <-errs; err != nil {
+		t.Fatalf("concurrent history write: %v", err)
+	}
+
+	history, err := st.ListNotificationDeliveries(ctx, sqlc.ListNotificationDeliveriesParams{
+		ChannelID: channelKey,
+		TeamID:    teamID,
+		Limit:     1000,
+	})
+	if err != nil {
+		t.Fatalf("ListNotificationDeliveries: %v", err)
+	}
+	if len(history) != cap {
+		t.Errorf("history = %d rows, want exactly the %d cap", len(history), cap)
 	}
 }

@@ -488,16 +488,16 @@ watch(
 .search-input {
   max-width: 280px;
 }
-.tool-cell {
+:deep(.tool-cell) {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
 }
-.tool-name {
+:deep(.tool-name) {
   color: var(--fg-2);
   font-weight: 600;
 }
-.tool-meta {
+:deep(.tool-meta) {
   font-size: var(--text-xs);
 }
 .group-title {

@@ -37,9 +37,9 @@ type AuthService interface {
 	// Two-factor authentication (JUS-196).
 	TOTPStatus(ctx context.Context, userID uuid.UUID) (*auth.TOTPStatus, error)
 	BeginTOTPEnrollment(ctx context.Context, userID uuid.UUID) (*auth.TOTPEnrollment, error)
-	EnableTOTP(ctx context.Context, userID uuid.UUID, password, code string) ([]string, error)
-	DisableTOTP(ctx context.Context, userID uuid.UUID, password, code string) error
-	RegenerateTOTPRecoveryCodes(ctx context.Context, userID uuid.UUID, password, code string) ([]string, error)
+	EnableTOTP(ctx context.Context, userID uuid.UUID, password, code string, currentSessionID uuid.UUID) ([]string, error)
+	DisableTOTP(ctx context.Context, userID uuid.UUID, password, code string, currentSessionID uuid.UUID) error
+	RegenerateTOTPRecoveryCodes(ctx context.Context, userID uuid.UUID, password, code string, currentSessionID uuid.UUID) ([]string, error)
 	CompleteMFALogin(ctx context.Context, mfaToken, code string, meta auth.SessionMeta) (*auth.AuthResult, error)
 }
 

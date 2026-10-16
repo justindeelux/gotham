@@ -65,4 +65,8 @@ var (
 	// exists. The message is the API contract body, rendered verbatim with a
 	// 409.
 	ErrTOTPNotEnrolled = errors.New("start two-factor setup first")
+	// ErrTOTPLocked is returned while the per-account second-factor lockout is
+	// active (too many consecutive wrong codes, from any source address). The
+	// message is the API contract body, rendered verbatim with a 429.
+	ErrTOTPLocked = errors.New("too many incorrect codes, try again later")
 )

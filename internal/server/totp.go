@@ -78,7 +78,7 @@ func (s *Server) handleTOTPEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	codes, err := s.auth.EnableTOTP(r.Context(), userID, code.Password, code.Code)
+	codes, err := s.auth.EnableTOTP(r.Context(), userID, code.Password, code.Code, SessionIDFromContext(r.Context()))
 	if err != nil {
 		s.writeTOTPError(w, "enable", err, http.StatusConflict)
 		return
@@ -93,7 +93,7 @@ func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.auth.DisableTOTP(r.Context(), userID, code.Password, code.Code); err != nil {
+	if err := s.auth.DisableTOTP(r.Context(), userID, code.Password, code.Code, SessionIDFromContext(r.Context())); err != nil {
 		s.writeTOTPError(w, "disable", err, http.StatusConflict)
 		return
 	}
@@ -108,7 +108,7 @@ func (s *Server) handleTOTPRegenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	codes, err := s.auth.RegenerateTOTPRecoveryCodes(r.Context(), userID, code.Password, code.Code)
+	codes, err := s.auth.RegenerateTOTPRecoveryCodes(r.Context(), userID, code.Password, code.Code, SessionIDFromContext(r.Context()))
 	if err != nil {
 		s.writeTOTPError(w, "regenerate recovery codes", err, http.StatusConflict)
 		return
@@ -127,6 +127,10 @@ func (s *Server) handleLoginTOTP(w http.ResponseWriter, r *http.Request) {
 	result, err := s.auth.CompleteMFALogin(r.Context(), req.MFAToken, req.Code, s.sessionMeta(r))
 	if err != nil {
 		switch {
+		case errors.Is(err, auth.ErrTOTPLocked):
+			// The account is locked out after too many wrong codes; the SPA
+			// renders the same rate-limit message it does for a 429.
+			writeJSON(w, http.StatusTooManyRequests, apiError{Message: auth.ErrTOTPLocked.Error()})
 		case errors.Is(err, auth.ErrInvalidCode), errors.Is(err, auth.ErrInvalidCredentials),
 			errors.Is(err, auth.ErrTOTPNotConfigured):
 			// One message for every refusal: a caller cannot learn from the
@@ -167,6 +171,8 @@ func (s *Server) writeTOTPError(w http.ResponseWriter, action string, err error,
 	switch {
 	case errors.Is(err, auth.ErrUnauthorized):
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
+	case errors.Is(err, auth.ErrTOTPLocked):
+		writeJSON(w, http.StatusTooManyRequests, apiError{Message: auth.ErrTOTPLocked.Error()})
 	case errors.Is(err, auth.ErrCurrentPasswordIncorrect):
 		writeJSON(w, http.StatusBadRequest, apiError{Message: auth.ErrCurrentPasswordIncorrect.Error()})
 	case errors.Is(err, auth.ErrInvalidCode):

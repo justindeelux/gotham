@@ -49,7 +49,7 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 	if enrollment.Secret == "" || enrollment.OTPAuthURL == "" {
 		t.Fatalf("enrollment = %+v, want a secret and otpauth URI", enrollment)
 	}
-	recoveryCodes, err := svc.EnableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, clock))
+	recoveryCodes, err := svc.EnableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, clock), uuid.Nil)
 	if err != nil {
 		t.Fatalf("EnableTOTP: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 
 	// Regenerating invalidates every previous code.
 	clock = clock.Add(totpPeriod)
-	if _, err := svc.RegenerateTOTPRecoveryCodes(ctx, userID, password, codeForSecret(t, enrollment.Secret, clock)); err != nil {
+	if _, err := svc.RegenerateTOTPRecoveryCodes(ctx, userID, password, codeForSecret(t, enrollment.Secret, clock), uuid.Nil); err != nil {
 		t.Fatalf("RegenerateTOTPRecoveryCodes: %v", err)
 	}
 	if _, err := svc.CompleteMFALogin(ctx, challenge.MFAToken, recoveryCodes[1], SessionMeta{}); !errors.Is(err, ErrInvalidCode) {
@@ -136,7 +136,7 @@ func TestTOTPEnrollChallengeAndRecovery(t *testing.T) {
 
 	// Disable with the password and a fresh TOTP code; login is plain again.
 	clock = clock.Add(totpPeriod)
-	if err := svc.DisableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, clock)); err != nil {
+	if err := svc.DisableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, clock), uuid.Nil); err != nil {
 		t.Fatalf("DisableTOTP: %v", err)
 	}
 	afterDisable, err := svc.Login(ctx, email, password, SessionMeta{})
@@ -170,21 +170,21 @@ func TestTOTPProfileActionsRequirePassword(t *testing.T) {
 		t.Fatalf("BeginTOTPEnrollment: %v", err)
 	}
 
-	if _, err := svc.EnableTOTP(ctx, userID, "wrong-password", codeForSecret(t, enrollment.Secret, time.Now())); !errors.Is(err, ErrCurrentPasswordIncorrect) {
+	if _, err := svc.EnableTOTP(ctx, userID, "wrong-password", codeForSecret(t, enrollment.Secret, time.Now()), uuid.Nil); !errors.Is(err, ErrCurrentPasswordIncorrect) {
 		t.Fatalf("EnableTOTP with a wrong password = %v, want ErrCurrentPasswordIncorrect", err)
 	}
 	// Enrolling again while pending is allowed (a fresh secret); while enabled
 	// it is refused.
-	if _, err := svc.EnableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, time.Now())); err != nil {
+	if _, err := svc.EnableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, time.Now()), uuid.Nil); err != nil {
 		t.Fatalf("EnableTOTP: %v", err)
 	}
 	if _, err := svc.BeginTOTPEnrollment(ctx, userID); !errors.Is(err, ErrTOTPAlreadyEnabled) {
 		t.Fatalf("BeginTOTPEnrollment while enabled = %v, want ErrTOTPAlreadyEnabled", err)
 	}
-	if err := svc.DisableTOTP(ctx, userID, "wrong-password", codeForSecret(t, enrollment.Secret, time.Now())); !errors.Is(err, ErrCurrentPasswordIncorrect) {
+	if err := svc.DisableTOTP(ctx, userID, "wrong-password", codeForSecret(t, enrollment.Secret, time.Now()), uuid.Nil); !errors.Is(err, ErrCurrentPasswordIncorrect) {
 		t.Fatalf("DisableTOTP with a wrong password = %v, want ErrCurrentPasswordIncorrect", err)
 	}
-	if _, err := svc.RegenerateTOTPRecoveryCodes(ctx, userID, "wrong-password", codeForSecret(t, enrollment.Secret, time.Now())); !errors.Is(err, ErrCurrentPasswordIncorrect) {
+	if _, err := svc.RegenerateTOTPRecoveryCodes(ctx, userID, "wrong-password", codeForSecret(t, enrollment.Secret, time.Now()), uuid.Nil); !errors.Is(err, ErrCurrentPasswordIncorrect) {
 		t.Fatalf("RegenerateTOTPRecoveryCodes with a wrong password = %v, want ErrCurrentPasswordIncorrect", err)
 	}
 }
@@ -210,7 +210,7 @@ func TestTOTPResetClearsSecondFactor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BeginTOTPEnrollment: %v", err)
 	}
-	if _, err := svc.EnableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, time.Now())); err != nil {
+	if _, err := svc.EnableTOTP(ctx, userID, password, codeForSecret(t, enrollment.Secret, time.Now()), uuid.Nil); err != nil {
 		t.Fatalf("EnableTOTP: %v", err)
 	}
 

@@ -194,7 +194,7 @@ func (f *fakeAuthService) BeginTOTPEnrollment(_ context.Context, _ uuid.UUID) (*
 	return &auth.TOTPEnrollment{Secret: "JBSWY3DPEHPK3PXP", OTPAuthURL: "otpauth://totp/Gotham:user@example.com?secret=JBSWY3DPEHPK3PXP"}, nil
 }
 
-func (f *fakeAuthService) EnableTOTP(_ context.Context, _ uuid.UUID, password, code string) ([]string, error) {
+func (f *fakeAuthService) EnableTOTP(_ context.Context, _ uuid.UUID, password, code string, _ uuid.UUID) ([]string, error) {
 	if password == "wrong-password" {
 		return nil, auth.ErrCurrentPasswordIncorrect
 	}
@@ -204,7 +204,7 @@ func (f *fakeAuthService) EnableTOTP(_ context.Context, _ uuid.UUID, password, c
 	return []string{"ABCDE-FGHJK"}, nil
 }
 
-func (f *fakeAuthService) DisableTOTP(_ context.Context, _ uuid.UUID, password, code string) error {
+func (f *fakeAuthService) DisableTOTP(_ context.Context, _ uuid.UUID, password, code string, _ uuid.UUID) error {
 	if password == "wrong-password" {
 		return auth.ErrCurrentPasswordIncorrect
 	}
@@ -214,7 +214,7 @@ func (f *fakeAuthService) DisableTOTP(_ context.Context, _ uuid.UUID, password, 
 	return nil
 }
 
-func (f *fakeAuthService) RegenerateTOTPRecoveryCodes(_ context.Context, _ uuid.UUID, password, code string) ([]string, error) {
+func (f *fakeAuthService) RegenerateTOTPRecoveryCodes(_ context.Context, _ uuid.UUID, password, code string, _ uuid.UUID) ([]string, error) {
 	if password == "wrong-password" {
 		return nil, auth.ErrCurrentPasswordIncorrect
 	}

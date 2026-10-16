@@ -38,7 +38,7 @@ func (s *sslService) certificateApplication(ctx context.Context, cert DomainCert
 	return s.store.GetApplication(ctx, cert.ApplicationID)
 }
 
-// ReconcilePanelCertificates retains both hosts during a trial, creates new
+// ReconcilePanelCertificates creates confirmed hosts' new
 // HTTPS intents before deleting retired ones, and never changes app intents.
 func (s *SyncService) ReconcilePanelCertificates(ctx context.Context, urls []string) error {
 	if s.panelCertificates == nil {
@@ -121,21 +121,43 @@ func panelCertificateState(observation CertificateStatusObservation, usable bool
 	return state
 }
 
-// RunPanelCertificates observes issuance/expiry for the server lifetime and
+// RunPanelCertificates reconciles immediately at startup, then observes issuance/expiry and
 // pushes only changed configuration, so redirects follow certificate readiness.
 func (s *SyncService) RunPanelCertificates(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	s.runPanelCertificates(ctx, ticker.C)
+}
+
+func (s *SyncService) runPanelCertificates(ctx context.Context, ticks <-chan time.Time) {
+	lastError := ""
 	for {
+		if err := s.reconcileStoredPanelCertificates(ctx); err != nil && ctx.Err() == nil {
+			if err.Error() != lastError {
+				s.logger.Warn("proxy: reconcile panel certificates", "error", err)
+			}
+			lastError = err.Error()
+		} else {
+			lastError = ""
+		}
 		if err := s.refreshPanelCertificates(ctx); err != nil && ctx.Err() == nil {
 			s.logger.Debug("proxy: refresh panel certificate", "error", err)
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticks:
 		}
 	}
+}
+
+func (s *SyncService) reconcileStoredPanelCertificates(ctx context.Context) error {
+	if s.reconcilePanel == nil || s.panelCertificates == nil {
+		return nil
+	}
+	reconcileCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return s.reconcilePanel(reconcileCtx)
 }
 
 func (s *SyncService) refreshPanelCertificates(ctx context.Context) error {

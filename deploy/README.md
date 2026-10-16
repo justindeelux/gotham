@@ -621,7 +621,8 @@ privilege model as the update wrapper. The control plane (never the agent) runs
 
 **Install (root-trusted source only).** `deploy/gotham-hostbootstrap.sh` is the
 single installer of the helper. `install.sh` (run by the operator as root) runs
-it once as `sh deploy/gotham-hostbootstrap.sh create <control-plane-user>`; the
+it once as `sh deploy/gotham-hostbootstrap.sh create <control-plane-user>
+<version>`; the
 self-update wrapper refreshes the helper from the signed release on every update
 (see *Helper refresh on self-update* below), applying the root-owned payload at
 `/usr/libexec/gotham/hostbootstrap/`. `create` writes only fixed root-owned paths:
@@ -698,11 +699,23 @@ helper design forbids. Instead:
 **Anti-rollback.** The version used to gate the apply is the signature-verified
 one, not the value in the service-writable pending marker: the marker only
 locates the release, and any value that does not match the staged binary's signed
-manifest fails closed. `apply-release` keeps a root-owned monotonic high-water
-mark at `/usr/libexec/gotham/hostbootstrap/version` (written atomically) and
-refuses any payload whose signed version is lower than the installed one (equal
-re-applies idempotently), so a compromised control plane cannot replay an older
-validly-signed helper. `install.sh` seeds the mark with the release it installs.
+manifest fails closed. Root keeps a root-owned monotonic high-water mark at
+`/usr/libexec/gotham/hostbootstrap/version` (written atomically), and the
+comparison is made **in code already installed on the host** — the update wrapper
+reads the mark and asks the installed helper's `version-cmp` before it runs the
+fetched payload — so an older validly-signed helper payload cannot skip (or
+ship a disabled version of) the check by being the code that performs it. The
+payload's own `apply-release` makes the same comparison as a second layer. A
+payload whose signed version is lower than the mark is refused (equal versions
+re-apply idempotently), and a **missing, empty or malformed** mark refuses the
+release too: an unmarked or unparseable host is one the bridge never seeded
+properly, and treating it as "version 0" would accept any replayable signed
+payload. A release version that is not `vMAJOR.MINOR.PATCH[-prerelease][+build]`
+is refused the same way (a garbage value never compares as `0.0.0`). `install.sh`
+seeds the mark with the release it installs, and `create` requires that version.
+A `create` re-run that would *lower* the mark is refused unless the operator
+passes `--allow-downgrade`; a malformed existing mark is repaired instead of
+blocking the repair.
 
 Every failure is logged and skipped, so a broken or tampered payload can never
 block or roll back an update. A host that predates the refresh support (no
@@ -716,8 +729,13 @@ host enables the refresh. `install.sh` runs it, and it is also the manual
 recovery/upgrade command:
 
 ```sh
-sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user>
+sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user> <version>
 ```
+
+The version is required: `create` seeds the high-water mark from it, and without
+a seeded mark the refresh refuses every release. Pass `--allow-downgrade` if you
+really need to lower the recorded mark (for example, reinstalling from an older
+checkout).
 
 There is no privileged path from the control plane to install the anchor: the
 service user cannot write `/usr/libexec/gotham`, so only the (root, operator)

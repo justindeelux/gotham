@@ -13,11 +13,13 @@ BOOTSTRAP="${SCRIPT_DIR}/gotham-hostbootstrap.sh"
 SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/test-host-bootstrap.XXXXXX")"
 trap 'rm -rf "${SCRATCH}"' EXIT
 
-# Fake visudo: succeeds by default; GOTHAM_TEST_VISUDO_FAIL makes it fail.
+# Fake visudo: succeeds by default; GOTHAM_TEST_VISUDO_FAIL makes it fail and
+# GOTHAM_TEST_VISUDO_SLEEP makes it sleep first (the signal-cleanup test).
 FAKE_BIN="${SCRATCH}/bin"
 mkdir -p "${FAKE_BIN}"
 cat >"${FAKE_BIN}/visudo" <<'SHIM'
 #!/bin/sh
+[ "${GOTHAM_TEST_VISUDO_SLEEP:-0}" = "0" ] || sleep "${GOTHAM_TEST_VISUDO_SLEEP}"
 [ "${GOTHAM_TEST_VISUDO_FAIL:-0}" = "1" ] && { echo "syntax error" >&2; exit 1; }
 exit 0
 SHIM
@@ -41,7 +43,7 @@ fi
 
 # ---- create on a fake root -------------------------------------------------
 ROOT1="$(root_for "${SCRATCH}/root1")"
-GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT1}" sh "${BOOTSTRAP}" create alice >/dev/null
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT1}" sh "${BOOTSTRAP}" create alice v9.0.0 >/dev/null
 for f in usr/libexec/gotham/hostbootstrap/gotham-hostctl \
     usr/libexec/gotham/hostbootstrap/gotham-toolctl \
     usr/libexec/gotham/hostbootstrap/gotham-hostctl.sudoers \
@@ -60,17 +62,59 @@ grep -q "alice ALL=(root) NOPASSWD: /usr/libexec/gotham/gotham-toolctl install-t
 pass "create installs the payload, live helpers and the pinned drop-in"
 
 # A custom control-plane user is baked in, not the default gotham.
-GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-custom")" sh "${BOOTSTRAP}" create ops >/dev/null
+GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-custom")" sh "${BOOTSTRAP}" create ops v9.0.0 >/dev/null
 grep -q "ops ALL=(root) NOPASSWD:" "${SCRATCH}/root-custom/etc/sudoers.d/gotham-hostctl" || fail "custom cp user not honoured"
 grep -q "gotham ALL=(root)" "${SCRATCH}/root-custom/etc/sudoers.d/gotham-hostctl" && fail "default user leaked into a custom install"
 pass "a custom control-plane user is used instead of the default"
 
 # The reserved sudoers word ALL is rejected, never written into a drop-in.
-if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-all")" sh "${BOOTSTRAP}" create ALL >"${SCRATCH}/all.log" 2>&1; then
+if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-all")" sh "${BOOTSTRAP}" create ALL v9.0.0 >"${SCRATCH}/all.log" 2>&1; then
     fail "the reserved user ALL was accepted"
 fi
 grep -q "invalid control-plane user" "${SCRATCH}/all.log" || fail "ALL rejection was not explained"
 pass "rejects the reserved user ALL"
+
+# ---- create without a version is refused ----------------------------------
+# A bridge with no marked version could never accept a refresh, and a missing
+# mark must never be read as "version 0, anything goes".
+if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-nover")" sh "${BOOTSTRAP}" create dave "" >"${SCRATCH}/create-nover.log" 2>&1; then
+    fail "create with an empty version was accepted"
+fi
+grep -q "create needs the release version" "${SCRATCH}/create-nover.log" || fail "the empty-version refusal was not explained"
+if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-nover2")" sh "${BOOTSTRAP}" create dave >"${SCRATCH}/create-usage.log" 2>&1; then
+    fail "create without a version argument was accepted"
+fi
+grep -q "usage: gotham-hostbootstrap create <cp-user> <version>" "${SCRATCH}/create-usage.log" \
+    || fail "the version-less create usage was not explained"
+pass "create requires the release version (beside the usage guard)"
+
+# ---- create refuses a malformed version and a lower mark --------------------
+# A malformed seed would compare as 0.0.0 and accept any rollback, and a silent
+# downgrade of the mark is the operator's call, not a side effect of a re-run.
+if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-junkver")" sh "${BOOTSTRAP}" create dave latest >"${SCRATCH}/create-junk.log" 2>&1; then
+    fail "create accepted the non-semver version 'latest'"
+fi
+grep -q "invalid control-plane version" "${SCRATCH}/create-junk.log" || fail "the malformed-version refusal was not explained"
+
+ROOTL="$(root_for "${SCRATCH}/root-lower")"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTL}" sh "${BOOTSTRAP}" create erin v2.0.0 >/dev/null
+if GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTL}" sh "${BOOTSTRAP}" create erin v1.0.0 >"${SCRATCH}/create-lower.log" 2>&1; then
+    fail "a create re-run lowered the high-water mark without a flag"
+fi
+grep -q "would lower the host-helper version" "${SCRATCH}/create-lower.log" || fail "the lowering refusal was not explained"
+[ "$(cat "${ROOTL}/usr/libexec/gotham/hostbootstrap/version")" = "v2.0.0" ] \
+    || fail "a refused create changed the high-water mark"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTL}" sh "${BOOTSTRAP}" create erin v1.0.0 --allow-downgrade >/dev/null \
+    || fail "create --allow-downgrade did not lower the mark"
+[ "$(cat "${ROOTL}/usr/libexec/gotham/hostbootstrap/version")" = "v1.0.0" ] \
+    || fail "--allow-downgrade did not record the lower version"
+# A malformed mark is repaired by a normal create, not blocked as a downgrade.
+printf 'dev\n' >"${ROOTL}/usr/libexec/gotham/hostbootstrap/version"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTL}" sh "${BOOTSTRAP}" create erin v1.0.0 >/dev/null 2>&1 \
+    || fail "create could not repair a malformed mark"
+[ "$(cat "${ROOTL}/usr/libexec/gotham/hostbootstrap/version")" = "v1.0.0" ] \
+    || fail "create did not repair the malformed mark"
+pass "create refuses a malformed version and a lower mark, --allow-downgrade forces it"
 
 # ---- idempotency -----------------------------------------------------------
 before="$(cksum "${ROOT1}/usr/libexec/gotham/gotham-hostctl" "${ROOT1}/etc/sudoers.d/gotham-hostctl")"
@@ -92,7 +136,7 @@ pass "apply restores a deleted helper and drop-in from the payload"
 ROOT2="$(root_for "${SCRATCH}/root2")"
 mkdir -p "${ROOT2}/usr/libexec/gotham"
 ln -s /etc/passwd "${ROOT2}/usr/libexec/gotham/gotham-hostctl"
-if GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT2}" sh "${BOOTSTRAP}" create alice >"${SCRATCH}/symlink.log" 2>&1; then
+if GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT2}" sh "${BOOTSTRAP}" create alice v9.0.0 >"${SCRATCH}/symlink.log" 2>&1; then
     fail "a symlinked live helper was accepted"
 fi
 grep -q "refusing to replace symlink" "${SCRATCH}/symlink.log" || fail "symlink refusal was not explained"
@@ -100,7 +144,7 @@ pass "refuses a symlinked destination"
 
 # ---- a bad sudoers abort leaves nothing -----------------------------------
 ROOT3="$(root_for "${SCRATCH}/root3")"
-if GOTHAM_TEST_VISUDO_FAIL=1 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT3}" sh "${BOOTSTRAP}" create alice >"${SCRATCH}/badsudo.log" 2>&1; then
+if GOTHAM_TEST_VISUDO_FAIL=1 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT3}" sh "${BOOTSTRAP}" create alice v9.0.0 >"${SCRATCH}/badsudo.log" 2>&1; then
     fail "a visudo rejection was accepted"
 fi
 grep -q "failed visudo" "${SCRATCH}/badsudo.log" || fail "visudo rejection was not explained"
@@ -151,13 +195,56 @@ vcase v0.0.9 v0.1.0 -1
 vcase v2.0.0 v2.0.0-rc.1 1
 vcase v2.0.0-rc.1 v2.0.0 -1
 vcase v2.0.0-rc.1 v2.0.0-rc.2 -1
-vcase v1 v1.0.0 0
-vcase v1.2 v1.2.0 0
+# Pre-release identifiers compare numerically, element-wise (semver §11).
+vcase v1.0.0-rc.9 v1.0.0-rc.10 -1
+vcase v1.0.0-rc.10 v1.0.0-rc.9 1
+vcase v1.0.0-rc.9 v1.0.0-rc.9 0
+vcase v1.0.0-alpha v1.0.0-alpha.1 -1
+vcase v1.0.0-1 v1.0.0-alpha -1
+vcase v1.0.0-rc.1.2 v1.0.0-rc.1.10 -1
+# Build metadata is ignored (semver §10).
+vcase v1.2.3+b1 v1.2.2 1
+vcase v1.2.3+b1 v1.2.3 0
+vcase v1.2.3+b9 v1.2.3+b1 0
+# Long identifiers must not overflow shell arithmetic (25 digits each; the
+# same-length cases are the discriminating ones).
+vcase 9999999999999999999999999.0.0 9999999999999999999999998.0.0 1
+vcase 9999999999999999999999998.0.0 9999999999999999999999999.0.0 -1
+vcase 9999999999999999999999999.0.0 9999999999999999999999999.0.0 0
+vcase v1.0.0-rc.1999999999999999999999999 v1.0.0-rc.1999999999999999999999998 1
+vcase v1.0.0-rc.1999999999999999999999998 v1.0.0-rc.1999999999999999999999999 -1
+vcase v1.0.0-rc.1999999999999999999999999 v1.0.0-rc.1999999999999999999999999 0
+vcase v1.0.0-rc.9999999999999999999999999 v1.0.0-rc.2 1
+vcase v1.0.0-rc.2 v1.0.0-rc.9999999999999999999999999 -1
 pass "version-cmp orders release tags"
+
+# ---- version-cmp refuses a malformed value (never "0.0.0") ------------------
+# A garbage mark must fail closed: comparing it as 0.0.0 would accept any
+# rollback, which is the missing-mark hole reopened with a malformed file.
+vcfail() { # a b
+    if out="$(sh "${BOOTSTRAP}" version-cmp "$1" "$2" 2>&1)"; then
+        fail "version-cmp '$1' '$2' accepted a malformed version (printed '${out}')"
+    fi
+    case "${out}" in
+        *"not a valid release version"*) ;;
+        *) fail "version-cmp '$1' '$2' refused without a clear reason: ${out}" ;;
+    esac
+}
+vcfail dev v1.0.0
+vcfail v1.0.0 dev
+vcfail v1.0.0 latest
+vcfail "" v1.0.0
+vcfail v1.0.0 ""
+vcfail v1.x.0 v1.0.0
+vcfail v1 v1.0.0
+vcfail v1.2 v1.2.0
+vcfail v1.0.0.9 v1.0.0
+vcfail v1.0.0- v1.0.0
+pass "version-cmp refuses a malformed argument with a clear reason"
 
 # ---- apply-release installs a verified payload, keeps the pinned drop-in ---
 ROOT5="$(root_for "${SCRATCH}/root5")"
-GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT5}" sh "${BOOTSTRAP}" create bob >/dev/null
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT5}" sh "${BOOTSTRAP}" create bob v1.0.0 >/dev/null
 SRC="${SCRATCH}/payload-src"
 mkdir -p "${SRC}"
 printf '#!/bin/sh\necho refreshed-hostctl\n' >"${SRC}/gotham-hostctl"
@@ -221,7 +308,63 @@ after_hctl="$(cksum "${ROOT5}/usr/libexec/gotham/gotham-hostctl")"
 [ "${before_hctl}" = "${after_hctl}" ] || fail "a failed refresh still replaced the live helper"
 [ "$(cat "${ROOT5}/usr/libexec/gotham/hostbootstrap/version")" = "v1.4.0" ] \
     || fail "a failed refresh advanced the high-water mark"
-pass "a failed refresh leaves the live files and the high-water mark intact"
+# The temp drop-in used to leak on this path; it must be gone.
+if ls "${ROOT5}/usr/libexec/gotham/hostbootstrap/".sudoers.* >/dev/null 2>&1; then
+    fail "a failed refresh leaked its temp drop-in"
+fi
+pass "a failed refresh leaves the live files and the high-water mark intact (no leaked temp)"
+
+# ---- a missing high-water mark refuses the release -------------------------
+# A mark that is absent (a host bridged before the mark was seeded) must not be
+# read as "version 0, anything goes": the refresh refuses until it is re-seeded.
+ROOT8="$(root_for "${SCRATCH}/root8")"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT8}" sh "${BOOTSTRAP}" create dana v9.9.9 >/dev/null
+rm -f "${ROOT8}/usr/libexec/gotham/hostbootstrap/version"
+if GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT8}" sh "${BOOTSTRAP}" apply-release "${SRC}" v9.9.10 >"${SCRATCH}/nomark.log" 2>&1; then
+    fail "apply-release accepted a release with no high-water mark"
+fi
+grep -q "no installed host-helper high-water mark" "${SCRATCH}/nomark.log" \
+    || fail "the missing-mark refusal was not explained"
+pass "a missing high-water mark refuses the release"
+
+# ---- a malformed mark or version refuses the release (not 0.0.0) -----------
+ROOTG="$(root_for "${SCRATCH}/root-garbage")"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTG}" sh "${BOOTSTRAP}" create gina v9.9.9 >/dev/null
+printf 'dev\n' >"${ROOTG}/usr/libexec/gotham/hostbootstrap/version"
+if GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTG}" sh "${BOOTSTRAP}" apply-release "${SRC}" v9.9.10 >"${SCRATCH}/junkmark.log" 2>&1; then
+    fail "apply-release accepted a release with a garbage high-water mark"
+fi
+grep -q "not a valid release version" "${SCRATCH}/junkmark.log" || fail "the malformed-mark refusal was not explained"
+if GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTG}" sh "${BOOTSTRAP}" apply-release "${SRC}" latest >"${SCRATCH}/junkcand.log" 2>&1; then
+    fail "apply-release accepted a non-semver release version"
+fi
+grep -q "not a valid release version" "${SCRATCH}/junkcand.log" || fail "the malformed-candidate refusal was not explained"
+[ "$(cat "${ROOTG}/usr/libexec/gotham/hostbootstrap/version")" = "dev" ] \
+    || fail "a refused release changed the malformed mark"
+pass "a malformed mark or release version refuses the release"
+
+# ---- a signal mid-run cleans up the temp (L3) ------------------------------
+# A trapped SIGTERM routes through exit 1, so the EXIT trap removes the temp
+# drop-in that a killed run would otherwise leave in the root-owned payload dir.
+ROOTS="$(root_for "${SCRATCH}/root-signal")"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTS}" sh "${BOOTSTRAP}" create sig v9.9.9 >/dev/null
+GOTHAM_TEST_VISUDO_SLEEP=2 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOTS}" \
+    sh "${BOOTSTRAP}" apply-release "${SRC}" v9.9.10 >"${SCRATCH}/signal.log" 2>&1 &
+sig_pid=$!
+sleep 1
+kill -TERM "${sig_pid}" 2>/dev/null || true
+sig_status=0
+wait "${sig_pid}" 2>/dev/null || sig_status=$?
+# The trapped signal exits 1 (the EXIT trap then cleans up); an untrapped one
+# would kill the shell (status 128+15 = 143) and, on a shell that does not run
+# EXIT for a signal, leave the temp behind.
+[ "${sig_status}" -eq 1 ] || fail "a signalled run exited ${sig_status}, not the trapped status 1"
+if ls "${ROOTS}/usr/libexec/gotham/hostbootstrap/".sudoers.* >/dev/null 2>&1; then
+    fail "a signal left a temp drop-in behind"
+fi
+[ "$(cat "${ROOTS}/usr/libexec/gotham/hostbootstrap/version")" = "v9.9.9" ] \
+    || fail "a signalled refresh advanced the high-water mark"
+pass "a signal mid-run cleans up the temp and leaves the mark"
 
 # ---- apply-release without a recorded user refuses -------------------------
 ROOT6="$(root_for "${SCRATCH}/root6")"

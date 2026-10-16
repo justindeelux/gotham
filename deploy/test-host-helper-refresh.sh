@@ -14,8 +14,10 @@
 #   - a tampered payload (digest mismatch), a tampered manifest, a manifest whose
 #     helper fields were added without re-signing, and a manifest without helper
 #     fields (honest no-op) are handled without applying unverified bytes;
-#   - anti-rollback: a lower signed version is refused and the high-water mark
-#     holds; a tampered payload never blocks the update;
+#   - anti-rollback: a lower signed version is refused *by the already-installed
+#     wrapper before the fetched payload runs*, and the high-water mark holds; a
+#     lower payload whose own hostbootstrap carries no check at all (a replayable
+#     older release) is refused too; a tampered payload never blocks the update;
 #   - TOCTOU guards: a symlinked or non-0700 staging directory is refused, and a
 #     payload with an unsafe path, a symlink, a non-regular entry or a duplicate
 #     entry is refused.
@@ -73,9 +75,10 @@ OTHER_BIN="${SCRATCH}/other-bin"
 printf 'a different binary\n' >"${OTHER_BIN}"
 
 # make_payload builds a helper payload archive whose toolctl carries <marker>, so
-# a refresh is visible as a content change.
-make_payload() { # $1 dir, $2 marker
-    dir="$1"; marker="$2"
+# a refresh is visible as a content change. The optional third argument replaces
+# the payload's own hostbootstrap (the replayable-payload replay test).
+make_payload() { # $1 dir, $2 marker, [$3 hostbootstrap]
+    dir="$1"; marker="$2"; boot="${3:-${SCRIPT_DIR}/gotham-hostbootstrap.sh}"
     mkdir -p "${dir}"
     cat >"${dir}/gotham-hostctl" <<EOF
 #!/bin/sh
@@ -87,7 +90,7 @@ echo toolctl-${marker}
 EOF
     # The real installer/fetch/wrapper: the wrapper runs the payload's own
     # hostbootstrap, so this payload must be able to apply itself.
-    cp "${SCRIPT_DIR}/gotham-hostbootstrap.sh" "${dir}/gotham-hostbootstrap.sh"
+    cp "${boot}" "${dir}/gotham-hostbootstrap.sh"
     cp "${SCRIPT_DIR}/gotham-hostbootstrap-fetch.sh" "${dir}/gotham-hostbootstrap-fetch.sh"
     cp "${SCRIPT_DIR}/gotham-update.sh" "${dir}/gotham-update.sh"
     tar -czf "${dir}.tar.gz" -C "${dir}" \
@@ -137,7 +140,7 @@ pass "a signed payload is fetched, verified and extracted with its signed versio
 
 # ---- the one-time bridge installs the trust anchor + fetch helper + wrapper --
 ROOT="$(mktemp -d "${SCRATCH}/root.XXXXXX")"
-GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT}" sh "${BOOTSTRAP}" create alice >/dev/null
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT}" sh "${BOOTSTRAP}" create alice "${VERSION}" >/dev/null
 for f in usr/libexec/gotham/gotham-signing-key.pub \
     usr/libexec/gotham/gotham-hostbootstrap-fetch.sh \
     usr/libexec/gotham/gotham-update; do
@@ -360,7 +363,7 @@ while ! curl -fsS "http://127.0.0.1:${HPORT}/healthz" -o /dev/null 2>/dev/null; 
 done
 
 WROOT="$(mktemp -d "${SCRATCH}/wroot.XXXXXX")"
-GOTHAM_HOST_BOOTSTRAP_ROOT="${WROOT}" sh "${BOOTSTRAP}" create erin >/dev/null
+GOTHAM_HOST_BOOTSTRAP_ROOT="${WROOT}" sh "${BOOTSTRAP}" create erin "${VERSION}" >/dev/null
 cp "${KEY}" "${WROOT}/usr/libexec/gotham/gotham-signing-key.pub"
 mkdir -p "${WROOT}/status"
 : >"${WROOT}/update.lock"
@@ -396,13 +399,18 @@ grep -q "refreshed the host-helper payload" "${SCRATCH}/wrapper-ok.log" \
 grep -q '^result=ok' "${WROOT}/status/update.status" || fail "the wrapper did not record a healthy update"
 pass "the wrapper fetches, verifies and applies the helper, then records ok"
 
-# A lower signed version must be refused and must not change the helper.
+# A lower signed version must be refused by the already-installed wrapper (which
+# compares before it runs the payload) and must not change the helper.
 make_payload "${SCRATCH}/p6" rolled-back
 publish "${REL}/${OLDER}" "${SCRATCH}/p6.tar.gz" "${OLDER}"
 printf 'version=%s\n' "${OLDER}" >"${WROOT}/update.pending"
 run_wrapper >"${SCRATCH}/wrapper-rollback.log" 2>&1 || fail "the wrapper exited nonzero on a lower version"
 grep -q "toolctl-wrapped" "${WROOT}/usr/libexec/gotham/gotham-toolctl" \
     || fail "a lower signed version changed the helper (rollback)"
+# The refusal is logged by the wrapper's own gate: the payload's stderr is
+# discarded, so this line can only come from installed code.
+grep -q "refusing to downgrade the host helper" "${SCRATCH}/wrapper-rollback.log" \
+    || fail "the installed wrapper did not refuse the lower signed version"
 grep -q '^result=ok' "${WROOT}/status/update.status" \
     || fail "a lower signed version blocked the update"
 pass "the wrapper refuses a lower signed version (anti-rollback) without blocking the update"
@@ -418,5 +426,90 @@ grep -qi "digest mismatch" "${SCRATCH}/wrapper-tamper.log" \
 grep -q '^result=ok' "${WROOT}/status/update.status" \
     || fail "a tampered payload blocked the update"
 pass "a tampered payload is refused without blocking the update"
+
+# ---- replay of an older payload whose own script carries no check -----------
+# The payload is the code the release ships, and an older release can lack the
+# anti-rollback check entirely. The already-installed wrapper makes the decision
+# before it runs the payload, so such a replay is still refused. The fixture is
+# proved to be genuinely checkless first, so the refusal is not vacuous.
+CHECKLESS_BOOT="${SCRATCH}/checkless-boot.sh"
+sed '/# Anti-rollback: refuse a version below/,/^    esac$/d' \
+    "${SCRIPT_DIR}/gotham-hostbootstrap.sh" >"${CHECKLESS_BOOT}"
+grep -q "refusing to downgrade the host helper" "${CHECKLESS_BOOT}" \
+    && fail "the checkless hostbootstrap fixture still contains the check"
+sh -n "${CHECKLESS_BOOT}" || fail "the checkless hostbootstrap fixture is not valid shell"
+make_payload "${SCRATCH}/p7" checkless "${CHECKLESS_BOOT}"
+publish "${REL}/${OLDER}" "${SCRATCH}/p7.tar.gz" "${OLDER}"
+
+# Non-vacuous: on a fresh host whose mark is below OLDER the checkless payload
+# applies, proving it has no anti-rollback check of its own.
+CHROOT="$(mktemp -d "${SCRATCH}/checkless-root.XXXXXX")"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${CHROOT}" sh "${BOOTSTRAP}" create frank v9.9.0-test >/dev/null
+CHSTAGE="$(mktemp -d "${SCRATCH}/stage.XXXXXX")"
+CHPAYLOAD="$(sh "${CHROOT}/usr/libexec/gotham/gotham-hostbootstrap-fetch.sh" \
+    "${GOOD_BASE}" "${OLDER}" "${ARCH}" "${KEY}" "${CHSTAGE}" "${BIN}")"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${CHROOT}" sh "${CHECKLESS_BOOT}" apply-release "${CHPAYLOAD}" "${OLDER}" >/dev/null \
+    || fail "the checkless fixture did not apply on a lower-marked host (fixture is not checkless)"
+grep -q "toolctl-checkless" "${CHROOT}/usr/libexec/gotham/gotham-toolctl" \
+    || fail "the checkless fixture did not install its payload"
+
+# ... yet the installed wrapper refuses the same payload on the installed host.
+printf 'version=%s\n' "${OLDER}" >"${WROOT}/update.pending"
+run_wrapper >"${SCRATCH}/wrapper-replay.log" 2>&1 || fail "the wrapper exited nonzero on the checkless older payload"
+grep -q "toolctl-wrapped" "${WROOT}/usr/libexec/gotham/gotham-toolctl" \
+    || fail "the checkless older payload changed the helper"
+grep -q "refusing to downgrade the host helper" "${SCRATCH}/wrapper-replay.log" \
+    || fail "the installed wrapper did not refuse the checkless older payload"
+grep -q '^result=ok' "${WROOT}/status/update.status" \
+    || fail "the replay refusal blocked the update"
+pass "the installed wrapper refuses an older payload that carries no check of its own"
+
+# ---- a missing high-water mark refuses the refresh -------------------------
+# The wrapper's gate must fail closed when the mark is gone, not read it as
+# "version 0" and apply whatever signed payload it fetched.
+make_payload "${SCRATCH}/p8" nomark
+publish "${REL}/${VERSION}" "${SCRATCH}/p8.tar.gz" "${VERSION}"
+rm -f "${WROOT}/usr/libexec/gotham/hostbootstrap/version"
+printf 'version=%s\n' "${VERSION}" >"${WROOT}/update.pending"
+run_wrapper >"${SCRATCH}/wrapper-nomark.log" 2>&1 || fail "the wrapper exited nonzero on a missing mark"
+grep -q "toolctl-wrapped" "${WROOT}/usr/libexec/gotham/gotham-toolctl" \
+    || fail "a missing mark still applied the payload"
+grep -q "no root-owned host-helper version mark" "${SCRATCH}/wrapper-nomark.log" \
+    || fail "the installed wrapper did not refuse a missing mark"
+grep -q '^result=ok' "${WROOT}/status/update.status" \
+    || fail "the missing mark blocked the update"
+pass "the installed wrapper refuses a missing high-water mark"
+
+# ---- a malformed or empty mark refuses the refresh (not 0.0.0) --------------
+# A garbage mark must fail closed: comparing it as 0.0.0 would accept any
+# rollback, i.e. the missing-mark hole reopened by a malformed file.
+printf 'dev\n' >"${WROOT}/usr/libexec/gotham/hostbootstrap/version"
+printf 'version=%s\n' "${VERSION}" >"${WROOT}/update.pending"
+run_wrapper >"${SCRATCH}/wrapper-junkmark.log" 2>&1 || fail "the wrapper exited nonzero on a garbage mark"
+grep -q "toolctl-wrapped" "${WROOT}/usr/libexec/gotham/gotham-toolctl" \
+    || fail "a garbage mark still applied the payload"
+grep -q "not a valid release version" "${SCRATCH}/wrapper-junkmark.log" \
+    || fail "the installed wrapper did not refuse a garbage mark with a clear reason"
+grep -q '^result=ok' "${WROOT}/status/update.status" || fail "a garbage mark blocked the update"
+
+: >"${WROOT}/usr/libexec/gotham/hostbootstrap/version"
+printf 'version=%s\n' "${VERSION}" >"${WROOT}/update.pending"
+run_wrapper >"${SCRATCH}/wrapper-emptymark.log" 2>&1 || fail "the wrapper exited nonzero on an empty mark"
+grep -q "toolctl-wrapped" "${WROOT}/usr/libexec/gotham/gotham-toolctl" \
+    || fail "an empty mark still applied the payload"
+grep -q "empty host-helper version mark" "${SCRATCH}/wrapper-emptymark.log" \
+    || fail "the installed wrapper did not refuse an empty mark"
+grep -q '^result=ok' "${WROOT}/status/update.status" || fail "an empty mark blocked the update"
+
+rm -f "${WROOT}/usr/libexec/gotham/hostbootstrap/version"
+ln -s /etc/passwd "${WROOT}/usr/libexec/gotham/hostbootstrap/version"
+printf 'version=%s\n' "${VERSION}" >"${WROOT}/update.pending"
+run_wrapper >"${SCRATCH}/wrapper-linkmark.log" 2>&1 || fail "the wrapper exited nonzero on a symlinked mark"
+grep -q "toolctl-wrapped" "${WROOT}/usr/libexec/gotham/gotham-toolctl" \
+    || fail "a symlinked mark still applied the payload"
+grep -q "no root-owned host-helper version mark" "${SCRATCH}/wrapper-linkmark.log" \
+    || fail "the installed wrapper did not refuse a symlinked mark"
+grep -q '^result=ok' "${WROOT}/status/update.status" || fail "a symlinked mark blocked the update"
+pass "the installed wrapper refuses a malformed, empty or symlinked high-water mark"
 
 echo "ALL HOST-HELPER REFRESH TESTS PASSED"

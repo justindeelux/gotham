@@ -3442,8 +3442,9 @@ type ToolInfo struct {
 	Installed bool `protobuf:"varint,5,opt,name=installed,proto3" json:"installed,omitempty"`
 	// version is the detected version, empty when unknown.
 	Version string `protobuf:"bytes,6,opt,name=version,proto3" json:"version,omitempty"`
-	// path is the resolved executable path; empty for a tool that is not a host
-	// binary (the BuildKit container) or that is not installed.
+	// path is the resolved executable path; empty for a tool that is not a
+	// command of its own (the BuildKit container, the systemd units probed
+	// through systemctl) or that is not installed.
 	Path string `protobuf:"bytes,7,opt,name=path,proto3" json:"path,omitempty"`
 	// installable and uninstallable gate the manager. Both are false for a
 	// detect-only host unit (systemd-networkd/resolved, networkctl) the platform
@@ -3456,9 +3457,12 @@ type ToolInfo struct {
 	// deps are the catalog ids this tool needs to be usable.
 	Deps []string `protobuf:"bytes,11,rep,name=deps,proto3" json:"deps,omitempty"`
 	// min_version is the minimum version the platform needs (for example git
-	// "2.37"); empty when no minimum is required. The version field carries the
-	// observed version and the caller compares.
-	MinVersion    string `protobuf:"bytes,12,opt,name=min_version,json=minVersion,proto3" json:"min_version,omitempty"`
+	// "2.37"); empty when no minimum is required.
+	MinVersion string `protobuf:"bytes,12,opt,name=min_version,json=minVersion,proto3" json:"min_version,omitempty"`
+	// version_ok reports whether the detected version meets min_version. It is
+	// true when the tool declares no minimum, and false when a minimum is
+	// declared but the observed version is missing or lower.
+	VersionOk     bool `protobuf:"varint,13,opt,name=version_ok,json=versionOk,proto3" json:"version_ok,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3575,6 +3579,13 @@ func (x *ToolInfo) GetMinVersion() string {
 		return x.MinVersion
 	}
 	return ""
+}
+
+func (x *ToolInfo) GetVersionOk() bool {
+	if x != nil {
+		return x.VersionOk
+	}
+	return false
 }
 
 // ListToolsResponse lists the catalog with each entry's detected state.
@@ -6119,7 +6130,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06sha256\x18\x06 \x01(\tR\x06sha256\x12\x18\n" +
 	"\achannel\x18\a \x01(\tR\achannel\x12\x18\n" +
 	"\arollout\x18\b \x01(\bR\arollout\"\x12\n" +
-	"\x10ListToolsRequest\"\xd4\x02\n" +
+	"\x10ListToolsRequest\"\xf3\x02\n" +
 	"\bToolInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12 \n" +
@@ -6135,7 +6146,9 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	" \x01(\bR\tneedsRoot\x12\x12\n" +
 	"\x04deps\x18\v \x03(\tR\x04deps\x12\x1f\n" +
 	"\vmin_version\x18\f \x01(\tR\n" +
-	"minVersion\"=\n" +
+	"minVersion\x12\x1d\n" +
+	"\n" +
+	"version_ok\x18\r \x01(\bR\tversionOk\"=\n" +
 	"\x11ListToolsResponse\x12(\n" +
 	"\x05tools\x18\x01 \x03(\v2\x12.agent.v1.ToolInfoR\x05tools\"$\n" +
 	"\x12InstallToolRequest\x12\x0e\n" +

@@ -41,6 +41,7 @@ func (s *ToolServer) ListTools(_ context.Context, _ *agentv1.ListToolsRequest) (
 			NeedsRoot:     tool.NeedsRoot,
 			Deps:          tool.Deps,
 			MinVersion:    tool.MinVersion,
+			VersionOk:     detection.VersionOK,
 		})
 	}
 	return &agentv1.ListToolsResponse{Tools: tools}, nil

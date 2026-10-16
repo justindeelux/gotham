@@ -755,8 +755,9 @@ message ToolInfo {
   bool installed = 5;
   // version is the detected version, empty when unknown.
   string version = 6;
-  // path is the resolved executable path; empty for a tool that is not a host
-  // binary (the BuildKit container) or that is not installed.
+  // path is the resolved executable path; empty for a tool that is not a
+  // command of its own (the BuildKit container, the systemd units probed
+  // through systemctl) or that is not installed.
   string path = 7;
   // installable and uninstallable gate the manager. Both are false for a
   // detect-only host unit (systemd-networkd/resolved, networkctl) the platform
@@ -769,9 +770,12 @@ message ToolInfo {
   // deps are the catalog ids this tool needs to be usable.
   repeated string deps = 11;
   // min_version is the minimum version the platform needs (for example git
-  // "2.37"); empty when no minimum is required. The version field carries the
-  // observed version and the caller compares.
+  // "2.37"); empty when no minimum is required.
   string min_version = 12;
+  // version_ok reports whether the detected version meets min_version. It is
+  // true when the tool declares no minimum, and false when a minimum is
+  // declared but the observed version is missing or lower.
+  bool version_ok = 13;
 }
 
 // ListToolsResponse lists the catalog with each entry's detected state.

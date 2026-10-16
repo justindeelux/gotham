@@ -8,9 +8,10 @@ package toolcatalog
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -46,20 +47,20 @@ const (
 	IDIP              = "ip"
 )
 
-// Detect describes how one tool is found on the host.
+// Detect describes how one tool is found on the host. Every rule resolves
+// through PATH (or runs the whole Probe argv through PATH), never a hard-coded
+// absolute path, so a test that points PATH at a stub directory sees exactly
+// the catalog entry it stubbed and nothing from the host it runs on.
 type Detect struct {
 	// Binaries are executable names resolved on PATH in order; the first hit
 	// wins.
 	Binaries []string
-	// Paths are absolute fallback paths tried when no binary resolves, for an
-	// executable that lives outside PATH (the systemd units).
-	Paths []string
 	// Version is the argv run against the resolved executable to read its
 	// version; nil skips the probe.
 	Version []string
-	// Probe, when set, is a whole argv run instead of a PATH lookup, for a tool
-	// that is not a host binary (the BuildKit container image). Its success
-	// means installed.
+	// Probe, when set, is a whole argv run instead of a binary lookup, for a
+	// tool that is not a command of its own (the BuildKit container image, the
+	// systemd units checked through systemctl). Its success means installed.
 	Probe []string
 }
 
@@ -82,9 +83,9 @@ type Tool struct {
 	// platform never installs or removes.
 	Installable   bool
 	Uninstallable bool
-	// MinVersion is the minimum version the platform needs; detection reports
-	// the observed version and leaves the comparison to the caller. Empty when
-	// no minimum is required.
+	// MinVersion is the minimum version the platform needs; detection compares
+	// the observed version against it and reports the result in
+	// Detection.VersionOK. Empty when no minimum is required.
 	MinVersion string
 }
 
@@ -148,10 +149,8 @@ var Catalog = []Tool{
 		Name:        "systemd-networkd",
 		Description: "Host network configuration; Gotham writes a drop-in and reloads it. Detect-only: never installed or removed.",
 		Category:    CategoryNetwork,
-		Detect: Detect{
-			Paths:   []string{"/lib/systemd/systemd-networkd", "/usr/lib/systemd/systemd-networkd"},
-			Version: []string{"--version"},
-		},
+		Detect:      Detect{Probe: []string{"systemctl", "is-active", "--quiet", "systemd-networkd"}},
+		Deps:        []string{IDSystemctl},
 		NeedsRoot:   true,
 		Installable: false, Uninstallable: false,
 	},
@@ -160,10 +159,8 @@ var Catalog = []Tool{
 		Name:        "systemd-resolved",
 		Description: "Host DNS resolution; Gotham writes a drop-in and reloads it. Detect-only: never installed or removed.",
 		Category:    CategoryNetwork,
-		Detect: Detect{
-			Paths:   []string{"/lib/systemd/systemd-resolved", "/usr/lib/systemd/systemd-resolved"},
-			Version: []string{"--version"},
-		},
+		Detect:      Detect{Probe: []string{"systemctl", "is-active", "--quiet", "systemd-resolved"}},
+		Deps:        []string{IDSystemctl},
 		NeedsRoot:   true,
 		Installable: false, Uninstallable: false,
 	},
@@ -173,6 +170,7 @@ var Catalog = []Tool{
 		Description: "Inspects and reloads systemd-networkd links. Detect-only: never installed or removed.",
 		Category:    CategoryNetwork,
 		Detect:      Detect{Binaries: []string{"networkctl"}, Version: []string{"--version"}},
+		Deps:        []string{IDSystemdNetworkd},
 		NeedsRoot:   true,
 		Installable: false, Uninstallable: false,
 	},
@@ -218,6 +216,7 @@ var Catalog = []Tool{
 		Description: "Reads and sets per-link DNS through systemd-resolved.",
 		Category:    CategoryNetwork,
 		Detect:      Detect{Binaries: []string{"resolvectl"}, Version: []string{"--version"}},
+		Deps:        []string{IDSystemdResolved},
 		NeedsRoot:   true,
 		Installable: false, Uninstallable: false,
 	},
@@ -240,9 +239,14 @@ type Detection struct {
 	Installed bool
 	// Version is the version read from the tool, empty when unknown.
 	Version string
-	// Path is the resolved executable path; empty for a tool that is not a host
-	// binary (the BuildKit container) or that is not installed.
+	// Path is the resolved executable path; empty for a tool that is not a
+	// command of its own (the BuildKit container, the systemd units probed
+	// through systemctl) or that is not installed.
 	Path string
+	// VersionOK reports whether the observed version meets the catalog entry's
+	// MinVersion. It is true when the entry declares no minimum, and false when
+	// a minimum is declared but the observed version is missing or lower.
+	VersionOK bool
 }
 
 // versionPattern extracts the first dotted numeric version from a probe's
@@ -267,15 +271,15 @@ func Lookup(id string) (Tool, bool) {
 }
 
 // Installed reports whether the tool with id resolves on this host. It is the
-// cheap presence check the build-toolchain gate uses: no version or probe
-// command is run. An unknown id is not installed.
+// cheap presence check the build-toolchain gate uses: no version probe is run.
+// An unknown id is not installed.
 func Installed(id string) bool {
 	tool, ok := Lookup(id)
 	if !ok {
 		return false
 	}
 	if len(tool.Detect.Probe) > 0 {
-		return probeInstalled(tool)
+		return probeSucceeds(tool)
 	}
 	_, ok = resolve(tool)
 	return ok
@@ -296,39 +300,31 @@ func DetectAll() []Detection {
 func DetectTool(tool Tool) Detection {
 	detection := Detection{ID: tool.ID}
 	if len(tool.Detect.Probe) > 0 {
-		detection.Installed = probeInstalled(tool)
-		return detection
+		detection.Installed = probeSucceeds(tool)
+	} else if path, ok := resolve(tool); ok {
+		detection.Installed = true
+		detection.Path = path
+		if len(tool.Detect.Version) > 0 {
+			detection.Version = runVersion(path, tool.Detect.Version)
+		}
 	}
-	path, ok := resolve(tool)
-	if !ok {
-		return detection
-	}
-	detection.Installed = true
-	detection.Path = path
-	if len(tool.Detect.Version) > 0 {
-		detection.Version = runVersion(path, tool.Detect.Version)
-	}
+	detection.VersionOK = meetsMinVersion(detection.Version, tool.MinVersion)
 	return detection
 }
 
 // resolve returns the executable one tool's Detect rule points at: the first
-// binary on PATH, or the first existing absolute fallback path.
+// binary on PATH.
 func resolve(tool Tool) (string, bool) {
 	for _, name := range tool.Detect.Binaries {
 		if path, err := exec.LookPath(name); err == nil {
 			return path, true
 		}
 	}
-	for _, path := range tool.Detect.Paths {
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			return path, true
-		}
-	}
 	return "", false
 }
 
-// probeInstalled runs a tool's Probe argv and reports whether it succeeded.
-func probeInstalled(tool Tool) bool {
+// probeSucceeds runs a tool's Probe argv and reports whether it succeeded.
+func probeSucceeds(tool Tool) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
 	return exec.CommandContext(ctx, tool.Detect.Probe[0], tool.Detect.Probe[1:]...).Run() == nil
@@ -341,4 +337,43 @@ func runVersion(path string, args []string) string {
 	defer cancel()
 	out, _ := exec.CommandContext(ctx, path, args...).CombinedOutput()
 	return versionPattern.FindString(string(out))
+}
+
+// meetsMinVersion reports whether observed is at least minimum. An entry with
+// no minimum is always met; a minimum that is declared but has no parseable
+// observed version is not, because the platform does not assume a version it
+// could not read is new enough.
+func meetsMinVersion(observed, minimum string) bool {
+	if minimum == "" {
+		return true
+	}
+	if observed == "" {
+		return false
+	}
+	return compareVersions(observed, minimum) >= 0
+}
+
+// compareVersions compares two dotted numeric versions, treating a missing
+// component as zero, so "2.43" equals "2.43.0". It returns -1, 0 or 1.
+func compareVersions(a, b string) int {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(as) || i < len(bs); i++ {
+		switch ai, bi := versionComponent(as, i), versionComponent(bs, i); {
+		case ai < bi:
+			return -1
+		case ai > bi:
+			return 1
+		}
+	}
+	return 0
+}
+
+// versionComponent returns the i-th dotted component as an int, or 0 when it is
+// missing or not a number.
+func versionComponent(parts []string, i int) int {
+	if i >= len(parts) {
+		return 0
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(parts[i]))
+	return n
 }

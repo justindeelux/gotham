@@ -63,9 +63,37 @@ func TestToolServerListToolsReportsDetection(t *testing.T) {
 		if !tool.GetInstalled() || tool.GetVersion() != "0.4.1" || tool.GetPath() == "" {
 			t.Fatalf("railpack = %v; want installed 0.4.1 with a path", tool)
 		}
+		if !tool.GetVersionOk() {
+			t.Error("railpack version_ok = false; want true (no minimum)")
+		}
 		return
 	}
 	t.Fatal("ListTools omitted railpack")
+}
+
+// TestToolServerListToolsReportsMinVersion checks the catalog's git minimum is
+// compared and surfaced through ListTools, not just carried as metadata.
+func TestToolServerListToolsReportsMinVersion(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\necho 'git version 2.30.0'\n"), 0o755); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", dir)
+
+	response, err := NewToolServer().ListTools(context.Background(), &agentv1.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range response.GetTools() {
+		if tool.GetId() != toolcatalog.IDGit {
+			continue
+		}
+		if tool.GetMinVersion() != "2.37" || tool.GetVersion() != "2.30.0" || tool.GetVersionOk() {
+			t.Fatalf("git = %v; want min 2.37, version 2.30.0, version_ok false", tool)
+		}
+		return
+	}
+	t.Fatal("ListTools omitted git")
 }
 
 // TestToolServerInstallUnimplemented pins the JUS-174 contract: the install and

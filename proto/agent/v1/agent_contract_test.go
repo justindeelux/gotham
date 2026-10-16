@@ -330,6 +330,7 @@ func TestListToolsProtoRoundtrip(t *testing.T) {
 			NeedsRoot:     true,
 			Deps:          []string{"docker"},
 			MinVersion:    "2.37",
+			VersionOk:     true,
 		}},
 	}
 

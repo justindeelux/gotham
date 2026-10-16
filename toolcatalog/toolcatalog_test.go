@@ -90,36 +90,38 @@ func TestDetectContainerProbe(t *testing.T) {
 	})
 }
 
-// TestDetectPathFallback checks a tool whose executable lives outside PATH
-// resolves through its absolute fallback path. It uses a synthetic entry so the
-// test never touches a real host path.
-func TestDetectPathFallback(t *testing.T) {
-	emptyPath(t)
-	path := filepath.Join(t.TempDir(), "systemd-networkd")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\necho 'systemd 255 (255.4)'\n"), 0o755); err != nil {
-		t.Fatalf("write fallback binary: %v", err)
-	}
-	tool := Tool{ID: "netd", Detect: Detect{Paths: []string{path}, Version: []string{"--version"}}}
-
-	detection := DetectTool(tool)
-	if !detection.Installed {
-		t.Fatal("tool not detected through its fallback path")
-	}
-	if detection.Path != path {
-		t.Errorf("path = %q; want %q", detection.Path, path)
-	}
-	if detection.Version != "255.4" {
-		t.Errorf("version = %q; want 255.4", detection.Version)
-	}
+// TestDetectSystemdUnitsProbeViaPath stubs systemctl on PATH: the systemd
+// units must be detected through the probe command, never a host absolute
+// path, so a test (or a node without the unit) never sees host state.
+func TestDetectSystemdUnitsProbeViaPath(t *testing.T) {
+	t.Run("active", func(t *testing.T) {
+		emptyPath(t)
+		fakeBinary(t, "systemctl", "exit 0")
+		for _, id := range []string{IDSystemdNetworkd, IDSystemdResolved} {
+			if detection := DetectTool(mustLookup(t, id)); !detection.Installed {
+				t.Errorf("%s not detected though its probe succeeded", id)
+			}
+		}
+	})
+	t.Run("inactive", func(t *testing.T) {
+		emptyPath(t)
+		fakeBinary(t, "systemctl", "exit 3")
+		for _, id := range []string{IDSystemdNetworkd, IDSystemdResolved} {
+			if detection := DetectTool(mustLookup(t, id)); detection.Installed {
+				t.Errorf("%s detected though its probe failed", id)
+			}
+		}
+	})
 }
 
-// TestCatalogSystemdEntriesUseFixedPaths keeps the systemd units pointed at the
-// real executables, which are not on PATH.
-func TestCatalogSystemdEntriesUseFixedPaths(t *testing.T) {
-	for _, id := range []string{IDSystemdNetworkd, IDSystemdResolved} {
-		tool := mustLookup(t, id)
-		if len(tool.Detect.Binaries) != 0 || len(tool.Detect.Paths) == 0 {
-			t.Errorf("%s should resolve by absolute path, not PATH", id)
+// TestCatalogLeaksNoHostState is the CI regression: every catalog entry must
+// resolve through PATH, so an empty PATH reports the whole catalog as absent
+// even on a host that runs systemd and Docker.
+func TestCatalogLeaksNoHostState(t *testing.T) {
+	emptyPath(t)
+	for _, detection := range DetectAll() {
+		if detection.Installed {
+			t.Errorf("%s reported installed on an empty PATH", detection.ID)
 		}
 	}
 }
@@ -155,7 +157,7 @@ func TestCatalogIntegrity(t *testing.T) {
 		default:
 			t.Errorf("%s has unknown category %q", tool.ID, tool.Category)
 		}
-		if len(tool.Detect.Binaries) == 0 && len(tool.Detect.Paths) == 0 && len(tool.Detect.Probe) == 0 {
+		if len(tool.Detect.Binaries) == 0 && len(tool.Detect.Probe) == 0 {
 			t.Errorf("%s has no detect rule", tool.ID)
 		}
 	}
@@ -186,11 +188,64 @@ func TestDetectAllReturnsCatalogOrder(t *testing.T) {
 	emptyPath(t)
 	detections := DetectAll()
 	if len(detections) != len(Catalog) {
-		t.Fatalf("Detect returned %d entries; want %d", len(detections), len(Catalog))
+		t.Fatalf("DetectAll returned %d entries; want %d", len(detections), len(Catalog))
 	}
 	for i, detection := range detections {
 		if detection.ID != Catalog[i].ID {
 			t.Errorf("position %d = %q; want %q", i, detection.ID, Catalog[i].ID)
+		}
+	}
+}
+
+// TestGitMinVersion is the reviewer's JUS-174 finding: the catalog records
+// git's 2.37 minimum and detection must compare the observed version against
+// it, not just report the raw version.
+func TestGitMinVersion(t *testing.T) {
+	if got := mustLookup(t, IDGit).MinVersion; got != "2.37" {
+		t.Fatalf("git MinVersion = %q; want 2.37", got)
+	}
+	tests := []struct {
+		version string
+		wantOK  bool
+	}{
+		{"2.30.0", false},
+		{"2.36.9", false},
+		{"2.37", true},
+		{"2.37.0", true},
+		{"2.43.0", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			emptyPath(t)
+			fakeBinary(t, "git", "echo 'git version "+tt.version+"'")
+			detection := DetectTool(mustLookup(t, IDGit))
+			if !detection.Installed {
+				t.Fatal("git not detected on the fake PATH")
+			}
+			if detection.VersionOK != tt.wantOK {
+				t.Errorf("git %s VersionOK = %v; want %v", tt.version, detection.VersionOK, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestMeetsMinVersion(t *testing.T) {
+	tests := []struct {
+		observed, minimum string
+		want              bool
+	}{
+		{"2.43.0", "", true},
+		{"", "", true},
+		{"", "2.37", false},
+		{"2.37", "2.37", true},
+		{"2.43", "2.37", true},
+		{"2.30.0", "2.37", false},
+		{"1.99.99", "2.0", false},
+		{"3", "2.37", true},
+	}
+	for _, tt := range tests {
+		if got := meetsMinVersion(tt.observed, tt.minimum); got != tt.want {
+			t.Errorf("meetsMinVersion(%q, %q) = %v; want %v", tt.observed, tt.minimum, got, tt.want)
 		}
 	}
 }

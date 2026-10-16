@@ -112,7 +112,10 @@ type ClaimNextQueuedToolchainJobParams struct {
 // (per-node sequential, parallel across nodes), marking it running and
 // recording the claiming instance plus a lease the worker renews. FOR UPDATE
 // SKIP LOCKED lets several control-plane instances work the same queue without
-// claiming one job twice; no rows means nothing is currently claimable.
+// claiming one job twice. The NOT EXISTS is only a best-effort filter (READ
+// COMMITTED): the toolchain_jobs_running_server_unique partial index is the
+// real per-node guard, and a losing racer gets 23505, which the store maps to
+// no-rows ("nothing claimable"). No rows means nothing is claimable now.
 func (q *Queries) ClaimNextQueuedToolchainJob(ctx context.Context, arg ClaimNextQueuedToolchainJobParams) (ToolchainJob, error) {
 	row := q.db.QueryRow(ctx, claimNextQueuedToolchainJob, arg.ClaimedBy, arg.LeaseSeconds)
 	var i ToolchainJob
@@ -172,36 +175,6 @@ func (q *Queries) CreateToolchainJob(ctx context.Context, arg CreateToolchainJob
 	return i, err
 }
 
-const failOwnedToolchainJobs = `-- name: FailOwnedToolchainJobs :many
-UPDATE toolchain_jobs
-SET status = 'failed', finished_at = now()
-WHERE status = 'running' AND claimed_by = $1
-RETURNING id
-`
-
-// Boot recovery: fails running jobs this instance claimed before a restart. It
-// runs once, before any worker starts, so it can never touch a job another live
-// instance is working.
-func (q *Queries) FailOwnedToolchainJobs(ctx context.Context, claimedBy string) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, failOwnedToolchainJobs, claimedBy)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []pgtype.UUID{}
-	for rows.Next() {
-		var id pgtype.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const failStaleToolchainJobs = `-- name: FailStaleToolchainJobs :many
 UPDATE toolchain_jobs
 SET status = 'failed', finished_at = now()
@@ -210,10 +183,12 @@ WHERE status = 'running'
 RETURNING id
 `
 
-// Periodic recovery: fails running jobs whose lease lapsed (a crashed
-// instance's job). A live instance renews its lease, so this never fails live
-// work, and two instances never fail each other's. Retrying an unknown
-// half-finished install is unsafe, so these are failed, not requeued.
+// Recovery: fails running jobs whose lease lapsed (the owning instance crashed
+// or stalled). A live instance renews its lease, so this never fails live work,
+// and two instances never fail each other's. Recovery is keyed purely on the
+// lease (instance ids are per-process), so a restart is at most one lease late.
+// Retrying an unknown half-finished install is unsafe, so these are failed, not
+// requeued.
 func (q *Queries) FailStaleToolchainJobs(ctx context.Context) ([]pgtype.UUID, error) {
 	rows, err := q.db.Query(ctx, failStaleToolchainJobs)
 	if err != nil {
@@ -236,19 +211,25 @@ func (q *Queries) FailStaleToolchainJobs(ctx context.Context) ([]pgtype.UUID, er
 
 const finishToolchainJob = `-- name: FinishToolchainJob :one
 UPDATE toolchain_jobs
-SET status = $2, finished_at = now()
+SET status = $3, finished_at = now()
 WHERE id = $1
+  AND status = 'running'
+  AND claimed_by = $2
+  AND (lease_expires_at IS NULL OR lease_expires_at > now())
 RETURNING id, server_id, tool_id, action, status, created_at, started_at, finished_at, claimed_by, lease_expires_at
 `
 
 type FinishToolchainJobParams struct {
-	ID     pgtype.UUID `json:"id"`
-	Status string      `json:"status"`
+	ID        pgtype.UUID `json:"id"`
+	ClaimedBy string      `json:"claimed_by"`
+	Status    string      `json:"status"`
 }
 
-// Closes a job with its terminal status.
+// Closes a job only while this instance still owns a running, unexpired lease.
+// A late finish (lease lapsed, job already recovered, or a foreign instance)
+// matches no rows, so a recovered job is never overwritten by its old worker.
 func (q *Queries) FinishToolchainJob(ctx context.Context, arg FinishToolchainJobParams) (ToolchainJob, error) {
-	row := q.db.QueryRow(ctx, finishToolchainJob, arg.ID, arg.Status)
+	row := q.db.QueryRow(ctx, finishToolchainJob, arg.ID, arg.ClaimedBy, arg.Status)
 	var i ToolchainJob
 	err := row.Scan(
 		&i.ID,
@@ -379,20 +360,25 @@ func (q *Queries) ListToolchainJobsByServer(ctx context.Context, arg ListToolcha
 	return items, nil
 }
 
-const renewToolchainJobLease = `-- name: RenewToolchainJobLease :exec
+const renewToolchainJobLease = `-- name: RenewToolchainJobLease :execrows
 UPDATE toolchain_jobs
-SET lease_expires_at = now() + make_interval(secs => $2::int)
-WHERE id = $1 AND status = 'running'
+SET lease_expires_at = now() + make_interval(secs => $3::int)
+WHERE id = $1 AND status = 'running' AND claimed_by = $2
 `
 
 type RenewToolchainJobLeaseParams struct {
 	ID           pgtype.UUID `json:"id"`
+	ClaimedBy    string      `json:"claimed_by"`
 	LeaseSeconds int32       `json:"lease_seconds"`
 }
 
-// Extends a running job's lease. Called periodically by the worker so a live
-// instance's job is never mistaken for a crashed one.
-func (q *Queries) RenewToolchainJobLease(ctx context.Context, arg RenewToolchainJobLeaseParams) error {
-	_, err := q.db.Exec(ctx, renewToolchainJobLease, arg.ID, arg.LeaseSeconds)
-	return err
+// Extends a running job's lease, but only while this instance still owns it.
+// zero rows means the lease lapsed (or the job was recovered), so the worker
+// aborts the stream instead of continuing work it no longer owns.
+func (q *Queries) RenewToolchainJobLease(ctx context.Context, arg RenewToolchainJobLeaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, renewToolchainJobLease, arg.ID, arg.ClaimedBy, arg.LeaseSeconds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

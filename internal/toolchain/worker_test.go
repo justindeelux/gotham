@@ -149,33 +149,58 @@ func TestWorkerFailsResultAndUnreachableAgent(t *testing.T) {
 	}
 }
 
-// TestWorkerRecoversOnlyOwnOrStaleJobs pins multi-instance-safe recovery: on
-// start the sweeper fails jobs this instance owned and jobs whose lease lapsed,
-// but never a job a live peer is still renewing.
-func TestWorkerRecoversOnlyOwnOrStaleJobs(t *testing.T) {
+// TestWorkerRecoversOnlyStaleJobs pins that recovery is lease-only: the sweeper
+// fails jobs whose lease lapsed, and never a job (even this instance's) that a
+// live process is still renewing — so a restart-overlapping process can never
+// fail a job another process owns.
+func TestWorkerRecoversOnlyStaleJobs(t *testing.T) {
 	agent := &fakeAgent{}
 	st := newFakeStore()
 
 	now := time.Now()
-	mine := st.seedRunning(uuid.New(), "mine", "test-instance", now.Add(time.Hour))
 	stale := st.seedRunning(uuid.New(), "stale", "other-instance", now.Add(-time.Minute))
-	livePeer := st.seedRunning(uuid.New(), "live", "other-instance", now.Add(time.Hour))
+	nullLease := st.seedRunning(uuid.New(), "nolease", "other-instance", time.Time{})
+	live := st.seedRunning(uuid.New(), "live", "some-instance", now.Add(time.Hour))
 
 	svc := testService(st, agent, &fakeRegistry{}, nil)
 	svc.Start()
 	defer func() { _ = svc.Close() }()
 
-	if got := waitTerminal(t, st, mine); got != StatusFailed {
-		t.Fatalf("own job status = %s, want failed", got)
-	}
 	if got := waitTerminal(t, st, stale); got != StatusFailed {
 		t.Fatalf("stale job status = %s, want failed", got)
 	}
-	if got := st.status(t, livePeer); got != StatusRunning {
-		t.Fatalf("live peer job status = %s, want running (untouched)", got)
+	if got := waitTerminal(t, st, nullLease); got != StatusFailed {
+		t.Fatalf("null-lease job status = %s, want failed", got)
+	}
+	if got := st.status(t, live); got != StatusRunning {
+		t.Fatalf("live job status = %s, want running (untouched, lease-only recovery)", got)
 	}
 	if log := st.logText(stale); !strings.Contains(log, "interrupted") {
 		t.Fatalf("stale job log = %q, want an interruption marker", log)
+	}
+}
+
+// TestFinishNoOpForForeignOrStaleLease pins the finish guard: a finish by an
+// instance that no longer owns the job (foreign claimed_by, or a lapsed lease)
+// must not overwrite its state.
+func TestFinishNoOpForForeignOrStaleLease(t *testing.T) {
+	st := newFakeStore()
+	svc := testService(st, &fakeAgent{}, &fakeRegistry{}, nil)
+
+	foreign := st.seedRunning(uuid.New(), "foreign", "other-instance", time.Now().Add(time.Hour))
+	lapsed := st.seedRunning(uuid.New(), "lapsed", "test-instance", time.Now().Add(-time.Minute))
+
+	svc.finish(context.Background(), jobFromRow(st.job(foreign)), StatusSucceeded)
+	svc.finish(context.Background(), jobFromRow(st.job(lapsed)), StatusSucceeded)
+
+	if got := st.status(t, foreign); got != StatusRunning {
+		t.Fatalf("foreign job status = %s, want running (finish must be a no-op)", got)
+	}
+	if got := st.status(t, lapsed); got != StatusRunning {
+		t.Fatalf("lapsed-lease job status = %s, want running (finish must be a no-op)", got)
+	}
+	if n := len(st.finishOrder()); n != 0 {
+		t.Fatalf("finish recorded %d terminal writes, want 0", n)
 	}
 }
 

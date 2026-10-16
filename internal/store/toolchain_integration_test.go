@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -127,7 +128,12 @@ func TestToolchainQueueContract(t *testing.T) {
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("claim while A busy err = %v, want pgx.ErrNoRows (A's second job blocked)", err)
 	}
-	if _, err := st.FinishToolchainJob(ctx, sqlc.FinishToolchainJobParams{ID: first.ID, Status: "succeeded"}); err != nil {
+	// A finish guarded on ownership: the wrong instance cannot close a running
+	// job, and only the owning instance on an unexpired lease can.
+	if _, err := st.FinishToolchainJob(ctx, sqlc.FinishToolchainJobParams{ID: first.ID, ClaimedBy: "someone-else", Status: "succeeded"}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("foreign finish err = %v, want pgx.ErrNoRows", err)
+	}
+	if _, err := st.FinishToolchainJob(ctx, sqlc.FinishToolchainJobParams{ID: first.ID, ClaimedBy: "inst-1", Status: "succeeded"}); err != nil {
 		t.Fatalf("finish a1: %v", err)
 	}
 	third := claim("inst-1")
@@ -151,9 +157,9 @@ func TestToolchainQueueContract(t *testing.T) {
 		t.Fatalf("canceled job = %+v, want canceled with finished_at", canceled)
 	}
 
-	// Recovery fails only this instance's jobs or jobs whose lease lapsed:
-	// b1 and a2 are ours, lapsed is another instance's stale lease, and fresh is
-	// another instance's live lease.
+	// Recovery is lease-only: the lapsed lease is failed; a fresh lease (ours or
+	// a peer's) is never touched, so a restart-overlapping process cannot fail a
+	// live job.
 	lapsedJob := enqueue(serverC.ID, "lapsed", "install", base.Add(5*time.Second))
 	freshJob := enqueue(serverD.ID, "fresh", "install", base.Add(6*time.Second))
 	lapsed := claim("inst-2")
@@ -167,25 +173,21 @@ func TestToolchainQueueContract(t *testing.T) {
 	if uuid.UUID(fresh.ID.Bytes) != uuid.UUID(freshJob.ID.Bytes) {
 		t.Fatalf("claim = %s, want freshJob on the idle node", uuid.UUID(fresh.ID.Bytes))
 	}
-	ownedIDs, err := st.FailOwnedToolchainJobs(ctx, "inst-1")
-	if err != nil {
-		t.Fatalf("FailOwnedToolchainJobs: %v", err)
-	}
 	staleIDs, err := st.FailStaleToolchainJobs(ctx)
 	if err != nil {
 		t.Fatalf("FailStaleToolchainJobs: %v", err)
 	}
-	// Our two running jobs (b1 and a2) plus the lapsed one are failed; the
-	// fresh peer job is untouched.
-	if len(ownedIDs) != 2 || len(staleIDs) != 1 {
-		t.Fatalf("recovered owned=%d stale=%d, want owned=2 stale=1 (not the live peer)", len(ownedIDs), len(staleIDs))
+	if len(staleIDs) != 1 {
+		t.Fatalf("recovered %d jobs, want 1 (only the lapsed lease)", len(staleIDs))
 	}
-	live, err := st.GetToolchainJobForServer(ctx, sqlc.GetToolchainJobForServerParams{ID: fresh.ID, ServerID: serverD.ID})
-	if err != nil {
-		t.Fatalf("GetToolchainJobForServer(fresh): %v", err)
-	}
-	if live.Status != "running" {
-		t.Fatalf("fresh peer job status = %s, want running (untouched)", live.Status)
+	for _, job := range []sqlc.ToolchainJob{second, third, fresh} {
+		row, err := st.GetToolchainJobForServer(ctx, sqlc.GetToolchainJobForServerParams{ID: job.ID, ServerID: job.ServerID})
+		if err != nil {
+			t.Fatalf("GetToolchainJobForServer: %v", err)
+		}
+		if row.Status != "running" {
+			t.Fatalf("job %s status = %s, want running (fresh lease untouched)", row.ToolID, row.Status)
+		}
 	}
 
 	// Append-only log: line rows with a monotonic seq, ordered reads, an after
@@ -231,5 +233,106 @@ func TestToolchainQueueContract(t *testing.T) {
 	}
 	if len(remaining) != 0 {
 		t.Fatalf("log rows survived the job delete: %+v", remaining)
+	}
+}
+
+// TestToolchainClaimIsPerNodeSerializedUnderConcurrency is the PR #325 H1
+// regression: many goroutines claiming concurrently must never leave two running
+// jobs on one node. The unique partial index is what guarantees this; the
+// claim's NOT EXISTS alone raced (two claimers each picked a different job of
+// one node ~39/40 trials).
+func TestToolchainClaimIsPerNodeSerializedUnderConcurrency(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	dsn := testDSN()
+	if err := store.ProbeOnce(ctx, dsn); err != nil {
+		if testDSNExplicit() {
+			t.Fatalf("GOTHAM_TEST_DSN is set but Postgres is unavailable: %v", err)
+		}
+		t.Skipf("Postgres not available: %v", err)
+	}
+	pool, err := store.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := store.Migrate(ctx, dsn, store.MigrateUp); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+	st := store.New(pool)
+
+	const (
+		trials = 25
+		racers = 6
+	)
+	for trial := 0; trial < trials; trial++ {
+		server, err := st.CreateServer(ctx, sqlc.CreateServerParams{
+			Name:    fmt.Sprintf("jus176-race-%d-%d", time.Now().UnixNano(), trial),
+			Ip:      "127.0.0.1",
+			Port:    22,
+			SshUser: "root",
+		})
+		if err != nil {
+			t.Fatalf("trial %d: CreateServer: %v", trial, err)
+		}
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", server.ID); err != nil {
+				t.Logf("cleanup server: %v", err)
+			}
+		})
+		for _, tool := range []string{"a", "b"} {
+			if _, err := st.CreateToolchainJob(ctx, sqlc.CreateToolchainJobParams{
+				ServerID: server.ID, ToolID: tool, Action: "install",
+			}); err != nil {
+				t.Fatalf("trial %d: CreateToolchainJob: %v", trial, err)
+			}
+		}
+
+		var (
+			wg       sync.WaitGroup
+			mu       sync.Mutex
+			claimed  int
+			claimErr error
+		)
+		for i := 0; i < racers; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				_, err := st.ClaimNextQueuedToolchainJob(ctx, sqlc.ClaimNextQueuedToolchainJobParams{
+					ClaimedBy:    fmt.Sprintf("racer-%d", i),
+					LeaseSeconds: 300,
+				})
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					claimed++
+				case errors.Is(err, pgx.ErrNoRows):
+					// expected for losers and for losers of the node race
+				default:
+					claimErr = err
+				}
+			}(i)
+		}
+		wg.Wait()
+		if claimErr != nil {
+			t.Fatalf("trial %d: unexpected claim error: %v", trial, claimErr)
+		}
+		if claimed != 1 {
+			t.Fatalf("trial %d: %d jobs claimed, want exactly 1 (one node, per-node serial)", trial, claimed)
+		}
+
+		var running int
+		if err := pool.QueryRow(ctx,
+			"SELECT count(*) FROM toolchain_jobs WHERE server_id = $1 AND status = 'running'", server.ID,
+		).Scan(&running); err != nil {
+			t.Fatalf("trial %d: count running: %v", trial, err)
+		}
+		if running != 1 {
+			t.Fatalf("trial %d: %d running jobs on one node, want 1", trial, running)
+		}
 	}
 }

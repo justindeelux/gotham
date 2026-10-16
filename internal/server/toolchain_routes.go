@@ -31,8 +31,8 @@ type toolDialer interface {
 // toolchainService builds the toolchain domain service for the HTTP wiring from
 // the shared database and the (optional) agent dialer. It returns nil, so the
 // routes are not mounted, when there is no database. The node registry is passed
-// for the per-node team authorization; the instance id defaults to the host name
-// (see GOTHAM_INSTANCE_ID) for lease-based job recovery.
+// for the per-node team authorization; the instance id is a random per-process
+// value (recovery is lease-based, never id-based).
 func (s *Server) toolchainService() *toolchain.Service {
 	if s.persistence == nil {
 		return nil

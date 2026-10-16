@@ -5,11 +5,11 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"google.golang.org/grpc"
 
 	"github.com/justindeelux/gotham/internal/store/sqlc"
@@ -22,8 +22,7 @@ const interruptedLog = "interrupted: the owning control plane stopped while this
 
 // Start launches the worker pool and the stale-job sweeper. It is idempotent:
 // a second call while running does nothing. Several workers claim independently
-// (parallel across nodes) and the claim query keeps each node's jobs
-// sequential.
+// (parallel across nodes) and the schema keeps each node's jobs sequential.
 func (s *Service) Start() {
 	s.mu.Lock()
 	if s.running {
@@ -36,13 +35,13 @@ func (s *Service) Start() {
 	workers := s.workers
 	s.mu.Unlock()
 
-	// Boot recovery runs once, before any worker claims, so an "owned" job can
-	// never be a live one. Workers wait on ready.
+	// Reconcile jobs whose lease already lapsed before workers claim, so a
+	// crashed instance's node frees up without waiting for the first sweep tick.
+	// Workers wait on ready.
 	ready := make(chan struct{})
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.recoverOwned(ctx)
 		s.recoverStale(ctx)
 		close(ready)
 	}()
@@ -75,9 +74,9 @@ func (s *Service) Close() error {
 }
 
 // worker claims and runs jobs until ctx ends. It keeps draining while jobs are
-// claimable for nodes it is not already working (the claim query excludes a
-// node with a running job), and idles between polls otherwise. It waits for
-// boot recovery (ready) before its first claim.
+// claimable for nodes it is not already working (a claim excludes a node with a
+// running job), and idles between polls otherwise. It waits for boot recovery
+// (ready) before its first claim.
 func (s *Service) worker(ctx context.Context, ready <-chan struct{}) {
 	defer s.wg.Done()
 
@@ -124,7 +123,7 @@ func (s *Service) idle(ctx context.Context, ticker *time.Ticker) bool {
 }
 
 // sweeper reconciles stale jobs periodically: it fails jobs whose lease lapsed
-// (a crashed instance's job), leaving live instances' jobs untouched.
+// (a crashed or stalled instance's job), leaving live instances' jobs untouched.
 func (s *Service) sweeper(ctx context.Context) {
 	defer s.wg.Done()
 
@@ -140,29 +139,15 @@ func (s *Service) sweeper(ctx context.Context) {
 	}
 }
 
-// recoverOwned fails the jobs this instance claimed before a restart. It runs
-// once at boot, before workers claim, so it never touches a live job.
-func (s *Service) recoverOwned(ctx context.Context) {
-	ids, err := s.store.FailOwnedToolchainJobs(ctx, s.instanceID)
-	if err != nil {
-		s.logger.Error("toolchain: recover owned jobs", "error", err)
-		return
-	}
-	s.markInterrupted(ctx, ids)
-}
-
-// recoverStale fails running jobs whose lease lapsed.
+// recoverStale fails running jobs whose lease lapsed. Recovery is keyed only on
+// the lease, never on the instance id, so a restarted process can never fail a
+// job another (restart-overlapping) process still owns.
 func (s *Service) recoverStale(ctx context.Context) {
 	ids, err := s.store.FailStaleToolchainJobs(ctx)
 	if err != nil {
 		s.logger.Error("toolchain: recover stale jobs", "error", err)
 		return
 	}
-	s.markInterrupted(ctx, ids)
-}
-
-// markInterrupted records why each recovered job was failed.
-func (s *Service) markInterrupted(ctx context.Context, ids []pgtype.UUID) {
 	for _, id := range ids {
 		jobID := uuidFromPG(id)
 		if err := s.store.AppendToolchainJobLogTail(ctx, sqlc.AppendToolchainJobLogTailParams{
@@ -193,21 +178,32 @@ func (s *Service) run(ctx context.Context, job Job) {
 	s.events.Job(ctx, job) // announce the running transition (status already set)
 
 	log := &jobLog{svc: s, ctx: ctx, job: job}
-	stopLease := s.startLeaseRenewal(ctx, job.ID)
+
+	streamCtx, cancelStream := context.WithTimeout(ctx, installTimeout)
+	defer cancelStream()
+
+	// If the lease lapses (the sweeper recovers the job) the renewer cancels the
+	// stream and flags it, so the worker stops instead of racing a job it no
+	// longer owns.
+	var lostLease atomic.Bool
+	stopLease := s.startLeaseRenewal(ctx, job.ID, func() {
+		lostLease.Store(true)
+		cancelStream()
+	})
 	defer stopLease()
 
 	client, err := s.dialClient(ctx, job.ServerID)
 	if err != nil {
+		if lostLease.Load() {
+			return
+		}
 		log.line("stderr", "failed to reach the node agent: "+err.Error())
 		s.finish(ctx, job, StatusFailed)
 		return
 	}
 	defer func() { _ = client.Close() }()
 
-	streamCtx, cancel := context.WithTimeout(ctx, installTimeout)
-	defer cancel()
 	req := &agentv1.InstallToolRequest{Id: job.ToolID}
-
 	var stream grpc.ServerStreamingClient[agentv1.ToolEvent]
 	if job.Action == ActionUninstall {
 		stream, err = client.UninstallTool(streamCtx, req)
@@ -215,6 +211,9 @@ func (s *Service) run(ctx context.Context, job Job) {
 		stream, err = client.InstallTool(streamCtx, req)
 	}
 	if err != nil {
+		if lostLease.Load() {
+			return
+		}
 		log.line("stderr", "failed to start "+string(job.Action)+": "+err.Error())
 		s.finish(ctx, job, StatusFailed)
 		return
@@ -226,6 +225,10 @@ func (s *Service) run(ctx context.Context, job Job) {
 	for {
 		event, recvErr := stream.Recv()
 		if recvErr != nil {
+			if lostLease.Load() {
+				// Already recovered (or recovered by a peer): nothing to close.
+				return
+			}
 			if errors.Is(recvErr, io.EOF) {
 				break
 			}
@@ -249,12 +252,17 @@ func (s *Service) run(ctx context.Context, job Job) {
 			}
 		}
 	}
+	if lostLease.Load() {
+		return
+	}
 	s.finish(ctx, job, outcome)
 }
 
 // startLeaseRenewal keeps a running job's lease fresh so recovery never fails a
-// live job; it returns a stop function that cancels the renewer and waits.
-func (s *Service) startLeaseRenewal(ctx context.Context, jobID uuid.UUID) func() {
+// live job. When a renew matches no rows the lease lapsed and the job was
+// recovered, so onLost is called once and the renewer stops. It returns a stop
+// function that cancels the renewer and waits.
+func (s *Service) startLeaseRenewal(ctx context.Context, jobID uuid.UUID, onLost func()) func() {
 	leaseCtx, cancel := context.WithCancel(ctx)
 	interval := s.lease / 3
 	if interval < time.Second {
@@ -271,11 +279,19 @@ func (s *Service) startLeaseRenewal(ctx context.Context, jobID uuid.UUID) func()
 			case <-leaseCtx.Done():
 				return
 			case <-ticker.C:
-				if err := s.store.RenewToolchainJobLease(leaseCtx, sqlc.RenewToolchainJobLeaseParams{
+				rows, err := s.store.RenewToolchainJobLease(leaseCtx, sqlc.RenewToolchainJobLeaseParams{
 					ID:           pgUUID(jobID),
+					ClaimedBy:    s.instanceID,
 					LeaseSeconds: int32(s.lease / time.Second),
-				}); err != nil {
+				})
+				if err != nil {
 					s.logger.Warn("toolchain: renew job lease", "error", err, "job_id", jobID.String())
+					continue
+				}
+				if rows == 0 {
+					s.logger.Warn("toolchain: job lease lost, aborting", "job_id", jobID.String())
+					onLost()
+					return
 				}
 			}
 		}
@@ -286,31 +302,42 @@ func (s *Service) startLeaseRenewal(ctx context.Context, jobID uuid.UUID) func()
 	}
 }
 
-// finish closes a job with its terminal status and publishes the transition.
-// The write retries on a context that shutdown does not cancel, so a blip (or a
-// shutdown racing the last line) cannot strand the job as running forever.
+// finish closes a job with its terminal status and publishes the transition. It
+// only matches the row while this instance still owns a running, unexpired
+// lease: a late finish (lease lapsed, job recovered, or a peer's job) is a
+// no-op, so a recovered job is never overwritten. The write retries on a
+// context that shutdown does not cancel, so a blip cannot strand the job.
 func (s *Service) finish(ctx context.Context, job Job, status Status) {
 	finishCtx := context.WithoutCancel(ctx)
+	params := sqlc.FinishToolchainJobParams{
+		ID:        pgUUID(job.ID),
+		ClaimedBy: s.instanceID,
+		Status:    string(status),
+	}
 	var (
 		row sqlc.ToolchainJob
 		err error
 	)
 	for attempt := 0; attempt < 3; attempt++ {
 		attemptCtx, cancel := context.WithTimeout(finishCtx, 5*time.Second)
-		row, err = s.store.FinishToolchainJob(attemptCtx, finishParams(job.ID, status))
+		row, err = s.store.FinishToolchainJob(attemptCtx, params)
 		cancel()
 		if err == nil {
-			break
+			s.events.Job(finishCtx, jobFromRow(row))
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The lease lapsed and the job was recovered, or a peer now owns it:
+			// leave it alone rather than overwrite a terminal state.
+			s.logger.Warn("toolchain: finish skipped, job no longer owned",
+				"job_id", job.ID.String(), "status", string(status))
+			return
 		}
 		s.logger.Warn("toolchain: finish job attempt failed",
 			"error", err, "job_id", job.ID.String(), "attempt", attempt+1)
 		time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
 	}
-	if err != nil {
-		s.logger.Error("toolchain: finish job", "error", err, "job_id", job.ID.String(), "status", string(status))
-		return
-	}
-	s.events.Job(finishCtx, jobFromRow(row))
+	s.logger.Error("toolchain: finish job", "error", err, "job_id", job.ID.String(), "status", string(status))
 }
 
 // jobLog appends job output line by line, capping the persisted size: once the

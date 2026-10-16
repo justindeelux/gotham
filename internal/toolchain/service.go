@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -96,8 +95,7 @@ type Store interface {
 	GetToolchainJobForServer(ctx context.Context, params sqlc.GetToolchainJobForServerParams) (sqlc.ToolchainJob, error)
 	ListToolchainJobsByServer(ctx context.Context, params sqlc.ListToolchainJobsByServerParams) ([]sqlc.ToolchainJob, error)
 	ClaimNextQueuedToolchainJob(ctx context.Context, params sqlc.ClaimNextQueuedToolchainJobParams) (sqlc.ToolchainJob, error)
-	RenewToolchainJobLease(ctx context.Context, params sqlc.RenewToolchainJobLeaseParams) error
-	FailOwnedToolchainJobs(ctx context.Context, claimedBy string) ([]pgtype.UUID, error)
+	RenewToolchainJobLease(ctx context.Context, params sqlc.RenewToolchainJobLeaseParams) (int64, error)
 	FailStaleToolchainJobs(ctx context.Context) ([]pgtype.UUID, error)
 	AppendToolchainJobLog(ctx context.Context, params sqlc.AppendToolchainJobLogParams) error
 	AppendToolchainJobLogTail(ctx context.Context, params sqlc.AppendToolchainJobLogTailParams) error
@@ -116,8 +114,8 @@ var (
 
 // Config wires a Service. Store and Registry are required (NewDefaultService
 // returns nil without a store). Dial may be nil until the mTLS dialer is
-// plugged in; Publisher/RedisAddr default to a Redis publisher, InstanceID to
-// the GOTHAM_INSTANCE_ID env or the host name, Workers to a small pool.
+// plugged in; Publisher/RedisAddr default to a Redis publisher, InstanceID to a
+// random per-process id, Workers to a small pool.
 type Config struct {
 	Store      Store
 	Registry   Registry
@@ -128,8 +126,9 @@ type Config struct {
 	RPCTimeout time.Duration
 	// PollInterval overrides the worker's queue poll (tests use a short one).
 	PollInterval time.Duration
-	// InstanceID identifies this control plane for lease-based recovery. It must
-	// be unique per instance when several share one queue.
+	// InstanceID identifies this process in claimed_by. It is random per process
+	// by default and is only used to scope lease renewal and finish; recovery is
+	// keyed on the lease, never on the id.
 	InstanceID string
 	// Lease overrides how long a claimed job stays owned (tests shorten it).
 	Lease time.Duration
@@ -462,21 +461,12 @@ func (s *Service) wakeWorkers() {
 	}
 }
 
-// instanceIDEnv overrides the lease-recovery instance identity.
-const instanceIDEnv = "GOTHAM_INSTANCE_ID"
-
-// defaultInstanceID resolves the identity this control plane claims jobs under.
-// Several instances sharing one queue set GOTHAM_INSTANCE_ID to a unique value;
-// otherwise the host name is a stable default (the lease still protects a job
-// from another instance's recovery even when two share a host).
+// defaultInstanceID returns a per-process identity for claimed jobs. It is
+// deliberately random: an instance must never be able to fail a job another
+// (possibly restart-overlapping) process still owns, so recovery is keyed only
+// on the lease, not on the instance id.
 func defaultInstanceID() string {
-	if id := strings.TrimSpace(os.Getenv(instanceIDEnv)); id != "" {
-		return id
-	}
-	if host, err := os.Hostname(); err == nil && strings.TrimSpace(host) != "" {
-		return host
-	}
-	return "gotham-control-plane"
+	return uuid.NewString()
 }
 
 // normalizeToolIDs trims, drops empties, and removes duplicates while keeping

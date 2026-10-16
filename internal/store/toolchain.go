@@ -2,11 +2,28 @@ package store
 
 import (
 	"context"
+	"errors"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 )
+
+// runningServerUniqueIndex is the partial unique index that serializes a node's
+// jobs (migration 00055).
+const runningServerUniqueIndex = "toolchain_jobs_running_server_unique"
+
+// isUniqueViolation reports whether err is a Postgres unique-violation (23505),
+// optionally on a specific constraint/index name.
+func isUniqueViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		return false
+	}
+	return constraint == "" || pgErr.ConstraintName == constraint
+}
 
 // Thin wrappers over the generated toolchain-job queries (JUS-176). Store keeps
 // its sqlc handle private, so the toolchain domain package reads and writes the
@@ -33,21 +50,21 @@ func (s *Store) ListToolchainJobsByServer(ctx context.Context, params sqlc.ListT
 }
 
 // ClaimNextQueuedToolchainJob atomically claims the oldest queued job whose
-// node has no running job, recording the claiming instance and a lease.
-// pgx.ErrNoRows means nothing is currently claimable.
+// node has no running job, recording the claiming instance and a lease. A
+// concurrent claim that loses the per-node unique-index race (23505) is a
+// no-op: it reports pgx.ErrNoRows, the same as an empty queue.
 func (s *Store) ClaimNextQueuedToolchainJob(ctx context.Context, params sqlc.ClaimNextQueuedToolchainJobParams) (sqlc.ToolchainJob, error) {
-	return s.queries.ClaimNextQueuedToolchainJob(ctx, params)
+	job, err := s.queries.ClaimNextQueuedToolchainJob(ctx, params)
+	if err != nil && isUniqueViolation(err, runningServerUniqueIndex) {
+		return sqlc.ToolchainJob{}, pgx.ErrNoRows
+	}
+	return job, err
 }
 
-// RenewToolchainJobLease extends a running job's lease.
-func (s *Store) RenewToolchainJobLease(ctx context.Context, params sqlc.RenewToolchainJobLeaseParams) error {
+// RenewToolchainJobLease extends a running job's lease while this instance owns
+// it, returning the number of rows updated (0 = the lease lapsed).
+func (s *Store) RenewToolchainJobLease(ctx context.Context, params sqlc.RenewToolchainJobLeaseParams) (int64, error) {
 	return s.queries.RenewToolchainJobLease(ctx, params)
-}
-
-// FailOwnedToolchainJobs fails running jobs this instance claimed before a
-// restart, returning their ids. It runs once at boot, before any worker starts.
-func (s *Store) FailOwnedToolchainJobs(ctx context.Context, claimedBy string) ([]pgtype.UUID, error) {
-	return s.queries.FailOwnedToolchainJobs(ctx, claimedBy)
 }
 
 // FailStaleToolchainJobs fails running jobs whose lease lapsed, returning their

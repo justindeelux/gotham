@@ -114,8 +114,3 @@ func timeFromPG(v pgtype.Timestamptz) *time.Time {
 func appendLogParams(jobID uuid.UUID, seq int64, stream, line string) sqlc.AppendToolchainJobLogParams {
 	return sqlc.AppendToolchainJobLogParams{JobID: pgUUID(jobID), Seq: seq, Stream: stream, Line: line}
 }
-
-// finishParams builds the sqlc parameters for closing a job.
-func finishParams(id uuid.UUID, status Status) sqlc.FinishToolchainJobParams {
-	return sqlc.FinishToolchainJobParams{ID: pgUUID(id), Status: string(status)}
-}

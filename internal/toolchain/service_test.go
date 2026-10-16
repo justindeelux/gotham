@@ -130,33 +130,15 @@ func (f *fakeStore) ClaimNextQueuedToolchainJob(_ context.Context, p sqlc.ClaimN
 	return sqlc.ToolchainJob{}, pgx.ErrNoRows
 }
 
-func (f *fakeStore) RenewToolchainJobLease(_ context.Context, p sqlc.RenewToolchainJobLeaseParams) error {
+func (f *fakeStore) RenewToolchainJobLease(_ context.Context, p sqlc.RenewToolchainJobLeaseParams) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	job, ok := f.jobs[p.ID.Bytes]
-	if !ok || job.Status != string(StatusRunning) {
-		return nil
+	if !ok || job.Status != string(StatusRunning) || job.ClaimedBy != p.ClaimedBy {
+		return 0, nil
 	}
 	job.LeaseExpiresAt = pgtype.Timestamptz{Time: time.Now().Add(time.Duration(p.LeaseSeconds) * time.Second), Valid: true}
-	return nil
-}
-
-func (f *fakeStore) FailOwnedToolchainJobs(_ context.Context, claimedBy string) ([]pgtype.UUID, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failStaleErr != nil {
-		return nil, f.failStaleErr
-	}
-	var ids []pgtype.UUID
-	for id, job := range f.jobs {
-		if job.Status == string(StatusRunning) && job.ClaimedBy == claimedBy {
-			job.Status = string(StatusFailed)
-			job.FinishedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-			f.finished = append(f.finished, id)
-			ids = append(ids, pgtype.UUID{Bytes: id, Valid: true})
-		}
-	}
-	return ids, nil
+	return 1, nil
 }
 
 func (f *fakeStore) FailStaleToolchainJobs(_ context.Context) ([]pgtype.UUID, error) {
@@ -235,6 +217,11 @@ func (f *fakeStore) FinishToolchainJob(_ context.Context, p sqlc.FinishToolchain
 	if !ok {
 		return sqlc.ToolchainJob{}, pgx.ErrNoRows
 	}
+	// Guard: only the owning instance, while running on an unexpired lease.
+	leased := !job.LeaseExpiresAt.Valid || job.LeaseExpiresAt.Time.After(time.Now())
+	if job.Status != string(StatusRunning) || job.ClaimedBy != p.ClaimedBy || !leased {
+		return sqlc.ToolchainJob{}, pgx.ErrNoRows
+	}
 	job.Status = p.Status
 	job.FinishedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
 	f.finished = append(f.finished, p.ID.Bytes)
@@ -258,6 +245,13 @@ func (f *fakeStore) status(t *testing.T, id uuid.UUID) Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return Status(f.jobs[id].Status)
+}
+
+// job returns a copy of one stored job row.
+func (f *fakeStore) job(id uuid.UUID) sqlc.ToolchainJob {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return *f.jobs[id]
 }
 
 // logText joins the stored log lines of a job.
@@ -288,22 +282,26 @@ func (f *fakeStore) finishOrder() []uuid.UUID {
 }
 
 // seedRunning inserts an already-running job owned by claimedBy with the given
-// lease expiry, simulating a control plane that died (or is still alive).
+// lease expiry (zero means a NULL lease), simulating a control plane that died
+// (or is still alive).
 func (f *fakeStore) seedRunning(serverID uuid.UUID, toolID, claimedBy string, lease time.Time) uuid.UUID {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := uuid.New()
-	f.jobs[id] = &sqlc.ToolchainJob{
-		ID:             pgtype.UUID{Bytes: id, Valid: true},
-		ServerID:       pgtype.UUID{Bytes: serverID, Valid: true},
-		ToolID:         toolID,
-		Action:         string(ActionInstall),
-		Status:         string(StatusRunning),
-		CreatedAt:      f.nextTime(),
-		StartedAt:      pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
-		ClaimedBy:      claimedBy,
-		LeaseExpiresAt: pgtype.Timestamptz{Time: lease, Valid: true},
+	job := &sqlc.ToolchainJob{
+		ID:        pgtype.UUID{Bytes: id, Valid: true},
+		ServerID:  pgtype.UUID{Bytes: serverID, Valid: true},
+		ToolID:    toolID,
+		Action:    string(ActionInstall),
+		Status:    string(StatusRunning),
+		CreatedAt: f.nextTime(),
+		StartedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+		ClaimedBy: claimedBy,
 	}
+	if !lease.IsZero() {
+		job.LeaseExpiresAt = pgtype.Timestamptz{Time: lease, Valid: true}
+	}
+	f.jobs[id] = job
 	f.order = append(f.order, id)
 	return id
 }

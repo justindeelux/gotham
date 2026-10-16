@@ -722,6 +722,98 @@ message UpdateResponse {
   bool rollout = 8;
 }
 
+// ToolService runs on the node agent. The control plane dials it to list the
+// host tools the platform needs and their detected state, and — from a later
+// package on — to install and uninstall them. The whole contract (list,
+// install, uninstall) is defined here so those later packages never touch this
+// file again; the install/uninstall RPCs answer codes.Unimplemented until the
+// installer lands.
+service ToolService {
+  // ListTools returns every catalog entry with its detected state on this node.
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+  // InstallTool installs one catalog tool, streaming the command's output
+  // lines and a final result. Not implemented yet: it answers
+  // codes.Unimplemented.
+  rpc InstallTool(InstallToolRequest) returns (stream ToolEvent);
+  // UninstallTool removes one catalog tool the same way. Not implemented yet:
+  // it answers codes.Unimplemented.
+  rpc UninstallTool(InstallToolRequest) returns (stream ToolEvent);
+}
+
+// ListToolsRequest is empty: the catalog is node-local.
+message ListToolsRequest {}
+
+// ToolInfo is one catalog entry with its state on this node.
+message ToolInfo {
+  // id is the stable catalog handle, e.g. "railpack" or "docker".
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  // category groups entries for display: "build", "runtime" or "network".
+  string category = 4;
+  // installed reports whether the tool was detected on this node.
+  bool installed = 5;
+  // version is the detected version, empty when unknown.
+  string version = 6;
+  // path is the resolved executable path; empty for a tool that is not a
+  // command of its own (the BuildKit container, the systemd units probed
+  // through systemctl) or that is not installed.
+  string path = 7;
+  // installable and uninstallable gate the manager. Both are false for a
+  // detect-only host unit (systemd-networkd/resolved, networkctl) the platform
+  // never installs or removes; docker and systemctl are installable but never
+  // uninstalled.
+  bool installable = 8;
+  bool uninstallable = 9;
+  // needs_root is true when install/uninstall needs root.
+  bool needs_root = 10;
+  // deps are the catalog ids this tool needs to be usable.
+  repeated string deps = 11;
+  // min_version is the minimum version the platform needs (for example git
+  // "2.37"); empty when no minimum is required.
+  string min_version = 12;
+  // version_ok reports whether the detected version meets min_version. It is
+  // true when the tool declares no minimum, and false when a minimum is
+  // declared but the observed version is missing or lower.
+  bool version_ok = 13;
+}
+
+// ListToolsResponse lists the catalog with each entry's detected state.
+message ListToolsResponse {
+  repeated ToolInfo tools = 1;
+}
+
+// InstallToolRequest names the catalog tool to install or uninstall.
+message InstallToolRequest {
+  string id = 1;
+}
+
+// ToolEvent is one message of an install/uninstall stream: an output line, or
+// the final result that closes the stream.
+message ToolEvent {
+  oneof event {
+    ToolOutput output = 1;
+    ToolResult result = 2;
+  }
+}
+
+// ToolOutput is one line of the command's output.
+message ToolOutput {
+  // line is one output line with no trailing newline.
+  string line = 1;
+  // stream names the source: "stdout" or "stderr".
+  string stream = 2;
+}
+
+// ToolResult closes an install/uninstall stream with the command's exit
+// status.
+message ToolResult {
+  // status is a short machine-readable outcome: "succeeded" or "failed".
+  string status = 1;
+  // exit_code is the command's exit code; -1 when it did not run.
+  int32 exit_code = 2;
+}
+
 // ListContainersRequest filters the container list.
 message ListContainersRequest {
   bool all = 1; // include stopped containers

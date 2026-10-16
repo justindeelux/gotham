@@ -312,6 +312,63 @@ func TestBuildImageResponseProtoRoundtrip(t *testing.T) {
 	}
 }
 
+// TestListToolsProtoRoundtrip covers the JUS-174 tool catalog messages.
+func TestListToolsProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	want := &agentv1.ListToolsResponse{
+		Tools: []*agentv1.ToolInfo{{
+			Id:            "git",
+			Name:          "Git",
+			Description:   "Clones application source and commits.",
+			Category:      "build",
+			Installed:     true,
+			Version:       "2.43.0",
+			Path:          "/usr/bin/git",
+			Installable:   true,
+			Uninstallable: true,
+			NeedsRoot:     true,
+			Deps:          []string{"docker"},
+			MinVersion:    "2.37",
+			VersionOk:     true,
+		}},
+	}
+
+	raw, err := proto.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got agentv1.ListToolsResponse
+	if err := proto.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !proto.Equal(want, &got) {
+		t.Fatalf("roundtrip mismatch: want %v, got %v", want, &got)
+	}
+}
+
+// TestToolEventProtoRoundtrip covers the install/uninstall stream message.
+func TestToolEventProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	for name, want := range map[string]*agentv1.ToolEvent{
+		"output": {Event: &agentv1.ToolEvent_Output{Output: &agentv1.ToolOutput{Line: "installing", Stream: "stdout"}}},
+		"result": {Event: &agentv1.ToolEvent_Result{Result: &agentv1.ToolResult{Status: "succeeded", ExitCode: 0}}},
+	} {
+		raw, err := proto.Marshal(want)
+		if err != nil {
+			t.Fatalf("%s marshal: %v", name, err)
+		}
+		var got agentv1.ToolEvent
+		if err := proto.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("%s unmarshal: %v", name, err)
+		}
+		if !proto.Equal(want, &got) {
+			t.Fatalf("%s roundtrip mismatch: want %v, got %v", name, want, &got)
+		}
+	}
+}
+
 func TestBuildServiceBuildImage(t *testing.T) {
 	t.Parallel()
 

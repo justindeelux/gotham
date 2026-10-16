@@ -11,42 +11,55 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const appendToolchainJobLog = `-- name: AppendToolchainJobLog :one
-UPDATE toolchain_jobs
-SET log = log || $2
-WHERE id = $1
-RETURNING id, server_id, tool_id, action, status, log, created_at, started_at, finished_at
+const appendToolchainJobLog = `-- name: AppendToolchainJobLog :exec
+INSERT INTO toolchain_job_logs (job_id, seq, stream, line)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (job_id, seq) DO NOTHING
 `
 
 type AppendToolchainJobLogParams struct {
-	ID  pgtype.UUID `json:"id"`
-	Log string      `json:"log"`
+	JobID  pgtype.UUID `json:"job_id"`
+	Seq    int64       `json:"seq"`
+	Stream string      `json:"stream"`
+	Line   string      `json:"line"`
 }
 
-// Appends one log chunk (the caller supplies the trailing newline) so a viewer
-// that fetches the job sees progress while it is still running.
-func (q *Queries) AppendToolchainJobLog(ctx context.Context, arg AppendToolchainJobLogParams) (ToolchainJob, error) {
-	row := q.db.QueryRow(ctx, appendToolchainJobLog, arg.ID, arg.Log)
-	var i ToolchainJob
-	err := row.Scan(
-		&i.ID,
-		&i.ServerID,
-		&i.ToolID,
-		&i.Action,
-		&i.Status,
-		&i.Log,
-		&i.CreatedAt,
-		&i.StartedAt,
-		&i.FinishedAt,
+// Appends one log line as its own row (the caller supplies the trailing
+// newline), so a chatty install is O(n) small inserts, not O(n^2) rewrites.
+func (q *Queries) AppendToolchainJobLog(ctx context.Context, arg AppendToolchainJobLogParams) error {
+	_, err := q.db.Exec(ctx, appendToolchainJobLog,
+		arg.JobID,
+		arg.Seq,
+		arg.Stream,
+		arg.Line,
 	)
-	return i, err
+	return err
+}
+
+const appendToolchainJobLogTail = `-- name: AppendToolchainJobLogTail :exec
+INSERT INTO toolchain_job_logs (job_id, seq, stream, line)
+SELECT $1, COALESCE(MAX(seq), 0) + 1, $2, $3
+FROM toolchain_job_logs WHERE job_id = $1
+`
+
+type AppendToolchainJobLogTailParams struct {
+	JobID  pgtype.UUID `json:"job_id"`
+	Stream string      `json:"stream"`
+	Line   string      `json:"line"`
+}
+
+// Appends one line after whatever is already logged, letting the recovery and
+// truncation paths add a marker without knowing the current max seq.
+func (q *Queries) AppendToolchainJobLogTail(ctx context.Context, arg AppendToolchainJobLogTailParams) error {
+	_, err := q.db.Exec(ctx, appendToolchainJobLogTail, arg.JobID, arg.Stream, arg.Line)
+	return err
 }
 
 const cancelToolchainJob = `-- name: CancelToolchainJob :one
 UPDATE toolchain_jobs
 SET status = 'canceled', finished_at = now()
 WHERE id = $1 AND status = 'queued'
-RETURNING id, server_id, tool_id, action, status, log, created_at, started_at, finished_at
+RETURNING id, server_id, tool_id, action, status, created_at, started_at, finished_at, claimed_by, lease_expires_at
 `
 
 // Cancels a job only while it is still queued: a running job has already
@@ -61,32 +74,47 @@ func (q *Queries) CancelToolchainJob(ctx context.Context, id pgtype.UUID) (Toolc
 		&i.ToolID,
 		&i.Action,
 		&i.Status,
-		&i.Log,
 		&i.CreatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ClaimedBy,
+		&i.LeaseExpiresAt,
 	)
 	return i, err
 }
 
 const claimNextQueuedToolchainJob = `-- name: ClaimNextQueuedToolchainJob :one
 UPDATE toolchain_jobs
-SET status = 'running', started_at = now()
+SET status = 'running',
+    started_at = now(),
+    claimed_by = $1,
+    lease_expires_at = now() + make_interval(secs => $2::int)
 WHERE id = (
-    SELECT id FROM toolchain_jobs
-    WHERE status = 'queued'
-    ORDER BY created_at, id
+    SELECT j.id FROM toolchain_jobs j
+    WHERE j.status = 'queued'
+      AND NOT EXISTS (
+          SELECT 1 FROM toolchain_jobs r
+          WHERE r.server_id = j.server_id AND r.status = 'running'
+      )
+    ORDER BY j.created_at, j.id
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, server_id, tool_id, action, status, log, created_at, started_at, finished_at
+RETURNING id, server_id, tool_id, action, status, created_at, started_at, finished_at, claimed_by, lease_expires_at
 `
 
-// Atomically claims the oldest queued job across all nodes, marking it running.
-// FOR UPDATE SKIP LOCKED lets several control-plane instances work the same
-// queue without ever claiming one job twice; no rows means the queue is empty.
-func (q *Queries) ClaimNextQueuedToolchainJob(ctx context.Context) (ToolchainJob, error) {
-	row := q.db.QueryRow(ctx, claimNextQueuedToolchainJob)
+type ClaimNextQueuedToolchainJobParams struct {
+	ClaimedBy    string `json:"claimed_by"`
+	LeaseSeconds int32  `json:"lease_seconds"`
+}
+
+// Atomically claims the oldest queued job whose node has no running job
+// (per-node sequential, parallel across nodes), marking it running and
+// recording the claiming instance plus a lease the worker renews. FOR UPDATE
+// SKIP LOCKED lets several control-plane instances work the same queue without
+// claiming one job twice; no rows means nothing is currently claimable.
+func (q *Queries) ClaimNextQueuedToolchainJob(ctx context.Context, arg ClaimNextQueuedToolchainJobParams) (ToolchainJob, error) {
+	row := q.db.QueryRow(ctx, claimNextQueuedToolchainJob, arg.ClaimedBy, arg.LeaseSeconds)
 	var i ToolchainJob
 	err := row.Scan(
 		&i.ID,
@@ -94,10 +122,11 @@ func (q *Queries) ClaimNextQueuedToolchainJob(ctx context.Context) (ToolchainJob
 		&i.ToolID,
 		&i.Action,
 		&i.Status,
-		&i.Log,
 		&i.CreatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ClaimedBy,
+		&i.LeaseExpiresAt,
 	)
 	return i, err
 }
@@ -107,7 +136,7 @@ const createToolchainJob = `-- name: CreateToolchainJob :one
 INSERT INTO toolchain_jobs (server_id, tool_id, action)
 VALUES ($1, $2, $3)
 ON CONFLICT DO NOTHING
-RETURNING id, server_id, tool_id, action, status, log, created_at, started_at, finished_at
+RETURNING id, server_id, tool_id, action, status, created_at, started_at, finished_at, claimed_by, lease_expires_at
 `
 
 type CreateToolchainJobParams struct {
@@ -118,8 +147,9 @@ type CreateToolchainJobParams struct {
 
 // Queries for the persisted tool install/uninstall queue (JUS-176). The
 // control plane only ever moves a job forward: queued -> running -> terminal.
-// Every writer keys on the row id, and ClaimNextQueuedToolchainJob is the one
-// ordered, concurrency-safe read that hands a worker its next job.
+// Every writer keys on the row id, ClaimNextQueuedToolchainJob is the ordered,
+// concurrency-safe read that hands a worker its next job, and the job log lives
+// in the append-only toolchain_job_logs child table.
 // Enqueues one job. The partial unique index toolchain_jobs_active_unique
 // makes a second active job for the same (server, tool, action) conflict and
 // return no row, so the caller reports the tool as "skipped" instead of
@@ -133,26 +163,59 @@ func (q *Queries) CreateToolchainJob(ctx context.Context, arg CreateToolchainJob
 		&i.ToolID,
 		&i.Action,
 		&i.Status,
-		&i.Log,
 		&i.CreatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ClaimedBy,
+		&i.LeaseExpiresAt,
 	)
 	return i, err
 }
 
-const failInterruptedToolchainJobs = `-- name: FailInterruptedToolchainJobs :many
+const failOwnedToolchainJobs = `-- name: FailOwnedToolchainJobs :many
 UPDATE toolchain_jobs
-SET status = 'failed', finished_at = now(), log = log || $1
-WHERE status = 'running'
+SET status = 'failed', finished_at = now()
+WHERE status = 'running' AND claimed_by = $1
 RETURNING id
 `
 
-// Boot recovery: a job left running belongs to a control plane that died
-// mid-install, so it is marked failed with an explicit reason rather than
-// silently retried (retrying an unknown half-finished install is unsafe).
-func (q *Queries) FailInterruptedToolchainJobs(ctx context.Context, log string) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, failInterruptedToolchainJobs, log)
+// Boot recovery: fails running jobs this instance claimed before a restart. It
+// runs once, before any worker starts, so it can never touch a job another live
+// instance is working.
+func (q *Queries) FailOwnedToolchainJobs(ctx context.Context, claimedBy string) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, failOwnedToolchainJobs, claimedBy)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const failStaleToolchainJobs = `-- name: FailStaleToolchainJobs :many
+UPDATE toolchain_jobs
+SET status = 'failed', finished_at = now()
+WHERE status = 'running'
+  AND (lease_expires_at IS NULL OR lease_expires_at < now())
+RETURNING id
+`
+
+// Periodic recovery: fails running jobs whose lease lapsed (a crashed
+// instance's job). A live instance renews its lease, so this never fails live
+// work, and two instances never fail each other's. Retrying an unknown
+// half-finished install is unsafe, so these are failed, not requeued.
+func (q *Queries) FailStaleToolchainJobs(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, failStaleToolchainJobs)
 	if err != nil {
 		return nil, err
 	}
@@ -173,20 +236,19 @@ func (q *Queries) FailInterruptedToolchainJobs(ctx context.Context, log string) 
 
 const finishToolchainJob = `-- name: FinishToolchainJob :one
 UPDATE toolchain_jobs
-SET status = $2, log = log || $3, finished_at = now()
+SET status = $2, finished_at = now()
 WHERE id = $1
-RETURNING id, server_id, tool_id, action, status, log, created_at, started_at, finished_at
+RETURNING id, server_id, tool_id, action, status, created_at, started_at, finished_at, claimed_by, lease_expires_at
 `
 
 type FinishToolchainJobParams struct {
 	ID     pgtype.UUID `json:"id"`
 	Status string      `json:"status"`
-	Log    string      `json:"log"`
 }
 
-// Closes a job with its terminal status and an optional final log chunk.
+// Closes a job with its terminal status.
 func (q *Queries) FinishToolchainJob(ctx context.Context, arg FinishToolchainJobParams) (ToolchainJob, error) {
-	row := q.db.QueryRow(ctx, finishToolchainJob, arg.ID, arg.Status, arg.Log)
+	row := q.db.QueryRow(ctx, finishToolchainJob, arg.ID, arg.Status)
 	var i ToolchainJob
 	err := row.Scan(
 		&i.ID,
@@ -194,16 +256,17 @@ func (q *Queries) FinishToolchainJob(ctx context.Context, arg FinishToolchainJob
 		&i.ToolID,
 		&i.Action,
 		&i.Status,
-		&i.Log,
 		&i.CreatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ClaimedBy,
+		&i.LeaseExpiresAt,
 	)
 	return i, err
 }
 
 const getToolchainJobForServer = `-- name: GetToolchainJobForServer :one
-SELECT id, server_id, tool_id, action, status, log, created_at, started_at, finished_at FROM toolchain_jobs WHERE id = $1 AND server_id = $2
+SELECT id, server_id, tool_id, action, status, created_at, started_at, finished_at, claimed_by, lease_expires_at FROM toolchain_jobs WHERE id = $1 AND server_id = $2
 `
 
 type GetToolchainJobForServerParams struct {
@@ -222,16 +285,57 @@ func (q *Queries) GetToolchainJobForServer(ctx context.Context, arg GetToolchain
 		&i.ToolID,
 		&i.Action,
 		&i.Status,
-		&i.Log,
 		&i.CreatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.ClaimedBy,
+		&i.LeaseExpiresAt,
 	)
 	return i, err
 }
 
+const listToolchainJobLogs = `-- name: ListToolchainJobLogs :many
+SELECT seq, stream, line FROM toolchain_job_logs
+WHERE job_id = $1 AND seq > $2
+ORDER BY seq
+LIMIT $3
+`
+
+type ListToolchainJobLogsParams struct {
+	JobID pgtype.UUID `json:"job_id"`
+	Seq   int64       `json:"seq"`
+	Limit int32       `json:"limit"`
+}
+
+type ListToolchainJobLogsRow struct {
+	Seq    int64  `json:"seq"`
+	Stream string `json:"stream"`
+	Line   string `json:"line"`
+}
+
+// A page of a job's log, oldest first, for incremental fetches (seq > after).
+func (q *Queries) ListToolchainJobLogs(ctx context.Context, arg ListToolchainJobLogsParams) ([]ListToolchainJobLogsRow, error) {
+	rows, err := q.db.Query(ctx, listToolchainJobLogs, arg.JobID, arg.Seq, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListToolchainJobLogsRow{}
+	for rows.Next() {
+		var i ListToolchainJobLogsRow
+		if err := rows.Scan(&i.Seq, &i.Stream, &i.Line); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listToolchainJobsByServer = `-- name: ListToolchainJobsByServer :many
-SELECT id, server_id, tool_id, action, status, log, created_at, started_at, finished_at FROM toolchain_jobs
+SELECT id, server_id, tool_id, action, status, created_at, started_at, finished_at, claimed_by, lease_expires_at FROM toolchain_jobs
 WHERE server_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT $2
@@ -242,6 +346,8 @@ type ListToolchainJobsByServerParams struct {
 	Limit    int32       `json:"limit"`
 }
 
+// The job rows only: the log is never loaded here, so listing a node's jobs
+// stays cheap no matter how chatty an install was.
 func (q *Queries) ListToolchainJobsByServer(ctx context.Context, arg ListToolchainJobsByServerParams) ([]ToolchainJob, error) {
 	rows, err := q.db.Query(ctx, listToolchainJobsByServer, arg.ServerID, arg.Limit)
 	if err != nil {
@@ -257,10 +363,11 @@ func (q *Queries) ListToolchainJobsByServer(ctx context.Context, arg ListToolcha
 			&i.ToolID,
 			&i.Action,
 			&i.Status,
-			&i.Log,
 			&i.CreatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.ClaimedBy,
+			&i.LeaseExpiresAt,
 		); err != nil {
 			return nil, err
 		}
@@ -270,4 +377,22 @@ func (q *Queries) ListToolchainJobsByServer(ctx context.Context, arg ListToolcha
 		return nil, err
 	}
 	return items, nil
+}
+
+const renewToolchainJobLease = `-- name: RenewToolchainJobLease :exec
+UPDATE toolchain_jobs
+SET lease_expires_at = now() + make_interval(secs => $2::int)
+WHERE id = $1 AND status = 'running'
+`
+
+type RenewToolchainJobLeaseParams struct {
+	ID           pgtype.UUID `json:"id"`
+	LeaseSeconds int32       `json:"lease_seconds"`
+}
+
+// Extends a running job's lease. Called periodically by the worker so a live
+// instance's job is never mistaken for a crashed one.
+func (q *Queries) RenewToolchainJobLease(ctx context.Context, arg RenewToolchainJobLeaseParams) error {
+	_, err := q.db.Exec(ctx, renewToolchainJobLease, arg.ID, arg.LeaseSeconds)
+	return err
 }

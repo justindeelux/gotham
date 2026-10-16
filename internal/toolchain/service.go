@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -29,12 +30,26 @@ const (
 	// installTimeout bounds a whole install/uninstall stream, which is not a
 	// single RPC: an apt install can legitimately run for minutes.
 	installTimeout = 30 * time.Minute
-	// defaultPollInterval is how often the worker re-checks the queue when no
+	// defaultPollInterval is how often a worker re-checks the queue when no
 	// enqueue has woken it (multi-instance control planes, or a lost wakeup).
 	defaultPollInterval = time.Second
 	// defaultListLimit / maxListLimit bound the job list.
 	defaultListLimit = 100
 	maxListLimit     = 500
+	// defaultWorkers is the worker pool size: nodes run in parallel, and the
+	// per-node claim keeps one node's jobs sequential.
+	defaultWorkers = 4
+	// defaultLease is how long a claimed job stays owned before another instance
+	// may recover it. The worker renews it every lease/3 while running.
+	defaultLease = 90 * time.Second
+	// defaultSweepInterval is how often the worker reconciles stale jobs.
+	defaultSweepInterval = 30 * time.Second
+	// maxJobLogBytes caps a job's persisted log; beyond it the worker stops
+	// appending and records one truncation marker. maxLogPage bounds one log
+	// fetch so a client pages with ?after=seq instead of pulling everything.
+	maxJobLogBytes  = 256 << 10
+	maxLogPage      = 2000
+	logTruncatedMsg = "[log truncated at 256 KiB]"
 )
 
 // ToolchainService is the slice of the domain the HTTP layer depends on. It
@@ -47,8 +62,9 @@ type ToolchainService interface {
 	Enqueue(ctx context.Context, serverID uuid.UUID, action Action, toolIDs []string) (EnqueueResult, error)
 	// Cancel cancels one queued job (a running or terminal job is a conflict).
 	Cancel(ctx context.Context, serverID, jobID uuid.UUID) (Job, error)
-	// Get returns one job including its persisted log.
-	Get(ctx context.Context, serverID, jobID uuid.UUID) (Job, error)
+	// Get returns one job plus a page of its log (lines with seq > after, at
+	// most maxLogPage), so the job list and realtime frames never carry the log.
+	Get(ctx context.Context, serverID, jobID uuid.UUID, after int64) (JobDetail, error)
 	// List returns a node's jobs, newest first.
 	List(ctx context.Context, serverID uuid.UUID, limit int) ([]Job, error)
 }
@@ -79,11 +95,15 @@ type Store interface {
 	CreateToolchainJob(ctx context.Context, params sqlc.CreateToolchainJobParams) (sqlc.ToolchainJob, error)
 	GetToolchainJobForServer(ctx context.Context, params sqlc.GetToolchainJobForServerParams) (sqlc.ToolchainJob, error)
 	ListToolchainJobsByServer(ctx context.Context, params sqlc.ListToolchainJobsByServerParams) ([]sqlc.ToolchainJob, error)
-	ClaimNextQueuedToolchainJob(ctx context.Context) (sqlc.ToolchainJob, error)
-	AppendToolchainJobLog(ctx context.Context, params sqlc.AppendToolchainJobLogParams) (sqlc.ToolchainJob, error)
+	ClaimNextQueuedToolchainJob(ctx context.Context, params sqlc.ClaimNextQueuedToolchainJobParams) (sqlc.ToolchainJob, error)
+	RenewToolchainJobLease(ctx context.Context, params sqlc.RenewToolchainJobLeaseParams) error
+	FailOwnedToolchainJobs(ctx context.Context, claimedBy string) ([]pgtype.UUID, error)
+	FailStaleToolchainJobs(ctx context.Context) ([]pgtype.UUID, error)
+	AppendToolchainJobLog(ctx context.Context, params sqlc.AppendToolchainJobLogParams) error
+	AppendToolchainJobLogTail(ctx context.Context, params sqlc.AppendToolchainJobLogTailParams) error
+	ListToolchainJobLogs(ctx context.Context, params sqlc.ListToolchainJobLogsParams) ([]sqlc.ListToolchainJobLogsRow, error)
 	FinishToolchainJob(ctx context.Context, params sqlc.FinishToolchainJobParams) (sqlc.ToolchainJob, error)
 	CancelToolchainJob(ctx context.Context, id pgtype.UUID) (sqlc.ToolchainJob, error)
-	FailInterruptedToolchainJobs(ctx context.Context, reason string) ([]pgtype.UUID, error)
 }
 
 // Compile-time checks: the production store is a Store, and *Service is the
@@ -96,7 +116,8 @@ var (
 
 // Config wires a Service. Store and Registry are required (NewDefaultService
 // returns nil without a store). Dial may be nil until the mTLS dialer is
-// plugged in; Publisher/RedisAddr default to a Redis publisher.
+// plugged in; Publisher/RedisAddr default to a Redis publisher, InstanceID to
+// the GOTHAM_INSTANCE_ID env or the host name, Workers to a small pool.
 type Config struct {
 	Store      Store
 	Registry   Registry
@@ -107,10 +128,17 @@ type Config struct {
 	RPCTimeout time.Duration
 	// PollInterval overrides the worker's queue poll (tests use a short one).
 	PollInterval time.Duration
+	// InstanceID identifies this control plane for lease-based recovery. It must
+	// be unique per instance when several share one queue.
+	InstanceID string
+	// Lease overrides how long a claimed job stays owned (tests shorten it).
+	Lease time.Duration
+	// Workers overrides the pool size (nodes run in parallel up to this many).
+	Workers int
 }
 
-// Service is the control-plane toolchain domain service: the queue API plus the
-// sequential worker that drives it.
+// Service is the control-plane toolchain domain service: the queue API plus a
+// pool of workers that drive node agents.
 type Service struct {
 	store     Store
 	registry  Registry
@@ -121,8 +149,13 @@ type Service struct {
 
 	rpcTimeout   time.Duration
 	pollInterval time.Duration
+	instanceID   string
+	lease        time.Duration
+	workers      int
+	// maxLogBytes caps a job's persisted log (a field so tests can shrink it).
+	maxLogBytes int
 
-	// wake nudges the worker as soon as a job is enqueued, so a job starts
+	// wake nudges idle workers as soon as a job is enqueued, so a job starts
 	// without waiting for the poll tick and tests do not have to sleep.
 	wake chan struct{}
 
@@ -159,6 +192,18 @@ func NewService(cfg Config) *Service {
 	if poll <= 0 {
 		poll = defaultPollInterval
 	}
+	lease := cfg.Lease
+	if lease <= 0 {
+		lease = defaultLease
+	}
+	workers := cfg.Workers
+	if workers <= 0 {
+		workers = defaultWorkers
+	}
+	instanceID := strings.TrimSpace(cfg.InstanceID)
+	if instanceID == "" {
+		instanceID = defaultInstanceID()
+	}
 	return &Service{
 		store:        cfg.Store,
 		registry:     cfg.Registry,
@@ -168,7 +213,11 @@ func NewService(cfg Config) *Service {
 		logger:       logger,
 		rpcTimeout:   rpcTimeout,
 		pollInterval: poll,
-		wake:         make(chan struct{}, 1),
+		instanceID:   instanceID,
+		lease:        lease,
+		workers:      workers,
+		maxLogBytes:  maxJobLogBytes,
+		wake:         make(chan struct{}, workers),
 	}
 }
 
@@ -262,7 +311,7 @@ func (s *Service) Enqueue(ctx context.Context, serverID uuid.UUID, action Action
 		result.Jobs = append(result.Jobs, job)
 		s.events.Job(ctx, job)
 	}
-	s.wakeWorker()
+	s.wakeWorkers()
 	return result, nil
 }
 
@@ -298,22 +347,44 @@ func (s *Service) Cancel(ctx context.Context, serverID, jobID uuid.UUID) (Job, e
 	return job, nil
 }
 
-// Get returns one job including its persisted log.
-func (s *Service) Get(ctx context.Context, serverID, jobID uuid.UUID) (Job, error) {
+// Get returns one job plus a page of its log (lines with seq > after). A job
+// owned by another node, or on a node the caller may not see, answers
+// ErrNotFound.
+func (s *Service) Get(ctx context.Context, serverID, jobID uuid.UUID, after int64) (JobDetail, error) {
 	if err := s.resolve(ctx, serverID, false); err != nil {
-		return Job{}, err
+		return JobDetail{}, err
 	}
 	row, err := s.store.GetToolchainJobForServer(ctx, sqlc.GetToolchainJobForServerParams{
 		ID:       pgUUID(jobID),
 		ServerID: pgUUID(serverID),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Job{}, ErrNotFound
+		return JobDetail{}, ErrNotFound
 	}
 	if err != nil {
-		return Job{}, fmt.Errorf("toolchain: load job: %w", err)
+		return JobDetail{}, fmt.Errorf("toolchain: load job: %w", err)
 	}
-	return jobFromRow(row), nil
+	if after < 0 {
+		after = 0
+	}
+	lines, err := s.store.ListToolchainJobLogs(ctx, sqlc.ListToolchainJobLogsParams{
+		JobID: pgUUID(jobID),
+		Seq:   after,
+		Limit: maxLogPage,
+	})
+	if err != nil {
+		return JobDetail{}, fmt.Errorf("toolchain: load job log: %w", err)
+	}
+	detail := JobDetail{Job: jobFromRow(row), NextSeq: after}
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString(l.Line)
+		if l.Seq > detail.NextSeq {
+			detail.NextSeq = l.Seq
+		}
+	}
+	detail.Log = b.String()
+	return detail, nil
 }
 
 // List returns a node's jobs, newest first. A limit of zero uses the default.
@@ -379,12 +450,33 @@ func (s *Service) dialClient(ctx context.Context, serverID uuid.UUID) (AgentConn
 	return conn, nil
 }
 
-// wakeWorker nudges the worker without blocking when one is already pending.
-func (s *Service) wakeWorker() {
-	select {
-	case s.wake <- struct{}{}:
-	default:
+// wakeWorkers nudges every idle worker (a full send buffer means they are
+// already awake) so an enqueue does not wait for the poll tick.
+func (s *Service) wakeWorkers() {
+	for i := 0; i < cap(s.wake); i++ {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+			return
+		}
 	}
+}
+
+// instanceIDEnv overrides the lease-recovery instance identity.
+const instanceIDEnv = "GOTHAM_INSTANCE_ID"
+
+// defaultInstanceID resolves the identity this control plane claims jobs under.
+// Several instances sharing one queue set GOTHAM_INSTANCE_ID to a unique value;
+// otherwise the host name is a stable default (the lease still protects a job
+// from another instance's recovery even when two share a host).
+func defaultInstanceID() string {
+	if id := strings.TrimSpace(os.Getenv(instanceIDEnv)); id != "" {
+		return id
+	}
+	if host, err := os.Hostname(); err == nil && strings.TrimSpace(host) != "" {
+		return host
+	}
+	return "gotham-control-plane"
 }
 
 // normalizeToolIDs trims, drops empties, and removes duplicates while keeping

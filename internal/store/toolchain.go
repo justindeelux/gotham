@@ -27,22 +27,51 @@ func (s *Store) GetToolchainJobForServer(ctx context.Context, params sqlc.GetToo
 }
 
 // ListToolchainJobsByServer returns up to limit of a node's jobs, newest first.
+// It never loads job logs.
 func (s *Store) ListToolchainJobsByServer(ctx context.Context, params sqlc.ListToolchainJobsByServerParams) ([]sqlc.ToolchainJob, error) {
 	return s.queries.ListToolchainJobsByServer(ctx, params)
 }
 
-// ClaimNextQueuedToolchainJob atomically marks the oldest queued job running
-// and returns it. pgx.ErrNoRows means the queue is empty.
-func (s *Store) ClaimNextQueuedToolchainJob(ctx context.Context) (sqlc.ToolchainJob, error) {
-	return s.queries.ClaimNextQueuedToolchainJob(ctx)
+// ClaimNextQueuedToolchainJob atomically claims the oldest queued job whose
+// node has no running job, recording the claiming instance and a lease.
+// pgx.ErrNoRows means nothing is currently claimable.
+func (s *Store) ClaimNextQueuedToolchainJob(ctx context.Context, params sqlc.ClaimNextQueuedToolchainJobParams) (sqlc.ToolchainJob, error) {
+	return s.queries.ClaimNextQueuedToolchainJob(ctx, params)
 }
 
-// AppendToolchainJobLog appends one log chunk to a job.
-func (s *Store) AppendToolchainJobLog(ctx context.Context, params sqlc.AppendToolchainJobLogParams) (sqlc.ToolchainJob, error) {
+// RenewToolchainJobLease extends a running job's lease.
+func (s *Store) RenewToolchainJobLease(ctx context.Context, params sqlc.RenewToolchainJobLeaseParams) error {
+	return s.queries.RenewToolchainJobLease(ctx, params)
+}
+
+// FailOwnedToolchainJobs fails running jobs this instance claimed before a
+// restart, returning their ids. It runs once at boot, before any worker starts.
+func (s *Store) FailOwnedToolchainJobs(ctx context.Context, claimedBy string) ([]pgtype.UUID, error) {
+	return s.queries.FailOwnedToolchainJobs(ctx, claimedBy)
+}
+
+// FailStaleToolchainJobs fails running jobs whose lease lapsed, returning their
+// ids.
+func (s *Store) FailStaleToolchainJobs(ctx context.Context) ([]pgtype.UUID, error) {
+	return s.queries.FailStaleToolchainJobs(ctx)
+}
+
+// AppendToolchainJobLog appends one log line as its own row.
+func (s *Store) AppendToolchainJobLog(ctx context.Context, params sqlc.AppendToolchainJobLogParams) error {
 	return s.queries.AppendToolchainJobLog(ctx, params)
 }
 
-// FinishToolchainJob closes a job with its terminal status and a final log chunk.
+// AppendToolchainJobLogTail appends one log line after whatever is logged.
+func (s *Store) AppendToolchainJobLogTail(ctx context.Context, params sqlc.AppendToolchainJobLogTailParams) error {
+	return s.queries.AppendToolchainJobLogTail(ctx, params)
+}
+
+// ListToolchainJobLogs returns a page of a job's log, oldest first.
+func (s *Store) ListToolchainJobLogs(ctx context.Context, params sqlc.ListToolchainJobLogsParams) ([]sqlc.ListToolchainJobLogsRow, error) {
+	return s.queries.ListToolchainJobLogs(ctx, params)
+}
+
+// FinishToolchainJob closes a job with its terminal status.
 func (s *Store) FinishToolchainJob(ctx context.Context, params sqlc.FinishToolchainJobParams) (sqlc.ToolchainJob, error) {
 	return s.queries.FinishToolchainJob(ctx, params)
 }
@@ -51,10 +80,4 @@ func (s *Store) FinishToolchainJob(ctx context.Context, params sqlc.FinishToolch
 // untouched, so this returns pgx.ErrNoRows for a job that cannot be cancelled.
 func (s *Store) CancelToolchainJob(ctx context.Context, id pgtype.UUID) (sqlc.ToolchainJob, error) {
 	return s.queries.CancelToolchainJob(ctx, id)
-}
-
-// FailInterruptedToolchainJobs marks every running job failed with reason,
-// returning the affected ids. It runs once on boot.
-func (s *Store) FailInterruptedToolchainJobs(ctx context.Context, reason string) ([]pgtype.UUID, error) {
-	return s.queries.FailInterruptedToolchainJobs(ctx, reason)
 }

@@ -16,22 +16,23 @@ import (
 // The toolchain routes live under the servers API and ride the same team chain
 // as server management: reads need the read scope, enqueue/cancel need the
 // deploy scope and an owner/admin role, and the domain re-checks the node's
-// team (so a foreign node answers not-found). They are mounted only when a
-// toolchain service is wired (a database and an agent dialer), matching the
-// other optional resource surfaces.
+// team (so a foreign node answers not-found). They mount whenever a database is
+// wired; the agent dialer is optional, so a build without it still serves job
+// reads while agent calls answer 502.
 
 // toolDialer is the mTLS ToolService dial implemented by *servers.ServerService.
-// The HTTP layer type-asserts its server registry to this interface, so tests
-// that pass a fake registry leave the dialer unwired (and the tool routes are
-// then still mounted for job reads, but agent calls fail).
+// The HTTP layer type-asserts its server registry to this interface, so a server
+// built with a fake registry simply leaves the dialer unwired: the job routes
+// still mount, but a catalog or enqueue call answers agent-unavailable.
 type toolDialer interface {
 	DialToolClient(ctx context.Context, id uuid.UUID, opts ...servers.DockerDialOption) (*servers.ToolClient, error)
 }
 
 // toolchainService builds the toolchain domain service for the HTTP wiring from
-// the shared database and the agent dialer. It returns nil (so the routes are
-// not mounted) when there is no database. The node registry is passed for the
-// per-node team authorization.
+// the shared database and the (optional) agent dialer. It returns nil, so the
+// routes are not mounted, when there is no database. The node registry is passed
+// for the per-node team authorization; the instance id defaults to the host name
+// (see GOTHAM_INSTANCE_ID) for lease-based job recovery.
 func (s *Server) toolchainService() *toolchain.Service {
 	if s.persistence == nil {
 		return nil
@@ -60,9 +61,18 @@ type toolchainJobsEnvelope struct {
 	Jobs []toolchain.Job `json:"jobs"`
 }
 
-// toolchainJobEnvelope wraps a single job (get and cancel).
+// toolchainJobEnvelope wraps a single job (cancel).
 type toolchainJobEnvelope struct {
 	Job toolchain.Job `json:"job"`
+}
+
+// toolchainJobDetailEnvelope is the GET .../jobs/{jobID} body: the job plus a
+// page of its log. NextSeq is the highest seq returned, so a client polls
+// ?after=NextSeq for the rest instead of pulling the whole log every time.
+type toolchainJobDetailEnvelope struct {
+	Job     toolchain.Job `json:"job"`
+	Log     string        `json:"log"`
+	NextSeq int64         `json:"next_seq"`
 }
 
 // enqueueJobsRequest is the POST .../toolchain/jobs body: a multi-select of
@@ -153,19 +163,24 @@ func (s *Server) handleEnqueueToolchainJobs(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusCreated, result)
 }
 
-// handleGetToolchainJob returns one job including its persisted log
-// (GET /api/v1/servers/{id}/toolchain/jobs/{jobID}).
+// handleGetToolchainJob returns one job plus a page of its log
+// (GET /api/v1/servers/{id}/toolchain/jobs/{jobID}). ?after=N returns only log
+// lines with seq > N, so a client tails a running job incrementally.
 func (s *Server) handleGetToolchainJob(w http.ResponseWriter, r *http.Request) {
 	serverID, jobID, ok := toolchainJobParams(w, r)
 	if !ok {
 		return
 	}
-	job, err := s.toolchain.Get(r.Context(), serverID, jobID)
+	after, ok := parseAfterQuery(w, r)
+	if !ok {
+		return
+	}
+	detail, err := s.toolchain.Get(r.Context(), serverID, jobID, after)
 	if err != nil {
 		s.writeToolchainError(w, "get job", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toolchainJobEnvelope{Job: job})
+	writeJSON(w, http.StatusOK, toolchainJobDetailEnvelope{Job: detail.Job, Log: detail.Log, NextSeq: detail.NextSeq})
 }
 
 // handleCancelToolchainJob cancels one queued job
@@ -226,4 +241,19 @@ func parsePositiveInt(raw string) (int, error) {
 		return 0, errors.New("not a positive integer")
 	}
 	return n, nil
+}
+
+// parseAfterQuery reads the optional ?after= log cursor (a non-negative seq);
+// absent means 0.
+func parseAfterQuery(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	raw := r.URL.Query().Get("after")
+	if raw == "" {
+		return 0, true
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid after"})
+		return 0, false
+	}
+	return n, true
 }

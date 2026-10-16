@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,10 +16,10 @@ import (
 )
 
 // TestToolchainQueueContract exercises the generated toolchain-job queries
-// against Postgres: the active-job de-dupe, ordered claiming, cancel scoped to
-// queued jobs, and boot recovery scoped to running jobs. These are the SQL
-// semantics the worker relies on, pinned separately from the worker's own unit
-// tests.
+// against Postgres: the active-job de-dupe, oldest-first per-node claiming,
+// cancel scoped to queued jobs, lease-scoped recovery, and the append-only log.
+// These are the SQL semantics the worker relies on, pinned separately from the
+// worker's own unit tests.
 func TestToolchainQueueContract(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -42,35 +41,37 @@ func TestToolchainQueueContract(t *testing.T) {
 	}
 	st := store.New(pool)
 
-	server, err := st.CreateServer(ctx, sqlc.CreateServerParams{
-		Name:    fmt.Sprintf("jus176-node-%d", time.Now().UnixNano()),
-		Ip:      "127.0.0.1",
-		Port:    22,
-		SshUser: "root",
-	})
-	if err != nil {
-		t.Fatalf("CreateServer: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-		if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", server.ID); err != nil {
-			t.Logf("cleanup server: %v", err)
+	newServer := func() sqlc.Server {
+		t.Helper()
+		server, err := st.CreateServer(ctx, sqlc.CreateServerParams{
+			Name:    fmt.Sprintf("jus176-node-%d", time.Now().UnixNano()),
+			Ip:      "127.0.0.1",
+			Port:    22,
+			SshUser: "root",
+		})
+		if err != nil {
+			t.Fatalf("CreateServer: %v", err)
 		}
-	})
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			if _, err := pool.Exec(cleanupCtx, "DELETE FROM servers WHERE id = $1", server.ID); err != nil {
+				t.Logf("cleanup server: %v", err)
+			}
+		})
+		return server
+	}
 
-	enqueue := func(tool, action string, at time.Time) sqlc.ToolchainJob {
+	enqueue := func(serverID pgtype.UUID, tool, action string, at time.Time) sqlc.ToolchainJob {
 		t.Helper()
 		job, err := st.CreateToolchainJob(ctx, sqlc.CreateToolchainJobParams{
-			ServerID: server.ID,
+			ServerID: serverID,
 			ToolID:   tool,
 			Action:   action,
 		})
 		if err != nil {
 			t.Fatalf("CreateToolchainJob(%s/%s): %v", tool, action, err)
 		}
-		// Pin created_at so the ordering assertion does not depend on clock
-		// resolution between two inserts.
 		if _, err := pool.Exec(ctx, "UPDATE toolchain_jobs SET created_at = $2 WHERE id = $1", job.ID, at); err != nil {
 			t.Fatalf("pin created_at: %v", err)
 		}
@@ -78,54 +79,70 @@ func TestToolchainQueueContract(t *testing.T) {
 		return job
 	}
 
+	claim := func(instance string) sqlc.ToolchainJob {
+		t.Helper()
+		job, err := st.ClaimNextQueuedToolchainJob(ctx, sqlc.ClaimNextQueuedToolchainJobParams{
+			ClaimedBy:    instance,
+			LeaseSeconds: 90,
+		})
+		if err != nil {
+			t.Fatalf("ClaimNextQueuedToolchainJob: %v", err)
+		}
+		return job
+	}
+
 	base := time.Now().UTC().Truncate(time.Second)
+	serverA, serverB := newServer(), newServer()
+	serverC, serverD := newServer(), newServer()
 
 	// Active de-dupe: a second active job for the same node+tool+action is a
-	// no-op (no rows). A different action is a distinct job, and re-enqueuing is
-	// allowed once the first job is terminal (here, cancelled).
-	superseded := enqueue("docker", "install", base)
+	// no-op; another action is a distinct job; re-enqueue is allowed once the
+	// first is terminal.
+	superseded := enqueue(serverA.ID, "docker", "install", base)
 	if _, err := st.CreateToolchainJob(ctx, sqlc.CreateToolchainJobParams{
-		ServerID: server.ID, ToolID: "docker", Action: "install",
+		ServerID: serverA.ID, ToolID: "docker", Action: "install",
 	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("duplicate active job err = %v, want pgx.ErrNoRows", err)
 	}
 	if _, err := st.CancelToolchainJob(ctx, superseded.ID); err != nil {
 		t.Fatalf("cancel superseded: %v", err)
 	}
-	reinstall := enqueue("docker", "install", base.Add(time.Second))
-	uninstall := enqueue("docker", "uninstall", base.Add(2*time.Second))
-	railpack := enqueue("railpack", "install", base.Add(3*time.Second))
-	git := enqueue("git", "install", base.Add(4*time.Second))
+	a1 := enqueue(serverA.ID, "docker", "install", base.Add(time.Second))
+	a2 := enqueue(serverA.ID, "git", "install", base.Add(2*time.Second))
+	b1 := enqueue(serverB.ID, "railpack", "install", base.Add(3*time.Second))
 
-	// Claiming is oldest-first.
-	wantOrder := []uuid.UUID{
-		uuid.UUID(reinstall.ID.Bytes),
-		uuid.UUID(uninstall.ID.Bytes),
-		uuid.UUID(railpack.ID.Bytes),
-		uuid.UUID(git.ID.Bytes),
+	// Oldest-first, and per-node sequential: after claiming A's first job, A is
+	// skipped (it has a running job) so B's job is claimed next; A's second job
+	// waits until A's first finishes.
+	first := claim("inst-1")
+	if uuid.UUID(first.ID.Bytes) != uuid.UUID(a1.ID.Bytes) {
+		t.Fatalf("first claim = %s, want a1", uuid.UUID(first.ID.Bytes))
 	}
-	for _, want := range wantOrder {
-		claimed, err := st.ClaimNextQueuedToolchainJob(ctx)
-		if err != nil {
-			t.Fatalf("ClaimNextQueuedToolchainJob: %v", err)
-		}
-		if got := uuid.UUID(claimed.ID.Bytes); got != want {
-			t.Fatalf("claimed %s, want %s (queue not oldest-first)", got, want)
-		}
-		if claimed.Status != "running" || !claimed.StartedAt.Valid {
-			t.Fatalf("claimed job not running/started: %+v", claimed)
-		}
+	second := claim("inst-1")
+	if uuid.UUID(second.ID.Bytes) != uuid.UUID(b1.ID.Bytes) {
+		t.Fatalf("second claim = %s, want b1 (A is busy, so B runs in parallel)", uuid.UUID(second.ID.Bytes))
 	}
-	if _, err := st.ClaimNextQueuedToolchainJob(ctx); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("empty claim err = %v, want pgx.ErrNoRows", err)
+	if _, err := st.ClaimNextQueuedToolchainJob(ctx, sqlc.ClaimNextQueuedToolchainJobParams{
+		ClaimedBy: "inst-1", LeaseSeconds: 90,
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("claim while A busy err = %v, want pgx.ErrNoRows (A's second job blocked)", err)
+	}
+	if _, err := st.FinishToolchainJob(ctx, sqlc.FinishToolchainJobParams{ID: first.ID, Status: "succeeded"}); err != nil {
+		t.Fatalf("finish a1: %v", err)
+	}
+	third := claim("inst-1")
+	if uuid.UUID(third.ID.Bytes) != uuid.UUID(a2.ID.Bytes) {
+		t.Fatalf("third claim = %s, want a2 after a1 finished", uuid.UUID(third.ID.Bytes))
+	}
+	if third.ClaimedBy != "inst-1" || !third.LeaseExpiresAt.Valid {
+		t.Fatalf("claim did not record instance/lease: %+v", third)
 	}
 
-	// Cancel only touches queued jobs: a running job is a no-op (no rows).
-	if _, err := st.CancelToolchainJob(ctx, reinstall.ID); !errors.Is(err, pgx.ErrNoRows) {
+	// Cancel only touches queued jobs.
+	if _, err := st.CancelToolchainJob(ctx, third.ID); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("cancel running err = %v, want pgx.ErrNoRows", err)
 	}
-	// A queued job can be cancelled.
-	queued := enqueue("caddy", "install", base.Add(5*time.Second))
+	queued := enqueue(serverA.ID, "caddy", "install", base.Add(4*time.Second))
 	canceled, err := st.CancelToolchainJob(ctx, queued.ID)
 	if err != nil {
 		t.Fatalf("cancel queued: %v", err)
@@ -134,24 +151,85 @@ func TestToolchainQueueContract(t *testing.T) {
 		t.Fatalf("canceled job = %+v, want canceled with finished_at", canceled)
 	}
 
-	// Boot recovery fails only running jobs and appends the reason.
-	ids, err := st.FailInterruptedToolchainJobs(ctx, "\ninterrupted\n")
+	// Recovery fails only this instance's jobs or jobs whose lease lapsed:
+	// b1 and a2 are ours, lapsed is another instance's stale lease, and fresh is
+	// another instance's live lease.
+	lapsedJob := enqueue(serverC.ID, "lapsed", "install", base.Add(5*time.Second))
+	freshJob := enqueue(serverD.ID, "fresh", "install", base.Add(6*time.Second))
+	lapsed := claim("inst-2")
+	if uuid.UUID(lapsed.ID.Bytes) != uuid.UUID(lapsedJob.ID.Bytes) {
+		t.Fatalf("claim = %s, want lapsedJob on the idle node", uuid.UUID(lapsed.ID.Bytes))
+	}
+	if _, err := pool.Exec(ctx, "UPDATE toolchain_jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = $1", lapsed.ID); err != nil {
+		t.Fatalf("expire lease: %v", err)
+	}
+	fresh := claim("inst-2")
+	if uuid.UUID(fresh.ID.Bytes) != uuid.UUID(freshJob.ID.Bytes) {
+		t.Fatalf("claim = %s, want freshJob on the idle node", uuid.UUID(fresh.ID.Bytes))
+	}
+	ownedIDs, err := st.FailOwnedToolchainJobs(ctx, "inst-1")
 	if err != nil {
-		t.Fatalf("FailInterruptedToolchainJobs: %v", err)
+		t.Fatalf("FailOwnedToolchainJobs: %v", err)
 	}
-	if len(ids) != len(wantOrder) {
-		t.Fatalf("interrupted count = %d, want %d (only running jobs)", len(ids), len(wantOrder))
-	}
-	recovered, err := st.GetToolchainJobForServer(ctx, sqlc.GetToolchainJobForServerParams{
-		ID: reinstall.ID, ServerID: server.ID,
-	})
+	staleIDs, err := st.FailStaleToolchainJobs(ctx)
 	if err != nil {
-		t.Fatalf("GetToolchainJobForServer: %v", err)
+		t.Fatalf("FailStaleToolchainJobs: %v", err)
 	}
-	if recovered.Status != "failed" || !strings.Contains(recovered.Log, "interrupted") {
-		t.Fatalf("recovered job = %+v, want failed with the reason appended", recovered)
+	// Our two running jobs (b1 and a2) plus the lapsed one are failed; the
+	// fresh peer job is untouched.
+	if len(ownedIDs) != 2 || len(staleIDs) != 1 {
+		t.Fatalf("recovered owned=%d stale=%d, want owned=2 stale=1 (not the live peer)", len(ownedIDs), len(staleIDs))
 	}
-	if _, err := st.ClaimNextQueuedToolchainJob(ctx); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("recovery claim err = %v, want pgx.ErrNoRows", err)
+	live, err := st.GetToolchainJobForServer(ctx, sqlc.GetToolchainJobForServerParams{ID: fresh.ID, ServerID: serverD.ID})
+	if err != nil {
+		t.Fatalf("GetToolchainJobForServer(fresh): %v", err)
+	}
+	if live.Status != "running" {
+		t.Fatalf("fresh peer job status = %s, want running (untouched)", live.Status)
+	}
+
+	// Append-only log: line rows with a monotonic seq, ordered reads, an after
+	// cursor, and idempotent appends.
+	logJob := enqueue(serverB.ID, "logtool", "install", base.Add(5*time.Second))
+	appendLine := func(seq int64, line string) {
+		t.Helper()
+		if err := st.AppendToolchainJobLog(ctx, sqlc.AppendToolchainJobLogParams{
+			JobID: logJob.ID, Seq: seq, Stream: "stdout", Line: line + "\n",
+		}); err != nil {
+			t.Fatalf("AppendToolchainJobLog: %v", err)
+		}
+	}
+	appendLine(1, "one")
+	appendLine(2, "two")
+	appendLine(1, "ignored") // ON CONFLICT DO NOTHING
+	if err := st.AppendToolchainJobLogTail(ctx, sqlc.AppendToolchainJobLogTailParams{
+		JobID: logJob.ID, Stream: "stderr", Line: "three\n",
+	}); err != nil {
+		t.Fatalf("AppendToolchainJobLogTail: %v", err)
+	}
+	rows, err := st.ListToolchainJobLogs(ctx, sqlc.ListToolchainJobLogsParams{JobID: logJob.ID, Seq: 0, Limit: 100})
+	if err != nil {
+		t.Fatalf("ListToolchainJobLogs: %v", err)
+	}
+	if len(rows) != 3 || rows[0].Line != "one\n" || rows[1].Line != "two\n" || rows[2].Line != "three\n" {
+		t.Fatalf("log rows = %+v, want 3 ordered lines (idempotent append, tail seq 3)", rows)
+	}
+	after, err := st.ListToolchainJobLogs(ctx, sqlc.ListToolchainJobLogsParams{JobID: logJob.ID, Seq: 1, Limit: 100})
+	if err != nil {
+		t.Fatalf("ListToolchainJobLogs(after): %v", err)
+	}
+	if len(after) != 2 || after[0].Seq != 2 {
+		t.Fatalf("after=1 rows = %+v, want seq 2 and 3", after)
+	}
+	// Deleting the job cascades its log rows away.
+	if _, err := pool.Exec(ctx, "DELETE FROM toolchain_jobs WHERE id = $1", logJob.ID); err != nil {
+		t.Fatalf("delete job: %v", err)
+	}
+	remaining, err := st.ListToolchainJobLogs(ctx, sqlc.ListToolchainJobLogsParams{JobID: logJob.ID, Seq: 0, Limit: 100})
+	if err != nil {
+		t.Fatalf("ListToolchainJobLogs(after delete): %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("log rows survived the job delete: %+v", remaining)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,18 +26,26 @@ import (
 // --- fakes ------------------------------------------------------------------
 
 // fakeStore is an in-memory Store that reproduces the SQL queue's semantics:
-// the active-uniqueness de-dupe, oldest-first claiming, and the state guards on
-// cancel and boot recovery.
+// the active-uniqueness de-dupe, oldest-first per-node claiming, lease-based
+// recovery, the append-only log, and the state guards on cancel and finish.
 type fakeStore struct {
-	mu      sync.Mutex
-	jobs    map[uuid.UUID]sqlc.ToolchainJob
-	order   []uuid.UUID
-	seq     int64
-	failErr error
+	mu    sync.Mutex
+	jobs  map[uuid.UUID]*sqlc.ToolchainJob
+	logs  map[uuid.UUID][]sqlc.ListToolchainJobLogsRow
+	order []uuid.UUID
+	seq   int64
+	// finished records terminal job ids in completion order.
+	finished []uuid.UUID
+	// finishFailures makes the next N FinishToolchainJob calls fail.
+	finishFailures int
+	failStaleErr   error
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{jobs: make(map[uuid.UUID]sqlc.ToolchainJob)}
+	return &fakeStore{
+		jobs: make(map[uuid.UUID]*sqlc.ToolchainJob),
+		logs: make(map[uuid.UUID][]sqlc.ListToolchainJobLogsRow),
+	}
 }
 
 func (f *fakeStore) nextTime() pgtype.Timestamptz {
@@ -53,17 +62,18 @@ func (f *fakeStore) CreateToolchainJob(_ context.Context, p sqlc.CreateToolchain
 			return sqlc.ToolchainJob{}, pgx.ErrNoRows
 		}
 	}
-	job := sqlc.ToolchainJob{
-		ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
+	id := uuid.New()
+	job := &sqlc.ToolchainJob{
+		ID:        pgtype.UUID{Bytes: id, Valid: true},
 		ServerID:  p.ServerID,
 		ToolID:    p.ToolID,
 		Action:    p.Action,
 		Status:    string(StatusQueued),
 		CreatedAt: f.nextTime(),
 	}
-	f.jobs[job.ID.Bytes] = job
-	f.order = append(f.order, job.ID.Bytes)
-	return job, nil
+	f.jobs[id] = job
+	f.order = append(f.order, id)
+	return *job, nil
 }
 
 func (f *fakeStore) GetToolchainJobForServer(_ context.Context, p sqlc.GetToolchainJobForServerParams) (sqlc.ToolchainJob, error) {
@@ -73,7 +83,7 @@ func (f *fakeStore) GetToolchainJobForServer(_ context.Context, p sqlc.GetToolch
 	if !ok || job.ServerID != p.ServerID {
 		return sqlc.ToolchainJob{}, pgx.ErrNoRows
 	}
-	return job, nil
+	return *job, nil
 }
 
 func (f *fakeStore) ListToolchainJobsByServer(_ context.Context, p sqlc.ListToolchainJobsByServerParams) ([]sqlc.ToolchainJob, error) {
@@ -82,7 +92,7 @@ func (f *fakeStore) ListToolchainJobsByServer(_ context.Context, p sqlc.ListTool
 	var out []sqlc.ToolchainJob
 	for _, job := range f.jobs {
 		if job.ServerID == p.ServerID {
-			out = append(out, job)
+			out = append(out, *job)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -97,40 +107,138 @@ func (f *fakeStore) ListToolchainJobsByServer(_ context.Context, p sqlc.ListTool
 	return out, nil
 }
 
-func (f *fakeStore) ClaimNextQueuedToolchainJob(_ context.Context) (sqlc.ToolchainJob, error) {
+func (f *fakeStore) ClaimNextQueuedToolchainJob(_ context.Context, p sqlc.ClaimNextQueuedToolchainJobParams) (sqlc.ToolchainJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	running := make(map[pgtype.UUID]bool)
+	for _, job := range f.jobs {
+		if job.Status == string(StatusRunning) {
+			running[job.ServerID] = true
+		}
+	}
 	for _, id := range f.order {
 		job := f.jobs[id]
-		if job.Status != string(StatusQueued) {
+		if job.Status != string(StatusQueued) || running[job.ServerID] {
 			continue
 		}
 		job.Status = string(StatusRunning)
 		job.StartedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-		f.jobs[id] = job
-		return job, nil
+		job.ClaimedBy = p.ClaimedBy
+		job.LeaseExpiresAt = pgtype.Timestamptz{Time: time.Now().Add(time.Duration(p.LeaseSeconds) * time.Second), Valid: true}
+		return *job, nil
 	}
 	return sqlc.ToolchainJob{}, pgx.ErrNoRows
 }
 
-func (f *fakeStore) AppendToolchainJobLog(_ context.Context, p sqlc.AppendToolchainJobLogParams) (sqlc.ToolchainJob, error) {
+func (f *fakeStore) RenewToolchainJobLease(_ context.Context, p sqlc.RenewToolchainJobLeaseParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	job := f.jobs[p.ID.Bytes]
-	job.Log += p.Log
-	f.jobs[p.ID.Bytes] = job
-	return job, nil
+	job, ok := f.jobs[p.ID.Bytes]
+	if !ok || job.Status != string(StatusRunning) {
+		return nil
+	}
+	job.LeaseExpiresAt = pgtype.Timestamptz{Time: time.Now().Add(time.Duration(p.LeaseSeconds) * time.Second), Valid: true}
+	return nil
+}
+
+func (f *fakeStore) FailOwnedToolchainJobs(_ context.Context, claimedBy string) ([]pgtype.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failStaleErr != nil {
+		return nil, f.failStaleErr
+	}
+	var ids []pgtype.UUID
+	for id, job := range f.jobs {
+		if job.Status == string(StatusRunning) && job.ClaimedBy == claimedBy {
+			job.Status = string(StatusFailed)
+			job.FinishedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
+			f.finished = append(f.finished, id)
+			ids = append(ids, pgtype.UUID{Bytes: id, Valid: true})
+		}
+	}
+	return ids, nil
+}
+
+func (f *fakeStore) FailStaleToolchainJobs(_ context.Context) ([]pgtype.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failStaleErr != nil {
+		return nil, f.failStaleErr
+	}
+	now := time.Now()
+	var ids []pgtype.UUID
+	for id, job := range f.jobs {
+		if job.Status != string(StatusRunning) {
+			continue
+		}
+		if job.LeaseExpiresAt.Valid && !job.LeaseExpiresAt.Time.Before(now) {
+			continue
+		}
+		job.Status = string(StatusFailed)
+		job.FinishedAt = pgtype.Timestamptz{Time: now.UTC(), Valid: true}
+		f.finished = append(f.finished, id)
+		ids = append(ids, pgtype.UUID{Bytes: id, Valid: true})
+	}
+	return ids, nil
+}
+
+func (f *fakeStore) AppendToolchainJobLog(_ context.Context, p sqlc.AppendToolchainJobLogParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, row := range f.logs[p.JobID.Bytes] {
+		if row.Seq == p.Seq {
+			return nil // ON CONFLICT DO NOTHING
+		}
+	}
+	f.logs[p.JobID.Bytes] = append(f.logs[p.JobID.Bytes], sqlc.ListToolchainJobLogsRow{Seq: p.Seq, Stream: p.Stream, Line: p.Line})
+	return nil
+}
+
+func (f *fakeStore) AppendToolchainJobLogTail(_ context.Context, p sqlc.AppendToolchainJobLogTailParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rows := f.logs[p.JobID.Bytes]
+	var maxSeq int64
+	for _, row := range rows {
+		if row.Seq > maxSeq {
+			maxSeq = row.Seq
+		}
+	}
+	f.logs[p.JobID.Bytes] = append(rows, sqlc.ListToolchainJobLogsRow{Seq: maxSeq + 1, Stream: p.Stream, Line: p.Line})
+	return nil
+}
+
+func (f *fakeStore) ListToolchainJobLogs(_ context.Context, p sqlc.ListToolchainJobLogsParams) ([]sqlc.ListToolchainJobLogsRow, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []sqlc.ListToolchainJobLogsRow
+	for _, row := range f.logs[p.JobID.Bytes] {
+		if row.Seq > p.Seq {
+			out = append(out, row)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	if int(p.Limit) < len(out) {
+		out = out[:p.Limit]
+	}
+	return out, nil
 }
 
 func (f *fakeStore) FinishToolchainJob(_ context.Context, p sqlc.FinishToolchainJobParams) (sqlc.ToolchainJob, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	job := f.jobs[p.ID.Bytes]
+	if f.finishFailures > 0 {
+		f.finishFailures--
+		return sqlc.ToolchainJob{}, errors.New("finish failed")
+	}
+	job, ok := f.jobs[p.ID.Bytes]
+	if !ok {
+		return sqlc.ToolchainJob{}, pgx.ErrNoRows
+	}
 	job.Status = p.Status
-	job.Log += p.Log
 	job.FinishedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-	f.jobs[p.ID.Bytes] = job
-	return job, nil
+	f.finished = append(f.finished, p.ID.Bytes)
+	return *job, nil
 }
 
 func (f *fakeStore) CancelToolchainJob(_ context.Context, id pgtype.UUID) (sqlc.ToolchainJob, error) {
@@ -142,47 +250,7 @@ func (f *fakeStore) CancelToolchainJob(_ context.Context, id pgtype.UUID) (sqlc.
 	}
 	job.Status = string(StatusCanceled)
 	job.FinishedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-	f.jobs[id.Bytes] = job
-	return job, nil
-}
-
-func (f *fakeStore) FailInterruptedToolchainJobs(_ context.Context, reason string) ([]pgtype.UUID, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.failErr != nil {
-		return nil, f.failErr
-	}
-	var ids []pgtype.UUID
-	for id, job := range f.jobs {
-		if job.Status != string(StatusRunning) {
-			continue
-		}
-		job.Status = string(StatusFailed)
-		job.Log += reason
-		job.FinishedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-		f.jobs[id] = job
-		ids = append(ids, pgtype.UUID{Bytes: id, Valid: true})
-	}
-	return ids, nil
-}
-
-// seedRunning inserts an already-running job, simulating a control plane that
-// died mid-install. It returns the job id.
-func (f *fakeStore) seedRunning(serverID uuid.UUID, toolID string) uuid.UUID {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	id := uuid.New()
-	f.jobs[id] = sqlc.ToolchainJob{
-		ID:        pgtype.UUID{Bytes: id, Valid: true},
-		ServerID:  pgtype.UUID{Bytes: serverID, Valid: true},
-		ToolID:    toolID,
-		Action:    string(ActionInstall),
-		Status:    string(StatusRunning),
-		CreatedAt: f.nextTime(),
-		StartedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
-	}
-	f.order = append(f.order, id)
-	return id
+	return *job, nil
 }
 
 func (f *fakeStore) status(t *testing.T, id uuid.UUID) Status {
@@ -192,11 +260,52 @@ func (f *fakeStore) status(t *testing.T, id uuid.UUID) Status {
 	return Status(f.jobs[id].Status)
 }
 
-func (f *fakeStore) log(t *testing.T, id uuid.UUID) string {
-	t.Helper()
+// logText joins the stored log lines of a job.
+func (f *fakeStore) logText(id uuid.UUID) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.jobs[id].Log
+	var b strings.Builder
+	for _, row := range f.logs[id] {
+		b.WriteString(row.Line)
+	}
+	return b.String()
+}
+
+func (f *fakeStore) logBytes(id uuid.UUID) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, row := range f.logs[id] {
+		n += len(row.Line)
+	}
+	return n
+}
+
+func (f *fakeStore) finishOrder() []uuid.UUID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]uuid.UUID(nil), f.finished...)
+}
+
+// seedRunning inserts an already-running job owned by claimedBy with the given
+// lease expiry, simulating a control plane that died (or is still alive).
+func (f *fakeStore) seedRunning(serverID uuid.UUID, toolID, claimedBy string, lease time.Time) uuid.UUID {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := uuid.New()
+	f.jobs[id] = &sqlc.ToolchainJob{
+		ID:             pgtype.UUID{Bytes: id, Valid: true},
+		ServerID:       pgtype.UUID{Bytes: serverID, Valid: true},
+		ToolID:         toolID,
+		Action:         string(ActionInstall),
+		Status:         string(StatusRunning),
+		CreatedAt:      f.nextTime(),
+		StartedAt:      pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+		ClaimedBy:      claimedBy,
+		LeaseExpiresAt: pgtype.Timestamptz{Time: lease, Valid: true},
+	}
+	f.order = append(f.order, id)
+	return id
 }
 
 // fakeStream feeds a fixed event slice and then EOF.
@@ -221,16 +330,16 @@ func (s *fakeStream) Context() context.Context     { return context.Background()
 func (s *fakeStream) SendMsg(any) error            { return nil }
 func (s *fakeStream) RecvMsg(any) error            { return nil }
 
-// fakeAgent is an AgentConn serving a fixed catalog and per-tool event streams,
-// recording the tool/action it was asked to run, in order.
+// fakeAgent is an AgentConn serving a fixed catalog and per-tool event streams.
+// delay lets a test make one tool slow so parallel-vs-sequential behaviour is
+// observable.
 type fakeAgent struct {
 	mu      sync.Mutex
 	catalog []*agentv1.ToolInfo
 	events  map[string][]*agentv1.ToolEvent
+	delay   map[string]time.Duration
 	openErr map[string]error
 	listErr error
-	ran     []string
-	closed  int
 }
 
 func (f *fakeAgent) ListTools(context.Context, *agentv1.ListToolsRequest, ...grpc.CallOption) (*agentv1.ListToolsResponse, error) {
@@ -250,25 +359,21 @@ func (f *fakeAgent) UninstallTool(_ context.Context, in *agentv1.InstallToolRequ
 
 func (f *fakeAgent) open(key string) (grpc.ServerStreamingClient[agentv1.ToolEvent], error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ran = append(f.ran, key)
-	if err := f.openErr[key]; err != nil {
+	err := f.openErr[key]
+	delay := f.delay[key]
+	events := f.events[key]
+	f.mu.Unlock()
+	if err != nil {
 		return nil, err
 	}
-	return &fakeStream{events: f.events[key]}, nil
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	return &fakeStream{events: events}, nil
 }
 
 func (f *fakeAgent) Close() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.closed++
 	return nil
-}
-
-func (f *fakeAgent) ranList() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.ran...)
 }
 
 // fakeRegistry resolves every id to a server, optionally on a team.
@@ -311,6 +416,10 @@ func (p *memPublisher) framesOf(channel string) []Frame {
 }
 
 func testService(st *fakeStore, agent *fakeAgent, reg *fakeRegistry, pub Publisher) *Service {
+	return testServiceN(st, agent, reg, pub, 1)
+}
+
+func testServiceN(st *fakeStore, agent *fakeAgent, reg *fakeRegistry, pub Publisher, workers int) *Service {
 	return NewService(Config{
 		Store:        st,
 		Registry:     reg,
@@ -318,6 +427,9 @@ func testService(st *fakeStore, agent *fakeAgent, reg *fakeRegistry, pub Publish
 		Publisher:    pub,
 		PollInterval: 2 * time.Millisecond,
 		RPCTimeout:   time.Second,
+		InstanceID:   "test-instance",
+		Lease:        2 * time.Second,
+		Workers:      workers,
 	})
 }
 
@@ -454,10 +566,48 @@ func TestCancelOnlyCancelsQueuedJobs(t *testing.T) {
 	}
 }
 
+// TestGetReturnsJobAndPagedLog covers the new job-detail shape: the log lives
+// outside the Job and is fetched in pages via the after cursor.
+func TestGetReturnsJobAndPagedLog(t *testing.T) {
+	agent := &fakeAgent{catalog: []*agentv1.ToolInfo{catalogTool("docker", true, true)}}
+	st := newFakeStore()
+	svc := testService(st, agent, &fakeRegistry{}, nil)
+	serverID := uuid.New()
+
+	result, err := svc.Enqueue(context.Background(), serverID, ActionInstall, []string{"docker"})
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	job := result.Jobs[0]
+	for i, line := range []string{"one", "two", "three"} {
+		if err := st.AppendToolchainJobLog(context.Background(), appendLogParams(job.ID, int64(i+1), "stdout", line+"\n")); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	full, err := svc.Get(context.Background(), serverID, job.ID, 0)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if full.Log != "one\ntwo\nthree\n" || full.NextSeq != 3 {
+		t.Fatalf("Get log = %q next = %d, want all three lines, next 3", full.Log, full.NextSeq)
+	}
+	page, err := svc.Get(context.Background(), serverID, job.ID, 1)
+	if err != nil {
+		t.Fatalf("Get after: %v", err)
+	}
+	if page.Log != "two\nthree\n" || page.NextSeq != 3 {
+		t.Fatalf("Get after=1 log = %q next = %d, want two/three, next 3", page.Log, page.NextSeq)
+	}
+	if _, err := svc.Get(context.Background(), uuid.New(), job.ID, 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign node get err = %v, want ErrNotFound", err)
+	}
+}
+
 // waitTerminal polls a job until it reaches a terminal status.
 func waitTerminal(t *testing.T, st *fakeStore, id uuid.UUID) Status {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if s := st.status(t, id); s.Terminal() {
 			return s

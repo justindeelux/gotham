@@ -38,18 +38,29 @@ func (s Status) Terminal() bool {
 	return s == StatusSucceeded || s == StatusFailed || s == StatusCanceled
 }
 
-// Job is one queued install/uninstall and its persisted log. The JSON shape is
-// the wire contract the Web UI reads (job list, job detail, realtime frames).
+// Job is one queued install/uninstall. The JSON shape is the wire contract the
+// Web UI reads (job list, job detail, realtime frames). The log is deliberately
+// NOT part of it: it lives in the append-only toolchain_job_logs table and is
+// fetched separately (JobDetail) so a listed or broadcast job never carries
+// megabytes of output.
 type Job struct {
 	ID         uuid.UUID  `json:"id"`
 	ServerID   uuid.UUID  `json:"server_id"`
 	ToolID     string     `json:"tool_id"`
 	Action     Action     `json:"action"`
 	Status     Status     `json:"status"`
-	Log        string     `json:"log"`
 	CreatedAt  time.Time  `json:"created_at"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
+// JobDetail is a job plus a page of its log. Log is the assembled text of the
+// returned lines (each already newline-terminated); NextSeq is the highest seq
+// in the page, so a client can poll `?after=NextSeq` for the next lines.
+type JobDetail struct {
+	Job     Job
+	Log     string
+	NextSeq int64
 }
 
 // EnqueueResult reports the outcome of one enqueue request: the jobs it created
@@ -68,7 +79,6 @@ func jobFromRow(row sqlc.ToolchainJob) Job {
 		ToolID:     row.ToolID,
 		Action:     Action(row.Action),
 		Status:     Status(row.Status),
-		Log:        row.Log,
 		CreatedAt:  row.CreatedAt.Time.UTC(),
 		StartedAt:  timeFromPG(row.StartedAt),
 		FinishedAt: timeFromPG(row.FinishedAt),
@@ -100,12 +110,12 @@ func timeFromPG(v pgtype.Timestamptz) *time.Time {
 	return &t
 }
 
-// appendLogParams builds the sqlc parameters for appending one log chunk.
-func appendLogParams(id uuid.UUID, chunk string) sqlc.AppendToolchainJobLogParams {
-	return sqlc.AppendToolchainJobLogParams{ID: pgUUID(id), Log: chunk}
+// appendLogParams builds the sqlc parameters for appending one log line.
+func appendLogParams(jobID uuid.UUID, seq int64, stream, line string) sqlc.AppendToolchainJobLogParams {
+	return sqlc.AppendToolchainJobLogParams{JobID: pgUUID(jobID), Seq: seq, Stream: stream, Line: line}
 }
 
 // finishParams builds the sqlc parameters for closing a job.
-func finishParams(id uuid.UUID, status Status, tail string) sqlc.FinishToolchainJobParams {
-	return sqlc.FinishToolchainJobParams{ID: pgUUID(id), Status: string(status), Log: tail}
+func finishParams(id uuid.UUID, status Status) sqlc.FinishToolchainJobParams {
+	return sqlc.FinishToolchainJobParams{ID: pgUUID(id), Status: string(status)}
 }

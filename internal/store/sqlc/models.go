@@ -559,15 +559,24 @@ type TeamMember struct {
 }
 
 type ToolchainJob struct {
-	ID         pgtype.UUID        `json:"id"`
-	ServerID   pgtype.UUID        `json:"server_id"`
-	ToolID     string             `json:"tool_id"`
-	Action     string             `json:"action"`
-	Status     string             `json:"status"`
-	Log        string             `json:"log"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	StartedAt  pgtype.Timestamptz `json:"started_at"`
-	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+	ID             pgtype.UUID        `json:"id"`
+	ServerID       pgtype.UUID        `json:"server_id"`
+	ToolID         string             `json:"tool_id"`
+	Action         string             `json:"action"`
+	Status         string             `json:"status"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	StartedAt      pgtype.Timestamptz `json:"started_at"`
+	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
+	ClaimedBy      string             `json:"claimed_by"`
+	LeaseExpiresAt pgtype.Timestamptz `json:"lease_expires_at"`
+}
+
+type ToolchainJobLog struct {
+	JobID     pgtype.UUID        `json:"job_id"`
+	Seq       int64              `json:"seq"`
+	Stream    string             `json:"stream"`
+	Line      string             `json:"line"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type UpdateSchedule struct {

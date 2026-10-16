@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -22,8 +23,11 @@ type fakeToolchainService struct {
 	lastAction    toolchain.Action
 	lastTools     []string
 
-	job    toolchain.Job
-	jobErr error
+	job       toolchain.Job
+	jobErr    error
+	log       string
+	nextSeq   int64
+	lastAfter int64
 }
 
 func (f *fakeToolchainService) ListTools(context.Context, uuid.UUID) ([]toolchain.Tool, error) {
@@ -39,8 +43,9 @@ func (f *fakeToolchainService) Cancel(context.Context, uuid.UUID, uuid.UUID) (to
 	return f.job, f.jobErr
 }
 
-func (f *fakeToolchainService) Get(context.Context, uuid.UUID, uuid.UUID) (toolchain.Job, error) {
-	return f.job, f.jobErr
+func (f *fakeToolchainService) Get(_ context.Context, _, _ uuid.UUID, after int64) (toolchain.JobDetail, error) {
+	f.lastAfter = after
+	return toolchain.JobDetail{Job: f.job, Log: f.log, NextSeq: f.nextSeq}, f.jobErr
 }
 
 func (f *fakeToolchainService) List(context.Context, uuid.UUID, int) ([]toolchain.Job, error) {
@@ -165,6 +170,47 @@ func TestToolchainInvalidJobIDIsBadRequest(t *testing.T) {
 	fake := &fakeToolchainService{}
 	s, _ := newToolchainTestServer(t, fake)
 	rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/"+uuid.New().String()+"/toolchain/jobs/not-a-uuid", "", "Bearer valid-token")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestToolchainGetJobReturnsLogAndCursor covers the job-detail shape: the log
+// is returned separately with a next_seq cursor, and ?after= is passed through.
+func TestToolchainGetJobReturnsLogAndCursor(t *testing.T) {
+	fake := &fakeToolchainService{
+		job:     toolchain.Job{ID: uuid.New(), ToolID: "docker", Status: toolchain.StatusRunning},
+		log:     "two\nthree\n",
+		nextSeq: 3,
+	}
+	s, _ := newToolchainTestServer(t, fake)
+
+	serverID := uuid.New().String()
+	jobID := uuid.New().String()
+	rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/"+serverID+"/toolchain/jobs/"+jobID+"?after=1", "", "Bearer valid-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if fake.lastAfter != 1 {
+		t.Fatalf("after passed to service = %d, want 1", fake.lastAfter)
+	}
+	var body struct {
+		Job     toolchain.Job `json:"job"`
+		Log     string        `json:"log"`
+		NextSeq int64         `json:"next_seq"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Log != "two\nthree\n" || body.NextSeq != 3 || body.Job.ToolID != "docker" {
+		t.Fatalf("detail = %+v, want log/next_seq/tool", body)
+	}
+}
+
+func TestToolchainInvalidAfterIsBadRequest(t *testing.T) {
+	fake := &fakeToolchainService{}
+	s, _ := newToolchainTestServer(t, fake)
+	rec := doRequest(t, s, http.MethodGet, "/api/v1/servers/"+uuid.New().String()+"/toolchain/jobs/"+uuid.New().String()+"?after=-3", "", "Bearer valid-token")
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
 	}

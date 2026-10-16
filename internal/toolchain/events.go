@@ -40,10 +40,12 @@ type Frame struct {
 	Data    string `json:"data"`
 }
 
-// LogLine is the payload of a TypeLog frame: which job the line belongs to and
-// which stream produced it.
+// LogLine is the payload of a TypeLog frame: which job the line belongs to, its
+// sequence number (for ordered/deduplicated rendering and `?after=` polling),
+// and which stream produced it.
 type LogLine struct {
 	JobID  string `json:"job_id"`
+	Seq    int64  `json:"seq"`
 	Stream string `json:"stream,omitempty"`
 	Line   string `json:"line"`
 }
@@ -63,9 +65,10 @@ func (e *Emitter) Job(ctx context.Context, job Job) {
 	e.publish(ctx, job.ServerID, TypeJob, job)
 }
 
-// Log publishes one output line of a job.
-func (e *Emitter) Log(ctx context.Context, serverID, jobID uuid.UUID, stream, line string) {
-	e.publish(ctx, serverID, TypeLog, LogLine{JobID: jobID.String(), Stream: stream, Line: line})
+// Log publishes one output line of a job. It carries only the new line, never
+// the accumulated log.
+func (e *Emitter) Log(ctx context.Context, serverID, jobID uuid.UUID, seq int64, stream, line string) {
+	e.publish(ctx, serverID, TypeLog, LogLine{JobID: jobID.String(), Seq: seq, Stream: stream, Line: line})
 }
 
 func (e *Emitter) publish(ctx context.Context, serverID uuid.UUID, kind string, payload any) {

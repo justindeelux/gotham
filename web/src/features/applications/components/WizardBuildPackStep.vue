@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useEventListener } from "@vueuse/core";
 import { NAlert, NButton, NRadio, NRadioGroup, NSpace, NText, NTooltip } from "naive-ui";
 import { onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -14,6 +15,7 @@ const { t } = useI18n();
 // store at that node while this step (and its Install buttons) is live.
 onMounted(() => wizard.subscribeNodeTools());
 watch(() => form.serverId, () => wizard.subscribeNodeTools());
+useEventListener(window, "focus", () => wizard.subscribeNodeTools());
 </script>
 
 <template>

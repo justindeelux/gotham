@@ -297,11 +297,12 @@ install_git() {
     # git has no service: unlike docker, never enable a unit for it.
     case "${DISTRO}" in
         apt)
-            run env DEBIAN_FRONTEND=noninteractive apt-get update
+            run env DEBIAN_FRONTEND=noninteractive apt-get update || return $?
+            # install also upgrades an existing package, while allowing a first install.
             run env DEBIAN_FRONTEND=noninteractive apt-get install -y git
             ;;
-        dnf) run dnf install -y git ;;
-        apk) run apk add --no-cache git ;;
+        dnf) run dnf install -y git && run dnf upgrade -y git ;;
+        apk) run apk add --no-cache --upgrade git ;;
         *) die "git: unsupported distribution" 5 ;;
     esac
 }

@@ -151,6 +151,9 @@ func TestToolServerInstallUpdatesOutdatedGit(t *testing.T) {
 			}
 			t.Setenv("PATH", dir)
 			runner := &fakeToolRunner{}
+			runner.step = func(context.Context, []string, bool, func(string, string) error) (int, error) {
+				return 0, os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\necho 'git version 2.43.0'\n"), 0o755)
+			}
 			server := NewToolServer(withToolRunner(runner))
 			stream := newFakeToolStream(context.Background())
 			if err := server.InstallTool(&agentv1.InstallToolRequest{Id: toolcatalog.IDGit}, stream); err != nil {
@@ -167,6 +170,32 @@ func TestToolServerInstallUpdatesOutdatedGit(t *testing.T) {
 				t.Fatalf("result = %v; want succeeded", result)
 			}
 		})
+	}
+}
+
+func TestToolServerInstallRejectsUnchangedOldGit(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\necho 'git version 2.34.1'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	runner := &fakeToolRunner{}
+	server := NewToolServer(withToolRunner(runner))
+	stream := newFakeToolStream(context.Background())
+	if err := server.InstallTool(&agentv1.InstallToolRequest{Id: toolcatalog.IDGit}, stream); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.invoked(helperInstallVerb)) != 1 {
+		t.Fatal("outdated git did not run the installer")
+	}
+	if result := stream.result(); result == nil || result.GetStatus() != toolStatusFailed || result.GetExitCode() == 0 {
+		t.Fatalf("unchanged git result = %v; want failed with nonzero exit code", result)
+	}
+	log := strings.Join(stream.lines(), "\n")
+	for _, text := range []string{"git 2.34.1", ">= 2.37 required", "distro repository", "newer repository / PPA"} {
+		if !strings.Contains(log, text) {
+			t.Errorf("log %q does not explain %q", log, text)
+		}
 	}
 }
 

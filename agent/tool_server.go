@@ -226,6 +226,18 @@ func (s *ToolServer) execute(id string, install bool, stream grpc.ServerStreamin
 		sender.note(fmt.Sprintf("%s %s", verb, toolID))
 		code, runErr := s.runner.Run(ctx, []string{s.helper, helperVerb, toolID}, true, sender.emit)
 		if runErr == nil && code == 0 {
+			tool, _ := toolcatalog.Lookup(toolID)
+			if install && tool.MinVersion != "" {
+				detected := toolcatalog.DetectTool(tool)
+				if !detected.Installed || !detected.VersionOK {
+					version := detected.Version
+					if version == "" {
+						version = "unknown"
+					}
+					sender.note(fmt.Sprintf("%s %s detected after install/update; >= %s required — the distro repository may not provide a newer version; add a newer repository / PPA", toolID, version, tool.MinVersion))
+					return sender.result(toolStatusFailed, -1)
+				}
+			}
 			continue
 		}
 		if runErr != nil {

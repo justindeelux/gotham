@@ -44,6 +44,7 @@ import {
 import type { ToolchainJob } from "@/features/toolchain/api/toolchain";
 import InstallJobLogPane from "@/features/toolchain/components/InstallJobLogPane.vue";
 import InstallQueueList from "@/features/toolchain/components/InstallQueueList.vue";
+import InstallQueueModal from "@/features/toolchain/components/InstallQueueModal.vue";
 import toolchainEn from "@/features/toolchain/locales/en";
 import {
   assignSeqs,
@@ -539,6 +540,30 @@ describe("InstallQueueList", () => {
     await flushPromises();
 
     expect(store.jobs["job-1"].status).toBe("running");
+    wrapper.unmount();
+  });
+});
+
+describe("git update failure", () => {
+  it("shows the failed status and repository guidance in the queue modal", async () => {
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    const failed = job({ tool_id: "git", status: "failed" });
+    const guidance = "git 2.34.1 detected after install/update; >= 2.37 required — " +
+      "the distro repository may not provide a newer version; add a newer repository / PPA";
+    store.applyJob(failed);
+    getJobMock.mockResolvedValue({ job: failed, log: guidance + "\n", next_seq: 1 });
+    store.openQueueModal("job-1");
+    const shell = defineComponent({
+      setup: () => () => h(NMessageProvider, null, { default: () => h(InstallQueueModal) }),
+    });
+    const wrapper = mount(shell, {
+      global: { plugins: [i18n], stubs: { teleport: true } },
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Failed");
+    expect(wrapper.find(".log-pane").text()).toContain(guidance);
+    expect(wrapper.text()).not.toContain("Succeeded");
     wrapper.unmount();
   });
 });

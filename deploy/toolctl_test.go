@@ -98,6 +98,19 @@ func TestToolctlGitHasNoServiceUnit(t *testing.T) {
 	}
 }
 
+func TestToolctlGitPackageUpgradeCommands(t *testing.T) {
+	for distro, command := range map[string]string{
+		"apt": "apt-get install -y git",
+		"dnf": "dnf upgrade -y git",
+		"apk": "apk add --no-cache --upgrade git",
+	} {
+		out, err := runToolctl(t, t.TempDir(), []string{"GOTHAM_TOOLCTL_DISTRO=" + distro}, "install-tool", "git")
+		if err != nil || !strings.Contains(out, command) {
+			t.Errorf("git install/update on %s = %q, %v; want %q", distro, out, err, command)
+		}
+	}
+}
+
 // TestToolctlRailpackIsPinnedAndVerified proves railpack uses a versioned
 // release tarball with a hard-coded sha256, per architecture, and never the
 // unpinned install.sh piped to a shell.

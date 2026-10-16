@@ -352,9 +352,11 @@ helper_arch() {
 # replayed release, so its own apply-release check must not be the only one: this
 # reads the root-owned high-water mark and asks the installed hostbootstrap's
 # version-cmp. It returns 0 only when VERSION is at or above the mark; an older
-# version, a missing or unusable mark, or a missing/unusable installed helper all
-# return nonzero (fail closed — a missing mark must never mean "version 0,
-# anything goes"), and the caller then leaves the installed helpers untouched.
+# version, a missing, empty or malformed mark, a malformed candidate, or a
+# missing/unusable installed helper all return nonzero (fail closed — a mark that
+# is absent or unparseable must never mean "0.0.0, anything goes"), and the caller
+# then leaves the installed helpers untouched. The helper's own diagnosis (which
+# names a malformed value) is logged so the operator sees why.
 require_newer_helper() {
     candidate="$1"
     if [ -L "${HWM_FILE}" ] || [ ! -f "${HWM_FILE}" ]; then
@@ -370,10 +372,10 @@ require_newer_helper() {
         log "empty host-helper version mark at ${HWM_FILE}; refusing the refresh"
         return 1
     fi
-    verdict="$(sh "${INSTALLED_BOOTSTRAP}" version-cmp "${candidate}" "${hwm}" 2>/dev/null)" || {
-        log "could not compare ${candidate} with the installed host helper ${hwm}; refusing the refresh"
+    if ! verdict="$(sh "${INSTALLED_BOOTSTRAP}" version-cmp "${candidate}" "${hwm}" 2>&1)"; then
+        log "host-helper version check refused the refresh: ${verdict}"
         return 1
-    }
+    fi
     case "${verdict}" in
         0 | 1) return 0 ;;
         -1)
@@ -381,7 +383,7 @@ require_newer_helper() {
             return 1
             ;;
         *)
-            log "could not compare ${candidate} with the installed host helper ${hwm}; refusing the refresh"
+            log "unexpected version-cmp result '${verdict}'; refusing the refresh"
             return 1
             ;;
     esac

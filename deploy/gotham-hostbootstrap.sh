@@ -13,7 +13,7 @@
 # payload it writes under /usr/libexec/gotham/hostbootstrap is root-owned, so
 # root can re-read it safely on later updates.
 #
-#   gotham-hostbootstrap create <cp-user> <version>
+#   gotham-hostbootstrap create <cp-user> <version> [--allow-downgrade]
 #                                          install payload + trust anchor + apply
 #   gotham-hostbootstrap apply             apply the payload only
 #   gotham-hostbootstrap apply-release <dir> <version>
@@ -28,12 +28,13 @@
 # It records the control-plane user in the root-owned payload so a release
 # refresh can regenerate the drop-in, and it requires the installer's release
 # version so it can seed the high-water mark: a bridge without a marked version
-# could never accept a refresh.
+# could never accept a refresh. A re-run that would lower the mark is refused
+# unless the operator passes --allow-downgrade.
 #
 # `apply-release` refuses to install a payload whose signature-verified version
 # is lower than the installed one (a root-owned high-water mark) or when that
-# mark is missing, so a compromised control plane cannot replay an older signed
-# helper payload. The update wrapper makes the same decision in the
+# mark is missing or malformed, so a compromised control plane cannot replay an
+# older signed helper payload. The update wrapper makes the same decision in the
 # already-installed helper before it runs the fetched payload (its own copy of
 # this check is the second layer).
 #
@@ -47,6 +48,11 @@
 # under sudo (like the other installer seams); production always uses "/".
 set -eu
 umask 022
+
+# Route catchable termination signals through the EXIT trap (set by the temp-file
+# owners below) so a signal does not leave a temp behind; dash/bash do not run
+# EXIT on an untrapped SIGTERM/SIGINT. SIGKILL cannot be trapped.
+trap 'exit 1' HUP INT TERM
 
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
@@ -147,8 +153,9 @@ validate_dropin() {
 }
 
 # num_cmp A B: print -1, 0 or 1 comparing two unsigned decimal strings without
-# relying on integer arithmetic (length first, so no overflow and no octal
-# surprise from a leading zero).
+# relying on integer arithmetic at all (length first, then a bytewise compare of
+# equal-length digit strings, so a 25-digit identifier is comparable and there is
+# no overflow and no octal surprise from a leading zero).
 num_cmp() {
     a="$(printf '%s' "$1" | sed 's/^0*//')"; [ -n "${a}" ] || a=0
     b="$(printf '%s' "$2" | sed 's/^0*//')"; [ -n "${b}" ] || b=0
@@ -156,8 +163,22 @@ num_cmp() {
     case "${b}" in *[!0-9]*) b=0 ;; esac
     if [ "${#a}" -gt "${#b}" ]; then echo 1; return 0; fi
     if [ "${#a}" -lt "${#b}" ]; then echo -1; return 0; fi
-    # Equal length and no leading zeros: a decimal comparison is the numeric one.
-    if [ "${a}" = "${b}" ]; then echo 0; elif [ "${a}" -gt "${b}" ]; then echo 1; else echo -1; fi
+    # Equal length and no leading zeros: the bytewise order of two digit strings
+    # of the same length is their numeric order (and, unlike `test -gt`, it cannot
+    # overflow). LC_ALL=C keeps it locale-independent.
+    if [ "${a}" = "${b}" ]; then echo 0; return 0; fi
+    first="$(printf '%s\n%s\n' "${a}" "${b}" | LC_ALL=C sort | head -n 1)"
+    if [ "${first}" = "${a}" ]; then echo -1; else echo 1; fi
+}
+
+# VERSION_RE + valid_version v: a value that version_cmp can order, i.e. a
+# vMAJOR.MINOR.PATCH tag with an optional -prerelease and +build metadata. A
+# malformed value (a hand-typed "latest", an empty or truncated mark) must be
+# rejected, not silently compared as 0.0.0 — that would reopen the "missing mark
+# means anything goes" hole as "garbage mark means anything goes".
+VERSION_RE='^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$'
+valid_version() {
+    printf '%s' "$1" | grep -Eq "${VERSION_RE}"
 }
 
 # pre_cmp A B: print -1, 0 or 1 comparing two dot-separated semver pre-release
@@ -196,8 +217,11 @@ pre_cmp() {
 # (vMAJOR.MINOR.PATCH with an optional -prerelease and an optional +build
 # metadata) with semver precedence: build metadata is ignored, a release sorts
 # above a pre-release of the same core, and pre-release identifiers compare
-# element-wise (pre_cmp), so rc.10 > rc.9 rather than the other way round.
+# element-wise (pre_cmp), so rc.10 > rc.9 rather than the other way round. A
+# malformed argument is refused (die), never treated as 0.0.0.
 version_cmp() {
+    valid_version "$1" || die "not a valid release version: '$1'" 2
+    valid_version "$2" || die "not a valid release version: '$2'" 2
     va="${1#v}"; va="${va%%+*}"
     vb="${2#v}"; vb="${vb%%+*}"
     va_pre=""; case "${va}" in *-*) va_pre="${va#*-}"; va="${va%%-*}" ;; esac
@@ -239,12 +263,14 @@ payload_cp_user() {
 }
 
 # write_record file value: write a root-owned record atomically (temp + rename in
-# the same root-owned directory).
+# the same root-owned directory), removing the temp on any exit including a signal.
 write_record() {
     rtmp="$(mktemp "${PAYLOAD_DIR}/.record.XXXXXX")" || die "cannot create a temp file in ${PAYLOAD_DIR}"
+    trap 'rm -f "${rtmp}" 2>/dev/null || true' EXIT
     printf '%s\n' "$2" >"${rtmp}" || { rm -f "${rtmp}"; die "cannot write ${1}"; }
     chmod 0644 "${rtmp}"
     mv -f "${rtmp}" "$1" || { rm -f "${rtmp}"; die "cannot install ${1}"; }
+    trap - EXIT
 }
 
 # ensure_dir dir mode: create the directory root-owned with the given mode, and
@@ -299,14 +325,26 @@ apply_payload() {
 create() {
     cp_user="$1"
     cp_version="${2:-}"
+    allow_downgrade="${3:-}"
     valid_user "${cp_user}" || die "invalid control-plane user: ${cp_user}" 2
     # The bridge must seed the high-water mark: a host left without one could
     # only ever refuse a refresh (a missing mark is never "version 0, anything
     # goes"), so require the version at the one-time install.
-    case "${cp_version}" in
-        "") die "create needs the release version: gotham-hostbootstrap create <cp-user> <version>" 2 ;;
-        *[!A-Za-z0-9._+-]*) die "invalid control-plane version: ${cp_version}" 2 ;;
-    esac
+    [ -n "${cp_version}" ] || die "create needs the release version: gotham-hostbootstrap create <cp-user> <version>" 2
+    valid_version "${cp_version}" \
+        || die "invalid control-plane version: '${cp_version}' (expected vMAJOR.MINOR.PATCH[-prerelease][+build])" 2
+    # A re-run must not silently lower the mark: the operator has to ask for it.
+    # A malformed existing mark is repaired instead (a valid version can only
+    # improve it), so a broken seed is not a dead end.
+    if [ -f "${VERSION_FILE}" ] && [ ! -L "${VERSION_FILE}" ]; then
+        prev="$(sed -n '1p' "${VERSION_FILE}" 2>/dev/null | tr -d '\r\n')"
+        if [ -n "${prev}" ] && ! valid_version "${prev}"; then
+            echo "gotham-hostbootstrap: replacing the malformed host-helper high-water mark '${prev}'" >&2
+        elif [ -n "${prev}" ] && [ "${allow_downgrade}" != "--allow-downgrade" ] \
+            && [ "$(version_cmp "${cp_version}" "${prev}")" = "-1" ]; then
+            die "create would lower the host-helper version from ${prev} to ${cp_version}; pass --allow-downgrade to force it" 2
+        fi
+    fi
     if [ -z "${ROOT}" ] && ! id -u "${cp_user}" >/dev/null 2>&1; then
         die "control-plane user does not exist: ${cp_user}" 2
     fi
@@ -375,9 +413,7 @@ apply_release() {
     rel_version="${2:-}"
     [ -d "${rel_src}" ] || die "payload source ${rel_src} is not a directory" 2
     [ -n "${rel_version}" ] || die "apply-release needs the signature-verified version" 2
-    case "${rel_version}" in
-        "" | *[!A-Za-z0-9._+-]*) die "invalid release version: ${rel_version}" 2 ;;
-    esac
+    valid_version "${rel_version}" || die "not a valid release version: '${rel_version}'" 2
     for f in gotham-hostctl gotham-toolctl; do
         [ -f "${rel_src}/${f}" ] || die "payload source is missing ${f}" 2
     done
@@ -398,6 +434,9 @@ apply_release() {
     fi
     if [ -z "${hwm}" ]; then
         die "no installed host-helper high-water mark at ${VERSION_FILE}; refusing the release (run create with the release version)" 2
+    fi
+    if ! valid_version "${hwm}"; then
+        die "installed host-helper high-water mark '${hwm}' is not a valid release version; refusing the release (run create with the release version)" 2
     fi
     case "$(version_cmp "${rel_version}" "${hwm}")" in
         -1) die "refusing to downgrade the host helper: ${rel_version} is older than the installed ${hwm}" 2 ;;
@@ -445,8 +484,8 @@ fi
 
 case "${MODE}" in
     create)
-        [ "$#" -ge 3 ] || die "usage: gotham-hostbootstrap create <cp-user> <version>" 2
-        create "$2" "$3"
+        [ "$#" -ge 3 ] || die "usage: gotham-hostbootstrap create <cp-user> <version> [--allow-downgrade]" 2
+        create "$2" "$3" "${4:-}"
         ;;
     apply)
         apply

@@ -707,10 +707,15 @@ fetched payload — so an older validly-signed helper payload cannot skip (or
 ship a disabled version of) the check by being the code that performs it. The
 payload's own `apply-release` makes the same comparison as a second layer. A
 payload whose signed version is lower than the mark is refused (equal versions
-re-apply idempotently), and a *missing* mark refuses the release too: an
-unmarked host is one the bridge never seeded, and treating it as "version 0"
-would accept any replayable signed payload. `install.sh` seeds the mark with the
-release it installs, and `create` requires that version.
+re-apply idempotently), and a **missing, empty or malformed** mark refuses the
+release too: an unmarked or unparseable host is one the bridge never seeded
+properly, and treating it as "version 0" would accept any replayable signed
+payload. A release version that is not `vMAJOR.MINOR.PATCH[-prerelease][+build]`
+is refused the same way (a garbage value never compares as `0.0.0`). `install.sh`
+seeds the mark with the release it installs, and `create` requires that version.
+A `create` re-run that would *lower* the mark is refused unless the operator
+passes `--allow-downgrade`; a malformed existing mark is repaired instead of
+blocking the repair.
 
 Every failure is logged and skipped, so a broken or tampered payload can never
 block or roll back an update. A host that predates the refresh support (no
@@ -728,7 +733,9 @@ sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user> <version>
 ```
 
 The version is required: `create` seeds the high-water mark from it, and without
-a seeded mark the refresh refuses every release.
+a seeded mark the refresh refuses every release. Pass `--allow-downgrade` if you
+really need to lower the recorded mark (for example, reinstalling from an older
+checkout).
 
 There is no privileged path from the control plane to install the anchor: the
 service user cannot write `/usr/libexec/gotham`, so only the (root, operator)

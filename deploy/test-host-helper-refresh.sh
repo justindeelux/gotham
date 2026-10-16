@@ -480,4 +480,36 @@ grep -q '^result=ok' "${WROOT}/status/update.status" \
     || fail "the missing mark blocked the update"
 pass "the installed wrapper refuses a missing high-water mark"
 
+# ---- a malformed or empty mark refuses the refresh (not 0.0.0) --------------
+# A garbage mark must fail closed: comparing it as 0.0.0 would accept any
+# rollback, i.e. the missing-mark hole reopened by a malformed file.
+printf 'dev\n' >"${WROOT}/usr/libexec/gotham/hostbootstrap/version"
+printf 'version=%s\n' "${VERSION}" >"${WROOT}/update.pending"
+run_wrapper >"${SCRATCH}/wrapper-junkmark.log" 2>&1 || fail "the wrapper exited nonzero on a garbage mark"
+grep -q "toolctl-wrapped" "${WROOT}/usr/libexec/gotham/gotham-toolctl" \
+    || fail "a garbage mark still applied the payload"
+grep -q "not a valid release version" "${SCRATCH}/wrapper-junkmark.log" \
+    || fail "the installed wrapper did not refuse a garbage mark with a clear reason"
+grep -q '^result=ok' "${WROOT}/status/update.status" || fail "a garbage mark blocked the update"
+
+: >"${WROOT}/usr/libexec/gotham/hostbootstrap/version"
+printf 'version=%s\n' "${VERSION}" >"${WROOT}/update.pending"
+run_wrapper >"${SCRATCH}/wrapper-emptymark.log" 2>&1 || fail "the wrapper exited nonzero on an empty mark"
+grep -q "toolctl-wrapped" "${WROOT}/usr/libexec/gotham/gotham-toolctl" \
+    || fail "an empty mark still applied the payload"
+grep -q "empty host-helper version mark" "${SCRATCH}/wrapper-emptymark.log" \
+    || fail "the installed wrapper did not refuse an empty mark"
+grep -q '^result=ok' "${WROOT}/status/update.status" || fail "an empty mark blocked the update"
+
+rm -f "${WROOT}/usr/libexec/gotham/hostbootstrap/version"
+ln -s /etc/passwd "${WROOT}/usr/libexec/gotham/hostbootstrap/version"
+printf 'version=%s\n' "${VERSION}" >"${WROOT}/update.pending"
+run_wrapper >"${SCRATCH}/wrapper-linkmark.log" 2>&1 || fail "the wrapper exited nonzero on a symlinked mark"
+grep -q "toolctl-wrapped" "${WROOT}/usr/libexec/gotham/gotham-toolctl" \
+    || fail "a symlinked mark still applied the payload"
+grep -q "no root-owned host-helper version mark" "${SCRATCH}/wrapper-linkmark.log" \
+    || fail "the installed wrapper did not refuse a symlinked mark"
+grep -q '^result=ok' "${WROOT}/status/update.status" || fail "a symlinked mark blocked the update"
+pass "the installed wrapper refuses a malformed, empty or symlinked high-water mark"
+
 echo "ALL HOST-HELPER REFRESH TESTS PASSED"

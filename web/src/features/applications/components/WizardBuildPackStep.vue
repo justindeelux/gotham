@@ -33,6 +33,17 @@ watch(() => form.serverId, () => wizard.subscribeNodeTools());
       <NText depth="3">
         {{ t("applications.wizard.buildPackIntro") }}
       </NText>
+      <NAlert v-if="wizard.nodeToolsLoading.value" type="info" :show-icon="true">
+        {{ t("applications.wizard.packChecking") }}
+      </NAlert>
+      <NAlert v-else-if="wizard.nodeToolsError.value" type="warning" :show-icon="true">
+        <NSpace align="center" :size="12" wrap>
+          <span>{{ t("applications.wizard.packCheckError") }}</span>
+          <NButton size="small" @click="() => void wizard.retryNodeTools()">
+            {{ t("applications.wizard.packRetry") }}
+          </NButton>
+        </NSpace>
+      </NAlert>
       <NAlert v-if="wizard.noBuildEngine.value" type="warning" :show-icon="true">
         <NSpace vertical :size="8">
           <span>{{ t("applications.wizard.packNoEngine") }}</span>
@@ -55,7 +66,7 @@ watch(() => form.serverId, () => wizard.subscribeNodeTools());
             </NRadio>
             <NTooltip v-if="pack.missing" trigger="hover" placement="top">
               <template #trigger>
-                <span class="pack-reason" tabindex="0">
+                <span class="pack-reason" role="note" tabindex="0">
                   {{
                     pack.installing
                       ? t("applications.wizard.packInstalling", { tool: pack.missing })
@@ -71,6 +82,7 @@ watch(() => form.serverId, () => wizard.subscribeNodeTools());
               tertiary
               :loading="pack.installing"
               :disabled="pack.installing"
+              :aria-label="t('applications.wizard.packInstallNamed', { pack: pack.label })"
               @click="wizard.installBuildPack(pack.value)"
             >
               {{ t("applications.wizard.packInstall") }}

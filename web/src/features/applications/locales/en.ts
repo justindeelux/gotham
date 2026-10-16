@@ -366,6 +366,11 @@ const en = {
     packNoEngine:
       "No build engine is installed on this node. Install Railpack to build without a Dockerfile, or pick Dockerfile/Static below.",
     packInstallRailpack: "Install Railpack",
+    packChecking: "Checking the build tools installed on this node…",
+    packCheckError:
+      "Couldn't check the build tools on this node. Build packs are shown as available; the server still verifies the toolchain at deploy.",
+    packRetry: "Retry",
+    packInstallNamed: "Install {pack}",
     node: "Node",
     domainOptional: "Domain (optional)",
     domainHint: "Leave empty to reach the app by port first.",

@@ -77,3 +77,18 @@ func TestValidateBuildToolchainSkipsUnassignedNode(t *testing.T) {
 		t.Fatalf("validateBuildToolchain with no node = %v, want nil", err)
 	}
 }
+
+// TestValidateBuildToolchainSkipsNonBuildSources checks the JUS-179 review
+// follow-up: a dockerfile/compose/image row that still carries a stale
+// railpack/buildpacks build_pack (e.g. after a source-type change) must not get
+// a false 4xx, because those sources never build with that pack.
+func TestValidateBuildToolchainSkipsNonBuildSources(t *testing.T) {
+	node := uuid.New()
+	svc := gateService(fakeToolStatus{installed: map[string]bool{}})
+	for _, sourceType := range []string{SourceDockerfile, SourceCompose, SourceImage} {
+		app := Application{ID: uuid.New(), ServerID: node, SourceType: sourceType, BuildPack: "railpack"}
+		if err := svc.validateBuildToolchain(context.Background(), app); err != nil {
+			t.Errorf("validateBuildToolchain(source %q, railpack) = %v, want nil", sourceType, err)
+		}
+	}
+}

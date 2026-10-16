@@ -15,6 +15,10 @@ import {
   useCreateAppWizard,
 } from "@/features/applications/composables/useCreateAppWizard";
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
+// The build-pack picker enqueues installs through the toolchain store; the
+// JUS-178 progress modal (log/stdout/cancel/retry) reads the same store, so the
+// wizard mounts it here to show the install it started.
+import InstallQueueModal from "@/features/toolchain/components/InstallQueueModal.vue";
 
 interface Props {  show: boolean;
   /** Project the application is created in (the route's, changeable). */
@@ -158,6 +162,10 @@ const stepCounter = computed<string>(() =>
         </div>
       </div>
     </div>
+
+    <!-- The install-progress modal (JUS-178) for installs the picker started;
+         it reads the toolchain store directly. -->
+    <InstallQueueModal />
   </NModal>
 </template>
 

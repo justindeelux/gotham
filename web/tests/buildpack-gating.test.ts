@@ -13,9 +13,14 @@ const toolchainStore = reactive({
   serverId: "",
   tools: [] as Array<{ id: string; installed: boolean }>,
   activeJobs: [] as Array<{ tool_id: string; action: string }>,
+  loading: false,
+  failure: null as unknown,
   enqueue: vi.fn(async () => [] as string[]),
   openQueueModal: vi.fn(),
+  closeQueueModal: vi.fn(),
   subscribe: vi.fn(async () => {}),
+  refresh: vi.fn(async () => {}),
+  disconnect: vi.fn(),
 });
 
 vi.mock("@/features/toolchain", () => ({
@@ -27,6 +32,7 @@ import {
   BUILD_PACK_TOOLS,
   useCreateAppWizard,
 } from "@/features/applications/composables/useCreateAppWizard";
+import { useServersStore } from "@/features/servers";
 import { registerDiscoveredCatalogs } from "@/shared/i18n";
 
 /** mountWizard exposes the raw wizard state without rendering a step. */
@@ -54,11 +60,17 @@ beforeEach(() => {
   toolchainStore.serverId = "";
   toolchainStore.tools = [];
   toolchainStore.activeJobs = [];
+  toolchainStore.loading = false;
+  toolchainStore.failure = null;
   toolchainStore.enqueue.mockClear();
   toolchainStore.enqueue.mockResolvedValue([]);
   toolchainStore.openQueueModal.mockClear();
+  toolchainStore.closeQueueModal.mockClear();
   toolchainStore.subscribe.mockClear();
   toolchainStore.subscribe.mockResolvedValue(undefined);
+  toolchainStore.refresh.mockClear();
+  toolchainStore.refresh.mockResolvedValue(undefined);
+  toolchainStore.disconnect.mockClear();
 });
 
 describe("build-pack gating on the target node", () => {
@@ -187,14 +199,74 @@ describe("installBuildPack", () => {
 });
 
 describe("subscribeNodeTools", () => {
-  it("points the toolchain store at the wizard's node once", () => {
+  it("subscribes once for a ready node", () => {
     const { w, wrapper } = mountWizard();
+    useServersStore().servers = [
+      { id: "srv-1", name: "node-1", ip: "127.0.0.1", status: "ready" } as never,
+    ];
     w.form.serverId = "srv-1";
     w.subscribeNodeTools();
     expect(toolchainStore.subscribe).toHaveBeenCalledWith("srv-1");
     toolchainStore.serverId = "srv-1";
     w.subscribeNodeTools();
     expect(toolchainStore.subscribe).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("does not fetch tools for a non-ready node (no live agent)", () => {
+    const { w, wrapper } = mountWizard();
+    useServersStore().servers = [
+      { id: "srv-1", name: "node-1", ip: "127.0.0.1", status: "pending" } as never,
+    ];
+    w.form.serverId = "srv-1";
+    w.subscribeNodeTools();
+    expect(toolchainStore.subscribe).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+});
+
+describe("node tool fetch state", () => {
+  it("exposes loading and error without disabling every pack, and retries", async () => {
+    const { w, wrapper } = mountWizard();
+    w.form.sourceType = "git_public";
+    selectNode(w);
+    toolchainStore.loading = true;
+    expect(w.nodeToolsLoading.value).toBe(true);
+    expect(w.nodeToolsError.value).toBe(false);
+    toolchainStore.loading = false;
+    toolchainStore.failure = new Error("agent unreachable");
+    expect(w.nodeToolsLoading.value).toBe(false);
+    expect(w.nodeToolsError.value).toBe(true);
+    // Fail-open: an unknown catalog never disables every pack.
+    expect(w.buildPackChoices.value.every((choice) => choice.selectable)).toBe(true);
+    await w.retryNodeTools();
+    expect(toolchainStore.refresh).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("does not report loading or error for another node", () => {
+    const { w, wrapper } = mountWizard();
+    w.form.serverId = "srv-a";
+    toolchainStore.serverId = "srv-b";
+    toolchainStore.loading = true;
+    toolchainStore.failure = new Error("boom");
+    expect(w.nodeToolsLoading.value).toBe(false);
+    expect(w.nodeToolsError.value).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+describe("toolchain socket lifecycle", () => {
+  it("closes the modal, disconnects and forgets the node on wizard close", () => {
+    const { w, wrapper } = mountWizard();
+    w.form.serverId = "srv-1";
+    toolchainStore.serverId = "srv-1";
+    w.closeWizard();
+    expect(toolchainStore.closeQueueModal).toHaveBeenCalled();
+    expect(toolchainStore.disconnect).toHaveBeenCalled();
+    // Forgetting the node makes the next open re-subscribe instead of reusing
+    // a dead socket.
+    expect(toolchainStore.serverId).toBe("");
     wrapper.unmount();
   });
 });

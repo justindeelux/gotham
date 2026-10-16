@@ -554,6 +554,10 @@ func (o *Orchestrator) installedTools(ctx context.Context, serverID uuid.UUID, k
 	}
 	tools, err := o.toolStatus.InstalledToolIDs(ctx, serverID)
 	if err != nil {
+		// Fail open to marker-only detection; buildtool.Available still guards
+		// the chosen engine, and the deploy log names the cause.
+		o.logger.Warn("deploy: tool lookup for auto-detection failed; using marker-only detection",
+			"server_id", serverID, "error", err)
 		return nil
 	}
 	return tools

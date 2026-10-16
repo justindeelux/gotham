@@ -460,6 +460,14 @@ func (s *Service) validateBuildToolchain(ctx context.Context, app Application) e
 	if s.toolStatus == nil || app.ServerID == uuid.Nil {
 		return nil
 	}
+	// Dockerfile, compose and image sources carry no build-pack build: the
+	// orchestrator forces the Dockerfile engine for dockerfiles and builds
+	// compose/image runs another way. A stale build_pack left on such a row
+	// (e.g. an update that switched the source type) must not 4xx the deploy.
+	switch NormalizeSourceType(app.SourceType, app.Provider) {
+	case SourceDockerfile, SourceCompose, SourceImage:
+		return nil
+	}
 	kind, err := builds.ParseEngineKind(app.BuildPack)
 	if err != nil {
 		// validateDeployTarget already reports an unknown build pack.

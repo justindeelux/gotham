@@ -34,20 +34,28 @@ const (
 // EngineKinds lists the canonical engines in auto-detection priority order.
 var EngineKinds = []EngineKind{EngineDockerfile, EngineRailpack, EngineBuildpacks, EngineStatic}
 
-// EngineTools returns the catalog tool ids a build engine needs installed on
-// the node, dependencies first (the same order toolcatalog.InstallOrder
-// produces). It is empty for the engines that shell out to no external CLI:
-// Dockerfile builds through the node Docker daemon and static is served by
-// nginx, so both always run; EngineAuto resolves at build time and names no
-// single tool. The deploy gate and the Web picker share this mapping.
-func EngineTools(kind EngineKind) []string {
-	var toolID string
+// EngineTool returns the catalog tool id an engine shells out to on the node
+// (the CLI it runs), or "" for engines that need none: Dockerfile builds
+// through the node Docker daemon, static is served by nginx, and EngineAuto
+// resolves at build time. The deploy gate, the auto error and the Web picker
+// share it.
+func EngineTool(kind EngineKind) string {
 	switch kind {
 	case EngineRailpack:
-		toolID = toolcatalog.IDRailpack
+		return toolcatalog.IDRailpack
 	case EngineBuildpacks:
-		toolID = toolcatalog.IDPack
+		return toolcatalog.IDPack
 	default:
+		return ""
+	}
+}
+
+// EngineTools returns the catalog tool ids a build engine needs installed on
+// the node, dependencies first (the same order toolcatalog.InstallOrder
+// produces). It is empty for the engines that shell out to no external CLI.
+func EngineTools(kind EngineKind) []string {
+	toolID := EngineTool(kind)
+	if toolID == "" {
 		return nil
 	}
 	order, err := toolcatalog.InstallOrder(toolID)
@@ -215,10 +223,37 @@ func (r *Registry) Build(ctx context.Context, opts BuildOptions) (ImageRef, erro
 		if opts.BuildPack != EngineAuto {
 			return ImageRef{}, fmt.Errorf("%w: engine %q cannot build %s", ErrNoEngine, opts.BuildPack, opts.RepoDir)
 		}
+		// Auto only resolves among installed engines; when the only reason it
+		// found nothing is a missing tool, name it so the deploy log is
+		// actionable instead of reading as a repo problem.
+		if engine, missing, found := r.autoMissingTool(opts.RepoDir, opts.InstalledTools); found {
+			return ImageRef{}, fmt.Errorf("%w: %s is not installed on this node; install it (or pick a different build pack) to build with the %s engine",
+				ErrNoEngine, missing, engine)
+		}
 		return ImageRef{}, fmt.Errorf("%w: %s", ErrNoEngine, opts.RepoDir)
 	}
 	opts.BuildPack = engine.Kind()
 	return engine.Build(ctx, opts)
+}
+
+// autoMissingTool reports the engine marker-only auto-detection would pick and
+// the tool of that engine that is missing on the node, when installed is
+// non-nil and the missing tool is the only reason auto found nothing. It
+// returns found=false when auto genuinely matches nothing (a repo problem) or
+// the node's tools are unknown.
+func (r *Registry) autoMissingTool(repoDir string, installed map[string]bool) (EngineKind, string, bool) {
+	if installed == nil {
+		return EngineAuto, "", false
+	}
+	engine, ok := r.detect(repoDir, EngineAuto, nil)
+	if !ok {
+		return EngineAuto, "", false
+	}
+	toolID := EngineTool(engine.Kind())
+	if toolID == "" || installed[toolID] {
+		return EngineAuto, "", false
+	}
+	return engine.Kind(), toolID, true
 }
 
 // validateOptions rejects a build request that cannot produce a tag.

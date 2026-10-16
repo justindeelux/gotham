@@ -387,6 +387,27 @@ export function useCreateAppWizard(
   /** noBuildEngine is true when neither CLI build engine is on the node. */
   const noBuildEngine = computed<boolean>(() => cliEngineInstalled.value === false);
 
+  /** nodeToolsLoading is true while the target node's catalog is being fetched. */
+  const nodeToolsLoading = computed<boolean>(
+    () =>
+      form.serverId !== "" &&
+      toolchainStore.serverId === form.serverId &&
+      toolchainStore.loading,
+  );
+
+  /**
+   * nodeToolsError is true when the target node's catalog could not be fetched.
+   * The gate stays fail-open (options remain selectable) and the step shows a
+   * retry, so a node the agent cannot be reached on never silently disables
+   * every pack.
+   */
+  const nodeToolsError = computed<boolean>(
+    () =>
+      form.serverId !== "" &&
+      toolchainStore.serverId === form.serverId &&
+      toolchainStore.failure !== null,
+  );
+
   /**
    * buildPackChoices augments every build-pack row with the target node's
    * toolchain state. A row whose tool is missing is not selectable and offers
@@ -991,10 +1012,16 @@ export function useCreateAppWizard(
 
   /** subscribeNodeTools points the toolchain store at the wizard's node, so the
    * build-pack step can gate on that node's installed tools and enqueue an
-   * install through the same store (and its JUS-178 progress modal). */
+   * install through the same store (and its JUS-178 progress modal). Only a
+   * `ready` node has a live agent to report a catalog: a pending/offline node
+   * would 502 the tools route, so the picker stays fail-open for it. */
   function subscribeNodeTools(): void {
     const id = form.serverId;
     if (id === "" || toolchainStore.serverId === id) {
+      return;
+    }
+    const status = serversStore.servers.find((item) => item.id === id)?.status;
+    if (status !== "ready") {
       return;
     }
     void toolchainStore.subscribe(id).catch(() => undefined);
@@ -1014,6 +1041,26 @@ export function useCreateAppWizard(
     } catch (error) {
       message.warning(describeToolchainError(error), { duration: 8000 });
     }
+  }
+
+  /** retryNodeTools re-fetches the target node's catalog after a failed check. */
+  async function retryNodeTools(): Promise<void> {
+    if (form.serverId === "") {
+      return;
+    }
+    try {
+      await toolchainStore.refresh();
+    } catch {
+      // The failure surfaces through toolchainStore.failure (nodeToolsError).
+    }
+  }
+
+  /** disconnectNodeTools releases the toolchain socket the wizard opened and
+   * forgets the node, so the next open re-subscribes instead of reusing a dead
+   * socket. */
+  function disconnectNodeTools(): void {
+    toolchainStore.disconnect();
+    toolchainStore.serverId = "";
   }
 
   /** handleRepoSelect prefills branch, clone URL and a name from the repo. */
@@ -1397,6 +1444,10 @@ export function useCreateAppWizard(
     providersStore.reposError = null;
     githubAppStore.clearErrors();
     providersStore.reposErrorRaw = null;
+    // Release the toolchain socket/subscription and the install modal the
+    // wizard opened, so closing it leaves nothing live in the background.
+    toolchainStore.closeQueueModal();
+    disconnectNodeTools();
   }
 
   return {
@@ -1407,7 +1458,10 @@ export function useCreateAppWizard(
     buildPackChoices,
     buildPackValid,
     noBuildEngine,
+    nodeToolsLoading,
+    nodeToolsError,
     installBuildPack,
+    retryNodeTools,
     subscribeNodeTools,
     submitting,
     errorMessage,

@@ -52,12 +52,15 @@ and the real agent rollout from the GitHub CDN are proven.
   - **Residual: no CRL/serial set.** Revocation is key-based (delete the node and
     re-enroll; there is no in-place rekey) plus the 90-day leaf; a superseded leaf
     of the *same* key stays valid until it expires.
-  - **Residual: EKU-any on the gateway (sunset).** The gateway accepts a
-    serverAuth-only leaf so nodes enrolled before mTLS keep working; that lapses
-    naturally within 90 days of the last pre-upgrade issuance. A later release
-    should tighten `VerifyNodeClientCert` to clientAuth-only and require the
-    control-plane URI SAN on agents (dropping the rollout grace branch in
-    `agent/tls.go`).
+  - **Legacy-leaf sunset (implemented).** The gateway keeps accepting a pre-mTLS
+    (serverAuth-only) node leaf so enrolled nodes are not bricked, but only until
+    `GOTHAM_GRPC_LEGACY_LEAF_UNTIL` (default `servers.DefaultLegacyLeafDeadline`);
+    serve logs the date and the number of nodes still presenting one, each accept
+    is warned, and after the date the leaf is refused. The agent's matching
+    rollout grace (a URI-less control-plane credential) is logged per accept and
+    is bounded and non-exploitable — only the CA mints such a credential — but it
+    has no date gate yet: drop it in the same release that removes the gateway
+    branch, and tighten `VerifyNodeClientCert` to clientAuth-only.
   - **Per-IP limiter keying.** Register/heartbeat limits are keyed per peer IP;
     agents behind one NAT/egress IP share a bucket.
   - **Unknown-node Register rows.** A certificate-less bootstrap still creates a

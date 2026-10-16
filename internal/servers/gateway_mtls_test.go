@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -123,8 +124,8 @@ func enrollNode(t *testing.T, addr string, authority *Authority, nodeID string) 
 	return enrollNodeKey(t, addr, authority, nodeID, key), testKeyPEM(t, key)
 }
 
-// deleteNode removes the node row at test cleanup.
-func deleteNode(t *testing.T, service *ServerService, nodeID string) {
+// cleanupNode removes the node row at test cleanup.
+func cleanupNode(t *testing.T, service *ServerService, nodeID string) {
 	t.Helper()
 	store := service.store
 	t.Cleanup(func() {
@@ -250,15 +251,18 @@ func TestGatewayEnrollmentRefusalsAreUniform(t *testing.T) {
 	wrong := metadata.AppendToOutgoingContext(ctx, enrollmentTokenMetadataKey, "nope")
 	valid := metadata.AppendToOutgoingContext(ctx, enrollmentTokenMetadataKey, "tok")
 	message := func(err error) string { return status.Convert(err).Message() }
+	code := func(err error) codes.Code { return status.Convert(err).Code() }
 
 	unknownID := uniqueNodeID("node-uniform-unknown")
 	_, errUnknown := client.Register(wrong, &agentv1.RegisterRequest{NodeId: unknownID, Csr: csrFor(t, unknownID, testKey(t))})
 
+	// The node stays enrolled for this call (cleanupNode only registers the
+	// cleanup), so the "enrolled" case is genuinely an existing node.
 	enrolledID := uniqueNodeID("node-uniform-enrolled")
 	if _, err := client.Register(valid, &agentv1.RegisterRequest{NodeId: enrolledID, Csr: csrFor(t, enrolledID, testKey(t))}); err != nil {
 		t.Fatalf("enroll with the token: %v", err)
 	}
-	deleteNode(t, service, enrolledID)
+	cleanupNode(t, service, enrolledID)
 	_, errEnrolled := client.Register(wrong, &agentv1.RegisterRequest{NodeId: enrolledID, Csr: csrFor(t, enrolledID, testKey(t))})
 	_, errNoToken := client.Register(ctx, &agentv1.RegisterRequest{NodeId: enrolledID, Csr: csrFor(t, enrolledID, testKey(t))})
 
@@ -266,7 +270,11 @@ func TestGatewayEnrollmentRefusalsAreUniform(t *testing.T) {
 		t.Fatalf("enrollment refusal leaks existence: unknown=%q enrolled=%q none=%q",
 			message(errUnknown), message(errEnrolled), message(errNoToken))
 	}
-	if status.Code(errUnknown) != codes.PermissionDenied {
+	if code(errUnknown) != code(errEnrolled) || code(errUnknown) != code(errNoToken) {
+		t.Fatalf("enrollment refusal leaks existence by code: unknown=%v enrolled=%v none=%v",
+			code(errUnknown), code(errEnrolled), code(errNoToken))
+	}
+	if code(errUnknown) != codes.PermissionDenied {
 		t.Fatalf("wrong-token enrollment = %v, want PermissionDenied", errUnknown)
 	}
 }
@@ -279,7 +287,7 @@ func TestGatewayKeyErrorsAreUniform(t *testing.T) {
 
 	nodeID := uniqueNodeID("node-key-uniform")
 	enrollNode(t, addr, authority, nodeID)
-	deleteNode(t, service, nodeID)
+	cleanupNode(t, service, nodeID)
 
 	otherKey := testKey(t)
 	otherCert := issueNodeCert(t, authority, nodeID, otherKey, nodeCertUsages, time.Hour)
@@ -296,6 +304,70 @@ func TestGatewayKeyErrorsAreUniform(t *testing.T) {
 	}
 	if status.Code(errMismatch) != codes.PermissionDenied {
 		t.Fatalf("key mismatch = %v, want PermissionDenied", errMismatch)
+	}
+}
+
+// TestGatewayLegacyLeafSunset is the M5 sunset: a pre-mutual-TLS
+// (serverAuth-only) node leaf is accepted, logged and recorded before the
+// configured deadline and refused after it, on a fake clock.
+func TestGatewayLegacyLeafSunset(t *testing.T) {
+	service, _, authority := newTestServiceWithAuthority(t)
+	deadline := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	before := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	after := time.Date(2026, 12, 2, 0, 0, 0, 0, time.UTC)
+
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	nodeID := uniqueNodeID("node-sunset")
+	key := testKey(t)
+	keyPEM := testKeyPEM(t, key)
+	legacy := issueNodeCert(t, authority, nodeID, key, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, time.Hour)
+
+	// Enroll normally first (a dual-EKU leaf), then present the legacy leaf with
+	// the same key: the node is enrolled, so only the leaf kind differs.
+	bootstrapAddr := startGatewayConfig(t, GatewayConfig{
+		Authority: authority, Service: service, AllowOpenEnrollment: true,
+		LegacyLeafDeadline: deadline, Now: func() time.Time { return before },
+		Logger: logger,
+	})
+	enrollNodeKey(t, bootstrapAddr, authority, nodeID, key)
+	cleanupNode(t, service, nodeID)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Before the sunset: accepted, logged, and recorded for the operator count.
+	if _, err := agentv1.NewAgentServiceClient(dialWithClientCert(t, bootstrapAddr, authority, legacy, keyPEM)).Register(
+		ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux", Csr: csrFor(t, nodeID, key)}); err != nil {
+		t.Fatalf("a legacy leaf before the sunset = %v, want success", err)
+	}
+	if !strings.Contains(logs.String(), "legacy serverAuth-only node certificate") {
+		t.Fatalf("no per-accept warning was logged; logs: %s", logs.String())
+	}
+	if count, err := service.LegacyLeafNodeCount(ctx); err != nil || count < 1 {
+		t.Fatalf("legacy node count = %d (err %v), want >= 1", count, err)
+	}
+
+	// After the sunset: the same leaf is refused.
+	afterAddr := startGatewayConfig(t, GatewayConfig{
+		Authority: authority, Service: service, AllowOpenEnrollment: true,
+		LegacyLeafDeadline: deadline, Now: func() time.Time { return after },
+	})
+	_, err := agentv1.NewAgentServiceClient(dialWithClientCert(t, afterAddr, authority, legacy, keyPEM)).Register(
+		ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux", Csr: csrFor(t, nodeID, key)})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("a legacy leaf after the sunset = %v, want Unauthenticated", err)
+	}
+
+	// A modern dual-EKU leaf keeps working after the sunset and clears the flag.
+	modern := issueNodeCert(t, authority, nodeID, key, nodeCertUsages, time.Hour)
+	if _, err := agentv1.NewAgentServiceClient(dialWithClientCert(t, afterAddr, authority, modern, keyPEM)).Register(
+		ctx, &agentv1.RegisterRequest{NodeId: nodeID, Os: "linux", Csr: csrFor(t, nodeID, key)}); err != nil {
+		t.Fatalf("a dual-EKU leaf after the sunset = %v, want success", err)
+	}
+	if count, err := service.LegacyLeafNodeCount(ctx); err != nil || count != 0 {
+		t.Fatalf("legacy node count after renewal = %d (err %v), want 0", count, err)
 	}
 }
 
@@ -400,7 +472,7 @@ func TestGatewayAcceptsServerAuthOnlyLeafUpgrade(t *testing.T) {
 	nodeID := uniqueNodeID("node-upgrade")
 	key := testKey(t)
 	enrollNodeKey(t, addr, authority, nodeID, key)
-	deleteNode(t, service, nodeID)
+	cleanupNode(t, service, nodeID)
 
 	legacy := issueNodeCert(t, authority, nodeID, key, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, time.Hour)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -419,7 +491,7 @@ func TestGatewayRejectsRotatedNodeKey(t *testing.T) {
 
 	nodeID := uniqueNodeID("node-rotate")
 	enrollNode(t, addr, authority, nodeID)
-	deleteNode(t, service, nodeID)
+	cleanupNode(t, service, nodeID)
 
 	otherKey := testKey(t)
 	otherCert := issueNodeCert(t, authority, nodeID, otherKey, nodeCertUsages, time.Hour)
@@ -507,7 +579,7 @@ func TestGatewayBootstrapRequiresEnrollmentToken(t *testing.T) {
 	if len(resp.GetCert()) == 0 {
 		t.Fatal("Register with the enrollment token returned no certificate")
 	}
-	deleteNode(t, service, nodeID)
+	cleanupNode(t, service, nodeID)
 
 	// The enrolled node still needs its certificate for a second enrollment.
 	if _, err := client.Register(callCtx, &agentv1.RegisterRequest{NodeId: nodeID, Csr: csr}); status.Code(err) != codes.PermissionDenied {

@@ -34,13 +34,16 @@
 # on a real node.
 #
 # Enrollment token: the bootstrap credential a node presents on its first
-# registration. Supply it through the environment (GOTHAM_AGENT_ENROLLMENT_TOKEN)
-# or --enrollment-token-file <path> reading a root-only file (mode 0600); both
-# keep the secret off the command line, where /proc/<pid>/cmdline, `ps` and shell
-# history would expose it. The installer never logs the value, and it is written
-# to agent.env as GOTHAM_AGENT_ENROLLMENT_TOKEN (a secret: keep that file at its
-# 0640 root-owned mode). The agent sends it only until it holds a certificate,
-# after which the operator may delete it from agent.env.
+# registration. Prefer --enrollment-token-file <path> with a root-owned file
+# (mode 0600, no symlink, not a directory) — the installer reads the value and
+# never echoes it. The environment variable GOTHAM_AGENT_ENROLLMENT_TOKEN also
+# works, but never as `sudo GOTHAM_AGENT_ENROLLMENT_TOKEN=<token> ...`: that puts
+# the secret in sudo's argv (/proc/<pid>/cmdline, `ps`) and in shell history.
+# Read it without echo and export it for `sudo -E`, or use the file. The value is
+# written to agent.env as GOTHAM_AGENT_ENROLLMENT_TOKEN (a secret: keep that file
+# at its 0640 root-owned mode). The agent sends it only until it holds a
+# certificate, over a CA-pinned TLS channel only, after which the operator may
+# delete it from agent.env.
 #
 # Docker Engine and the compose plugin (which the agent shells out to) are
 # required at runtime but are NOT installed by default: pass --full (or set
@@ -247,23 +250,16 @@ fi
 # ---- Enrollment token: read it off the command line -------------------------
 # The bootstrap credential is a secret; accept it from the environment or a
 # root-only file, never as an argv value (which /proc/<pid>/cmdline, `ps` and
-# shell history expose). The value is only written to agent.env and never logged.
+# shell history expose). The value is only written to agent.env and never logged
+# or echoed. read_enrollment_token_file enforces the root-only file rules.
 if [ -n "${ENROLLMENT_TOKEN_FILE}" ]; then
-    [ -f "${ENROLLMENT_TOKEN_FILE}" ] && [ -r "${ENROLLMENT_TOKEN_FILE}" ] \
-        || { echo "install-agent.sh: enrollment token file ${ENROLLMENT_TOKEN_FILE} is not a readable file" >&2; exit 1; }
-    # Refuse a file readable by group or others: anyone who can read it can
-    # enroll a node. `stat -c` is GNU, `-f '%Lp'` is BSD/macOS.
-    _token_mode="$(stat -c '%a' "${ENROLLMENT_TOKEN_FILE}" 2>/dev/null || stat -f '%Lp' "${ENROLLMENT_TOKEN_FILE}" 2>/dev/null || echo "")"
-    case "${_token_mode}" in
-        "") ;;
-        *[4-7])
-            echo "install-agent.sh: enrollment token file ${ENROLLMENT_TOKEN_FILE} is readable by group or others (mode ${_token_mode}); chmod 600 it" >&2
-            exit 1
-            ;;
-    esac
-    GOTHAM_AGENT_ENROLLMENT_TOKEN="$(head -n1 -- "${ENROLLMENT_TOKEN_FILE}" | tr -d '\r')"
+    _as_root=0
+    if [ "$(id -u 2>/dev/null)" = "0" ]; then
+        _as_root=1
+    fi
+    GOTHAM_AGENT_ENROLLMENT_TOKEN="$(read_enrollment_token_file "${ENROLLMENT_TOKEN_FILE}" "${_as_root}")" || exit 1
     export GOTHAM_AGENT_ENROLLMENT_TOKEN
-    unset _token_mode
+    unset _as_root
 fi
 
 # --full defaults off; GOTHAM_AGENT_FULL=1 is the environment form (the

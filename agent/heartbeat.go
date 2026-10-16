@@ -163,6 +163,13 @@ func NewAgent(cfg Config, log *slog.Logger, docker dockerClient, options ...Opti
 	for _, option := range options {
 		option(agent)
 	}
+	// A token on a plaintext channel is never sent (see
+	// shouldSendEnrollmentToken); say so loudly rather than failing to enroll
+	// with a silent, unexplained refusal.
+	if cfg.EnrollmentToken != "" && cfg.CA == "" {
+		log.Warn("agent: GOTHAM_AGENT_ENROLLMENT_TOKEN is set but the channel has no CA; the token is NOT sent over " +
+			"plaintext. Set GOTHAM_AGENT_CA for a TLS channel, or use the control plane's open-enrollment opt-in")
+	}
 	// The updater is disabled (nil) when no release public key is configured or
 	// no fixed binary path is set; it never blocks construction.
 	if u, err := newUpdater(cfg, log, agent.Version, agent.setVersion); err != nil {
@@ -341,23 +348,25 @@ func (a *Agent) dialOptionsFor() ([]grpc.DialOption, error) {
 func (a *Agent) register(ctx context.Context, client agentv1.AgentServiceClient) (*agentv1.RegisterResponse, error) {
 	callCtx, cancel := context.WithTimeout(ctx, a.registerTimeout)
 	defer cancel()
-	// The token is a bootstrap credential: send it only while this node has no
-	// certificate yet, so a long-lived agent stops re-sending it once enrolled.
-	if a.cfg.EnrollmentToken != "" && !a.hasClientCert() {
+	if a.shouldSendEnrollmentToken() {
 		callCtx = metadata.AppendToOutgoingContext(callCtx, enrollmentTokenMetadataKey, a.cfg.EnrollmentToken)
 	}
 	return client.Register(callCtx, a.registerRequest(callCtx))
 }
 
-// hasClientCert reports whether a node certificate is already on disk. An
-// unconfigured CA means the plaintext development channel, which never carries
-// the token.
-func (a *Agent) hasClientCert() bool {
-	if a.cfg.CA == "" {
+// shouldSendEnrollmentToken reports whether the enrollment token may ride on
+// this Register. The token is a secret with two conditions (JUS-194):
+//   - it is only ever sent over a channel that authenticates the control plane,
+//     i.e. with a configured CA that pins the CP certificate. A plaintext
+//     (dev-insecure) channel must never carry a real token; and
+//   - only while this node has no certificate yet, so a long-lived agent stops
+//     re-sending it once enrolled.
+func (a *Agent) shouldSendEnrollmentToken() bool {
+	if a.cfg.EnrollmentToken == "" || a.cfg.CA == "" {
 		return false
 	}
 	_, err := os.Stat(ClientCertPath(a.cfg.CertDir))
-	return err == nil
+	return err != nil
 }
 
 // renewalDelay returns how long to keep the current registration before

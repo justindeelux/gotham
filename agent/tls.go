@@ -52,18 +52,21 @@ func verifyControlPlanePeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 	if err != nil {
 		return fmt.Errorf("agent: parse client certificate: %w", err)
 	}
-	return verifyControlPlaneCert(cert)
+	_, err = verifyControlPlaneCert(cert)
+	return err
 }
 
 // verifyControlPlaneCert is the certificate-level check behind
-// verifyControlPlanePeer and the gRPC interceptor.
-func verifyControlPlaneCert(cert *x509.Certificate) error {
+// verifyControlPlanePeer and the gRPC interceptor. It reports whether the
+// credential was accepted through the legacy rollout branch, so the caller can
+// log it.
+func verifyControlPlaneCert(cert *x509.Certificate) (legacy bool, err error) {
 	if cert.IsCA {
-		return fmt.Errorf("agent: a CA certificate is not a control-plane credential")
+		return false, fmt.Errorf("agent: a CA certificate is not a control-plane credential")
 	}
 	for _, uri := range cert.URIs {
 		if uri != nil && uri.String() == controlPlaneURI {
-			return nil
+			return false, nil
 		}
 	}
 	// Rollout grace: a control plane upgraded after this agent still presents the
@@ -71,12 +74,14 @@ func verifyControlPlaneCert(cert *x509.Certificate) error {
 	// only the control plane can obtain it: its extended key usage is clientAuth
 	// ALONE (a node leaf always carries serverAuth too) and its identity is the
 	// reserved control-plane name. A node cannot present a matching certificate.
-	// shortcut: drop this branch once the CP-side URI SAN is mandatory everywhere.
+	// shortcut: this branch is bounded and non-exploitable (only the CA mints
+	// such a credential); drop it once the CP-side URI SAN is mandatory, in the
+	// same release that tightens the gateway's legacy-leaf sunset (docs/TODO.md).
 	if len(cert.ExtKeyUsage) == 1 && cert.ExtKeyUsage[0] == x509.ExtKeyUsageClientAuth &&
 		cert.Subject.CommonName == controlPlaneClientName {
-		return nil
+		return true, nil
 	}
-	return fmt.Errorf("agent: client certificate is not the control plane")
+	return false, fmt.Errorf("agent: client certificate is not the control plane")
 }
 
 // clientCredentials returns transport credentials that verify the CP server

@@ -78,6 +78,13 @@ type GatewayConfig struct {
 	// operator choice: with neither, first enrollment is refused (fail closed).
 	// Set from GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true.
 	AllowOpenEnrollment bool
+	// LegacyLeafDeadline is when a pre-mutual-TLS (serverAuth-only) node leaf
+	// stops being accepted (JUS-194 M5). The zero value accepts it indefinitely;
+	// serve resolves it from GOTHAM_GRPC_LEGACY_LEAF_UNTIL with a default.
+	LegacyLeafDeadline time.Time
+	// Now is the clock used for the legacy-leaf sunset. Nil selects time.Now;
+	// tests inject a fake clock.
+	Now func() time.Time
 }
 
 // Gateway is the control-plane gRPC server. It implements AgentService (node
@@ -105,6 +112,10 @@ type Gateway struct {
 	// allowOpenEnrollment permits certificate-less first enrollment with no
 	// token configured (explicit operator opt-in).
 	allowOpenEnrollment bool
+	// legacyLeafDeadline is when a serverAuth-only node leaf stops being
+	// accepted; now is the clock it is compared against.
+	legacyLeafDeadline time.Time
+	now                func() time.Time
 
 	// Per-peer rate limits bound the unauthenticated Register/heartbeat
 	// surface. Tests may replace them with tighter limits.
@@ -139,11 +150,16 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 		heartbeatIdle:       cfg.HeartbeatIdle,
 		enrollmentToken:     cfg.EnrollmentToken,
 		allowOpenEnrollment: cfg.AllowOpenEnrollment,
+		legacyLeafDeadline:  cfg.LegacyLeafDeadline,
+		now:                 cfg.Now,
 		registerLimiter:     newPeerRateLimiter(registerRateLimit, registerBurst),
 		heartbeatLimiter:    newPeerRateLimiter(heartbeatRateLimit, heartbeatBurst),
 	}
 	if g.heartbeatIdle <= 0 {
 		g.heartbeatIdle = heartbeatIdleTimeout
+	}
+	if g.now == nil {
+		g.now = time.Now
 	}
 	maxStreams := cfg.MaxConcurrentStreams
 	if maxStreams == 0 {
@@ -247,7 +263,7 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 	if err := validateNodeID(nodeID); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	identity, cert, err := g.peerNodeIdentity(ctx)
+	identity, cert, legacyLeaf, err := g.peerNodeIdentity(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -255,6 +271,9 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 		g.logger.Warn("servers: register node_id does not match the authenticated peer",
 			"node_id", nodeID, "peer_identity", identity, "peer", peerAddress(ctx))
 		return nil, status.Error(codes.PermissionDenied, "node_id does not match the authenticated peer")
+	}
+	if err := g.admitNodeLeaf(ctx, nodeID, legacyLeaf); err != nil {
+		return nil, err
 	}
 	// Only the co-located agent may enroll the mandatory localhost identity.
 	localPeer := net.ParseIP(peerHost(ctx))
@@ -269,7 +288,7 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 	// the bootstrap gate.
 	if g.tlsEnabled {
 		if identity != "" {
-			if err := g.authorizeEstablished(ctx, nodeID, cert, req.GetCsr()); err != nil {
+			if err := g.authorizeEstablished(ctx, nodeID, cert, req.GetCsr(), legacyLeaf); err != nil {
 				return nil, err
 			}
 		} else if err := g.authorizeBootstrap(ctx, nodeID, req.GetCsr()); err != nil {
@@ -300,7 +319,7 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 		// already authorized above (this is a no-op re-read); a bootstrap node
 		// is bound here, once RegisterNode has created its row.
 		if g.tlsEnabled && csrFingerprint != "" {
-			if err := g.nodeKeyError(nodeID, identity, g.service.AuthorizeNodeKey(ctx, nodeID, csrFingerprint)); err != nil {
+			if err := g.nodeKeyError(nodeID, identity, g.service.AuthorizeNodeKey(ctx, nodeID, csrFingerprint, legacyLeaf)); err != nil {
 				return nil, err
 			}
 		}
@@ -312,7 +331,7 @@ func (g *Gateway) Register(ctx context.Context, req *agentv1.RegisterRequest) (*
 // certificate: its node must exist, the presented key must be the key the node
 // is bound to (bound on first authenticated use), and a renewal CSR must sign
 // for that same key.
-func (g *Gateway) authorizeEstablished(ctx context.Context, nodeID string, cert *x509.Certificate, csr []byte) error {
+func (g *Gateway) authorizeEstablished(ctx context.Context, nodeID string, cert *x509.Certificate, csr []byte, legacyLeaf bool) error {
 	fingerprint, err := NodeKeyFingerprint(cert.PublicKey)
 	if err != nil {
 		return status.Error(codes.Internal, "internal error")
@@ -328,7 +347,7 @@ func (g *Gateway) authorizeEstablished(ctx context.Context, nodeID string, cert 
 			return status.Error(codes.PermissionDenied, "certificate signing request key does not match the authenticated certificate")
 		}
 	}
-	return g.nodeKeyError(nodeID, "", g.service.AuthorizeNodeKey(ctx, nodeID, fingerprint))
+	return g.nodeKeyError(nodeID, "", g.service.AuthorizeNodeKey(ctx, nodeID, fingerprint, legacyLeaf))
 }
 
 // authorizeBootstrap gates a first-ever enrollment. The enrollment token is
@@ -432,7 +451,7 @@ func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatR
 	peer := peerAddress(ctx)
 	limiterKey := peerHost(ctx)
 
-	nodeID, cert, err := g.heartbeatIdentity(ctx, peer)
+	nodeID, cert, legacyLeaf, err := g.heartbeatIdentity(ctx, peer)
 	if err != nil {
 		return err
 	}
@@ -504,7 +523,7 @@ func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatR
 			// Revocation: a node removed or re-keyed after the stream opened
 			// fails this check and the stream closes.
 			if keyFingerprint != "" {
-				if err := g.nodeKeyError(nodeID, "", g.service.AuthorizeNodeKey(ctx, nodeID, keyFingerprint)); err != nil {
+				if err := g.nodeKeyError(nodeID, "", g.service.AuthorizeNodeKey(ctx, nodeID, keyFingerprint, legacyLeaf)); err != nil {
 					return err
 				}
 			}
@@ -523,25 +542,28 @@ func (g *Gateway) Heartbeat(stream grpc.ClientStreamingServer[agentv1.HeartbeatR
 // metadata identity that contradicts the authenticated peer certificate. On the
 // TLS listener a client certificate is required; the dev listener has none and
 // falls back to the node-id metadata.
-func (g *Gateway) heartbeatIdentity(ctx context.Context, peer string) (string, *x509.Certificate, error) {
-	authenticated, cert, err := g.peerNodeIdentity(ctx)
+func (g *Gateway) heartbeatIdentity(ctx context.Context, peer string) (string, *x509.Certificate, bool, error) {
+	authenticated, cert, legacyLeaf, err := g.peerNodeIdentity(ctx)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	claimed := metadataNodeID(ctx)
 	if authenticated != "" && claimed != "" && authenticated != claimed {
 		g.logger.Warn("servers: heartbeat node_id does not match the authenticated peer",
 			"node_id", claimed, "peer_identity", authenticated, "peer", peer)
-		return "", nil, status.Error(codes.PermissionDenied, "node_id does not match the authenticated peer")
+		return "", nil, false, status.Error(codes.PermissionDenied, "node_id does not match the authenticated peer")
 	}
 	if authenticated != "" {
-		return authenticated, cert, nil
+		if err := g.admitNodeLeaf(ctx, authenticated, legacyLeaf); err != nil {
+			return "", nil, false, err
+		}
+		return authenticated, cert, legacyLeaf, nil
 	}
 	if g.tlsEnabled {
 		g.logger.Warn("servers: heartbeat from a peer without a client certificate", "peer", peer)
-		return "", nil, status.Error(codes.Unauthenticated, "client certificate is required")
+		return "", nil, false, status.Error(codes.Unauthenticated, "client certificate is required")
 	}
-	return claimed, nil, nil
+	return claimed, nil, false, nil
 }
 
 // RequestUpdate answers an agent's update query. It compares the reported
@@ -620,7 +642,7 @@ func (a *Authority) serverCredentials(addr string, extraHosts []string) (credent
 // metadata. The returned id is the authenticated node id ("" on the dev
 // listener when the peer sent no metadata).
 func (g *Gateway) authorizeRequest(ctx context.Context) (string, error) {
-	identity, cert, err := g.peerNodeIdentity(ctx)
+	identity, cert, legacyLeaf, err := g.peerNodeIdentity(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -636,11 +658,14 @@ func (g *Gateway) authorizeRequest(ctx context.Context) (string, error) {
 			"node_id", claimed, "peer_identity", identity, "peer", peerAddress(ctx))
 		return "", status.Error(codes.PermissionDenied, "node_id does not match the authenticated peer")
 	}
+	if err := g.admitNodeLeaf(ctx, identity, legacyLeaf); err != nil {
+		return "", err
+	}
 	fingerprint, err := NodeKeyFingerprint(cert.PublicKey)
 	if err != nil {
 		return "", status.Error(codes.Internal, "internal error")
 	}
-	if err := g.nodeKeyError(identity, "", g.service.AuthorizeNodeKey(ctx, identity, fingerprint)); err != nil {
+	if err := g.nodeKeyError(identity, "", g.service.AuthorizeNodeKey(ctx, identity, fingerprint, legacyLeaf)); err != nil {
 		return "", err
 	}
 	return identity, nil
@@ -664,16 +689,34 @@ func peerClientCert(ctx context.Context) *x509.Certificate {
 // certificate the peer presented, or "" when it presented none. A certificate
 // that does not verify against the authority is a hard refusal: the peer is
 // unauthenticated rather than anonymous.
-func (g *Gateway) peerNodeIdentity(ctx context.Context) (string, *x509.Certificate, error) {
+func (g *Gateway) peerNodeIdentity(ctx context.Context) (string, *x509.Certificate, bool, error) {
 	cert := peerClientCert(ctx)
 	if cert == nil || g.authority == nil {
-		return "", nil, nil
+		return "", nil, false, nil
 	}
-	if err := g.authority.VerifyNodeClientCert(cert); err != nil {
+	legacy, err := g.authority.VerifyNodeClientCert(cert)
+	if err != nil {
 		g.logger.Warn("servers: rejecting a peer client certificate", "peer", peerAddress(ctx), "error", err)
-		return "", nil, status.Error(codes.Unauthenticated, "client certificate is not valid for this control plane")
+		return "", nil, false, status.Error(codes.Unauthenticated, "client certificate is not valid for this control plane")
 	}
-	return nodeIDFromCertIdentity(certIdentity(cert)), cert, nil
+	return nodeIDFromCertIdentity(certIdentity(cert)), cert, legacy, nil
+}
+
+// admitNodeLeaf applies the legacy-leaf sunset (JUS-194 M5) to an authenticated
+// node certificate: a serverAuth-only leaf is accepted (and warned about) until
+// the deadline and refused after it.
+func (g *Gateway) admitNodeLeaf(ctx context.Context, nodeID string, legacy bool) error {
+	if !legacy {
+		return nil
+	}
+	if !g.legacyLeafDeadline.IsZero() && !g.now().Before(g.legacyLeafDeadline) {
+		g.logger.Error("servers: rejecting a legacy serverAuth-only node certificate after the sunset",
+			"node_id", nodeID, "deadline", g.legacyLeafDeadline.Format(time.RFC3339), "peer", peerAddress(ctx))
+		return status.Error(codes.Unauthenticated, "node certificate predates mutual TLS; re-enroll the node")
+	}
+	g.logger.Warn("servers: accepted a legacy serverAuth-only node certificate; it stops working after the sunset",
+		"node_id", nodeID, "deadline", g.legacyLeafDeadline.Format(time.RFC3339), "peer", peerAddress(ctx))
+	return nil
 }
 
 // nodeIDFromCertIdentity maps a certificate identity to the node id it proves.

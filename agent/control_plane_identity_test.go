@@ -91,8 +91,9 @@ func nodeLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, n
 }
 
 // startTestAgentTLS starts an agent listener that verifies client certificates
-// against caPEM, with the control-plane interceptor installed.
-func startTestAgentTLS(t *testing.T, caPEM []byte, caCert *x509.Certificate, caKey *ecdsa.PrivateKey) string {
+// against caPEM, with the mandatory control-plane interceptor (unless an opt-out
+// is passed).
+func startTestAgentTLS(t *testing.T, caPEM []byte, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, options ...ServerOption) string {
 	t.Helper()
 	caPath := filepath.Join(t.TempDir(), "ca.pem")
 	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
@@ -103,8 +104,17 @@ func startTestAgentTLS(t *testing.T, caPEM []byte, caCert *x509.Certificate, caK
 	if err != nil {
 		t.Fatalf("ServerCredentials: %v", err)
 	}
+	return startAgentWithCreds(t, creds, options...)
+}
+
+// startAgentWithCreds starts an agent listener from creds and returns its
+// address.
+func startAgentWithCreds(t *testing.T, creds credentials.TransportCredentials, options ...ServerOption) string {
+	t.Helper()
 	docker := &fakeDockerClient{version: "24.0.7", containers: []*agentv1.ContainerInfo{{Id: "c1"}}}
-	server, err := NewServer("127.0.0.1:0", creds, NewDockerServer(docker, discardLogger()), discardLogger(), WithControlPlanePeer())
+	// No control-plane option is passed: NewServer installs the check for any TLS
+	// listener (M4), which is what these tests also prove.
+	server, err := NewServer("127.0.0.1:0", creds, NewDockerServer(docker, discardLogger()), discardLogger(), options...)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -192,6 +202,38 @@ func TestAgentListenerRejectsExpiredAndCACredentials(t *testing.T) {
 	}
 }
 
+// TestAgentListenerControlPlaneCheckIsMandatory proves the interceptor is a real
+// gate with exactly one opt-out: a TLS listener that does not verify client
+// certificates still refuses an uncertified peer unless the caller explicitly
+// passes WithoutControlPlanePeer (the dev/test escape production must not use).
+// The credential-level check is separate and stays in place.
+func TestAgentListenerControlPlaneCheckIsMandatory(t *testing.T) {
+	caPEM, caCert, caKey := testCA(t)
+	pool := testPool(t, caPEM)
+	serverCert, serverKey := testLeaf(t, caCert, caKey)
+	// No CA => the listener does not request a client certificate at all.
+	creds, err := ServerCredentials(serverCert, serverKey, "", false)
+	if err != nil {
+		t.Fatalf("ServerCredentials: %v", err)
+	}
+
+	enforced := startAgentWithCreds(t, creds)
+	if _, err := listOverMTLS(t, enforced, pool, caPEM, mustKeyPEM(t, caKey)); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("a TLS listener without the control-plane check accepted a peer: %v", err)
+	}
+
+	optedOut := startAgentWithCreds(t, creds, WithoutControlPlanePeer())
+	if _, err := listOverMTLS(t, optedOut, pool, caPEM, mustKeyPEM(t, caKey)); err != nil {
+		t.Fatalf("WithoutControlPlanePeer did not opt out: %v", err)
+	}
+}
+
+// mustKeyPEM encodes a key as PEM for a client keypair in a test.
+func mustKeyPEM(t *testing.T, key *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: mustMarshalPKCS8(t, key)})
+}
+
 // TestAgentAcceptsLegacyControlPlaneCredential is the rollout grace path: a
 // control plane upgraded after the agent still presents the pre-change
 // credential (clientAuth only, control-plane name), which must keep working. A
@@ -216,14 +258,14 @@ func TestRequireControlPlanePeerFromContext(t *testing.T) {
 	_, caCert, caKey := testCA(t)
 
 	cpCert, _ := controlPlaneLeaf(t, caCert, caKey)
-	if err := requireControlPlanePeerFromContext(peerWithCert(t, cpCert)); err != nil {
+	if err := requireControlPlanePeerFromContext(peerWithCert(t, cpCert), discardLogger()); err != nil {
 		t.Fatalf("control-plane peer rejected by the interceptor: %v", err)
 	}
 	nodeCert, _ := nodeLeaf(t, caCert, caKey, "node-a")
-	if err := requireControlPlanePeerFromContext(peerWithCert(t, nodeCert)); status.Code(err) != codes.PermissionDenied {
+	if err := requireControlPlanePeerFromContext(peerWithCert(t, nodeCert), discardLogger()); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("node peer = %v, want PermissionDenied", err)
 	}
-	if err := requireControlPlanePeerFromContext(context.Background()); status.Code(err) != codes.Unauthenticated {
+	if err := requireControlPlanePeerFromContext(context.Background(), discardLogger()); status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("peerless context = %v, want Unauthenticated", err)
 	}
 }

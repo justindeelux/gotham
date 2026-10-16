@@ -428,8 +428,9 @@ repeated against this shared box's CP/agent yet.
   node's first registration has no certificate yet, so on a TLS install the
   control plane uses `GOTHAM_GRPC_ENROLLMENT_TOKEN` (or generates
   `<GOTHAM_CA_DIR>/enrollment-token`) and you pass the value to
-  `install-agent.sh` via `GOTHAM_AGENT_ENROLLMENT_TOKEN` or
-  `--enrollment-token-file`; the plaintext dev box above needs neither.
+  `install-agent.sh` via `--enrollment-token-file` (a root-owned 0600 file) or,
+  without echo, `GOTHAM_AGENT_ENROLLMENT_TOKEN` for `sudo -E`; the plaintext dev
+  box above needs neither because it enrolls with the open-enrollment opt-in.
 - Go toolchain: install a Go release matching `go.mod` before `make build`.
 - Ports used on this host: 8000 (CP HTTP), 9442 (CP gRPC), 9443 (agent
   DockerService), 5432 (Postgres), 6379 (Redis).

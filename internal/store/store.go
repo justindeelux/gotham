@@ -471,11 +471,18 @@ func (s *Store) GetServerByNodeID(ctx context.Context, nodeID *string) (sqlc.Ser
 	return s.queries.GetServerByNodeID(ctx, nodeID)
 }
 
-// SetServerAgentKey binds (or confirms) the client key fingerprint a node
-// authenticated with (JUS-194). It answers pgx.ErrNoRows when the node is bound
-// to a different key, so a reassigned node cannot keep authenticating.
-func (s *Store) SetServerAgentKey(ctx context.Context, params sqlc.SetServerAgentKeyParams) (sqlc.Server, error) {
-	return s.queries.SetServerAgentKey(ctx, params)
+// SetServerAgentLeaf binds (or confirms) the client key fingerprint a node
+// authenticated with and records whether its accepted leaf was legacy
+// (JUS-194). It answers pgx.ErrNoRows when the node is bound to a different key,
+// so a reassigned node cannot keep authenticating.
+func (s *Store) SetServerAgentLeaf(ctx context.Context, params sqlc.SetServerAgentLeafParams) (sqlc.Server, error) {
+	return s.queries.SetServerAgentLeaf(ctx, params)
+}
+
+// CountLegacyAgentLeaves returns how many nodes last authenticated with a legacy
+// serverAuth-only leaf (JUS-194 M5): the nodes that must renew before the sunset.
+func (s *Store) CountLegacyAgentLeaves(ctx context.Context) (int64, error) {
+	return s.queries.CountLegacyAgentLeaves(ctx)
 }
 
 // UpsertServerByNodeID inserts or refreshes the node registered under its node

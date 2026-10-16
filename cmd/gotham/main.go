@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/justindeelux/gotham/internal/auth"
 	"github.com/justindeelux/gotham/internal/config"
@@ -202,6 +203,26 @@ func runServe() int {
 		logger.Info("generated a bootstrap enrollment token; pass it to new nodes with GOTHAM_AGENT_ENROLLMENT_TOKEN "+
 			"(or install-agent.sh --enrollment-token-file)", "path", tokenPath)
 	}
+	// The sunset for pre-mutual-TLS (serverAuth-only) node certificates: a
+	// configured date with a built-in default, reported with how many nodes still
+	// present one (JUS-194 M5). A malformed value fails startup rather than
+	// silently extending the window.
+	legacyLeafDeadline, err := servers.ParseLegacyLeafDeadline(snap.GRPC.LegacyLeafUntil)
+	if err != nil {
+		logger.Error("invalid GOTHAM_GRPC_LEGACY_LEAF_UNTIL", "error", err)
+		return exitError
+	}
+	if !legacyLeafDeadline.IsZero() {
+		legacyNodes, countErr := serverService.LegacyLeafNodeCount(ctx)
+		if countErr != nil {
+			logger.Warn("failed to count nodes with a legacy certificate", "error", countErr)
+		}
+		logger.Warn("node certificates issued before mutual TLS (serverAuth-only) stop being accepted after the sunset; "+
+			"online nodes renew automatically",
+			"deadline", legacyLeafDeadline.Format(time.RFC3339),
+			"legacy_nodes", legacyNodes,
+			"override", config.EnvGRPCLegacyLeafUntil)
+	}
 	gateway, err := servers.NewGateway(servers.GatewayConfig{
 		Addr:                snap.GRPC.Addr,
 		Authority:           authority,
@@ -210,6 +231,7 @@ func runServe() int {
 		Hosts:               grpcHosts,
 		EnrollmentToken:     enrollmentToken,
 		AllowOpenEnrollment: snap.GRPC.AllowOpenEnrollment,
+		LegacyLeafDeadline:  legacyLeafDeadline,
 	})
 	if err != nil {
 		logger.Error("failed to create grpc gateway", "error", err)

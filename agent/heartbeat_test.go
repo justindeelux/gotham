@@ -48,14 +48,24 @@ type fakeAgentService struct {
 	mu         sync.Mutex
 	registers  []*agentv1.RegisterRequest
 	heartbeats []*agentv1.HeartbeatRequest
+	// registerTokens is the enrollment-token metadata seen on each Register
+	// (aligned with registers); empty means no token was sent.
+	registerTokens []string
 	// heartbeatNodes is the node id carried in the heartbeat stream metadata,
 	// aligned with heartbeats (the request itself carries no node id).
 	heartbeatNodes []string
 }
 
 func (f *fakeAgentService) Register(ctx context.Context, req *agentv1.RegisterRequest) (*agentv1.RegisterResponse, error) {
+	token := ""
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		if values := md.Get(enrollmentTokenMetadataKey); len(values) > 0 {
+			token = values[0]
+		}
+	}
 	f.mu.Lock()
 	f.registers = append(f.registers, req)
+	f.registerTokens = append(f.registerTokens, token)
 	f.mu.Unlock()
 	if f.registerGate != nil {
 		select {
@@ -99,6 +109,17 @@ func (f *fakeAgentService) Heartbeat(stream grpc.ClientStreamingServer[agentv1.H
 			}
 		}
 	}
+}
+
+// firstRegisterToken returns the token sent on the first Register ("" when
+// none was sent).
+func (f *fakeAgentService) firstRegisterToken() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.registerTokens) == 0 {
+		return ""
+	}
+	return f.registerTokens[0]
 }
 
 func (f *fakeAgentService) registerCount() int {

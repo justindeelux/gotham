@@ -208,12 +208,10 @@ func LoadOrCreateEnrollmentToken(dir string) (token, path string, err error) {
 		return "", "", errors.New("servers: ca dir is empty")
 	}
 	path = filepath.Join(dir, enrollmentTokenFile)
-	if data, readErr := os.ReadFile(path); readErr == nil {
-		if existing := strings.TrimSpace(string(data)); existing != "" {
-			return existing, path, nil
-		}
-	} else if !errors.Is(readErr, os.ErrNotExist) {
-		return "", "", fmt.Errorf("read enrollment token: %w", readErr)
+	if existing, readErr := readEnrollmentToken(path); readErr != nil {
+		return "", "", readErr
+	} else if existing != "" {
+		return existing, path, nil
 	}
 
 	raw := make([]byte, 32)
@@ -224,10 +222,59 @@ func LoadOrCreateEnrollmentToken(dir string) (token, path string, err error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", "", fmt.Errorf("create ca dir: %w", err)
 	}
-	if err := writeFile(path, []byte(token+"\n")); err != nil {
-		return "", "", err
+	// O_EXCL: two control-plane starts racing on a fresh CA must converge on one
+	// token, not each persist their own (the loser's in-memory token would no
+	// longer match the file).
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			if existing, readErr := readEnrollmentToken(path); readErr == nil && existing != "" {
+				return existing, path, nil
+			}
+			// The file exists but is empty (a botched earlier write): fill it in
+			// place rather than leave the instance without a token.
+			if writeErr := os.WriteFile(path, []byte(token+"\n"), 0o600); writeErr != nil {
+				return "", "", fmt.Errorf("write enrollment token: %w", writeErr)
+			}
+			return token, path, nil
+		}
+		return "", "", fmt.Errorf("write enrollment token: %w", err)
+	}
+	if _, err := file.WriteString(token + "\n"); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return "", "", fmt.Errorf("write enrollment token: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", "", fmt.Errorf("write enrollment token: %w", err)
 	}
 	return token, path, nil
+}
+
+// readEnrollmentToken returns the persisted token, or "" when the file does not
+// exist. It refuses a symlink or a non-regular file and a token readable beyond
+// its owner: the value is a credential, and a group- or world-readable file is a
+// hard error rather than a warning.
+func readEnrollmentToken(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("stat enrollment token: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("servers: enrollment token %s is not a regular file", path)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return "", fmt.Errorf("servers: enrollment token %s has permissions %04o; must not be readable by group or others (chmod 0600)", path, perm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read enrollment token: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 // Pool returns a certificate pool containing the CA certificate, suitable for
@@ -291,27 +338,68 @@ func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte, nodeID string) ([]byte,
 // VerifyNodeClientCert verifies a certificate an agent presented on the mutual-
 // TLS agent channel: it must chain to this authority, be inside its validity
 // window and not be a CA. The extended key usage is deliberately NOT constrained
-// (x509.ExtKeyUsageAny): a leaf issued before mutual TLS carries only serverAuth
-// and the upgrade path must keep accepting it until the node renews.
-func (a *Authority) VerifyNodeClientCert(cert *x509.Certificate) error {
+// (x509.ExtKeyUsageAny): a leaf issued before mutual TLS carries only serverAuth,
+// and the gateway keeps accepting it until the node renews or the sunset date
+// (DefaultLegacyLeafDeadline) passes.
+//
+// It reports whether the leaf is legacy (serverAuth-only, no clientAuth), which
+// the gateway uses for the sunset decision, the operator's legible count and the
+// per-accept warning.
+func (a *Authority) VerifyNodeClientCert(cert *x509.Certificate) (legacy bool, err error) {
 	if cert == nil {
-		return errors.New("servers: no client certificate presented")
+		return false, errors.New("servers: no client certificate presented")
 	}
 	if cert.IsCA {
-		return errors.New("servers: a CA certificate is not a node credential")
+		return false, errors.New("servers: a CA certificate is not a node credential")
 	}
 	// The control-plane client credential is a different trust role: it must
 	// never authenticate as a node on the gateway (JUS-194 fix round 1).
 	if hasControlPlaneURI(cert) {
-		return errors.New("servers: a control-plane client certificate is not a node credential")
+		return false, errors.New("servers: a control-plane client certificate is not a node credential")
 	}
 	if _, err := cert.Verify(x509.VerifyOptions{
 		Roots:     a.Pool(),
 		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}); err != nil {
-		return fmt.Errorf("servers: node certificate: %w", err)
+		return false, fmt.Errorf("servers: node certificate: %w", err)
 	}
-	return nil
+	return !hasClientAuthUsage(cert), nil
+}
+
+// hasClientAuthUsage reports whether a leaf declares the clientAuth extended key
+// usage (a dual-EKU leaf does; a pre-mTLS serverAuth-only leaf does not).
+func hasClientAuthUsage(cert *x509.Certificate) bool {
+	for _, usage := range cert.ExtKeyUsage {
+		if usage == x509.ExtKeyUsageClientAuth || usage == x509.ExtKeyUsageAny {
+			return true
+		}
+	}
+	return false
+}
+
+// DefaultLegacyLeafDeadline is the default date after which the gateway stops
+// accepting a pre-mutual-TLS (serverAuth-only) node leaf, which the M5 sunset
+// requires. The 90-day agent leaf means every node that is online has renewed
+// long before it; the date is a hard stop, not a hint. Override with
+// GOTHAM_GRPC_LEGACY_LEAF_UNTIL (RFC 3339, or "none" to disable the sunset).
+const DefaultLegacyLeafDeadline = "2027-01-15T00:00:00Z"
+
+// ParseLegacyLeafDeadline resolves the configured sunset date. An empty value
+// selects DefaultLegacyLeafDeadline; "none"/"off" disables the sunset (the
+// operator explicitly accepts it); a malformed value is an error rather than a
+// silent default, so a typo cannot extend the legacy window unnoticed.
+func ParseLegacyLeafDeadline(raw string) (time.Time, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		raw = DefaultLegacyLeafDeadline
+	case "none", "off":
+		return time.Time{}, nil
+	}
+	deadline, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse legacy leaf deadline %q: %w", raw, err)
+	}
+	return deadline, nil
 }
 
 // hasControlPlaneURI reports whether cert carries the control-plane client URI

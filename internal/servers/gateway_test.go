@@ -731,7 +731,7 @@ func TestGatewayHeartbeatRejectsIdentityMismatch(t *testing.T) {
 
 	nodeID := uniqueNodeID("node-hb-mismatch")
 	certPEM, keyPEM := enrollNode(t, addr, authority, nodeID)
-	deleteNode(t, service, nodeID)
+	cleanupNode(t, service, nodeID)
 
 	streamCtx := metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, "victim")
 	stream, err := agentv1.NewAgentServiceClient(dialWithClientCert(t, addr, authority, certPEM, keyPEM)).Heartbeat(streamCtx)

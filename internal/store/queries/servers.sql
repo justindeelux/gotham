@@ -81,19 +81,30 @@ SET os = EXCLUDED.os,
     updated_at = now()
 RETURNING *;
 
--- name: SetServerAgentKey :one
--- Binds a node's client key fingerprint, or confirms the presented one, and
--- refuses any other key (JUS-194): the guarded UPDATE affects 0 rows (pgx
--- ErrNoRows) when the node is already bound to a different key, so a stale read
--- cannot let a reassigned node keep heartbeating. updated_at moves only when the
--- value actually changes, so the per-heartbeat authorization check is a no-op
--- write once the node is bound.
+-- name: SetServerAgentLeaf :one
+-- Binds a node's client key fingerprint, or confirms the presented one, records
+-- whether the accepted leaf was a legacy serverAuth-only one, and refuses any
+-- other key (JUS-194): the guarded UPDATE affects 0 rows (pgx ErrNoRows) when the
+-- node is already bound to a different key, so a stale read cannot let a
+-- reassigned node keep heartbeating. updated_at moves only when a value actually
+-- changes, so the per-heartbeat authorization check is a no-op write once the
+-- node is bound and its leaf kind is known.
 UPDATE servers
 SET agent_key_fingerprint = $2,
-    updated_at = CASE WHEN agent_key_fingerprint IS DISTINCT FROM $2 THEN now() ELSE updated_at END
+    agent_legacy_leaf = $3,
+    updated_at = CASE
+        WHEN agent_key_fingerprint IS DISTINCT FROM $2
+          OR agent_legacy_leaf IS DISTINCT FROM $3 THEN now()
+        ELSE updated_at
+    END
 WHERE id = $1
   AND (agent_key_fingerprint IS NULL OR agent_key_fingerprint = $2)
 RETURNING *;
+
+-- name: CountLegacyAgentLeaves :one
+-- How many enrolled nodes last authenticated with a legacy serverAuth-only leaf
+-- (JUS-194 M5): the nodes that still have to renew before the sunset date.
+SELECT count(*) FROM servers WHERE agent_legacy_leaf;
 
 -- name: ClaimServerByNodeID :one
 -- Claims an operator-created server row (node_id still NULL) whose address

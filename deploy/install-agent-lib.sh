@@ -230,14 +230,16 @@ _env_check_value() {
             # It is opaque, but it must survive systemd's EnvironmentFile parse
             # unchanged: no whitespace, quotes, backslash or '=' (an unquoted
             # value would be mangled), and it is bounded so an accidental paste
-            # of a whole file fails instead of being written.
+            # of a whole file fails instead of being written. The value is a
+            # SECRET: never echo it (a captured error log or shell history would
+            # leak it) — name the shape, not the value.
             if [ "${#_ck_value}" -gt 512 ]; then
-                echo "install-agent.sh: ${_ck_key} exceeds 512 bytes (got ${#_ck_value})" >&2
+                echo "install-agent.sh: ${_ck_key} exceeds 512 bytes (got ${#_ck_value}); check the enrollment token file" >&2
                 return 1
             fi
             case "${_ck_value}" in
                 *" "* | *"$_ck_tab"* | *"'"* | *'"'* | *\\* | *=*)
-                    echo "install-agent.sh: ${_ck_key} must not contain whitespace, quotes, backslashes or = (got '${_ck_value}')" >&2
+                    echo "install-agent.sh: ${_ck_key} is malformed (must not contain whitespace, quotes, backslashes or =); check the enrollment token file" >&2
                     return 1
                     ;;
             esac
@@ -381,6 +383,74 @@ _env_check_value() {
             ;;
     esac
     return 0
+}
+
+# read_enrollment_token_file reads a bootstrap enrollment token from a root-only
+# file and prints it on stdout (nothing else), refusing: an empty path, a
+# directory, a symlink, an unreadable or missing file, a file readable by group
+# or others, a non-root owner when the caller runs as root, and an empty or
+# control-character value. The metadata read is an lstat of the path and the
+# value is read once; POSIX sh has no O_NOFOLLOW, so a swap between the two is
+# not detectable here.
+# shortcut: the lstat/read pair is not atomic; it is closed in practice by the
+# file living in a root-only directory (the CA dir), and there is no better
+# primitive in POSIX sh.
+#
+#   $1 path
+#   $2 1 when the caller runs as root (owner must then be uid 0), else 0
+read_enrollment_token_file() {
+    _tf_path=$1
+    _tf_require_root=$2
+    if [ -z "${_tf_path}" ]; then
+        echo "install-agent.sh: enrollment token file path is empty" >&2
+        return 1
+    fi
+    if [ -L "${_tf_path}" ]; then
+        echo "install-agent.sh: enrollment token file ${_tf_path} is a symlink; refusing" >&2
+        return 1
+    fi
+    if [ -d "${_tf_path}" ]; then
+        echo "install-agent.sh: enrollment token file ${_tf_path} is a directory" >&2
+        return 1
+    fi
+    if [ ! -f "${_tf_path}" ] || [ ! -r "${_tf_path}" ]; then
+        echo "install-agent.sh: enrollment token file ${_tf_path} is not a readable file" >&2
+        return 1
+    fi
+    # GNU stat uses -c, BSD/macOS uses -f; an unparsable result is a hard error
+    # (fail closed, never treat "cannot tell" as "safe").
+    _tf_mode=""
+    _tf_uid=""
+    if _tf_mode="$(stat -c '%a' "${_tf_path}" 2>/dev/null)" && _tf_uid="$(stat -c '%u' "${_tf_path}" 2>/dev/null)"; then
+        :
+    elif _tf_mode="$(stat -f '%Lp' "${_tf_path}" 2>/dev/null)" && _tf_uid="$(stat -f '%u' "${_tf_path}" 2>/dev/null)"; then
+        :
+    else
+        echo "install-agent.sh: could not read the mode and owner of ${_tf_path}; refusing" >&2
+        return 1
+    fi
+    case "${_tf_mode}" in
+        "" | *[!0-7]*)
+            echo "install-agent.sh: could not parse the mode of ${_tf_path} (got '${_tf_mode}'); refusing" >&2
+            return 1
+            ;;
+        *00) ;;
+        *)
+            echo "install-agent.sh: enrollment token file ${_tf_path} is readable by group or others (mode ${_tf_mode}); chmod 600 it" >&2
+            return 1
+            ;;
+    esac
+    if [ "${_tf_require_root}" = "1" ] && [ "${_tf_uid}" != "0" ]; then
+        echo "install-agent.sh: enrollment token file ${_tf_path} is not owned by root (uid ${_tf_uid}); refusing" >&2
+        return 1
+    fi
+    _tf_token="$(head -n1 -- "${_tf_path}" | tr -d '\r')"
+    if [ -z "${_tf_token}" ] || _env_has_ctrl "${_tf_token}"; then
+        echo "install-agent.sh: enrollment token file ${_tf_path} is empty or holds an invalid value; refusing" >&2
+        return 1
+    fi
+    printf '%s' "${_tf_token}"
+    unset _tf_token
 }
 
 # agent_env_validate checks every value agent_env_write would write to

@@ -343,10 +343,12 @@ node, and each agent accepts only the control plane (a certificate carrying the
 plane toward another node. A node's first registration has no certificate yet and
 needs the enrollment token: the control plane generates one
 `<GOTHAM_CA_DIR>/enrollment-token` (or you set `GOTHAM_GRPC_ENROLLMENT_TOKEN`),
-and you hand it to the installer via `GOTHAM_AGENT_ENROLLMENT_TOKEN=<token>` or
-`--enrollment-token-file /root/token` (mode 0600) — never on the command line.
-Without a token (and without the explicit `GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true`
-opt-in) first enrollment is refused. Only the first registration needs it. Nodes
+and you hand it to the installer with `--enrollment-token-file /root/token` (a
+root-owned file, mode 0600, not a symlink) or, without echo, the
+`GOTHAM_AGENT_ENROLLMENT_TOKEN` environment variable for `sudo -E`. Never write
+it as `sudo VAR=<token> …`: that exposes the secret in `ps`/`/proc` and shell
+history. Without a token (and without the explicit
+`GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true` opt-in) first enrollment is refused. Only the first registration needs it. Nodes
 enrolled before this change keep working (the control plane accepts their
 existing certificate and binds its key), and a self-update never touches the node
 key or certificate.

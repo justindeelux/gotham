@@ -127,6 +127,11 @@ grpc:
   # enrollment with no token. Leave false on a real instance. Set from
   # GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true.
   # allow_open_enrollment: false
+  # LegacyLeafUntil is when a node certificate issued before mutual TLS
+  # (serverAuth-only) stops being accepted (JUS-194 sunset). RFC 3339, or "none"
+  # to disable. Empty selects the built-in default; serve logs the date and how
+  # many nodes still present one. Set from GOTHAM_GRPC_LEGACY_LEAF_UNTIL.
+  # legacy_leaf_until: "2027-01-15T00:00:00Z"
 
 # Certificate authority used to issue agent and control-plane mTLS certificates.
 # Without one, serve refuses to start unless GOTHAM_GRPC_INSECURE=true

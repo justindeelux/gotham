@@ -287,6 +287,9 @@ type serverConfig struct {
 	registers []func(*grpc.Server)
 	unary     []grpc.UnaryServerInterceptor
 	stream    []grpc.StreamServerInterceptor
+	// allowAnyPeer opts out of the mandatory control-plane peer check. It is set
+	// only by WithoutControlPlanePeer (tests and the explicit dev-insecure mode).
+	allowAnyPeer bool
 }
 
 // ServerOption registers an optional service or interceptor on the agent gRPC
@@ -344,39 +347,41 @@ func WithToolService(tools agentv1.ToolServiceServer) ServerOption {
 	}
 }
 
-// WithControlPlanePeer requires every RPC, unary and stream, to come from the
-// control plane: the interceptor re-checks the peer certificate's control-plane
-// identity (JUS-194 fix round 1) in addition to the TLS handshake check, so a
-// node leaf can never use the Docker/Compose/File/Build/Proxy/Tool services.
-// Pass it whenever the listener verifies client certificates (a CA is set).
-func WithControlPlanePeer() ServerOption {
+// WithoutControlPlanePeer disables the mandatory control-plane peer check that
+// NewServer installs for every TLS listener (JUS-194). A production listener
+// must never pass it: it exists for tests, and for the explicit dev-insecure
+// mode where the listener serves plaintext on loopback and no CA is configured.
+func WithoutControlPlanePeer() ServerOption {
 	return func(c *serverConfig) {
-		c.unary = append(c.unary, requireControlPlaneUnary)
-		c.stream = append(c.stream, requireControlPlaneStream)
+		c.allowAnyPeer = true
 	}
 }
 
 // requireControlPlaneUnary rejects a unary RPC whose peer is not the control
 // plane.
-func requireControlPlaneUnary(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	if err := requireControlPlanePeerFromContext(ctx); err != nil {
-		return nil, err
+func requireControlPlaneUnary(log *slog.Logger) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if err := requireControlPlanePeerFromContext(ctx, log); err != nil {
+			return nil, err
+		}
+		return handler(ctx, req)
 	}
-	return handler(ctx, req)
 }
 
 // requireControlPlaneStream rejects a streaming RPC whose peer is not the
 // control plane.
-func requireControlPlaneStream(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-	if err := requireControlPlanePeerFromContext(stream.Context()); err != nil {
-		return err
+func requireControlPlaneStream(log *slog.Logger) grpc.StreamServerInterceptor {
+	return func(srv any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err := requireControlPlanePeerFromContext(stream.Context(), log); err != nil {
+			return err
+		}
+		return handler(srv, stream)
 	}
-	return handler(srv, stream)
 }
 
 // requireControlPlanePeerFromContext re-checks the peer certificate's
 // control-plane identity for one RPC.
-func requireControlPlanePeerFromContext(ctx context.Context) error {
+func requireControlPlanePeerFromContext(ctx context.Context, log *slog.Logger) error {
 	p, ok := peer.FromContext(ctx)
 	if !ok || p.AuthInfo == nil {
 		return status.Error(codes.Unauthenticated, "control-plane client certificate is required")
@@ -385,8 +390,12 @@ func requireControlPlanePeerFromContext(ctx context.Context) error {
 	if !ok || len(tlsInfo.State.PeerCertificates) == 0 {
 		return status.Error(codes.Unauthenticated, "control-plane client certificate is required")
 	}
-	if err := verifyControlPlaneCert(tlsInfo.State.PeerCertificates[0]); err != nil {
+	legacy, err := verifyControlPlaneCert(tlsInfo.State.PeerCertificates[0])
+	if err != nil {
 		return status.Error(codes.PermissionDenied, "peer is not the control plane")
+	}
+	if legacy && log != nil {
+		log.Warn("agent: accepted a legacy control-plane credential (no URI SAN); it should be upgraded")
 	}
 	return nil
 }
@@ -411,9 +420,18 @@ func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1
 	if err != nil {
 		return nil, fmt.Errorf("agent: listen %s: %w", addr, err)
 	}
+	if log == nil {
+		log = slog.Default()
+	}
 	config := &serverConfig{}
 	for _, option := range options {
 		option(config)
+	}
+	// The control-plane peer check is mandatory for a TLS listener (JUS-194): the
+	// F1 fix relies on it, so it is installed here rather than by each caller.
+	if creds != nil && !config.allowAnyPeer {
+		config.unary = append(config.unary, requireControlPlaneUnary(log))
+		config.stream = append(config.stream, requireControlPlaneStream(log))
 	}
 	var serverOptions []grpc.ServerOption
 	if creds != nil {
@@ -433,9 +451,6 @@ func NewServer(addr string, creds credentials.TransportCredentials, impl agentv1
 	agentv1.RegisterDockerServiceServer(server, impl)
 	for _, register := range config.registers {
 		register(server)
-	}
-	if log == nil {
-		log = slog.Default()
 	}
 	if creds == nil {
 		log.Warn("agent: serving plaintext on loopback (development only)", "addr", listener.Addr().String())

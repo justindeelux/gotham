@@ -469,6 +469,7 @@ type Server struct {
 	HostKeyFingerprint  *string            `json:"host_key_fingerprint"`
 	EncryptedPassword   *string            `json:"encrypted_password"`
 	AgentKeyFingerprint *string            `json:"agent_key_fingerprint"`
+	AgentLegacyLeaf     *bool              `json:"agent_legacy_leaf"`
 }
 
 type ServerMetric struct {

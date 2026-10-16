@@ -117,16 +117,34 @@ the command line, where `ps`, `/proc/<pid>/cmdline` and shell history expose it:
 ```sh
 # control plane: read the generated token (or set GOTHAM_GRPC_ENROLLMENT_TOKEN)
 sudo cat /var/lib/gotham/ca/enrollment-token
-# each node, off-argv (either form):
-sudo GOTHAM_AGENT_ENROLLMENT_TOKEN=<token> deploy/install-agent.sh --ca ./ca.crt
-sudo deploy/install-agent.sh --ca ./ca.crt --enrollment-token-file /root/cp-enrollment-token   # mode 0600
+# each node — preferred: a root-owned file, mode 0600, not a symlink
+sudo install -m 0600 /dev/stdin /root/cp-enrollment-token   # paste the token, end with Ctrl-D
+sudo deploy/install-agent.sh --ca ./ca.crt --enrollment-token-file /root/cp-enrollment-token
+# alternative: the environment, read without echo (never `sudo VAR=<token> cmd`:
+# that puts the secret in sudo's argv and in shell history)
+read -rs GOTHAM_AGENT_ENROLLMENT_TOKEN && export GOTHAM_AGENT_ENROLLMENT_TOKEN
+sudo -E deploy/install-agent.sh --ca ./ca.crt
 ```
 
+`--enrollment-token-file` refuses a missing file, a directory, a symlink, a file
+readable by group or others, a non-root owner when the installer runs as root,
+and an unreadable/unparsable one; it never prints the value.
+
 Only the first enrollment needs it: the agent sends the token only while it holds
-no certificate, and every later `Register`, `Heartbeat` and `RequestUpdate` uses
-the node certificate. The operator may then delete `GOTHAM_AGENT_ENROLLMENT_TOKEN`
-from `/etc/gotham/agent.env`. A certificate-less caller with no (or a wrong)
-token gets the same refusal, so it cannot use the error to enumerate node ids.
+no certificate **and only over a CA-pinned TLS channel** (a plaintext
+`GOTHAM_AGENT_INSECURE` agent logs that it is dropping the token rather than
+sending it in the clear), and every later `Register`, `Heartbeat` and
+`RequestUpdate` uses the node certificate. The operator may then delete
+`GOTHAM_AGENT_ENROLLMENT_TOKEN` from `/etc/gotham/agent.env`. A certificate-less
+caller with no (or a wrong) token gets the same refusal, so it cannot use the
+error to enumerate node ids.
+
+**Legacy-leaf sunset.** Pre-mutual-TLS (serverAuth-only) node certificates are
+accepted only until `GOTHAM_GRPC_LEGACY_LEAF_UNTIL` (default
+`2027-01-15T00:00:00Z`; `none` disables). `serve` logs the date and how many nodes
+still present one at startup, and warns on each accept; after the date such a
+leaf is refused and the node must re-enroll (online nodes renew automatically
+long before, since the leaf is 90 days).
 
 **Upgrading an already-enrolled node.** Nodes enrolled before mutual TLS hold a
 `serverAuth`-only leaf. The gateway keeps accepting it (the extended key usage is

@@ -52,6 +52,13 @@ func (s *Store) CreateNotificationDelivery(ctx context.Context, params sqlc.Crea
 	return s.queries.CreateNotificationDelivery(ctx, params)
 }
 
+// LockNotificationChannelHistory takes the per-channel advisory lock that
+// serializes the history writers of one channel for the current transaction,
+// so an insert + prune pair cannot race past the retention cap.
+func (s *Store) LockNotificationChannelHistory(ctx context.Context, channelID string) error {
+	return s.queries.LockNotificationChannelHistory(ctx, channelID)
+}
+
 // ListNotificationDeliveries returns the newest attempts of one team-scoped
 // channel. A channel of another team matches no row.
 func (s *Store) ListNotificationDeliveries(ctx context.Context, params sqlc.ListNotificationDeliveriesParams) ([]sqlc.NotificationDelivery, error) {

@@ -45,6 +45,15 @@ INSERT INTO notification_deliveries (id, channel_id, event_type, status, error_s
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
+-- name: LockNotificationChannelHistory :exec
+-- Serializes the delivery writers of one channel for the current transaction,
+-- so the insert + prune pair cannot race past the retention cap: under READ
+-- COMMITTED two concurrent writers would each keep their own newest row and
+-- leave the channel at cap+1. The advisory lock releases at commit/rollback.
+-- hashtextextended maps the channel UUID to the bigint key; a hash collision
+-- only means two channels briefly serialize, which is harmless.
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0));
+
 -- name: ListNotificationDeliveries :many
 -- The history panel read: the newest attempts of one channel, joined to its
 -- channel so a foreign team's channel can never be read (the join matches no

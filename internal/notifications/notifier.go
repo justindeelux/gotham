@@ -41,6 +41,19 @@ type discordNotifier struct {
 	client *http.Client
 }
 
+// discordPayload is the Discord webhook body. allowed_mentions with an empty
+// parse list disables every mention, so a resource name (or commit text) that
+// contains "@everyone", "@here" or a role mention can never ping a channel.
+type discordPayload struct {
+	Content         string          `json:"content"`
+	AllowedMentions discordMentions `json:"allowed_mentions"`
+}
+
+// discordMentions mirrors the allowed_mentions object Discord expects.
+type discordMentions struct {
+	Parse []string `json:"parse"`
+}
+
 // newDiscordNotifier builds a Discord notifier for a webhook URL.
 func newDiscordNotifier(webhookURL string, client *http.Client) *discordNotifier {
 	return &discordNotifier{url: webhookURL, client: client}
@@ -48,7 +61,11 @@ func newDiscordNotifier(webhookURL string, client *http.Client) *discordNotifier
 
 // Notify implements Notifier.
 func (n *discordNotifier) Notify(ctx context.Context, event Event) error {
-	return postJSON(ctx, n.client, n.url, map[string]string{"content": truncateText(event.Message(), discordContentLimit)})
+	payload := discordPayload{
+		Content:         truncateText(event.Message(), discordContentLimit),
+		AllowedMentions: discordMentions{Parse: []string{}},
+	}
+	return postJSON(ctx, n.client, n.url, payload)
 }
 
 // slackNotifier posts {"text": ...} to a Slack incoming webhook.

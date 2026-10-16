@@ -91,9 +91,42 @@ func TestDiscordNotifierPostsContent(t *testing.T) {
 	if path != "/webhook" {
 		t.Errorf("path = %q, want /webhook", path)
 	}
-	want := `{"content":` + mustJSONString(t, fixedEvent().Message()) + `}`
-	if string(body) != want {
-		t.Errorf("body = %s, want %s", body, want)
+	want := fixedEvent().Message()
+	var payload discordPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode payload %s: %v", body, err)
+	}
+	if payload.Content != want {
+		t.Errorf("content = %q, want %q", payload.Content, want)
+	}
+	if payload.AllowedMentions.Parse == nil || len(payload.AllowedMentions.Parse) != 0 {
+		t.Errorf("allowed_mentions.parse = %v, want an empty list that disables every mention", payload.AllowedMentions.Parse)
+	}
+}
+
+// TestDiscordDisablesMentions proves an application name that looks like a
+// mention can never ping a channel: the payload disables every mention kind
+// while the name still travels verbatim as data.
+func TestDiscordDisablesMentions(t *testing.T) {
+	server, call := newWebhookServer(t, http.StatusOK)
+	notifier := newDiscordNotifier(server.URL+"/webhook", server.Client())
+	event := fixedEvent()
+	event.Name = "@everyone @here <@&1234>"
+	event.Error = "deploy by @everyone failed"
+
+	if err := notifier.Notify(context.Background(), event); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	_, _, _, body := call.snapshot()
+	var payload discordPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode payload %s: %v", body, err)
+	}
+	if len(payload.AllowedMentions.Parse) != 0 {
+		t.Errorf("allowed_mentions.parse = %v, want no mention kinds", payload.AllowedMentions.Parse)
+	}
+	if !strings.Contains(payload.Content, "@everyone @here <@&1234>") || !strings.Contains(payload.Content, "deploy by @everyone failed") {
+		t.Errorf("content = %q, want the mention-shaped text kept verbatim as data", payload.Content)
 	}
 }
 

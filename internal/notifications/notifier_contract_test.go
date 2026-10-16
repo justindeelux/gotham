@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // This file verifies each sender against the endpoint contract the real
@@ -140,10 +141,11 @@ func TestRateLimitWithoutRetryAfter(t *testing.T) {
 
 // TestTransportsTruncateAtTheirLimit proves an over-long message is cut to each
 // transport's own limit, so a pathological resource name cannot make a provider
-// reject the payload.
+// reject the payload. The cap includes the ellipsis and is rune-safe: the input
+// is astral (2 UTF-16 units per rune), so a byte or unit slip shows up.
 func TestTransportsTruncateAtTheirLimit(t *testing.T) {
 	event := fixedEvent()
-	event.Name = strings.Repeat("n", 6000) // pushes Message past every limit
+	event.Name = strings.Repeat("🚀", 3000) // astral runes: pushes Message past every limit
 
 	cases := map[string]struct {
 		limit    int
@@ -162,21 +164,54 @@ func TestTransportsTruncateAtTheirLimit(t *testing.T) {
 				t.Fatalf("Notify: %v", err)
 			}
 			_, _, _, body := call.snapshot()
-			var payload map[string]string
+			var payload struct {
+				Text    string `json:"text"`
+				Content string `json:"content"`
+			}
 			if err := json.Unmarshal(body, &payload); err != nil {
 				t.Fatalf("decode payload %s: %v", body, err)
 			}
-			text := payload["text"]
+			text := payload.Text
 			if text == "" {
-				text = payload["content"]
+				text = payload.Content
 			}
-			// truncateText keeps the head and appends one ellipsis rune (3 bytes).
-			if len(text) > tc.limit+3 {
-				t.Errorf("%s message = %d bytes, want <= %d", name, len(text), tc.limit+3)
+			if !utf8.ValidString(text) {
+				t.Errorf("%s message is not valid UTF-8", name)
+			}
+			if units := utf16Length(text); units > tc.limit {
+				t.Errorf("%s message = %d UTF-16 units, want <= %d (ellipsis included)", name, units, tc.limit)
 			}
 			if !strings.HasSuffix(text, "…") {
 				t.Errorf("%s message does not end in the truncation marker", name)
 			}
 		})
+	}
+}
+
+// TestTruncateTextCapsIncludingEllipsisRuneSafe pins the cap semantics: the
+// ellipsis counts against the limit and truncation never splits a rune.
+func TestTruncateTextCapsIncludingEllipsisRuneSafe(t *testing.T) {
+	got := truncateText(strings.Repeat("🚀", 100), 10)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateText produced invalid UTF-8: %q", got)
+	}
+	if units := utf16Length(got); units > 10 {
+		t.Errorf("units = %d, want <= the 10 cap including the ellipsis", units)
+	}
+	if !strings.HasSuffix(got, "…") || !strings.HasPrefix(got, "🚀") {
+		t.Errorf("got = %q, want the head kept on a rune boundary plus an in-budget ellipsis", got)
+	}
+	ascii := truncateText(strings.Repeat("a", 4000), 2000)
+	if units := utf16Length(ascii); units > 2000 {
+		t.Errorf("ascii = %d UTF-16 units, want no more than the 2000 cap", units)
+	}
+	if runes := utf8.RuneCountInString(ascii); runes > 2000 {
+		t.Errorf("ascii = %d runes, want no more than the 2000 cap", runes)
+	}
+	if got := truncateText("hello", 10); got != "hello" {
+		t.Errorf("short text = %q, want it unchanged", got)
+	}
+	if exact := strings.Repeat("a", 10); truncateText(exact, 10) != exact {
+		t.Error("text exactly at the cap must stay unchanged (no needless ellipsis)")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -977,8 +978,8 @@ func TestTestChannelRecordsDelivery(t *testing.T) {
 	if failed == nil {
 		t.Fatalf("history = %+v, want a failed row", rows)
 	}
-	if len(failed.ErrorSummary) > maxDeliveryError+3 {
-		t.Errorf("summary = %d bytes, want it bounded at %d", len(failed.ErrorSummary), maxDeliveryError)
+	if utf8.RuneCountInString(failed.ErrorSummary) > maxDeliveryError {
+		t.Errorf("summary = %d runes, want it bounded at %d", utf8.RuneCountInString(failed.ErrorSummary), maxDeliveryError)
 	}
 }
 

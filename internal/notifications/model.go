@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/google/uuid"
 
@@ -210,13 +211,53 @@ func (e Event) Message() string {
 	return strings.Join(lines, "\n")
 }
 
-// truncateText trims text and caps it, keeping the head.
+// truncateText trims text and caps it to at most limit UTF-16 code units,
+// keeping the head. When it truncates, the budget includes the trailing
+// ellipsis, so the result never exceeds the limit the caller passed.
+//
+// UTF-16 code units are the conservative unit for every transport: Discord and
+// Slack count characters the way JavaScript does, and the Telegram Bot API
+// counts UTF-16 code units after entity parsing. A message that fits here fits
+// all three. Truncation walks rune boundaries, so it can never split a UTF-8
+// sequence (Postgres rejects an invalid-UTF-8 delivery row).
 func truncateText(text string, limit int) string {
 	text = strings.TrimSpace(text)
-	if len(text) <= limit {
+	if limit <= 0 {
+		return ""
+	}
+	if utf16Length(text) <= limit {
 		return text
 	}
-	return text[:limit] + "…"
+	// One unit is reserved for the ellipsis; it is itself one UTF-16 unit.
+	budget := limit - 1
+	var b strings.Builder
+	used := 0
+	for _, r := range text {
+		width := utf16.RuneLen(r)
+		if width <= 0 {
+			width = 1
+		}
+		if used+width > budget {
+			break
+		}
+		b.WriteRune(r)
+		used += width
+	}
+	return b.String() + "…"
+}
+
+// utf16Length counts the UTF-16 code units of text, the unit the providers
+// bound a message by.
+func utf16Length(text string) int {
+	total := 0
+	for _, r := range text {
+		width := utf16.RuneLen(r)
+		if width <= 0 {
+			width = 1
+		}
+		total += width
+	}
+	return total
 }
 
 // ChannelConfig is the transport configuration of one channel. A single struct keeps

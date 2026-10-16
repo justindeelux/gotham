@@ -273,6 +273,21 @@ func (q *Queries) ListNotificationDeliveries(ctx context.Context, arg ListNotifi
 	return items, nil
 }
 
+const lockNotificationChannelHistory = `-- name: LockNotificationChannelHistory :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// Serializes the delivery writers of one channel for the current transaction,
+// so the insert + prune pair cannot race past the retention cap: under READ
+// COMMITTED two concurrent writers would each keep their own newest row and
+// leave the channel at cap+1. The advisory lock releases at commit/rollback.
+// hashtextextended maps the channel UUID to the bigint key; a hash collision
+// only means two channels briefly serialize, which is harmless.
+func (q *Queries) LockNotificationChannelHistory(ctx context.Context, dollar_1 string) error {
+	_, err := q.db.Exec(ctx, lockNotificationChannelHistory, dollar_1)
+	return err
+}
+
 const pruneNotificationDeliveries = `-- name: PruneNotificationDeliveries :execrows
 DELETE FROM notification_deliveries AS d
 WHERE d.channel_id = $1

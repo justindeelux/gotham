@@ -149,9 +149,15 @@ func (r *storeRepository) DeleteChannel(ctx context.Context, teamID, channelID u
 
 // CreateDelivery implements Repository: it appends one attempt and trims the
 // channel's history to the retention cap in a single transaction, so a write
-// can never leave the channel over the cap.
+// can never leave the channel over the cap. The per-channel advisory lock
+// serializes concurrent writers of the same channel: without it, two
+// READ COMMITTED transactions would each keep their own newest row and leave
+// the channel at cap+1.
 func (r *storeRepository) CreateDelivery(ctx context.Context, delivery Delivery) error {
 	return r.store.InTx(ctx, func(tx *store.Store) error {
+		if err := tx.LockNotificationChannelHistory(ctx, delivery.ChannelID.String()); err != nil {
+			return fmt.Errorf("notifications: lock delivery history: %w", err)
+		}
 		if _, err := tx.CreateNotificationDelivery(ctx, sqlc.CreateNotificationDeliveryParams{
 			ID:           pgUUID(delivery.ID),
 			ChannelID:    pgUUID(delivery.ChannelID),

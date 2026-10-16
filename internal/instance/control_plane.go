@@ -52,7 +52,27 @@ func (s *Service) ControlPlaneURLs(ctx context.Context) ([]string, error) {
 	return urls, nil
 }
 
+func (s *Service) syncPanelCertificates(ctx context.Context, rec Stored) {
+	if s.SyncPanelCertificates == nil {
+		return
+	}
+	urls := []string{s.general(rec).ControlPlaneURL.Value}
+	if rec.PendingControlPlaneURL != nil && rec.PendingControlPlaneURL.Previous != nil {
+		urls = append(urls, *rec.PendingControlPlaneURL.Previous)
+	}
+	certCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := s.SyncPanelCertificates(certCtx, urls); err != nil {
+		s.logger.Warn("instance panel certificate reconciliation failed", "error", err)
+	}
+}
+
 func (s *Service) syncControlPlaneURL(ctx context.Context) error {
+	if rec, err := s.repo.Load(ctx); err == nil {
+		s.syncPanelCertificates(ctx, rec)
+	} else {
+		s.logger.Warn("instance panel certificate settings read failed", "error", err)
+	}
 	if s.ResyncProxy == nil {
 		return ErrDomainNotSynced
 	}

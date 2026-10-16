@@ -65,17 +65,19 @@ type updateDNSProviderRequest struct {
 // configured, so existing consumers are unaffected. NotAfter is only present
 // when Status is "present".
 type certificateResponse struct {
-	ID            string     `json:"id"`
-	ApplicationID string     `json:"application_id"`
-	Domain        string     `json:"domain"`
-	Enabled       bool       `json:"enabled"`
-	Challenge     string     `json:"challenge"`
-	DNSProviderID string     `json:"dns_provider_id,omitempty"`
-	Wildcard      bool       `json:"wildcard"`
-	Status        string     `json:"status,omitempty"`
-	NotAfter      *time.Time `json:"not_after,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	OwnerKind     string                 `json:"owner_kind"`
+	PanelState    *PanelCertificateState `json:"panel_state,omitempty"`
+	ID            string                 `json:"id"`
+	ApplicationID string                 `json:"application_id"`
+	Domain        string                 `json:"domain"`
+	Enabled       bool                   `json:"enabled"`
+	Challenge     string                 `json:"challenge"`
+	DNSProviderID string                 `json:"dns_provider_id,omitempty"`
+	Wildcard      bool                   `json:"wildcard"`
+	Status        string                 `json:"status,omitempty"`
+	NotAfter      *time.Time             `json:"not_after,omitempty"`
+	CreatedAt     time.Time              `json:"created_at"`
+	UpdatedAt     time.Time              `json:"updated_at"`
 }
 
 // certificateEnvelope wraps a single certificate config.
@@ -425,6 +427,12 @@ func newCertificateResponse(certificate DomainCertificate, observation Certifica
 		Wildcard:      certificate.Wildcard,
 		CreatedAt:     certificate.CreatedAt,
 		UpdatedAt:     certificate.UpdatedAt,
+	}
+	response.OwnerKind = "application"
+	if certificate.ApplicationID == uuid.Nil {
+		response.OwnerKind = "control_plane"
+		state := panelCertificateState(observation, certificate.Enabled)
+		response.PanelState = &state
 	}
 	if certificate.DNSProviderID != uuid.Nil {
 		response.DNSProviderID = certificate.DNSProviderID.String()

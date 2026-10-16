@@ -260,7 +260,9 @@ ORDER BY r.created_at, r.id;
 -- hosting its application, so the status service can read each node's ACME
 -- storage once and map certificates to it. Disabled intents are included:
 -- status is a fact about the node's storage, not about the intent.
-SELECT c.id AS certificate_id, c.domain, a.server_id
+SELECT c.id AS certificate_id, c.domain,
+       COALESCE(a.server_id, panel.id) AS server_id
 FROM domain_certificates c
-JOIN applications a ON a.id = c.application_id
+LEFT JOIN applications a ON a.id = c.application_id
+LEFT JOIN servers panel ON c.application_id IS NULL AND panel.name = 'localhost'
 ORDER BY c.id;

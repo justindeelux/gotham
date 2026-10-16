@@ -144,7 +144,16 @@ func (s *sslService) ListCertificates(ctx context.Context) ([]DomainCertificate,
 	if err != nil {
 		return nil, err
 	}
-	filtered := filterByTeam(ctx, s.store, certificates, func(c DomainCertificate) uuid.UUID {
+	visible := make([]DomainCertificate, 0, len(certificates))
+	for _, cert := range certificates {
+		if (cert.ApplicationID == uuid.Nil) == panelCertificateContext(ctx) {
+			visible = append(visible, cert)
+		}
+	}
+	if panelCertificateContext(ctx) {
+		return visible, nil
+	}
+	filtered := filterByTeam(ctx, s.store, visible, func(c DomainCertificate) uuid.UUID {
 		return c.ApplicationID
 	})
 	if filtered == nil {
@@ -163,7 +172,7 @@ func (s *sslService) GetCertificate(ctx context.Context, id uuid.UUID) (DomainCe
 	if err != nil {
 		return DomainCertificate{}, err
 	}
-	app, err := s.store.GetApplication(ctx, certificate.ApplicationID)
+	app, err := s.certificateApplication(ctx, certificate)
 	if err != nil {
 		return DomainCertificate{}, err
 	}
@@ -190,7 +199,7 @@ func (s *sslService) UpdateCertificate(ctx context.Context, id uuid.UUID, in Upd
 		if err != nil {
 			return err
 		}
-		app, err := s.store.GetApplication(ctx, existing.ApplicationID)
+		app, err := s.certificateApplication(ctx, existing)
 		if err != nil {
 			return err
 		}
@@ -282,7 +291,7 @@ func (s *sslService) DeleteCertificate(ctx context.Context, id uuid.UUID) error 
 		if err != nil {
 			return err
 		}
-		app, err := s.store.GetApplication(ctx, existing.ApplicationID)
+		app, err := s.certificateApplication(ctx, existing)
 		if err != nil {
 			return err
 		}

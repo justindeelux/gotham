@@ -137,6 +137,19 @@ with an SSH user, key, or password are not candidates. Non-loopback or missing
 legacy addresses still require the saved identity hint for migration 49;
 migration 51 ignores it.
 
+For panel HTTPS, save an `https://` control-plane URL in General settings and
+confirm the proposed host during the trial. The `localhost` proxy creates a
+panel-owned certificate intent and serves HTTPS without an application. Keep
+ports 80 and 443 reachable. HTTP-01 requires the domain's A/AAAA records to point
+**directly at this box**, with Cloudflare's proxy disabled (DNS only). For a
+proxied Cloudflare domain, configure a DNS provider and change the panel intent
+to DNS-01 through `/api/v1/proxy/panel-certificates/{id}`; see
+[panel HTTPS setup](../docs/install.md#https-for-the-panel). HTTP stays available
+while issuance is pending or failed, and redirects only after an unexpired
+certificate is observed. Confirmation retires the previous host's intent;
+reverting retires the proposed host's intent. Certificate errors never fail a
+settings save or block a revert.
+
 After a manual upgrade, set `GOTHAM_AGENT_NODE_ID=localhost` in the local agent's
 saved environment (normally `/etc/gotham/agent.env`) and restart the agent. The
 installer updates it automatically; retaining the old ID can register a duplicate

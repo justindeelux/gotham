@@ -85,6 +85,35 @@ An operator who runs `gotham serve` directly without a CA gets the development
 fallback (plaintext gRPC, logged as a warning); the installer never leaves a
 production host in that state.
 
+### HTTPS for the panel
+
+Set the instance `control_plane_url` to `https://panel.example.com` in General
+settings. The registered `localhost` node must run Traefik, with inbound ports
+80 and 443 open. Saving starts a confirmation trial and creates a panel-owned
+certificate intent; no application is required. Confirm through the proposed
+host before the trial expires. Both the proposed and previous hosts stay routed
+during the trial, and revert restores the previous host if issuance fails.
+
+HTTP-01 is the default: the domain's A/AAAA records must point directly to this
+box, and Cloudflare records must be **DNS only** (proxy disabled). Remove stale
+AAAA records when the box cannot serve IPv6. To keep Cloudflare's proxy enabled,
+configure a DNS provider and select DNS-01 for the panel intent through the
+platform-admin `PATCH /api/v1/proxy/panel-certificates/{id}` API using the existing
+`challenge` and `dns_provider_id` fields. DNS-01 needs a token allowed to update
+the configured zone; use Full (strict) once the origin certificate is issued.
+
+The HTTPS router starts ACME issuance while HTTP continues forwarding to the
+panel. HTTP redirects to HTTPS only after the local agent reports an unexpired
+certificate; readiness is refreshed every 30 seconds. Pending or failed issuance
+keeps HTTP available. The routers API reports the proposed host during a trial
+and adds `certificate.status` (`issued`, `pending`, or `failed`) and
+`certificate.not_after` for panel rows. The platform-only
+`GET /api/v1/proxy/panel-certificates` API lists panel intents with the existing
+storage `status` plus additive `panel_state` and `owner_kind` fields. `pending`
+means no usable certificate has been observed yet; `failed` includes unusable
+configuration or unavailable storage, since the agent does not report ACME
+order errors. Application certificate APIs retain their team scope.
+
 ### Git sources and the SSRF host policy
 
 Application clone URLs are operator-supplied, and the control plane dials

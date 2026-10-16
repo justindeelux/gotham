@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -35,7 +36,7 @@ func TestControlPlaneConfig(t *testing.T) {
 	providerID := uuid.New()
 	access := map[uuid.UUID]providerAccess{providerID: {provider: DNSProvider{
 		ID: providerID, Enabled: true, Provider: ProviderCloudflare, Zones: []string{"example.com"},
-	}}}
+	}, credential: "panel-dns-token"}}
 	for _, tc := range []struct {
 		name     string
 		intent   *CertificateIntent
@@ -44,18 +45,25 @@ func TestControlPlaneConfig(t *testing.T) {
 		{name: "http only"},
 		{name: "http01", intent: &CertificateIntent{Domain: "panel.example.com", Enabled: true, Challenge: ChallengeHTTP01}, resolver: DefaultResolverName},
 		{name: "dns01", intent: &CertificateIntent{Domain: "panel.example.com", Enabled: true, Challenge: ChallengeDNS01, DNSProviderID: providerID}, resolver: DNSResolverPrefix + "cloudflare"},
-		{name: "wildcard", intent: &CertificateIntent{Domain: "app.example.com", Enabled: true, Challenge: ChallengeDNS01, Wildcard: true, DNSProviderID: providerID}, resolver: DNSResolverPrefix + "cloudflare"},
+		{name: "wildcard", intent: &CertificateIntent{Domain: "panel.example.com", Enabled: true, Challenge: ChallengeDNS01, Wildcard: true, DNSProviderID: providerID}, resolver: DNSResolverPrefix + "cloudflare"},
 		{name: "disabled", intent: &CertificateIntent{Domain: "panel.example.com", Challenge: ChallengeHTTP01}},
 		{name: "unrelated", intent: &CertificateIntent{Domain: "app.example.com", Enabled: true, Challenge: ChallengeDNS01, DNSProviderID: providerID}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := panelFixture(t)
-			apps := []ProxiedApplication{{ID: uuid.New(), Certificate: tc.intent}}
+			apps := []ProxiedApplication{}
+			sslStore := newFakeSSLStore()
+			f.service.panelCertificates = sslStore
+			if tc.intent != nil {
+				sslStore.certificates = []DomainCertificate{{ID: uuid.New(), Domain: tc.intent.Domain, Enabled: tc.intent.Enabled, Challenge: tc.intent.Challenge, DNSProviderID: tc.intent.DNSProviderID, Wildcard: tc.intent.Wildcard}}
+			}
+			f.service.certificateStatus = fixedPanelStatus{CertificateStatusObservation{Status: CertificateStatusPresent, NotAfter: time.Now().Add(time.Hour)}}
 			routes, redirects, diagnostics, count := f.service.gatherRoutes(context.Background(), apps, nil, nil, f.serverID, nil, access)
 			if len(routes) != 1 || len(diagnostics) != 0 || count != 0 {
 				t.Fatalf("routes=%+v diagnostics=%+v", routes, diagnostics)
 			}
-			cfg := BuildConfig(routes, redirects, nil, "", "")
+			providers := []DNSProvider{access[providerID].provider}
+			cfg := BuildConfig(routes, redirects, providers, "", "")
 			web := cfg.Routers["panel-web"]
 			if web.Rule != "Host(`panel.example.com`)" || web.Service != "panel" || cfg.Services["panel"].LoadBalancer.Servers[0].URL != "http://172.17.0.1:8000" {
 				t.Fatalf("config: %+v", cfg)
@@ -67,13 +75,23 @@ func TestControlPlaneConfig(t *testing.T) {
 			if ok && (secure.TLS == nil || secure.TLS.CertResolver != tc.resolver || len(web.Middlewares) != 1 || web.Middlewares[0] != HTTPRedirectMiddleware) {
 				t.Fatalf("TLS=%+v web=%+v", secure, web)
 			}
+			if tc.intent != nil && tc.intent.Challenge == ChallengeDNS01 && tc.resolver != "" {
+				resolver := cfg.CertificatesResolvers[tc.resolver]
+				if resolver.ACME.DNSChallenge == nil || resolver.ACME.HTTPChallenge != nil {
+					t.Fatalf("DNS resolver=%+v", resolver)
+				}
+				env := traefikEnv(routes, access)
+				if len(env) != 1 || env[0] != "CF_DNS_API_TOKEN=panel-dns-token" {
+					t.Fatalf("panel credentials=%v", env)
+				}
+			}
 			for _, format := range []Format{FormatYAML, FormatTOML} {
 				first, err := Generate(cfg, format)
 				if err != nil {
 					t.Fatal(err)
 				}
 				againRoutes, againRedirects, _, _ := f.service.gatherRoutes(context.Background(), apps, nil, nil, f.serverID, nil, access)
-				again, err := Generate(BuildConfig(againRoutes, againRedirects, nil, "", ""), format)
+				again, err := Generate(BuildConfig(againRoutes, againRedirects, providers, "", ""), format)
 				if err != nil || !reflect.DeepEqual(first, again) {
 					t.Fatalf("non-identical rerun: %v", err)
 				}
@@ -129,7 +147,7 @@ func TestControlPlaneSyncAndList(t *testing.T) {
 		t.Fatal("sync files differ on rerun")
 	}
 	// The localhost route must never be emitted on a remote node.
-	routes, diagnostics := f.service.controlPlaneRoute(ctx, nil, uuid.New(), nil, nil)
+	routes, diagnostics := f.service.controlPlaneRoute(ctx, uuid.New(), nil, nil)
 	if len(routes) != 0 || len(diagnostics) != 0 {
 		t.Fatalf("remote panel=%+v diagnostics=%+v", routes, diagnostics)
 	}

@@ -315,6 +315,14 @@ func WithFileService(files agentv1.FileServiceServer) ServerOption {
 	}
 }
 
+// WithToolService registers the host tool catalog so the control plane can list
+// this node's tools and their detected state. Pass it to NewServer.
+func WithToolService(tools agentv1.ToolServiceServer) ServerOption {
+	return func(server *grpc.Server) {
+		agentv1.RegisterToolServiceServer(server, tools)
+	}
+}
+
 // Server wraps a gRPC server exposing DockerService over TLS.
 type Server struct {
 	grpc *grpc.Server

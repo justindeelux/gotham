@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/justindeelux/gotham/toolcatalog"
 )
 
 // Engine identifies a toolchain. It mirrors the control plane's EngineKind for
@@ -82,21 +84,23 @@ type Options struct {
 // Available reports whether the toolchain can run at all, returning an
 // ErrCLIMissing error with the install hint when it cannot. Callers check it
 // before doing any work so a missing toolchain never looks like a failed build.
+// Presence is decided by the host tool catalog, the same detection the agent
+// reports, so a build is gated on exactly what the node's tool list shows.
 func Available(engine Engine) error {
 	switch engine {
 	case Railpack:
-		if _, err := exec.LookPath(RailpackCLI); err != nil {
+		if !toolcatalog.Installed(toolcatalog.IDRailpack) {
 			return fmt.Errorf("%w: %q is not on PATH; %s", ErrCLIMissing, RailpackCLI, railpackInstallHint)
 		}
 		if strings.TrimSpace(os.Getenv("BUILDKIT_HOST")) == "" {
-			if _, err := exec.LookPath("docker"); err != nil {
+			if !toolcatalog.Installed(toolcatalog.IDDocker) {
 				return fmt.Errorf("%w: %s also needs a running BuildKit daemon: %s",
 					ErrCLIMissing, RailpackCLI, railpackBuildKitHint)
 			}
 		}
 		return nil
 	case Buildpacks:
-		if _, err := exec.LookPath(BuildpacksCLI); err != nil {
+		if !toolcatalog.Installed(toolcatalog.IDPack) {
 			return fmt.Errorf("%w: %q is not on PATH; %s", ErrCLIMissing, BuildpacksCLI, buildpacksInstallHint)
 		}
 		return nil

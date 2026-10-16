@@ -166,6 +166,7 @@ func runServe() int {
 			serverOptions := []agent.ServerOption{
 				agent.WithBuildService(agent.NewBuildServer(docker, log)),
 				agent.WithProxyService(agent.NewProxyServer(agent.ProxyServerConfig{Logger: log})),
+				agent.WithToolService(agent.NewToolServer()),
 				agent.WithComposeService(agent.NewComposeServer(agent.ComposeServerConfig{
 					Root:       cfg.ComposeRoot,
 					DockerHost: cfg.DockerSock,

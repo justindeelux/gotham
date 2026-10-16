@@ -2240,3 +2240,214 @@ var FileService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "agent/v1/agent.proto",
 }
+
+const (
+	ToolService_ListTools_FullMethodName     = "/agent.v1.ToolService/ListTools"
+	ToolService_InstallTool_FullMethodName   = "/agent.v1.ToolService/InstallTool"
+	ToolService_UninstallTool_FullMethodName = "/agent.v1.ToolService/UninstallTool"
+)
+
+// ToolServiceClient is the client API for ToolService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ToolService runs on the node agent. The control plane dials it to list the
+// host tools the platform needs and their detected state, and — from a later
+// package on — to install and uninstall them. The whole contract (list,
+// install, uninstall) is defined here so those later packages never touch this
+// file again; the install/uninstall RPCs answer codes.Unimplemented until the
+// installer lands.
+type ToolServiceClient interface {
+	// ListTools returns every catalog entry with its detected state on this node.
+	ListTools(ctx context.Context, in *ListToolsRequest, opts ...grpc.CallOption) (*ListToolsResponse, error)
+	// InstallTool installs one catalog tool, streaming the command's output
+	// lines and a final result. Not implemented yet: it answers
+	// codes.Unimplemented.
+	InstallTool(ctx context.Context, in *InstallToolRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ToolEvent], error)
+	// UninstallTool removes one catalog tool the same way. Not implemented yet:
+	// it answers codes.Unimplemented.
+	UninstallTool(ctx context.Context, in *InstallToolRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ToolEvent], error)
+}
+
+type toolServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewToolServiceClient(cc grpc.ClientConnInterface) ToolServiceClient {
+	return &toolServiceClient{cc}
+}
+
+func (c *toolServiceClient) ListTools(ctx context.Context, in *ListToolsRequest, opts ...grpc.CallOption) (*ListToolsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListToolsResponse)
+	err := c.cc.Invoke(ctx, ToolService_ListTools_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *toolServiceClient) InstallTool(ctx context.Context, in *InstallToolRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ToolEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ToolService_ServiceDesc.Streams[0], ToolService_InstallTool_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[InstallToolRequest, ToolEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ToolService_InstallToolClient = grpc.ServerStreamingClient[ToolEvent]
+
+func (c *toolServiceClient) UninstallTool(ctx context.Context, in *InstallToolRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ToolEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ToolService_ServiceDesc.Streams[1], ToolService_UninstallTool_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[InstallToolRequest, ToolEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ToolService_UninstallToolClient = grpc.ServerStreamingClient[ToolEvent]
+
+// ToolServiceServer is the server API for ToolService service.
+// All implementations must embed UnimplementedToolServiceServer
+// for forward compatibility.
+//
+// ToolService runs on the node agent. The control plane dials it to list the
+// host tools the platform needs and their detected state, and — from a later
+// package on — to install and uninstall them. The whole contract (list,
+// install, uninstall) is defined here so those later packages never touch this
+// file again; the install/uninstall RPCs answer codes.Unimplemented until the
+// installer lands.
+type ToolServiceServer interface {
+	// ListTools returns every catalog entry with its detected state on this node.
+	ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error)
+	// InstallTool installs one catalog tool, streaming the command's output
+	// lines and a final result. Not implemented yet: it answers
+	// codes.Unimplemented.
+	InstallTool(*InstallToolRequest, grpc.ServerStreamingServer[ToolEvent]) error
+	// UninstallTool removes one catalog tool the same way. Not implemented yet:
+	// it answers codes.Unimplemented.
+	UninstallTool(*InstallToolRequest, grpc.ServerStreamingServer[ToolEvent]) error
+	mustEmbedUnimplementedToolServiceServer()
+}
+
+// UnimplementedToolServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedToolServiceServer struct{}
+
+func (UnimplementedToolServiceServer) ListTools(context.Context, *ListToolsRequest) (*ListToolsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTools not implemented")
+}
+func (UnimplementedToolServiceServer) InstallTool(*InstallToolRequest, grpc.ServerStreamingServer[ToolEvent]) error {
+	return status.Error(codes.Unimplemented, "method InstallTool not implemented")
+}
+func (UnimplementedToolServiceServer) UninstallTool(*InstallToolRequest, grpc.ServerStreamingServer[ToolEvent]) error {
+	return status.Error(codes.Unimplemented, "method UninstallTool not implemented")
+}
+func (UnimplementedToolServiceServer) mustEmbedUnimplementedToolServiceServer() {}
+func (UnimplementedToolServiceServer) testEmbeddedByValue()                     {}
+
+// UnsafeToolServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ToolServiceServer will
+// result in compilation errors.
+type UnsafeToolServiceServer interface {
+	mustEmbedUnimplementedToolServiceServer()
+}
+
+func RegisterToolServiceServer(s grpc.ServiceRegistrar, srv ToolServiceServer) {
+	// If the following call panics, it indicates UnimplementedToolServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ToolService_ServiceDesc, srv)
+}
+
+func _ToolService_ListTools_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListToolsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ToolServiceServer).ListTools(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ToolService_ListTools_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ToolServiceServer).ListTools(ctx, req.(*ListToolsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ToolService_InstallTool_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(InstallToolRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ToolServiceServer).InstallTool(m, &grpc.GenericServerStream[InstallToolRequest, ToolEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ToolService_InstallToolServer = grpc.ServerStreamingServer[ToolEvent]
+
+func _ToolService_UninstallTool_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(InstallToolRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ToolServiceServer).UninstallTool(m, &grpc.GenericServerStream[InstallToolRequest, ToolEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ToolService_UninstallToolServer = grpc.ServerStreamingServer[ToolEvent]
+
+// ToolService_ServiceDesc is the grpc.ServiceDesc for ToolService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ToolService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "agent.v1.ToolService",
+	HandlerType: (*ToolServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListTools",
+			Handler:    _ToolService_ListTools_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "InstallTool",
+			Handler:       _ToolService_InstallTool_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "UninstallTool",
+			Handler:       _ToolService_UninstallTool_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "agent/v1/agent.proto",
+}

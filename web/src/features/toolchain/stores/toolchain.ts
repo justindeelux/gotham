@@ -277,6 +277,23 @@ export const useToolchainStore = defineStore("toolchain", () => {
     applyJob(job);
   }
 
+  /**
+   * retry re-enqueues a finished job's tool action as a fresh job (the API
+   * has no retry endpoint: a retry is one new queued job). Returns the
+   * created jobs so the modal can focus the new attempt.
+   */
+  async function retry(jobId: string): Promise<ToolchainJob[]> {
+    const job = jobs.value[jobId];
+    if (!job) {
+      throw new Error(`unknown toolchain job: ${jobId}`);
+    }
+    const result = await enqueueJobs(serverId.value, [job.tool_id], job.action);
+    for (const created of result.jobs) {
+      applyJob(created);
+    }
+    return result.jobs;
+  }
+
   /** reset clears node state and closes the socket; used by sign-out. */
   function reset(): void {
     disconnect();
@@ -310,6 +327,7 @@ export const useToolchainStore = defineStore("toolchain", () => {
     disconnect,
     enqueue,
     cancel,
+    retry,
     reset,
   };
 });

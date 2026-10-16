@@ -1017,11 +1017,15 @@ export function useCreateAppWizard(
    * would 502 the tools route, so the picker stays fail-open for it. */
   function subscribeNodeTools(): void {
     const id = form.serverId;
-    if (id === "" || toolchainStore.serverId === id) {
+    if (id === "") {
       return;
     }
     const status = serversStore.servers.find((item) => item.id === id)?.status;
     if (status !== "ready") {
+      return;
+    }
+    if (toolchainStore.serverId === id) {
+      void toolchainStore.refresh().catch(() => undefined);
       return;
     }
     void toolchainStore.subscribe(id).catch(() => undefined);

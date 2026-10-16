@@ -247,8 +247,13 @@ func TestToolctlBuildkitTagsLastAndIsIdempotent(t *testing.T) {
 
 // TestToolctlBuildkitUninstallMissingImageIsQuiet runs real uninstall logic
 // with Docker and flock functions so no host containers or locks are touched.
+// The fake mirrors the daemon's real reporting, which the JUS-182 fix missed:
+// on an absent ref `docker rmi -f` writes "No such image" to stderr *and still
+// exits 0*, so the exit status cannot mark it and the text has to be filtered
+// by hand. A full uninstall must therefore log no error line at all, while a
+// genuine daemon failure stays visible and fatal.
 func TestToolctlBuildkitUninstallMissingImageIsQuiet(t *testing.T) {
-	for _, mode := range []string{"removed", "digest-missing", "all-missing", "daemon-error"} {
+	for _, mode := range []string{"full-install", "daemon-error"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			record := filepath.Join(dir, "docker-argv")
@@ -257,11 +262,14 @@ flock() { return 0; }
 docker() {
     printf '%s\n' "$*" >> "$FAKE_RECORD"
     [ "$1" = rmi ] || return 0
-    case "$FAKE_MODE:$3" in
-        daemon-error:*) echo 'Cannot connect to the Docker daemon' >&2; return 1 ;;
-        all-missing:* | digest-missing:*@*)
-            echo "Error response from daemon: No such image: $3" >&2; return 1 ;;
-        *) echo "Untagged: $3" ;;
+    if [ "$FAKE_MODE" = daemon-error ]; then
+        echo 'Cannot connect to the Docker daemon' >&2; return 1
+    fi
+    # A full install: the detection tag exists and removing it also drops the
+    # digest ref, so the second rmi gets the exit-0 "No such image" report.
+    case "$3" in
+        *@*) echo "Error response from daemon: No such image: $3" >&2 ;;
+        *) echo "Untagged: $3"; echo "Deleted: sha256:deadbeef" ;;
     esac
 }
 . ./gotham-toolctl.sh
@@ -278,12 +286,20 @@ docker() {
 			out, err := cmd.CombinedOutput()
 			if mode == "daemon-error" {
 				if err == nil || !strings.Contains(string(out), "Cannot connect") {
-					t.Fatalf("daemon failure must remain visible: %v: %s", err, out)
+					t.Fatalf("daemon failure must remain visible and fatal: %v: %s", err, out)
 				}
 				return
 			}
-			if err != nil || strings.Contains(string(out), "No such image") {
-				t.Fatalf("uninstall must quietly tolerate absent images: %v: %s", err, out)
+			if err != nil {
+				t.Fatalf("full uninstall must succeed: %v: %s", err, out)
+			}
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if strings.Contains(line, "Error") || strings.Contains(line, "No such image") {
+					t.Fatalf("full uninstall log carries an error line %q: %s", line, out)
+				}
+			}
+			if !strings.Contains(string(out), "Untagged: moby/buildkit:latest") {
+				t.Fatalf("a real removal must stay visible: %s", out)
 			}
 			argv, err := os.ReadFile(record)
 			if err != nil {

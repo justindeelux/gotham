@@ -20,6 +20,11 @@ const en = {
     emptyToolsHint: "The agent on this node did not report any tools.",
     emptySearch: "No tools match the current search",
     emptySearchHint: "Try a different search term.",
+    tabsLabel: "Tool categories",
+    tabMatches: "{matched} of {total}",
+    tabSelected: "{count} selected",
+    footerSelected: "{count} selected",
+    footerEmpty: "Nothing selected yet",
     detectOnlyNote: "Detect-only: the agent reports this tool but cannot install it.",
     required: {
       git: "Required for source deployments. Cannot be uninstalled.",

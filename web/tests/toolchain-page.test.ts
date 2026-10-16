@@ -184,6 +184,9 @@ describe("install selected", () => {
     await flushPromises();
     // The checked installed + detect-only rows are excluded server-side too.
     expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git"], "install");
+    // The enqueue opens the queue modal (teleported focus trap): unmount so
+    // later tests own document focus.
+    wrapper.unmount();
   });
 });
 
@@ -212,6 +215,181 @@ describe("row selectability", () => {
     expect(wrapper.text()).toContain("Tool");
     expect(wrapper.text()).toContain("Actions");
     expect(useToolchainStore().tools).toHaveLength(3);
+  });
+});
+
+describe("category tabs (JUS-189)", () => {
+  function tabs(wrapper: ReturnType<typeof mount>) {
+    return wrapper.findAll('[role="tab"]');
+  }
+
+  it("renders one tab per category with counts and keeps selection across switches", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", category: "build" }),
+      tool({ id: "make", name: "Make", category: "build" }),
+      tool({ id: "curl", name: "Curl", category: "network" }),
+    ]);
+    const wrapper = await mountPage();
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(true);
+    expect(tabs(wrapper).map((tab) => tab.text())).toEqual(["build (2)", "network (1)"]);
+    expect(tabs(wrapper)[0].attributes("aria-selected")).toBe("true");
+    expect(tabs(wrapper)[0].attributes("tabindex")).toBe("0");
+    expect(tabs(wrapper)[1].attributes("tabindex")).toBe("-1");
+    expect(wrapper.find('[role="tabpanel"]').exists()).toBe(true);
+    // Build tab sorts by name (Git, Make); header checkbox is first.
+    let boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
+    await boxes[1].trigger("click");
+    await flushPromises();
+    // Switch to the network tab: only Curl shows, Git stays checked.
+    await tabs(wrapper)[1].trigger("click");
+    await flushPromises();
+    expect(tabs(wrapper)[1].attributes("aria-selected")).toBe("true");
+    expect(tabs(wrapper)[0].attributes("tabindex")).toBe("-1");
+    const visibleRows = wrapper.findAll("tbody tr");
+    expect(visibleRows).toHaveLength(1);
+    expect(visibleRows[0].text()).toContain("Curl");
+    await wrapper.findAll('.n-checkbox[role="checkbox"]')[1].trigger("click");
+    await flushPromises();
+    // Switch back: the build tab badge reports the selection, Git is kept.
+    await tabs(wrapper)[0].trigger("click");
+    await flushPromises();
+    expect(tabs(wrapper)[0].text()).toContain("1 selected");
+    boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
+    expect(boxes[1].attributes("aria-checked")).toBe("true");
+    // One bulk install covers tools from both tabs.
+    const action = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Install selected"));
+    await action?.trigger("click");
+    await flushPromises();
+    expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git", "curl"], "install");
+    wrapper.unmount();
+  });
+
+  it("moves and activates tabs with ArrowLeft/Right/Home/End", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", category: "build" }),
+      tool({ id: "curl", name: "Curl", category: "network" }),
+      tool({ id: "node", name: "Node", category: "runtime" }),
+    ]);
+    const wrapper = await mountPage();
+    // Focus assertions need a live document (detached nodes never take focus).
+    globalThis.document.body.appendChild(wrapper.element);
+    const tablist = wrapper.find('[role="tablist"]');
+    expect(tabs(wrapper)[0].attributes("aria-selected")).toBe("true");
+    await tablist.trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(tabs(wrapper)[1].attributes("aria-selected")).toBe("true");
+    expect(tabs(wrapper)[1].attributes("tabindex")).toBe("0");
+    expect(globalThis.document.activeElement).toBe(tabs(wrapper)[1].element);
+    expect(wrapper.findAll("tbody tr")[0].text()).toContain("Curl");
+    await tablist.trigger("keydown", { key: "End" });
+    await flushPromises();
+    expect(tabs(wrapper)[2].attributes("aria-selected")).toBe("true");
+    await tablist.trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    expect(tabs(wrapper)[0].attributes("aria-selected")).toBe("true");
+    await tablist.trigger("keydown", { key: "ArrowLeft" });
+    await flushPromises();
+    expect(tabs(wrapper)[2].attributes("aria-selected")).toBe("true");
+    await tablist.trigger("keydown", { key: "Home" });
+    await flushPromises();
+    expect(tabs(wrapper)[0].attributes("aria-selected")).toBe("true");
+    expect(globalThis.document.activeElement).toBe(tabs(wrapper)[0].element);
+    wrapper.unmount();
+  });
+
+  it("counts only selectable rows in the tab badge and footer", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", category: "build" }),
+    ]);
+    const wrapper = await mountPage();
+    const boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
+    await boxes[1].trigger("click");
+    await flushPromises();
+    expect(tabs(wrapper)[0].text()).toContain("1 selected");
+    // Git reports back installed: the row is pruned, so both badge and
+    // footer fall back instead of disagreeing.
+    useToolchainStore().tools = [
+      tool({ id: "git", name: "Git", category: "build", installed: true, version: "2.47.1" }),
+    ];
+    await flushPromises();
+    expect(tabs(wrapper)[0].text()).not.toContain("selected");
+    expect(wrapper.find(".footer-status").text()).toContain("Nothing selected yet");
+  });
+
+  it("filters the tabs by search and shows per-tab match counts", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", category: "build" }),
+      tool({ id: "make", name: "Make", category: "build" }),
+      tool({ id: "curl", name: "Curl", category: "network" }),
+    ]);
+    const wrapper = await mountPage();
+    const input = wrapper.find(".search-input input");
+    await input.setValue("git");
+    await flushPromises();
+    expect(tabs(wrapper)[0].text()).toContain("1 of 2");
+    expect(tabs(wrapper)[1].text()).toContain("0 of 1");
+    // Active tab shows only the match; the other tab's hit stays discoverable.
+    expect(wrapper.findAll("tbody tr")).toHaveLength(1);
+    await tabs(wrapper)[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".n-empty").exists()).toBe(true);
+  });
+
+  it("keeps node select and search in the page header and queue actions in a live footer", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", category: "build" }),
+    ]);
+    const wrapper = await mountPage();
+    const head = wrapper.find(".page-head");
+    expect(head.find(".node-select").exists()).toBe(true);
+    expect(head.find(".search-input").exists()).toBe(true);
+    const footer = wrapper.find(".table-footer");
+    expect(footer.exists()).toBe(true);
+    expect(footer.text()).toContain("Nothing selected yet");
+    const status = footer.find('[role="status"]');
+    expect(status.attributes("aria-live")).toBe("polite");
+    const boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
+    await boxes[1].trigger("click");
+    await flushPromises();
+    expect(footer.text()).toContain("1 selected");
+    const action = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Install selected"));
+    expect(action).toBeDefined();
+    const queue = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Queue"));
+    expect(queue).toBeDefined();
+  });
+
+  it("keeps Queue reachable when the tool list is empty but jobs run", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([]);
+    const wrapper = await mountPage();
+    useToolchainStore().applyJob({
+      id: "job-1",
+      server_id: "srv-1",
+      tool_id: "docker",
+      action: "install",
+      status: "queued",
+      created_at: "2026-10-16T12:00:00Z",
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain("No tools reported for this node");
+    const footer = wrapper.find(".table-footer");
+    expect(footer.exists()).toBe(true);
+    const queue = footer
+      .findAll("button")
+      .find((button) => button.text().includes("Queue"));
+    expect(queue).toBeDefined();
+    expect(queue?.attributes("disabled")).toBeUndefined();
   });
 });
 

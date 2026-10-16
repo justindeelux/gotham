@@ -13,7 +13,7 @@ import {
 } from "naive-ui";
 import type { DataTableColumns, SelectOption } from "naive-ui";
 import { useMessage } from "naive-ui";
-import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { VNode } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -41,6 +41,9 @@ const searchQuery = ref("");
 const checkedKeys = ref<string[]>([]);
 const pendingTools = ref<Record<string, boolean>>({});
 const busyBulk = ref(false);
+// activeCategory is the selected tab; checkedKeys lives outside the tabs so
+// multi-select survives tab switches and one bulk install covers every tab.
+const activeCategory = ref("");
 
 const nodeOptions = computed<SelectOption[]>(() =>
   serversStore.servers.map((server) => ({
@@ -53,43 +56,52 @@ const errorText = computed<string | null>(() =>
   store.failure ? describeToolchainError(store.failure) : null,
 );
 
-/** filteredTools applies the search query client-side (name, id, category). */
-const filteredTools = computed<ToolchainTool[]>(() => {
-  const query = searchQuery.value.trim().toLowerCase();
-  if (query === "") {
-    return store.tools;
-  }
-  return store.tools.filter((tool) =>
-    tool.name.toLowerCase().includes(query) ||
+/** matchesQuery is the client-side search predicate (name, id, category). */
+function matchesQuery(tool: ToolchainTool, query: string): boolean {
+  return tool.name.toLowerCase().includes(query) ||
     tool.id.toLowerCase().includes(query) ||
-    (tool.category ?? "").toLowerCase().includes(query),
-  );
-});
-
-interface ToolGroup {
-  category: string;
-  tools: ToolchainTool[];
+    (tool.category ?? "").toLowerCase().includes(query);
 }
 
-/** groupedTools sorts tools into category sections (uncategorized last). */
-const groupedTools = computed<ToolGroup[]>(() => {
+/** categoryOf normalizes the catalog grouping (blank sorts as Other). */
+function categoryOf(tool: ToolchainTool): string {
+  return tool.category?.trim() || t("toolchain.page.uncategorized");
+}
+
+/** groupedTools buckets the full catalog once per render (not once per tab). */
+const groupedTools = computed<Map<string, ToolchainTool[]>>(() => {
   const groups = new Map<string, ToolchainTool[]>();
-  for (const tool of filteredTools.value) {
-    const category = tool.category?.trim() || t("toolchain.page.uncategorized");
-    const list = groups.get(category);
+  for (const tool of store.tools) {
+    const key = categoryOf(tool);
+    const list = groups.get(key);
     if (list) {
       list.push(tool);
     } else {
-      groups.set(category, [tool]);
+      groups.set(key, [tool]);
     }
   }
-  return [...groups.entries()]
-    .map(([category, tools]) => ({
-      category,
-      tools: [...tools].sort((a, b) => a.name.localeCompare(b.name)),
-    }))
-    .sort((a, b) => a.category.localeCompare(b.category));
+  return groups;
 });
+
+/** categories lists every tab from the full catalog (not the search filter). */
+const categories = computed<string[]>(() =>
+  [...groupedTools.value.keys()].sort((a, b) => a.localeCompare(b)),
+);
+
+// The tab list follows the catalog: an unknown active tab (node switch,
+// locale change) falls back to the first category.
+watch(
+  categories,
+  (names) => {
+    if (!names.includes(activeCategory.value)) {
+      activeCategory.value = names[0] ?? "";
+    }
+  },
+  { immediate: true },
+);
+
+/** searching is true while the header box filters every tab's badge. */
+const searching = computed<boolean>(() => searchQuery.value.trim() !== "");
 
 /** selectableIds are the checked rows that can actually be installed. */
 const selectableIds = computed<string[]>(() =>
@@ -97,6 +109,101 @@ const selectableIds = computed<string[]>(() =>
     const tool = store.tools.find((item) => item.id === id);
     return tool !== undefined && isToolSelectable(tool);
   }),
+);
+
+/** matchesIn reports how many tools of one tab pass the current search. */
+function matchesIn(category: string): number {
+  const query = searchQuery.value.trim().toLowerCase();
+  const tools = groupedTools.value.get(category) ?? [];
+  if (query === "") {
+    return tools.length;
+  }
+  return tools.filter((tool) => matchesQuery(tool, query)).length;
+}
+
+/** selectableInTab counts the actually-installable checked rows of one tab. */
+function selectableInTab(category: string): number {
+  const ids = new Set(selectableIds.value);
+  return (groupedTools.value.get(category) ?? []).filter((tool) => ids.has(tool.id)).length;
+}
+
+/** tabLabel names a tab with its counts: total, matches while searching, selected. */
+function tabLabel(category: string): string {
+  const total = groupedTools.value.get(category)?.length ?? 0;
+  const matched = matchesIn(category);
+  const count = searching.value
+    ? String(t("toolchain.page.tabMatches", { matched, total }))
+    : String(total);
+  const selected = selectableInTab(category);
+  const suffix = selected > 0
+    ? ` · ${String(t("toolchain.page.tabSelected", { count: selected }))}`
+    : "";
+  return `${category} (${count})${suffix}`;
+}
+
+/** activeTools shows only the active tab, filtered by the header search. */
+const activeTools = computed<ToolchainTool[]>(() => {
+  const query = searchQuery.value.trim().toLowerCase();
+  return (groupedTools.value.get(activeCategory.value) ?? [])
+    .filter((tool) => query === "" || matchesQuery(tool, query))
+    .sort((a, b) => a.name.localeCompare(b.name));
+});
+
+/** activeIndex names the active tab for the tabpanel's aria-labelledby. */
+const activeIndex = computed<number>(() =>
+  Math.max(0, categories.value.indexOf(activeCategory.value)),
+);
+
+/** tabId names one tab button (stable across renders, keyed by position). */
+function tabId(index: number): string {
+  return `appstore-tab-${index}`;
+}
+
+/** handleTabKeydown moves and activates tabs with arrows/Home/End.
+    Naive-ui 2.45.3 NTabs renders plain divs with no tablist roles or key
+    handling, so this tablist carries explicit ARIA instead; the NButtons
+    keep native Enter/Space activation and Naive visuals. */
+function handleTabKeydown(event: KeyboardEvent): void {
+  const names = categories.value;
+  if (names.length === 0) {
+    return;
+  }
+  const current = Math.max(0, names.indexOf(activeCategory.value));
+  let next = -1;
+  switch (event.key) {
+    case "ArrowRight":
+      next = (current + 1) % names.length;
+      break;
+    case "ArrowLeft":
+      next = (current - 1 + names.length) % names.length;
+      break;
+    case "Home":
+      next = 0;
+      break;
+    case "End":
+      next = names.length - 1;
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
+  if (next === current) {
+    return;
+  }
+  activeCategory.value = names[next];
+  // Roving tabindex: focus follows the selection after re-render (the
+  // currentTarget is captured now: it reads null once dispatch ends).
+  const tablist = event.currentTarget as HTMLElement | null;
+  nextTick(() => {
+    tablist?.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
+  });
+}
+
+/** footerText announces the bulk selection for the sticky footer status. */
+const footerText = computed<string>(() =>
+  selectableIds.value.length > 0
+    ? String(t("toolchain.page.footerSelected", { count: selectableIds.value.length }))
+    : String(t("toolchain.page.footerEmpty")),
 );
 
 /** queueType maps a job status to one Naive tag. */
@@ -342,57 +449,34 @@ watch(
 <template>
   <div class="toolchain-page">
     <div class="page-head">
-      <div>
+      <div class="page-title">
         <p class="eyebrow">{{ $t("toolchain.page.eyebrow") }}</p>
         <h1>{{ $t("toolchain.page.title") }}</h1>
         <p class="page-desc">{{ $t("toolchain.page.description") }}</p>
       </div>
-      <div class="page-actions">
-        <NButton
-          secondary
-          :disabled="store.activeJobs.length === 0"
-          @click="store.openQueueModal()"
-        >
-          {{ $t("toolchain.page.queue") }}
-          <span v-if="store.activeJobs.length > 0" class="count-pill">
-            {{ store.activeJobs.length }}
-          </span>
-        </NButton>
-        <NButton
-          type="primary"
-          :disabled="selectableIds.length === 0"
-          :loading="busyBulk"
-          @click="() => void handleInstallSelected()"
-        >
-          {{ $t("toolchain.page.installSelected") }}
-          <span v-if="selectableIds.length > 0" class="count-pill">
-            {{ selectableIds.length }}
-          </span>
-        </NButton>
+      <div class="header-controls">
+        <NSelect
+          :value="store.serverId === '' ? null : store.serverId"
+          :options="nodeOptions"
+          :placeholder="$t('toolchain.page.selectNodePlaceholder')"
+          :aria-label="$t('toolchain.page.selectNode')"
+          :loading="serversStore.loading"
+          :disabled="serversStore.loading"
+          class="node-select"
+          @update:value="(id: string) => void selectNode(id)"
+        />
+        <NInput
+          v-model:value="searchQuery"
+          :placeholder="$t('toolchain.page.searchPlaceholder')"
+          :aria-label="$t('toolchain.page.searchPlaceholder')"
+          clearable
+          class="search-input"
+        />
       </div>
     </div>
 
     <NCard>
       <NSpace vertical :size="12">
-        <div class="toolbar-row">
-          <NSelect
-            :value="store.serverId === '' ? null : store.serverId"
-            :options="nodeOptions"
-            :placeholder="$t('toolchain.page.selectNodePlaceholder')"
-            :aria-label="$t('toolchain.page.selectNode')"
-            :loading="serversStore.loading"
-            :disabled="serversStore.loading"
-            class="node-select"
-            @update:value="(id: string) => void selectNode(id)"
-          />
-          <NInput
-            v-model:value="searchQuery"
-            :placeholder="$t('toolchain.page.searchPlaceholder')"
-            clearable
-            class="search-input"
-          />
-        </div>
-
         <template v-if="errorText">
           <NAlert type="error" :show-icon="true">
             {{ errorText }}
@@ -416,26 +500,87 @@ watch(
         >
           <template #extra>{{ $t("toolchain.page.emptyToolsHint") }}</template>
         </NEmpty>
-        <NEmpty
-          v-else-if="groupedTools.length === 0"
-          :description="$t('toolchain.page.emptySearch')"
-        >
-          <template #extra>{{ $t("toolchain.page.emptySearchHint") }}</template>
-        </NEmpty>
 
+        <!-- Explicit tablist: one shared checked-keys model keeps the bulk
+             selection across tabs, and one table renders the active tab. -->
         <template v-else>
-          <section v-for="group in groupedTools" :key="group.category">
-            <h2 class="group-title">{{ group.category }}</h2>
+          <div
+            class="category-tabs"
+            role="tablist"
+            :aria-label="t('toolchain.page.tabsLabel')"
+            @keydown="handleTabKeydown"
+          >
+            <NButton
+              v-for="(category, index) in categories"
+              :key="category"
+              :id="tabId(index)"
+              role="tab"
+              :aria-selected="category === activeCategory"
+              aria-controls="appstore-panel"
+              :tabindex="category === activeCategory ? 0 : -1"
+              quaternary
+              :type="category === activeCategory ? 'primary' : 'default'"
+              :class="['category-tab', { 'is-active': category === activeCategory }]"
+              @click="activeCategory = category"
+            >
+              {{ tabLabel(category) }}
+            </NButton>
+          </div>
+
+          <div
+            id="appstore-panel"
+            role="tabpanel"
+            :aria-labelledby="tabId(activeIndex)"
+            tabindex="0"
+          >
+            <NEmpty
+              v-if="activeTools.length === 0"
+              :description="$t('toolchain.page.emptySearch')"
+            >
+              <template #extra>{{ $t("toolchain.page.emptySearchHint") }}</template>
+            </NEmpty>
             <NDataTable
+              v-else
               :columns="toolColumns"
-              :data="group.tools"
+              :data="activeTools"
               :row-key="(row: ToolchainTool) => row.id"
               v-model:checked-row-keys="checkedKeys"
               :bordered="false"
               :pagination="false"
             />
-          </section>
+          </div>
         </template>
+
+        <!-- The footer outlives the list: Queue stays reachable while the
+             tools fail to load or come back empty (jobs may still run). -->
+        <div class="table-footer">
+          <p class="footer-status" role="status" aria-live="polite">
+            {{ footerText }}
+          </p>
+          <div class="footer-actions">
+            <NButton
+              secondary
+              :disabled="store.activeJobs.length === 0"
+              @click="store.openQueueModal()"
+            >
+              {{ $t("toolchain.page.queue") }}
+              <span v-if="store.activeJobs.length > 0" class="count-pill">
+                {{ store.activeJobs.length }}
+              </span>
+            </NButton>
+            <NButton
+              type="primary"
+              :disabled="selectableIds.length === 0"
+              :loading="busyBulk"
+              @click="() => void handleInstallSelected()"
+            >
+              {{ $t("toolchain.page.installSelected") }}
+              <span v-if="selectableIds.length > 0" class="count-pill">
+                {{ selectableIds.length }}
+              </span>
+            </NButton>
+          </div>
+        </div>
       </NSpace>
     </NCard>
 
@@ -454,9 +599,13 @@ watch(
 .page-head {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: var(--space-4);
   flex-wrap: wrap;
+}
+.page-title {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 .eyebrow {
   color: var(--fg-3);
@@ -475,22 +624,53 @@ watch(
   margin: var(--space-2) 0 0;
   max-width: 640px;
 }
-.page-actions {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-}
-.toolbar-row {
+.header-controls {
   display: flex;
   gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
+  flex: 1 1 20rem;
 }
 .node-select {
-  min-width: 240px;
+  flex: 1 1 12rem;
+  max-width: 100%;
 }
 .search-input {
-  max-width: 280px;
+  flex: 1 1 10rem;
+  max-width: 100%;
+}
+.table-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding-block: var(--space-3);
+  padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.category-tabs {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-2);
+}
+.footer-status {
+  margin: 0;
+  margin-right: auto;
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+}
+.footer-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
 }
 :deep(.tool-cell) {
   display: flex;
@@ -503,14 +683,6 @@ watch(
 }
 :deep(.tool-meta) {
   font-size: var(--text-xs);
-}
-.group-title {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--fg-2);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin: var(--space-2) 0 var(--space-1);
 }
 .count-pill {
   margin-left: var(--space-2);

@@ -21,6 +21,11 @@ const vi: typeof en = {
     emptyToolsHint: "Agent trên nút này chưa báo cáo công cụ nào.",
     emptySearch: "Không có công cụ nào khớp tìm kiếm",
     emptySearchHint: "Hãy thử từ khóa khác.",
+    tabsLabel: "Danh mục công cụ",
+    tabMatches: "{matched} trên {total}",
+    tabSelected: "{count} đã chọn",
+    footerSelected: "{count} đã chọn",
+    footerEmpty: "Chưa chọn công cụ nào",
     detectOnlyNote: "Chỉ phát hiện: agent báo cáo công cụ này nhưng không thể cài đặt.",
     required: {
       git: "Cần thiết để triển khai mã nguồn. Không thể gỡ bỏ.",

@@ -96,7 +96,13 @@ if [ -z "${SUDO_USER:-}${SUDO_UID:-}" ]; then
     ROOT="${GOTHAM_HOST_BOOTSTRAP_ROOT:-}"
 fi
 HELPER_DIR="${ROOT}/usr/libexec/gotham"
+PAYLOAD_DIR="${HELPER_DIR}/hostbootstrap"
 FETCH_SCRIPT="${HELPER_DIR}/gotham-hostbootstrap-fetch.sh"
+# The already-installed helper and the root-owned high-water mark it keeps
+# (JUS-190): the wrapper reads the mark and asks the installed helper to compare
+# it before it runs the fetched payload.
+INSTALLED_BOOTSTRAP="${PAYLOAD_DIR}/gotham-hostbootstrap.sh"
+HWM_FILE="${PAYLOAD_DIR}/version"
 SIGNING_KEY="${HELPER_DIR}/gotham-signing-key.pub"
 RELEASE_BASE="${GOTHAM_RELEASE_BASE:-https://github.com/justindeelux/gotham/releases/download}"
 STAGING_ROOT="${GOTHAM_STAGING:-${STATUS_DIR}}"
@@ -341,6 +347,46 @@ helper_arch() {
     esac
 }
 
+# require_newer_helper VERSION: the anti-rollback decision (JUS-190), taken in
+# already-installed code *before* the fetched payload runs. The payload is a
+# replayed release, so its own apply-release check must not be the only one: this
+# reads the root-owned high-water mark and asks the installed hostbootstrap's
+# version-cmp. It returns 0 only when VERSION is at or above the mark; an older
+# version, a missing or unusable mark, or a missing/unusable installed helper all
+# return nonzero (fail closed — a missing mark must never mean "version 0,
+# anything goes"), and the caller then leaves the installed helpers untouched.
+require_newer_helper() {
+    candidate="$1"
+    if [ -L "${HWM_FILE}" ] || [ ! -f "${HWM_FILE}" ]; then
+        log "no root-owned host-helper version mark at ${HWM_FILE}; refusing the refresh (run create with the release version)"
+        return 1
+    fi
+    if [ -L "${INSTALLED_BOOTSTRAP}" ] || [ ! -f "${INSTALLED_BOOTSTRAP}" ]; then
+        log "no installed hostbootstrap at ${INSTALLED_BOOTSTRAP}; refusing the refresh"
+        return 1
+    fi
+    hwm="$(sed -n '1p' "${HWM_FILE}" 2>/dev/null | tr -d '\r\n')"
+    if [ -z "${hwm}" ]; then
+        log "empty host-helper version mark at ${HWM_FILE}; refusing the refresh"
+        return 1
+    fi
+    verdict="$(sh "${INSTALLED_BOOTSTRAP}" version-cmp "${candidate}" "${hwm}" 2>/dev/null)" || {
+        log "could not compare ${candidate} with the installed host helper ${hwm}; refusing the refresh"
+        return 1
+    }
+    case "${verdict}" in
+        0 | 1) return 0 ;;
+        -1)
+            log "refusing to downgrade the host helper: ${candidate} is older than the installed ${hwm}"
+            return 1
+            ;;
+        *)
+            log "could not compare ${candidate} with the installed host helper ${hwm}; refusing the refresh"
+            return 1
+            ;;
+    esac
+}
+
 # refresh_host_helpers fetches, verifies and applies the host-helper payload
 # shipped inside the signed release (JUS-188), so helper content upgrades through
 # a self-update instead of only through install.sh.
@@ -353,12 +399,14 @@ helper_arch() {
 # and checks the payload digest against the signed manifest, and only then runs
 # the payload's own installer (apply-release) from that verified directory. The
 # marker's version only locates the release; the version that gates the apply is
-# the signature-verified one, which apply-release refuses to install below the
-# root-owned high-water mark (anti-rollback). No byte the service or agent user
-# can write is fetched, read as code or executed. Every failure is logged and
-# skipped, and a missing anchor/fetch helper (a host installed before the
-# one-time bridge) is a clean no-op, so a helper refresh can never block or brick
-# an update.
+# the signature-verified one, which this wrapper refuses below the root-owned
+# high-water mark *before* the fetched payload runs (JUS-190), so an older
+# validly-signed payload cannot skip (or disable) the check by being the code
+# that performs it. apply-release's own comparison stays as a second layer. No
+# byte the service or agent user can write is fetched, read as code or executed.
+# Every failure is logged and skipped, and a missing anchor/fetch helper (a host
+# installed before the one-time bridge) is a clean no-op, so a helper refresh can
+# never block or brick an update.
 refresh_host_helpers() {
     [ "${IS_AGENT}" -eq 0 ] || return 0
     [ -f "${FETCH_SCRIPT}" ] || return 0
@@ -390,11 +438,10 @@ refresh_host_helpers() {
     }
     if payload="$(sh "${FETCH_SCRIPT}" "${RELEASE_BASE}" "${VERSION}" "${arch}" "${SIGNING_KEY}" "${staging}" "${BINARY}" 2>&1)" \
         && [ -f "${payload}/gotham-hostbootstrap.sh" ] && [ -f "${staging}/version" ]; then
-        # The verified signed version (the fetch proved it equals the candidate
-        # and that the manifest describes ${BINARY}); apply-release refuses a
-        # version below the root-owned high-water mark.
         signed_version="$(sed -n '1p' "${staging}/version" | tr -d '\r\n')"
-        if sh "${payload}/gotham-hostbootstrap.sh" apply-release "${payload}" "${signed_version}" >/dev/null 2>&1; then
+        if ! require_newer_helper "${signed_version}"; then
+            log "host-helper refresh skipped; the installed helpers are left in place"
+        elif sh "${payload}/gotham-hostbootstrap.sh" apply-release "${payload}" "${signed_version}" >/dev/null 2>&1; then
             log "refreshed the host-helper payload from the verified release ${signed_version}"
         else
             log "host-helper apply failed; the installed helpers are left in place"

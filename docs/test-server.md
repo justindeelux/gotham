@@ -111,10 +111,11 @@ tag (no separate clone), driven by two systemd units.
   self-update wrapper re-applies:
 
   ```sh
-  sudo sh deploy/gotham-hostbootstrap.sh create gotham
+  sudo sh deploy/gotham-hostbootstrap.sh create gotham <version>
   ```
 
-  (Use the actual service user if it is not `gotham`.) Until this runs on a box
+  (Use the actual service user if it is not `gotham`, and the version of the
+  checkout — `create` seeds the high-water mark from it.) Until this runs on a box
   that predates the feature, the section stays read-only and says to update the
   control plane. Do not add an `ExecStartPre=+` that runs the service-owned
   binary as root — that would let any control-plane code execution become root.

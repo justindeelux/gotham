@@ -27,8 +27,10 @@
 # that matters is read from the signature-verified manifest, and it must equal
 # the candidate *and* the manifest must describe <staged-binary> (its sha256), so
 # a compromised control plane cannot point root at a payload that did not ship
-# with the binary being installed. The root wrapper compares the signed version
-# against a root-owned high-water mark before applying (gotham-hostbootstrap.sh).
+# with the binary being installed. The root wrapper then refuses the signed
+# version when it is below a root-owned high-water mark, comparing it in
+# already-installed code before it runs the payload (gotham-hostbootstrap.sh); a
+# missing mark refuses too.
 #
 # The transport is not the trust boundary: the signature and the signed digests
 # are, so a mirror (or a file:// URL in tests) is safe. The version is

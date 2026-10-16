@@ -1152,7 +1152,7 @@ elif [ "${TEST_MODE}" -eq 0 ]; then
     # Pass the release version so the helper's high-water mark is seeded from the
     # root-trusted installer: the first self-update cannot go below it.
     if ! sh "${SCRIPT_DIR}/gotham-hostbootstrap.sh" create "${SERVICE_USER}" "${VERSION}"; then
-        log "WARNING: host helper install failed; retry with: sudo sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER}"
+        log "WARNING: host helper install failed; retry with: sudo sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER} ${VERSION}"
     fi
 fi
 

@@ -25,6 +25,7 @@ type ServerService interface {
 	Update(ctx context.Context, id uuid.UUID, params servers.UpdateParams) (*servers.Server, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 	Validate(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth) (*servers.ValidationResult, error)
+	InstallDocker(ctx context.Context, id uuid.UUID, auth servers.ValidateAuth, out io.Writer) error
 	ResetHostKey(ctx context.Context, id uuid.UUID) (*servers.Server, error)
 	AddPrivateKey(ctx context.Context, name, privateKeyPEM string) (*servers.PrivateKey, error)
 	Metrics(ctx context.Context, id uuid.UUID, from, to time.Time, step string) ([]servers.MetricPoint, error)
@@ -201,6 +202,7 @@ func (s *Server) mountServerRoutes(api chi.Router) {
 		protected.Patch("/v1/servers/{id}", s.handleUpdateServer)
 		protected.Delete("/v1/servers/{id}", s.handleDeleteServer)
 		protected.Post("/v1/servers/{id}/validate", s.handleValidateServer)
+		protected.Post("/v1/servers/{id}/docker-install", s.handleInstallDocker)
 		protected.Delete("/v1/servers/{id}/host-key", s.handleResetHostKey)
 		protected.Post("/v1/private-keys", s.handleCreatePrivateKey)
 		// The metrics range route is part of the servers surface but rides its
@@ -251,7 +253,7 @@ func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyID, ok := parseOptionalUUID(w, req.SSHKeyID, "ssh_key_id")
+	keyID, ok := parseOptionalUUID(w, req.SSHKeyID)
 	if !ok {
 		return
 	}
@@ -299,7 +301,7 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 		SSHUser: req.SSHUser,
 	}
 	if req.SSHKeyID != nil {
-		keyID, ok := parseOptionalUUID(w, *req.SSHKeyID, "ssh_key_id")
+		keyID, ok := parseOptionalUUID(w, *req.SSHKeyID)
 		if !ok {
 			return
 		}
@@ -341,7 +343,7 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyID, ok := parseOptionalUUID(w, req.SSHKeyID, "ssh_key_id")
+	keyID, ok := parseOptionalUUID(w, req.SSHKeyID)
 	if !ok {
 		return
 	}
@@ -390,6 +392,87 @@ func (s *Server) handleValidateServer(w http.ResponseWriter, r *http.Request) {
 		Checks: result.Checks,
 		Server: serverDTOPtr(result.Server),
 	})
+}
+
+// handleInstallDocker installs Docker Engine on a node over SSH and streams the
+// installer output as a plain-text chunked body (POST
+// /v1/servers/{id}/docker-install). The 200 is deferred until the first output
+// byte, so a failure before the install starts (SSH, privilege, unsupported
+// distribution or architecture) is still answered as a real JSON error; a
+// failure once the stream has started is appended to the body and logged.
+func (s *Server) handleInstallDocker(w http.ResponseWriter, r *http.Request) {
+	id, ok := serverIDParam(w, r)
+	if !ok {
+		return
+	}
+
+	var req validateServerRequest
+	if !s.decodeOptionalJSON(w, r, &req) {
+		return
+	}
+	keyID, ok := parseOptionalUUID(w, req.SSHKeyID)
+	if !ok {
+		return
+	}
+
+	out := &streamWriter{w: w, flusher: flusherOf(w)}
+	err := s.servers.InstallDocker(r.Context(), id, servers.ValidateAuth{
+		KeyID:        keyID,
+		Password:     req.Password,
+		Passphrase:   req.Passphrase,
+		TrustHostKey: req.TrustHostKey,
+	}, out)
+	if err == nil {
+		return
+	}
+	if out.started {
+		// The status is already sent: the log shows the command output, so a
+		// short marker keeps the cause visible instead of silently truncating.
+		_, _ = io.WriteString(out, "\n"+err.Error()+"\n")
+		s.logger.Warn("servers: docker install failed after the stream started",
+			"server_id", id.String(), "error", err)
+		return
+	}
+	s.writeServerError(w, "install docker", err)
+}
+
+// streamWriter defers the response status until the first byte, so a handler
+// that can fail before producing output still answers a real error status. Once
+// the first byte is written the response is a committed 200 text stream.
+type streamWriter struct {
+	w       http.ResponseWriter
+	flusher http.Flusher
+	started bool
+}
+
+// Write starts the stream on the first byte and flushes every chunk.
+func (s *streamWriter) Write(p []byte) (int, error) {
+	s.start()
+	n, err := s.w.Write(p)
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+	return n, err
+}
+
+// start commits the 200 and the streaming headers once.
+func (s *streamWriter) start() {
+	if s.started {
+		return
+	}
+	s.started = true
+	s.w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	s.w.Header().Set("Cache-Control", "no-store")
+	s.w.WriteHeader(http.StatusOK)
+	if s.flusher != nil {
+		s.flusher.Flush()
+	}
+}
+
+// flusherOf returns the response's Flusher when it has one.
+func flusherOf(w http.ResponseWriter) http.Flusher {
+	flusher, _ := w.(http.Flusher)
+	return flusher
 }
 
 // handleResetHostKey forgets a server's pinned SSH host key, so the next
@@ -610,15 +693,15 @@ func serverIDParam(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	return id, true
 }
 
-// parseOptionalUUID parses an optional UUID string, answering 400 when it is
+// parseOptionalUUID parses an optional ssh_key_id, answering 400 when it is
 // neither empty nor a valid UUID.
-func parseOptionalUUID(w http.ResponseWriter, raw, field string) (uuid.UUID, bool) {
+func parseOptionalUUID(w http.ResponseWriter, raw string) (uuid.UUID, bool) {
 	if raw == "" {
 		return uuid.Nil, true
 	}
 	id, err := uuid.Parse(raw)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid " + field})
+		writeJSON(w, http.StatusBadRequest, apiError{Message: "invalid ssh_key_id"})
 		return uuid.Nil, false
 	}
 	return id, true

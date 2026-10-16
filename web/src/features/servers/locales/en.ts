@@ -236,6 +236,12 @@ const en = {
     trustHint: "Required once: a password node has no key to pin until it is trusted.",
     validateTitle: "Validate node",
     validatePassed: "All checks passed. Continue to install the node agent.",
+    installDocker: "Install Docker",
+    dockerInstallTitle: "Installing Docker",
+    dockerInstallHint:
+      "The control plane installs Docker Engine on this node over the SSH session, using the node's own package manager. Output streams below; nothing else on the node is changed.",
+    dockerInstallLog: "Install output",
+    dockerInstallRecheck: "Re-check node",
     checkDocker: "Docker Engine installed and running",
     checkCpu: "CPU architecture and core count",
     checkRam: "Available RAM",

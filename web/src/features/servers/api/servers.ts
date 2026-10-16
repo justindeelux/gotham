@@ -194,6 +194,15 @@ export async function validateServer(
   };
 }
 
+/**
+ * dockerInstallPath builds the streamed Docker-install URL. It is absolute
+ * because the streaming reader uses `fetch`, not the axios instance: a chunked
+ * response must be consumed as a stream.
+ */
+export function dockerInstallPath(id: string): string {
+  return `/api/v1/servers/${id}/docker-install`;
+}
+
 /** updateServer applies a PATCH edit to one server. */
 export async function updateServer(id: string, input: UpdateServerInput): Promise<Server> {
   const response = await http.patch<ServerEnvelope>(`/servers/${id}`, input);

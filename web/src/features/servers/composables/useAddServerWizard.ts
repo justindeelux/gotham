@@ -22,6 +22,8 @@ import {
   connectionRules,
 } from "@/features/servers/schemas/servers";
 import { useServersStore } from "@/features/servers/stores/servers";
+import { useDockerInstall } from "@/features/servers/composables/useDockerInstall";
+import type { DockerInstallState } from "@/features/servers/composables/useDockerInstall";
 import { useInFlightGuard } from "@/shared/composables/useInFlightGuard";
 import { onLocaleChange } from "@/shared/i18n";
 import { formatBytes } from "@/shared/utils/format";
@@ -78,6 +80,16 @@ export interface AddServerWizardContext {
   handleValidate: () => Promise<void>;
   closeWizard: () => void;
   handleShowChange: (_value: boolean) => void;
+  /** dockerInstall streams the pre-agent install over the wizard's SSH session. */
+  dockerInstall: DockerInstallState;
+  /** dockerInstallOpen mirrors the install-log modal visibility. */
+  dockerInstallOpen: Ref<boolean>;
+  /** dockerInstallOffer is true when the docker probe failed and can be fixed. */
+  dockerInstallOffer: ComputedRef<boolean>;
+  openDockerInstall: () => void;
+  closeDockerInstall: () => void;
+  /** recheckAfterDockerInstall closes the log and re-runs the probe. */
+  recheckAfterDockerInstall: () => Promise<void>;
 }
 
 export const WizardKey: InjectionKey<AddServerWizardContext> = Symbol("add-server-wizard");
@@ -164,6 +176,41 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
   });
 
   const rules = computed<FormRules>(() => connectionRules(form));
+
+  // The pre-agent Docker install (JUS-187): the node's agent is not installed
+  // yet at the validate step, so the install runs over the same SSH session the
+  // probes use and the wizard re-runs them afterwards. The control plane owns
+  // the allow-listed argv; the browser only names the node and credentials.
+  const dockerInstall = useDockerInstall({
+    serverId: computed<string>(() => createdServer.value?.id ?? ""),
+    passphrase: computed<string>(() => form.passphrase),
+    trustHostKey: computed<boolean>(() => form.trustHostKey),
+  });
+  const dockerInstallOpen = ref(false);
+  const dockerInstallOffer = computed<boolean>(() => {
+    if (createdServer.value === null || validating.value) {
+      return false;
+    }
+    return fixedChecks.value.find((check) => check.name === "docker")?.state === "fail";
+  });
+
+  /** openDockerInstall opens the log modal and starts the streamed install. */
+  function openDockerInstall(): void {
+    dockerInstallOpen.value = true;
+    void dockerInstall.start();
+  }
+
+  /** closeDockerInstall hides the modal and aborts any running stream. */
+  function closeDockerInstall(): void {
+    dockerInstallOpen.value = false;
+    dockerInstall.stop();
+  }
+
+  /** recheckAfterDockerInstall closes the log and re-runs the probe. */
+  async function recheckAfterDockerInstall(): Promise<void> {
+    closeDockerInstall();
+    await handleValidate();
+  }
 
   /** hasCreatedServer reports whether the connection step already registered a node. */
   const hasCreatedServer = computed<boolean>(() => createdServer.value !== null);
@@ -476,6 +523,8 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     validationAttempted.value = false;
     fixedChecks.value = makeIdleChecks();
     createdServer.value = null;
+    dockerInstallOpen.value = false;
+    dockerInstall.reset();
     formRef.value?.restoreValidation();
   }
 
@@ -525,5 +574,11 @@ export function useAddServerWizard(emit: WizardEmit): AddServerWizardContext {
     handleValidate,
     closeWizard,
     handleShowChange,
+    dockerInstall,
+    dockerInstallOpen,
+    dockerInstallOffer,
+    openDockerInstall,
+    closeDockerInstall,
+    recheckAfterDockerInstall,
   };
 }

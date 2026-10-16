@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -26,7 +28,23 @@ const (
 	unameCmd         = "uname -sm"
 	meminfoCmd       = "cat /proc/meminfo"
 	diskCmd          = "df -Pk / | tail -1"
+
+	// dockerInstallTimeout bounds one Docker install; an apt/dnf install can
+	// legitimately run for minutes, so it is far wider than a probe run.
+	dockerInstallTimeout = 30 * time.Minute
+
+	// Docker-install probes. All are fixed commands: no caller value is ever
+	// interpolated into a command line.
+	dockerUIDCmd       = "id -u"
+	dockerSudoCheckCmd = "sudo -n true"
+	dockerDistroCmd    = `sed -n -E 's/^(ID|ID_LIKE)="?([^"]*)"?$/\2/p' /etc/os-release 2>/dev/null | tr '[:upper:]' '[:lower:]'`
+	dockerArchCmd      = "uname -m"
 )
+
+// dockerSudoPrefix escalates the fixed install argv when the SSH user is not
+// root but has passwordless privilege escalation. It is one of exactly two
+// constants, never derived from caller input.
+const dockerSudoPrefix = "sudo -n "
 
 // SSHAuth carries the credentials used to authenticate one SSH session.
 // PrivateKeyPEM takes precedence; Password is the fallback.
@@ -119,7 +137,7 @@ func ValidateNode(ctx context.Context, ip string, port int, user string, auth SS
 	defer cancel()
 
 	addr := net.JoinHostPort(ip, strconv.Itoa(port))
-	client, err := dialSSH(ctx, addr, cfg)
+	client, _, err := dialSSH(ctx, addr, cfg)
 	if err != nil {
 		return nil, info, verifier.observed, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
@@ -225,11 +243,14 @@ func parsePrivateKey(pemBytes []byte, passphrase string) (ssh.Signer, error) {
 // just the dial, so the key exchange (NewClientConn) and every later session
 // read are bounded too: a peer that accepts TCP then stalls cannot hang
 // validation past the run's deadline (A4-14).
-func dialSSH(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+// The net.Conn is returned alongside the client so a caller with a longer
+// deadline than a probe run (the Docker installer) can extend it after the
+// handshake without redialing.
+func dialSSH(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Client, net.Conn, error) {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	deadline := time.Now().Add(sshDialTimeout)
@@ -238,15 +259,15 @@ func dialSSH(ctx context.Context, addr string, cfg *ssh.ClientConfig) (*ssh.Clie
 	}
 	if err := conn.SetDeadline(deadline); err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, nil, err
 	}
 
 	clientConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	return ssh.NewClient(clientConn, chans, reqs), nil
+	return ssh.NewClient(clientConn, chans, reqs), conn, nil
 }
 
 // runRemote executes cmd and returns its combined output, aborting if ctx is
@@ -329,9 +350,10 @@ func dockerFailure(out string, err error) string {
 	detail := detailOrError(out, err)
 	lower := strings.ToLower(detail)
 	if strings.Contains(lower, "not found") || strings.Contains(lower, "no such file") {
-		// The agent registers without Docker and the App Store can install it,
-		// so point at that in-product path instead of naming PATH.
-		return "Docker Engine is not installed on this node. Install it from the App Store after the agent is registered, then validate again: " + detail
+		// The wizard offers an in-product install over this same SSH session
+		// (JUS-187); a registered node can install it from the App Store. Point
+		// at those actions instead of naming PATH.
+		return "Docker Engine is not installed on this node. Use Install Docker in the Add-server wizard, or install it from the App Store on a registered node: " + detail
 	}
 	return "docker version failed: " + detail
 }
@@ -366,4 +388,209 @@ func nonEmptyLines(out string) []string {
 		}
 	}
 	return lines
+}
+
+// InstallDockerNode installs Docker Engine on a node over SSH with the node's
+// allow-listed package manager for its distribution, streaming the installer's
+// combined output to out.
+//
+// Everything that can be decided before the node is touched — the SSH
+// connection, the SSH user's privilege, the distribution and architecture —
+// is reported as an error *before* anything is written to out, so an HTTP
+// caller can still answer a real error status. The install itself is a fixed,
+// allow-listed argv per distribution: no caller value is ever interpolated
+// into a command. A non-zero exit after the stream started is returned to the
+// caller once the output has streamed.
+func InstallDockerNode(ctx context.Context, ip string, port int, user string, auth SSHAuth, policy HostKeyPolicy, out io.Writer) error {
+	if ip == "" {
+		return fmt.Errorf("%w: ip is required", ErrValidation)
+	}
+	if user == "" {
+		return fmt.Errorf("%w: ssh user is required", ErrValidation)
+	}
+	if port <= 0 {
+		port = 22
+	}
+
+	verifier := &hostKeyVerifier{pinned: policy.Pinned, acceptUnpinned: policy.AcceptUnpinned}
+	cfg, err := sshClientConfig(user, auth, verifier)
+	if err != nil {
+		return err
+	}
+
+	// The handshake is bounded like a probe run; the install session below is
+	// given the caller's context and the wider install deadline instead.
+	dialCtx, cancel := context.WithTimeout(ctx, sshDialTimeout)
+	defer cancel()
+
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
+	client, conn, err := dialSSH(dialCtx, addr, cfg)
+	if err != nil {
+		return fmt.Errorf("ssh dial %s: %w", addr, err)
+	}
+	defer func() { _ = client.Close() }()
+
+	prefix, err := dockerPrivilege(dialCtx, client, user)
+	if err != nil {
+		return err
+	}
+	if err := dockerCheckArch(dialCtx, client); err != nil {
+		return err
+	}
+	distro, err := dockerDistro(dialCtx, client)
+	if err != nil {
+		return err
+	}
+	script, err := dockerInstallScript(distro, prefix)
+	if err != nil {
+		return err
+	}
+
+	// Extend the connection deadline for the install, never past the caller's
+	// own deadline, and run the fixed install argv.
+	deadline := time.Now().Add(dockerInstallTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	if err := runRemoteStream(ctx, client, script, out); err != nil {
+		return fmt.Errorf("docker install failed: %w", err)
+	}
+	return nil
+}
+
+// dockerPrivilege reports the fixed command prefix the install argv needs: "" as
+// root, the sudo prefix for a non-root user with passwordless escalation, or an
+// honest error when neither holds.
+func dockerPrivilege(ctx context.Context, client *ssh.Client, user string) (string, error) {
+	out, err := runRemote(ctx, client, dockerUIDCmd)
+	if err != nil {
+		return "", fmt.Errorf("%w: could not determine the SSH user's privileges: %s", ErrValidation, detailOrError(out, err))
+	}
+	if firstLine(out) == "0" {
+		return "", nil
+	}
+	if _, err := runRemote(ctx, client, dockerSudoCheckCmd); err != nil {
+		return "", fmt.Errorf("%w: the node user %q is not root and has no passwordless privilege escalation; Docker must be installed by root, so add the node with a root user or install Docker on it yourself first", ErrValidation, user)
+	}
+	return dockerSudoPrefix, nil
+}
+
+// dockerCheckArch refuses architectures the allow-listed install material does
+// not cover, so the failure is honest instead of a partial install.
+func dockerCheckArch(ctx context.Context, client *ssh.Client) error {
+	out, err := runRemote(ctx, client, dockerArchCmd)
+	if err != nil {
+		return fmt.Errorf("%w: could not determine the node architecture: %s", ErrValidation, detailOrError(out, err))
+	}
+	switch firstLine(out) {
+	case "x86_64", "amd64", "aarch64", "arm64":
+		return nil
+	default:
+		return fmt.Errorf("%w: Docker install is not supported on this architecture (%s)", ErrValidation, firstLine(out))
+	}
+}
+
+// dockerDistro resolves the node's package-manager family from /etc/os-release,
+// falling back to probing the package managers in a fixed order. The returned
+// token is one of apt, dnf or apk, or an honest error.
+func dockerDistro(ctx context.Context, client *ssh.Client) (string, error) {
+	if out, err := runRemote(ctx, client, dockerDistroCmd); err == nil {
+		if distro := matchDistroFamily(out); distro != "" {
+			return distro, nil
+		}
+	}
+	for _, candidate := range []struct{ probe, distro string }{
+		{"apt-get", "apt"},
+		{"dnf", "dnf"},
+		{"apk", "apk"},
+	} {
+		if _, err := runRemote(ctx, client, "command -v "+candidate.probe); err == nil {
+			return candidate.distro, nil
+		}
+	}
+	return "", fmt.Errorf("%w: Docker install is not supported on this node: no apt, dnf or apk package manager was found", ErrValidation)
+}
+
+// matchDistroFamily maps the lowercase ID/ID_LIKE tokens of /etc/os-release to
+// the package-manager family the installer knows.
+func matchDistroFamily(out string) string {
+	for _, id := range strings.Fields(out) {
+		switch id {
+		case "debian", "ubuntu", "raspbian", "linuxmint", "pop", "kali":
+			return "apt"
+		case "fedora", "rhel", "centos", "rocky", "almalinux", "amzn", "oracle":
+			return "dnf"
+		case "alpine":
+			return "apk"
+		}
+	}
+	return ""
+}
+
+// dockerInstallScript returns the fixed, allow-listed install argv for a
+// distribution, prefixed with the privilege command when one is needed. The
+// command is noninteractive and enables the docker service where the
+// distribution ships one.
+func dockerInstallScript(distro, prefix string) (string, error) {
+	switch distro {
+	case "apt":
+		return prefix + "env DEBIAN_FRONTEND=noninteractive apt-get update && " +
+			prefix + "env DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io && " +
+			prefix + "systemctl enable --now docker", nil
+	case "dnf":
+		return prefix + "dnf install -y docker && " +
+			prefix + "systemctl enable --now docker", nil
+	case "apk":
+		return prefix + "apk add --no-cache docker", nil
+	default:
+		return "", fmt.Errorf("%w: Docker install is not supported on this distribution", ErrValidation)
+	}
+}
+
+// runRemoteStream runs cmd and streams its combined output to out, closing the
+// session if ctx is cancelled first. Unlike runRemote it never buffers the
+// output, so a long install's progress reaches the caller as it happens.
+func runRemoteStream(ctx context.Context, client *ssh.Client, cmd string, out io.Writer) error {
+	session, err := client.NewSession()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = session.Close() }()
+
+	// x/crypto/ssh drains stdout and stderr in two goroutines; serializing them
+	// keeps a single writer (an http.ResponseWriter) safe and the line order
+	// stable.
+	sink := &syncWriter{w: out}
+	session.Stdout = sink
+	session.Stderr = sink
+
+	done := make(chan error, 1)
+	go func() { done <- session.Run(cmd) }()
+
+	select {
+	case <-ctx.Done():
+		_ = session.Close()
+		// Wait for Run to unwind before returning, so it never writes to the
+		// response after the handler has handed it back.
+		<-done
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
+}
+
+// syncWriter serializes writes, so a caller's writer never sees concurrent
+// writes from the session's stdout and stderr goroutines.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }

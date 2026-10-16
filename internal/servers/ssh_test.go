@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,16 +20,36 @@ import (
 )
 
 // sshProbeServer is a tiny in-process SSH server that answers the fixed probe
-// commands with canned output, so validation can be tested without a real node.
+// and Docker-install commands with canned output, so validation and install can
+// be tested without a real node.
 type sshProbeServer struct {
 	listener      net.Listener
 	password      string
 	dockerMissing bool
+	// uid answers `id -u`; empty means root ("0").
+	uid string
+	// distro is the /etc/os-release ID; empty means "debian".
+	distro string
+	// arch answers `uname -m`; empty means "x86_64".
+	arch string
+	// sudoOK answers `sudo -n true` for a non-root user.
+	sudoOK bool
+
+	mu       sync.Mutex
+	commands []string
 }
 
-// startSSHProbeServer starts the server on a random localhost port and returns
-// its address, the SHA256 fingerprint of its host key, and a stop function.
+// startSSHProbeServer starts the probe server on a random localhost port and
+// returns its address, the SHA256 fingerprint of its host key, and a stop
+// function.
 func startSSHProbeServer(t *testing.T, password string, dockerMissing bool) (string, string, func()) {
+	t.Helper()
+	return startSSHServer(t, &sshProbeServer{password: password, dockerMissing: dockerMissing})
+}
+
+// startSSHServer starts a customized probe server (privilege, distribution and
+// architecture overrides) on a random localhost port.
+func startSSHServer(t *testing.T, server *sshProbeServer) (string, string, func()) {
 	t.Helper()
 
 	_, hostKey, err := ed25519.GenerateKey(rand.Reader)
@@ -39,7 +61,6 @@ func startSSHProbeServer(t *testing.T, password string, dockerMissing bool) (str
 		t.Fatalf("host signer: %v", err)
 	}
 
-	server := &sshProbeServer{password: password, dockerMissing: dockerMissing}
 	server.listener, err = net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -50,9 +71,9 @@ func startSSHProbeServer(t *testing.T, password string, dockerMissing bool) (str
 			return nil, nil // accept any public key
 		},
 	}
-	if password != "" {
+	if server.password != "" {
 		config.PasswordCallback = func(_ ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			if string(pass) == password {
+			if string(pass) == server.password {
 				return nil, nil
 			}
 			return nil, errors.New("password rejected")
@@ -114,7 +135,11 @@ func (s *sshProbeServer) serveSession(channel ssh.Channel, requests <-chan *ssh.
 		}
 		_ = request.Reply(true, nil)
 
-		stdout, stderr, status := cannedProbeOutput(payload.Command, s.dockerMissing)
+		s.mu.Lock()
+		s.commands = append(s.commands, payload.Command)
+		s.mu.Unlock()
+
+		stdout, stderr, status := s.cannedOutput(payload.Command)
 		if stdout != "" {
 			_, _ = io.WriteString(channel, stdout)
 		}
@@ -126,16 +151,52 @@ func (s *sshProbeServer) serveSession(channel ssh.Channel, requests <-chan *ssh.
 	}
 }
 
-// cannedProbeOutput maps a probe command to its canned output and exit status.
-func cannedProbeOutput(command string, dockerMissing bool) (stdout, stderr string, status uint32) {
+// lastCommand returns the most recently exec'd command.
+func (s *sshProbeServer) lastCommand() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.commands) == 0 {
+		return ""
+	}
+	return s.commands[len(s.commands)-1]
+}
+
+// cannedOutput maps a fixed command to its canned output and exit status.
+func (s *sshProbeServer) cannedOutput(command string) (stdout, stderr string, status uint32) {
 	switch {
 	case strings.Contains(command, "docker version"):
-		if dockerMissing {
+		if s.dockerMissing {
 			return "", "bash: docker: command not found\n", 127
 		}
 		return "24.0.7\n", "", 0
+	case command == "id -u":
+		if s.uid != "" {
+			return s.uid + "\n", "", 0
+		}
+		return "0\n", "", 0
+	case command == "sudo -n true":
+		if s.sudoOK {
+			return "", "", 0
+		}
+		return "", "sudo: a password is required\n", 1
+	case strings.Contains(command, "/etc/os-release"):
+		if s.distro != "" {
+			return s.distro + "\n", "", 0
+		}
+		return "debian\n", "", 0
+	case command == "uname -m":
+		if s.arch != "" {
+			return s.arch + "\n", "", 0
+		}
+		return "x86_64\n", "", 0
 	case strings.Contains(command, "uname -sm"):
 		return "Linux x86_64\n", "", 0
+	case strings.Contains(command, "apt-get install"):
+		return "Setting up docker.io\n", "", 0
+	case strings.Contains(command, "dnf install"):
+		return "Installing docker...\n", "", 0
+	case strings.Contains(command, "apk add"):
+		return "OK: 12 MiB in 30 packages\n", "", 0
 	case strings.Contains(command, "/proc/meminfo"):
 		return "MemTotal:        8192000 kB\nMemFree:         1048576 kB\n", "", 0
 	case strings.Contains(command, "df -Pk"):
@@ -442,5 +503,136 @@ func TestParseHelpers(t *testing.T) {
 	}
 	if detail := dockerFailure("bash: docker: command not found", fmt.Errorf("exit status 127")); !strings.Contains(detail, "not installed") {
 		t.Errorf("dockerFailure = %q", detail)
+	}
+}
+
+func TestInstallDockerNodeRootApt(t *testing.T) {
+	server := &sshProbeServer{password: "hunter2"}
+	addr, _, stop := startSSHServer(t, server)
+	defer stop()
+	host, port := target(t, addr)
+
+	var out bytes.Buffer
+	err := InstallDockerNode(context.Background(), host, port, "root",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{AcceptUnpinned: true}, &out)
+	if err != nil {
+		t.Fatalf("InstallDockerNode: %v", err)
+	}
+	if !strings.Contains(out.String(), "Setting up docker.io") {
+		t.Errorf("streamed output = %q, want the installer output", out.String())
+	}
+	if cmd := server.lastCommand(); !strings.HasPrefix(cmd, "env DEBIAN_FRONTEND=noninteractive apt-get update") {
+		t.Errorf("install command = %q, want the allow-listed apt argv", cmd)
+	}
+}
+
+// TestInstallDockerNodeNonRootUsesSudo proves a non-root SSH user with
+// passwordless escalation runs the same fixed argv with the sudo prefix.
+func TestInstallDockerNodeNonRootUsesSudo(t *testing.T) {
+	server := &sshProbeServer{password: "hunter2", uid: "1000", sudoOK: true}
+	addr, _, stop := startSSHServer(t, server)
+	defer stop()
+	host, port := target(t, addr)
+
+	var out bytes.Buffer
+	err := InstallDockerNode(context.Background(), host, port, "deploy",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{AcceptUnpinned: true}, &out)
+	if err != nil {
+		t.Fatalf("InstallDockerNode: %v", err)
+	}
+	if cmd := server.lastCommand(); !strings.HasPrefix(cmd, "sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update") {
+		t.Errorf("install command = %q, want the sudo-prefixed allow-listed argv", cmd)
+	}
+}
+
+// TestInstallDockerNodeNonRootWithoutSudo refuses before any output when the
+// SSH user is neither root nor able to escalate.
+func TestInstallDockerNodeNonRootWithoutSudo(t *testing.T) {
+	server := &sshProbeServer{password: "hunter2", uid: "1000"}
+	addr, _, stop := startSSHServer(t, server)
+	defer stop()
+	host, port := target(t, addr)
+
+	var out bytes.Buffer
+	err := InstallDockerNode(context.Background(), host, port, "deploy",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{AcceptUnpinned: true}, &out)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("wrote %q before the privilege check failed", out.String())
+	}
+	if !strings.Contains(err.Error(), "not root") {
+		t.Errorf("err = %v, want an honest privilege message", err)
+	}
+}
+
+func TestInstallDockerNodeUnsupportedDistro(t *testing.T) {
+	server := &sshProbeServer{password: "hunter2", distro: "void"}
+	addr, _, stop := startSSHServer(t, server)
+	defer stop()
+	host, port := target(t, addr)
+
+	var out bytes.Buffer
+	err := InstallDockerNode(context.Background(), host, port, "root",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{AcceptUnpinned: true}, &out)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("err = %v, want an honest unsupported-distribution message", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("wrote %q for an unsupported distribution", out.String())
+	}
+}
+
+func TestInstallDockerNodeUnsupportedArch(t *testing.T) {
+	server := &sshProbeServer{password: "hunter2", arch: "i686"}
+	addr, _, stop := startSSHServer(t, server)
+	defer stop()
+	host, port := target(t, addr)
+
+	var out bytes.Buffer
+	err := InstallDockerNode(context.Background(), host, port, "root",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{AcceptUnpinned: true}, &out)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if !strings.Contains(err.Error(), "architecture") {
+		t.Errorf("err = %v, want an honest unsupported-architecture message", err)
+	}
+}
+
+// TestInstallDockerNodeRefusesUnpinnedHost proves the install honours the same
+// host-key policy as validation: an unpinned host without consent is refused.
+func TestInstallDockerNodeRefusesUnpinnedHost(t *testing.T) {
+	server := &sshProbeServer{password: "hunter2"}
+	addr, _, stop := startSSHServer(t, server)
+	defer stop()
+	host, port := target(t, addr)
+
+	var out bytes.Buffer
+	err := InstallDockerNode(context.Background(), host, port, "root",
+		SSHAuth{Password: "hunter2"}, HostKeyPolicy{}, &out)
+	if err == nil {
+		t.Fatal("InstallDockerNode trusted an unpinned host without consent")
+	}
+}
+
+func TestMatchDistroFamily(t *testing.T) {
+	cases := map[string]string{
+		"debian\n":        "apt",
+		"ubuntu debian\n": "apt",
+		"alpine\n":        "apk",
+		"fedora\n":        "dnf",
+		"rhel centos\n":   "dnf",
+		"opensuse\n":      "",
+		"":                "",
+	}
+	for in, want := range cases {
+		if got := matchDistroFamily(in); got != want {
+			t.Errorf("matchDistroFamily(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

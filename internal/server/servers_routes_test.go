@@ -26,6 +26,8 @@ type fakeServerService struct {
 	failAdd        error
 	validateResult *servers.ValidationResult
 	validateErr    error
+	installOutput  string
+	installErr     error
 	lastAuth       servers.ValidateAuth
 	lastPassword   string
 	metrics        []servers.MetricPoint
@@ -213,6 +215,30 @@ func (f *fakeServerService) Validate(_ context.Context, id uuid.UUID, auth serve
 		},
 		Server: &item,
 	}, nil
+}
+
+func (f *fakeServerService) InstallDocker(_ context.Context, id uuid.UUID, auth servers.ValidateAuth, out io.Writer) error {
+	f.mu.Lock()
+	f.lastAuth = auth
+	installErr := f.installErr
+	output := f.installOutput
+	f.mu.Unlock()
+
+	if output != "" {
+		if _, err := io.WriteString(out, output); err != nil {
+			return err
+		}
+	}
+	if installErr != nil {
+		return installErr
+	}
+	f.mu.Lock()
+	_, ok := f.items[id]
+	f.mu.Unlock()
+	if !ok {
+		return servers.ErrNotFound
+	}
+	return nil
 }
 
 func (f *fakeServerService) ResetHostKey(_ context.Context, id uuid.UUID) (*servers.Server, error) {
@@ -440,6 +466,40 @@ func TestValidateServerRouteNoCredentials(t *testing.T) {
 	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/validate", "", authHeader)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInstallDockerRouteStreamsOutput(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install")
+
+	fake.installOutput = "Reading package lists...\nSetting up docker.io\n"
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); !strings.Contains(got, "Setting up docker.io") {
+		t.Errorf("body = %q, want the installer output", got)
+	}
+}
+
+func TestInstallDockerRoutePreflightError(t *testing.T) {
+	fake := newFakeServerService()
+	s := newServerRoutesTestServer(t, fake)
+	id := seedServer(t, fake, "web-install-fail")
+
+	// No output before the error: the handler must answer a real error status,
+	// not a committed 200 stream.
+	fake.installErr = fmt.Errorf("%w: Docker install is not supported on this node", servers.ErrValidation)
+
+	rec := doRequest(t, s, http.MethodPost, "/api/v1/servers/"+id.String()+"/docker-install", "", authHeader)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not supported") {
+		t.Errorf("body = %q, want the honest failure detail", rec.Body.String())
 	}
 }
 

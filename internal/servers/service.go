@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
@@ -1029,6 +1030,41 @@ func (s *ServerService) Validate(ctx context.Context, id uuid.UUID, auth Validat
 
 	s.logger.Info("servers: validation succeeded", "server_id", id.String(), "docker_version", info.DockerVersion)
 	return &ValidationResult{Checks: checks, Server: serverFromRow(updated)}, nil
+}
+
+// InstallDocker installs Docker Engine on a server over SSH, streaming the
+// installer output to out. It resolves the credentials and host-key policy the
+// same way Validate does but never writes to the database: the operator re-runs
+// the probe afterwards, and that run records the outcome. It is the in-product
+// alternative to the App Store install for a node whose agent is not installed
+// yet, which is exactly the state the Add-server wizard validates in.
+func (s *ServerService) InstallDocker(ctx context.Context, id uuid.UUID, auth ValidateAuth, out io.Writer) error {
+	row, err := s.store.GetServerByID(ctx, pgUUID(id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("get server: %w", err)
+	}
+	server := serverFromRow(row)
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, true); err != nil {
+		if errors.Is(err, teams.ErrForbidden) {
+			return err
+		}
+		return ErrNotFound
+	}
+
+	credentials, err := s.credentials(ctx, row, auth)
+	if err != nil {
+		return err
+	}
+
+	policy := HostKeyPolicy{Pinned: fingerprintOf(row.HostKeyFingerprint)}
+	if policy.Pinned == "" {
+		policy.AcceptUnpinned = len(credentials.PrivateKeyPEM) > 0 || auth.TrustHostKey
+	}
+
+	return InstallDockerNode(ctx, server.IP, server.Port, server.SSHUser, credentials, policy, out)
 }
 
 // RegisterNode handles an agent Register call: it finds or creates the server

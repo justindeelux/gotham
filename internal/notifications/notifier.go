@@ -81,7 +81,38 @@ func newSlackNotifier(webhookURL string, client *http.Client) *slackNotifier {
 
 // Notify implements Notifier.
 func (n *slackNotifier) Notify(ctx context.Context, event Event) error {
-	return postJSON(ctx, n.client, n.url, map[string]string{"text": truncateText(event.Message(), slackTextLimit)})
+	// Every field of the message is user-controlled (resource name, host,
+	// engine error), so the whole message is escaped before it becomes Slack
+	// mrkdwn: a name containing "<!channel>", "<@U123>", "<#C1|x>" or an
+	// "<https://evil|click>" link travels as inert text instead of pinging or
+	// phishing. Slack's rule is ampersand-first, which a single-pass replacer
+	// handles without re-escaping the inserted entities. Escaping runs before
+	// the cap so the limit bounds what is actually sent.
+	return postJSON(ctx, n.client, n.url, slackPayload{
+		Text:        truncateText(slackEscape(event.Message()), slackTextLimit),
+		LinkNames:   false,
+		UnfurlLinks: false,
+		UnfurlMedia: false,
+	})
+}
+
+// slackPayload is the Slack incoming-webhook body. link_names stays off so
+// Slack never turns an "@here" in user text into a mention, and the unfurl
+// flags stay off so Slack never fetches a user-controlled URL to preview it.
+// mrkdwn is left at Slack's default: the escaped text is already inert, and
+// disabling mrkdwn would render the escape sequences literally.
+type slackPayload struct {
+	Text        string `json:"text"`
+	LinkNames   bool   `json:"link_names"`
+	UnfurlLinks bool   `json:"unfurl_links"`
+	UnfurlMedia bool   `json:"unfurl_media"`
+}
+
+// slackEscape escapes the three characters Slack's mrkdwn parser treats as
+// markup, in the order the rule requires (ampersand first). The result is data,
+// never markup; intentional formatting would be composed from escaped parts.
+func slackEscape(text string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(text)
 }
 
 // telegramNotifier calls the Bot API sendMessage method.
@@ -108,6 +139,11 @@ func newTelegramNotifier(token, chatID, baseURL string, client *http.Client) *te
 
 // Notify implements Notifier. The token travels in the URL path (the Bot API
 // contract), so a failed call never reports the endpoint, only the host.
+//
+// No parse_mode is sent, so the Bot API treats the text as plain: a resource
+// name or error containing "<b>", "*bold*" or "[x](y)" is delivered verbatim
+// and never parsed as HTML or Markdown. If a parse_mode is ever added, the
+// dynamic text must be escaped for that mode first.
 func (n *telegramNotifier) Notify(ctx context.Context, event Event) error {
 	endpoint := n.baseURL + "/bot" + url.PathEscape(n.token) + "/sendMessage"
 	return postJSON(ctx, n.client, endpoint, map[string]string{

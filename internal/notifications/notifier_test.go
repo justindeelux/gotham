@@ -141,9 +141,16 @@ func TestSlackNotifierPostsText(t *testing.T) {
 	if method != http.MethodPost {
 		t.Errorf("method = %q, want POST", method)
 	}
-	want := `{"text":` + mustJSONString(t, fixedEvent().Message()) + `}`
-	if string(body) != want {
-		t.Errorf("body = %s, want %s", body, want)
+	var payload slackPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode payload %s: %v", body, err)
+	}
+	if want := slackEscape(fixedEvent().Message()); payload.Text != want {
+		t.Errorf("text = %q, want %q", payload.Text, want)
+	}
+	// No option may re-parse or resolve the user text.
+	if payload.LinkNames || payload.UnfurlLinks || payload.UnfurlMedia {
+		t.Errorf("payload = %+v, want link_names and both unfurl flags off", payload)
 	}
 }
 
@@ -585,4 +592,115 @@ func mustJSONString(t *testing.T, s string) string {
 		t.Fatalf("marshal %q: %v", s, err)
 	}
 	return string(encoded)
+}
+
+// TestSlackEscapesMentionAndLinkInjection proves every user-controlled part of
+// the message reaches Slack as inert text: mentions ("<!channel>", "<@U123>"),
+// channel links ("<#C1|x>") and phishing links ("<https://evil|click>") are
+// escaped, so nothing pings or renders a link from user input.
+func TestSlackEscapesMentionAndLinkInjection(t *testing.T) {
+	server, call := newWebhookServer(t, http.StatusOK)
+	notifier := newSlackNotifier(server.URL+"/services/T04/inject-secret", server.Client())
+	event := fixedEvent()
+	event.Name = "<!channel> <!here> <!everyone> <@U123> <#C123|general>"
+	event.Error = "<https://evil.example|click> & <b>bold</b>"
+
+	if err := notifier.Notify(context.Background(), event); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	_, _, _, body := call.snapshot()
+	var payload slackPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode payload %s: %v", body, err)
+	}
+	text := payload.Text
+	for _, escaped := range []string{
+		"&lt;!channel&gt;", "&lt;!here&gt;", "&lt;!everyone&gt;",
+		"&lt;@U123&gt;", "&lt;#C123|general&gt;",
+		"&lt;https://evil.example|click&gt;", "&amp;", "&lt;b&gt;bold&lt;/b&gt;",
+	} {
+		if !strings.Contains(text, escaped) {
+			t.Errorf("text = %q, want the escaped form %q", text, escaped)
+		}
+	}
+	// No raw markup survives: every '<'/'>' is escaped and '&' only starts an
+	// entity.
+	if strings.ContainsAny(text, "<>") {
+		t.Errorf("text = %q still contains raw angle brackets", text)
+	}
+	for i := 0; i < len(text); i++ {
+		if text[i] != '&' {
+			continue
+		}
+		rest := text[i:]
+		if !strings.HasPrefix(rest, "&amp;") && !strings.HasPrefix(rest, "&lt;") && !strings.HasPrefix(rest, "&gt;") {
+			t.Errorf("text = %q has an unescaped ampersand at %d", text, i)
+			break
+		}
+	}
+	if payload.LinkNames || payload.UnfurlLinks || payload.UnfurlMedia {
+		t.Errorf("payload = %+v, want link_names and both unfurl flags off", payload)
+	}
+}
+
+// TestTelegramDoesNotParseUserMarkup proves the sender never asks the Bot API
+// to parse the text: a name carrying HTML/Markdown syntax is delivered
+// verbatim and no parse_mode is sent.
+func TestTelegramDoesNotParseUserMarkup(t *testing.T) {
+	server, call := newWebhookServer(t, http.StatusOK)
+	notifier := newTelegramNotifier("7184:AAH-token", "-100", server.URL, server.Client())
+	event := fixedEvent()
+	event.Name = "<b>bold</b> *italic* [x](https://evil.example) `code`"
+
+	if err := notifier.Notify(context.Background(), event); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	_, _, _, body := call.snapshot()
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode payload %s: %v", body, err)
+	}
+	if _, ok := payload["parse_mode"]; ok {
+		t.Error("payload sets parse_mode; the dynamic text would be parsed as markup")
+	}
+	if text, _ := payload["text"].(string); text != event.Message() {
+		t.Errorf("text = %q, want the verbatim message %q", text, event.Message())
+	}
+}
+
+// TestEmailSubjectCannotInjectHeaders proves a resource name carrying CRLF
+// cannot add a header: the subject is neutralized and the document keeps a
+// single Subject line.
+func TestEmailSubjectCannotInjectHeaders(t *testing.T) {
+	mailer := &fakeMailer{}
+	notifier := newEmailNotifier(mailer, ChannelConfig{
+		Host: "smtp.gotham.dev", Port: 587, From: "ops@gotham.dev", To: []string{"oncall@gotham.dev"},
+	})
+	event := fixedEvent()
+	event.Name = "shop-web\r\nBcc: attacker@example.com"
+
+	if err := notifier.Notify(context.Background(), event); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	mails := mailer.delivered()
+	if len(mails) != 1 {
+		t.Fatalf("mails = %d, want 1", len(mails))
+	}
+	raw := string(renderMessage(mails[0]))
+	headerBlock, _, ok := strings.Cut(raw, "\r\n\r\n")
+	if !ok {
+		t.Fatalf("document = %q, want a header/body separator", raw)
+	}
+	subjectLines := 0
+	for _, line := range strings.Split(headerBlock, "\r\n") {
+		if strings.HasPrefix(line, "Subject: ") {
+			subjectLines++
+		}
+		if strings.HasPrefix(line, "Bcc:") || strings.HasPrefix(line, "X-Injected:") {
+			t.Errorf("document header block injected %q", line)
+		}
+	}
+	if subjectLines != 1 {
+		t.Errorf("header block = %q, want exactly one Subject header", headerBlock)
+	}
 }

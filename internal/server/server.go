@@ -38,6 +38,7 @@ import (
 	"github.com/justindeelux/gotham/internal/taskevents"
 	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/templates"
+	"github.com/justindeelux/gotham/internal/toolchain"
 	"github.com/justindeelux/gotham/internal/updates"
 	"github.com/justindeelux/gotham/internal/webhooks"
 	"github.com/justindeelux/gotham/updatecore"
@@ -98,6 +99,10 @@ type Server struct {
 	deploy            deploy.DeployService
 	proxy             proxy.ProxyService
 	backups           databases.BackupService
+	// toolchain is the persisted tool install/uninstall queue (JUS-176): the
+	// HTTP surface plus the worker that drives node agents. Built from the
+	// database and the agent dialer; nil disables the routes.
+	toolchain toolchain.ToolchainService
 	// jobLeases is the exclusion registry shared by the database service and
 	// the backup manager: a backup/restore owns the volume while a lifecycle
 	// Start/Restart is refused, and vice versa.
@@ -218,6 +223,12 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		if closer, ok := s.deploy.(interface{ Close() error }); ok {
 			_ = closer.Close()
 		}
+		// The toolchain worker stops its queue loop before the shared Redis
+		// pinger goes away; a job interrupted here is reconciled to failed on
+		// the next boot.
+		if closer, ok := s.toolchain.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
 		_ = redisClient.Close()
 		limiter.Close()
 		refreshLimiter.Close()
@@ -290,6 +301,19 @@ func (s *Server) routes() (http.Handler, error) {
 		if s.servers != nil {
 			s.mountServerRoutes(api)
 		}
+
+		// Toolchain install queue (JUS-176): the tool catalog per node, the
+		// persisted install/uninstall queue, and the worker that drives each
+		// node's agent ToolService. It rides the same team/RBAC chain as server
+		// management and mounts nothing without a database. The worker is
+		// started here; the closer stops it.
+		if s.toolchain == nil {
+			if svc := s.toolchainService(); svc != nil {
+				s.toolchain = svc
+				svc.Start()
+			}
+		}
+		s.mountToolchainRoutes(api)
 
 		// Running binary version (JUS-7): any authenticated caller, no team
 		// scope. It reads through the versionReporter seam, so it mounts

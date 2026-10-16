@@ -558,6 +558,18 @@ type TeamMember struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type ToolchainJob struct {
+	ID         pgtype.UUID        `json:"id"`
+	ServerID   pgtype.UUID        `json:"server_id"`
+	ToolID     string             `json:"tool_id"`
+	Action     string             `json:"action"`
+	Status     string             `json:"status"`
+	Log        string             `json:"log"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	StartedAt  pgtype.Timestamptz `json:"started_at"`
+	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+}
+
 type UpdateSchedule struct {
 	ID              bool               `json:"id"`
 	CheckEnabled    bool               `json:"check_enabled"`

@@ -13,13 +13,14 @@ vi.mock("@/features/notifications/api/notifications", async (importOriginal) => 
     await importOriginal<
       typeof import("@/features/notifications/api/notifications")
     >();
-  return { ...actual, listDeliveries: vi.fn() };
+  return { ...actual, listDeliveries: vi.fn(), testChannel: vi.fn() };
 });
 
 import {
   deliveryEventLabel,
   deliveryStatusLabel,
   listDeliveries,
+  testChannel,
 } from "@/features/notifications/api/notifications";
 import type {
   NotificationChannel,
@@ -43,6 +44,7 @@ beforeEach(() => {
   i18n.global.mergeLocaleMessage("vi", { notifications: notificationsVi });
   syncComposerLocale("en");
   vi.mocked(listDeliveries).mockReset();
+  vi.mocked(testChannel).mockReset();
 });
 
 const channel = {
@@ -68,6 +70,15 @@ function attempt(overrides: Partial<NotificationDelivery>): NotificationDelivery
     created_at: "2026-09-29T12:00:00Z",
     ...overrides,
   };
+}
+
+/** deferred builds a promise a test resolves by hand. */
+function deferred<T>() {
+  let resolve!: (_value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 describe("JUS-195 delivery labels", () => {
@@ -158,6 +169,62 @@ describe("JUS-195 channel history panel", () => {
     expect(wrapper.find("[data-test-channel-history-error]").text()).toBe(
       "Your team role does not allow this action.",
     );
+    wrapper.unmount();
+  });
+
+  it("keeps the newest read when two history loads overlap", async () => {
+    const first = deferred<NotificationDelivery[]>();
+    const second = deferred<NotificationDelivery[]>();
+    vi.mocked(listDeliveries)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    vi.mocked(testChannel).mockResolvedValueOnce({
+      ok: true,
+      message: "delivered",
+    });
+    const wrapper = await cardHarness();
+    const button = (label: string) =>
+      wrapper.findAll("button").find((item) => item.text() === label)!;
+
+    // The toggle is disabled while a read is in flight, so the realistic
+    // overlap is the send-test refresh racing an open panel's pending read.
+    await button("Delivery history").trigger("click"); // read 1 (pending)
+    await button("Send test").trigger("click");
+    await flushPromises(); // the test resolves and refreshes the open panel
+    expect(vi.mocked(listDeliveries)).toHaveBeenCalledTimes(2);
+
+    second.resolve([
+      attempt({ id: "new", status: "success", event_type: "test", error_summary: "" }),
+    ]);
+    await flushPromises();
+    expect(wrapper.findAll("[data-test-channel-history-row]")).toHaveLength(1);
+    expect(wrapper.text()).toContain("Test message");
+
+    // The stale first read resolves late and must be ignored.
+    first.resolve([attempt({ id: "old", error_summary: "stale failure" })]);
+    await flushPromises();
+    expect(wrapper.findAll("[data-test-channel-history-row]")).toHaveLength(1);
+    expect(wrapper.text()).toContain("Test message");
+    expect(wrapper.text()).not.toContain("stale failure");
+    wrapper.unmount();
+  });
+
+  it("announces a send-test result through a polite live region", async () => {
+    vi.mocked(testChannel).mockRejectedValueOnce({ message: "", status: 403 });
+    const wrapper = await cardHarness();
+    const send = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Send test");
+    expect(send, "expected a Send test button").toBeDefined();
+    await send!.trigger("click");
+    await flushPromises();
+
+    const result = wrapper.find("[data-test-channel-result]");
+    expect(result.exists()).toBe(true);
+    expect(result.attributes("role")).toBe("status");
+    expect(result.attributes("aria-live")).toBe("polite");
+    // No history read is triggered by a send-test while the panel is closed.
+    expect(vi.mocked(listDeliveries)).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 });

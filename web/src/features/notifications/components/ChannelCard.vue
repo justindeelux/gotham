@@ -63,6 +63,13 @@ const historyError = computed<string | null>(() =>
     : describeChannelError(historyErrorRaw.value),
 );
 
+/**
+ * Token of the newest history read. Opening the panel and a send-test refresh
+ * can overlap; only the newest read may write state, so an older response can
+ * never overwrite a newer list or clear a spinner the newest read still owns.
+ */
+let historyReadToken = 0;
+
 /** toggleHistory opens/closes the panel, loading the history on open. */
 async function toggleHistory(channel: NotificationChannel): Promise<void> {
   historyOpen.value = !historyOpen.value;
@@ -71,17 +78,27 @@ async function toggleHistory(channel: NotificationChannel): Promise<void> {
   }
 }
 
-/** loadHistory reloads one channel's newest attempts. */
+/** loadHistory reloads one channel's newest attempts (latest read wins). */
 async function loadHistory(channel: NotificationChannel): Promise<void> {
+  const token = ++historyReadToken;
   historyLoading.value = true;
   historyErrorRaw.value = null;
   try {
-    deliveries.value = await channelsStore.history(channel.id);
+    const next = await channelsStore.history(channel.id);
+    if (token !== historyReadToken) {
+      return;
+    }
+    deliveries.value = next;
   } catch (error) {
+    if (token !== historyReadToken) {
+      return;
+    }
     historyErrorRaw.value = error;
     deliveries.value = [];
   } finally {
-    historyLoading.value = false;
+    if (token === historyReadToken) {
+      historyLoading.value = false;
+    }
   }
 }
 
@@ -193,6 +210,8 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
             type="error"
             depth="1"
             class="small"
+            role="status"
+            aria-live="polite"
             data-test-channel-result
           >
             {{ $t("notifications.card.testFailed") }}{{ testFailure }}
@@ -202,6 +221,8 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
             :type="testResult.ok ? 'success' : 'error'"
             depth="1"
             class="small"
+            role="status"
+            aria-live="polite"
             data-test-channel-result
           >
             {{ testResult.ok ? $t("notifications.card.testDelivered") : $t("notifications.card.testFailed") }}{{
@@ -231,6 +252,8 @@ async function handleTest(channel: NotificationChannel): Promise<void> {
               type="error"
               depth="1"
               class="small"
+              role="status"
+              aria-live="polite"
               data-test-channel-history-error
             >
               {{ historyError }}

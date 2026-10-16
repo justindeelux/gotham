@@ -45,14 +45,30 @@ type BuildServer struct {
 	log    *slog.Logger
 	// maxContextBytes bounds the received build context; tests lower it.
 	maxContextBytes int64
+	// toolUse marks a build in flight so an uninstall can refuse a tool that
+	// is building. Nil when the node runs no tool service.
+	toolUse *ToolUseTracker
+}
+
+// BuildServerOption tunes a BuildServer.
+type BuildServerOption func(*BuildServer)
+
+// WithToolUseTracker wires the node's tool-use tracker so a build is reported
+// as using its toolchain for the duration of the build.
+func WithToolUseTracker(tracker *ToolUseTracker) BuildServerOption {
+	return func(s *BuildServer) { s.toolUse = tracker }
 }
 
 // NewBuildServer returns a BuildService implementation backed by docker.
-func NewBuildServer(docker buildClient, log *slog.Logger) *BuildServer {
+func NewBuildServer(docker buildClient, log *slog.Logger, options ...BuildServerOption) *BuildServer {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &BuildServer{docker: docker, log: log, maxContextBytes: defaultBuildContextLimit}
+	server := &BuildServer{docker: docker, log: log, maxContextBytes: defaultBuildContextLimit}
+	for _, option := range options {
+		option(server)
+	}
+	return server
 }
 
 // BuildImage buffers the streamed build context, builds the image on the
@@ -60,6 +76,13 @@ func NewBuildServer(docker buildClient, log *slog.Logger) *BuildServer {
 // The last response on success carries the image digest and registry address.
 func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) error {
 	ctx := stream.Context()
+
+	// Mark the build in flight before any toolchain work: an uninstall of
+	// docker/buildkit/railpack/pack must refuse while this is running.
+	if s.toolUse != nil {
+		s.toolUse.BeginBuild()
+		defer s.toolUse.EndBuild()
+	}
 
 	first, err := stream.Recv()
 	if err != nil {

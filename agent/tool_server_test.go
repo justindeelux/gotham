@@ -96,16 +96,16 @@ func TestToolServerListToolsReportsMinVersion(t *testing.T) {
 	t.Fatal("ListTools omitted git")
 }
 
-// TestToolServerInstallUnimplemented pins the JUS-174 contract: the install and
-// uninstall RPCs are defined now but not implemented, so they answer
-// codes.Unimplemented from the embedded server rather than a silent success.
-func TestToolServerInstallUnimplemented(t *testing.T) {
-	server := NewToolServer()
-	request := &agentv1.InstallToolRequest{Id: toolcatalog.IDRailpack}
-	if err := server.InstallTool(request, nil); status.Code(err) != codes.Unimplemented {
-		t.Errorf("InstallTool = %v; want Unimplemented", err)
+// TestToolServerInstallDetectOnly pins the contract that a detect-only host
+// unit is refused before any command runs: the systemd units are never
+// installed or removed, so the manager answers FailedPrecondition.
+func TestToolServerInstallDetectOnly(t *testing.T) {
+	server := NewToolServer(withToolRunner(&fakeToolRunner{}))
+	request := &agentv1.InstallToolRequest{Id: toolcatalog.IDSystemdNetworkd}
+	if err := server.InstallTool(request, newFakeToolStream(context.Background())); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("InstallTool(systemd-networkd) = %v; want FailedPrecondition", err)
 	}
-	if err := server.UninstallTool(request, nil); status.Code(err) != codes.Unimplemented {
-		t.Errorf("UninstallTool = %v; want Unimplemented", err)
+	if err := server.UninstallTool(request, newFakeToolStream(context.Background())); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("UninstallTool(systemd-networkd) = %v; want FailedPrecondition", err)
 	}
 }

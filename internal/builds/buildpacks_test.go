@@ -80,8 +80,8 @@ func TestBuildpacksBuildCLIMissing(t *testing.T) {
 	if !errors.Is(err, ErrCLIMissing) {
 		t.Fatalf("Build error = %v; want ErrCLIMissing", err)
 	}
-	if !strings.Contains(err.Error(), "brew install buildpacks/pack/pack") {
-		t.Errorf("Build error = %q; want the pack install command", err)
+	if !strings.Contains(err.Error(), "install it from the App Store") {
+		t.Errorf("Build error = %q; want the pack install hint", err)
 	}
 }
 

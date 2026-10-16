@@ -140,8 +140,8 @@ func TestRailpackBuildRequiresBuildKit(t *testing.T) {
 	if !errors.Is(err, ErrCLIMissing) {
 		t.Fatalf("Build error = %v; want ErrCLIMissing", err)
 	}
-	if !strings.Contains(err.Error(), "moby/buildkit") {
-		t.Errorf("Build error = %q; want the BuildKit start command", err)
+	if !strings.Contains(err.Error(), "install Docker from the App Store") {
+		t.Errorf("Build error = %q; want the App Store Docker hint", err)
 	}
 	if _, statErr := os.Stat(ranFile); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("railpack ran although BUILDKIT_HOST was unset")

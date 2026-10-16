@@ -183,7 +183,7 @@ const vi: ServersMessages = {
     currentStatus: "Trạng thái hiện tại:",
     installReady: "Agent đã đăng ký và máy chủ đã sẵn sàng.",
     installHowto:
-      "SSH vào nút và chạy khối lệnh bên dưới. Khối lệnh sao chép chứng chỉ CA của control plane, lấy các tệp phụ của trình cài đặt và đăng ký nút. Thay tên máy chủ CP và tên nút giữ chỗ; trình cài đặt từ chối khi thiếu --ca, và agent gọi địa chỉ loopback trừ khi GOTHAM_AGENT_CP_ADDR trỏ tới control plane.",
+      "Bước thủ công một lần. SSH vào nút và chạy khối lệnh bên dưới. Khối lệnh sao chép chứng chỉ CA của control plane, lấy các tệp phụ của trình cài đặt và đăng ký nút. Thay tên máy chủ CP và tên nút giữ chỗ; trình cài đặt từ chối khi thiếu --ca, và agent gọi địa chỉ loopback trừ khi GOTHAM_AGENT_CP_ADDR trỏ tới control plane.",
     copy: "Sao chép",
     installCopied: "Đã sao chép lệnh cài đặt",
     copyFailed: "Không thể sao chép vào khay nhớ tạm",
@@ -271,7 +271,7 @@ const vi: ServersMessages = {
     unexpected: "Đã xảy ra lỗi. Vui lòng thử lại.",
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     metricsDisabled:
-      "Control plane này chưa bật chỉ số máy chủ (FEATURE_METRICS=false).",
+      "Chỉ số máy chủ đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật.",
     metricsRange: "Khoảng chỉ số không hợp lệ. Hãy chọn khoảng khác rồi thử lại.",
   },
   toasts: {

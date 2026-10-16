@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-BE-8PLhl.js
+import{e as i}from"./index-FtW8t-RT.js";import{u as n}from"./use-message-BV-4potS.js";import{bu as e}from"./index-C_BYxTzt.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+========
+import{e as i}from"./index-i77hShnm.js";import{u as n}from"./use-message-COHIKlwF.js";import{bu as e}from"./index-D1w3TW7n.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+>>>>>>>> 2e52d59b7 (fix(copy): replace manual-install and env-var copy with in-product actions (JUS-186)):internal/server/webdist/assets/useCopyText-CkZBCPB8.js

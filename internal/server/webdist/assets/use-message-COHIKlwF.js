@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/use-message-BV-4potS.js
+import{aD as s,Z as o,fX as t}from"./index-C_BYxTzt.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+========
+import{aD as s,Z as o,fX as t}from"./index-D1w3TW7n.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+>>>>>>>> 2e52d59b7 (fix(copy): replace manual-install and env-var copy with in-product actions (JUS-186)):internal/server/webdist/assets/use-message-COHIKlwF.js

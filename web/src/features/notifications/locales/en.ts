@@ -16,8 +16,8 @@ const en = {
     newChannel: "New channel",
     unavailableTitle: "Notifications unavailable",
     unavailableDesc:
-      "Notification channels are not enabled on this control plane " +
-      "(FEATURE_NOTIFICATIONS=false).",
+      "Notification channels are turned off on this control plane. Ask your " +
+      "platform admin to enable them.",
     empty: "No channels for this team yet.",
     createFirst: "Create the first channel",
   },
@@ -140,11 +140,11 @@ const en = {
       "Applications and databases are unavailable on this control plane; " +
       "the channel can stay team-wide.",
     unavailableApps:
-      "Applications are unavailable on this control plane " +
-      "(FEATURE_APPLICATIONS=false); a database scope is still available.",
+      "Applications are turned off on this control plane; " +
+      "a database scope is still available.",
     unavailableDbs:
-      "Databases are unavailable on this control plane " +
-      "(FEATURE_DATABASES=false); an application scope is still available.",
+      "Databases are turned off on this control plane; " +
+      "an application scope is still available.",
     enabled: "Enabled",
     enabledAria: "Channel enabled",
     secretsNote:
@@ -165,8 +165,8 @@ const en = {
     sessionExpired: "Your session expired. Please sign in again.",
     forbiddenRole: "Your team role does not allow this action.",
     featureDisabled:
-      "Notification channels are not enabled on this control plane " +
-      "(FEATURE_NOTIFICATIONS=false).",
+      "Notification channels are turned off on this control plane. Ask your " +
+      "platform admin to enable them.",
     invalidConfig: "Invalid channel configuration.",
     requestFailed: "Request failed",
     unexpected: "Something went wrong. Please try again.",

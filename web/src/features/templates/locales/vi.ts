@@ -23,7 +23,7 @@ const vi: typeof en = {
     invalidValuesWithDetail: "Giá trị không hợp lệ: {detail}",
     notFound: "Không tìm thấy mẫu. Danh mục có thể đã đổi — tải lại trang.",
     notFoundWithDetail: "Không tìm thấy: {detail}",
-    disabled: "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).",
+    disabled: "Dịch vụ đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật.",
   },
   gallery: {
     empty: "Danh mục chưa có mẫu nào.",

@@ -29,7 +29,7 @@ const en = {
     databaseAgentUnreachable:
       "The node agent is unreachable or the healthcheck failed. Check the node status and retry.",
     featureDisabled:
-      "Databases are disabled on the control plane (FEATURE_DATABASES=false).",
+      "Databases are turned off on this control plane. Ask your platform admin to enable them.",
     backupInvalidRequest:
       "Invalid request. Check the cron expression and target fields.",
     sessionExpired: "Session expired. Please sign in again.",

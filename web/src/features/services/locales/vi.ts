@@ -34,7 +34,7 @@ const vi: typeof en = {
     unknownWithDetail: "Yêu cầu thất bại: {detail}",
     nodeAgentError: "Lỗi node agent: {detail}",
     nodeUnreachable: "Không kết nối được node agent. Kiểm tra trạng thái node rồi thử lại.",
-    disabled: "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).",
+    disabled: "Dịch vụ đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật.",
   },
   import: {
     title: "Nhập compose",

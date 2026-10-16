@@ -329,7 +329,9 @@ func dockerFailure(out string, err error) string {
 	detail := detailOrError(out, err)
 	lower := strings.ToLower(detail)
 	if strings.Contains(lower, "not found") || strings.Contains(lower, "no such file") {
-		return "docker is not installed or not on PATH: " + detail
+		// The agent registers without Docker and the App Store can install it,
+		// so point at that in-product path instead of naming PATH.
+		return "Docker Engine is not installed on this node. Install it from the App Store after the agent is registered, then validate again: " + detail
 	}
 	return "docker version failed: " + detail
 }

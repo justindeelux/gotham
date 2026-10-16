@@ -182,7 +182,7 @@ const en = {
     currentStatus: "Current status:",
     installReady: "The agent registered and the server is ready.",
     installHowto:
-      "SSH into the node and run the block below. It copies the control plane CA certificate, clones the installer sibling files, and registers the node. Replace the CP host and node placeholders; the installer fails closed without --ca, and the agent dials the loopback address unless GOTHAM_AGENT_CP_ADDR points at the control plane.",
+      "One-time manual step. SSH into the node and run the block below. It copies the control plane CA certificate, clones the installer sibling files, and registers the node. Replace the CP host and node placeholders; the installer fails closed without --ca, and the agent dials the loopback address unless GOTHAM_AGENT_CP_ADDR points at the control plane.",
     copy: "Copy",
     installCopied: "Install command copied",
     copyFailed: "Could not copy to clipboard",
@@ -270,7 +270,7 @@ const en = {
     unexpected: "Something went wrong. Please try again.",
     sessionExpired: "Your session expired. Please sign in again.",
     metricsDisabled:
-      "Server metrics are not enabled on this control plane (FEATURE_METRICS=false).",
+      "Server metrics are turned off on this control plane. Ask your platform admin to enable them.",
     metricsRange: "Invalid metrics range. Pick another range and retry.",
   },
   toasts: {

@@ -9,6 +9,8 @@ import {
   NSelect,
   NSpace,
   NSpin,
+  NTabPane,
+  NTabs,
   NTag,
 } from "naive-ui";
 import type { DataTableColumns, SelectOption } from "naive-ui";
@@ -41,6 +43,9 @@ const searchQuery = ref("");
 const checkedKeys = ref<string[]>([]);
 const pendingTools = ref<Record<string, boolean>>({});
 const busyBulk = ref(false);
+// activeCategory is the selected tab; checkedKeys lives outside the tabs so
+// multi-select survives tab switches and one bulk install covers every tab.
+const activeCategory = ref("");
 
 const nodeOptions = computed<SelectOption[]>(() =>
   serversStore.servers.map((server) => ({
@@ -53,43 +58,86 @@ const errorText = computed<string | null>(() =>
   store.failure ? describeToolchainError(store.failure) : null,
 );
 
-/** filteredTools applies the search query client-side (name, id, category). */
-const filteredTools = computed<ToolchainTool[]>(() => {
-  const query = searchQuery.value.trim().toLowerCase();
-  if (query === "") {
-    return store.tools;
-  }
-  return store.tools.filter((tool) =>
-    tool.name.toLowerCase().includes(query) ||
+/** matchesQuery is the client-side search predicate (name, id, category). */
+function matchesQuery(tool: ToolchainTool, query: string): boolean {
+  return tool.name.toLowerCase().includes(query) ||
     tool.id.toLowerCase().includes(query) ||
-    (tool.category ?? "").toLowerCase().includes(query),
-  );
-});
-
-interface ToolGroup {
-  category: string;
-  tools: ToolchainTool[];
+    (tool.category ?? "").toLowerCase().includes(query);
 }
 
-/** groupedTools sorts tools into category sections (uncategorized last). */
-const groupedTools = computed<ToolGroup[]>(() => {
-  const groups = new Map<string, ToolchainTool[]>();
-  for (const tool of filteredTools.value) {
-    const category = tool.category?.trim() || t("toolchain.page.uncategorized");
-    const list = groups.get(category);
-    if (list) {
-      list.push(tool);
-    } else {
-      groups.set(category, [tool]);
-    }
+/** categories lists every tab from the full catalog (not the search filter). */
+const categories = computed<string[]>(() => {
+  const names = new Set<string>();
+  for (const tool of store.tools) {
+    names.add(tool.category?.trim() || t("toolchain.page.uncategorized"));
   }
-  return [...groups.entries()]
-    .map(([category, tools]) => ({
-      category,
-      tools: [...tools].sort((a, b) => a.name.localeCompare(b.name)),
-    }))
-    .sort((a, b) => a.category.localeCompare(b.category));
+  return [...names].sort((a, b) => a.localeCompare(b));
 });
+
+// The tab list follows the catalog: an unknown active tab (node switch,
+// locale change) falls back to the first category.
+watch(
+  categories,
+  (names) => {
+    if (!names.includes(activeCategory.value)) {
+      activeCategory.value = names[0] ?? "";
+    }
+  },
+  { immediate: true },
+);
+
+/** searching is true while the header box filters every tab's badge. */
+const searching = computed<boolean>(() => searchQuery.value.trim() !== "");
+
+/** matchCount reports how many tools of one tab pass the current search. */
+function matchCount(category: string): number {
+  const query = searchQuery.value.trim().toLowerCase();
+  if (query === "") {
+    return store.tools.filter((tool) =>
+      (tool.category?.trim() || t("toolchain.page.uncategorized")) === category,
+    ).length;
+  }
+  return store.tools.filter((tool) =>
+    (tool.category?.trim() || t("toolchain.page.uncategorized")) === category &&
+    matchesQuery(tool, query),
+  ).length;
+}
+
+/** selectedInTab counts the checked rows of one tab for its badge. */
+function selectedInTab(category: string): number {
+  const ids = new Set(checkedKeys.value);
+  return store.tools.filter((tool) =>
+    ids.has(tool.id) &&
+    (tool.category?.trim() || t("toolchain.page.uncategorized")) === category,
+  ).length;
+}
+
+/** tabLabel names a tab with its counts: total, matches while searching, selected. */
+function tabLabel(category: string): string {
+  const total = store.tools.filter((tool) =>
+    (tool.category?.trim() || t("toolchain.page.uncategorized")) === category,
+  ).length;
+  const matched = matchCount(category);
+  const count = searching.value
+    ? String(t("toolchain.page.tabMatches", { matched, total }))
+    : String(total);
+  const selected = selectedInTab(category);
+  const suffix = selected > 0
+    ? ` · ${String(t("toolchain.page.tabSelected", { count: selected }))}`
+    : "";
+  return `${category} (${count})${suffix}`;
+}
+
+/** toolsIn lists one tab's tools, filtered by the header search, sorted by name. */
+function toolsIn(category: string): ToolchainTool[] {
+  const query = searchQuery.value.trim().toLowerCase();
+  return store.tools
+    .filter((tool) =>
+      (tool.category?.trim() || t("toolchain.page.uncategorized")) === category &&
+      (query === "" || matchesQuery(tool, query)),
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
 
 /** selectableIds are the checked rows that can actually be installed. */
 const selectableIds = computed<string[]>(() =>
@@ -97,6 +145,13 @@ const selectableIds = computed<string[]>(() =>
     const tool = store.tools.find((item) => item.id === id);
     return tool !== undefined && isToolSelectable(tool);
   }),
+);
+
+/** footerText announces the bulk selection for the sticky footer status. */
+const footerText = computed<string>(() =>
+  selectableIds.value.length > 0
+    ? String(t("toolchain.page.footerSelected", { count: selectableIds.value.length }))
+    : String(t("toolchain.page.footerEmpty")),
 );
 
 /** queueType maps a job status to one Naive tag. */
@@ -342,57 +397,34 @@ watch(
 <template>
   <div class="toolchain-page">
     <div class="page-head">
-      <div>
+      <div class="page-title">
         <p class="eyebrow">{{ $t("toolchain.page.eyebrow") }}</p>
         <h1>{{ $t("toolchain.page.title") }}</h1>
         <p class="page-desc">{{ $t("toolchain.page.description") }}</p>
       </div>
-      <div class="page-actions">
-        <NButton
-          secondary
-          :disabled="store.activeJobs.length === 0"
-          @click="store.openQueueModal()"
-        >
-          {{ $t("toolchain.page.queue") }}
-          <span v-if="store.activeJobs.length > 0" class="count-pill">
-            {{ store.activeJobs.length }}
-          </span>
-        </NButton>
-        <NButton
-          type="primary"
-          :disabled="selectableIds.length === 0"
-          :loading="busyBulk"
-          @click="() => void handleInstallSelected()"
-        >
-          {{ $t("toolchain.page.installSelected") }}
-          <span v-if="selectableIds.length > 0" class="count-pill">
-            {{ selectableIds.length }}
-          </span>
-        </NButton>
+      <div class="header-controls">
+        <NSelect
+          :value="store.serverId === '' ? null : store.serverId"
+          :options="nodeOptions"
+          :placeholder="$t('toolchain.page.selectNodePlaceholder')"
+          :aria-label="$t('toolchain.page.selectNode')"
+          :loading="serversStore.loading"
+          :disabled="serversStore.loading"
+          class="node-select"
+          @update:value="(id: string) => void selectNode(id)"
+        />
+        <NInput
+          v-model:value="searchQuery"
+          :placeholder="$t('toolchain.page.searchPlaceholder')"
+          :aria-label="$t('toolchain.page.searchPlaceholder')"
+          clearable
+          class="search-input"
+        />
       </div>
     </div>
 
     <NCard>
       <NSpace vertical :size="12">
-        <div class="toolbar-row">
-          <NSelect
-            :value="store.serverId === '' ? null : store.serverId"
-            :options="nodeOptions"
-            :placeholder="$t('toolchain.page.selectNodePlaceholder')"
-            :aria-label="$t('toolchain.page.selectNode')"
-            :loading="serversStore.loading"
-            :disabled="serversStore.loading"
-            class="node-select"
-            @update:value="(id: string) => void selectNode(id)"
-          />
-          <NInput
-            v-model:value="searchQuery"
-            :placeholder="$t('toolchain.page.searchPlaceholder')"
-            clearable
-            class="search-input"
-          />
-        </div>
-
         <template v-if="errorText">
           <NAlert type="error" :show-icon="true">
             {{ errorText }}
@@ -416,25 +448,67 @@ watch(
         >
           <template #extra>{{ $t("toolchain.page.emptyToolsHint") }}</template>
         </NEmpty>
-        <NEmpty
-          v-else-if="groupedTools.length === 0"
-          :description="$t('toolchain.page.emptySearch')"
-        >
-          <template #extra>{{ $t("toolchain.page.emptySearchHint") }}</template>
-        </NEmpty>
 
+        <!-- Category tabs (Naive UI owns tablist roles and arrow-key moves);
+             one shared checked-keys model keeps the bulk selection across tabs. -->
         <template v-else>
-          <section v-for="group in groupedTools" :key="group.category">
-            <h2 class="group-title">{{ group.category }}</h2>
-            <NDataTable
-              :columns="toolColumns"
-              :data="group.tools"
-              :row-key="(row: ToolchainTool) => row.id"
-              v-model:checked-row-keys="checkedKeys"
-              :bordered="false"
-              :pagination="false"
-            />
-          </section>
+          <NTabs
+            v-model:value="activeCategory"
+            type="line"
+            :aria-label="t('toolchain.page.tabsLabel')"
+          >
+            <NTabPane
+              v-for="category in categories"
+              :key="category"
+              :name="category"
+              :tab="tabLabel(category)"
+            >
+              <NEmpty
+                v-if="toolsIn(category).length === 0"
+                :description="$t('toolchain.page.emptySearch')"
+              >
+                <template #extra>{{ $t("toolchain.page.emptySearchHint") }}</template>
+              </NEmpty>
+              <NDataTable
+                v-else
+                :columns="toolColumns"
+                :data="toolsIn(category)"
+                :row-key="(row: ToolchainTool) => row.id"
+                v-model:checked-row-keys="checkedKeys"
+                :bordered="false"
+                :pagination="false"
+              />
+            </NTabPane>
+          </NTabs>
+
+          <div class="table-footer">
+            <p class="footer-status" role="status" aria-live="polite">
+              {{ footerText }}
+            </p>
+            <div class="footer-actions">
+              <NButton
+                secondary
+                :disabled="store.activeJobs.length === 0"
+                @click="store.openQueueModal()"
+              >
+                {{ $t("toolchain.page.queue") }}
+                <span v-if="store.activeJobs.length > 0" class="count-pill">
+                  {{ store.activeJobs.length }}
+                </span>
+              </NButton>
+              <NButton
+                type="primary"
+                :disabled="selectableIds.length === 0"
+                :loading="busyBulk"
+                @click="() => void handleInstallSelected()"
+              >
+                {{ $t("toolchain.page.installSelected") }}
+                <span v-if="selectableIds.length > 0" class="count-pill">
+                  {{ selectableIds.length }}
+                </span>
+              </NButton>
+            </div>
+          </div>
         </template>
       </NSpace>
     </NCard>
@@ -454,9 +528,13 @@ watch(
 .page-head {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: var(--space-4);
   flex-wrap: wrap;
+}
+.page-title {
+  flex: 1 1 16rem;
+  min-width: 0;
 }
 .eyebrow {
   color: var(--fg-3);
@@ -475,22 +553,44 @@ watch(
   margin: var(--space-2) 0 0;
   max-width: 640px;
 }
-.page-actions {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-}
-.toolbar-row {
+.header-controls {
   display: flex;
   gap: var(--space-3);
   align-items: center;
   flex-wrap: wrap;
+  flex: 1 1 20rem;
 }
 .node-select {
-  min-width: 240px;
+  flex: 1 1 12rem;
+  max-width: 100%;
 }
 .search-input {
-  max-width: 280px;
+  flex: 1 1 10rem;
+  max-width: 100%;
+}
+.table-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding-block: var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--n-color);
+}
+.footer-status {
+  margin: 0;
+  margin-right: auto;
+  color: var(--fg-3);
+  font-size: var(--text-sm);
+}
+.footer-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
 }
 :deep(.tool-cell) {
   display: flex;
@@ -503,14 +603,6 @@ watch(
 }
 :deep(.tool-meta) {
   font-size: var(--text-xs);
-}
-.group-title {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--fg-2);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin: var(--space-2) 0 var(--space-1);
 }
 .count-pill {
   margin-left: var(--space-2);

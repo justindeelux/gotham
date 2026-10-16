@@ -215,6 +215,96 @@ describe("row selectability", () => {
   });
 });
 
+describe("category tabs (JUS-189)", () => {
+  it("renders one tab per category with counts and keeps selection across switches", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", category: "build" }),
+      tool({ id: "make", name: "Make", category: "build" }),
+      tool({ id: "curl", name: "Curl", category: "network" }),
+    ]);
+    const wrapper = await mountPage();
+    const tabs = wrapper.findAll(".n-tabs-tab");
+    expect(tabs.map((tab) => tab.text())).toEqual(["build (2)", "network (1)"]);
+    // Build tab sorts by name (Git, Make); header checkbox is first.
+    let boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
+    await boxes[1].trigger("click");
+    await flushPromises();
+    // Switch to the network tab: only Curl shows, Git stays checked.
+    await wrapper.findAll(".n-tabs-tab")[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".n-tabs-tab")[1].text()).toContain("network");
+    boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
+    const visibleRows = wrapper.findAll("tbody tr");
+    expect(visibleRows).toHaveLength(1);
+    expect(visibleRows[0].text()).toContain("Curl");
+    await boxes[1].trigger("click");
+    await flushPromises();
+    // Switch back: the build tab badge reports the selection, Git is kept.
+    await wrapper.findAll(".n-tabs-tab")[0].trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".n-tabs-tab")[0].text()).toContain("1 selected");
+    boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
+    expect(boxes[1].attributes("aria-checked")).toBe("true");
+    // One bulk install covers tools from both tabs.
+    const action = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Install selected"));
+    await action?.trigger("click");
+    await flushPromises();
+    expect(enqueueJobsMock).toHaveBeenCalledWith("srv-1", ["git", "curl"], "install");
+  });
+
+  it("filters the tabs by search and shows per-tab match counts", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", category: "build" }),
+      tool({ id: "make", name: "Make", category: "build" }),
+      tool({ id: "curl", name: "Curl", category: "network" }),
+    ]);
+    const wrapper = await mountPage();
+    const input = wrapper.find("input");
+    await input.setValue("git");
+    await flushPromises();
+    const tabs = wrapper.findAll(".n-tabs-tab");
+    expect(tabs[0].text()).toContain("1 of 2");
+    expect(tabs[1].text()).toContain("0 of 1");
+    // Active tab shows only the match; the other tab's hit stays discoverable.
+    expect(wrapper.findAll("tbody tr")).toHaveLength(1);
+    await wrapper.findAll(".n-tabs-tab")[1].trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".n-empty").exists()).toBe(true);
+  });
+
+  it("keeps node select and search in the page header and queue actions in a live footer", async () => {
+    useServersStore().servers = [server()];
+    listToolsMock.mockResolvedValue([
+      tool({ id: "git", name: "Git", category: "build" }),
+    ]);
+    const wrapper = await mountPage();
+    const head = wrapper.find(".page-head");
+    expect(head.find(".node-select").exists()).toBe(true);
+    expect(head.find(".search-input").exists()).toBe(true);
+    const footer = wrapper.find(".table-footer");
+    expect(footer.exists()).toBe(true);
+    expect(footer.text()).toContain("Nothing selected yet");
+    const status = footer.find('[role="status"]');
+    expect(status.attributes("aria-live")).toBe("polite");
+    const boxes = wrapper.findAll('.n-checkbox[role="checkbox"]');
+    await boxes[1].trigger("click");
+    await flushPromises();
+    expect(footer.text()).toContain("1 selected");
+    const action = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Install selected"));
+    expect(action).toBeDefined();
+    const queue = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Queue"));
+    expect(queue).toBeDefined();
+  });
+});
+
 describe("platform tools", () => {
   it("hides uninstall even for an older agent and explains the impact", async () => {
     useServersStore().servers = [server()];

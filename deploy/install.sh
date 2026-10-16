@@ -160,7 +160,7 @@ CP_HOSTS="${CP_HOSTS}${CP_HOSTS_OPT}"
 CP_HOSTS="$(printf '%s' "${CP_HOSTS}" | tr ',' ' ')"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in release-verify.sh install-agent-lib.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service gotham-hostbootstrap.sh gotham-hostctl.sh gotham-toolctl.sh; do
+for sibling in release-verify.sh install-agent-lib.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service gotham-hostbootstrap.sh gotham-hostbootstrap-fetch.sh gotham-hostctl.sh gotham-toolctl.sh gotham-signing-key.pub; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2
@@ -1147,9 +1147,11 @@ fi
 # state).
 log "installing the host helper"
 if [ "${DRY_RUN}" -eq 1 ]; then
-    echo "[dry-run] sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER}"
+    echo "[dry-run] sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER} ${VERSION}"
 elif [ "${TEST_MODE}" -eq 0 ]; then
-    if ! sh "${SCRIPT_DIR}/gotham-hostbootstrap.sh" create "${SERVICE_USER}"; then
+    # Pass the release version so the helper's high-water mark is seeded from the
+    # root-trusted installer: the first self-update cannot go below it.
+    if ! sh "${SCRIPT_DIR}/gotham-hostbootstrap.sh" create "${SERVICE_USER}" "${VERSION}"; then
         log "WARNING: host helper install failed; retry with: sudo sh ${SCRIPT_DIR}/gotham-hostbootstrap.sh create ${SERVICE_USER}"
     fi
 fi

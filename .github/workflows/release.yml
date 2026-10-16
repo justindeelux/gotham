@@ -205,6 +205,23 @@ jobs:
           rm -rf signed
           mkdir -p signed
           go build -o "$RUNNER_TEMP/gotham-signer" ./cmd/signer
+
+          # Host-helper payload (JUS-188). The deploy scripts travel inside the
+          # signed release so the root update wrapper can verify (manifest
+          # signature + payload digest against the root-owned key) and apply them
+          # on a self-update, instead of only install.sh writing them. The names
+          # here are what gotham-hostbootstrap-fetch.sh expects.
+          helper_dir="$(mktemp -d)"
+          cp deploy/gotham-hostctl.sh "${helper_dir}/gotham-hostctl"
+          cp deploy/gotham-toolctl.sh "${helper_dir}/gotham-toolctl"
+          cp deploy/gotham-hostbootstrap.sh "${helper_dir}/gotham-hostbootstrap.sh"
+          cp deploy/gotham-hostbootstrap-fetch.sh "${helper_dir}/gotham-hostbootstrap-fetch.sh"
+          cp deploy/gotham-update.sh "${helper_dir}/gotham-update.sh"
+          tar -czf signed/gotham-hosthelpers.tar.gz -C "${helper_dir}" \
+            gotham-hostctl gotham-toolctl gotham-hostbootstrap.sh \
+            gotham-hostbootstrap-fetch.sh gotham-update.sh
+          rm -rf "${helper_dir}"
+
           count=0
           for bin in dist/gotham_linux_*/gotham dist/gotham-agent_linux_*/gotham-agent; do
             [ -f "$bin" ] || continue
@@ -213,18 +230,24 @@ jobs:
             base="$(basename "$bin")"
             asset="${base}-linux-${arch}"
             cp "$bin" "signed/${asset}"
+            # The control-plane manifest binds the host-helper payload digest
+            # (the agent never applies it, so its manifest stays as before).
+            helper_args=()
             if [ "$base" = "gotham" ]; then
               prefix="gotham-manifest"
+              helper_args=(-helper signed/gotham-hosthelpers.tar.gz)
             else
               prefix="gotham-agent-manifest"
             fi
             "$RUNNER_TEMP/gotham-signer" manifest -key "$key" -in "signed/${asset}" \
               -version "$tag" -arch "$arch" -channel "$channel" \
+              "${helper_args[@]}" \
               -out "signed/${prefix}-${arch}.txt"
             count=$((count + 1))
           done
           [ "$count" = "4" ] || { echo "::error::expected 4 signed binaries, got $count"; exit 1; }
-          # Exactly 4 binaries + 4 manifests + 4 signatures, no more, no less.
+          # Exactly 4 binaries + 4 manifests + 4 signatures, no more, no less
+          # (the host-helper payload does not match these patterns).
           for pattern in '*-linux-*' '*manifest*.txt' '*manifest*.txt.sig'; do
             n="$(find signed -maxdepth 1 -type f -name "$pattern" | wc -l | tr -d ' ')"
             [ "$n" = "4" ] || { echo "::error::expected 4 files matching '$pattern', found $n"; exit 1; }
@@ -250,7 +273,7 @@ jobs:
 
           # Every asset the checkers and the installer need for both arches.
           base="gotham-linux-amd64 gotham-linux-arm64 gotham-agent-linux-amd64 gotham-agent-linux-arm64 checksums.txt gotham-signing-key.pub"
-          expected="$base gotham-manifest-amd64.txt gotham-manifest-amd64.txt.sig gotham-manifest-arm64.txt gotham-manifest-arm64.txt.sig gotham-agent-manifest-amd64.txt gotham-agent-manifest-amd64.txt.sig gotham-agent-manifest-arm64.txt gotham-agent-manifest-arm64.txt.sig"
+          expected="$base gotham-manifest-amd64.txt gotham-manifest-amd64.txt.sig gotham-manifest-arm64.txt gotham-manifest-arm64.txt.sig gotham-agent-manifest-amd64.txt gotham-agent-manifest-amd64.txt.sig gotham-agent-manifest-arm64.txt gotham-agent-manifest-arm64.txt.sig gotham-hosthelpers.tar.gz"
 
           assets_now() {
             curl -fsSL -H "$auth" "${api}/releases/${release_id}/assets?per_page=100" | jq -r '.[].name'
@@ -273,7 +296,7 @@ jobs:
           # GoReleaser must have uploaded the binaries, checksums and public key.
           check_assets "$base"
 
-          for asset in signed/*manifest*.txt signed/*manifest*.txt.sig; do
+          for asset in signed/*manifest*.txt signed/*manifest*.txt.sig signed/gotham-hosthelpers.tar.gz; do
             [ -f "$asset" ] || { echo "::error::no signed manifest at ${asset}"; exit 1; }
             name="$(basename "$asset")"
             echo "uploading ${name}"

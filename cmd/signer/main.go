@@ -7,13 +7,13 @@
 //	signer keygen   [-out signing.key]
 //	signer sign     -key signing.key -in gotham-linux-amd64 [-out gotham-linux-amd64.sig]
 //	signer verify   -key signing.key.pub -in gotham-linux-amd64 [-sig gotham-linux-amd64.sig]
-//	signer manifest -key signing.key -in gotham-linux-amd64 -version v1.2.0 -arch amd64
+//	signer manifest -key signing.key -in gotham-linux-amd64 -version v1.2.0 -arch amd64 [-helper gotham-hosthelpers.tar.gz]
 //
 // The signature is written as standard base64 (with a trailing newline), which
 // is the format the Applier verifies. Releases must publish a signed manifest
 // (gotham-manifest-<arch>.txt and its .sig) as well as the artifact: the
 // manifest binds the version, channel, arch and file name to the artifact
-// SHA-256.
+// SHA-256, and, when -helper is given, the host-helper payload digest (JUS-188).
 package main
 
 import (
@@ -165,7 +165,7 @@ func runSign(args []string) int {
 // manifest binds the version, channel, arch and file name to the artifact
 // sha256; the detached signature authenticates the manifest.
 func runManifest(args []string) int {
-	var keyPath, inPath, version, channel, arch, outPath string
+	var keyPath, inPath, version, channel, arch, outPath, helperPath string
 	flags := newFlagSet("manifest")
 	flags.StringVar(&keyPath, "key", "", "private key PEM path (required)")
 	flags.StringVar(&inPath, "in", "", "artifact to describe (required)")
@@ -173,6 +173,7 @@ func runManifest(args []string) int {
 	flags.StringVar(&channel, "channel", "stable", "release channel: stable or beta")
 	flags.StringVar(&arch, "arch", "", "artifact architecture, e.g. amd64 (required)")
 	flags.StringVar(&outPath, "out", "", "manifest output path (default gotham-manifest-<arch>.txt)")
+	flags.StringVar(&helperPath, "helper", "", "optional host-helper payload archive to bind to the manifest")
 	if err := flags.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -206,6 +207,17 @@ func runManifest(args []string) int {
 	}
 
 	manifest := updatecore.BuildManifest(version, channel, arch, filepath.Base(inPath), artifact)
+	// -helper binds the co-shipped host-helper payload archive (JUS-188) to the
+	// same signature, so the root update wrapper can verify the payload digest
+	// against the signed manifest before applying it.
+	if helperPath != "" {
+		helper, err := os.ReadFile(helperPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "manifest: read %s: %v\n", helperPath, err)
+			return exitError
+		}
+		manifest = manifest.WithHelper(filepath.Base(helperPath), helper)
+	}
 	body := manifest.Marshal()
 	if err := os.WriteFile(outPath, body, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "manifest: write %s: %v\n", outPath, err)
@@ -290,8 +302,9 @@ Usage:
   signer keygen [-out signing.key]                        Generate a keypair
   signer sign   -key <priv> -in <file> [-out <sig>]       Sign a file (base64)
   signer verify -key <pub.pem> -in <file> [-sig <sig>]    Verify a signature
-  signer manifest -key <priv> -in <artifact> -version <v> -arch <a> [-channel <c>]
+  signer manifest -key <priv> -in <artifact> -version <v> -arch <a> [-channel <c>] [-helper <tar.gz>]
                                                           Generate + sign a release manifest
+                                                          (-helper binds a host-helper payload)
   signer version                                          Print the version
   signer help                                             Show this help
 `, version)

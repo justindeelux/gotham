@@ -29,6 +29,41 @@ func TestManifestRoundtrip(t *testing.T) {
 	}
 }
 
+// TestManifestHelperBinding covers the optional host-helper payload binding
+// (JUS-188): a manifest without a helper renders exactly as before, a helper
+// digest round-trips, and a half-bound or malformed binding fails closed.
+func TestManifestHelperBinding(t *testing.T) {
+	artifact := []byte("gotham binary")
+	helper := []byte("helper payload")
+	base := BuildManifest("v1.2.0", "stable", "amd64", "gotham-linux-amd64", artifact)
+	if strings.Contains(string(base.Marshal()), "helper_") {
+		t.Fatalf("a manifest without a helper must not render helper fields:\n%s", base.Marshal())
+	}
+
+	bound := base.WithHelper("gotham-hosthelpers.tar.gz", helper)
+	parsed, err := ParseManifest(bound.Marshal())
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if parsed != bound {
+		t.Fatalf("roundtrip = %+v, want %+v", parsed, bound)
+	}
+	if parsed.HelperFile != "gotham-hosthelpers.tar.gz" || len(parsed.HelperSHA256) != 64 {
+		t.Fatalf("helper binding not preserved: %+v", parsed)
+	}
+
+	prefix := "version=v1.2.0\nchannel=stable\narch=amd64\nfile=f\nsha256=" + strings.Repeat("a", 64) + "\n"
+	for name, body := range map[string]string{
+		"digest without a file": prefix + "helper_sha256=" + strings.Repeat("a", 64) + "\n",
+		"malformed digest":      prefix + "helper_file=h\nhelper_sha256=" + strings.Repeat("z", 64) + "\n",
+		"short digest":          prefix + "helper_file=h\nhelper_sha256=abc\n",
+	} {
+		if _, err := ParseManifest([]byte(body)); !errors.Is(err, ErrManifest) {
+			t.Errorf("%s: err = %v, want ErrManifest", name, err)
+		}
+	}
+}
+
 // TestParseManifestRejectsInvalid covers missing and malformed fields.
 func TestParseManifestRejectsInvalid(t *testing.T) {
 	valid := "version=v1.2.0\nchannel=stable\narch=amd64\nfile=gotham-linux-amd64\nsha256=" +

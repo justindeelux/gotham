@@ -22,6 +22,8 @@
 #   GOTHAM_STATUS=/var/lib/gotham-updater/update.status   (root-owned dir)
 #   GOTHAM_PENDING=/var/lib/gotham/update.pending
 #   GOTHAM_LOCK=/var/lib/gotham/update.lock
+#   GOTHAM_RELEASE_BASE=https://github.com/justindeelux/gotham/releases/download
+#   GOTHAM_STAGING=/var/lib/gotham-updater   (root-owned staging parent)
 #
 # GOTHAM_UPDATER_CONF may point at another configuration file for local
 # testing. It is honoured only when NOT running under sudo (the production
@@ -36,7 +38,8 @@ set -u
 # environment by default and SETENV must stay disabled; this is defense in depth.
 if [ -n "${SUDO_USER:-}" ] || [ -n "${SUDO_UID:-}" ]; then
     for variable in GOTHAM_UPDATER_CONF GOTHAM_BINARY GOTHAM_SERVICE GOTHAM_HEALTH \
-        GOTHAM_TIMEOUT GOTHAM_STATUS GOTHAM_PENDING GOTHAM_LOCK GOTHAM_GRACE; do
+        GOTHAM_TIMEOUT GOTHAM_STATUS GOTHAM_PENDING GOTHAM_LOCK GOTHAM_GRACE \
+        GOTHAM_HOST_BOOTSTRAP_ROOT GOTHAM_RELEASE_BASE GOTHAM_STAGING; do
         unset "${variable}" 2>/dev/null || true
     done
 fi
@@ -50,8 +53,12 @@ fi
 # wrapper serves both the control plane (gotham-update) and the node agent
 # (gotham-agent-update). The file is root-owned and is the only source of the
 # paths it acts on.
+# IS_AGENT distinguishes the two wrappers: the host-helper refresh (JUS-188) is a
+# control-plane concern, so the agent wrapper never runs it.
+IS_AGENT=0
 case "$(basename "$0")" in
     gotham-agent-update)
+        IS_AGENT=1
         DEFAULT_CONF="/etc/gotham/agent-updater.conf"
         # The agent wrapper fails closed on a missing config: it must never
         # fall back to the control-plane defaults and restart/swap the wrong
@@ -80,6 +87,19 @@ STATUS_DIR=$(dirname "${STATUS}")
 PENDING="${GOTHAM_PENDING:-/var/lib/gotham/update.pending}"
 LOCK="${GOTHAM_LOCK:-/var/lib/gotham/update.lock}"
 GRACE="${GOTHAM_GRACE:-1}"
+# JUS-188 host-helper refresh. ROOT is a non-sudo test seam (the same one the
+# installer uses); production always uses "/". The release base is a URL the
+# wrapper fetches the signed payload from; the staging directory must be
+# root-owned (it defaults to the root-owned status directory).
+ROOT=""
+if [ -z "${SUDO_USER:-}${SUDO_UID:-}" ]; then
+    ROOT="${GOTHAM_HOST_BOOTSTRAP_ROOT:-}"
+fi
+HELPER_DIR="${ROOT}/usr/libexec/gotham"
+FETCH_SCRIPT="${HELPER_DIR}/gotham-hostbootstrap-fetch.sh"
+SIGNING_KEY="${HELPER_DIR}/gotham-signing-key.pub"
+RELEASE_BASE="${GOTHAM_RELEASE_BASE:-https://github.com/justindeelux/gotham/releases/download}"
+STAGING_ROOT="${GOTHAM_STAGING:-${STATUS_DIR}}"
 # LOCK_PIN is the hardlink that pins the lock inode in the root-owned status
 # directory for the duration of a run (acquire_lock); the trap removes it, and
 # stale pins from hard-killed runs are swept when the next run starts.
@@ -312,28 +332,77 @@ restart_service() {
     return 1
 }
 
-# apply_host_bootstrap_payload re-applies the root-owned host-helper payload
-# (JUS-185) that install.sh wrote under /usr/libexec/gotham/hostbootstrap, so the
-# host helper, the tool installer and their verb-pinned sudoers drop-in stay in
-# place across a self-update. It runs the payload's own installer script, which
-# is root-owned (never a service-writable path), and is a no-op when the payload
-# is absent (a host installed before this feature shows the honest "update the
-# control plane" state instead). A failure is logged and never blocks the
-# restart.
-apply_host_bootstrap_payload() {
-    payload="/usr/libexec/gotham/hostbootstrap"
-    script="${payload}/gotham-hostbootstrap.sh"
-    [ -d "${payload}" ] || return 0
-    [ -f "${script}" ] || return 0
-    if [ -L "${script}" ]; then
-        log "refusing symlinked ${script}; skipping host-bootstrap payload"
+# helper_arch maps the host machine to the release architecture name.
+helper_arch() {
+    case "$(uname -m)" in
+        x86_64 | amd64) echo amd64 ;;
+        aarch64 | arm64) echo arm64 ;;
+        *) echo "" ;;
+    esac
+}
+
+# refresh_host_helpers fetches, verifies and applies the host-helper payload
+# shipped inside the signed release (JUS-188), so helper content upgrades through
+# a self-update instead of only through install.sh.
+#
+# Trust: the control plane stages nothing. Root fetches the release's signed
+# manifest, its detached Ed25519 signature and the payload archive into a
+# root-only staging directory, verifies the manifest against the root-owned
+# release public key, binds the manifest to the very binary root is about to
+# restart (the manifest's signed sha256 must equal the staged binary's digest)
+# and checks the payload digest against the signed manifest, and only then runs
+# the payload's own installer (apply-release) from that verified directory. The
+# marker's version only locates the release; the version that gates the apply is
+# the signature-verified one, which apply-release refuses to install below the
+# root-owned high-water mark (anti-rollback). No byte the service or agent user
+# can write is fetched, read as code or executed. Every failure is logged and
+# skipped, and a missing anchor/fetch helper (a host installed before the
+# one-time bridge) is a clean no-op, so a helper refresh can never block or brick
+# an update.
+refresh_host_helpers() {
+    [ "${IS_AGENT}" -eq 0 ] || return 0
+    [ -f "${FETCH_SCRIPT}" ] || return 0
+    [ -f "${BINARY}" ] || return 0
+    if [ ! -f "${SIGNING_KEY}" ] || [ -L "${SIGNING_KEY}" ]; then
+        log "no root-owned release key at ${SIGNING_KEY}; skipping the host-helper refresh"
         return 0
     fi
-    if output="$(sh "${script}" apply 2>&1)"; then
-        log "re-applied the host-bootstrap payload"
-    else
-        log "host-bootstrap payload apply failed: ${output}"
+    case "${VERSION}" in
+        "" ) log "no staged version; skipping the host-helper refresh"; return 0 ;;
+        *[!A-Za-z0-9._+-]*) log "unsafe staged version; skipping the host-helper refresh"; return 0 ;;
+    esac
+    arch="$(helper_arch)"
+    if [ -z "${arch}" ]; then
+        log "unsupported architecture; skipping the host-helper refresh"
+        return 0
     fi
+    # The staging parent must be a root-owned, non-symlink directory: root
+    # extracts and runs from the staging directory, so it must not be writable by
+    # the service user (which shares this host's /tmp under PrivateTmp).
+    # shellcheck disable=SC3067
+    if [ -L "${STAGING_ROOT}" ] || [ ! -d "${STAGING_ROOT}" ] || ! [ -O "${STAGING_ROOT}" ]; then
+        log "staging root ${STAGING_ROOT} is not a root-owned directory; skipping the host-helper refresh"
+        return 0
+    fi
+    staging="$(mktemp -d "${STAGING_ROOT}/gotham-helpers.XXXXXX" 2>/dev/null)" || {
+        log "could not create a staging directory in ${STAGING_ROOT}; skipping the host-helper refresh"
+        return 0
+    }
+    if payload="$(sh "${FETCH_SCRIPT}" "${RELEASE_BASE}" "${VERSION}" "${arch}" "${SIGNING_KEY}" "${staging}" "${BINARY}" 2>&1)" \
+        && [ -f "${payload}/gotham-hostbootstrap.sh" ] && [ -f "${staging}/version" ]; then
+        # The verified signed version (the fetch proved it equals the candidate
+        # and that the manifest describes ${BINARY}); apply-release refuses a
+        # version below the root-owned high-water mark.
+        signed_version="$(sed -n '1p' "${staging}/version" | tr -d '\r\n')"
+        if sh "${payload}/gotham-hostbootstrap.sh" apply-release "${payload}" "${signed_version}" >/dev/null 2>&1; then
+            log "refreshed the host-helper payload from the verified release ${signed_version}"
+        else
+            log "host-helper apply failed; the installed helpers are left in place"
+        fi
+    else
+        log "host-helper refresh skipped: ${payload}"
+    fi
+    rm -rf "${staging}" 2>/dev/null || true
     return 0
 }
 
@@ -407,7 +476,7 @@ if [ ! -f "${BINARY}" ]; then
 fi
 
 log "waiting ${GRACE}s before restarting ${SERVICE}"
-apply_host_bootstrap_payload
+refresh_host_helpers
 sleep "${GRACE}"
 
 # A failed restart must still attempt a rollback; never exit before that.

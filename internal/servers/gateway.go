@@ -71,10 +71,13 @@ type GatewayConfig struct {
 	MaxConcurrentStreams uint32
 	// EnrollmentToken, when set, is the bootstrap credential a node must present
 	// (metadata "enrollment-token") on its first-ever Register, before it holds
-	// a client certificate. Set from GOTHAM_GRPC_ENROLLMENT_TOKEN. When empty,
-	// first enrollment is trust-on-first-use and logged; there is no silent
-	// third state.
+	// a client certificate. Set from GOTHAM_GRPC_ENROLLMENT_TOKEN.
 	EnrollmentToken string
+	// AllowOpenEnrollment opts into trust-on-first-use first enrollment when no
+	// EnrollmentToken is configured. It must be an explicit, loudly-logged
+	// operator choice: with neither, first enrollment is refused (fail closed).
+	// Set from GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true.
+	AllowOpenEnrollment bool
 }
 
 // Gateway is the control-plane gRPC server. It implements AgentService (node
@@ -99,6 +102,9 @@ type Gateway struct {
 	heartbeatIdle   time.Duration
 	// enrollmentToken gates first-ever enrollment on the TLS listener.
 	enrollmentToken string
+	// allowOpenEnrollment permits certificate-less first enrollment with no
+	// token configured (explicit operator opt-in).
+	allowOpenEnrollment bool
 
 	// Per-peer rate limits bound the unauthenticated Register/heartbeat
 	// surface. Tests may replace them with tighter limits.
@@ -125,15 +131,16 @@ func NewGateway(cfg GatewayConfig) (*Gateway, error) {
 	}
 
 	g := &Gateway{
-		addr:             addr,
-		authority:        cfg.Authority,
-		service:          cfg.Service,
-		logger:           logger,
-		reservedNodeIDs:  reservedNodeIDSet(addr, cfg.Hosts),
-		heartbeatIdle:    cfg.HeartbeatIdle,
-		enrollmentToken:  cfg.EnrollmentToken,
-		registerLimiter:  newPeerRateLimiter(registerRateLimit, registerBurst),
-		heartbeatLimiter: newPeerRateLimiter(heartbeatRateLimit, heartbeatBurst),
+		addr:                addr,
+		authority:           cfg.Authority,
+		service:             cfg.Service,
+		logger:              logger,
+		reservedNodeIDs:     reservedNodeIDSet(addr, cfg.Hosts),
+		heartbeatIdle:       cfg.HeartbeatIdle,
+		enrollmentToken:     cfg.EnrollmentToken,
+		allowOpenEnrollment: cfg.AllowOpenEnrollment,
+		registerLimiter:     newPeerRateLimiter(registerRateLimit, registerBurst),
+		heartbeatLimiter:    newPeerRateLimiter(heartbeatRateLimit, heartbeatBurst),
 	}
 	if g.heartbeatIdle <= 0 {
 		g.heartbeatIdle = heartbeatIdleTimeout
@@ -324,10 +331,15 @@ func (g *Gateway) authorizeEstablished(ctx context.Context, nodeID string, cert 
 	return g.nodeKeyError(nodeID, "", g.service.AuthorizeNodeKey(ctx, nodeID, fingerprint))
 }
 
-// authorizeBootstrap gates a first-ever enrollment: it requires a CSR (the
-// identity is pinned to its key), refuses a node that already holds a bound key,
-// and enforces the enrollment token when one is configured.
+// authorizeBootstrap gates a first-ever enrollment. The enrollment token is
+// checked FIRST, so a caller without a valid token learns nothing about which
+// node ids exist (uniform refusal, no existence oracle). Only then does it
+// require a CSR (the identity is pinned to its key) and refuse a node that
+// already holds a bound key.
 func (g *Gateway) authorizeBootstrap(ctx context.Context, nodeID string, csr []byte) error {
+	if err := g.checkEnrollmentToken(ctx, nodeID); err != nil {
+		return err
+	}
 	if len(csr) == 0 {
 		g.logger.Warn("servers: registration without a client certificate or a certificate signing request",
 			"node_id", nodeID, "peer", peerAddress(ctx))
@@ -341,17 +353,24 @@ func (g *Gateway) authorizeBootstrap(ctx context.Context, nodeID string, csr []b
 			"node_id", nodeID, "peer", peerAddress(ctx))
 		return status.Error(codes.PermissionDenied, "the node is already enrolled; present its client certificate")
 	}
-	return g.checkEnrollmentToken(ctx, nodeID)
+	return nil
 }
 
 // checkEnrollmentToken gates first-ever enrollment. When the operator configured
-// an enrollment token, the request must present it (constant-time compared);
-// with no token configured, first enrollment is trust-on-first-use and logged
-// loudly, just as the dev-insecure mode is an explicit opt-in.
+// an enrollment token, the request must present it (constant-time compared).
+// With no token configured, enrollment fails closed unless the operator
+// explicitly opted into open enrollment (GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT),
+// in which case it is trust-on-first-use and logged loudly. The error is the
+// same whether the token is missing or wrong, so it is not an oracle.
 func (g *Gateway) checkEnrollmentToken(ctx context.Context, nodeID string) error {
 	presented := metadataValue(ctx, enrollmentTokenMetadataKey)
 	if g.enrollmentToken == "" {
-		g.logger.Warn("servers: enrolling a node without a configured enrollment token (GOTHAM_GRPC_ENROLLMENT_TOKEN); first enrollment is trust-on-first-use",
+		if !g.allowOpenEnrollment {
+			g.logger.Warn("servers: first enrollment refused; no GOTHAM_GRPC_ENROLLMENT_TOKEN is configured and open enrollment is not enabled",
+				"node_id", nodeID, "peer", peerAddress(ctx))
+			return status.Error(codes.PermissionDenied, "enrollment is closed")
+		}
+		g.logger.Warn("servers: enrolling a node with open enrollment enabled (GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT); first enrollment is trust-on-first-use",
 			"node_id", nodeID, "peer", peerAddress(ctx))
 		return nil
 	}
@@ -363,17 +382,21 @@ func (g *Gateway) checkEnrollmentToken(ctx context.Context, nodeID string) error
 }
 
 // nodeKeyError maps a node-key authorization failure to a gRPC status. Every
-// failure is a refusal: an unknown node is not enrolled, and a mismatched key
-// means the caller is not the node it claims to be.
+// failure is a refusal with the SAME message: an unknown node, a key mismatch
+// and a revoked node are indistinguishable to the caller, so a certificate
+// holder cannot use the error to probe the registry (the distinct reason is
+// logged server-side).
 func (g *Gateway) nodeKeyError(nodeID, peerIdentity string, err error) error {
 	switch {
 	case err == nil:
 		return nil
 	case errors.Is(err, ErrNotFound):
 		g.logger.Warn("servers: agent certificate for an unknown node", "node_id", nodeID, "peer_identity", peerIdentity)
-		return status.Error(codes.PermissionDenied, "node is not enrolled")
+		return status.Error(codes.PermissionDenied, "agent certificate is not valid for this node")
 	case errors.Is(err, ErrConflict):
-		return status.Error(codes.PermissionDenied, "agent certificate does not match the enrolled node key")
+		g.logger.Warn("servers: agent certificate key does not match the enrolled node",
+			"node_id", nodeID, "peer_identity", peerIdentity)
+		return status.Error(codes.PermissionDenied, "agent certificate is not valid for this node")
 	default:
 		g.logger.Error("servers: node key authorization failed", "node_id", nodeID, "error", err)
 		return status.Error(codes.Internal, "internal error")

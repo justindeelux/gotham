@@ -181,20 +181,35 @@ func runServe() int {
 	}
 
 	// Mutual TLS (JUS-194): agents authenticate to the gateway with a per-node
-	// certificate, and a node's first-ever enrollment needs the bootstrap
-	// credential when one is configured. Without it that one enrollment is
-	// trust-on-first-use and logged by the gateway.
-	if authority != nil && snap.GRPC.EnrollmentToken == "" {
-		logger.Warn("no GOTHAM_GRPC_ENROLLMENT_TOKEN configured; a node's first-ever registration is trust-on-first-use " +
-			"(subsequent registrations, heartbeats and streams still require a per-node certificate)")
+	// certificate, and a node's first-ever enrollment needs a bootstrap
+	// credential. Prefer the configured token; otherwise generate and persist
+	// one next to the CA so a TLS control plane fails closed by default instead
+	// of accepting anonymous enrollment. Open enrollment is an explicit opt-in.
+	enrollmentToken := snap.GRPC.EnrollmentToken
+	switch {
+	case enrollmentToken != "":
+	case snap.GRPC.AllowOpenEnrollment:
+		logger.Warn("open enrollment is enabled (GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT); " +
+			"any peer that can reach the gRPC listener may enroll an unused node id")
+	case authority != nil && snap.CA.Dir != "":
+		generated, tokenPath, genErr := servers.LoadOrCreateEnrollmentToken(snap.CA.Dir)
+		if genErr != nil {
+			logger.Error("could not provide a bootstrap enrollment token; set GOTHAM_GRPC_ENROLLMENT_TOKEN "+
+				"or GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT", "error", genErr)
+			return exitError
+		}
+		enrollmentToken = generated
+		logger.Info("generated a bootstrap enrollment token; pass it to new nodes with GOTHAM_AGENT_ENROLLMENT_TOKEN "+
+			"(or install-agent.sh --enrollment-token-file)", "path", tokenPath)
 	}
 	gateway, err := servers.NewGateway(servers.GatewayConfig{
-		Addr:            snap.GRPC.Addr,
-		Authority:       authority,
-		Service:         serverService,
-		Logger:          logger,
-		Hosts:           grpcHosts,
-		EnrollmentToken: snap.GRPC.EnrollmentToken,
+		Addr:                snap.GRPC.Addr,
+		Authority:           authority,
+		Service:             serverService,
+		Logger:              logger,
+		Hosts:               grpcHosts,
+		EnrollmentToken:     enrollmentToken,
+		AllowOpenEnrollment: snap.GRPC.AllowOpenEnrollment,
 	})
 	if err != nil {
 		logger.Error("failed to create grpc gateway", "error", err)

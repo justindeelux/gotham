@@ -224,7 +224,7 @@ func TestEnsureLocalhost(t *testing.T) {
 
 func TestLocalhostRegistration(t *testing.T) {
 	s, st, authority := newTestServiceWithAuthority(t)
-	g, err := NewGateway(GatewayConfig{Addr: "127.0.0.1:9442", Authority: authority, Service: s, Logger: discardLogger()})
+	g, err := NewGateway(GatewayConfig{Addr: "127.0.0.1:9442", Authority: authority, Service: s, Logger: discardLogger(), AllowOpenEnrollment: true})
 	if err != nil {
 		t.Fatal(err)
 	}

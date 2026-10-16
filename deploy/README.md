@@ -104,21 +104,29 @@ recorded for that node (bound on the first authenticated connection), so a
 certificate for node A cannot act as node B, a foreign, expired or CA certificate
 is refused, and removing or re-keying a node closes its live stream.
 
-A node's **first ever** registration carries no certificate. It is gated by
-`GOTHAM_GRPC_ENROLLMENT_TOKEN`: set it on the control plane and pass the same
-value to the installer.
+A node's **first ever** registration carries no certificate. It is gated by the
+enrollment token. The control plane uses `GOTHAM_GRPC_ENROLLMENT_TOKEN` when set,
+otherwise it generates one on first start and persists it at
+`<GOTHAM_CA_DIR>/enrollment-token` (0600) — so a TLS control plane fails closed by
+default. `GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true` is the explicit, loudly-logged
+opt-in for trust-on-first-use instead.
+
+To add a node, pass the token from the environment or a root-only file — never on
+the command line, where `ps`, `/proc/<pid>/cmdline` and shell history expose it:
 
 ```sh
-# control plane (service environment or gotham.yaml: grpc.enrollment_token)
-GOTHAM_GRPC_ENROLLMENT_TOKEN=<random-secret>
-# each node
-sudo deploy/install-agent.sh --ca ./ca.crt --enrollment-token <random-secret>
+# control plane: read the generated token (or set GOTHAM_GRPC_ENROLLMENT_TOKEN)
+sudo cat /var/lib/gotham/ca/enrollment-token
+# each node, off-argv (either form):
+sudo GOTHAM_AGENT_ENROLLMENT_TOKEN=<token> deploy/install-agent.sh --ca ./ca.crt
+sudo deploy/install-agent.sh --ca ./ca.crt --enrollment-token-file /root/cp-enrollment-token   # mode 0600
 ```
 
-With no token configured the first enrollment is trust-on-first-use (TLS + CSR +
-CA, no caller authentication) and the control plane logs it loudly; set the token
-on a real instance. Only the first enrollment needs it — every later `Register`,
-`Heartbeat` and `RequestUpdate` requires the node certificate.
+Only the first enrollment needs it: the agent sends the token only while it holds
+no certificate, and every later `Register`, `Heartbeat` and `RequestUpdate` uses
+the node certificate. The operator may then delete `GOTHAM_AGENT_ENROLLMENT_TOKEN`
+from `/etc/gotham/agent.env`. A certificate-less caller with no (or a wrong)
+token gets the same refusal, so it cannot use the error to enumerate node ids.
 
 **Upgrading an already-enrolled node.** Nodes enrolled before mutual TLS hold a
 `serverAuth`-only leaf. The gateway keeps accepting it (the extended key usage is
@@ -474,10 +482,14 @@ the body).
   match the claimed node id and the key must match the key bound to the node, for
   `Register`, `Heartbeat` (re-checked per message) and `RequestUpdate`. Removing
   or re-keying a node invalidates the credential and closes its live stream.
-  Residuals: a first-ever enrollment without `GOTHAM_GRPC_ENROLLMENT_TOKEN` is
-  trust-on-first-use (logged); there is no CRL/serial set, so revocation is
-  key-based (delete/rotate) plus the 90-day leaf; and the per-IP limiter stays
-  keyed per peer IP (agents behind one NAT share a bucket). See "Mutual TLS" above.
+  The agent listeners accept **only** the control-plane credential (a client
+  certificate carrying the `spiffe://gotham/control-plane` URI SAN, checked in
+  the TLS handshake and again in a gRPC interceptor), so a node leaf can never
+  act as the control plane toward another node. Residuals: an open-enrollment
+  opt-in (`GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT`) is trust-on-first-use (logged);
+  there is no CRL/serial set, so revocation is key-based (delete/rotate) plus
+  the 90-day leaf; and the per-IP limiter stays keyed per peer IP (agents behind
+  one NAT share a bucket). See "Mutual TLS" above.
 - **Key ring shipped; remote revocation of a compromised key still needs
   upgrades (R1, residual).** Every release binary now embeds the current plus an
   optional pre-positioned next key (`updatecore.NextPublicKey`), verifies

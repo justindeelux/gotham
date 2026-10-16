@@ -338,13 +338,18 @@ to `127.0.0.1:9443`). Never use it on a real node.
 Over TLS the channel is mutual (JUS-194): the agent generates a key, sends a CSR
 on `Register`, receives a node certificate, and presents it on every later
 connection; the control plane binds the certificate identity and key to the
-node. A node's first registration has no certificate yet, so set
-`GOTHAM_GRPC_ENROLLMENT_TOKEN` on the control plane and pass the same value to
-`install-agent.sh --enrollment-token <token>`; without it the first enrollment is
-trust-on-first-use and the control plane logs it. Only the first registration
-needs it. Nodes enrolled before this change keep working (the control plane
-accepts their existing certificate and binds its key), and a self-update never
-touches the node key or certificate.
+node, and each agent accepts only the control plane (a certificate carrying the
+`spiffe://gotham/control-plane` identity), so a node cannot act as the control
+plane toward another node. A node's first registration has no certificate yet and
+needs the enrollment token: the control plane generates one
+`<GOTHAM_CA_DIR>/enrollment-token` (or you set `GOTHAM_GRPC_ENROLLMENT_TOKEN`),
+and you hand it to the installer via `GOTHAM_AGENT_ENROLLMENT_TOKEN=<token>` or
+`--enrollment-token-file /root/token` (mode 0600) — never on the command line.
+Without a token (and without the explicit `GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true`
+opt-in) first enrollment is refused. Only the first registration needs it. Nodes
+enrolled before this change keep working (the control plane accepts their
+existing certificate and binds its key), and a self-update never touches the node
+key or certificate.
 
 The agent installer uses the same signed-manifest verification
 (`deploy/release-verify.sh`) for `gotham-agent-linux-<arch>` and

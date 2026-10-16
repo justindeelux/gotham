@@ -178,6 +178,11 @@ func runServe() int {
 			if fileServer != nil {
 				serverOptions = append(serverOptions, agent.WithFileService(fileServer))
 			}
+			if cfg.CA != "" {
+				// TLS listener: it verifies client certificates, so require the
+				// peer to be the control plane on every RPC as well (JUS-194).
+				serverOptions = append(serverOptions, agent.WithControlPlanePeer())
+			}
 			server, err := agent.NewServer(cfg.ListenAddr, creds, agent.NewDockerServer(docker, log,
 				agent.WithManagedVolumeRoot(cfg.ManagedVolumeRoot)), log, serverOptions...)
 			if err != nil {

@@ -29,6 +29,56 @@ const (
 // selfSignedValidity is how long a generated development certificate lasts.
 const selfSignedValidity = 365 * 24 * time.Hour
 
+// controlPlaneURI mirrors internal/servers.ControlPlaneURI: the URI SAN of the
+// control-plane client credential. The agent cannot import internal/servers
+// (cross-scope rule), so the literal is duplicated and pinned by
+// TestControlPlaneIdentityLiteral plus the end-to-end CP dial test.
+const controlPlaneURI = "spiffe://gotham/control-plane"
+
+// controlPlaneClientName is the legacy control-plane client common name,
+// accepted only during the rollout window (see verifyControlPlanePeer).
+const controlPlaneClientName = "gotham-control-plane"
+
+// verifyControlPlanePeer is the agent-side half of the two-role identity model
+// (JUS-194 fix round 1). Agents run the Docker, Compose, File, Build, Proxy and
+// Tool services (RCE-class), so the listener must accept ONLY the control plane:
+// a node leaf chains to the same CA and now carries clientAuth, so without this
+// check any enrolled node could act as the CP toward every other agent.
+func verifyControlPlanePeer(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	if len(rawCerts) == 0 {
+		return fmt.Errorf("agent: no client certificate presented")
+	}
+	cert, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		return fmt.Errorf("agent: parse client certificate: %w", err)
+	}
+	return verifyControlPlaneCert(cert)
+}
+
+// verifyControlPlaneCert is the certificate-level check behind
+// verifyControlPlanePeer and the gRPC interceptor.
+func verifyControlPlaneCert(cert *x509.Certificate) error {
+	if cert.IsCA {
+		return fmt.Errorf("agent: a CA certificate is not a control-plane credential")
+	}
+	for _, uri := range cert.URIs {
+		if uri != nil && uri.String() == controlPlaneURI {
+			return nil
+		}
+	}
+	// Rollout grace: a control plane upgraded after this agent still presents the
+	// pre-change credential, which has no URI SAN. It is unambiguous because
+	// only the control plane can obtain it: its extended key usage is clientAuth
+	// ALONE (a node leaf always carries serverAuth too) and its identity is the
+	// reserved control-plane name. A node cannot present a matching certificate.
+	// shortcut: drop this branch once the CP-side URI SAN is mandatory everywhere.
+	if len(cert.ExtKeyUsage) == 1 && cert.ExtKeyUsage[0] == x509.ExtKeyUsageClientAuth &&
+		cert.Subject.CommonName == controlPlaneClientName {
+		return nil
+	}
+	return fmt.Errorf("agent: client certificate is not the control plane")
+}
+
 // clientCredentials returns transport credentials that verify the CP server
 // certificate against the PEM bundle at caPath and present the node's own
 // certificate as a mutual-TLS client certificate (JUS-194) when certPath/keyPath
@@ -116,6 +166,7 @@ func ServerCredentials(certPEM, keyPEM []byte, caPath string, allowInsecure bool
 		}
 		config.ClientCAs = pool
 		config.ClientAuth = tls.RequireAndVerifyClientCert
+		config.VerifyPeerCertificate = verifyControlPlanePeer
 	}
 	return credentials.NewTLS(config), nil
 }
@@ -151,6 +202,7 @@ func ServerCredentialsFromFiles(certPath, keyPath, caPath string) (credentials.T
 	if pool != nil {
 		config.ClientCAs = pool
 		config.ClientAuth = tls.RequireAndVerifyClientCert
+		config.VerifyPeerCertificate = verifyControlPlanePeer
 	}
 	return credentials.NewTLS(config), nil
 }

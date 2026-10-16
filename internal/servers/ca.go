@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,26 @@ const (
 	maxCSRSANs = 8
 
 	caCommonName = "Gotham CA"
+
+	// ControlPlaneURI is the URI subject alternative name that marks a
+	// certificate as the control-plane *client* credential for the agent
+	// direction. A node leaf never carries it, so an agent listener can tell
+	// the two trust roles apart even though both chain to the same CA: the CP
+	// presents this identity when it dials an agent, and the agent accepts only
+	// this identity. The agent package keeps the same literal (it cannot import
+	// this one); a mismatch would fail the end-to-end dial test.
+	ControlPlaneURI = "spiffe://gotham/control-plane"
 )
+
+// controlPlaneURIParsed parses ControlPlaneURI once; it is a compile-time
+// constant so a malformed value is a programming error.
+var controlPlaneURIParsed = func() *url.URL {
+	u, err := url.Parse(ControlPlaneURI)
+	if err != nil {
+		panic(err)
+	}
+	return u
+}()
 
 // Authority is the control-plane certificate authority. It signs the mTLS
 // certificates agents present and the certificates the control plane uses for
@@ -173,6 +193,43 @@ func LoadHosts(dir string) ([]string, error) {
 	return uniqueStrings(hosts), nil
 }
 
+// enrollmentTokenFile is the bootstrap credential `gotham serve` generates when
+// no GOTHAM_GRPC_ENROLLMENT_TOKEN is configured (JUS-194). It lives inside the
+// 0700 CA directory and is written 0600.
+const enrollmentTokenFile = "enrollment-token"
+
+// LoadOrCreateEnrollmentToken returns the persisted bootstrap enrollment token,
+// generating a random 256-bit one on first use. It exists so a TLS control plane
+// has a token by default (fail closed) instead of falling back to open
+// enrollment; the operator passes the same value to install-agent.sh (via
+// GOTHAM_AGENT_ENROLLMENT_TOKEN or --enrollment-token-file).
+func LoadOrCreateEnrollmentToken(dir string) (token, path string, err error) {
+	if dir == "" {
+		return "", "", errors.New("servers: ca dir is empty")
+	}
+	path = filepath.Join(dir, enrollmentTokenFile)
+	if data, readErr := os.ReadFile(path); readErr == nil {
+		if existing := strings.TrimSpace(string(data)); existing != "" {
+			return existing, path, nil
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return "", "", fmt.Errorf("read enrollment token: %w", readErr)
+	}
+
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", "", fmt.Errorf("generate enrollment token: %w", err)
+	}
+	token = hex.EncodeToString(raw)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", "", fmt.Errorf("create ca dir: %w", err)
+	}
+	if err := writeFile(path, []byte(token+"\n")); err != nil {
+		return "", "", err
+	}
+	return token, path, nil
+}
+
 // Pool returns a certificate pool containing the CA certificate, suitable for
 // verifying certificates signed by this authority.
 func (a *Authority) Pool() *x509.CertPool {
@@ -224,7 +281,7 @@ func (a *Authority) IssueAgentCertFromCSR(csrPEM []byte, nodeID string) ([]byte,
 		// The agent must never receive a SAN accepted for the CP loopback listener.
 		dns = []string{localhostAgentServerName}
 	}
-	cert, err := a.sign(nodeID, dns, ips, nodeCertUsages, agentCertValidity, csr.PublicKey)
+	cert, err := a.sign(nodeID, dns, ips, nil, nodeCertUsages, agentCertValidity, csr.PublicKey)
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +300,11 @@ func (a *Authority) VerifyNodeClientCert(cert *x509.Certificate) error {
 	if cert.IsCA {
 		return errors.New("servers: a CA certificate is not a node credential")
 	}
+	// The control-plane client credential is a different trust role: it must
+	// never authenticate as a node on the gateway (JUS-194 fix round 1).
+	if hasControlPlaneURI(cert) {
+		return errors.New("servers: a control-plane client certificate is not a node credential")
+	}
 	if _, err := cert.Verify(x509.VerifyOptions{
 		Roots:     a.Pool(),
 		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
@@ -250,6 +312,17 @@ func (a *Authority) VerifyNodeClientCert(cert *x509.Certificate) error {
 		return fmt.Errorf("servers: node certificate: %w", err)
 	}
 	return nil
+}
+
+// hasControlPlaneURI reports whether cert carries the control-plane client URI
+// SAN (ControlPlaneURI).
+func hasControlPlaneURI(cert *x509.Certificate) bool {
+	for _, uri := range cert.URIs {
+		if uri != nil && uri.String() == ControlPlaneURI {
+			return true
+		}
+	}
+	return false
 }
 
 // NodeKeyFingerprint returns a stable fingerprint of a public key (the SHA-256
@@ -397,20 +470,22 @@ func (a *Authority) IssueServerCert(hosts []string) (certPEM, keyPEM []byte, err
 	if len(hosts) == 0 {
 		hosts = []string{"localhost"}
 	}
-	key, cert, err := a.issue(hosts[0], hosts, ipSANs(hosts...), []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, serverCertValidity)
+	key, cert, err := a.issue(hosts[0], hosts, ipSANs(hosts...), nil, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, serverCertValidity)
 	if err != nil {
 		return nil, nil, err
 	}
 	return leafPEM(cert, key)
 }
 
-// IssueClientCert issues a client-auth certificate the control plane presents
-// when dialing an agent, returning the certificate and private key as PEM.
+// IssueClientCert issues the control-plane client credential the CP presents
+// when dialing an agent. It carries the ControlPlaneURI identity (plus the
+// legacy common name and DNS SAN), so an agent can require exactly this role
+// and reject a node leaf that chains to the same CA.
 func (a *Authority) IssueClientCert(name string) (certPEM, keyPEM []byte, err error) {
 	if name == "" {
 		name = "gotham-control-plane"
 	}
-	key, cert, err := a.issue(name, []string{name}, nil, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, clientCertValidity)
+	key, cert, err := a.issue(name, []string{name}, nil, []*url.URL{controlPlaneURIParsed}, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, clientCertValidity)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -418,12 +493,12 @@ func (a *Authority) IssueClientCert(name string) (certPEM, keyPEM []byte, err er
 }
 
 // issue generates a leaf keypair and certificate signed by the CA.
-func (a *Authority) issue(commonName string, dns []string, ips []net.IP, usages []x509.ExtKeyUsage, validity time.Duration) (*ecdsa.PrivateKey, *x509.Certificate, error) {
+func (a *Authority) issue(commonName string, dns []string, ips []net.IP, uris []*url.URL, usages []x509.ExtKeyUsage, validity time.Duration) (*ecdsa.PrivateKey, *x509.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generate leaf key: %w", err)
 	}
-	cert, err := a.sign(commonName, dns, ips, usages, validity, &key.PublicKey)
+	cert, err := a.sign(commonName, dns, ips, uris, usages, validity, &key.PublicKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -431,7 +506,7 @@ func (a *Authority) issue(commonName string, dns []string, ips []net.IP, usages 
 }
 
 // sign builds a leaf certificate for pub and signs it with the CA key.
-func (a *Authority) sign(commonName string, dns []string, ips []net.IP, usages []x509.ExtKeyUsage, validity time.Duration, pub crypto.PublicKey) (*x509.Certificate, error) {
+func (a *Authority) sign(commonName string, dns []string, ips []net.IP, uris []*url.URL, usages []x509.ExtKeyUsage, validity time.Duration, pub crypto.PublicKey) (*x509.Certificate, error) {
 	serial, err := randomSerial()
 	if err != nil {
 		return nil, err
@@ -448,6 +523,7 @@ func (a *Authority) sign(commonName string, dns []string, ips []net.IP, usages [
 		BasicConstraintsValid: true,
 		DNSNames:              dns,
 		IPAddresses:           ips,
+		URIs:                  uris,
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, a.cert, pub, a.key)

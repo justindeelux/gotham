@@ -39,15 +39,25 @@ and the real agent rollout from the GitHub CDN are proven.
   the one certificate-less registration and is gated by
   `GOTHAM_GRPC_ENROLLMENT_TOKEN` when configured. Details and the upgrade path:
   `deploy/README.md` → Known residuals.
-  - **Residual: first enrollment is trust-on-first-use without a token.** With no
-    `GOTHAM_GRPC_ENROLLMENT_TOKEN`, a caller that can reach the listener may
-    enroll an unused node id (TLS + CSR + CA, no caller authentication); the CP
-    logs it loudly, and every later RPC still needs the node's key. Set the token
-    on a real instance. A per-node, single-use enrollment token surfaced in the
-    add-server wizard would close it (future work).
-  - **Residual: no CRL/serial set.** Revocation is key-based (delete the node or
-    rotate its key) plus the 90-day leaf; a superseded leaf of the *same* key
-    stays valid until it expires.
+  - The two directions are separate trust roles: a node leaf authenticates only
+    to the CP gateway (bound to node-id + stored key fingerprint), and an agent
+    listener accepts only the control-plane credential (`spiffe://gotham/control-plane`
+    URI SAN, checked in the handshake and in a gRPC interceptor), so a node leaf
+    cannot act as the CP toward another agent.
+  - **Residual: open enrollment.** First enrollment fails closed: the CP uses
+    `GOTHAM_GRPC_ENROLLMENT_TOKEN` or generates `<GOTHAM_CA_DIR>/enrollment-token`.
+    `GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true` is the explicit, loudly-logged
+    opt-in for trust-on-first-use. A per-node, single-use enrollment token
+    surfaced in the add-server wizard would be the end state (future work).
+  - **Residual: no CRL/serial set.** Revocation is key-based (delete the node and
+    re-enroll; there is no in-place rekey) plus the 90-day leaf; a superseded leaf
+    of the *same* key stays valid until it expires.
+  - **Residual: EKU-any on the gateway (sunset).** The gateway accepts a
+    serverAuth-only leaf so nodes enrolled before mTLS keep working; that lapses
+    naturally within 90 days of the last pre-upgrade issuance. A later release
+    should tighten `VerifyNodeClientCert` to clientAuth-only and require the
+    control-plane URI SAN on agents (dropping the rollout grace branch in
+    `agent/tls.go`).
   - **Per-IP limiter keying.** Register/heartbeat limits are keyed per peer IP;
     agents behind one NAT/egress IP share a bucket.
   - **Unknown-node Register rows.** A certificate-less bootstrap still creates a

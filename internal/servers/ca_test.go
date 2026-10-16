@@ -425,3 +425,66 @@ func TestUniqueStringsTrims(t *testing.T) {
 		}
 	}
 }
+
+// TestIssueClientCertCarriesControlPlaneIdentity pins the two-role model: the
+// control-plane client credential carries the ControlPlaneURI URI SAN and is
+// refused as a node credential, while a node leaf is not accepted as the CP
+// credential (agent-side test).
+func TestIssueClientCertCarriesControlPlaneIdentity(t *testing.T) {
+	if ControlPlaneURI != "spiffe://gotham/control-plane" {
+		t.Fatalf("ControlPlaneURI = %q, want spiffe://gotham/control-plane", ControlPlaneURI)
+	}
+	authority, err := LoadOrCreateAuthority(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreateAuthority: %v", err)
+	}
+	certPEM, _, err := authority.IssueClientCert("")
+	if err != nil {
+		t.Fatalf("IssueClientCert: %v", err)
+	}
+	cert := parseCertPEM(t, certPEM)
+	if !hasControlPlaneURI(cert) {
+		t.Fatal("the control-plane credential does not carry the control-plane URI SAN")
+	}
+	if err := authority.VerifyNodeClientCert(cert); err == nil {
+		t.Fatal("the control-plane credential was accepted as a node credential")
+	}
+	if err := authority.VerifyNodeClientCert(authority.cert); err == nil {
+		t.Fatal("the CA certificate was accepted as a node credential")
+	}
+}
+
+// TestLoadOrCreateEnrollmentToken proves the fail-closed default: a token is
+// generated, persisted 0600, and reused unchanged on the next call.
+func TestLoadOrCreateEnrollmentToken(t *testing.T) {
+	dir := t.TempDir()
+	token, path, err := LoadOrCreateEnrollmentToken(dir)
+	if err != nil {
+		t.Fatalf("LoadOrCreateEnrollmentToken: %v", err)
+	}
+	if len(token) < 43 {
+		t.Fatalf("generated token %q is too short", token)
+	}
+	if want := filepath.Join(dir, enrollmentTokenFile); path != want {
+		t.Fatalf("token path = %q, want %q", path, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat token: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("token file mode = %04o, want 0600", perm)
+	}
+	again, _, err := LoadOrCreateEnrollmentToken(dir)
+	if err != nil || again != token {
+		t.Fatalf("second call = (%q, %v), want the persisted token", again, err)
+	}
+	// An empty file is treated as absent and regenerated.
+	if err := os.WriteFile(path, []byte("\n"), 0o600); err != nil {
+		t.Fatalf("write empty token: %v", err)
+	}
+	regenerated, _, err := LoadOrCreateEnrollmentToken(dir)
+	if err != nil || regenerated == "" || regenerated == token {
+		t.Fatalf("regenerated = (%q, %v), want a fresh token", regenerated, err)
+	}
+}

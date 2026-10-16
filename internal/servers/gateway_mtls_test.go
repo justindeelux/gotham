@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,7 +88,7 @@ func peerWithClientCert(ctx context.Context, certPEM []byte) context.Context {
 // legacy (serverAuth-only) credential.
 func issueNodeCert(t *testing.T, authority *Authority, commonName string, key *ecdsa.PrivateKey, usages []x509.ExtKeyUsage, validity time.Duration) []byte {
 	t.Helper()
-	cert, err := authority.sign(commonName, []string{commonName}, nil, usages, validity, &key.PublicKey)
+	cert, err := authority.sign(commonName, []string{commonName}, nil, nil, usages, validity, &key.PublicKey)
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -151,6 +152,150 @@ func assertHeartbeatRejected(t *testing.T, addr string, authority *Authority, ce
 	}
 	if status.Code(err) != want {
 		t.Fatalf("Heartbeat = %v, want %v", err, want)
+	}
+}
+
+// startGatewayConfig starts a gateway over a real TCP listener with cfg and
+// returns its address, for tests that need a specific config.
+func startGatewayConfig(t *testing.T, cfg GatewayConfig) string {
+	t.Helper()
+	if cfg.Addr == "" {
+		cfg.Addr = "127.0.0.1:0"
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = discardLogger()
+	}
+	gateway, err := NewGateway(cfg)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := gateway.Start(ctx); err != nil {
+		t.Fatalf("gateway.Start: %v", err)
+	}
+	t.Cleanup(gateway.Stop)
+	return gateway.listener.Addr().String()
+}
+
+// heartbeatWithClaim opens a heartbeat with the given keypair claiming nodeID
+// and returns the resulting error.
+func heartbeatWithClaim(t *testing.T, addr string, authority *Authority, certPEM, keyPEM []byte, claimed string) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream, err := agentv1.NewAgentServiceClient(dialWithClientCert(t, addr, authority, certPEM, keyPEM)).Heartbeat(
+		metadata.AppendToOutgoingContext(ctx, nodeIDMetadataKey, claimed))
+	if err == nil {
+		_ = stream.Send(&agentv1.HeartbeatRequest{SentAt: timestamppb.Now()})
+		_, err = stream.CloseAndRecv()
+	}
+	return err
+}
+
+// TestGatewayRejectsControlPlaneCredentialAsNode: the CP's own client credential
+// (the agent-direction identity) is not a node credential, even though it chains
+// to the same CA.
+func TestGatewayRejectsControlPlaneCredentialAsNode(t *testing.T) {
+	service, _, authority := newTestServiceWithAuthority(t)
+	addr := startGatewayConfig(t, GatewayConfig{Authority: authority, Service: service, AllowOpenEnrollment: true})
+
+	cpCert, cpKey, err := authority.IssueClientCert("")
+	if err != nil {
+		t.Fatalf("IssueClientCert: %v", err)
+	}
+	if err := heartbeatWithClaim(t, addr, authority, cpCert, cpKey, "victim"); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("control-plane credential presented as a node = %v, want Unauthenticated", err)
+	}
+	// ... and it cannot register either.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, regErr := agentv1.NewAgentServiceClient(dialWithClientCert(t, addr, authority, cpCert, cpKey)).Register(
+		ctx, &agentv1.RegisterRequest{NodeId: "victim", Csr: csrFor(t, "victim", testKey(t))})
+	if status.Code(regErr) != codes.Unauthenticated {
+		t.Fatalf("control-plane credential Register = %v, want Unauthenticated", regErr)
+	}
+}
+
+// TestGatewayEnrollmentFailsClosedWithoutToken: with a CA and neither an
+// enrollment token nor the open-enrollment opt-in, a certificate-less first
+// registration is refused and creates no row.
+func TestGatewayEnrollmentFailsClosedWithoutToken(t *testing.T) {
+	service, st, authority := newTestServiceWithAuthority(t)
+	addr := startGatewayConfig(t, GatewayConfig{Authority: authority, Service: service})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	nodeID := uniqueNodeID("node-closed")
+	_, err := agentv1.NewAgentServiceClient(dialNoClientCert(t, addr, authority)).Register(
+		ctx, &agentv1.RegisterRequest{NodeId: nodeID, Csr: csrFor(t, nodeID, testKey(t))})
+	if status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "enrollment is closed") {
+		t.Fatalf("Register with enrollment closed = %v, want PermissionDenied/enrollment is closed", err)
+	}
+	if _, lookupErr := st.GetServerByNodeID(ctx, &nodeID); lookupErr == nil {
+		t.Fatal("a refused enrollment created a registry row")
+	}
+}
+
+// TestGatewayEnrollmentRefusalsAreUniform: a caller with no or a wrong token
+// gets the same refusal whether or not the node id exists, so enrollment cannot
+// be used to enumerate node ids.
+func TestGatewayEnrollmentRefusalsAreUniform(t *testing.T) {
+	service, _, authority := newTestServiceWithAuthority(t)
+	addr := startGatewayConfig(t, GatewayConfig{Authority: authority, Service: service, EnrollmentToken: "tok"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := agentv1.NewAgentServiceClient(dialNoClientCert(t, addr, authority))
+	wrong := metadata.AppendToOutgoingContext(ctx, enrollmentTokenMetadataKey, "nope")
+	valid := metadata.AppendToOutgoingContext(ctx, enrollmentTokenMetadataKey, "tok")
+	message := func(err error) string { return status.Convert(err).Message() }
+
+	unknownID := uniqueNodeID("node-uniform-unknown")
+	_, errUnknown := client.Register(wrong, &agentv1.RegisterRequest{NodeId: unknownID, Csr: csrFor(t, unknownID, testKey(t))})
+
+	enrolledID := uniqueNodeID("node-uniform-enrolled")
+	if _, err := client.Register(valid, &agentv1.RegisterRequest{NodeId: enrolledID, Csr: csrFor(t, enrolledID, testKey(t))}); err != nil {
+		t.Fatalf("enroll with the token: %v", err)
+	}
+	deleteNode(t, service, enrolledID)
+	_, errEnrolled := client.Register(wrong, &agentv1.RegisterRequest{NodeId: enrolledID, Csr: csrFor(t, enrolledID, testKey(t))})
+	_, errNoToken := client.Register(ctx, &agentv1.RegisterRequest{NodeId: enrolledID, Csr: csrFor(t, enrolledID, testKey(t))})
+
+	if message(errUnknown) != message(errEnrolled) || message(errUnknown) != message(errNoToken) {
+		t.Fatalf("enrollment refusal leaks existence: unknown=%q enrolled=%q none=%q",
+			message(errUnknown), message(errEnrolled), message(errNoToken))
+	}
+	if status.Code(errUnknown) != codes.PermissionDenied {
+		t.Fatalf("wrong-token enrollment = %v, want PermissionDenied", errUnknown)
+	}
+}
+
+// TestGatewayKeyErrorsAreUniform: an unknown node and a key mismatch return the
+// same refusal, so a CA-valid certificate holder cannot probe the registry.
+func TestGatewayKeyErrorsAreUniform(t *testing.T) {
+	service, _, authority := newTestServiceWithAuthority(t)
+	addr := startGatewayConfig(t, GatewayConfig{Authority: authority, Service: service, AllowOpenEnrollment: true})
+
+	nodeID := uniqueNodeID("node-key-uniform")
+	enrollNode(t, addr, authority, nodeID)
+	deleteNode(t, service, nodeID)
+
+	otherKey := testKey(t)
+	otherCert := issueNodeCert(t, authority, nodeID, otherKey, nodeCertUsages, time.Hour)
+	errMismatch := heartbeatWithClaim(t, addr, authority, otherCert, testKeyPEM(t, otherKey), nodeID)
+
+	unknownID := uniqueNodeID("node-key-unknown")
+	unknownKey := testKey(t)
+	unknownCert := issueNodeCert(t, authority, unknownID, unknownKey, nodeCertUsages, time.Hour)
+	errUnknown := heartbeatWithClaim(t, addr, authority, unknownCert, testKeyPEM(t, unknownKey), unknownID)
+
+	if status.Convert(errMismatch).Message() != status.Convert(errUnknown).Message() {
+		t.Fatalf("key refusal leaks state: mismatch=%q unknown=%q",
+			status.Convert(errMismatch).Message(), status.Convert(errUnknown).Message())
+	}
+	if status.Code(errMismatch) != codes.PermissionDenied {
+		t.Fatalf("key mismatch = %v, want PermissionDenied", errMismatch)
 	}
 }
 

@@ -55,8 +55,12 @@ const (
 	// certificate. When unset, first enrollment is trust-on-first-use and
 	// logged; set it on a production instance.
 	EnvGRPCEnrollmentToken = "GOTHAM_GRPC_ENROLLMENT_TOKEN"
-	EnvCADir               = "GOTHAM_CA_DIR"
-	EnvSecretKey           = "GOTHAM_SECRET_KEY"
+	// EnvGRPCAllowOpenEnrollment is the explicit opt-in that lets a node's
+	// first-ever registration enroll with no enrollment token (trust-on-first-
+	// use). Without it, a TLS control plane requires a token (JUS-194).
+	EnvGRPCAllowOpenEnrollment = "GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT"
+	EnvCADir                   = "GOTHAM_CA_DIR"
+	EnvSecretKey               = "GOTHAM_SECRET_KEY"
 
 	// EnvDeployGitAllowPrivateHosts lifts the git SSRF host policy for
 	// RFC1918, ULA and loopback remotes (self-hosted git servers). Default
@@ -134,9 +138,14 @@ type GRPC struct {
 	Insecure bool `mapstructure:"insecure"`
 	// EnrollmentToken is the bootstrap credential a node must present on its
 	// first-ever registration (JUS-194), before it holds a client certificate.
-	// Empty leaves first enrollment trust-on-first-use, which is logged. Set
-	// from GOTHAM_GRPC_ENROLLMENT_TOKEN.
+	// When empty, serve generates and persists one next to the CA (fail closed);
+	// set it from GOTHAM_GRPC_ENROLLMENT_TOKEN to pin your own value.
 	EnrollmentToken string `mapstructure:"enrollment_token"`
+	// AllowOpenEnrollment opts into trust-on-first-use first enrollment with no
+	// token. It must be an explicit operator choice; without a token and without
+	// this, first enrollment is refused. Set from
+	// GOTHAM_GRPC_ALLOW_OPEN_ENROLLMENT=true.
+	AllowOpenEnrollment bool `mapstructure:"allow_open_enrollment"`
 }
 
 // CA holds the certificate authority settings.
@@ -358,6 +367,7 @@ func newViper() *viper.Viper {
 		"grpc.hosts":                     EnvGRPCHosts,
 		"grpc.insecure":                  EnvGRPCInsecure,
 		"grpc.enrollment_token":          EnvGRPCEnrollmentToken,
+		"grpc.allow_open_enrollment":     EnvGRPCAllowOpenEnrollment,
 		"ca.dir":                         EnvCADir,
 		"secret_key":                     EnvSecretKey,
 		"deploy.git_allow_private_hosts": EnvDeployGitAllowPrivateHosts,

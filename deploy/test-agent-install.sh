@@ -1513,25 +1513,49 @@ _v1_must_fail() { # $1 key=value assignment, $2 key name
 _v1_must_fail "GOTHAM_AGENT_LOG_LEVEL=$(printf 'info\nGOTHAM_AGENT_INSECURE=true')" GOTHAM_AGENT_LOG_LEVEL
 _v1_must_fail "GOTHAM_AGENT_NODE_ID=bad id" GOTHAM_AGENT_NODE_ID
 _v1_must_fail "GOTHAM_AGENT_AUTO_UPDATE=yes" GOTHAM_AGENT_AUTO_UPDATE
-# The --enrollment-token flag (JUS-194) is validated like every other managed
-# key: a mangled secret fails before the first mutation, a clean one passes.
+# The enrollment token (JUS-194) is a secret: it is accepted only from the
+# environment or a root-only file, never from argv, and is validated like every
+# other managed key before the first mutation.
+if grep -q 'GOTHAM_AGENT_ENROLLMENT_TOKEN="\$2"' "${AGENT_INSTALLER}"; then
+    fail "V1: the enrollment token is still read from argv"
+fi
+printf 's3cret-Enroll_token.1\n' >"${V1_DIR}/token"
+chmod 600 "${V1_DIR}/token"
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token-file "${V1_DIR}/token" --dry-run >"${V1_DIR}/tok-good.log" 2>&1 \
+    || fail "V1: a valid --enrollment-token-file was rejected"
+printf '%s' "${HELP_OUT}" | grep -q -- '--enrollment-token-file' \
+    || fail "V1: --help does not document --enrollment-token-file"
+# A world-readable token file is refused (anyone who can read it can enroll).
+printf 's3cret-Enroll_token.1\n' >"${V1_DIR}/token-open"
+chmod 644 "${V1_DIR}/token-open"
 if env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
-    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token "bad token" --dry-run >"${V1_DIR}/tok-bad.log" 2>&1; then
-    fail "V1: a direct run with a mangled --enrollment-token succeeded"
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token-file "${V1_DIR}/token-open" --dry-run >"${V1_DIR}/tok-open.log" 2>&1; then
+    fail "V1: a group/world-readable enrollment token file was accepted"
+fi
+grep -q 'readable by group or others' "${V1_DIR}/tok-open.log" \
+    || fail "V1: the token-file mode rejection is not explained"
+# A missing file is refused.
+if env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token-file "${V1_DIR}/absent" --dry-run >/dev/null 2>&1; then
+    fail "V1: a missing enrollment token file was accepted"
+fi
+# A mangled value fails validation and names the key.
+printf 'bad token\n' >"${V1_DIR}/token-bad"
+chmod 600 "${V1_DIR}/token-bad"
+if env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
+    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token-file "${V1_DIR}/token-bad" --dry-run >"${V1_DIR}/tok-bad.log" 2>&1; then
+    fail "V1: a mangled enrollment token succeeded"
 fi
 grep -q 'GOTHAM_AGENT_ENROLLMENT_TOKEN' "${V1_DIR}/tok-bad.log" \
-    || fail "V1: the --enrollment-token rejection does not name the key"
-env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${V1_DIR}/tmp" \
-    sh "${AGENT_INSTALLER}" --ca "${V1_DIR}/ca.pem" --enrollment-token "s3cret-Enroll_token.1" --dry-run >"${V1_DIR}/tok-good.log" 2>&1 \
-    || fail "V1: a valid --enrollment-token was rejected"
-# The flag's value must reach agent.env, not only the environment.
+    || fail "V1: the enrollment token rejection does not name the key"
+# The value must reach agent.env, and survive a reinstall that omits it.
 V1_ENV="${V1_DIR}/flag.env"
 env GOTHAM_AGENT_ENROLLMENT_TOKEN="s3cret-Enroll_token.1" \
     sh -c '. '"${SCRIPT_DIR}"'/install-agent-lib.sh; agent_env_write "'"${V1_ENV}"'" "/etc/gotham/ca.crt" 0' 2>/dev/null \
     || fail "V1: writing the enrollment token failed"
 grep -qxF 'GOTHAM_AGENT_ENROLLMENT_TOKEN=s3cret-Enroll_token.1' "${V1_ENV}" \
-    || fail "V1: --enrollment-token did not reach agent.env"
-# A later install without the flag keeps the stored token (operator set it once).
+    || fail "V1: the enrollment token did not reach agent.env"
 sh -c '. '"${SCRIPT_DIR}"'/install-agent-lib.sh; agent_env_write "'"${V1_ENV}"'" "/etc/gotham/ca.crt" 0' 2>/dev/null \
     || fail "V1: re-writing without the token failed"
 grep -qxF 'GOTHAM_AGENT_ENROLLMENT_TOKEN=s3cret-Enroll_token.1' "${V1_ENV}" \

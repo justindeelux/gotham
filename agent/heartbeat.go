@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -340,10 +341,23 @@ func (a *Agent) dialOptionsFor() ([]grpc.DialOption, error) {
 func (a *Agent) register(ctx context.Context, client agentv1.AgentServiceClient) (*agentv1.RegisterResponse, error) {
 	callCtx, cancel := context.WithTimeout(ctx, a.registerTimeout)
 	defer cancel()
-	if a.cfg.EnrollmentToken != "" {
+	// The token is a bootstrap credential: send it only while this node has no
+	// certificate yet, so a long-lived agent stops re-sending it once enrolled.
+	if a.cfg.EnrollmentToken != "" && !a.hasClientCert() {
 		callCtx = metadata.AppendToOutgoingContext(callCtx, enrollmentTokenMetadataKey, a.cfg.EnrollmentToken)
 	}
 	return client.Register(callCtx, a.registerRequest(callCtx))
+}
+
+// hasClientCert reports whether a node certificate is already on disk. An
+// unconfigured CA means the plaintext development channel, which never carries
+// the token.
+func (a *Agent) hasClientCert() bool {
+	if a.cfg.CA == "" {
+		return false
+	}
+	_, err := os.Stat(ClientCertPath(a.cfg.CertDir))
+	return err == nil
 }
 
 // renewalDelay returns how long to keep the current registration before

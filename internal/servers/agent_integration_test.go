@@ -34,10 +34,11 @@ func TestAgentGatewayEndToEnd(t *testing.T) {
 	defer cancel()
 
 	gateway, err := NewGateway(GatewayConfig{
-		Addr:      "127.0.0.1:0",
-		Authority: authority,
-		Service:   service,
-		Logger:    discardLogger(),
+		Addr:                "127.0.0.1:0",
+		Authority:           authority,
+		Service:             service,
+		Logger:              discardLogger(),
+		AllowOpenEnrollment: true,
 	})
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)

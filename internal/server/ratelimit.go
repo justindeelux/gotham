@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -119,10 +120,22 @@ func (l *ipRateLimiter) Close() {
 	l.once.Do(func() { close(l.stop) })
 }
 
+// limiterKey buckets a client address for the per-IP limiters. An IPv6 address
+// is masked to its /64, so a caller inside one prefix cannot rotate through its
+// own addresses for a fresh bucket per guess. A non-IPv6 key (including an
+// unparseable peer) is used verbatim.
+func limiterKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || !addr.Is6() || addr.Is4In6() {
+		return ip
+	}
+	return netip.PrefixFrom(addr, 64).Masked().String()
+}
+
 // rateLimit rejects requests from clients that exhaust their bucket.
 func (s *Server) rateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.authLimiter.allow(clientip.ClientIP(r, s.trustedProxies)) {
+		if !s.authLimiter.allow(limiterKey(clientip.ClientIP(r, s.trustedProxies))) {
 			writeJSON(w, http.StatusTooManyRequests, apiError{Message: "too many requests"})
 			return
 		}
@@ -134,7 +147,7 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 // their bucket.
 func (s *Server) refreshRateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.refreshLimiter.allow(clientip.ClientIP(r, s.trustedProxies)) {
+		if !s.refreshLimiter.allow(limiterKey(clientip.ClientIP(r, s.trustedProxies))) {
 			writeJSON(w, http.StatusTooManyRequests, apiError{Message: "too many requests"})
 			return
 		}

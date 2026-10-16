@@ -30,10 +30,15 @@ const vi: typeof en = {
     invalid: "Nhập URL control plane hợp lệ để kiểm tra trạng thái.",
     dnsUnknown: "DNS: chưa báo cáo",
     certUnknown: "Chứng chỉ: chưa báo cáo",
+    certState: {
+      issued: "Chứng chỉ: đã cấp",
+      pending: "Chứng chỉ: đang chờ cấp",
+      failed: "Chứng chỉ: cấp thất bại",
+    },
+    certExpiry: "Hết hạn {date}",
     certNotApplicable: "Chứng chỉ: không áp dụng (HTTP)",
     observationHint:
-      "API router không báo cáo kết quả phân giải DNS " +
-      "hay việc cấp chứng chỉ cho bảng điều khiển.",
+      "API router không báo cáo kết quả phân giải DNS.",
     loading: "Router: đang kiểm tra…",
     synced: "Router: đã đồng bộ",
     pending: "Router: chờ đồng bộ",

@@ -32,9 +32,15 @@ const en = {
     invalid: "Enter a valid control-plane URL to check its status.",
     dnsUnknown: "DNS: not reported",
     certUnknown: "Certificate: not reported",
+    certState: {
+      issued: "Certificate: issued",
+      pending: "Certificate: pending",
+      failed: "Certificate: failed",
+    },
+    certExpiry: "Expires {date}",
     certNotApplicable: "Certificate: not applicable (HTTP)",
     observationHint:
-      "The routers API does not report DNS resolution or panel certificate issuance.",
+      "The routers API does not report DNS resolution.",
     loading: "Router: checking…",
     synced: "Router: synced",
     pending: "Router: sync pending",

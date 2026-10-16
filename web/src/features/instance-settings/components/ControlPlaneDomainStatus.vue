@@ -4,14 +4,16 @@ import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { listRouters } from "@/features/domains/api/proxy";
-import type { RouterSyncStatus } from "@/features/domains/api/proxy";
+import type { PanelCertificateState, RouterSyncStatus } from "@/features/domains/api/proxy";
 import { controlPlaneUrlSchema } from "@/features/instance-settings/schemas/instance";
+import { formatDate } from "@/shared/utils/format";
 
 const props = defineProps<{ url: string; savedUrl: string }>();
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const reload = ref(0);
 const loading = ref(false);
 const routerStatus = ref<RouterSyncStatus>("unknown");
+const certificate = ref<PanelCertificateState>();
 const warning = ref<"missingLocalhost" | "readFailed" | "unsaved" | null>(null);
 function parseUrl(value: string): URL | null {
   const result = controlPlaneUrlSchema.safeParse(value);
@@ -25,6 +27,7 @@ watch(
   (_values, _previous, onCleanup) => {
     let active = true;
     routerStatus.value = "unknown";
+    certificate.value = undefined;
     warning.value = null;
     loading.value = parsedUrl.value !== null;
     const url = parsedUrl.value;
@@ -38,16 +41,18 @@ watch(
           warning.value = "missingLocalhost";
         } else if (node.error) {
           warning.value = "readFailed";
-        } else if (url.origin !== parseUrl(props.savedUrl)?.origin) {
-          warning.value = "unsaved";
-          routerStatus.value = "pending";
         } else {
           const router = result.routers.find((entry) =>
             entry.kind === "control_plane" && entry.server_id === node.server_id &&
-            new URL(`${url.protocol}//${entry.host}`).origin === url.origin &&
-            entry.entrypoints.includes(url.protocol === "https:" ? "websecure" : "web"),
+            new URL(`${url.protocol}//${entry.host}`).origin === url.origin,
           );
-          routerStatus.value = router ? node.sync_status : "pending";
+          certificate.value = router?.certificate;
+          routerStatus.value = router?.entrypoints.includes(
+            url.protocol === "https:" ? "websecure" : "web",
+          ) ? node.sync_status : "pending";
+          if (!router && url.origin !== parseUrl(props.savedUrl)?.origin) {
+            warning.value = "unsaved";
+          }
         }
       } catch {
         if (active) warning.value = "readFailed";
@@ -81,11 +86,22 @@ watch(
     <template v-else>
       <NSpace align="center">
         <NTag>{{ t("instance-settings.domainStatus.dnsUnknown") }}</NTag>
-        <NTag>
+        <NTag :type="parsedUrl.protocol === 'http:' ? 'default'
+          : certificate?.status === 'issued' ? 'success'
+          : certificate?.status === 'failed' ? 'error'
+          : certificate?.status === 'pending' ? 'warning' : 'default'">
           {{ t(parsedUrl.protocol === "http:"
             ? "instance-settings.domainStatus.certNotApplicable"
-            : "instance-settings.domainStatus.certUnknown") }}
+            : certificate
+              ? `instance-settings.domainStatus.certState.${certificate.status}`
+              : "instance-settings.domainStatus.certUnknown") }}
         </NTag>
+        <NText v-if="parsedUrl.protocol === 'https:' && certificate?.status === 'issued'
+          && certificate.not_after" depth="3">
+          {{ t("instance-settings.domainStatus.certExpiry", {
+            date: formatDate(certificate.not_after, locale === "vi" ? "vi" : "en"),
+          }) }}
+        </NText>
         <NTag :type="!loading && routerStatus === 'synced' ? 'success' : 'warning'">
           {{ t(`instance-settings.domainStatus.${loading ? 'loading' : routerStatus}`) }}
         </NTag>

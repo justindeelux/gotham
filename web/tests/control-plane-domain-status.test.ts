@@ -9,6 +9,7 @@ import en from "@/features/instance-settings/locales/en";
 import vietnamese from "@/features/instance-settings/locales/vi";
 import { checkCatalogParity } from "@/shared/i18n/catalog";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
+import { formatDate } from "@/shared/utils/format";
 
 const url = "https://panel.example.com";
 const envelope = {
@@ -44,6 +45,95 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("control-plane domain status", () => {
+  it.each(["issued", "pending", "failed"] as const)(
+    "renders HTTPS certificate state %s and keeps DNS unreported",
+    async (status) => {
+      const notAfter = "2027-01-14T12:00:00Z";
+      vi.mocked(listRouters).mockResolvedValue({
+        ...envelope,
+        routers: [{ ...envelope.routers[0], certificate: {
+          status, ...(status === "issued" ? { not_after: notAfter } : {}),
+        } }],
+      });
+      const wrapper = mountStatus();
+      await settle();
+      expect(wrapper.text()).toContain(en.domainStatus.certState[status]);
+      expect(wrapper.text()).toContain(en.domainStatus.dnsUnknown);
+      expect(wrapper.text()).toContain(en.domainStatus.synced);
+      expect(wrapper.text()).not.toContain(en.domainStatus.certUnknown);
+      if (status === "issued") {
+        expect(wrapper.text()).toContain(`Expires ${formatDate(notAfter, "en")}`);
+      } else {
+        expect(wrapper.text()).not.toContain("Expires");
+      }
+      syncComposerLocale("vi");
+      await flushPromises();
+      expect(wrapper.text()).toContain(vietnamese.domainStatus.certState[status]);
+      if (status === "issued") {
+        expect(wrapper.text()).toContain(`Hết hạn ${formatDate(notAfter, "vi")}`);
+      }
+      wrapper.unmount();
+    },
+  );
+
+  it("reports HTTP as not applicable even if certificate data is present", async () => {
+    vi.mocked(listRouters).mockResolvedValue({
+      ...envelope,
+      routers: [{ ...envelope.routers[0], certificate: {
+        status: "issued", not_after: "2027-01-14T12:00:00Z",
+      } }],
+    });
+    const wrapper = mountStatus();
+    await wrapper.setProps({ url: "http://panel.example.com", savedUrl: "http://panel.example.com" });
+    await settle();
+    expect(wrapper.text()).toContain(en.domainStatus.certNotApplicable);
+    expect(wrapper.text()).not.toContain("Expires");
+    expect(wrapper.text()).not.toContain(en.domainStatus.certState.issued);
+    wrapper.unmount();
+  });
+
+  it("uses the proposed router during a trial despite the previous saved URL", async () => {
+    vi.mocked(listRouters).mockResolvedValue({
+      ...envelope,
+      routers: [
+        { ...envelope.routers[0], host: "previous.example.com" },
+        { ...envelope.routers[0], certificate: { status: "pending" } },
+      ],
+    });
+    const wrapper = mountStatus();
+    await wrapper.setProps({ savedUrl: "http://previous.example.com" });
+    await settle();
+    expect(wrapper.text()).toContain(en.domainStatus.synced);
+    expect(wrapper.text()).toContain(en.domainStatus.certState.pending);
+    expect(wrapper.text()).not.toContain(en.domainStatus.unsaved);
+    wrapper.unmount();
+  });
+
+  it("keeps certificate unknown when localhost is missing, even with router data", async () => {
+    vi.mocked(listRouters).mockResolvedValue({
+      nodes: [],
+      routers: [{ ...envelope.routers[0], certificate: { status: "issued" } }],
+    });
+    const wrapper = mountStatus();
+    await settle();
+    expect(wrapper.text()).toContain(en.domainStatus.missingLocalhost);
+    expect(wrapper.text()).toContain(en.domainStatus.certUnknown);
+    expect(wrapper.text()).not.toContain(en.domainStatus.certState.issued);
+    wrapper.unmount();
+  });
+
+  it("reads a failed certificate even when only the fallback HTTP router exists", async () => {
+    vi.mocked(listRouters).mockResolvedValue({
+      ...envelope,
+      routers: [{ ...envelope.routers[0], entrypoints: ["web"], certificate: { status: "failed" } }],
+    });
+    const wrapper = mountStatus();
+    await settle();
+    expect(wrapper.text()).toContain(en.domainStatus.certState.failed);
+    expect(wrapper.text()).toContain(en.domainStatus.pending);
+    wrapper.unmount();
+  });
+
   it("reports synced and unreported observations in both locales", async () => {
     expect(checkCatalogParity(en, vietnamese)).toEqual([]);
     const wrapper = mountStatus();

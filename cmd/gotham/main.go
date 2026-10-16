@@ -149,8 +149,10 @@ func runServe() int {
 	}
 
 	// Same durable fallback key the server resolves, so SSH keys sealed by the
-	// servers service survive a restart too.
+	// servers service survive a restart too, and the auth service seals TOTP
+	// secrets under the same credential-encryption key.
 	serverSecret, _, _ := server.ResolveSecretKey(snap.SecretKey, snap.CA.Dir)
+	authService.SetSecretKey(serverSecret)
 	serverService := servers.NewService(servers.Config{
 		Store:     authStore,
 		Authority: authority,

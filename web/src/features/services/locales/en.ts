@@ -33,7 +33,7 @@ const en = {
     unknownWithDetail: "Request failed: {detail}",
     nodeAgentError: "Node agent error: {detail}",
     nodeUnreachable: "The node agent is unreachable. Check the node status and retry.",
-    disabled: "Services are turned off on this control plane. Ask your platform admin to enable them.",
+    disabled: "Services are turned off on this control plane. The platform administrator must enable them.",
   },
   import: {
     title: "Import compose",

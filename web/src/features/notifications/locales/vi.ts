@@ -16,7 +16,7 @@ const vi = {
     unavailableTitle: "Thông báo không khả dụng",
     unavailableDesc:
       "Kênh thông báo đang tắt trên control plane này. " +
-      "Liên hệ quản trị viên nền tảng để bật.",
+      "Quản trị viên nền tảng phải bật.",
     empty: "Nhóm này chưa có kênh nào.",
     createFirst: "Tạo kênh đầu tiên",
   },
@@ -136,10 +136,10 @@ const vi = {
       "kênh có thể giữ phạm vi toàn nhóm.",
     unavailableApps:
       "Ứng dụng đang tắt trên control plane này; " +
-      "vẫn dùng được phạm vi cơ sở dữ liệu.",
+      "vẫn dùng được phạm vi cơ sở dữ liệu. Quản trị viên nền tảng phải bật.",
     unavailableDbs:
       "Cơ sở dữ liệu đang tắt trên control plane này; " +
-      "vẫn dùng được phạm vi ứng dụng.",
+      "vẫn dùng được phạm vi ứng dụng. Quản trị viên nền tảng phải bật.",
     enabled: "Đang bật",
     enabledAria: "Kênh đang bật",
     secretsNote:
@@ -161,7 +161,7 @@ const vi = {
     forbiddenRole: "Vai trò nhóm của bạn không cho phép hành động này.",
     featureDisabled:
       "Kênh thông báo đang tắt trên control plane này. " +
-      "Liên hệ quản trị viên nền tảng để bật.",
+      "Quản trị viên nền tảng phải bật.",
     invalidConfig: "Cấu hình kênh không hợp lệ.",
     requestFailed: "Yêu cầu thất bại",
     unexpected: "Đã xảy ra lỗi. Vui lòng thử lại.",

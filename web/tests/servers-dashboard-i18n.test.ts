@@ -285,7 +285,7 @@ describe("retained failure display", () => {
       "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     );
     expect(metricsFailureText({ message: "x", status: 404 }, "vi")).toBe(
-      "Chỉ số máy chủ đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật.",
+      "Chỉ số máy chủ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
     );
     expect(metricsFailureText({ message: "", status: 400 })).toBe(
       "Invalid metrics range. Pick another range and retry.",

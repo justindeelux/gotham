@@ -210,3 +210,33 @@ func TestAgentUnitWiring(t *testing.T) {
 		t.Error("agent unit must not set NoNewPrivileges=true: the fixed wrapper runs through sudo")
 	}
 }
+
+// TestAgentInstallerEnsuresDockerGroup guards the node-startup contract the
+// "install Docker from the App Store after the agent is registered" copy
+// depends on: the agent registers without Docker, so the installer must create
+// the docker group before enabling the unit, or systemd fails the unit at start
+// (status 216/GROUP) on a node that has no docker group yet. Both the
+// checked-in unit and the fallback unit install-agent.sh writes join that group.
+func TestAgentInstallerEnsuresDockerGroup(t *testing.T) {
+	installer := readRepoFile(t, "deploy/install-agent.sh")
+
+	groupIdx := strings.Index(installer, "groupadd --system docker")
+	if groupIdx < 0 {
+		t.Fatal("install-agent.sh does not create the docker group when it is missing")
+	}
+	enableIdx := strings.Index(installer, "systemctl enable gotham-agent.service")
+	if enableIdx < 0 {
+		t.Fatal("install-agent.sh does not enable the unit")
+	}
+	if groupIdx > enableIdx {
+		t.Error("install-agent.sh enables the unit before creating the docker group")
+	}
+	if !strings.Contains(installer, "SupplementaryGroups=docker") {
+		t.Error("install-agent.sh's fallback unit does not join the docker group")
+	}
+
+	unit := readRepoFile(t, "deploy/gotham-agent.service")
+	if !strings.Contains(unit, "SupplementaryGroups=docker") {
+		t.Error("deploy/gotham-agent.service does not join the docker group")
+	}
+}

@@ -410,8 +410,8 @@ test("feature-off failure shows the translated frame with the intact token", asy
       await switchLocale(page, locale);
       const expected =
         locale === "vi"
-          ? "Dịch vụ đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật."
-          : "Services are turned off on this control plane. Ask your platform admin to enable them.";
+          ? "Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật."
+          : "Services are turned off on this control plane. The platform administrator must enable them.";
       await expect(page.locator(".template-gallery")).toContainText(expected);
       // The retry control stays usable at every width.
       const retry = locale === "vi" ? "Thử lại" : "Retry";

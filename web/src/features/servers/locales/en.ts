@@ -270,7 +270,7 @@ const en = {
     unexpected: "Something went wrong. Please try again.",
     sessionExpired: "Your session expired. Please sign in again.",
     metricsDisabled:
-      "Server metrics are turned off on this control plane. Ask your platform admin to enable them.",
+      "Server metrics are turned off on this control plane. The platform administrator must enable them.",
     metricsRange: "Invalid metrics range. Pick another range and retry.",
   },
   toasts: {

@@ -32,7 +32,7 @@ const vi: typeof en = {
     databaseAgentUnreachable:
       "Không kết nối được node agent hoặc kiểm tra trạng thái thất bại. Kiểm tra trạng thái node rồi thử lại.",
     featureDisabled:
-      "Databases đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật.",
+      "Databases đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
     backupInvalidRequest:
       "Yêu cầu không hợp lệ. Kiểm tra biểu thức cron và các trường đích lưu trữ.",
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",

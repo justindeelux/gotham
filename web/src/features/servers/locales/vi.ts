@@ -271,7 +271,7 @@ const vi: ServersMessages = {
     unexpected: "Đã xảy ra lỗi. Vui lòng thử lại.",
     sessionExpired: "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     metricsDisabled:
-      "Chỉ số máy chủ đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật.",
+      "Chỉ số máy chủ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
     metricsRange: "Khoảng chỉ số không hợp lệ. Hãy chọn khoảng khác rồi thử lại.",
   },
   toasts: {

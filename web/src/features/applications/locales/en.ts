@@ -587,8 +587,8 @@ const en = {
     nameConflict: "An application with this name already exists in the target environment.",
     conflict: "The request conflicts with the current state of the application.",
     agentUnreachable: "The node agent is unreachable. Check the node status and retry.",
-    appsDisabled: "Applications are turned off on this control plane. Ask your platform admin to enable them.",
-    previewsDisabled: "Preview deployments are turned off on this control plane. Ask your platform admin to enable them.",
+    appsDisabled: "Applications are turned off on this control plane. The platform administrator must enable them.",
+    previewsDisabled: "Preview deployments are turned off on this control plane. The platform administrator must enable them.",
   },
   validation: {
     domain:

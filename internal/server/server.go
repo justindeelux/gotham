@@ -161,6 +161,7 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		return nil, fmt.Errorf("server: trusted proxies: %w", err)
 	}
 	warnTrustedProxyConfig(logger, trustedProxies, snap, oauthService != nil)
+	logDisabledFeatures(logger)
 
 	// Prefer the store's pool so the control plane does not open a second
 	// PostgreSQL connection just for the health check.
@@ -264,6 +265,35 @@ func warnTrustedProxyConfig(logger *slog.Logger, trusted []netip.Prefix, snap co
 	}
 	if len(trusted) == 0 && (oauth || strings.HasPrefix(snap.OAuth.GitHub.RedirectURL, "https://")) {
 		logger.Warn("no trusted proxies configured: X-Forwarded-For and X-Forwarded-Proto are ignored. Behind a TLS-terminating proxy this downgrades secure cookies and makes OAuth fail closed; set GOTHAM_TRUSTED_PROXIES to the proxy's address.")
+	}
+}
+
+// logDisabledFeatures emits one startup line per feature switched off by its
+// kill-switch env var, naming the module and the exact flag. Product copy no
+// longer names the environment variable, so this is the diagnostic handle a
+// platform administrator (and a support engineer reading the logs) needs to see
+// why the UI says a module is turned off.
+func logDisabledFeatures(logger *slog.Logger) {
+	for _, feature := range []struct {
+		module  string
+		flag    string
+		enabled bool
+	}{
+		{"Applications", deploy.FeatureEnv, deploy.Enabled()},
+		{"Previews", webhooks.FeatureEnv, webhooks.Enabled()},
+		{"Databases", databases.FeatureEnv, databases.Enabled()},
+		{"Services", services.FeatureEnv, services.Enabled()},
+		{"Teams", teams.FeatureEnv, teams.Enabled()},
+		{"Files", files.FeatureEnv, files.Enabled()},
+		{"Notifications", notifications.FeatureEnv, notifications.Enabled()},
+		{"Proxy", proxy.FeatureEnv, proxy.Enabled()},
+		{"Metrics", servers.FeatureEnv, servers.MetricsEnabled()},
+		{"Updates", updates.FeatureEnv, updates.Enabled()},
+	} {
+		if !feature.enabled {
+			logger.Warn("feature disabled on this control plane",
+				"module", feature.module, "flag", feature.flag+"=false")
+		}
 	}
 }
 

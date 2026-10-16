@@ -439,13 +439,13 @@ describe("I18N-8 retained channel test failure", () => {
     expect(vi.mocked(testChannel)).toHaveBeenCalledTimes(2);
     expect(resultText(wrapper)).toBe(
       "Test failed: Notification channels are turned off on this control " +
-        "plane. Ask your platform admin to enable them.",
+        "plane. The platform administrator must enable them.",
     );
     setLocale("vi", null);
     await nextTick();
     expect(resultText(wrapper)).toBe(
       "Gửi thử thất bại: Kênh thông báo đang tắt trên control plane này. " +
-        "Liên hệ quản trị viên nền tảng để bật.",
+        "Quản trị viên nền tảng phải bật.",
     );
     expect(vi.mocked(testChannel)).toHaveBeenCalledTimes(2);
     wrapper.unmount();

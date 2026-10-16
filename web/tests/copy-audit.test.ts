@@ -9,9 +9,11 @@ import editorVi from "@/features/files/locales/editorVi";
 /**
  * JUS-186: user-visible copy must never send a deployed instance to the
  * repository (file paths, docs) or to a shell it cannot run, and must not leak
- * an operator's env-var kill switch. These tokens mark copy that breaks that
- * rule; each surviving match has to be allow-listed with a reason below, so a
- * new one fails the build instead of shipping.
+ * an operator's env-var kill switch. These tokens mark text that breaks that
+ * rule in every user-reaching string source — the locale catalogs and the
+ * inline fallback strings the components pass when a key is missing. Each
+ * surviving match has to be allow-listed with a reason below, so a new one
+ * fails the build instead of shipping.
  */
 const DENYLIST: Array<{ label: string; pattern: RegExp }> = [
   { label: "repo file path", pattern: /\.md\b/ },
@@ -25,34 +27,62 @@ const DENYLIST: Array<{ label: string; pattern: RegExp }> = [
 ];
 
 /**
- * Allow-listed copy, keyed by "<module>.<dotted.key>", with the reason it may
- * keep a denylisted token. Keep this list explicit and tiny: it is the whole
- * record of where the rule is consciously waived.
+ * Allow-listed copy, keyed by "<id> [<label>]" (`id` is a catalog key like
+ * `servers.wizard.installHowto` or a source path under `src/`), with the reason
+ * it may keep that specific token. Keying on the exact token means a *new*
+ * `curl` line added to an allow-listed string still fails. Keep this list
+ * explicit and tiny: it is the whole record of where the rule is waived.
  */
 const ALLOWLIST: Record<string, string> = {
-  "instance-settings.unsupported":
+  "instance-settings.unsupported [repo file path]":
     "Handled by JUS-185 (instance-settings Network message); that parallel change owns this string, not this one.",
-  "servers.wizard.installHowto":
+  "instance-settings.unsupported [repo directory]":
+    "Handled by JUS-185 (instance-settings Network message); that parallel change owns this string, not this one.",
+  "servers.wizard.installHowto [gotham env var]":
     "The install wizard's one-time manual agent bootstrap, kept as the explicit alternative; it names the installer's own env var on purpose.",
+  "features/servers/components/AddServerWizard.vue [repo directory]":
+    "The install wizard's one-time manual agent bootstrap command (the explicit alternative), which reaches the installer sibling files; it is shown verbatim in the copyable block.",
+  "features/servers/components/AddServerWizard.vue [sudo command]":
+    "The install wizard's one-time manual agent bootstrap command (the explicit alternative); `sudo` is part of the command the operator copies.",
+  "features/servers/components/AddServerWizard.vue [gotham env var]":
+    "The install wizard's one-time manual agent bootstrap command (the explicit alternative); it sets the installer's own env vars on purpose.",
 };
 
-interface CopyEntry {
+interface Finding {
+  /** Catalog key (`<module>.<dotted.key>`) or source path under `src/`. */
   id: string;
-  locale: "en" | "vi";
+  label: string;
+  /** "en"/"vi" for a catalog hit, "src" for a source hit. */
+  where: string;
   value: string;
 }
 
-/** collectCopy flattens every discovered locale catalog to leaf strings. */
-function collectCopy(): CopyEntry[] {
-  const out: CopyEntry[] = [];
+/** findingKey is the allow-list key: the id plus the exact token matched. */
+function findingKey(finding: Finding): string {
+  return `${finding.id} [${finding.label}]`;
+}
+
+/** matches returns every denylist rule the value trips. */
+function matches(value: string, id: string, where: string): Finding[] {
+  return DENYLIST.filter((rule) => rule.pattern.test(value)).map((rule) => ({
+    id,
+    label: rule.label,
+    where,
+    value,
+  }));
+}
+
+/** catalogFindings scans every discovered locale catalog leaf. */
+function catalogFindings(): Finding[] {
+  const out: Finding[] = [];
   const add = (
     module: string,
     catalog: Record<string, unknown>,
-    locale: "en" | "vi",
+    where: string,
   ): void => {
     for (const [key, value] of leafEntries(catalog)) {
       if (typeof value === "string") {
-        out.push({ id: `${module}.${key}`, locale, value });
+        out.push(...matches(value, `${module}.${key}`, where));
       }
     }
   };
@@ -73,7 +103,6 @@ function collectCopy(): CopyEntry[] {
       "vi",
     ],
   ];
-
   for (const [modules, locale] of featureGlobs) {
     for (const [path, mod] of Object.entries(modules)) {
       const module = /features\/([^/]+)\/locales\/[a-z]+\.ts$/.exec(path)?.[1];
@@ -93,36 +122,84 @@ function collectCopy(): CopyEntry[] {
   return out;
 }
 
-const copy = collectCopy();
+/**
+ * Raw source of every user-reaching .ts/.vue file. Locale catalogs are
+ * excluded here: the catalog scan above covers them, keyed by i18n key.
+ */
+const sourceFiles = {
+  ...import.meta.glob<string>("@/features/**/*.{ts,vue}", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }),
+  ...import.meta.glob<string>("@/app/**/*.{ts,vue}", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }),
+  ...import.meta.glob<string>("@/shared/**/*.{ts,vue}", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }),
+} as Record<string, string>;
 
-/** violations returns every leaf string that matches a denylist token. */
-function violations(): Array<CopyEntry & { label: string }> {
-  const hits: Array<CopyEntry & { label: string }> = [];
-  for (const entry of copy) {
+/**
+ * contentLines drops lines that are wholly a comment so JSDoc and line comments
+ * do not trip the denylist. The codebase keeps comments on their own lines, so
+ * this matches a grep that skips comments without a full parser.
+ */
+function contentLines(text: string): string[] {
+  return text.split("\n").filter((line) => {
+    const trimmed = line.trimStart();
+    return !(
+      trimmed.startsWith("//") ||
+      trimmed.startsWith("*") ||
+      trimmed.startsWith("/*") ||
+      trimmed.startsWith("<!--")
+    );
+  });
+}
+
+/** sourceFindings scans the raw string literals of the user-reaching sources. */
+function sourceFindings(): Finding[] {
+  const out: Finding[] = [];
+  for (const [path, raw] of Object.entries(sourceFiles)) {
+    if (path.includes("/locales/")) {
+      continue;
+    }
+    const id = path.replace(/^.*\/src\//, "");
     for (const rule of DENYLIST) {
-      if (rule.pattern.test(entry.value)) {
-        hits.push({ ...entry, label: rule.label });
+      const hit = contentLines(raw).find((line) => rule.pattern.test(line));
+      if (hit !== undefined) {
+        out.push({ id, label: rule.label, where: "src", value: hit.trim() });
       }
     }
   }
-  return hits;
+  return out;
 }
 
+const findings = [...catalogFindings(), ...sourceFindings()];
+
 describe("copy audit denylist (JUS-186)", () => {
-  it("scans a non-trivial slice of the locale surface", () => {
-    expect(copy.length).toBeGreaterThan(500);
+  it("scans a non-trivial slice of the locale and source surface", () => {
+    expect(catalogFindings().length).toBeGreaterThan(0);
+    expect(Object.keys(sourceFiles).length).toBeGreaterThan(100);
   });
 
   it("flags no copy outside the allow-list", () => {
-    const offenders = violations()
-      .filter((hit) => !(hit.id in ALLOWLIST))
-      .map((hit) => `${hit.locale} ${hit.id} [${hit.label}]: ${hit.value}`);
+    const offenders = findings
+      .filter((finding) => !(findingKey(finding) in ALLOWLIST))
+      .map(
+        (finding) =>
+          `${finding.where} ${finding.id} [${finding.label}]: ${finding.value}`,
+      );
     expect(offenders).toEqual([]);
   });
 
   it("keeps the allow-list honest (no stale entries)", () => {
-    const matched = new Set(violations().map((hit) => hit.id));
-    const stale = Object.keys(ALLOWLIST).filter((id) => !matched.has(id));
+    const matched = new Set(findings.map(findingKey));
+    const stale = Object.keys(ALLOWLIST).filter((key) => !matched.has(key));
     expect(stale).toEqual([]);
   });
 });

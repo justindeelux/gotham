@@ -1551,6 +1551,41 @@ fi
 rm -rf "${FM_DIR}"
 pass "FM1: file manager answer defaults to no and drives the drop-in and agent.env"
 
+# --- G1: the docker group is ensured before the unit is enabled ---------------
+echo "==> G1 the docker group is ensured before enabling the unit"
+G1_DIR="${SCRATCH}/g1"
+mkdir -p "${G1_DIR}"
+printf 'dummy CA for the docker-group dry-run path\n' >"${G1_DIR}/ca.pem"
+# A bare node (no --full, Docker installed later from the App Store) has no
+# docker group, and the unit's SupplementaryGroups=docker then fails the start
+# with status 216/GROUP so the agent never registers. install-agent.sh must plan
+# to create the group and add the service user before it writes and enables the
+# unit.
+env GOTHAM_BASE_URL=http://127.0.0.1:9 GOTHAM_VERSION=v9.9.9-test TMPDIR="${G1_DIR}" \
+    sh "${AGENT_INSTALLER}" --ca "${G1_DIR}/ca.pem" --dry-run >"${G1_DIR}/dry.log" 2>&1 \
+    || fail "G1: --dry-run failed"
+grep -q 'groupadd --system docker' "${G1_DIR}/dry.log" \
+    || fail "G1: --dry-run must plan to create the docker group when it is missing"
+grep -q 'usermod -aG docker gotham-agent' "${G1_DIR}/dry.log" \
+    || fail "G1: --dry-run must add the service user to the docker group"
+g1_group="$(grep -n 'groupadd --system docker' "${G1_DIR}/dry.log" | head -n1 | cut -d: -f1)"
+g1_unit="$(grep -n 'write /etc/systemd/system/gotham-agent.service' "${G1_DIR}/dry.log" | head -n1 | cut -d: -f1)"
+g1_enable="$(grep -n 'systemctl enable gotham-agent.service' "${G1_DIR}/dry.log" | head -n1 | cut -d: -f1)"
+if [ -z "${g1_group}" ] || [ -z "${g1_unit}" ] || [ -z "${g1_enable}" ]; then
+    fail "G1: could not locate the group/unit/enable steps in the dry-run log"
+elif [ "${g1_group}" -ge "${g1_unit}" ] || [ "${g1_unit}" -ge "${g1_enable}" ]; then
+    fail "G1: the docker group must be created before the unit is written and enabled"
+fi
+# Both the checked-in unit and the fallback unit written without a checkout set
+# SupplementaryGroups=docker, so the guard above is what keeps a Docker-less node
+# bootable; pin the contract statically too.
+grep -q '^SupplementaryGroups=docker$' "${SCRIPT_DIR}/gotham-agent.service" \
+    || fail "G1: the checked-in unit no longer joins the docker group"
+grep -q 'SupplementaryGroups=docker' "${AGENT_INSTALLER}" \
+    || fail "G1: the fallback unit in install-agent.sh no longer joins the docker group"
+rm -rf "${G1_DIR}"
+pass "G1: docker group ensured before the unit is written and enabled"
+
 if [ "${FAILURES}" -eq 0 ]; then
     echo "ALL AGENT-INSTALL TESTS PASSED"
     exit 0

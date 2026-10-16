@@ -64,7 +64,7 @@ const vi = {
     permissionTitle: "Không có quyền truy cập",
     permissionHint: "Agent trên node không đọc được thư mục này — volume do container tạo thường thuộc sở hữu root.",
     disabledTitle: "Quản lý tệp đang tắt",
-    disabledHint: "Quản lý tệp đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật.",
+    disabledHint: "Quản lý tệp đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
     readOnlyTitle: "Thư mục gốc này chỉ đọc",
     readOnlyHint: "ComposeGuard kiểm tra thư mục gốc này khi triển khai và lần ComposeUp kế tiếp sẽ ghi đè chỉnh sửa cục bộ. Mở và tải về vẫn dùng được; thao tác ghi bị tắt.",
     selectionCount: "Đã chọn {count}",
@@ -283,7 +283,7 @@ const vi = {
     insufficientStorage: "Node không đủ dung lượng trống cho tệp này.",
     agentOutdated: "Hãy cập nhật agent trên node — bản này chưa có quản lý tệp.",
     agentUnavailable: "Không kết nối được agent trên node. Kiểm tra trạng thái node rồi thử lại.",
-    disabled: "Quản lý tệp đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật.",
+    disabled: "Quản lý tệp đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
   },
 };
 

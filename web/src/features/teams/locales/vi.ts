@@ -17,7 +17,7 @@ const vi = {
     newTeam: "Nhóm mới",
     unavailableTitle: "Nhóm không khả dụng",
     unavailableDesc:
-      "Quản lý nhóm đang tắt trên control plane này. Liên hệ quản trị viên nền tảng để bật.",
+      "Quản lý nhóm đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
     yourRole: "vai trò của bạn: {role}",
     personal: "cá nhân",
     membersTab: "Thành viên ({count})",

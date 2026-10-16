@@ -311,6 +311,9 @@ async function loadAuthHarness() {
     "@/features/templates": [
       "export const useTemplatesStore = () => globalThis.__userStores.templates;",
     ].join("\n"),
+    "@/features/toolchain": [
+      "export const useToolchainStore = () => globalThis.__userStores.toolchain;",
+    ].join("\n"),
   };
   await build({
     stdin: {
@@ -1155,7 +1158,7 @@ async function main() {
         [
           "teams", "servers", "applications", "databases", "notifications",
           "services", "backups", "providers", "templates", "proxy",
-          "projects", "github-app",
+          "projects", "github-app", "toolchain",
         ].map((name) => [
           name,
           { reset: () => seen.push(name) },
@@ -1176,7 +1179,7 @@ async function main() {
       });
       await store.logout();
       assert(postCalls.length === 1, "logout revokes the refresh token");
-      assert(seen.length === 12, `all twelve stores reset (saw ${seen.length})`);
+      assert(seen.length === 13, `all thirteen stores reset (saw ${seen.length})`);
       assert(store.accessToken === null, "session cleared");
       store.setSession({
         user: { email: "b@example.com" },
@@ -1184,7 +1187,7 @@ async function main() {
         refresh_token: "refresh",
       });
       store.clearSession();
-      assert(seen.length === 24, "clearSession resets too (401 path)");
+      assert(seen.length === 26, "clearSession resets too (401 path)");
     } finally {
       delete globalThis.__userStores;
       delete globalThis.__authHttp;

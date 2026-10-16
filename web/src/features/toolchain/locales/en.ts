@@ -14,6 +14,7 @@ const en = {
     noNodes: "No nodes yet. Add a server first.",
     searchPlaceholder: "Search tools…",
     installSelected: "Install selected",
+    retry: "Retry",
     queue: "Queue",
     emptyTools: "No tools reported for this node",
     emptyToolsHint: "The agent on this node did not report any tools.",
@@ -23,6 +24,12 @@ const en = {
     skipped: "Skipped {tools}: already queued",
     enqueued: "Queued {count}",
     uncategorized: "Other",
+  },
+  columns: {
+    tool: "Tool",
+    status: "Status",
+    queue: "Queue",
+    actions: "Actions",
   },
   status: {
     installed: "Installed {version}",
@@ -48,6 +55,7 @@ const en = {
     unexpected: "Something went wrong. Please try again.",
     notFound: "Node not found. It may have been removed — pick another node.",
     conflict: "That job already left the queue, so it cannot be canceled.",
+    agentUnavailable: "The node agent is unreachable. Check that it is online and retry.",
   },
 };
 

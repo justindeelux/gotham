@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 import { http } from "@/shared/api/http";
 import type { ApiError } from "@/shared/api/http";
 import { activeLocale } from "@/shared/i18n/locale";
@@ -10,6 +8,7 @@ import {
   toolchainCancelEnvelopeSchema,
   toolchainEnqueueEnvelopeSchema,
   toolchainJobDetailEnvelopeSchema,
+  toolchainJobSchema,
   toolchainJobsEnvelopeSchema,
   toolchainToolsEnvelopeSchema,
 } from "@/features/toolchain/schemas/toolchain";
@@ -106,6 +105,16 @@ export function isTerminalJobStatus(status: ToolchainJobStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "canceled";
 }
 
+/**
+ * isToolSelectable reports whether a row can be checked for bulk install:
+ * only tools that are missing and installable. Detect-only rows and
+ * already-installed rows render a disabled checkbox with a visible reason
+ * instead (see ToolchainPage).
+ */
+export function isToolSelectable(tool: ToolchainTool): boolean {
+  return !tool.installed && tool.installable;
+}
+
 function pathOf(serverId: string): string {
   return `/servers/${encodeURIComponent(serverId)}`;
 }
@@ -181,34 +190,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-const jobStatuses: ReadonlySet<string> = new Set([
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "canceled",
-]);
-
 function asJob(value: unknown): ToolchainJob | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  if (typeof value.id !== "string" || value.id === "") {
-    return null;
-  }
-  if (typeof value.tool_id !== "string" || typeof value.server_id !== "string") {
-    return null;
-  }
-  if (value.action !== "install" && value.action !== "uninstall") {
-    return null;
-  }
-  if (typeof value.status !== "string" || !jobStatuses.has(value.status)) {
-    return null;
-  }
-  if (typeof value.created_at !== "string") {
-    return null;
-  }
-  return value as unknown as ToolchainJob;
+  const parsed = toolchainJobSchema.safeParse(value);
+  return parsed.success ? (parsed.data as ToolchainJob) : null;
 }
 
 /**
@@ -297,11 +281,8 @@ export function describeToolchainError(error: unknown, locale?: string | null): 
   if (apiError.status === 409) {
     return detail || errors.conflict;
   }
+  if (apiError.status === 502) {
+    return detail || errors.agentUnavailable;
+  }
   return detail || errors.unexpected;
 }
-
-/** enqueueSchema validates the multi-select enqueue form (at least one tool). */
-export const enqueueFormSchema = z.object({
-  tools: z.array(z.string()).min(1),
-  action: z.enum(["install", "uninstall"]),
-});

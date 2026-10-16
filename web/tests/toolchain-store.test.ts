@@ -1,8 +1,20 @@
-// Toolchain App Store store (JUS-177): queue state, enqueue/cancel actions,
-// realtime job-frame application, and the JUS-178 modal hook point. The API
-// module is mocked so the store is exercised without axios or a socket.
+// Toolchain App Store store (JUS-177, fix round 1): queue state,
+// enqueue/cancel actions, socket lifecycle (disconnect on unmount/sign-out),
+// reconnect resync, refresh race guards, and the JUS-178 modal hook point.
+// The API module and the realtime client are mocked; socket callbacks are
+// driven manually through the captured options.
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { useWebSocket } from "@/shared/composables/useWebSocket";
+import type {
+  UseWebSocketOptions,
+  WebSocketMessage,
+} from "@/shared/composables/useWebSocket";
+
+vi.mock("@/shared/composables/useWebSocket", () => ({
+  useWebSocket: vi.fn(),
+}));
 
 vi.mock("@/features/toolchain/api/toolchain", async (importOriginal) => {
   const actual =
@@ -19,6 +31,7 @@ vi.mock("@/features/toolchain/api/toolchain", async (importOriginal) => {
 import {
   cancelJob,
   enqueueJobs,
+  isToolSelectable,
   listJobs,
   listTools,
   parseToolchainJobFrame,
@@ -27,10 +40,19 @@ import {
 import type { ToolchainJob, ToolchainTool } from "@/features/toolchain/api/toolchain";
 import { useToolchainStore } from "@/features/toolchain/stores/toolchain";
 
+const useWebSocketMock = vi.mocked(useWebSocket);
 const listToolsMock = vi.mocked(listTools);
 const listJobsMock = vi.mocked(listJobs);
 const enqueueJobsMock = vi.mocked(enqueueJobs);
 const cancelJobMock = vi.mocked(cancelJob);
+
+const socketStub = {
+  subscribe: vi.fn(),
+  unsubscribe: vi.fn(),
+  close: vi.fn(),
+};
+
+let capturedOptions: UseWebSocketOptions | null = null;
 
 function tool(overrides: Partial<ToolchainTool> = {}): ToolchainTool {
   return {
@@ -62,8 +84,39 @@ function frame(type: string, data: string): string {
   return JSON.stringify({ channel: "logs:srv-1:toolchain", type, data });
 }
 
+/** socketMessage builds the client message the store's handler reads. */
+function socketMessage(raw: string, kind: WebSocketMessage["kind"] = "data"): WebSocketMessage {
+  return {
+    raw,
+    payload: null,
+    channel: "logs:srv-1:toolchain",
+    kind,
+    receivedAt: Date.now(),
+  };
+}
+
+/** deferred returns a promise with its settle functions exposed. */
+function deferred<T>() {
+  let resolve!: (_value: T) => void;
+  let reject!: (_reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
+  capturedOptions = null;
+  socketStub.subscribe.mockClear();
+  socketStub.unsubscribe.mockClear();
+  socketStub.close.mockClear();
+  useWebSocketMock.mockReset();
+  useWebSocketMock.mockImplementation((options: UseWebSocketOptions) => {
+    capturedOptions = options;
+    return socketStub as unknown as ReturnType<typeof useWebSocket>;
+  });
   listToolsMock.mockReset();
   listJobsMock.mockReset();
   enqueueJobsMock.mockReset();
@@ -80,19 +133,106 @@ describe("subscribe", () => {
     expect(store.serverId).toBe("srv-1");
     expect(store.tools).toHaveLength(1);
     expect(store.jobsList).toHaveLength(1);
-    expect(listToolsMock).toHaveBeenCalledWith("srv-1");
+    expect(socketStub.subscribe).toHaveBeenCalledWith("logs:srv-1:toolchain");
   });
 
-  it("clears node state when switching nodes", async () => {
+  it("switches the channel subscription when switching nodes", async () => {
     const store = useToolchainStore();
-    listJobsMock.mockImplementation((id: string) =>
-      Promise.resolve(id === "srv-1" ? [job()] : []),
-    );
     await store.subscribe("srv-1");
-    expect(store.jobsList).toHaveLength(1);
     await store.subscribe("srv-2");
+    expect(socketStub.unsubscribe).toHaveBeenCalledWith("logs:srv-1:toolchain");
+    expect(socketStub.subscribe).toHaveBeenCalledWith("logs:srv-2:toolchain");
+  });
+});
+
+describe("disconnect and reset", () => {
+  it("reset unsubscribes and closes the socket (sign-out leaves nothing live)", async () => {
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    store.reset();
+    expect(socketStub.unsubscribe).toHaveBeenCalledWith("logs:srv-1:toolchain");
+    expect(socketStub.close).toHaveBeenCalled();
+    expect(store.serverId).toBe("");
+    // A later subscribe dials a fresh socket instead of reusing the dead one.
+    await store.subscribe("srv-1");
+    expect(useWebSocketMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("disconnect is safe to call twice and with no socket", () => {
+    const store = useToolchainStore();
+    expect(() => store.disconnect()).not.toThrow();
+    store.disconnect();
+    expect(socketStub.close).not.toHaveBeenCalled();
+  });
+
+  it("applies live job frames from the channel into the queue", async () => {
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    expect(capturedOptions).not.toBeNull();
+    capturedOptions?.onMessage?.(
+      socketMessage(frame("toolchain_job", JSON.stringify(job({ status: "running" })))),
+    );
+    expect(store.jobs["job-1"]?.status).toBe("running");
+  });
+});
+
+describe("reconnect resync", () => {
+  it("refreshes the queue on reconnect, not on the first connect", async () => {
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    expect(capturedOptions).not.toBeNull();
+    const callsAfterSubscribe = listToolsMock.mock.calls.length;
+    capturedOptions?.onStatusChange?.("open");
+    expect(listToolsMock.mock.calls.length).toBe(callsAfterSubscribe);
+    capturedOptions?.onStatusChange?.("open");
+    expect(listToolsMock.mock.calls.length).toBe(callsAfterSubscribe + 1);
+  });
+
+  it("refreshes when the subscription is denied", async () => {
+    const store = useToolchainStore();
+    await store.subscribe("srv-1");
+    const callsAfterSubscribe = listToolsMock.mock.calls.length;
+    capturedOptions?.onMessage?.(socketMessage("{}", "denied"));
+    expect(listToolsMock.mock.calls.length).toBe(callsAfterSubscribe + 1);
+  });
+});
+
+describe("refresh race", () => {
+  it("keeps the newer node's data when an older fetch resolves late", async () => {
+    const store = useToolchainStore();
+    const first = deferred<ToolchainTool[]>();
+    const second = deferred<ToolchainTool[]>();
+    listToolsMock.mockImplementation((id: string) =>
+      id === "srv-1" ? first.promise : second.promise,
+    );
+    listJobsMock.mockResolvedValue([]);
+    const p1 = store.subscribe("srv-1");
+    const p2 = store.subscribe("srv-2");
+    first.resolve([tool({ id: "old-tool", name: "Old" })]);
+    await p1;
+    second.resolve([tool({ id: "new-tool", name: "New" })]);
+    await p2;
+    expect(store.serverId).toBe("srv-2");
+    expect(store.tools.map((item) => item.id)).toEqual(["new-tool"]);
+    expect(store.loading).toBe(false);
+  });
+
+  it("does not leak an older node's error into the newer node's view", async () => {
+    const store = useToolchainStore();
+    const first = deferred<ToolchainTool[]>();
+    listToolsMock.mockImplementation((id: string) =>
+      id === "srv-1" ? first.promise : Promise.resolve([tool()]),
+    );
+    listJobsMock.mockResolvedValue([]);
+    const p1 = store.subscribe("srv-1");
+    const p2 = store.subscribe("srv-2");
+    await p2;
+    first.reject(new Error("node A exploded"));
+    await p1;
+    expect(store.serverId).toBe("srv-2");
+    expect(store.failure).toBeNull();
     expect(store.tools).toHaveLength(1);
-    expect(store.jobsList).toHaveLength(0);
+    expect(store.loading).toBe(false);
   });
 });
 
@@ -130,16 +270,36 @@ describe("jobForTool", () => {
     expect(store.jobForTool("docker")?.id).toBe("job-2");
     expect(store.activeJobs).toHaveLength(1);
   });
+
+  it("never downgrades a terminal state from a delayed frame", () => {
+    const store = useToolchainStore();
+    store.applyJob(job({ status: "succeeded" }));
+    store.applyJob(job({ status: "running" }));
+    expect(store.jobs["job-1"]?.status).toBe("succeeded");
+  });
+});
+
+describe("isToolSelectable", () => {
+  it("allows only missing, installable tools", () => {
+    expect(isToolSelectable(tool({ installed: false, installable: true }))).toBe(true);
+    expect(isToolSelectable(tool({ installed: true, installable: true }))).toBe(false);
+    expect(isToolSelectable(tool({ installed: false, installable: false }))).toBe(false);
+    expect(
+      isToolSelectable(tool({ installed: false, installable: false, uninstallable: false })),
+    ).toBe(false);
+  });
 });
 
 describe("queue modal hook", () => {
-  it("opens and closes without rendering a modal (JUS-178 owns the markup)", async () => {
+  it("opens with an optional job focus and closes clean (JUS-178 owns the markup)", () => {
     const store = useToolchainStore();
     expect(store.queueModalOpen).toBe(false);
-    store.openQueueModal();
+    store.openQueueModal("job-1");
     expect(store.queueModalOpen).toBe(true);
+    expect(store.queueModalJobId).toBe("job-1");
     store.closeQueueModal();
     expect(store.queueModalOpen).toBe(false);
+    expect(store.queueModalJobId).toBeNull();
   });
 });
 
@@ -149,6 +309,10 @@ describe("parseToolchainJobFrame", () => {
     expect(parsed?.id).toBe("job-1");
     expect(parseToolchainJobFrame(frame("toolchain_log", "{}"))).toBeNull();
     expect(parseToolchainJobFrame("not json")).toBeNull();
+    expect(parseToolchainJobFrame(frame("toolchain_job", "{broken"))).toBeNull();
+    expect(
+      parseToolchainJobFrame(frame("toolchain_job", JSON.stringify({ id: "x" }))),
+    ).toBeNull();
   });
 });
 
@@ -159,5 +323,8 @@ describe("parseToolchainLogFrame", () => {
     );
     expect(parsed).toMatchObject({ job_id: "job-1", seq: 7 });
     expect(parseToolchainLogFrame(frame("toolchain_job", "{}"))).toBeNull();
+    expect(
+      parseToolchainLogFrame(frame("toolchain_log", JSON.stringify({ seq: 1 }))),
+    ).toBeNull();
   });
 });

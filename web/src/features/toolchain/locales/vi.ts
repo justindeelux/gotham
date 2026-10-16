@@ -15,6 +15,7 @@ const vi: typeof en = {
     noNodes: "Chưa có nút nào. Hãy thêm máy chủ trước.",
     searchPlaceholder: "Tìm công cụ…",
     installSelected: "Cài các mục đã chọn",
+    retry: "Thử lại",
     queue: "Hàng đợi",
     emptyTools: "Nút này chưa báo cáo công cụ nào",
     emptyToolsHint: "Agent trên nút này chưa báo cáo công cụ nào.",
@@ -24,6 +25,12 @@ const vi: typeof en = {
     skipped: "Đã bỏ qua {tools}: đã có trong hàng đợi",
     enqueued: "Đã xếp hàng {count}",
     uncategorized: "Khác",
+  },
+  columns: {
+    tool: "Công cụ",
+    status: "Trạng thái",
+    queue: "Hàng đợi",
+    actions: "Thao tác",
   },
   status: {
     installed: "Đã cài {version}",
@@ -49,6 +56,7 @@ const vi: typeof en = {
     unexpected: "Đã xảy ra lỗi. Vui lòng thử lại.",
     notFound: "Không tìm thấy nút. Nó có thể đã bị xóa — hãy chọn nút khác.",
     conflict: "Tác vụ đã rời hàng đợi nên không thể hủy.",
+    agentUnavailable: "Không kết nối được agent trên nút. Kiểm tra nút đang trực tuyến rồi thử lại.",
   },
 };
 

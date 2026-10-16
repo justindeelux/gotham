@@ -13,7 +13,7 @@ import {
 } from "naive-ui";
 import type { DataTableColumns, SelectOption } from "naive-ui";
 import { useMessage } from "naive-ui";
-import { computed, h, onMounted, ref, watch } from "vue";
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { VNode } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -21,8 +21,10 @@ import { useServersStore } from "@/features/servers/stores/servers";
 import {
   describeToolchainError,
   isTerminalJobStatus,
+  isToolSelectable,
 } from "@/features/toolchain/api/toolchain";
 import type {
+  ToolchainAction,
   ToolchainJob,
   ToolchainTool,
 } from "@/features/toolchain/api/toolchain";
@@ -36,7 +38,7 @@ const store = useToolchainStore();
 
 const searchQuery = ref("");
 const checkedKeys = ref<string[]>([]);
-const busyTool = ref<string | null>(null);
+const pendingTools = ref<Record<string, boolean>>({});
 const busyBulk = ref(false);
 
 const nodeOptions = computed<SelectOption[]>(() =>
@@ -92,7 +94,7 @@ const groupedTools = computed<ToolGroup[]>(() => {
 const selectableIds = computed<string[]>(() =>
   checkedKeys.value.filter((id) => {
     const tool = store.tools.find((item) => item.id === id);
-    return tool !== undefined && !tool.installed && tool.installable;
+    return tool !== undefined && isToolSelectable(tool);
   }),
 );
 
@@ -110,10 +112,11 @@ function queueType(status: ToolchainJob["status"]): "default" | "info" | "succes
   }
 }
 
-async function handleInstall(tool: ToolchainTool): Promise<void> {
-  busyTool.value = tool.id;
+/** runToolAction enqueues one tool action with a per-row spinner. */
+async function runToolAction(tool: ToolchainTool, action: ToolchainAction): Promise<void> {
+  pendingTools.value = { ...pendingTools.value, [tool.id]: true };
   try {
-    const skipped = await store.enqueue([tool.id], "install");
+    const skipped = await store.enqueue([tool.id], action);
     if (skipped.length > 0) {
       message.warning(t("toolchain.page.skipped", { tools: skipped.join(", ") }));
     } else {
@@ -122,23 +125,9 @@ async function handleInstall(tool: ToolchainTool): Promise<void> {
   } catch (err) {
     message.error(describeToolchainError(err));
   } finally {
-    busyTool.value = null;
-  }
-}
-
-async function handleUninstall(tool: ToolchainTool): Promise<void> {
-  busyTool.value = tool.id;
-  try {
-    const skipped = await store.enqueue([tool.id], "uninstall");
-    if (skipped.length > 0) {
-      message.warning(t("toolchain.page.skipped", { tools: skipped.join(", ") }));
-    } else {
-      message.success(t("toolchain.page.enqueued", { count: 1 }));
-    }
-  } catch (err) {
-    message.error(describeToolchainError(err));
-  } finally {
-    busyTool.value = null;
+    const next = { ...pendingTools.value };
+    delete next[tool.id];
+    pendingTools.value = next;
   }
 }
 
@@ -154,7 +143,10 @@ async function handleInstallSelected(): Promise<void> {
     if (skipped.length > 0) {
       message.warning(t("toolchain.page.skipped", { tools: skipped.join(", ") }));
     }
-    message.success(t("toolchain.page.enqueued", { count: ids.length - skipped.length }));
+    const created = ids.length - skipped.length;
+    if (created > 0) {
+      message.success(t("toolchain.page.enqueued", { count: created }));
+    }
   } catch (err) {
     message.error(describeToolchainError(err));
   } finally {
@@ -163,13 +155,15 @@ async function handleInstallSelected(): Promise<void> {
 }
 
 async function handleCancel(job: ToolchainJob): Promise<void> {
-  busyTool.value = job.tool_id;
+  pendingTools.value = { ...pendingTools.value, [job.tool_id]: true };
   try {
     await store.cancel(job.id);
   } catch (err) {
     message.error(describeToolchainError(err));
   } finally {
-    busyTool.value = null;
+    const next = { ...pendingTools.value };
+    delete next[job.tool_id];
+    pendingTools.value = next;
   }
 }
 
@@ -183,31 +177,48 @@ async function selectNode(serverId: string): Promise<void> {
   }
 }
 
+async function handleRetry(): Promise<void> {
+  if (store.serverId === "") {
+    return;
+  }
+  try {
+    await store.refresh();
+  } catch (err) {
+    message.error(describeToolchainError(err));
+  }
+}
+
 const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
-  { type: "selection" },
   {
-    title: "Tool",
+    type: "selection",
+    // Detect-only and already-installed rows cannot be installed: their
+    // checkbox is disabled, and the row itself shows why (the detect-only
+    // note or the installed badge).
+    disabled: (row) => !isToolSelectable(row),
+  },
+  {
+    title: t("toolchain.columns.tool"),
     key: "name",
     minWidth: 220,
     render: (row) =>
-      h("div", { style: "display:flex;flex-direction:column;gap:2px" }, [
-        h("span", { style: "color:var(--fg-2);font-weight:600" }, row.name),
+      h("div", { class: "tool-cell" }, [
+        h("span", { class: "tool-name" }, row.name),
         row.description
-          ? h("span", { class: "muted", style: "font-size:var(--text-xs)" }, row.description)
+          ? h("span", { class: "muted tool-meta" }, row.description)
           : null,
         !row.installable && !row.uninstallable
-          ? h("span", { class: "muted", style: "font-size:var(--text-xs)" }, t("toolchain.page.detectOnlyNote"))
+          ? h("span", { class: "muted tool-meta" }, t("toolchain.page.detectOnlyNote"))
           : null,
       ]),
   },
   {
-    title: "Status",
+    title: t("toolchain.columns.status"),
     key: "status",
     width: 170,
     render: (row) => h(ToolStatusBadge, { tool: row }),
   },
   {
-    title: "Queue",
+    title: t("toolchain.columns.queue"),
     key: "queue",
     width: 150,
     render: (row) => {
@@ -227,8 +238,7 @@ const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
               ? h(NButton, {
                   size: "tiny",
                   ghost: true,
-                  loading: busyTool.value === row.id,
-                  "aria-label": t("toolchain.actions.cancel"),
+                  loading: pendingTools.value[row.id] === true,
                   onClick: () => void handleCancel(job),
                 }, { default: () => t("toolchain.actions.cancel") })
               : null,
@@ -238,7 +248,7 @@ const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
     },
   },
   {
-    title: "Actions",
+    title: t("toolchain.columns.actions"),
     key: "actions",
     width: 200,
     render: (row) => {
@@ -249,8 +259,8 @@ const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
             size: "small",
             type: "primary",
             ghost: true,
-            loading: busyTool.value === row.id,
-            onClick: () => void handleInstall(row),
+            loading: pendingTools.value[row.id] === true,
+            onClick: () => void runToolAction(row, "install"),
           }, { default: () => t("toolchain.actions.install") }),
         );
       }
@@ -259,8 +269,8 @@ const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
           h(NButton, {
             size: "small",
             ghost: true,
-            loading: busyTool.value === row.id,
-            onClick: () => void handleUninstall(row),
+            loading: pendingTools.value[row.id] === true,
+            onClick: () => void runToolAction(row, "uninstall"),
           }, { default: () => t("toolchain.actions.uninstall") }),
         );
       }
@@ -273,7 +283,9 @@ const toolColumns = computed<DataTableColumns<ToolchainTool>>(() => [
 ]);
 
 onMounted(() => {
-  void serversStore.fetchServers().catch(() => undefined);
+  void serversStore
+    .fetchServers()
+    .catch((err: unknown) => message.error(describeToolchainError(err)));
   if (serversStore.servers.length > 0 && store.serverId === "") {
     void selectNode(serversStore.servers[0].id);
   } else if (store.serverId !== "") {
@@ -281,11 +293,33 @@ onMounted(() => {
   }
 });
 
+onBeforeUnmount(() => {
+  // Release the socket and the channel: without this the realtime client
+  // (created outside a component scope) would keep buffering log lines in
+  // the background after the route is left.
+  store.disconnect();
+});
+
 watch(
   () => serversStore.servers.length,
   () => {
     if (store.serverId === "" && serversStore.servers.length > 0) {
       void selectNode(serversStore.servers[0].id);
+    }
+  },
+);
+
+// A tool that becomes installed (or detect-only) while checked must not
+// stay selected: drop rows that are no longer installable.
+watch(
+  () => store.tools,
+  (tools) => {
+    const allowed = new Set(
+      tools.filter((tool) => isToolSelectable(tool)).map((tool) => tool.id),
+    );
+    const next = checkedKeys.value.filter((id) => allowed.has(id));
+    if (next.length !== checkedKeys.value.length) {
+      checkedKeys.value = next;
     }
   },
 );
@@ -306,7 +340,7 @@ watch(
           @click="store.openQueueModal()"
         >
           {{ $t("toolchain.page.queue") }}
-          <span v-if="store.activeJobs.length > 0" class="nav-count">
+          <span v-if="store.activeJobs.length > 0" class="count-pill">
             {{ store.activeJobs.length }}
           </span>
         </NButton>
@@ -317,7 +351,7 @@ watch(
           @click="() => void handleInstallSelected()"
         >
           {{ $t("toolchain.page.installSelected") }}
-          <span v-if="selectableIds.length > 0" class="nav-count">
+          <span v-if="selectableIds.length > 0" class="count-pill">
             {{ selectableIds.length }}
           </span>
         </NButton>
@@ -326,28 +360,37 @@ watch(
 
     <NCard>
       <NSpace vertical :size="12">
-        <NSpace :size="12" align="center">
+        <div class="toolbar-row">
           <NSelect
             :value="store.serverId === '' ? null : store.serverId"
             :options="nodeOptions"
             :placeholder="$t('toolchain.page.selectNodePlaceholder')"
             :aria-label="$t('toolchain.page.selectNode')"
-            style="min-width: 240px"
+            :loading="serversStore.loading"
+            :disabled="serversStore.loading"
+            class="node-select"
             @update:value="(id: string) => void selectNode(id)"
           />
           <NInput
             v-model:value="searchQuery"
             :placeholder="$t('toolchain.page.searchPlaceholder')"
             clearable
-            style="max-width: 280px"
+            class="search-input"
           />
-        </NSpace>
+        </div>
 
-        <NAlert v-if="errorText" type="error" :show-icon="true">
-          {{ errorText }}
-        </NAlert>
+        <template v-if="errorText">
+          <NAlert type="error" :show-icon="true">
+            {{ errorText }}
+          </NAlert>
+          <div>
+            <NButton size="small" ghost @click="() => void handleRetry()">
+              {{ $t("toolchain.page.retry") }}
+            </NButton>
+          </div>
+        </template>
 
-        <NSpin v-if="store.loading" :show="true" />
+        <NSpin v-else-if="store.loading" :show="true" />
 
         <NEmpty
           v-else-if="store.serverId === ''"
@@ -388,13 +431,13 @@ watch(
 .toolchain-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
 }
 .page-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 16px;
+  gap: var(--space-4);
   flex-wrap: wrap;
 }
 .eyebrow {
@@ -402,7 +445,7 @@ watch(
   font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-1);
 }
 .page-head h1 {
   margin: 0;
@@ -411,13 +454,37 @@ watch(
 }
 .page-desc {
   color: var(--fg-3);
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   max-width: 640px;
 }
 .page-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   align-items: center;
+}
+.toolbar-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+.node-select {
+  min-width: 240px;
+}
+.search-input {
+  max-width: 280px;
+}
+.tool-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.tool-name {
+  color: var(--fg-2);
+  font-weight: 600;
+}
+.tool-meta {
+  font-size: var(--text-xs);
 }
 .group-title {
   font-size: var(--text-sm);
@@ -425,9 +492,9 @@ watch(
   color: var(--fg-2);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  margin: 8px 0 4px;
+  margin: var(--space-2) 0 var(--space-1);
 }
-.nav-count {
-  margin-left: 6px;
+.count-pill {
+  margin-left: var(--space-2);
 }
 </style>

@@ -9,6 +9,7 @@ import {
   NSpace,
   NSpin,
   NText,
+  useMessage,
 } from "naive-ui";
 import type { FormInst } from "naive-ui";
 import { computed, reactive, ref, watch } from "vue";
@@ -23,6 +24,7 @@ import {
 import { totpCodeRules } from "@/features/profile/schemas/totp";
 import QrCode from "@/shared/components/QrCode.vue";
 import { useCopyText } from "@/shared/composables/useCopyText";
+import { downloadText } from "@/shared/utils/download";
 
 /**
  * TotpSetupDialog runs the two-factor enrollment (JUS-196): it shows the
@@ -42,6 +44,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const authStore = useAuthStore();
+const message = useMessage();
 const { copyText } = useCopyText();
 
 const hasPassword = computed<boolean>(() => authStore.user?.has_password ?? true);
@@ -56,9 +59,18 @@ const errorMessage = computed<string>(() =>
   rawError.value === null ? "" : describeAuthError(rawError.value),
 );
 
+/**
+ * gateCodes is true while the one-time recovery codes are on screen. The modal
+ * must not be dismissable then (no mask click, no Esc), so the codes cannot be
+ * lost before the user acknowledges them.
+ */
+const gateCodes = computed<boolean>(() => step.value === "codes");
+
 const formRef = ref<FormInst | null>(null);
 const form = reactive({ password: "", code: "" });
-const rules = totpCodeRules(hasPassword.value);
+// A computed so the password rule follows a late /auth/me load (an OAuth-only
+// account has no password field).
+const rules = computed(() => totpCodeRules(hasPassword.value));
 
 /** startEnrollment mints a fresh pending secret every time the dialog opens. */
 async function startEnrollment(): Promise<void> {
@@ -83,7 +95,12 @@ watch(
   (show) => {
     if (show) {
       void startEnrollment();
+      return;
     }
+    // Closed: drop the pending secret and any codes still in memory.
+    enrolling.value = null;
+    recoveryCodes.value = [];
+    step.value = "scan";
   },
 );
 
@@ -107,6 +124,9 @@ async function confirmEnable(): Promise<void> {
     });
     form.password = "";
     form.code = "";
+    // Two-factor is on: refresh the card now, then show the one-time codes.
+    message.success(t("profile.totp.enabledToast"));
+    emit("done");
     step.value = "codes";
   } catch (error) {
     rawError.value = error;
@@ -118,7 +138,16 @@ async function confirmEnable(): Promise<void> {
 /** finish closes the dialog after the recovery codes were acknowledged. */
 function finish(): void {
   emit("update:show", false);
-  emit("done");
+}
+
+/** cancelSetup abandons the enrollment before it is enabled. */
+function cancelSetup(): void {
+  emit("update:show", false);
+}
+
+/** downloadCodes saves the one-time codes as a text file. */
+function downloadCodes(): void {
+  downloadText("gotham-recovery-codes.txt", `${recoveryCodes.value.join("\n")}\n`);
 }
 </script>
 
@@ -129,6 +158,8 @@ function finish(): void {
     :title="t('profile.totp.setupTitle')"
     class="app-modal"
     style="width: 520px; max-width: 94vw"
+    :mask-closable="!gateCodes"
+    :close-on-esc="!gateCodes"
     @update:show="emit('update:show', $event)"
   >
     <NSpace vertical :size="16">
@@ -191,9 +222,14 @@ function finish(): void {
             />
           </NFormItem>
 
-          <NButton type="primary" :loading="submitting" @click="confirmEnable">
-            {{ t("profile.totp.confirmEnable") }}
-          </NButton>
+          <div class="totp-actions">
+            <NButton :disabled="submitting" @click="cancelSetup">
+              {{ t("profile.totp.cancel") }}
+            </NButton>
+            <NButton type="primary" :loading="submitting" @click="confirmEnable">
+              {{ t("profile.totp.confirmEnable") }}
+            </NButton>
+          </div>
         </NForm>
       </template>
 
@@ -205,13 +241,18 @@ function finish(): void {
             <code>{{ code }}</code>
           </li>
         </ul>
-        <NButton
-          size="small"
-          quaternary
-          @click="copyText(recoveryCodes.join('\n'), t('profile.totp.codesLabel'))"
-        >
-          {{ t("profile.totp.copyCodes") }}
-        </NButton>
+        <NSpace :size="8">
+          <NButton
+            size="small"
+            quaternary
+            @click="copyText(recoveryCodes.join('\n'), t('profile.totp.codesLabel'))"
+          >
+            {{ t("profile.totp.copyCodes") }}
+          </NButton>
+          <NButton size="small" quaternary @click="downloadCodes">
+            {{ t("profile.totp.downloadCodes") }}
+          </NButton>
+        </NSpace>
         <NButton type="primary" @click="finish">
           {{ t("profile.totp.codesSaved") }}
         </NButton>
@@ -246,6 +287,13 @@ function finish(): void {
   font-family: var(--font-mono);
   letter-spacing: 0.08em;
   word-break: break-all;
+}
+
+.totp-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
 .totp-codes {

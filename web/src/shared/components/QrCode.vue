@@ -4,10 +4,10 @@ import { computed } from "vue";
 
 /**
  * QrCode renders `value` as an inline SVG QR code (JUS-196, TOTP enrollment).
- * The matrix is built with the vetted qrcode-generator library; the rectangles
- * are emitted directly as a single SVG path so no raw markup is injected
- * (v-html stays out of the codebase). The value never appears in the SVG, only
- * in the aria-label schedule the accessible name.
+ * The matrix is built with the vetted qrcode-generator library; the dark
+ * modules are emitted directly as a single SVG path so no raw markup is
+ * injected (v-html stays out of the codebase). The value never appears in the
+ * SVG; only the label is exposed, as the image's accessible name.
  */
 const props = withDefaults(
   defineProps<{
@@ -23,21 +23,27 @@ const props = withDefaults(
 
 /** grid is the QR module count and the dark modules' coordinates. */
 const grid = computed<{ count: number; path: string }>(() => {
-  // Type 0 auto-selects the smallest version; "M" is the standard tolerance.
-  const qr = qrcodeGenerator(0, "M");
-  qr.addData(props.value);
-  qr.make();
+  try {
+    // Type 0 auto-selects the smallest version; "M" is the standard tolerance.
+    const qr = qrcodeGenerator(0, "M");
+    qr.addData(props.value);
+    qr.make();
 
-  const count = qr.getModuleCount();
-  let path = "";
-  for (let row = 0; row < count; row += 1) {
-    for (let col = 0; col < count; col += 1) {
-      if (qr.isDark(row, col)) {
-        path += `M${col} ${row}h1v1h-1z`;
+    const count = qr.getModuleCount();
+    let path = "";
+    for (let row = 0; row < count; row += 1) {
+      for (let col = 0; col < count; col += 1) {
+        if (qr.isDark(row, col)) {
+          path += `M${col} ${row}h1v1h-1z`;
+        }
       }
     }
+    return { count, path };
+  } catch {
+    // An oversized (or otherwise unencodable) value must not break the whole
+    // dialog render; fall back to an empty code.
+    return { count: 0, path: "" };
   }
-  return { count, path };
 });
 </script>
 

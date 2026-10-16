@@ -87,6 +87,10 @@ const vi: AuthMessages = {
     submit: "Xác minh",
     back: "Quay lại",
     invalidCode: "Mã không khớp. Vui lòng thử lại.",
+    useRecovery: "Dùng mã khôi phục",
+    useTotp: "Dùng mã từ ứng dụng xác thực",
+    recoveryPlaceholder: "Mã khôi phục",
+    sessionExpired: "Thời gian xác minh đã hết. Vui lòng đăng nhập lại.",
   },
   footnote: {
     text: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng GitHub hoặc email nhóm của bạn.",

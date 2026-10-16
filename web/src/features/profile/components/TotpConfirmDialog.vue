@@ -21,6 +21,7 @@ import {
 } from "@/features/profile/api/totp";
 import { totpCodeRules } from "@/features/profile/schemas/totp";
 import { useCopyText } from "@/shared/composables/useCopyText";
+import { downloadText } from "@/shared/utils/download";
 
 /**
  * TotpConfirmDialog asks for the password and a current code before turning
@@ -53,9 +54,22 @@ const errorMessage = computed<string>(() =>
   rawError.value === null ? "" : describeAuthError(rawError.value),
 );
 const form = reactive({ password: "", code: "" });
-const rules = totpCodeRules(hasPassword.value);
+// A computed so the password rule follows a late /auth/me load.
+const rules = computed(() => totpCodeRules(hasPassword.value));
 
 const codes = ref<string[]>([]);
+
+/**
+ * gateCodes is true while the freshly regenerated recovery codes are on screen
+ * (and not yet acknowledged), so the modal is not dismissable then and the codes
+ * cannot be lost.
+ */
+const gateCodes = computed<boolean>(() => codes.value.length > 0);
+
+/** downloadCodes saves the regenerated codes as a text file. */
+function downloadCodes(): void {
+  downloadText("gotham-recovery-codes.txt", `${codes.value.join("\n")}\n`);
+}
 
 watch(
   () => props.show,
@@ -136,6 +150,8 @@ function close(changed: boolean): void {
     :title="title"
     class="app-modal"
     style="width: 480px; max-width: 94vw"
+    :mask-closable="!gateCodes"
+    :close-on-esc="!gateCodes"
     @update:show="emit('update:show', $event)"
   >
     <NSpace vertical :size="16">
@@ -158,6 +174,9 @@ function close(changed: boolean): void {
             @click="copyText(codes.join('\n'), t('profile.totp.codesLabel'))"
           >
             {{ t("profile.totp.copyCodes") }}
+          </NButton>
+          <NButton size="small" quaternary @click="downloadCodes">
+            {{ t("profile.totp.downloadCodes") }}
           </NButton>
           <NButton type="primary" @click="close(true)">
             {{ t("profile.totp.codesSaved") }}

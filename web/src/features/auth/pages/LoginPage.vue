@@ -12,7 +12,7 @@ import {
 import type { FormInst, FormRules } from "naive-ui";
 import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useI18n } from "vue-i18n";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { RouterLink, onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 
 import { describeAuthError, useAuthStore } from "@/features/auth/stores/auth";
 import { loginRules } from "@/features/auth/schemas/auth";
@@ -54,6 +54,12 @@ const form = reactive<LoginForm>({ email: "", password: "" });
  */
 const step = ref<"credentials" | "code">("credentials");
 
+/**
+ * mfaNotice explains why the code step was abandoned (an expired half-auth
+ * token or an account lockout), so a return to the form is not silent.
+ */
+const mfaNotice = ref("");
+
 const rules: FormRules = loginRules();
 
 /**
@@ -69,6 +75,12 @@ const stopLocaleWatch = onLocaleChange(() => {
 
 onUnmounted(() => {
   stopLocaleWatch();
+  // Never leave a half-authenticated token behind when this page goes away.
+  authStore.clearMfaChallenge();
+});
+
+onBeforeRouteLeave(() => {
+  authStore.clearMfaChallenge();
 });
 
 /** redirectAfterAuth honours ?redirect when it is a safe local path. */
@@ -78,6 +90,7 @@ async function redirectAfterAuth(): Promise<void> {
 
 async function handleSubmit(): Promise<void> {
   rawError.value = null;
+  mfaNotice.value = "";
 
   try {
     await formRef.value?.validate();
@@ -104,6 +117,15 @@ async function handleSubmit(): Promise<void> {
 
 /** backToCredentials abandons a pending challenge and returns to the form. */
 function backToCredentials(): void {
+  authStore.clearMfaChallenge();
+  step.value = "credentials";
+}
+
+/** handleChallengeExpired returns to the form once the challenge is dead. */
+function handleChallengeExpired(): void {
+  authStore.clearMfaChallenge();
+  rawError.value = null;
+  mfaNotice.value = t("auth.mfa.sessionExpired");
   step.value = "credentials";
 }
 
@@ -113,9 +135,15 @@ onMounted(() => {
   void authStore.fetchAuthConfig();
 
   // An OAuth callback that hit a TOTP-enabled account leaves a pending
-  // challenge; land directly on the code step (JUS-196).
+  // challenge; land directly on the code step (JUS-196). A challenge past its
+  // lifetime is discarded, so a stale token never reopens the code step.
   if (authStore.mfaPending) {
-    step.value = "code";
+    if (authStore.isMfaChallengeLive()) {
+      step.value = "code";
+    } else {
+      authStore.clearMfaChallenge();
+      mfaNotice.value = t("auth.mfa.sessionExpired");
+    }
   }
 
   if (route.query.error === "oauth_failed") {
@@ -155,51 +183,56 @@ onMounted(() => {
           v-if="step === 'code'"
           @success="redirectAfterAuth"
           @cancel="backToCredentials"
+          @expired="handleChallengeExpired"
         />
 
         <template v-else>
-        <NAlert v-if="errorMessage" type="error" :show-icon="true">
-          {{ errorMessage }}
-        </NAlert>
+          <NAlert v-if="mfaNotice" type="warning" :show-icon="true">
+            {{ mfaNotice }}
+          </NAlert>
 
-        <NForm ref="formRef" :model="form" :rules="trackedRules" @submit.prevent="handleSubmit">
-          <NFormItem :label="t('auth.login.emailLabel')" path="email" :label-props="{ for: 'login-email' }">
-            <NInput
-              v-model:value="form.email"
-              :placeholder="t('auth.login.emailPlaceholder')"
-              :input-props="{ id: 'login-email', autocomplete: 'username', type: 'email' }"
-              @keyup.enter="handleSubmit"
-            />
-          </NFormItem>
+          <NAlert v-if="errorMessage" type="error" :show-icon="true">
+            {{ errorMessage }}
+          </NAlert>
 
-          <NFormItem :label="t('auth.login.passwordLabel')" path="password" :label-props="{ for: 'login-password' }">
-            <NInput
-              v-model:value="form.password"
-              type="password"
-              show-password-on="click"
-              :placeholder="t('auth.login.passwordPlaceholder')"
-              :input-props="{ id: 'login-password', autocomplete: 'current-password' }"
-              @keyup.enter="handleSubmit"
-            />
-          </NFormItem>
+          <NForm ref="formRef" :model="form" :rules="trackedRules" @submit.prevent="handleSubmit">
+            <NFormItem :label="t('auth.login.emailLabel')" path="email" :label-props="{ for: 'login-email' }">
+              <NInput
+                v-model:value="form.email"
+                :placeholder="t('auth.login.emailPlaceholder')"
+                :input-props="{ id: 'login-email', autocomplete: 'username', type: 'email' }"
+                @keyup.enter="handleSubmit"
+              />
+            </NFormItem>
 
-          <NButton
-            type="primary"
-            block
-            :loading="submitting"
-            @click="handleSubmit"
-          >
-            {{ t("auth.login.submit") }}
-          </NButton>
+            <NFormItem :label="t('auth.login.passwordLabel')" path="password" :label-props="{ for: 'login-password' }">
+              <NInput
+                v-model:value="form.password"
+                type="password"
+                show-password-on="click"
+                :placeholder="t('auth.login.passwordPlaceholder')"
+                :input-props="{ id: 'login-password', autocomplete: 'current-password' }"
+                @keyup.enter="handleSubmit"
+              />
+            </NFormItem>
 
-          <p class="auth-contact">{{ t("auth.login.contactAdmin") }}</p>
+            <NButton
+              type="primary"
+              block
+              :loading="submitting"
+              @click="handleSubmit"
+            >
+              {{ t("auth.login.submit") }}
+            </NButton>
 
-          <div class="auth-divider" aria-hidden="true">
-            <span>{{ t("auth.login.divider") }}</span>
-          </div>
+            <p class="auth-contact">{{ t("auth.login.contactAdmin") }}</p>
 
-          <GitHubOAuthButton mode="signin" />
-        </NForm>
+            <div class="auth-divider" aria-hidden="true">
+              <span>{{ t("auth.login.divider") }}</span>
+            </div>
+
+            <GitHubOAuthButton mode="signin" />
+          </NForm>
         </template>
 
         <AuthFootnote />

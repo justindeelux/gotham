@@ -33,6 +33,13 @@ import { useToolchainStore } from "@/features/toolchain";
 
 export type { AuthResult, User } from "@/shared/api/token";
 
+/**
+ * MFA_CHALLENGE_TTL_MS mirrors the half-authenticated token's lifetime on the
+ * server (JUS-196), so the SPA stops offering a code step once the token can no
+ * longer be redeemed.
+ */
+const MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+
 /** Input accepted by {@link useAuthStore.setSession}. */
 export interface SessionInput {
   user?: User | null;
@@ -51,9 +58,12 @@ export const useAuthStore = defineStore("auth", () => {
    * mfaToken holds the half-authenticated token between the password (or OAuth)
    * step and the code step (JUS-196). It is in memory only, never persisted, and
    * grants no access on its own: a reload abandons it and the user signs in
-   * again. mfaPending is true while a challenge is waiting to be completed.
+   * again. mfaPending is true while a challenge is waiting to be completed;
+   * mfaExpiresAt mirrors the server's five-minute token lifetime so the code
+   * step is not reopened once the token can no longer be redeemed.
    */
   const mfaToken = ref<string | null>(null);
+  const mfaExpiresAt = ref<number | null>(null);
   const mfaPending = computed<boolean>(() => mfaToken.value !== null);
 
   /**
@@ -141,7 +151,7 @@ export const useAuthStore = defineStore("auth", () => {
     user.value = null;
     accessToken.value = null;
     refreshToken.value = null;
-    mfaToken.value = null;
+    clearMfaChallenge();
     userSeq += 1;
     clearStoredSession();
     resetUserStores();
@@ -225,20 +235,41 @@ export const useAuthStore = defineStore("auth", () => {
     if (response.data.mfa_required) {
       // The account has two-factor on: no session is issued. The caller must
       // show the code step and call completeMfaLogin.
-      mfaToken.value = response.data.mfa_token ?? null;
+      setMfaChallenge(response.data.mfa_token ?? null);
       return { mfaRequired: true };
     }
-    mfaToken.value = null;
+    clearMfaChallenge();
     setSession(response.data);
     return { mfaRequired: false };
   }
 
   /**
    * setMfaChallenge remembers a half-authenticated token minted elsewhere (an
-   * OAuth callback) so the code step can complete it without another password.
+   * OAuth callback) or by the password step, and stamps the client-side expiry.
+   * A null token clears the challenge.
    */
-  function setMfaChallenge(token: string): void {
+  function setMfaChallenge(token: string | null): void {
     mfaToken.value = token;
+    mfaExpiresAt.value = token === null ? null : Date.now() + MFA_CHALLENGE_TTL_MS;
+  }
+
+  /** clearMfaChallenge abandons a pending challenge (cancel, expiry, sign-out). */
+  function clearMfaChallenge(): void {
+    mfaToken.value = null;
+    mfaExpiresAt.value = null;
+  }
+
+  /**
+   * isMfaChallengeLive reports whether a pending token is still within its
+   * server-side lifetime, so the code step is not offered for a token that can
+   * only answer 401.
+   */
+  function isMfaChallengeLive(): boolean {
+    return (
+      mfaToken.value !== null &&
+      mfaExpiresAt.value !== null &&
+      Date.now() < mfaExpiresAt.value
+    );
   }
 
   /**
@@ -255,7 +286,7 @@ export const useAuthStore = defineStore("auth", () => {
       mfa_token: token,
       code,
     });
-    mfaToken.value = null;
+    clearMfaChallenge();
     setSession(response.data);
   }
 
@@ -337,6 +368,8 @@ export const useAuthStore = defineStore("auth", () => {
     validateInvite,
     login,
     setMfaChallenge,
+    clearMfaChallenge,
+    isMfaChallengeLive,
     completeMfaLogin,
     register,
     logout,
@@ -346,6 +379,11 @@ export const useAuthStore = defineStore("auth", () => {
 /** isUnauthorized reports whether an error is a 401 ApiError. */
 export function isUnauthorized(error: unknown): boolean {
   return getStatus(error) === 401;
+}
+
+/** isRateLimited reports whether an error is a 429 ApiError. */
+export function isRateLimited(error: unknown): boolean {
+  return getStatus(error) === 429;
 }
 
 /**

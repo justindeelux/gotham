@@ -86,6 +86,10 @@ const en = {
     submit: "Verify",
     back: "Back",
     invalidCode: "That code did not match. Try again.",
+    useRecovery: "Use a recovery code",
+    useTotp: "Use an authenticator code",
+    recoveryPlaceholder: "Recovery code",
+    sessionExpired: "Your verification window expired. Sign in again.",
   },
   footnote: {
     text: "Your password is stored securely. Sign in with GitHub or your team email.",

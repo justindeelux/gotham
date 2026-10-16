@@ -113,6 +113,7 @@ const vi: ProfileMessages = {
       "Hãy lưu các mã khôi phục ở nơi an toàn. Mỗi mã dùng được một lần nếu bạn mất thiết bị, và chỉ hiển thị lần này.",
     codesLabel: "Mã khôi phục",
     copyCodes: "Sao chép mã",
+    downloadCodes: "Tải .txt",
     codesSaved: "Tôi đã lưu",
     cancel: "Hủy",
     enabledToast: "Đã bật xác thực hai lớp.",

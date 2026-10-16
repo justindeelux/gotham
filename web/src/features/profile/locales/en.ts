@@ -112,6 +112,7 @@ const en = {
       "Save these recovery codes somewhere safe. Each one works once if you lose your device, and they are shown only now.",
     codesLabel: "Recovery codes",
     copyCodes: "Copy codes",
+    downloadCodes: "Download .txt",
     codesSaved: "I saved them",
     cancel: "Cancel",
     enabledToast: "Two-factor authentication is on.",

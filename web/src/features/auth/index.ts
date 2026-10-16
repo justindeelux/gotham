@@ -1,4 +1,9 @@
-export { describeAuthError, isUnauthorized, useAuthStore } from "./stores/auth";
+export {
+  describeAuthError,
+  isRateLimited,
+  isUnauthorized,
+  useAuthStore,
+} from "./stores/auth";
 export {
   confirmPasswordSchema,
   registerPasswordSchema,

@@ -1,8 +1,8 @@
 // Dashboard recent-deployments store (JUS-193). The aggregate feed loads once,
-// is bounded by the feed limit, and a read failure is retained and localized
-// (the panel never fabricates rows).
+// is bounded by the feed limit, refresh is single-flight and timer-driven, and
+// reset() drops the previous user's rows (sign-out must not leak them).
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/features/applications", async (importOriginal) => {
   const actual =
@@ -45,6 +45,10 @@ beforeEach(() => {
   vi.mocked(listRecentDeployments).mockReset();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("dashboard recent-deployments store", () => {
   it("loads the bounded feed once and exposes the rows", async () => {
     vi.mocked(listRecentDeployments).mockResolvedValue([row("d1")]);
@@ -75,5 +79,53 @@ describe("dashboard recent-deployments store", () => {
     expect(store.deployments).toEqual([]);
     expect(store.loading).toBe(false);
     expect(store.error).toBe("Request failed list recent deployments: boom");
+  });
+
+  it("coalesces overlapping refreshes into one request (single-flight)", async () => {
+    let resolveFeed!: () => void;
+    vi.mocked(listRecentDeployments).mockImplementation(
+      () => new Promise<RecentDeployment[]>((resolve) => {
+        resolveFeed = () => resolve([row("d1")]);
+      }),
+    );
+    const store = useRecentDeploymentsStore();
+
+    store.refreshRecentDeployments();
+    store.refreshRecentDeployments();
+    expect(vi.mocked(listRecentDeployments)).toHaveBeenCalledTimes(1);
+
+    resolveFeed();
+    await vi.waitFor(() => expect(store.deployments).toHaveLength(1));
+    expect(store.deployments[0].id).toBe("d1");
+  });
+
+  it("refreshes on the interval while visible and stops on stopRefresh", async () => {
+    vi.useFakeTimers();
+    vi.mocked(listRecentDeployments).mockResolvedValue([row("d1")]);
+    const store = useRecentDeploymentsStore();
+
+    store.startRefresh();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(vi.mocked(listRecentDeployments)).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(vi.mocked(listRecentDeployments)).toHaveBeenCalledTimes(2);
+
+    store.stopRefresh();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(vi.mocked(listRecentDeployments)).toHaveBeenCalledTimes(2);
+  });
+
+  it("reset drops the previous user's rows and the error", async () => {
+    vi.mocked(listRecentDeployments).mockResolvedValue([row("d1")]);
+    const store = useRecentDeploymentsStore();
+    store.startRefresh();
+    await store.fetchRecentDeployments();
+    expect(store.deployments).toHaveLength(1);
+
+    store.reset();
+
+    expect(store.deployments).toEqual([]);
+    expect(store.loading).toBe(false);
+    expect(store.error).toBeNull();
   });
 });

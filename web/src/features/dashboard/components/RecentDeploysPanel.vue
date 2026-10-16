@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NCard, NButton, NEmpty, NSkeleton, NSpace, NText } from "naive-ui";
-import { computed, onMounted } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 
 import DeploymentStatusTag from "@/features/applications/components/DeploymentStatusTag.vue";
 import type { RecentDeployment } from "@/features/applications";
@@ -13,6 +13,13 @@ const store = useRecentDeploymentsStore();
 
 onMounted(() => {
   void store.fetchRecentDeployments();
+  // Light refresh while the panel is visible; the store stops the timer and
+  // the focus listener on unmount (and on sign-out reset).
+  store.startRefresh();
+});
+
+onUnmounted(() => {
+  store.stopRefresh();
 });
 
 /** commitLine renders the short hash plus subject, falling back to the branch. */
@@ -39,7 +46,8 @@ const rows = computed<RecentDeployment[]>(() => store.deployments);
   <NCard size="small">
     <NSkeleton v-if="store.loading" text :repeat="3" />
     <template v-else-if="store.error">
-      <NText depth="3">{{ store.error }}</NText>
+      <NText depth="2">{{ $t("dashboard.deploys.loadFailed") }}</NText>
+      <NText depth="3" class="error-detail">{{ store.error }}</NText>
       <div class="panel-action">
         <NButton size="small" quaternary @click="() => void store.fetchRecentDeployments()">
           {{ $t("dashboard.deploys.retry") }}
@@ -97,6 +105,12 @@ const rows = computed<RecentDeployment[]>(() => store.deployments);
 
 .panel-action {
   margin-top: var(--space-2);
+}
+
+.error-detail {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
 }
 
 .deploy-row {

@@ -961,7 +961,11 @@ func (q *Queries) ListEnvVarsByApp(ctx context.Context, applicationID pgtype.UUI
 }
 
 const listRecentDeploymentsByTeam = `-- name: ListRecentDeploymentsByTeam :many
-SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image, d.digest, d.error, d.attempt, d.container_id, d.rollback_from, d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_document, d.compose_commit, d.commit_sha, d.commit_message, d.commit_author, d.committed_at, d.build_log, a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
+SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
+       d.digest, d.error, d.attempt, d.container_id, d.rollback_from,
+       d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_commit,
+       d.commit_sha, d.commit_message, d.commit_author, d.committed_at,
+       a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
 FROM deployments d
 JOIN applications a ON a.id = d.application_id
 WHERE a.team_id = $1 AND a.is_preview = false
@@ -990,13 +994,11 @@ type ListRecentDeploymentsByTeamRow struct {
 	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	ComposeDocument   string             `json:"compose_document"`
 	ComposeCommit     string             `json:"compose_commit"`
 	CommitSha         string             `json:"commit_sha"`
 	CommitMessage     string             `json:"commit_message"`
 	CommitAuthor      string             `json:"commit_author"`
 	CommittedAt       string             `json:"committed_at"`
-	BuildLog          string             `json:"build_log"`
 	ApplicationName   string             `json:"application_name"`
 	ApplicationRepo   string             `json:"application_repo"`
 	ApplicationBranch string             `json:"application_branch"`
@@ -1004,6 +1006,8 @@ type ListRecentDeploymentsByTeamRow struct {
 
 // The newest deployments across one team's applications (dashboard feed,
 // JUS-193), newest first. Previews stay out, matching the applications list.
+// The heavy columns the feed never returns (build_log, compose_document) are
+// left out on purpose.
 func (q *Queries) ListRecentDeploymentsByTeam(ctx context.Context, arg ListRecentDeploymentsByTeamParams) ([]ListRecentDeploymentsByTeamRow, error) {
 	rows, err := q.db.Query(ctx, listRecentDeploymentsByTeam, arg.TeamID, arg.Limit)
 	if err != nil {
@@ -1029,13 +1033,11 @@ func (q *Queries) ListRecentDeploymentsByTeam(ctx context.Context, arg ListRecen
 			&i.FinishedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ComposeDocument,
 			&i.ComposeCommit,
 			&i.CommitSha,
 			&i.CommitMessage,
 			&i.CommitAuthor,
 			&i.CommittedAt,
-			&i.BuildLog,
 			&i.ApplicationName,
 			&i.ApplicationRepo,
 			&i.ApplicationBranch,
@@ -1051,7 +1053,11 @@ func (q *Queries) ListRecentDeploymentsByTeam(ctx context.Context, arg ListRecen
 }
 
 const listRecentDeploymentsByUser = `-- name: ListRecentDeploymentsByUser :many
-SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image, d.digest, d.error, d.attempt, d.container_id, d.rollback_from, d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_document, d.compose_commit, d.commit_sha, d.commit_message, d.commit_author, d.committed_at, d.build_log, a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
+SELECT d.id, d.application_id, d.kind, d.state, d.image_tag, d.registry_image,
+       d.digest, d.error, d.attempt, d.container_id, d.rollback_from,
+       d.started_at, d.finished_at, d.created_at, d.updated_at, d.compose_commit,
+       d.commit_sha, d.commit_message, d.commit_author, d.committed_at,
+       a.name AS application_name, a.repo AS application_repo, a.branch AS application_branch
 FROM deployments d
 JOIN applications a ON a.id = d.application_id
 WHERE a.user_id = $1 AND a.is_preview = false
@@ -1080,13 +1086,11 @@ type ListRecentDeploymentsByUserRow struct {
 	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	ComposeDocument   string             `json:"compose_document"`
 	ComposeCommit     string             `json:"compose_commit"`
 	CommitSha         string             `json:"commit_sha"`
 	CommitMessage     string             `json:"commit_message"`
 	CommitAuthor      string             `json:"commit_author"`
 	CommittedAt       string             `json:"committed_at"`
-	BuildLog          string             `json:"build_log"`
 	ApplicationName   string             `json:"application_name"`
 	ApplicationRepo   string             `json:"application_repo"`
 	ApplicationBranch string             `json:"application_branch"`
@@ -1118,13 +1122,11 @@ func (q *Queries) ListRecentDeploymentsByUser(ctx context.Context, arg ListRecen
 			&i.FinishedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.ComposeDocument,
 			&i.ComposeCommit,
 			&i.CommitSha,
 			&i.CommitMessage,
 			&i.CommitAuthor,
 			&i.CommittedAt,
-			&i.BuildLog,
 			&i.ApplicationName,
 			&i.ApplicationRepo,
 			&i.ApplicationBranch,

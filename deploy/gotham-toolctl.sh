@@ -327,13 +327,20 @@ HOSTCTL_DROPIN="${ROOT}/etc/sudoers.d/gotham-hostctl"
 install_hostctl() {
     [ -f "${HOSTCTL_SRC}" ] || die "gotham-hostctl payload is missing (${HOSTCTL_SRC}); run the control-plane installer" 5
     [ -f "${HOSTCTL_SUDOERS}" ] || die "gotham-hostctl sudoers payload is missing (${HOSTCTL_SUDOERS})" 5
-    run install -m 0755 -o root -g root "${HOSTCTL_SRC}" "${HOSTCTL_LIVE}"
     if [ "${DRYRUN}" = "1" ]; then
+        echo "+ install -m 0755 ${HOSTCTL_SRC} ${HOSTCTL_LIVE}"
         echo "+ visudo -cf <temp>"
         echo "+ install -m 0440 ${HOSTCTL_SUDOERS} ${HOSTCTL_DROPIN}"
         return 0
     fi
+    [ -L "${HOSTCTL_LIVE}" ] && die "refusing to replace symlink ${HOSTCTL_LIVE}" 3
     command -v visudo >/dev/null 2>&1 || die "visudo is required to validate the sudoers drop-in" 1
+    # Stage + rename the helper, so the live path is never briefly absent.
+    tmp="$(mktemp "${ROOT}/usr/libexec/gotham/.hostctl.XXXXXX")" || die "could not stage the host helper" 1
+    cp "${HOSTCTL_SRC}" "${tmp}"
+    chmod 0755 "${tmp}"
+    mv -f "${tmp}" "${HOSTCTL_LIVE}" || { rm -f "${tmp}"; die "could not install the host helper" 1; }
+    [ -L "${HOSTCTL_DROPIN}" ] && die "refusing to replace symlink ${HOSTCTL_DROPIN}" 3
     tmp="$(mktemp "${ROOT}/etc/sudoers.d/.gotham-hostctl.XXXXXX")" \
         || die "could not create a sudoers temp file" 1
     cp "${HOSTCTL_SUDOERS}" "${tmp}"

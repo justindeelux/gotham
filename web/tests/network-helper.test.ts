@@ -1,7 +1,7 @@
 // HostHelperGate + section states (JUS-185): one accurate message per cause, an
-// in-product Install only when the host supports the section and the bootstrap
-// has run, an honest restart hint for old units, and the failure/retry and
-// double-click paths.
+// in-product Install only when the repair path exists (helper missing but the
+// payload and the pinned repair drop-in present), an honest "update the control
+// plane" message otherwise, and the failure/retry and double-click paths.
 import { NMessageProvider } from "naive-ui";
 import { defineComponent, h, nextTick, ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -32,7 +32,7 @@ const mockInstall = vi.mocked(installHostHelper);
 
 const ready: HostState = {
   helper: "ready",
-  bootstrap: true,
+  repair: true,
   network_stack: true,
   system_stack: true,
   network: true,
@@ -174,13 +174,13 @@ describe("HostHelperGate", () => {
     wrapper.unmount();
   });
 
-  it("names a refused permission as its own cause", async () => {
+  it("does not offer an install for a Denied host (no repair path exists)", async () => {
     const { wrapper } = await mountGate(
-      networkState(hostWith({ helper: "denied", network_stack: true })),
+      networkState(hostWith({ helper: "denied", repair: false, network_stack: true })),
       "network",
     );
-    expect(wrapper.text()).toContain("installed but not permitted");
-    expect(installButton(wrapper)).toBeTruthy();
+    expect(wrapper.text()).toContain("Update the control plane");
+    expect(installButton(wrapper)).toBeUndefined();
     wrapper.unmount();
   });
 
@@ -194,9 +194,9 @@ describe("HostHelperGate", () => {
     wrapper.unmount();
   });
 
-  it("asks for a restart when the bootstrap has not run", async () => {
+  it("asks for an update when the payload/drop-in is gone (no repair path)", async () => {
     const { wrapper } = await mountGate(
-      networkState(hostWith({ helper: "missing", bootstrap: false, network_stack: true })),
+      networkState(hostWith({ helper: "missing", repair: false, network_stack: true })),
       "network",
     );
     expect(wrapper.text()).toContain("Update the control plane");
@@ -264,10 +264,10 @@ describe("SystemForm host states", () => {
     wrapper.unmount();
   });
 
-  it("asks for a restart when the bootstrap has not run", async () => {
+  it("asks for an update when no repair path exists", async () => {
     const { wrapper } = await mountForm(
       SystemForm,
-      systemState(hostWith({ helper: "missing", bootstrap: false, system_stack: true })),
+      systemState(hostWith({ helper: "missing", repair: false, system_stack: true })),
     );
     expect(wrapper.text()).toContain("Update the control plane");
     expect(installButton(wrapper)).toBeUndefined();

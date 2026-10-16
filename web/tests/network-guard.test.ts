@@ -36,7 +36,7 @@ function staticState(): InstanceState {
     capabilities: { network: true, system: true },
     host: {
       helper: "ready",
-      bootstrap: true,
+      repair: true,
       network_stack: true,
       system_stack: true,
       network: true,

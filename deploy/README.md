@@ -646,14 +646,27 @@ The agent's `/etc/sudoers.d/gotham-toolctl` is installed by `install-agent.sh`
 host-helper payload, so a custom service user's hostctl grant is never rewritten
 for `gotham`.
 
-When the helper is missing or not permitted, `Settings → Instance` reports the
-cause and offers **Install host helper**: the control plane runs
-`gotham-toolctl install-tool gotham-hostctl` (one pinned sudoers rule, no blanket
-sudo), which reinstalls the helper and its drop-in from the payload. When the
-payload has never been installed (a host that predates this feature and has not
-run the new installer), the page says to update the control plane instead of
-offering an install that cannot succeed. Manual recovery is the same fixed
-command:
+**In-product install: only where it can succeed.** The pinned repair rule
+(`gotham-toolctl install-tool gotham-hostctl`) lives in the same drop-in as the
+hostctl verbs, so it is only reachable while that drop-in exists. The page
+therefore offers **Install host helper** only when the helper file is missing but
+the root-owned payload and the drop-in are still present (the control plane runs
+the pinned repair verb, which reinstalls the helper and its drop-in from the
+payload). In every other read-only state — the drop-in is gone or names another
+user ("Denied"), or the payload was never installed (a host that predates this
+feature) — there is no privileged path from the control plane by design, so the
+page states plainly **"Update the control plane to enable host changes"** instead
+of offering an install that cannot work. A control-plane update re-applies the
+payload (restoring the drop-in), which is the supported recovery.
+
+**Helper upgrades.** The payload is written by the (root, operator-run)
+installer, so its content — the helper scripts — is refreshed when
+`install.sh`/`gotham-hostbootstrap.sh create` next runs. The self-update wrapper
+re-applies whatever payload is installed on every update (so a deleted helper or
+drop-in is restored), but it cannot fetch a *newer* helper from the release: the
+release ships binaries only, and a root-owned payload cannot be replaced from a
+service-writable artifact without reintroducing the escalation removed in this
+change. Manual recovery/upgrade is the same fixed command:
 
 ```sh
 sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user>

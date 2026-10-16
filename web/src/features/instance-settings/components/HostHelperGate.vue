@@ -25,13 +25,15 @@ const supported = computed<boolean>(() =>
   props.section === "network" ? props.state.host.network_stack : props.state.host.system_stack,
 );
 
-/** causeMessage names the helper problem: missing file vs refused rule. */
-const causeMessage = computed<string>(() =>
-  t(
-    props.state.host.helper === "denied"
-      ? "instance-settings.helper.denied"
-      : "instance-settings.helper.missing",
-  ),
+/**
+ * installable mirrors the host's repair rule: the in-product install can only
+ * succeed when the helper file is missing (so the drop-in with the pinned repair
+ * verb is still in place) and the root-owned payload exists. A Denied host, or
+ * one without the payload, has no privileged path — the honest "update the
+ * control plane" message is shown instead of an install that would fail.
+ */
+const installable = computed<boolean>(
+  () => props.state.host.helper === "missing" && props.state.host.repair,
 );
 
 const installing = ref(false);
@@ -69,17 +71,19 @@ async function handleInstall(): Promise<void> {
     <NAlert v-if="!supported" type="info" :show-icon="true" class="form-alert">
       {{ t(`instance-settings.${section}.stackUnsupported`) }}
     </NAlert>
-    <NAlert v-else-if="!state.host.bootstrap" type="info" :show-icon="true" class="form-alert">
-      {{ t("instance-settings.helper.restart") }}
-    </NAlert>
-    <template v-else>
-      <NAlert type="warning" :show-icon="true" class="form-alert">{{ causeMessage }}</NAlert>
+    <template v-else-if="installable">
+      <NAlert type="warning" :show-icon="true" class="form-alert">
+        {{ t("instance-settings.helper.missing") }}
+      </NAlert>
       <div class="form-alert">
         <NButton type="primary" :loading="installing" @click="handleInstall">
           {{ t("instance-settings.helper.install") }}
         </NButton>
       </div>
     </template>
+    <NAlert v-else type="info" :show-icon="true" class="form-alert">
+      {{ t("instance-settings.helper.restart") }}
+    </NAlert>
     <NAlert v-if="errorMessage" type="error" :show-icon="true" class="form-alert">
       {{ errorMessage }}
     </NAlert>

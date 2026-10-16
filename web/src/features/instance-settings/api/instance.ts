@@ -77,9 +77,10 @@ export type HostHelperState = "ready" | "missing" | "denied";
 /** Host readiness: one accurate message per cause instead of one merged blur. */
 export interface HostState {
   helper: HostHelperState;
-  /** True when the root-owned bootstrap artifacts exist (the tool installer
-   * exists), so the in-product install can run; false means restart/update. */
-  bootstrap: boolean;
+  /** True when the in-product Install can run: the root-owned payload and the
+   * hostctl drop-in (with the pinned repair verb) are both present. False means
+   * only a control-plane update can help. */
+  repair: boolean;
   /** The host runs systemd-networkd + systemd-resolved + networkctl. */
   network_stack: boolean;
   /** The host has systemctl and hostnamectl. */

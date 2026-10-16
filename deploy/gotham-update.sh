@@ -329,10 +329,10 @@ apply_host_bootstrap_payload() {
         log "refusing symlinked ${script}; skipping host-bootstrap payload"
         return 0
     fi
-    if sh "${script}" apply >/dev/null 2>&1; then
+    if output="$(sh "${script}" apply 2>&1)"; then
         log "re-applied the host-bootstrap payload"
     else
-        log "host-bootstrap payload apply failed; continuing"
+        log "host-bootstrap payload apply failed: ${output}"
     fi
     return 0
 }

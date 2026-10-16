@@ -65,9 +65,12 @@ const ToolctlEnv = "GOTHAM_TOOLCTL"
 const DefaultToolctl = "/usr/libexec/gotham/gotham-toolctl"
 
 // DefaultBootstrapPayload is the root-owned payload the installer and the
-// self-update wrapper install (deploy/gotham-hostbootstrap.sh). Its presence is
-// what makes the in-product helper install possible.
+// self-update wrapper install (deploy/gotham-hostbootstrap.sh).
 const DefaultBootstrapPayload = "/usr/libexec/gotham/hostbootstrap"
+
+// DefaultSudoersDropIn is the hostctl sudoers drop-in that carries the pinned
+// repair verb the in-product install needs.
+const DefaultSudoersDropIn = "/etc/sudoers.d/gotham-hostctl"
 
 // hostctlToolID is the tool-installer id that maps to the host-helper install
 // (see the allow-list in deploy/gotham-toolctl.sh).
@@ -116,7 +119,7 @@ func (a *sudoApplier) run(ctx context.Context, verb, stdin string) (string, erro
 func (a *sudoApplier) Probe(ctx context.Context) Host {
 	h := Host{
 		Helper:       HelperReady,
-		Bootstrap:    payloadPresent(DefaultBootstrapPayload),
+		Repair:       payloadPresent(DefaultBootstrapPayload) && regularFile(DefaultSudoersDropIn),
 		NetworkStack: networkStackAvailable(),
 		SystemStack:  systemStackAvailable(),
 	}
@@ -139,7 +142,12 @@ func (a *sudoApplier) Probe(ctx context.Context) Host {
 // payloadPresent reports whether the root-owned host-helper payload is
 // installed, i.e. whether the in-product install has a privileged path to run.
 func payloadPresent(dir string) bool {
-	fi, err := os.Stat(filepath.Join(dir, "gotham-hostctl"))
+	return regularFile(filepath.Join(dir, "gotham-hostctl"))
+}
+
+// regularFile reports whether path is an existing regular (non-symlink) file.
+func regularFile(path string) bool {
+	fi, err := os.Lstat(path)
 	return err == nil && fi.Mode().IsRegular()
 }
 

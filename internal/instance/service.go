@@ -395,16 +395,29 @@ func (s *Service) stateLocked(ctx context.Context, rec Stored) State {
 // InstallHostHelper installs the fixed host helper and its verb-pinned sudoers
 // rule through the root-owned tool installer, then re-probes so the caller gets
 // the fresh state. It answers the command output for the operator to read.
+//
+// It refuses when the repair path cannot run (no payload, or a Denied host
+// whose drop-in with the pinned repair verb is gone): no privileged path exists
+// by design in that state, so an install could only fail — the UI shows the
+// honest "update the control plane" state instead, and a direct call answers a
+// conflict rather than a sudo failure.
 func (s *Service) InstallHostHelper(ctx context.Context, actor uuid.UUID) (State, string, error) {
 	if s.host == nil {
 		return State{}, "", ErrUnsupported
 	}
-	if s.host.Probe(ctx).Helper == HelperReady {
+	probe := s.host.Probe(ctx)
+	if probe.Helper == HelperReady {
 		st, err := s.Get(ctx)
 		return st, "", err
 	}
+	if !probe.Repair {
+		s.logger.Info("instance host helper install refused: no repair path",
+			"actor", actor, "helper", probe.Helper)
+		return State{}, "", ErrUnsupported
+	}
 	log, err := s.host.InstallHostHelper(ctx)
-	s.logger.Info("instance host helper install", "actor", actor, "ok", err == nil)
+	s.logger.Info("instance host helper install",
+		"actor", actor, "ok", err == nil, "helper_before", probe.Helper, "output", strings.TrimSpace(log))
 	if err != nil {
 		return State{}, log, err
 	}

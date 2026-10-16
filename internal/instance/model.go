@@ -167,11 +167,13 @@ const (
 type Host struct {
 	// Helper is the install state of the fixed host helper.
 	Helper HelperState `json:"helper"`
-	// Bootstrap is true when the root-owned host-helper payload is installed
-	// (install.sh / the self-update wrapper wrote it), i.e. the in-product
-	// install has a privileged path to run. When false the operator must
-	// update the control plane first.
-	Bootstrap bool `json:"bootstrap"`
+	// Repair is true when the in-product Install can actually run: the
+	// root-owned payload exists AND the hostctl drop-in (which carries the
+	// pinned repair verb) is present. It is false whenever the pinned rule
+	// cannot exist — an old install, or a Denied host whose drop-in is gone —
+	// in which case only a control-plane update (which re-applies the payload)
+	// can help.
+	Repair bool `json:"repair"`
 	// NetworkStack is true when the host runs what the network section needs
 	// (systemd-networkd + systemd-resolved + networkctl), detected without the
 	// helper. When false, installing the helper cannot make the section work.
@@ -184,11 +186,13 @@ type Host struct {
 	System bool `json:"system"`
 }
 
-// Installable reports whether the in-product helper install could help at all:
-// the helper is not ready, the bootstrap artifacts exist, and the host supports
-// at least one section. The UI refines this per section.
+// Installable reports whether the in-product helper install can succeed: the
+// helper file is missing (the drop-in with the repair rule is still in place),
+// the repair path exists, and the host supports at least one section. A Denied
+// host, or one without the payload, is not installable — only a control-plane
+// update can help.
 func (h Host) Installable() bool {
-	return h.Helper != HelperReady && h.Bootstrap && (h.NetworkStack || h.SystemStack)
+	return h.Helper == HelperMissing && h.Repair && (h.NetworkStack || h.SystemStack)
 }
 
 // State is the full read model.

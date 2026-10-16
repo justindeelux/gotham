@@ -18,7 +18,7 @@ test("URL status follows edits and warns when localhost is missing", async ({ pa
     system: { hostname: "gotham", ntp_enabled: true, ntp_servers: [] },
     capabilities: { network: false, system: false },
     host: {
-      helper: "missing", bootstrap: true,
+      helper: "missing", repair: true,
       network_stack: true, system_stack: true, network: false, system: false,
     },
     pending: null,

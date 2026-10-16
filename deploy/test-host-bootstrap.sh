@@ -65,12 +65,28 @@ grep -q "ops ALL=(root) NOPASSWD:" "${SCRATCH}/root-custom/etc/sudoers.d/gotham-
 grep -q "gotham ALL=(root)" "${SCRATCH}/root-custom/etc/sudoers.d/gotham-hostctl" && fail "default user leaked into a custom install"
 pass "a custom control-plane user is used instead of the default"
 
+# The reserved sudoers word ALL is rejected, never written into a drop-in.
+if GOTHAM_HOST_BOOTSTRAP_ROOT="$(root_for "${SCRATCH}/root-all")" sh "${BOOTSTRAP}" create ALL >"${SCRATCH}/all.log" 2>&1; then
+    fail "the reserved user ALL was accepted"
+fi
+grep -q "invalid control-plane user" "${SCRATCH}/all.log" || fail "ALL rejection was not explained"
+pass "rejects the reserved user ALL"
+
 # ---- idempotency -----------------------------------------------------------
 before="$(cksum "${ROOT1}/usr/libexec/gotham/gotham-hostctl" "${ROOT1}/etc/sudoers.d/gotham-hostctl")"
 GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT1}" sh "${BOOTSTRAP}" apply >/dev/null
 after="$(cksum "${ROOT1}/usr/libexec/gotham/gotham-hostctl" "${ROOT1}/etc/sudoers.d/gotham-hostctl")"
 [ "${before}" = "${after}" ] || fail "a second run changed the installed files"
 pass "apply is idempotent"
+
+# ---- apply restores a deleted helper + drop-in -----------------------------
+# This is the root-owned re-apply the self-update wrapper runs (M1): it restores
+# the live artifacts from the payload, so a deleted helper or drop-in is fixed.
+rm -f "${ROOT1}/usr/libexec/gotham/gotham-hostctl" "${ROOT1}/etc/sudoers.d/gotham-hostctl"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT1}" sh "${BOOTSTRAP}" apply >/dev/null
+[ -f "${ROOT1}/usr/libexec/gotham/gotham-hostctl" ] || fail "apply did not restore the helper"
+[ -f "${ROOT1}/etc/sudoers.d/gotham-hostctl" ] || fail "apply did not restore the drop-in"
+pass "apply restores a deleted helper and drop-in from the payload"
 
 # ---- symlink refusal -------------------------------------------------------
 ROOT2="$(root_for "${SCRATCH}/root2")"

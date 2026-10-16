@@ -48,7 +48,7 @@ die() { echo "gotham-hostbootstrap: $*" >&2; exit "${2:-1}"; }
 
 valid_user() {
     case "$1" in
-        "" | *[!A-Za-z0-9_-]*) return 1 ;;
+        "" | ALL | all | *[!A-Za-z0-9_-]*) return 1 ;;
         *) return 0 ;;
     esac
 }
@@ -92,9 +92,22 @@ install_sudoers() {
     mv -f "${tmp}" "${dst}" || { rm -f "${tmp}"; die "cannot install ${dst}"; }
 }
 
+# ensure_dir dir mode: create the directory root-owned with the given mode, and
+# refuse a symlink. On a real root it also re-asserts root ownership of an
+# existing directory, so a payload directory that is not root-owned is refused.
 ensure_dir() {
-    symlink_free "$1"
-    [ -d "$1" ] || mkdir -p "$1" || die "cannot create $1"
+    d="$1"; m="$2"
+    symlink_free "${d}"
+    if [ -z "${ROOT}" ]; then
+        install -d -m "${m}" -o root -g root "${d}" || die "cannot prepare ${d}"
+        # test -O is supported by dash/bash (the shells these installers run
+        # under) and is already used in gotham-update.sh; shellcheck's POSIX
+        # portability note does not apply here.
+        # shellcheck disable=SC3067
+        [ -O "${d}" ] || die "${d} is not root-owned"
+    else
+        [ -d "${d}" ] || mkdir -p "${d}" || die "cannot create ${d}"
+    fi
 }
 
 # hostctl_sudoers user: the control-plane drop-in (five verbs + repair). The
@@ -112,8 +125,8 @@ hostctl_sudoers() {
 # root-owned payload. Shared by `create` (right after it writes the payload)
 # and the self-update wrapper.
 apply_payload() {
-    ensure_dir "${HELPER_DIR}"
-    ensure_dir "${SUDOERS_DIR}"
+    ensure_dir "${HELPER_DIR}" 0755
+    ensure_dir "${SUDOERS_DIR}" 0750
     for f in gotham-hostctl gotham-toolctl gotham-hostctl.sudoers; do
         [ -f "${PAYLOAD_DIR}/${f}" ] || die "payload is missing ${PAYLOAD_DIR}/${f}" 2
     done
@@ -127,10 +140,13 @@ apply_payload() {
 create() {
     cp_user="$1"
     valid_user "${cp_user}" || die "invalid control-plane user: ${cp_user}" 2
+    if [ -z "${ROOT}" ] && ! id -u "${cp_user}" >/dev/null 2>&1; then
+        die "control-plane user does not exist: ${cp_user}" 2
+    fi
     [ -f "${SELF_DIR}/gotham-hostctl.sh" ] || die "${SELF_DIR}/gotham-hostctl.sh is missing" 2
     [ -f "${SELF_DIR}/gotham-toolctl.sh" ] || die "${SELF_DIR}/gotham-toolctl.sh is missing" 2
 
-    ensure_dir "${PAYLOAD_DIR}"
+    ensure_dir "${PAYLOAD_DIR}" 0755
     install_file "${SELF_DIR}/gotham-hostctl.sh" "${PAYLOAD_DIR}/gotham-hostctl" 0755
     install_file "${SELF_DIR}/gotham-toolctl.sh" "${PAYLOAD_DIR}/gotham-toolctl" 0755
     install_file "${SELF_DIR}/gotham-hostbootstrap.sh" "${PAYLOAD_DIR}/gotham-hostbootstrap.sh" 0755

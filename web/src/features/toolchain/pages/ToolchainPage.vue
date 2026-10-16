@@ -29,6 +29,7 @@ import type {
   ToolchainTool,
 } from "@/features/toolchain/api/toolchain";
 import ToolStatusBadge from "@/features/toolchain/components/ToolStatusBadge.vue";
+import InstallQueueModal from "@/features/toolchain/components/InstallQueueModal.vue";
 import { useToolchainStore } from "@/features/toolchain/stores/toolchain";
 
 const { t } = useI18n();
@@ -121,6 +122,9 @@ async function runToolAction(tool: ToolchainTool, action: ToolchainAction): Prom
       message.warning(t("toolchain.page.skipped", { tools: skipped.join(", ") }));
     } else {
       message.success(t("toolchain.page.enqueued", { count: 1 }));
+      // The progress modal owns its markup and subscribes to the same
+      // store: opening it shows the new job's live output immediately.
+      store.openQueueModal();
     }
   } catch (err) {
     message.error(describeToolchainError(err));
@@ -146,6 +150,7 @@ async function handleInstallSelected(): Promise<void> {
     const created = ids.length - skipped.length;
     if (created > 0) {
       message.success(t("toolchain.page.enqueued", { count: created }));
+      store.openQueueModal();
     }
   } catch (err) {
     message.error(describeToolchainError(err));
@@ -429,6 +434,10 @@ watch(
         </template>
       </NSpace>
     </NCard>
+
+    <!-- Install progress modal (JUS-178): renders from the same store and
+         opens via the queueModalOpen hook (Queue button, post-enqueue). -->
+    <InstallQueueModal />
   </div>
 </template>
 

@@ -8,6 +8,7 @@ import ChangePasswordForm from "@/features/profile/components/ChangePasswordForm
 import DisplayNameForm from "@/features/profile/components/DisplayNameForm.vue";
 import ProfileIdentityCard from "@/features/profile/components/ProfileIdentityCard.vue";
 import SessionsPanel from "@/features/profile/components/SessionsPanel.vue";
+import TotpCard from "@/features/profile/components/TotpCard.vue";
 
 const { t } = useI18n();
 const authStore = useAuthStore();
@@ -49,6 +50,7 @@ onMounted(() => {
       <ProfileIdentityCard />
       <DisplayNameForm />
       <ChangePasswordForm />
+      <TotpCard />
       <SessionsPanel />
     </NSpace>
   </div>

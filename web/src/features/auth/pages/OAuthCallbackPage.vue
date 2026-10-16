@@ -45,6 +45,16 @@ onMounted(async () => {
       { code },
       { withCredentials: true },
     );
+
+    // An account with two-factor on gets no session here: hand the
+    // half-authenticated token to the login code step (JUS-196).
+    if (response.data.mfa_required && response.data.mfa_token) {
+      authStore.setMfaChallenge(response.data.mfa_token);
+      clearCode();
+      await router.replace({ path: "/login" });
+      return;
+    }
+
     authStore.setSession(response.data);
 
     clearCode();

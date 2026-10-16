@@ -311,6 +311,13 @@ func (s *Store) ResetUserPassword(ctx context.Context, userID pgtype.UUID, email
 	if err := queries.BumpCredentialVersion(ctx, userID); err != nil {
 		return err
 	}
+	// The admin reset path for a lost authenticator (JUS-196): the password
+	// reset also clears the account's TOTP configuration, so a self-hoster who
+	// lost the device can recover without database surgery. It runs in the same
+	// transaction, so the account is never left with the old second factor.
+	if err := queries.DeleteUserTOTP(ctx, userID); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 

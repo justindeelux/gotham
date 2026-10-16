@@ -77,6 +77,21 @@ const vi: AuthMessages = {
       "Liên kết này không mang token mời. Hãy mở đúng liên kết trong thư mời như đã chia sẻ.",
     hint: "Việc chấp nhận dùng phiên bạn đang đăng nhập — hãy đăng nhập bằng địa chỉ được mời. Mỗi lời mời chỉ dùng một lần.",
   },
+  mfa: {
+    title: "Xác thực hai lớp",
+    subtitle: "Mật khẩu đã được chấp nhận. Nhập mã từ ứng dụng xác thực để hoàn tất đăng nhập.",
+    codeLabel: "Mã",
+    codePlaceholder: "Mã 6 chữ số",
+    hint: "Lấy từ ứng dụng xác thực, hoặc dùng một mã khôi phục.",
+    recoveryHint: "Mất thiết bị? Hãy nhập một mã khôi phục thay thế.",
+    submit: "Xác minh",
+    back: "Quay lại",
+    invalidCode: "Mã không khớp. Vui lòng thử lại.",
+    useRecovery: "Dùng mã khôi phục",
+    useTotp: "Dùng mã từ ứng dụng xác thực",
+    recoveryPlaceholder: "Mã khôi phục",
+    sessionExpired: "Thời gian xác minh đã hết. Vui lòng đăng nhập lại.",
+  },
   footnote: {
     text: "Mật khẩu của bạn được lưu an toàn. Đăng nhập bằng GitHub hoặc email nhóm của bạn.",
   },
@@ -96,6 +111,8 @@ const vi: AuthMessages = {
     confirmRequired: "Vui lòng xác nhận mật khẩu",
     confirmMismatch: "Mật khẩu không khớp",
     termsRequired: "Bạn phải chấp nhận điều khoản để tạo tài khoản",
+    twoFactorCodeRequired: "Nhập mã từ ứng dụng xác thực",
+    twoFactorCodeInvalid: "Nhập mã 6 chữ số hoặc một mã khôi phục",
   },
 };
 

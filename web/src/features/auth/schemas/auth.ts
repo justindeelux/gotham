@@ -101,6 +101,40 @@ export const termsSchema = z
   })
   .refine((value) => value === true, { message: authMessages.termsRequired });
 
+/** Message keys for the two-factor code field (JUS-196). */
+export const twoFactorMessages = {
+  codeRequired: "auth.validation.twoFactorCodeRequired",
+  codeInvalid: "auth.validation.twoFactorCodeInvalid",
+} as const;
+
+/**
+ * twoFactorCodeSchema backs the second login step (and the profile dialogs).
+ * It accepts a six-digit authenticator code or a formatted recovery code; the
+ * server is the authority on validity, so the client rule only rejects
+ * obviously wrong input rather than blocking a legitimate code.
+ */
+export const twoFactorCodeSchema = z
+  .string({
+    required_error: twoFactorMessages.codeRequired,
+    invalid_type_error: twoFactorMessages.codeRequired,
+  })
+  .trim()
+  .min(6, twoFactorMessages.codeInvalid)
+  .max(14, twoFactorMessages.codeInvalid)
+  .regex(/^[A-Za-z0-9 -]+$/, twoFactorMessages.codeInvalid);
+
+/** twoFactorCodeRules builds the single-field code form used by the login step. */
+export function twoFactorCodeRules(): FormRules {
+  return {
+    code: [
+      {
+        ...ruleFrom(twoFactorCodeSchema, { required: true }),
+        trigger: ["input", "blur"],
+      },
+    ],
+  };
+}
+
 /**
  * registerRules builds the RegisterPage NForm rules. The password reader
  * keeps the confirmation check live, exactly like the old closure over the

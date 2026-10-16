@@ -39,7 +39,7 @@ re-runs.
 | Frontend | Vue 3 + Vite + TypeScript | SPA embedded into the Go binary via `embed.FS` |
 | State / HTTP | Pinia + axios | |
 | UI kit | Naive UI | Flat design style |
-| Auth | JWT + OAuth2 (GitHub, GitLab) | argon2id password hashing, TOTP 2FA later |
+| Auth | JWT + OAuth2 (GitHub, GitLab) | argon2id password hashing, TOTP 2FA |
 | Config | viper | YAML / ENV, hot reload of log level |
 | Self-update | Built-in atomic swap + Ed25519 signed manifest | GitHub Releases as the update channel |
 | CI/CD | GitHub Actions + GoReleaser | Build, sign, publish, attach checksums |
@@ -155,6 +155,54 @@ A release that fails to activate is rolled back and its version is backed off
 restart does not re-apply a broken release and crash-loop). A newer release is
 applied automatically; to retry the *same* version after a fix, run
 `sudo gotham-agent update reset` (documented in `deploy/README.md`).
+
+## Two-factor authentication (TOTP)
+
+Accounts can add a time-based second factor (RFC 6238, HMAC-SHA1, 6 digits,
+30-second step) from **Settings → Profile → Two-factor authentication**:
+
+1. **Set up** shows a QR code and the manual setup key. Scan it (or type the
+   key) into any authenticator app, then confirm with the first code and the
+   account password. Nothing is enabled until a code verifies.
+2. **Recovery codes** are shown once at setup (and again whenever they are
+   regenerated). Each is single-use; regenerating invalidates every previous
+   code. Store them somewhere safe — the password alone no longer signs in.
+3. **Sign-in** accepts the password, then asks for a code from the app or a
+   recovery code. No session, refresh token or realtime token is issued before
+   the second factor is verified, and the second step is rate limited like the
+   password step.
+4. **OAuth logins honour the second factor.** A GitHub sign-in on an account
+   with TOTP enabled returns the same half-authenticated challenge as a
+   password login and lands on the code step instead of a session: OAuth is
+   never a way around 2FA. (There is no "trust this device" option yet, so every
+   sign-in asks for a code.)
+5. **Turn off** requires the password plus a current code or recovery code.
+6. **Lockout.** Five consecutive wrong codes (TOTP or recovery, from any source
+   address or half-authenticated token) lock the account's second factor for
+   five minutes; the lock answers `429`. Guessing is therefore bound to the
+   account, not to the caller's IP, and IPv6 callers are rate limited by `/64`.
+   A correct code clears the counter.
+
+The TOTP secret is encrypted at rest with the same key that seals provider and
+SSH credentials (`GOTHAM_SECRET_KEY`, or the key file beside the CA directory
+when that is unset), and recovery codes are stored only as argon2id hashes. A
+used code step cannot be replayed. Enabling or disabling TOTP, regenerating
+recovery codes, and signing in with a recovery code end the account's other
+sessions — the caller's own session is kept except for a recovery-code sign-in,
+whose new session is the only one left.
+
+**Lost your device and your recovery codes?** Reset the account from the host:
+
+```sh
+sudo -u gotham -- /usr/local/bin/gotham admin reset-password --email you@example.com
+```
+
+That replaces the password, ends the account's sessions **and clears its
+two-factor configuration** in the same transaction — host access is the
+recovery authority. Sign in with the new password and set the second factor up
+again. Losing or rotating `GOTHAM_SECRET_KEY` also breaks every 2FA sign-in
+(the secret can no longer be unsealed); the reset command above is the way
+back.
 
 ## Naming conventions
 

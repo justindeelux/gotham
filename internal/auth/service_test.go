@@ -77,7 +77,11 @@ func newTestService(t *testing.T) (*Service, *store.Store) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	st := store.New(pool)
-	return New(st, signer, logger), st
+	svc := New(st, signer, logger)
+	// A fixed credential-encryption key so TOTP enrollment seals and opens
+	// consistently across the test's calls.
+	svc.SetSecretKey("test-credential-encryption-key")
+	return svc, st
 }
 
 // requireClosedInstance seeds the "instance already has accounts" precondition

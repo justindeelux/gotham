@@ -63,8 +63,9 @@ Usage:
                             (exit 1 on error). Lets the installer detect a
                             re-run without parsing the database.
   gotham admin reset-password --email <email> [--password <pw>]
-                            Replace a password and revoke the account's
-                            sessions.
+                            Replace a password, revoke the account's sessions
+                            and clear its two-factor authentication (the
+                            recovery path for a lost authenticator device).
   gotham admin help         Show this help
 
 The password is read with a hidden prompt when none of --password,
@@ -217,8 +218,10 @@ func runAdminExists(args []string) int {
 	return exitOK
 }
 
-// runAdminResetPassword replaces the argon2id hash of an existing account and
-// deletes its sessions, so the old refresh chain dies with the password.
+// runAdminResetPassword replaces the argon2id hash of an existing account,
+// deletes its sessions, and clears its TOTP two-factor configuration. That last
+// part is the documented recovery path for a self-hoster who lost the
+// authenticator device (JUS-196): host/DB access is the recovery authority.
 func runAdminResetPassword(args []string) int {
 	fs := flag.NewFlagSet("admin reset-password", flag.ContinueOnError)
 	email := fs.String("email", "", "account email (required)")
@@ -248,8 +251,9 @@ func runAdminResetPassword(args []string) int {
 			return exitError
 		}
 
-		fmt.Printf("password updated for %s; refresh sessions were revoked. "+
-			"Access tokens already issued stay valid until they expire (15 minutes).\n", user.Email)
+		fmt.Printf("password updated for %s; refresh sessions were revoked and "+
+			"two-factor authentication was cleared. Access tokens already issued "+
+			"stay valid until they expire (15 minutes).\n", user.Email)
 		return exitOK
 	})
 }

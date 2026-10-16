@@ -51,4 +51,22 @@ var (
 	// deleted, expired, or foreign. Nothing is revoked. The message is the
 	// API contract body, rendered verbatim with a 409.
 	ErrSessionUnknown = errors.New("sign in again to manage other sessions")
+	// ErrInvalidCode is returned when a submitted TOTP or recovery code does
+	// not verify (or was already used). The message is the API contract body.
+	ErrInvalidCode = errors.New("invalid code")
+	// ErrTOTPNotConfigured is returned when a second factor is submitted for an
+	// account whose TOTP was never enabled (or was disabled meanwhile).
+	ErrTOTPNotConfigured = errors.New("auth: two-factor authentication is not configured")
+	// ErrTOTPAlreadyEnabled is returned by BeginTOTPEnrollment when TOTP is
+	// already on: the caller must disable it first. The message is the API
+	// contract body, rendered verbatim with a 409.
+	ErrTOTPAlreadyEnabled = errors.New("two-factor authentication is already enabled")
+	// ErrTOTPNotEnrolled is returned by EnableTOTP when no pending secret
+	// exists. The message is the API contract body, rendered verbatim with a
+	// 409.
+	ErrTOTPNotEnrolled = errors.New("start two-factor setup first")
+	// ErrTOTPLocked is returned while the per-account second-factor lockout is
+	// active (too many consecutive wrong codes, from any source address). The
+	// message is the API contract body, rendered verbatim with a 429.
+	ErrTOTPLocked = errors.New("too many incorrect codes, try again later")
 )

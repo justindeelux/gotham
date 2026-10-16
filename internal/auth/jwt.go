@@ -19,14 +19,31 @@ const (
 	tokenIssuer    = "gotham"
 )
 
+// mfaTokenTTL bounds the window between a verified password (or OAuth identity)
+// and the second factor. The token is single-purpose and grants nothing on its
+// own.
+const mfaTokenTTL = 5 * time.Minute
+
+// mfaPurpose marks the half-authenticated token minted between the password and
+// the TOTP step. VerifyAccessToken refuses any token carrying it, so a stolen
+// half-authenticated token is not an access token, a WS token, or a session.
+const mfaPurpose = "mfa"
+
 // Claims is the payload carried by an access token. SessionID is the refresh
 // session the token was minted with (the "sid" claim, PF-2): the sessions
 // list marks that row as the caller's current one. Tokens minted before PF-2
 // carry no sid; a missing or malformed value means "current unknown", never a
 // verification failure.
+//
+// Purpose is set only on the half-authenticated MFA token (JUS-196): an access
+// token never carries it, and VerifyAccessToken rejects one that does.
+// CredentialVersion binds the MFA token to the account state it was minted
+// against, so a password reset between the two steps invalidates it.
 type Claims struct {
-	Role      string `json:"role"`
-	SessionID string `json:"sid,omitempty"`
+	Role              string `json:"role"`
+	SessionID         string `json:"sid,omitempty"`
+	Purpose           string `json:"purpose,omitempty"`
+	CredentialVersion int32  `json:"cv,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -102,7 +119,8 @@ func (s *Signer) IssueAccessToken(userID uuid.UUID, role string, sessionID uuid.
 
 // VerifyAccessToken parses and validates tokenString, requiring the EdDSA
 // algorithm, the Gotham issuer, and a non-expired token. Any failure returns
-// ErrInvalidToken.
+// ErrInvalidToken. A half-authenticated MFA token is refused: it carries a
+// purpose and must be redeemed through CompleteMFALogin instead.
 func (s *Signer) VerifyAccessToken(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims,
@@ -112,6 +130,52 @@ func (s *Signer) VerifyAccessToken(tokenString string) (*Claims, error) {
 		jwt.WithExpirationRequired(),
 	)
 	if err != nil || !token.Valid {
+		return nil, ErrInvalidToken
+	}
+	if claims.Purpose != "" {
+		return nil, ErrInvalidToken
+	}
+	return claims, nil
+}
+
+// IssueMFAToken signs the short-lived half-authenticated token minted after a
+// verified password (or OAuth identity) and before the TOTP step. It carries
+// the MFA purpose, so it can never be accepted as an access token, and the
+// account's credential version, so a password reset between the two steps
+// invalidates it.
+func (s *Signer) IssueMFAToken(userID uuid.UUID, credentialVersion int32) (string, error) {
+	now := s.now()
+
+	claims := Claims{
+		Purpose:           mfaPurpose,
+		CredentialVersion: credentialVersion,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   userID.String(),
+			Issuer:    tokenIssuer,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(mfaTokenTTL)),
+		},
+	}
+
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims).SignedString(s.private)
+	if err != nil {
+		return "", fmt.Errorf("auth: sign mfa token: %w", err)
+	}
+	return signed, nil
+}
+
+// VerifyMFAToken parses and validates a half-authenticated token, requiring the
+// EdDSA algorithm, the Gotham issuer, the MFA purpose, and a non-expired token.
+// Any failure returns ErrInvalidToken.
+func (s *Signer) VerifyMFAToken(tokenString string) (*Claims, error) {
+	claims := &Claims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims,
+		func(*jwt.Token) (any, error) { return s.public, nil },
+		jwt.WithValidMethods([]string{"EdDSA"}),
+		jwt.WithIssuer(tokenIssuer),
+		jwt.WithExpirationRequired(),
+	)
+	if err != nil || !token.Valid || claims.Purpose != mfaPurpose {
 		return nil, ErrInvalidToken
 	}
 	return claims, nil

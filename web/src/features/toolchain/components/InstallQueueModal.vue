@@ -31,6 +31,16 @@ const show = computed<boolean>({
 /** selectedJobId names the job whose log renders; null shows the hint. */
 const selectedJobId = ref<string | null>(null);
 
+/**
+ * manualJobId names the job the user picked after opening. Follow-active
+ * (JUS-184) keeps it only while that job is still active; any terminal or
+ * missing manual pick falls back to the active job.
+ */
+const manualJobId = ref<string | null>(null);
+
+/** lastWanted tracks the open-request id already honored (open only). */
+const lastWanted = ref<string | null | undefined>(undefined);
+
 /** selectedJob resolves the selection against the live queue. */
 const selectedJob = computed<ToolchainJob | null>(
   () => store.jobs[selectedJobId.value ?? ""] ?? null,
@@ -101,26 +111,75 @@ const paneState = computed<InstallLogPaneState>(() => {
   return "ready";
 });
 
-// Opening (re)focuses the requested job, the first active job, or the
-// newest job; a selection that outlives its job (or an empty queue that
-// gains jobs) falls back the same way.
+// pickFollowedId prefers the newest running job, else the newest queued
+// job, else the newest job (jobsList is newest first).
+function pickFollowedId(jobs: ToolchainJob[]): string | null {
+  return (
+    jobs.find((job) => job.status === "running")?.id ??
+    jobs.find((job) => job.status === "queued")?.id ??
+    jobs[0]?.id ??
+    null
+  );
+}
+
+/**
+ * onSelect records a user pick after opening; the jobs watcher keeps it
+ * only while the picked job is still active.
+ */
+function onSelect(id: string | null): void {
+  selectedJobId.value = id;
+  manualJobId.value = id;
+}
+
+// Opening follows the requested job (or the active job); closing resets so
+// a reopen never lands on a stale finished job (JUS-184).
 watch(
-  [show, () => store.jobsList],
-  ([open, jobs]) => {
+  show,
+  (open) => {
     if (!open) {
+      selectedJobId.value = null;
+      manualJobId.value = null;
+      lastWanted.value = undefined;
       return;
     }
-    if (selectedJobId.value !== null && jobs.some((job) => job.id === selectedJobId.value)) {
-      return;
-    }
+    lastWanted.value = store.queueModalJobId;
+    const jobs = store.jobsList;
     const wanted = store.queueModalJobId;
+    manualJobId.value = null;
     selectedJobId.value =
       (wanted !== null && jobs.some((job) => job.id === wanted) ? wanted : undefined) ??
-      store.activeJobs[0]?.id ??
-      jobs[0]?.id ??
-      null;
+      pickFollowedId(jobs);
   },
   { immediate: true },
+);
+
+// While open, a new open-request wins once; otherwise a manual pick of a
+// still-active job is kept and everything else follows the active job, so
+// a finished selection moves to a newly enqueued job (JUS-184).
+watch(
+  [() => store.jobsList, () => store.queueModalJobId],
+  ([jobs, wanted]) => {
+    if (!show.value) {
+      return;
+    }
+    if (wanted !== lastWanted.value) {
+      lastWanted.value = wanted;
+      if (wanted !== null && jobs.some((job) => job.id === wanted)) {
+        manualJobId.value = null;
+        selectedJobId.value = wanted;
+        return;
+      }
+    }
+    const manual = manualJobId.value !== null
+      ? jobs.find((job) => job.id === manualJobId.value)
+      : undefined;
+    if (manual && !isTerminalJobStatus(manual.status)) {
+      selectedJobId.value = manual.id;
+      return;
+    }
+    manualJobId.value = null;
+    selectedJobId.value = pickFollowedId(jobs);
+  },
 );
 </script>
 
@@ -137,7 +196,7 @@ watch(
       <section :aria-label="$t('toolchain.modal.queueLabel')">
         <InstallQueueList
           :selected-id="selectedJobId"
-          @select="selectedJobId = $event"
+          @select="onSelect"
         />
         <p class="modal-sr" aria-live="polite">{{ voiceStatus }}</p>
       </section>

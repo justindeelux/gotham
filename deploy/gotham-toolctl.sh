@@ -111,16 +111,16 @@ esac
 # attempted only for the installed, absolute helper path.
 #
 # --wait only waits: it does not stop the unit when this process is killed. The
-# RuntimeMaxSec property bounds a job whose agent went away, and the TERM/INT
-# trap below stops the unit on a graceful cancel.
+# RuntimeMaxSec property bounds a job whose agent went away. POSIX shells may
+# defer the TERM/INT trap until the foreground systemd-run returns; cancellation
+# is bounded by RuntimeMaxSec and flock, not an immediate unit stop.
 SELF="$0"
 case "${SELF}" in /*) SELF_OK=1 ;; *) SELF_OK=0 ;; esac
 if [ "${DRYRUN}" != "1" ] && [ "${INNER}" != "1" ] && [ "${SELF_OK}" = "1" ] \
     && command -v "${SYSTEMD_RUN}" >/dev/null 2>&1; then
     UNIT="gotham-toolctl-${VERB}-${TOOL}-$$"
-    # Stops the transient unit on a graceful cancel (SIGTERM from the agent).
-    # systemd-run --wait does not stop the unit when this process dies; a
-    # missing systemctl is tolerated by the `|| true`.
+    # shortcut: this trap can be deferred during systemd-run; use an interruptible
+    # background wait when prompt graceful cancellation is implemented.
     trap 'systemctl stop "$UNIT" >/dev/null 2>&1 || true; exit 130' TERM INT HUP
     "${SYSTEMD_RUN}" --quiet --pipe --wait --collect \
         --unit="${UNIT}" \
@@ -258,12 +258,19 @@ install_buildkit() {
 }
 
 uninstall_buildkit() {
-    # Symmetric with install: the detection ref is what the agent probes, so
-    # removing it untags the image (and, because the pull stored it digest-only,
-    # deletes it); the digest ref rmi is then a tolerated no-op.
     run docker rm -f "${BUILDKIT_CONTAINER}" || true
-    run docker rmi -f "${BUILDKIT_DETECT_REF}"
-    run docker rmi -f "${BUILDKIT_IMAGE}" || true
+    # Removing the detection tag may also delete the image. Use the repository
+    # digest left by pull for partial installs, and quietly accept absent refs.
+    for ref in "${BUILDKIT_DETECT_REF}:latest" "${BUILDKIT_DETECT_REF}@${BUILDKIT_DIGEST}"; do
+        if output="$(run docker rmi -f "${ref}" 2>&1)"; then
+            [ -z "${output}" ] || printf '%s\n' "${output}"
+        else
+            case "${output}" in
+                *"No such image:"*) ;;
+                *) printf '%s\n' "${output}" >&2; return 1 ;;
+            esac
+        fi
+    done
 }
 
 install_docker() {

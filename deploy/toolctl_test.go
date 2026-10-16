@@ -178,19 +178,72 @@ func TestToolctlBuildkitTagsLastAndIsIdempotent(t *testing.T) {
 	}
 
 	// Uninstall must be symmetric: drop the detection ref first (it is what the
-	// agent probes) and then the digest image.
+	// agent probes) and then the repository digest left by pull.
 	uninstall, err := runToolctl(t, root, nil, "uninstall-tool", "buildkit")
 	if err != nil {
 		t.Fatalf("uninstall-tool buildkit: %v: %s", err, uninstall)
 	}
-	rmiDetect := strings.Index(uninstall, "docker rmi -f moby/buildkit\n")
-	rmiImage := strings.Index(uninstall, "docker rmi -f "+buildkitDigestRef)
+	rmiDetect := strings.Index(uninstall, "docker rmi -f moby/buildkit:latest\n")
+	rmiImage := strings.Index(uninstall, "docker rmi -f moby/buildkit@"+strings.SplitN(buildkitDigestRef, "@", 2)[1])
 	rmContainer := strings.Index(uninstall, "docker rm -f buildkit")
 	switch {
 	case rmContainer < 0 || rmiDetect < 0 || rmiImage < 0:
 		t.Fatalf("buildkit uninstall steps missing: %q", uninstall)
 	case rmContainer >= rmiDetect || rmiDetect >= rmiImage:
 		t.Fatalf("buildkit uninstall out of order: %q", uninstall)
+	}
+}
+
+// TestToolctlBuildkitUninstallMissingImageIsQuiet runs real uninstall logic
+// with Docker and flock functions so no host containers or locks are touched.
+func TestToolctlBuildkitUninstallMissingImageIsQuiet(t *testing.T) {
+	for _, mode := range []string{"removed", "digest-missing", "all-missing", "daemon-error"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			record := filepath.Join(dir, "docker-argv")
+			cmd := exec.Command("sh", "-c", `
+flock() { return 0; }
+docker() {
+    printf '%s\n' "$*" >> "$FAKE_RECORD"
+    [ "$1" = rmi ] || return 0
+    case "$FAKE_MODE:$3" in
+        daemon-error:*) echo 'Cannot connect to the Docker daemon' >&2; return 1 ;;
+        all-missing:* | digest-missing:*@*)
+            echo "Error response from daemon: No such image: $3" >&2; return 1 ;;
+        *) echo "Untagged: $3" ;;
+    esac
+}
+. ./gotham-toolctl.sh
+`, "toolctl", "uninstall-tool", "buildkit")
+			cmd.Env = append(os.Environ(),
+				"GOTHAM_TOOLCTL_INNER=1",
+				"GOTHAM_TOOLCTL_DRYRUN=0",
+				"GOTHAM_TOOLCTL_LOCK="+filepath.Join(dir, "lock"),
+				"GOTHAM_TOOLCTL_ARCH=amd64",
+				"GOTHAM_TOOLCTL_DISTRO=apt",
+				"FAKE_RECORD="+record,
+				"FAKE_MODE="+mode,
+			)
+			out, err := cmd.CombinedOutput()
+			if mode == "daemon-error" {
+				if err == nil || !strings.Contains(string(out), "Cannot connect") {
+					t.Fatalf("daemon failure must remain visible: %v: %s", err, out)
+				}
+				return
+			}
+			if err != nil || strings.Contains(string(out), "No such image") {
+				t.Fatalf("uninstall must quietly tolerate absent images: %v: %s", err, out)
+			}
+			argv, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "rm -f buildkit\nrmi -f moby/buildkit:latest\n" +
+				"rmi -f moby/buildkit@sha256:b059f8d7226d0b326bc871af489a5dddf65e36af4d20d14251b072974d9ee87c\n"
+			if string(argv) != want {
+				t.Fatalf("removal refs = %q; want %q", argv, want)
+			}
+		})
 	}
 }
 

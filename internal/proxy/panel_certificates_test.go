@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -269,7 +271,7 @@ func TestPanelCertificateStartupReconciliation(t *testing.T) {
 			st := newFakeSSLStore()
 			f.service.panelCertificates = st
 			f.service.certificateStatus = fixedPanelStatus{CertificateStatusObservation{Status: CertificateStatusAbsent}}
-			f.service.panelCertURLs = func(context.Context) ([]string, error) { return []string{raw}, nil }
+			f.service.reconcilePanel = func(ctx context.Context) error { return f.service.ReconcilePanelCertificates(ctx, []string{raw}) }
 			f.service.controlPlaneURL = func(context.Context) (string, error) { return raw, nil }
 			var id uuid.UUID
 			for range 2 {
@@ -305,11 +307,13 @@ func TestStoredPanelCertificateReconciliationRetries(t *testing.T) {
 	f := panelFixture(t)
 	st := newFakeSSLStore()
 	f.service.panelCertificates = st
-	f.service.panelCertURLs = func(context.Context) ([]string, error) { return nil, errors.New("settings unavailable") }
+	f.service.reconcilePanel = func(context.Context) error { return errors.New("settings unavailable") }
 	if err := f.service.reconcileStoredPanelCertificates(context.Background()); err == nil {
 		t.Fatal("missing settings error")
 	}
-	f.service.panelCertURLs = func(context.Context) ([]string, error) { return []string{"https://panel.example.com"}, nil }
+	f.service.reconcilePanel = func(ctx context.Context) error {
+		return f.service.ReconcilePanelCertificates(ctx, []string{"https://panel.example.com"})
+	}
 	st.certCreateErr = errors.New("store unavailable")
 	if err := f.service.reconcileStoredPanelCertificates(context.Background()); err == nil {
 		t.Fatal("missing store error")
@@ -343,7 +347,8 @@ func TestPanelCertificateStartupDuringTrial(t *testing.T) {
 			}}
 			svc := instance.NewService(repo, nil, nil)
 			t.Cleanup(svc.Close)
-			f.service.panelCertURLs = svc.ControlPlaneCertificateURLs
+			svc.SyncPanelCertificates = f.service.ReconcilePanelCertificates
+			f.service.reconcilePanel = svc.ReconcilePanelCertificates
 			f.service.controlPlaneURLs = svc.ControlPlaneURLs
 			for range 2 {
 				if err := f.service.reconcileStoredPanelCertificates(context.Background()); err != nil {
@@ -361,5 +366,36 @@ func TestPanelCertificateStartupDuringTrial(t *testing.T) {
 				t.Fatal("fallback intent missing")
 			}
 		})
+	}
+}
+
+func TestPanelCertificateReconciliationLogsErrorChanges(t *testing.T) {
+	f := panelFixture(t)
+	f.service.panelCertificates = newFakeSSLStore()
+	var logs bytes.Buffer
+	f.service.logger = slog.New(slog.NewTextHandler(&logs, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	failures := []string{"store unavailable", "store unavailable", "different error", "", "store unavailable"}
+	ticks := make(chan time.Time, len(failures))
+	for range failures {
+		ticks <- time.Now()
+	}
+	calls := 0
+	f.service.reconcilePanel = func(context.Context) error {
+		if calls == len(failures) {
+			cancel()
+			return nil
+		}
+		failure := failures[calls]
+		calls++
+		if failure == "" {
+			return nil
+		}
+		return errors.New(failure)
+	}
+	f.service.runPanelCertificates(ctx, ticks)
+	if got := strings.Count(logs.String(), "level=WARN"); got != 3 {
+		t.Fatalf("warnings=%d logs=%s", got, logs.String())
 	}
 }

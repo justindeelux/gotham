@@ -326,3 +326,70 @@ func TestControlPlaneURLClosePreservesTrialForRestart(t *testing.T) {
 		t.Fatalf("restart did not revert: %+v", rec)
 	}
 }
+
+func TestPanelCertificateReconciliationSerializesURLChanges(t *testing.T) {
+	for _, action := range []string{"confirm", "revert"} {
+		t.Run(action, func(t *testing.T) {
+			old, proposed := "https://old.example.com", "https://new.example.com"
+			repo := &timerRepo{rec: Stored{
+				ControlPlaneURL: &proposed,
+				PendingControlPlaneURL: &PendingControlPlaneURL{
+					Previous: &old, Proposed: proposed, Deadline: time.Now().Add(time.Minute), Synced: true,
+				},
+			}}
+			svc := NewService(repo, nil, nil)
+			t.Cleanup(svc.Close)
+			svc.ResyncProxy = func(context.Context) error { return nil }
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			var applied []string
+			svc.SyncPanelCertificates = func(_ context.Context, urls []string) error {
+				if svc.domainLock.TryLock() {
+					svc.domainLock.Unlock()
+					t.Error("certificate mutation did not hold domain lock")
+				}
+				once.Do(func() { close(entered); <-release })
+				applied = append(applied, urls[0])
+				return nil
+			}
+			reconciled := make(chan error, 1)
+			go func() { reconciled <- svc.ReconcilePanelCertificates(context.Background()) }()
+			<-entered
+			changed, started := make(chan error, 1), make(chan struct{})
+			go func() {
+				close(started)
+				var err error
+				if action == "confirm" {
+					_, err = svc.ConfirmControlPlaneURL(context.Background(), uuid.Nil, "new.example.com")
+				} else {
+					_, err = svc.RevertControlPlaneURL(context.Background(), uuid.Nil)
+				}
+				changed <- err
+			}()
+			<-started
+			completed := false
+			select {
+			case err := <-changed:
+				completed = true
+				t.Errorf("URL changed during certificate reconciliation: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			close(release)
+			if err := <-reconciled; err != nil {
+				t.Fatal(err)
+			}
+			if !completed {
+				if err := <-changed; err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := old
+			if action == "confirm" {
+				want = proposed
+			}
+			if len(applied) != 2 || applied[0] != old || applied[1] != want {
+				t.Fatalf("certificate snapshots=%v want old then %s", applied, want)
+			}
+		})
+	}
+}

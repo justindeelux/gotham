@@ -44,3 +44,10 @@ func TestResyncProxySeparatesSkippedRoutesFromFailedNodes(t *testing.T) {
 		})
 	}
 }
+
+func TestPanelCertificateReconciliationRequiresInstanceService(t *testing.T) {
+	s := &Server{}
+	if err := s.reconcilePanelCertificates(context.Background()); err == nil {
+		t.Fatal("missing instance service must fail without mutating certificate intents")
+	}
+}

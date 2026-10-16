@@ -126,9 +126,19 @@ func panelCertificateState(observation CertificateStatusObservation, usable bool
 func (s *SyncService) RunPanelCertificates(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	s.runPanelCertificates(ctx, ticker.C)
+}
+
+func (s *SyncService) runPanelCertificates(ctx context.Context, ticks <-chan time.Time) {
+	lastError := ""
 	for {
 		if err := s.reconcileStoredPanelCertificates(ctx); err != nil && ctx.Err() == nil {
-			s.logger.Warn("proxy: reconcile panel certificates", "error", err)
+			if err.Error() != lastError {
+				s.logger.Warn("proxy: reconcile panel certificates", "error", err)
+			}
+			lastError = err.Error()
+		} else {
+			lastError = ""
 		}
 		if err := s.refreshPanelCertificates(ctx); err != nil && ctx.Err() == nil {
 			s.logger.Debug("proxy: refresh panel certificate", "error", err)
@@ -136,22 +146,18 @@ func (s *SyncService) RunPanelCertificates(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticks:
 		}
 	}
 }
 
 func (s *SyncService) reconcileStoredPanelCertificates(ctx context.Context) error {
-	if s.panelCertURLs == nil || s.panelCertificates == nil {
+	if s.reconcilePanel == nil || s.panelCertificates == nil {
 		return nil
 	}
 	reconcileCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	urls, err := s.panelCertURLs(reconcileCtx)
-	if err != nil {
-		return err
-	}
-	return s.ReconcilePanelCertificates(reconcileCtx, urls)
+	return s.reconcilePanel(reconcileCtx)
 }
 
 func (s *SyncService) refreshPanelCertificates(ctx context.Context) error {

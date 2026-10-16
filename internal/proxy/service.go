@@ -141,9 +141,10 @@ func (e *PartialError) Is(target error) bool { return target == ErrPartialSync }
 // plugged in, and every tunable falls back to a documented default.
 type Config struct {
 	PanelCertificates SSLStore
-	// PanelCertificateURLs resolves confirmed hosts independently of trial routes.
-	PanelCertificateURLs func(context.Context) ([]string, error)
-	CertificateStatus    CertificateStatusService
+	// ReconcilePanelCertificates reads confirmed hosts and mutates intents atomically.
+	ReconcilePanelCertificates func(context.Context) error
+
+	CertificateStatus CertificateStatusService
 	// ControlPlaneURL resolves the effective instance URL; nil disables the panel route.
 	ControlPlaneURL  func(context.Context) (string, error)
 	ControlPlaneURLs func(context.Context) ([]string, error)
@@ -273,7 +274,7 @@ func (c Config) history() HistoryStore {
 // configuration in place.
 type SyncService struct {
 	panelCertificates SSLStore
-	panelCertURLs     func(context.Context) ([]string, error)
+	reconcilePanel    func(context.Context) error
 	certificateStatus CertificateStatusService
 	controlPlaneURL   func(context.Context) (string, error)
 	controlPlaneURLs  func(context.Context) ([]string, error)
@@ -355,7 +356,7 @@ func NewService(cfg Config) *SyncService {
 	}
 	return &SyncService{
 		panelCertificates: cfg.PanelCertificates,
-		panelCertURLs:     cfg.PanelCertificateURLs,
+		reconcilePanel:    cfg.ReconcilePanelCertificates,
 		certificateStatus: cfg.CertificateStatus,
 		controlPlaneURL:   cfg.ControlPlaneURL,
 		controlPlaneURLs:  cfg.ControlPlaneURLs,

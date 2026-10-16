@@ -52,13 +52,18 @@ func (s *Service) ControlPlaneURLs(ctx context.Context) ([]string, error) {
 	return urls, nil
 }
 
-// ControlPlaneCertificateURLs excludes unconfirmed hosts while HTTP trial routes stay active.
-func (s *Service) ControlPlaneCertificateURLs(ctx context.Context) ([]string, error) {
+// ReconcilePanelCertificates serializes the settings snapshot and intent mutation with URL changes.
+func (s *Service) ReconcilePanelCertificates(ctx context.Context) error {
+	s.domainLock.Lock()
+	defer s.domainLock.Unlock()
+	if s.SyncPanelCertificates == nil {
+		return nil
+	}
 	rec, err := s.repo.Load(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return s.panelCertificateURLs(rec), nil
+	return s.SyncPanelCertificates(ctx, s.panelCertificateURLs(rec))
 }
 
 func (s *Service) panelCertificateURLs(rec Stored) []string {

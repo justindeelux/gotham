@@ -836,6 +836,13 @@ func (s *Server) fileService() files.FileService {
 	return service
 }
 
+func (s *Server) reconcilePanelCertificates(ctx context.Context) error {
+	if s.instanceSvc == nil {
+		return errors.New("instance settings service is unavailable")
+	}
+	return s.instanceSvc.ReconcilePanelCertificates(ctx)
+}
+
 // proxyDialer is the mTLS ProxyService dial implemented by
 // *servers.ServerService. The HTTP layer type-asserts its server registry to
 // this interface, so tests that pass a fake registry simply leave the dialer
@@ -857,12 +864,7 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		return nil
 	}
 	cfg := proxy.Config{
-		PanelCertificateURLs: func(ctx context.Context) ([]string, error) {
-			if s.instanceSvc == nil {
-				return nil, nil
-			}
-			return s.instanceSvc.ControlPlaneCertificateURLs(ctx)
-		},
+		ReconcilePanelCertificates: s.reconcilePanelCertificates,
 		ControlPlaneURLs: func(ctx context.Context) ([]string, error) {
 			if s.instanceSvc == nil {
 				return nil, nil

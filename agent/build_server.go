@@ -78,9 +78,12 @@ func (s *BuildServer) BuildImage(stream agentv1.BuildService_BuildImageServer) e
 	ctx := stream.Context()
 
 	// Mark the build in flight before any toolchain work: an uninstall of
-	// docker/buildkit/railpack/pack must refuse while this is running.
+	// docker/buildkit/railpack/pack must refuse while this is running, and a
+	// build must not start into an uninstall's removal window.
 	if s.toolUse != nil {
-		s.toolUse.BeginBuild()
+		if err := s.toolUse.BeginBuild(); err != nil {
+			return status.Errorf(codes.Unavailable, "build refused: %v", err)
+		}
 		defer s.toolUse.EndBuild()
 	}
 

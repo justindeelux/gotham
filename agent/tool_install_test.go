@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -57,54 +59,67 @@ func (s *fakeToolStream) result() *agentv1.ToolResult {
 	return s.events[len(s.events)-1].GetResult()
 }
 
+// recordedCommand is one command the executor ran.
+type recordedCommand struct {
+	argv []string
+	root bool
+}
+
 // fakeToolRunner is a commandRunner for tests: it records every argv and, when
 // step is set, delegates to it instead of the default success.
 type fakeToolRunner struct {
 	mu    sync.Mutex
-	calls [][]string
-	step  func(ctx context.Context, argv []string, emit func(stream, line string) error) (int, error)
+	calls []recordedCommand
+	step  func(ctx context.Context, argv []string, root bool, emit func(stream, line string) error) (int, error)
 }
 
-func (r *fakeToolRunner) Run(ctx context.Context, step toolcatalog.Step, emit func(string, string) error) (int, error) {
+func (r *fakeToolRunner) Run(ctx context.Context, argv []string, root bool, emit func(string, string) error) (int, error) {
 	r.mu.Lock()
-	r.calls = append(r.calls, append([]string(nil), step.Argv...))
+	r.calls = append(r.calls, recordedCommand{argv: append([]string(nil), argv...), root: root})
 	override := r.step
 	r.mu.Unlock()
 	if override != nil {
-		return override(ctx, step.Argv, emit)
+		return override(ctx, argv, root, emit)
 	}
-	if err := emit(streamStdout, "ok: "+strings.Join(step.Argv, " ")); err != nil {
+	if err := emit(streamStdout, "ok: "+strings.Join(argv, " ")); err != nil {
 		return -1, err
 	}
 	return 0, nil
 }
 
-// commands returns the argv of every step the executor ran, in order.
+// commands returns the argv of every command the executor ran, in order.
 func (r *fakeToolRunner) commands() [][]string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([][]string(nil), r.calls...)
+	out := make([][]string, 0, len(r.calls))
+	for _, call := range r.calls {
+		out = append(out, call.argv)
+	}
+	return out
 }
 
-// commandIndex returns the position of the first step whose joined argv
-// contains fragment, or -1.
-func (r *fakeToolRunner) commandIndex(fragment string) int {
-	for i, argv := range r.commands() {
-		if strings.Contains(strings.Join(argv, " "), fragment) {
-			return i
+// allRoot reports whether every recorded command was marked root.
+func (r *fakeToolRunner) allRoot() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, call := range r.calls {
+		if !call.root {
+			return false
 		}
 	}
-	return -1
+	return len(r.calls) > 0
 }
 
-// testToolEnv is a fixed install environment so plans are host-independent.
-func testToolEnv() toolcatalog.Env {
-	return toolcatalog.Env{
-		Arch:    "amd64",
-		Distro:  toolcatalog.DistroApt,
-		BinDir:  "/usr/local/bin",
-		TempDir: "/tmp",
+// invoked returns the tool ids the executor asked the helper to act on, with
+// the verb stripped, in order.
+func (r *fakeToolRunner) invoked(verb string) []string {
+	var ids []string
+	for _, argv := range r.commands() {
+		if len(argv) == 3 && argv[1] == verb {
+			ids = append(ids, argv[2])
+		}
 	}
+	return ids
 }
 
 // installedNone reports every tool absent; installedOnly reports exactly the
@@ -120,13 +135,14 @@ func installedOnly(ids ...string) func(string) bool {
 }
 
 // TestToolServerInstallRunsDependenciesFirst proves the dependency chain
-// railpack => buildkit => docker is installed in order, each before the tool
-// that needs it, and the stream closes with a success result.
+// railpack => buildkit => docker is installed in order, each as the fixed
+// helper verb with a catalog id and elevated to root, and the stream closes
+// with a success result.
 func TestToolServerInstallRunsDependenciesFirst(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
 		withToolRunner(runner),
-		withToolEnv(testToolEnv()),
+		withToolHelper("/opt/gotham/gotham-toolctl"),
 		withToolInstalled(installedNone),
 	)
 
@@ -135,15 +151,16 @@ func TestToolServerInstallRunsDependenciesFirst(t *testing.T) {
 		t.Fatalf("InstallTool(railpack): %v", err)
 	}
 
-	dockerInstall := runner.commandIndex("apt-get install -y docker.io")
-	buildkitRun := runner.commandIndex("docker run")
-	railpackInstall := runner.commandIndex("gotham-railpack-install.sh -y -b")
-	switch {
-	case dockerInstall < 0 || buildkitRun < 0 || railpackInstall < 0:
-		t.Fatalf("missing a step; ran %v", runner.commands())
-	case dockerInstall >= buildkitRun || buildkitRun >= railpackInstall:
-		t.Fatalf("steps ran out of dependency order: docker=%d buildkit=%d railpack=%d",
-			dockerInstall, buildkitRun, railpackInstall)
+	if got, want := runner.invoked(helperInstallVerb), []string{toolcatalog.IDDocker, toolcatalog.IDBuildKit, toolcatalog.IDRailpack}; !equalStrings(got, want) {
+		t.Fatalf("install order = %v; want %v", got, want)
+	}
+	for _, argv := range runner.commands() {
+		if len(argv) != 3 || argv[0] != "/opt/gotham/gotham-toolctl" {
+			t.Fatalf("helper argv = %v; want [/opt/gotham/gotham-toolctl install-tool <id>]", argv)
+		}
+	}
+	if !runner.allRoot() {
+		t.Fatal("a helper step ran without root; the helper is the privileged path")
 	}
 
 	if result := stream.result(); result == nil || result.GetStatus() != toolStatusSucceeded || result.GetExitCode() != 0 {
@@ -157,7 +174,6 @@ func TestToolServerInstallIdempotent(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
 		withToolRunner(runner),
-		withToolEnv(testToolEnv()),
 		withToolInstalled(installedOnly(toolcatalog.IDRailpack, toolcatalog.IDBuildKit, toolcatalog.IDDocker)),
 	)
 
@@ -177,7 +193,7 @@ func TestToolServerInstallIdempotent(t *testing.T) {
 // reported in-band with its own exit code and the command's stderr, not as a
 // gRPC error, so the control plane can show what went wrong.
 func TestToolServerInstallFailureReportsExitCode(t *testing.T) {
-	runner := &fakeToolRunner{step: func(_ context.Context, argv []string, emit func(string, string) error) (int, error) {
+	runner := &fakeToolRunner{step: func(_ context.Context, _ []string, _ bool, emit func(string, string) error) (int, error) {
 		if err := emit(streamStderr, "E: unable to locate package git"); err != nil {
 			return -1, err
 		}
@@ -185,7 +201,6 @@ func TestToolServerInstallFailureReportsExitCode(t *testing.T) {
 	}}
 	server := NewToolServer(
 		withToolRunner(runner),
-		withToolEnv(testToolEnv()),
 		withToolInstalled(installedNone),
 	)
 
@@ -212,13 +227,12 @@ func TestToolServerInstallFailureReportsExitCode(t *testing.T) {
 // cancelled RPC, not as a failed install, and the command sees the
 // cancellation.
 func TestToolServerInstallCanceled(t *testing.T) {
-	runner := &fakeToolRunner{step: func(ctx context.Context, _ []string, _ func(string, string) error) (int, error) {
+	runner := &fakeToolRunner{step: func(ctx context.Context, _ []string, _ bool, _ func(string, string) error) (int, error) {
 		<-ctx.Done()
 		return -1, ctx.Err()
 	}}
 	server := NewToolServer(
 		withToolRunner(runner),
-		withToolEnv(testToolEnv()),
 		withToolInstalled(installedNone),
 	)
 
@@ -237,7 +251,7 @@ func TestToolServerInstallSecondCallBusy(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var once sync.Once
-	runner := &fakeToolRunner{step: func(ctx context.Context, _ []string, _ func(string, string) error) (int, error) {
+	runner := &fakeToolRunner{step: func(ctx context.Context, _ []string, _ bool, _ func(string, string) error) (int, error) {
 		once.Do(func() { close(started) })
 		select {
 		case <-release:
@@ -248,7 +262,6 @@ func TestToolServerInstallSecondCallBusy(t *testing.T) {
 	}}
 	server := NewToolServer(
 		withToolRunner(runner),
-		withToolEnv(testToolEnv()),
 		withToolInstalled(installedNone),
 	)
 
@@ -269,13 +282,35 @@ func TestToolServerInstallSecondCallBusy(t *testing.T) {
 	}
 }
 
+// TestToolServerInstallTimeout proves a command that outlives the install
+// timeout is killed and reported as a failed install, not left running.
+func TestToolServerInstallTimeout(t *testing.T) {
+	runner := &fakeToolRunner{step: func(ctx context.Context, _ []string, _ bool, _ func(string, string) error) (int, error) {
+		<-ctx.Done()
+		return -1, ctx.Err()
+	}}
+	server := NewToolServer(
+		withToolRunner(runner),
+		withToolInstalled(installedNone),
+		withToolTimeout(20*time.Millisecond),
+	)
+
+	stream := newFakeToolStream(context.Background())
+	if err := server.InstallTool(&agentv1.InstallToolRequest{Id: toolcatalog.IDGit}, stream); err != nil {
+		t.Fatalf("InstallTool(timeout): %v", err)
+	}
+	result := stream.result()
+	if result == nil || result.GetStatus() != toolStatusFailed || result.GetExitCode() != -1 {
+		t.Fatalf("final result = %v; want failed/-1", result)
+	}
+}
+
 // TestToolServerUninstallRefusesInUse proves an uninstall is refused while the
 // tool is busy, before any command runs.
 func TestToolServerUninstallRefusesInUse(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
 		withToolRunner(runner),
-		withToolEnv(testToolEnv()),
 		withToolInstalled(installedOnly(toolcatalog.IDBuildKit, toolcatalog.IDDocker)),
 		withToolInUse(func(id string) (bool, string) {
 			if id == toolcatalog.IDBuildKit {
@@ -300,7 +335,6 @@ func TestToolServerUninstallRefusesDependency(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
 		withToolRunner(runner),
-		withToolEnv(testToolEnv()),
 		withToolInstalled(installedOnly(toolcatalog.IDBuildKit, toolcatalog.IDDocker, toolcatalog.IDRailpack)),
 	)
 
@@ -313,8 +347,8 @@ func TestToolServerUninstallRefusesDependency(t *testing.T) {
 	if err := server.UninstallTool(&agentv1.InstallToolRequest{Id: toolcatalog.IDRailpack}, stream); err != nil {
 		t.Fatalf("UninstallTool(railpack): %v", err)
 	}
-	if runner.commandIndex("-r -b") < 0 {
-		t.Fatalf("railpack uninstall did not run the remove flag: %v", runner.commands())
+	if got, want := runner.invoked(helperUninstallVerb), []string{toolcatalog.IDRailpack}; !equalStrings(got, want) {
+		t.Fatalf("uninstall invoked %v; want %v", got, want)
 	}
 	if result := stream.result(); result == nil || result.GetStatus() != toolStatusSucceeded {
 		t.Fatalf("final result = %v; want succeeded", result)
@@ -327,7 +361,6 @@ func TestToolServerUninstallNotInstalledIsNoOp(t *testing.T) {
 	runner := &fakeToolRunner{}
 	server := NewToolServer(
 		withToolRunner(runner),
-		withToolEnv(testToolEnv()),
 		withToolInstalled(installedNone),
 	)
 
@@ -343,27 +376,25 @@ func TestToolServerUninstallNotInstalledIsNoOp(t *testing.T) {
 	}
 }
 
-// TestToolServerInstallTimeout proves a step that outlives the install timeout
-// is killed and reported as a failed install, not left running.
-func TestToolServerInstallTimeout(t *testing.T) {
-	runner := &fakeToolRunner{step: func(ctx context.Context, _ []string, _ func(string, string) error) (int, error) {
-		<-ctx.Done()
-		return -1, ctx.Err()
+// TestToolServerUninstallHoldsBuildGuard proves the tracker's uninstall mark is
+// held for the whole uninstall, so a build cannot start into the removal window.
+func TestToolServerUninstallHoldsBuildGuard(t *testing.T) {
+	tracker := NewToolUseTracker()
+	runner := &fakeToolRunner{step: func(_ context.Context, _ []string, _ bool, _ func(string, string) error) (int, error) {
+		if err := tracker.BeginBuild(); err == nil {
+			t.Error("a build started while an uninstall was in flight")
+			tracker.EndBuild()
+		}
+		return 0, nil
 	}}
 	server := NewToolServer(
 		withToolRunner(runner),
-		withToolEnv(testToolEnv()),
-		withToolInstalled(installedNone),
-		withToolTimeout(20*time.Millisecond),
+		withToolInstalled(installedOnly(toolcatalog.IDPack)),
+		WithToolUse(tracker),
 	)
 
-	stream := newFakeToolStream(context.Background())
-	if err := server.InstallTool(&agentv1.InstallToolRequest{Id: toolcatalog.IDGit}, stream); err != nil {
-		t.Fatalf("InstallTool(timeout): %v", err)
-	}
-	result := stream.result()
-	if result == nil || result.GetStatus() != toolStatusFailed || result.GetExitCode() != -1 {
-		t.Fatalf("final result = %v; want failed/-1", result)
+	if err := server.UninstallTool(&agentv1.InstallToolRequest{Id: toolcatalog.IDPack}, newFakeToolStream(context.Background())); err != nil {
+		t.Fatalf("UninstallTool(pack): %v", err)
 	}
 }
 
@@ -378,4 +409,103 @@ func TestToolServerInstallUnknownTool(t *testing.T) {
 	if err := server.InstallTool(&agentv1.InstallToolRequest{}, newFakeToolStream(context.Background())); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("InstallTool(empty) = %v; want InvalidArgument", err)
 	}
+}
+
+// TestExecRunnerDrainsOutputBeforeWait is the regression for the pipe/Wait
+// race: reading the pipes concurrently with command.Wait drops trailing lines
+// (often the error message). Every emitted line must be captured.
+func TestExecRunnerDrainsOutputBeforeWait(t *testing.T) {
+	runner := execRunner{}
+	var stdout, stderr []string
+	// printf is a real argument vector here (no shell), and the format string
+	// holds no tool input; 500 lines is enough that a Wait/read race truncates.
+	format := strings.Repeat("line\n", 500)
+	code, err := runner.Run(context.Background(), []string{"printf", format}, false,
+		func(stream, line string) error {
+			switch stream {
+			case streamStdout:
+				stdout = append(stdout, line)
+			case streamStderr:
+				stderr = append(stderr, line)
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("exit code = %d; want 0", code)
+	}
+	if len(stdout) != 500 {
+		t.Fatalf("captured %d stdout lines; want 500 (trailing output was truncated)", len(stdout))
+	}
+	if len(stderr) != 0 {
+		t.Fatalf("unexpected stderr: %v", stderr)
+	}
+}
+
+// TestExecRunnerReportsExitCode proves a non-zero exit is returned with its
+// code so the executor can report it.
+func TestExecRunnerReportsExitCode(t *testing.T) {
+	runner := execRunner{}
+	code, err := runner.Run(context.Background(), []string{"false"}, false, func(string, string) error { return nil })
+	if err == nil {
+		t.Fatal("Run(false) = nil error; want a non-zero exit error")
+	}
+	if code != 1 {
+		t.Fatalf("exit code = %d; want 1", code)
+	}
+}
+
+// TestExecRunnerElevatesRootSteps proves a root command is run through the
+// fixed `sudo -n` prefix with the same argv, and that a bogus sudo refusal is
+// surfaced rather than silently running unelevated.
+func TestExecRunnerElevatesRootSteps(t *testing.T) {
+	dir := t.TempDir()
+	sudo := filepath.Join(dir, "sudo")
+	// A stand-in sudo: drop the -n flag and exec the rest.
+	script := "#!/bin/sh\n[ \"$1\" = \"-n\" ] || exit 9\nshift\nexec \"$@\"\n"
+	if err := os.WriteFile(sudo, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake sudo: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	runner := execRunner{}
+	var stdout []string
+	var agentLines []string
+	code, err := runner.Run(context.Background(), []string{"printf", "root\n"}, true, func(stream, line string) error {
+		switch stream {
+		case streamStdout:
+			stdout = append(stdout, line)
+		case streamAgent:
+			agentLines = append(agentLines, line)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Run(root): %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("exit code = %d; want 0", code)
+	}
+	if len(stdout) != 1 || stdout[0] != "root" {
+		t.Fatalf("stdout = %v; want [root]", stdout)
+	}
+	if len(agentLines) == 0 || !strings.HasPrefix(agentLines[0], "$ sudo -n ") {
+		t.Fatalf("agent command line = %v; want a `$ sudo -n ...` prefix", agentLines)
+	}
+}
+
+// equalStrings compares two string slices without importing slices in every
+// test file.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

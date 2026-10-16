@@ -685,6 +685,42 @@ exactly; `status` already reported the link DNS as the effective list);
 covered by `TestHostctlDNSOnlyOverridesLinkDNS` and
 `TestGetReportsEffectiveLinkDNS`.
 
+## Host tool installer (JUS-175)
+
+The node agent's `ToolService` installs and removes the host tools the platform
+builds with (Railpack, BuildKit, `pack`, Docker, git) through
+`gotham-toolctl.sh`, a fixed root-owned helper with the same privilege model as
+the update wrapper and `gotham-hostctl`.
+
+```sh
+sudo install -D -m 0755 -o root -g root deploy/gotham-toolctl.sh /usr/libexec/gotham/gotham-toolctl
+sudo deploy/install-toolctl-sudoers.sh gotham-agent
+```
+
+- sudoers grants exactly one rule per verb and tool id (`install-tool <id>`,
+  `uninstall-tool <id>`, no wildcards); the agent passes only a catalog id and
+  the helper owns every executable argv, so a compromised agent cannot name a
+  package, a URL or an extra flag.
+- Detected-only host units (the systemd units, `networkctl`, `systemctl`) have
+  no installer: the agent refuses them with `FAILED_PRECONDITION`.
+- Downloads are pinned: Railpack and `pack` come from versioned release
+  tarballs with sha256 constants in the helper, BuildKit from the digest-pinned
+  `moby/buildkit:v0.34.0` image. A mismatch aborts.
+- The agent resolves dependencies (`railpack → buildkit → docker`), installs
+  one tool per helper call, runs one install at a time per node, and refuses an
+  uninstall while a build runs or an installed tool depends on it.
+- The agent unit is sandboxed (`ProtectSystem=full`), so the helper re-executes
+  itself via `systemd-run --pipe --wait --collect` in a transient unit outside
+  the unit's read-only namespace. The streamed output is the helper's
+  stdout/stderr.
+- Standalone dry-run for a debugging host (as root):
+  `GOTHAM_TOOLCTL_DRYRUN=1 GOTHAM_TOOLCTL_ARCH=amd64 GOTHAM_TOOLCTL_DISTRO=apt
+  /usr/libexec/gotham/gotham-toolctl install-tool railpack`. The
+  `GOTHAM_TOOLCTL_*` overrides are honoured only without sudo, like hostctl.
+- Covered by `deploy/toolctl_test.go` (allow-list refusals, pinned/verified
+  downloads per arch, the git-vs-docker unit step, BuildKit tag-last order and
+  the test root redirect).
+
 ## Hardening lessons (self-update and release, Phase 9)
 
 **Privileges (root touching service-owned paths)**

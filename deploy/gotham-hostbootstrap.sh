@@ -6,14 +6,21 @@
 #
 # It is the single source of the host-helper payload. It runs only from a
 # root-trusted source: `install.sh` (run by the operator as root, from the
-# release checkout) and the root self-update wrapper `gotham-update`, which
-# re-applies the already-installed payload. It never reads a service-writable
-# file as code and never executes the service binary; the payload it writes
-# under /usr/libexec/gotham/hostbootstrap is root-owned, so root can re-read it
-# safely on later updates.
+# release checkout) and the root self-update wrapper `gotham-update`. The wrapper
+# does not hand it a service-writable file: it fetches the payload from the
+# signed release itself and verifies it root-side (see
+# deploy/gotham-hostbootstrap-fetch.sh) before calling `apply-release`. The
+# payload it writes under /usr/libexec/gotham/hostbootstrap is root-owned, so
+# root can re-read it safely on later updates.
 #
-#   gotham-hostbootstrap create <cp-user>   install payload + apply
+#   gotham-hostbootstrap create <cp-user>   install payload + trust anchor + apply
 #   gotham-hostbootstrap apply              apply the payload only
+#   gotham-hostbootstrap apply-release <dir> apply a verified payload from <dir>
+#
+# `create` is the one-time bridge (JUS-188): besides the live helpers it installs
+# the root-owned release public key, the fetch helper and the canonical update
+# wrapper, so a host that predates the refresh support gains it with a single
+# root command and refreshes its own helper content on every later self-update.
 #
 # Fixed paths, fixed content (from this directory's sibling scripts): nothing is
 # read from the environment or configuration. A destination that is a symlink is
@@ -39,6 +46,17 @@ SUDOERS_DIR="${ROOT}/etc/sudoers.d"
 HOSTCTL="${HELPER_DIR}/gotham-hostctl"
 TOOLCTL="${HELPER_DIR}/gotham-toolctl"
 HOSTCTL_DROPIN="${SUDOERS_DIR}/gotham-hostctl"
+# Root-owned trust anchor + the fetch helper the update wrapper runs (JUS-188).
+SIGNING_KEY="${HELPER_DIR}/gotham-signing-key.pub"
+FETCH_SCRIPT="${HELPER_DIR}/gotham-hostbootstrap-fetch.sh"
+WRAPPER="${HELPER_DIR}/gotham-update"
+
+# install_optional src dst mode: install a script only when this checkout ships
+# it, so a caller that lacks the newer siblings still installs the helper.
+install_optional() {
+    [ -f "$1" ] || return 0
+    install_file "$1" "$2" "$3"
+}
 
 # Closed verb set the control plane may run the host helper with; the last rule
 # is the single pinned repair verb (the tool installer re-applies the payload).
@@ -151,6 +169,7 @@ create() {
     install_file "${SELF_DIR}/gotham-hostctl.sh" "${PAYLOAD_DIR}/gotham-hostctl" 0755
     install_file "${SELF_DIR}/gotham-toolctl.sh" "${PAYLOAD_DIR}/gotham-toolctl" 0755
     install_file "${SELF_DIR}/gotham-hostbootstrap.sh" "${PAYLOAD_DIR}/gotham-hostbootstrap.sh" 0755
+    install_optional "${SELF_DIR}/gotham-hostbootstrap-fetch.sh" "${PAYLOAD_DIR}/gotham-hostbootstrap-fetch.sh" 0755
 
     tmp="$(mktemp "${PAYLOAD_DIR}/.sudoers.XXXXXX")" || die "cannot create a payload temp file"
     hostctl_sudoers "${cp_user}" >"${tmp}"
@@ -159,6 +178,12 @@ create() {
     rm -f "${tmp}"
 
     apply_payload
+    # One-time bridge (JUS-188): install the root-owned release public key, the
+    # fetch helper and the canonical update wrapper next to the helper, so the
+    # wrapper can verify and apply released payloads on every later self-update.
+    install_optional "${SELF_DIR}/gotham-hostbootstrap-fetch.sh" "${FETCH_SCRIPT}" 0755
+    install_optional "${SELF_DIR}/gotham-update.sh" "${WRAPPER}" 0755
+    install_optional "${SELF_DIR}/gotham-signing-key.pub" "${SIGNING_KEY}" 0644
     echo "gotham-hostbootstrap: installed the host helper for ${cp_user}"
 }
 
@@ -168,8 +193,39 @@ apply() {
     echo "gotham-hostbootstrap: re-applied the host helper payload"
 }
 
+# apply-release src: install a payload the root update wrapper fetched from the
+# signed release and verified root-side (JUS-188). src is a root-only staging
+# directory, so these bytes are already authenticated; this only installs them.
+# The rendered drop-in is not shipped in the release (it names the control-plane
+# user), so it is preserved from the installed payload and re-applied.
+apply_release() {
+    # rel_src, not src: install_file assigns its own global src/dst/mode.
+    rel_src="$1"
+    [ -d "${rel_src}" ] || die "payload source ${rel_src} is not a directory" 2
+    for f in gotham-hostctl gotham-toolctl; do
+        [ -f "${rel_src}/${f}" ] || die "payload source is missing ${f}" 2
+    done
+    if [ -L "${rel_src}/gotham-hostctl" ] || [ -L "${rel_src}/gotham-toolctl" ]; then
+        die "refusing a symlinked payload source in ${rel_src}" 2
+    fi
+    ensure_dir "${PAYLOAD_DIR}" 0755
+    [ -f "${PAYLOAD_DIR}/gotham-hostctl.sudoers" ] \
+        || die "no installed ${PAYLOAD_DIR}/gotham-hostctl.sudoers; run create first" 2
+
+    install_file "${rel_src}/gotham-hostctl" "${PAYLOAD_DIR}/gotham-hostctl" 0755
+    install_file "${rel_src}/gotham-toolctl" "${PAYLOAD_DIR}/gotham-toolctl" 0755
+    install_optional "${rel_src}/gotham-hostbootstrap.sh" "${PAYLOAD_DIR}/gotham-hostbootstrap.sh" 0755
+    install_optional "${rel_src}/gotham-hostbootstrap-fetch.sh" "${PAYLOAD_DIR}/gotham-hostbootstrap-fetch.sh" 0755
+
+    apply_payload
+    install_optional "${rel_src}/gotham-hostbootstrap-fetch.sh" "${FETCH_SCRIPT}" 0755
+    # Refresh the wrapper too, so future updates use the released logic.
+    install_optional "${rel_src}/gotham-update.sh" "${WRAPPER}" 0755
+    echo "gotham-hostbootstrap: applied the released host-helper payload"
+}
+
 MODE="${1:-}"
-[ "$#" -ge 1 ] || die "usage: gotham-hostbootstrap create <cp-user> | apply" 2
+[ "$#" -ge 1 ] || die "usage: gotham-hostbootstrap create <cp-user> | apply | apply-release <dir>" 2
 
 # A root-owned operation: refuse a non-root caller unless the test root seam is
 # in use (which writes only under that test root).
@@ -185,7 +241,11 @@ case "${MODE}" in
     apply)
         apply
         ;;
+    apply-release)
+        [ "$#" -ge 2 ] || die "usage: gotham-hostbootstrap apply-release <dir>" 2
+        apply_release "$2"
+        ;;
     *)
-        die "usage: gotham-hostbootstrap create <cp-user> | apply" 2
+        die "usage: gotham-hostbootstrap create <cp-user> | apply | apply-release <dir>" 2
         ;;
 esac

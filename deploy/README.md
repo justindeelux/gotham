@@ -622,10 +622,13 @@ privilege model as the update wrapper. The control plane (never the agent) runs
 **Install (root-trusted source only).** `deploy/gotham-hostbootstrap.sh` is the
 single installer of the helper. `install.sh` (run by the operator as root) runs
 it once as `sh deploy/gotham-hostbootstrap.sh create <control-plane-user>`; the
-self-update wrapper re-applies it on every update from the root-owned payload at
-`/usr/libexec/gotham/hostbootstrap/`. It writes only fixed root-owned paths:
+self-update wrapper refreshes the helper from the signed release on every update
+(see *Helper refresh on self-update* below), applying the root-owned payload at
+`/usr/libexec/gotham/hostbootstrap/`. `create` writes only fixed root-owned paths:
 
-- `/usr/libexec/gotham/gotham-hostctl` and `gotham-toolctl` (root:root 0755);
+- `/usr/libexec/gotham/gotham-hostctl` and `gotham-toolctl` and the canonical
+  `gotham-update` wrapper (root:root 0755), plus the root-owned release public key
+  `gotham-signing-key.pub` and the fetch helper `gotham-hostbootstrap-fetch.sh`;
 - the payload `/usr/libexec/gotham/hostbootstrap/` (the same scripts, the
   rendered `gotham-hostctl.sudoers`, and its own installer copy);
 - `/etc/sudoers.d/gotham-hostctl` for the actual control-plane user: the five
@@ -637,14 +640,14 @@ atomically; a symlinked destination is refused; a sudoers drop-in is validated
 with `visudo -cf` before the rename, so a broken file is never left behind. It is
 idempotent and reads no environment or configuration (the console name is the
 control-plane user the installer passes). No root process ever executes or reads
-as code a file the service user can write: the wrapper only re-reads the
-root-owned payload, and the service binary (owned by the service user) is never
-run as root.
+as code a file the service user can write: the wrapper only runs the root-owned
+payload after verifying it against the signed release, and the service binary
+(owned by the service user) is never run as root.
 
 The agent's `/etc/sudoers.d/gotham-toolctl` is installed by `install-agent.sh`
-(`install-toolctl-sudoers.sh`), unchanged; the control plane only re-applies the
-host-helper payload, so a custom service user's hostctl grant is never rewritten
-for `gotham`.
+(`install-toolctl-sudoers.sh`), unchanged; the control plane's refresh only
+rewrites the host-helper payload, so a custom service user's hostctl grant is
+never rewritten for `gotham`.
 
 **In-product install: only where it can succeed.** The pinned repair rule
 (`gotham-toolctl install-tool gotham-hostctl`) lives in the same drop-in as the
@@ -666,25 +669,44 @@ covers:
   refused with it;
 - the payload was never installed (a host installed before this feature).
 
-**Helper refresh (honest limitation).** The payload is written only by the
-(root, operator-run) installer, and the self-update wrapper itself is rendered by
-`install.sh` only. So:
+**Helper refresh on self-update (JUS-188).** The helper content ships inside the
+signed release, and the root update wrapper refreshes it on every self-update —
+root-side, from a root-only staging directory. The control plane stages nothing:
+a payload staged by the service user is exactly the root-escalation path the
+helper design forbids. Instead:
 
-- a **deleted** helper or drop-in is restored only on a host whose wrapper already
-  has the `apply_host_bootstrap_payload` step and whose payload exists (re-applied
-  before every restart);
-- a host that predates this feature has an **old wrapper with no apply step** and
-  **no payload**, so no self-update can install the helper — only re-running the
-  installer can;
-- the helper *content* never upgrades through self-update at all (the release
-  ships binaries only, and a root-owned payload must not be replaced from a
-  service-writable artifact). Upgrading the helper means re-running the installer.
+1. the release ships `gotham-hosthelpers.tar.gz`, and the control-plane manifest
+   binds its sha256 (`helper_file`, `helper_sha256`) inside the same Ed25519
+   signature that already authenticates the release;
+2. `gotham-update` (root) fetches the manifest, its signature and the payload into
+   a root-owned 0700 directory (`deploy/gotham-hostbootstrap-fetch.sh`), verifies
+   the manifest against the **root-owned** release public key
+   (`/usr/libexec/gotham/gotham-signing-key.pub`) and the payload digest against
+   the signed manifest, refusing absolute/`..`/symlink archive entries;
+3. only then does it run the verified payload's `apply-release`, which installs
+   the live `gotham-hostctl`/`gotham-toolctl`, refreshes the root-owned payload
+   and the wrapper itself, and re-applies the rendered drop-in (the release never
+   carries the drop-in, so the control-plane user is preserved).
 
-Manual recovery/upgrade is the same fixed command:
+Every failure is logged and skipped, so a broken or tampered payload can never
+block or roll back an update. A host that predates the refresh support (no
+root-owned key or fetch helper) is a clean no-op; it gains the support with the
+one-time bridge below and refreshes its own content on every later self-update.
+
+**One-time bridge (hosts installed before JUS-188).** `gotham-hostbootstrap
+create` now also installs the root-owned release public key, the fetch helper and
+the canonical wrapper next to the helper, so a single root command on a legacy
+host enables the refresh. `install.sh` runs it, and it is also the manual
+recovery/upgrade command:
 
 ```sh
 sudo sh deploy/gotham-hostbootstrap.sh create <control-plane-user>
 ```
+
+There is no privileged path from the control plane to install the anchor: the
+service user cannot write `/usr/libexec/gotham`, so only the (root, operator)
+installer or this command can provision it. Once provisioned, helper *content*
+and the wrapper upgrade through self-update like the binary does.
 
 - sudoers grants exactly five verbs (`status`, `apply-network`, `confirm-network`,
   `revert-network`, `apply-system`), plus the single repair verb

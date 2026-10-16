@@ -27,6 +27,14 @@ type Manifest struct {
 	Arch    string
 	File    string
 	SHA256  string
+	// HelperFile and HelperSHA256 optionally bind a co-shipped host-helper
+	// payload archive (the deploy/ helper scripts, tarred) to the same
+	// signature. The control plane's root update wrapper verifies the payload
+	// against HelperSHA256 before applying it (JUS-188); an empty pair means the
+	// release ships no helper payload. Optional for every existing consumer:
+	// the Go applier verifies only the binary SHA256 and ignores these fields.
+	HelperFile   string
+	HelperSHA256 string
 }
 
 // ManifestName returns the manifest asset name for arch.
@@ -56,6 +64,16 @@ func BuildManifest(version, channel, arch, file string, artifact []byte) Manifes
 	}
 }
 
+// WithHelper binds a co-shipped helper payload archive (its file name and
+// bytes) to the manifest, returning the updated manifest. The digest is what
+// the root update wrapper checks before applying the payload.
+func (m Manifest) WithHelper(name string, data []byte) Manifest {
+	sum := sha256.Sum256(data)
+	m.HelperFile = name
+	m.HelperSHA256 = hex.EncodeToString(sum[:])
+	return m
+}
+
 // Marshal renders the manifest deterministically (one key=value per line).
 func (m Manifest) Marshal() []byte {
 	var b strings.Builder
@@ -64,6 +82,12 @@ func (m Manifest) Marshal() []byte {
 	fmt.Fprintf(&b, "arch=%s\n", m.Arch)
 	fmt.Fprintf(&b, "file=%s\n", m.File)
 	fmt.Fprintf(&b, "sha256=%s\n", m.SHA256)
+	// Omitted entirely for a release with no helper payload, so older manifests
+	// render byte-for-byte as before.
+	if m.HelperFile != "" && m.HelperSHA256 != "" {
+		fmt.Fprintf(&b, "helper_file=%s\n", m.HelperFile)
+		fmt.Fprintf(&b, "helper_sha256=%s\n", m.HelperSHA256)
+	}
 	return []byte(b.String())
 }
 
@@ -94,6 +118,10 @@ func ParseManifest(data []byte) (Manifest, error) {
 			m.File = strings.TrimSpace(value)
 		case "sha256":
 			m.SHA256 = strings.TrimSpace(value)
+		case "helper_file":
+			m.HelperFile = strings.TrimSpace(value)
+		case "helper_sha256":
+			m.HelperSHA256 = strings.TrimSpace(value)
 		}
 	}
 	switch {
@@ -110,6 +138,20 @@ func ParseManifest(data []byte) (Manifest, error) {
 	}
 	if _, err := hex.DecodeString(m.SHA256); err != nil {
 		return Manifest{}, fmt.Errorf("%w: malformed sha256", ErrManifest)
+	}
+	// The helper binding is optional, but a manifest that names one without a
+	// digest (or with a malformed digest) is rejected rather than silently
+	// accepted: the root wrapper refuses a payload it cannot check.
+	if m.HelperFile != "" || m.HelperSHA256 != "" {
+		if m.HelperFile == "" {
+			return Manifest{}, fmt.Errorf("%w: helper_sha256 without helper_file", ErrManifest)
+		}
+		if len(m.HelperSHA256) != 64 {
+			return Manifest{}, fmt.Errorf("%w: missing or malformed helper_sha256", ErrManifest)
+		}
+		if _, err := hex.DecodeString(m.HelperSHA256); err != nil {
+			return Manifest{}, fmt.Errorf("%w: malformed helper_sha256", ErrManifest)
+		}
 	}
 	return m, nil
 }

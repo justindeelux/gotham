@@ -188,7 +188,7 @@ bake_installer() {
         install-sudoers.sh gotham.service install-agent.sh install-agent-lib.sh \
         gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service \
         gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostbootstrap.sh \
-        gotham-hostctl.sh; do
+        gotham-hostbootstrap-fetch.sh gotham-signing-key.pub gotham-hostctl.sh; do
         ln -sf "${SCRIPT_DIR}/${_sib}" "$(dirname "$1")/${_sib}"
     done
 }
@@ -346,13 +346,14 @@ echo "PASS: localhost agent wiring present and test mode skips it (JUS-5)"
 # "bad interpreter: Permission denied".
 for script in install.sh install-agent.sh install-sudoers.sh install-agent-sudoers.sh \
     gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostbootstrap.sh \
-    test-release-install.sh verify-systemd.sh verify-agent-update.sh; do
+    gotham-hostbootstrap-fetch.sh test-release-install.sh verify-systemd.sh verify-agent-update.sh; do
     [ -x "${SCRIPT_DIR}/${script}" ] \
         || { echo "FAIL: ${script} is not executable (chmod +x it)" >&2; exit 1; }
 done
 if git -C "${REPO_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
     for script in install.sh install-agent.sh install-sudoers.sh install-agent-sudoers.sh \
-        gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostbootstrap.sh; do
+        gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostbootstrap.sh \
+        gotham-hostbootstrap-fetch.sh; do
         mode="$(git -C "${REPO_DIR}" ls-files -s -- "deploy/${script}" | awk '{print $1}')"
         [ "${mode}" = "100755" ] \
             || { echo "FAIL: deploy/${script} is committed mode ${mode}, want 100755" >&2; exit 1; }
@@ -1212,7 +1213,7 @@ _rr_extra="$(diff "${INSTALL_SH}" "${RR_INSTALLER}" | grep '^>' | grep -vcE '^> 
         install-sudoers.sh gotham.service install-agent.sh install-agent-lib.sh \
         gotham-agent-updater.conf install-agent-sudoers.sh gotham-agent.service \
         gotham-toolctl.sh install-toolctl-sudoers.sh gotham-hostbootstrap.sh \
-        gotham-hostctl.sh; do
+        gotham-hostbootstrap-fetch.sh gotham-signing-key.pub gotham-hostctl.sh; do
         ln -sf "${SCRIPT_DIR}/${_sib}" "$(dirname "${RR_INSTALLER}")/${_sib}"
     done
     REAL_OPENSSL="$(command -v openssl)"

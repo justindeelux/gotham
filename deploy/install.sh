@@ -160,7 +160,7 @@ CP_HOSTS="${CP_HOSTS}${CP_HOSTS_OPT}"
 CP_HOSTS="$(printf '%s' "${CP_HOSTS}" | tr ',' ' ')"
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-for sibling in release-verify.sh install-agent-lib.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service gotham-hostbootstrap.sh gotham-hostctl.sh gotham-toolctl.sh; do
+for sibling in release-verify.sh install-agent-lib.sh gotham-update.sh gotham-updater.conf install-sudoers.sh gotham.service gotham-hostbootstrap.sh gotham-hostbootstrap-fetch.sh gotham-hostctl.sh gotham-toolctl.sh gotham-signing-key.pub; do
     if [ ! -f "${SCRIPT_DIR}/${sibling}" ]; then
         echo "install.sh: ${sibling} must be next to this script (run it from the repository checkout)" >&2
         exit 2

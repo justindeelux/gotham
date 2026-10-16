@@ -115,4 +115,53 @@ fi
 grep -q "no installed payload" "${SCRATCH}/nopay.log" || fail "missing-payload refusal was not explained"
 pass "apply without a payload refuses clearly"
 
+# ---- create installs the one-time bridge artifacts (JUS-188) ---------------
+# The root-owned release key, the fetch helper and the canonical wrapper, so the
+# update wrapper can verify and apply released payloads on later self-updates.
+for f in usr/libexec/gotham/gotham-signing-key.pub \
+    usr/libexec/gotham/gotham-hostbootstrap-fetch.sh \
+    usr/libexec/gotham/gotham-update \
+    usr/libexec/gotham/hostbootstrap/gotham-hostbootstrap-fetch.sh; do
+    [ -f "${ROOT1}/${f}" ] || fail "create did not install the bridge artifact ${f}"
+done
+pass "create installs the root key, fetch helper and wrapper (one-time bridge)"
+
+# ---- apply-release installs a verified payload, keeps the pinned drop-in ---
+ROOT5="$(root_for "${SCRATCH}/root5")"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT5}" sh "${BOOTSTRAP}" create bob >/dev/null
+SRC="${SCRATCH}/payload-src"
+mkdir -p "${SRC}"
+printf '#!/bin/sh\necho refreshed-hostctl\n' >"${SRC}/gotham-hostctl"
+printf '#!/bin/sh\necho refreshed-toolctl\n' >"${SRC}/gotham-toolctl"
+printf '#!/bin/sh\necho refreshed-bootstrap\n' >"${SRC}/gotham-hostbootstrap.sh"
+printf '#!/bin/sh\necho refreshed-fetch\n' >"${SRC}/gotham-hostbootstrap-fetch.sh"
+printf '#!/bin/sh\necho refreshed-wrapper\n' >"${SRC}/gotham-update.sh"
+GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT5}" sh "${BOOTSTRAP}" apply-release "${SRC}" >/dev/null
+grep -q refreshed-hostctl "${ROOT5}/usr/libexec/gotham/gotham-hostctl" || fail "apply-release did not refresh the live hostctl"
+grep -q refreshed-toolctl "${ROOT5}/usr/libexec/gotham/gotham-toolctl" || fail "apply-release did not refresh the live toolctl"
+grep -q refreshed-fetch "${ROOT5}/usr/libexec/gotham/gotham-hostbootstrap-fetch.sh" || fail "apply-release did not refresh the live fetch helper"
+grep -q refreshed-wrapper "${ROOT5}/usr/libexec/gotham/gotham-update" || fail "apply-release did not refresh the wrapper"
+grep -q refreshed-toolctl "${ROOT5}/usr/libexec/gotham/hostbootstrap/gotham-toolctl" || fail "apply-release did not refresh the payload"
+grep -q "bob ALL=(root)" "${ROOT5}/etc/sudoers.d/gotham-hostctl" || fail "the rendered drop-in user was lost"
+grep -q "gotham ALL=(root)" "${ROOT5}/etc/sudoers.d/gotham-hostctl" && fail "the drop-in user changed"
+pass "apply-release installs a verified payload and keeps the pinned drop-in"
+
+# ---- apply-release without a rendered drop-in refuses ----------------------
+ROOT6="$(root_for "${SCRATCH}/root6")"
+if GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT6}" sh "${BOOTSTRAP}" apply-release "${SRC}" >"${SCRATCH}/norelay.log" 2>&1; then
+    fail "apply-release without a rendered drop-in succeeded"
+fi
+grep -q "run create first" "${SCRATCH}/norelay.log" || fail "the missing-drop-in refusal was not explained"
+pass "apply-release refuses without a rendered drop-in"
+
+# ---- apply-release refuses a symlinked payload source (TOCTOU) -------------
+rm -f "${SRC}/gotham-toolctl"
+ln -s /etc/passwd "${SRC}/gotham-toolctl"
+if GOTHAM_HOST_BOOTSTRAP_ROOT="${ROOT5}" sh "${BOOTSTRAP}" apply-release "${SRC}" >"${SCRATCH}/srclink.log" 2>&1; then
+    fail "apply-release accepted a symlinked payload source"
+fi
+grep -q "refusing a symlinked payload source" "${SCRATCH}/srclink.log" || fail "the symlinked source was not explained"
+rm -f "${SRC}/gotham-toolctl"
+pass "apply-release refuses a symlinked payload source"
+
 echo "ALL HOST-BOOTSTRAP TESTS PASSED"

@@ -272,3 +272,9 @@ jobs:
 
       - name: Agent reinstall behaviours (test-agent-install.sh)
         run: sh deploy/test-agent-install.sh
+
+      - name: Host helper bootstrap (test-host-bootstrap.sh)
+        run: sh deploy/test-host-bootstrap.sh
+
+      - name: Host helper refresh (test-host-helper-refresh.sh)
+        run: sh deploy/test-host-helper-refresh.sh

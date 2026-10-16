@@ -13,6 +13,16 @@ import (
 	"testing"
 
 	"github.com/justindeelux/gotham/internal/config"
+	"github.com/justindeelux/gotham/internal/databases"
+	"github.com/justindeelux/gotham/internal/deploy"
+	"github.com/justindeelux/gotham/internal/files"
+	"github.com/justindeelux/gotham/internal/notifications"
+	"github.com/justindeelux/gotham/internal/proxy"
+	"github.com/justindeelux/gotham/internal/servers"
+	"github.com/justindeelux/gotham/internal/services"
+	"github.com/justindeelux/gotham/internal/teams"
+	"github.com/justindeelux/gotham/internal/updates"
+	"github.com/justindeelux/gotham/internal/webhooks"
 )
 
 // stubPinger is a deterministic Pinger for tests.
@@ -187,5 +197,43 @@ func TestNewWarnsOnMissingTrustedProxyForOAuth(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "no trusted proxies configured") {
 		t.Errorf("log = %q, want a missing trusted-proxy warning", buf.String())
+	}
+}
+
+// TestLogDisabledFeatures pins the startup diagnostic: one line per feature
+// switched off by its kill-switch flag, naming the module and the flag, and no
+// line for a feature that is on. Product copy points at the administrator, so
+// this log line is how that administrator diagnoses which module is off.
+func TestLogDisabledFeatures(t *testing.T) {
+	flags := []string{
+		deploy.FeatureEnv, webhooks.FeatureEnv, databases.FeatureEnv,
+		services.FeatureEnv, teams.FeatureEnv, files.FeatureEnv,
+		notifications.FeatureEnv, proxy.FeatureEnv, servers.FeatureEnv,
+		updates.FeatureEnv,
+	}
+	// Every flag is set explicitly so the assertion does not depend on the
+	// caller's environment.
+	for _, flag := range flags {
+		t.Setenv(flag, "")
+	}
+	t.Setenv(deploy.FeatureEnv, "false")
+	t.Setenv(databases.FeatureEnv, "false")
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	logDisabledFeatures(logger)
+	out := buf.String()
+
+	if !strings.Contains(out, "module=Applications") || !strings.Contains(out, deploy.FeatureEnv+"=false") {
+		t.Errorf("missing the Applications diagnostic line:\n%s", out)
+	}
+	if !strings.Contains(out, "module=Databases") || !strings.Contains(out, databases.FeatureEnv+"=false") {
+		t.Errorf("missing the Databases diagnostic line:\n%s", out)
+	}
+	if strings.Contains(out, teams.FeatureEnv) {
+		t.Errorf("an enabled feature was logged as disabled:\n%s", out)
+	}
+	if got := strings.Count(out, "feature disabled on this control plane"); got != 2 {
+		t.Errorf("disabled-feature lines = %d, want 2:\n%s", got, out)
 	}
 }

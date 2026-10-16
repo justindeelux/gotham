@@ -23,7 +23,7 @@ const en = {
     invalidValuesWithDetail: "{detail}",
     notFound: "Template not found. The catalog may have changed — reload the page.",
     notFoundWithDetail: "{detail}",
-    disabled: "Services are disabled on the control plane (FEATURE_SERVICES=false).",
+    disabled: "Services are turned off on this control plane. The platform administrator must enable them.",
   },
   gallery: {
     empty: "No templates in the catalog.",

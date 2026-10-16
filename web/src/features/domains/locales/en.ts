@@ -267,7 +267,7 @@ const en = {
       "The node agent is unreachable. Check the node status and retry.",
     secretNotConfigured:
       "The deployment secret is not configured, so credentials cannot be " +
-      "stored (set GOTHAM_SECRET_KEY).",
+      "stored. The platform administrator must configure it.",
     requestFailed: "Request failed",
     unexpected: "Something went wrong. Please try again.",
   },

@@ -792,7 +792,7 @@ plainTest.describe("files disabled", () => {
     await expect(page.getByText("Files are disabled")).toBeVisible();
     await expect(
       page.getByText(
-        "The file manager is turned off on the control plane (FEATURE_FILES=false). Enable it to browse this server.",
+        "The file manager is turned off on this control plane. The platform administrator must enable it.",
       ),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();

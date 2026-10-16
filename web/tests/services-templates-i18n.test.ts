@@ -96,19 +96,19 @@ describe("service errors keep raw diagnostics", () => {
     );
     expect(
       describeServiceError({ status: 503, message: "", cause: null }),
-    ).toBe("Services are disabled on the control plane (FEATURE_SERVICES=false).");
+    ).toBe("Services are turned off on this control plane. The platform administrator must enable them.");
     setLocale("vi", null);
     expect(describeServiceError({ status: 401, message: "", cause: null })).toBe(
       "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
     );
     expect(describeServiceError(null)).toBe("Đã xảy ra lỗi. Vui lòng thử lại.");
-    // The UI frame translates; the FEATURE_SERVICES=false token is preserved.
+    // The UI frame translates and no longer leaks the env-var kill switch.
     expect(describeServiceError({ status: 503, message: "", cause: null })).toBe(
-      "Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).",
+      "Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
     );
     expect(
       describeTemplateError({ status: 503, message: "", cause: null }),
-    ).toBe("Dịch vụ bị tắt trên control plane (FEATURE_SERVICES=false).");
+    ).toBe("Dịch vụ đang tắt trên control plane này. Quản trị viên nền tảng phải bật.");
   });
 
   it("frames status-classified raw refusals without touching the EN baseline", () => {

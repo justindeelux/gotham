@@ -368,9 +368,19 @@ log "creating system user ${SERVICE_USER}"
 if [ "${DRY_RUN}" -eq 1 ] || ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
     run useradd --system --no-create-home --shell /usr/sbin/nologin "${SERVICE_USER}"
 fi
-if command -v getent >/dev/null 2>&1 && getent group docker >/dev/null 2>&1; then
-    run usermod -aG docker "${SERVICE_USER}"
+# The unit joins the docker group (SupplementaryGroups=docker), but Docker is
+# installed only with --full or later from the App Store, so a bare node has no
+# docker group and systemd fails the unit at start (status 216/GROUP) — the
+# agent would then never register, which the "install Docker from the App Store
+# after the agent is registered" guidance depends on. Create the system group
+# when missing (so both the checked-in unit and the fallback unit start), then
+# add the service user; a later Docker install reuses the same group.
+if [ "${DRY_RUN}" -eq 1 ]; then
+    echo "[dry-run] getent group docker >/dev/null 2>&1 || groupadd --system docker"
+else
+    getent group docker >/dev/null 2>&1 || groupadd --system docker
 fi
+run usermod -aG docker "${SERVICE_USER}"
 
 # The binary MUST live in the service StateDirectory and be owned by the
 # service user: the updater hardlinks it to <binary>.old, and

@@ -227,7 +227,7 @@ func (r *Registry) Build(ctx context.Context, opts BuildOptions) (ImageRef, erro
 		// found nothing is a missing tool, name it so the deploy log is
 		// actionable instead of reading as a repo problem.
 		if engine, missing, found := r.autoMissingTool(opts.RepoDir, opts.InstalledTools); found {
-			return ImageRef{}, fmt.Errorf("%w: %s is not installed on this node; install it (or pick a different build pack) to build with the %s engine",
+			return ImageRef{}, fmt.Errorf("%w: %s is not installed on this node; install it from the App Store (or pick a different build pack) to build with the %s engine",
 				ErrNoEngine, missing, engine)
 		}
 		return ImageRef{}, fmt.Errorf("%w: %s", ErrNoEngine, opts.RepoDir)

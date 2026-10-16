@@ -267,8 +267,8 @@ export function describeChannelError(error: unknown): string {
     if (error.status === 404) {
       return channelText(
         "notifications.errors.featureDisabled",
-        "Notification channels are not enabled on this control plane " +
-          "(FEATURE_NOTIFICATIONS=false).",
+        "Notification channels are turned off on this control plane. " +
+          "The platform administrator must enable them.",
       );
     }
     if (error.status === 400) {

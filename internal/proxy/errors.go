@@ -40,5 +40,5 @@ var (
 	// ErrSecret — the deployment secret that seals and opens DNS provider
 	// credentials is not configured. Credential writes are refused instead of
 	// falling back to the public empty-string key (503).
-	ErrSecret = errors.New("proxy: the deployment secret is not configured (set GOTHAM_SECRET_KEY)")
+	ErrSecret = errors.New("proxy: the deployment secret is not configured")
 )

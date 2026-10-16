@@ -17,7 +17,7 @@ const en = {
     newTeam: "New team",
     unavailableTitle: "Teams unavailable",
     unavailableDesc:
-      "Team management is not enabled on this control plane (FEATURE_TEAMS=false).",
+      "Team management is turned off on this control plane. The platform administrator must enable it.",
     yourRole: "your role: {role}",
     personal: "personal",
     membersTab: "Members ({count})",

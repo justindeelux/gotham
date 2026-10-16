@@ -587,8 +587,8 @@ const vi: ApplicationsMessages = {
     nameConflict: "Đã tồn tại ứng dụng cùng tên trong môi trường đích.",
     conflict: "Yêu cầu xung đột với trạng thái hiện tại của ứng dụng.",
     agentUnreachable: "Không kết nối được node agent. Kiểm tra trạng thái node rồi thử lại.",
-    appsDisabled: "Ứng dụng đang tắt trên control plane (FEATURE_APPLICATIONS=false).",
-    previewsDisabled: "Triển khai xem trước chưa bật trên control plane này (FEATURE_PREVIEWS=false).",
+    appsDisabled: "Ứng dụng đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
+    previewsDisabled: "Triển khai xem trước đang tắt trên control plane này. Quản trị viên nền tảng phải bật.",
   },
   validation: {
     domain:

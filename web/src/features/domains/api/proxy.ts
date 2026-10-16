@@ -543,7 +543,7 @@ export function describeProxyError(error: unknown): string {
         proxyText(
           "domains.errors.secretNotConfigured",
           "The deployment secret is not configured, so credentials cannot " +
-            "be stored (set GOTHAM_SECRET_KEY).",
+            "be stored. The platform administrator must configure it.",
         )
       );
     }

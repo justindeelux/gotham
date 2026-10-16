@@ -142,7 +142,7 @@ test.describe("previews tab", () => {
     await page.reload();
     await expect(page.locator(".n-tabs-tab").filter({ hasText: "Previews" })).toHaveCount(0);
     await expect(
-      page.getByText("Preview deployments are not enabled"),
+      page.getByText("Preview deployments are turned off on this control plane"),
     ).toHaveCount(0);
 
     expect(
@@ -712,7 +712,7 @@ test.describe("server metrics", () => {
     metricsReply = "missing";
     await page.getByRole("button", { name: "Refresh" }).click();
     await expect(
-      page.getByText("Server metrics are not enabled on this control plane"),
+      page.getByText("Server metrics are turned off on this control plane"),
     ).toBeVisible();
     const after404 = metricsRequests;
     await page.clock.fastForward(16_000);
@@ -1704,7 +1704,7 @@ test.describe("teams feature off", () => {
 
     await page.goto("/teams");
     await expect(
-      page.getByText("Team management is not enabled on this control plane"),
+      page.getByText("Team management is turned off on this control plane"),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: "New team" })).toHaveCount(0);
   });

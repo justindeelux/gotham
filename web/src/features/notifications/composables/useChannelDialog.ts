@@ -162,15 +162,17 @@ function createChannelDialogState() {
     if (applicationsUnavailable.value) {
       return channelText(
         "notifications.dialog.unavailableApps",
-        "Applications are unavailable on this control plane " +
-          "(FEATURE_APPLICATIONS=false); a database scope is still available.",
+        "Applications are turned off on this control plane; " +
+          "a database scope is still available. The platform administrator " +
+          "must enable them.",
       );
     }
     if (databasesUnavailable.value) {
       return channelText(
         "notifications.dialog.unavailableDbs",
-        "Databases are unavailable on this control plane " +
-          "(FEATURE_DATABASES=false); an application scope is still available.",
+        "Databases are turned off on this control plane; " +
+          "an application scope is still available. The platform administrator " +
+          "must enable them.",
       );
     }
     return "";

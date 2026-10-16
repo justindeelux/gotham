@@ -43,11 +43,13 @@ const (
 )
 
 // Install and prerequisite hints. They are quoted in every ErrCLIMissing error
-// so the deploy log is actionable.
+// so the deploy log — shown in the UI — is actionable. A deployed instance has
+// no repository and is never asked to install anything by hand, so the hints
+// point at the in-product installer (the App Store) instead of shell commands.
 const (
-	railpackInstallHint   = "install it with `curl -sSL https://railpack.com/install.sh | sh` (https://railpack.com/installation)"
-	railpackBuildKitHint  = "install Docker so Gotham can start its BuildKit container, or export BUILDKIT_HOST to a running BuildKit daemon (`docker run --rm --privileged -d --name buildkit moby/buildkit`, `export BUILDKIT_HOST=docker-container://buildkit`)"
-	buildpacksInstallHint = "install it with `brew install buildpacks/pack/pack` or from https://github.com/buildpacks/pack/releases (https://buildpacks.io/docs/install-pack/)"
+	railpackInstallHint   = "install it from the App Store"
+	railpackBuildKitHint  = "install Docker from the App Store so Gotham can run its BuildKit container"
+	buildpacksInstallHint = "install it from the App Store"
 )
 
 // ErrCLIMissing reports a build whose external toolchain is unavailable on this

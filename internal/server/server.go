@@ -857,6 +857,12 @@ func (s *Server) proxyService(containerService containers.ContainerService) prox
 		return nil
 	}
 	cfg := proxy.Config{
+		PanelCertificateURLs: func(ctx context.Context) ([]string, error) {
+			if s.instanceSvc == nil {
+				return nil, nil
+			}
+			return s.instanceSvc.ControlPlaneCertificateURLs(ctx)
+		},
 		ControlPlaneURLs: func(ctx context.Context) ([]string, error) {
 			if s.instanceSvc == nil {
 				return nil, nil

@@ -63,7 +63,7 @@ func TestPanelCertificateReadiness(t *testing.T) {
 }
 
 func TestPanelTrialCertificateLifecycle(t *testing.T) {
-	for _, action := range []string{"confirm", "revert", "issuance failure", "intent failure"} {
+	for _, action := range []string{"confirm", "revert", "issuance failure"} {
 		t.Run(action, func(t *testing.T) {
 			ctx := context.Background()
 			f := panelFixture(t)
@@ -80,9 +80,6 @@ func TestPanelTrialCertificateLifecycle(t *testing.T) {
 			svc.SyncPanelCertificates = f.service.ReconcilePanelCertificates
 			svc.ResyncProxy = f.service.SyncControlPlane
 			f.service.controlPlaneURLs = svc.ControlPlaneURLs
-			if action == "intent failure" {
-				st.certCreateErr = errors.New("database write failed")
-			}
 			if action == "issuance failure" {
 				f.service.certificateStatus = fixedPanelStatus{CertificateStatusObservation{Status: CertificateStatusUnknown}}
 			}
@@ -90,11 +87,7 @@ func TestPanelTrialCertificateLifecycle(t *testing.T) {
 			if err != nil || !state.PendingControlPlaneURL.Synced {
 				t.Fatalf("save=%+v err=%v", state, err)
 			}
-			want := 2
-			if action == "intent failure" {
-				want = 1
-			}
-			if len(st.certificates) != want {
+			if len(st.certificates) != 1 || st.certificates[0].Domain != "old.example.com" {
 				t.Fatalf("trial certificates=%+v", st.certificates)
 			}
 			rows, err := f.service.ListRouters(ctx, f.serverID)
@@ -107,10 +100,16 @@ func TestPanelTrialCertificateLifecycle(t *testing.T) {
 					found = true
 				}
 			}
+			routes, _, _, _ := f.service.gatherRoutes(ctx, nil, nil, nil, f.serverID, nil, nil)
+			for _, route := range routes {
+				if route.Domain == "new.example.com" && route.Certificate != nil {
+					t.Fatal("unconfirmed host requested a certificate")
+				}
+			}
 			if !found {
 				t.Fatal("proposed host absent during trial")
 			}
-			if action == "revert" || action == "intent failure" {
+			if action == "revert" {
 				_, err = svc.RevertControlPlaneURL(ctx, uuid.Nil)
 			} else {
 				_, err = svc.ConfirmControlPlaneURL(ctx, uuid.Nil, "new.example.com")
@@ -119,7 +118,7 @@ func TestPanelTrialCertificateLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			expected := "new.example.com"
-			if action == "revert" || action == "intent failure" {
+			if action == "revert" {
 				expected = "old.example.com"
 			}
 			if len(st.certificates) != 1 || st.certificates[0].Domain != expected {
@@ -260,5 +259,107 @@ func TestPanelCertificateRetryPreservesDNSConfiguration(t *testing.T) {
 	}
 	if len(st.certificates) != 0 {
 		t.Fatal("HTTP URL retained an HTTPS intent")
+	}
+}
+
+func TestPanelCertificateStartupReconciliation(t *testing.T) {
+	for _, raw := range []string{"https://panel.example.com", "http://panel.example.com"} {
+		t.Run(raw, func(t *testing.T) {
+			f := panelFixture(t)
+			st := newFakeSSLStore()
+			f.service.panelCertificates = st
+			f.service.certificateStatus = fixedPanelStatus{CertificateStatusObservation{Status: CertificateStatusAbsent}}
+			f.service.panelCertURLs = func(context.Context) ([]string, error) { return []string{raw}, nil }
+			f.service.controlPlaneURL = func(context.Context) (string, error) { return raw, nil }
+			var id uuid.UUID
+			for range 2 {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				f.service.RunPanelCertificates(ctx)
+				cancel()
+				certs, err := st.ListCertificates(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.HasPrefix(raw, "http:") {
+					if len(certs) != 0 {
+						t.Fatalf("HTTP intents=%+v", certs)
+					}
+					continue
+				}
+				if len(certs) != 1 {
+					t.Fatalf("HTTPS intents=%+v", certs)
+				}
+				if id != uuid.Nil && certs[0].ID != id {
+					t.Fatal("restart recreated certificate")
+				}
+				id = certs[0].ID
+				if len(f.agent.calls) != 1 {
+					t.Fatalf("startup config pushes=%d", len(f.agent.calls))
+				}
+			}
+		})
+	}
+}
+
+func TestStoredPanelCertificateReconciliationRetries(t *testing.T) {
+	f := panelFixture(t)
+	st := newFakeSSLStore()
+	f.service.panelCertificates = st
+	f.service.panelCertURLs = func(context.Context) ([]string, error) { return nil, errors.New("settings unavailable") }
+	if err := f.service.reconcileStoredPanelCertificates(context.Background()); err == nil {
+		t.Fatal("missing settings error")
+	}
+	f.service.panelCertURLs = func(context.Context) ([]string, error) { return []string{"https://panel.example.com"}, nil }
+	st.certCreateErr = errors.New("store unavailable")
+	if err := f.service.reconcileStoredPanelCertificates(context.Background()); err == nil {
+		t.Fatal("missing store error")
+	}
+	st.certCreateErr = nil
+	if err := f.service.reconcileStoredPanelCertificates(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.certificates) != 1 {
+		t.Fatalf("retry intents=%+v", st.certificates)
+	}
+	if err := f.service.refreshPanelCertificates(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPanelCertificateStartupDuringTrial(t *testing.T) {
+	for _, previous := range []string{"https://old.example.com", "http://old.example.com", ""} {
+		t.Run(previous, func(t *testing.T) {
+			f := panelFixture(t)
+			st := newFakeSSLStore()
+			f.service.panelCertificates = st
+			// Remove a proposed-host intent left by the previous implementation.
+			st.certificates = []DomainCertificate{{ID: uuid.New(), Domain: "new.example.com", Enabled: true, Challenge: ChallengeHTTP01}}
+			proposed := "https://new.example.com"
+			repo := &panelSettingsRepo{rec: instance.Stored{
+				ControlPlaneURL: &proposed,
+				PendingControlPlaneURL: &instance.PendingControlPlaneURL{
+					Previous: &previous, Proposed: proposed, Deadline: time.Now().Add(time.Minute), Synced: true,
+				},
+			}}
+			svc := instance.NewService(repo, nil, nil)
+			t.Cleanup(svc.Close)
+			f.service.panelCertURLs = svc.ControlPlaneCertificateURLs
+			f.service.controlPlaneURLs = svc.ControlPlaneURLs
+			for range 2 {
+				if err := f.service.reconcileStoredPanelCertificates(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := 0
+			if strings.HasPrefix(previous, "https:") {
+				want = 1
+			}
+			if len(st.certificates) != want {
+				t.Fatalf("trial intents=%+v", st.certificates)
+			}
+			if want == 1 && st.certificates[0].Domain != "old.example.com" {
+				t.Fatal("fallback intent missing")
+			}
+		})
 	}
 }

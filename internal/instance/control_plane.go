@@ -52,14 +52,27 @@ func (s *Service) ControlPlaneURLs(ctx context.Context) ([]string, error) {
 	return urls, nil
 }
 
+// ControlPlaneCertificateURLs excludes unconfirmed hosts while HTTP trial routes stay active.
+func (s *Service) ControlPlaneCertificateURLs(ctx context.Context) ([]string, error) {
+	rec, err := s.repo.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.panelCertificateURLs(rec), nil
+}
+
+func (s *Service) panelCertificateURLs(rec Stored) []string {
+	if rec.PendingControlPlaneURL != nil {
+		rec.ControlPlaneURL = rec.PendingControlPlaneURL.Previous
+	}
+	return []string{s.general(rec).ControlPlaneURL.Value}
+}
+
 func (s *Service) syncPanelCertificates(ctx context.Context, rec Stored) {
 	if s.SyncPanelCertificates == nil {
 		return
 	}
-	urls := []string{s.general(rec).ControlPlaneURL.Value}
-	if rec.PendingControlPlaneURL != nil && rec.PendingControlPlaneURL.Previous != nil {
-		urls = append(urls, *rec.PendingControlPlaneURL.Previous)
-	}
+	urls := s.panelCertificateURLs(rec)
 	certCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	if err := s.SyncPanelCertificates(certCtx, urls); err != nil {

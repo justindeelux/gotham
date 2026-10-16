@@ -38,7 +38,7 @@ func (s *sslService) certificateApplication(ctx context.Context, cert DomainCert
 	return s.store.GetApplication(ctx, cert.ApplicationID)
 }
 
-// ReconcilePanelCertificates retains both hosts during a trial, creates new
+// ReconcilePanelCertificates creates confirmed hosts' new
 // HTTPS intents before deleting retired ones, and never changes app intents.
 func (s *SyncService) ReconcilePanelCertificates(ctx context.Context, urls []string) error {
 	if s.panelCertificates == nil {
@@ -121,12 +121,15 @@ func panelCertificateState(observation CertificateStatusObservation, usable bool
 	return state
 }
 
-// RunPanelCertificates observes issuance/expiry for the server lifetime and
+// RunPanelCertificates reconciles immediately at startup, then observes issuance/expiry and
 // pushes only changed configuration, so redirects follow certificate readiness.
 func (s *SyncService) RunPanelCertificates(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
+		if err := s.reconcileStoredPanelCertificates(ctx); err != nil && ctx.Err() == nil {
+			s.logger.Warn("proxy: reconcile panel certificates", "error", err)
+		}
 		if err := s.refreshPanelCertificates(ctx); err != nil && ctx.Err() == nil {
 			s.logger.Debug("proxy: refresh panel certificate", "error", err)
 		}
@@ -136,6 +139,19 @@ func (s *SyncService) RunPanelCertificates(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *SyncService) reconcileStoredPanelCertificates(ctx context.Context) error {
+	if s.panelCertURLs == nil || s.panelCertificates == nil {
+		return nil
+	}
+	reconcileCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	urls, err := s.panelCertURLs(reconcileCtx)
+	if err != nil {
+		return err
+	}
+	return s.ReconcilePanelCertificates(reconcileCtx, urls)
 }
 
 func (s *SyncService) refreshPanelCertificates(ctx context.Context) error {

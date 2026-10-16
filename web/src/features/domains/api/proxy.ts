@@ -117,8 +117,16 @@ export interface UpdateDNSProviderInput {
  */
 export type CertificateStatus = "present" | "absent" | "unknown";
 
+/** Panel issuance state reported by routers and certificate responses. */
+export interface PanelCertificateState {
+  status: "issued" | "pending" | "failed";
+  not_after?: string;
+}
+
 /** One certificate configuration as returned by the API. */
 export interface Certificate {
+  owner_kind?: "application" | "control_plane";
+  panel_state?: PanelCertificateState;
   id: string;
   application_id: string;
   /** Recorded host: the primary domain by default, or one attached domain. */
@@ -356,6 +364,7 @@ export type RouterKind = "application" | "service" | "redirect" | "control_plane
 export type RouterSyncStatus = "synced" | "pending" | "unknown";
 
 export interface ProxyRouter {
+  certificate?: PanelCertificateState;
   host: string;
   rule: string;
   service: string;

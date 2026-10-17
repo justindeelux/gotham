@@ -29,6 +29,7 @@ import {
   NCheckbox,
   NDropdown,
   NInput,
+  NInputGroup,
   NSelect,
   useMessage,
 } from "naive-ui";
@@ -2452,16 +2453,15 @@ function onFolderMenu(key: string): void {
       </AppTooltip>
     </div>
 
-    <!-- Navigation row (JUS-159): one bordered field merges back, breadcrumb
-         and an attached refresh button; long paths truncate from the left
-         (the crumb strip clips at its start edge). The right side of the row
-         keeps only the folder filter — reserved for the JUS-163 search field. -->
+    <!-- Navigation row (JUS-159/JUS-206): one Naive NInputGroup row merges
+         back, breadcrumb and an attached refresh button (32px); long paths
+         truncate from the left (the crumb strip clips at its start edge). The
+         right side of the row keeps the folder filter + JUS-163 search. -->
     <div class="fm-bar fm-pathbar">
-      <div class="fm-navfield">
+      <NInputGroup class="fm-navfield">
         <AppTooltip :label="$t('files.browser.parent')">
           <NButton
             size="small"
-            quaternary
             class="fm-navback"
             :disabled="files.path === ''"
             :aria-label="$t('files.browser.parent')"
@@ -2490,7 +2490,6 @@ function onFolderMenu(key: string): void {
         <AppTooltip :label="$t('files.browser.refresh')">
           <NButton
             size="small"
-            quaternary
             class="fm-navrefresh"
             :loading="files.loading"
             :aria-label="$t('files.browser.refresh')"
@@ -2501,7 +2500,7 @@ function onFolderMenu(key: string): void {
             </template>
           </NButton>
         </AppTooltip>
-      </div>
+      </NInputGroup>
 
       <div class="fm-search-group">
         <NInput
@@ -2551,7 +2550,6 @@ function onFolderMenu(key: string): void {
         <AppTooltip v-if="files.canWrite" :label="$t('files.actions.upload')">
           <NButton
             size="small"
-            quaternary
             :disabled="files.acting"
             :aria-label="$t('files.actions.upload')"
             @click="openUpload()"
@@ -2577,7 +2575,6 @@ function onFolderMenu(key: string): void {
           <AppTooltip :label="$t('files.actions.new')">
             <NButton
               size="small"
-              quaternary
               aria-haspopup="menu"
               :aria-expanded="newMenuOpen"
               :disabled="files.acting"
@@ -2614,7 +2611,6 @@ function onFolderMenu(key: string): void {
           <AppTooltip :label="$t('files.actions.fileOperations')">
             <NButton
               size="small"
-              quaternary
               aria-haspopup="menu"
               :aria-expanded="fileOpsOpen"
               :disabled="files.acting"
@@ -2652,7 +2648,6 @@ function onFolderMenu(key: string): void {
           <AppTooltip :label="sortLabel">
             <NButton
               size="small"
-              quaternary
               class="fm-sort-toggle"
               aria-haspopup="menu"
               :aria-expanded="sortMenuOpen"
@@ -2674,7 +2669,6 @@ function onFolderMenu(key: string): void {
         <AppTooltip :label="$t('files.browser.recycleBin')">
           <NButton
             size="small"
-            quaternary
             :disabled="files.rootName === ''"
             :aria-label="$t('files.browser.recycleBin')"
             @click="recycleOpen = true"
@@ -3308,9 +3302,8 @@ function onFolderMenu(key: string): void {
 .files-browser {
   position: relative;
   /* JUS-134: the single row-height token every list row reads. JUS-137 can
-   * size its virtual rows from it, so the compact desktop density stays a
-   * one-value change. */
-  --fm-row-height: var(--space-12);
+   * size its virtual rows from it. JUS-206: 42px, the reference row height. */
+  --fm-row-height: 42px;
   /* The panel is a flex column that fills whatever height its parent gives it
    * (JUS-118): toolbar/bar/footer stay fixed while the entry list is the
    * only scrolling region (`flex: 1` on .table-wrap / .fm-grid / .fm-state). */
@@ -3394,18 +3387,24 @@ function onFolderMenu(key: string): void {
   color: var(--warn-ink);
 }
 
+/* JUS-206: flat tabs — the active tab is accent text on a subtle fill (no
+   box/ring); the inactive tabs ride the card surface. */
 .fm-tab.is-active {
-  background: var(--selected-row);
-  color: var(--fg-2);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
   font-weight: 600;
 }
 
+.fm-tab.is-active .fm-tab-icon {
+  color: inherit;
+}
+
 /* The strip scrolls (overflow-x: auto) and clips its descendants at its edge,
-   so the shared outward :focus-visible ring would be cut off entirely on the
-   default single tab. Draw the same ring just inside the tab instead (JUS-152);
-   the ring keeps the shared colour and width, only the offset flips inward. */
+   and the shared 3px focus ring would read as a loud box here — draw a thin
+   ring just inside the tab instead (JUS-152/JUS-206). */
 .fm-tab:focus-visible {
-  outline-offset: -2px;
+  outline: 1px solid var(--accent-ink);
+  outline-offset: -1px;
 }
 
 .fm-tab-name {
@@ -3592,7 +3591,18 @@ function onFolderMenu(key: string): void {
 
 .fm-toolbar :deep(.n-button) {
   height: var(--space-8);
-  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
+  border-radius: 6px;
+}
+
+/* JUS-206: default outlined toolbar buttons — 32px high, 12px labels, the
+   reference padding. The 6px radius is the reference value. */
+.fm-toolbar :deep(.n-button .n-button__content) {
+  font-size: var(--text-xs);
+}
+
+.fm-toolbar :deep(.n-button:not(.n-button--icon)) {
+  padding: 0 var(--space-3);
 }
 
 /* Context bar (JUS-159): the home of the header-tools slot (the agent-node
@@ -3607,19 +3617,20 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-3);
 }
 
-/* Merged navigation field (JUS-159): back button, breadcrumb and the attached
-   refresh button share one border. The crumb strip takes the free width and
-   clips overflowing crumbs at its start edge, so long paths truncate from
-   the left while back and refresh stay pinned. */
+/* Merged navigation field (JUS-159/JUS-206): a Naive NInputGroup row, 32px
+   high — a back icon button, the breadcrumb strip and an attached refresh
+   button joined into one bordered row. The group collapses the buttons'
+   adjoining borders; the borderless crumb strip draws only its top/bottom so
+   the row reads as one field. Long paths truncate from the left (the crumb
+   strip clips at its start edge) while back and refresh stay pinned. */
 .fm-navfield {
-  display: flex;
-  align-items: center;
   flex: 1 1 auto;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-2);
-  background: var(--surface);
+  height: var(--space-8);
+  padding: 0;
+  border: 0;
+  background: none;
+  gap: 0;
 }
 
 .fm-navback,
@@ -3630,17 +3641,22 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-navrefresh {
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .fm-navcrumbs {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  align-self: stretch;
   min-width: 0;
   flex-wrap: nowrap;
   justify-content: flex-end;
   overflow: hidden;
-  border: 0;
-  /* Vertical rhythm comes from the `.fm-path` base; only widen the sides. */
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  /* Vertical rhythm comes from the `.fm-path` base; only widen the sides. The
+     strip is 30px tall inside the 32px row (its own borders complete it). */
+  padding-block: 0;
   padding-inline: var(--space-2);
 }
 
@@ -3834,7 +3850,8 @@ function onFolderMenu(key: string): void {
   grid-template-columns: 34px minmax(240px, 1.6fr) 110px 96px 148px 168px;
   gap: var(--space-3);
   align-items: center;
-  padding: 4px var(--space-3);
+  /* JUS-206: the reference cell padding. */
+  padding: 6px var(--space-2);
   /* JUS-134: one compact, tokenised row height instead of the old 52px. */
   min-height: var(--fm-row-height);
   border-bottom: 1px solid var(--border);
@@ -3876,17 +3893,19 @@ function onFolderMenu(key: string): void {
 .fm-head {
   /* JUS-132: the column header stays pinned to the top of the entry list's
      scroll region so the active sort column is visible in long folders. The
-     solid surface matches the card, so rows scroll under it cleanly. */
+     header band matches the reference (a tone below the card) so rows scroll
+     under it cleanly. */
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--surface);
+  background: var(--surface-warm);
   color: var(--muted);
   border-bottom: 1px solid var(--border-soft);
   /* JUS-146: the row height is max(column headers, bulk bar). Both variants
      are always mounted and overlap the same cells, so the height never depends
      on the selection — no reserved band, no row shift (JUS-130/134). */
-  min-height: var(--fm-row-height);
+  /* JUS-206: the reference header is 34px. */
+  min-height: 34px;
   padding-block: 0;
   align-items: center;
 }
@@ -3902,10 +3921,13 @@ function onFolderMenu(key: string): void {
   grid-template-columns: minmax(240px, 1.6fr) 110px 96px 148px 168px;
   gap: var(--space-3);
   align-items: center;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  /* JUS-206: the reference headers are normal-case 12px/500 body text with
+     sort arrows — not tiny uppercase mono. */
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .fm-head-cols.is-hidden {
@@ -3942,7 +3964,7 @@ function onFolderMenu(key: string): void {
 
 .fm-head-bulk.is-visible {
   visibility: visible;
-  background: var(--surface);
+  background: var(--surface-warm);
 }
 
 /* JUS-147: the bulk bar's sort control keeps the desktop list sortable while the
@@ -3971,9 +3993,9 @@ function onFolderMenu(key: string): void {
 }
 
 /* Hovering the pinned header must not reveal the rows scrolling under it:
-   keep the solid card surface instead of the row hover tint. */
+   keep the solid header band instead of the row hover tint. */
 .fm-head:hover {
-  background: var(--surface);
+  background: var(--surface-warm);
 }
 
 .fm-sort {
@@ -4045,7 +4067,8 @@ function onFolderMenu(key: string): void {
 .fm-label b {
   display: block;
   min-width: 0;
-  font-weight: 500;
+  /* JUS-206: the reference rows are 12px/400 body text. */
+  font-weight: 400;
   color: var(--fg);
   font-size: var(--text-xs);
   overflow: hidden;
@@ -4093,7 +4116,8 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-cell {
-  font-family: var(--font-mono);
+  /* JUS-206: the reference cells are normal 12px body text, not mono. */
+  font-family: var(--font-body);
   font-size: var(--text-xs);
   color: var(--muted);
 }
@@ -4123,12 +4147,19 @@ function onFolderMenu(key: string): void {
    composited on top (the tokens are translucent), so the columns scrolling
    under the pinned cell never show through; the hairline marks the pinned
    edge. */
-.fm-row > .fm-actions,
-.fm-head .fm-actions-cell {
+.fm-row > .fm-actions {
   position: sticky;
   right: 0;
   z-index: 1;
   background-color: var(--surface);
+  box-shadow: -1px 0 0 var(--border);
+}
+
+.fm-head .fm-actions-cell {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background-color: var(--surface-warm);
   box-shadow: -1px 0 0 var(--border);
 }
 

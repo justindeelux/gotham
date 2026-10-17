@@ -284,20 +284,30 @@ for (const viewport of [
       expect(regions[name].borderTop, `${name} has no band divider`).toBe(0);
     }
     const field = page.locator(".fm-navfield");
-    await expect(field).toHaveCSS("border-top-width", "1px");
-    const fieldBorder = await field.evaluate((element) => getComputedStyle(element).borderTopColor);
+    // JUS-206: the path bar is one Naive NInputGroup row — the borderless
+    // crumb strip draws the row's top/bottom rule while the outlined icon
+    // buttons attach at both ends (no inset padding).
+    const strip = page.locator(".fm-navcrumbs");
+    await expect(strip).toHaveCSS("border-top-width", "1px");
+    await expect(strip).toHaveCSS("border-bottom-width", "1px");
+    const fieldBorder = await strip.evaluate((element) => getComputedStyle(element).borderTopColor);
     expect(normalizeColor(fieldBorder)).toBe(normalizeColor(toRgb(border)));
     await expect(page.locator(".table-wrap")).toHaveCSS("border-top-width", "1px");
     const fieldBox = (await field.boundingBox())!;
+    expect(fieldBox.height, "path bar is one 32px row").toBe(32);
     for (const selector of [".fm-navback", ".fm-navrefresh"]) {
       const button = page.locator(selector);
+      await expect(button.locator(".n-button__border")).toHaveCount(1);
       const box = (await button.boundingBox())!;
-      expect(box.x - fieldBox.x).toBeGreaterThanOrEqual(8);
-      expect(fieldBox.x + fieldBox.width - box.x - box.width).toBeGreaterThanOrEqual(8);
-      expect(box.y - fieldBox.y).toBeGreaterThanOrEqual(8);
-      expect(fieldBox.y + fieldBox.height - box.y - box.height).toBeGreaterThanOrEqual(8);
-      await expect(button.locator(".n-button__border")).toHaveCount(0);
+      expect(box.height, `${selector} fills the row height`).toBe(32);
     }
+    const backBox = (await page.locator(".fm-navback").boundingBox())!;
+    const refreshBox = (await page.locator(".fm-navrefresh").boundingBox())!;
+    expect(backBox.x - fieldBox.x, "back attaches at the row start").toBeLessThanOrEqual(1);
+    expect(
+      fieldBox.x + fieldBox.width - refreshBox.x - refreshBox.width,
+      "refresh attaches at the row end",
+    ).toBeLessThanOrEqual(1);
     await test.info().attach(`files-chrome-${viewport.width}px`, {
       body: await page.screenshot({
         path: test.info().outputPath(`files-chrome-${viewport.width}px.png`),

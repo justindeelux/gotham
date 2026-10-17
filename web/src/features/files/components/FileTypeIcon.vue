@@ -28,29 +28,29 @@ const icon = computed<Component>(() => icons[props.kind]);
 
 <template>
   <span class="fm-mark" :data-kind="kind" aria-hidden="true">
-    <component :is="icon" :size="15" :stroke-width="1.6" />
+    <component :is="icon" :size="20" :stroke-width="1.6" />
   </span>
 </template>
 
 <style scoped>
-/* File-type marks (.fm-mark family). */
+/* File-type marks (JUS-206): the glyph sits directly in the row — no dark
+ * tile. The box is the reference 25px; the folder is a filled yellow mark. */
 .fm-mark {
   position: relative;
-  width: calc(var(--space-6) + var(--space-1));
-  height: calc(var(--space-6) + var(--space-1));
+  width: 25px;
+  height: 25px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: var(--radius-md);
-  background: var(--surface-warm);
-  border: 1px solid var(--border);
   color: var(--fg-2);
 }
 
 .fm-mark[data-kind="folder"] {
-  color: var(--warn-ink);
-  background: var(--warn-soft);
-  border-color: transparent;
+  color: var(--warn);
+}
+
+.fm-mark[data-kind="folder"] svg {
+  fill: currentColor;
 }
 
 .fm-mark[data-kind="image"] {

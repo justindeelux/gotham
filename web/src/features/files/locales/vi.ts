@@ -116,6 +116,7 @@ const vi = {
   menu: {
     open: "Mở",
     openTab: "Mở trong tab mới",
+    view: "Xem",
     edit: "Sửa trong trình soạn thảo",
     download: "Tải về",
     permissions: "Quyền…",

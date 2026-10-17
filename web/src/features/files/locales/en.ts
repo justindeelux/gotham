@@ -117,6 +117,7 @@ const en = {
   menu: {
     open: "Open",
     openTab: "Open in new tab",
+    view: "View",
     edit: "Edit in editor",
     download: "Download",
     permissions: "Permissions…",

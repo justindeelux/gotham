@@ -6,6 +6,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  Eye,
   FilePlus,
   FolderOpen,
   FolderPlus,
@@ -21,7 +22,7 @@ import { h } from "vue";
 import type { Component, VNode } from "vue";
 
 import type { FilesEntry } from "@/features/files/schemas/files";
-import { isExtractableArchive } from "@/features/files/utils/files";
+import { isExtractableArchive, isImageFile } from "@/features/files/utils/files";
 
 /**
  * FilesMenuItem is one NDropdown option row: a label, the key the browser
@@ -83,6 +84,13 @@ export function rowMenuOptions(
       item(t("files.menu.openTab"), "open-tab", false, menuIcon(ExternalLink)),
     );
   } else if (entry.kind === "file") {
+    // Images open in the viewer (JUS-204), the row's default action, so the
+    // menu leads with View exactly where folders lead with Open.
+    if (isImageFile(entry)) {
+      options.push(
+        item(t("files.menu.view"), "view", !canReadContent, menuIcon(Eye)),
+      );
+    }
     options.push(
       item(t("files.menu.edit"), "edit", !canReadContent, menuIcon(Pencil)),
     );

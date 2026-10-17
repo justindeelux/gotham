@@ -2106,6 +2106,9 @@ function onRowMenu(key: string, entry: FilesEntry): void {
     case "edit":
       openInEditor(entry);
       break;
+    case "view":
+      openViewer(entry);
+      break;
     case "go-target":
       void goToSymlinkTarget(entry);
       break;

@@ -282,14 +282,26 @@ for (const viewport of [
       `tablist draws no top rule at ${viewport.width}px`,
     ).toBe(0);
 
-    // Round 7: the band ends exactly at the tab bottom (zero padding below
+    // Round 7/8: the band ends exactly at the tab bottom (zero padding below
     // the tabs), so the active tab touches the card body — the tab row meets
-    // the path bar with no gap at any width.
+    // the path bar with no gap at any width. The breathing room lives INSIDE
+    // the body-coloured path bar as top padding (round 8: margins cannot
+    // paint, so a margin gap could read as a dark seam).
     const gaps = [
       ["tablist", "pathbar", 0],
       ["pathbar", "toolbar", viewport.width <= 640 ? 16 : 32],
       ["toolbar", "panel", 16],
     ] as const;
+    // The 16px body surface above the path row is n-colored padding, and the
+    // path bar rides the card colour so the tab flows into the content.
+    await expect(page.locator(".fm-bar.fm-pathbar")).toHaveCSS(
+      "padding-top",
+      "16px",
+    );
+    await expect(page.locator(".fm-bar.fm-pathbar")).toHaveCSS(
+      "background-color",
+      cardBackground,
+    );
     for (const [upper, lower, expected] of gaps) {
       expect(regions[lower].top - regions[upper].bottom, `${upper} -> ${lower}`)
         .toBeCloseTo(expected, 0);

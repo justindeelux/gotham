@@ -3802,9 +3802,15 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-3);
 }
 
-/* The path field owns its border; space separates the chrome bands. */
+/* The path field owns its border; space separates the chrome bands.
+   Round 8: the breathing room above the row is n-colored PADDING inside the
+   body (margins cannot paint, so a margin gap could read as a dark seam) —
+   the tab bottom touches the body top and flows into it, then 16px of the
+   same body colour before the row, like the sample's toolbar band. */
 .fm-bar.fm-pathbar {
   margin-bottom: var(--space-8);
+  padding-top: var(--space-4);
+  background: var(--n-color);
 }
 
 .fm-toolbar :deep(.n-button) {

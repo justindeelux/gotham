@@ -35,7 +35,8 @@ const icon = computed<Component>(() => icons[props.kind]);
 <style scoped>
 /* File-type marks (JUS-206): the glyph sits directly in the row — no dark
  * tile. The box is the reference 25px (--fm-mark-size, owned by
- * FilesBrowser); the folder is a filled yellow mark. */
+ * FilesBrowser); folders (and folder-links, resolved at the call site) are an
+ * outline mark in the warn tone. */
 .fm-mark {
   position: relative;
   width: var(--fm-mark-size);
@@ -48,10 +49,6 @@ const icon = computed<Component>(() => icons[props.kind]);
 
 .fm-mark[data-kind="folder"] {
   color: var(--warn);
-}
-
-.fm-mark[data-kind="folder"] svg {
-  fill: currentColor;
 }
 
 .fm-mark[data-kind="image"] {

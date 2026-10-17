@@ -196,7 +196,6 @@ async function submit(): Promise<void> {
               v-for="column in flagIndexes.slice(0, 3)"
               :key="`${row.offset}-${column}`"
               class="check"
-              :title="flagAria(row.offset, column)"
             >
               <NCheckbox
                 size="small"

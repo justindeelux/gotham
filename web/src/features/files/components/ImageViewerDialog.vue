@@ -232,7 +232,7 @@ function onPointerUp(): void {
     class="app-modal"
     :show="props.show"
     preset="card"
-    style="width: 880px; max-width: 96vw"
+    style="width: min(1280px, 94vw)"
     :title="props.entry?.name ?? ''"
     :mask-closable="true"
     :close-on-esc="true"
@@ -278,7 +278,6 @@ function onPointerUp(): void {
             circle
             :disabled="objectUrl === null"
             :aria-label="t('files.viewer.zoomOut')"
-            :title="t('files.viewer.zoomOut')"
             @click="zoomAt(0, 0, 1 / WHEEL_FACTOR)"
           >
             <template #icon>
@@ -293,7 +292,6 @@ function onPointerUp(): void {
             circle
             :disabled="objectUrl === null"
             :aria-label="t('files.viewer.zoomIn')"
-            :title="t('files.viewer.zoomIn')"
             @click="zoomAt(0, 0, WHEEL_FACTOR)"
           >
             <template #icon>
@@ -304,7 +302,6 @@ function onPointerUp(): void {
             size="small"
             :disabled="objectUrl === null"
             :aria-label="t('files.viewer.reset')"
-            :title="t('files.viewer.reset')"
             @click="reset()"
           >
             <template #icon>
@@ -326,8 +323,8 @@ function onPointerUp(): void {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 320px;
-  max-height: 66vh;
+  min-height: 440px;
+  max-height: 72vh;
   overflow: hidden;
   background: var(--surface-warm);
   border-radius: var(--radius-md);
@@ -345,7 +342,7 @@ function onPointerUp(): void {
 
 .viewer-image {
   max-width: 100%;
-  max-height: 66vh;
+  max-height: 72vh;
   transform-origin: center center;
 }
 

@@ -149,7 +149,7 @@ function statusLabel(item: UploadItem): string {
     class="app-modal"
     :show="props.show"
     preset="card"
-    style="width: 620px; max-width: 94vw"
+    style="width: min(960px, 92vw)"
     :title="t('files.dialogs.uploadTitle')"
     @update:show="(value: boolean) => { if (!value) close(); }"
   >
@@ -274,7 +274,7 @@ function statusLabel(item: UploadItem): string {
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  padding: var(--space-6) var(--space-4);
+  padding: var(--space-8) var(--space-4);
   border: 1px dashed var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-warm);
@@ -299,13 +299,13 @@ function statusLabel(item: UploadItem): string {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  max-height: 280px;
+  max-height: 400px;
   overflow-y: auto;
 }
 
 .row {
   display: grid;
-  grid-template-columns: 18px minmax(90px, 1.4fr) 120px minmax(80px, 1fr) 64px auto;
+  grid-template-columns: 18px minmax(0, 1.4fr) 120px minmax(0, 1fr) 64px auto;
   align-items: center;
   gap: var(--space-2);
   font-size: var(--text-xs);

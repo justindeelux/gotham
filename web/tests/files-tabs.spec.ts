@@ -435,10 +435,12 @@ test("tab titles carry the full path and the strip scrolls at narrow widths", as
 }) => {
   await openFiles(page);
 
-  // A tab's tooltip is the full root-relative location.
+  // A tab's accessible name is the full root-relative location (JUS-210: tabs
+  // carry no title tooltip).
   await rowFor(page, "alpha").locator(".fm-label").dblclick();
   await expect(page.locator(".fm-label b").first()).toHaveText("a.txt");
-  await expect(activeTab(page)).toHaveAttribute("title", "volumes/alpha");
+  await expect(activeTab(page)).toHaveAttribute("aria-label", "volumes/alpha");
+  await expect(activeTab(page)).not.toHaveAttribute("title", /.+/);
 
   // Open enough tabs that the strip must scroll instead of wrapping the page.
   for (let index = 0; index < 5; index += 1) {

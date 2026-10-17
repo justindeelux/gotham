@@ -708,7 +708,6 @@ onBeforeUnmount(() => {
         quaternary
         size="tiny"
         class="ed-window-min"
-        :title="t('files.editor.minimize')"
         :aria-label="t('files.editor.minimize')"
         @click="minimizeWindow"
       >
@@ -720,7 +719,6 @@ onBeforeUnmount(() => {
         quaternary
         size="tiny"
         class="ed-window-close"
-        :title="t('files.editor.closeWindow')"
         :aria-label="t('files.editor.closeWindow')"
         @click="closeAllTabs"
       >
@@ -745,7 +743,6 @@ onBeforeUnmount(() => {
           :aria-selected="tab.id === editor.activeId"
           :aria-controls="'ed-panel-' + tab.id"
           :tabindex="tab.id === editor.activeId ? 0 : -1"
-          :title="tab.path"
           @click="editor.activate(tab.id)"
           @keydown="onTabKeydown($event, index)"
         >
@@ -786,7 +783,6 @@ onBeforeUnmount(() => {
           size="tiny"
           secondary
           :type="editor.wrap ? 'primary' : 'default'"
-          :title="editor.wrap ? t('files.editor.unwrap') : t('files.editor.wrap')"
           :aria-pressed="editor.wrap"
           @click="toggleWrap"
         >
@@ -795,13 +791,13 @@ onBeforeUnmount(() => {
           </template>
           {{ t("files.editor.wrap") }}
         </NButton>
-        <NButton size="tiny" secondary :title="t('files.editor.search')" @click="openSearch">
+        <NButton size="tiny" secondary @click="openSearch">
           <template #icon>
             <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
           </template>
           {{ t("files.editor.search") }}
         </NButton>
-        <NButton size="tiny" secondary :title="t('files.editor.goToLine')" @click="openGoToLine">
+        <NButton size="tiny" secondary @click="openGoToLine">
           <template #icon>
             <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
           </template>
@@ -944,7 +940,6 @@ onBeforeUnmount(() => {
       ref="dockButton"
       type="button"
       class="ed-dock-item"
-      :title="dockLabel"
       :aria-label="dockLabel"
       @click="restoreWindow"
     >

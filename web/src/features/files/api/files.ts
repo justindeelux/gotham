@@ -290,6 +290,25 @@ export function downloadUrl(serverId: string, ticket: string): string {
   return `/api/v1/servers/${serverId}/files/download?ticket=${encodeURIComponent(ticket)}`;
 }
 
+/**
+ * fetchDownloadBlob loads one ticket-authorised download body as a Blob. The
+ * image viewer (JUS-204) shows it through an object URL instead of navigating
+ * the SPA to the attachment. The thrown shape carries `status` + `message`, so
+ * {@link describeFilesError} maps it onto the files catalog like any API
+ * failure.
+ */
+export async function fetchDownloadBlob(
+  serverId: string,
+  ticket: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch(downloadUrl(serverId, ticket), { signal });
+  if (!response.ok) {
+    throw { status: response.status, message: `Download failed: ${response.status}` };
+  }
+  return response.blob();
+}
+
 /** filesErrorKey maps an HTTP status (or a stable server code) onto its files catalog key. */
 export function filesErrorKey(error: unknown): string | null {
   if (isApiError(error)) {

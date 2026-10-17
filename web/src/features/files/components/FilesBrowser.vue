@@ -41,6 +41,7 @@ import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue
 import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog.vue";
 import ExtractDialog from "@/features/files/components/ExtractDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
+import ImageViewerDialog from "@/features/files/components/ImageViewerDialog.vue";
 import FilesSearchResults from "@/features/files/components/FilesSearchResults.vue";
 import FilesSelectionBar from "@/features/files/components/FilesSelectionBar.vue";
 import FolderSizeCell from "@/features/files/components/FolderSizeCell.vue";
@@ -68,6 +69,7 @@ import {
   formatTimestamp,
   isExtractableArchive,
   isFileDrag,
+  isImageFile,
   isSelectable,
   joinPath,
   resolveSymlinkTarget,
@@ -432,9 +434,13 @@ function ariaSort(key: string): "ascending" | "descending" | "none" {
  * activate performs an entry's default action for a double-click (or Enter) on
  * a row (JUS-130). The dispatch rule lives in {@link entryAction} so it is
  * unit-tested; every branch reuses the existing open/extract path rather than
- * duplicating it.
+ * duplicating it. Images bypass the dispatch into the viewer (JUS-204).
  */
 function activate(entry: FilesEntry): void {
+  if (isImageFile(entry) && files.canReadContent) {
+    openViewer(entry);
+    return;
+  }
   switch (
     entryAction(entry, {
       canOpenEditor: files.canReadContent,
@@ -1967,6 +1973,19 @@ function openExtract(entry: FilesEntry): void {
   extractOpen.value = true;
 }
 
+/** viewerOpen/viewerEntry own the image viewer (JUS-204). */
+const viewerOpen = ref(false);
+const viewerEntry = ref<FilesEntry | null>(null);
+
+/** openViewer shows one image in the viewer (owner/admin only). */
+function openViewer(entry: FilesEntry): void {
+  if (entry.kind !== "file" || !files.canReadContent) {
+    return;
+  }
+  viewerEntry.value = entry;
+  viewerOpen.value = true;
+}
+
 /** onDragOver highlights the zone only for a file drag on a writable root. */
 function onDragOver(event: DragEvent): void {
   if (!isFileDrag(event.dataTransfer?.types)) {
@@ -3249,6 +3268,14 @@ function onFolderMenu(key: string): void {
     <UploadDialog v-model:show="uploadOpen" :initial-files="droppedFiles" />
     <CompressDialog v-model:show="compressOpen" :entries="compressTargets" />
     <ExtractDialog v-model:show="extractOpen" :entry="extractTarget" />
+    <ImageViewerDialog
+      v-model:show="viewerOpen"
+      :server-id="props.serverId"
+      :team-id="teams.activeTeamId"
+      :root="files.rootName"
+      :directory="files.path"
+      :entry="viewerEntry"
+    />
     <ConflictDialog />
 
     <!-- One controlled dropdown serves the row / empty-space context menu and

@@ -214,6 +214,15 @@ const vi = {
     extractDestination: "Giải nén vào thư mục hiện tại",
     extracted: "Đã giải nén {name}.",
   },
+  viewer: {
+    loading: "Đang tải ảnh…",
+    loadError: "Không tải được ảnh.",
+    retry: "Thử lại",
+    zoomIn: "Phóng to",
+    zoomOut: "Thu nhỏ",
+    reset: "Đặt lại chế độ xem",
+    zoomHint: "Cuộn để thu/phóng · kéo để di chuyển · nhấp đúp để đặt lại",
+  },
   trash: {
     title: "Thùng rác",
     hint: "Các mục bị xóa khỏi thư mục gốc này nằm ở đây cho tới khi được khôi phục hoặc xóa vĩnh viễn.",

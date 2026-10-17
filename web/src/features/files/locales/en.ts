@@ -215,6 +215,15 @@ const en = {
     extractDestination: "Extracts into the current folder",
     extracted: "Extracted {name}.",
   },
+  viewer: {
+    loading: "Loading image…",
+    loadError: "Could not load the image.",
+    retry: "Retry",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    reset: "Reset view",
+    zoomHint: "Scroll to zoom · drag to pan · double-click to reset",
+  },
   trash: {
     title: "Recycle bin",
     hint: "Entries deleted from this root land here until they are restored or permanently deleted.",

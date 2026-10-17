@@ -127,6 +127,15 @@ export function isExtractableArchive(entry: FilesEntry): boolean {
   return entry.kind === "file" && archiveFormatFromName(entry.name) !== null;
 }
 
+/**
+ * isImageFile reports a regular file the image viewer opens: one of the
+ * viewer formats (JUS-204). It reuses the family the type label and the row
+ * icon already classify as an image, so the three surfaces never disagree.
+ */
+export function isImageFile(entry: FilesEntry): boolean {
+  return entry.kind === "file" && imageExtensions.has(entryExtension(entry.name));
+}
+
 /** EntryAction is the default action a double-click (or Enter) performs on a row. */
 export type EntryAction = "directory" | "editor" | "extract" | "none";
 

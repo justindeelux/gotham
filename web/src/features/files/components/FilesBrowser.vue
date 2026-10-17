@@ -986,6 +986,62 @@ function rowDescribedBy(entry: FilesEntry): string | undefined {
   return entry.name === rovingTabName.value ? ROW_DETAILS_ID : undefined;
 }
 
+/**
+ * NARROW_TAB_PX is the sample's icon-only threshold: a tab narrower than this
+ * hides its title (and an inactive one its close), like Chrome.
+ */
+const NARROW_TAB_PX = 90;
+
+/**
+ * narrowTabs are the tab ids currently rendered below the icon-only width.
+ * The class MUST be binding-driven (a render would wipe a manual toggle), so
+ * the measured ids live in a reactive set swapped wholesale per pass.
+ */
+const narrowTabs = ref<ReadonlySet<string>>(new Set());
+
+/** updateNarrowTabs re-measures every tab against the icon-only threshold. */
+function updateNarrowTabs(): void {
+  const strip = tabListEl.value;
+  if (!strip) {
+    return;
+  }
+  const next = new Set<string>();
+  for (const node of strip.querySelectorAll<HTMLElement>(".fm-tab")) {
+    if (node.getBoundingClientRect().width < NARROW_TAB_PX) {
+      next.add(node.id.replace(/^fm-tab-/, ""));
+    }
+  }
+  const prev = narrowTabs.value;
+  if (prev.size !== next.size || [...next].some((id) => !prev.has(id))) {
+    narrowTabs.value = next;
+  }
+}
+
+let narrowObserver: ResizeObserver | null = null;
+onMounted(() => {
+  // jsdom (unit tests) has no ResizeObserver; the watcher below still covers
+  // tab-set changes there.
+  if (typeof ResizeObserver !== "undefined") {
+    narrowObserver = new ResizeObserver(() => updateNarrowTabs());
+    if (tabListEl.value) {
+      narrowObserver.observe(tabListEl.value);
+    }
+  }
+  void nextTick(() => updateNarrowTabs());
+});
+onBeforeUnmount(() => {
+  narrowObserver?.disconnect();
+  narrowObserver = null;
+});
+// A tab add/remove/rename changes every tab's share of the strip; re-measure
+// once the patch lands. Showing a title only ever grows its tab, so the pass
+// converges instead of flapping.
+watch(
+  () => files.tabs.map((tab) => `${tab.id}:${tabLabel(tab)}`),
+  () => void nextTick(() => updateNarrowTabs()),
+  { flush: "post" },
+);
+
 /** tabTitle is the tab tooltip / accessible name: the full root-relative path. */
 function tabTitle(tab: FilesTab): string {
   return tab.path === "" ? tab.rootName : `${tab.rootName}/${tab.path}`;
@@ -2443,7 +2499,10 @@ function onFolderMenu(key: string): void {
           :key="tab.id"
           type="button"
           class="fm-tab"
-          :class="{ 'is-active': tab.id === files.activeTabId }"
+          :class="{
+            'is-active': tab.id === files.activeTabId,
+            'is-narrow': narrowTabs.has(tab.id),
+          }"
           role="tab"
           :id="'fm-tab-' + tab.id"
           aria-controls="fm-tabpanel"
@@ -3366,25 +3425,26 @@ function onFolderMenu(key: string): void {
   width: 220px;
 }
 
-/* Tab bar (JUS-123/150, JUS-206 round 2-4): browser-style tabs riding the
-   warm header band (no surrounding box — JUS-150). Inactive tabs are
-   transparent with all four corners rounded; hover is a soft purple fill.
-   The active tab uses the card body colour with rounded TOP corners only and
-   concave flares joining it to the content below — no ring, no outline, no
-   accent border. The strip scrolls horizontally at narrow widths instead of
-   wrapping the layout. */
+/* Tab bar (JUS-123/150, JUS-206 round 2-5): the sample's Chrome-style tabs,
+   mapped to tokens. Inactive tabs are transparent; hovering paints an inset
+   rounded fill behind the content; 1px dividers separate neighbours (hidden
+   around the active/hovered tab via :has). The active tab uses the card body
+   colour with rounded TOP corners only and concave flares joining it to the
+   content below — no ring, no outline, no accent border. The strip scrolls
+   horizontally at narrow widths instead of wrapping the layout. */
 /* Header band (JUS-206 round 4): the dark strip from the card top to the tab
    row. It bleeds to the card's side edges (the card content has no top
    padding, so no top compensation is needed) and keeps the 16px rhythm below
-   the tabs; the top corners follow the card radius. */
+   the tabs; the top corners follow the card radius. End-aligned like the
+   sample so the active tab sits flush on the content. */
 .fm-topbar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: var(--space-3);
   flex: 0 0 auto;
   background: var(--surface-warm);
   margin: 0 calc(-1 * var(--space-6)) var(--space-4);
-  padding: var(--space-2) var(--space-6) 0;
+  padding: var(--space-2) var(--space-2) 0;
   border-radius: var(--n-border-radius, var(--radius-md)) var(--n-border-radius, var(--radius-md)) 0 0;
 }
 
@@ -3400,9 +3460,16 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-tabs {
+  /* Sample geometry, defined once: the 34px tab height, 240px flex basis,
+     56px shrink floor and 28px + button have no token fit. Everything else
+     below reads space/radius tokens. */
+  --fm-tab-h: 34px;
+  --fm-tab-w: 240px;
+  --fm-tab-min: 56px;
+  --fm-add-size: 28px;
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  align-items: flex-end;
+  gap: 0;
   flex: 1 1 auto;
   min-width: 0;
   margin-top: 0;
@@ -3411,8 +3478,8 @@ function onFolderMenu(key: string): void {
 
 .fm-tabstrip {
   display: flex;
-  align-items: stretch;
-  gap: var(--space-2);
+  align-items: flex-end;
+  gap: 0;
   /* Hug the tabs so the + button sits right after the last one (JUS-126);
      shrinking below the content keeps the strip the only scroll region. */
   flex: 0 1 auto;
@@ -3426,21 +3493,56 @@ function onFolderMenu(key: string): void {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  flex: 0 0 auto;
-  max-width: 220px;
+  flex: 0 1 var(--fm-tab-w);
+  min-width: var(--fm-tab-min);
+  height: var(--fm-tab-h);
   border: 0;
   background: none;
-  height: var(--space-8);
-  padding: var(--space-1) var(--space-3);
+  padding: 0 var(--space-1) 0 var(--space-3);
   border-radius: var(--radius-md);
   color: var(--muted);
   font-size: var(--text-sm);
   cursor: pointer;
+  isolation: isolate;
+}
+
+/* Inactive hover (sample ::before): an inset rounded fill behind the content,
+   gapped on all four sides. */
+.fm-tab:not(.is-active)::before {
+  content: "";
+  position: absolute;
+  inset: var(--space-1);
+  border-radius: var(--radius-md);
+  background: transparent;
+  z-index: -1;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.fm-tab:not(.is-active):hover::before {
+  background: var(--accent-softer);
 }
 
 .fm-tab:hover {
-  background: var(--accent-softer);
   color: var(--fg-2);
+}
+
+/* Divider between neighbours: a 1px x 16px rule centred in the tab height.
+   Hidden at the strip end and around the hovered/active tab (sample :has). */
+.fm-tab::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: calc((var(--fm-tab-h) - var(--space-4)) / 2);
+  width: 1px;
+  height: var(--space-4);
+  background: var(--border);
+}
+
+.fm-tab:last-child::after,
+.fm-tab:hover::after,
+.fm-tab:has(+ .fm-tab:hover)::after,
+.fm-tab:has(+ .fm-tab.is-active)::after {
+  display: none;
 }
 
 .fm-tab-icon {
@@ -3449,14 +3551,16 @@ function onFolderMenu(key: string): void {
 }
 
 /* The active tab is the card body colour with rounded TOP corners only, in
-   the normal text colour — no ring, no outline, no accent border. It sits
-   after the hover rule so the fill wins on hover. Its concave bottom flares
-   (the card body colour over the warm band) join it to the content below. */
+   the normal text colour — no ring, no outline, no accent border. Its concave
+   bottom flares (the card body colour over the warm band, sample geometry)
+   join it to the content below; they reuse ::after, whose divider is hidden
+   on the active tab by the rule above. */
 .fm-tab.is-active {
   background: var(--n-color);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   color: var(--fg);
   font-weight: 600;
+  z-index: 2;
 }
 
 .fm-tab.is-active::before,
@@ -3464,19 +3568,38 @@ function onFolderMenu(key: string): void {
   content: "";
   position: absolute;
   bottom: 0;
-  width: var(--space-2);
-  height: var(--space-2);
+  display: block;
+  width: var(--radius-md);
+  height: var(--radius-md);
   pointer-events: none;
 }
 
 .fm-tab.is-active::before {
-  left: calc(-1 * var(--space-2));
-  background: radial-gradient(circle farthest-side at 100% 100%, var(--n-color) 98%, transparent 100%);
+  left: calc(-1 * var(--radius-md));
+  background: radial-gradient(circle at 0 0, transparent 70%, var(--n-color) 72%);
 }
 
 .fm-tab.is-active::after {
-  right: calc(-1 * var(--space-2));
-  background: radial-gradient(circle farthest-side at 0 100%, var(--n-color) 98%, transparent 100%);
+  right: calc(-1 * var(--radius-md));
+  background: radial-gradient(circle at 100% 0, transparent 70%, var(--n-color) 72%);
+}
+
+/* Icon-only narrow tabs (sample .narrow, measured in updateNarrowTabs). The
+   title stays in the DOM (clipped and transparent) so the tab keeps its
+   accessible name and never reads as an empty icon-only button. */
+.fm-tab.is-narrow {
+  justify-content: center;
+  gap: 0;
+  padding: 0 var(--space-2);
+}
+
+.fm-tab.is-narrow .fm-tab-name {
+  max-width: 0;
+  opacity: 0;
+}
+
+.fm-tab.is-narrow:not(.is-active) .fm-tab-close {
+  display: none;
 }
 
 /* The strip scrolls (overflow-x: auto) and clips its descendants at its edge,
@@ -3489,16 +3612,22 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-tab-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  /* Sample fade mask instead of an ellipsis. */
+  -webkit-mask-image: linear-gradient(90deg, #000 80%, transparent);
+  mask-image: linear-gradient(90deg, #000 80%, transparent);
 }
 
 .fm-tab-close {
   display: grid;
   place-items: center;
+  flex: 0 0 auto;
   width: var(--space-5);
   height: var(--space-5);
+  margin-right: var(--space-1);
   border-radius: var(--radius-pill);
   color: var(--muted);
 }
@@ -3512,11 +3641,13 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: var(--space-8);
-  height: var(--space-8);
+  width: var(--fm-add-size);
+  height: var(--fm-add-size);
+  /* Sample offset: bottom-centred in the tab height, gapped from the tabs. */
+  margin: 0 0 calc((var(--fm-tab-h) - var(--fm-add-size)) / 2) var(--space-2);
   border: 0;
   background: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   color: var(--muted);
   cursor: pointer;
 }

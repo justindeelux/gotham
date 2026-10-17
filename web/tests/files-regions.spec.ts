@@ -269,12 +269,10 @@ for (const viewport of [
         `switcher wraps under the tabs at ${viewport.width}px`,
       ).toBeGreaterThanOrEqual(regions.tablist.bottom - 1);
     } else {
-      // The switcher is shorter than the 32px tabs, so the row centers it —
-      // assert the vertical centers coincide, not the tops.
-      const tabMid = (regions.tablist.top + regions.tablist.bottom) / 2;
-      const nodeMid = (regions.contextbar.top + regions.contextbar.bottom) / 2;
+      // The switcher is shorter than the 34px tabs; the row is end-aligned
+      // (sample geometry), so assert the bottoms coincide, not the tops.
       expect(
-        Math.abs(nodeMid - tabMid),
+        Math.abs(regions.contextbar.bottom - regions.tablist.bottom),
         `switcher shares the tab row at ${viewport.width}px`,
       ).toBeLessThanOrEqual(1);
       expect(

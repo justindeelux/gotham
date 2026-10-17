@@ -6,7 +6,7 @@ import { useI18n } from "vue-i18n";
 
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
 import type { FilesSearchHit } from "@/features/files/schemas/files";
-import { entryIconKind, parentPath, resolveSymlinkTarget } from "@/features/files/utils/files";
+import { entryIconKind, parentPath } from "@/features/files/utils/files";
 
 interface Props {
   /** results are the name-search hits with their root-relative paths. */
@@ -30,20 +30,6 @@ const emit = defineEmits<{
 /** folderOf is the containing folder of one hit, for the row's location line. */
 function folderOf(hit: FilesSearchHit): string {
   return parentPath(hit.path) || "/";
-}
-
-/** hitIcon mirrors the browser rows: a link into the browsable root draws as
- * a folder (the listing never says whether a target is a folder). */
-function hitIcon(hit: FilesSearchHit): ReturnType<typeof entryIconKind> {
-  const target = hit.entry.symlink_target;
-  if (
-    hit.entry.kind === "symlink" &&
-    target &&
-    resolveSymlinkTarget(parentPath(hit.path), hit.entry.name, target) !== null
-  ) {
-    return "folder";
-  }
-  return entryIconKind(hit.entry);
 }
 
 const scope = computed<string>(() => props.path || "/");
@@ -147,7 +133,7 @@ const liveMessage = computed<string>(() => {
           @keydown.enter.prevent="openHit(hit)"
           @keydown.space.prevent="openHit(hit)"
         >
-          <FileTypeIcon :kind="hitIcon(hit)" />
+          <FileTypeIcon :kind="entryIconKind(hit.entry)" />
           <span class="fm-search-name">{{ hit.entry.name }}</span>
           <span class="fm-search-folder">
             {{ $t("files.search.inFolder", { path: folderOf(hit) }) }}

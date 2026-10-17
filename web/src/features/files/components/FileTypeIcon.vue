@@ -35,8 +35,10 @@ const icon = computed<Component>(() => icons[props.kind]);
 <style scoped>
 /* File-type marks (JUS-206): the glyph sits directly in the row — no dark
  * tile. The box is the reference 25px (--fm-mark-size, owned by
- * FilesBrowser); folders (and folder-links, resolved at the call site) are an
- * outline mark in the warn tone. */
+ * FilesBrowser); folders are an outline mark in the warn tone. Symlinks keep
+ * the link icon until the agent reports the target kind (backend follow-up):
+ * the listing cannot tell a folder-link from a file-link, so every symlink
+ * draws as a link. */
 .fm-mark {
   position: relative;
   width: var(--fm-mark-size);

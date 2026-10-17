@@ -355,14 +355,11 @@ function typeLabel(entry: FilesEntry): string {
 }
 
 /** iconKind resolves the marker icon family for one entry. */
-// shortcut: the listing never says whether a symlink target is a folder, so a
-// link that resolves inside the browsable root (the "Go to target" gate) is
-// drawn as a folder; a file-link there mislabels until the agent reports
-// target kinds.
+// Symlinks always resolve to the link icon — even a link into the browsable
+// root — until the agent reports the target kind (backend follow-up); the
+// listing never says whether a target is a directory, so guessing drew folder
+// icons for file and dangling links.
 function iconKind(entry: FilesEntry): ReturnType<typeof entryIconKind> {
-  if (entry.kind === "symlink" && symlinkTargetPath(entry) !== null) {
-    return "folder";
-  }
   return entryIconKind(entry);
 }
 

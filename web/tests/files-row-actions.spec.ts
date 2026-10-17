@@ -265,6 +265,12 @@ async function expectTooltipOnHover(
   const tooltip = tooltipFor(page, label);
   await control.hover();
   await expect(tooltip, `hover tooltip for "${label}"`).toBeVisible();
+  // JUS-203: the tooltip opens 500ms after the hover, so it is still in its
+  // first positioning frame when it becomes visible — and an unpositioned
+  // popover briefly sits at the document origin, exactly where the mouse jumps
+  // next. Moving away only once it has settled keeps the leave aimed at the
+  // control instead of pinning the tooltip open under a stationary pointer.
+  await page.waitForTimeout(300);
   await page.mouse.move(0, 0);
   await expect(tooltip).toBeHidden();
 }
@@ -377,6 +383,9 @@ test.describe("icon-only controls are accessible", () => {
   test("every icon-only button in the three areas keeps an aria-label and a tooltip", async ({
     page,
   }) => {
+    // JUS-203: the sweep hovers ~45 controls and each one waits out the 500ms
+    // tooltip intent delay, so the 30s default budget cannot hold it.
+    test.setTimeout(180_000);
     await openFiles(page);
 
     // Row actions are icon-only at every width; the desktop row is checked

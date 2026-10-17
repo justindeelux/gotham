@@ -1,4 +1,24 @@
 import type { DropdownOption } from "naive-ui";
+import {
+  ArchiveRestore,
+  ChevronRight,
+  ClipboardPaste,
+  Copy,
+  Download,
+  ExternalLink,
+  FilePlus,
+  FolderOpen,
+  FolderPlus,
+  Lock,
+  Pencil,
+  Recycle,
+  RefreshCw,
+  Scissors,
+  Trash2,
+  Upload,
+} from "@lucide/vue";
+import { h } from "vue";
+import type { Component, VNode } from "vue";
 
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { isExtractableArchive } from "@/features/files/utils/files";
@@ -27,8 +47,18 @@ export interface FilesMenuContext {
 }
 
 /** item builds one menu row with the menuitem role NDropdown needs. */
-function item(label: string, key: string, disabled = false): FilesMenuItem {
-  return { label, key, disabled, props: { role: "menuitem" } };
+function item(
+  label: string,
+  key: string,
+  disabled = false,
+  icon?: () => VNode,
+): FilesMenuItem {
+  return { label, key, disabled, icon, props: { role: "menuitem" } };
+}
+
+/** menuIcon renders one lucide icon for a dropdown option, matching the sort menu. */
+function menuIcon(icon: Component): () => VNode {
+  return () => h(icon, { size: 14, "aria-hidden": "true" });
 }
 
 /**
@@ -46,11 +76,24 @@ export function rowMenuOptions(
   const { t, canWrite, canReadContent, canPaste } = ctx;
   const options: FilesMenuItem[] = [];
   if (entry.kind === "directory") {
-    options.push(item(t("files.menu.open"), "open"));
-    options.push(item(t("files.menu.openTab"), "open-tab"));
+    options.push(
+      item(t("files.menu.open"), "open", false, menuIcon(FolderOpen)),
+    );
+    options.push(
+      item(t("files.menu.openTab"), "open-tab", false, menuIcon(ExternalLink)),
+    );
   } else if (entry.kind === "file") {
-    options.push(item(t("files.menu.edit"), "edit", !canReadContent));
-    options.push(item(t("files.menu.download"), "download", !canReadContent));
+    options.push(
+      item(t("files.menu.edit"), "edit", !canReadContent, menuIcon(Pencil)),
+    );
+    options.push(
+      item(
+        t("files.menu.download"),
+        "download",
+        !canReadContent,
+        menuIcon(Download),
+      ),
+    );
   }
   // JUS-132: a symlink whose target lives inside the browsable root can jump
   // there. "" is the root's top level and stays valid; null (outside the root)
@@ -60,28 +103,67 @@ export function rowMenuOptions(
     entry.symlink_target &&
     typeof ctx.symlinkTargetPath === "string"
   ) {
-    options.push(item(t("files.menu.goTarget"), "go-target"));
+    options.push(
+      item(
+        t("files.menu.goTarget"),
+        "go-target",
+        false,
+        menuIcon(ChevronRight),
+      ),
+    );
   }
   // Only a regular file or a folder can be chmod-ed: the agent refuses a
   // symlink (it would follow to the target) and a special file.
   if (entry.kind === "file" || entry.kind === "directory") {
-    options.push(item(t("files.menu.permissions"), "permissions", !canWrite));
+    options.push(
+      item(
+        t("files.menu.permissions"),
+        "permissions",
+        !canWrite,
+        menuIcon(Lock),
+      ),
+    );
   }
   if (entry.kind !== "special" && entry.kind !== "unspecified") {
     if (entry.kind === "file" && isExtractableArchive(entry)) {
-      options.push(item(t("files.actions.extract"), "extract", !canWrite));
+      options.push(
+        item(
+          t("files.actions.extract"),
+          "extract",
+          !canWrite,
+          menuIcon(ArchiveRestore),
+        ),
+      );
     }
-    options.push(item(t("files.actions.rename"), "rename", !canWrite));
-    options.push(item(t("files.actions.cut"), "cut", !canWrite));
-    options.push(item(t("files.actions.copy"), "copy", !canWrite));
+    options.push(
+      item(t("files.actions.rename"), "rename", !canWrite, menuIcon(Pencil)),
+    );
+    options.push(
+      item(t("files.actions.cut"), "cut", !canWrite, menuIcon(Scissors)),
+    );
+    options.push(
+      item(t("files.actions.copy"), "copy", !canWrite, menuIcon(Copy)),
+    );
     // Paste is a folder action: on a folder row it pastes INTO that folder, so
     // it is offered only where a destination makes sense, never on a file row.
     if (entry.kind === "directory") {
       options.push(
-        item(t("files.actions.paste"), "paste", !canWrite || !canPaste),
+        item(
+          t("files.actions.paste"),
+          "paste",
+          !canWrite || !canPaste,
+          menuIcon(ClipboardPaste),
+        ),
       );
     }
-    options.push(item(t("common.actions.delete"), "delete", !canWrite));
+    options.push(
+      item(
+        t("common.actions.delete"),
+        "delete",
+        !canWrite,
+        menuIcon(Trash2),
+      ),
+    );
   }
   return options;
 }
@@ -96,11 +178,21 @@ export function rowMenuOptions(
 export function folderMenuOptions(ctx: FilesMenuContext): FilesMenuItem[] {
   const { t, canWrite, canPaste } = ctx;
   return [
-    item(t("files.actions.newFile"), "new-file", !canWrite),
-    item(t("files.actions.newFolder"), "new-folder", !canWrite),
-    item(t("files.actions.paste"), "paste", !canWrite || !canPaste),
-    item(t("files.actions.upload"), "upload", !canWrite),
-    item(t("files.menu.recycleBin"), "recycle-bin"),
-    item(t("files.browser.refresh"), "refresh"),
+    item(t("files.actions.newFile"), "new-file", !canWrite, menuIcon(FilePlus)),
+    item(
+      t("files.actions.newFolder"),
+      "new-folder",
+      !canWrite,
+      menuIcon(FolderPlus),
+    ),
+    item(
+      t("files.actions.paste"),
+      "paste",
+      !canWrite || !canPaste,
+      menuIcon(ClipboardPaste),
+    ),
+    item(t("files.actions.upload"), "upload", !canWrite, menuIcon(Upload)),
+    item(t("files.menu.recycleBin"), "recycle-bin", false, menuIcon(Recycle)),
+    item(t("files.browser.refresh"), "refresh", false, menuIcon(RefreshCw)),
   ];
 }

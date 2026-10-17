@@ -131,6 +131,74 @@ func TestAddDomainKeepsPlainHTTPWhenNotTLS(t *testing.T) {
 	}
 }
 
+// TestAddDomainReusesExistingIntent pins JUS-201's transaction safety: a
+// pre-existing intent for the host is left untouched and the attach still
+// succeeds (the ON CONFLICT DO NOTHING write never aborts the transaction).
+func TestAddDomainReusesExistingIntent(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	repo.certificates = []CertificateIntent{{
+		ApplicationID: app.ID, Domain: "kept.example.com", Enabled: false, Challenge: string(proxy.ChallengeHTTP01),
+	}}
+	svc := tlsService(t, repo, true)
+
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, "kept.example.com"); err != nil {
+		t.Fatalf("AddDomain with a pre-existing intent: %v", err)
+	}
+	if len(repo.certificates) != 1 || repo.certificates[0].Enabled {
+		t.Fatalf("certificates = %#v, want the operator's intent untouched", repo.certificates)
+	}
+}
+
+// TestAddDomainSkipsHTTP01UnderWildcard pins JUS-201's wildcard guard: an
+// enabled wildcard intent already covers the new host, so the default per-host
+// http-01 intent must be skipped.
+func TestAddDomainSkipsHTTP01UnderWildcard(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	repo.certificates = []CertificateIntent{{
+		ApplicationID: app.ID, Domain: "app.example.com", Enabled: true, Challenge: string(proxy.ChallengeDNS01), Wildcard: true,
+	}}
+	svc := tlsService(t, repo, true)
+
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, "www.example.com"); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	for _, cert := range repo.certificates {
+		if cert.Domain == "www.example.com" {
+			t.Fatalf("per-host intent created under a wildcard: %#v", repo.certificates)
+		}
+	}
+}
+
+// TestRemoveDomainDeletesAutoIntent pins JUS-201's cleanup: removing the host
+// drops its auto-created http-01 intent but never an operator's wildcard or
+// dns-01 one.
+func TestRemoveDomainDeletesAutoIntent(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	svc := tlsService(t, repo, true)
+
+	created, err := svc.AddDomain(context.Background(), userID, app.ID, "gone.example.com")
+	if err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	// An operator's wildcard intent for a sibling survives the removal.
+	repo.certificates = append(repo.certificates, CertificateIntent{
+		ApplicationID: app.ID, Domain: "sibling.example.com", Enabled: true, Challenge: string(proxy.ChallengeDNS01), Wildcard: true,
+	})
+
+	if _, err := svc.RemoveDomain(context.Background(), userID, app.ID, created.ID); err != nil {
+		t.Fatalf("RemoveDomain: %v", err)
+	}
+	if len(repo.certificates) != 1 || repo.certificates[0].Domain != "sibling.example.com" {
+		t.Fatalf("certificates = %#v, want only the operator intent kept", repo.certificates)
+	}
+}
+
 func TestAddDomainRejectsConflicts(t *testing.T) {
 	userID := uuid.New()
 	repo := &fakeRepository{}

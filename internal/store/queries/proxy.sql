@@ -166,6 +166,42 @@ INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
+-- name: CreateDomainCertificateIfAbsent :execrows
+-- CreateDomainCertificateIfAbsent records an intent only when none exists for
+-- the (application_id, domain) pair (JUS-201). The attach and backfill paths
+-- use it so a re-attach or an operator's existing intent is a silent no-op
+-- instead of a unique violation that would abort the surrounding
+-- transaction.
+INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (application_id, domain) DO NOTHING;
+
+-- name: DeleteAutoDomainCertificate :execrows
+-- DeleteAutoDomainCertificate removes the default enabled http-01
+-- non-wildcard intent a detached domain got (JUS-201). An operator's wildcard
+-- or dns-01 intent is never touched.
+DELETE FROM domain_certificates
+WHERE application_id = $1 AND domain = $2 AND challenge = 'http-01' AND NOT wildcard;
+
+-- name: BackfillApplicationCertificates :execrows
+-- BackfillApplicationCertificates gives every enabled application domain that
+-- has no certificate intent the default enabled http-01 one (JUS-201). It is
+-- idempotent (ON CONFLICT DO NOTHING) and skips an application that already
+-- holds an enabled wildcard intent, whose SAN already covers its hosts.
+INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
+SELECT d.application_id, d.domain, true, 'http-01', NULL, false
+FROM application_domains d
+WHERE NOT d.disabled
+  AND NOT EXISTS (
+      SELECT 1 FROM domain_certificates c
+      WHERE c.application_id = d.application_id AND c.domain = d.domain
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM domain_certificates w
+      WHERE w.application_id = d.application_id AND w.enabled AND w.wildcard
+  )
+ON CONFLICT (application_id, domain) DO NOTHING;
+
 -- name: UpdateDomainCertificate :one
 UPDATE domain_certificates
 SET domain = $2,

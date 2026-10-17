@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/store"
 	"github.com/justindeelux/gotham/internal/store/sqlc"
 	"github.com/justindeelux/gotham/internal/teams"
@@ -68,6 +69,28 @@ func domainIntegrationService(t *testing.T, ctx context.Context, st *store.Store
 	userID := uuid.UUID(userRow.ID.Bytes)
 	repo := newStoreRepository(st, "integration-secret")
 	svc := NewService(Config{Repository: repo, Secret: "integration-secret", Logger: discardLogger()})
+	t.Cleanup(func() { _ = svc.Close() })
+	svcCtx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: teams.RoleOwner})
+	return svc, svcCtx, userID
+}
+
+// domainIntegrationTLSService builds a Service whose default-domain TLS gate
+// is on, over the real repository: the JUS-201 attach/remove/re-attach and
+// pre-existing-intent paths run against real Postgres.
+func domainIntegrationTLSService(t *testing.T, ctx context.Context, st *store.Store, teamID uuid.UUID) (*Service, context.Context, uuid.UUID) {
+	t.Helper()
+	userRow, err := st.CreateUser(ctx, fmt.Sprintf("p201-domains-%d@example.com", time.Now().UnixNano()), nil)
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	userID := uuid.UUID(userRow.ID.Bytes)
+	repo := newStoreRepository(st, "integration-secret")
+	svc := NewService(Config{
+		Repository:    repo,
+		Secret:        "integration-secret",
+		Logger:        discardLogger(),
+		TLSForDomains: func(context.Context) bool { return true },
+	})
 	t.Cleanup(func() { _ = svc.Close() })
 	svcCtx := teams.WithScope(context.Background(), teams.Scope{UserID: userID, TeamID: teamID, Role: teams.RoleOwner})
 	return svc, svcCtx, userID
@@ -290,6 +313,98 @@ func TestRemoveDomainPromotesEnabledRealDB(t *testing.T) {
 	}
 	if updated.BaseDomain != "disabled.example.com" || !updated.BaseDomainDisabled {
 		t.Fatalf("mirror = %q disabled=%v, want the disabled fallback carried visibly", updated.BaseDomain, updated.BaseDomainDisabled)
+	}
+}
+
+// TestAddDomainReattachRealDB is the JUS-201 regression: attach, remove and
+// re-attach the same host against real Postgres. The earlier code left the
+// auto-created intent behind, so the re-attach hit the (application_id,
+// domain) unique index inside the attach transaction and the whole domain row
+// rolled back.
+func TestAddDomainReattachRealDB(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	st := openDomainIntegrationStore(t, ctx)
+	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	svc, svcCtx, userID := domainIntegrationTLSService(t, ctx, st, teamID)
+	repo := newStoreRepository(st, "integration-secret")
+
+	app := createDomainIntegrationApp(t, svcCtx, svc, userID, envID, serverID, "reattach", "base.example.com")
+	attached, err := svc.AddDomain(svcCtx, userID, app.ID, "reattach.example.com")
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	intents, err := repo.ListCertificateIntents(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("list intents: %v", err)
+	}
+	if len(intents) != 1 || intents[0].Domain != "reattach.example.com" || !intents[0].Enabled || intents[0].Challenge != string(proxy.ChallengeHTTP01) {
+		t.Fatalf("attach intents = %#v", intents)
+	}
+
+	if _, err := svc.RemoveDomain(svcCtx, userID, app.ID, attached.ID); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	intents, err = repo.ListCertificateIntents(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("list intents after remove: %v", err)
+	}
+	if len(intents) != 0 {
+		t.Fatalf("auto intent survived removal: %#v", intents)
+	}
+
+	if _, err := svc.AddDomain(svcCtx, userID, app.ID, "reattach.example.com"); err != nil {
+		t.Fatalf("re-attach: %v", err)
+	}
+	intents, err = repo.ListCertificateIntents(ctx, app.ID)
+	if err != nil {
+		t.Fatalf("list intents after re-attach: %v", err)
+	}
+	if len(intents) != 1 || intents[0].Domain != "reattach.example.com" {
+		t.Fatalf("re-attach intents = %#v", intents)
+	}
+}
+
+// TestAddDomainPreExistingIntentRealDB proves the attach transaction survives a
+// host that already has an operator intent, on both the alias path (the commit
+// used to fail with 25P02) and the primary path (the mirror write used to fail
+// with the aborted transaction).
+func TestAddDomainPreExistingIntentRealDB(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	st := openDomainIntegrationStore(t, ctx)
+	teamID, envID, serverID := seedProjectEnvironment(t, ctx, st)
+	svc, svcCtx, userID := domainIntegrationTLSService(t, ctx, st, teamID)
+	repo := newStoreRepository(st, "integration-secret")
+
+	for _, tc := range []struct {
+		name   string
+		base   string
+		domain string
+	}{
+		{"alias", "base.example.com", "kept-alias.example.com"},
+		{"primary", "", "kept-primary.example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := createDomainIntegrationApp(t, svcCtx, svc, userID, envID, serverID, "keep-"+tc.name, tc.base)
+			if err := repo.CreateCertificateIntent(ctx, CertificateIntent{
+				ApplicationID: app.ID, Domain: tc.domain, Enabled: false, Challenge: string(proxy.ChallengeHTTP01),
+			}); err != nil {
+				t.Fatalf("seed operator intent: %v", err)
+			}
+			if _, err := svc.AddDomain(svcCtx, userID, app.ID, tc.domain); err != nil {
+				t.Fatalf("attach with a pre-existing intent: %v", err)
+			}
+			intents, err := repo.ListCertificateIntents(ctx, app.ID)
+			if err != nil {
+				t.Fatalf("list intents: %v", err)
+			}
+			if len(intents) != 1 || intents[0].Enabled {
+				t.Fatalf("intents = %#v, want the operator intent untouched", intents)
+			}
+		})
 	}
 }
 

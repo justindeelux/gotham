@@ -67,6 +67,16 @@ func (s *Service) AddDomain(ctx context.Context, userID, appID uuid.UUID, domain
 	// the panel domain. The gate is the same one the panel uses — an https
 	// control-plane URL — so an http-only dev box stays plain-HTTP.
 	withTLS := s.tlsForDomains != nil && s.tlsForDomains(ctx)
+	if withTLS {
+		// Skip when the application already holds an enabled wildcard intent:
+		// the generator prefers an exact-host intent, so a per-host http-01
+		// order would outrank the SAN that already covers the new host.
+		intents, err := s.repo.ListCertificateIntents(ctx, app.ID)
+		if err != nil {
+			return ApplicationDomain{}, err
+		}
+		withTLS = !hasEnabledWildcardIntent(intents)
+	}
 	var created ApplicationDomain
 	err = s.repo.InTx(ctx, func(tx Repository) error {
 		row, err := tx.CreateApplicationDomain(ctx, ApplicationDomain{
@@ -80,13 +90,14 @@ func (s *Service) AddDomain(ctx context.Context, userID, appID uuid.UUID, domain
 		created = row
 		if withTLS {
 			// An intent already recorded for the host (a re-attach, or an
-			// operator's own wildcard/DNS-01 configuration) is left untouched.
-			if err := tx.CreateCertificateIntent(ctx, CertificateIntent{
+			// operator's dns-01 configuration) is left untouched: the insert is
+			// ON CONFLICT DO NOTHING, so it can never abort this transaction.
+			if err := tx.CreateCertificateIntentIfAbsent(ctx, CertificateIntent{
 				ApplicationID: app.ID,
 				Domain:        next,
 				Enabled:       true,
 				Challenge:     string(proxy.ChallengeHTTP01),
-			}); err != nil && !errors.Is(err, ErrConflict) {
+			}); err != nil {
 				return err
 			}
 		}
@@ -103,6 +114,19 @@ func (s *Service) AddDomain(ctx context.Context, userID, appID uuid.UUID, domain
 	}
 	s.syncProxy(ctx, app)
 	return created, nil
+}
+
+// hasEnabledWildcardIntent reports whether the application already holds an
+// enabled wildcard certificate intent. Such an intent's SAN covers a newly
+// attached host, and the generator prefers an exact-host intent, so the
+// default per-host HTTP-01 intent must be skipped (JUS-201).
+func hasEnabledWildcardIntent(intents []CertificateIntent) bool {
+	for _, intent := range intents {
+		if intent.Enabled && intent.Wildcard {
+			return true
+		}
+	}
+	return false
 }
 
 // RemoveDomain detaches one hostname from an application (JUS-89). Removing
@@ -146,6 +170,12 @@ func (s *Service) RemoveDomain(ctx context.Context, userID, appID, domainID uuid
 	var updated Application
 	err = s.repo.InTx(ctx, func(tx Repository) error {
 		if err := tx.DeleteApplicationDomain(ctx, app.ID, target.ID); err != nil {
+			return err
+		}
+		// The default TLS of a detached host goes with it (JUS-201): the
+		// auto-created http-01 intent must not linger, or a re-attach would
+		// collide with it. An operator's wildcard or dns-01 intent survives.
+		if err := tx.DeleteAutoCertificateIntent(ctx, app.ID, target.Domain); err != nil {
 			return err
 		}
 		if !target.IsPrimary {

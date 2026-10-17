@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/justindeelux/gotham/internal/providers"
+	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/teams"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
@@ -1097,6 +1098,57 @@ func (r *fakeRepository) CreateCertificateIntent(_ context.Context, in Certifica
 		}
 	}
 	r.certificates = append(r.certificates, in)
+	return nil
+}
+
+// CreateCertificateIntentIfAbsent implements Repository with the ON CONFLICT
+// DO NOTHING write: an existing (application, domain) intent is a no-op
+// (JUS-201).
+func (r *fakeRepository) CreateCertificateIntentIfAbsent(_ context.Context, in CertificateIntent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.certErr != nil {
+		return r.certErr
+	}
+	for _, cert := range r.certificates {
+		if cert.ApplicationID == in.ApplicationID && cert.Domain == in.Domain {
+			return nil
+		}
+	}
+	r.certificates = append(r.certificates, in)
+	return nil
+}
+
+// ListCertificateIntents implements Repository.
+func (r *fakeRepository) ListCertificateIntents(_ context.Context, appID uuid.UUID) ([]CertificateIntent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
+	intents := []CertificateIntent{}
+	for _, cert := range r.certificates {
+		if cert.ApplicationID == appID {
+			intents = append(intents, cert)
+		}
+	}
+	return intents, nil
+}
+
+// DeleteAutoCertificateIntent implements Repository: only the default http-01
+// non-wildcard intent is removed.
+func (r *fakeRepository) DeleteAutoCertificateIntent(_ context.Context, appID uuid.UUID, domain string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := make([]CertificateIntent, 0, len(r.certificates))
+	for _, cert := range r.certificates {
+		if cert.ApplicationID == appID && cert.Domain == domain &&
+			cert.Challenge == string(proxy.ChallengeHTTP01) && !cert.Wildcard {
+			continue
+		}
+		kept = append(kept, cert)
+	}
+	r.certificates = kept
 	return nil
 }
 

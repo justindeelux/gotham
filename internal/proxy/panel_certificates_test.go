@@ -27,6 +27,79 @@ func (f fixedPanelStatus) CertificateStatuses(_ context.Context, certs []DomainC
 	return out
 }
 
+// TestReconcileApplicationCertificatesGate pins the JUS-201 backfill gate: the
+// default TLS of attached application domains is reconciled only when a
+// control-plane URL is served over https, exactly like the panel domain.
+func TestReconcileApplicationCertificatesGate(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		urls []string
+		want int
+	}{
+		{"https", []string{"https://panel.example.com"}, 1},
+		{"http", []string{"http://panel.example.com"}, 0},
+		{"empty", []string{""}, 0},
+		{"mixed", []string{"http://panel.example.com", "https://other.example.com"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := panelFixture(t)
+			st := newFakeSSLStore()
+			f.service.panelCertificates = st
+			if err := f.service.ReconcilePanelCertificates(context.Background(), tc.urls); err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if st.backfillCalls != tc.want {
+				t.Fatalf("backfill calls = %d, want %d", st.backfillCalls, tc.want)
+			}
+		})
+	}
+}
+
+// TestReconcileApplicationBackfillResyncs pins JUS-201's rebuild trigger: when
+// the backfill records an intent the proxy configuration is pushed, and an
+// unchanged (or gated-off) backfill pushes nothing.
+func TestReconcileApplicationBackfillResyncs(t *testing.T) {
+	newBackfillFixture := func(t *testing.T) *syncFixture {
+		t.Helper()
+		f := panelFixture(t)
+		st := newFakeSSLStore()
+		st.uncertified = []DomainCertificate{{ApplicationID: uuid.New(), Domain: "app.example.com"}}
+		f.service.panelCertificates = st
+		f.source.apps = []ProxiedApplication{runningApp(f.serverID, "app.example.com", "c1", 3000, 32768)}
+		f.containers.list = append(f.containers.list, appContainer("c1", 32768))
+		return f
+	}
+
+	t.Run("insert triggers one push", func(t *testing.T) {
+		f := newBackfillFixture(t)
+		before := len(f.agent.calls)
+		if err := f.service.ReconcilePanelCertificates(context.Background(), []string{"https://panel.example.com"}); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		if len(f.agent.calls) != before+1 {
+			t.Fatalf("config pushes = %d, want %d after the backfill", len(f.agent.calls), before+1)
+		}
+		// A second run inserts nothing and must not push again.
+		if err := f.service.ReconcilePanelCertificates(context.Background(), []string{"https://panel.example.com"}); err != nil {
+			t.Fatalf("second reconcile: %v", err)
+		}
+		if len(f.agent.calls) != before+1 {
+			t.Fatalf("idempotent backfill pushed again (%d)", len(f.agent.calls))
+		}
+	})
+
+	t.Run("http gate pushes nothing", func(t *testing.T) {
+		f := newBackfillFixture(t)
+		before := len(f.agent.calls)
+		if err := f.service.ReconcilePanelCertificates(context.Background(), []string{"http://panel.example.com"}); err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		if len(f.agent.calls) != before {
+			t.Fatal("an http-only instance pushed a TLS backfill")
+		}
+	})
+}
+
 func TestPanelCertificateReadiness(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

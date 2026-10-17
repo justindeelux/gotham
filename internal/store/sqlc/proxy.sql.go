@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const backfillApplicationCertificates = `-- name: BackfillApplicationCertificates :execrows
+INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
+SELECT d.application_id, d.domain, true, 'http-01', NULL, false
+FROM application_domains d
+WHERE NOT d.disabled
+  AND NOT EXISTS (
+      SELECT 1 FROM domain_certificates c
+      WHERE c.application_id = d.application_id AND c.domain = d.domain
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM domain_certificates w
+      WHERE w.application_id = d.application_id AND w.enabled AND w.wildcard
+  )
+ON CONFLICT (application_id, domain) DO NOTHING
+`
+
+// BackfillApplicationCertificates gives every enabled application domain that
+// has no certificate intent the default enabled http-01 one (JUS-201). It is
+// idempotent (ON CONFLICT DO NOTHING) and skips an application that already
+// holds an enabled wildcard intent, whose SAN already covers its hosts.
+func (q *Queries) BackfillApplicationCertificates(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, backfillApplicationCertificates)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const clearPendingProxyConfigVersions = `-- name: ClearPendingProxyConfigVersions :exec
 DELETE FROM proxy_config_versions WHERE server_id = $1 AND pending
 `
@@ -127,6 +155,41 @@ func (q *Queries) CreateDomainCertificate(ctx context.Context, arg CreateDomainC
 	return i, err
 }
 
+const createDomainCertificateIfAbsent = `-- name: CreateDomainCertificateIfAbsent :execrows
+INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns_provider_id, wildcard)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (application_id, domain) DO NOTHING
+`
+
+type CreateDomainCertificateIfAbsentParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Domain        string      `json:"domain"`
+	Enabled       bool        `json:"enabled"`
+	Challenge     string      `json:"challenge"`
+	DnsProviderID pgtype.UUID `json:"dns_provider_id"`
+	Wildcard      bool        `json:"wildcard"`
+}
+
+// CreateDomainCertificateIfAbsent records an intent only when none exists for
+// the (application_id, domain) pair (JUS-201). The attach and backfill paths
+// use it so a re-attach or an operator's existing intent is a silent no-op
+// instead of a unique violation that would abort the surrounding
+// transaction.
+func (q *Queries) CreateDomainCertificateIfAbsent(ctx context.Context, arg CreateDomainCertificateIfAbsentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createDomainCertificateIfAbsent,
+		arg.ApplicationID,
+		arg.Domain,
+		arg.Enabled,
+		arg.Challenge,
+		arg.DnsProviderID,
+		arg.Wildcard,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createDomainRedirect = `-- name: CreateDomainRedirect :one
 INSERT INTO domain_redirects (application_id, source_domain, target_domain, code, preserve_path, enabled)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -164,6 +227,27 @@ func (q *Queries) CreateDomainRedirect(ctx context.Context, arg CreateDomainRedi
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteAutoDomainCertificate = `-- name: DeleteAutoDomainCertificate :execrows
+DELETE FROM domain_certificates
+WHERE application_id = $1 AND domain = $2 AND challenge = 'http-01' AND NOT wildcard
+`
+
+type DeleteAutoDomainCertificateParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Domain        string      `json:"domain"`
+}
+
+// DeleteAutoDomainCertificate removes the default enabled http-01
+// non-wildcard intent a detached domain got (JUS-201). An operator's wildcard
+// or dns-01 intent is never touched.
+func (q *Queries) DeleteAutoDomainCertificate(ctx context.Context, arg DeleteAutoDomainCertificateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAutoDomainCertificate, arg.ApplicationID, arg.Domain)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteDNSProvider = `-- name: DeleteDNSProvider :exec

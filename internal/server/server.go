@@ -656,14 +656,15 @@ func (s *Server) defaultDomainTLS(ctx context.Context) bool {
 	}
 	urls, err := s.instanceSvc.ControlPlaneURLs(ctx)
 	if err != nil {
+		s.logger.Warn("proxy: control-plane URLs unavailable for the default domain TLS gate", "error", err)
 		return false
 	}
-	for _, raw := range urls {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "https://") {
-			return true
-		}
+	hosts, err := proxy.ControlPlaneHTTPSHosts(urls)
+	if err != nil {
+		s.logger.Warn("proxy: control-plane URL unparseable for the default domain TLS gate", "error", err)
+		return false
 	}
-	return false
+	return len(hosts) > 0
 }
 
 // deployService builds the deploy domain service for the HTTP wiring: the

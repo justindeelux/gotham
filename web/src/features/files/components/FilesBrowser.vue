@@ -1049,6 +1049,9 @@ function tabTitle(tab: FilesTab): string {
 
 /** openNewTab opens a tab at the active root's top level. */
 function openNewTab(): void {
+  // JUS-207: intentionally leaves DOM focus where it is. The active-tab
+  // watcher above only refocuses after a close or when focus is already in
+  // the tablist, so pressing + never pulls the keyboard into the new tab.
   void files.openTab();
 }
 
@@ -1081,7 +1084,11 @@ let closeFocusArmed = false;
 
 /** closeTabFromButton closes one tab from its × or middle-click. */
 function closeTabFromButton(id: string): void {
-  closeFocusArmed = true;
+  // JUS-207: arm the close refocus only when the close retires the active
+  // tab. Closing an inactive tab leaves activeTabId untouched, so the flag
+  // must not stay armed for a later switch from outside the tablist (the +
+  // button) — that switch would otherwise steal keyboard focus into the tab.
+  closeFocusArmed = id === files.activeTabId;
   void files.closeTab(id);
 }
 
@@ -3399,8 +3406,17 @@ function onFolderMenu(key: string): void {
 .files-browser {
   position: relative;
   /* JUS-134: the single row-height token every list row reads. JUS-137 can
-   * size its virtual rows from it. JUS-206: 42px, the reference row height. */
+   * size its virtual rows from it. JUS-206: 42px, the reference row height.
+   * JUS-207: the remaining sample-geometry values with no token fit live
+   * here too, defined once — every rule below reads these vars: the 34px
+   * header height, the 34px checkbox column, the 25px file-type mark, the
+   * 6px toolbar-button radius and the 6px row vertical padding. */
   --fm-row-height: 42px;
+  --fm-head-h: 34px;
+  --fm-check-col: 34px;
+  --fm-mark-size: 25px;
+  --fm-btn-radius: 6px;
+  --fm-row-pad-y: 6px;
   /* The panel is a flex column that fills whatever height its parent gives it
    * (JUS-118): toolbar/bar/footer stay fixed while the entry list is the
    * only scrolling region (`flex: 1` on .table-wrap / .fm-grid / .fm-state). */
@@ -3852,7 +3868,7 @@ function onFolderMenu(key: string): void {
 .fm-toolbar :deep(.n-button) {
   height: var(--space-8);
   padding: 0 var(--space-3);
-  border-radius: 6px;
+  border-radius: var(--fm-btn-radius);
 }
 
 /* JUS-206: default outlined toolbar buttons — 32px high, 12px labels, the
@@ -4105,11 +4121,11 @@ function onFolderMenu(key: string): void {
 .fm-row {
   display: grid;
   /* JUS-161: checkbox, Name, Owner/Mode, Size, Modified, Operation. */
-  grid-template-columns: 34px minmax(240px, 1.6fr) 110px 96px 148px 168px;
+  grid-template-columns: var(--fm-check-col) minmax(240px, 1.6fr) 110px 96px 148px 168px;
   gap: var(--space-3);
   align-items: center;
   /* JUS-206: the reference cell padding. */
-  padding: 6px var(--space-2);
+  padding: var(--fm-row-pad-y) var(--space-2);
   /* JUS-134: one compact, tokenised row height instead of the old 52px. */
   min-height: var(--fm-row-height);
   border-bottom: 1px solid var(--border);
@@ -4162,8 +4178,8 @@ function onFolderMenu(key: string): void {
   /* JUS-146: the row height is max(column headers, bulk bar). Both variants
      are always mounted and overlap the same cells, so the height never depends
      on the selection — no reserved band, no row shift (JUS-130/134). */
-  /* JUS-206: the reference header is 34px. */
-  min-height: 34px;
+  /* JUS-206: the reference header is 34px (--fm-head-h). */
+  min-height: var(--fm-head-h);
   padding-block: 0;
   align-items: center;
 }
@@ -4240,9 +4256,9 @@ function onFolderMenu(key: string): void {
 @media (min-width: 861px) {
   .fm-head-bulk {
     position: sticky;
-    left: calc(var(--space-3) + 34px + var(--space-3));
+    left: calc(var(--space-3) + var(--fm-check-col) + var(--space-3));
     justify-self: start;
-    width: calc(var(--fm-scroller-w, 100%) - var(--space-3) - 34px - var(--space-3));
+    width: calc(var(--fm-scroller-w, 100%) - var(--space-3) - var(--fm-check-col) - var(--space-3));
   }
 }
 

@@ -3452,8 +3452,11 @@ function onFolderMenu(key: string): void {
   /* JUS-150: a plain 1px rule separates the toolbar from the path bar above;
      the row itself stays on the card surface (no band), so it keeps the single
      compact toolbar row (the toolbar-height guards) and the plain inter-block
-     margin to the list header. */
+     margin to the list header. JUS-203: token padding keeps the border off the
+     buttons (space-1: the JUS-135 phone list-share guard leaves no room for
+     more — see files-layout-fit). */
   border-top: 1px solid var(--border);
+  padding-top: var(--space-1);
   margin-bottom: var(--space-3);
 }
 
@@ -3562,9 +3565,11 @@ function onFolderMenu(key: string): void {
    is tighter than the default bar margin; the toolbar keeps the gap to the
    list. `.fm-bar.fm-pathbar` outranks the single-class `.fm-bar` base.
    JUS-150: the path bar is a plain row on the card surface; a 1px rule
-   separates it from the tablist above. */
+   separates it from the tablist above. JUS-203: token padding keeps the
+   border off the buttons (space-1, matching the toolbar — see above). */
 .fm-bar.fm-pathbar {
   border-top: 1px solid var(--border);
+  padding-top: var(--space-1);
   margin-bottom: var(--space-2);
 }
 

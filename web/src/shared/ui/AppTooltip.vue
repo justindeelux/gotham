@@ -57,6 +57,9 @@ import type { PropType, VNode } from "vue";
 /** HOVER_GAP_MS leaves a short window for the pointer to reach the tooltip. */
 const HOVER_GAP_MS = 120;
 
+/** SHOW_DELAY_MS is the hover/focus intent delay before a tooltip opens. */
+const SHOW_DELAY_MS = 500;
+
 /**
  * TOUCH_TAP_MS is the window just after a touch tap in which a compatibility
  * mouseenter is ignored: a tap fires mouseenter with no matching mouseleave, so
@@ -153,6 +156,7 @@ const AppTooltip = defineComponent({
     let child: Element | { $el?: unknown } | null = null;
     let hoveringContent = false;
     let hideTimer: ReturnType<typeof setTimeout> | null = null;
+    let showTimer: ReturnType<typeof setTimeout> | null = null;
     /** restoringFocus suppresses the focusout of an activation re-render. */
     let restoringFocus = false;
 
@@ -163,7 +167,28 @@ const AppTooltip = defineComponent({
       }
     }
 
+    /** cancelShow drops a pending delayed open. */
+    function cancelShow(): void {
+      if (showTimer !== null) {
+        clearTimeout(showTimer);
+        showTimer = null;
+      }
+    }
+
+    /** scheduleShow opens the tooltip after the intent delay. */
+    function scheduleShow(): void {
+      cancelHide();
+      if (show.value || showTimer !== null) {
+        return;
+      }
+      showTimer = setTimeout(() => {
+        showTimer = null;
+        show.value = true;
+      }, SHOW_DELAY_MS);
+    }
+
     function hideNow(): void {
+      cancelShow();
       cancelHide();
       show.value = false;
     }
@@ -215,10 +240,10 @@ const AppTooltip = defineComponent({
           return;
         }
         activated.value = true;
-        cancelHide();
-        show.value = true;
+        scheduleShow();
       },
       onMouseleave: () => {
+        cancelShow();
         if (show.value) {
           hideSoon();
         }
@@ -233,8 +258,7 @@ const AppTooltip = defineComponent({
         }
         const firstActivation = !activated.value;
         activated.value = true;
-        cancelHide();
-        show.value = true;
+        scheduleShow();
         if (firstActivation) {
           // Mounting the popover rebuilds the control (the tree gains the
           // tooltip), which drops focus to <body>; hand it back so a keyboard
@@ -286,6 +310,7 @@ const AppTooltip = defineComponent({
       }
     });
     onBeforeUnmount(() => {
+      cancelShow();
       cancelHide();
       if (escapeBound) {
         document.removeEventListener("keydown", onEscape, true);

@@ -290,6 +290,56 @@ export function downloadUrl(serverId: string, ticket: string): string {
   return `/api/v1/servers/${serverId}/files/download?ticket=${encodeURIComponent(ticket)}`;
 }
 
+/**
+ * imageMimeTypes maps the viewer formats (JUS-204) onto their MIME types. The
+ * download route serves `application/octet-stream`, which raster formats
+ * survive by sniffing but SVG does not, so the viewer rewraps the Blob with
+ * the extension type before building the object URL.
+ */
+const imageMimeTypes: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  tiff: "image/tiff",
+  avif: "image/avif",
+};
+
+/**
+ * imageMimeType returns the viewer MIME type for one file name, falling back
+ * to octet-stream for an unknown extension (the server's own type).
+ */
+export function imageMimeType(name: string): string {
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
+  return imageMimeTypes[ext] ?? "application/octet-stream";
+}
+
+/**
+ * fetchDownloadBlob loads one ticket-authorised download body as a Blob. The
+ * image viewer (JUS-204) shows it through an object URL instead of navigating
+ * the SPA to the attachment. The thrown shape carries `status` + `message`, so
+ * {@link describeFilesError} maps it onto the files catalog like any API
+ * failure.
+ */
+export async function fetchDownloadBlob(
+  serverId: string,
+  ticket: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch(downloadUrl(serverId, ticket), { signal });
+  if (!response.ok) {
+    throw { status: response.status, message: `Download failed: ${response.status}` };
+  }
+  const blob = await response.blob();
+  return new Blob([blob], { type: imageMimeType(name) });
+}
+
 /** filesErrorKey maps an HTTP status (or a stable server code) onto its files catalog key. */
 export function filesErrorKey(error: unknown): string | null {
   if (isApiError(error)) {

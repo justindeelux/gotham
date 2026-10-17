@@ -11,7 +11,11 @@ import (
 // the embedded Vite SPA: same-origin scripts and styles plus the inline styles
 // Naive UI injects at runtime. img-src additionally allows the OAuth avatar
 // hosts from auth.AvatarImgSources (GitHub avatar URLs would otherwise be
-// blocked by the policy and the header would fall back to the initial); every
+// blocked by the policy and the header would fall back to the initial) and the
+// blob: scheme the file manager's image viewer (JUS-204) renders through. A
+// blob: URL is minted by same-origin script only and an <img> never executes
+// script (SVG included), so the viewer cannot become a script vector;
+// object-src stays 'none'. Every
 // other directive stays same-origin or stricter. The avatar hosts are defined
 // once in the auth package and shared with the storage validator, so a stored
 // avatar always renders under this policy.
@@ -21,7 +25,7 @@ import (
 // GitHub App manifest flow can POST its form to github.com/settings/apps/new.
 // ponytail: GitHub Enterprise hosts are dynamic and not listed; the manifest
 // POST to an Enterprise host stays blocked until form-action is made per-host.
-var contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: " + strings.Join(auth.AvatarImgSources(), " ") + "; base-uri 'self'; object-src 'none'; form-action 'self' https://github.com; frame-ancestors 'none'"
+var contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: " + strings.Join(auth.AvatarImgSources(), " ") + "; base-uri 'self'; object-src 'none'; form-action 'self' https://github.com; frame-ancestors 'none'"
 
 // hstsHeader pins browsers to HTTPS. It is emitted only on secure requests
 // (direct TLS or a trusted proxy's X-Forwarded-Proto: https); a direct-HTTP

@@ -98,6 +98,21 @@ describe("rowMenuOptions", () => {
     expect(keys(plain)).not.toContain("extract");
   });
 
+  it("leads an image row with View and hides it elsewhere (JUS-204)", () => {
+    const image = rowMenuOptions(entry({ name: "logo.png" }), ctx());
+    expect(keys(image)[0]).toBe("view");
+    expect(byKey(image, "view")?.disabled).toBe(false);
+
+    const plain = rowMenuOptions(entry({ name: "app.yaml" }), ctx());
+    expect(keys(plain)).not.toContain("view");
+
+    const gated = rowMenuOptions(
+      entry({ name: "logo.png" }),
+      ctx({ canReadContent: false }),
+    );
+    expect(byKey(gated, "view")?.disabled).toBe(true);
+  });
+
   it("keeps a symlink's write actions but never chmod", () => {
     const options = rowMenuOptions(
       entry({ name: "current", kind: "symlink", mode: 0o120777 }),

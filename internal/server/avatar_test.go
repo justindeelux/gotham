@@ -13,7 +13,8 @@ import (
 // TestContentSecurityPolicyMatchesAvatarAllowlist proves the served img-src
 // hosts are exactly the validator's allowlist: the two share one definition
 // (auth.AvatarImgSources), so a stored avatar always renders and no other
-// host can sneak into the policy.
+// host can sneak into the policy. The viewer blob: scheme (JUS-204) is not a
+// host and is skipped like 'self' and data:.
 func TestContentSecurityPolicyMatchesAvatarAllowlist(t *testing.T) {
 	s := newTestAuthServer(t)
 
@@ -24,7 +25,7 @@ func TestContentSecurityPolicyMatchesAvatarAllowlist(t *testing.T) {
 	imgSrc = imgSrc[:strings.Index(imgSrc, ";")]
 	var hosts []string
 	for _, token := range strings.Fields(imgSrc) {
-		if token == "'self'" || token == "data:" {
+		if token == "'self'" || token == "data:" || token == "blob:" {
 			continue
 		}
 		hosts = append(hosts, token)

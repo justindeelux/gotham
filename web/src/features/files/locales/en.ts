@@ -117,6 +117,7 @@ const en = {
   menu: {
     open: "Open",
     openTab: "Open in new tab",
+    view: "View",
     edit: "Edit in editor",
     download: "Download",
     permissions: "Permissions…",
@@ -214,6 +215,16 @@ const en = {
     extractProgress: "Extracting the archive on the node…",
     extractDestination: "Extracts into the current folder",
     extracted: "Extracted {name}.",
+  },
+  viewer: {
+    loading: "Loading image…",
+    loadError: "Could not load the image.",
+    retry: "Retry",
+    controls: "Image zoom controls",
+    zoomIn: "Zoom in",
+    zoomOut: "Zoom out",
+    reset: "Reset view",
+    zoomHint: "Scroll to zoom · drag to pan · double-click to reset",
   },
   trash: {
     title: "Recycle bin",

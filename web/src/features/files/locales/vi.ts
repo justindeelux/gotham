@@ -116,6 +116,7 @@ const vi = {
   menu: {
     open: "Mở",
     openTab: "Mở trong tab mới",
+    view: "Xem",
     edit: "Sửa trong trình soạn thảo",
     download: "Tải về",
     permissions: "Quyền…",
@@ -213,6 +214,16 @@ const vi = {
     extractProgress: "Đang giải nén tệp nén trên node…",
     extractDestination: "Giải nén vào thư mục hiện tại",
     extracted: "Đã giải nén {name}.",
+  },
+  viewer: {
+    loading: "Đang tải ảnh…",
+    loadError: "Không tải được ảnh.",
+    retry: "Thử lại",
+    controls: "Điều khiển thu/phóng ảnh",
+    zoomIn: "Phóng to",
+    zoomOut: "Thu nhỏ",
+    reset: "Đặt lại chế độ xem",
+    zoomHint: "Cuộn để thu/phóng · kéo để di chuyển · nhấp đúp để đặt lại",
   },
   trash: {
     title: "Thùng rác",

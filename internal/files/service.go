@@ -552,25 +552,18 @@ func (s *Service) Download(ctx context.Context, serverID uuid.UUID, ticketID str
 }
 
 // resolve returns the registry entry for a server after authorizing the caller.
-// Unlike the rest of the node surface (AuthorizeOptionalTeam), a browsable
-// server must belong to a team: a legacy team-less node has no team to
-// authorize against and answers ErrNotFound, so file bodies are never shared
-// with every authenticated caller. write requires an owner/admin role; the
-// remaining roles read. A request without a team scope (teams not wired, a
-// non-HTTP caller) keeps the pre-teams compatibility path.
+// It follows the rest of the node surface (AuthorizeOptionalTeam, like
+// ListServers): a team node belongs to its team, so a foreign server answers
+// ErrNotFound, while a legacy team-less node (team_id NULL, e.g. the all-in-one
+// localhost node) stays available to every authenticated caller. write requires
+// an owner/admin role; the remaining roles read. A request without a team scope
+// (teams not wired, a non-HTTP caller) keeps the pre-teams compatibility path.
 func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) (*servers.Server, error) {
 	server, err := s.server(ctx, serverID)
 	if err != nil {
 		return nil, err
 	}
-	scope := teams.ScopeFor(ctx, uuid.Nil)
-	if !scope.Active() {
-		return server, nil
-	}
-	if server.TeamID == uuid.Nil {
-		return nil, ErrNotFound
-	}
-	if err := scope.AuthorizeResource(server.TeamID, uuid.Nil, write); err != nil {
+	if err := teams.ScopeFor(ctx, uuid.Nil).AuthorizeOptionalTeam(server.TeamID, write); err != nil {
 		if errors.Is(err, teams.ErrForbidden) {
 			return nil, ErrForbidden
 		}

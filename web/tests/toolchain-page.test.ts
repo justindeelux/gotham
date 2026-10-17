@@ -231,8 +231,9 @@ describe("category tabs (JUS-189)", () => {
       tool({ id: "curl", name: "Curl", category: "network" }),
     ]);
     const wrapper = await mountPage();
+    expect(wrapper.find(".n-tabs").exists()).toBe(true);
     expect(wrapper.find('[role="tablist"]').exists()).toBe(true);
-    expect(tabs(wrapper).map((tab) => tab.text())).toEqual(["build (2)", "network (1)"]);
+    expect(tabs(wrapper).map((tab) => tab.text())).toEqual(["BUILD (2)", "NETWORK (1)"]);
     expect(tabs(wrapper)[0].attributes("aria-selected")).toBe("true");
     expect(tabs(wrapper)[0].attributes("tabindex")).toBe("0");
     expect(tabs(wrapper)[1].attributes("tabindex")).toBe("-1");

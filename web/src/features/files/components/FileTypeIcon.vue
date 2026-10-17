@@ -34,11 +34,12 @@ const icon = computed<Component>(() => icons[props.kind]);
 
 <style scoped>
 /* File-type marks (JUS-206): the glyph sits directly in the row — no dark
- * tile. The box is the reference 25px; the folder is a filled yellow mark. */
+ * tile. The box is the reference 25px (--fm-mark-size, owned by
+ * FilesBrowser); the folder is a filled yellow mark. */
 .fm-mark {
   position: relative;
-  width: 25px;
-  height: 25px;
+  width: var(--fm-mark-size);
+  height: var(--fm-mark-size);
   flex: 0 0 auto;
   display: grid;
   place-items: center;

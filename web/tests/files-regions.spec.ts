@@ -335,8 +335,9 @@ for (const viewport of [
 
     // The regions must not clip focus rings: none of them creates a clipping box.
     for (const name of ["contextbar", "tablist", "pathbar", "toolbar"] as const) {
-      expect(regions[name].overflowX, `${name} overflow-x`).toBe("visible");
-      expect(regions[name].overflowY, `${name} overflow-y`).toBe("visible");
+      const scrolls = name === "toolbar" && viewport.width <= 480;
+      expect(regions[name].overflowX, `${name} overflow-x`).toBe(scrolls ? "auto" : "visible");
+      expect(regions[name].overflowY, `${name} overflow-y`).toBe(scrolls ? "hidden" : "visible");
     }
   });
 }

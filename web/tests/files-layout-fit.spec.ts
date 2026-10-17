@@ -879,7 +879,7 @@ test("on a phone the clipboard chip and the bulk bar never wrap", async ({ page 
 // JUS-135: the phone toolbar must not eat the list. With a selection active
 // (the tallest chrome state) the entry list keeps at least 59% of an iPhone-14
 // viewport.
-test("the entry list keeps its phone height budget after intentional chrome spacing", async ({
+test("the entry list keeps at least 59% of the phone viewport", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -894,10 +894,39 @@ test("the entry list keeps its phone height budget after intentional chrome spac
     const wrap = document.querySelector(".table-wrap") as HTMLElement | null;
     return wrap ? wrap.clientHeight / window.innerHeight : 0;
   });
-  // JUS-205 adds 44px: tabs (6), padded path field (11), band gaps (24),
-  // and ghost toolbar rows (3). An accidental extra toolbar row still fails.
-  expect(share + 44 / 844, "entry list share plus intentional chrome spacing")
-    .toBeGreaterThanOrEqual(0.59);
+  expect(share, "entry list share of the phone viewport").toBeGreaterThanOrEqual(0.59);
+});
+
+test("phone chrome keeps the current folder readable and every toolbar action reachable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-label").first()).toBeVisible();
+
+  const crumb = page.locator(".fm-crumb.is-current > span");
+  const visibleWidth = await crumb.evaluate((element) => {
+    const text = element.getBoundingClientRect();
+    const nav = element.closest("nav")!.getBoundingClientRect();
+    return Math.max(0, Math.min(text.right, nav.right) - Math.max(text.left, nav.left));
+  });
+  expect(visibleWidth, "current folder text is not clipped to a stem").toBeGreaterThanOrEqual(40);
+  const field = (await page.locator(".fm-navfield").boundingBox())!;
+  const search = (await page.locator(".fm-search-group").boundingBox())!;
+  expect(search.y, "search has its own row").toBeGreaterThanOrEqual(field.y + field.height);
+
+  const toolbar = page.locator(".fm-toolbar");
+  const bounds = (await toolbar.boundingBox())!;
+  expect(bounds.height, "toolbar stays one row").toBe(32);
+  const actions = toolbar.getByRole("button");
+  for (const action of await actions.all()) {
+    await action.scrollIntoViewIfNeeded();
+    const name = (await action.getAttribute("aria-label"))!;
+    await assertReachable(page, action, bounds, { width: 390, height: 844 }, name);
+  }
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow, "the page never scrolls sideways").toBeLessThanOrEqual(1);
 });
 
 // JUS-135: below the tablet breakpoint the server rail is a Naive UI drawer
@@ -1420,7 +1449,7 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
     page.getByRole("button", { name: "Recycle bin", exact: true }),
   ).toBeVisible();
 
-  for (const width of [480, 640, 768, 920, 1260, 1280, 1366, 1440, 1600, 1876]) {
+  for (const width of [390, 480, 640, 768, 920, 1260, 1280, 1366, 1440, 1600, 1876]) {
     await page.setViewportSize({ width, height: 900 });
     await settleLayout(page);
     const layout = await page.evaluate(() => {
@@ -1500,7 +1529,13 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
       layout.toolbarHeight,
       `toolbar height backed by content rows at ${width}px`,
     ).toBeLessThanOrEqual(layout.heightCap);
-    expect(layout.spill, `no toolbar spill at ${width}px`).toBeLessThanOrEqual(1);
+    if (width <= 480) {
+      expect(layout.rows, "phone toolbar is one row").toBe(1);
+      expect(layout.toolbarHeight, "phone toolbar has no orphan rows").toBe(32);
+      await expect(page.locator(".fm-toolbar")).toHaveCSS("overflow-x", "auto");
+    } else {
+      expect(layout.spill, `no toolbar spill at ${width}px`).toBeLessThanOrEqual(1);
+    }
     expect(layout.gap, `16px band gap plus table border at ${width}px`).toBe(17);
   }
 });

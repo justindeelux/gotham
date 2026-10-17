@@ -2497,7 +2497,7 @@ function onFolderMenu(key: string): void {
             @click="files.refresh()"
           >
             <template #icon>
-              <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
+              <RefreshCw :size="16" :stroke-width="1.8" aria-hidden="true" />
             </template>
           </NButton>
         </AppTooltip>
@@ -4458,6 +4458,36 @@ function onFolderMenu(key: string): void {
   .fm-foot-path,
   .fm-foot-free {
     display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .fm-navfield,
+  .fm-search-group {
+    flex-basis: 100%;
+  }
+
+  .fm-bar.fm-toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .fm-toolbar-group,
+  .fm-toolbar-end {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+
+  .fm-toolbar .fm-root-select {
+    width: calc(var(--space-12) * 3);
+    flex: 0 0 auto;
+  }
+
+  /* Keep keyboard focus visible inside the horizontal scrollport. */
+  .fm-toolbar :deep(button:focus-visible) {
+    outline-offset: calc(-1 * var(--space-1));
   }
 }
 

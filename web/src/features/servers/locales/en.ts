@@ -80,7 +80,12 @@ const en = {
     filesEmpty: "Browse and download files inside the node agent's allowed roots.",
     openFiles: "Open files",
     validateAction: "Validate",
-    proxyEmpty: "Proxy & Traefik ships in Phase 6.",
+  },
+  proxy: {
+    title: "Traefik routers on this node",
+    refresh: "Refresh",
+    retry: "Retry",
+    loading: "Loading routers…",
   },
   overview: {
     nodeInfo: "Node info",

@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -618,25 +620,69 @@ func (s *FileServer) root(name string) (*fsroot.Root, error) {
 	return root, nil
 }
 
-// fileEntries converts a listing page.
+// fileEntries converts a listing page, sharing one owner cache across the
+// page so a directory full of files owned by the same user does not repeat the
+// passwd/group lookup.
 func fileEntries(entries []fsroot.Entry) []*agentv1.FileEntry {
 	if len(entries) == 0 {
 		return nil
 	}
+	names := newNameCache()
 	out := make([]*agentv1.FileEntry, 0, len(entries))
 	for _, entry := range entries {
-		out = append(out, fileEntry(entry))
+		out = append(out, fileEntryWith(entry, names))
 	}
 	return out
 }
 
-// fileEntry converts one entry. Proto3 string fields must be valid UTF-8, so a
-// filename or symlink target holding arbitrary bytes (legal on Linux) is
-// scrubbed rather than making the whole message fail to marshal. The scrubbed
-// name may therefore differ from the bytes on disk and cannot be fed back to
-// Stat or Read; the List cursor is base64 precisely so paging still addresses
-// the real names.
+// fileEntry converts one entry with a fresh owner cache.
 func fileEntry(entry fsroot.Entry) *agentv1.FileEntry {
+	return fileEntryWith(entry, newNameCache())
+}
+
+// nameCache memoizes uid and gid lookups to names for one listing. A lookup
+// that cannot resolve keeps the numeric id string, so an entry is always
+// reported and a listing never fails because a name is missing.
+type nameCache struct {
+	users  map[uint32]string
+	groups map[uint32]string
+}
+
+func newNameCache() *nameCache {
+	return &nameCache{users: map[uint32]string{}, groups: map[uint32]string{}}
+}
+
+func (c *nameCache) owner(uid uint32) string {
+	if name, ok := c.users[uid]; ok {
+		return name
+	}
+	name := strconv.FormatUint(uint64(uid), 10)
+	if u, err := user.LookupId(name); err == nil {
+		name = u.Username
+	}
+	c.users[uid] = name
+	return name
+}
+
+func (c *nameCache) group(gid uint32) string {
+	if name, ok := c.groups[gid]; ok {
+		return name
+	}
+	name := strconv.FormatUint(uint64(gid), 10)
+	if g, err := user.LookupGroupId(name); err == nil {
+		name = g.Name
+	}
+	c.groups[gid] = name
+	return name
+}
+
+// fileEntryWith converts one entry. Proto3 string fields must be valid UTF-8,
+// so a filename, symlink target or owner name holding arbitrary bytes (legal on
+// Linux) is scrubbed rather than making the whole message fail to marshal. The
+// scrubbed name may therefore differ from the bytes on disk and cannot be fed
+// back to Stat or Read; the List cursor is base64 precisely so paging still
+// addresses the real names.
+func fileEntryWith(entry fsroot.Entry, names *nameCache) *agentv1.FileEntry {
 	out := &agentv1.FileEntry{
 		Name:          validUTF8(entry.Name),
 		Kind:          fileKind(entry.Kind),
@@ -644,6 +690,8 @@ func fileEntry(entry fsroot.Entry) *agentv1.FileEntry {
 		Mode:          uint32(entry.Mode.Perm()),
 		SymlinkTarget: validUTF8(entry.SymlinkTarget),
 		Etag:          entry.Etag,
+		Owner:         validUTF8(names.owner(entry.UID)),
+		Group:         validUTF8(names.group(entry.GID)),
 	}
 	if !entry.Modified.IsZero() {
 		out.ModifiedAt = timestamppb.New(entry.Modified)

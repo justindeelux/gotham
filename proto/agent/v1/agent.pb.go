@@ -366,7 +366,13 @@ type FileEntry struct {
 	// symlink_target is the link target when kind is FILE_KIND_SYMLINK.
 	SymlinkTarget string `protobuf:"bytes,6,opt,name=symlink_target,json=symlinkTarget,proto3" json:"symlink_target,omitempty"`
 	// etag is the RFC 7232 quoted entity tag "dev:ino:mtime_ns:size".
-	Etag          string `protobuf:"bytes,7,opt,name=etag,proto3" json:"etag,omitempty"`
+	Etag string `protobuf:"bytes,7,opt,name=etag,proto3" json:"etag,omitempty"`
+	// owner is the owning user's name, or the numeric uid when it does not
+	// resolve. Empty only from an agent that predates this field.
+	Owner string `protobuf:"bytes,8,opt,name=owner,proto3" json:"owner,omitempty"`
+	// group is the owning group's name, or the numeric gid when it does not
+	// resolve. Empty only from an agent that predates this field.
+	Group         string `protobuf:"bytes,9,opt,name=group,proto3" json:"group,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -446,6 +452,20 @@ func (x *FileEntry) GetSymlinkTarget() string {
 func (x *FileEntry) GetEtag() string {
 	if x != nil {
 		return x.Etag
+	}
+	return ""
+}
+
+func (x *FileEntry) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+func (x *FileEntry) GetGroup() string {
+	if x != nil {
+		return x.Group
 	}
 	return ""
 }
@@ -5925,7 +5945,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\vListRequest\x12\x12\n" +
 	"\x04root\x18\x01 \x01(\tR\x04root\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
-	"\x06cursor\x18\x03 \x01(\tR\x06cursor\"\xe7\x01\n" +
+	"\x06cursor\x18\x03 \x01(\tR\x06cursor\"\x93\x02\n" +
 	"\tFileEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12&\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x12.agent.v1.FileKindR\x04kind\x12\x12\n" +
@@ -5934,7 +5954,9 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\vmodified_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"modifiedAt\x12%\n" +
 	"\x0esymlink_target\x18\x06 \x01(\tR\rsymlinkTarget\x12\x12\n" +
-	"\x04etag\x18\a \x01(\tR\x04etag\"s\n" +
+	"\x04etag\x18\a \x01(\tR\x04etag\x12\x14\n" +
+	"\x05owner\x18\b \x01(\tR\x05owner\x12\x14\n" +
+	"\x05group\x18\t \x01(\tR\x05group\"s\n" +
 	"\fListResponse\x12-\n" +
 	"\aentries\x18\x01 \x03(\v2\x13.agent.v1.FileEntryR\aentries\x12\x1c\n" +
 	"\ttruncated\x18\x02 \x01(\bR\ttruncated\x12\x16\n" +

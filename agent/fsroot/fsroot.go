@@ -101,6 +101,7 @@ type Entry struct {
 	// atomic rename, while a foreign, hard-linked or bind-mounted file must be
 	// written in place so its inode, owner and ACLs survive.
 	UID   uint32
+	GID   uint32
 	Nlink uint64
 }
 
@@ -431,7 +432,7 @@ func (r *Root) entryFor(p string, info os.FileInfo) (Entry, error) {
 		Modified: info.ModTime(),
 		Etag:     etag(info),
 	}
-	entry.UID, entry.Nlink = ownerLinks(info)
+	entry.UID, entry.GID, entry.Nlink = ownerLinks(info)
 	mode := info.Mode()
 	switch {
 	case mode&os.ModeSymlink != 0:

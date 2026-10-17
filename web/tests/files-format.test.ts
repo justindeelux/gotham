@@ -4,7 +4,8 @@
 // non-monotonic across unit and decimal boundaries).
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { widestBytesLabel } from "@/features/files/utils/files";
+import { ownerModeLabel, widestBytesLabel } from "@/features/files/utils/files";
+import type { FilesEntry } from "@/features/files/schemas/files";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -137,5 +138,33 @@ describe("files footer plurals", () => {
     expect(t("files.browser.fileCount", 2)).toBe("2 tệp");
     expect(t("files.browser.symlinkCount", 2)).toBe("2 liên kết");
     expect(t("files.browser.entryCount", 1)).toBe("1 mục");
+  });
+});
+
+// JUS-214: the Owner/Mode list cell shows "owner/mode", falling back to the
+// octal mode alone when the agent reported no owner (an older agent).
+describe("ownerModeLabel", () => {
+  const entry = (overrides: Partial<FilesEntry>): FilesEntry => ({
+    name: "f",
+    kind: "file",
+    size: 0,
+    mode: 0o100755,
+    modified_at: "2026-10-12T09:02:00Z",
+    etag: '"1"',
+    ...overrides,
+  });
+
+  it("joins the owner and the octal mode", () => {
+    expect(ownerModeLabel(entry({ owner: "root" }))).toBe("root/755");
+  });
+
+  it("keeps a special-bits digit", () => {
+    expect(ownerModeLabel(entry({ owner: "root", mode: 0o104755 }))).toBe(
+      "root/4755",
+    );
+  });
+
+  it("renders the mode alone when the owner is absent", () => {
+    expect(ownerModeLabel(entry({}))).toBe("755");
   });
 });

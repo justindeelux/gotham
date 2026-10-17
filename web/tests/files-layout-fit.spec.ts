@@ -1637,6 +1637,86 @@ test("the Owner/Mode column stays visible across desktop widths", async ({ page 
   await expect(rowMode, "Owner/Mode cell hidden in compact layout").toBeHidden();
 });
 
+// JUS-214 fix round: the Owner/Mode track is a fixed 110px, so an owner longer
+// than the track must clip inside the cell instead of spilling into the
+// right-aligned Size cell (the review's "systemd-network/755" case). Measured in
+// real Chromium at 1366/1920px. The full "owner/mode" text stays in the DOM so a
+// screen reader still reads it.
+test("a long owner clips inside the Owner/Mode cell without reaching Size", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 900 });
+  await mockApi(page);
+  // Override the list with one entry whose owner outgrows the 110px track
+  // ("systemd-network" is 15 chars; "systemd-network/755" does not fit).
+  await page.route(
+    `**/api/v1/servers/${server1}/files/list*`,
+    async (route) => {
+      await route.fulfill({
+        json: {
+          entries: [
+            {
+              name: "long.txt",
+              kind: "file",
+              size: 1024,
+              mode: 0o100755,
+              modified_at: "2026-10-12T09:02:00Z",
+              etag: '"e"',
+              owner: "systemd-network",
+              group: "systemd-network",
+            },
+          ],
+          truncated: false,
+          cursor: "",
+        },
+      });
+    },
+  );
+  await page.goto(`${baseURL}/servers/${server1}/files`);
+  await expect(page.locator(".fm-table .fm-row:not(.fm-head)")).toHaveCount(1);
+
+  for (const width of [1366, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settleLayout(page);
+    const m = await page.evaluate(() => {
+      const row = document.querySelector(
+        ".fm-table .fm-row:not(.fm-head)",
+      ) as HTMLElement;
+      const mode = row.querySelector(".fm-mode") as HTMLElement;
+      const size = row.querySelector(".fm-cell--size") as HTMLElement;
+      const head = document.querySelector(".fm-head .fm-cell--mode") as HTMLElement;
+      const headSize = document.querySelector(".fm-head .fm-cell--size") as HTMLElement;
+      const style = getComputedStyle(mode);
+      return {
+        text: mode.textContent ?? "",
+        modeRight: mode.getBoundingClientRect().right,
+        modeWidth: mode.getBoundingClientRect().width,
+        sizeLeft: size.getBoundingClientRect().left,
+        headRight: head.getBoundingClientRect().right,
+        headSizeLeft: headSize.getBoundingClientRect().left,
+        overflow: style.overflow,
+        textOverflow: style.textOverflow,
+      };
+    });
+    expect(m.text, `full owner/mode text in the DOM at ${width}px`).toBe(
+      "systemd-network/755",
+    );
+    expect(m.textOverflow, `clipped with an ellipsis at ${width}px`).toBe(
+      "ellipsis",
+    );
+    expect(m.overflow, `overflow hidden at ${width}px`).toBe("hidden");
+    // The cell is capped to its 110px track and never reaches the Size column;
+    // the header's mode cell shares the same boundary.
+    expect(m.modeWidth, `mode cell within the track at ${width}px`).toBeLessThanOrEqual(110.5);
+    expect(m.modeRight, `mode cell left of Size at ${width}px`).toBeLessThanOrEqual(
+      m.sizeLeft + 0.5,
+    );
+    expect(m.headRight, `header within the track at ${width}px`).toBeLessThanOrEqual(
+      m.headSizeLeft + 0.5,
+    );
+  }
+});
+
 // JUS-148/JUS-161: while the bar replaces the headers the row exposes 2 cells
 // against 6 body cells. aria-colcount on the table and aria-colspan on the bar
 // keep the semantics consistent at every width.

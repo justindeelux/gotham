@@ -66,13 +66,13 @@ import {
   entryTypeLabel,
   filesFromDrop,
   formatMode,
-  formatOctalModeFull,
   formatTimestamp,
   isExtractableArchive,
   isFileDrag,
   isImageFile,
   isSelectable,
   joinPath,
+  ownerModeLabel,
   resolveSymlinkTarget,
   typeaheadIndex,
   widestBytesLabel,
@@ -2949,8 +2949,8 @@ function onFolderMenu(key: string): void {
                 </button>
               </div>
               <!-- JUS-161: Name, Owner/Mode, Size, Modified, Operation. The
-                   owner name has no API field yet, so the cell shows the octal
-                   mode until the listing carries it. -->
+                   cell shows owner/mode (JUS-214); the owner is empty from an
+                   older agent, so the cell falls back to the octal mode. -->
               <div class="fm-cell--mode" role="columnheader" :aria-sort="ariaSort('mode')">
                 <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'mode' }" @click="files.setSort('mode')">
                   {{ $t("files.browser.columnMode") }}
@@ -3086,7 +3086,7 @@ function onFolderMenu(key: string): void {
                 <span class="fm-row-sub">{{ modifiedLabel(entry) }}</span>
               </span>
             </div>
-            <div class="fm-cell fm-mode fm-cell--mode" role="cell" :title="formatMode(entry.mode)">{{ formatOctalModeFull(entry.mode) }}</div>
+            <div class="fm-cell fm-mode fm-cell--mode" role="cell" :title="formatMode(entry.mode)">{{ ownerModeLabel(entry) }}</div>
             <div class="fm-cell fm-cell--size" role="cell">
               <FolderSizeCell
                 v-if="entry.kind === 'directory'"
@@ -4400,10 +4400,22 @@ function onFolderMenu(key: string): void {
   text-align: right;
 }
 
-/* JUS-134: the mode cell is one line ("755"); the rwx form is its tooltip. */
+/* JUS-134: the mode and date cells are one line; the rwx form is the mode
+   cell's tooltip. */
 .fm-mode,
 .fm-date {
   white-space: nowrap;
+}
+
+/* JUS-214: the Owner/Mode track is a fixed 110px, so a long owner
+   ("systemd-network/755" or a 10-digit uid) must clip instead of spilling into
+   the right-aligned Size cell. min-width: 0 lets the grid item shrink below its
+   min-content width; the full owner/mode text stays in the DOM for screen
+   readers (no title is added — JUS-210 removes file-manager tooltips). */
+.fm-mode {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fm-actions {

@@ -258,6 +258,12 @@ message FileEntry {
   string symlink_target = 6;
   // etag is the RFC 7232 quoted entity tag "dev:ino:mtime_ns:size".
   string etag = 7;
+  // owner is the owning user's name, or the numeric uid when it does not
+  // resolve. Empty only from an agent that predates this field.
+  string owner = 8;
+  // group is the owning group's name, or the numeric gid when it does not
+  // resolve. Empty only from an agent that predates this field.
+  string group = 9;
 }
 
 // ListResponse is one page of a directory listing.

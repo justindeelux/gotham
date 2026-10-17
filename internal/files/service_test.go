@@ -569,6 +569,34 @@ func TestRootsAndListMapping(t *testing.T) {
 	}
 }
 
+// TestListEntryOwnerMapping pins the owner/group mapping: the names land on
+// Entry, and an agent that predates the fields leaves them empty rather than
+// failing the listing.
+func TestListEntryOwnerMapping(t *testing.T) {
+	teamID := uuid.New()
+	registry := newFakeRegistry()
+	server := registry.seed(teamID)
+	client := &fakeFileClient{listResp: &agentv1.ListResponse{Entries: []*agentv1.FileEntry{
+		{Name: "new.txt", Kind: agentv1.FileKind_FILE_KIND_FILE, Owner: "root", Group: "wheel"},
+		{Name: "old.txt", Kind: agentv1.FileKind_FILE_KIND_FILE},
+	}}}
+	svc := newTestService(t, registry, client)
+
+	listing, err := svc.List(scopeCtx(teams.RoleOwner, teamID), server.ID, "volumes", "", "")
+	if err != nil {
+		t.Fatalf("list err = %v", err)
+	}
+	if len(listing.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(listing.Entries))
+	}
+	if got := listing.Entries[0]; got.Owner != "root" || got.Group != "wheel" {
+		t.Fatalf("entry[0] owner/group = %q/%q, want root/wheel", got.Owner, got.Group)
+	}
+	if got := listing.Entries[1]; got.Owner != "" || got.Group != "" {
+		t.Fatalf("entry[1] owner/group = %q/%q, want empty", got.Owner, got.Group)
+	}
+}
+
 func TestContentLimits(t *testing.T) {
 	teamID := uuid.New()
 	registry := newFakeRegistry()

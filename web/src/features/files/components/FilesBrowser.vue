@@ -4745,6 +4745,19 @@ function onFolderMenu(key: string): void {
     display: none;
   }
 
+  /* JUS-206 round 9: the horizontal strip must never reserve scrollbar layout
+     space on the phone (a classic scrollbar gutter sits the tabs above the
+     band bottom and clips the feet). The strip stays scrollable by touch,
+     wheel and keyboard; the + button lives outside it. Desktop keeps its
+     thin scrollbar and is untouched. */
+  .fm-tabstrip {
+    scrollbar-width: none;
+  }
+
+  .fm-tabstrip::-webkit-scrollbar {
+    display: none;
+  }
+
   .fm-navfield,
   .fm-search-group {
     flex-basis: 100%;

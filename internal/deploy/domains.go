@@ -62,6 +62,11 @@ func (s *Service) AddDomain(ctx context.Context, userID, appID uuid.UUID, domain
 	if err != nil {
 		return ApplicationDomain{}, err
 	}
+	// TLS by default (JUS-201): an attached domain gets an HTTP-01 intent so
+	// the generator emits a websecure router and an http→https redirect, like
+	// the panel domain. The gate is the same one the panel uses — an https
+	// control-plane URL — so an http-only dev box stays plain-HTTP.
+	withTLS := s.tlsForDomains != nil && s.tlsForDomains(ctx)
 	var created ApplicationDomain
 	err = s.repo.InTx(ctx, func(tx Repository) error {
 		row, err := tx.CreateApplicationDomain(ctx, ApplicationDomain{
@@ -73,6 +78,18 @@ func (s *Service) AddDomain(ctx context.Context, userID, appID uuid.UUID, domain
 			return err
 		}
 		created = row
+		if withTLS {
+			// An intent already recorded for the host (a re-attach, or an
+			// operator's own wildcard/DNS-01 configuration) is left untouched.
+			if err := tx.CreateCertificateIntent(ctx, CertificateIntent{
+				ApplicationID: app.ID,
+				Domain:        next,
+				Enabled:       true,
+				Challenge:     string(proxy.ChallengeHTTP01),
+			}); err != nil && !errors.Is(err, ErrConflict) {
+				return err
+			}
+		}
 		if created.IsPrimary {
 			app.BaseDomain = next
 			app.BaseDomainDisabled = false

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/proxy"
 )
 
 // seedDomainApp stores one application with the given mirror domain in the
@@ -70,6 +72,62 @@ func TestAddDomainFirstBecomesPrimary(t *testing.T) {
 	}
 	if stored.BaseDomain != "app.example.com" {
 		t.Fatalf("mirror = %q, want the primary", stored.BaseDomain)
+	}
+}
+
+// tlsService builds a service whose TLSForDomains gate answers enabled.
+func tlsService(t *testing.T, repo *fakeRepository, enabled bool) *Service {
+	t.Helper()
+	svc := NewService(Config{
+		Repository:    repo,
+		Secret:        testSecretKey,
+		Logger:        discardLogger(),
+		TLSForDomains: func(context.Context) bool { return enabled },
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc
+}
+
+// TestAddDomainProvisionsTLSByDefault pins JUS-201: when the instance
+// terminates TLS (the panel's https condition), attaching a domain records an
+// enabled HTTP-01 intent so the generator emits a websecure router and the
+// http→https redirect.
+func TestAddDomainProvisionsTLSByDefault(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	svc := tlsService(t, repo, true)
+
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, "portfolio.example.com"); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	var found *CertificateIntent
+	for i := range repo.certificates {
+		if repo.certificates[i].ApplicationID == app.ID && repo.certificates[i].Domain == "portfolio.example.com" {
+			found = &repo.certificates[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("certificates = %#v, want an intent for the attached domain", repo.certificates)
+	}
+	if !found.Enabled || found.Challenge != string(proxy.ChallengeHTTP01) || found.DNSProviderID != uuid.Nil {
+		t.Fatalf("intent = %#v, want enabled http-01 with no provider", *found)
+	}
+}
+
+// TestAddDomainKeepsPlainHTTPWhenNotTLS pins the local/dev path: without the
+// gate no certificate intent is recorded.
+func TestAddDomainKeepsPlainHTTPWhenNotTLS(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	svc := tlsService(t, repo, false)
+
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, "portfolio.example.com"); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	if len(repo.certificates) != 0 {
+		t.Fatalf("certificates = %#v, want none on an http-only instance", repo.certificates)
 	}
 }
 

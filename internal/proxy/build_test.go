@@ -132,6 +132,51 @@ func TestBuildConfigRouteProducesHTTPForwardingRouter(t *testing.T) {
 	}
 }
 
+// TestBuildConfigAppDomainTLSFollowsCertificate pins JUS-201's generated
+// shape: an app domain with a resolved certificate gets a websecure router
+// with the shared resolver and an http→https redirect on the web router, while
+// a domain without one stays the plain-HTTP forwarding router (the local/dev
+// path with no resolver/ACME).
+func TestBuildConfigAppDomainTLSFollowsCertificate(t *testing.T) {
+	appID := uuid.MustParse("11111111-2222-3333-4444-555555555555")
+	name := "app-" + appID.String()
+
+	plain := BuildConfig([]Route{{AppID: appID, Domain: "portfolio.example.com", Target: "http://172.17.0.1:3000"}}, nil, nil, "", "")
+	if _, ok := plain.Routers[name+"-websecure"]; ok {
+		t.Fatalf("websecure router emitted without a certificate: %#v", plain.Routers)
+	}
+	if mws := plain.Routers[name+"-web"].Middlewares; len(mws) != 0 {
+		t.Errorf("http router middlewares = %#v, want none", mws)
+	}
+	if len(plain.Middlewares) != 0 {
+		t.Errorf("middlewares = %#v, want none", plain.Middlewares)
+	}
+
+	secured := BuildConfig([]Route{{
+		AppID:       appID,
+		Domain:      "portfolio.example.com",
+		Target:      "http://172.17.0.1:3000",
+		Certificate: &RouteCertificate{Resolver: DefaultResolverName},
+	}}, nil, nil, "", "")
+	secure, ok := secured.Routers[name+"-websecure"]
+	if !ok {
+		t.Fatalf("missing websecure router in %#v", secured.Routers)
+	}
+	if secure.TLS == nil || secure.TLS.CertResolver != DefaultResolverName {
+		t.Errorf("websecure TLS = %#v, want resolver %q", secure.TLS, DefaultResolverName)
+	}
+	if len(secure.EntryPoints) != 1 || secure.EntryPoints[0] != EntryPointWebSecure {
+		t.Errorf("websecure entrypoints = %#v", secure.EntryPoints)
+	}
+	web := secured.Routers[name+"-web"]
+	if len(web.Middlewares) != 1 || web.Middlewares[0] != HTTPRedirectMiddleware {
+		t.Errorf("http router middlewares = %#v, want the https redirect", web.Middlewares)
+	}
+	if redirect := secured.Middlewares[HTTPRedirectMiddleware].RedirectScheme; redirect == nil || redirect.Scheme != "https" || !redirect.Permanent {
+		t.Errorf("redirect middleware = %#v", secured.Middlewares[HTTPRedirectMiddleware])
+	}
+}
+
 func TestBuildConfigKeepsRoutesIndependent(t *testing.T) {
 	first := uuid.MustParse("11111111-2222-3333-4444-555555555555")
 	second := uuid.MustParse("66666666-7777-8888-9999-aaaaaaaaaaaa")

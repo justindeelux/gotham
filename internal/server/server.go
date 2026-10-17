@@ -645,6 +645,27 @@ func (s *Server) baseMiddleware(r chi.Router) {
 	r.Use(middleware.Recoverer)
 }
 
+// defaultDomainTLS reports whether an attached application domain should get
+// HTTPS by default (JUS-201). It mirrors the panel domain's condition: an
+// https control-plane URL means this instance terminates TLS, so the domain
+// gets an HTTP-01 certificate intent; a dev box (no URL, or a plain http one)
+// keeps attaching plain-HTTP domains.
+func (s *Server) defaultDomainTLS(ctx context.Context) bool {
+	if s.instanceSvc == nil {
+		return false
+	}
+	urls, err := s.instanceSvc.ControlPlaneURLs(ctx)
+	if err != nil {
+		return false
+	}
+	for _, raw := range urls {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "https://") {
+			return true
+		}
+	}
+	return false
+}
+
 // deployService builds the deploy domain service for the HTTP wiring: the
 // database, the key that opens sealed application secrets and the realtime
 // publisher, plus the mTLS agent dialer when the concrete node registry is
@@ -667,6 +688,7 @@ func (s *Server) deployService(providerSvc providers.ProviderService, proxySvc p
 		Logger:               s.logger,
 		GitAllowPrivateHosts: s.cfg.Snapshot().Deploy.GitAllowPrivateHosts,
 	}
+	cfg.TLSForDomains = s.defaultDomainTLS
 	if githubAppSvc != nil {
 		cfg.AppTokens = githubAppTokenAdapter{svc: githubAppSvc}
 	}

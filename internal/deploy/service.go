@@ -191,6 +191,12 @@ type Config struct {
 	// application state. Best effort: a sync failure is logged, never
 	// returned. nil disables the notifications.
 	Proxy ProxySync
+	// TLSForDomains reports whether an attached application domain should
+	// get an HTTPS certificate intent by default (JUS-201). It mirrors the
+	// panel domain's condition — an https control-plane URL means this
+	// instance terminates TLS — so an http-only dev box (no URL, or a plain
+	// http one) keeps attaching plain-HTTP domains. nil disables the default.
+	TLSForDomains func(context.Context) bool
 	// Notifier receives one terminal deployment result (running or failed).
 	// Best effort: delivery runs asynchronously and can never fail a
 	// deployment. nil disables notifications, which is also the
@@ -272,6 +278,9 @@ func (c Config) repository() Repository {
 // safe for concurrent use.
 type Service struct {
 	guardDomains proxy.DomainGuard
+	// tlsForDomains gates the default HTTPS intent of an attached domain
+	// (see Config.TLSForDomains); nil keeps every attachment plain-HTTP.
+	tlsForDomains func(context.Context) bool
 	*Orchestrator
 	// registrar talks to the Git host for deploy keys; nil when no provider
 	// service is wired (creation then answers a clear error instead of a nil
@@ -341,6 +350,7 @@ func NewService(cfg Config) *Service {
 	}
 	return &Service{
 		guardDomains:   cfg.GuardDomains,
+		tlsForDomains:  cfg.TLSForDomains,
 		Orchestrator:   o,
 		registrar:      cfg.KeyRegistrar,
 		previewCleanup: cfg.PreviewCleanup,

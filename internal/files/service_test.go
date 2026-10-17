@@ -461,12 +461,31 @@ func TestResolveRBAC(t *testing.T) {
 		}
 	})
 
-	t.Run("team-less server is not found", func(t *testing.T) {
+	t.Run("team-less legacy server is allowed", func(t *testing.T) {
+		registry := newFakeRegistry()
+		server := registry.seed(uuid.Nil)
+		svc := newTestService(t, registry, &fakeFileClient{
+			statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "a", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 2}},
+			readBody: []byte("hi"),
+		})
+		ctx := scopeCtx(teams.RoleOwner, teamID)
+		if _, err := svc.Roots(ctx, server.ID); err != nil {
+			t.Fatalf("roots err = %v, want nil", err)
+		}
+		if _, err := svc.Content(ctx, server.ID, "root", "a"); err != nil {
+			t.Fatalf("content err = %v, want nil", err)
+		}
+	})
+
+	t.Run("read_only viewer may write on a team-less legacy server", func(t *testing.T) {
+		// A team-less node ignores the caller's team role, like the rest of the
+		// legacy node surface: platform operators are superusers, so a viewer
+		// scope still authorizes a write there (documents the operator semantics).
 		registry := newFakeRegistry()
 		server := registry.seed(uuid.Nil)
 		svc := newTestService(t, registry, &fakeFileClient{})
-		if _, err := svc.Roots(scopeCtx(teams.RoleOwner, teamID), server.ID); !errors.Is(err, ErrNotFound) {
-			t.Fatalf("err = %v, want ErrNotFound", err)
+		if err := svc.AuthorizeWrite(scopeCtx(teams.RoleReadOnly, teamID), server.ID); err != nil {
+			t.Fatalf("err = %v, want nil", err)
 		}
 	})
 

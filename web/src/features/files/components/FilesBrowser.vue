@@ -3480,9 +3480,11 @@ function onFolderMenu(key: string): void {
   display: flex;
   align-items: flex-end;
   gap: 0;
-  /* Hug the tabs so the + button sits right after the last one (JUS-126);
-     shrinking below the content keeps the strip the only scroll region. */
-  flex: 0 1 auto;
+  /* The strip fills the row like the sample's .tabs (flex 1 1 auto): tabs
+     keep their 240px basis while there is room and shrink (scrolling the
+     strip) when there is not. A hugging strip would collapse to the tabs'
+     content minimum instead of their basis (round 6 probe). */
+  flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;

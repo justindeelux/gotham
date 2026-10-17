@@ -1013,6 +1013,22 @@ function neighbourTabId(id: string, delta: number): string {
   return files.tabs[(index + delta + count) % count]?.id ?? id;
 }
 
+/**
+ * closeFocusArmed moves DOM focus after a tab close drops it to <body>.
+ * A mouse click focuses the new tab natively (never :focus-visible), and
+ * keyboard arrows keep focus inside the tablist, so the watcher below only
+ * steps in for the close routes — the close removes the focused button and
+ * focus would otherwise strand on <body> (JUS-206 round 2 keeps the
+ * reference's ring-free tabs while the keyboard ring stays).
+ */
+let closeFocusArmed = false;
+
+/** closeTabFromButton closes one tab from its × or middle-click. */
+function closeTabFromButton(id: string): void {
+  closeFocusArmed = true;
+  void files.closeTab(id);
+}
+
 /** onTabKeydown drives the roving-tabindex tablist (arrows, Home/End, Delete). */
 function onTabKeydown(event: KeyboardEvent, tab: FilesTab): void {
   switch (event.key) {
@@ -1039,7 +1055,7 @@ function onTabKeydown(event: KeyboardEvent, tab: FilesTab): void {
       // hidden for a single tab), so Delete is a no-op there too.
       if (files.tabs.length > 1) {
         event.preventDefault();
-        void files.closeTab(tab.id);
+        closeTabFromButton(tab.id);
       }
       break;
   }
@@ -1051,7 +1067,7 @@ function onTabAuxClick(event: MouseEvent, id: string): void {
     return;
   }
   event.preventDefault();
-  void files.closeTab(id);
+  closeTabFromButton(id);
 }
 
 /**
@@ -1596,18 +1612,27 @@ watch(
   { flush: "post" },
 );
 
-// Move focus to the active tab as soon as it changes, nextTick — but only when
-// focus is not already on it. A mouse click focuses the tab natively (which
-// never matches :focus-visible), and a programmatic .focus() from inside that
-// click's dispatch would paint the loud ring the reference has not (JUS-206);
-// keyboard switches and tab closes (focus left on <body>) still move focus, so
-// the roving tabindex never lags and the focused close never strands focus.
+// Move focus to the active tab only when the switch needs it (JUS-206 round 2;
+// see the watcher body).
 watch(() => files.activeTabId, async () => {
   await nextTick();
   const active = tabListEl.value?.querySelector<HTMLElement>(
     '[role="tab"][aria-selected="true"]',
   );
-  if (active && document.activeElement !== active) {
+  if (!active || document.activeElement === active) {
+    // A mouse click focuses the tab natively (never :focus-visible, so no
+    // ring); a fresh page leaves focus alone too. Only a keyboard switch
+    // (focus still inside the tablist) or a close (focus dropped to <body>,
+    // armed by the close routes) moves DOM focus — JUS-206 round 2 keeps the
+    // reference's ring-free tabs while the keyboard ring stays (JUS-152).
+    return;
+  }
+  if (tabListEl.value?.contains(document.activeElement) === true) {
+    await focusActiveTab();
+    return;
+  }
+  if (closeFocusArmed) {
+    closeFocusArmed = false;
     await focusActiveTab();
   }
 });
@@ -2443,7 +2468,7 @@ function onFolderMenu(key: string): void {
             class="fm-tab-close"
             aria-hidden="true"
             :title="$t('files.tabs.close', { name: tabLabel(tab) })"
-            @click.stop="void files.closeTab(tab.id)"
+            @click.stop="closeTabFromButton(tab.id)"
           >
             <X :size="12" :stroke-width="2" aria-hidden="true" />
           </span>
@@ -3342,10 +3367,12 @@ function onFolderMenu(key: string): void {
   width: 220px;
 }
 
-/* Tab bar (JUS-123/150): one tab per open directory. The tabs and the + button
-   ride on the card surface (no surrounding box — JUS-150), so the only filled
-   element is the active tab's own indicator; the strip scrolls horizontally at
-   narrow widths instead of wrapping the layout. */
+/* Tab bar (JUS-123/150, JUS-206 round 2): browser-style tabs riding the card
+   surface (no surrounding box — JUS-150). Inactive tabs are transparent with
+   a thin divider between neighbours; the active tab is a lighter fill with
+   rounded TOP corners only, visually joined to the content below — no ring,
+   no outline, no accent border. The strip scrolls horizontally at narrow
+   widths instead of wrapping the layout. */
 .fm-tabs {
   display: flex;
   align-items: center;
@@ -3361,9 +3388,10 @@ function onFolderMenu(key: string): void {
 .fm-tabstrip {
   display: flex;
   align-items: stretch;
-  gap: var(--space-2);
+  gap: 0;
   /* Hug the tabs so the + button sits right after the last one (JUS-126);
-     shrinking below the content keeps the strip the only scroll region. */
+     shrinking below the content keeps the strip the only scroll region. The
+     zero gap lets the inactive-tab dividers join edge to edge. */
   flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
@@ -3380,10 +3408,16 @@ function onFolderMenu(key: string): void {
   background: none;
   height: var(--space-8);
   padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill);
+  border-radius: 0;
   color: var(--muted);
   font-size: var(--text-sm);
   cursor: pointer;
+}
+
+/* Thin divider between two neighbouring inactive tabs; none touches the active
+   tab. An inset shadow so it never shifts layout. */
+.fm-tab:not(.is-active) + .fm-tab:not(.is-active) {
+  box-shadow: inset 1px 0 0 var(--border);
 }
 
 .fm-tab:hover {
@@ -3396,21 +3430,20 @@ function onFolderMenu(key: string): void {
   color: var(--warn-ink);
 }
 
-/* JUS-206: flat tabs — the active tab is accent text on a subtle fill (no
-   box/ring); the inactive tabs ride the card surface. */
+/* JUS-206 round 2: the active tab is a lighter fill with rounded TOP corners
+   only (Chrome-style), in the normal text colour — no ring, no outline, no
+   accent border. It sits after the hover rule so the fill wins on hover. */
 .fm-tab.is-active {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
+  background: var(--selected-row);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  color: var(--fg);
   font-weight: 600;
 }
 
-.fm-tab.is-active .fm-tab-icon {
-  color: inherit;
-}
-
 /* The strip scrolls (overflow-x: auto) and clips its descendants at its edge,
-   and the shared 3px focus ring would read as a loud box here — draw a thin
-   ring just inside the tab instead (JUS-152/JUS-206). */
+   and the shared focus outline would read as a loud box here — keyboard focus
+   (only; mouse clicks and fresh loads never move DOM focus, see the watcher)
+   draws a thin ring just inside the tab instead (JUS-152). */
 .fm-tab:focus-visible {
   outline: 1px solid var(--accent-ink);
   outline-offset: -1px;

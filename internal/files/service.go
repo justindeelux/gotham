@@ -554,10 +554,13 @@ func (s *Service) Download(ctx context.Context, serverID uuid.UUID, ticketID str
 // resolve returns the registry entry for a server after authorizing the caller.
 // It follows the rest of the node surface (AuthorizeOptionalTeam, like
 // ListServers): a team node belongs to its team, so a foreign server answers
-// ErrNotFound, while a legacy team-less node (team_id NULL, e.g. the all-in-one
-// localhost node) stays available to every authenticated caller. write requires
-// an owner/admin role; the remaining roles read. A request without a team scope
-// (teams not wired, a non-HTTP caller) keeps the pre-teams compatibility path.
+// ErrNotFound; write requires an owner/admin role and the remaining roles read.
+// A legacy team-less node (team_id NULL, e.g. the all-in-one localhost node)
+// stays available to anyone who passes the router's platform-operator gate
+// (RequirePlatformAdmin in internal/server), which is what protects the host
+// filesystem: the files surface is never mounted for plain team members. A
+// request without a team scope (teams not wired, a non-HTTP caller) keeps the
+// pre-teams compatibility path.
 func (s *Service) resolve(ctx context.Context, serverID uuid.UUID, write bool) (*servers.Server, error) {
 	server, err := s.server(ctx, serverID)
 	if err != nil {

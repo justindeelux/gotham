@@ -477,6 +477,18 @@ func TestResolveRBAC(t *testing.T) {
 		}
 	})
 
+	t.Run("read_only viewer may write on a team-less legacy server", func(t *testing.T) {
+		// A team-less node ignores the caller's team role, like the rest of the
+		// legacy node surface: platform operators are superusers, so a viewer
+		// scope still authorizes a write there (documents the operator semantics).
+		registry := newFakeRegistry()
+		server := registry.seed(uuid.Nil)
+		svc := newTestService(t, registry, &fakeFileClient{})
+		if err := svc.AuthorizeWrite(scopeCtx(teams.RoleReadOnly, teamID), server.ID); err != nil {
+			t.Fatalf("err = %v, want nil", err)
+		}
+	})
+
 	t.Run("read_only member reads but not content", func(t *testing.T) {
 		registry := newFakeRegistry()
 		server := registry.seed(teamID)

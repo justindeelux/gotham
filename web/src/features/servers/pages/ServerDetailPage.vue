@@ -20,6 +20,7 @@ import EditServerModal from "@/features/servers/components/EditServerModal.vue";
 import ServerDetailHeader from "@/features/servers/components/ServerDetailHeader.vue";
 import ServerMetricsTab from "@/features/servers/components/ServerMetricsTab.vue";
 import ServerOverviewTab from "@/features/servers/components/ServerOverviewTab.vue";
+import ServerProxyTab from "@/features/servers/components/ServerProxyTab.vue";
 import ServerSettingsTab from "@/features/servers/components/ServerSettingsTab.vue";
 import {
   ServerMetricsKey,
@@ -235,9 +236,7 @@ onMounted(() => {
           </NTabPane>
 
           <NTabPane name="proxy" :tab="$t('servers.detail.tabProxy')">
-            <NCard style="margin-top: 16px">
-              <NEmpty :description="$t('servers.detail.proxyEmpty')" />
-            </NCard>
+            <ServerProxyTab :server-id="server.id" />
           </NTabPane>
 
           <NTabPane name="settings" :tab="$t('servers.detail.tabSettings')">

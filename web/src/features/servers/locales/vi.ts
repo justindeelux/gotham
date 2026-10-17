@@ -81,7 +81,12 @@ const vi: ServersMessages = {
     filesEmpty: "Duyệt và tải tệp trong các thư mục gốc được phép của agent trên nút.",
     openFiles: "Mở tệp",
     validateAction: "Kiểm tra",
-    proxyEmpty: "Proxy và Traefik sẽ ra mắt ở Giai đoạn 6.",
+  },
+  proxy: {
+    title: "Các router Traefik trên nút này",
+    refresh: "Tải lại",
+    retry: "Thử lại",
+    loading: "Đang tải router…",
   },
   overview: {
     nodeInfo: "Thông tin nút",

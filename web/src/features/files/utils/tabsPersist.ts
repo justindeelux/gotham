@@ -17,8 +17,11 @@ export type FilesTabsStorage = Pick<Storage, "getItem" | "setItem" | "removeItem
 /**
  * filesTabsStorageKey scopes the snapshot by server/node and user: different
  * nodes never share state, and a different user on the same browser never sees
- * another account's tabs. Empty segments mean "no identity yet" — the caller
- * skips persistence instead of writing a pooled key.
+ * another account's tabs. Logout deliberately keeps the stored state (no wipe):
+ * the key already separates accounts, so the user comes back to the same
+ * layout after re-login and nothing can leak across accounts. Empty segments
+ * mean "no identity yet" — the caller skips persistence instead of writing a
+ * pooled key.
  */
 export function filesTabsStorageKey(serverId: string, userId: string): string {
   if (serverId === "" || userId === "") {

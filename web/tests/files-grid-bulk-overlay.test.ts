@@ -4,7 +4,7 @@
 // the covered content goes inert and the overlay carries the controls; on
 // clear both return. The files API and useMessage are mocked, so the component
 // runs under a real pinia + i18n.
-/* global document:readonly, HTMLElement:readonly */
+/* global document:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const messages = {

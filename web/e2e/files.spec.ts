@@ -968,6 +968,37 @@ test.describe("files double-click", () => {
 
   test("double-clicking a binary file does nothing", async ({ page, request }) => {
     const server = await seedServer(request, uniqueSuffix());
+    // A non-image binary: images now open the viewer (JUS-204), so the
+    // no-op case uses a video. (app.bin would open the editor: "bin" is not
+    // a known binary extension, so the dispatch treats it as text.)
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(
+          route,
+          200,
+          listing([entry("movie.mp4", "file", 25190, 0o100644, "etag-mp4")]),
+        ),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    await dblclickRow(page, "movie.mp4");
+    // No editor tab, no modal, no navigation: the listing is unchanged.
+    await expect(page.locator(".files-editor")).toHaveCount(0);
+    await expect(page.locator(".n-modal")).toHaveCount(0);
+    await expect(page.locator(".fm-table").getByText("movie.mp4")).toBeVisible();
+  });
+
+  test("double-clicking an image opens the viewer (JUS-204)", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    // A 1x1 PNG body for the ticket-authorised download the viewer fetches.
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      "base64",
+    );
     await routeFiles(page, {
       roots: (route) => json(route, 200, { roots: [writableRoot] }),
       list: (route) =>
@@ -976,13 +1007,20 @@ test.describe("files double-click", () => {
           200,
           listing([entry("logo.png", "file", 25190, 0o100644, "etag-png")]),
         ),
+      "download-ticket": (route) => json(route, 201, { ticket: "ticket-viewer" }),
+      download: (route) =>
+        route.fulfill({ status: 200, contentType: "image/png", body: png }),
     });
 
     await page.goto(`/servers/${server.id}/files`);
     await dblclickRow(page, "logo.png");
-    // No editor tab, no modal, no navigation: the listing is unchanged.
-    await expect(page.locator(".files-editor")).toHaveCount(0);
-    await expect(page.locator(".n-modal")).toHaveCount(0);
+    const dialog = page.locator(".n-modal").filter({ hasText: "logo.png" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".viewer-stage img")).toBeVisible();
+
+    // Esc closes the viewer; the listing is unchanged.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
     await expect(page.locator(".fm-table").getByText("logo.png")).toBeVisible();
   });
 });

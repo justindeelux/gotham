@@ -219,6 +219,7 @@ const en = {
     loading: "Loading image…",
     loadError: "Could not load the image.",
     retry: "Retry",
+    controls: "Image zoom controls",
     zoomIn: "Zoom in",
     zoomOut: "Zoom out",
     reset: "Reset view",

@@ -7,6 +7,7 @@ import { useI18n } from "vue-i18n";
 import {
   describeFilesError,
   fetchDownloadBlob,
+  filesErrorKey,
   isCanceledError,
   issueDownloadTicket,
 } from "@/features/files/api/files";
@@ -60,13 +61,24 @@ function releaseUrl(): void {
   }
 }
 
-/** closeAll drops the load, the URL and the transient states. */
+/** closeAll drops the load and the transient states. The object URL is
+ * released on the modal's leave transition ({@link onAfterLeave}), never
+ * mid-close, so a reopen racing the fade cannot lose its URL. */
 function closeAll(): void {
   cancelLoad();
-  releaseUrl();
   dragAnchor = null;
   loading.value = false;
   error.value = null;
+}
+
+/**
+ * onAfterLeave revokes the object URL once the dialog is gone. It runs only
+ * while closed: a reopen that cancelled the leave keeps its own URL.
+ */
+function onAfterLeave(): void {
+  if (!props.show) {
+    releaseUrl();
+  }
 }
 
 /**
@@ -96,7 +108,12 @@ async function load(): Promise<void> {
     if (seq !== loadSeq) {
       return;
     }
-    const blob = await fetchDownloadBlob(props.serverId, ticket, aborter.signal);
+    const blob = await fetchDownloadBlob(
+      props.serverId,
+      ticket,
+      target.name,
+      aborter.signal,
+    );
     if (seq !== loadSeq) {
       return;
     }
@@ -111,7 +128,12 @@ async function load(): Promise<void> {
     if (isCanceledError(err)) {
       return;
     }
-    error.value = describeFilesError(err);
+    // An unclassified failure (a network TypeError, a ticket 500 with no
+    // catalog mapping) gets the viewer copy, never a raw message.
+    error.value =
+      filesErrorKey(err) === null
+        ? String(t("files.viewer.loadError"))
+        : describeFilesError(err);
   } finally {
     if (seq === loadSeq) {
       loading.value = false;
@@ -137,11 +159,24 @@ watch(
     }
   },
 );
-onBeforeUnmount(() => closeAll());
+onBeforeUnmount(() => {
+  cancelLoad();
+  releaseUrl();
+});
 
 /** close emits the v-model close. */
 function close(): void {
   emit("update:show", false);
+}
+
+/**
+ * onImgError reports an undecodable body (corrupt or unsupported bytes): the
+ * spinner is already gone and the stage would otherwise sit blank. The broken
+ * URL is released; retry reloads it.
+ */
+function onImgError(): void {
+  releaseUrl();
+  error.value = String(t("files.viewer.loadError"));
 }
 
 /**
@@ -202,6 +237,7 @@ function onPointerUp(): void {
     :mask-closable="true"
     :close-on-esc="true"
     @update:show="(value: boolean) => emit('update:show', value)"
+    @after-leave="onAfterLeave"
   >
     <div
       ref="stageEl"
@@ -229,13 +265,14 @@ function onPointerUp(): void {
         :style="{ transform: transform }"
         draggable="false"
         @dragstart.prevent
+        @error="onImgError"
       />
     </div>
 
     <template #footer>
       <div class="dialog-foot">
         <span class="hint small muted">{{ t("files.viewer.zoomHint") }}</span>
-        <span class="zoom-controls" role="group" :aria-label="props.entry?.name ?? ''">
+        <span class="zoom-controls" role="group" :aria-label="t('files.viewer.controls')">
           <NButton
             size="small"
             circle

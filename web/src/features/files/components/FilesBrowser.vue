@@ -41,10 +41,10 @@ import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue
 import DeleteEntriesDialog from "@/features/files/components/DeleteEntriesDialog.vue";
 import ExtractDialog from "@/features/files/components/ExtractDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
-import ImageViewerDialog from "@/features/files/components/ImageViewerDialog.vue";
 import FilesSearchResults from "@/features/files/components/FilesSearchResults.vue";
 import FilesSelectionBar from "@/features/files/components/FilesSelectionBar.vue";
 import FolderSizeCell from "@/features/files/components/FolderSizeCell.vue";
+import ImageViewerDialog from "@/features/files/components/ImageViewerDialog.vue";
 import PermissionsDialog from "@/features/files/components/PermissionsDialog.vue";
 import RecycleBinDialog from "@/features/files/components/RecycleBinDialog.vue";
 import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue";

@@ -218,6 +218,7 @@ const vi = {
     loading: "Đang tải ảnh…",
     loadError: "Không tải được ảnh.",
     retry: "Thử lại",
+    controls: "Điều khiển thu/phóng ảnh",
     zoomIn: "Phóng to",
     zoomOut: "Thu nhỏ",
     reset: "Đặt lại chế độ xem",

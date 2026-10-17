@@ -615,25 +615,27 @@ func TestSecurityHeaders(t *testing.T) {
 }
 
 // TestContentSecurityPolicyAvatarAllowlist pins the whole policy literally:
-// the OAuth avatar hosts are the only img-src addition, and no other
-// directive is loosened (no wildcard, no extra scheme, no new host).
+// the OAuth avatar hosts and the viewer blob: scheme are the only img-src
+// additions, and no other directive is loosened (no wildcard, no extra
+// scheme, no new host).
 func TestContentSecurityPolicyAvatarAllowlist(t *testing.T) {
 	s := newTestAuthServer(t)
 
 	rec := doRequest(t, s, http.MethodGet, "/healthz", "", "")
 	got := rec.Header().Get("Content-Security-Policy")
-	want := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; base-uri 'self'; object-src 'none'; form-action 'self' https://github.com; frame-ancestors 'none'"
+	want := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://avatars.githubusercontent.com; base-uri 'self'; object-src 'none'; form-action 'self' https://github.com; frame-ancestors 'none'"
 	if got != want {
 		t.Fatalf("Content-Security-Policy = %q, want %q", got, want)
 	}
 
 	// The img-src addition is exactly the supported OAuth providers' avatar
-	// hosts: no wildcard, no other host or scheme may sneak in.
+	// hosts plus the viewer blob: scheme: no wildcard, no other host or
+	// scheme may sneak in.
 	imgSrc := got[strings.Index(got, "img-src ")+len("img-src "):]
 	imgSrc = imgSrc[:strings.Index(imgSrc, ";")]
 	var hosts []string
 	for _, token := range strings.Fields(imgSrc) {
-		if token == "'self'" || token == "data:" {
+		if token == "'self'" || token == "data:" || token == "blob:" {
 			continue
 		}
 		hosts = append(hosts, token)
@@ -641,14 +643,17 @@ func TestContentSecurityPolicyAvatarAllowlist(t *testing.T) {
 	if len(hosts) != 1 || hosts[0] != "https://avatars.githubusercontent.com" {
 		t.Errorf("img-src remote hosts = %q, want [https://avatars.githubusercontent.com]", hosts)
 	}
+	if !strings.Contains(got, "img-src 'self' data: blob: ") {
+		t.Errorf("Content-Security-Policy %q missing the viewer blob: source", got)
+	}
 
 	// Nothing else loosened: the full policy carries no wildcard source and
-	// no scheme outside the pinned img-src data:, the https: avatar host and
+	// no scheme outside the pinned img-src data:/blob:, the https: avatar host and
 	// the style 'unsafe-inline' the SPA already needs.
 	if strings.Contains(got, "*") {
 		t.Errorf("Content-Security-Policy %q contains a wildcard source", got)
 	}
-	for _, scheme := range []string{"http:", "blob:", "filesystem:"} {
+	for _, scheme := range []string{"http:", "filesystem:"} {
 		if strings.Contains(got, scheme) {
 			t.Errorf("Content-Security-Policy %q contains loosened scheme %q", got, scheme)
 		}

@@ -416,8 +416,20 @@ test.describe("icon-only controls are accessible", () => {
     await page.getByRole("button", { name: "Grid view" }).click();
     await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
     await expectIconOnlyTooltips(page, ".fm-grid .fm-tile-actions");
-    await expectIconOnlyTooltips(page, ".fm-toolbar");
+    // JUS-208 round 2: while a selection exists the bulk bar overlays the
+    // toolbar row, so each sweep runs where its buttons are on top — the
+    // bar's buttons while selected, the toolbar's own buttons idle (overlay
+    // hidden). Every button keeps its aria-label and tooltip sweep. (The
+    // selection stays whole throughout: selecting a single tile could land
+    // on the directory, whose Download tooltip names the blocked reason
+    // instead of the action.)
     await expectIconOnlyTooltips(page, ".fm-selection-actions");
+    await page
+      .locator(".fm-grid-bulk .fm-selection-actions")
+      .getByRole("button", { name: "Clear", exact: true })
+      .click();
+    await expect(page.locator(".fm-tile.is-selected")).toHaveCount(0);
+    await expectIconOnlyTooltips(page, ".fm-toolbar .fm-toolbar-scroll");
   });
 
   test("a special row offers no row menu", async ({ page }) => {

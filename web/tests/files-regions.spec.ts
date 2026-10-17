@@ -398,9 +398,16 @@ for (const viewport of [
 
     // The regions must not clip focus rings: none of them creates a clipping box.
     for (const name of ["topbar", "contextbar", "tablist", "pathbar", "toolbar"] as const) {
-      const scrolls = name === "toolbar" && viewport.width <= 480;
-      expect(regions[name].overflowX, `${name} overflow-x`).toBe(scrolls ? "auto" : "visible");
-      expect(regions[name].overflowY, `${name} overflow-y`).toBe(scrolls ? "hidden" : "visible");
+      expect(regions[name].overflowX, `${name} overflow-x`).toBe("visible");
+      expect(regions[name].overflowY, `${name} overflow-y`).toBe("visible");
+    }
+    if (viewport.width <= 480) {
+      // JUS-208 round 2: the phone scrollport moved one level into
+      // .fm-toolbar-scroll (the outer toolbar keeps the row box so the grid
+      // bulk overlay can anchor to it) — the scrollability guarantee is
+      // unchanged, only its host moved.
+      await expect(page.locator(".fm-toolbar-scroll")).toHaveCSS("overflow-x", "auto");
+      await expect(page.locator(".fm-toolbar-scroll")).toHaveCSS("overflow-y", "hidden");
     }
   });
 }

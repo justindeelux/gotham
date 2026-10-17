@@ -1537,7 +1537,10 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
     if (width <= 480) {
       expect(layout.rows, "phone toolbar is one row").toBe(1);
       expect(layout.toolbarHeight, "phone toolbar has no orphan rows").toBe(32);
-      await expect(page.locator(".fm-toolbar")).toHaveCSS("overflow-x", "auto");
+      // JUS-208 round 2: the scrollport moved one level in (the outer toolbar
+      // keeps the row box so the grid bulk overlay can anchor to it) — the
+      // scrollability guarantee is unchanged, only its host moved.
+      await expect(page.locator(".fm-toolbar-scroll")).toHaveCSS("overflow-x", "auto");
     } else {
       expect(layout.spill, `no toolbar spill at ${width}px`).toBeLessThanOrEqual(1);
     }
@@ -1870,5 +1873,108 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
       .toBeGreaterThanOrEqual(30);
     expect(m.pathbarHeight, `path bar stays one row at ${width}px`).toBeLessThanOrEqual(52);
     expect(m.toolbarHeight, `toolbar is one row at ${width}px`).toBeLessThanOrEqual(44);
+  }
+});
+
+// JUS-208: in grid view the toolbar end group (Recycle bin + list/grid toggle)
+// wrapped onto a second row at every desktop width, even with plenty of free
+// space. The grid-only selection bar stayed mounted with visibility:hidden and
+// reserved ~710px of layout width (count reserve plus every bulk button) while
+// nothing was selected, and the grid-only sort toggle added the rest. Round 2:
+// the idle toolbar is one row wherever the visible controls fit, and while a
+// selection exists the cluster overlays the toolbar row as a contextual action
+// bar instead of joining it — selecting never grows the toolbar (JUS-130/141).
+test("the grid toolbar keeps its end group on the first row at desktop widths", async ({
+  page,
+}) => {
+  for (const width of [1366, 1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page);
+    await page.goto(`${baseURL}/servers/${server1}/files`);
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+
+    const toolbar = page.locator(".fm-toolbar");
+    const box = (await toolbar.boundingBox())!;
+    expect(box.height, `toolbar is one row at ${width}px`).toBe(32);
+
+    const groups = toolbar.locator(".fm-toolbar-group");
+    await expect(groups).toHaveCount(2);
+    const leftBox = (await groups.nth(0).boundingBox())!;
+    const endBox = (await groups.nth(1).boundingBox())!;
+    expect(
+      Math.abs(endBox.y - leftBox.y),
+      `end group shares the row at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      box.x + box.width - (endBox.x + endBox.width),
+      `end group right-aligned at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+  }
+});
+
+// JUS-208 round 2: selecting a grid tile must not shift the layout — the bulk
+// cluster overlays the toolbar row, so the toolbar keeps its height and the
+// first tile keeps its y, at desktop widths and on the phone.
+test("selecting a grid tile never shifts the toolbar or the tiles", async ({
+  page,
+}) => {
+  for (const width of [1366, 1920, 390]) {
+    const height = width === 390 ? 844 : 900;
+    await page.setViewportSize({ width, height });
+    await mockApi(page);
+    await page.goto(`${baseURL}/servers/${server1}/files`);
+    await page.getByRole("button", { name: "Grid view" }).click();
+    await expect(page.locator(".fm-grid .fm-tile").first()).toBeVisible();
+
+    const toolbar = page.locator(".fm-toolbar");
+    const tile = page.locator(".fm-tile-wrap").first();
+    const toolbarHeight = async (): Promise<number> =>
+      (await toolbar.boundingBox())!.height;
+    const tileY = async (): Promise<number> =>
+      (await tile.boundingBox())!.y;
+    expect(await toolbarHeight(), `idle toolbar is one row at ${width}px`).toBe(32);
+    const beforeY = await tileY();
+
+    await tile.click();
+    await expect(page.locator(".fm-tile.is-selected")).toHaveCount(1);
+    expect(
+      await toolbarHeight(),
+      `toolbar height unchanged on select at ${width}px`,
+    ).toBe(32);
+    expect(
+      Math.abs((await tileY()) - beforeY),
+      `first tile unmoved on select at ${width}px`,
+    ).toBeLessThanOrEqual(1);
+
+    // Delete and Clear stay reachable through the bar's own row: scroll each
+    // into view, then assert it sits fully inside the viewport.
+    const bar = page.locator(".fm-grid-bulk .fm-selection-actions");
+    for (const name of ["Delete", "Clear"]) {
+      const button = bar.getByRole("button", { name, exact: true });
+      await button.scrollIntoViewIfNeeded();
+      const box = (await button.boundingBox())!;
+      expect(box.x, `${name} left inside viewport at ${width}px`).toBeGreaterThanOrEqual(-1);
+      expect(
+        box.x + box.width,
+        `${name} right inside viewport at ${width}px`,
+      ).toBeLessThanOrEqual(width + 1);
+      expect(box.y, `${name} top inside viewport at ${width}px`).toBeGreaterThanOrEqual(-1);
+      expect(
+        box.y + box.height,
+        `${name} bottom inside viewport at ${width}px`,
+      ).toBeLessThanOrEqual(height + 1);
+    }
+
+    await bar.getByRole("button", { name: "Clear", exact: true }).click();
+    await expect(page.locator(".fm-tile.is-selected")).toHaveCount(0);
+    expect(
+      await toolbarHeight(),
+      `toolbar height unchanged on clear at ${width}px`,
+    ).toBe(32);
+    expect(
+      Math.abs((await tileY()) - beforeY),
+      `first tile unmoved on clear at ${width}px`,
+    ).toBeLessThanOrEqual(1);
   }
 });

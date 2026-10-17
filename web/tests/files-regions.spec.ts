@@ -170,6 +170,8 @@ async function openFiles(page: Page, width: number, height: number): Promise<voi
 interface RegionBox {
   top: number;
   bottom: number;
+  left: number;
+  right: number;
   background: string;
   borderTop: number;
   borderBottom: number;
@@ -186,6 +188,7 @@ async function regionsOf(page: Page): Promise<{
   regions: Record<string, RegionBox>;
   cardBackground: string;
   border: string;
+  surfaceWarm: string;
 }> {
   return page.evaluate(() => {
     const read = (selector: string): RegionBox | null => {
@@ -196,6 +199,8 @@ async function regionsOf(page: Page): Promise<{
       return {
         top: box.top,
         bottom: box.bottom,
+        left: box.left,
+        right: box.right,
         background: style.backgroundColor,
         borderTop: Number.parseFloat(style.borderTopWidth),
         borderBottom: Number.parseFloat(style.borderBottomWidth),
@@ -215,6 +220,7 @@ async function regionsOf(page: Page): Promise<{
     };
     return {
       regions: {
+        topbar: region(".fm-topbar"),
         contextbar: region(".fm-contextbar"),
         tablist: region(".fm-tabs"),
         pathbar: region(".fm-bar.fm-pathbar"),
@@ -225,6 +231,7 @@ async function regionsOf(page: Page): Promise<{
         document.querySelector(".files-browser") as HTMLElement,
       ).backgroundColor,
       border: rootStyle.getPropertyValue("--border").trim(),
+      surfaceWarm: rootStyle.getPropertyValue("--surface-warm").trim(),
     };
   });
 }
@@ -238,8 +245,8 @@ for (const viewport of [
     page,
   }) => {
     await openFiles(page, viewport.width, viewport.height);
-    const { regions, cardBackground, border } = await regionsOf(page);
-    const order = ["contextbar", "tablist", "pathbar", "toolbar", "panel"] as const;
+    const { regions, cardBackground, border, surfaceWarm } = await regionsOf(page);
+    const order = ["topbar", "pathbar", "toolbar", "panel"] as const;
 
     // Every region has a height and stacks top-to-bottom without overlap.
     for (let index = 0; index < order.length; index += 1) {
@@ -253,13 +260,28 @@ for (const viewport of [
       }
     }
 
-    // The plain context bar meets the tablist with a margin gap only (no rule
-    // on either edge) — since JUS-160 it keeps only the agent-node slot, the
-    // Root selector and the view toggle having moved into the toolbar.
-    expect(
-      regions.tablist.top - regions.contextbar.bottom,
-      `contextbar -> tablist gap at ${viewport.width}px`,
-    ).toBeGreaterThan(0);
+    // JUS-206 round 4: tabs and the node switcher share the header band row —
+    // tabs left, switcher right — with no rule on either edge. On a phone the
+    // switcher wraps under the tabs instead.
+    if (viewport.width <= 480) {
+      expect(
+        regions.contextbar.top,
+        `switcher wraps under the tabs at ${viewport.width}px`,
+      ).toBeGreaterThanOrEqual(regions.tablist.bottom - 1);
+    } else {
+      // The switcher is shorter than the 32px tabs, so the row centers it —
+      // assert the vertical centers coincide, not the tops.
+      const tabMid = (regions.tablist.top + regions.tablist.bottom) / 2;
+      const nodeMid = (regions.contextbar.top + regions.contextbar.bottom) / 2;
+      expect(
+        Math.abs(nodeMid - tabMid),
+        `switcher shares the tab row at ${viewport.width}px`,
+      ).toBeLessThanOrEqual(1);
+      expect(
+        regions.contextbar.left - regions.tablist.right,
+        `switcher sits right of the tabs at ${viewport.width}px`,
+      ).toBeCloseTo(12, 0);
+    }
     expect(
       regions.contextbar.borderBottom,
       `contextbar draws no bottom rule at ${viewport.width}px`,
@@ -269,8 +291,11 @@ for (const viewport of [
       `tablist draws no top rule at ${viewport.width}px`,
     ).toBe(0);
 
+    // The tab row meets the path bar with a 16px rhythm (measured from the
+    // tab row itself on desktop; from the wrapped header band on a phone,
+    // where the switcher drops under the tabs).
     const gaps = [
-      ["tablist", "pathbar", 16],
+      [viewport.width <= 480 ? "topbar" : "tablist", "pathbar", 16],
       ["pathbar", "toolbar", viewport.width <= 640 ? 16 : 32],
       ["toolbar", "panel", 16],
     ] as const;
@@ -320,7 +345,12 @@ for (const viewport of [
     await page.getByRole("button", { name: "Grid view", exact: true }).click();
     await expect(page.locator('.fm-grid .fm-mark[data-kind="folder"]')).toHaveCount(2);
 
-    // The pill tabs sit directly on the card without a boxed strip.
+    // The browser tabs sit on the warm header band: the band paints the
+    // surface-warm token while the tab row itself stays transparent.
+    expect(
+      normalizeColor(regions.topbar.background),
+      `header band uses the warm token at ${viewport.width}px`,
+    ).toBe(normalizeColor(toRgb(surfaceWarm)));
     expect(
       normalizeColor(regions.tablist.background),
       `tablist has no band background at ${viewport.width}px`,
@@ -344,7 +374,7 @@ for (const viewport of [
     }
 
     // The regions must not clip focus rings: none of them creates a clipping box.
-    for (const name of ["contextbar", "tablist", "pathbar", "toolbar"] as const) {
+    for (const name of ["topbar", "contextbar", "tablist", "pathbar", "toolbar"] as const) {
       const scrolls = name === "toolbar" && viewport.width <= 480;
       expect(regions[name].overflowX, `${name} overflow-x`).toBe(scrolls ? "auto" : "visible");
       expect(regions[name].overflowY, `${name} overflow-y`).toBe(scrolls ? "hidden" : "visible");

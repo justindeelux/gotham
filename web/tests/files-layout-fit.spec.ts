@@ -290,32 +290,36 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   // JUS-119: the page-top breadcrumb (Servers / node / Files) is removed.
   await expect(page.locator(".breadcrumb")).toHaveCount(0);
 
-  // JUS-154: the field captions ("Agent node" in the context bar, "Root" in
-  // the toolbar since JUS-160) are 12px (--text-xs). They used to keep
-  // Naive's 18px card-title size because the `.small` class had no rule in
-  // either component's scoped styles.
-  const headerCaptions = page.locator(".fm-contextbar .fm-field-label");
-  await expect(headerCaptions).toHaveCount(1);
+  // JUS-154/JUS-206 round 4: the visible "Agent node" caption is gone (the
+  // group keeps its accessible name); only the "Root" caption in the toolbar
+  // remains, at 12px (--text-xs).
+  await expect(page.locator(".fm-contextbar .fm-field-label")).toHaveCount(0);
   const toolbarCaptions = page.locator(".fm-toolbar .fm-field-label");
   await expect(toolbarCaptions).toHaveCount(1);
   await expect(toolbarCaptions).toHaveText("Root");
-  const captionSizes = await headerCaptions
-    .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).fontSize));
   const toolbarSizes = await toolbarCaptions.evaluateAll((elements) =>
     elements.map((element) => getComputedStyle(element).fontSize),
   );
-  expect([...captionSizes, ...toolbarSizes]).toEqual(["12px", "12px"]);
+  expect(toolbarSizes).toEqual(["12px"]);
 
   // JUS-134/JUS-160: the agent-node selector decides the listing, so it lives
   // in the context bar, while the Root selector moved to the action toolbar
-  // below — not a bar at the page bottom.
+  // below — not a bar at the page bottom. Round 4: the switcher shares the tab
+  // row (tabs left, switcher right) with its accessible name and no caption.
   const node = page.locator(".fm-node__select");
   await expect(node).toBeVisible();
   await expect(node).toContainText("prod-01");
+  await expect(page.locator(".fm-node")).toHaveAttribute(
+    "aria-label",
+    "Switch agent node",
+  );
+  const tabsBox = (await page.locator(".fm-tabs").boundingBox())!;
   const nodeBox = (await node.boundingBox())!;
   const rootBox = (await page.locator(".fm-root-select").boundingBox())!;
   const toolbarBox = (await page.locator(".fm-toolbar").boundingBox())!;
   // Playwright boxes carry x/y/width/height (no top/bottom): derive edges.
+  expect(Math.abs(nodeBox.y - tabsBox.y)).toBeLessThanOrEqual(8);
+  expect(nodeBox.x).toBeGreaterThanOrEqual(tabsBox.x + tabsBox.width);
   expect(nodeBox.y + nodeBox.height).toBeLessThanOrEqual(toolbarBox.y + 1);
   expect(rootBox.y).toBeGreaterThanOrEqual(toolbarBox.y);
 

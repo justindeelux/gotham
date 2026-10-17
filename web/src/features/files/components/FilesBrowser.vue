@@ -2422,14 +2422,9 @@ function onFolderMenu(key: string): void {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <!-- Context bar (JUS-159): the NCard header (title chrome) is gone. The
-         agent-node slot stays reachable here; the Root selector and the view
-         toggle moved into the action toolbar below (JUS-160). This row is
-         intentionally plain (no card-header border). -->
-    <div class="fm-contextbar">
-      <slot name="header-tools" />
-    </div>
-
+    <!-- Header band (JUS-206 round 4): browser-style tabs on the left, the
+         agent-node switcher at the right end of the same row. -->
+    <div class="fm-topbar">
     <!-- Tab bar (JUS-123/126): one tab per open directory. A middle-click or
          the × closes a tab; the + opens a new one at the root top and sits
          right after the last tab (the strip hugs its tabs and scrolls, so + is
@@ -2485,6 +2480,10 @@ function onFolderMenu(key: string): void {
           <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
         </button>
       </AppTooltip>
+    </div>
+      <div class="fm-contextbar">
+        <slot name="header-tools" />
+      </div>
     </div>
 
     <!-- Navigation row (JUS-159/JUS-206): one Naive NInputGroup row merges
@@ -3367,31 +3366,55 @@ function onFolderMenu(key: string): void {
   width: 220px;
 }
 
-/* Tab bar (JUS-123/150, JUS-206 round 2): browser-style tabs riding the card
-   surface (no surrounding box — JUS-150). Inactive tabs are transparent with
-   a thin divider between neighbours; the active tab is a lighter fill with
-   rounded TOP corners only, visually joined to the content below — no ring,
-   no outline, no accent border. The strip scrolls horizontally at narrow
-   widths instead of wrapping the layout. */
-.fm-tabs {
+/* Tab bar (JUS-123/150, JUS-206 round 2-4): browser-style tabs riding the
+   warm header band (no surrounding box — JUS-150). Inactive tabs are
+   transparent with all four corners rounded; hover is a soft purple fill.
+   The active tab uses the card body colour with rounded TOP corners only and
+   concave flares joining it to the content below — no ring, no outline, no
+   accent border. The strip scrolls horizontally at narrow widths instead of
+   wrapping the layout. */
+/* Header band (JUS-206 round 4): the dark strip from the card top to the tab
+   row. It bleeds to the card's side edges (the card content has no top
+   padding, so no top compensation is needed) and keeps the 16px rhythm below
+   the tabs; the top corners follow the card radius. */
+.fm-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+  background: var(--surface-warm);
+  margin: 0 calc(-1 * var(--space-6)) var(--space-4);
+  padding: var(--space-2) var(--space-6) 0;
+  border-radius: var(--n-border-radius, var(--radius-md)) var(--n-border-radius, var(--radius-md)) 0 0;
+}
+
+/* Context cluster (JUS-159/JUS-206 round 4): the agent-node switcher pinned to
+   the right end of the tab row. Plain, no border of its own. */
+.fm-contextbar {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
-  /* Hug the tabs + the + button so the row rings exactly its content. */
-  width: fit-content;
-  max-width: 100%;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.fm-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
   margin-top: 0;
-  margin-bottom: var(--space-4);
+  margin-bottom: 0;
 }
 
 .fm-tabstrip {
   display: flex;
   align-items: stretch;
-  gap: 0;
+  gap: var(--space-2);
   /* Hug the tabs so the + button sits right after the last one (JUS-126);
-     shrinking below the content keeps the strip the only scroll region. The
-     zero gap lets the inactive-tab dividers join edge to edge. */
+     shrinking below the content keeps the strip the only scroll region. */
   flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
@@ -3399,6 +3422,7 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -3408,20 +3432,14 @@ function onFolderMenu(key: string): void {
   background: none;
   height: var(--space-8);
   padding: var(--space-1) var(--space-3);
-  border-radius: 0;
+  border-radius: var(--radius-md);
   color: var(--muted);
   font-size: var(--text-sm);
   cursor: pointer;
 }
 
-/* Thin divider between two neighbouring inactive tabs; none touches the active
-   tab. An inset shadow so it never shifts layout. */
-.fm-tab:not(.is-active) + .fm-tab:not(.is-active) {
-  box-shadow: inset 1px 0 0 var(--border);
-}
-
 .fm-tab:hover {
-  background: var(--hover-row);
+  background: var(--accent-softer);
   color: var(--fg-2);
 }
 
@@ -3430,14 +3448,35 @@ function onFolderMenu(key: string): void {
   color: var(--warn-ink);
 }
 
-/* JUS-206 round 2: the active tab is a lighter fill with rounded TOP corners
-   only (Chrome-style), in the normal text colour — no ring, no outline, no
-   accent border. It sits after the hover rule so the fill wins on hover. */
+/* The active tab is the card body colour with rounded TOP corners only, in
+   the normal text colour — no ring, no outline, no accent border. It sits
+   after the hover rule so the fill wins on hover. Its concave bottom flares
+   (the card body colour over the warm band) join it to the content below. */
 .fm-tab.is-active {
-  background: var(--selected-row);
+  background: var(--n-color);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
   color: var(--fg);
   font-weight: 600;
+}
+
+.fm-tab.is-active::before,
+.fm-tab.is-active::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  width: var(--space-2);
+  height: var(--space-2);
+  pointer-events: none;
+}
+
+.fm-tab.is-active::before {
+  left: calc(-1 * var(--space-2));
+  background: radial-gradient(circle farthest-side at 100% 100%, var(--n-color) 98%, transparent 100%);
+}
+
+.fm-tab.is-active::after {
+  right: calc(-1 * var(--space-2));
+  background: radial-gradient(circle farthest-side at 0 100%, var(--n-color) 98%, transparent 100%);
 }
 
 /* The strip scrolls (overflow-x: auto) and clips its descendants at its edge,
@@ -3650,15 +3689,6 @@ function onFolderMenu(key: string): void {
 /* Context bar (JUS-159): the home of the header-tools slot (the agent-node
    selector) after the card header went away. Plain row, no border of its own;
    the Root selector and the view toggle moved into the toolbar (JUS-160). */
-.fm-contextbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  margin-bottom: var(--space-3);
-}
-
 /* Merged navigation field (JUS-159/JUS-206): a Naive NInputGroup row, 32px
    high — a back icon button, the breadcrumb strip and an attached refresh
    button joined into one bordered row. The group collapses the buttons'
@@ -4558,6 +4588,23 @@ function onFolderMenu(key: string): void {
 }
 
 @media (max-width: 480px) {
+  /* JUS-206 round 4: the node switcher wraps under the tabs; the tab strip
+     keeps its own horizontal scroll so nothing overflows the phone. */
+  .fm-topbar {
+    flex-wrap: wrap;
+    margin: 0 calc(-1 * var(--space-3)) var(--space-4);
+    padding: var(--space-2) var(--space-3) 0;
+  }
+
+  .fm-topbar .fm-tabs {
+    flex: 1 1 100%;
+  }
+
+  .fm-topbar .fm-contextbar {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+
   .fm-navfield,
   .fm-search-group {
     flex-basis: 100%;

@@ -220,6 +220,7 @@ async function regionsOf(page: Page): Promise<{
     };
     return {
       regions: {
+        card: region(".files-browser"),
         topbar: region(".fm-topbar"),
         contextbar: region(".fm-contextbar"),
         tablist: region(".fm-tabs"),
@@ -263,11 +264,14 @@ for (const viewport of [
     // JUS-206 round 4/7: tabs and the node switcher share the header band row —
     // tabs left, switcher right — with no rule on either edge, at every width
     // (the phone keeps the compact switcher in the row instead of wrapping).
-    // The switcher is shorter than the 34px tabs; the row is end-aligned
-    // (sample geometry), so assert the bottoms coincide, not the tops.
+    // The switcher is shorter than the 34px tabs; the row is vertically
+    // centred, so assert the switcher's centre coincides with the tab middle
+    // (within 1px).
+    const tabMid = (regions.tablist.top + regions.tablist.bottom) / 2;
+    const nodeMid = (regions.contextbar.top + regions.contextbar.bottom) / 2;
     expect(
-      Math.abs(regions.contextbar.bottom - regions.tablist.bottom),
-      `switcher shares the tab row at ${viewport.width}px`,
+      Math.abs(nodeMid - tabMid),
+      `switcher centred on the tab row at ${viewport.width}px`,
     ).toBeLessThanOrEqual(1);
     expect(
       regions.contextbar.left - regions.tablist.right,
@@ -347,6 +351,22 @@ for (const viewport of [
     await expect(page.locator('.fm-table .fm-mark[data-kind="folder"]')).toHaveCount(2);
     await page.getByRole("button", { name: "Grid view", exact: true }).click();
     await expect(page.locator('.fm-grid .fm-mark[data-kind="folder"]')).toHaveCount(2);
+
+    // Round 10: the header band is flush with the card — it starts at the
+    // card's top edge (border box aside) and bleeds to both side edges, so no
+    // card padding rings the band.
+    expect(
+      regions.topbar.top - regions.card.top,
+      `band flush with card top at ${viewport.width}px`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      regions.card.left - regions.topbar.left,
+      `band bleeds to the card left edge at ${viewport.width}px`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      regions.topbar.right - regions.card.right,
+      `band bleeds to the card right edge at ${viewport.width}px`,
+    ).toBeLessThanOrEqual(1);
 
     // The browser tabs sit on the warm header band: the band paints the
     // surface-warm token while the tab row itself stays transparent.

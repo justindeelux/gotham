@@ -2482,18 +2482,17 @@ function onFolderMenu(key: string): void {
          agent-node switcher at the right end of the same row. -->
     <div class="fm-topbar">
     <!-- Tab bar (JUS-123/126): one tab per open directory. A middle-click or
-         the × closes a tab; the + opens a new one at the root top and sits
-         right after the last tab (the strip hugs its tabs and scrolls, so + is
-         always reachable). The tablist owns only role=tab buttons (the × is a
+         the × closes a tab; the + lives at the strip's end in the tab flow and
+         stays visible there while tabs scroll under it (sticky), so + is
+         always reachable. The tablist owns only role=tab buttons (the × is a
          span inside the tab) so it satisfies aria-required-children; keyboard
          users close with Delete. -->
     <div class="fm-tabs">
-      <div
-        ref="tabListEl"
-        class="fm-tabstrip"
-        role="tablist"
-        :aria-label="$t('files.tabs.list')"
-      >
+      <div ref="tabListEl" class="fm-tabstrip">
+        <!-- The tablist owns only the tabs (the + stays a sibling inside the
+             scroll strip so it can stick to the visible end); the strip
+             itself carries no role. -->
+        <div class="fm-tablist" role="tablist" :aria-label="$t('files.tabs.list')">
         <button
           v-for="tab in files.tabs"
           :key="tab.id"
@@ -2527,18 +2526,19 @@ function onFolderMenu(key: string): void {
             <X :size="12" :stroke-width="2" aria-hidden="true" />
           </span>
         </button>
+        </div>
+        <AppTooltip :label="$t('files.tabs.new')">
+          <button
+            type="button"
+            class="fm-tab-add"
+            :disabled="files.rootName === ''"
+            :aria-label="$t('files.tabs.new')"
+            @click="openNewTab()"
+          >
+            <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </AppTooltip>
       </div>
-      <AppTooltip :label="$t('files.tabs.new')">
-        <button
-          type="button"
-          class="fm-tab-add"
-          :disabled="files.rootName === ''"
-          :aria-label="$t('files.tabs.new')"
-          @click="openNewTab()"
-        >
-          <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-      </AppTooltip>
     </div>
       <div class="fm-contextbar">
         <slot name="header-tools" />
@@ -3439,7 +3439,9 @@ function onFolderMenu(key: string): void {
    sample so the active tab sits flush on the content. */
 .fm-topbar {
   display: flex;
-  align-items: flex-end;
+  /* Round 10: centred on the tab row's horizontal axis (the tabs define the
+     row height, so the shorter switcher centres on the 34px tab middle). */
+  align-items: center;
   gap: var(--space-3);
   flex: 0 0 auto;
   background: var(--surface-warm);
@@ -3490,6 +3492,16 @@ function onFolderMenu(key: string): void {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;
+}
+
+/* The tablist owns only the tabs (the + is a strip-level sibling in the tab
+   flow): it is display:contents so the tabs lay out directly in the strip —
+   the round-6/9 verified behaviour (240px basis kept while there is room,
+   shrinking to the icon-only floor, strip scrolling past that). A real flex
+   box here would either collapse the basis (hug) or push + to the far right
+   (fill). */
+.fm-tablist {
+  display: contents;
 }
 
 .fm-tab {
@@ -3582,12 +3594,12 @@ function onFolderMenu(key: string): void {
 
 .fm-tab.is-active::before {
   left: calc(-1 * var(--radius-md));
-  background: radial-gradient(circle at 0 0, transparent 70%, var(--n-color) 72%);
+  background: radial-gradient(circle at 0 0, var(--surface-warm) 70%, var(--n-color) 72%);
 }
 
 .fm-tab.is-active::after {
   right: calc(-1 * var(--radius-md));
-  background: radial-gradient(circle at 100% 0, transparent 70%, var(--n-color) 72%);
+  background: radial-gradient(circle at 100% 0, var(--surface-warm) 70%, var(--n-color) 72%);
 }
 
 /* Icon-only narrow tabs (sample .narrow, measured in updateNarrowTabs). The
@@ -3649,10 +3661,19 @@ function onFolderMenu(key: string): void {
   place-items: center;
   width: var(--fm-add-size);
   height: var(--fm-add-size);
-  /* Sample offset: bottom-centred in the tab height, gapped from the tabs. */
-  margin: 0 0 calc((var(--fm-tab-h) - var(--fm-add-size)) / 2) var(--space-2);
+  /* Round 10: in the tab flow right after the last tab (sample gap 6px —
+     no token fits, so the literal stands with this comment), bottom-centred
+     in the tab height. Sticky at the strip's visible end so tabs scroll under
+     it; the band-coloured fill keeps scrolled tabs from showing through
+     (invisible against the band itself). Above an open active tab (z-index 2).
+     */
+  margin: 0 0 calc((var(--fm-tab-h) - var(--fm-add-size)) / 2) 0;
+  margin-left: 6px;
+  position: sticky;
+  right: 0;
+  z-index: 3;
   border: 0;
-  background: none;
+  background: var(--surface-warm);
   border-radius: var(--radius-pill);
   color: var(--muted);
   cursor: pointer;
@@ -3675,6 +3696,12 @@ function onFolderMenu(key: string): void {
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* Round 10: the header band is flush with the card top — Naive gives the
+   first-child content 20px of top padding, which would push the band down. */
+.files-browser :deep(.n-card-content:first-child) {
+  padding-top: 0;
 }
 
 /* The single shared aria-describedby target for the roving row (JUS-140):

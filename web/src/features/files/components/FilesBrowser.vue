@@ -3443,7 +3443,9 @@ function onFolderMenu(key: string): void {
   gap: var(--space-3);
   flex: 0 0 auto;
   background: var(--surface-warm);
-  margin: 0 calc(-1 * var(--space-6)) var(--space-4);
+  /* Round 7: zero below the tabs — the band ends exactly at the tab bottom
+     so the active tab touches the card body and flows into the content. */
+  margin: 0 calc(-1 * var(--space-6)) 0;
   padding: var(--space-2) var(--space-2) 0;
   border-radius: var(--n-border-radius, var(--radius-md)) var(--n-border-radius, var(--radius-md)) 0 0;
 }
@@ -3504,6 +3506,7 @@ function onFolderMenu(key: string): void {
   border-radius: var(--radius-md);
   color: var(--muted);
   font-size: var(--text-sm);
+  text-align: left;
   cursor: pointer;
   isolation: isolate;
 }
@@ -3569,6 +3572,7 @@ function onFolderMenu(key: string): void {
 .fm-tab.is-active::after {
   content: "";
   position: absolute;
+  top: auto;
   bottom: 0;
   display: block;
   width: var(--radius-md);
@@ -4721,21 +4725,18 @@ function onFolderMenu(key: string): void {
 }
 
 @media (max-width: 480px) {
-  /* JUS-206 round 4: the node switcher wraps under the tabs; the tab strip
-     keeps its own horizontal scroll so nothing overflows the phone. */
+  /* JUS-206 round 7: single band row on the phone too — the compact
+     switcher (icon hidden, truncated select) shares the row while the strip
+     keeps its own horizontal scroll, so nothing overflows and no second band
+     row appears between the tabs and the body. */
   .fm-topbar {
-    flex-wrap: wrap;
-    margin: 0 calc(-1 * var(--space-3)) var(--space-4);
+    flex-wrap: nowrap;
+    margin: 0 calc(-1 * var(--space-3)) 0;
     padding: var(--space-2) var(--space-3) 0;
   }
 
-  .fm-topbar .fm-tabs {
-    flex: 1 1 100%;
-  }
-
-  .fm-topbar .fm-contextbar {
-    flex: 1 1 100%;
-    margin-left: 0;
+  .fm-topbar .fm-node__icon {
+    display: none;
   }
 
   .fm-navfield,

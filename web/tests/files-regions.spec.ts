@@ -260,26 +260,19 @@ for (const viewport of [
       }
     }
 
-    // JUS-206 round 4: tabs and the node switcher share the header band row —
-    // tabs left, switcher right — with no rule on either edge. On a phone the
-    // switcher wraps under the tabs instead.
-    if (viewport.width <= 480) {
-      expect(
-        regions.contextbar.top,
-        `switcher wraps under the tabs at ${viewport.width}px`,
-      ).toBeGreaterThanOrEqual(regions.tablist.bottom - 1);
-    } else {
-      // The switcher is shorter than the 34px tabs; the row is end-aligned
-      // (sample geometry), so assert the bottoms coincide, not the tops.
-      expect(
-        Math.abs(regions.contextbar.bottom - regions.tablist.bottom),
-        `switcher shares the tab row at ${viewport.width}px`,
-      ).toBeLessThanOrEqual(1);
-      expect(
-        regions.contextbar.left - regions.tablist.right,
-        `switcher sits right of the tabs at ${viewport.width}px`,
-      ).toBeCloseTo(12, 0);
-    }
+    // JUS-206 round 4/7: tabs and the node switcher share the header band row —
+    // tabs left, switcher right — with no rule on either edge, at every width
+    // (the phone keeps the compact switcher in the row instead of wrapping).
+    // The switcher is shorter than the 34px tabs; the row is end-aligned
+    // (sample geometry), so assert the bottoms coincide, not the tops.
+    expect(
+      Math.abs(regions.contextbar.bottom - regions.tablist.bottom),
+      `switcher shares the tab row at ${viewport.width}px`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      regions.contextbar.left - regions.tablist.right,
+      `switcher sits right of the tabs at ${viewport.width}px`,
+    ).toBeCloseTo(12, 0);
     expect(
       regions.contextbar.borderBottom,
       `contextbar draws no bottom rule at ${viewport.width}px`,
@@ -289,11 +282,11 @@ for (const viewport of [
       `tablist draws no top rule at ${viewport.width}px`,
     ).toBe(0);
 
-    // The tab row meets the path bar with a 16px rhythm (measured from the
-    // tab row itself on desktop; from the wrapped header band on a phone,
-    // where the switcher drops under the tabs).
+    // Round 7: the band ends exactly at the tab bottom (zero padding below
+    // the tabs), so the active tab touches the card body — the tab row meets
+    // the path bar with no gap at any width.
     const gaps = [
-      [viewport.width <= 480 ? "topbar" : "tablist", "pathbar", 16],
+      ["tablist", "pathbar", 0],
       ["pathbar", "toolbar", viewport.width <= 640 ? 16 : 32],
       ["toolbar", "panel", 16],
     ] as const;

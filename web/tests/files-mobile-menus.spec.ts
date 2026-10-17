@@ -388,7 +388,7 @@ test.describe("windowed list keeps its maths and reachability (JUS-145)", () => 
     });
   }
 
-  test("scrollHeight == entries x row height at 40px and 52px, across the breakpoint", async ({
+  test("scrollHeight == entries x row height at 42px and 52px, across the breakpoint", async ({
     page,
   }) => {
     await openFiles(page, {
@@ -410,12 +410,12 @@ test.describe("windowed list keeps its maths and reachability (JUS-145)", () => 
         .toBe(`${expectedRow}:true:true`);
     };
 
-    await checked(40);
+    await checked(42);
     // Cross the compact breakpoint: the token grows to 52px, then back.
     await page.setViewportSize({ width: 860, height: 900 });
     await checked(52);
     await page.setViewportSize({ width: 861, height: 900 });
-    await checked(40);
+    await checked(42);
   });
 
   test("the far end of a 5,000-entry list keeps its ⋮ reachable and hit-testable", async ({

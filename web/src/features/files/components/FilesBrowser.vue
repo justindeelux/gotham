@@ -29,6 +29,7 @@ import {
   NCheckbox,
   NDropdown,
   NInput,
+  NInputGroup,
   NSelect,
   useMessage,
 } from "naive-ui";
@@ -985,6 +986,62 @@ function rowDescribedBy(entry: FilesEntry): string | undefined {
   return entry.name === rovingTabName.value ? ROW_DETAILS_ID : undefined;
 }
 
+/**
+ * NARROW_TAB_PX is the sample's icon-only threshold: a tab narrower than this
+ * hides its title (and an inactive one its close), like Chrome.
+ */
+const NARROW_TAB_PX = 90;
+
+/**
+ * narrowTabs are the tab ids currently rendered below the icon-only width.
+ * The class MUST be binding-driven (a render would wipe a manual toggle), so
+ * the measured ids live in a reactive set swapped wholesale per pass.
+ */
+const narrowTabs = ref<ReadonlySet<string>>(new Set());
+
+/** updateNarrowTabs re-measures every tab against the icon-only threshold. */
+function updateNarrowTabs(): void {
+  const strip = tabListEl.value;
+  if (!strip) {
+    return;
+  }
+  const next = new Set<string>();
+  for (const node of strip.querySelectorAll<HTMLElement>(".fm-tab")) {
+    if (node.getBoundingClientRect().width < NARROW_TAB_PX) {
+      next.add(node.id.replace(/^fm-tab-/, ""));
+    }
+  }
+  const prev = narrowTabs.value;
+  if (prev.size !== next.size || [...next].some((id) => !prev.has(id))) {
+    narrowTabs.value = next;
+  }
+}
+
+let narrowObserver: ResizeObserver | null = null;
+onMounted(() => {
+  // jsdom (unit tests) has no ResizeObserver; the watcher below still covers
+  // tab-set changes there.
+  if (typeof ResizeObserver !== "undefined") {
+    narrowObserver = new ResizeObserver(() => updateNarrowTabs());
+    if (tabListEl.value) {
+      narrowObserver.observe(tabListEl.value);
+    }
+  }
+  void nextTick(() => updateNarrowTabs());
+});
+onBeforeUnmount(() => {
+  narrowObserver?.disconnect();
+  narrowObserver = null;
+});
+// A tab add/remove/rename changes every tab's share of the strip; re-measure
+// once the patch lands. Showing a title only ever grows its tab, so the pass
+// converges instead of flapping.
+watch(
+  () => files.tabs.map((tab) => `${tab.id}:${tabLabel(tab)}`),
+  () => void nextTick(() => updateNarrowTabs()),
+  { flush: "post" },
+);
+
 /** tabTitle is the tab tooltip / accessible name: the full root-relative path. */
 function tabTitle(tab: FilesTab): string {
   return tab.path === "" ? tab.rootName : `${tab.rootName}/${tab.path}`;
@@ -1010,6 +1067,22 @@ function neighbourTabId(id: string, delta: number): string {
   const count = files.tabs.length;
   const index = files.tabs.findIndex((tab) => tab.id === id);
   return files.tabs[(index + delta + count) % count]?.id ?? id;
+}
+
+/**
+ * closeFocusArmed moves DOM focus after a tab close drops it to <body>.
+ * A mouse click focuses the new tab natively (never :focus-visible), and
+ * keyboard arrows keep focus inside the tablist, so the watcher below only
+ * steps in for the close routes — the close removes the focused button and
+ * focus would otherwise strand on <body> (JUS-206 round 2 keeps the
+ * reference's ring-free tabs while the keyboard ring stays).
+ */
+let closeFocusArmed = false;
+
+/** closeTabFromButton closes one tab from its × or middle-click. */
+function closeTabFromButton(id: string): void {
+  closeFocusArmed = true;
+  void files.closeTab(id);
 }
 
 /** onTabKeydown drives the roving-tabindex tablist (arrows, Home/End, Delete). */
@@ -1038,7 +1111,7 @@ function onTabKeydown(event: KeyboardEvent, tab: FilesTab): void {
       // hidden for a single tab), so Delete is a no-op there too.
       if (files.tabs.length > 1) {
         event.preventDefault();
-        void files.closeTab(tab.id);
+        closeTabFromButton(tab.id);
       }
       break;
   }
@@ -1050,7 +1123,7 @@ function onTabAuxClick(event: MouseEvent, id: string): void {
     return;
   }
   event.preventDefault();
-  void files.closeTab(id);
+  closeTabFromButton(id);
 }
 
 /**
@@ -1595,12 +1668,30 @@ watch(
   { flush: "post" },
 );
 
-// Move focus to the active tab as soon as it changes (nextTick), never after
-// the tab's listing finishes loading — otherwise the roving tabindex lags
-// behind and the next arrow press navigates from the stale tab. Also covers a
-// mouse close: the × removes the focused button, so focus must follow the tab
-// that takes over.
-watch(() => files.activeTabId, () => void focusActiveTab());
+// Move focus to the active tab only when the switch needs it (JUS-206 round 2;
+// see the watcher body).
+watch(() => files.activeTabId, async () => {
+  await nextTick();
+  const active = tabListEl.value?.querySelector<HTMLElement>(
+    '[role="tab"][aria-selected="true"]',
+  );
+  if (!active || document.activeElement === active) {
+    // A mouse click focuses the tab natively (never :focus-visible, so no
+    // ring); a fresh page leaves focus alone too. Only a keyboard switch
+    // (focus still inside the tablist) or a close (focus dropped to <body>,
+    // armed by the close routes) moves DOM focus — JUS-206 round 2 keeps the
+    // reference's ring-free tabs while the keyboard ring stays (JUS-152).
+    return;
+  }
+  if (tabListEl.value?.contains(document.activeElement) === true) {
+    await focusActiveTab();
+    return;
+  }
+  if (closeFocusArmed) {
+    closeFocusArmed = false;
+    await focusActiveTab();
+  }
+});
 
 // Replay the active tab's scroll offset after a switch, and after a load
 // completes (a restore that landed while the rows were still unrendered would
@@ -2387,33 +2478,30 @@ function onFolderMenu(key: string): void {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <!-- Context bar (JUS-159): the NCard header (title chrome) is gone. The
-         agent-node slot stays reachable here; the Root selector and the view
-         toggle moved into the action toolbar below (JUS-160). This row is
-         intentionally plain (no card-header border). -->
-    <div class="fm-contextbar">
-      <slot name="header-tools" />
-    </div>
-
+    <!-- Header band (JUS-206 round 4): browser-style tabs on the left, the
+         agent-node switcher at the right end of the same row. -->
+    <div class="fm-topbar">
     <!-- Tab bar (JUS-123/126): one tab per open directory. A middle-click or
-         the × closes a tab; the + opens a new one at the root top and sits
-         right after the last tab (the strip hugs its tabs and scrolls, so + is
-         always reachable). The tablist owns only role=tab buttons (the × is a
+         the × closes a tab; the + lives at the strip's end in the tab flow and
+         stays visible there while tabs scroll under it (sticky), so + is
+         always reachable. The tablist owns only role=tab buttons (the × is a
          span inside the tab) so it satisfies aria-required-children; keyboard
          users close with Delete. -->
     <div class="fm-tabs">
-      <div
-        ref="tabListEl"
-        class="fm-tabstrip"
-        role="tablist"
-        :aria-label="$t('files.tabs.list')"
-      >
+      <div ref="tabListEl" class="fm-tabstrip">
+        <!-- The tablist owns only the tabs (the + stays a sibling inside the
+             scroll strip so it can stick to the visible end); the strip
+             itself carries no role. -->
+        <div class="fm-tablist" role="tablist" :aria-label="$t('files.tabs.list')">
         <button
           v-for="tab in files.tabs"
           :key="tab.id"
           type="button"
           class="fm-tab"
-          :class="{ 'is-active': tab.id === files.activeTabId }"
+          :class="{
+            'is-active': tab.id === files.activeTabId,
+            'is-narrow': narrowTabs.has(tab.id),
+          }"
           role="tab"
           :id="'fm-tab-' + tab.id"
           aria-controls="fm-tabpanel"
@@ -2433,35 +2521,44 @@ function onFolderMenu(key: string): void {
             class="fm-tab-close"
             aria-hidden="true"
             :title="$t('files.tabs.close', { name: tabLabel(tab) })"
-            @click.stop="void files.closeTab(tab.id)"
+            @click.stop="closeTabFromButton(tab.id)"
           >
             <X :size="12" :stroke-width="2" aria-hidden="true" />
           </span>
+          <span
+            v-if="tab.id === files.activeTabId"
+            class="fm-tab-corner"
+            aria-hidden="true"
+          />
         </button>
+        </div>
+        <AppTooltip :label="$t('files.tabs.new')">
+          <button
+            type="button"
+            class="fm-tab-add"
+            :disabled="files.rootName === ''"
+            :aria-label="$t('files.tabs.new')"
+            @click="openNewTab()"
+          >
+            <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </AppTooltip>
       </div>
-      <AppTooltip :label="$t('files.tabs.new')">
-        <button
-          type="button"
-          class="fm-tab-add"
-          :disabled="files.rootName === ''"
-          :aria-label="$t('files.tabs.new')"
-          @click="openNewTab()"
-        >
-          <Plus :size="14" :stroke-width="1.8" aria-hidden="true" />
-        </button>
-      </AppTooltip>
+    </div>
+      <div class="fm-contextbar">
+        <slot name="header-tools" />
+      </div>
     </div>
 
-    <!-- Navigation row (JUS-159): one bordered field merges back, breadcrumb
-         and an attached refresh button; long paths truncate from the left
-         (the crumb strip clips at its start edge). The right side of the row
-         keeps only the folder filter — reserved for the JUS-163 search field. -->
+    <!-- Navigation row (JUS-159/JUS-206): one Naive NInputGroup row merges
+         back, breadcrumb and an attached refresh button (32px); long paths
+         truncate from the left (the crumb strip clips at its start edge). The
+         right side of the row keeps the folder filter + JUS-163 search. -->
     <div class="fm-bar fm-pathbar">
-      <div class="fm-navfield">
+      <NInputGroup class="fm-navfield">
         <AppTooltip :label="$t('files.browser.parent')">
           <NButton
             size="small"
-            quaternary
             class="fm-navback"
             :disabled="files.path === ''"
             :aria-label="$t('files.browser.parent')"
@@ -2490,7 +2587,6 @@ function onFolderMenu(key: string): void {
         <AppTooltip :label="$t('files.browser.refresh')">
           <NButton
             size="small"
-            quaternary
             class="fm-navrefresh"
             :loading="files.loading"
             :aria-label="$t('files.browser.refresh')"
@@ -2501,7 +2597,7 @@ function onFolderMenu(key: string): void {
             </template>
           </NButton>
         </AppTooltip>
-      </div>
+      </NInputGroup>
 
       <div class="fm-search-group">
         <NInput
@@ -2551,7 +2647,6 @@ function onFolderMenu(key: string): void {
         <AppTooltip v-if="files.canWrite" :label="$t('files.actions.upload')">
           <NButton
             size="small"
-            quaternary
             :disabled="files.acting"
             :aria-label="$t('files.actions.upload')"
             @click="openUpload()"
@@ -2577,7 +2672,6 @@ function onFolderMenu(key: string): void {
           <AppTooltip :label="$t('files.actions.new')">
             <NButton
               size="small"
-              quaternary
               aria-haspopup="menu"
               :aria-expanded="newMenuOpen"
               :disabled="files.acting"
@@ -2614,7 +2708,6 @@ function onFolderMenu(key: string): void {
           <AppTooltip :label="$t('files.actions.fileOperations')">
             <NButton
               size="small"
-              quaternary
               aria-haspopup="menu"
               :aria-expanded="fileOpsOpen"
               :disabled="files.acting"
@@ -2652,7 +2745,6 @@ function onFolderMenu(key: string): void {
           <AppTooltip :label="sortLabel">
             <NButton
               size="small"
-              quaternary
               class="fm-sort-toggle"
               aria-haspopup="menu"
               :aria-expanded="sortMenuOpen"
@@ -2674,7 +2766,6 @@ function onFolderMenu(key: string): void {
         <AppTooltip :label="$t('files.browser.recycleBin')">
           <NButton
             size="small"
-            quaternary
             :disabled="files.rootName === ''"
             :aria-label="$t('files.browser.recycleBin')"
             @click="recycleOpen = true"
@@ -3308,9 +3399,8 @@ function onFolderMenu(key: string): void {
 .files-browser {
   position: relative;
   /* JUS-134: the single row-height token every list row reads. JUS-137 can
-   * size its virtual rows from it, so the compact desktop density stays a
-   * one-value change. */
-  --fm-row-height: var(--space-12);
+   * size its virtual rows from it. JUS-206: 42px, the reference row height. */
+  --fm-row-height: 42px;
   /* The panel is a flex column that fills whatever height its parent gives it
    * (JUS-118): toolbar/bar/footer stay fixed while the entry list is the
    * only scrolling region (`flex: 1` on .table-wrap / .fm-grid / .fm-state). */
@@ -3340,53 +3430,141 @@ function onFolderMenu(key: string): void {
   width: 220px;
 }
 
-/* Tab bar (JUS-123/150): one tab per open directory. The tabs and the + button
-   ride on the card surface (no surrounding box — JUS-150), so the only filled
-   element is the active tab's own indicator; the strip scrolls horizontally at
-   narrow widths instead of wrapping the layout. */
-.fm-tabs {
+/* Tab bar (JUS-123/150, JUS-206 round 2-5): the sample's Chrome-style tabs,
+   mapped to tokens. Inactive tabs are transparent; hovering paints an inset
+   rounded fill behind the content; 1px dividers separate neighbours (hidden
+   around the active/hovered tab via :has). The active tab uses the card body
+   colour with rounded TOP corners only and concave flares joining it to the
+   content below — no ring, no outline, no accent border. The strip scrolls
+   horizontally at narrow widths instead of wrapping the layout. */
+/* Header band (JUS-206 round 4): the dark strip from the card top to the tab
+   row. It bleeds to the card's side edges (the card content has no top
+   padding, so no top compensation is needed) and keeps the 16px rhythm below
+   the tabs; the top corners follow the card radius. End-aligned like the
+   sample so the active tab sits flush on the content. */
+.fm-topbar {
+  display: flex;
+  /* Round 10: centred on the tab row's horizontal axis (the tabs define the
+     row height, so the shorter switcher centres on the 34px tab middle). */
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+  background: var(--surface-warm);
+  /* Round 7: zero below the tabs — the band ends exactly at the tab bottom
+     so the active tab touches the card body and flows into the content. */
+  margin: 0 calc(-1 * var(--space-6)) 0;
+  padding: var(--space-2) var(--space-2) 0;
+  border-radius: var(--n-border-radius, var(--radius-md)) var(--n-border-radius, var(--radius-md)) 0 0;
+}
+
+/* Context cluster (JUS-159/JUS-206 round 4): the agent-node switcher pinned to
+   the right end of the tab row. Plain, no border of its own. */
+.fm-contextbar {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
-  /* Hug the tabs + the + button so the row rings exactly its content. */
-  width: fit-content;
-  max-width: 100%;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.fm-tabs {
+  /* Sample geometry, defined once: the 34px tab height, 240px flex basis,
+     56px shrink floor and 28px + button have no token fit. Everything else
+     below reads space/radius tokens. */
+  --fm-tab-h: 34px;
+  --fm-tab-w: 240px;
+  --fm-tab-min: 56px;
+  --fm-add-size: 28px;
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   margin-top: 0;
-  margin-bottom: var(--space-4);
+  margin-bottom: 0;
 }
 
 .fm-tabstrip {
   display: flex;
-  align-items: stretch;
-  gap: var(--space-2);
-  /* Hug the tabs so the + button sits right after the last one (JUS-126);
-     shrinking below the content keeps the strip the only scroll region. */
-  flex: 0 1 auto;
+  align-items: flex-end;
+  gap: 0;
+  /* The strip fills the row like the sample's .tabs (flex 1 1 auto): tabs
+     keep their 240px basis while there is room and shrink (scrolling the
+     strip) when there is not. A hugging strip would collapse to the tabs'
+     content minimum instead of their basis (round 6 probe). */
+  flex: 1 1 auto;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;
 }
 
+/* The tablist owns only the tabs (the + is a strip-level sibling in the tab
+   flow): it is display:contents so the tabs lay out directly in the strip —
+   the round-6/9 verified behaviour (240px basis kept while there is room,
+   shrinking to the icon-only floor, strip scrolling past that). A real flex
+   box here would either collapse the basis (hug) or push + to the far right
+   (fill). */
+.fm-tablist {
+  display: contents;
+}
+
 .fm-tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  flex: 0 0 auto;
-  max-width: 220px;
+  flex: 0 1 var(--fm-tab-w);
+  min-width: var(--fm-tab-min);
+  height: var(--fm-tab-h);
   border: 0;
   background: none;
-  height: var(--space-8);
-  padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-pill);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border-radius: var(--radius-md);
   color: var(--muted);
   font-size: var(--text-sm);
+  text-align: left;
   cursor: pointer;
+  isolation: isolate;
+}
+
+/* Inactive hover (sample ::before): an inset rounded fill behind the content,
+   gapped on all four sides. */
+.fm-tab:not(.is-active)::before {
+  content: "";
+  position: absolute;
+  inset: var(--space-1);
+  border-radius: var(--radius-md);
+  background: transparent;
+  z-index: -1;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.fm-tab:not(.is-active):hover::before {
+  background: var(--accent-softer);
 }
 
 .fm-tab:hover {
-  background: var(--hover-row);
   color: var(--fg-2);
+}
+
+/* Divider between neighbours: a 1px x 16px rule centred in the tab height.
+   Hidden at the strip end and around the hovered/active tab (sample :has). */
+.fm-tab::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: calc((var(--fm-tab-h) - var(--space-4)) / 2);
+  width: 1px;
+  height: var(--space-4);
+  background: var(--border);
+}
+
+.fm-tab:last-child::after,
+.fm-tab:hover::after,
+.fm-tab:has(+ .fm-tab:hover)::after,
+.fm-tab:has(+ .fm-tab.is-active)::after {
+  display: none;
 }
 
 .fm-tab-icon {
@@ -3394,31 +3572,89 @@ function onFolderMenu(key: string): void {
   color: var(--warn-ink);
 }
 
+/* The active tab is the card body colour with rounded TOP corners only, in
+   the normal text colour — no ring, no outline, no accent border. Its concave
+   bottom flares (the card body colour over the warm band, sample geometry)
+   join it to the content below. Like the sample, the left flare is ::before
+   and the right flare is a real element (.fm-tab-corner): ::after is the
+   divider, which the :has()/:hover rules above hide next to a hovered tab and
+   would take the flare with it. */
 .fm-tab.is-active {
-  background: var(--selected-row);
-  color: var(--fg-2);
+  background: var(--n-color);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  color: var(--fg);
   font-weight: 600;
+  z-index: 2;
+}
+
+.fm-tab.is-active::after {
+  display: none;
+}
+
+.fm-tab.is-active::before,
+.fm-tab-corner {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  width: var(--radius-md);
+  height: var(--radius-md);
+  pointer-events: none;
+}
+
+.fm-tab.is-active::before {
+  left: calc(-1 * var(--radius-md));
+  background: radial-gradient(circle at 0 0, transparent var(--radius-md), var(--n-color) calc(var(--radius-md) + 0.5px));
+}
+
+.fm-tab-corner {
+  right: calc(-1 * var(--radius-md));
+  background: radial-gradient(circle at 100% 0, transparent var(--radius-md), var(--n-color) calc(var(--radius-md) + 0.5px));
+}
+
+/* Icon-only narrow tabs (sample .narrow, measured in updateNarrowTabs). The
+   title stays in the DOM (clipped and transparent) so the tab keeps its
+   accessible name and never reads as an empty icon-only button. */
+.fm-tab.is-narrow {
+  justify-content: center;
+  gap: 0;
+  padding: 0 var(--space-2);
+}
+
+.fm-tab.is-narrow .fm-tab-name {
+  max-width: 0;
+  opacity: 0;
+}
+
+.fm-tab.is-narrow:not(.is-active) .fm-tab-close {
+  display: none;
 }
 
 /* The strip scrolls (overflow-x: auto) and clips its descendants at its edge,
-   so the shared outward :focus-visible ring would be cut off entirely on the
-   default single tab. Draw the same ring just inside the tab instead (JUS-152);
-   the ring keeps the shared colour and width, only the offset flips inward. */
+   and the shared focus outline would read as a loud box here — keyboard focus
+   (only; mouse clicks and fresh loads never move DOM focus, see the watcher)
+   draws a thin ring just inside the tab instead (JUS-152). */
 .fm-tab:focus-visible {
-  outline-offset: -2px;
+  outline: 1px solid var(--accent-ink);
+  outline-offset: -1px;
 }
 
 .fm-tab-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  /* Sample fade mask instead of an ellipsis. */
+  -webkit-mask-image: linear-gradient(90deg, #000 80%, transparent);
+  mask-image: linear-gradient(90deg, #000 80%, transparent);
 }
 
 .fm-tab-close {
   display: grid;
   place-items: center;
+  flex: 0 0 auto;
   width: var(--space-5);
   height: var(--space-5);
+  margin-right: var(--space-1);
   border-radius: var(--radius-pill);
   color: var(--muted);
 }
@@ -3432,11 +3668,22 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: var(--space-8);
-  height: var(--space-8);
+  width: var(--fm-add-size);
+  height: var(--fm-add-size);
+  /* Round 10: in the tab flow right after the last tab (sample gap 6px —
+     no token fits, so the literal stands with this comment), bottom-centred
+     in the tab height. Sticky at the strip's visible end so tabs scroll under
+     it; the band-coloured fill keeps scrolled tabs from showing through
+     (invisible against the band itself). Above an open active tab (z-index 2).
+     */
+  margin: 0 0 calc((var(--fm-tab-h) - var(--fm-add-size)) / 2) 0;
+  margin-left: 6px;
+  position: sticky;
+  right: 0;
+  z-index: 3;
   border: 0;
-  background: none;
-  border-radius: var(--radius-sm);
+  background: var(--surface-warm);
+  border-radius: var(--radius-pill);
   color: var(--muted);
   cursor: pointer;
 }
@@ -3458,6 +3705,12 @@ function onFolderMenu(key: string): void {
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+}
+
+/* Round 10: the header band is flush with the card top — Naive gives the
+   first-child content 20px of top padding, which would push the band down. */
+.files-browser :deep(.n-card-content:first-child) {
+  padding-top: 0;
 }
 
 /* The single shared aria-describedby target for the roving row (JUS-140):
@@ -3585,41 +3838,55 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-3);
 }
 
-/* The path field owns its border; space separates the chrome bands. */
+/* The path field owns its border; space separates the chrome bands.
+   Round 8: the breathing room above the row is n-colored PADDING inside the
+   body (margins cannot paint, so a margin gap could read as a dark seam) —
+   the tab bottom touches the body top and flows into it, then 16px of the
+   same body colour before the row, like the sample's toolbar band. */
 .fm-bar.fm-pathbar {
   margin-bottom: var(--space-8);
+  padding-top: var(--space-4);
+  background: var(--n-color);
 }
 
 .fm-toolbar :deep(.n-button) {
   height: var(--space-8);
-  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
+  border-radius: 6px;
+}
+
+/* JUS-206: default outlined toolbar buttons — 32px high, 12px labels, the
+   reference padding. The 6px radius is the reference value. */
+.fm-toolbar :deep(.n-button .n-button__content) {
+  font-size: var(--text-xs);
+}
+
+.fm-toolbar :deep(.n-button:not(.n-button--icon)) {
+  padding: 0 var(--space-3);
 }
 
 /* Context bar (JUS-159): the home of the header-tools slot (the agent-node
    selector) after the card header went away. Plain row, no border of its own;
    the Root selector and the view toggle moved into the toolbar (JUS-160). */
-.fm-contextbar {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  margin-bottom: var(--space-3);
-}
-
-/* Merged navigation field (JUS-159): back button, breadcrumb and the attached
-   refresh button share one border. The crumb strip takes the free width and
-   clips overflowing crumbs at its start edge, so long paths truncate from
-   the left while back and refresh stay pinned. */
+/* Merged navigation field (JUS-159/JUS-206): a Naive NInputGroup row, 32px
+   high — a back icon button, the breadcrumb strip and an attached refresh
+   button joined into one bordered row. The group collapses the buttons'
+   adjoining borders; the borderless crumb strip draws only its top/bottom so
+   the row reads as one field. Long paths truncate from the left (the crumb
+   strip clips at its start edge) while back and refresh stay pinned. */
 .fm-navfield {
-  display: flex;
-  align-items: center;
-  flex: 1 1 auto;
+  /* JUS-206 round 1: naive's .n-input-group is width:100% — reset to auto so
+     the row shares the desktop path bar with the search block (~half each);
+     the phone rules below still take their own full-width rows. */
+  width: auto;
+  flex: 1 1 50%;
   min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-2);
-  background: var(--surface);
+  height: var(--space-8);
+  min-height: var(--space-8);
+  padding: 0;
+  border: 0;
+  background: none;
+  gap: 0;
 }
 
 .fm-navback,
@@ -3630,17 +3897,24 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-navrefresh {
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .fm-navcrumbs {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  align-self: stretch;
   min-width: 0;
   flex-wrap: nowrap;
-  justify-content: flex-end;
+  /* JUS-206 round 1: crumbs start right after the back button (reference:
+     [back] | Root dir > www > ... [refresh]), truncating from the left. */
+  justify-content: flex-start;
   overflow: hidden;
-  border: 0;
-  /* Vertical rhythm comes from the `.fm-path` base; only widen the sides. */
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  /* Vertical rhythm comes from the `.fm-path` base; only widen the sides. The
+     strip stretches the row's full 32px (its own borders complete it). */
+  padding-block: 0;
   padding-inline: var(--space-2);
 }
 
@@ -3834,7 +4108,8 @@ function onFolderMenu(key: string): void {
   grid-template-columns: 34px minmax(240px, 1.6fr) 110px 96px 148px 168px;
   gap: var(--space-3);
   align-items: center;
-  padding: 4px var(--space-3);
+  /* JUS-206: the reference cell padding. */
+  padding: 6px var(--space-2);
   /* JUS-134: one compact, tokenised row height instead of the old 52px. */
   min-height: var(--fm-row-height);
   border-bottom: 1px solid var(--border);
@@ -3876,17 +4151,19 @@ function onFolderMenu(key: string): void {
 .fm-head {
   /* JUS-132: the column header stays pinned to the top of the entry list's
      scroll region so the active sort column is visible in long folders. The
-     solid surface matches the card, so rows scroll under it cleanly. */
+     header band matches the reference (a tone below the card) so rows scroll
+     under it cleanly. */
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--surface);
+  background: var(--surface-warm);
   color: var(--muted);
   border-bottom: 1px solid var(--border-soft);
   /* JUS-146: the row height is max(column headers, bulk bar). Both variants
      are always mounted and overlap the same cells, so the height never depends
      on the selection — no reserved band, no row shift (JUS-130/134). */
-  min-height: var(--fm-row-height);
+  /* JUS-206: the reference header is 34px. */
+  min-height: 34px;
   padding-block: 0;
   align-items: center;
 }
@@ -3902,10 +4179,13 @@ function onFolderMenu(key: string): void {
   grid-template-columns: minmax(240px, 1.6fr) 110px 96px 148px 168px;
   gap: var(--space-3);
   align-items: center;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  /* JUS-206: the reference headers are normal-case 12px/500 body text with
+     sort arrows — not tiny uppercase mono. */
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .fm-head-cols.is-hidden {
@@ -3942,7 +4222,7 @@ function onFolderMenu(key: string): void {
 
 .fm-head-bulk.is-visible {
   visibility: visible;
-  background: var(--surface);
+  background: var(--surface-warm);
 }
 
 /* JUS-147: the bulk bar's sort control keeps the desktop list sortable while the
@@ -3971,9 +4251,9 @@ function onFolderMenu(key: string): void {
 }
 
 /* Hovering the pinned header must not reveal the rows scrolling under it:
-   keep the solid card surface instead of the row hover tint. */
+   keep the solid header band instead of the row hover tint. */
 .fm-head:hover {
-  background: var(--surface);
+  background: var(--surface-warm);
 }
 
 .fm-sort {
@@ -4045,7 +4325,8 @@ function onFolderMenu(key: string): void {
 .fm-label b {
   display: block;
   min-width: 0;
-  font-weight: 500;
+  /* JUS-206: the reference rows are 12px/400 body text. */
+  font-weight: 400;
   color: var(--fg);
   font-size: var(--text-xs);
   overflow: hidden;
@@ -4093,7 +4374,8 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-cell {
-  font-family: var(--font-mono);
+  /* JUS-206: the reference cells are normal 12px body text, not mono. */
+  font-family: var(--font-body);
   font-size: var(--text-xs);
   color: var(--muted);
 }
@@ -4123,12 +4405,19 @@ function onFolderMenu(key: string): void {
    composited on top (the tokens are translucent), so the columns scrolling
    under the pinned cell never show through; the hairline marks the pinned
    edge. */
-.fm-row > .fm-actions,
-.fm-head .fm-actions-cell {
+.fm-row > .fm-actions {
   position: sticky;
   right: 0;
   z-index: 1;
   background-color: var(--surface);
+  box-shadow: -1px 0 0 var(--border);
+}
+
+.fm-head .fm-actions-cell {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background-color: var(--surface-warm);
   box-shadow: -1px 0 0 var(--border);
 }
 
@@ -4352,6 +4641,22 @@ function onFolderMenu(key: string): void {
   pointer-events: none;
 }
 
+/* ── JUS-206 round 3: desktop one-row path bar ───────────────────────────
+   At >=1024px the path group (~half the row) and the search block share ONE
+   row: the bar never wraps, the breadcrumb clips from the left and the filter
+   input shrinks instead (its 120px floor plus the compact search controls fit
+   every desktop width). Below 1024px the bar may wrap; the phone rules below
+   take over at <=640px. */
+@media (min-width: 1024px) {
+  .fm-bar.fm-pathbar {
+    flex-wrap: nowrap;
+  }
+
+  .fm-search {
+    min-width: 120px;
+  }
+}
+
 /* ── JUS-135: phone layout ────────────────────────────────────────────────
    At 390px the toolbar used to wrap to four rows and the selection cluster
    squeezed the list to ~1.5 rows. The rules below (deliberately last, so they
@@ -4462,6 +4767,33 @@ function onFolderMenu(key: string): void {
 }
 
 @media (max-width: 480px) {
+  /* JUS-206 round 7: single band row on the phone too — the compact
+     switcher (icon hidden, truncated select) shares the row while the strip
+     keeps its own horizontal scroll, so nothing overflows and no second band
+     row appears between the tabs and the body. */
+  .fm-topbar {
+    flex-wrap: nowrap;
+    margin: 0 calc(-1 * var(--space-3)) 0;
+    padding: var(--space-2) var(--space-3) 0;
+  }
+
+  .fm-topbar .fm-node__icon {
+    display: none;
+  }
+
+  /* JUS-206 round 9: the horizontal strip must never reserve scrollbar layout
+     space on the phone (a classic scrollbar gutter sits the tabs above the
+     band bottom and clips the feet). The strip stays scrollable by touch,
+     wheel and keyboard; the + button lives outside it. Desktop keeps its
+     thin scrollbar and is untouched. */
+  .fm-tabstrip {
+    scrollbar-width: none;
+  }
+
+  .fm-tabstrip::-webkit-scrollbar {
+    display: none;
+  }
+
   .fm-navfield,
   .fm-search-group {
     flex-basis: 100%;

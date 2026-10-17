@@ -181,7 +181,7 @@ test("right-click on a file opens the custom menu, not the native one", async ({
   // Outside click closes it too.
   await rowFor(page, "app.yaml").click({ button: "right" });
   await expect(menu).toBeVisible();
-  await page.locator(".fm-contextbar").click();
+  await page.locator(".fm-topbar").click();
   await expect(menu).toBeHidden();
 });
 

@@ -290,32 +290,36 @@ test("the top breadcrumb is gone and the header node selector switches nodes", a
   // JUS-119: the page-top breadcrumb (Servers / node / Files) is removed.
   await expect(page.locator(".breadcrumb")).toHaveCount(0);
 
-  // JUS-154: the field captions ("Agent node" in the context bar, "Root" in
-  // the toolbar since JUS-160) are 12px (--text-xs). They used to keep
-  // Naive's 18px card-title size because the `.small` class had no rule in
-  // either component's scoped styles.
-  const headerCaptions = page.locator(".fm-contextbar .fm-field-label");
-  await expect(headerCaptions).toHaveCount(1);
+  // JUS-154/JUS-206 round 4: the visible "Agent node" caption is gone (the
+  // group keeps its accessible name); only the "Root" caption in the toolbar
+  // remains, at 12px (--text-xs).
+  await expect(page.locator(".fm-contextbar .fm-field-label")).toHaveCount(0);
   const toolbarCaptions = page.locator(".fm-toolbar .fm-field-label");
   await expect(toolbarCaptions).toHaveCount(1);
   await expect(toolbarCaptions).toHaveText("Root");
-  const captionSizes = await headerCaptions
-    .evaluateAll((elements) => elements.map((element) => getComputedStyle(element).fontSize));
   const toolbarSizes = await toolbarCaptions.evaluateAll((elements) =>
     elements.map((element) => getComputedStyle(element).fontSize),
   );
-  expect([...captionSizes, ...toolbarSizes]).toEqual(["12px", "12px"]);
+  expect(toolbarSizes).toEqual(["12px"]);
 
   // JUS-134/JUS-160: the agent-node selector decides the listing, so it lives
   // in the context bar, while the Root selector moved to the action toolbar
-  // below — not a bar at the page bottom.
+  // below — not a bar at the page bottom. Round 4: the switcher shares the tab
+  // row (tabs left, switcher right) with its accessible name and no caption.
   const node = page.locator(".fm-node__select");
   await expect(node).toBeVisible();
   await expect(node).toContainText("prod-01");
+  await expect(page.locator(".fm-node")).toHaveAttribute(
+    "aria-label",
+    "Switch agent node",
+  );
+  const tabsBox = (await page.locator(".fm-tabs").boundingBox())!;
   const nodeBox = (await node.boundingBox())!;
   const rootBox = (await page.locator(".fm-root-select").boundingBox())!;
   const toolbarBox = (await page.locator(".fm-toolbar").boundingBox())!;
   // Playwright boxes carry x/y/width/height (no top/bottom): derive edges.
+  expect(Math.abs(nodeBox.y - tabsBox.y)).toBeLessThanOrEqual(8);
+  expect(nodeBox.x).toBeGreaterThanOrEqual(tabsBox.x + tabsBox.width);
   expect(nodeBox.y + nodeBox.height).toBeLessThanOrEqual(toolbarBox.y + 1);
   expect(rootBox.y).toBeGreaterThanOrEqual(toolbarBox.y);
 
@@ -1129,7 +1133,8 @@ test("the list header stays pinned while scrolling a long folder", async ({ page
 
   // Hovering the pinned header keeps it opaque, so rows cannot bleed through.
   await head.hover();
-  await expect(head).toHaveCSS("background-color", "rgb(43, 45, 49)");
+  // JUS-206: the header band uses --surface-warm (#1e1f22), the reference tone.
+  await expect(head).toHaveCSS("background-color", "rgb(30, 31, 34)");
 });
 
 test("the folder filter resets on navigation and the footer counts the filtered rows", async ({
@@ -1726,8 +1731,9 @@ test("the empty state is centered in the browser panel", async ({ page }) => {
 
 // JUS-153: the breadcrumb, the folder filter and Refresh moved out of the
 // toolbar into their own bar directly above it, so the toolbar carries actions
-// only. Both bars stay one row with no blank band or unintended wrap across the
-// 1366-1500px band the issue calls out.
+// only. At >=1024px both bars stay one row with no blank band or unintended
+// wrap (the path group takes ~half the row, the search block the right side);
+// below that the path bar may wrap, with the phone rows taking over at <=640px.
 test("the path bar sits above the toolbar with no blank band at 1366-1500px", async ({
   page,
 }) => {
@@ -1753,7 +1759,7 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
   ).toHaveCount(1);
   await expect(toolbar.locator(".fm-root-select")).toHaveCount(1);
 
-  for (const width of [1366, 1440, 1500]) {
+  for (const width of [1024, 1366, 1440, 1500]) {
     await page.setViewportSize({ width, height: 900 });
     await settleLayout(page);
     const m = await page.evaluate(() => {
@@ -1780,8 +1786,8 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
       m.toolbarToHeader,
       `16px band gap plus table border at ${width}px`,
     ).toBe(17);
-    expect(m.pathbarHeight, `path field includes 8px padding at ${width}px`)
-      .toBeGreaterThanOrEqual(50);
+    expect(m.pathbarHeight, `path bar is the 32px input-group row at ${width}px`)
+      .toBeGreaterThanOrEqual(30);
     expect(m.pathbarHeight, `path bar stays one row at ${width}px`).toBeLessThanOrEqual(52);
     expect(m.toolbarHeight, `toolbar is one row at ${width}px`).toBeLessThanOrEqual(44);
   }

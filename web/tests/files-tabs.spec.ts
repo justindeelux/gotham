@@ -249,10 +249,12 @@ test("the tablist rides on the card surface with the active tab highlighted (JUS
   await openFiles(page);
   await openExtraTab(page);
 
-  // The tabs and the + button share one container that carries no fill, border,
-  // radius or padding of its own — the region sits on the card surface (JUS-150).
+  // The tabs and the + button share the strip (the + is the strip's last
+  // child so it follows the tabs and sticks at the visible end on overflow),
+  // which carries no fill, border, radius or padding of its own — the region
+  // sits on the card surface (JUS-150).
   await expect(page.locator(".fm-tabs > .fm-tabstrip")).toHaveCount(1);
-  await expect(page.locator(".fm-tabs > .fm-tab-add")).toHaveCount(1);
+  await expect(page.locator(".fm-tabstrip > .fm-tab-add")).toHaveCount(1);
   const group = await page.locator(".fm-tabs").evaluate((el) => {
     const style = getComputedStyle(el as HTMLElement);
     return {
@@ -400,10 +402,11 @@ test("the tablist exposes tabs with a panel and moves focus on close", async ({
   await openFiles(page);
   await openExtraTab(page);
 
-  // Every owned child of the tablist is a tab (no stray close buttons), and the
-  // active tab controls the single panel that labels itself by that tab.
+  // Every owned child of the tablist is a tab (no stray close buttons; the +
+  // is a sibling inside the scroll strip, not a tab), and the active tab
+  // controls the single panel that labels itself by that tab.
   const childRoles = await page.evaluate(() =>
-    [...document.querySelectorAll(".fm-tabstrip > *")].map((element) =>
+    [...document.querySelectorAll(".fm-tablist > *")].map((element) =>
       element.getAttribute("role"),
     ),
   );
@@ -462,11 +465,27 @@ test("tab titles carry the full path and the strip scrolls at narrow widths", as
   expect(strip!.pageOverflow).toBeLessThanOrEqual(1);
 
   // JUS-126: + follows the last tab and stays on-screen when the strip
-  // overflows, instead of being pushed out of view.
+  // overflows: pinned to the visible right edge while the tabs scroll
+  // underneath it, instead of being pushed out of view.
   const addBox = await page.locator(".fm-tab-add").boundingBox();
   const stripBox = await page.locator(".fm-tabstrip").boundingBox();
   expect(addBox).not.toBeNull();
   expect(stripBox).not.toBeNull();
-  expect(addBox!.x).toBeGreaterThanOrEqual(stripBox!.x + stripBox!.width - 1);
+  expect(
+    Math.abs(addBox!.x + addBox!.width - (stripBox!.x + stripBox!.width)),
+    "+ stuck to the strip's visible right edge",
+  ).toBeLessThanOrEqual(1);
   expect(addBox!.x + addBox!.width).toBeLessThanOrEqual(420 + 1);
+  // Scrolling the strip leaves + pinned at the visible edge.
+  await page.locator(".fm-tabstrip").evaluate((element) => {
+    element.scrollLeft += 120;
+  });
+  const addScrolled = await page.locator(".fm-tab-add").boundingBox();
+  expect(addScrolled).not.toBeNull();
+  expect(
+    Math.abs(
+      addScrolled!.x + addScrolled!.width - (stripBox!.x + stripBox!.width),
+    ),
+    "+ stays pinned while the strip scrolls",
+  ).toBeLessThanOrEqual(1);
 });

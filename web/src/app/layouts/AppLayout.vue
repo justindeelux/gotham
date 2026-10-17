@@ -40,6 +40,8 @@ onUnmounted(() => serversStore.stopPolling());
 // browser, JUS-118): the page spans the viewport and never scrolls itself.
 const route = useRoute();
 const fillViewport = computed(() => route.meta.fillViewport === true);
+// A wide page (the file manager, JUS-206) skips the centred max-width column.
+const widePage = computed(() => route.meta.wide === true);
 </script>
 
 <template>
@@ -55,7 +57,7 @@ const fillViewport = computed(() => route.meta.fillViewport === true);
       <AppTopbar />
 
       <main class="view">
-        <div class="page" :class="{ 'page--fill': fillViewport }">
+        <div class="page" :class="{ 'page--fill': fillViewport, 'page--wide': widePage }">
           <RouterView />
         </div>
       </main>
@@ -118,6 +120,11 @@ const fillViewport = computed(() => route.meta.fillViewport === true);
 
 .page.page--fill > * {
   min-height: 0;
+}
+
+/* A wide page skips the centred max-width column and uses the full width. */
+.page.page--wide {
+  max-width: none;
 }
 
 .backdrop {

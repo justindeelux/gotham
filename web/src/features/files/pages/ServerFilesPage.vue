@@ -103,13 +103,13 @@ function switchNode(next: string | number | null): void {
 <template>
   <div class="server-files">
     <FilesBrowser class="server-files__browser" :server-id="serverId">
-      <!-- JUS-134: the agent-node selector decides the whole listing, so it
-           sits next to the Root selector in the browser header (passed through
-           the header-tools slot) instead of a bar at the page bottom. -->
+      <!-- JUS-134/JUS-206 round 4: the agent-node selector decides the whole
+           listing, so it rides at the right end of the tab row (passed through
+           the header-tools slot). No visible label — the group keeps the
+           accessible name through aria-label. -->
       <template #header-tools>
         <span class="fm-node" role="group" :aria-label="t('files.browser.switchNode')">
           <ServerIcon class="fm-node__icon" :size="15" :stroke-width="1.8" aria-hidden="true" />
-          <span class="small muted fm-field-label">{{ t("files.browser.nodeLabel") }}</span>
           <NSelect
             class="fm-node__select"
             size="small"
@@ -142,21 +142,14 @@ function switchNode(next: string | number | null): void {
   min-height: 0;
 }
 
-/* Agent-node switcher (JUS-119/134): names the node on screen and lets the user
-   jump to another node's files. It rides in the browser context bar (JUS-159;
-   previously the card header) next to the Root selector. */
+/* Agent-node switcher (JUS-119/134, JUS-206 round 4): names the node on
+   screen and lets the user jump to another node's files. It rides at the
+   right end of the tab row (JUS-159 context bar). */
 .fm-node {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-}
-
-/* JUS-154: the "Agent node" caption rides in the browser card header, which
- * sets the Naive card-title size (18px); with no `.small` rule of its own the
- * caption inherited it. This scoped rule restores the mockup's 12px caption. */
-.small {
-  font-size: var(--text-xs);
 }
 
 .fm-node__icon {
@@ -179,10 +172,5 @@ function switchNode(next: string | number | null): void {
     flex: 0 1 120px;
   }
 
-  /* JUS-135: the "Agent node" caption is redundant with the control's
-     aria-label, so the header keeps the node + root selectors on one row. */
-  .fm-field-label {
-    display: none;
-  }
 }
 </style>

@@ -68,7 +68,13 @@ const routes: RouteRecordRaw[] = [
         path: "files",
         name: "files",
         component: () => import("@/features/files/pages/FilesPage.vue"),
-        meta: { titleKey: "titles.files", requiresAuth: true, requiresPlatformAdmin: true },
+        meta: {
+          titleKey: "titles.files",
+          requiresAuth: true,
+          requiresPlatformAdmin: true,
+          // The file manager uses the full viewport width (JUS-206).
+          wide: true,
+        },
       },
       {
         path: "servers/:id/files",
@@ -81,6 +87,8 @@ const routes: RouteRecordRaw[] = [
           // The file browser fills the viewport and scrolls its own entry list,
           // so the page must not grow past the viewport (JUS-118).
           fillViewport: true,
+          // The file manager uses the full viewport width (JUS-206).
+          wide: true,
         },
       },
       {

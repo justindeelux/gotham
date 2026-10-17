@@ -153,8 +153,9 @@ function cancel(): void {
 }
 
 .fm-size-action {
-  color: var(--link);
-  font-family: var(--font-mono);
+  /* JUS-206: the reference "Calculate" is a green body-text link, not mono. */
+  color: var(--success-ink);
+  font-family: var(--font-body);
   font-size: var(--text-xs);
 }
 

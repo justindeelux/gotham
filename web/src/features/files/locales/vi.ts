@@ -78,7 +78,6 @@ const vi = {
     specialCount: "{count} đặc biệt | {count} đặc biệt",
     freeSpace: "Còn trống: {free}",
     currentPath: "Gốc: {path}",
-    nodeLabel: "Node agent",
     switchNode: "Đổi node agent",
     recycleBin: "Thùng rác",
   },

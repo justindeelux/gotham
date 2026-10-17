@@ -79,7 +79,6 @@ const en = {
     specialCount: "{count} special | {count} special",
     freeSpace: "Free space: {free}",
     currentPath: "Root: {path}",
-    nodeLabel: "Agent node",
     switchNode: "Switch agent node",
     recycleBin: "Recycle bin",
   },

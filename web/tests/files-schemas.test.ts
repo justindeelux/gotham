@@ -255,6 +255,18 @@ describe("entry predicates and labels", () => {
     expect(entryIconKind(entry({ name: "backup.tar.gz" }))).toBe("archive");
     expect(entryIconKind(entry({ name: "server.log" }))).toBe("terminal");
     expect(entryIconKind(entry({ name: "current", kind: "symlink" }))).toBe("link");
+    // JUS-210: every symlink keeps the link icon — a link to a file, a link
+    // to a directory, and a dangling link — until the agent reports the
+    // target kind.
+    expect(
+      entryIconKind(entry({ name: "linkfile", kind: "symlink", symlink_target: "a.txt" })),
+    ).toBe("link");
+    expect(
+      entryIconKind(entry({ name: "linkdir", kind: "symlink", symlink_target: "sub" })),
+    ).toBe("link");
+    expect(
+      entryIconKind(entry({ name: "broken", kind: "symlink", symlink_target: "/nonexistent" })),
+    ).toBe("link");
     expect(entryIconKind(entry({ name: "app.yaml" }))).toBe("doc");
   });
 

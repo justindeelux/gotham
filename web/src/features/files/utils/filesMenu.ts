@@ -58,7 +58,7 @@ function item(
 }
 
 /** menuIcon renders one lucide icon for a dropdown option, matching the sort menu. */
-function menuIcon(icon: Component): () => VNode {
+export function menuIcon(icon: Component): () => VNode {
   return () => h(icon, { size: 14, "aria-hidden": "true" });
 }
 

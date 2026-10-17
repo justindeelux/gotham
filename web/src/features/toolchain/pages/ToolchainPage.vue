@@ -9,6 +9,8 @@ import {
   NSelect,
   NSpace,
   NSpin,
+  NTabPane,
+  NTabs,
   NTag,
 } from "naive-ui";
 import type { DataTableColumns, SelectOption } from "naive-ui";
@@ -127,7 +129,8 @@ function selectableInTab(category: string): number {
   return (groupedTools.value.get(category) ?? []).filter((tool) => ids.has(tool.id)).length;
 }
 
-/** tabLabel names a tab with its counts: total, matches while searching, selected. */
+/** tabLabel names a tab with its counts: total, matches while searching, selected.
+    The category renders UPPERCASE (BUILD (4)); counts and suffix keep i18n case. */
 function tabLabel(category: string): string {
   const total = groupedTools.value.get(category)?.length ?? 0;
   const matched = matchesIn(category);
@@ -138,7 +141,7 @@ function tabLabel(category: string): string {
   const suffix = selected > 0
     ? ` · ${String(t("toolchain.page.tabSelected", { count: selected }))}`
     : "";
-  return `${category} (${count})${suffix}`;
+  return `${category.toUpperCase()} (${count})${suffix}`;
 }
 
 /** activeTools shows only the active tab, filtered by the header search. */
@@ -149,20 +152,19 @@ const activeTools = computed<ToolchainTool[]>(() => {
     .sort((a, b) => a.name.localeCompare(b.name));
 });
 
-/** activeIndex names the active tab for the tabpanel's aria-labelledby. */
-const activeIndex = computed<number>(() =>
-  Math.max(0, categories.value.indexOf(activeCategory.value)),
-);
-
-/** tabId names one tab button (stable across renders, keyed by position). */
-function tabId(index: number): string {
-  return `appstore-tab-${index}`;
+/** tabPropsFor carries the tab semantics NTabs omits (2.45.3 renders
+    plain divs): each tab is a roving-tabindex tab owned by the tablist. */
+function tabPropsFor(category: string): Record<string, string | number | boolean> {
+  const selected = category === activeCategory.value;
+  return {
+    role: "tab",
+    "aria-selected": selected,
+    tabindex: selected ? 0 : -1,
+  };
 }
 
-/** handleTabKeydown moves and activates tabs with arrows/Home/End.
-    Naive-ui 2.45.3 NTabs renders plain divs with no tablist roles or key
-    handling, so this tablist carries explicit ARIA instead; the NButtons
-    keep native Enter/Space activation and Naive visuals. */
+/** handleTabKeydown moves and activates tabs with arrows/Home/End
+    (NTabs 2.45.3 has no key handling of its own). */
 function handleTabKeydown(event: KeyboardEvent): void {
   const names = categories.value;
   if (names.length === 0) {
@@ -195,7 +197,7 @@ function handleTabKeydown(event: KeyboardEvent): void {
   // currentTarget is captured now: it reads null once dispatch ends).
   const tablist = event.currentTarget as HTMLElement | null;
   nextTick(() => {
-    tablist?.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
+    tablist?.querySelectorAll<HTMLElement>(".n-tabs-tab")[next]?.focus();
   });
 }
 
@@ -501,38 +503,31 @@ watch(
           <template #extra>{{ $t("toolchain.page.emptyToolsHint") }}</template>
         </NEmpty>
 
-        <!-- Explicit tablist: one shared checked-keys model keeps the bulk
-             selection across tabs, and one table renders the active tab. -->
+        <!-- Category tabs are Naive NTabs (line type, like the other
+             pages): one shared checked-keys model keeps the bulk selection
+             across tabs, and one table below renders the active tab. NTabs
+             2.45.3 renders plain divs, so tab roles, roving tabindex and
+             arrow-key handling ride along via tab-props + keydown. -->
         <template v-else>
-          <div
-            class="category-tabs"
+          <NTabs
+            v-model:value="activeCategory"
+            type="line"
+            animated
             role="tablist"
             :aria-label="t('toolchain.page.tabsLabel')"
             @keydown="handleTabKeydown"
           >
-            <NButton
-              v-for="(category, index) in categories"
+            <NTabPane
+              v-for="category in categories"
               :key="category"
-              :id="tabId(index)"
-              role="tab"
-              :aria-selected="category === activeCategory"
-              aria-controls="appstore-panel"
-              :tabindex="category === activeCategory ? 0 : -1"
-              quaternary
-              :type="category === activeCategory ? 'primary' : 'default'"
-              :class="['category-tab', { 'is-active': category === activeCategory }]"
-              @click="activeCategory = category"
+              :name="category"
+              :tab-props="tabPropsFor(category)"
             >
-              {{ tabLabel(category) }}
-            </NButton>
-          </div>
+              <template #tab>{{ tabLabel(category) }}</template>
+            </NTabPane>
+          </NTabs>
 
-          <div
-            id="appstore-panel"
-            role="tabpanel"
-            :aria-labelledby="tabId(activeIndex)"
-            tabindex="0"
-          >
+          <div role="tabpanel" :aria-label="tabLabel(activeCategory)">
             <NEmpty
               v-if="activeTools.length === 0"
               :description="$t('toolchain.page.emptySearch')"
@@ -651,14 +646,6 @@ watch(
   padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
   background: var(--surface);
-}
-.category-tabs {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-  flex-wrap: wrap;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: var(--space-2);
 }
 .footer-status {
   margin: 0;

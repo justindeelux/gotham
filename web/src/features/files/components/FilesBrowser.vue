@@ -2525,6 +2525,11 @@ function onFolderMenu(key: string): void {
           >
             <X :size="12" :stroke-width="2" aria-hidden="true" />
           </span>
+          <span
+            v-if="tab.id === files.activeTabId"
+            class="fm-tab-corner"
+            aria-hidden="true"
+          />
         </button>
         </div>
         <AppTooltip :label="$t('files.tabs.new')">
@@ -3570,8 +3575,10 @@ function onFolderMenu(key: string): void {
 /* The active tab is the card body colour with rounded TOP corners only, in
    the normal text colour — no ring, no outline, no accent border. Its concave
    bottom flares (the card body colour over the warm band, sample geometry)
-   join it to the content below; they reuse ::after, whose divider is hidden
-   on the active tab by the rule above. */
+   join it to the content below. Like the sample, the left flare is ::before
+   and the right flare is a real element (.fm-tab-corner): ::after is the
+   divider, which the :has()/:hover rules above hide next to a hovered tab and
+   would take the flare with it. */
 .fm-tab.is-active {
   background: var(--n-color);
   border-radius: var(--radius-md) var(--radius-md) 0 0;
@@ -3580,13 +3587,15 @@ function onFolderMenu(key: string): void {
   z-index: 2;
 }
 
-.fm-tab.is-active::before,
 .fm-tab.is-active::after {
+  display: none;
+}
+
+.fm-tab.is-active::before,
+.fm-tab-corner {
   content: "";
   position: absolute;
-  top: auto;
   bottom: 0;
-  display: block;
   width: var(--radius-md);
   height: var(--radius-md);
   pointer-events: none;
@@ -3594,12 +3603,12 @@ function onFolderMenu(key: string): void {
 
 .fm-tab.is-active::before {
   left: calc(-1 * var(--radius-md));
-  background: radial-gradient(circle at 0 0, var(--surface-warm) 70%, var(--n-color) 72%);
+  background: radial-gradient(circle at 0 0, transparent var(--radius-md), var(--n-color) calc(var(--radius-md) + 0.5px));
 }
 
-.fm-tab.is-active::after {
+.fm-tab-corner {
   right: calc(-1 * var(--radius-md));
-  background: radial-gradient(circle at 100% 0, var(--surface-warm) 70%, var(--n-color) 72%);
+  background: radial-gradient(circle at 100% 0, transparent var(--radius-md), var(--n-color) calc(var(--radius-md) + 0.5px));
 }
 
 /* Icon-only narrow tabs (sample .narrow, measured in updateNarrowTabs). The

@@ -4400,10 +4400,22 @@ function onFolderMenu(key: string): void {
   text-align: right;
 }
 
-/* JUS-134: the mode cell is one line ("755"); the rwx form is its tooltip. */
+/* JUS-134: the mode and date cells are one line; the rwx form is the mode
+   cell's tooltip. */
 .fm-mode,
 .fm-date {
   white-space: nowrap;
+}
+
+/* JUS-214: the Owner/Mode track is a fixed 110px, so a long owner
+   ("systemd-network/755" or a 10-digit uid) must clip instead of spilling into
+   the right-aligned Size cell. min-width: 0 lets the grid item shrink below its
+   min-content width; the full owner/mode text stays in the DOM for screen
+   readers (no title is added — JUS-210 removes file-manager tooltips). */
+.fm-mode {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fm-actions {

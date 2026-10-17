@@ -176,8 +176,9 @@ func TestFileServerListRoots(t *testing.T) {
 
 // TestFileServerListReportsOwner pins that a listing entry carries the owning
 // user and group names resolved from the file's uid/gid (JUS-214). A temp file
-// is owned by this process, so the expectation is resolved the same way from
-// the process ids, falling back to the numeric id when a name is unavailable.
+// and a symlink are owned by this process, so the expectation is resolved the
+// same way from the process ids, falling back to the numeric id when a name is
+// unavailable.
 func TestFileServerListReportsOwner(t *testing.T) {
 	t.Parallel()
 	server, volumeRoot := newTestFileServer(t)
@@ -185,6 +186,11 @@ func TestFileServerListReportsOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(volumeRoot, "app", "owned.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A link keeps its own lstat owner, so its entry must report the same
+	// resolved name rather than dropping the owner.
+	if err := os.Symlink("owned.txt", filepath.Join(volumeRoot, "app", "link.txt")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -201,15 +207,16 @@ func TestFileServerListReportsOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(list.GetEntries()) != 1 {
-		t.Fatalf("entries = %d, want 1", len(list.GetEntries()))
+	if len(list.GetEntries()) != 2 {
+		t.Fatalf("entries = %d, want 2", len(list.GetEntries()))
 	}
-	entry := list.GetEntries()[0]
-	if got := entry.GetOwner(); got != wantOwner {
-		t.Fatalf("owner = %q, want %q", got, wantOwner)
-	}
-	if got := entry.GetGroup(); got != wantGroup {
-		t.Fatalf("group = %q, want %q", got, wantGroup)
+	for _, entry := range list.GetEntries() {
+		if got := entry.GetOwner(); got != wantOwner {
+			t.Fatalf("%s owner = %q, want %q", entry.GetName(), got, wantOwner)
+		}
+		if got := entry.GetGroup(); got != wantGroup {
+			t.Fatalf("%s group = %q, want %q", entry.GetName(), got, wantGroup)
+		}
 	}
 }
 

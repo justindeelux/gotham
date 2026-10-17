@@ -121,6 +121,35 @@ func TestUpdateResponseProtoRoundtrip(t *testing.T) {
 	}
 }
 
+func TestFileEntryOwnerProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	want := &agentv1.FileEntry{
+		Name:          "readme.txt",
+		Kind:          agentv1.FileKind_FILE_KIND_FILE,
+		Size:          12,
+		Mode:          0o644,
+		ModifiedAt:    timestamppb.New(time.Unix(1_700_000_000, 0)),
+		SymlinkTarget: "target",
+		Etag:          `"1:2:3:4"`,
+		Owner:         "root",
+		Group:         "wheel",
+	}
+
+	raw, err := proto.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var got agentv1.FileEntry
+	if err := proto.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !proto.Equal(want, &got) {
+		t.Fatalf("roundtrip mismatch: want %v, got %v", want, &got)
+	}
+}
+
 func TestHeartbeatRequestProtoRoundtrip(t *testing.T) {
 	t.Parallel()
 

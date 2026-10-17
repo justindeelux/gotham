@@ -268,7 +268,7 @@ func TestRootsListStatRoutes(t *testing.T) {
 	id := uuid.New()
 	svc := &fakeService{
 		roots:   []Root{{Name: "volumes", Path: "/volumes", Writable: true, FreeBytes: 7}},
-		listing: Listing{Entries: []Entry{{Name: "a", Kind: "file", Etag: `"e"`}}, Truncated: true, Cursor: "c"},
+		listing: Listing{Entries: []Entry{{Name: "a", Kind: "file", Etag: `"e"`, Owner: "root", Group: "wheel"}}, Truncated: true, Cursor: "c"},
 		entry:   Entry{Name: "a", Kind: "file"},
 	}
 	h := newTestRouter(svc)
@@ -295,6 +295,10 @@ func TestRootsListStatRoutes(t *testing.T) {
 	}
 	if !listing.Truncated || listing.Cursor != "c" || len(listing.Entries) != 1 {
 		t.Fatalf("listing = %+v", listing)
+	}
+	// JUS-214: the owner/group ride the same entry JSON.
+	if body := rec.Body.String(); !strings.Contains(body, `"owner":"root"`) || !strings.Contains(body, `"group":"wheel"`) {
+		t.Fatalf("list JSON missing owner/group: %s", body)
 	}
 
 	rec = doRequest(t, h, http.MethodGet, "/v1/servers/"+id.String()+"/files/stat?root=volumes&path=a")

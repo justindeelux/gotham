@@ -66,13 +66,13 @@ import {
   entryTypeLabel,
   filesFromDrop,
   formatMode,
-  formatOctalModeFull,
   formatTimestamp,
   isExtractableArchive,
   isFileDrag,
   isImageFile,
   isSelectable,
   joinPath,
+  ownerModeLabel,
   resolveSymlinkTarget,
   typeaheadIndex,
   widestBytesLabel,
@@ -2949,8 +2949,8 @@ function onFolderMenu(key: string): void {
                 </button>
               </div>
               <!-- JUS-161: Name, Owner/Mode, Size, Modified, Operation. The
-                   owner name has no API field yet, so the cell shows the octal
-                   mode until the listing carries it. -->
+                   cell shows owner/mode (JUS-214); the owner is empty from an
+                   older agent, so the cell falls back to the octal mode. -->
               <div class="fm-cell--mode" role="columnheader" :aria-sort="ariaSort('mode')">
                 <button type="button" class="fm-sort" :class="{ 'is-active': files.sortKey === 'mode' }" @click="files.setSort('mode')">
                   {{ $t("files.browser.columnMode") }}
@@ -3086,7 +3086,7 @@ function onFolderMenu(key: string): void {
                 <span class="fm-row-sub">{{ modifiedLabel(entry) }}</span>
               </span>
             </div>
-            <div class="fm-cell fm-mode fm-cell--mode" role="cell" :title="formatMode(entry.mode)">{{ formatOctalModeFull(entry.mode) }}</div>
+            <div class="fm-cell fm-mode fm-cell--mode" role="cell" :title="formatMode(entry.mode)">{{ ownerModeLabel(entry) }}</div>
             <div class="fm-cell fm-cell--size" role="cell">
               <FolderSizeCell
                 v-if="entry.kind === 'directory'"

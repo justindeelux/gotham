@@ -14,7 +14,9 @@ import { z } from "zod";
  * Envelopes are validated warn-only through `parseWith`, so a newer server
  * field degrades to a warning instead of a blank page. `kind` mirrors the
  * agent's FileKind enum through `kindString` in internal/files/service.go.
- * `mode` is the raw POSIX st_mode (type bits + permission bits).
+ * `mode` is the raw POSIX st_mode (type bits + permission bits). `owner` and
+ * `group` are the agent's resolved names (numeric id when unresolvable); both
+ * are empty from an agent that predates them.
  */
 
 export const fileKindSchema = z.enum([
@@ -42,6 +44,8 @@ export const filesEntrySchema = z.object({
   modified_at: z.string(),
   symlink_target: z.string().optional(),
   etag: z.string(),
+  owner: z.string().optional(),
+  group: z.string().optional(),
 });
 export type FilesEntry = z.infer<typeof filesEntrySchema>;
 

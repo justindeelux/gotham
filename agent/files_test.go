@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -170,6 +172,79 @@ func TestFileServerListRoots(t *testing.T) {
 	if got := resp.GetRoots()[1]; got.GetName() != fileRootCompose || got.GetWritable() {
 		t.Fatalf("compose root = %+v", got)
 	}
+}
+
+// TestFileServerListReportsOwner pins that a listing entry carries the owning
+// user and group names resolved from the file's uid/gid (JUS-214). A temp file
+// is owned by this process, so the expectation is resolved the same way from
+// the process ids, falling back to the numeric id when a name is unavailable.
+func TestFileServerListReportsOwner(t *testing.T) {
+	t.Parallel()
+	server, volumeRoot := newTestFileServer(t)
+	if err := os.MkdirAll(filepath.Join(volumeRoot, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(volumeRoot, "app", "owned.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wantOwner := strconv.Itoa(os.Geteuid())
+	if u, err := user.LookupId(wantOwner); err == nil {
+		wantOwner = u.Username
+	}
+	wantGroup := strconv.Itoa(os.Getegid())
+	if g, err := user.LookupGroupId(wantGroup); err == nil {
+		wantGroup = g.Name
+	}
+
+	list, err := server.List(context.Background(), &agentv1.ListRequest{Root: fileRootVolumes, Path: "app"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list.GetEntries()) != 1 {
+		t.Fatalf("entries = %d, want 1", len(list.GetEntries()))
+	}
+	entry := list.GetEntries()[0]
+	if got := entry.GetOwner(); got != wantOwner {
+		t.Fatalf("owner = %q, want %q", got, wantOwner)
+	}
+	if got := entry.GetGroup(); got != wantGroup {
+		t.Fatalf("group = %q, want %q", got, wantGroup)
+	}
+}
+
+// TestNameCacheFallsBackToNumericID pins that an id with no passwd/group entry
+// keeps its numeric string, so a listing never fails over a missing name.
+func TestNameCacheFallsBackToNumericID(t *testing.T) {
+	t.Parallel()
+	names := newNameCache()
+	absent := absentID(t)
+	want := strconv.FormatUint(uint64(absent), 10)
+	if got := names.owner(absent); got != want {
+		t.Fatalf("owner = %q, want %q", got, want)
+	}
+	if got := names.group(absent); got != want {
+		t.Fatalf("group = %q, want %q", got, want)
+	}
+	// A repeated lookup is served from the cache with the same answer.
+	if got := names.owner(absent); got != want {
+		t.Fatalf("cached owner = %q, want %q", got, want)
+	}
+}
+
+// absentID returns an id no user and no group resolves to on this host.
+func absentID(t *testing.T) uint32 {
+	t.Helper()
+	for _, id := range []uint32{4294967295, 4294967294, 4000000000} {
+		s := strconv.FormatUint(uint64(id), 10)
+		_, userErr := user.LookupId(s)
+		_, groupErr := user.LookupGroupId(s)
+		if userErr != nil && groupErr != nil {
+			return id
+		}
+	}
+	t.Skip("every candidate id resolves to a name on this host")
+	return 0
 }
 
 func TestFileServerListStatRead(t *testing.T) {

@@ -643,6 +643,16 @@ export function formatOctalModeFull(mode: number): string {
   return bits.toString(8).padStart(bits > PERMISSION_BITS ? 4 : 3, "0");
 }
 
+/**
+ * ownerModeLabel renders the Owner/Mode list cell as "owner/mode" (e.g.
+ * "root/755"), or just the mode when the agent reported no owner (an agent
+ * that predates the owner field).
+ */
+export function ownerModeLabel(entry: FilesEntry): string {
+  const mode = formatOctalModeFull(entry.mode);
+  return entry.owner ? `${entry.owner}/${mode}` : mode;
+}
+
 /** parseOctalMode converts a validated 3-digit octal string to a number. */
 export function parseOctalMode(value: string): number {
   return Number.parseInt(value, 8) & PERMISSION_BITS;

@@ -94,6 +94,11 @@ type Entry struct {
 	ModifiedAt    time.Time `json:"modified_at"`
 	SymlinkTarget string    `json:"symlink_target,omitempty"`
 	Etag          string    `json:"etag"`
+	// Owner and Group are the owning user and group names reported by the
+	// agent; an unresolvable id is kept as its numeric string. They are empty
+	// from an agent that predates these fields.
+	Owner string `json:"owner"`
+	Group string `json:"group"`
 }
 
 // Listing is one page of a directory listing.
@@ -726,6 +731,8 @@ func newEntry(info *agentv1.FileEntry) Entry {
 		Mode:          info.GetMode(),
 		SymlinkTarget: info.GetSymlinkTarget(),
 		Etag:          info.GetEtag(),
+		Owner:         info.GetOwner(),
+		Group:         info.GetGroup(),
 	}
 	if ts := info.GetModifiedAt(); ts != nil {
 		entry.ModifiedAt = ts.AsTime()

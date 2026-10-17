@@ -162,6 +162,19 @@ type Repository interface {
 	// CreateCertificateIntent stores one application's certificate
 	// configuration. The per-application unique index is a conflict.
 	CreateCertificateIntent(ctx context.Context, in CertificateIntent) error
+	// CreateCertificateIntentIfAbsent stores one application's certificate
+	// configuration only when the (application, domain) pair has none, so a
+	// re-attach or an operator's existing intent is a silent no-op instead of
+	// a unique violation that would abort the caller's transaction (JUS-201).
+	CreateCertificateIntentIfAbsent(ctx context.Context, in CertificateIntent) error
+	// ListCertificateIntents returns one application's certificate intents,
+	// oldest first (JUS-201: the attach path skips a host an enabled wildcard
+	// intent already covers).
+	ListCertificateIntents(ctx context.Context, appID uuid.UUID) ([]CertificateIntent, error)
+	// DeleteAutoCertificateIntent removes the default http-01 non-wildcard
+	// intent of one (application, domain), leaving an operator's wildcard or
+	// dns-01 intent in place (JUS-201).
+	DeleteAutoCertificateIntent(ctx context.Context, appID uuid.UUID, domain string) error
 	// ListApplicationDomains returns one application's domains, primary
 	// first, then oldest first (JUS-89).
 	ListApplicationDomains(ctx context.Context, appID uuid.UUID) ([]ApplicationDomain, error)
@@ -1083,6 +1096,59 @@ func (r *storeRepository) CreateCertificateIntent(ctx context.Context, in Certif
 			return fmt.Errorf("%w: the application already has a certificate configuration", ErrConflict)
 		}
 		return fmt.Errorf("deploy: create certificate intent: %w", err)
+	}
+	return nil
+}
+
+// CreateCertificateIntentIfAbsent stores one application's certificate
+// configuration unless the (application, domain) pair already has one
+// (JUS-201). A re-attach or an operator's intent is a silent no-op: the
+// statement never violates the unique index, so it cannot abort the caller's
+// transaction.
+func (r *storeRepository) CreateCertificateIntentIfAbsent(ctx context.Context, in CertificateIntent) error {
+	if _, err := r.store.CreateDomainCertificateIfAbsent(ctx, sqlc.CreateDomainCertificateIfAbsentParams{
+		ApplicationID: pgUUID(in.ApplicationID),
+		Domain:        in.Domain,
+		Enabled:       in.Enabled,
+		Challenge:     in.Challenge,
+		DnsProviderID: pgUUID(in.DNSProviderID),
+		Wildcard:      in.Wildcard,
+	}); err != nil {
+		return fmt.Errorf("deploy: create certificate intent: %w", err)
+	}
+	return nil
+}
+
+// ListCertificateIntents returns one application's certificate intents,
+// oldest first.
+func (r *storeRepository) ListCertificateIntents(ctx context.Context, appID uuid.UUID) ([]CertificateIntent, error) {
+	rows, err := r.store.ListDomainCertificatesByApplication(ctx, pgUUID(appID))
+	if err != nil {
+		return nil, fmt.Errorf("deploy: list certificate intents: %w", err)
+	}
+	intents := make([]CertificateIntent, 0, len(rows))
+	for _, row := range rows {
+		intents = append(intents, CertificateIntent{
+			ApplicationID: uuidFromPG(row.ApplicationID),
+			Domain:        row.Domain,
+			Enabled:       row.Enabled,
+			Challenge:     row.Challenge,
+			DNSProviderID: uuidFromPG(row.DnsProviderID),
+			Wildcard:      row.Wildcard,
+		})
+	}
+	return intents, nil
+}
+
+// DeleteAutoCertificateIntent removes the default http-01 non-wildcard intent
+// of one (application, domain), leaving an operator's wildcard or dns-01
+// intent in place.
+func (r *storeRepository) DeleteAutoCertificateIntent(ctx context.Context, appID uuid.UUID, domain string) error {
+	if _, err := r.store.DeleteAutoDomainCertificate(ctx, sqlc.DeleteAutoDomainCertificateParams{
+		ApplicationID: pgUUID(appID),
+		Domain:        domain,
+	}); err != nil {
+		return fmt.Errorf("deploy: delete certificate intent: %w", err)
 	}
 	return nil
 }

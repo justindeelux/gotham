@@ -203,6 +203,28 @@ func (s *Store) CreateDomainCertificate(ctx context.Context, params sqlc.CreateD
 	return s.queries.CreateDomainCertificate(ctx, params)
 }
 
+// CreateDomainCertificateIfAbsent records an intent only when the
+// (application_id, domain) pair has none (JUS-201), so a re-attach or an
+// operator's existing intent never aborts the caller's transaction. It reports
+// whether a row was inserted.
+func (s *Store) CreateDomainCertificateIfAbsent(ctx context.Context, params sqlc.CreateDomainCertificateIfAbsentParams) (int64, error) {
+	return s.queries.CreateDomainCertificateIfAbsent(ctx, params)
+}
+
+// DeleteAutoDomainCertificate removes the default http-01 non-wildcard intent
+// of one (application, domain), leaving an operator's wildcard or dns-01
+// intent in place (JUS-201).
+func (s *Store) DeleteAutoDomainCertificate(ctx context.Context, params sqlc.DeleteAutoDomainCertificateParams) (int64, error) {
+	return s.queries.DeleteAutoDomainCertificate(ctx, params)
+}
+
+// BackfillApplicationCertificates gives every enabled application domain with
+// no intent the default enabled http-01 one (JUS-201), skipping applications
+// that already hold an enabled wildcard intent. It reports the rows inserted.
+func (s *Store) BackfillApplicationCertificates(ctx context.Context) (int64, error) {
+	return s.queries.BackfillApplicationCertificates(ctx)
+}
+
 // GetDomainCertificate returns one certificate config row.
 func (s *Store) GetDomainCertificate(ctx context.Context, id pgtype.UUID) (sqlc.DomainCertificate, error) {
 	return s.queries.GetDomainCertificate(ctx, id)

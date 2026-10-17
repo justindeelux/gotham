@@ -260,6 +260,11 @@ type SSLStore interface {
 	ListCertificates(ctx context.Context) ([]DomainCertificate, error)
 	UpdateCertificate(ctx context.Context, id uuid.UUID, in CertificateWrite) (DomainCertificate, error)
 	DeleteCertificate(ctx context.Context, id uuid.UUID) error
+	// BackfillApplicationCertificates gives every enabled application domain
+	// without an intent the default enabled http-01 one (JUS-201), skipping
+	// applications that already hold an enabled wildcard intent. It reports
+	// the rows inserted.
+	BackfillApplicationCertificates(ctx context.Context) (int64, error)
 
 	GetApplication(ctx context.Context, id uuid.UUID) (ApplicationInfo, error)
 }
@@ -452,6 +457,12 @@ func (s storeSSL) DeleteCertificate(ctx context.Context, id uuid.UUID) error {
 		return mapSSLWriteError(err)
 	}
 	return nil
+}
+
+// BackfillApplicationCertificates delegates the JUS-201 TLS backfill to the
+// shared store.
+func (s storeSSL) BackfillApplicationCertificates(ctx context.Context) (int64, error) {
+	return s.store.BackfillApplicationCertificates(ctx)
 }
 
 // GetApplication returns the application a certificate config targets, or

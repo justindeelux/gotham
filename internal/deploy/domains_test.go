@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/proxy"
 )
 
 // seedDomainApp stores one application with the given mirror domain in the
@@ -70,6 +72,130 @@ func TestAddDomainFirstBecomesPrimary(t *testing.T) {
 	}
 	if stored.BaseDomain != "app.example.com" {
 		t.Fatalf("mirror = %q, want the primary", stored.BaseDomain)
+	}
+}
+
+// tlsService builds a service whose TLSForDomains gate answers enabled.
+func tlsService(t *testing.T, repo *fakeRepository, enabled bool) *Service {
+	t.Helper()
+	svc := NewService(Config{
+		Repository:    repo,
+		Secret:        testSecretKey,
+		Logger:        discardLogger(),
+		TLSForDomains: func(context.Context) bool { return enabled },
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc
+}
+
+// TestAddDomainProvisionsTLSByDefault pins JUS-201: when the instance
+// terminates TLS (the panel's https condition), attaching a domain records an
+// enabled HTTP-01 intent so the generator emits a websecure router and the
+// http→https redirect.
+func TestAddDomainProvisionsTLSByDefault(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	svc := tlsService(t, repo, true)
+
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, "portfolio.example.com"); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	var found *CertificateIntent
+	for i := range repo.certificates {
+		if repo.certificates[i].ApplicationID == app.ID && repo.certificates[i].Domain == "portfolio.example.com" {
+			found = &repo.certificates[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("certificates = %#v, want an intent for the attached domain", repo.certificates)
+	}
+	if !found.Enabled || found.Challenge != string(proxy.ChallengeHTTP01) || found.DNSProviderID != uuid.Nil {
+		t.Fatalf("intent = %#v, want enabled http-01 with no provider", *found)
+	}
+}
+
+// TestAddDomainKeepsPlainHTTPWhenNotTLS pins the local/dev path: without the
+// gate no certificate intent is recorded.
+func TestAddDomainKeepsPlainHTTPWhenNotTLS(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	svc := tlsService(t, repo, false)
+
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, "portfolio.example.com"); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	if len(repo.certificates) != 0 {
+		t.Fatalf("certificates = %#v, want none on an http-only instance", repo.certificates)
+	}
+}
+
+// TestAddDomainReusesExistingIntent pins JUS-201's transaction safety: a
+// pre-existing intent for the host is left untouched and the attach still
+// succeeds (the ON CONFLICT DO NOTHING write never aborts the transaction).
+func TestAddDomainReusesExistingIntent(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	repo.certificates = []CertificateIntent{{
+		ApplicationID: app.ID, Domain: "kept.example.com", Enabled: false, Challenge: string(proxy.ChallengeHTTP01),
+	}}
+	svc := tlsService(t, repo, true)
+
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, "kept.example.com"); err != nil {
+		t.Fatalf("AddDomain with a pre-existing intent: %v", err)
+	}
+	if len(repo.certificates) != 1 || repo.certificates[0].Enabled {
+		t.Fatalf("certificates = %#v, want the operator's intent untouched", repo.certificates)
+	}
+}
+
+// TestAddDomainSkipsHTTP01UnderWildcard pins JUS-201's wildcard guard: an
+// enabled wildcard intent already covers the new host, so the default per-host
+// http-01 intent must be skipped.
+func TestAddDomainSkipsHTTP01UnderWildcard(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	repo.certificates = []CertificateIntent{{
+		ApplicationID: app.ID, Domain: "app.example.com", Enabled: true, Challenge: string(proxy.ChallengeDNS01), Wildcard: true,
+	}}
+	svc := tlsService(t, repo, true)
+
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, "www.example.com"); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	for _, cert := range repo.certificates {
+		if cert.Domain == "www.example.com" {
+			t.Fatalf("per-host intent created under a wildcard: %#v", repo.certificates)
+		}
+	}
+}
+
+// TestRemoveDomainDeletesAutoIntent pins JUS-201's cleanup: removing the host
+// drops its auto-created http-01 intent but never an operator's wildcard or
+// dns-01 one.
+func TestRemoveDomainDeletesAutoIntent(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	svc := tlsService(t, repo, true)
+
+	created, err := svc.AddDomain(context.Background(), userID, app.ID, "gone.example.com")
+	if err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+	// An operator's wildcard intent for a sibling survives the removal.
+	repo.certificates = append(repo.certificates, CertificateIntent{
+		ApplicationID: app.ID, Domain: "sibling.example.com", Enabled: true, Challenge: string(proxy.ChallengeDNS01), Wildcard: true,
+	})
+
+	if _, err := svc.RemoveDomain(context.Background(), userID, app.ID, created.ID); err != nil {
+		t.Fatalf("RemoveDomain: %v", err)
+	}
+	if len(repo.certificates) != 1 || repo.certificates[0].Domain != "sibling.example.com" {
+		t.Fatalf("certificates = %#v, want only the operator intent kept", repo.certificates)
 	}
 }
 

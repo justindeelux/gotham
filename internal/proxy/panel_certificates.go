@@ -40,30 +40,89 @@ func (s *sslService) certificateApplication(ctx context.Context, cert DomainCert
 
 // ReconcilePanelCertificates creates confirmed hosts' new
 // HTTPS intents before deleting retired ones, and never changes app intents.
+// It then backfills the default TLS intent of application domains that have
+// none (JUS-201), so a box that upgrades gets its existing hosts repaired.
 func (s *SyncService) ReconcilePanelCertificates(ctx context.Context, urls []string) error {
 	if s.panelCertificates == nil {
 		return nil
 	}
 	ssl := newSSLService(SSLConfig{Store: s.panelCertificates, Logger: s.logger})
-	return ssl.reconcilePanelCertificates(ctx, urls)
+	if err := ssl.reconcilePanelCertificates(ctx, urls); err != nil {
+		return err
+	}
+	return s.reconcileApplicationCertificates(ctx, urls)
+}
+
+// ControlPlaneHTTPSHosts returns the normalized hosts of the configured
+// control-plane URLs that are served over https. It is the single gate that
+// turns on TLS for the panel domain and for the default TLS of attached
+// application domains, so the two cannot drift. A URL that cannot be parsed is
+// an error; a non-https URL is skipped.
+func ControlPlaneHTTPSHosts(urls []string) ([]string, error) {
+	hosts := make([]string, 0, len(urls))
+	for _, raw := range urls {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("proxy: invalid control-plane URL: %w", err)
+		}
+		if u.Scheme != "https" {
+			continue
+		}
+		domain := NormalizeDomain(u.Hostname())
+		if err := ValidateDomain(domain); err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, domain)
+	}
+	return hosts, nil
+}
+
+// reconcileApplicationCertificates backfills the default enabled http-01
+// intent for every enabled application domain that has none (JUS-201): a host
+// attached before this change, or one whose intent was never recorded, is
+// repaired on startup and on every control-plane URL change. It is gated on
+// the same https condition as the panel domain, so an http-only instance
+// stays plain-HTTP, and it triggers the proxy rebuild the panel flow relies on
+// when it actually inserts rows.
+func (s *SyncService) reconcileApplicationCertificates(ctx context.Context, urls []string) error {
+	hosts, err := ControlPlaneHTTPSHosts(urls)
+	if err != nil {
+		return err
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	inserted, err := s.panelCertificates.BackfillApplicationCertificates(ctx)
+	if err != nil {
+		return err
+	}
+	if inserted > 0 {
+		s.resyncAfterBackfill(ctx)
+	}
+	return nil
+}
+
+// resyncAfterBackfill pushes the freshly recorded intents to every node. It is
+// best effort like sslService.notifyResync — the intents are durable and the
+// next sync converges — and it inherits the caller's deadline so a settings
+// save is never held open by a slow bootstrap.
+func (s *SyncService) resyncAfterBackfill(ctx context.Context) {
+	syncCtx, cancel := context.WithTimeout(ctx, defaultResyncTimeout)
+	defer cancel()
+	if _, err := s.SyncAll(syncCtx); err != nil {
+		s.logger.Warn("proxy: TLS backfill resync failed", "error", err)
+	}
 }
 
 func (s *sslService) reconcilePanelCertificates(ctx context.Context, urls []string) error {
 	return s.mutate(ctx, func(ctx context.Context) error {
-		wanted := map[string]bool{}
-		for _, raw := range urls {
-			u, err := url.Parse(raw)
-			if err != nil {
-				return fmt.Errorf("proxy: invalid panel URL: %w", err)
-			}
-			if u.Scheme != "https" {
-				continue
-			}
-			domain := NormalizeDomain(u.Hostname())
-			if err := ValidateDomain(domain); err != nil {
-				return err
-			}
-			wanted[domain] = true
+		hosts, err := ControlPlaneHTTPSHosts(urls)
+		if err != nil {
+			return err
+		}
+		wanted := make(map[string]bool, len(hosts))
+		for _, host := range hosts {
+			wanted[host] = true
 		}
 		certificates, err := s.store.ListCertificates(ctx)
 		if err != nil {

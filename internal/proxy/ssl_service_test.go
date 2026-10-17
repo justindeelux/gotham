@@ -28,6 +28,14 @@ type fakeSSLStore struct {
 	certDeleteErr error
 	getAppErr     error
 
+	// uncertified seeds the JUS-201 backfill: enabled application domains with
+	// no intent. backfillCalls counts the invocations so a test can pin the
+	// gate, backfillErr forces a store failure.
+	uncertified      []DomainCertificate
+	backfillCalls    int
+	backfillInserted int64
+	backfillErr      error
+
 	// countHook runs after CountEnabledCertificatesByProvider computes its
 	// result, outside the store lock: tests use it to hold a mutation inside
 	// its critical section.
@@ -284,6 +292,44 @@ func (f *fakeSSLStore) DeleteCertificate(_ context.Context, id uuid.UUID) error 
 		}
 	}
 	return ErrNotFound
+}
+
+// BackfillApplicationCertificates implements SSLStore: it records the default
+// http-01 intent for every enabled application domain the test seeds, skipping
+// applications that already hold an enabled wildcard intent.
+func (f *fakeSSLStore) BackfillApplicationCertificates(_ context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.backfillCalls++
+	if f.backfillErr != nil {
+		return 0, f.backfillErr
+	}
+	var inserted int64
+	for _, ref := range f.uncertified {
+		wildcard := false
+		has := false
+		for _, cert := range f.certificates {
+			if cert.ApplicationID != ref.ApplicationID {
+				continue
+			}
+			if cert.Domain == ref.Domain {
+				has = true
+			}
+			if cert.Enabled && cert.Wildcard {
+				wildcard = true
+			}
+		}
+		if has || wildcard {
+			continue
+		}
+		f.certificates = append(f.certificates, DomainCertificate{
+			ID: uuid.New(), ApplicationID: ref.ApplicationID, Domain: ref.Domain,
+			Enabled: true, Challenge: ChallengeHTTP01,
+		})
+		inserted++
+	}
+	f.backfillInserted += inserted
+	return inserted, nil
 }
 
 func (f *fakeSSLStore) GetApplication(_ context.Context, id uuid.UUID) (ApplicationInfo, error) {

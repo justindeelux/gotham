@@ -1596,12 +1596,21 @@ watch(
   { flush: "post" },
 );
 
-// Move focus to the active tab as soon as it changes (nextTick), never after
-// the tab's listing finishes loading — otherwise the roving tabindex lags
-// behind and the next arrow press navigates from the stale tab. Also covers a
-// mouse close: the × removes the focused button, so focus must follow the tab
-// that takes over.
-watch(() => files.activeTabId, () => void focusActiveTab());
+// Move focus to the active tab as soon as it changes, nextTick — but only when
+// focus is not already on it. A mouse click focuses the tab natively (which
+// never matches :focus-visible), and a programmatic .focus() from inside that
+// click's dispatch would paint the loud ring the reference has not (JUS-206);
+// keyboard switches and tab closes (focus left on <body>) still move focus, so
+// the roving tabindex never lags and the focused close never strands focus.
+watch(() => files.activeTabId, async () => {
+  await nextTick();
+  const active = tabListEl.value?.querySelector<HTMLElement>(
+    '[role="tab"][aria-selected="true"]',
+  );
+  if (active && document.activeElement !== active) {
+    await focusActiveTab();
+  }
+});
 
 // Replay the active tab's scroll offset after a switch, and after a load
 // completes (a restore that landed while the rows were still unrendered would
@@ -3624,9 +3633,14 @@ function onFolderMenu(key: string): void {
    the row reads as one field. Long paths truncate from the left (the crumb
    strip clips at its start edge) while back and refresh stay pinned. */
 .fm-navfield {
-  flex: 1 1 auto;
+  /* JUS-206 round 1: naive's .n-input-group is width:100% — reset to auto so
+     the row shares the desktop path bar with the search block (~half each);
+     the phone rules below still take their own full-width rows. */
+  width: auto;
+  flex: 1 1 50%;
   min-width: 0;
   height: var(--space-8);
+  min-height: var(--space-8);
   padding: 0;
   border: 0;
   background: none;
@@ -3649,13 +3663,15 @@ function onFolderMenu(key: string): void {
   align-self: stretch;
   min-width: 0;
   flex-wrap: nowrap;
-  justify-content: flex-end;
+  /* JUS-206 round 1: crumbs start right after the back button (reference:
+     [back] | Root dir > www > ... [refresh]), truncating from the left. */
+  justify-content: flex-start;
   overflow: hidden;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   border-radius: 0;
   /* Vertical rhythm comes from the `.fm-path` base; only widen the sides. The
-     strip is 30px tall inside the 32px row (its own borders complete it). */
+     strip stretches the row's full 32px (its own borders complete it). */
   padding-block: 0;
   padding-inline: var(--space-2);
 }

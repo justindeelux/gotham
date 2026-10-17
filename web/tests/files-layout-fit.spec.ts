@@ -1933,8 +1933,22 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
       (await toolbar.boundingBox())!.height;
     const tileY = async (): Promise<number> =>
       (await tile.boundingBox())!.y;
+    // inert is presence-based (inert="false" still counts), so assert the
+    // attribute's presence, never its value.
+    const hasInert = (target: Locator): Promise<boolean> =>
+      target.evaluate((element) => element.hasAttribute("inert"));
     expect(await toolbarHeight(), `idle toolbar is one row at ${width}px`).toBe(32);
     const beforeY = await tileY();
+
+    // Idle the overlay is out of the a11y tree and tab order (inert and
+    // hidden), and its actions are not reachable.
+    const bulk = page.locator(".fm-grid-bulk");
+    const scroller = page.locator(".fm-toolbar-scroll");
+    expect(await hasInert(bulk), `idle overlay is inert at ${width}px`).toBe(true);
+    await expect(bulk).toHaveCSS("visibility", "hidden");
+    await expect(
+      bulk.getByRole("button", { name: "Download", exact: true }),
+    ).toBeHidden();
 
     await tile.click();
     await expect(page.locator(".fm-tile.is-selected")).toHaveCount(1);
@@ -1946,6 +1960,92 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
       Math.abs((await tileY()) - beforeY),
       `first tile unmoved on select at ${width}px`,
     ).toBeLessThanOrEqual(1);
+
+    // While the overlay shows, the covered scroll content goes inert (Tab
+    // skips it, the tree exposes only the bar) and the overlay swallows the
+    // row's pointer events: a hit test on the count text lands on the
+    // overlay, never on the Upload/New control underneath.
+    await expect(await hasInert(scroller), `covered content is inert at ${width}px`).toBe(true);
+    await expect(await hasInert(bulk), `visible overlay leaves inert at ${width}px`).toBe(false);
+    const hitInBulk = await page.evaluate(() => {
+      const count = document.querySelector(
+        ".fm-grid-bulk .fm-bulk-count",
+      ) as HTMLElement | null;
+      if (count === null) {
+        return false;
+      }
+      const box = count.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        box.x + box.width / 2,
+        box.y + box.height / 2,
+      ) as HTMLElement | null;
+      return hit !== null && hit.closest(".fm-grid-bulk") !== null;
+    });
+    expect(hitInBulk, `count hit lands on the overlay at ${width}px`).toBe(true);
+
+    if (width === 390) {
+      // The overlay row is 32px: every bulk button renders at the row height
+      // and sits fully inside the overlay box (no 6px clip — the phone focus
+      // ring is inset, so it cannot clip either).
+      const bulkBox = (await bulk.boundingBox())!;
+      const actions = bulk.locator(".fm-selection-actions").getByRole("button");
+      const buttonCount = await actions.count();
+      expect(buttonCount, "overlay renders its actions").toBeGreaterThan(0);
+      for (let index = 0; index < buttonCount; index += 1) {
+        const button = actions.nth(index);
+        await button.scrollIntoViewIfNeeded();
+        const box = (await button.boundingBox())!;
+        expect(
+          await button.evaluate((element) => getComputedStyle(element).height),
+          `bulk button is the 32px row height at ${width}px`,
+        ).toBe("32px");
+        expect(
+          box.y >= bulkBox.y - 1 &&
+            box.y + box.height <= bulkBox.y + bulkBox.height + 1,
+          `bulk button inside the overlay box at ${width}px`,
+        ).toBe(true);
+      }
+    }
+
+    if (width === 1366 || width === 390) {
+      // Keyboard: Shift+Tab from the tile must land in the overlay (Clear is
+      // its last control), never on a covered toolbar control — Tab skips the
+      // inert content, and the bar stays reachable by keyboard while visible.
+      let landed: { label: string; inBulk: boolean } | null = null;
+      for (let press = 0; press < 10 && landed === null; press += 1) {
+        await page.keyboard.press("Shift+Tab");
+        landed = await page.evaluate(() => {
+          const active = document.activeElement as HTMLElement | null;
+          if (active === null || active === document.body) {
+            return null;
+          }
+          if (active.closest(".fm-tile-wrap") !== null) {
+            return null;
+          }
+          const labelled = active.closest("button") ?? active;
+          return {
+            label: (
+              labelled.getAttribute("aria-label") ??
+              labelled.textContent ??
+              ""
+            ).trim(),
+            inBulk: active.closest(".fm-grid-bulk") !== null,
+          };
+        });
+      }
+      expect(landed, `Shift+Tab leaves the tile at ${width}px`).not.toBeNull();
+      expect(landed!.label, `Shift+Tab reaches Clear at ${width}px`).toBe("Clear");
+      expect(landed!.inBulk, `covered controls are Tab-skipped at ${width}px`).toBe(true);
+      // The keyboard-focused control sits fully inside the overlay box, focus
+      // ring included.
+      const bulkBox = (await bulk.boundingBox())!;
+      const focusedBox = (await page.locator(":focus").boundingBox())!;
+      expect(
+        focusedBox.y >= bulkBox.y - 1 &&
+          focusedBox.y + focusedBox.height <= bulkBox.y + bulkBox.height + 1,
+        `focused control inside the overlay box at ${width}px`,
+      ).toBe(true);
+    }
 
     // Delete and Clear stay reachable through the bar's own row: scroll each
     // into view, then assert it sits fully inside the viewport.
@@ -1968,6 +2068,10 @@ test("selecting a grid tile never shifts the toolbar or the tiles", async ({
 
     await bar.getByRole("button", { name: "Clear", exact: true }).click();
     await expect(page.locator(".fm-tile.is-selected")).toHaveCount(0);
+    // Clearing restores the idle tree: the scroll content leaves inert duty
+    // and the overlay returns to it.
+    await expect(await hasInert(scroller), `scroll content uninerted on clear at ${width}px`).toBe(false);
+    await expect(await hasInert(bulk), `overlay inert again on clear at ${width}px`).toBe(true);
     expect(
       await toolbarHeight(),
       `toolbar height unchanged on clear at ${width}px`,

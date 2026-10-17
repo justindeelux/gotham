@@ -358,5 +358,15 @@ watch(hasSelection, async () => {
     min-width: 44px;
     height: 44px;
   }
+
+  /* JUS-208 round 2: inside the grid toolbar overlay the row is 32px, so its
+     buttons keep the toolbar's 32px metrics instead of the 44px touch size —
+     otherwise they clip ~6px top and bottom under the overlay's hidden
+     overflow (the phone focus ring stays inset, so it is never clipped
+     either). Scoped to the grid host; the list header bar is untouched. */
+  .fm-grid-bulk .fm-selection-actions :deep(.n-button) {
+    min-width: auto;
+    height: var(--space-8);
+  }
 }
 </style>

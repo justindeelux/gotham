@@ -994,7 +994,14 @@ test.describe("row action accessibility nits (JUS-140)", () => {
     await expect(page.locator(".fm-grid")).toBeVisible();
     await expect(page.getByRole("menu")).toHaveCount(0);
 
-    // (c) tab change via the tablist keyboard.
+    // (c) tab change via the tablist keyboard. The right-click selected a row,
+    // so the grid shows the overlay bulk bar with the view toggle inert
+    // (JUS-208 round 2: covered toolbar controls go inert while the bar
+    // shows) — clear from the keyboard first, then switch back. The menu
+    // assertions below are unchanged.
+    await page.getByRole("button", { name: "Clear", exact: true }).focus();
+    await page.keyboard.press(" ");
+    await expect(page.locator(".fm-tile.is-selected")).toHaveCount(0);
     await page.getByRole("button", { name: "List view" }).focus();
     await page.keyboard.press(" ");
     await expect(page.locator(".fm-table")).toBeVisible();

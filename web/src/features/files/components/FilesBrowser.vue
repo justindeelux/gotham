@@ -2663,7 +2663,9 @@ function onFolderMenu(key: string): void {
          while a selection exists (see .fm-grid-bulk below) instead of joining
          it, so selecting never grows the toolbar or shifts the tiles. -->
     <div class="fm-bar fm-toolbar" :class="{ 'is-grid': files.viewMode === 'grid' }">
-      <div class="fm-toolbar-scroll">
+      <!-- inert is presence-based (inert="false" would still count as inert),
+           so a false arm binds undefined and the attribute is omitted. -->
+      <div class="fm-toolbar-scroll" :inert="gridBulkVisible || undefined">
         <div class="fm-toolbar-group">
           <AppTooltip v-if="files.canWrite" :label="$t('files.actions.upload')">
             <NButton
@@ -2832,15 +2834,15 @@ function onFolderMenu(key: string): void {
            cluster overlays this toolbar row as a contextual action bar instead
            of joining it: the toolbar keeps its single 32px row and the tiles
            never shift. Idle it is visibility-hidden and inert (out of the a11y
-           tree and tab order). The overlay itself never takes pointer events —
-           only its action row does — so every covered toolbar control keeps
-           working exactly as before (hover, focus, menus); the bar is purely a
-           visual layer, never a modal one. -->
+           tree and tab order). While it shows, the covered scroll content goes
+           inert with it — Tab skips the hidden Upload/New/Root/File-operations,
+           Recycle bin and view toggle, and the tree exposes only the bar, so
+           Clear is the way back (Escape still only dismisses menus/tooltips). -->
       <div
         v-if="files.viewMode === 'grid'"
         class="fm-grid-bulk"
         :class="{ 'is-visible': gridBulkVisible }"
-        :inert="!gridBulkVisible"
+        :inert="!gridBulkVisible || undefined"
       >
         <FilesSelectionBar
           :count-reserve="countReserve"
@@ -3841,9 +3843,10 @@ function onFolderMenu(key: string): void {
    height from the in-flow groups; the overlay is absolutely positioned over it
    with the card colour, its action row scrolling inside when it cannot fit.
    Idle it stays mounted but visibility-hidden and inert — out of the layout,
-   the a11y tree and the tab order. The overlay itself is transparent to the
-   pointer (only its action row takes events), so covered toolbar controls keep
-   working exactly as before and the bar never traps input. */
+   the a11y tree and the tab order. While it shows it swallows the whole row's
+   pointer events (a tap on the count or a gap must never fire the invisible
+   control underneath) and the covered toolbar content goes inert with it, so
+   Tab skips the hidden controls and Clear is the way back. */
 .fm-bar.fm-toolbar.is-grid {
   position: relative;
 }
@@ -3863,18 +3866,10 @@ function onFolderMenu(key: string): void {
   overflow: hidden;
   background: var(--n-color);
   visibility: hidden;
-  pointer-events: none;
 }
 
 .fm-grid-bulk.is-visible {
   visibility: visible;
-}
-
-/* The overlay's own action row stays interactive over the covered controls
-   (:deep — the row is rendered by the child FilesSelectionBar, so the parent
-   scope alone would never match it). */
-.fm-grid-bulk:deep(.fm-selection-actions) {
-  pointer-events: auto;
 }
 
 /* The clipboard hint (Paste (N) / Cut clipboard) is its own compact chip so

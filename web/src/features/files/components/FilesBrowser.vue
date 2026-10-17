@@ -4432,6 +4432,22 @@ function onFolderMenu(key: string): void {
   pointer-events: none;
 }
 
+/* ── JUS-206 round 3: desktop one-row path bar ───────────────────────────
+   At >=1024px the path group (~half the row) and the search block share ONE
+   row: the bar never wraps, the breadcrumb clips from the left and the filter
+   input shrinks instead (its 120px floor plus the compact search controls fit
+   every desktop width). Below 1024px the bar may wrap; the phone rules below
+   take over at <=640px. */
+@media (min-width: 1024px) {
+  .fm-bar.fm-pathbar {
+    flex-wrap: nowrap;
+  }
+
+  .fm-search {
+    min-width: 120px;
+  }
+}
+
 /* ── JUS-135: phone layout ────────────────────────────────────────────────
    At 390px the toolbar used to wrap to four rows and the selection cluster
    squeezed the list to ~1.5 rows. The rules below (deliberately last, so they

@@ -1129,7 +1129,8 @@ test("the list header stays pinned while scrolling a long folder", async ({ page
 
   // Hovering the pinned header keeps it opaque, so rows cannot bleed through.
   await head.hover();
-  await expect(head).toHaveCSS("background-color", "rgb(43, 45, 49)");
+  // JUS-206: the header band uses --surface-warm (#1e1f22), the reference tone.
+  await expect(head).toHaveCSS("background-color", "rgb(30, 31, 34)");
 });
 
 test("the folder filter resets on navigation and the footer counts the filtered rows", async ({
@@ -1726,8 +1727,9 @@ test("the empty state is centered in the browser panel", async ({ page }) => {
 
 // JUS-153: the breadcrumb, the folder filter and Refresh moved out of the
 // toolbar into their own bar directly above it, so the toolbar carries actions
-// only. Both bars stay one row with no blank band or unintended wrap across the
-// 1366-1500px band the issue calls out.
+// only. At >=1024px both bars stay one row with no blank band or unintended
+// wrap (the path group takes ~half the row, the search block the right side);
+// below that the path bar may wrap, with the phone rows taking over at <=640px.
 test("the path bar sits above the toolbar with no blank band at 1366-1500px", async ({
   page,
 }) => {
@@ -1753,7 +1755,7 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
   ).toHaveCount(1);
   await expect(toolbar.locator(".fm-root-select")).toHaveCount(1);
 
-  for (const width of [1366, 1440, 1500]) {
+  for (const width of [1024, 1366, 1440, 1500]) {
     await page.setViewportSize({ width, height: 900 });
     await settleLayout(page);
     const m = await page.evaluate(() => {
@@ -1780,8 +1782,8 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
       m.toolbarToHeader,
       `16px band gap plus table border at ${width}px`,
     ).toBe(17);
-    expect(m.pathbarHeight, `path field includes 8px padding at ${width}px`)
-      .toBeGreaterThanOrEqual(50);
+    expect(m.pathbarHeight, `path bar is the 32px input-group row at ${width}px`)
+      .toBeGreaterThanOrEqual(30);
     expect(m.pathbarHeight, `path bar stays one row at ${width}px`).toBeLessThanOrEqual(52);
     expect(m.toolbarHeight, `toolbar is one row at ${width}px`).toBeLessThanOrEqual(44);
   }

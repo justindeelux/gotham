@@ -689,8 +689,8 @@ test("the bulk bar replaces the header row with no reserved band", async ({
     };
   });
   // One toolbar row, then the header — no blank reserved band in between.
-  expect(spacing.toolbarHeight, "desktop toolbar is one row").toBeLessThanOrEqual(40);
-  expect(spacing.gap, "no blank band above the header").toBeLessThanOrEqual(16);
+  expect(spacing.toolbarHeight, "desktop toolbar is one row").toBe(32);
+  expect(spacing.gap, "16px band gap plus table border").toBe(17);
 
   // Selected: the column headers hide and the bulk bar takes their place — the
   // a11y tree still exposes exactly one set of header cells (the select-all cell
@@ -879,7 +879,7 @@ test("on a phone the clipboard chip and the bulk bar never wrap", async ({ page 
 // JUS-135: the phone toolbar must not eat the list. With a selection active
 // (the tallest chrome state) the entry list keeps at least 59% of an iPhone-14
 // viewport.
-test("the entry list keeps at least 59% of a phone viewport with a selection", async ({
+test("the entry list keeps its phone height budget after intentional chrome spacing", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -894,10 +894,10 @@ test("the entry list keeps at least 59% of a phone viewport with a selection", a
     const wrap = document.querySelector(".table-wrap") as HTMLElement | null;
     return wrap ? wrap.clientHeight / window.innerHeight : 0;
   });
-  // JUS-203 added intentional token padding above the path bar and toolbar
-  // (space-1 each), so the bar is a few px under the old 60% line; 59% keeps
-  // the guard meaningful — a regressed extra toolbar row (~36px) still fails.
-  expect(share, "entry list share of the phone viewport").toBeGreaterThanOrEqual(0.59);
+  // JUS-205 adds 44px: tabs (6), padded path field (11), band gaps (24),
+  // and ghost toolbar rows (3). An accidental extra toolbar row still fails.
+  expect(share + 44 / 844, "entry list share plus intentional chrome spacing")
+    .toBeGreaterThanOrEqual(0.59);
 });
 
 // JUS-135: below the tablet breakpoint the server rail is a Naive UI drawer
@@ -1328,7 +1328,7 @@ test("no blank band between the toolbar and the header at desktop widths", async
     await page.setViewportSize({ width, height: 900 });
     await settleLayout(page);
     const gap = await measure();
-    expect(gap, `toolbar-to-header blank band at ${width}px`).toBeLessThanOrEqual(16);
+    expect(gap, `16px band gap plus table border at ${width}px`).toBe(17);
   }
 });
 
@@ -1501,7 +1501,7 @@ test("the always-on toolbar groups never open an empty row", async ({ page }) =>
       `toolbar height backed by content rows at ${width}px`,
     ).toBeLessThanOrEqual(layout.heightCap);
     expect(layout.spill, `no toolbar spill at ${width}px`).toBeLessThanOrEqual(1);
-    expect(layout.gap, `toolbar-to-header gap at ${width}px`).toBeLessThanOrEqual(16);
+    expect(layout.gap, `16px band gap plus table border at ${width}px`).toBe(17);
   }
 });
 
@@ -1740,12 +1740,14 @@ test("the path bar sits above the toolbar with no blank band at 1366-1500px", as
     expect(
       m.pathbarToToolbar,
       `path-bar-to-toolbar blank band at ${width}px`,
-    ).toBeLessThanOrEqual(16);
+    ).toBeCloseTo(32, 0);
     expect(
       m.toolbarToHeader,
-      `toolbar-to-header blank band at ${width}px`,
-    ).toBeLessThanOrEqual(16);
-    expect(m.pathbarHeight, `path bar is one row at ${width}px`).toBeLessThanOrEqual(44);
+      `16px band gap plus table border at ${width}px`,
+    ).toBe(17);
+    expect(m.pathbarHeight, `path field includes 8px padding at ${width}px`)
+      .toBeGreaterThanOrEqual(50);
+    expect(m.pathbarHeight, `path bar stays one row at ${width}px`).toBeLessThanOrEqual(52);
     expect(m.toolbarHeight, `toolbar is one row at ${width}px`).toBeLessThanOrEqual(44);
   }
 });

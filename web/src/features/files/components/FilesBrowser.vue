@@ -2426,6 +2426,7 @@ function onFolderMenu(key: string): void {
           @keydown="onTabKeydown($event, tab)"
           @auxclick="onTabAuxClick($event, tab.id)"
         >
+          <Folder class="fm-tab-icon" :size="16" :stroke-width="1.8" aria-hidden="true" />
           <span class="fm-tab-name">{{ tabLabel(tab) }}</span>
           <span
             v-if="files.tabs.length > 1"
@@ -2458,19 +2459,22 @@ function onFolderMenu(key: string): void {
     <div class="fm-bar fm-pathbar">
       <div class="fm-navfield">
         <AppTooltip :label="$t('files.browser.parent')">
-          <button
-            type="button"
+          <NButton
+            size="small"
+            quaternary
             class="fm-navback"
             :disabled="files.path === ''"
             :aria-label="$t('files.browser.parent')"
             @click="files.goUp()"
           >
-            <ArrowUp :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </button>
+            <template #icon>
+              <ArrowUp :size="16" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+          </NButton>
         </AppTooltip>
         <nav class="fm-path fm-navcrumbs" :aria-label="$t('files.browser.crumbs')">
           <template v-for="(crumb, index) in files.breadcrumb" :key="crumb.path">
-            <span v-if="index > 0" class="sep" aria-hidden="true">/</span>
+            <ChevronRight v-if="index > 0" class="sep" :size="14" :stroke-width="1.8" aria-hidden="true" />
             <button
               type="button"
               class="fm-crumb"
@@ -2495,7 +2499,6 @@ function onFolderMenu(key: string): void {
             <template #icon>
               <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
             </template>
-            <span class="fm-btn-label">{{ $t("files.browser.refresh") }}</span>
           </NButton>
         </AppTooltip>
       </div>
@@ -2548,7 +2551,7 @@ function onFolderMenu(key: string): void {
         <AppTooltip v-if="files.canWrite" :label="$t('files.actions.upload')">
           <NButton
             size="small"
-            type="primary"
+            quaternary
             :disabled="files.acting"
             :aria-label="$t('files.actions.upload')"
             @click="openUpload()"
@@ -2574,7 +2577,7 @@ function onFolderMenu(key: string): void {
           <AppTooltip :label="$t('files.actions.new')">
             <NButton
               size="small"
-              secondary
+              quaternary
               aria-haspopup="menu"
               :aria-expanded="newMenuOpen"
               :disabled="files.acting"
@@ -2611,7 +2614,7 @@ function onFolderMenu(key: string): void {
           <AppTooltip :label="$t('files.actions.fileOperations')">
             <NButton
               size="small"
-              secondary
+              quaternary
               aria-haspopup="menu"
               :aria-expanded="fileOpsOpen"
               :disabled="files.acting"
@@ -2649,7 +2652,7 @@ function onFolderMenu(key: string): void {
           <AppTooltip :label="sortLabel">
             <NButton
               size="small"
-              secondary
+              quaternary
               class="fm-sort-toggle"
               aria-haspopup="menu"
               :aria-expanded="sortMenuOpen"
@@ -2671,7 +2674,7 @@ function onFolderMenu(key: string): void {
         <AppTooltip :label="$t('files.browser.recycleBin')">
           <NButton
             size="small"
-            secondary
+            quaternary
             :disabled="files.rootName === ''"
             :aria-label="$t('files.browser.recycleBin')"
             @click="recycleOpen = true"
@@ -2682,6 +2685,7 @@ function onFolderMenu(key: string): void {
             <span class="fm-btn-label">{{ $t("files.browser.recycleBin") }}</span>
           </NButton>
         </AppTooltip>
+        <span class="fm-toolbar-sep" aria-hidden="true" />
         <span class="segmented" role="group">
           <AppTooltip :label="$t('files.browser.viewList')">
             <button
@@ -3306,7 +3310,7 @@ function onFolderMenu(key: string): void {
   /* JUS-134: the single row-height token every list row reads. JUS-137 can
    * size its virtual rows from it, so the compact desktop density stays a
    * one-value change. */
-  --fm-row-height: 36px;
+  --fm-row-height: var(--space-12);
   /* The panel is a flex column that fills whatever height its parent gives it
    * (JUS-118): toolbar/bar/footer stay fixed while the entry list is the
    * only scrolling region (`flex: 1` on .table-wrap / .fm-grid / .fm-state). */
@@ -3322,16 +3326,6 @@ function onFolderMenu(key: string): void {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-}
-
-/* JUS-150: the browser regions are separated by plain 1px --border rules, not
- * by tinted bands. Every region sits on the card's normal surface (no
- * background step); each adjacent pair — card header, tablist, path bar,
- * toolbar, entry list — shares a single divider. The header owns the rule down
- * to the tablist; the bars and the list own theirs (see below). Tokens only
- * (--border, --space-*). */
-.files-browser :deep(.n-card-header) {
-  border-bottom: 1px solid var(--border);
 }
 
 /* JUS-154: the header slot renders inside Naive's `.n-card-header`, whose
@@ -3358,16 +3352,14 @@ function onFolderMenu(key: string): void {
   /* Hug the tabs + the + button so the row rings exactly its content. */
   width: fit-content;
   max-width: 100%;
-  /* JUS-150: breathing room on either side of the region's dividers (the
-     header rule above, the path bar rule below); no fill or box of its own. */
-  margin-top: var(--space-3);
-  margin-bottom: var(--space-3);
+  margin-top: 0;
+  margin-bottom: var(--space-4);
 }
 
 .fm-tabstrip {
   display: flex;
   align-items: stretch;
-  gap: 2px;
+  gap: var(--space-2);
   /* Hug the tabs so the + button sits right after the last one (JUS-126);
      shrinking below the content keeps the strip the only scroll region. */
   flex: 0 1 auto;
@@ -3379,16 +3371,27 @@ function onFolderMenu(key: string): void {
 .fm-tab {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-2);
   flex: 0 0 auto;
   max-width: 220px;
   border: 0;
   background: none;
-  padding: 8px 11px;
-  border-radius: var(--radius-sm);
+  height: var(--space-8);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
   color: var(--muted);
   font-size: var(--text-sm);
   cursor: pointer;
+}
+
+.fm-tab:hover {
+  background: var(--hover-row);
+  color: var(--fg-2);
+}
+
+.fm-tab-icon {
+  flex: 0 0 auto;
+  color: var(--warn-ink);
 }
 
 .fm-tab.is-active {
@@ -3414,9 +3417,9 @@ function onFolderMenu(key: string): void {
 .fm-tab-close {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-sm);
+  width: var(--space-5);
+  height: var(--space-5);
+  border-radius: var(--radius-pill);
   color: var(--muted);
 }
 
@@ -3429,8 +3432,8 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--space-8);
+  height: var(--space-8);
   border: 0;
   background: none;
   border-radius: var(--radius-sm);
@@ -3455,8 +3458,6 @@ function onFolderMenu(key: string): void {
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  /* JUS-150: the 1px rule between the toolbar and the entry list. */
-  border-top: 1px solid var(--border);
 }
 
 /* The single shared aria-describedby target for the roving row (JUS-140):
@@ -3473,21 +3474,13 @@ function onFolderMenu(key: string): void {
   border: 0;
 }
 
-.fm-toolbar {
+.fm-bar.fm-toolbar {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
   flex-wrap: wrap;
-  /* JUS-150: a plain 1px rule separates the toolbar from the path bar above;
-     the row itself stays on the card surface (no band), so it keeps the single
-     compact toolbar row (the toolbar-height guards) and the plain inter-block
-     margin to the list header. JUS-203: token padding keeps the border off the
-     buttons (space-1: the JUS-135 phone list-share guard leaves no room for
-     more — see files-layout-fit). */
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-1);
-  margin-bottom: var(--space-3);
+  margin-bottom: var(--space-4);
 }
 
 /* Left group (Upload, New menu, Root selector, File Operations) and the
@@ -3509,7 +3502,8 @@ function onFolderMenu(key: string): void {
    roots so it never leads a row. */
 .fm-toolbar-sep {
   width: 1px;
-  align-self: stretch;
+  height: var(--space-5);
+  flex: 0 0 auto;
   background: var(--border);
 }
 
@@ -3591,16 +3585,14 @@ function onFolderMenu(key: string): void {
   margin-bottom: var(--space-3);
 }
 
-/* JUS-153: the path bar sits directly above the toolbar, so its bottom margin
-   is tighter than the default bar margin; the toolbar keeps the gap to the
-   list. `.fm-bar.fm-pathbar` outranks the single-class `.fm-bar` base.
-   JUS-150: the path bar is a plain row on the card surface; a 1px rule
-   separates it from the tablist above. JUS-203: token padding keeps the
-   border off the buttons (space-1, matching the toolbar — see above). */
+/* The path field owns its border; space separates the chrome bands. */
 .fm-bar.fm-pathbar {
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-1);
-  margin-bottom: var(--space-2);
+  margin-bottom: var(--space-8);
+}
+
+.fm-toolbar :deep(.n-button) {
+  height: var(--space-8);
+  border-radius: var(--radius-md);
 }
 
 /* Context bar (JUS-159): the home of the header-tools slot (the agent-node
@@ -3625,34 +3617,24 @@ function onFolderMenu(key: string): void {
   flex: 1 1 auto;
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
   background: var(--surface);
 }
 
-.fm-navback {
-  display: inline-flex;
-  align-items: center;
+.fm-navback,
+.fm-navrefresh {
   flex: 0 0 auto;
-  padding: var(--space-1) var(--space-2);
-  border: 0;
-  border-right: 1px solid var(--border);
-  background: none;
-  border-radius: 0;
-  color: var(--muted);
-  cursor: pointer;
+  width: var(--space-8);
+  height: var(--space-8);
 }
 
-.fm-navback:hover:not(:disabled) {
-  color: var(--fg-2);
-}
-
-.fm-navback:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+.fm-navrefresh {
+  margin-left: auto;
 }
 
 .fm-navcrumbs {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   flex-wrap: nowrap;
   justify-content: flex-end;
@@ -3666,28 +3648,22 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
 }
 
-.fm-navrefresh {
-  flex: 0 0 auto;
-  border-left: 1px solid var(--border);
-  border-radius: 0;
-}
-
 .fm-path {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-1);
   flex-wrap: wrap;
   /* JUS-150: the breadcrumb rides the card surface — no background or border —
      but keeps its own box metrics so the shared :focus-visible ring has room. */
-  padding: 2px;
-  min-height: 32px;
+  padding: var(--space-1);
+  min-height: var(--space-8);
 }
 
 .fm-crumb {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
   border: 0;
   background: none;
   border-radius: var(--radius-sm);
@@ -3708,12 +3684,12 @@ function onFolderMenu(key: string): void {
 }
 
 .fm-crumb.is-current {
-  background: var(--selected-row);
   color: var(--fg-2);
   font-weight: 600;
 }
 
 .fm-path .sep {
+  flex: 0 0 auto;
   color: var(--meta);
 }
 
@@ -4410,27 +4386,11 @@ function onFolderMenu(key: string): void {
     flex: 1 1 90px;
   }
 
-  .fm-tabs {
-    margin-top: var(--space-2);
-    margin-bottom: var(--space-1);
-  }
-
-  /* JUS-150: keep the chrome compact on a phone — the entry list needs the
-     height (the >=60% guard). `row-gap` matches the mockup's phone rule. */
+  /* Keep the roomier band gaps while reducing the path-to-toolbar gap on phones. */
   .fm-toolbar,
   .fm-bar.fm-pathbar {
     row-gap: var(--space-2);
-    margin-bottom: var(--space-1);
-  }
-
-  /* Slimmer tab strip/footer band: every pixel here is list height. */
-  .fm-tab {
-    padding: 6px 9px;
-  }
-
-  .fm-tab-add {
-    width: 30px;
-    height: 30px;
+    margin-bottom: var(--space-4);
   }
 
   /* Path bar row 1: the breadcrumb takes the whole row (scrolls, never wraps). */

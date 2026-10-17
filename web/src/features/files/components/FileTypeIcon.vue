@@ -36,19 +36,21 @@ const icon = computed<Component>(() => icons[props.kind]);
 /* File-type marks (.fm-mark family). */
 .fm-mark {
   position: relative;
-  width: 28px;
-  height: 28px;
+  width: calc(var(--space-6) + var(--space-1));
+  height: calc(var(--space-6) + var(--space-1));
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--surface-warm);
   border: 1px solid var(--border);
   color: var(--fg-2);
 }
 
 .fm-mark[data-kind="folder"] {
-  color: var(--accent-ink);
+  color: var(--warn-ink);
+  background: var(--warn-soft);
+  border-color: transparent;
 }
 
 .fm-mark[data-kind="image"] {

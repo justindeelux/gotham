@@ -8,16 +8,8 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 /* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL, window:readonly */
-// JUS-150 region-separation proof (JUS-159: the card header is gone, so the
-// five browser regions are now the context bar, tablist, path bar, toolbar and
-// entry list): the committed webdist is served statically with the
-// control-plane file API mocked in real Chromium. Measured claims: the regions
-// stack top-to-bottom, every adjacent pair below the tablist is joined by a
-// single 1px --border rule (the context bar meets the tablist with a margin
-// gap only), and none of the regions paints a band of its own — the context
-// bar, tablist, path bar and toolbar stay on the card surface (the tablist also
-// draws no boxed border) at 1440, 1024 and 390px. The path bar must not clip
-// the breadcrumb's shared :focus-visible ring.
+// JUS-205: token gaps separate the chrome bands; the navigation field and
+// entry list own their borders. Check real layout and focus-ring clearance.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -237,16 +229,12 @@ async function regionsOf(page: Page): Promise<{
   });
 }
 
-// JUS-150 (JUS-159: the card header is gone — the context bar replaces it and
-// draws no rule of its own): the five regions stack in order and each adjacent
-// pair below the tablist is joined by a single 1px --border rule; no region
-// paints a band of its own at every width.
 for (const viewport of [
   { width: 1440, height: 900 },
   { width: 1024, height: 768 },
   { width: 390, height: 844 },
 ]) {
-  test(`the browser regions are separated by divider rules at ${viewport.width}px`, async ({
+  test(`the browser regions are separated by token spacing at ${viewport.width}px`, async ({
     page,
   }) => {
     await openFiles(page, viewport.width, viewport.height);
@@ -281,53 +269,48 @@ for (const viewport of [
       `tablist draws no top rule at ${viewport.width}px`,
     ).toBe(0);
 
-    // Each remaining adjacent pair is separated by a real gap AND a 1px
-    // --border rule the eye can see. The gap rules out a coincident double
-    // line; the pair must share at least one rule, drawn at the shared edge by
-    // the upper region's bottom border or the lower region's top border.
-    for (let index = 2; index < order.length; index += 1) {
-      const upper = regions[order[index - 1]];
-      const lower = regions[order[index]];
-      const gap = lower.top - upper.bottom;
-      expect(
-        gap,
-        `${order[index - 1]} -> ${order[index]} gap at ${viewport.width}px`,
-      ).toBeGreaterThan(0);
-      const upperRule = upper.borderBottom > 0;
-      const lowerRule = lower.borderTop > 0;
-      expect(
-        upperRule || lowerRule,
-        `${order[index - 1]} -> ${order[index]} divider at ${viewport.width}px`,
-      ).toBe(true);
-      // A shared edge must not carry two stacked rules (one divider per boundary).
-      expect(
-        upperRule && lowerRule && gap < 2,
-        `${order[index - 1]} -> ${order[index]} double line at ${viewport.width}px`,
-      ).toBe(false);
-    }
-
-    // JUS-150: the three dividers are plain 1px --border rules, each owned by
-    // the top edge of the path bar, the toolbar and the entry list. The
-    // tablist itself draws no rule of its own.
-    const dividers = [
-      ["pathbar", "borderTop"],
-      ["toolbar", "borderTop"],
-      ["panel", "borderTop"],
+    const gaps = [
+      ["tablist", "pathbar", 16],
+      ["pathbar", "toolbar", viewport.width <= 640 ? 16 : 32],
+      ["toolbar", "panel", 16],
     ] as const;
-    for (const [name, edge] of dividers) {
-      const box = regions[name];
-      const width = edge === "borderTop" ? box.borderTop : box.borderBottom;
-      expect(width, `${name} ${edge} is 1px`).toBe(1);
-      const colour = edge === "borderTop" ? box.borderTopColor : box.borderBottomColor;
-      expect(normalizeColor(colour), `${name} ${edge} uses --border`).toBe(
-        normalizeColor(toRgb(border)),
-      );
+    for (const [upper, lower, expected] of gaps) {
+      expect(regions[lower].top - regions[upper].bottom, `${upper} -> ${lower}`)
+        .toBeCloseTo(expected, 0);
     }
 
-    // JUS-150: the tablist region is a divider-separated row, not a boxed band —
-    // it paints no background of its own and draws no border on any edge (the
-    // divider below it belongs to the path bar; above it sits the rule-free
-    // context-bar gap).
+    // Only the field and the list are boxed; no full-width rules crowd the bands.
+    for (const name of ["pathbar", "toolbar", "panel"] as const) {
+      expect(regions[name].borderTop, `${name} has no band divider`).toBe(0);
+    }
+    const field = page.locator(".fm-navfield");
+    await expect(field).toHaveCSS("border-top-width", "1px");
+    const fieldBorder = await field.evaluate((element) => getComputedStyle(element).borderTopColor);
+    expect(normalizeColor(fieldBorder)).toBe(normalizeColor(toRgb(border)));
+    await expect(page.locator(".table-wrap")).toHaveCSS("border-top-width", "1px");
+    const fieldBox = (await field.boundingBox())!;
+    for (const selector of [".fm-navback", ".fm-navrefresh"]) {
+      const button = page.locator(selector);
+      const box = (await button.boundingBox())!;
+      expect(box.x - fieldBox.x).toBeGreaterThanOrEqual(8);
+      expect(fieldBox.x + fieldBox.width - box.x - box.width).toBeGreaterThanOrEqual(8);
+      expect(box.y - fieldBox.y).toBeGreaterThanOrEqual(8);
+      expect(fieldBox.y + fieldBox.height - box.y - box.height).toBeGreaterThanOrEqual(8);
+      await expect(button.locator(".n-button__border")).toHaveCount(0);
+    }
+    await test.info().attach(`files-chrome-${viewport.width}px`, {
+      body: await page.screenshot({
+        path: test.info().outputPath(`files-chrome-${viewport.width}px.png`),
+        animations: "disabled",
+      }),
+      contentType: "image/png",
+    });
+    await expect(page.locator(".fm-tab-icon")).toHaveCount(1);
+    await expect(page.locator('.fm-table .fm-mark[data-kind="folder"]')).toHaveCount(2);
+    await page.getByRole("button", { name: "Grid view", exact: true }).click();
+    await expect(page.locator('.fm-grid .fm-mark[data-kind="folder"]')).toHaveCount(2);
+
+    // The pill tabs sit directly on the card without a boxed strip.
     expect(
       normalizeColor(regions.tablist.background),
       `tablist has no band background at ${viewport.width}px`,

@@ -26,6 +26,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 
 import EditorCloseTabsDialog from "@/features/files/components/EditorCloseTabsDialog.vue";
 import EditorConflictDialog from "@/features/files/components/EditorConflictDialog.vue";
+import EditorDraftDialog from "@/features/files/components/EditorDraftDialog.vue";
 import EditorEncodingDialog from "@/features/files/components/EditorEncodingDialog.vue";
 import EditorEncodingUnsupportedDialog from "@/features/files/components/EditorEncodingUnsupportedDialog.vue";
 import EditorExplorer from "@/features/files/components/EditorExplorer.vue";
@@ -38,6 +39,7 @@ import "@/features/files/locales/editorMessages";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
+import { useEditorDrafts } from "@/features/files/composables/useEditorDrafts";
 import { createMergeSession } from "@/features/files/composables/useMergeView";
 import type { MergeSession } from "@/features/files/composables/useMergeView";
 import {
@@ -80,6 +82,13 @@ const editorSettings = useEditorSettingsStore();
 const files = useFilesStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
+// Unsaved drafts survive a reload/crash; reopening a file offers Restore /
+// Discard (JUS-229). Kept out of the store so this component stays a view.
+const {
+  prompt: draftPrompt,
+  restore: restoreDraftPrompt,
+  discard: discardDraftPrompt,
+} = useEditorDrafts(() => props.serverId);
 
 /** sessions holds one live CodeMirror instance per opened tab. */
 const sessions = new Map<string, EditorSession>();
@@ -1724,6 +1733,11 @@ onBeforeUnmount(() => {
     @save="saveAndClose"
     @discard="discardAndClose"
     @cancel="cancelClose"
+  />
+  <EditorDraftDialog
+    :prompt="draftPrompt"
+    @restore="restoreDraftPrompt"
+    @discard="discardDraftPrompt"
   />
   <EditorConflictDialog />
   <EditorSaveAsDialog />

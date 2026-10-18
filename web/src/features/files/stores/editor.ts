@@ -409,6 +409,23 @@ export const useEditorStore = defineStore("filesEditor", () => {
   }
 
   /**
+   * restoreDraft replaces a tab's buffer with a recovered draft, including the
+   * line endings and BOM it was typed with, so a later save writes what the
+   * user saw. Only a fully loaded editable tab can take a draft.
+   */
+  function restoreDraft(
+    id: string,
+    draft: { doc: string; eol: EditorEol; bom: boolean },
+  ): void {
+    const tab = tabs.value.find((item) => item.id === id);
+    if (tab && tab.kind === "file" && tab.status === "ready") {
+      tab.doc = draft.doc;
+      tab.eol = draft.eol;
+      tab.bom = draft.bom;
+    }
+  }
+
+  /**
    * setLanguage overrides the detected grammar for one tab. The live session
    * reconfigures its language compartment, so the undo history is untouched;
    * a later rename keeps the manual choice instead of re-detecting.
@@ -845,6 +862,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     openFile,
     openDiff,
     setDoc,
+    restoreDraft,
     setLanguage,
     setEol,
     setEncoding,

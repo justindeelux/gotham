@@ -55,7 +55,7 @@ import {
 import type { EditorLanguageId, TabCloseScope } from "@/features/files/utils/editor";
 import { useTeamsStore } from "@/features/teams";
 import { useCopyText } from "@/shared/composables/useCopyText";
-import { formatBytes } from "@/shared/utils/format";
+import { formatBytes, formatDateTime } from "@/shared/utils/format";
 
 interface Props {
   serverId: string;
@@ -86,6 +86,9 @@ const mergeSessions = new Map<string, MergeSession>();
 const mergeHosts = new Map<string, HTMLElement>();
 /** mergeCreating holds the in-flight diff build per tab. */
 const mergeCreating = new Map<string, Promise<void>>();
+/** mergeSources remembers the two docs a live merge view was built from, so a
+ *  refreshed diff tab rebuilds instead of showing stale sides. */
+const mergeSources = new Map<string, { base: string; current: string }>();
 const cursor = ref<{ line: number; column: number }>({ line: 1, column: 1 });
 // minimized collapses the window into the bottom dock. The window stays
 // mounted (v-show) so every live session and buffer survives the toggle.
@@ -354,6 +357,32 @@ watch(
         session.destroy();
         mergeSessions.delete(id);
         mergeHosts.delete(id);
+        mergeSources.delete(id);
+      }
+    }
+    for (const tab of editor.tabs) {
+      if (tab.kind !== "diff") {
+        continue;
+      }
+      const session = mergeSessions.get(tab.id);
+      if (!session) {
+        continue;
+      }
+      const source = mergeSources.get(tab.id);
+      const stale =
+        tab.status !== "ready" ||
+        !tab.diff ||
+        !source ||
+        source.base !== tab.diff.base ||
+        source.current !== tab.diff.current;
+      if (!stale) {
+        continue;
+      }
+      session.destroy();
+      mergeSessions.delete(tab.id);
+      mergeSources.delete(tab.id);
+      if (editor.activeId === tab.id && tab.status === "ready") {
+        void ensureMerge();
       }
     }
     for (const tab of editor.tabs) {
@@ -460,14 +489,17 @@ async function ensureMerge(): Promise<void> {
     return;
   }
   const tabId = tab.id;
+  const base = tab.diff.base;
+  const current = tab.diff.current;
   const build = createMergeSession({
     parent: host,
-    base: tab.diff.base,
-    current: tab.diff.current,
+    base,
+    current,
     language: tab.language,
   }).then((session) => {
     if (editor.tabs.some((item) => item.id === tabId)) {
       mergeSessions.set(tabId, session);
+      mergeSources.set(tabId, { base, current });
     } else {
       session.destroy();
     }
@@ -518,6 +550,7 @@ async function openDiff(version: FilesVersion): Promise<void> {
     tab.root,
     tab.path,
     version.id,
+    `${tab.name} · ${formatDateTime(version.created_at)}`,
   );
   const opened = editor.activeTab;
   if (opened?.status === "error") {
@@ -1180,6 +1213,7 @@ onBeforeUnmount(() => {
   }
   mergeSessions.clear();
   mergeHosts.clear();
+  mergeSources.clear();
   // An implicit unmount (a team switch, or losing the read role) must never
   // drop a dirty buffer: reset only when nothing is dirty, or the user
   // resolved the discard prompt. The store outlives the component, so a

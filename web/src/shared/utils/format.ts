@@ -301,6 +301,28 @@ export function formatDate(
   });
 }
 
+/**
+ * formatDateTime renders an ISO timestamp as a localized date and time
+ * ("18 Oct 2026, 09:30"), for labels that must distinguish same-day events.
+ */
+export function formatDateTime(
+  iso: string | null | undefined,
+  locale?: Locale | null,
+): string {
+  const loc = locale ?? activeLocale.value;
+  if (!iso) {
+    return emptyPlaceholder;
+  }
+  const time = new Date(iso);
+  if (Number.isNaN(time.getTime())) {
+    return (loc === "vi" ? viCatalog : enCatalog).time.unknown;
+  }
+  return time.toLocaleString(localeTag(loc), {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 /** expiryLabel renders how far away (or past) an expiry timestamp is. */
 export function expiryLabel(
   iso: string | null | undefined,

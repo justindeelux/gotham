@@ -223,8 +223,41 @@ export const useEditorStore = defineStore("filesEditor", () => {
   }
 
   /**
+   * loadDiff fills a diff tab from the stored revision and the live server body.
+   * Re-reading on reuse keeps the right side current when the file changed
+   * since the tab was first opened. `title` is the caller-localized tab label.
+   */
+  async function loadDiff(
+    tab: EditorTab,
+    teamId: string,
+    versionId: string,
+    title: string,
+  ): Promise<void> {
+    tab.status = "loading";
+    tab.error = "";
+    try {
+      // The base is the stored revision; the right side is the live server body
+      // (a dirty local buffer is not the file the diff compares against).
+      const [version, current] = await Promise.all([
+        getFileVersion(serverId.value, teamId, tab.root, tab.path, versionId),
+        getContent(serverId.value, teamId, tab.root, tab.path),
+      ]);
+      tab.diff = { versionId, base: version.content, current: current.content };
+      tab.etag = current.etag;
+      tab.size = version.version.size;
+      tab.name = title;
+      tab.status = "ready";
+    } catch (err) {
+      tab.diff = undefined;
+      tab.status = "error";
+      tab.error = describeFilesError(err);
+    }
+  }
+
+  /**
    * openDiff focuses an existing read-only diff tab for one revision or opens a
-   * new one. A history tab is never editable or savable. A body that cannot be
+   * new one. A reused tab is re-read, so its right side reflects the current
+   * file. A history tab is never editable or savable. A body that cannot be
    * read (the file grew past the editor limit, or was removed) yields an error
    * tab instead of a blank diff.
    */
@@ -234,6 +267,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     root: string,
     path: string,
     versionId: string,
+    title: string,
   ): Promise<void> {
     if (serverId.value !== nextServerId) {
       reset();
@@ -248,6 +282,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     );
     if (existing) {
       activeId.value = existing.id;
+      await loadDiff(existing, teamId, versionId, title);
       return;
     }
     const tab: EditorTab = {
@@ -255,7 +290,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       kind: "diff",
       root,
       path,
-      name: tabTitle(path),
+      name: title,
       doc: "",
       original: "",
       etag: "",
@@ -275,23 +310,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     if (!live) {
       return;
     }
-    try {
-      // The base is the stored revision; the right side is the live server body
-      // (a dirty local buffer is not the file the diff compares against).
-      const [version, current] = await Promise.all([
-        getFileVersion(serverId.value, teamId, root, path, versionId),
-        getContent(serverId.value, teamId, root, path),
-      ]);
-      live.diff = { versionId, base: version.content, current: current.content };
-      live.etag = current.etag;
-      live.size = version.version.size;
-      live.name = `${tabTitle(path)} · ${new Date(version.version.created_at).toLocaleString()}`;
-      live.status = "ready";
-      live.error = "";
-    } catch (err) {
-      live.status = "error";
-      live.error = describeFilesError(err);
-    }
+    await loadDiff(live, teamId, versionId, title);
   }
 
   /** load reads one tab's content and applies the decoded shape. */

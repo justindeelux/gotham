@@ -41,7 +41,9 @@ const mergeTheme = EditorView.theme({
   ".cm-changedText": { backgroundColor: "color-mix(in oklab, var(--success) 40%, transparent)" },
   ".cm-deletedChunk": { backgroundColor: "color-mix(in oklab, var(--danger) 16%, transparent)" },
   ".cm-insertedLine": { backgroundColor: "color-mix(in oklab, var(--success) 16%, transparent)" },
-  ".cm-changedLineGutter": { backgroundColor: "color-mix(in oklab, var(--accent) 28%, transparent)" },
+  ".cm-changedLineGutter": {
+    backgroundColor: "color-mix(in oklab, var(--accent) 28%, transparent)",
+  },
 });
 
 /** readOnlyExtensions make both sides non-editable and non-writable. */

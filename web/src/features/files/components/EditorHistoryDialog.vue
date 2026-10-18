@@ -115,7 +115,10 @@ function sizeLabel(version: FilesVersion): string {
   >
     <NSpin :show="loading">
       <p v-if="loadError" class="small muted" role="alert">{{ loadError }}</p>
-      <NEmpty v-else-if="versions.length === 0 && !loading" :description="t('files.editor.historyEmpty')" />
+      <NEmpty
+        v-else-if="versions.length === 0 && !loading"
+        :description="t('files.editor.historyEmpty')"
+      />
       <table v-else class="ed-history-table">
         <thead>
           <tr>
@@ -153,7 +156,11 @@ function sizeLabel(version: FilesVersion): string {
                       {{ t("files.editor.historyRestore") }}
                     </NButton>
                   </template>
-                  {{ dirty ? t("files.editor.historyRestoreDirty") : t("files.editor.historyRestoreConfirm") }}
+                  {{
+                    dirty
+                      ? t("files.editor.historyRestoreDirty")
+                      : t("files.editor.historyRestoreConfirm")
+                  }}
                 </NPopconfirm>
                 <NPopconfirm
                   :positive-text="t('files.editor.historyDelete')"

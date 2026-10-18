@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,11 @@ const (
 	// DefaultHistoryMaxBytes keeps at most 32 MiB of bodies per file. At the
 	// editor's 2 MiB ceiling that is still 16 full-size revisions.
 	DefaultHistoryMaxBytes int64 = 32 << 20
+
+	// historyWriteTimeout bounds one snapshot insert or cleanup. It runs on a
+	// detached context, so a slow database still cannot stall a request
+	// forever while a client disconnect cannot lose the revision.
+	historyWriteTimeout = 10 * time.Second
 )
 
 // historyMaxVersionsFromEnv parses HistoryMaxVersionsEnv; 0 keeps the default.
@@ -71,8 +77,9 @@ type VersionBody struct {
 // 503 and saves skip snapshots).
 type HistoryStore interface {
 	// SaveVersion records one pre-save body and applies the retention bounds
-	// in the same transaction.
-	SaveVersion(ctx context.Context, serverID uuid.UUID, root, path, etag string, content []byte, maxVersions int, maxBytes int64) error
+	// in the same transaction. It returns the stored revision, which a restore
+	// deletes again when its write is refused.
+	SaveVersion(ctx context.Context, serverID uuid.UUID, root, path, etag string, content []byte, maxVersions int, maxBytes int64) (Version, error)
 	// ListVersions returns one file's revisions, newest first.
 	ListVersions(ctx context.Context, serverID uuid.UUID, root, path string) ([]Version, error)
 	// GetVersion reads one revision, scoped to the addressed file.
@@ -93,8 +100,8 @@ func NewStoreHistory(s *store.Store) HistoryStore {
 }
 
 // SaveVersion records one snapshot and prunes the file's older revisions.
-func (h storeHistory) SaveVersion(ctx context.Context, serverID uuid.UUID, root, path, etag string, content []byte, maxVersions int, maxBytes int64) error {
-	_, err := h.store.SaveFileVersion(ctx, sqlc.InsertFileVersionParams{
+func (h storeHistory) SaveVersion(ctx context.Context, serverID uuid.UUID, root, path, etag string, content []byte, maxVersions int, maxBytes int64) (Version, error) {
+	row, err := h.store.SaveFileVersion(ctx, sqlc.InsertFileVersionParams{
 		ServerID: historyUUID(serverID),
 		Root:     root,
 		Path:     path,
@@ -102,7 +109,15 @@ func (h storeHistory) SaveVersion(ctx context.Context, serverID uuid.UUID, root,
 		Size:     int64(len(content)),
 		Content:  content,
 	}, int64(maxVersions), maxBytes)
-	return err
+	if err != nil {
+		return Version{}, err
+	}
+	return Version{
+		ID:        uuid.UUID(row.ID.Bytes),
+		CreatedAt: row.CreatedAt.Time,
+		Size:      row.Size,
+		Etag:      row.Etag,
+	}, nil
 }
 
 // ListVersions returns one file's revisions, newest first.
@@ -167,6 +182,19 @@ func historyUUID(id uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
+// canonicalHistoryPath normalizes a root-relative path into the one key a
+// file's history lives under. It mirrors the agent's own cleanRel for relative
+// paths (path.Clean drops ".", duplicate and trailing separators), so
+// "a//f", "a/./f" and "a/f/" all address the same single history. An absolute
+// path is left absolute: the agent refuses it, so no revision is ever stored
+// under it.
+func canonicalHistoryPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	return path.Clean(p)
+}
+
 // History lists one file's snapshots, newest first. Owner/admin only: a
 // snapshot holds the file body. It never dials the agent, so the history of a
 // deleted or renamed file stays readable.
@@ -180,6 +208,7 @@ func (s *Service) History(ctx context.Context, serverID uuid.UUID, root, path st
 	if err := validatePathArg("path", path); err != nil {
 		return nil, err
 	}
+	path = canonicalHistoryPath(path)
 	if _, err := s.resolve(ctx, serverID, true); err != nil {
 		return nil, err
 	}
@@ -209,6 +238,7 @@ func (s *Service) HistoryVersion(ctx context.Context, serverID uuid.UUID, root, 
 	if err := validatePathArg("path", path); err != nil {
 		return VersionBody{}, err
 	}
+	path = canonicalHistoryPath(path)
 	if versionID == uuid.Nil {
 		return VersionBody{}, fmt.Errorf("%w: version id is required", ErrValidation)
 	}
@@ -235,6 +265,7 @@ func (s *Service) DeleteVersion(ctx context.Context, serverID uuid.UUID, root, p
 	if err := validatePathArg("path", path); err != nil {
 		return err
 	}
+	path = canonicalHistoryPath(path)
 	if versionID == uuid.Nil {
 		return fmt.Errorf("%w: version id is required", ErrValidation)
 	}
@@ -272,6 +303,7 @@ func (s *Service) RestoreVersion(ctx context.Context, serverID uuid.UUID, root, 
 	if err := validatePathArg("path", path); err != nil {
 		return WriteResult{}, err
 	}
+	path = canonicalHistoryPath(path)
 	if versionID == uuid.Nil {
 		return WriteResult{}, fmt.Errorf("%w: version id is required", ErrValidation)
 	}
@@ -298,6 +330,16 @@ func (s *Service) RestoreVersion(ctx context.Context, serverID uuid.UUID, root, 
 	default:
 		return WriteResult{}, priorErr
 	}
+	// Snapshot what the restore replaces BEFORE the write, and abort when it
+	// cannot be stored: an overwrite whose prior body is unknown is exactly
+	// the data loss this feature exists to prevent (aaPanel's FE-HIS-08 gap).
+	var snapshot Version
+	if priorErr == nil {
+		snapshot, err = s.saveVersionDetached(ctx, serverID, root, path, prior)
+		if err != nil {
+			return WriteResult{}, fmt.Errorf("files: snapshot the current body before restore: %w", err)
+		}
+	}
 	result, err = s.streamWrite(ctx, serverID, WriteRequest{
 		Root:       root,
 		Path:       path,
@@ -305,24 +347,53 @@ func (s *Service) RestoreVersion(ctx context.Context, serverID uuid.UUID, root, 
 		Size:       int64(len(version.Content)),
 	}, strings.NewReader(version.Content))
 	if err != nil {
+		// A refused write (conflict or bad request) replaced nothing, so drop
+		// the pre-snapshot instead of leaving a phantom revision. Any other
+		// error may have committed on the node, so its snapshot is kept.
+		if priorErr == nil && (errors.Is(err, ErrConflict) || errors.Is(err, ErrValidation)) {
+			s.clearVersion(ctx, serverID, root, path, snapshot.ID)
+		}
 		return WriteResult{}, err
-	}
-	if priorErr == nil {
-		s.recordVersion(ctx, serverID, root, path, prior)
 	}
 	return result, nil
 }
 
-// recordVersion stores one pre-save body. A history failure never fails the
-// save that already committed: it is logged (never with the body) so an
-// operator can see the missing revision.
+// saveVersionDetached stores one pre-save body on a context detached from the
+// request, so a client disconnect or request deadline after the agent commit
+// cannot lose the revision. The key is canonical, so every spelling of one path
+// shares a single history.
+func (s *Service) saveVersionDetached(ctx context.Context, serverID uuid.UUID, root, path string, prior Content) (Version, error) {
+	history := s.historyStore()
+	if history == nil {
+		return Version{}, ErrHistoryUnavailable
+	}
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyWriteTimeout)
+	defer cancel()
+	return history.SaveVersion(saveCtx, serverID, root, canonicalHistoryPath(path), prior.Etag, []byte(prior.Content), s.historyMaxVersions, s.historyMaxBytes)
+}
+
+// recordVersion stores one pre-save body after a successful save. A history
+// failure never fails the save that already committed: it is logged (never with
+// the body) so an operator can see the missing revision.
 func (s *Service) recordVersion(ctx context.Context, serverID uuid.UUID, root, path string, prior Content) {
+	if _, err := s.saveVersionDetached(ctx, serverID, root, path, prior); err != nil {
+		s.logger.Warn("files: could not record file version",
+			"server_id", serverID.String(), "root", root, "relpath", path, "error", err)
+	}
+}
+
+// clearVersion removes the pre-restore snapshot when the restore write was
+// refused. It uses a detached context for the same reason as the insert; a
+// failed cleanup is logged and leaves at worst one extra revision.
+func (s *Service) clearVersion(ctx context.Context, serverID uuid.UUID, root, path string, versionID uuid.UUID) {
 	history := s.historyStore()
 	if history == nil {
 		return
 	}
-	if err := history.SaveVersion(ctx, serverID, root, path, prior.Etag, []byte(prior.Content), s.historyMaxVersions, s.historyMaxBytes); err != nil {
-		s.logger.Warn("files: could not record file version",
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyWriteTimeout)
+	defer cancel()
+	if _, err := history.DeleteVersion(cleanupCtx, serverID, root, canonicalHistoryPath(path), versionID); err != nil {
+		s.logger.Warn("files: could not remove the pre-restore version",
 			"server_id", serverID.String(), "root", root, "relpath", path, "error", err)
 	}
 }

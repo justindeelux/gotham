@@ -137,7 +137,7 @@ const vi = {
   historyDeleteConfirm: "Xóa phiên bản này? Không thể hoàn tác.",
   historyDeleted: "Đã xóa phiên bản",
   historyClose: "Đóng",
-  historyCount: "{count} phiên bản",
+  historyCount: "{count} phiên bản | {count} phiên bản",
   historyLoadFailed: "Không tải được lịch sử tệp.",
   historyUnavailable: "Lịch sử tệp không khả dụng trên bảng điều khiển này.",
 };

@@ -120,12 +120,13 @@ describe("editor history diff tab", () => {
     });
     const editor = useEditorStore();
 
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1");
+    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1", "a.txt · now");
 
     expect(editor.tabs).toHaveLength(1);
     const tab = editor.tabs[0];
     expect(tab.kind).toBe("diff");
     expect(tab.status).toBe("ready");
+    expect(tab.name).toBe("a.txt · now");
     expect(tab.diff).toEqual({
       versionId: "v1",
       base: "old body",
@@ -149,14 +150,27 @@ describe("editor history diff tab", () => {
       mode: 0o100644,
     });
     const editor = useEditorStore();
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1");
+    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1", "v1 · time");
     const first = editor.tabs[0];
 
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1");
+    // A reused diff re-reads both sides, so the right side is the current file.
+    vi.mocked(getFileVersion).mockResolvedValue({
+      version: versions[0],
+      content: "old body",
+    });
+    vi.mocked(getContent).mockResolvedValue({
+      content: "newer current",
+      etag: '"v3"',
+      sha256: "y",
+      size: 13,
+      mode: 0o100644,
+    });
+    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1", "v1 · time");
     expect(editor.tabs).toHaveLength(1);
     expect(editor.activeId).toBe(first.id);
+    expect(first.diff?.current).toBe("newer current");
 
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v2");
+    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v2", "v2 · time");
     expect(editor.tabs).toHaveLength(2);
     expect(editor.activeTab?.diff?.versionId).toBe("v2");
   });
@@ -169,7 +183,7 @@ describe("editor history diff tab", () => {
     vi.mocked(getContent).mockRejectedValue(new Error("gone"));
     const editor = useEditorStore();
 
-    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1");
+    await editor.openDiff("srv", "team-1", "volumes", "a.txt", "v1", "v1 · time");
 
     expect(editor.tabs[0].status).toBe("error");
     expect(editor.tabs[0].diff).toBeUndefined();
@@ -230,6 +244,7 @@ describe("history in the editor", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("2 versions");
+    expect(i18n.global.t("files.editor.historyCount", 1)).toBe("1 version");
     const history = wrapper
       .findAll("button")
       .find((button) => button.text().includes("History"));
@@ -243,6 +258,26 @@ describe("history in the editor", () => {
       "volumes",
       "a.txt",
     );
+
+    // Opening the diff uses a localized title, not the raw locale default.
+    vi.mocked(getFileVersion).mockResolvedValue({
+      version: versions[0],
+      content: "old",
+    });
+    vi.mocked(getContent).mockResolvedValue({
+      content: "current",
+      etag: '"v2"',
+      sha256: "x",
+      size: 7,
+      mode: 0o100644,
+    });
+    const diff = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Diff"));
+    await diff!.trigger("click");
+    await flushPromises();
+    expect(editor.activeTab?.kind).toBe("diff");
+    expect(editor.activeTab?.name).toMatch(/^a\.txt · /);
     wrapper.unmount();
   });
 });

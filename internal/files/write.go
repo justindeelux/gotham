@@ -103,16 +103,24 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 		body = strings.NewReader("")
 	}
 
-	// A save over a file the caller has read is snapshotted first, so the
-	// replaced body stays recoverable. A force-save or a create has no known
-	// prior, so there is nothing to record. A body that cannot be read as text
-	// (too large / binary) is simply not versioned: the save still succeeds.
+	// Guarantee: a recorded revision is exactly the body the commit replaced.
+	// The pre-save read must carry the same etag as the If-Match the agent
+	// validates under its per-path lock; only then is the body we read provably
+	// the one being replaced. A mismatch means the file moved between the
+	// caller's read and ours (the agent's etag check will either refuse the
+	// commit or the file changed back), so nothing is recorded rather than the
+	// wrong prior body. A force-save or create has no known prior at all, and a
+	// too-large/binary body is not readable as text: both skip history without
+	// failing the save.
 	var prior *Content
 	if op == "write" && req.ExpectEtag != "" && s.historyStore() != nil {
 		current, readErr := s.readContent(ctx, serverID, req.Root, req.Path)
 		switch {
-		case readErr == nil:
+		case readErr == nil && current.Etag == req.ExpectEtag:
 			prior = &current
+		case readErr == nil:
+			s.logger.Debug("files: skipping version snapshot; the pre-save etag does not match the save",
+				"server_id", serverID.String(), "root", req.Root, "relpath", req.Path)
 		case errors.Is(readErr, ErrTooLarge), errors.Is(readErr, ErrNotEditable), errors.Is(readErr, ErrNotFound):
 			// Nothing readable to keep (a large/binary body or a vanished
 			// file). The save itself still proceeds.

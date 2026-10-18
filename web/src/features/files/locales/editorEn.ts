@@ -141,7 +141,7 @@ const en = {
   historyDeleteConfirm: "Delete this version? This cannot be undone.",
   historyDeleted: "Version deleted",
   historyClose: "Close",
-  historyCount: "{count} versions",
+  historyCount: "{count} version | {count} versions",
   historyLoadFailed: "Could not load the file history.",
   historyUnavailable: "File history is unavailable on this control plane.",
 };

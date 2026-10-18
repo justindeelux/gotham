@@ -2,6 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
+import EditorGotoLine from "@/features/files/components/EditorGotoLine.vue";
+import EditorSearchBar from "@/features/files/components/EditorSearchBar.vue";
+import { useEditorFind } from "@/features/files/composables/useEditorFind";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
 import { CODE_EDITOR_PRESETS } from "@/features/files/editor/presets";
@@ -54,6 +57,47 @@ const host = ref<HTMLElement | null>(null);
 let session: EditorSession | null = null;
 let disposed = false;
 
+// The embedded editor gets the same custom find/replace and go-to-line
+// surfaces as the file editor (JUS-231); its read-only flag also gates replace.
+const {
+  findOpen,
+  replaceExpanded,
+  focusReplace,
+  gotoOpen,
+  query: findQuery,
+  replacement: findReplacement,
+  caseSensitive: findCaseSensitive,
+  wholeWord: findWholeWord,
+  regexp: findRegexp,
+  total: findTotal,
+  current: findCurrent,
+  capped: findCapped,
+  gotoCurrent,
+  gotoTotal,
+  canReplace,
+  patternError: findPatternError,
+  openFind,
+  closeFind,
+  toggleReplace,
+  setQuery: setFindQuery,
+  setReplacement: setFindReplacement,
+  toggleCase,
+  toggleWord,
+  toggleRegex,
+  next: nextMatch,
+  previous: previousMatch,
+  replaceMatch,
+  replaceEveryMatch,
+  openGotoLine,
+  closeGotoLine,
+  jumpToLine,
+  queueStatus: queueFindStatus,
+} = useEditorFind({
+  session: () => session,
+  tabId: () => "code-editor",
+  canReplace: () => !props.readOnly,
+});
+
 /** ariaLabel is the caller label, else the localized generic editor name. */
 const ariaLabel = computed<string>(
   () => props.ariaLabel ?? t("files.editor.codeEditorLabel"),
@@ -83,8 +127,22 @@ onMounted(() => {
     ariaLabel: ariaLabel.value,
     readOnly: props.readOnly,
     settings: effectiveSettings.value,
-    onChange: (doc) => emit("update:modelValue", doc),
+    onChange: (doc) => {
+      emit("update:modelValue", doc);
+      queueFindStatus();
+    },
     onSave: () => emit("save", session?.getDoc() ?? props.modelValue),
+    onFind: () => openFind(false),
+    onReplace: () => openFind(true),
+    onGoToLine: () => openGotoLine(),
+    onFindNext: () => {
+      openFind(false);
+      nextMatch();
+    },
+    onFindPrevious: () => {
+      openFind(false);
+      previousMatch();
+    },
   }).then((created) => {
     // The chunk is lazy: a dialog can close before it resolves, and that
     // instance must not outlive the component.
@@ -120,15 +178,58 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="host" class="code-editor" :style="{ height }" />
+  <div class="code-editor" :style="{ height }">
+    <EditorSearchBar
+      :show="findOpen"
+      :expanded="replaceExpanded"
+      :can-replace="canReplace"
+      :query="findQuery"
+      :replacement="findReplacement"
+      :case-sensitive="findCaseSensitive"
+      :whole-word="findWholeWord"
+      :regexp="findRegexp"
+      :pattern-error="findPatternError"
+      :total="findTotal"
+      :capped="findCapped"
+      :current="findCurrent"
+      :focus-replace="focusReplace"
+      @close="closeFind"
+      @update:query="setFindQuery"
+      @update:replacement="setFindReplacement"
+      @toggle:expanded="toggleReplace"
+      @toggle:case="toggleCase"
+      @toggle:word="toggleWord"
+      @toggle:regex="toggleRegex"
+      @next="nextMatch"
+      @previous="previousMatch"
+      @replace="replaceMatch"
+      @replace-all="replaceEveryMatch"
+    />
+    <div ref="host" class="code-editor-host" />
+    <EditorGotoLine
+      :show="gotoOpen"
+      :current="gotoCurrent"
+      :total="gotoTotal"
+      :jump="jumpToLine"
+      @close="closeGotoLine"
+    />
+  </div>
 </template>
 
 <style scoped>
 .code-editor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   min-height: 120px;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface-warm);
+}
+
+.code-editor-host {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 </style>

@@ -24,7 +24,11 @@ import {
   indentUnit,
   syntaxHighlighting,
 } from "@codemirror/language";
-import { gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap } from "@codemirror/search";
+import {
+  highlightSelectionMatches,
+  selectNextOccurrence,
+  selectSelectionMatches,
+} from "@codemirror/search";
 import { Compartment, EditorState } from "@codemirror/state";
 import type { Extension, Range } from "@codemirror/state";
 import {
@@ -47,6 +51,9 @@ import { tags } from "@lezer/highlight";
 
 import { bracketExtensions, completionExtensions } from "@/features/files/editor/completion";
 import { editorCommandKeymap } from "@/features/files/editor/shortcuts";
+import { createSearchController, customSearchExtensions } from "@/features/files/editor/search";
+import type { EditorSearchController } from "@/features/files/editor/search";
+import type { EditorLineInfo } from "@/features/files/editor/goto";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
@@ -59,9 +66,12 @@ export interface EditorSession {
   setReadOnly: (_readOnly: boolean) => void;
   focus: () => void;
   requestMeasure: () => void;
-  openSearch: () => void;
-  openReplace: () => void;
-  goToLine: () => void;
+  /** search drives the custom find/replace bar over the CM search state. */
+  search: EditorSearchController;
+  /** lineInfo reports the cursor line and the document line count. */
+  lineInfo: () => EditorLineInfo;
+  /** gotoLine moves the cursor; a rejected dimension is returned, not clamped. */
+  gotoLine: (_line: number, _column: number) => "line" | "column" | null;
   destroy: () => void;
 }
 
@@ -84,6 +94,14 @@ export interface EditorSessionOptions {
   onToggleWrap?: () => void;
   onNextTab?: () => void;
   onPreviousTab?: () => void;
+  /** The custom find/replace and go-to-line surfaces (JUS-231). Required so no
+   *  surface can fall back to the default CodeMirror panels. */
+  onFind: () => void;
+  onReplace: () => void;
+  onGoToLine: () => void;
+  /** Walk the matches without opening the default search panel (Mod-G). */
+  onFindNext?: () => void;
+  onFindPrevious?: () => void;
 }
 
 /** logMode highlights the level, timestamp and quoted fields of a log line. */
@@ -381,19 +399,6 @@ export function editorSettingsExtensions(
 }
 
 /**
- * openReplacePanel opens the search panel and moves focus to its Replace
- * input, so Mod-h lands on replace instead of the find field.
- */
-function openReplacePanel(view: EditorView): void {
-  openSearchPanel(view);
-  const focusReplace = (): void => {
-    view.dom.querySelector<HTMLInputElement>('input[name="replace"]')?.focus();
-  };
-  focusReplace();
-  requestAnimationFrame(focusReplace);
-}
-
-/**
  * createEditorSession builds one editor. The language, settings (theme, font,
  * indentation, gutters, whitespace, wrap) and read-only facets live in
  * Compartments so the settings popover (or a role change) can reconfigure them
@@ -424,14 +429,13 @@ export async function createEditorSession(
       closeTab: options.onCloseTab ?? noop,
       nextTab: options.onNextTab ?? noop,
       previousTab: options.onPreviousTab ?? noop,
-      find: () => void openSearchPanel(view),
-      replace: () => openReplacePanel(view),
-      goToLine: () => gotoLine(view),
+      find: options.onFind ?? noop,
+      replace: options.onReplace ?? noop,
+      goToLine: options.onGoToLine ?? noop,
       toggleWrap: options.onToggleWrap ?? noop,
     }),
     ...defaultKeymap,
     ...historyKeymap,
-    ...searchKeymap,
   ]);
 
   let view: EditorView;
@@ -449,6 +453,9 @@ export async function createEditorSession(
         bracketMatching(),
         rectangularSelection(),
         highlightSelectionMatches(),
+        // The custom find bar keeps its query in CodeMirror's search state;
+        // this also installs our own match highlighter (no default panel).
+        customSearchExtensions(),
         settingsCompartment.of(
           editorSettingsExtensions(options.settings, options.language),
         ),
@@ -462,6 +469,39 @@ export async function createEditorSession(
         // which traps keyboard focus in the editor (WCAG 2.1.2). Tab now moves
         // focus out of the editor as usual.
         commandKeymap,
+        // selectNextOccurrence used to come from searchKeymap, which is gone
+        // with the default search panel; the shortcut sheet still documents it.
+        // No searchKeymap binding is installed, so no key can fall back to a
+        // default panel: the match walkers and Mod-Alt-g route to the custom UI
+        // and Mod-Shift-l is a standalone command.
+        keymap.of([
+          { key: "Mod-d", run: selectNextOccurrence, preventDefault: true },
+          {
+            key: "Mod-g",
+            run: () => {
+              options.onFindNext?.();
+              return true;
+            },
+            preventDefault: true,
+          },
+          {
+            key: "Mod-Shift-g",
+            run: () => {
+              options.onFindPrevious?.();
+              return true;
+            },
+            preventDefault: true,
+          },
+          {
+            key: "Mod-Alt-g",
+            run: () => {
+              options.onGoToLine();
+              return true;
+            },
+            preventDefault: true,
+          },
+          { key: "Mod-Shift-l", run: selectSelectionMatches, preventDefault: true },
+        ]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             options.onChange(update.state.doc.toString());
@@ -528,14 +568,28 @@ export async function createEditorSession(
     requestMeasure(): void {
       view.requestMeasure();
     },
-    openSearch(): void {
-      openSearchPanel(view);
+    search: createSearchController([view]),
+    lineInfo(): EditorLineInfo {
+      const head = view.state.selection.main.head;
+      return {
+        line: view.state.doc.lineAt(head).number,
+        total: view.state.doc.lines,
+      };
     },
-    openReplace(): void {
-      openReplacePanel(view);
-    },
-    goToLine(): void {
-      gotoLine(view);
+    gotoLine(line: number, column: number): "line" | "column" | null {
+      const total = view.state.doc.lines;
+      if (!Number.isSafeInteger(line) || line < 1 || line > total) {
+        return "line";
+      }
+      const target = view.state.doc.line(line);
+      if (!Number.isSafeInteger(column) || column < 1 || column > target.length + 1) {
+        return "column";
+      }
+      view.dispatch({
+        selection: { anchor: target.from + column - 1 },
+        scrollIntoView: true,
+      });
+      return null;
     },
     destroy(): void {
       view.destroy();

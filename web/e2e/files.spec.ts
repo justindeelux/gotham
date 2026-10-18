@@ -357,6 +357,18 @@ test.describe("files editor", () => {
     // must have zero serious/critical axe findings in the default dark theme.
     expect(await scan(".files-editor")).toEqual([]);
 
+    // JUS-231: the custom find bar is a new editor surface. Search with the
+    // replace row open; Escape closes only the bar and keeps the window.
+    await editor.getByRole("button", { name: "Find / replace" }).click();
+    const findBar = page.locator(".ed-find");
+    await expect(findBar).toBeVisible();
+    await findBar.locator("input").first().fill("key");
+    await expect(findBar.locator(".ed-find-count")).toHaveText("1 of 1");
+    expect(await scan(".ed-find")).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(findBar).toBeHidden();
+    await expect(editor).toBeVisible();
+
     // The shortcut sheet is an editor surface too: same bar, including the
     // dialog focus/name semantics.
     await editor.locator(".ed-window-shortcuts").click();
@@ -384,6 +396,15 @@ test.describe("files editor", () => {
       .click();
     await settings.click();
     await expect(panel).toBeHidden();
+
+    // The same bar must hold in the light theme (its surfaces are tokens).
+    await editor.getByRole("button", { name: "Find / replace" }).click();
+    await expect(findBar).toBeVisible();
+    await findBar.locator("input").first().fill("key");
+    expect(await scan(".ed-find")).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(findBar).toBeHidden();
+
     expect(await scan(".files-editor")).toEqual([]);
   });
 

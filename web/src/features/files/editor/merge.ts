@@ -6,9 +6,13 @@
 import { MergeView } from "@codemirror/merge";
 import { Compartment, EditorState } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, keymap } from "@codemirror/view";
 
 import { editorSettingsExtensions, loadLanguage } from "@/features/files/editor/codemirror";
+import { createSearchController, customSearchExtensions } from "@/features/files/editor/search";
+import type { EditorSearchController } from "@/features/files/editor/search";
+import type { EditorLineInfo } from "@/features/files/editor/goto";
+import { editorCommandKeymap } from "@/features/files/editor/shortcuts";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
@@ -18,6 +22,11 @@ export interface MergeSession {
   destroy: () => void;
   /** requestMeasure re-lays out both panes after a hidden host is shown. */
   requestMeasure: () => void;
+  /** search drives the find bar over the current (right) pane. */
+  search: EditorSearchController;
+  lineInfo: () => EditorLineInfo;
+  gotoLine: (_line: number, _column: number) => "line" | "column" | null;
+  focus: () => void;
 }
 
 /** MergeSessionOptions configures one side-by-side read-only diff. */
@@ -29,6 +38,11 @@ export interface MergeSessionOptions {
   current: string;
   language: EditorLanguageId;
   settings: EditorSettings;
+  /** The custom find/replace and go-to-line surfaces (JUS-231), so the shared
+   *  shortcuts work with focus inside a diff pane. */
+  onFind: () => void;
+  onReplace: () => void;
+  onGoToLine: () => void;
 }
 
 /** mergeTheme maps added/removed chunks onto the app's surface tokens. */
@@ -71,6 +85,22 @@ export async function createMergeSession(
   const language = await loadLanguage(options.language);
   const settingsA = new Compartment();
   const settingsB = new Compartment();
+  // The read-only panes can still find, jump and open the replace surface
+  // (disabled there); the file commands are no-ops.
+  const noop = (): void => {};
+  const commandKeymap = keymap.of(
+    editorCommandKeymap({
+      save: noop,
+      saveAll: noop,
+      closeTab: noop,
+      nextTab: noop,
+      previousTab: noop,
+      find: options.onFind,
+      replace: options.onReplace,
+      goToLine: options.onGoToLine,
+      toggleWrap: noop,
+    }),
+  );
   const side = (doc: string, settings: Compartment) => ({
     doc,
     extensions: [
@@ -79,6 +109,8 @@ export async function createMergeSession(
       ),
       language,
       mergeTheme,
+      customSearchExtensions(),
+      commandKeymap,
       ...readOnlyExtensions(),
     ],
   });
@@ -99,6 +131,30 @@ export async function createMergeSession(
       view.a.dispatch({ effects: settingsA.reconfigure(extension) });
       view.b.dispatch({ effects: settingsB.reconfigure(extension) });
     },
+    search: createSearchController([view.b, view.a]),
+    lineInfo(): EditorLineInfo {
+      const head = view.b.state.selection.main.head;
+      return {
+        line: view.b.state.doc.lineAt(head).number,
+        total: view.b.state.doc.lines,
+      };
+    },
+    gotoLine(line: number, column: number): "line" | "column" | null {
+      const total = view.b.state.doc.lines;
+      if (!Number.isSafeInteger(line) || line < 1 || line > total) {
+        return "line";
+      }
+      const target = view.b.state.doc.line(line);
+      if (!Number.isSafeInteger(column) || column < 1 || column > target.length + 1) {
+        return "column";
+      }
+      view.b.dispatch({
+        selection: { anchor: target.from + column - 1 },
+        scrollIntoView: true,
+      });
+      return null;
+    },
+    focus: () => view.b.focus(),
     destroy: () => view.destroy(),
     requestMeasure: () => {
       view.a.requestMeasure();

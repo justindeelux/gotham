@@ -22,15 +22,24 @@ const mocks = vi.hoisted(() => {
     setReadOnly: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
     requestMeasure: ReturnType<typeof vi.fn>;
-    openSearch: ReturnType<typeof vi.fn>;
-    openReplace: ReturnType<typeof vi.fn>;
-    goToLine: ReturnType<typeof vi.fn>;
+    search: {
+      setOptions: ReturnType<typeof vi.fn>;
+      status: ReturnType<typeof vi.fn>;
+      next: ReturnType<typeof vi.fn>;
+      previous: ReturnType<typeof vi.fn>;
+      replace: ReturnType<typeof vi.fn>;
+      replaceAll: ReturnType<typeof vi.fn>;
+      clear: ReturnType<typeof vi.fn>;
+    };
+    lineInfo: ReturnType<typeof vi.fn>;
+    gotoLine: ReturnType<typeof vi.fn>;
     destroy: ReturnType<typeof vi.fn>;
   }
 
   /** fakeSession tracks the doc so getDoc mirrors a live CodeMirror view. */
   function fakeSession(doc: string): FakeSession {
     let current = doc;
+    const status = { total: 0, current: 0, capped: false };
     return {
       getDoc: vi.fn(() => current),
       setDoc: vi.fn((next: string) => {
@@ -41,9 +50,17 @@ const mocks = vi.hoisted(() => {
       setReadOnly: vi.fn(),
       focus: vi.fn(),
       requestMeasure: vi.fn(),
-      openSearch: vi.fn(),
-      openReplace: vi.fn(),
-      goToLine: vi.fn(),
+      search: {
+        setOptions: vi.fn(() => status),
+        status: vi.fn(() => status),
+        next: vi.fn(() => status),
+        previous: vi.fn(() => status),
+        replace: vi.fn(() => status),
+        replaceAll: vi.fn(() => status),
+        clear: vi.fn(),
+      },
+      lineInfo: vi.fn(() => ({ line: 1, total: 1 })),
+      gotoLine: vi.fn(() => null),
       destroy: vi.fn(),
     };
   }
@@ -180,6 +197,39 @@ describe("CodeEditor", () => {
 
     await wrapper.setProps({ modelValue: "from: parent\n" });
     expect(mocks.sessions[0].setDoc).toHaveBeenCalledWith("from: parent\n");
+    wrapper.unmount();
+  });
+
+  it("opens the custom find bar and go-to-line popover from the keymap", async () => {
+    const wrapper = await mountEditor();
+    const options = lastOptions();
+
+    (options.onFind as () => void)();
+    await flushPromises();
+    expect(wrapper.find(".ed-find").exists()).toBe(true);
+    expect(wrapper.findAll(".ed-find input")).toHaveLength(1);
+
+    // The replace binding expands the bar instead of opening a second surface.
+    (options.onReplace as () => void)();
+    await flushPromises();
+    expect(wrapper.findAll(".ed-find input")).toHaveLength(2);
+
+    (options.onGoToLine as () => void)();
+    await flushPromises();
+    expect(wrapper.find(".ed-goto").exists()).toBe(true);
+    expect(wrapper.find(".ed-find").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("disables replace on a read-only instance", async () => {
+    const wrapper = await mountEditor({ readOnly: true });
+    (lastOptions().onReplace as () => void)();
+    await flushPromises();
+
+    const inputs = wrapper.findAll(".ed-find input");
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]!.attributes("disabled")).toBeUndefined();
+    expect(inputs[1]!.attributes("disabled")).toBeDefined();
     wrapper.unmount();
   });
 

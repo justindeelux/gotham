@@ -33,7 +33,9 @@ import EditorEncodingDialog from "@/features/files/components/EditorEncodingDial
 import EditorEncodingUnsupportedDialog from "@/features/files/components/EditorEncodingUnsupportedDialog.vue";
 import EditorExplorer from "@/features/files/components/EditorExplorer.vue";
 import EditorHistoryDialog from "@/features/files/components/EditorHistoryDialog.vue";
+import EditorGotoLine from "@/features/files/components/EditorGotoLine.vue";
 import EditorSaveAsDialog from "@/features/files/components/EditorSaveAsDialog.vue";
+import EditorSearchBar from "@/features/files/components/EditorSearchBar.vue";
 import EditorSettingsPopover from "@/features/files/components/EditorSettingsPopover.vue";
 import EditorShortcutsDialog from "@/features/files/components/EditorShortcutsDialog.vue";
 import EditorStatusBar from "@/features/files/components/EditorStatusBar.vue";
@@ -43,6 +45,7 @@ import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
 import { useEditorDrafts } from "@/features/files/composables/useEditorDrafts";
+import { useEditorFind } from "@/features/files/composables/useEditorFind";
 import { createMergeSession } from "@/features/files/composables/useMergeView";
 import type { MergeSession } from "@/features/files/composables/useMergeView";
 import {
@@ -228,6 +231,54 @@ const readyDiffTabs = computed(() =>
 /** activeTab is the store's focused tab (convenience for the template). */
 const activeTab = computed(() => editor.activeTab);
 
+// Custom find/replace and go-to-line surfaces (JUS-231). One instance serves
+// the whole window; the composable keeps each tab's query and restores it on a
+// switch, while the matches live in that tab's CodeMirror search state.
+const {
+  findOpen,
+  replaceExpanded,
+  focusReplace: findFocusReplace,
+  gotoOpen,
+  query: findQuery,
+  replacement: findReplacement,
+  caseSensitive: findCaseSensitive,
+  wholeWord: findWholeWord,
+  regexp: findRegexp,
+  total: findTotal,
+  current: findCurrent,
+  capped: findCapped,
+  gotoCurrent,
+  gotoTotal,
+  canReplace: canReplaceInTab,
+  patternError: findPatternError,
+  openFind,
+  closeFind,
+  toggleReplace,
+  setQuery: setFindQuery,
+  setReplacement: setFindReplacement,
+  toggleCase,
+  toggleWord,
+  toggleRegex,
+  next: nextMatch,
+  previous: previousMatch,
+  replaceMatch,
+  replaceEveryMatch,
+  openGotoLine,
+  closeGotoLine,
+  jumpToLine,
+  refresh: refreshFind,
+  queueStatus: queueFindStatus,
+} = useEditorFind({
+  session: () =>
+    sessions.get(editor.activeId) ?? mergeSessions.get(editor.activeId) ?? null,
+  tabId: () => editor.activeId,
+  canReplace: () =>
+    activeTab.value?.kind === "file" &&
+    activeTab.value.status === "ready" &&
+    !activeTab.value.truncated &&
+    files.canWrite,
+});
+
 /** historyTarget is the editable tab the history dialog acts on, if any. */
 const historyTarget = computed<EditorTab | null>(() =>
   activeTab.value?.kind === "file" ? activeTab.value : null,
@@ -362,6 +413,7 @@ watch(
     await nextTick();
     await ensureSession();
     await ensureMerge();
+    refreshFind();
     void refreshHistoryCount();
   },
   { flush: "post" },
@@ -533,6 +585,9 @@ async function ensureMerge(): Promise<void> {
     current,
     language: tab.language,
     settings: editorSettings.settings,
+    onFind: () => openFind(false),
+    onReplace: () => openFind(true),
+    onGoToLine: () => openGotoLine(),
   }).then((session) => {
     if (editor.tabs.some((item) => item.id === tabId)) {
       mergeSessions.set(tabId, session);
@@ -684,7 +739,11 @@ async function ensureSession(): Promise<void> {
     ariaLabel: String(t("files.editor.contentLabel", { name: tab.name })),
     readOnly: !files.canWrite || tab.truncated,
     settings: editorSettings.settings,
-    onChange: (doc) => editor.setDoc(tabId, doc),
+    onChange: (doc) => {
+      editor.setDoc(tabId, doc);
+      // Coalesce the recount; a scan per transaction would block typing.
+      queueFindStatus();
+    },
     onCursor: (line, column) => {
       if (editor.activeId === tabId) {
         cursor.value = { line, column };
@@ -696,6 +755,17 @@ async function ensureSession(): Promise<void> {
     onToggleWrap: () => toggleWrap(),
     onNextTab: () => cycleTab(1),
     onPreviousTab: () => cycleTab(-1),
+    onFind: () => openFind(false),
+    onReplace: () => openFind(true),
+    onGoToLine: () => openGotoLine(),
+    onFindNext: () => {
+      openFind(false);
+      nextMatch();
+    },
+    onFindPrevious: () => {
+      openFind(false);
+      previousMatch();
+    },
   }).then((session) => {
     // A rapid tab switch while the chunk loaded: keep the instance only if the
     // tab is still open.
@@ -811,16 +881,6 @@ async function downloadActive(): Promise<void> {
 function directoryOf(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash === -1 ? "" : path.slice(0, slash);
-}
-
-/** openSearch opens the find/replace panel on the active instance. */
-function openSearch(): void {
-  sessions.get(editor.activeId)?.openSearch();
-}
-
-/** openGoToLine opens the go-to-line prompt on the active instance. */
-function openGoToLine(): void {
-  sessions.get(editor.activeId)?.goToLine();
 }
 
 /** toggleWrap flips the wrap preference. */
@@ -1037,9 +1097,9 @@ function minimizeWindow(): void {
 }
 
 /**
- * onWindowEsc closes only the topmost surface. A dialog, popover or menu owns
- * Escape while it is open, so the window must never collapse underneath it.
- * CodeMirror's search panel cancels the key itself (defaultPrevented).
+ * onWindowEsc closes only the topmost surface. A dialog, popover, menu or the
+ * find bar owns Escape while it is open, so the window must never collapse
+ * underneath it.
  */
 function onWindowEsc(event: KeyboardEvent): void {
   if (event.defaultPrevented) {
@@ -1056,6 +1116,16 @@ function onWindowEsc(event: KeyboardEvent): void {
   // autocomplete tooltip is not tracked by dialogOpen; while one is mounted it
   // consumes Escape itself.
   if (document.querySelector(".n-popover, .n-dropdown, .cm-tooltip") !== null) {
+    return;
+  }
+  // The find bar and go-to-line popover are surfaces too: Escape closes the one
+  // on screen before the window itself collapses.
+  if (findOpen.value) {
+    closeFind();
+    return;
+  }
+  if (gotoOpen.value) {
+    closeGotoLine();
     return;
   }
   minimizeWindow();
@@ -1546,13 +1616,13 @@ onBeforeUnmount(() => {
               </template>
               {{ t("files.editor.wrap") }}
             </NButton>
-            <NButton size="tiny" secondary @click="openSearch">
+            <NButton size="tiny" secondary @click="openFind(false)">
               <template #icon>
                 <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
               </template>
               {{ t("files.editor.search") }}
             </NButton>
-            <NButton size="tiny" secondary @click="openGoToLine">
+            <NButton size="tiny" secondary @click="openGotoLine">
               <template #icon>
                 <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
               </template>
@@ -1602,6 +1672,19 @@ onBeforeUnmount(() => {
 
           <div v-if="activeTab.kind === 'diff'" class="ed-toolbar">
             <span class="small muted">{{ t("files.editor.historyDiffReadOnly") }}</span>
+            <span class="grow" />
+            <NButton size="tiny" secondary @click="openFind(false)">
+              <template #icon>
+                <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              {{ t("files.editor.search") }}
+            </NButton>
+            <NButton size="tiny" secondary @click="openGotoLine">
+              <template #icon>
+                <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              {{ t("files.editor.goToLine") }}
+            </NButton>
           </div>
 
           <!-- A file over the editor ceiling opens as a read-only tail: say so
@@ -1619,30 +1702,69 @@ onBeforeUnmount(() => {
             </NAlert>
           </div>
 
-          <!-- One host per ready tab, kept mounted across a status switch (a
-               loading/large/binary/error tab must not detach a live session). -->
-          <div
-            v-for="tab in readyTabs"
-            :key="tab.id"
-            v-show="tab.id === editor.activeId"
-            :id="'ed-panel-' + tab.id"
-            :ref="(el) => setHost(tab.id, el)"
-            class="ed-host"
-            role="tabpanel"
-            :aria-labelledby="'ed-tab-' + tab.id"
+          <!-- Custom find/replace bar (JUS-231): in flow above the content, so
+               the status bar keeps its place and the editor shrinks instead. -->
+          <EditorSearchBar
+            :show="findOpen && activeTab.status === 'ready'"
+            :expanded="replaceExpanded"
+            :can-replace="canReplaceInTab"
+            :query="findQuery"
+            :replacement="findReplacement"
+            :case-sensitive="findCaseSensitive"
+            :whole-word="findWholeWord"
+            :regexp="findRegexp"
+            :pattern-error="findPatternError"
+            :total="findTotal"
+            :capped="findCapped"
+            :current="findCurrent"
+            :focus-replace="findFocusReplace"
+            @close="closeFind"
+            @update:query="setFindQuery"
+            @update:replacement="setFindReplacement"
+            @toggle:expanded="toggleReplace"
+            @toggle:case="toggleCase"
+            @toggle:word="toggleWord"
+            @toggle:regex="toggleRegex"
+            @next="nextMatch"
+            @previous="previousMatch"
+            @replace="replaceMatch"
+            @replace-all="replaceEveryMatch"
           />
 
-          <!-- History diffs are read-only MergeViews, one host per ready diff tab. -->
-          <div
-            v-for="tab in readyDiffTabs"
-            :key="tab.id"
-            v-show="tab.id === editor.activeId"
-            :id="'ed-panel-' + tab.id"
-            :ref="(el) => setMergeHost(tab.id, el)"
-            class="ed-host ed-diff-host"
-            role="tabpanel"
-            :aria-labelledby="'ed-tab-' + tab.id"
-          />
+          <div class="ed-panes" :class="{ 'is-hidden': activeTab.status !== 'ready' }">
+            <EditorGotoLine
+              :show="gotoOpen && activeTab.status === 'ready'"
+              :current="gotoCurrent"
+              :total="gotoTotal"
+              :jump="jumpToLine"
+              @close="closeGotoLine"
+            />
+
+            <!-- One host per ready tab, kept mounted across a status switch (a
+                 loading/large/binary/error tab must not detach a live session). -->
+            <div
+              v-for="tab in readyTabs"
+              :key="tab.id"
+              v-show="tab.id === editor.activeId"
+              :id="'ed-panel-' + tab.id"
+              :ref="(el) => setHost(tab.id, el)"
+              class="ed-host"
+              role="tabpanel"
+              :aria-labelledby="'ed-tab-' + tab.id"
+            />
+
+            <!-- History diffs are read-only MergeViews, one host per ready diff tab. -->
+            <div
+              v-for="tab in readyDiffTabs"
+              :key="tab.id"
+              v-show="tab.id === editor.activeId"
+              :id="'ed-panel-' + tab.id"
+              :ref="(el) => setMergeHost(tab.id, el)"
+              class="ed-host ed-diff-host"
+              role="tabpanel"
+              :aria-labelledby="'ed-tab-' + tab.id"
+            />
+          </div>
 
           <div
             v-if="activeTab.status === 'loading'"
@@ -2014,6 +2136,22 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   min-height: 0;
   padding: 0 var(--space-3) var(--space-3);
+}
+
+/* The panes share one positioned box so the go-to-line popover can sit above
+   the active editor without entering the flex flow. */
+.ed-panes {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* A loading/large/binary/error tab owns the content area; the ready hosts stay
+   mounted but must not split the space with its state panel. */
+.ed-panes.is-hidden {
+  display: none;
 }
 
 .ed-tab {

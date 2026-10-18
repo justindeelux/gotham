@@ -48,7 +48,7 @@ docs/plans/      # feature/phase plans (medium to large work)
   5. `npm run build` + `npm run type-check` clean (web/)
   6. No cross-scope imports: `agent/` must not import `internal/`; domain packages must not import the HTTP server
 - Orchestration rules (worker dispatch, recipe, lessons): see `docs/ORCHESTRATION.md`.
-- UI e2e: workers do NOT run Playwright/e2e — only lint/build/unit tests (see `docs/ORCHESTRATION.md` → Dispatch brief rule). The coordinator/reviewer runs the Playwright smoke suite (`npm run e2e` in `web/`) when needed, against throwaway Postgres + Redis containers and its own `gotham serve` (see `docs/test-server.md`); never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`, and remove the containers when the run ends.
+- UI e2e: run the Playwright smoke suite (`npm run e2e` in `web/`) when needed, against throwaway Postgres + Redis containers and its own `gotham serve` (see `docs/test-server.md`); never reuse the shared `gotham-dev-postgres` / `gotham-dev-redis`, and remove the containers when the run ends.
 - Minimum dev environment: Docker, PostgreSQL 16, Redis 7, Node 20+ (web/ only).
 
 ## Linear Issues

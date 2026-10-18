@@ -4,10 +4,11 @@
  * CodeMirror's search state, so a tab switch restores what the user typed and
  * the highlights always come from the live document.
  */
-import { computed, ref, watch } from "vue";
+import { computed, onScopeDispose, ref, watch } from "vue";
 
 import type { GotoLineError } from "@/features/files/editor/goto";
-import { isValidRegex } from "@/features/files/editor/searchPattern";
+import { validateSearchPattern } from "@/features/files/editor/searchPattern";
+import type { SearchPatternError } from "@/features/files/editor/searchPattern";
 import type {
   EditorSearchOptions,
   EditorSearchStatus,
@@ -25,7 +26,16 @@ export interface UseEditorFindOptions {
 
 interface SavedFindState extends EditorSearchOptions {
   replacement: string;
+  replaceExpanded: boolean;
 }
+
+/** QUERY_DEBOUNCE_MS waits out a typing burst before scanning the document. */
+const QUERY_DEBOUNCE_MS = 180;
+
+/** STATUS_DEBOUNCE_MS coalesces the recount after one or more edits. */
+const STATUS_DEBOUNCE_MS = 220;
+
+const EMPTY_STATUS: EditorSearchStatus = { total: 0, current: 0, capped: false };
 
 /** useEditorFind owns the find bar and go-to-line popover state. */
 export function useEditorFind(options: UseEditorFindOptions) {
@@ -40,17 +50,39 @@ export function useEditorFind(options: UseEditorFindOptions) {
   const regexp = ref(false);
   const total = ref(0);
   const current = ref(0);
+  const capped = ref(false);
   const gotoCurrent = ref(1);
   const gotoTotal = ref(1);
   const saved = new Map<string, SavedFindState>();
+  let queryTimer: ReturnType<typeof setTimeout> | null = null;
+  let statusTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** canReplace follows the active tab's read-only state. */
   const canReplace = computed<boolean>(() => options.canReplace());
 
-  /** invalidRegex turns on the inline error without throwing at the editor. */
-  const invalidRegex = computed<boolean>(
-    () => regexp.value && query.value.length > 0 && !isValidRegex(query.value),
-  );
+  /** patternError is the inline reason the query is not applied. */
+  const patternError = computed<SearchPatternError | null>(() => {
+    if (!regexp.value || query.value.length === 0) {
+      return null;
+    }
+    return validateSearchPattern(query.value);
+  });
+
+  /** clearQueryTimer cancels a pending debounced apply. */
+  function clearQueryTimer(): void {
+    if (queryTimer !== null) {
+      clearTimeout(queryTimer);
+      queryTimer = null;
+    }
+  }
+
+  /** clearStatusTimer cancels a pending debounced recount. */
+  function clearStatusTimer(): void {
+    if (statusTimer !== null) {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+    }
+  }
 
   /** currentOptions snapshots the form for the search controller. */
   function currentOptions(): EditorSearchOptions {
@@ -66,15 +98,29 @@ export function useEditorFind(options: UseEditorFindOptions) {
   function publish(status: EditorSearchStatus): void {
     total.value = status.total;
     current.value = status.current;
+    capped.value = status.capped;
   }
 
-  /** applySearch installs the query on the active session. */
+  /** applySearch installs the query on the active session. A rejected pattern
+   *  clears the editor's search state instead of running it. */
   function applySearch(): void {
     const editor = options.session();
     if (!editor) {
       return;
     }
+    if (patternError.value) {
+      editor.search.clear();
+      publish(EMPTY_STATUS);
+      return;
+    }
     publish(editor.search.setOptions(currentOptions(), replacement.value));
+  }
+
+  /** applyNow flushes a pending keystroke and scans once. */
+  function applyNow(): void {
+    clearQueryTimer();
+    clearStatusTimer();
+    applySearch();
   }
 
   /** loadState restores one tab's query and toggles. */
@@ -85,11 +131,18 @@ export function useEditorFind(options: UseEditorFindOptions) {
     caseSensitive.value = stored?.caseSensitive ?? false;
     wholeWord.value = stored?.wholeWord ?? false;
     regexp.value = stored?.regexp ?? false;
+    replaceExpanded.value = stored?.replaceExpanded ?? false;
   }
 
   watch(options.tabId, (next, previous) => {
+    clearQueryTimer();
+    clearStatusTimer();
     if (previous) {
-      saved.set(previous, { ...currentOptions(), replacement: replacement.value });
+      saved.set(previous, {
+        ...currentOptions(),
+        replacement: replacement.value,
+        replaceExpanded: replaceExpanded.value,
+      });
     }
     loadState(next);
     if (findOpen.value) {
@@ -100,15 +153,18 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   });
 
-  /** openFind opens the bar, optionally with the replace row expanded. */
+  /** openFind opens the bar. `expand` forces the replace row (Mod-H); the
+   *  toolbar leaves the tab's remembered state alone. */
   function openFind(expand: boolean): void {
     if (gotoOpen.value) {
       closeGotoLine(false);
     }
-    replaceExpanded.value = expand;
+    if (expand) {
+      replaceExpanded.value = true;
+    }
     focusReplace.value = expand;
     findOpen.value = true;
-    applySearch();
+    applyNow();
   }
 
   /** closeFind closes the bar, clears the highlights and refocuses the editor. */
@@ -116,25 +172,35 @@ export function useEditorFind(options: UseEditorFindOptions) {
     if (!findOpen.value) {
       return;
     }
+    clearQueryTimer();
+    clearStatusTimer();
     findOpen.value = false;
-    replaceExpanded.value = false;
     options.session()?.search.clear();
-    total.value = 0;
-    current.value = 0;
+    publish(EMPTY_STATUS);
     if (focus) {
       options.session()?.focus();
     }
   }
 
-  /** toggleReplace shows or hides the replacement row. */
+  /** toggleReplace shows or hides the replacement row (kept per tab). */
   function toggleReplace(): void {
     replaceExpanded.value = !replaceExpanded.value;
   }
 
-  /** setQuery applies a typed query immediately. */
+  /** setQuery debounces the scan so a typing burst costs one pass. */
   function setQuery(value: string): void {
     query.value = value;
-    applySearch();
+    clearQueryTimer();
+    if (patternError.value) {
+      // Surface the error immediately and clear stale highlights; never run a
+      // rejected (possibly catastrophic) pattern.
+      applyNow();
+      return;
+    }
+    queryTimer = setTimeout(() => {
+      queryTimer = null;
+      applySearch();
+    }, QUERY_DEBOUNCE_MS);
   }
 
   /** setReplacement only stores the text; matching does not depend on it. */
@@ -151,37 +217,48 @@ export function useEditorFind(options: UseEditorFindOptions) {
     } else {
       regexp.value = !regexp.value;
     }
-    applySearch();
+    applyNow();
+  }
+
+  /** syncPending flushes a debounced query/recount before a command. */
+  function syncPending(): void {
+    if (queryTimer !== null || statusTimer !== null) {
+      applyNow();
+    }
   }
 
   /** next selects the next match and refreshes the counter. */
   function next(): void {
+    syncPending();
     const editor = options.session();
-    if (editor && !invalidRegex.value) {
+    if (editor && !patternError.value) {
       publish(editor.search.next());
     }
   }
 
   /** previous selects the previous match and refreshes the counter. */
   function previous(): void {
+    syncPending();
     const editor = options.session();
-    if (editor && !invalidRegex.value) {
+    if (editor && !patternError.value) {
       publish(editor.search.previous());
     }
   }
 
-  /** replaceSwap replaces the current match (one undo step). */
+  /** replaceMatch replaces the current match (one undo step). */
   function replaceMatch(): void {
+    syncPending();
     const editor = options.session();
-    if (editor && canReplace.value && !invalidRegex.value) {
+    if (editor && canReplace.value && !patternError.value) {
       publish(editor.search.replace(replacement.value));
     }
   }
 
   /** replaceEveryMatch replaces every match in one undoable transaction. */
   function replaceEveryMatch(): void {
+    syncPending();
     const editor = options.session();
-    if (editor && canReplace.value && !invalidRegex.value) {
+    if (editor && canReplace.value && !patternError.value) {
       publish(editor.search.replaceAll(replacement.value));
     }
   }
@@ -238,12 +315,23 @@ export function useEditorFind(options: UseEditorFindOptions) {
     }
   }
 
-  /** syncStatus updates the counter after an edit or a cursor move. */
-  function syncStatus(): void {
-    if (findOpen.value) {
-      applySearch();
+  /** queueStatus coalesces a recount after edits; cursor moves never trigger
+   *  a rescan (a full-document pass per arrow key is the regression here). */
+  function queueStatus(): void {
+    if (!findOpen.value) {
+      return;
     }
+    clearStatusTimer();
+    statusTimer = setTimeout(() => {
+      statusTimer = null;
+      applySearch();
+    }, STATUS_DEBOUNCE_MS);
   }
+
+  onScopeDispose(() => {
+    clearQueryTimer();
+    clearStatusTimer();
+  });
 
   return {
     findOpen,
@@ -257,10 +345,11 @@ export function useEditorFind(options: UseEditorFindOptions) {
     regexp,
     total,
     current,
+    capped,
     gotoCurrent,
     gotoTotal,
     canReplace,
-    invalidRegex,
+    patternError,
     openFind,
     closeFind,
     toggleReplace,
@@ -277,6 +366,6 @@ export function useEditorFind(options: UseEditorFindOptions) {
     closeGotoLine,
     jumpToLine,
     refresh,
-    syncStatus,
+    queueStatus,
   };
 }

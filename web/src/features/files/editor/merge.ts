@@ -6,12 +6,13 @@
 import { MergeView } from "@codemirror/merge";
 import { Compartment, EditorState } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, keymap } from "@codemirror/view";
 
 import { editorSettingsExtensions, loadLanguage } from "@/features/files/editor/codemirror";
 import { createSearchController, customSearchExtensions } from "@/features/files/editor/search";
 import type { EditorSearchController } from "@/features/files/editor/search";
 import type { EditorLineInfo } from "@/features/files/editor/goto";
+import { editorCommandKeymap } from "@/features/files/editor/shortcuts";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
@@ -37,6 +38,11 @@ export interface MergeSessionOptions {
   current: string;
   language: EditorLanguageId;
   settings: EditorSettings;
+  /** The custom find/replace and go-to-line surfaces (JUS-231), so the shared
+   *  shortcuts work with focus inside a diff pane. */
+  onFind: () => void;
+  onReplace: () => void;
+  onGoToLine: () => void;
 }
 
 /** mergeTheme maps added/removed chunks onto the app's surface tokens. */
@@ -79,6 +85,22 @@ export async function createMergeSession(
   const language = await loadLanguage(options.language);
   const settingsA = new Compartment();
   const settingsB = new Compartment();
+  // The read-only panes can still find, jump and open the replace surface
+  // (disabled there); the file commands are no-ops.
+  const noop = (): void => {};
+  const commandKeymap = keymap.of(
+    editorCommandKeymap({
+      save: noop,
+      saveAll: noop,
+      closeTab: noop,
+      nextTab: noop,
+      previousTab: noop,
+      find: options.onFind,
+      replace: options.onReplace,
+      goToLine: options.onGoToLine,
+      toggleWrap: noop,
+    }),
+  );
   const side = (doc: string, settings: Compartment) => ({
     doc,
     extensions: [
@@ -88,6 +110,7 @@ export async function createMergeSession(
       language,
       mergeTheme,
       customSearchExtensions(),
+      commandKeymap,
       ...readOnlyExtensions(),
     ],
   });

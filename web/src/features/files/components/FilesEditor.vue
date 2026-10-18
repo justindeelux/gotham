@@ -246,10 +246,11 @@ const {
   regexp: findRegexp,
   total: findTotal,
   current: findCurrent,
+  capped: findCapped,
   gotoCurrent,
   gotoTotal,
   canReplace: canReplaceInTab,
-  invalidRegex: findInvalidRegex,
+  patternError: findPatternError,
   openFind,
   closeFind,
   toggleReplace,
@@ -266,7 +267,7 @@ const {
   closeGotoLine,
   jumpToLine,
   refresh: refreshFind,
-  syncStatus: syncFindStatus,
+  queueStatus: queueFindStatus,
 } = useEditorFind({
   session: () =>
     sessions.get(editor.activeId) ?? mergeSessions.get(editor.activeId) ?? null,
@@ -584,6 +585,9 @@ async function ensureMerge(): Promise<void> {
     current,
     language: tab.language,
     settings: editorSettings.settings,
+    onFind: () => openFind(false),
+    onReplace: () => openFind(true),
+    onGoToLine: () => openGotoLine(),
   }).then((session) => {
     if (editor.tabs.some((item) => item.id === tabId)) {
       mergeSessions.set(tabId, session);
@@ -737,12 +741,12 @@ async function ensureSession(): Promise<void> {
     settings: editorSettings.settings,
     onChange: (doc) => {
       editor.setDoc(tabId, doc);
-      syncFindStatus();
+      // Coalesce the recount; a scan per transaction would block typing.
+      queueFindStatus();
     },
     onCursor: (line, column) => {
       if (editor.activeId === tabId) {
         cursor.value = { line, column };
-        syncFindStatus();
       }
     },
     onSave: () => void saveTab(tabId),
@@ -754,6 +758,14 @@ async function ensureSession(): Promise<void> {
     onFind: () => openFind(false),
     onReplace: () => openFind(true),
     onGoToLine: () => openGotoLine(),
+    onFindNext: () => {
+      openFind(false);
+      nextMatch();
+    },
+    onFindPrevious: () => {
+      openFind(false);
+      previousMatch();
+    },
   }).then((session) => {
     // A rapid tab switch while the chunk loaded: keep the instance only if the
     // tab is still open.
@@ -1604,7 +1616,7 @@ onBeforeUnmount(() => {
               </template>
               {{ t("files.editor.wrap") }}
             </NButton>
-            <NButton size="tiny" secondary @click="openFind(true)">
+            <NButton size="tiny" secondary @click="openFind(false)">
               <template #icon>
                 <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
               </template>
@@ -1661,7 +1673,7 @@ onBeforeUnmount(() => {
           <div v-if="activeTab.kind === 'diff'" class="ed-toolbar">
             <span class="small muted">{{ t("files.editor.historyDiffReadOnly") }}</span>
             <span class="grow" />
-            <NButton size="tiny" secondary @click="openFind(true)">
+            <NButton size="tiny" secondary @click="openFind(false)">
               <template #icon>
                 <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
               </template>
@@ -1701,8 +1713,9 @@ onBeforeUnmount(() => {
             :case-sensitive="findCaseSensitive"
             :whole-word="findWholeWord"
             :regexp="findRegexp"
-            :invalid-regex="findInvalidRegex"
+            :pattern-error="findPatternError"
             :total="findTotal"
+            :capped="findCapped"
             :current="findCurrent"
             :focus-replace="findFocusReplace"
             @close="closeFind"

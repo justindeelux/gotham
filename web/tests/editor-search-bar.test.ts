@@ -32,8 +32,9 @@ function mountBar(overrides: Record<string, unknown> = {}) {
       caseSensitive: false,
       wholeWord: false,
       regexp: false,
-      invalidRegex: false,
+      patternError: null,
       total: 12,
+      capped: false,
       current: 3,
       focusReplace: false,
       ...overrides,
@@ -64,6 +65,12 @@ describe("EditorSearchBar", () => {
   it("says No results when the query matches nothing", async () => {
     const wrapper = mountBar({ total: 0, current: 0 });
     expect(wrapper.find(".ed-find-count").text()).toBe("No results");
+    wrapper.unmount();
+  });
+
+  it("degrades to a capped counter instead of listing a huge count", async () => {
+    const wrapper = mountBar({ total: 1000, capped: true });
+    expect(wrapper.find(".ed-find-count").text()).toBe("1000+ results");
     wrapper.unmount();
   });
 
@@ -116,7 +123,7 @@ describe("EditorSearchBar", () => {
     const wrapper = mountBar({
       query: "(",
       regexp: true,
-      invalidRegex: true,
+      patternError: "syntax",
     });
 
     const alert = wrapper.find('[role="alert"]');
@@ -124,6 +131,20 @@ describe("EditorSearchBar", () => {
     const input = wrapper.findAll("input")[0]!;
     expect(input.attributes("aria-invalid")).toBe("true");
     expect(input.attributes("aria-describedby")).toBe(alert.attributes("id"));
+    wrapper.unmount();
+  });
+
+  it("refuses a catastrophic pattern with its own inline alert", () => {
+    const wrapper = mountBar({
+      query: "(a+)+$",
+      regexp: true,
+      patternError: "complexity",
+    });
+
+    expect(wrapper.find('[role="alert"]').text()).toBe(
+      "Pattern too complex to search safely",
+    );
+    expect(wrapper.findAll("input")[0]!.attributes("aria-invalid")).toBe("true");
     wrapper.unmount();
   });
 

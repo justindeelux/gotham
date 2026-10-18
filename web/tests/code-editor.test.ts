@@ -39,7 +39,7 @@ const mocks = vi.hoisted(() => {
   /** fakeSession tracks the doc so getDoc mirrors a live CodeMirror view. */
   function fakeSession(doc: string): FakeSession {
     let current = doc;
-    const status = { total: 0, current: 0 };
+    const status = { total: 0, current: 0, capped: false };
     return {
       getDoc: vi.fn(() => current),
       setDoc: vi.fn((next: string) => {

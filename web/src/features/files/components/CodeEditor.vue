@@ -71,10 +71,11 @@ const {
   regexp: findRegexp,
   total: findTotal,
   current: findCurrent,
+  capped: findCapped,
   gotoCurrent,
   gotoTotal,
   canReplace,
-  invalidRegex: findInvalidRegex,
+  patternError: findPatternError,
   openFind,
   closeFind,
   toggleReplace,
@@ -90,7 +91,7 @@ const {
   openGotoLine,
   closeGotoLine,
   jumpToLine,
-  syncStatus: syncFindStatus,
+  queueStatus: queueFindStatus,
 } = useEditorFind({
   session: () => session,
   tabId: () => "code-editor",
@@ -128,13 +129,20 @@ onMounted(() => {
     settings: effectiveSettings.value,
     onChange: (doc) => {
       emit("update:modelValue", doc);
-      syncFindStatus();
+      queueFindStatus();
     },
-    onCursor: () => syncFindStatus(),
     onSave: () => emit("save", session?.getDoc() ?? props.modelValue),
     onFind: () => openFind(false),
     onReplace: () => openFind(true),
     onGoToLine: () => openGotoLine(),
+    onFindNext: () => {
+      openFind(false);
+      nextMatch();
+    },
+    onFindPrevious: () => {
+      openFind(false);
+      previousMatch();
+    },
   }).then((created) => {
     // The chunk is lazy: a dialog can close before it resolves, and that
     // instance must not outlive the component.
@@ -180,8 +188,9 @@ onBeforeUnmount(() => {
       :case-sensitive="findCaseSensitive"
       :whole-word="findWholeWord"
       :regexp="findRegexp"
-      :invalid-regex="findInvalidRegex"
+      :pattern-error="findPatternError"
       :total="findTotal"
+      :capped="findCapped"
       :current="findCurrent"
       :focus-replace="focusReplace"
       @close="closeFind"

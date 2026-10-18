@@ -38,7 +38,7 @@ const codemirror = vi.hoisted(() => ({
 
 vi.mock("@/features/files/composables/useCodeMirror", () => ({
   createEditorSession: vi.fn(async () => {
-    const status = { total: 0, current: 0 };
+    const status = { total: 0, current: 0, capped: false };
     const session: FakeSession = {
       getDoc: () => "",
       setDoc: vi.fn(),
@@ -159,6 +159,16 @@ function toolbarButton(
     throw new Error(`toolbar button not found: ${label}`);
   }
   return button;
+}
+
+/** lastSessionOptions is the option bag the mocked factory received last. */
+function lastSessionOptions(): Record<string, unknown> {
+  const calls = vi.mocked(createEditorSession).mock.calls;
+  const options = calls.at(-1)?.[0];
+  if (!options) {
+    throw new Error("createEditorSession was not called");
+  }
+  return options as Record<string, unknown>;
 }
 
 /** mountEditor mounts FilesEditor under the message provider with both teams. */
@@ -386,6 +396,31 @@ describe("FilesEditor guards", () => {
     );
     expect(session.search.clear).toHaveBeenCalled();
     expect(session.focus).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("opens the find bar collapsed and never recounts on a cursor move", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    await toolbarButton(wrapper, "Find / replace").trigger("click");
+    await flushPromises();
+    // The toolbar opens find; only the replace binding expands the row.
+    expect(wrapper.findAll(".ed-find input")).toHaveLength(1);
+
+    const options = lastSessionOptions();
+    const session = codemirror.sessions[0]!;
+    session.search.setOptions.mockClear();
+    (options.onCursor as (_line: number, _column: number) => void)(2, 3);
+    await flushPromises();
+    expect(session.search.setOptions).not.toHaveBeenCalled();
+
+    (options.onReplace as () => void)();
+    await flushPromises();
+    expect(wrapper.findAll(".ed-find input")).toHaveLength(2);
     wrapper.unmount();
   });
 

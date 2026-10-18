@@ -2,22 +2,31 @@
 // count, the query options, replacement undo and the go-to-line parser. The
 // controller is exercised on a real EditorView so the search state, the
 // highlight decoration and the history integration are the real ones.
-/* global document:readonly */
+/* global document:readonly, performance:readonly */
 import { history, undo } from "@codemirror/commands";
+import { SearchQuery, getSearchQuery, setSearchQuery } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import type { Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { getSearchQuery } from "@codemirror/search";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { parseGotoLine } from "@/features/files/editor/goto";
 import {
+  MAX_SEARCH_MATCHES,
   createSearchController,
   customSearchExtensions,
-  isValidRegex,
   searchStatus,
 } from "@/features/files/editor/search";
 import type { EditorSearchOptions } from "@/features/files/editor/search";
+import {
+  isValidRegex,
+  validateSearchPattern,
+} from "@/features/files/editor/searchPattern";
+
+/** status is the expected shape with the cap flag defaulted off. */
+function status(total: number, current: number, capped = false) {
+  return { total, current, capped };
+}
 
 /** options builds one query spec with every toggle off. */
 function options(query: string, extra: Partial<EditorSearchOptions> = {}): EditorSearchOptions {
@@ -60,11 +69,27 @@ describe("isValidRegex", () => {
   });
 });
 
+describe("validateSearchPattern", () => {
+  it("separates a syntax error from catastrophic backtracking", () => {
+    expect(validateSearchPattern("plain")).toBeNull();
+    expect(validateSearchPattern("a.*b")).toBeNull();
+    expect(validateSearchPattern("(\\d+\\.)+")).toBeNull();
+    expect(validateSearchPattern("(")).toBe("syntax");
+    expect(validateSearchPattern("(a+)+$")).toBe("complexity");
+    expect(validateSearchPattern("(.*)*")).toBe("complexity");
+    expect(validateSearchPattern("((a+))+")).toBe("complexity");
+    expect(validateSearchPattern("(a+){2,}")).toBe("complexity");
+    expect(validateSearchPattern("(\\d+\\.){2,}")).toBeNull();
+    expect(validateSearchPattern("(a+){2,5}")).toBeNull();
+    expect(validateSearchPattern("[()]+")).toBeNull();
+  });
+});
+
 describe("searchStatus", () => {
   it("counts every match and names the one at the cursor", () => {
     const doc = text("one two\none");
-    expect(searchStatus(doc, options("one"), 0)).toEqual({ total: 2, current: 1 });
-    expect(searchStatus(doc, options("one"), 4)).toEqual({ total: 2, current: 2 });
+    expect(searchStatus(doc, options("one"), 0)).toEqual(status(2, 1));
+    expect(searchStatus(doc, options("one"), 4)).toEqual(status(2, 2));
   });
 
   it("honours case, whole word and regexp", () => {
@@ -89,11 +114,26 @@ describe("searchStatus", () => {
 
   it("reports no results for an invalid regex or an empty query", () => {
     const doc = text("one");
-    expect(searchStatus(doc, options("(", { regexp: true }), 0)).toEqual({
-      total: 0,
-      current: 0,
-    });
-    expect(searchStatus(doc, options(""), 0)).toEqual({ total: 0, current: 0 });
+    expect(searchStatus(doc, options("(", { regexp: true }), 0)).toEqual(status(0, 0));
+    expect(searchStatus(doc, options(""), 0)).toEqual(status(0, 0));
+  });
+
+  it("caps a document with more matches than the counter shows", () => {
+    const doc = text("a ".repeat(MAX_SEARCH_MATCHES + 500));
+    const result = searchStatus(doc, options("a"), 0);
+
+    expect(result).toEqual(status(MAX_SEARCH_MATCHES, 1, true));
+  });
+
+  it("refuses a catastrophic regex instead of running it on a long line", () => {
+    const doc = text("a".repeat(50_000) + "!");
+    const started = performance.now();
+    const result = searchStatus(doc, options("(a+)+$", { regexp: true }), 0);
+
+    expect(result).toEqual(status(0, 0));
+    // The pattern never reaches RegExp.exec, so this returns immediately even
+    // though (a+)+$ on 50k 'a's would backtrack effectively forever.
+    expect(performance.now() - started).toBeLessThan(250);
   });
 });
 
@@ -102,7 +142,7 @@ describe("search controller", () => {
     const view = makeView("one two one");
     const search = createSearchController([view]);
 
-    expect(search.setOptions(options("one"), "")).toEqual({ total: 2, current: 1 });
+    expect(search.setOptions(options("one"), "")).toEqual(status(2, 1));
     expect(getSearchQuery(view.state).search).toBe("one");
     expect(view.dom.querySelectorAll(".cm-searchMatch")).toHaveLength(2);
 
@@ -117,10 +157,10 @@ describe("search controller", () => {
     const search = createSearchController([view]);
     search.setOptions(options("one"), "");
 
-    expect(search.next()).toEqual({ total: 2, current: 1 });
-    expect(search.next()).toEqual({ total: 2, current: 2 });
-    expect(search.next()).toEqual({ total: 2, current: 1 });
-    expect(search.previous()).toEqual({ total: 2, current: 2 });
+    expect(search.next()).toEqual(status(2, 1));
+    expect(search.next()).toEqual(status(2, 2));
+    expect(search.next()).toEqual(status(2, 1));
+    expect(search.previous()).toEqual(status(2, 2));
     view.destroy();
   });
 
@@ -137,12 +177,25 @@ describe("search controller", () => {
     view.destroy();
   });
 
+  it("does not cascade when the replacement equals the match", () => {
+    const view = makeView("a A");
+    const search = createSearchController([view]);
+    search.setOptions(options("a"), "a");
+    // Select the first match, then replace it with itself: the next match must
+    // survive (the old doc-identity check replaced it too).
+    view.dispatch({ selection: { anchor: 0, head: 1 } });
+
+    search.replace("a");
+    expect(view.state.doc.toString()).toBe("a A");
+    view.destroy();
+  });
+
   it("replaces every match as one undoable transaction", () => {
     const view = makeView("one two one");
     const search = createSearchController([view]);
     search.setOptions(options("one"), "X");
 
-    expect(search.replaceAll("X")).toEqual({ total: 0, current: 0 });
+    expect(search.replaceAll("X")).toEqual(status(0, 0));
     expect(view.state.doc.toString()).toBe("X two X");
 
     undo(view);
@@ -153,15 +206,32 @@ describe("search controller", () => {
   it("does not throw or edit on an invalid regex", () => {
     const view = makeView("one (two");
     const search = createSearchController([view]);
-    expect(search.setOptions(options("(", { regexp: true }), "X")).toEqual({
-      total: 0,
-      current: 0,
-    });
-    expect(search.next()).toEqual({ total: 0, current: 0 });
-    expect(search.replaceAll("X")).toEqual({ total: 0, current: 0 });
+    expect(search.setOptions(options("(", { regexp: true }), "X")).toEqual(status(0, 0));
+    expect(search.next()).toEqual(status(0, 0));
+    expect(search.replaceAll("X")).toEqual(status(0, 0));
     expect(view.state.doc.toString()).toBe("one (two");
     // A fallback to CodeMirror's default panel is the one regression this
     // surface must never have.
+    expect(view.dom.querySelector(".cm-panels")).toBeNull();
+    view.destroy();
+  });
+
+  it("stays responsive when the state already holds a catastrophic pattern", () => {
+    const view = makeView("a".repeat(50_000) + "!");
+    // Simulate a state injected from outside the bar (defense in depth).
+    view.dispatch({
+      effects: setSearchQuery.of(
+        new SearchQuery({ search: "(a+)+$", regexp: true }),
+      ),
+    });
+    const search = createSearchController([view]);
+    const started = performance.now();
+
+    expect(search.next()).toEqual(status(0, 0));
+    expect(search.status()).toEqual(status(0, 0));
+    expect(search.replaceAll("x")).toEqual(status(0, 0));
+
+    expect(performance.now() - started).toBeLessThan(250);
     expect(view.dom.querySelector(".cm-panels")).toBeNull();
     view.destroy();
   });

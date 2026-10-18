@@ -24,7 +24,11 @@ import {
   indentUnit,
   syntaxHighlighting,
 } from "@codemirror/language";
-import { highlightSelectionMatches, selectNextOccurrence } from "@codemirror/search";
+import {
+  highlightSelectionMatches,
+  selectNextOccurrence,
+  selectSelectionMatches,
+} from "@codemirror/search";
 import { Compartment, EditorState } from "@codemirror/state";
 import type { Extension, Range } from "@codemirror/state";
 import {
@@ -95,6 +99,9 @@ export interface EditorSessionOptions {
   onFind: () => void;
   onReplace: () => void;
   onGoToLine: () => void;
+  /** Walk the matches without opening the default search panel (Mod-G). */
+  onFindNext?: () => void;
+  onFindPrevious?: () => void;
 }
 
 /** logMode highlights the level, timestamp and quoted fields of a log line. */
@@ -465,8 +472,36 @@ export async function createEditorSession(
         // selectNextOccurrence used to come from searchKeymap, which is gone
         // with the default search panel; the shortcut sheet still documents it.
         // No searchKeymap binding is installed, so no key can fall back to a
-        // default panel.
-        keymap.of([{ key: "Mod-d", run: selectNextOccurrence, preventDefault: true }]),
+        // default panel: the match walkers and Mod-Alt-g route to the custom UI
+        // and Mod-Shift-l is a standalone command.
+        keymap.of([
+          { key: "Mod-d", run: selectNextOccurrence, preventDefault: true },
+          {
+            key: "Mod-g",
+            run: () => {
+              options.onFindNext?.();
+              return true;
+            },
+            preventDefault: true,
+          },
+          {
+            key: "Mod-Shift-g",
+            run: () => {
+              options.onFindPrevious?.();
+              return true;
+            },
+            preventDefault: true,
+          },
+          {
+            key: "Mod-Alt-g",
+            run: () => {
+              options.onGoToLine();
+              return true;
+            },
+            preventDefault: true,
+          },
+          { key: "Mod-Shift-l", run: selectSelectionMatches, preventDefault: true },
+        ]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             options.onChange(update.state.doc.toString());

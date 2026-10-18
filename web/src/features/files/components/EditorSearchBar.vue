@@ -16,6 +16,8 @@ import type { InputInst } from "naive-ui";
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
+import type { SearchPatternError } from "@/features/files/editor/searchPattern";
+
 /**
  * Custom find/replace bar (JUS-231). It is presentation only: the parent owns
  * the query and the CodeMirror search calls, so the same bar serves the file
@@ -32,8 +34,11 @@ interface Props {
   caseSensitive: boolean;
   wholeWord: boolean;
   regexp: boolean;
-  invalidRegex: boolean;
+  /** patternError is the inline syntax/complexity reason the query is unused. */
+  patternError: SearchPatternError | null;
   total: number;
+  /** capped means the count stopped at the match/time cap. */
+  capped: boolean;
   current: number;
   /** focusReplace puts the caret in the replacement field on open. */
   focusReplace: boolean;
@@ -64,11 +69,14 @@ const errorId = `ed-find-regex-${Math.random().toString(36).slice(2, 9)}`;
 
 /** counterText is the aria-live match count, empty without a query. */
 const counterText = computed<string>(() => {
-  if (!props.query || props.invalidRegex) {
+  if (!props.query || props.patternError) {
     return "";
   }
   if (props.total === 0) {
     return String(t("files.editor.searchBar.noResults"));
+  }
+  if (props.capped) {
+    return String(t("files.editor.searchBar.resultsCapped", { total: props.total }));
   }
   return String(
     t("files.editor.searchBar.results", {
@@ -78,11 +86,22 @@ const counterText = computed<string>(() => {
   );
 });
 
-/** queryProps names the field and links the inline regex error. */
+/** errorText names the rejected pattern in place. */
+const errorText = computed<string>(() => {
+  if (props.patternError === "complexity") {
+    return String(t("files.editor.searchBar.complexPattern"));
+  }
+  if (props.patternError === "syntax") {
+    return String(t("files.editor.searchBar.invalidRegex"));
+  }
+  return "";
+});
+
+/** queryProps names the field and links the inline pattern error. */
 const queryProps = computed<Record<string, string | undefined>>(() => ({
   "aria-label": String(t("files.editor.searchBar.find")),
-  "aria-invalid": props.invalidRegex ? "true" : undefined,
-  "aria-describedby": props.invalidRegex ? errorId : undefined,
+  "aria-invalid": props.patternError ? "true" : undefined,
+  "aria-describedby": props.patternError ? errorId : undefined,
 }));
 
 // Opening moves focus into the bar; Mod-H lands on the replacement field.
@@ -242,8 +261,8 @@ function onReplaceEnter(event: KeyboardEvent): void {
       </NButton>
     </div>
 
-    <p v-if="props.invalidRegex" :id="errorId" class="ed-find-error" role="alert">
-      {{ t("files.editor.searchBar.invalidRegex") }}
+    <p v-if="props.patternError" :id="errorId" class="ed-find-error" role="alert">
+      {{ errorText }}
     </p>
 
     <div v-if="props.expanded" class="ed-find-row">

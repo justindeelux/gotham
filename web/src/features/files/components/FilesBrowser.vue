@@ -3287,15 +3287,23 @@ function onFolderMenu(key: string): void {
             :tabindex="rowTabindex(entry.name)"
             :aria-describedby="rowDescribedBy(entry)"
           >
+            <!-- JUS-215: the name owns the tile top, the relative modified age
+                 rides the right end; the type, owner/mode and size lines sit
+                 under the icon. Directories show no size line (their grid
+                 behaviour is unchanged). -->
             <span class="fm-tile-top">
+              <span class="fm-label fm-tile-name">
+                <b>{{ entry.name }}</b>
+              </span>
+              <span class="fm-tile-ago">{{ modifiedLabel(entry) }}</span>
+            </span>
+            <span class="fm-tile-main">
               <FileTypeIcon :kind="iconKind(entry)" />
-            </span>
-            <span class="fm-label">
-              <b>{{ entry.name }}</b>
-              <span :title="entrySubtitle(entry)">{{ entrySubtitle(entry) }}</span>
-            </span>
-            <span class="fm-meta">
-              <template v-if="entry.kind !== 'directory'">{{ formatBytes(entry.size) }} · </template>{{ formatTimestamp(entry.modified_at) }}
+              <span class="fm-tile-lines">
+                <span class="fm-tile-type">{{ entrySubtitle(entry) }}</span>
+                <span class="fm-tile-ownermode">{{ ownerModeLabel(entry) }}</span>
+                <span v-if="entry.kind !== 'directory'" class="fm-tile-size">{{ formatBytes(entry.size) }}</span>
+              </span>
             </span>
           </button>
           <!-- JUS-145: the tile's ⋮ row menu — the same trigger contract as the
@@ -4587,11 +4595,15 @@ function onFolderMenu(key: string): void {
   position: relative;
   flex: 1 1 auto;
   width: 100%;
+  min-width: 0;
   text-align: left;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-3);
+  /* JUS-215: the bottom-left checkbox overlays this reserve, so selecting
+     never changes the tile size. */
+  padding-bottom: 28px;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -4610,14 +4622,23 @@ function onFolderMenu(key: string): void {
   background: var(--accent-soft);
 }
 
+/* JUS-215: the name owns the tile top (ellipsis), the relative modified age
+   rides the right end. The ⋮ stays top-right, so the row keeps its right
+   clearance. */
 .fm-tile-top {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
   padding-right: 26px;
 }
 
-.fm-tile .fm-label b {
+.fm-tile-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fm-tile .fm-tile-name b {
   display: block;
   font-weight: 500;
   color: var(--fg);
@@ -4627,21 +4648,41 @@ function onFolderMenu(key: string): void {
   white-space: nowrap;
 }
 
-.fm-tile .fm-label span {
+.fm-tile-ago {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.fm-tile-main {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.fm-tile-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Every metadata line clips with an ellipsis instead of overflowing the tile
+   or wrapping it taller (JUS-215 keeps the stable tile height). */
+.fm-tile-type,
+.fm-tile-ownermode,
+.fm-tile-size {
   display: block;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: 10px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.fm-tile .fm-meta {
-  margin-top: auto;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--muted);
 }
 
 /* JUS-145: the tile's ⋮ row menu sits in the top-right corner as a sibling of
@@ -4660,18 +4701,15 @@ function onFolderMenu(key: string): void {
   height: 30px;
 }
 
+/* JUS-215: the tile checkbox is a bare control in the bottom-left corner — no
+   background tile — so selecting never changes the tile size. */
 .fm-tile-check {
   position: absolute;
-  top: 6px;
-  right: 42px;
+  left: 6px;
+  bottom: 6px;
   z-index: 2;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--radius-sm);
-  background: var(--float);
-  border: 1px solid var(--border);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--motion-fast) linear;
@@ -4878,6 +4916,12 @@ function onFolderMenu(key: string): void {
     display: none;
   }
 
+  /* JUS-215: single-column tiles on a phone — two narrow columns would squeeze
+     the top name and the right-side age into truncation. */
+  .fm-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .fm-navfield,
   .fm-search-group {
     flex-basis: 100%;
@@ -5025,11 +5069,6 @@ function onFolderMenu(key: string): void {
   .fm-tile-actions :deep(.n-button) {
     min-width: 44px;
     height: 44px;
-  }
-
-  /* The tile checkbox clears the wider 44px ⋮. */
-  .fm-tile-check {
-    right: 56px;
   }
 }
 

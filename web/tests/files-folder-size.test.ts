@@ -1,9 +1,10 @@
 // Folder size "Calculate" (JUS-162): the API client's route/params and the
 // composable's idle → loading → done / error / cancel state machine. The axios
 // layer is mocked, so the real api module runs without a DOM or network.
-/* global AbortSignal: readonly */
+/* global AbortSignal, document: readonly */
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { mount } from "@vue/test-utils";
 
 vi.mock("@/shared/api/http", () => ({
   http: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -12,6 +13,7 @@ vi.mock("@/shared/api/http", () => ({
 
 import { http } from "@/shared/api/http";
 import { calculateFolderSize } from "@/features/files/api/files";
+import FolderSizeCell from "@/features/files/components/FolderSizeCell.vue";
 import {
   cancelFolderSize,
   folderSizeState,
@@ -21,6 +23,12 @@ import {
 import { filesFolderSizeSchema } from "@/features/files/schemas/files";
 import { useFilesStore } from "@/features/files/stores/files";
 import { useTeamsStore } from "@/features/teams";
+import {
+  i18n,
+  registerDiscoveredCatalogs,
+  resetLocaleState,
+  syncComposerLocale,
+} from "@/shared/i18n";
 
 const get = http.get as unknown as Mock;
 
@@ -164,5 +172,41 @@ describe("useFolderSize", () => {
     get.mockResolvedValueOnce({ data: { entries: [], truncated: false, cursor: "" } });
     await store.refresh();
     expect(folderSizeState("server-1", "volumes", "apps").status).toBe("idle");
+  });
+});
+
+// JUS-216: the idle cell renders a quiet icon-only Calculate button — an
+// aria-label for assistive tech, no visible text, no tooltip (JUS-210), and a
+// lucide glyph.
+describe("FolderSizeCell idle Calculate", () => {
+  it("renders an icon button with an aria-label and no text or title", () => {
+    setActivePinia(createPinia());
+    registerDiscoveredCatalogs();
+    resetLocaleState();
+    syncComposerLocale("en");
+    useTeamsStore().activeTeamId = "team";
+    const wrapper = mount(FolderSizeCell, {
+      props: {
+        entry: {
+          name: "apps",
+          kind: "directory",
+          size: 0,
+          mode: 0o040755,
+          modified_at: "2026-10-12T09:02:00Z",
+          etag: '"e"',
+        },
+        path: "apps",
+      },
+      attachTo: document.body,
+      global: { plugins: [i18n] },
+    });
+    const button = wrapper.find(
+      'button[aria-label="Calculate the size of apps"]',
+    );
+    expect(button.exists()).toBe(true);
+    expect(button.text()).toBe("");
+    expect(button.attributes("title")).toBeUndefined();
+    expect(button.find("svg").exists()).toBe(true);
+    wrapper.unmount();
   });
 });

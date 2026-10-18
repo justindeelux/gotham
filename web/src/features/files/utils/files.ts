@@ -644,13 +644,13 @@ export function formatOctalModeFull(mode: number): string {
 }
 
 /**
- * ownerModeLabel renders the Owner/Mode list cell as "owner/mode" (e.g.
- * "root/755"), or just the mode when the agent reported no owner (an agent
+ * ownerModeLabel renders the Owner/Mode list cell as "owner / mode" (e.g.
+ * "root / 755"), or just the mode when the agent reported no owner (an agent
  * that predates the owner field).
  */
 export function ownerModeLabel(entry: FilesEntry): string {
   const mode = formatOctalModeFull(entry.mode);
-  return entry.owner ? `${entry.owner}/${mode}` : mode;
+  return entry.owner ? `${entry.owner} / ${mode}` : mode;
 }
 
 /** parseOctalMode converts a validated 3-digit octal string to a number. */

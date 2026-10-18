@@ -14,6 +14,7 @@ function nextFolderSizeErrorId(): number {
 </script>
 
 <script setup lang="ts">
+import { Calculator } from "@lucide/vue";
 import { NButton, NSpin } from "naive-ui";
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
@@ -30,8 +31,8 @@ import { formatBytes } from "@/shared/utils/format";
 
 /**
  * FolderSizeCell (JUS-162) renders the Size cell of ONE folder row: a
- * "Calculate" link, a spinner with a Cancel control while the walk runs, the
- * result (with a "partial" marker when the agent stopped at its entry cap), or
+ * quiet icon-only "Calculate" button, a spinner with a Cancel control while
+ * the walk runs, the result (with a "partial" marker when the agent stopped at its entry cap), or
  * a retry affordance after a failure. The state lives in `useFolderSize`, keyed
  * by server/root/path, so it survives the list's row windowing.
  *
@@ -59,7 +60,10 @@ const resultText = computed(() =>
 const resultLabel = computed(() =>
   state.value.truncated
     ? `${t("files.browser.sizeResultAria", { name: props.entry.name, size: resultText.value })} — ${t("files.browser.sizePartialHint")}`
-    : t("files.browser.sizeResultAria", { name: props.entry.name, size: resultText.value }),
+    : t("files.browser.sizeResultAria", {
+        name: props.entry.name,
+        size: resultText.value,
+      }),
 );
 
 /**
@@ -83,7 +87,12 @@ const announcement = computed<string>(() => {
 });
 
 function calculate(): void {
-  void requestFolderSize(files.serverId, teams.activeTeamId, files.rootName, props.path);
+  void requestFolderSize(
+    files.serverId,
+    teams.activeTeamId,
+    files.rootName,
+    props.path,
+  );
 }
 
 function cancel(): void {
@@ -127,16 +136,24 @@ function cancel(): void {
       v-else
       text
       size="tiny"
-      class="fm-size-action"
+      class="fm-size-action fm-size-action--icon"
       :aria-label="t('files.browser.sizeCalculateAria', { name: entry.name })"
       @click="calculate"
     >
-      {{ t("files.browser.sizeCalculate") }}
+      <template #icon>
+        <Calculator :size="14" :stroke-width="1.8" aria-hidden="true" />
+      </template>
     </NButton>
     <!-- Persistent live region: it exists in every state so a status change is
          announced (a live region inserted already-full is not). -->
-    <span class="fm-sr-only" role="status" aria-live="polite">{{ announcement }}</span>
-    <span v-if="state.status === 'error' && state.error" :id="errorId" class="fm-sr-only">
+    <span class="fm-sr-only" role="status" aria-live="polite">{{
+      announcement
+    }}</span>
+    <span
+      v-if="state.status === 'error' && state.error"
+      :id="errorId"
+      class="fm-sr-only"
+    >
       {{ state.error }}
     </span>
   </span>
@@ -153,7 +170,8 @@ function cancel(): void {
 }
 
 .fm-size-action {
-  /* JUS-206: the reference "Calculate" is a green body-text link, not mono. */
+  /* JUS-206/216: the Calculate control is a quiet icon button (no background);
+     the Cancel/Retry text controls keep the reference green body-text link. */
   color: var(--success-ink);
   font-family: var(--font-body);
   font-size: var(--text-xs);
@@ -162,6 +180,11 @@ function cancel(): void {
 .fm-size-action:hover {
   color: var(--accent-ink-hover);
   text-decoration: underline;
+}
+
+/* The icon-only Calculate has no text to underline on hover. */
+.fm-size-action--icon:hover {
+  text-decoration: none;
 }
 
 .fm-size-action--error {

@@ -3287,23 +3287,24 @@ function onFolderMenu(key: string): void {
             :tabindex="rowTabindex(entry.name)"
             :aria-describedby="rowDescribedBy(entry)"
           >
-            <!-- JUS-215: the name owns the tile top, the relative modified age
-                 rides the right end; the type, owner/mode and size lines sit
-                 under the icon. Directories show no size line (their grid
-                 behaviour is unchanged). -->
+            <!-- JUS-216: the file-type icon sits top-left directly before the
+                 name (one line); the bottom area keeps the type, owner/mode
+                 and size lines on the left while the relative modified age
+                 rides the bottom-right corner. Directories show no size line
+                 (their grid behaviour is unchanged). -->
             <span class="fm-tile-top">
+              <FileTypeIcon :kind="iconKind(entry)" />
               <span class="fm-label fm-tile-name">
                 <b>{{ entry.name }}</b>
               </span>
-              <span class="fm-tile-ago">{{ modifiedLabel(entry) }}</span>
             </span>
-            <span class="fm-tile-main">
-              <FileTypeIcon :kind="iconKind(entry)" />
+            <span class="fm-tile-bottom">
               <span class="fm-tile-lines">
                 <span class="fm-tile-type">{{ entrySubtitle(entry) }}</span>
                 <span class="fm-tile-ownermode">{{ ownerModeLabel(entry) }}</span>
                 <span v-if="entry.kind !== 'directory'" class="fm-tile-size">{{ formatBytes(entry.size) }}</span>
               </span>
+              <span class="fm-tile-ago">{{ modifiedLabel(entry) }}</span>
             </span>
           </button>
           <!-- JUS-145: the tile's ⋮ row menu — the same trigger contract as the
@@ -4622,12 +4623,13 @@ function onFolderMenu(key: string): void {
   background: var(--accent-soft);
 }
 
-/* JUS-215: the name owns the tile top (ellipsis), the relative modified age
-   rides the right end. The ⋮ stays top-right, so the row keeps its right
-   clearance. */
+/* JUS-216: the icon sits top-left directly before the name (one line, the name
+   keeps its ellipsis); the bottom area keeps the metadata lines on the left
+   while the relative modified age rides the bottom-right corner. The ⋮ stays
+   top-right, so the top row keeps its right clearance. */
 .fm-tile-top {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-2);
   min-width: 0;
   padding-right: 26px;
@@ -4650,17 +4652,19 @@ function onFolderMenu(key: string): void {
 
 .fm-tile-ago {
   flex: 0 0 auto;
+  align-self: flex-end;
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--muted);
   white-space: nowrap;
 }
 
-.fm-tile-main {
+.fm-tile-bottom {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: var(--space-2);
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .fm-tile-lines {

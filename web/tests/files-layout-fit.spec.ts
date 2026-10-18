@@ -1702,7 +1702,7 @@ test("a long owner clips inside the Owner/Mode cell without reaching Size", asyn
       };
     });
     expect(m.text, `full owner/mode text in the DOM at ${width}px`).toBe(
-      "systemd-network/755",
+      "systemd-network / 755",
     );
     expect(m.textOverflow, `clipped with an ellipsis at ${width}px`).toBe(
       "ellipsis",

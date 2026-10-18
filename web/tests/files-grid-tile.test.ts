@@ -1,6 +1,7 @@
-// JUS-215: the grid tile carries the name on top, the relative modified age on
-// the right, and the type / owner-mode / size lines under the icon; the
-// checkbox is a bare control in the tile's bottom-left corner.
+// JUS-215/216: the grid tile carries the file-type icon before the name on
+// top, the type / owner-mode / size lines on the bottom-left and the relative
+// modified age at the bottom-right; the checkbox is a bare control in the
+// tile's bottom-left corner.
 /* global document:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -113,12 +114,17 @@ function tile(wrapper: VueWrapper, name: string) {
 }
 
 describe("grid tile layout", () => {
-  it("puts the name on top with the relative age on its right", async () => {
+  it("puts the icon before the name on top with the age at the bottom-right", async () => {
     const wrapper = await mountGrid();
     const top = tile(wrapper, "app.yaml").find(".fm-tile-top");
     expect(top.exists()).toBe(true);
+    expect(top.find(".fm-mark").exists()).toBe(true);
     expect(top.find(".fm-tile-name b").text()).toBe("app.yaml");
-    const ago = top.find(".fm-tile-ago").text();
+    // The relative age left the top line for the bottom row's right end.
+    expect(top.find(".fm-tile-ago").exists()).toBe(false);
+    const bottom = tile(wrapper, "app.yaml").find(".fm-tile-bottom");
+    expect(bottom.exists()).toBe(true);
+    const ago = bottom.find(".fm-tile-ago").text();
     expect(ago.length).toBeGreaterThan(0);
     // Relative, never the absolute "YYYY-MM-DD HH:mm" stamp the tile used to show.
     expect(ago).not.toMatch(/\d{4}-\d{2}-\d{2}/);
@@ -128,7 +134,7 @@ describe("grid tile layout", () => {
     const wrapper = await mountGrid();
     const lines = tile(wrapper, "app.yaml").find(".fm-tile-lines");
     expect(lines.find(".fm-tile-type").text()).toContain("YAML");
-    expect(lines.find(".fm-tile-ownermode").text()).toBe("root/644");
+    expect(lines.find(".fm-tile-ownermode").text()).toBe("root / 644");
     expect(lines.find(".fm-tile-size").text()).toContain("KiB");
   });
 

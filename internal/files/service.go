@@ -121,10 +121,18 @@ type TrashEntry struct {
 // Content is one editable text body.
 type Content struct {
 	Content string `json:"content"`
-	Etag    string `json:"etag"`
-	SHA256  string `json:"sha256"`
-	Size    int64  `json:"size"`
-	Mode    uint32 `json:"mode"`
+	// Encoding is the detected charset of Content (utf-8, ascii, gbk, gb2312,
+	// big5). The editor shows it and sends it back on save, so an unedited file
+	// is written with the same bytes. ASCII-only bodies are reported as UTF-8.
+	Encoding string `json:"encoding"`
+	Etag     string `json:"etag"`
+	SHA256   string `json:"sha256"`
+	Size     int64  `json:"size"`
+	Mode     uint32 `json:"mode"`
+	// raw is the file body exactly as read, kept for history snapshots so a
+	// legacy-encoded file is versioned and restored byte-for-byte. It never
+	// leaves the package as JSON.
+	raw []byte
 }
 
 // Download is an open agent read stream. Chunks is closed when the stream ends;
@@ -444,8 +452,9 @@ func (s *Service) Stat(ctx context.Context, serverID uuid.UUID, root, path strin
 
 // Content reads one file body for the editor. Owner/admin only: file bodies
 // hold secrets such as 0600 compose environment files. A file larger than the
-// editor ceiling answers ErrTooLarge (413) and a binary/invalid-UTF-8 body
-// answers ErrNotEditable (415); both should be offered as a download instead.
+// editor ceiling answers ErrTooLarge (413) and a genuinely binary body answers
+// ErrNotEditable (415); both should be offered as a download instead. A legacy
+// body (GBK/GB2312/BIG5) is decoded to UTF-8 and reported through Encoding.
 func (s *Service) Content(ctx context.Context, serverID uuid.UUID, root, path string) (content Content, err error) {
 	defer func() { s.audit(ctx, serverID, "read_content", root, path, err) }()
 	if !Enabled() {
@@ -490,16 +499,19 @@ func (s *Service) readContent(ctx context.Context, serverID uuid.UUID, root, pat
 	if err != nil {
 		return Content{}, err
 	}
-	if !utf8.Valid(body) || bytes.IndexByte(body, 0) >= 0 {
-		return Content{}, ErrNotEditable
+	encodingName, text, err := detectEncoding(body)
+	if err != nil {
+		return Content{}, err
 	}
 	sum := sha256.Sum256(body)
 	return Content{
-		Content: string(body),
-		Etag:    info.GetEtag(),
-		SHA256:  hex.EncodeToString(sum[:]),
-		Size:    int64(len(body)),
-		Mode:    info.GetMode(),
+		Content:  text,
+		Encoding: encodingName,
+		Etag:     info.GetEtag(),
+		SHA256:   hex.EncodeToString(sum[:]),
+		Size:     int64(len(body)),
+		Mode:     info.GetMode(),
+		raw:      body,
 	}, nil
 }
 
@@ -948,6 +960,8 @@ func auditResult(err error) string {
 		return "invalid_archive"
 	case errors.Is(err, ErrNotEditable):
 		return "not_editable"
+	case errors.Is(err, ErrUnrepresentable):
+		return "unrepresentable"
 	case errors.Is(err, ErrBusy):
 		return "busy"
 	case errors.Is(err, ErrInsufficientStorage):

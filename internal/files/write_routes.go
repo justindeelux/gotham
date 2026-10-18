@@ -78,9 +78,11 @@ func (h *handler) requestLimits() (int64, time.Duration) {
 
 // putContent serves PUT .../files/content: the editor save. If-Match is
 // required (428 when absent); ?overwrite=true force-replaces a target the
-// caller has not read, and If-Match: * is treated as that force. The body is
-// streamed to the agent; a request-body error cancels the agent stream so a
-// partial save never commits.
+// caller has not read, and If-Match: * is treated as that force. ?encoding= is
+// the charset the body should be stored in (default utf-8); the body is always
+// UTF-8 and is transcoded, refusing characters the target cannot represent. The
+// body is streamed to the agent; a request-body error cancels the agent stream
+// so a partial save never commits.
 func (h *handler) putContent(w http.ResponseWriter, r *http.Request) {
 	serverID, ok := serverIDParam(w, r)
 	if !ok {
@@ -132,6 +134,7 @@ func (h *handler) putContent(w http.ResponseWriter, r *http.Request) {
 		ExpectEtag: expectEtag,
 		Overwrite:  overwrite,
 		Size:       size,
+		Encoding:   query.Get("encoding"),
 	}, body)
 	if err != nil {
 		h.writeError(w, err)

@@ -62,7 +62,7 @@ type handler struct {
 //	GET    /v1/servers/{id}/files/size?root=&path=
 //	GET    /v1/servers/{id}/files/search?root=&path=&query=&recursive=
 //	GET    /v1/servers/{id}/files/content?root=&path=
-//	PUT    /v1/servers/{id}/files/content?root=&path=          (If-Match / ?overwrite)
+//	PUT    /v1/servers/{id}/files/content?root=&path=&encoding=   (If-Match / ?overwrite)
 //	GET    /v1/servers/{id}/files/history?root=&path=
 //	GET    /v1/servers/{id}/files/history/{version}?root=&path=
 //	POST   /v1/servers/{id}/files/history/{version}/restore?root=&path=
@@ -291,6 +291,10 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		// A body that overran the ceiling while being read (a lying or chunked
 		// Content-Length) is 413, not 400.
 		writeJSON(w, http.StatusRequestEntityTooLarge, errorBody{Message: "file is too large to edit", Code: "too_large"})
+	case errors.Is(err, ErrUnrepresentable):
+		// The body holds a character the chosen save encoding cannot represent.
+		// It is refused, never substituted, so the user can switch to UTF-8.
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "text cannot be represented in the save encoding", Code: "unrepresentable"})
 	case errors.Is(err, ErrValidation):
 		// A fixed message: the underlying error can carry raw gRPC/agent text
 		// (mapRPCError wraps the agent error), which must not reach the client.

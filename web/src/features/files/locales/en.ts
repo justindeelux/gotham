@@ -288,6 +288,7 @@ const en = {
     archiveEntry: "The archive contains an entry that cannot be extracted safely (a link, device, FIFO or unsupported type).",
     invalidArchive: "The archive is invalid or truncated and could not be unpacked.",
     notEditable: "The file is not editable text. Download it instead.",
+    unrepresentable: "The file contains characters the selected encoding cannot represent. Switch it to UTF-8 instead.",
     precondition: "The file changed on the node before the request completed.",
     busy: "The node is busy transferring files. Retry in a moment.",
     insufficientStorage: "Not enough free space on the node for this file.",

@@ -107,6 +107,12 @@ export type FilesSearchListing = z.infer<typeof filesSearchListingSchema>;
 /** contentSchema validates GET /content (owner/admin only, <= 2 MiB). */
 export const filesContentSchema = z.object({
   content: z.string(),
+  /**
+   * encoding is the charset the body was decoded from (utf-8, ascii, gbk,
+   * gb2312, big5). Optional so an older control plane still loads: the editor
+   * then assumes UTF-8.
+   */
+  encoding: z.string().optional(),
   etag: z.string(),
   sha256: z.string(),
   size: z.number(),

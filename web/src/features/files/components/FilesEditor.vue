@@ -26,6 +26,8 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 
 import EditorCloseTabsDialog from "@/features/files/components/EditorCloseTabsDialog.vue";
 import EditorConflictDialog from "@/features/files/components/EditorConflictDialog.vue";
+import EditorEncodingDialog from "@/features/files/components/EditorEncodingDialog.vue";
+import EditorEncodingUnsupportedDialog from "@/features/files/components/EditorEncodingUnsupportedDialog.vue";
 import EditorExplorer from "@/features/files/components/EditorExplorer.vue";
 import EditorHistoryDialog from "@/features/files/components/EditorHistoryDialog.vue";
 import EditorLanguagePicker from "@/features/files/components/EditorLanguagePicker.vue";
@@ -50,11 +52,16 @@ import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
 import {
   clampEditorOffset,
+  encodingLabel,
   languageLabel,
   scrollTabIntoView,
   tabsToClose,
 } from "@/features/files/utils/editor";
-import type { EditorLanguageId, TabCloseScope } from "@/features/files/utils/editor";
+import type {
+  EditorEncoding,
+  EditorLanguageId,
+  TabCloseScope,
+} from "@/features/files/utils/editor";
 import { useTeamsStore } from "@/features/teams";
 import { useCopyText } from "@/shared/composables/useCopyText";
 import { formatBytes, formatDateTime } from "@/shared/utils/format";
@@ -128,6 +135,8 @@ let dragState: {
 const closeAllOpen = ref(false);
 // historyOpen shows the version-history dialog for the active file tab.
 const historyOpen = ref(false);
+// encodingOpen shows the save-encoding dialog for the active file tab.
+const encodingOpen = ref(false);
 // historyDialog is the dialog instance, so a restore can refresh its list.
 const historyDialog = ref<InstanceType<typeof EditorHistoryDialog> | null>(null);
 // historyCounts caches the revision count per tab for the status bar. A file
@@ -705,7 +714,8 @@ async function saveTab(id: string): Promise<void> {
   } else if (outcome === "error") {
     message.error(tab.error || String(t("files.editor.saveFailed", { name: tab.name })));
   }
-  // "conflict" arms the modal; "blocked" is a no-op (loading/read-only tab).
+  // "conflict" and "unsupported" arm their own prompts; "blocked" is a no-op
+  // (loading/read-only tab).
 }
 
 /** saveFailureText names the tab and, when known, its server error. */
@@ -746,6 +756,10 @@ async function saveAllTabs(): Promise<void> {
       message.warning(
         String(t("files.editor.conflictFile", { name: report.tab.name })),
       );
+      continue;
+    }
+    if (report.outcome === "unsupported") {
+      // The encoding prompt names the tab and offers a UTF-8 save.
       continue;
     }
     message.error(saveFailureText(report.tab));
@@ -792,6 +806,65 @@ function pickLanguage(language: EditorLanguageId): void {
   const tab = activeTab.value;
   if (tab) {
     editor.setLanguage(tab.id, language);
+  }
+}
+
+/** encodingWarningTab is the open tab the unsupported-characters prompt names. */
+const encodingWarningTab = computed<EditorTab | null>(
+  () =>
+    editor.tabs.find((tab) => tab.id === editor.encodingWarning?.tabId) ?? null,
+);
+
+/**
+ * pickEncoding changes the active tab's save charset. A clean tab is re-saved
+ * immediately so the file itself moves to the new encoding (an unmodified
+ * legacy file must not keep its old bytes under a new label); a dirty tab
+ * applies it on the next save.
+ */
+async function pickEncoding(encoding: EditorEncoding): Promise<void> {
+  const tab = activeTab.value;
+  if (!tab || tab.kind !== "file" || !files.canWrite) {
+    return;
+  }
+  const outcome = await editor.changeEncoding(
+    tab.id,
+    teams.activeTeamId,
+    encoding,
+  );
+  if (outcome === "saved") {
+    message.success(
+      String(t("files.editor.encodingChanged", { encoding: encodingLabel(encoding) })),
+    );
+    void refreshHistoryCount(tab);
+  } else if (outcome === "pending") {
+    message.info(
+      String(
+        t("files.editor.encodingPending", {
+          encoding: encodingLabel(encoding),
+        }),
+      ),
+    );
+  } else if (outcome === "error") {
+    message.error(saveFailureText(tab));
+  }
+  // "conflict"/"unsupported" arm their own prompts; the store has already
+  // reverted the label to the charset on disk when the re-save did not land.
+}
+
+/** useUtf8AndSave retries the blocked save as UTF-8, keeping the characters. */
+async function useUtf8AndSave(): Promise<void> {
+  const warning = editor.encodingWarning;
+  const tab = encodingWarningTab.value;
+  if (!warning || !tab) {
+    editor.dismissEncodingWarning();
+    return;
+  }
+  const outcome = await editor.saveAsUtf8(warning.tabId, teams.activeTeamId);
+  if (outcome === "saved") {
+    message.success(String(t("files.editor.saved", { name: tab.name })));
+    void refreshHistoryCount(tab);
+  } else if (outcome === "error") {
+    message.error(saveFailureText(tab));
   }
 }
 
@@ -1074,6 +1147,10 @@ async function saveAndClose(): Promise<void> {
         message.warning(
           String(t("files.editor.conflictFile", { name: report.tab.name })),
         );
+        continue;
+      }
+      if (report.outcome === "unsupported") {
+        // Keep the tab open; the encoding prompt offers a UTF-8 save.
         continue;
       }
       message.error(saveFailureText(report.tab));
@@ -1543,11 +1620,21 @@ onBeforeUnmount(() => {
             >
               {{ t("files.editor.lineColumn", { line: cursor.line, column: cursor.column }) }}
             </span>
+            <button
+              v-if="activeTab.kind === 'file' && activeTab.status === 'ready' && files.canWrite"
+              type="button"
+              class="ed-encoding"
+              :aria-label="`${t('files.editor.encodingTitle')}: ${encodingLabel(activeTab.encoding)}`"
+              :title="t('files.editor.encodingTitle')"
+              @click="encodingOpen = true"
+            >
+              {{ encodingLabel(activeTab.encoding) }}
+            </button>
             <span
-              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
+              v-else-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
               class="mono"
             >
-              {{ t("files.editor.encoding") }}
+              {{ encodingLabel(activeTab.encoding) }}
             </span>
             <span
               v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
@@ -1662,6 +1749,19 @@ onBeforeUnmount(() => {
   />
   <EditorConflictDialog />
   <EditorSaveAsDialog />
+  <EditorEncodingDialog
+    v-model:show="encodingOpen"
+    :encoding="activeTab?.encoding ?? 'utf-8'"
+    @select="(encoding) => void pickEncoding(encoding)"
+  />
+  <EditorEncodingUnsupportedDialog
+    :show="editor.encodingWarning !== null"
+    :name="encodingWarningTab?.name ?? ''"
+    :encoding="editor.encodingWarning?.encoding ?? 'utf-8'"
+    :characters="editor.encodingWarning?.characters ?? []"
+    @update:show="(value: boolean) => { if (!value) editor.dismissEncodingWarning(); }"
+    @use-utf8="() => void useUtf8AndSave()"
+  />
   <EditorHistoryDialog
     ref="historyDialog"
     v-model:show="historyOpen"
@@ -1960,6 +2060,22 @@ onBeforeUnmount(() => {
 
 .mono {
   font-family: var(--font-mono);
+}
+
+.ed-encoding {
+  padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.ed-encoding:hover,
+.ed-encoding:focus-visible {
+  background: color-mix(in oklab, var(--fg) 10%, transparent);
 }
 
 .dialog-foot {

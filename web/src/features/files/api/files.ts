@@ -1,4 +1,5 @@
 import { isApiError } from "@/features/servers";
+import type { EditorEncoding } from "@/features/files/utils/editor";
 import { i18n } from "@/shared/i18n";
 import { http, teamHeaders } from "@/shared/api/http";
 import { parseWith } from "@/shared/validation/parse";
@@ -228,6 +229,11 @@ export interface SaveContentOptions {
   etag?: string;
   /** overwrite force-replaces a target the caller has not read (If-Match: *). */
   overwrite?: boolean;
+  /**
+   * encoding is the charset the body is stored in (default utf-8). The server
+   * transcodes the UTF-8 body and refuses a character the target cannot hold.
+   */
+  encoding?: EditorEncoding;
 }
 
 /**
@@ -251,6 +257,7 @@ export async function putContent(
         root: options.root,
         path: options.path,
         overwrite: overwrite ? "true" : "false",
+        encoding: options.encoding ?? "utf-8",
       },
       headers: {
         ...teamHeaders(teamId),
@@ -890,4 +897,5 @@ const codeKeys: Record<string, string> = {
   archive_entry: "files.errors.archiveEntry",
   invalid_archive: "files.errors.invalidArchive",
   history_unavailable: "files.editor.historyUnavailable",
+  unrepresentable: "files.errors.unrepresentable",
 };

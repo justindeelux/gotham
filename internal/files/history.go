@@ -1,6 +1,7 @@
 package files
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -66,10 +67,13 @@ type Version struct {
 	Etag      string    `json:"etag"`
 }
 
-// VersionBody is one snapshot plus its content.
+// VersionBody is one snapshot plus its content. Content is the body decoded to
+// UTF-8 for the diff view; raw keeps the stored bytes so a legacy-encoded
+// snapshot restores byte-for-byte.
 type VersionBody struct {
 	Version Version
 	Content string
+	raw     []byte
 }
 
 // HistoryStore persists per-file snapshots. The production implementation is
@@ -163,8 +167,20 @@ func (h storeHistory) GetVersion(ctx context.Context, serverID uuid.UUID, root, 
 			Size:      row.Size,
 			Etag:      row.Etag,
 		},
-		Content: string(row.Content),
+		Content: historyText(row.Content),
+		raw:     row.Content,
 	}, nil
+}
+
+// historyText decodes a stored snapshot body for the diff view. A body the
+// editor detector does not recognise falls back to a lossy string rather than
+// failing the history read; the restore path uses the raw bytes, so a fallback
+// never changes what a restore writes.
+func historyText(body []byte) string {
+	if _, text, err := detectEncoding(body); err == nil {
+		return text
+	}
+	return string(body)
 }
 
 // DeleteVersion removes one revision.
@@ -340,12 +356,13 @@ func (s *Service) RestoreVersion(ctx context.Context, serverID uuid.UUID, root, 
 			return WriteResult{}, fmt.Errorf("files: snapshot the current body before restore: %w", err)
 		}
 	}
+	body := versionBytes(version)
 	result, err = s.streamWrite(ctx, serverID, WriteRequest{
 		Root:       root,
 		Path:       path,
 		ExpectEtag: expectEtag,
-		Size:       int64(len(version.Content)),
-	}, strings.NewReader(version.Content))
+		Size:       int64(len(body)),
+	}, bytes.NewReader(body))
 	if err != nil {
 		// A refused write (conflict or bad request) replaced nothing, so drop
 		// the pre-snapshot instead of leaving a phantom revision. Any other
@@ -361,7 +378,8 @@ func (s *Service) RestoreVersion(ctx context.Context, serverID uuid.UUID, root, 
 // saveVersionDetached stores one pre-save body on a context detached from the
 // request, so a client disconnect or request deadline after the agent commit
 // cannot lose the revision. The key is canonical, so every spelling of one path
-// shares a single history.
+// shares a single history. The body is stored exactly as read (see
+// Content.raw), so a GBK/BIG5 file is versioned and restored byte-for-byte.
 func (s *Service) saveVersionDetached(ctx context.Context, serverID uuid.UUID, root, path string, prior Content) (Version, error) {
 	history := s.historyStore()
 	if history == nil {
@@ -369,7 +387,21 @@ func (s *Service) saveVersionDetached(ctx context.Context, serverID uuid.UUID, r
 	}
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyWriteTimeout)
 	defer cancel()
-	return history.SaveVersion(saveCtx, serverID, root, canonicalHistoryPath(path), prior.Etag, []byte(prior.Content), s.historyMaxVersions, s.historyMaxBytes)
+	body := prior.raw
+	if body == nil {
+		body = []byte(prior.Content)
+	}
+	return history.SaveVersion(saveCtx, serverID, root, canonicalHistoryPath(path), prior.Etag, body, s.historyMaxVersions, s.historyMaxBytes)
+}
+
+// versionBytes returns the bytes to write for a restore: the raw snapshot when
+// the store kept them, else the decoded text (a store that predates raw
+// snapshots).
+func versionBytes(version VersionBody) []byte {
+	if version.raw != nil {
+		return version.raw
+	}
+	return []byte(version.Content)
 }
 
 // recordVersion stores one pre-save body after a successful save. A history

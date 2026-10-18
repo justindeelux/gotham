@@ -148,8 +148,8 @@ export interface EntryActionGates {
 }
 
 /**
- * MAX_EDITABLE_BYTES is the editor's content ceiling: a larger body answers 413
- * on read and is offered as a download instead. It mirrors the control plane's
+ * MAX_EDITABLE_BYTES is the editor's full-read ceiling: a larger file opens as
+ * a read-only tail instead. It mirrors the control plane's
  * `files.MaxContentBytes` (2 MiB, internal/files/service.go).
  */
 export const MAX_EDITABLE_BYTES = 2 << 20;
@@ -167,18 +167,13 @@ const binaryExtensions = new Set([
 ]);
 
 /**
- * canOpenInEditor reports whether one listing row opens as editable text in the
- * code editor: a regular file within {@link MAX_EDITABLE_BYTES} and not a known
- * binary family. It is the name/size half of the editor-open decision, so a
- * double-click never opens a tab the editor can only show as download-only
- * (JUS-130, owner decision: such files do nothing).
+ * canOpenInEditor reports whether one listing row opens as text in the code
+ * editor: a regular file that is not a known binary family. Size is not a gate:
+ * a file over {@link MAX_EDITABLE_BYTES} opens as a read-only tail (JUS-225),
+ * and a body the server finds binary still answers a download-only state.
  */
 export function canOpenInEditor(entry: FilesEntry): boolean {
-  return (
-    entry.kind === "file" &&
-    entry.size <= MAX_EDITABLE_BYTES &&
-    !binaryExtensions.has(entryExtension(entry.name))
-  );
+  return entry.kind === "file" && !binaryExtensions.has(entryExtension(entry.name));
 }
 
 /**

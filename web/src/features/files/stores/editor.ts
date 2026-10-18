@@ -36,9 +36,10 @@ export type EditorTabStatus =
  * EditorTab is one open document. `doc` is the live editor text (BOM stripped,
  * EOL normalised to LF); `original` is the last loaded/saved text, so
  * `doc !== original` is the dirty condition without a separate flag. `eol` and
- * `bom` reproduce the file's original bytes on save. `large`/`binary` tabs
- * carry no text (the server refused a 413/415 read) and render a
- * download-only state.
+ * `bom` reproduce the file's original bytes on save. `truncated` marks a
+ * read-only tail of a file over the editor ceiling: it renders in the editor
+ * but is never edited or saved. `large`/`binary` tabs carry no text (the server
+ * refused a 413/415 read) and render a download-only state.
  */
 export interface EditorTab {
   id: string;
@@ -59,6 +60,8 @@ export interface EditorTab {
   encoding: EditorEncoding;
   size: number;
   mode: number;
+  /** truncated is true for a read-only tail view of an over-limit file. */
+  truncated: boolean;
   language: EditorLanguageId;
   /** languageManual is true once the status-bar picker overrode the detected mode. */
   languageManual: boolean;
@@ -188,6 +191,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     return (
       tab.kind === "file" &&
       tab.status === "ready" &&
+      !tab.truncated &&
       (tab.doc !== tab.original ||
         (tab.originalEol !== undefined && tab.eol !== tab.originalEol))
     );
@@ -254,6 +258,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       encoding: "utf-8",
       size: 0,
       mode: 0,
+      truncated: false,
       language: detectLanguage(path),
       languageManual: false,
       status: "loading",
@@ -290,6 +295,14 @@ export const useEditorStore = defineStore("filesEditor", () => {
         getFileVersion(serverId.value, teamId, tab.root, tab.path, versionId),
         getContent(serverId.value, teamId, tab.root, tab.path),
       ]);
+      if (current.truncated === true) {
+        // The live side is only the tail of an over-limit file, so a diff
+        // against it would claim every earlier line was deleted.
+        tab.diff = undefined;
+        tab.status = "error";
+        tab.error = describeFilesError({ message: "truncated", status: 413 });
+        return;
+      }
       tab.diff = { versionId, base: version.content, current: current.content };
       tab.etag = current.etag;
       tab.size = version.version.size;
@@ -347,6 +360,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       encoding: "utf-8",
       size: 0,
       mode: 0,
+      truncated: false,
       language: detectLanguage(path),
       languageManual: false,
       status: "loading",
@@ -380,6 +394,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
         etag: content.etag,
         size: content.size,
         mode: content.mode,
+        truncated: content.truncated === true,
         // A body with mixed terminators cannot round-trip, so it is shown
         // read-only (download only) instead of being silently normalised.
         status: shape.faithful ? "ready" : "mixed",
@@ -403,7 +418,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
   /** setDoc applies an editor change to one tab. */
   function setDoc(id: string, doc: string): void {
     const tab = tabs.value.find((item) => item.id === id);
-    if (tab && tab.status === "ready") {
+    if (tab && tab.status === "ready" && !tab.truncated) {
       tab.doc = doc;
     }
   }
@@ -501,7 +516,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     encoding: EditorEncoding,
   ): Promise<ChangeEncodingOutcome> {
     const tab = tabs.value.find((item) => item.id === id);
-    if (!tab || tab.kind !== "file" || tab.status !== "ready") {
+    if (!tab || tab.kind !== "file" || tab.status !== "ready" || tab.truncated) {
       return "blocked";
     }
     if (tab.encoding === encoding) {
@@ -544,7 +559,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     overwrite = false,
   ): Promise<SaveOutcome> {
     const tab = tabs.value.find((item) => item.id === id);
-    if (!tab || tab.kind !== "file" || tab.status !== "ready") {
+    if (!tab || tab.kind !== "file" || tab.status !== "ready" || tab.truncated) {
       return "blocked";
     }
     const sentDoc = tab.doc;
@@ -661,7 +676,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     name: string,
   ): Promise<SaveOutcome> {
     const tab = tabs.value.find((item) => item.id === id);
-    if (!tab || tab.kind !== "file" || tab.status !== "ready") {
+    if (!tab || tab.kind !== "file" || tab.status !== "ready" || tab.truncated) {
       return "blocked";
     }
     const target = joinPath(directoryOf(tab.path), name);

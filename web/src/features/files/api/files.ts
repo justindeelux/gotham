@@ -203,7 +203,8 @@ export async function searchEntries(
   };
 }
 
-/** getContent reads one editable text body (owner/admin only, ≤ 2 MiB). */
+/** getContent reads one editable text body (owner/admin only). A file over the
+ *  editor ceiling answers a read-only tail flagged `truncated`. */
 export async function getContent(
   serverId: string,
   teamId: string,

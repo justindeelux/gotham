@@ -73,6 +73,26 @@ describe("editor tab store", () => {
     expect(store.hasDirty).toBe(false);
   });
 
+  it("opens an over-limit file as a read-only tail that cannot be edited or saved", async () => {
+    getContentMock.mockResolvedValueOnce({
+      ...content("tail\n", '"v9"'),
+      truncated: true,
+      size: 5_000_000,
+    });
+    const store = useEditorStore();
+    await store.openFile("srv", "team", "volumes", "server.log");
+
+    const tab = store.activeTab!;
+    expect(tab.status).toBe("ready");
+    expect(tab.truncated).toBe(true);
+    expect(tab.size).toBe(5_000_000);
+    store.setDoc(tab.id, "changed");
+    expect(tab.doc).toBe("tail\n");
+    expect(store.isDirty(tab)).toBe(false);
+    expect(await store.save(tab.id, "team")).toBe("blocked");
+    expect(putContentMock).not.toHaveBeenCalled();
+  });
+
   it("keeps a manual language override through a rename but re-detects otherwise", async () => {
     getContentMock.mockResolvedValue(content("start"));
     const store = useEditorStore();

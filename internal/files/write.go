@@ -46,6 +46,11 @@ type WriteRequest struct {
 	// body is always UTF-8 from the editor; writeFile transcodes it before it
 	// reaches the agent and refuses a rune the target cannot represent.
 	Encoding string
+	// FromEditor marks a save from the code editor. The editor only ever sees a
+	// read-only tail of a file over the ceiling, so such a save is refused when
+	// the target is already too large; an upload or copy of the same file is
+	// not.
+	FromEditor bool
 }
 
 // WriteResult reports the committed file.
@@ -104,6 +109,11 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 	}
 	if s.maxUploadBytes > 0 && req.Size > s.maxUploadBytes {
 		return WriteResult{}, ErrTooLarge
+	}
+	if req.FromEditor && op == "write" {
+		if err := s.refuseEditorWrite(ctx, serverID, req.Root, req.Path); err != nil {
+			return WriteResult{}, err
+		}
 	}
 	if body == nil {
 		body = strings.NewReader("")
@@ -170,6 +180,25 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 		s.recordVersion(ctx, serverID, req.Root, req.Path, *prior)
 	}
 	return result, nil
+}
+
+// refuseEditorWrite rejects an editor save over an existing file larger than
+// the editor ceiling: the buffer the user saw is a read-only tail, so writing it
+// would replace bytes they never saw. A force-save is refused too, deliberately:
+// the editor never shows an over-limit file, so even `overwrite` would commit a
+// buffer whose relation to the file on disk is unknown. A missing target (a
+// create) or a small one proceeds. The size check is a UX guard on the stat; the
+// If-Match etag remains the integrity guard against a concurrent change.
+func (s *Service) refuseEditorWrite(ctx context.Context, serverID uuid.UUID, root, path string) error {
+	existing, err := s.Stat(ctx, serverID, root, path)
+	switch {
+	case err == nil && existing.Size > s.maxContentBytes:
+		return ErrTooLarge
+	case err == nil, errors.Is(err, ErrNotFound):
+		return nil
+	default:
+		return err
+	}
 }
 
 // streamWrite streams one validated request body to the agent and commits it.

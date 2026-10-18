@@ -223,6 +223,7 @@ describe("history in the editor", () => {
       bom: false,
       size: 6,
       mode: 0o100644,
+      truncated: false,
       language: "plain",
       languageManual: false,
       status: "ready",

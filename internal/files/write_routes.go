@@ -135,6 +135,7 @@ func (h *handler) putContent(w http.ResponseWriter, r *http.Request) {
 		Overwrite:  overwrite,
 		Size:       size,
 		Encoding:   query.Get("encoding"),
+		FromEditor: true,
 	}, body)
 	if err != nil {
 		h.writeError(w, err)

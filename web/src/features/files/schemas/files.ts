@@ -117,6 +117,12 @@ export const filesContentSchema = z.object({
   sha256: z.string(),
   size: z.number(),
   mode: z.number(),
+  /**
+   * truncated marks a read-only tail view: `content` is the end of a file over
+   * the editor ceiling and `size` is the whole file. Optional so an older
+   * control plane still loads.
+   */
+  truncated: z.boolean().optional(),
 });
 export type FilesContent = z.infer<typeof filesContentSchema>;
 

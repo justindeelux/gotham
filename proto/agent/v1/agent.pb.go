@@ -948,9 +948,17 @@ func (x *SearchResponse) GetTruncated() bool {
 
 // ReadRequest reads one file.
 type ReadRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Root          string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
-	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Root  string                 `protobuf:"bytes,1,opt,name=root,proto3" json:"root,omitempty"`
+	Path  string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	// offset starts the read that many bytes into the file (0 = the start).
+	// limit caps the read at that many bytes (0 = to EOF). Zero/zero reads the
+	// whole file, so a request without both behaves exactly as before. An agent
+	// that predates these fields ignores them and streams from the start; the
+	// control plane then sees a body over its editor ceiling and answers 413
+	// (the download-only fallback), never a head presented as a tail.
+	Offset        int64 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	Limit         int64 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -997,6 +1005,20 @@ func (x *ReadRequest) GetPath() string {
 		return x.Path
 	}
 	return ""
+}
+
+func (x *ReadRequest) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *ReadRequest) GetLimit() int64 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
 }
 
 // ReadChunk is one slice of a file body.
@@ -5984,10 +6006,12 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x05entry\x18\x02 \x01(\v2\x13.agent.v1.FileEntryR\x05entry\"`\n" +
 	"\x0eSearchResponse\x120\n" +
 	"\aresults\x18\x01 \x03(\v2\x16.agent.v1.SearchResultR\aresults\x12\x1c\n" +
-	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"5\n" +
+	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"c\n" +
 	"\vReadRequest\x12\x12\n" +
 	"\x04root\x18\x01 \x01(\tR\x04root\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"\x1f\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\x14\n" +
+	"\x05limit\x18\x04 \x01(\x03R\x05limit\"\x1f\n" +
 	"\tReadChunk\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"\x8e\x01\n" +
 	"\fWriteRequest\x12/\n" +

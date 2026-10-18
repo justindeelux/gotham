@@ -46,6 +46,7 @@ const en = {
   errorTitle: "Could not open {name}",
   largeTitle: "Too large to edit",
   largeHint: "{name} is over the 2 MiB editor limit. Download only.",
+  truncatedHint: "{name} is over the 2 MiB editor limit. Showing the end of the file ({size}), read-only.",
   binaryTitle: "Binary file",
   binaryHint: "{name} is not editable text. Download only.",
   mixedTitle: "Mixed line endings",

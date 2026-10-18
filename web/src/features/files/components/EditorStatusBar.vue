@@ -169,17 +169,31 @@ function pickTabSize(value: string | number): void {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  flex-wrap: wrap;
+  /* One line at the default window width: the path truncates, right-side
+     counters never wrap. */
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   padding-top: var(--space-2);
   font-size: var(--text-xs);
   color: var(--muted);
 }
 
+.ed-foot > * {
+  flex: 0 0 auto;
+}
+
 .ed-foot .grow {
   flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ed-path {
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;

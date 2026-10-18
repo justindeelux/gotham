@@ -102,6 +102,22 @@ describe("editor shortcut table", () => {
     }
   });
 
+  it("avoids browser-reserved keys and keeps macOS replace usable", () => {
+    const keys = editorShortcuts.flatMap((shortcut) => [
+      ...shortcut.keys,
+      ...(shortcut.macKeys ?? []),
+    ]);
+    // Ctrl+Tab / Ctrl+Shift+Tab never reach a page; the sheet must not list them.
+    expect(keys).not.toContain("Ctrl-Tab");
+    expect(keys).not.toContain("Ctrl-Shift-Tab");
+    // Cmd+H hides the app on macOS; replace uses the editor convention there.
+    const replace = editorShortcuts.find((shortcut) => shortcut.id === "replace")!;
+    expect(shortcutKeysFor(replace, "other")).toEqual(["Mod-h"]);
+    expect(shortcutKeysFor(replace, "mac")).toEqual(["Mod-Alt-f"]);
+    const next = editorShortcuts.find((shortcut) => shortcut.id === "nextTab")!;
+    expect(shortcutKeysFor(next, "other")).toEqual(["Mod-Alt-PageDown"]);
+  });
+
   it("builds one real binding per command key", () => {
     const custom = customKeymap();
     for (const shortcut of editorShortcuts) {

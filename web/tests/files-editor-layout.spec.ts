@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global document:readonly, HTMLElement:readonly, URL, window:readonly */
+/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, navigator:readonly, URL, window:readonly */
 // URL/window run inside the page and server callbacks (browser/Node URL
 // globals); the repo lint envs do not cover tests/, so they are declared.
 
@@ -541,6 +541,76 @@ test("arrow keys keep switching between two ready tabs", async ({ page }) => {
   ).toBe("tab");
   await page.keyboard.press("ArrowLeft");
   await expect(editorTabs.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
+
+  // The documented tab-cycling binding works from inside the editor (a browser
+  // never delivers Ctrl+Tab to the page, so the sheet advertises Mod+Alt+Page).
+  await page.locator(".ed-host:visible .cm-content").click();
+  await page.keyboard.press("ControlOrMeta+Alt+PageDown");
+  await expect(editorTabs.getByRole("tab", { selected: true })).toHaveText(/notes\.md/);
+  await page.keyboard.press("ControlOrMeta+Alt+PageUp");
+  await expect(editorTabs.getByRole("tab", { selected: true })).toHaveText(/app\.yaml/);
+});
+
+test("the status bar stays on one line at the default window width", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+
+  const foot = page.locator(".ed-foot");
+  await expect(foot).toBeVisible();
+  expect(await foot.evaluate((el) => getComputedStyle(el).flexWrap)).toBe("nowrap");
+
+  const metrics = await foot.evaluate((el) => {
+    const style = getComputedStyle(el);
+    const lineHeight =
+      Number.parseFloat(style.lineHeight) ||
+      Number.parseFloat(style.fontSize) * 1.2;
+    const padding =
+      Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+    return {
+      height: el.getBoundingClientRect().height,
+      oneLine: lineHeight + padding,
+      scrollWidth: el.scrollWidth,
+      clientWidth: el.clientWidth,
+    };
+  });
+  // One line only: the height is one line box plus its top padding, and no
+  // item overflows horizontally.
+  expect(metrics.height).toBeLessThanOrEqual(metrics.oneLine + 2);
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+
+  // The long part truncates; the full path stays available as the title.
+  const path = page.locator(".ed-path");
+  expect(await path.getAttribute("title")).toContain("app.yaml");
+  expect(await path.evaluate((el) => getComputedStyle(el).textOverflow)).toBe(
+    "ellipsis",
+  );
+  expect(await path.evaluate((el) => getComputedStyle(el).whiteSpace)).toBe(
+    "nowrap",
+  );
+});
+
+test("the replace binding opens the search panel on its replace field", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  const content = page.locator(".cm-content");
+  await expect(content).toBeVisible({ timeout: 15_000 });
+  await content.click();
+
+  // macOS uses Cmd+Option+F (Cmd+H hides the app); other platforms Ctrl+H.
+  const mac = await page.evaluate(() => navigator.platform.includes("Mac"));
+  await page.keyboard.press(mac ? "Meta+Alt+f" : "Control+h");
+  await expect(page.locator('.cm-search input[name="replace"]')).toBeFocused();
 });
 
 test("the conflict modal is an alertdialog that confirms overwrite and reload", async ({

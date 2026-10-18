@@ -88,17 +88,19 @@ export const editorShortcuts: readonly EditorShortcut[] = [
     source: "command",
   },
   {
+    // Ctrl+Tab / Cmd+Option+Arrow are reserved by browsers, and Alt+Arrow is a
+    // CodeMirror cursor command, so tab cycling uses Mod+Alt+Page keys.
     id: "nextTab",
     group: "common",
     label: "files.editor.shortcuts.nextTab",
-    keys: ["Ctrl-Tab"],
+    keys: ["Mod-Alt-PageDown"],
     source: "command",
   },
   {
     id: "previousTab",
     group: "common",
     label: "files.editor.shortcuts.previousTab",
-    keys: ["Ctrl-Shift-Tab"],
+    keys: ["Mod-Alt-PageUp"],
     source: "command",
   },
   { id: "find", group: "common", label: "files.editor.shortcuts.find", keys: ["Mod-f"], source: "default" },
@@ -107,6 +109,8 @@ export const editorShortcuts: readonly EditorShortcut[] = [
     group: "common",
     label: "files.editor.shortcuts.replace",
     keys: ["Mod-h"],
+    // Ctrl+H is preventable on Windows/Linux; on macOS Cmd+H is the OS "Hide".
+    macKeys: ["Mod-Alt-f"],
     source: "command",
   },
   {

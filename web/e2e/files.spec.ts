@@ -303,7 +303,7 @@ test.describe("files editor", () => {
     await expect(editor.locator(".ed-dot")).toHaveCount(0);
   });
 
-  test("passes an axe scan on the open editor and shortcut sheet", async ({
+  test("passes an axe scan in the dark and light editor themes", async ({
     page,
     request,
   }) => {
@@ -314,9 +314,15 @@ test.describe("files editor", () => {
         json(
           route,
           200,
-          listing([entry("app.yaml", "file", 11, 0o100644, "etag-1")]),
+          listing([entry("app.yaml", "file", 24, 0o100644, "etag-1")]),
         ),
-      content: (route) => json(route, 200, textContent),
+      // A comment line exercises the syntax comment colour in both themes.
+      content: (route) =>
+        json(route, 200, {
+          ...textContent,
+          content: "# note: contrast\nkey: value\n",
+          size: 24,
+        }),
     });
 
     await page.goto(`/servers/${server.id}/files`);
@@ -329,38 +335,34 @@ test.describe("files editor", () => {
     const editor = page.locator(".files-editor");
     await expect(editor.locator(".cm-content")).toBeVisible();
 
+    /** scan returns the serious/critical findings for one surface. */
+    const scan = async (include: string): Promise<string[]> => {
+      const results = await new AxeBuilder({ page }).include(include).analyze();
+      return results.violations
+        .filter(
+          (violation) => violation.impact === "serious" || violation.impact === "critical",
+        )
+        .map(
+          (violation) =>
+            `${violation.id}: ${violation.help} @ ${violation.nodes
+              .map(
+                (node) =>
+                  `${node.target.join(" ")} [${node.failureSummary ?? ""}]`,
+              )
+              .join(" | ")}`,
+        );
+    };
+
     // T-A11Y-01: the open editor (chrome, tabs, toolbar, explorer and pane)
-    // must have zero serious/critical axe findings.
-    const editorScan = await new AxeBuilder({ page }).include(".files-editor").analyze();
-    const editorBlocking = editorScan.violations.filter(
-      (violation) => violation.impact === "serious" || violation.impact === "critical",
-    );
-    expect(
-      editorBlocking.map(
-        (violation) =>
-          `${violation.id}: ${violation.help} @ ${violation.nodes
-            .map((node) => node.target.join(" "))
-            .join(" | ")}`,
-      ),
-    ).toEqual([]);
+    // must have zero serious/critical axe findings in the default dark theme.
+    expect(await scan(".files-editor")).toEqual([]);
 
     // The shortcut sheet is an editor surface too: same bar, including the
     // dialog focus/name semantics.
     await editor.locator(".ed-window-shortcuts").click();
     const sheet = page.locator(".n-modal").filter({ hasText: "Keyboard shortcuts" });
     await expect(sheet).toBeVisible();
-    const sheetScan = await new AxeBuilder({ page }).include(".n-modal").analyze();
-    const sheetBlocking = sheetScan.violations.filter(
-      (violation) => violation.impact === "serious" || violation.impact === "critical",
-    );
-    expect(
-      sheetBlocking.map(
-        (violation) =>
-          `${violation.id}: ${violation.help} @ ${violation.nodes
-            .map((node) => node.target.join(" "))
-            .join(" | ")}`,
-      ),
-    ).toEqual([]);
+    expect(await scan(".n-modal")).toEqual([]);
 
     // T-A11Y-03 / the topmost-surface rule: Escape closes the sheet, keeps the
     // window open, and returns focus to the header trigger.
@@ -368,6 +370,21 @@ test.describe("files editor", () => {
     await expect(sheet).toBeHidden();
     await expect(editor).toBeVisible();
     await expect(editor.locator(".ed-window-shortcuts")).toBeFocused();
+
+    // The settings popover can switch the editor to Light; the same scan must
+    // hold there (syntax comment/gutter colours are per-theme).
+    const settings = editor.getByRole("button", { name: "Settings" });
+    await settings.click();
+    const panel = page.locator(".ed-settings");
+    await expect(panel).toBeVisible();
+    await panel.locator(".n-base-selection").first().click();
+    await page
+      .locator(".n-base-select-option")
+      .filter({ hasText: "Light" })
+      .click();
+    await settings.click();
+    await expect(panel).toBeHidden();
+    expect(await scan(".files-editor")).toEqual([]);
   });
 
   test("drags by the title bar and closes every tab from the close control", async ({

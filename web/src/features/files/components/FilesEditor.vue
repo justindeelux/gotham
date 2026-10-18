@@ -1052,9 +1052,10 @@ function onWindowEsc(event: KeyboardEvent): void {
   if (dialogOpen.value) {
     return;
   }
-  // A teleported follower (settings popover, select menu) is not tracked by
-  // dialogOpen; while one is mounted it consumes Escape itself.
-  if (document.querySelector(".n-popover, .n-dropdown") !== null) {
+  // A teleported follower (settings popover, select menu) or the CodeMirror
+  // autocomplete tooltip is not tracked by dialogOpen; while one is mounted it
+  // consumes Escape itself.
+  if (document.querySelector(".n-popover, .n-dropdown, .cm-tooltip") !== null) {
     return;
   }
   minimizeWindow();
@@ -1284,13 +1285,6 @@ function onEditorKeydown(event: KeyboardEvent): void {
     if (editor.activeId) {
       requestCloseTabs([editor.activeId]);
     }
-    return;
-  }
-  // Ctrl+Tab is reserved by some browsers, but it works wherever the page can
-  // claim it (Firefox, kiosk/desktop shells).
-  if (event.ctrlKey && !event.metaKey && event.key === "Tab") {
-    event.preventDefault();
-    cycleTab(event.shiftKey ? -1 : 1);
   }
 }
 

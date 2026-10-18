@@ -5,7 +5,7 @@
 // a real editor.
 /* global document:readonly, Event:readonly, HTMLElement:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
-import { NMessageProvider } from "naive-ui";
+import { NDropdown, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, nextTick } from "vue";
@@ -295,6 +295,88 @@ describe("FilesEditor guards", () => {
     // Once the sheet is closed, Escape belongs to the window again.
     wrapper.findComponent(EditorShortcutsDialog).vm.$emit("update:show", false);
     await flushPromises();
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
+    wrapper.unmount();
+  });
+
+  it("does not collapse the window on Escape while a popover is open", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    // A teleported follower (settings popover / select menu) exists in the
+    // document while open; Escape must leave it to its own handler.
+    const popover = document.createElement("div");
+    popover.className = "n-popover";
+    document.body.append(popover);
+
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+
+    popover.remove();
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
+    wrapper.unmount();
+  });
+
+  it("closes the tab menu on Escape without minimizing the window", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    await wrapper
+      .find(".ed-tab")
+      .trigger("contextmenu", { clientX: 24, clientY: 24 });
+    await flushPromises();
+    const openMenu = () =>
+      wrapper.findAllComponents(NDropdown).find((menu) => menu.props("show") === true);
+    expect(openMenu()).toBeTruthy();
+
+    // The first Escape belongs to the menu: it closes, the window stays.
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(openMenu()).toBeUndefined();
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+
+    // A second Escape now minimizes.
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
+    wrapper.unmount();
+  });
+
+  it("does not collapse the window on Escape while completion is open", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    // CodeMirror's completion tooltip lives in the editor host; its keymap
+    // owns Escape. The window handler must not collapse underneath it.
+    const tooltip = document.createElement("div");
+    tooltip.className = "cm-tooltip cm-tooltip-autocomplete";
+    document.body.append(tooltip);
+
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+
+    tooltip.remove();
     await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
     await flushPromises();
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");

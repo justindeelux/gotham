@@ -21,12 +21,15 @@ import {
 } from "naive-ui";
 import type { DropdownOption } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import type { CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { useElementSize } from "@vueuse/core";
 
 import EditorExplorerDialog from "@/features/files/components/EditorExplorerDialog.vue";
 import FileTypeIcon from "@/features/files/components/FileTypeIcon.vue";
-import { describeFilesError } from "@/features/files/api/files";
+import { useResizeHandle } from "@/features/files/composables/useResizeHandle";
+import { useTreeKeyboard } from "@/features/files/composables/useTreeKeyboard";
+import { describeFilesError, isConflictError } from "@/features/files/api/files";
 import "@/features/files/locales/editorMessages";
 import { ExplorerDirtyError, useExplorerStore } from "@/features/files/stores/explorer";
 import { useEditorStore } from "@/features/files/stores/editor";
@@ -38,10 +41,9 @@ import type {
   ExplorerRow,
 } from "@/features/files/utils/explorer";
 import {
+  EXPLORER_ROW_HEIGHT,
   firstEntryIndex,
   flattenTree,
-  lastEntryIndex,
-  nextEntryIndex,
 } from "@/features/files/utils/explorer";
 import {
   entryIconKind,
@@ -65,8 +67,6 @@ const editor = useEditorStore();
 const files = useFilesStore();
 const teams = useTeamsStore();
 
-/** ROW_HEIGHT mirrors the `.ex-row` height so the window maths stays exact. */
-const ROW_HEIGHT = 26;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 
@@ -80,13 +80,15 @@ const activeIndex = ref(0);
 
 const rows = computed<ExplorerRow[]>(() => {
   if (explorer.searchActive) {
-    return explorer.searchHits.map((hit) => ({
+    return explorer.searchHits.map((hit, index) => ({
       type: "entry" as const,
       path: hit.path,
       name: hit.entry.name,
       kind: hit.entry.kind,
       depth: 0,
       expanded: false,
+      setsize: explorer.searchHits.length,
+      posinset: index + 1,
       entry: hit.entry,
     }));
   }
@@ -99,7 +101,7 @@ const rowKey = computed<string>(() => rows.value.map((row) => row.path).join("\n
 const windowRange = computed(() =>
   virtualWindow(
     rows.value.length,
-    ROW_HEIGHT,
+    EXPLORER_ROW_HEIGHT,
     scrollTop.value,
     viewportHeight.value > 0 ? viewportHeight.value : 360,
     0,
@@ -112,12 +114,6 @@ const windowRows = computed(() =>
   rows.value
     .slice(windowRange.value.start, windowRange.value.end)
     .map((row, offset) => ({ row, index: windowRange.value.start + offset })),
-);
-
-/** activeRow is the row the tree's aria-activedescendant points at. */
-const activeRow = computed<ExplorerRow | null>(() => rows.value[activeIndex.value] ?? null);
-const activeDescendant = computed<string | undefined>(() =>
-  activeRow.value?.type === "entry" ? `ex-row-${activeIndex.value}` : undefined,
 );
 
 // ── Panel root / selection helpers ───────────────────────────────────────
@@ -185,8 +181,12 @@ watch(
   () => bindExplorer(),
 );
 
-// ── Keyboard / active-row navigation ─────────────────────────────────────
-/** syncActive keeps the roving row on a real entry after a structural change. */
+// ── Keyboard ─────────────────────────────────────────────────────────────
+/**
+ * syncActive keeps the roving row on a real entry after a structural change.
+ * The new row is revealed (create/rename) but DOM focus stays on the tree
+ * container, which keeps `aria-activedescendant` authoritative across windowing.
+ */
 async function syncActive(): Promise<void> {
   const list = rows.value;
   if (list.length === 0) {
@@ -210,177 +210,11 @@ async function syncActive(): Promise<void> {
 
 watch(rowKey, () => void syncActive(), { flush: "post" });
 
-/** revealIndex scrolls one row into the virtual window. */
-function revealIndex(index: number): void {
-  const el = scrollEl.value;
-  if (!el) {
-    return;
-  }
-  const top = index * ROW_HEIGHT;
-  const height = el.clientHeight || (viewportHeight.value > 0 ? viewportHeight.value : 360);
-  if (top < el.scrollTop) {
-    el.scrollTop = top;
-  } else if (top + ROW_HEIGHT > el.scrollTop + height) {
-    el.scrollTop = top + ROW_HEIGHT - height;
-  }
-  scrollTop.value = el.scrollTop;
-}
-
-/** setActive moves the roving row and keeps it rendered. */
-function setActive(index: number): void {
-  if (index < 0 || index >= rows.value.length) {
-    return;
-  }
-  activeIndex.value = index;
-  const row = rows.value[index];
-  if (row?.type === "entry") {
-    explorer.select(row.path);
-  }
-  revealIndex(index);
-}
-
-/** onScroll drives the window from the scrollport. */
-function onScroll(event: Event): void {
-  scrollTop.value = (event.currentTarget as HTMLElement).scrollTop;
-}
-
-/** onTreeFocus lands the roving row on the first entry when focus arrives. */
-function onTreeFocus(): void {
-  if (activeRow.value?.type === "entry") {
-    return;
-  }
-  const first = firstEntryIndex(rows.value);
-  if (first >= 0) {
-    activeIndex.value = first;
-    revealIndex(first);
-  }
-}
-
-/** statusDir resolves the folder an inline status row belongs to. */
-function statusDir(row: ExplorerRow): string {
-  return row.type === "status" ? row.dir : "";
-}
-
-/** onTreeKeydown implements the ARIA tree keyboard model. */
-function onTreeKeydown(event: KeyboardEvent): void {
-  const list = rows.value;
-  if (list.length === 0) {
-    return;
-  }
-  const index = Math.min(Math.max(activeIndex.value, 0), list.length - 1);
-  const row = list[index];
-
-  switch (event.key) {
-    case "ArrowDown": {
-      event.preventDefault();
-      const next = nextEntryIndex(list, index + 1, 1);
-      if (next >= 0) {
-        setActive(next);
-      }
-      break;
-    }
-    case "ArrowUp": {
-      event.preventDefault();
-      const prev = nextEntryIndex(list, index - 1, -1);
-      if (prev >= 0) {
-        setActive(prev);
-      }
-      break;
-    }
-    case "ArrowRight": {
-      if (row.type !== "entry" || row.kind !== "directory") {
-        break;
-      }
-      event.preventDefault();
-      if (!row.expanded) {
-        void explorer.expand(row.path).then(() => void nextTick(() => revealIndex(index)));
-      } else {
-        const child = nextEntryIndex(list, index + 1, 1);
-        if (child >= 0 && list[child].type === "entry" && list[child].depth > row.depth) {
-          setActive(child);
-        }
-      }
-      break;
-    }
-    case "ArrowLeft": {
-      if (row.type !== "entry") {
-        break;
-      }
-      if (row.kind === "directory" && row.expanded) {
-        event.preventDefault();
-        explorer.collapse(row.path);
-        break;
-      }
-      const parent = parentPath(row.path);
-      const parentIndex = list.findIndex(
-        (item) => item.type === "entry" && item.path === parent,
-      );
-      if (parentIndex >= 0) {
-        event.preventDefault();
-        setActive(parentIndex);
-      }
-      break;
-    }
-    case "Home": {
-      event.preventDefault();
-      const first = firstEntryIndex(list);
-      if (first >= 0) {
-        setActive(first);
-      }
-      break;
-    }
-    case "End": {
-      event.preventDefault();
-      const last = lastEntryIndex(list);
-      if (last >= 0) {
-        setActive(last);
-      }
-      break;
-    }
-    case "Enter": {
-      if (row.type === "status") {
-        if (row.status === "error") {
-          event.preventDefault();
-          void explorer.load(row.dir, true);
-        }
-        break;
-      }
-      event.preventDefault();
-      void activateRow(row);
-      break;
-    }
-    case " ": {
-      if (row.type === "entry" && row.kind === "directory") {
-        event.preventDefault();
-        void explorer.toggle(row.path);
-      }
-      break;
-    }
-    case "F2": {
-      if (row.type === "entry" && explorer.canWrite) {
-        event.preventDefault();
-        beginRename(row);
-      }
-      break;
-    }
-    case "Delete": {
-      if (row.type === "entry" && explorer.canWrite) {
-        event.preventDefault();
-        beginDelete(row);
-      }
-      break;
-    }
-    default:
-      break;
-  }
-}
-
 /** activateRow opens a file in a tab or toggles a folder. */
 async function activateRow(row: ExplorerEntryRow): Promise<void> {
   if (row.kind === "directory") {
     if (explorer.searchActive) {
       await explorer.setRoot(explorer.rootName, row.path);
-      explorer.clearSearch();
       return;
     }
     await explorer.toggle(row.path);
@@ -403,7 +237,43 @@ function onRowClick(row: ExplorerRow, index: number): void {
   void activateRow(row);
 }
 
+const { activeRow, revealIndex, onTreeFocus, onTreeKeydown } = useTreeKeyboard({
+  rows: () => rows.value,
+  activeIndex,
+  scrollEl,
+  rowHeight: EXPLORER_ROW_HEIGHT,
+  select: (path) => explorer.select(path),
+  expand: (path) => explorer.expand(path),
+  collapse: (path) => explorer.collapse(path),
+  toggle: (path) => explorer.toggle(path),
+  activate: (row) => activateRow(row),
+  retry: (dir) => void explorer.load(dir, true),
+  canWrite: () => explorer.canWrite,
+  rename: (row) => void beginRename(row),
+  remove: (row) => beginDelete(row),
+  openMenu: (row) => openMenuAtRow(row),
+});
+
+/** onScroll drives the window from the scrollport. */
+function onScroll(event: Event): void {
+  scrollTop.value = (event.currentTarget as HTMLElement).scrollTop;
+}
+
+/** statusDir resolves the folder an inline status row belongs to. */
+function statusDir(row: ExplorerRow): string {
+  return row.type === "status" ? row.dir : "";
+}
+
 // ── Row context menu ─────────────────────────────────────────────────────
+const menuOpen = ref(false);
+const menuRow = ref<ExplorerEntryRow | null>(null);
+const menuX = ref(0);
+const menuY = ref(0);
+
+const menuOptions = computed<DropdownOption[]>(() =>
+  menuRow.value === null ? [] : rowMenuOptions(menuRow.value),
+);
+
 /** rowMenuOptions lists the actions available on one row. */
 function rowMenuOptions(row: ExplorerEntryRow): DropdownOption[] {
   const options: DropdownOption[] = [];
@@ -426,6 +296,41 @@ function rowMenuOptions(row: ExplorerEntryRow): DropdownOption[] {
   return options;
 }
 
+/** openMenuAt opens the one controlled row menu at an anchor element. */
+function openMenuAt(row: ExplorerEntryRow, anchor: HTMLElement | null): void {
+  const rect = anchor?.getBoundingClientRect() ?? null;
+  menuRow.value = row;
+  menuX.value = rect === null ? 0 : Math.round(rect.left + 24);
+  menuY.value = rect === null ? 0 : Math.round(rect.bottom);
+  menuOpen.value = true;
+}
+
+/** openRowMenu opens the menu from a row's ⋮ button. */
+function openRowMenu(row: ExplorerEntryRow, event: MouseEvent): void {
+  const target = event.currentTarget;
+  openMenuAt(row, target instanceof HTMLElement ? target : null);
+}
+
+/** openMenuAtRow is the keyboard (ContextMenu / Shift+F10) entry point. */
+function openMenuAtRow(row: ExplorerEntryRow): void {
+  const element = document.getElementById(`ex-row-${activeIndex.value}`);
+  openMenuAt(row, element);
+}
+
+/** onMenuShow keeps the controlled dropdown in step with its own dismissal. */
+function onMenuShow(value: boolean): void {
+  menuOpen.value = value;
+}
+
+/** onMenuSelect dispatches one row action from the controlled menu. */
+function onMenuSelect(key: string | number): void {
+  menuOpen.value = false;
+  const row = menuRow.value;
+  if (row !== null) {
+    onRowMenu(String(key), row);
+  }
+}
+
 /** onRowMenu dispatches one row action. */
 function onRowMenu(key: string, row: ExplorerEntryRow): void {
   switch (key) {
@@ -434,16 +339,15 @@ function onRowMenu(key: string, row: ExplorerEntryRow): void {
       break;
     case "root":
       void explorer.setRoot(explorer.rootName, row.path);
-      explorer.clearSearch();
       break;
     case "new-file":
-      beginCreate("file", row.path);
+      void beginCreate("file", row.path);
       break;
     case "new-folder":
-      beginCreate("directory", row.path);
+      void beginCreate("directory", row.path);
       break;
     case "rename":
-      beginRename(row);
+      void beginRename(row);
       break;
     case "delete":
       beginDelete(row);
@@ -506,7 +410,10 @@ interface DialogState {
   isDirectory: boolean;
 }
 
+// `dialog` stays populated through the modal's leave transition (so its title
+// and label never flash back to the create defaults); `dialogOpen` drives show.
 const dialog = ref<DialogState | null>(null);
+const dialogOpen = ref(false);
 const dialogBusy = ref(false);
 
 const dialogExisting = computed<string[]>(() => {
@@ -529,9 +436,13 @@ function isDirtyBlocked(path: string): boolean {
   return true;
 }
 
-/** beginCreate opens the create dialog in `dir` (the selected folder by default). */
-function beginCreate(kind: "file" | "directory", dir?: string): void {
+/**
+ * beginCreate refreshes the target directory before opening the dialog, so the
+ * duplicate guard works for a never-expanded folder (and for search hits).
+ */
+async function beginCreate(kind: "file" | "directory", dir?: string): Promise<void> {
   const folder = dir ?? (selectedDirectory.value || explorer.rootPath);
+  await explorer.load(folder, true);
   dialog.value = {
     mode: kind === "directory" ? "create-folder" : "create-file",
     path: "",
@@ -539,20 +450,27 @@ function beginCreate(kind: "file" | "directory", dir?: string): void {
     dir: folder,
     isDirectory: kind === "directory",
   };
+  dialogOpen.value = true;
 }
 
-/** beginRename opens the rename dialog, refusing a dirty entry first. */
-function beginRename(row: ExplorerEntryRow): void {
+/**
+ * beginRename refreshes the parent first (same duplicate guard reason), then
+ * opens the dialog. A dirty entry is refused before any dialog appears.
+ */
+async function beginRename(row: ExplorerEntryRow): Promise<void> {
   if (isDirtyBlocked(row.path)) {
     return;
   }
+  const dir = parentPath(row.path);
+  await explorer.load(dir, true);
   dialog.value = {
     mode: "rename",
     path: row.path,
     name: row.name,
-    dir: parentPath(row.path),
+    dir,
     isDirectory: row.kind === "directory",
   };
+  dialogOpen.value = true;
 }
 
 /** beginDelete opens the recycle-bin confirmation, refusing a dirty entry first. */
@@ -567,11 +485,19 @@ function beginDelete(row: ExplorerEntryRow): void {
     dir: parentPath(row.path),
     isDirectory: row.kind === "directory",
   };
+  dialogOpen.value = true;
 }
 
-/** closeDialog drops the dialog state. */
-function closeDialog(): void {
-  dialog.value = null;
+/** requestCloseDialog starts the leave transition without clearing the state. */
+function requestCloseDialog(): void {
+  dialogOpen.value = false;
+}
+
+/** finishCloseDialog clears the state only after the modal has left. */
+function finishCloseDialog(): void {
+  if (!dialogOpen.value) {
+    dialog.value = null;
+  }
 }
 
 /** submitDialog performs the dialog's mutation and reports the outcome. */
@@ -601,13 +527,19 @@ async function submitDialog(name: string): Promise<void> {
         String(t("files.editor.explorer.deleted", { name: state.name })),
       );
     }
-    dialog.value = null;
+    dialogOpen.value = false;
   } catch (err) {
     if (err instanceof ExplorerDirtyError) {
       message.warning(
         String(t("files.editor.dirtyBlocked", { names: err.names.join(", ") })),
       );
-      dialog.value = null;
+      dialogOpen.value = false;
+    } else if (state.mode !== "delete" && isConflictError(err)) {
+      // The server creates exclusively and refuses an occupied rename target,
+      // so a 409 is the authoritative "name taken" answer.
+      message.error(
+        String(t("files.editor.explorer.nameTaken", { name })),
+      );
     } else {
       message.error(describeFilesError(err));
     }
@@ -631,62 +563,36 @@ function refreshTree(): void {
 }
 
 // ── Resize ───────────────────────────────────────────────────────────────
-const dragState = ref<{ pointerId: number; startX: number; startWidth: number } | null>(null);
+const {
+  dragging: resizing,
+  onPointerDown: onSplitDown,
+  onPointerMove: onSplitMove,
+  onPointerUp: onSplitUp,
+  onKeydown: onSplitKey,
+} = useResizeHandle({
+  width: () => props.width,
+  min: MIN_WIDTH,
+  max: MAX_WIDTH,
+  onChange: (width) => emit("resize", width),
+});
 
-/** clampWidth keeps the panel usable without swallowing the editor. */
-function clampWidth(value: number): number {
-  return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
-}
+/** panelStyle pins the width and publishes the shared row height to CSS. */
+const panelStyle = computed<CSSProperties>(() => ({
+  width: `${props.width}px`,
+  "--ex-row-height": `${EXPLORER_ROW_HEIGHT}px`,
+}) as CSSProperties);
 
-/** onSplitDown starts a drag on the vertical splitter. */
-function onSplitDown(event: PointerEvent): void {
-  if (event.button !== 0) {
-    return;
-  }
-  const handle = event.currentTarget;
-  if (!(handle instanceof HTMLElement)) {
-    return;
-  }
-  dragState.value = {
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startWidth: props.width,
-  };
-  handle.setPointerCapture(event.pointerId);
-  event.preventDefault();
-}
-
-/** onSplitMove reports the clamped width while dragging. */
-function onSplitMove(event: PointerEvent): void {
-  const state = dragState.value;
-  if (state === null || event.pointerId !== state.pointerId) {
-    return;
-  }
-  emit("resize", clampWidth(state.startWidth + event.clientX - state.startX));
-}
-
-/** onSplitUp ends the resize drag. */
-function onSplitUp(event: PointerEvent): void {
-  if (dragState.value !== null && event.pointerId === dragState.value.pointerId) {
-    dragState.value = null;
-  }
-}
-
-/** onSplitKey resizes from the keyboard (16 px per press). */
-function onSplitKey(event: KeyboardEvent): void {
-  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-    return;
-  }
-  event.preventDefault();
-  const delta = event.key === "ArrowRight" ? 16 : -16;
-  emit("resize", clampWidth(props.width + delta));
-}
+/** activeDescendant points at the active row while it is a real entry. */
+const activeDescendant = computed<string | undefined>(() =>
+  activeRow.value?.type === "entry" ? `ex-row-${activeIndex.value}` : undefined,
+);
 </script>
 
 <template>
   <aside
     class="ex-panel"
-    :style="{ width: `${props.width}px` }"
+    :class="{ 'is-resizing': resizing }"
+    :style="panelStyle"
     :aria-label="t('files.editor.explorer.heading')"
   >
     <header class="ex-head">
@@ -735,7 +641,7 @@ function onSplitKey(event: KeyboardEvent): void {
           size="tiny"
           class="ex-action"
           :aria-label="t('files.editor.explorer.newFile')"
-          @click="beginCreate('file')"
+          @click="() => void beginCreate('file')"
         >
           <template #icon>
             <FilePlus :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -747,7 +653,7 @@ function onSplitKey(event: KeyboardEvent): void {
           size="tiny"
           class="ex-action"
           :aria-label="t('files.editor.explorer.newFolder')"
-          @click="beginCreate('directory')"
+          @click="() => void beginCreate('directory')"
         >
           <template #icon>
             <FolderPlus :size="15" :stroke-width="1.8" aria-hidden="true" />
@@ -816,7 +722,9 @@ function onSplitKey(event: KeyboardEvent): void {
             role="treeitem"
             aria-disabled="true"
             :aria-level="item.row.depth + 1"
-            :style="{ paddingLeft: `${10 + item.row.depth * 14}px` }"
+            :aria-setsize="item.row.setsize"
+            :aria-posinset="item.row.posinset"
+            :style="{ '--ex-depth': item.row.depth }"
           >
             <template v-if="item.row.status === 'loading'">
               <NSpin :size="12" />
@@ -849,12 +757,14 @@ function onSplitKey(event: KeyboardEvent): void {
             }"
             role="treeitem"
             :aria-level="item.row.depth + 1"
+            :aria-setsize="item.row.setsize"
+            :aria-posinset="item.row.posinset"
             :aria-selected="item.index === activeIndex"
             :aria-expanded="
               item.row.kind === 'directory' ? item.row.expanded : undefined
             "
             :data-path="item.row.path"
-            :style="{ paddingLeft: `${10 + item.row.depth * 14}px` }"
+            :style="{ '--ex-depth': item.row.depth }"
             @mousedown.prevent
             @click="onRowClick(item.row, item.index)"
           >
@@ -884,24 +794,17 @@ function onSplitKey(event: KeyboardEvent): void {
               class="ex-open-dot"
               aria-hidden="true"
             />
-            <NDropdown
+            <button
               v-if="explorer.canWrite"
-              trigger="click"
-              size="small"
-              :options="rowMenuOptions(item.row)"
-              @select="(key: string | number) => onRowMenu(String(key), item.row as ExplorerEntryRow)"
+              type="button"
+              class="ex-menu"
+              tabindex="-1"
+              :aria-label="t('files.editor.explorer.actionsFor', { name: item.row.name })"
+              @mousedown.stop.prevent
+              @click.stop="openRowMenu(item.row, $event)"
             >
-              <button
-                type="button"
-                class="ex-menu"
-                tabindex="-1"
-                :aria-label="t('files.editor.explorer.actionsFor', { name: item.row.name })"
-                @mousedown.stop.prevent
-                @click.stop
-              >
-                <MoreHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-            </NDropdown>
+              <MoreHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </button>
           </div>
         </template>
         <div :style="{ height: `${windowRange.padBottom}px` }" aria-hidden="true" />
@@ -935,15 +838,28 @@ function onSplitKey(event: KeyboardEvent): void {
       @lostpointercapture="onSplitUp"
       @keydown="onSplitKey"
     />
+
+    <NDropdown
+      v-if="menuOpen"
+      :show="menuOpen"
+      :x="menuX"
+      :y="menuY"
+      :options="menuOptions"
+      placement="bottom-start"
+      size="small"
+      @select="onMenuSelect"
+      @update:show="onMenuShow"
+    />
   </aside>
 
   <EditorExplorerDialog
-    :show="dialog !== null"
+    :show="dialogOpen"
     :mode="dialog?.mode ?? 'create-file'"
     :name="dialog?.name ?? ''"
     :existing="dialogExisting"
     :busy="dialogBusy"
-    @update:show="(value: boolean) => { if (!value) closeDialog(); }"
+    @update:show="(value: boolean) => { if (!value) requestCloseDialog(); }"
+    @after-leave="finishCloseDialog"
     @submit="(name: string) => void submitDialog(name)"
   />
 </template>
@@ -957,6 +873,11 @@ function onSplitKey(event: KeyboardEvent): void {
   min-height: 0;
   background: var(--surface-warm);
   border-right: 1px solid var(--border);
+}
+
+.ex-panel.is-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .ex-head {
@@ -984,8 +905,8 @@ function onSplitKey(event: KeyboardEvent): void {
 }
 
 .ex-action {
-  width: 24px;
-  height: 24px;
+  width: var(--space-6);
+  height: var(--space-6);
 }
 
 .ex-root {
@@ -1018,8 +939,9 @@ function onSplitKey(event: KeyboardEvent): void {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  height: 26px;
+  height: var(--ex-row-height);
   padding-right: var(--space-1);
+  padding-left: calc(var(--space-2) + var(--ex-depth, 0) * var(--space-3));
   color: var(--fg-2);
   font-size: var(--text-sm);
   white-space: nowrap;
@@ -1054,8 +976,8 @@ function onSplitKey(event: KeyboardEvent): void {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 12px;
-  height: 12px;
+  width: var(--space-3);
+  height: var(--space-3);
   color: var(--muted);
 }
 
@@ -1076,8 +998,8 @@ function onSplitKey(event: KeyboardEvent): void {
 
 .ex-open-dot {
   flex: 0 0 auto;
-  width: 5px;
-  height: 5px;
+  width: var(--space-1);
+  height: var(--space-1);
   border-radius: 50%;
   background: var(--accent);
 }
@@ -1086,8 +1008,8 @@ function onSplitKey(event: KeyboardEvent): void {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  width: var(--space-5);
+  height: var(--space-5);
   margin-left: auto;
   padding: 0;
   border: 0;
@@ -1120,7 +1042,8 @@ function onSplitKey(event: KeyboardEvent): void {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 26px;
+  min-height: var(--ex-row-height);
+  padding-left: calc(var(--space-2) + var(--ex-depth, 0) * var(--space-3));
   color: var(--muted);
   font-size: var(--text-xs);
 }
@@ -1141,7 +1064,7 @@ function onSplitKey(event: KeyboardEvent): void {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 120px;
+  min-height: calc(var(--space-12) * 3);
   padding: var(--space-4);
   color: var(--muted);
   font-size: var(--text-sm);
@@ -1157,9 +1080,9 @@ function onSplitKey(event: KeyboardEvent): void {
 .ex-split {
   position: absolute;
   top: 0;
-  right: -3px;
+  right: calc(var(--space-1) * -1);
   bottom: 0;
-  width: 6px;
+  width: var(--space-2);
   cursor: col-resize;
   touch-action: none;
   z-index: 1;

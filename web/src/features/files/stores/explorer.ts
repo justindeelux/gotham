@@ -56,7 +56,7 @@ function isUnder(path: string, prefix: string): boolean {
   return path === prefix || path.startsWith(`${prefix}/`);
 }
 
-/** emptyDir builds a directory cache entry in its loading state. */
+/** loadingDir builds a directory cache entry in its loading state. */
 function loadingDir(path: string, entries: ExplorerDirState["entries"] = []): ExplorerDirState {
   return {
     path,
@@ -92,6 +92,12 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
   // A load or search that finishes after a re-root must not write into the new
   // tree. `session` is bumped by every reset; in-flight work captures it.
   let session = 0;
+  // A forced reload supersedes an in-flight listing instead of being dropped,
+  // and `dropUnder` bumps a path's token so a listing that started before a
+  // rename/delete can never resurrect the old directory afterwards.
+  let loadSeq = 0;
+  const loadTokens = new Map<string, number>();
+  const inFlight = new Map<string, Promise<void>>();
   let searchController: AbortController | null = null;
   let searchGeneration = 0;
 
@@ -142,9 +148,14 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
   /** clearCache drops every cached listing and expansion. */
   function clearCache(): void {
     session += 1;
+    // A new non-forced load must never adopt a pre-reset in-flight promise; the
+    // session check already discards the old response.
+    inFlight.clear();
+    loadTokens.clear();
     dirs.value = {};
     expanded.value = [];
     selectedPath.value = "";
+    searchQuery.value = "";
     clearSearchState();
   }
 
@@ -168,46 +179,67 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     clearCache();
   }
 
-  /** load reads one directory, keeping any previous entries during a refresh. */
+  /**
+   * load reads one directory, keeping any previous entries during a refresh.
+   * A forced reload always issues a new request and supersedes any in-flight
+   * listing for that path, so a write followed by `load(dir, true)` can never
+   * be dropped behind a pre-write response.
+   */
   async function load(path: string, force = false): Promise<void> {
     if (serverId.value === "") {
       return;
     }
     const current = dirs.value[path];
-    if (current?.loading) {
-      return;
-    }
-    if (current?.loaded && !force) {
-      return;
+    if (!force) {
+      if (current?.loaded) {
+        return;
+      }
+      const pending = inFlight.get(path);
+      if (pending) {
+        return pending;
+      }
     }
     const activeSession = session;
+    loadSeq += 1;
+    const token = loadSeq;
+    loadTokens.set(path, token);
     dirs.value[path] = loadingDir(path, current?.entries ?? []);
+    const task = (async () => {
+      try {
+        const listing = await listEntries(serverId.value, teamId(), {
+          root: rootName.value,
+          path,
+        });
+        if (loadTokens.get(path) !== token || activeSession !== session) {
+          return;
+        }
+        dirs.value[path] = {
+          path,
+          entries: listing.entries,
+          loaded: true,
+          loading: false,
+          truncated: listing.truncated,
+          cursor: listing.cursor ?? "",
+          error: null,
+        };
+      } catch (err) {
+        if (loadTokens.get(path) !== token || activeSession !== session) {
+          return;
+        }
+        dirs.value[path] = {
+          ...loadingDir(path, current?.entries ?? []),
+          loading: false,
+          error: err,
+        };
+      }
+    })();
+    inFlight.set(path, task);
     try {
-      const listing = await listEntries(serverId.value, teamId(), {
-        root: rootName.value,
-        path,
-      });
-      if (activeSession !== session) {
-        return;
+      await task;
+    } finally {
+      if (inFlight.get(path) === task) {
+        inFlight.delete(path);
       }
-      dirs.value[path] = {
-        path,
-        entries: listing.entries,
-        loaded: true,
-        loading: false,
-        truncated: listing.truncated,
-        cursor: listing.cursor ?? "",
-        error: null,
-      };
-    } catch (err) {
-      if (activeSession !== session) {
-        return;
-      }
-      dirs.value[path] = {
-        ...loadingDir(path, current?.entries ?? []),
-        loading: false,
-        error: err,
-      };
     }
   }
 
@@ -264,21 +296,29 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
   }
 
   /**
-   * dropUnder invalidates every cached listing at or below `prefix`. A renamed
-   * or deleted folder's children can never be reused under the old paths.
+   * dropUnder invalidates every cached listing at or below `prefix`, including
+   * loads already in flight: their token is bumped so a late response cannot
+   * resurrect a deleted or renamed path. A renamed or deleted folder's children
+   * can never be reused under the old paths.
    */
   function dropUnder(prefix: string, includeSelf: boolean): void {
+    const inside = (key: string): boolean =>
+      includeSelf ? isUnder(key, prefix) : key.startsWith(`${prefix}/`);
     const next: Record<string, ExplorerDirState> = {};
     for (const [key, value] of Object.entries(dirs.value)) {
-      const inside = includeSelf ? isUnder(key, prefix) : key.startsWith(`${prefix}/`);
-      if (!inside) {
+      if (!inside(key)) {
         next[key] = value;
       }
     }
     dirs.value = next;
-    expanded.value = expanded.value.filter((path) =>
-      includeSelf ? !isUnder(path, prefix) : !path.startsWith(`${prefix}/`),
-    );
+    expanded.value = expanded.value.filter((path) => !inside(path));
+    for (const key of loadTokens.keys()) {
+      if (inside(key)) {
+        loadSeq += 1;
+        loadTokens.set(key, loadSeq);
+        inFlight.delete(key);
+      }
+    }
   }
 
   /** select records the user's focused row. */
@@ -321,6 +361,7 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     if (dir !== rootPath.value && !isExpanded(dir)) {
       expanded.value = [...expanded.value, dir];
     }
+    clearSearch();
     await load(dir, true);
     selectedPath.value = target;
     return target;
@@ -347,6 +388,7 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     if (selectedPath.value !== "" && isUnder(selectedPath.value, path)) {
       selectedPath.value = target + selectedPath.value.slice(path.length);
     }
+    clearSearch();
     await load(dir, true);
     return target;
   }
@@ -369,6 +411,7 @@ export const useExplorerStore = defineStore("filesExplorer", () => {
     if (selectedPath.value !== "" && isUnder(selectedPath.value, path)) {
       selectedPath.value = "";
     }
+    clearSearch();
     await load(dir, true);
   }
 

@@ -1,7 +1,7 @@
 // In-editor file explorer (JUS-223): lazy tree caching, inline errors, recursive
 // search, rename/delete tab sync, ARIA keyboard navigation and windowing. The
 // files API is mocked so the store and the panel run without axios.
-/* global document:readonly */
+/* global document:readonly, KeyboardEvent:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -35,9 +35,11 @@ import type { EditorTab } from "@/features/files/stores/editor";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { ExplorerDirtyError, useExplorerStore } from "@/features/files/stores/explorer";
 import { useFilesStore } from "@/features/files/stores/files";
-import type { FilesEntry, FilesRoot } from "@/features/files/schemas/files";
+import type { FilesEntry, FilesListing, FilesRoot } from "@/features/files/schemas/files";
 import type { ExplorerDirState, ExplorerRow } from "@/features/files/utils/explorer";
 import { flattenTree } from "@/features/files/utils/explorer";
+import editorEn from "@/features/files/locales/editorEn";
+import editorVi from "@/features/files/locales/editorVi";
 import { useTeamsStore } from "@/features/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
@@ -150,6 +152,21 @@ beforeEach(() => {
 afterEach(() => {
   document.body.innerHTML = "";
 });
+
+/** deferred builds a promise a test can settle after starting a request. */
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (_value: T) => void;
+  reject: (_reason?: unknown) => void;
+} {
+  let resolve!: (_value: T) => void;
+  let reject!: (_reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 describe("flattenTree", () => {
   it("walks only expanded folders, folders first, with row depth", () => {
@@ -342,6 +359,107 @@ describe("explorer store", () => {
     });
     expect(explorer.selectedPath).toBe("www/assets");
   });
+
+  it("lets a forced reload supersede an in-flight listing", async () => {
+    const first = deferred<FilesListing>();
+    const second = deferred<FilesListing>();
+    vi.mocked(listEntries)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { explorer } = setupStores();
+    explorer.bind("server-1", "volumes", "www");
+
+    const pending = explorer.load("www");
+    const forced = explorer.load("www", true);
+    second.resolve({
+      entries: [entry({ name: "new.ts" })],
+      truncated: false,
+      cursor: "",
+    });
+    await forced;
+    first.resolve({
+      entries: [entry({ name: "old.ts" })],
+      truncated: false,
+      cursor: "",
+    });
+    await pending;
+
+    expect(explorer.dirs.www?.entries.map((item) => item.name)).toEqual(["new.ts"]);
+  });
+
+  it("drops a load that was in flight when a folder is deleted", async () => {
+    const pending = deferred<FilesListing>();
+    vi.mocked(listEntries).mockReturnValueOnce(pending.promise);
+    vi.mocked(deleteEntry).mockResolvedValue(undefined);
+    const { explorer } = setupStores();
+    explorer.bind("server-1", "volumes", "www");
+
+    const loading = explorer.load("www/src");
+    await explorer.remove("www/src", "directory");
+    pending.resolve({
+      entries: [entry({ name: "ghost.ts" })],
+      truncated: false,
+      cursor: "",
+    });
+    await loading;
+
+    expect(explorer.dirs["www/src"]).toBeUndefined();
+  });
+
+  it("drops a load that finishes after a re-root", async () => {
+    const pending = deferred<FilesListing>();
+    vi.mocked(listEntries).mockReturnValueOnce(pending.promise);
+    const { explorer } = setupStores();
+    explorer.bind("server-1", "volumes", "www");
+
+    const loading = explorer.load("www/old");
+    await explorer.setRoot("volumes", "other");
+    pending.resolve({
+      entries: [entry({ name: "stale.ts" })],
+      truncated: false,
+      cursor: "",
+    });
+    await loading;
+
+    expect(explorer.rootPath).toBe("other");
+    expect(explorer.dirs["www/old"]).toBeUndefined();
+  });
+
+  it("deletes a search hit in a never-expanded folder recursively", async () => {
+    vi.mocked(searchEntries).mockResolvedValue({
+      results: [
+        {
+          path: "www/deep/folder",
+          entry: dir("folder"),
+        },
+      ],
+      truncated: false,
+    });
+    vi.mocked(deleteEntry).mockResolvedValue(undefined);
+    const { explorer } = setupStores();
+    explorer.bind("server-1", "volumes", "www");
+    explorer.setSearchQuery("folder");
+    await explorer.runSearch();
+
+    await explorer.remove("www/deep/folder", "directory");
+
+    expect(vi.mocked(deleteEntry)).toHaveBeenCalledWith(
+      "server-1",
+      "team-1",
+      "volumes",
+      "www/deep/folder",
+      true,
+    );
+    expect(explorer.searchActive).toBe(false);
+  });
+});
+
+describe("editor explorer catalogs", () => {
+  it("keeps the EN and VI explorer key sets identical", () => {
+    expect(Object.keys(editorVi.explorer).sort()).toEqual(
+      Object.keys(editorEn.explorer).sort(),
+    );
+  });
 });
 
 describe("EditorExplorer panel", () => {
@@ -448,6 +566,130 @@ describe("EditorExplorer panel", () => {
     expect(rendered.length).toBeGreaterThan(0);
     expect(rendered.length).toBeLessThan(100);
     expect(wrapper.find('[role="tree"]').element.children.length).toBeLessThan(100);
+    wrapper.unmount();
+  });
+
+  it("navigates parents with ArrowLeft and jumps with Home/End", async () => {
+    vi.mocked(listEntries).mockImplementation(async (_server, _team, options) => ({
+      entries:
+        (options.path ?? "") === "www"
+          ? [dir("src"), entry({ name: "z.ts" })]
+          : [entry({ name: "main.ts" })],
+      truncated: false,
+      cursor: "",
+    }));
+    const { wrapper } = mountPanel();
+    await flushPromises();
+    const tree = wrapper.find('[role="tree"]');
+
+    await tree.trigger("keydown", { key: "ArrowRight" });
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.findAll('[role="treeitem"]')).toHaveLength(3);
+
+    // ArrowDown walks into the expanded child, ArrowLeft returns to its folder.
+    await tree.trigger("keydown", { key: "ArrowDown" });
+    expect(tree.attributes("aria-activedescendant")).toBe("ex-row-1");
+    await tree.trigger("keydown", { key: "ArrowLeft" });
+    expect(tree.attributes("aria-activedescendant")).toBe("ex-row-0");
+
+    // End reaches the last sibling; Home returns to the first row.
+    await tree.trigger("keydown", { key: "End" });
+    expect(tree.attributes("aria-activedescendant")).toBe("ex-row-2");
+    await tree.trigger("keydown", { key: "Home" });
+    expect(tree.attributes("aria-activedescendant")).toBe("ex-row-0");
+    wrapper.unmount();
+  });
+
+  it("refuses F2/Delete on a dirty tab and opens the dialogs when clean", async () => {
+    vi.mocked(listEntries).mockResolvedValue({
+      entries: [entry({ name: "a.ts" })],
+      truncated: false,
+      cursor: "",
+    });
+    const { wrapper, editor } = mountPanel();
+    await flushPromises();
+    const tree = wrapper.find('[role="tree"]');
+
+    editor.tabs = [makeTab("www/a.ts", true)];
+    editor.activeId = editor.tabs[0]!.id;
+    await flushPromises();
+
+    await tree.trigger("keydown", { key: "F2" });
+    await flushPromises();
+    expect(document.body.textContent ?? "").toContain("Save or close");
+    expect(document.body.textContent ?? "").not.toContain("Rename a.ts");
+
+    editor.tabs[0]!.doc = editor.tabs[0]!.original;
+    await flushPromises();
+    await tree.trigger("keydown", { key: "F2" });
+    await flushPromises();
+    await nextTick();
+    expect(document.body.textContent ?? "").toContain("Rename a.ts");
+
+    // Cancel the rename, then Delete opens the same kind of confirmation.
+    const cancel = wrapper.findAll("button").find((button) =>
+      button.text() === "Cancel",
+    );
+    await cancel!.trigger("click");
+    await flushPromises();
+    await tree.trigger("keydown", { key: "Delete" });
+    await flushPromises();
+    expect(document.body.textContent ?? "").toContain("Delete a.ts?");
+    wrapper.unmount();
+  });
+
+  it("opens the row menu from Shift+F10 and the ContextMenu key", async () => {
+    vi.mocked(listEntries).mockResolvedValue({
+      entries: [dir("src"), entry({ name: "a.ts" })],
+      truncated: false,
+      cursor: "",
+    });
+    const { wrapper } = mountPanel();
+    await flushPromises();
+    const tree = wrapper.find('[role="tree"]');
+
+    await tree.trigger("keydown", { key: "F10", shiftKey: true });
+    await flushPromises();
+    expect(document.body.textContent ?? "").toContain("Set as root");
+
+    // Close the menu and reopen it with the dedicated ContextMenu key.
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flushPromises();
+    await tree.trigger("keydown", { key: "ContextMenu" });
+    await flushPromises();
+    expect(document.body.textContent ?? "").toContain("Set as root");
+    wrapper.unmount();
+  });
+
+  it("refreshes a never-expanded parent before opening the rename dialog", async () => {
+    vi.mocked(listEntries).mockImplementation(async (_server, _team, options) => ({
+      entries:
+        (options.path ?? "") === "www"
+          ? [dir("deep")]
+          : [entry({ name: "a.ts" }), entry({ name: "taken.ts" })],
+      truncated: false,
+      cursor: "",
+    }));
+    vi.mocked(searchEntries).mockResolvedValue({
+      results: [{ path: "www/deep/a.ts", entry: entry({ name: "a.ts" }) }],
+      truncated: false,
+    });
+    const { wrapper, explorer } = mountPanel();
+    await flushPromises();
+
+    explorer.setSearchQuery("a.ts");
+    await explorer.runSearch();
+    await flushPromises();
+
+    await wrapper.find('[role="tree"]').trigger("keydown", { key: "F2" });
+    await flushPromises();
+
+    expect(vi.mocked(listEntries)).toHaveBeenCalledWith("server-1", "team-1", {
+      root: "volumes",
+      path: "www/deep",
+    });
+    expect(document.body.textContent ?? "").toContain("Rename a.ts");
     wrapper.unmount();
   });
 });

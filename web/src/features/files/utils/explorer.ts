@@ -36,6 +36,9 @@ export interface ExplorerEntryRow {
   depth: number;
   /** expanded is meaningful for directories only. */
   expanded: boolean;
+  /** setsize/posinset describe this row among its real siblings (ARIA). */
+  setsize: number;
+  posinset: number;
   entry: FilesEntry;
 }
 
@@ -52,9 +55,18 @@ export interface ExplorerStatusRow {
   depth: number;
   status: ExplorerStatus;
   error: unknown;
+  /** A status row replaces a directory's child list, so it is its only sibling. */
+  setsize: number;
+  posinset: number;
 }
 
 export type ExplorerRow = ExplorerEntryRow | ExplorerStatusRow;
+
+/**
+ * EXPLORER_ROW_HEIGHT is the single row height shared by the window maths and
+ * the CSS (`--ex-row-height`), so the two can never drift.
+ */
+export const EXPLORER_ROW_HEIGHT = 26;
 
 /** ExplorerDialogMode selects the editor explorer's create/rename/delete modal. */
 export type ExplorerDialogMode =
@@ -101,6 +113,8 @@ export function flattenTree(
         depth,
         status: "loading",
         error: null,
+        setsize: 1,
+        posinset: 1,
       });
       return;
     }
@@ -114,6 +128,8 @@ export function flattenTree(
         depth,
         status: "loading",
         error: null,
+        setsize: 1,
+        posinset: 1,
       });
       return;
     }
@@ -125,6 +141,8 @@ export function flattenTree(
         depth,
         status: "error",
         error: state.error,
+        setsize: 1,
+        posinset: 1,
       });
       return;
     }
@@ -136,10 +154,13 @@ export function flattenTree(
         depth,
         status: "empty",
         error: null,
+        setsize: 1,
+        posinset: 1,
       });
       return;
     }
-    for (const entry of sortEntries(state.entries, "name", "asc")) {
+    const entries = sortEntries(state.entries, "name", "asc");
+    entries.forEach((entry, index) => {
       const path = dir === "" ? entry.name : `${dir}/${entry.name}`;
       const expanded = entry.kind === "directory" && isExpanded(path);
       rows.push({
@@ -149,12 +170,14 @@ export function flattenTree(
         kind: entry.kind,
         depth,
         expanded,
+        setsize: entries.length,
+        posinset: index + 1,
         entry,
       });
       if (expanded) {
         walk(path, depth + 1);
       }
-    }
+    });
   }
 
   walk(rootPath, 0);

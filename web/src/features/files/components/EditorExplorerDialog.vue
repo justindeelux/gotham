@@ -25,6 +25,8 @@ const emit = defineEmits<{
   "update:show": [value: boolean];
   /** submit carries the validated name (empty for a delete). */
   submit: [name: string];
+  /** after-leave fires once the modal has fully closed. */
+  "after-leave": [];
 }>();
 
 const { t } = useI18n();
@@ -140,6 +142,7 @@ function submit(): void {
     style="width: 440px; max-width: 94vw"
     :title="title"
     @update:show="(value: boolean) => emit('update:show', value)"
+    @after-leave="emit('after-leave')"
   >
     <p v-if="isDelete" class="ex-dialog-text small">
       {{ t("files.editor.explorer.deleteMessage", { name: props.name }) }}

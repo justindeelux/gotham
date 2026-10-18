@@ -3,24 +3,17 @@
  * dynamic `import()` in {@link ../composables/useCodeMirror}, so every
  * CodeMirror package lands in its own chunk and never in the entry bundle.
  *
- * The language set is explicit (json, yaml, js/ts, python, go, markdown, css,
- * html, shell, dockerfile, toml); `@codemirror/language-data` is deliberately
- * not a dependency, so the editor never loads a grammar the ticket did not
- * list.
+ * Grammars are loaded through per-language dynamic imports: the editor chunk
+ * carries only the shell + the loader table, and the first time a file (or the
+ * status-bar picker) asks for a language its grammar chunk is fetched.
+ * `@codemirror/language-data` is deliberately not a dependency, so the editor
+ * never bundles a grammar catalogue it did not name.
  */
 import {
   defaultKeymap,
   history,
   historyKeymap,
 } from "@codemirror/commands";
-import { css } from "@codemirror/lang-css";
-import { go } from "@codemirror/lang-go";
-import { html } from "@codemirror/lang-html";
-import { javascript } from "@codemirror/lang-javascript";
-import { json } from "@codemirror/lang-json";
-import { markdown } from "@codemirror/lang-markdown";
-import { python } from "@codemirror/lang-python";
-import { yaml } from "@codemirror/lang-yaml";
 import {
   HighlightStyle,
   StreamLanguage,
@@ -43,9 +36,7 @@ import {
   placeholder as placeholderExt,
   rectangularSelection,
 } from "@codemirror/view";
-import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
-import { shell } from "@codemirror/legacy-modes/mode/shell";
-import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { simpleMode } from "@codemirror/legacy-modes/mode/simple-mode";
 import { tags } from "@lezer/highlight";
 
 import type { EditorLanguageId } from "@/features/files/utils/editor";
@@ -76,36 +67,91 @@ export interface EditorSessionOptions {
   onSave: () => void;
 }
 
-/** languageExtension resolves the explicit language set to a CM extension. */
-function languageExtension(id: EditorLanguageId): Extension {
-  switch (id) {
-    case "json":
-      return json();
-    case "yaml":
-      return yaml();
-    case "javascript":
-      return javascript();
-    case "typescript":
-      return javascript({ typescript: true });
-    case "python":
-      return python();
-    case "go":
-      return go();
-    case "markdown":
-      return markdown();
-    case "css":
-      return css();
-    case "html":
-      return html();
-    case "shell":
-      return StreamLanguage.define(shell);
-    case "dockerfile":
-      return StreamLanguage.define(dockerFile);
-    case "toml":
-      return StreamLanguage.define(toml);
-    default:
-      return [];
+/** logMode highlights the level, timestamp and quoted fields of a log line. */
+const logMode = simpleMode({
+  start: [
+    { regex: /\b(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL|CRITICAL)\b/, token: "keyword" },
+    {
+      regex: /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/,
+      token: "atom",
+    },
+    { regex: /\b\d+(?:\.\d+){1,3}\b/, token: "number" },
+    { regex: /"(?:[^"\\]|\\.)*"/, token: "string" },
+  ],
+});
+
+/** makefileMode highlights assignments and targets in a Makefile. */
+const makefileMode = simpleMode({
+  start: [
+    { regex: /#.*/, token: "comment" },
+    { regex: /^\s*[A-Za-z_][\w.-]*\s*[:+?]?=/, token: "def" },
+    { regex: /^[A-Za-z0-9_./%$()-]+(?=\s*:(?!=))/, token: "variableName" },
+    { regex: /^\t/, token: "meta" },
+    { regex: /\$[({][^)}]+[)}]/, token: "variableName" },
+    { regex: /"(?:[^"\\]|\\.)*"/, token: "string" },
+  ],
+});
+
+/** stream wraps one legacy mode as a StreamLanguage extension. */
+function stream(mode: Parameters<typeof StreamLanguage.define>[0]): Extension {
+  return StreamLanguage.define(mode);
+}
+
+/**
+ * languageLoaders fetches one grammar on first use. Each dynamic import puts
+ * that grammar (and its parser) in its own chunk; Vite shares the common
+ * CodeMirror runtime between them.
+ */
+const languageLoaders: Record<EditorLanguageId, () => Promise<Extension>> = {
+  json: async () => (await import("@codemirror/lang-json")).json(),
+  yaml: async () => (await import("@codemirror/lang-yaml")).yaml(),
+  javascript: async () => (await import("@codemirror/lang-javascript")).javascript(),
+  typescript: async () =>
+    (await import("@codemirror/lang-javascript")).javascript({ typescript: true }),
+  python: async () => (await import("@codemirror/lang-python")).python(),
+  go: async () => (await import("@codemirror/lang-go")).go(),
+  markdown: async () => (await import("@codemirror/lang-markdown")).markdown(),
+  css: async () => (await import("@codemirror/lang-css")).css(),
+  scss: async () => stream((await import("@codemirror/legacy-modes/mode/sass")).sass),
+  // shortcut: the legacy sass mode also covers the CSS-superset parts of LESS;
+  // swap in a dedicated LESS parser if strict LESS nesting matters.
+  less: async () => stream((await import("@codemirror/legacy-modes/mode/sass")).sass),
+  html: async () => (await import("@codemirror/lang-html")).html(),
+  vue: async () => (await import("@codemirror/lang-vue")).vue(),
+  shell: async () => stream((await import("@codemirror/legacy-modes/mode/shell")).shell),
+  dockerfile: async () =>
+    stream((await import("@codemirror/legacy-modes/mode/dockerfile")).dockerFile),
+  makefile: async () => stream(makefileMode),
+  toml: async () => stream((await import("@codemirror/legacy-modes/mode/toml")).toml),
+  php: async () => (await import("@codemirror/lang-php")).php(),
+  sql: async () => stream((await import("@codemirror/legacy-modes/mode/sql")).standardSQL),
+  xml: async () => stream((await import("@codemirror/legacy-modes/mode/xml")).xml),
+  rust: async () => stream((await import("@codemirror/legacy-modes/mode/rust")).rust),
+  java: async () => stream((await import("@codemirror/legacy-modes/mode/clike")).java),
+  cpp: async () => stream((await import("@codemirror/legacy-modes/mode/clike")).cpp),
+  lua: async () => stream((await import("@codemirror/legacy-modes/mode/lua")).lua),
+  ruby: async () => stream((await import("@codemirror/legacy-modes/mode/ruby")).ruby),
+  nginx: async () => stream((await import("@codemirror/legacy-modes/mode/nginx")).nginx),
+  // Apache directives are close enough to nginx's `directive value;` shape.
+  apache: async () => stream((await import("@codemirror/legacy-modes/mode/nginx")).nginx),
+  ini: async () =>
+    stream((await import("@codemirror/legacy-modes/mode/properties")).properties),
+  diff: async () => stream((await import("@codemirror/legacy-modes/mode/diff")).diff),
+  log: async () => stream(logMode),
+  plain: async () => [],
+};
+
+/** languageExtensions caches the loaded extension per language (one load each). */
+const languageExtensions = new Map<EditorLanguageId, Promise<Extension>>();
+
+/** loadLanguage resolves one language, falling back to no grammar on failure. */
+function loadLanguage(language: EditorLanguageId): Promise<Extension> {
+  let extension = languageExtensions.get(language);
+  if (!extension) {
+    extension = languageLoaders[language]().catch(() => [] as Extension);
+    languageExtensions.set(language, extension);
   }
+  return extension;
 }
 
 /** readOnlyExtensions bundles the two facets that gate typing, so a live
@@ -174,12 +220,16 @@ const gothamTheme = EditorView.theme(
  * createEditorSession builds one editor. The wrap, language and read-only
  * facets live in Compartments so the toolbar (or a role change) can
  * reconfigure them without recreating the view, which would lose the undo
- * history.
+ * history. It awaits the first grammar so the first paint is already
+ * highlighted; later switches load in the background.
  */
-export function createEditorSession(options: EditorSessionOptions): EditorSession {
+export async function createEditorSession(
+  options: EditorSessionOptions,
+): Promise<EditorSession> {
   const languageCompartment = new Compartment();
   const wrapCompartment = new Compartment();
   const readOnlyCompartment = new Compartment();
+  const initialLanguage = await loadLanguage(options.language);
 
   const saveKeymap = keymap.of([
     {
@@ -212,7 +262,7 @@ export function createEditorSession(options: EditorSessionOptions): EditorSessio
         syntaxHighlighting(gothamHighlight),
         gothamTheme,
         wrapCompartment.of(options.wrap ? EditorView.lineWrapping : []),
-        languageCompartment.of(languageExtension(options.language)),
+        languageCompartment.of(initialLanguage),
         placeholderExt("(empty file)"),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly)),
         // indentWithTab is deliberately omitted: it binds Tab to indentation,
@@ -234,6 +284,9 @@ export function createEditorSession(options: EditorSessionOptions): EditorSessio
     }),
   });
 
+  // languageToken makes the last requested grammar win if several loads race.
+  let languageToken = 0;
+
   return {
     getDoc(): string {
       return view.state.doc.toString();
@@ -247,8 +300,15 @@ export function createEditorSession(options: EditorSessionOptions): EditorSessio
       });
     },
     setLanguage(language: EditorLanguageId): void {
-      view.dispatch({
-        effects: languageCompartment.reconfigure(languageExtension(language)),
+      // A rapid second switch wins over the first grammar still loading; the
+      // compartment reconfigure keeps the existing state and undo history.
+      const token = ++languageToken;
+      void loadLanguage(language).then((extension) => {
+        if (token === languageToken) {
+          view.dispatch({
+            effects: languageCompartment.reconfigure(extension),
+          });
+        }
       });
     },
     setWrap(wrap: boolean): void {

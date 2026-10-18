@@ -24,6 +24,7 @@ const vi = {
   search: "Tìm / thay thế",
   goToLine: "Đi tới dòng",
   lineColumn: "Dòng {line}, Cột {column}",
+  language: "Ngôn ngữ",
   encoding: "UTF-8",
   loading: "Đang tải {name}…",
   errorTitle: "Không mở được {name}",

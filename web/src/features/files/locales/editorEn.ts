@@ -28,6 +28,7 @@ const en = {
   search: "Find / replace",
   goToLine: "Go to line",
   lineColumn: "Ln {line}, Col {column}",
+  language: "Language",
   encoding: "UTF-8",
   loading: "Loading {name}…",
   errorTitle: "Could not open {name}",

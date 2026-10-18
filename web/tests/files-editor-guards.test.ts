@@ -73,6 +73,7 @@ function makeTab(id: string, dirty: boolean): EditorTab {
     size: 6,
     mode: 0o100644,
     language: "yaml",
+    languageManual: false,
     status: "ready",
     error: "",
     saving: false,
@@ -140,6 +141,24 @@ describe("FilesEditor guards", () => {
       .map((node) => node.attributes("id"));
     expect(panels).toHaveLength(1);
     expect(new Set(panels).size).toBe(panels.length);
+    wrapper.unmount();
+  });
+
+  it("reconfigures the live session grammar in place on a manual override", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+    expect(codemirror.sessions).toHaveLength(1);
+
+    editor.setLanguage(tab.id, "php");
+    await flushPromises();
+
+    // The same view is reconfigured, so the undo history is not recreated.
+    expect(codemirror.sessions).toHaveLength(1);
+    expect(codemirror.sessions[0].setLanguage).toHaveBeenLastCalledWith("php");
+    expect(wrapper.find(".ed-language").text()).toBe("PHP");
     wrapper.unmount();
   });
 

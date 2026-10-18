@@ -51,6 +51,9 @@ export interface EditorTab {
   original: string;
   etag: string;
   eol: EditorEol;
+  /** originalEol is the line ending last loaded/saved, so switching it marks
+   *  the tab dirty even when the text itself is unchanged. */
+  originalEol?: EditorEol;
   bom: boolean;
   /** encoding is the charset the document is saved in (detected on load). */
   encoding: EditorEncoding;
@@ -183,7 +186,10 @@ export const useEditorStore = defineStore("filesEditor", () => {
   /** isDirty reports whether one editable tab has unsaved changes. */
   function isDirty(tab: EditorTab): boolean {
     return (
-      tab.kind === "file" && tab.status === "ready" && tab.doc !== tab.original
+      tab.kind === "file" &&
+      tab.status === "ready" &&
+      (tab.doc !== tab.original ||
+        (tab.originalEol !== undefined && tab.eol !== tab.originalEol))
     );
   }
 
@@ -366,6 +372,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
         doc: shape.doc,
         original: shape.doc,
         eol: shape.eol,
+        originalEol: shape.eol,
         // A BOM belongs to UTF-8; a legacy body holding U+FEFF would be
         // refused on save, so it is never re-applied there.
         bom: shape.bom && encoding === "utf-8",
@@ -411,6 +418,19 @@ export const useEditorStore = defineStore("filesEditor", () => {
     if (tab) {
       tab.language = language;
       tab.languageManual = true;
+    }
+  }
+
+  /**
+   * setEol switches one tab's line ending. The buffer text is unchanged; the
+   * next save re-serialises it with the new terminator, and `originalEol`
+   * keeps the tab dirty until that save lands. Mixed-EOL tabs never reach
+   * "ready", so they cannot be switched.
+   */
+  function setEol(id: string, eol: EditorEol): void {
+    const tab = tabs.value.find((item) => item.id === id);
+    if (tab && tab.kind === "file" && tab.status === "ready" && tab.eol !== eol) {
+      tab.eol = eol;
     }
   }
 
@@ -506,6 +526,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       return "blocked";
     }
     const sentDoc = tab.doc;
+    const sentEol = tab.eol;
     const characters = unrepresentableChars(sentDoc, tab.encoding);
     if (characters.length > 0) {
       // Never let the server substitute '?': stop before the write and let the
@@ -520,7 +541,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
         path: tab.path,
         content: serializeDoc({
           doc: sentDoc,
-          eol: tab.eol,
+          eol: sentEol,
           bom: tab.bom,
           encoding: tab.encoding,
         }),
@@ -532,6 +553,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       tab.size = entry.size;
       tab.mode = entry.mode;
       tab.original = sentDoc;
+      tab.originalEol = sentEol;
       tab.error = "";
       clearConflict(id);
       return "saved";
@@ -622,6 +644,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     }
     const target = joinPath(directoryOf(tab.path), name);
     const sentDoc = tab.doc;
+    const sentEol = tab.eol;
     tab.saving = true;
     let reserved = false;
     try {
@@ -647,7 +670,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
         path: target,
         content: serializeDoc({
           doc: sentDoc,
-          eol: tab.eol,
+          eol: sentEol,
           bom: tab.bom,
           encoding: tab.encoding,
         }),
@@ -664,6 +687,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       tab.size = entry.size;
       tab.mode = entry.mode;
       tab.original = sentDoc;
+      tab.originalEol = sentEol;
       tab.error = "";
       clearConflict(id);
       saveAsId.value = null;
@@ -822,6 +846,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     openDiff,
     setDoc,
     setLanguage,
+    setEol,
     setEncoding,
     changeEncoding,
     dismissEncodingWarning,

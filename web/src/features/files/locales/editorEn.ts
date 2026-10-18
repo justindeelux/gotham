@@ -9,6 +9,7 @@
 const en = {
   heading: "Editor",
   windowLabel: "Code editor window",
+  codeEditorLabel: "Code editor",
   contentLabel: "{name} editor content",
   minimize: "Minimize editor",
   closeWindow: "Close editor",

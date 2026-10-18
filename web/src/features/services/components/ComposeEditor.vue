@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { NButton, NInput, NSpace } from "naive-ui";
+import { NButton, NSpace } from "naive-ui";
 import { computed, ref, watch } from "vue";
 
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import { activeLocale, i18n } from "@/shared/i18n";
 
 /**
@@ -19,7 +20,6 @@ interface Props {
   saving?: boolean;
   readonly?: boolean;
   label?: string;
-  minRows?: number;
   /** Placeholder shown when the stored document is empty. */
   emptyText?: string;
 }
@@ -38,7 +38,6 @@ const props = withDefaults(defineProps<Props>(), {
   saving: false,
   readonly: false,
   label: "",
-  minRows: 16,
   emptyText: "",
 });
 
@@ -90,6 +89,10 @@ function cancel(): void {
 
 /** save hands the draft to the parent; the parent persists and closes. */
 function save(): void {
+  // Ctrl/Cmd+S in the embedded editor must not rewrite an unchanged document.
+  if (!isDirty.value) {
+    return;
+  }
   emit("save", draft.value);
 }
 </script>
@@ -117,13 +120,15 @@ function save(): void {
       </NSpace>
     </header>
 
-    <NInput
+    <CodeEditor
       v-if="editing"
-      v-model:value="draft"
-      type="textarea"
-      class="compose-editor__input mono"
-      spellcheck="false"
-      :autosize="{ minRows, maxRows: 40 }"
+      v-model="draft"
+      class="compose-editor__input"
+      preset="yaml"
+      height="46vh"
+      :read-only="readonly"
+      :aria-label="labelText"
+      @save="save"
     />
     <pre v-else class="compose-editor__view mono">{{
       modelValue || emptyLabel
@@ -169,12 +174,6 @@ function save(): void {
   max-height: 56vh;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.compose-editor__input :deep(textarea) {
-  background: var(--surface-warm);
-  font-size: var(--text-xs);
-  line-height: 1.6;
 }
 
 .compose-editor__hint {

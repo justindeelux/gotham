@@ -432,10 +432,10 @@ test.describe("services fix regressions", () => {
     // The compose editor round-trips B's own document (the guarded compose
     // save path).
     await page.getByRole("button", { name: "Edit" }).click();
-    const editor = page.locator(".compose-editor__input textarea");
-    await expect(editor).toHaveValue(new RegExp(domainB.replace(/\./g, "\\.")));
+    const editor = page.locator(".compose-editor__input .cm-content");
+    await expect(editor).toContainText(domainB);
     await editor.fill(
-      (await editor.inputValue()).replace("nginx:1.27-alpine", "nginx:1.28-alpine"),
+      (await editor.innerText()).replace("nginx:1.27-alpine", "nginx:1.28-alpine"),
     );
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(

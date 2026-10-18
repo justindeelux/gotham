@@ -75,13 +75,15 @@ export interface EditorSessionOptions {
   readOnly: boolean;
   settings: EditorSettings;
   onChange: (_doc: string) => void;
-  onCursor: (_line: number, _column: number) => void;
+  /** The remaining handlers are optional so an embedded editor only pays for
+   *  the commands it implements; unbound ones are no-ops in the shared keymap. */
+  onCursor?: (_line: number, _column: number) => void;
   onSave: () => void;
-  onSaveAll: () => void;
-  onCloseTab: () => void;
-  onToggleWrap: () => void;
-  onNextTab: () => void;
-  onPreviousTab: () => void;
+  onSaveAll?: () => void;
+  onCloseTab?: () => void;
+  onToggleWrap?: () => void;
+  onNextTab?: () => void;
+  onPreviousTab?: () => void;
 }
 
 /** logMode highlights the level, timestamp and quoted fields of a log line. */
@@ -414,17 +416,18 @@ export async function createEditorSession(
   // One keymap, built from the shared shortcut table, so the sheet and the
   // real bindings cannot drift. It is installed before the CodeMirror defaults
   // so an override such as go-to-line on Mod-l wins.
+  const noop = (): void => {};
   const commandKeymap = keymap.of([
     ...editorCommandKeymap({
       save: options.onSave,
-      saveAll: options.onSaveAll,
-      closeTab: options.onCloseTab,
-      nextTab: options.onNextTab,
-      previousTab: options.onPreviousTab,
+      saveAll: options.onSaveAll ?? noop,
+      closeTab: options.onCloseTab ?? noop,
+      nextTab: options.onNextTab ?? noop,
+      previousTab: options.onPreviousTab ?? noop,
       find: () => void openSearchPanel(view),
       replace: () => openReplacePanel(view),
       goToLine: () => gotoLine(view),
-      toggleWrap: options.onToggleWrap,
+      toggleWrap: options.onToggleWrap ?? noop,
     }),
     ...defaultKeymap,
     ...historyKeymap,
@@ -466,7 +469,7 @@ export async function createEditorSession(
           if (update.docChanged || update.selectionSet) {
             const head = update.state.selection.main.head;
             const line = update.state.doc.lineAt(head);
-            options.onCursor(line.number, head - line.from + 1);
+            options.onCursor?.(line.number, head - line.from + 1);
           }
         }),
       ],

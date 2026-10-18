@@ -58,6 +58,7 @@ import RenameEntryDialog from "@/features/files/components/RenameEntryDialog.vue
 import UploadDialog from "@/features/files/components/UploadDialog.vue";
 import { useCoarseNow } from "@/features/files/composables/useCoarseNow";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
+import { useFilesTabsPersist } from "@/features/files/composables/useFilesTabsPersist";
 import { resetFolderSizes } from "@/features/files/composables/useFolderSize";
 import type { FilesEntry } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
@@ -114,8 +115,8 @@ const trash = useTrashStore();
 const editor = useEditorStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
-/** coarseNow is the shared minute clock behind the Modified column's age. */
-const coarseNow = useCoarseNow();
+/** initBrowser loads the listing, then restores this user+server's tabs. */
+const { initBrowser } = useFilesTabsPersist(() => props.serverId);
 
 watch(
   () => props.serverId,
@@ -125,9 +126,12 @@ watch(
     // folder sizes (and any in-flight walk) belong to the old node too.
     trash.reset();
     resetFolderSizes();
-    void files.init(next);
+    void initBrowser(next);
   },
 );
+/** coarseNow is the shared minute clock behind the Modified column's age. */
+const coarseNow = useCoarseNow();
+
 // A team switch changes the caller's role and the server's visibility, so the
 // listing must reload rather than keep the previous team's directory. It also
 // changes the bin's scope.
@@ -146,7 +150,7 @@ watch(
     resetFolderSizes();
   },
 );
-onMounted(() => void files.init(props.serverId));
+onMounted(() => void initBrowser(props.serverId));
 
 // ── Dialog state ──────────────────────────────────────────────────────────
 const createOpen = ref(false);

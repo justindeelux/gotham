@@ -27,6 +27,8 @@ import type {
   FilesSearchHit,
   FileKind,
 } from "@/features/files/schemas/files";
+import { FILES_TABS_MAX_TABS } from "@/features/files/schemas/tabsPersist";
+import type { FilesTabsSnapshot } from "@/features/files/schemas/tabsPersist";
 import type { NameKind } from "@/features/files/utils/files";
 import {
   breadcrumbSegments,
@@ -201,9 +203,9 @@ export const useFilesStore = defineStore("files", () => {
   const roots = ref<FilesRoot[]>([]);
 
   /** createTab seeds one independent browser tab. */
-  function createTab(rootName = "", path = ""): FilesTab {
+  function createTab(rootName = "", path = "", id = nextTabId()): FilesTab {
     return {
-      id: nextTabId(),
+      id,
       rootName,
       path,
       entries: [],
@@ -393,6 +395,13 @@ export const useFilesStore = defineStore("files", () => {
    * reactive tab objects on purpose: the controller must not be proxied.
    */
   const searchAborts = new Map<string, AbortController>();
+  /**
+   * pendingRestore holds restored tab ids whose stored path has not been
+   * validated yet (JUS-209). Only the active tab is checked on restore; a
+   * background tab is validated on its first switch, so mounting never fires
+   * one request per tab and a missing path falls back silently there too.
+   */
+  const pendingRestore = new Set<string>();
 
   /** error renders the retained read failure in the active locale. */
   const error = computed<string | null>(() =>
@@ -654,6 +663,30 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
+   * revalidateRoots moves every tab off a root the refreshed list no longer
+   * has (see loadAll/initialLoad): the tab drops to the first root with a
+   * cleared filter, anchor and search, so a removed root never errors a tab.
+   */
+  function revalidateRoots(list: FilesRoot[]): void {
+    for (const item of tabs.value) {
+      if (!list.some((root) => root.name === item.rootName)) {
+        item.rootName = list[0]?.name ?? "";
+        item.path = "";
+        // The tab drops to a fresh location, so its stale folder filter must
+        // go too: keeping the needle would hide the new root's listing behind
+        // a query typed for the vanished root. The range anchor goes with it
+        // (JUS-141).
+        item.query = "";
+        item.anchor = null;
+        item.loaded = false;
+        // A root that vanished also invalidates any search results the tab
+        // was showing for it (JUS-163 fix round 1).
+        resetSearch(item);
+      }
+    }
+  }
+
+  /**
    * loadAll loads the roots, then the active tab's directory. Used on first
    * open and by retry; navigation uses {@link loadEntriesFor} alone.
    */
@@ -679,25 +712,7 @@ export const useFilesStore = defineStore("files", () => {
         return;
       }
       roots.value = list;
-      // Re-validate EVERY tab's root against the refreshed list, not only the
-      // active one: a background tab bound to a removed root would otherwise
-      // error on its next load.
-      for (const item of tabs.value) {
-        if (!list.some((root) => root.name === item.rootName)) {
-          item.rootName = list[0]?.name ?? "";
-          item.path = "";
-          // The tab drops to a fresh location, so its stale folder filter must
-          // go too: keeping the needle would hide the new root's listing behind
-          // a query typed for the vanished root. The range anchor goes with it
-          // (JUS-141).
-          item.query = "";
-          item.anchor = null;
-          item.loaded = false;
-          // A root that vanished also invalidates any search results the tab
-          // was showing for it (JUS-163 fix round 1).
-          resetSearch(item);
-        }
-      }
+      revalidateRoots(list);
       if (tab.rootName === "") {
         applyListingTo(tab, [], "", false);
         return;
@@ -791,20 +806,172 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
-   * init binds the store to one server. Switching servers (nodes) resets every
-   * tab back to a single default tab so a node never inherits the previous
-   * node's tabs; a repeat call for the same server is a no-op once it has
-   * loaded.
+   * initPromise is the in-flight initial load, shared so concurrent inits join
+   * it instead of racing (JUS-209 fix round 1): a second init while the first
+   * listing is still slow awaits the same roots instead of restoring against
+   * an empty list. A server switch clears it — the stale load's guards discard
+   * it and a fresh load starts below.
    */
-  async function init(nextServerId: string): Promise<void> {
+  let initPromise: Promise<void> | null = null;
+
+  /**
+   * init binds the store to one server, restoring `snapshot` (when given)
+   * before anything loads: the snapshot is read from storage before the
+   * default tab is created, so the first listing goes straight to the restored
+   * tabs with one fetch for the active tab (no flash of the default root) and
+   * background tabs load lazily on first switch. Switching servers (nodes)
+   * resets every tab back to a single default tab so a node never inherits the
+   * previous node's tabs; a repeat call for the same server joins the
+   * in-flight load.
+   */
+  function init(
+    nextServerId: string,
+    snapshot: FilesTabsSnapshot | null = null,
+  ): Promise<void> {
     if (serverId.value !== nextServerId) {
       resetBrowser();
       serverId.value = nextServerId;
+      initPromise = null;
     }
-    if (loading.value) {
+    if (initPromise === null) {
+      const started = initialLoad(snapshot);
+      initPromise = started;
+      void started.finally(() => {
+        if (initPromise === started) {
+          initPromise = null;
+        }
+      });
+    }
+    return initPromise;
+  }
+
+  /**
+   * touchedDuringInit is the user-touched guard for the initial restore
+   * (JUS-209 fix round 1): tab actions set it while the roots are loading, and
+   * the restore is skipped when it is set — a restore never overwrites
+   * tabs/paths the user changed since init began. It is reset at the start of
+   * every initial load.
+   */
+  let touchedDuringInit = false;
+
+  /**
+   * rebuildTabsFromSnapshot validates the snapshot against the loaded roots
+   * and builds the replacement tabs (no fetch): unknown roots move to the
+   * default root, the active id falls back to the first tab. Null when nothing
+   * can be rebuilt.
+   */
+  function rebuildTabsFromSnapshot(
+    snapshot: FilesTabsSnapshot,
+  ): { tabs: FilesTab[]; activeId: string } | null {
+    const defaultRoot = roots.value[0]?.name ?? "";
+    if (defaultRoot === "") {
+      return null;
+    }
+    const seen = new Set<string>();
+    const rebuilt: FilesTab[] = [];
+    for (const item of snapshot.tabs.slice(0, FILES_TABS_MAX_TABS)) {
+      const known = roots.value.some((root) => root.name === item.root);
+      const tab = createTab(
+        known ? item.root : defaultRoot,
+        known ? item.path : "",
+        item.id !== "" && !seen.has(item.id) ? item.id : nextTabId(),
+      );
+      seen.add(tab.id);
+      tab.viewMode = snapshot.viewMode;
+      rebuilt.push(tab);
+    }
+    if (rebuilt.length === 0) {
+      return null;
+    }
+    return {
+      tabs: rebuilt,
+      activeId: seen.has(snapshot.activeTabId)
+        ? snapshot.activeTabId
+        : rebuilt[0].id,
+    };
+  }
+
+  /**
+   * activateRebuiltTabs swaps the current tabs for restored ones, invalidating
+   * the discarded tabs (a listing still in flight for one must not write after
+   * the swap) and marking background tabs for lazy path validation on first
+   * switch. Returns the tab to load.
+   */
+  function activateRebuiltTabs(
+    rebuilt: FilesTab[],
+    activeId: string,
+  ): FilesTab {
+    for (const discarded of tabs.value) {
+      discarded.generation += 1;
+      searchAborts.get(discarded.id)?.abort();
+      searchAborts.delete(discarded.id);
+      pendingRestore.delete(discarded.id);
+    }
+    tabs.value = rebuilt;
+    activeTabId.value = rebuilt.some((tab) => tab.id === activeId)
+      ? activeId
+      : rebuilt[0].id;
+    for (const tab of rebuilt) {
+      if (tab.id !== activeTabId.value) {
+        pendingRestore.add(tab.id);
+      }
+    }
+    return findTab(activeTabId.value) ?? rebuilt[0];
+  }
+
+  /**
+   * initialLoad fetches the roots, then loads straight into the restored tabs
+   * when the snapshot still applies. The fingerprint is captured before the
+   * first await: a user touch during the roots fetch skips the restore and the
+   * user's tabs load normally instead of being overwritten.
+   */
+  async function initialLoad(snapshot: FilesTabsSnapshot | null): Promise<void> {
+    const server = serverId.value;
+    if (server === "") {
       return;
     }
-    await loadAll();
+    touchedDuringInit = false;
+    const tab = activeTab.value;
+    const gen = ++tab.generation;
+    tab.loading = true;
+    tab.errorRaw = null;
+    tab.disabled = false;
+    // A fresh listing invalidates every cached folder size: a refresh or a
+    // mutation may have changed what a folder holds.
+    resetFolderSizes();
+    try {
+      const list = await listRoots(server, teamId());
+      if (gen !== tab.generation || server !== serverId.value) {
+        return;
+      }
+      roots.value = list;
+      revalidateRoots(list);
+      const rebuilt =
+        snapshot === null || touchedDuringInit
+          ? null
+          : rebuildTabsFromSnapshot(snapshot);
+      if (rebuilt === null) {
+        const current = findTab(tab.id) ?? activeTab.value;
+        if (current.id !== tab.id) {
+          tab.loading = false;
+        }
+        await loadEntriesFor(current);
+        return;
+      }
+      // The untouched default never loaded: swap it for the restored tabs and
+      // fetch the active one directly (one fetch, no flash of the root).
+      const active = activateRebuiltTabs(rebuilt.tabs, rebuilt.activeId);
+      await loadRestoredTab(active);
+    } catch (err) {
+      if (gen !== tab.generation || server !== serverId.value) {
+        return;
+      }
+      applyErrorTo(tab, err);
+    } finally {
+      if (gen === tab.generation) {
+        tab.loading = false;
+      }
+    }
   }
 
   /**
@@ -889,6 +1056,7 @@ export const useFilesStore = defineStore("files", () => {
   async function openTab(
     options: { root?: string; path?: string } = {},
   ): Promise<void> {
+    touchedDuringInit = true;
     const root = options.root ?? rootName.value;
     if (!serverId.value || root === "") {
       return;
@@ -907,6 +1075,7 @@ export const useFilesStore = defineStore("files", () => {
    * the browser is never empty.
    */
   async function closeTab(id: string): Promise<void> {
+    touchedDuringInit = true;
     const index = tabs.value.findIndex((tab) => tab.id === id);
     if (index === -1) {
       return;
@@ -914,6 +1083,7 @@ export const useFilesStore = defineStore("files", () => {
     // A closed tab must not leave its search walking on the node.
     searchAborts.get(id)?.abort();
     searchAborts.delete(id);
+    pendingRestore.delete(id);
     const wasActive = activeTabId.value === id;
     const closedRoot = tabs.value[index].rootName;
     const remaining = tabs.value.filter((tab) => tab.id !== id);
@@ -937,6 +1107,7 @@ export const useFilesStore = defineStore("files", () => {
 
   /** switchTab focuses one tab, loading it if it has never loaded. */
   async function switchTab(id: string): Promise<void> {
+    touchedDuringInit = true;
     const tab = findTab(id);
     if (!tab) {
       return;
@@ -944,9 +1115,121 @@ export const useFilesStore = defineStore("files", () => {
     activeTabId.value = tab.id;
     // A tab switch ends the range: the anchor belongs to the view it was set in.
     tab.anchor = null;
-    if (!tab.loaded && !tab.loading) {
+    if (pendingRestore.delete(tab.id)) {
+      await loadRestoredTab(tab);
+    } else if (!tab.loaded && !tab.loading) {
       await loadEntriesFor(tab);
     }
+  }
+
+  /**
+   * collectTabsSnapshot reads the persistable browser state for localStorage
+   * (JUS-209): the open tabs (id, root, path), the active tab and its view
+   * mode. Null while nothing worth persisting is on screen (no server, no
+   * roots), so a blank intermediate state never overwrites a good snapshot.
+   */
+  function collectTabsSnapshot(): FilesTabsSnapshot | null {
+    if (serverId.value === "" || roots.value.length === 0) {
+      return null;
+    }
+    const kept = tabs.value.filter((tab) => tab.rootName !== "");
+    if (kept.length === 0) {
+      return null;
+    }
+    return {
+      version: 1,
+      tabs: kept.slice(0, FILES_TABS_MAX_TABS).map((tab) => ({
+        id: tab.id,
+        root: tab.rootName,
+        path: tab.path,
+      })),
+      activeTabId: activeTabId.value,
+      viewMode: activeTab.value.viewMode,
+    };
+  }
+
+  /**
+   * loadRestoredTab loads one restored tab, falling back silently when its
+   * stored path is gone: a missing/unreadable path walks up to the nearest
+   * existing parent, then the root. Transient failures keep the error state;
+   * nothing here toasts — a reload must never open with an error-toast storm.
+   */
+  async function loadRestoredTab(tab: FilesTab): Promise<void> {
+    if (serverId.value === "" || tab.rootName === "") {
+      tab.entries = [];
+      tab.cursor = "";
+      tab.truncated = false;
+      return;
+    }
+    const gen = ++tab.generation;
+    tab.errorRaw = null;
+    // Navigation lands on a new directory, so the cached folder sizes belong
+    // to the folder being left behind.
+    resetFolderSizes();
+    let target = tab.path;
+    for (;;) {
+      if (gen !== tab.generation) {
+        return;
+      }
+      tab.loading = true;
+      try {
+        const listing = await listEntries(serverId.value, teamId(), {
+          root: tab.rootName,
+          path: target,
+        });
+        if (gen !== tab.generation) {
+          return;
+        }
+        tab.path = target;
+        applyListingTo(tab, listing.entries, listing.cursor ?? "", listing.truncated);
+        return;
+      } catch (err) {
+        if (gen !== tab.generation || isCanceledError(err)) {
+          return;
+        }
+        if (isFilesDisabled(err)) {
+          applyErrorTo(tab, err);
+          return;
+        }
+        const key = filesErrorKey(err);
+        const gone =
+          key === "files.errors.notFound" ||
+          key === "files.errors.invalid" ||
+          key === "files.errors.forbidden";
+        if (gone && target !== "") {
+          target = parentPath(target);
+          continue;
+        }
+        if (gone) {
+          tab.path = "";
+        }
+        applyErrorTo(tab, err);
+        return;
+      } finally {
+        if (gen === tab.generation) {
+          tab.loading = false;
+        }
+      }
+    }
+  }
+
+  /**
+   * restorePersistedTabs rebuilds the tabs from a validated snapshot (JUS-209).
+   * Tabs bound to an unknown root move to the default root; a missing active
+   * id falls back to the first tab; an empty rebuild keeps the current tabs.
+   * The active tab loads with silent path fallback, background tabs on first
+   * switch. Returns true when tabs were rebuilt.
+   */
+  async function restorePersistedTabs(snapshot: FilesTabsSnapshot): Promise<boolean> {
+    if (serverId.value === "" || roots.value.length === 0) {
+      return false;
+    }
+    const rebuilt = rebuildTabsFromSnapshot(snapshot);
+    if (rebuilt === null) {
+      return false;
+    }
+    await loadRestoredTab(activateRebuiltTabs(rebuilt.tabs, rebuilt.activeId));
+    return true;
   }
 
   /** activateRelative focuses the tab `delta` places away, wrapping around. */
@@ -1349,6 +1632,7 @@ export const useFilesStore = defineStore("files", () => {
 
   /** setRoot switches the active tab's root and returns to its top level. */
   async function setRoot(name: string): Promise<void> {
+    touchedDuringInit = true;
     const tab = activeTab.value;
     if (name === tab.rootName) {
       return;
@@ -1364,6 +1648,7 @@ export const useFilesStore = defineStore("files", () => {
 
   /** openDirectory descends into one directory in the active tab. */
   async function openDirectory(name: string): Promise<void> {
+    touchedDuringInit = true;
     const tab = activeTab.value;
     tab.path = joinPath(tab.path, name);
     tab.scrollTop = 0;
@@ -1375,6 +1660,7 @@ export const useFilesStore = defineStore("files", () => {
 
   /** goToPath navigates the active tab to an absolute (root-relative) path. */
   async function goToPath(next: string): Promise<void> {
+    touchedDuringInit = true;
     const tab = activeTab.value;
     if (next === tab.path) {
       // Clicking the current crumb is still a navigation: drop a stale filter
@@ -1423,6 +1709,7 @@ export const useFilesStore = defineStore("files", () => {
       if (gen !== tab.generation) {
         return "opened";
       }
+      touchedDuringInit = true;
       tab.path = target;
       tab.scrollTop = 0;
       tab.query = "";
@@ -1476,6 +1763,7 @@ export const useFilesStore = defineStore("files", () => {
 
   /** setViewMode switches the active tab between the list and grid layouts. */
   function setViewMode(mode: FilesViewMode): void {
+    touchedDuringInit = true;
     viewMode.value = mode;
   }
 
@@ -1744,6 +2032,7 @@ export const useFilesStore = defineStore("files", () => {
       searchAborts.get(discarded.id)?.abort();
       searchAborts.delete(discarded.id);
     }
+    pendingRestore.clear();
     const tab = createTab();
     tabs.value = [tab];
     activeTabId.value = tab.id;
@@ -1829,6 +2118,8 @@ export const useFilesStore = defineStore("files", () => {
     switchTab,
     nextTab,
     prevTab,
+    collectTabsSnapshot,
+    restorePersistedTabs,
     setScrollTop,
     setRoot,
     openDirectory,

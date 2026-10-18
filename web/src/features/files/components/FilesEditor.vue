@@ -205,18 +205,32 @@ const closeSaving = ref(false);
 const { copyText } = useCopyText();
 
 /**
- * windowStyle applies the persisted size and dragged position, fitted into
- * the current viewport for display only (the saved size is untouched). Until
- * the window is dragged the CSS default (pinned bottom-right) applies, so a
- * fresh open is always as designed.
+ * displayedSize is the fitted window size for the current viewport (see
+ * displayGeometry): the single source for rendering, aria and resize seeds,
+ * so a resize always starts where the user sees the window.
+ */
+const displayedSize = computed<{ width: number; height: number }>(() => {
+  const fitted = editorWindow.displayGeometry(viewport.value.width, viewport.value.height);
+  return {
+    width: fitted.width,
+    // The window never covers the shell chrome: cap the height below the
+    // viewport by the top-bar/bottom-gap margin.
+    height: Math.min(fitted.height, Math.max(0, viewport.value.height - WINDOW_VIEWPORT_MARGIN)),
+  };
+});
+
+/**
+ * windowStyle applies the displayed size and dragged position. Until the
+ * window is dragged the CSS default (pinned bottom-right) applies, so a
+ * fresh open is always as designed. The chrome margin rides along as a
+ * custom property so the stylesheet never duplicates the pixel value.
  */
 const windowStyle = computed<CSSProperties>(() => {
   const fitted = editorWindow.displayGeometry(viewport.value.width, viewport.value.height);
-  const style: CSSProperties = {
-    width: `${fitted.width}px`,
-    // The window never covers the shell chrome: cap the height below the
-    // viewport by the top-bar/bottom-gap margin.
-    height: `${Math.min(fitted.height, Math.max(0, viewport.value.height - WINDOW_VIEWPORT_MARGIN))}px`,
+  const style: Record<string, string> = {
+    width: `${displayedSize.value.width}px`,
+    height: `${displayedSize.value.height}px`,
+    "--ed-window-chrome": `${WINDOW_VIEWPORT_MARGIN}px`,
   };
   const position = offset.value;
   if (position && fitted.x !== null && fitted.y !== null) {
@@ -225,7 +239,7 @@ const windowStyle = computed<CSSProperties>(() => {
     style.right = "auto";
     style.bottom = "auto";
   }
-  return style;
+  return style as CSSProperties;
 });
 
 const readyTabs = computed(() =>
@@ -335,43 +349,12 @@ const tabMenuOptions = computed<DropdownOption[]>(() => {
 });
 
 // A dirty buffer must never be dropped by a destructive path — a server or
-// team switch, or logout — without an explicit confirmation (beforeunload
-// still covers a browser close/reload). Route navigation never drops buffers:
-// the window mounts once in the app shell and outlives the page.
-const leaveOpen = ref(false);
-let leaveResolve: ((_leave: boolean) => void) | null = null;
-// leavePromise is the open confirmation both Overlapping callers share: a
-// second confirmDiscard while the dialog is open returns the same promise
-// instead of orphaning the first caller's guard.
-let leavePromise: Promise<boolean> | null = null;
-
-/**
- * confirmDiscard asks the user before discarding dirty buffers. Overlapping
- * calls share one dialog and one promise, so a team switch landing mid-prompt
- * (or a rapid double action) can never strand a caller waiting forever.
- */
-function confirmDiscard(): Promise<boolean> {
-  if (!editor.hasDirty) {
-    return Promise.resolve(true);
-  }
-  if (leavePromise) {
-    return leavePromise;
-  }
-  leavePromise = new Promise<boolean>((resolve) => {
-    leaveResolve = resolve;
-    leaveOpen.value = true;
-  });
-  return leavePromise;
-}
-
-/** resolveLeave settles the pending confirmation and releases its promise. */
-function resolveLeave(leave: boolean): void {
-  leaveOpen.value = false;
-  leaveResolve?.(leave);
-  leaveResolve = null;
-  leavePromise = null;
-}
-
+// team switch, or a user-initiated logout — without an explicit confirmation
+// (beforeunload still covers a browser close/reload; forced sign-outs reset
+// directly). Route navigation never drops buffers: the window mounts once in
+// the app shell and outlives the page. The confirmation dialog renders once
+// here and is shared through the editor store, so the account menu's logout
+// path prompts through the same dialog.
 // A server switch moves the browser to another node while this window may
 // hold that node's dirty tabs: confirm before dropping them, and browse back
 // when the user stays (mirroring the team-switch revert below). A discard
@@ -382,7 +365,7 @@ watch(
     if (!next || next === editor.serverId || !editor.hasDirty) {
       return;
     }
-    void confirmDiscard().then((leave) => {
+    void editor.confirmDiscard().then((leave) => {
       if (leave) {
         editor.reset();
         return;
@@ -409,7 +392,7 @@ watch(
     if (prev === undefined || next === prev) {
       return;
     }
-    if (!(await confirmDiscard())) {
+    if (!(await editor.confirmDiscard())) {
       teamRevertTarget = prev;
       teams.selectTeam(prev);
       return;
@@ -938,7 +921,7 @@ const dialogOpen = computed<boolean>(
     historyOpen.value ||
     encodingOpen.value ||
     closeAllOpen.value ||
-    leaveOpen.value ||
+    editor.leaveOpen ||
     pendingClose.value !== null ||
     editor.encodingWarning !== null,
 );
@@ -1078,9 +1061,10 @@ function onBarPointerUp(event: PointerEvent): void {
 }
 
 /**
- * onResizePointerDown starts a corner drag-to-resize. Pointer capture keeps
- * the tracking even outside the handle; the size is clamped to the usable
- * band and persisted on every move by the host store.
+ * onResizePointerDown starts a corner drag-to-resize from the DISPLAYED size,
+ * so the first move never jumps (a fitted window would otherwise snap back to
+ * the persisted size). Pointer capture keeps the tracking even outside the
+ * handle; the host store clamps the result and persists only fitting sizes.
  */
 function onResizePointerDown(event: PointerEvent): void {
   if (event.button !== 0) {
@@ -1094,8 +1078,8 @@ function onResizePointerDown(event: PointerEvent): void {
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
-    originWidth: editorWindow.width,
-    originHeight: editorWindow.height,
+    originWidth: displayedSize.value.width,
+    originHeight: displayedSize.value.height,
   };
   handle.setPointerCapture(event.pointerId);
   event.preventDefault();
@@ -1106,9 +1090,11 @@ function onResizePointerMove(event: PointerEvent): void {
   if (!resizeState || event.pointerId !== resizeState.pointerId) {
     return;
   }
-  editorWindow.setSize(
+  editorWindow.resizeTo(
     resizeState.originWidth + (event.clientX - resizeState.startX),
     resizeState.originHeight + (event.clientY - resizeState.startY),
+    viewport.value.width,
+    viewport.value.height,
   );
 }
 
@@ -1128,8 +1114,9 @@ const RESIZE_KEY_STEP_LARGE = 64;
 
 /**
  * onResizeKeydown resizes from the keyboard: arrows grow or shrink the window
- * by one step, Shift+arrows by a large step. The host store clamps and
- * persists the result, exactly like a pointer drag.
+ * by one step from its DISPLAYED size, Shift+arrows by a large step. The host
+ * store clamps the result and persists only fitting sizes, exactly like a
+ * pointer drag.
  */
 function onResizeKeydown(event: KeyboardEvent): void {
   const step = event.shiftKey ? RESIZE_KEY_STEP_LARGE : RESIZE_KEY_STEP;
@@ -1152,7 +1139,7 @@ function onResizeKeydown(event: KeyboardEvent): void {
       return;
   }
   event.preventDefault();
-  editorWindow.setSize(editorWindow.width + deltaWidth, editorWindow.height + deltaHeight);
+  editorWindow.resizeBy(deltaWidth, deltaHeight, viewport.value.width, viewport.value.height);
 }
 
 /** minimizeWindow collapses the window into the rail icon and moves focus there. */
@@ -1951,9 +1938,9 @@ onBeforeUnmount(() => {
       role="slider"
       :aria-label="t('files.editor.resize')"
       :aria-valuemin="EDITOR_WINDOW_MIN_WIDTH"
-      :aria-valuemax="4096"
-      :aria-valuenow="editorWindow.width"
-      :aria-valuetext="`${editorWindow.width} by ${editorWindow.height} pixels`"
+      :aria-valuemax="viewport.width"
+      :aria-valuenow="displayedSize.width"
+      :aria-valuetext="`${displayedSize.width} by ${displayedSize.height} pixels`"
       aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
       @pointerdown="onResizePointerDown"
       @pointermove="onResizePointerMove"
@@ -1978,19 +1965,19 @@ onBeforeUnmount(() => {
 
   <NModal
     class="app-modal"
-    :show="leaveOpen"
+    :show="editor.leaveOpen"
     preset="card"
     style="width: 440px; max-width: 94vw"
     :title="t('files.editor.leaveTitle')"
     :mask-closable="false"
     :close-on-esc="false"
-    @update:show="(value: boolean) => { if (!value) resolveLeave(false); }"
+    @update:show="(value: boolean) => { if (!value) editor.resolveLeave(false); }"
   >
     <p class="small">{{ t("files.editor.leaveMessage") }}</p>
     <template #footer>
       <div class="dialog-foot">
-        <NButton @click="resolveLeave(false)">{{ t("files.editor.leaveStay") }}</NButton>
-        <NButton type="error" @click="resolveLeave(true)">
+        <NButton @click="editor.resolveLeave(false)">{{ t("files.editor.leaveStay") }}</NButton>
+        <NButton type="error" @click="editor.resolveLeave(true)">
           {{ t("files.editor.leaveDiscard") }}
         </NButton>
       </div>
@@ -2073,8 +2060,8 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   width: min(1331px, calc(100vw - var(--space-6) * 2));
-  height: min(936px, calc(100vh - 104px));
-  height: min(936px, calc(100dvh - 104px));
+  height: min(936px, calc(100vh - var(--ed-window-chrome, 104px)));
+  height: min(936px, calc(100dvh - var(--ed-window-chrome, 104px)));
   /* The minimum yields to narrow viewports so the window always fits with
      its side margins; the maximum caps the inline size to the same margins
      (the inline style owns the real value, the caps only trim overflow). */

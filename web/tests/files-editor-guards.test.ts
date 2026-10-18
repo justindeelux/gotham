@@ -3,7 +3,7 @@
 // ready tab must render no error state, and a role/root change must flip a live
 // session read-only. The CodeMirror chunk is mocked so the guards run without
 // a real editor.
-/* global document:readonly, Event:readonly, HTMLElement:readonly */
+/* global document:readonly, Element:readonly, Event:readonly, HTMLElement:readonly, MouseEvent:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NDropdown, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -721,6 +721,90 @@ describe("FilesEditor guards", () => {
     expect(windows.height).toBe(600 - 64);
     await grip.trigger("keydown", { key: "Enter" });
     expect(windows.width).toBe(800 - 16);
+    wrapper.unmount();
+  });
+
+  it("seeds a pointer drag from the displayed size without jumping", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1600 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 1000 });
+    const captureHolder = window.HTMLElement.prototype as unknown as {
+      setPointerCapture?: (_id: number) => void;
+    };
+    const originalCapture = captureHolder.setPointerCapture;
+    captureHolder.setPointerCapture = () => {};
+    /** firePointer dispatches a native pointer-ish mouse event (VTU cannot
+     * synthesize PointerEvent init properties). */
+    function firePointer(
+      target: Element,
+      type: string,
+      init: { button?: number; clientX?: number; clientY?: number; pointerId?: number },
+    ): void {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: init.button ?? 0,
+        clientX: init.clientX ?? 0,
+        clientY: init.clientY ?? 0,
+      });
+      Object.defineProperty(event, "pointerId", { value: init.pointerId ?? 0 });
+      target.dispatchEvent(event);
+    }
+    try {
+      const { wrapper } = mountEditor();
+      const tab = makeTab("t1", false);
+      const editor = useEditorStore();
+      editor.tabs = [tab];
+      editor.activeId = tab.id;
+      await flushPromises();
+
+      const windows = useEditorWindowStore();
+      windows.setSize(1331, 936);
+      // Narrow the viewport: the window now displays fitted at 800px.
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
+      window.dispatchEvent(new Event("resize"));
+      await flushPromises();
+
+      const grip = wrapper.find(".ed-resize").element;
+      firePointer(grip, "pointerdown", { button: 0, clientX: 200, clientY: 200, pointerId: 7 });
+      firePointer(grip, "pointermove", { clientX: 184, clientY: 200, pointerId: 7 });
+      firePointer(grip, "pointerup", { pointerId: 7 });
+      await flushPromises();
+
+      // No jump back to the persisted size: the first move shrinks one step
+      // from the displayed 800, and the saved desktop size is untouched.
+      expect(windows.width).toBe(1331);
+      expect(wrapper.find(".ed-window").attributes("style") ?? "").toContain(
+        "width: 784px",
+      );
+      wrapper.unmount();
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+      if (originalCapture === undefined) {
+        delete captureHolder.setPointerCapture;
+      } else {
+        captureHolder.setPointerCapture = originalCapture;
+      }
+    }
+  });
+
+  it("reports the displayed size and viewport max on the resize handle", async () => {
+    const { wrapper } = mountEditor();
+    const tab = makeTab("t1", false);
+    const editor = useEditorStore();
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    const windows = useEditorWindowStore();
+    windows.setSize(800, 600);
+    await flushPromises();
+    const grip = wrapper.find(".ed-resize");
+    expect(grip.attributes("aria-valuemax")).toBe(String(window.innerWidth));
+    expect(grip.attributes("aria-valuenow")).toBe("800");
+    await grip.trigger("keydown", { key: "ArrowLeft" });
+    expect(grip.attributes("aria-valuenow")).toBe("784");
     wrapper.unmount();
   });
 

@@ -2,7 +2,7 @@
 // minimized flag per user, clamps them back into the viewport on restore, and
 // exposes the open-tab count behind the rail badge.
 /* global window:readonly */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createPinia, setActivePinia } from "pinia";
 
@@ -38,6 +38,12 @@ function seedSession(userId: string): void {
     "gotham.auth.session",
     JSON.stringify({ user: { id: userId }, accessToken: "a", refreshToken: "r" }),
   );
+}
+
+/** setViewport overrides the jsdom window size; restore afterwards. */
+function setViewport(width: number, height: number): void {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
 }
 
 /** makeTab builds one minimal open tab for the badge count. */
@@ -153,6 +159,14 @@ describe("clampEditorSize", () => {
       height: 844,
     });
   });
+
+  it("never yields a 0px window on a zero viewport", () => {
+    seedSession("u-1");
+    const store = useEditorWindowStore();
+    const fitted = store.displayGeometry(0, 0);
+    expect(fitted.width).toBeGreaterThan(0);
+    expect(fitted.height).toBeGreaterThan(0);
+  });
 });
 
 describe("useEditorWindowStore", () => {
@@ -227,5 +241,71 @@ describe("useEditorWindowStore", () => {
     expect(windows.openCount).toBe(2);
     editor.closeAll();
     expect(windows.openCount).toBe(0);
+  });
+});
+
+describe("resizeTo / resizeBy (JUS-232 fix round 2)", () => {
+  beforeEach(() => {
+    setViewport(1600, 1000);
+  });
+
+  afterEach(() => {
+    setViewport(1024, 768);
+  });
+
+  it("persists a fitting resize and clears the transient", () => {
+    seedSession("u-1");
+    const store = useEditorWindowStore();
+    store.setSize(900, 600);
+    store.resizeTo(950, 620, 1024, 768);
+    expect(store.width).toBe(950);
+    expect(store.height).toBe(620);
+    expect(store.displayGeometry(1024, 768)).toEqual({
+      width: 950,
+      height: 620,
+      x: null,
+      y: null,
+    });
+  });
+
+  it("keeps the saved size while shrinking the display on a narrow viewport", () => {
+    seedSession("u-1");
+    const store = useEditorWindowStore();
+    store.setSize(1331, 936);
+    // ArrowLeft once at an 800px viewport: one step off the displayed 800.
+    store.resizeBy(-16, 0, 800, 600);
+    expect(store.width).toBe(1331);
+    expect(store.height).toBe(936);
+    expect(store.displayGeometry(800, 600).width).toBe(784);
+  });
+
+  it("seeds pointer drags from the displayed size without jumping", () => {
+    seedSession("u-1");
+    const store = useEditorWindowStore();
+    store.setSize(1331, 936);
+    // First move of a drag started at the displayed left edge, -40px in.
+    store.resizeTo(760, 600, 800, 600);
+    expect(store.width).toBe(1331);
+    expect(store.displayGeometry(800, 600)).toEqual({
+      width: 760,
+      height: 600,
+      x: null,
+      y: null,
+    });
+  });
+
+  it("returns to the persisted size once the viewport fits again", () => {
+    seedSession("u-1");
+    const store = useEditorWindowStore();
+    store.setSize(1331, 936);
+    store.resizeBy(-16, 0, 800, 600);
+    expect(store.displayGeometry(800, 600).width).toBe(784);
+    // Widened past the persisted size: the transient no longer applies.
+    expect(store.displayGeometry(1600, 1000)).toEqual({
+      width: 1331,
+      height: 936,
+      x: null,
+      y: null,
+    });
   });
 });

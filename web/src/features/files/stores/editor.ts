@@ -153,6 +153,22 @@ export const useEditorStore = defineStore("filesEditor", () => {
   /** saveAsId is the tab awaiting a "save as copy" name. */
   const saveAsId = ref<string | null>(null);
   /**
+   * leaveOpen arms the shared "discard unsaved changes?" confirmation (JUS-232
+   * fix round 2). The dialog renders once in the app-level editor window, and
+   * every destructive path (server switch, team switch, user-initiated
+   * logout) confirms through it. Forced sign-outs bypass it and reset
+   * directly.
+   */
+  const leaveOpen = ref(false);
+  /** leaveResolve settles the open confirmation (null when idle). */
+  let leaveResolve: ((_leave: boolean) => void) | null = null;
+  /**
+   * leavePromise is the open confirmation every overlapping caller shares: a
+   * second confirmDiscard while the dialog is open returns the same promise
+   * instead of orphaning the first caller's guard.
+   */
+  let leavePromise: Promise<boolean> | null = null;
+  /**
    * encodingWarnings is the ordered queue of saves blocked by characters the
    * target charset cannot hold: Save All can hit several at once and the prompt
    * walks them one by one, like the conflict queue.
@@ -856,8 +872,41 @@ export const useEditorStore = defineStore("filesEditor", () => {
 
   /** reset clears every tab and unbinds the server (server switch/sign-out). */
   function reset(): void {
+    // A forced sign-out can land while the discard prompt is open: settle it
+    // so no waiter is left hanging on an unmounted dialog.
+    if (leaveOpen.value) {
+      resolveLeave(false);
+    }
     closeAll();
     serverId.value = "";
+  }
+
+  /**
+   * confirmDiscard asks the user before discarding dirty buffers. Overlapping
+   * calls share one dialog and one promise, so a team switch landing
+   * mid-prompt (or a rapid double action) can never strand a caller waiting
+   * forever.
+   */
+  function confirmDiscard(): Promise<boolean> {
+    if (!hasDirty.value) {
+      return Promise.resolve(true);
+    }
+    if (leavePromise) {
+      return leavePromise;
+    }
+    leavePromise = new Promise<boolean>((resolve) => {
+      leaveResolve = resolve;
+      leaveOpen.value = true;
+    });
+    return leavePromise;
+  }
+
+  /** resolveLeave settles the pending confirmation and releases its promise. */
+  function resolveLeave(leave: boolean): void {
+    leaveOpen.value = false;
+    leaveResolve?.(leave);
+    leaveResolve = null;
+    leavePromise = null;
   }
 
   return {
@@ -868,6 +917,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     conflictId,
     saveAsId,
     encodingWarning,
+    leaveOpen,
     // derived
     activeTab,
     conflictTab,
@@ -905,6 +955,8 @@ export const useEditorStore = defineStore("filesEditor", () => {
     applyMove,
     applyDelete,
     reset,
+    confirmDiscard,
+    resolveLeave,
   };
 });
 

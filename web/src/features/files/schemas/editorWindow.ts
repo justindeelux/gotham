@@ -16,6 +16,9 @@ export const EDITOR_WINDOW_DEFAULT_HEIGHT = 936 as const;
 export const EDITOR_WINDOW_MIN_WIDTH = 480 as const;
 export const EDITOR_WINDOW_MIN_HEIGHT = 320 as const;
 
+/** EDITOR_WINDOW_MAX_DIMENSION caps one persisted window side. */
+export const EDITOR_WINDOW_MAX_DIMENSION = 4096 as const;
+
 /**
  * EDITOR_WINDOW_NARROW_VIEWPORT is the width below which the floating window
  * nearly fills the screen, so a dragged offset is meaningless and resets to
@@ -25,8 +28,8 @@ export const EDITOR_WINDOW_NARROW_VIEWPORT = 640 as const;
 
 /** editorWindowSchema validates the persisted geometry fields. */
 export const editorWindowSchema = z.object({
-  width: z.number().int().min(EDITOR_WINDOW_MIN_WIDTH).max(4096).catch(EDITOR_WINDOW_DEFAULT_WIDTH),
-  height: z.number().int().min(EDITOR_WINDOW_MIN_HEIGHT).max(4096).catch(EDITOR_WINDOW_DEFAULT_HEIGHT),
+  width: z.number().int().min(EDITOR_WINDOW_MIN_WIDTH).max(EDITOR_WINDOW_MAX_DIMENSION).catch(EDITOR_WINDOW_DEFAULT_WIDTH),
+  height: z.number().int().min(EDITOR_WINDOW_MIN_HEIGHT).max(EDITOR_WINDOW_MAX_DIMENSION).catch(EDITOR_WINDOW_DEFAULT_HEIGHT),
   x: z.number().int().min(0).max(8192).nullable().catch(null).default(null),
   y: z.number().int().min(0).max(8192).nullable().catch(null).default(null),
   minimized: z.boolean().catch(false),

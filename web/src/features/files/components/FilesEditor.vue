@@ -59,7 +59,10 @@ import type { FilesVersion } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
-import { EDITOR_WINDOW_MIN_WIDTH } from "@/features/files/schemas/editorWindow";
+import {
+  EDITOR_WINDOW_CHROME_MARGIN,
+  EDITOR_WINDOW_MIN_WIDTH,
+} from "@/features/files/schemas/editorWindow";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
 import {
@@ -144,17 +147,12 @@ const offset = computed<{ x: number; y: number } | null>(() =>
     ? { x: editorWindow.x, y: editorWindow.y }
     : null,
 );
-// viewport mirrors the window size for display-only clamping (finding 6): the
-// persisted size is never rewritten by a resize event, only fitted on screen.
+// viewport mirrors the window size for display-only fitting: the persisted
+// size is never rewritten by a resize event, only fitted on screen.
 const viewport = ref({
   width: typeof window === "undefined" ? 0 : window.innerWidth,
   height: typeof window === "undefined" ? 0 : window.innerHeight,
 });
-/**
- * WINDOW_VIEWPORT_MARGIN reserves the pinned window's breathing room: the
- * bottom dock gap plus the top bar, so the default size never covers them.
- */
-const WINDOW_VIEWPORT_MARGIN = 104;
 // windowElement is the floating window, measured for drag clamping.
 const windowElement = ref<HTMLElement | null>(null);
 // resizeState tracks one in-flight corner resize (null when idle).
@@ -206,16 +204,27 @@ const { copyText } = useCopyText();
 
 /**
  * displayedSize is the fitted window size for the current viewport (see
- * displayGeometry): the single source for rendering, aria and resize seeds,
- * so a resize always starts where the user sees the window.
+ * displayGeometry, which already honors the side and chrome margins): the
+ * single source for rendering, aria and resize seeds, so a resize always
+ * starts where the user sees the window.
  */
 const displayedSize = computed<{ width: number; height: number }>(() => {
   const fitted = editorWindow.displayGeometry(viewport.value.width, viewport.value.height);
+  return { width: fitted.width, height: fitted.height };
+});
+
+/**
+ * resizeAria keeps the slider semantics honest: the value is the displayed
+ * size and the range always brackets it, even on a phone viewport narrower
+ * than the drag floor.
+ */
+const resizeAria = computed<{ min: number; max: number; now: number; text: string }>(() => {
+  const min = Math.min(EDITOR_WINDOW_MIN_WIDTH, displayedSize.value.width);
   return {
-    width: fitted.width,
-    // The window never covers the shell chrome: cap the height below the
-    // viewport by the top-bar/bottom-gap margin.
-    height: Math.min(fitted.height, Math.max(0, viewport.value.height - WINDOW_VIEWPORT_MARGIN)),
+    min,
+    max: Math.max(min, viewport.value.width),
+    now: displayedSize.value.width,
+    text: `${displayedSize.value.width} by ${displayedSize.value.height} pixels`,
   };
 });
 
@@ -230,7 +239,7 @@ const windowStyle = computed<CSSProperties>(() => {
   const style: Record<string, string> = {
     width: `${displayedSize.value.width}px`,
     height: `${displayedSize.value.height}px`,
-    "--ed-window-chrome": `${WINDOW_VIEWPORT_MARGIN}px`,
+    "--ed-window-chrome": `${EDITOR_WINDOW_CHROME_MARGIN}px`,
   };
   const position = offset.value;
   if (position && fitted.x !== null && fitted.y !== null) {
@@ -365,12 +374,14 @@ watch(
     if (!next || next === editor.serverId || !editor.hasDirty) {
       return;
     }
-    void editor.confirmDiscard().then((leave) => {
-      if (leave) {
+    void editor.confirmDiscard().then((outcome) => {
+      if (outcome === "leave") {
         editor.reset();
         return;
       }
-      if (editor.serverId !== "") {
+      // "stay" browses back to the tab's server; "aborted" (a forced sign-out
+      // landing mid-prompt) does nothing.
+      if (outcome === "stay" && editor.serverId !== "") {
         void router?.push({ name: "server-files", params: { id: editor.serverId } });
       }
     });
@@ -392,12 +403,17 @@ watch(
     if (prev === undefined || next === prev) {
       return;
     }
-    if (!(await editor.confirmDiscard())) {
+    const outcome = await editor.confirmDiscard();
+    if (outcome === "stay") {
       teamRevertTarget = prev;
       teams.selectTeam(prev);
       return;
     }
-    editor.reset();
+    // "aborted" (a forced sign-out landing mid-prompt) selects nothing: the
+    // session teardown already reset the stores.
+    if (outcome === "leave") {
+      editor.reset();
+    }
   },
 );
 
@@ -1042,7 +1058,9 @@ function onBarPointerDown(event: PointerEvent): void {
   bar.setPointerCapture(event.pointerId);
 }
 
-/** onBarPointerMove drags the window by the pointer delta, clamped on screen. */
+/** onBarPointerMove drags the window by the pointer delta, clamped on screen
+ * against the DISPLAYED size, so a fitted window never snaps to the origin
+ * on the first move. */
 function onBarPointerMove(event: PointerEvent): void {
   if (!dragState || event.pointerId !== dragState.pointerId) {
     return;
@@ -1050,6 +1068,8 @@ function onBarPointerMove(event: PointerEvent): void {
   editorWindow.setPosition(
     dragState.originX + (event.clientX - dragState.startX),
     dragState.originY + (event.clientY - dragState.startY),
+    displayedSize.value.width,
+    displayedSize.value.height,
   );
 }
 
@@ -1064,7 +1084,7 @@ function onBarPointerUp(event: PointerEvent): void {
  * onResizePointerDown starts a corner drag-to-resize from the DISPLAYED size,
  * so the first move never jumps (a fitted window would otherwise snap back to
  * the persisted size). Pointer capture keeps the tracking even outside the
- * handle; the host store clamps the result and persists only fitting sizes.
+ * handle; the host store clamps the result and persists it.
  */
 function onResizePointerDown(event: PointerEvent): void {
   if (event.button !== 0) {
@@ -1090,7 +1110,7 @@ function onResizePointerMove(event: PointerEvent): void {
   if (!resizeState || event.pointerId !== resizeState.pointerId) {
     return;
   }
-  editorWindow.resizeTo(
+  editorWindow.setSize(
     resizeState.originWidth + (event.clientX - resizeState.startX),
     resizeState.originHeight + (event.clientY - resizeState.startY),
     viewport.value.width,
@@ -1937,10 +1957,10 @@ onBeforeUnmount(() => {
       tabindex="0"
       role="slider"
       :aria-label="t('files.editor.resize')"
-      :aria-valuemin="EDITOR_WINDOW_MIN_WIDTH"
-      :aria-valuemax="viewport.width"
-      :aria-valuenow="displayedSize.width"
-      :aria-valuetext="`${displayedSize.width} by ${displayedSize.height} pixels`"
+      :aria-valuemin="resizeAria.min"
+      :aria-valuemax="resizeAria.max"
+      :aria-valuenow="resizeAria.now"
+      :aria-valuetext="resizeAria.text"
       aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
       @pointerdown="onResizePointerDown"
       @pointermove="onResizePointerMove"

@@ -3,9 +3,11 @@ import { computed, ref } from "vue";
 
 import {
   DEFAULT_EDITOR_WINDOW,
+  EDITOR_WINDOW_CHROME_MARGIN,
   EDITOR_WINDOW_MIN_HEIGHT,
   EDITOR_WINDOW_MIN_WIDTH,
   EDITOR_WINDOW_NARROW_VIEWPORT,
+  EDITOR_WINDOW_SIDE_MARGIN,
 } from "@/features/files/schemas/editorWindow";
 import type { EditorWindowState } from "@/features/files/schemas/editorWindow";
 import { useEditorStore } from "@/features/files/stores/editor";
@@ -39,16 +41,17 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
   const x = ref<number | null>(initial.x);
   const y = ref<number | null>(initial.y);
   const minimized = ref<boolean>(initial.minimized);
-  // viewWidth/viewHeight is a transient display-only size from a resize that
-  // ran while the persisted size overflowed the viewport. It is never
-  // persisted: writing it would shrink the saved desktop size to the fitted
-  // one. It applies only while the persisted size still overflows (see
-  // displayGeometry); a desktop resize clears it.
-  const viewWidth = ref<number | null>(null);
-  const viewHeight = ref<number | null>(null);
 
   /** openCount is the rail badge: the number of open editor tabs. */
   const openCount = computed<number>(() => useEditorStore().tabs.length);
+
+  /** viewportSize reads the live window, defaulting for SSR/tests. */
+  function viewportSize(): { width: number; height: number } {
+    if (typeof window === "undefined") {
+      return { width: 0, height: 0 };
+    }
+    return { width: window.innerWidth, height: window.innerHeight };
+  }
 
   /** snapshot reads the persistable geometry. */
   function snapshot(): EditorWindowState {
@@ -85,8 +88,6 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
    */
   function reloadForUser(nextUserId: string): void {
     userId.value = nextUserId;
-    viewWidth.value = null;
-    viewHeight.value = null;
     apply(storage ? readEditorWindow(storage, nextUserId) : DEFAULT_EDITOR_WINDOW);
   }
 
@@ -97,25 +98,45 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
    */
   function reset(): void {
     userId.value = "";
-    viewWidth.value = null;
-    viewHeight.value = null;
     apply(DEFAULT_EDITOR_WINDOW);
   }
 
-  /** setSize applies a clamped resize and persists it. */
-  function setSize(nextWidth: number, nextHeight: number): void {
-    const viewportWidth = typeof window === "undefined" ? nextWidth : window.innerWidth;
-    const viewportHeight = typeof window === "undefined" ? nextHeight : window.innerHeight;
-    const clamped = clampEditorSize(
+  /**
+   * fitSize clamps a size into a viewport honoring the display margins, so
+   * what is persisted is always what is shown: the side gutters for the
+   * width, the shell chrome for the height.
+   */
+  function fitSize(
+    nextWidth: number,
+    nextHeight: number,
+    viewportWidth: number,
+    viewportHeight: number,
+  ): { width: number; height: number } {
+    return clampEditorSize(
       nextWidth,
       nextHeight,
-      viewportWidth,
-      viewportHeight,
+      Math.max(viewportWidth - EDITOR_WINDOW_SIDE_MARGIN, 1),
+      Math.max(viewportHeight - EDITOR_WINDOW_CHROME_MARGIN, 1),
       EDITOR_WINDOW_MIN_WIDTH,
       EDITOR_WINDOW_MIN_HEIGHT,
     );
-    width.value = clamped.width;
-    height.value = clamped.height;
+  }
+
+  /**
+   * setSize applies an explicit user resize, clamped to the viewport display
+   * limits, and persists it — replacing the saved size. Viewport-only changes
+   * never call this, so merely narrowing or growing the window cannot rewrite
+   * the saved size.
+   */
+  function setSize(
+    nextWidth: number,
+    nextHeight: number,
+    viewportWidth: number = viewportSize().width,
+    viewportHeight: number = viewportSize().height,
+  ): void {
+    const fitted = fitSize(nextWidth, nextHeight, viewportWidth, viewportHeight);
+    width.value = fitted.width;
+    height.value = fitted.height;
     // A resize can strand a dragged position off-screen; pull it back in.
     if (x.value !== null && y.value !== null) {
       const position = clampEditorOffset(
@@ -132,17 +153,26 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
     persist();
   }
 
-  /** setPosition applies a clamped drag position and persists it. */
-  function setPosition(nextX: number, nextY: number): void {
-    const viewportWidth = typeof window === "undefined" ? 0 : window.innerWidth;
-    const viewportHeight = typeof window === "undefined" ? 0 : window.innerHeight;
+  /**
+   * setPosition applies a clamped drag position and persists it. The size is
+   * the DISPLAYED one (callers pass the fitted size): clamping with the
+   * persisted size would snap the window to the origin whenever the saved
+   * size overflows the viewport.
+   */
+  function setPosition(
+    nextX: number,
+    nextY: number,
+    widthValue: number = width.value,
+    heightValue: number = height.value,
+  ): void {
+    const viewport = viewportSize();
     const position = clampEditorOffset(
       nextX,
       nextY,
-      width.value,
-      height.value,
-      viewportWidth,
-      viewportHeight,
+      widthValue,
+      heightValue,
+      viewport.width,
+      viewport.height,
     );
     x.value = position.x;
     y.value = position.y;
@@ -163,64 +193,19 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
   }
 
   /**
-   * resizeTo applies one corner-resize step from a resize gesture (pointer
-   * drag or keyboard). The size is always seeded from the DISPLAYED size, so
-   * the first move never jumps; when the persisted size overflows the
-   * viewport the result is kept transient (display-only) instead of
-   * overwriting the saved desktop size. A resize that fits persists and
-   * clears the transient.
-   */
-  function resizeTo(
-    nextWidth: number,
-    nextHeight: number,
-    viewportWidth: number,
-    viewportHeight: number,
-  ): void {
-    const clamped = clampEditorSize(
-      nextWidth,
-      nextHeight,
-      viewportWidth,
-      viewportHeight,
-      EDITOR_WINDOW_MIN_WIDTH,
-      EDITOR_WINDOW_MIN_HEIGHT,
-    );
-    if (width.value <= viewportWidth && height.value <= viewportHeight) {
-      width.value = clamped.width;
-      height.value = clamped.height;
-      viewWidth.value = null;
-      viewHeight.value = null;
-      // A resize can strand a dragged position off-screen; pull it back in.
-      if (x.value !== null && y.value !== null) {
-        const position = clampEditorOffset(
-          x.value,
-          y.value,
-          width.value,
-          height.value,
-          viewportWidth,
-          viewportHeight,
-        );
-        x.value = position.x;
-        y.value = position.y;
-      }
-      persist();
-      return;
-    }
-    viewWidth.value = clamped.width;
-    viewHeight.value = clamped.height;
-  }
-
-  /**
    * resizeBy grows or shrinks the window by a delta from its DISPLAYED size
-   * (keyboard arrows). See resizeTo for the persist/transient rule.
+   * (keyboard arrows), then persists the fitted result like any explicit
+   * resize. Seeding from the display means a fitted window never jumps back
+   * to the saved size on the first press.
    */
   function resizeBy(
     deltaWidth: number,
     deltaHeight: number,
-    viewportWidth: number,
-    viewportHeight: number,
+    viewportWidth: number = viewportSize().width,
+    viewportHeight: number = viewportSize().height,
   ): void {
     const displayed = displayGeometry(viewportWidth, viewportHeight);
-    resizeTo(
+    setSize(
       displayed.width + deltaWidth,
       displayed.height + deltaHeight,
       viewportWidth,
@@ -229,12 +214,11 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
   }
 
   /**
-   * displayGeometry fits the geometry into a viewport for display only (a
-   * narrow viewport drops the dragged offset to the pinned default). While
-   * the persisted size overflows the viewport, a transient resize result
-   * applies instead of the fitted persisted size. It never writes state or
-   * storage, so a briefly small window cannot shrink the saved desktop size;
-   * a zero viewport (unmounted tests) yields a 1px floor, never a 0px window.
+   * displayGeometry fits the persisted geometry into a viewport for display
+   * only (a narrow viewport drops the dragged offset to the pinned default).
+   * It never writes state or storage, so narrowing or growing the viewport
+   * alone cannot rewrite the saved size; a zero viewport yields a 1px floor,
+   * never a 0px window.
    */
   function displayGeometry(
     viewportWidth: number,
@@ -242,34 +226,22 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
   ): { width: number; height: number; x: number | null; y: number | null } {
     const vw = Math.max(1, viewportWidth);
     const vh = Math.max(1, viewportHeight);
-    const persistedFits = width.value <= vw && height.value <= vh;
-    const base =
-      !persistedFits && viewWidth.value !== null && viewHeight.value !== null
-        ? { width: viewWidth.value, height: viewHeight.value }
-        : { width: width.value, height: height.value };
-    const clamped = clampEditorSize(
-      base.width,
-      base.height,
-      vw,
-      vh,
-      EDITOR_WINDOW_MIN_WIDTH,
-      EDITOR_WINDOW_MIN_HEIGHT,
-    );
+    const fitted = fitSize(width.value, height.value, vw, vh);
     if (vw < EDITOR_WINDOW_NARROW_VIEWPORT) {
-      return { width: clamped.width, height: clamped.height, x: null, y: null };
+      return { width: fitted.width, height: fitted.height, x: null, y: null };
     }
     if (x.value === null || y.value === null) {
-      return { width: clamped.width, height: clamped.height, x: null, y: null };
+      return { width: fitted.width, height: fitted.height, x: null, y: null };
     }
     const position = clampEditorOffset(
       x.value,
       y.value,
-      clamped.width,
-      clamped.height,
+      fitted.width,
+      fitted.height,
       vw,
       vh,
     );
-    return { width: clamped.width, height: clamped.height, x: position.x, y: position.y };
+    return { width: fitted.width, height: fitted.height, x: position.x, y: position.y };
   }
 
   return {
@@ -283,7 +255,6 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
     setPosition,
     resetPosition,
     setMinimized,
-    resizeTo,
     resizeBy,
     displayGeometry,
     reloadForUser,

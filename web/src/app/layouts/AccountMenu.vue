@@ -161,10 +161,11 @@ async function handleSelect(key: string | number): Promise<void> {
     return;
   }
   // A user-initiated logout drops the editor buffers, so dirty tabs confirm
-  // first through the shared editor dialog (staying aborts the logout).
-  // Forced sign-outs bypass this path and reset directly.
+  // first through the shared editor dialog. Anything but an explicit "leave"
+  // (staying, or the prompt being settled by a concurrent sign-out) aborts
+  // the logout. Forced sign-outs bypass this path and reset directly.
   const editor = useEditorStore();
-  if (editor.hasDirty && !(await editor.confirmDiscard())) {
+  if ((await editor.confirmDiscard()) !== "leave") {
     return;
   }
   try {

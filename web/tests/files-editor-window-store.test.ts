@@ -191,13 +191,13 @@ describe("useEditorWindowStore", () => {
     const store = useEditorWindowStore();
     store.setSize(900, 600);
     store.setPosition(100, 80);
-    const fitted = store.displayGeometry(800, 600);
-    expect(fitted.width).toBeLessThanOrEqual(800);
-    expect(fitted.height).toBeLessThanOrEqual(600);
-    expect(fitted.x).not.toBeNull();
-    expect(fitted.y).not.toBeNull();
-    expect(fitted.x! + fitted.width).toBeLessThanOrEqual(800);
-    expect(fitted.y! + fitted.height).toBeLessThanOrEqual(600);
+    // Margins included: 800 - 48 wide, 600 - 104 tall.
+    expect(store.displayGeometry(800, 600)).toEqual({
+      width: 752,
+      height: 496,
+      x: 48,
+      y: 80,
+    });
   });
 
   it("never persists a display fit: the saved size survives a small viewport", () => {
@@ -244,7 +244,7 @@ describe("useEditorWindowStore", () => {
   });
 });
 
-describe("resizeTo / resizeBy (JUS-232 fix round 2)", () => {
+describe("explicit resize persists the fitted size (JUS-232 fix round 3)", () => {
   beforeEach(() => {
     setViewport(1600, 1000);
   });
@@ -253,11 +253,10 @@ describe("resizeTo / resizeBy (JUS-232 fix round 2)", () => {
     setViewport(1024, 768);
   });
 
-  it("persists a fitting resize and clears the transient", () => {
+  it("persists an explicit resize clamped to the viewport display limits", () => {
     seedSession("u-1");
     const store = useEditorWindowStore();
-    store.setSize(900, 600);
-    store.resizeTo(950, 620, 1024, 768);
+    store.setSize(950, 620, 1024, 768);
     expect(store.width).toBe(950);
     expect(store.height).toBe(620);
     expect(store.displayGeometry(1024, 768)).toEqual({
@@ -268,44 +267,54 @@ describe("resizeTo / resizeBy (JUS-232 fix round 2)", () => {
     });
   });
 
-  it("keeps the saved size while shrinking the display on a narrow viewport", () => {
+  it("persists a keyboard resize seeded from the displayed size", () => {
     seedSession("u-1");
     const store = useEditorWindowStore();
-    store.setSize(1331, 936);
-    // ArrowLeft once at an 800px viewport: one step off the displayed 800.
-    store.resizeBy(-16, 0, 800, 600);
-    expect(store.width).toBe(1331);
-    expect(store.height).toBe(936);
-    expect(store.displayGeometry(800, 600).width).toBe(784);
+    store.setSize(1331, 936, 1600, 1000);
+    // ArrowLeft once at a 1366px viewport: one step off the displayed 1318.
+    store.resizeBy(-16, 0, 1366, 800);
+    expect(store.width).toBe(1302);
+    expect(store.height).toBe(696);
+    expect(store.displayGeometry(1366, 800).width).toBe(1302);
   });
 
-  it("seeds pointer drags from the displayed size without jumping", () => {
+  it("persists a pointer drag seeded from the displayed size", () => {
     seedSession("u-1");
     const store = useEditorWindowStore();
-    store.setSize(1331, 936);
-    // First move of a drag started at the displayed left edge, -40px in.
-    store.resizeTo(760, 600, 800, 600);
-    expect(store.width).toBe(1331);
-    expect(store.displayGeometry(800, 600)).toEqual({
-      width: 760,
-      height: 600,
+    store.setSize(1331, 936, 1600, 1000);
+    // First move of a drag started at the displayed 1318px, -40px in: the
+    // result lands on the persisted size, with no viewport-fitted jump.
+    store.setSize(1318 - 40, 696, 1366, 800);
+    expect(store.width).toBe(1278);
+    expect(store.displayGeometry(1366, 800)).toEqual({
+      width: 1278,
+      height: 696,
       x: null,
       y: null,
     });
   });
 
-  it("returns to the persisted size once the viewport fits again", () => {
+  it("caps the persisted size at the viewport display limits", () => {
     seedSession("u-1");
     const store = useEditorWindowStore();
-    store.setSize(1331, 936);
-    store.resizeBy(-16, 0, 800, 600);
-    expect(store.displayGeometry(800, 600).width).toBe(784);
-    // Widened past the persisted size: the transient no longer applies.
-    expect(store.displayGeometry(1600, 1000)).toEqual({
-      width: 1331,
-      height: 936,
-      x: null,
-      y: null,
-    });
+    store.setSize(2000, 1500, 1440, 900);
+    // Width capped at 1440 - 48, height at 900 - 104.
+    expect(store.width).toBe(1392);
+    expect(store.height).toBe(796);
+  });
+
+  it("reload restores the resized size, and viewport-only changes never persist", () => {
+    seedSession("u-1");
+    const first = useEditorWindowStore();
+    first.setSize(1331, 936, 1600, 1000);
+    first.resizeBy(-16, 0, 1366, 800);
+    expect(first.width).toBe(1302);
+    // Merely displaying at another viewport writes nothing.
+    first.displayGeometry(390, 844);
+    // A fresh store instance (a reload) restores the resized size.
+    setActivePinia(createPinia());
+    const second = useEditorWindowStore();
+    expect(second.width).toBe(1302);
+    expect(second.height).toBe(696);
   });
 });

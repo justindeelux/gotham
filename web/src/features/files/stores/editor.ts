@@ -118,6 +118,13 @@ export interface SaveReport {
   outcome: SaveOutcome;
 }
 
+/**
+ * LeaveOutcome is the discard prompt's answer: "leave" discards the buffers,
+ * "stay" keeps them, "aborted" means the prompt was settled by an external
+ * teardown (forced sign-out) instead of the user.
+ */
+export type LeaveOutcome = "leave" | "stay" | "aborted";
+
 let tabSeq = 0;
 
 /** nextTabId mints a stable per-session tab id. */
@@ -161,13 +168,13 @@ export const useEditorStore = defineStore("filesEditor", () => {
    */
   const leaveOpen = ref(false);
   /** leaveResolve settles the open confirmation (null when idle). */
-  let leaveResolve: ((_leave: boolean) => void) | null = null;
+  let leaveResolve: ((_outcome: LeaveOutcome) => void) | null = null;
   /**
    * leavePromise is the open confirmation every overlapping caller shares: a
    * second confirmDiscard while the dialog is open returns the same promise
    * instead of orphaning the first caller's guard.
    */
-  let leavePromise: Promise<boolean> | null = null;
+  let leavePromise: Promise<LeaveOutcome> | null = null;
   /**
    * encodingWarnings is the ordered queue of saves blocked by characters the
    * target charset cannot hold: Save All can hit several at once and the prompt
@@ -873,10 +880,9 @@ export const useEditorStore = defineStore("filesEditor", () => {
   /** reset clears every tab and unbinds the server (server switch/sign-out). */
   function reset(): void {
     // A forced sign-out can land while the discard prompt is open: settle it
-    // so no waiter is left hanging on an unmounted dialog.
-    if (leaveOpen.value) {
-      resolveLeave(false);
-    }
+    // as aborted (not "stay") so no stay-revert navigation or team revert
+    // fires during the teardown.
+    abortLeave();
     closeAll();
     serverId.value = "";
   }
@@ -887,24 +893,35 @@ export const useEditorStore = defineStore("filesEditor", () => {
    * mid-prompt (or a rapid double action) can never strand a caller waiting
    * forever.
    */
-  function confirmDiscard(): Promise<boolean> {
+  function confirmDiscard(): Promise<LeaveOutcome> {
     if (!hasDirty.value) {
-      return Promise.resolve(true);
+      return Promise.resolve("leave");
     }
     if (leavePromise) {
       return leavePromise;
     }
-    leavePromise = new Promise<boolean>((resolve) => {
+    leavePromise = new Promise<LeaveOutcome>((resolve) => {
       leaveResolve = resolve;
       leaveOpen.value = true;
     });
     return leavePromise;
   }
 
-  /** resolveLeave settles the pending confirmation and releases its promise. */
+  /** resolveLeave settles the pending confirmation with the user's answer. */
   function resolveLeave(leave: boolean): void {
     leaveOpen.value = false;
-    leaveResolve?.(leave);
+    leaveResolve?.(leave ? "leave" : "stay");
+    leaveResolve = null;
+    leavePromise = null;
+  }
+
+  /** abortLeave settles an open confirmation as abandoned by a teardown. */
+  function abortLeave(): void {
+    if (leavePromise === null) {
+      return;
+    }
+    leaveOpen.value = false;
+    leaveResolve?.("aborted");
     leaveResolve = null;
     leavePromise = null;
   }
@@ -957,6 +974,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     reset,
     confirmDiscard,
     resolveLeave,
+    abortLeave,
   };
 });
 

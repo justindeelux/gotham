@@ -96,6 +96,7 @@ import FilesEditor from "@/features/files/components/FilesEditor.vue";
 import EditorShortcutsDialog from "@/features/files/components/EditorShortcutsDialog.vue";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import { createMergeSession } from "@/features/files/composables/useMergeView";
+import { useAuthStore } from "@/features/auth/stores/auth";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
@@ -593,8 +594,33 @@ describe("FilesEditor guards", () => {
     wrapper.unmount();
   });
 
-  it("returns focus to the active tab on restore", async () => {
-    const { wrapper, editor } = mountEditor();
+  it("forced sign-out with an open prompt neither reverts nor navigates", async () => {
+    const { wrapper, teams, editor, router } = await mountEditorWithRouter("/dashboard");
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    // A team switch opens the shared confirmation.
+    teams.activeTeamId = "team-b";
+    await flushPromises();
+    expect(leaveDialog(wrapper)).toBeTruthy();
+
+    // A forced sign-out (401, cross-tab) settles the prompt as aborted: the
+    // tabs are dropped by the session teardown, and no stay-revert runs.
+    const selectSpy = vi.spyOn(teams, "selectTeam");
+    useAuthStore().clearSession();
+    await flushPromises();
+    await router.isReady();
+
+    expect(leaveDialog(wrapper)).toBeUndefined();
+    expect(editor.tabs).toHaveLength(0);
+    expect(selectSpy).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.path).toBe("/dashboard");
+    wrapper.unmount();
+  });
+
+  it("returns focus to the active tab on restore", async () => {    const { wrapper, editor } = mountEditor();
     const tab = makeTab("t1", true);
     editor.tabs = [tab];
     editor.activeId = tab.id;
@@ -724,7 +750,7 @@ describe("FilesEditor guards", () => {
     wrapper.unmount();
   });
 
-  it("seeds a pointer drag from the displayed size without jumping", async () => {
+  it("persists a pointer drag seeded from the displayed size", async () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 1600 });
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 1000 });
     const captureHolder = window.HTMLElement.prototype as unknown as {
@@ -759,7 +785,8 @@ describe("FilesEditor guards", () => {
 
       const windows = useEditorWindowStore();
       windows.setSize(1331, 936);
-      // Narrow the viewport: the window now displays fitted at 800px.
+      // Narrow the viewport: the window now displays fitted (752 wide with
+      // side margins at 800px).
       Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
       Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
       window.dispatchEvent(new Event("resize"));
@@ -771,11 +798,11 @@ describe("FilesEditor guards", () => {
       firePointer(grip, "pointerup", { pointerId: 7 });
       await flushPromises();
 
-      // No jump back to the persisted size: the first move shrinks one step
-      // from the displayed 800, and the saved desktop size is untouched.
-      expect(windows.width).toBe(1331);
+      // No jump and no silent persist of a fitted size: the first move
+      // shrinks one step from the displayed 752 and persists the result.
+      expect(windows.width).toBe(736);
       expect(wrapper.find(".ed-window").attributes("style") ?? "").toContain(
-        "width: 784px",
+        "width: 736px",
       );
       wrapper.unmount();
     } finally {

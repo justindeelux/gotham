@@ -20,6 +20,20 @@ export const EDITOR_WINDOW_MIN_HEIGHT = 320 as const;
 export const EDITOR_WINDOW_MAX_DIMENSION = 4096 as const;
 
 /**
+ * EDITOR_WINDOW_CHROME_MARGIN reserves the shell chrome the floating window
+ * never covers: the top bar plus the bottom gap. It is the single source for
+ * the height fit (mirrored into CSS as --ed-window-chrome).
+ */
+export const EDITOR_WINDOW_CHROME_MARGIN = 104 as const;
+
+/**
+ * EDITOR_WINDOW_SIDE_MARGIN mirrors the pinned window's side gutters
+ * (one spacing token each side, see the rail CSS rule). It keeps the fitted
+ * width identical to the rendered box.
+ */
+export const EDITOR_WINDOW_SIDE_MARGIN = 48 as const;
+
+/**
  * EDITOR_WINDOW_NARROW_VIEWPORT is the width below which the floating window
  * nearly fills the screen, so a dragged offset is meaningless and resets to
  * the pinned default.

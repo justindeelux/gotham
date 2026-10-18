@@ -817,10 +817,123 @@ test("the editor window drags by its title bar and clamps to the viewport", asyn
   );
 });
 
-test("the Close control closes every tab, guarding dirty buffers", async ({
+/** persistedGeometry reads the editor window record from localStorage. */
+async function persistedGeometry(page: Page): Promise<{
+  width: number;
+  height: number;
+  x: number | null;
+  y: number | null;
+} | null> {
+  return page.evaluate(() => {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const key = window.localStorage.key(index);
+      if (key?.startsWith("gotham.files.editorWindow.v1.")) {
+        return JSON.parse(window.localStorage.getItem(key) ?? "null") as {
+          width: number;
+          height: number;
+          x: number | null;
+          y: number | null;
+        };
+      }
+    }
+    return null;
+  });
+}
+
+/** reopenEditor opens the file after a reload (clean tabs do not survive one). */
+async function reopenEditor(page: Page): Promise<void> {
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+}
+
+test("a 1366x800 resize persists, clamps the drag and survives reload", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
+  const viewport = { width: 1366, height: 800 };
+  await page.setViewportSize(viewport);
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+
+  const window_ = page.locator(".ed-window");
+  const initial = await window_.boundingBox();
+  expect(initial).not.toBeNull();
+  // The fitted default fills the viewport with side and chrome margins.
+  expect(Math.round(initial!.x)).toBe(24);
+  expect(Math.round(initial!.y)).toBe(88);
+  expect(Math.round(initial!.width)).toBe(1318);
+  expect(Math.round(initial!.height)).toBe(696);
+  // Opening alone persists nothing: merely showing the window at a smaller
+  // viewport never rewrites the saved size.
+  expect(await persistedGeometry(page)).toBeNull();
+
+  // Keyboard resize seeds from the displayed 1318 and persists the result.
+  const grip = page.locator(".ed-resize");
+  await grip.focus();
+  await page.keyboard.press("Shift+ArrowLeft");
+  await page.keyboard.press("Shift+ArrowLeft");
+  await page.keyboard.press("Shift+ArrowLeft");
+  const keyboardBox = await window_.boundingBox();
+  expect(Math.round(keyboardBox!.width)).toBe(1318 - 192);
+  expect(await persistedGeometry(page)).toMatchObject({
+    width: 1318 - 192,
+    height: 696,
+  });
+
+  // Reload restores the resized box exactly.
+  await page.reload();
+  await reopenEditor(page);
+  const reloadedBox = await window_.boundingBox();
+  expect(Math.round(reloadedBox!.width)).toBe(1318 - 192);
+  expect(Math.round(reloadedBox!.height)).toBe(696);
+
+  // A title-bar drag clamps against the displayed 696px height (y max 104)
+  // and persists the position.
+  const bar = page.locator(".ed-window-bar");
+  const barBox = await bar.boundingBox();
+  await page.mouse.move(barBox!.x + 40, barBox!.y + barBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(barBox!.x + 40, barBox!.y + barBox!.height / 2 + 50, {
+    steps: 10,
+  });
+  await page.mouse.up();
+  const draggedBox = await window_.boundingBox();
+  expect(Math.round(draggedBox!.y)).toBe(104);
+  expect(await persistedGeometry(page)).toMatchObject({ y: 104 });
+  await page.reload();
+  await reopenEditor(page);
+  const draggedReloaded = await window_.boundingBox();
+  expect(Math.round(draggedReloaded!.x)).toBe(Math.round(draggedBox!.x));
+  expect(Math.round(draggedReloaded!.y)).toBe(104);
+
+  // A corner drag seeds from the displayed size and persists the result.
+  const gripBox = await page.locator(".ed-resize").boundingBox();
+  expect(gripBox).not.toBeNull();
+  const gripCenterX = gripBox!.x + gripBox!.width / 2;
+  const gripCenterY = gripBox!.y + gripBox!.height / 2;
+  await page.mouse.move(gripCenterX, gripCenterY);
+  await page.mouse.down();
+  await page.mouse.move(gripCenterX - 150, gripCenterY - 100, { steps: 10 });
+  await page.mouse.up();
+  const resizedBox = await window_.boundingBox();
+  expect(Math.round(resizedBox!.width)).toBe(1126 - 150);
+  expect(Math.round(resizedBox!.height)).toBe(696 - 100);
+  expect(await persistedGeometry(page)).toMatchObject({
+    width: 1126 - 150,
+    height: 696 - 100,
+  });
+  await page.reload();
+  await reopenEditor(page);
+  const resizedReloaded = await window_.boundingBox();
+  expect(Math.round(resizedReloaded!.width)).toBe(1126 - 150);
+  expect(Math.round(resizedReloaded!.height)).toBe(696 - 100);
+});
+
+test("the Close control closes every tab, guarding dirty buffers", async ({
+  page,
+}) => {  await page.setViewportSize({ width: 1440, height: 900 });
   await mockApi(page);
   await page.goto(`${baseURL}/servers/${serverId}/files`);
 

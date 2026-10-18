@@ -3,6 +3,7 @@ import {
   CaseSensitive,
   Code,
   Minus,
+  PanelLeft,
   Save,
   SaveAll,
   Search,
@@ -24,6 +25,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 
 import EditorCloseTabsDialog from "@/features/files/components/EditorCloseTabsDialog.vue";
 import EditorConflictDialog from "@/features/files/components/EditorConflictDialog.vue";
+import EditorExplorer from "@/features/files/components/EditorExplorer.vue";
 import EditorLanguagePicker from "@/features/files/components/EditorLanguagePicker.vue";
 import EditorSaveAsDialog from "@/features/files/components/EditorSaveAsDialog.vue";
 // Side-effect import: merges the lazy editor catalogs under `files.editor`.
@@ -71,6 +73,10 @@ const cursor = ref<{ line: number; column: number }>({ line: 1, column: 1 });
 // minimized collapses the window into the bottom dock. The window stays
 // mounted (v-show) so every live session and buffer survives the toggle.
 const minimized = ref(false);
+// explorerOpen toggles the in-editor file explorer; explorerWidth is its
+// dragged width (the panel clamps it to 200–480 px on the way back).
+const explorerOpen = ref(true);
+const explorerWidth = ref(260);
 // dockButton is the dock control that receives focus when the window collapses.
 const dockButton = ref<HTMLButtonElement | null>(null);
 // dockElement is the fixed dock band; its measured height is published as a CSS
@@ -1031,6 +1037,22 @@ onBeforeUnmount(() => {
       <NButton
         quaternary
         size="tiny"
+        class="ed-window-explorer"
+        :aria-label="
+          explorerOpen
+            ? t('files.editor.explorer.hide')
+            : t('files.editor.explorer.show')
+        "
+        :aria-pressed="explorerOpen"
+        @click="explorerOpen = !explorerOpen"
+      >
+        <template #icon>
+          <PanelLeft :size="16" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+      </NButton>
+      <NButton
+        quaternary
+        size="tiny"
         class="ed-window-min"
         :aria-label="t('files.editor.minimize')"
         @click="minimizeWindow"
@@ -1052,210 +1074,220 @@ onBeforeUnmount(() => {
       </NButton>
     </header>
 
-    <div
-      ref="tabsElement"
-      class="ed-tabs"
-      role="tablist"
-      :aria-label="t('files.editor.heading')"
-    >
-      <div
-        v-for="(tab, index) in editor.tabs"
-        :key="tab.id"
-        class="ed-tab"
-        :class="{ 'is-active': tab.id === editor.activeId, 'is-dirty': editor.isDirty(tab) }"
-        @mousedown="onTabMouseDown"
-        @contextmenu.prevent="openTabMenu($event, tab.id)"
-        @auxclick="onTabAuxClick($event, tab.id)"
-      >
-        <button
-          type="button"
-          class="ed-tab-name"
-          role="tab"
-          :id="'ed-tab-' + tab.id"
-          :aria-selected="tab.id === editor.activeId"
-          :aria-controls="'ed-panel-' + tab.id"
-          :tabindex="tab.id === editor.activeId ? 0 : -1"
-          @click="editor.activate(tab.id)"
-          @keydown="onTabKeydown($event, index)"
-        >
-          <span v-if="editor.isDirty(tab)" class="ed-dot" aria-hidden="true" />
-          {{ tab.name }}
-        </button>
-        <button
-          type="button"
-          class="ed-tab-close"
-          :aria-label="t('files.editor.close', { name: tab.name })"
-          @click="requestCloseTabs([tab.id])"
-        >
-          <X :size="13" :stroke-width="2" aria-hidden="true" />
-        </button>
-      </div>
-    </div>
-
-    <div v-if="activeTab" class="ed-body">
-      <div v-if="activeTab.status === 'ready'" class="ed-toolbar">
-        <NButton
-          size="tiny"
-          secondary
-          :type="editor.wrap ? 'primary' : 'default'"
-          :aria-pressed="editor.wrap"
-          @click="toggleWrap"
-        >
-          <template #icon>
-            <WrapText :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          {{ t("files.editor.wrap") }}
-        </NButton>
-        <NButton size="tiny" secondary @click="openSearch">
-          <template #icon>
-            <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          {{ t("files.editor.search") }}
-        </NButton>
-        <NButton size="tiny" secondary @click="openGoToLine">
-          <template #icon>
-            <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          {{ t("files.editor.goToLine") }}
-        </NButton>
-        <span class="grow" />
-        <NButton
-          v-if="files.canWrite"
-          size="small"
-          secondary
-          :disabled="!editor.hasDirty"
-          :loading="editor.dirtyTabs.some((tab) => tab.saving)"
-          @click="saveAllTabs"
-        >
-          <template #icon>
-            <SaveAll :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          {{ t("files.editor.saveAll") }}
-        </NButton>
-        <NButton
-          v-if="files.canWrite"
-          size="small"
-          type="primary"
-          :loading="activeTab.saving"
-          :disabled="!editor.isDirty(activeTab)"
-          @click="() => void saveTab(activeTab!.id)"
-        >
-          <template #icon>
-            <Save :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-          {{ activeTab.saving ? t("files.editor.saving") : t("files.editor.save") }}
-        </NButton>
-      </div>
-
-      <!-- One host per ready tab, kept mounted across a status switch (a
-           loading/large/binary/error tab must not detach a live session). -->
-      <div
-        v-for="tab in readyTabs"
-        :key="tab.id"
-        v-show="tab.id === editor.activeId"
-        :id="'ed-panel-' + tab.id"
-        :ref="(el) => setHost(tab.id, el)"
-        class="ed-host"
-        role="tabpanel"
-        :aria-labelledby="'ed-tab-' + tab.id"
+    <div class="ed-main">
+      <EditorExplorer
+        v-if="explorerOpen"
+        :server-id="serverId"
+        :width="explorerWidth"
+        @resize="(width: number) => (explorerWidth = width)"
       />
+      <div class="ed-right">
+        <div
+          ref="tabsElement"
+          class="ed-tabs"
+          role="tablist"
+          :aria-label="t('files.editor.heading')"
+        >
+          <div
+            v-for="(tab, index) in editor.tabs"
+            :key="tab.id"
+            class="ed-tab"
+            :class="{ 'is-active': tab.id === editor.activeId, 'is-dirty': editor.isDirty(tab) }"
+            @mousedown="onTabMouseDown"
+            @contextmenu.prevent="openTabMenu($event, tab.id)"
+            @auxclick="onTabAuxClick($event, tab.id)"
+          >
+            <button
+              type="button"
+              class="ed-tab-name"
+              role="tab"
+              :id="'ed-tab-' + tab.id"
+              :aria-selected="tab.id === editor.activeId"
+              :aria-controls="'ed-panel-' + tab.id"
+              :tabindex="tab.id === editor.activeId ? 0 : -1"
+              @click="editor.activate(tab.id)"
+              @keydown="onTabKeydown($event, index)"
+            >
+              <span v-if="editor.isDirty(tab)" class="ed-dot" aria-hidden="true" />
+              {{ tab.name }}
+            </button>
+            <button
+              type="button"
+              class="ed-tab-close"
+              :aria-label="t('files.editor.close', { name: tab.name })"
+              @click="requestCloseTabs([tab.id])"
+            >
+              <X :size="13" :stroke-width="2" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
 
-      <div
-        v-if="activeTab.status === 'loading'"
-        class="ed-state"
-        role="tabpanel"
-        :id="'ed-panel-' + activeTab.id"
-        :aria-labelledby="'ed-tab-' + activeTab.id"
-      >
-        <p class="small muted">{{ t("files.editor.loading", { name: activeTab.name }) }}</p>
-      </div>
-
-      <div
-        v-else-if="activeTab.status === 'large'"
-        class="ed-state"
-        role="tabpanel"
-        :id="'ed-panel-' + activeTab.id"
-        :aria-labelledby="'ed-tab-' + activeTab.id"
-      >
-        <NEmpty :description="t('files.editor.largeTitle')">
-          <template #extra>
-            <p class="small muted">
-              {{ t("files.editor.largeHint", { name: activeTab.name }) }}
-            </p>
-            <NButton size="small" secondary @click="downloadActive">
-              {{ t("files.editor.download", { name: activeTab.name }) }}
+        <div v-if="activeTab" class="ed-body">
+          <div v-if="activeTab.status === 'ready'" class="ed-toolbar">
+            <NButton
+              size="tiny"
+              secondary
+              :type="editor.wrap ? 'primary' : 'default'"
+              :aria-pressed="editor.wrap"
+              @click="toggleWrap"
+            >
+              <template #icon>
+                <WrapText :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              {{ t("files.editor.wrap") }}
             </NButton>
-          </template>
-        </NEmpty>
-      </div>
-
-      <div
-        v-else-if="activeTab.status === 'binary'"
-        class="ed-state"
-        role="tabpanel"
-        :id="'ed-panel-' + activeTab.id"
-        :aria-labelledby="'ed-tab-' + activeTab.id"
-      >
-        <NEmpty :description="t('files.editor.binaryTitle')">
-          <template #extra>
-            <p class="small muted">
-              {{ t("files.editor.binaryHint", { name: activeTab.name }) }}
-            </p>
-            <NButton size="small" secondary @click="downloadActive">
-              {{ t("files.editor.download", { name: activeTab.name }) }}
+            <NButton size="tiny" secondary @click="openSearch">
+              <template #icon>
+                <Search :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              {{ t("files.editor.search") }}
             </NButton>
-          </template>
-        </NEmpty>
-      </div>
-
-      <div
-        v-else-if="activeTab.status === 'mixed'"
-        class="ed-state"
-        role="tabpanel"
-        :id="'ed-panel-' + activeTab.id"
-        :aria-labelledby="'ed-tab-' + activeTab.id"
-      >
-        <NEmpty :description="t('files.editor.mixedTitle')">
-          <template #extra>
-            <p class="small muted">
-              {{ t("files.editor.mixedHint", { name: activeTab.name }) }}
-            </p>
-            <NButton size="small" secondary @click="downloadActive">
-              {{ t("files.editor.download", { name: activeTab.name }) }}
+            <NButton size="tiny" secondary @click="openGoToLine">
+              <template #icon>
+                <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              {{ t("files.editor.goToLine") }}
             </NButton>
-          </template>
-        </NEmpty>
-      </div>
+            <span class="grow" />
+            <NButton
+              v-if="files.canWrite"
+              size="small"
+              secondary
+              :disabled="!editor.hasDirty"
+              :loading="editor.dirtyTabs.some((tab) => tab.saving)"
+              @click="saveAllTabs"
+            >
+              <template #icon>
+                <SaveAll :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              {{ t("files.editor.saveAll") }}
+            </NButton>
+            <NButton
+              v-if="files.canWrite"
+              size="small"
+              type="primary"
+              :loading="activeTab.saving"
+              :disabled="!editor.isDirty(activeTab)"
+              @click="() => void saveTab(activeTab!.id)"
+            >
+              <template #icon>
+                <Save :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              {{ activeTab.saving ? t("files.editor.saving") : t("files.editor.save") }}
+            </NButton>
+          </div>
 
-      <div
-        v-else-if="activeTab.status === 'error'"
-        class="ed-state"
-        role="tabpanel"
-        :id="'ed-panel-' + activeTab.id"
-        :aria-labelledby="'ed-tab-' + activeTab.id"
-      >
-        <NEmpty :description="t('files.editor.errorTitle', { name: activeTab.name })">
-          <template #extra>
-            <p class="small muted">{{ activeTab.error }}</p>
-          </template>
-        </NEmpty>
-      </div>
+          <!-- One host per ready tab, kept mounted across a status switch (a
+               loading/large/binary/error tab must not detach a live session). -->
+          <div
+            v-for="tab in readyTabs"
+            :key="tab.id"
+            v-show="tab.id === editor.activeId"
+            :id="'ed-panel-' + tab.id"
+            :ref="(el) => setHost(tab.id, el)"
+            class="ed-host"
+            role="tabpanel"
+            :aria-labelledby="'ed-tab-' + tab.id"
+          />
 
-      <div class="ed-foot">
-        <span class="grow">
-          {{ editor.isDirty(activeTab) ? t("files.editor.unsaved") : files.canWrite ? "" : t("files.editor.readOnly") }}
-        </span>
-        <span v-if="activeTab.status === 'ready'" class="mono">
-          {{ t("files.editor.lineColumn", { line: cursor.line, column: cursor.column }) }}
-        </span>
-        <span v-if="activeTab.status === 'ready'" class="mono">{{ t("files.editor.encoding") }}</span>
-        <span v-if="activeTab.status === 'ready'" class="mono">{{ activeTab.eol === "\r\n" ? "CRLF" : "LF" }}</span>
-        <EditorLanguagePicker
-          v-if="activeTab.status === 'ready'"
-          :language="activeTab.language"
-          @select="pickLanguage"
-        />
-        <span class="mono">{{ formatBytes(activeTab.size) }}</span>
+          <div
+            v-if="activeTab.status === 'loading'"
+            class="ed-state"
+            role="tabpanel"
+            :id="'ed-panel-' + activeTab.id"
+            :aria-labelledby="'ed-tab-' + activeTab.id"
+          >
+            <p class="small muted">{{ t("files.editor.loading", { name: activeTab.name }) }}</p>
+          </div>
+
+          <div
+            v-else-if="activeTab.status === 'large'"
+            class="ed-state"
+            role="tabpanel"
+            :id="'ed-panel-' + activeTab.id"
+            :aria-labelledby="'ed-tab-' + activeTab.id"
+          >
+            <NEmpty :description="t('files.editor.largeTitle')">
+              <template #extra>
+                <p class="small muted">
+                  {{ t("files.editor.largeHint", { name: activeTab.name }) }}
+                </p>
+                <NButton size="small" secondary @click="downloadActive">
+                  {{ t("files.editor.download", { name: activeTab.name }) }}
+                </NButton>
+              </template>
+            </NEmpty>
+          </div>
+
+          <div
+            v-else-if="activeTab.status === 'binary'"
+            class="ed-state"
+            role="tabpanel"
+            :id="'ed-panel-' + activeTab.id"
+            :aria-labelledby="'ed-tab-' + activeTab.id"
+          >
+            <NEmpty :description="t('files.editor.binaryTitle')">
+              <template #extra>
+                <p class="small muted">
+                  {{ t("files.editor.binaryHint", { name: activeTab.name }) }}
+                </p>
+                <NButton size="small" secondary @click="downloadActive">
+                  {{ t("files.editor.download", { name: activeTab.name }) }}
+                </NButton>
+              </template>
+            </NEmpty>
+          </div>
+
+          <div
+            v-else-if="activeTab.status === 'mixed'"
+            class="ed-state"
+            role="tabpanel"
+            :id="'ed-panel-' + activeTab.id"
+            :aria-labelledby="'ed-tab-' + activeTab.id"
+          >
+            <NEmpty :description="t('files.editor.mixedTitle')">
+              <template #extra>
+                <p class="small muted">
+                  {{ t("files.editor.mixedHint", { name: activeTab.name }) }}
+                </p>
+                <NButton size="small" secondary @click="downloadActive">
+                  {{ t("files.editor.download", { name: activeTab.name }) }}
+                </NButton>
+              </template>
+            </NEmpty>
+          </div>
+
+          <div
+            v-else-if="activeTab.status === 'error'"
+            class="ed-state"
+            role="tabpanel"
+            :id="'ed-panel-' + activeTab.id"
+            :aria-labelledby="'ed-tab-' + activeTab.id"
+          >
+            <NEmpty :description="t('files.editor.errorTitle', { name: activeTab.name })">
+              <template #extra>
+                <p class="small muted">{{ activeTab.error }}</p>
+              </template>
+            </NEmpty>
+          </div>
+
+          <div class="ed-foot">
+            <span class="grow">
+              {{ editor.isDirty(activeTab) ? t("files.editor.unsaved") : files.canWrite ? "" : t("files.editor.readOnly") }}
+            </span>
+            <span v-if="activeTab.status === 'ready'" class="mono">
+              {{ t("files.editor.lineColumn", { line: cursor.line, column: cursor.column }) }}
+            </span>
+            <span v-if="activeTab.status === 'ready'" class="mono">{{ t("files.editor.encoding") }}</span>
+            <span v-if="activeTab.status === 'ready'" class="mono">{{ activeTab.eol === "\r\n" ? "CRLF" : "LF" }}</span>
+            <EditorLanguagePicker
+              v-if="activeTab.status === 'ready'"
+              :language="activeTab.language"
+              @select="pickLanguage"
+            />
+            <span class="mono">{{ formatBytes(activeTab.size) }}</span>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -1466,6 +1498,23 @@ onBeforeUnmount(() => {
   height: 6px;
   border-radius: 50%;
   background: var(--warn);
+}
+
+.ed-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The editor column keeps the tab strip, toolbar, pane and footer while the
+   explorer panel sits beside it; min-width:0 lets the pane shrink instead of
+   pushing the sidebar off the window. */
+.ed-right {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 
 .ed-tabs {

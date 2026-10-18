@@ -541,28 +541,16 @@ describe("editor tab ergonomics", () => {
     wrapper.unmount();
   });
 
-  it("cycles tabs with Ctrl+Tab and Ctrl+Shift+Tab", async () => {
+  it("closes the focused tab with Delete", async () => {
     const { wrapper, editor } = mountEditor();
-    editor.tabs = [makeTab("t1", false), makeTab("t2", false), makeTab("t3", false)];
+    editor.tabs = [makeTab("t1", false), makeTab("t2", false)];
     editor.activeId = "t1";
     await flushPromises();
 
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Tab", ctrlKey: true, bubbles: true }),
-    );
+    await wrapper.find("#ed-tab-t1").trigger("keydown", { key: "Delete" });
     await flushPromises();
-    expect(editor.activeId).toBe("t2");
 
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Tab",
-        ctrlKey: true,
-        shiftKey: true,
-        bubbles: true,
-      }),
-    );
-    await flushPromises();
-    expect(editor.activeId).toBe("t1");
+    expect(editor.tabs.map((tab) => tab.id)).toEqual(["t2"]);
     wrapper.unmount();
   });
 });

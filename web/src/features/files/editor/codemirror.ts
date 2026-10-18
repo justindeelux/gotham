@@ -46,6 +46,7 @@ import { simpleMode } from "@codemirror/legacy-modes/mode/simple-mode";
 import { tags } from "@lezer/highlight";
 
 import { bracketExtensions, completionExtensions } from "@/features/files/editor/completion";
+import { editorCommandKeymap } from "@/features/files/editor/shortcuts";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
@@ -59,6 +60,7 @@ export interface EditorSession {
   focus: () => void;
   requestMeasure: () => void;
   openSearch: () => void;
+  openReplace: () => void;
   goToLine: () => void;
   destroy: () => void;
 }
@@ -68,12 +70,18 @@ export interface EditorSessionOptions {
   parent: HTMLElement;
   doc: string;
   language: EditorLanguageId;
+  /** ariaLabel names the contenteditable surface for screen readers. */
+  ariaLabel: string;
   readOnly: boolean;
   settings: EditorSettings;
   onChange: (_doc: string) => void;
   onCursor: (_line: number, _column: number) => void;
   onSave: () => void;
   onSaveAll: () => void;
+  onCloseTab: () => void;
+  onToggleWrap: () => void;
+  onNextTab: () => void;
+  onPreviousTab: () => void;
 }
 
 /** logMode highlights the level, timestamp and quoted fields of a log line. */
@@ -174,7 +182,7 @@ const gothamHighlight = HighlightStyle.define([
   { tag: tags.keyword, color: "#c792ea" },
   { tag: [tags.string, tags.special(tags.string)], color: "#c3e88d" },
   { tag: [tags.number, tags.bool, tags.null], color: "#f78c6c" },
-  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "#7a7f8a", fontStyle: "italic" },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "#8f95a3", fontStyle: "italic" },
   { tag: [tags.propertyName, tags.attributeName], color: "#82aaff" },
   { tag: [tags.typeName, tags.className], color: "#ffcb6b" },
   { tag: [tags.function(tags.variableName), tags.labelName], color: "#82aaff" },
@@ -296,7 +304,7 @@ function editorTheme(settings: EditorSettings): Extension {
         ".cm-content": { caretColor: "var(--accent)" },
         ".cm-gutters": {
           backgroundColor: background,
-          color: "var(--meta)",
+          color: dark ? "var(--muted)" : "var(--meta)",
           border: "none",
           borderRight: "1px solid var(--border)",
         },
@@ -371,6 +379,19 @@ export function editorSettingsExtensions(
 }
 
 /**
+ * openReplacePanel opens the search panel and moves focus to its Replace
+ * input, so Mod-h lands on replace instead of the find field.
+ */
+function openReplacePanel(view: EditorView): void {
+  openSearchPanel(view);
+  const focusReplace = (): void => {
+    view.dom.querySelector<HTMLInputElement>('input[name="replace"]')?.focus();
+  };
+  focusReplace();
+  requestAnimationFrame(focusReplace);
+}
+
+/**
  * createEditorSession builds one editor. The language, settings (theme, font,
  * indentation, gutters, whitespace, wrap) and read-only facets live in
  * Compartments so the settings popover (or a role change) can reconfigure them
@@ -390,26 +411,28 @@ export async function createEditorSession(
   let currentSettings = options.settings;
   const initialLanguage = await loadLanguage(options.language);
 
-  const saveKeymap = keymap.of([
-    {
-      key: "Mod-Shift-s",
-      preventDefault: true,
-      run: () => {
-        options.onSaveAll();
-        return true;
-      },
-    },
-    {
-      key: "Mod-s",
-      preventDefault: true,
-      run: () => {
-        options.onSave();
-        return true;
-      },
-    },
+  // One keymap, built from the shared shortcut table, so the sheet and the
+  // real bindings cannot drift. It is installed before the CodeMirror defaults
+  // so an override such as go-to-line on Mod-l wins.
+  const commandKeymap = keymap.of([
+    ...editorCommandKeymap({
+      save: options.onSave,
+      saveAll: options.onSaveAll,
+      closeTab: options.onCloseTab,
+      nextTab: options.onNextTab,
+      previousTab: options.onPreviousTab,
+      find: () => void openSearchPanel(view),
+      replace: () => openReplacePanel(view),
+      goToLine: () => gotoLine(view),
+      toggleWrap: options.onToggleWrap,
+    }),
+    ...defaultKeymap,
+    ...historyKeymap,
+    ...searchKeymap,
   ]);
 
-  const view = new EditorView({
+  let view: EditorView;
+  view = new EditorView({
     parent: options.parent,
     state: EditorState.create({
       doc: options.doc,
@@ -429,11 +452,13 @@ export async function createEditorSession(
         languageCompartment.of(initialLanguage),
         placeholderExt("(empty file)"),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly)),
+        // The contenteditable surface needs its own accessible name (axe
+        // aria-input-field-name); the window title is not enough.
+        EditorView.contentAttributes.of({ "aria-label": options.ariaLabel }),
         // indentWithTab is deliberately omitted: it binds Tab to indentation,
         // which traps keyboard focus in the editor (WCAG 2.1.2). Tab now moves
         // focus out of the editor as usual.
-        keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
-        saveKeymap,
+        commandKeymap,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             options.onChange(update.state.doc.toString());
@@ -502,6 +527,9 @@ export async function createEditorSession(
     },
     openSearch(): void {
       openSearchPanel(view);
+    },
+    openReplace(): void {
+      openReplacePanel(view);
     },
     goToLine(): void {
       gotoLine(view);

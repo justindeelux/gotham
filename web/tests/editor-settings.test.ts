@@ -155,11 +155,17 @@ describe("live session reconfiguration", () => {
       parent: host,
       doc: "  const value = 1;",
       language: "plain",
+      ariaLabel: "Test editor",
       readOnly: false,
       settings: DEFAULT_EDITOR_SETTINGS,
       onChange: () => undefined,
       onCursor: () => undefined,
       onSave: () => undefined,
+      onSaveAll: () => undefined,
+      onCloseTab: () => undefined,
+      onToggleWrap: () => undefined,
+      onNextTab: () => undefined,
+      onPreviousTab: () => undefined,
     });
 
     expect(host.querySelector(".cm-lineNumbers")).not.toBeNull();

@@ -141,7 +141,7 @@ describe("files footer plurals", () => {
   });
 });
 
-// JUS-214: the Owner/Mode list cell shows "owner/mode", falling back to the
+// JUS-214: the Owner/Mode list cell shows "owner / mode", falling back to the
 // octal mode alone when the agent reported no owner (an older agent).
 describe("ownerModeLabel", () => {
   const entry = (overrides: Partial<FilesEntry>): FilesEntry => ({
@@ -155,12 +155,12 @@ describe("ownerModeLabel", () => {
   });
 
   it("joins the owner and the octal mode", () => {
-    expect(ownerModeLabel(entry({ owner: "root" }))).toBe("root/755");
+    expect(ownerModeLabel(entry({ owner: "root" }))).toBe("root / 755");
   });
 
   it("keeps a special-bits digit", () => {
     expect(ownerModeLabel(entry({ owner: "root", mode: 0o104755 }))).toBe(
-      "root/4755",
+      "root / 4755",
     );
   });
 

@@ -14,9 +14,9 @@ function nextFolderSizeErrorId(): number {
 </script>
 
 <script setup lang="ts">
+import { Calculator } from "@lucide/vue";
 import { NButton, NSpin } from "naive-ui";
-import { computed } from "vue";
-import { useI18n } from "vue-i18n";
+import { computed } from "vue";import { useI18n } from "vue-i18n";
 
 import {
   cancelFolderSize,
@@ -30,7 +30,7 @@ import { formatBytes } from "@/shared/utils/format";
 
 /**
  * FolderSizeCell (JUS-162) renders the Size cell of ONE folder row: a
- * "Calculate" link, a spinner with a Cancel control while the walk runs, the
+ * quiet icon-only "Calculate" button, a spinner with a Cancel control while the walk runs, the
  * result (with a "partial" marker when the agent stopped at its entry cap), or
  * a retry affordance after a failure. The state lives in `useFolderSize`, keyed
  * by server/root/path, so it survives the list's row windowing.
@@ -125,13 +125,15 @@ function cancel(): void {
     </NButton>
     <NButton
       v-else
-      text
+      quaternary
       size="tiny"
       class="fm-size-action"
       :aria-label="t('files.browser.sizeCalculateAria', { name: entry.name })"
       @click="calculate"
     >
-      {{ t("files.browser.sizeCalculate") }}
+      <template #icon>
+        <Calculator :size="14" :stroke-width="1.8" aria-hidden="true" />
+      </template>
     </NButton>
     <!-- Persistent live region: it exists in every state so a status change is
          announced (a live region inserted already-full is not). -->
@@ -153,7 +155,8 @@ function cancel(): void {
 }
 
 .fm-size-action {
-  /* JUS-206: the reference "Calculate" is a green body-text link, not mono. */
+  /* JUS-206/216: the Calculate control is a quiet icon button (no background);
+     the Cancel/Retry text controls keep the reference green body-text link. */
   color: var(--success-ink);
   font-family: var(--font-body);
   font-size: var(--text-xs);

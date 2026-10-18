@@ -225,17 +225,21 @@ export const gothamTheme = EditorView.theme(
 );
 /** gothamLightHighlight is the light-theme syntax palette (JUS-219). */
 const gothamLightHighlight = HighlightStyle.define([
-  { tag: tags.keyword, color: "#7c3aed" },
-  { tag: [tags.string, tags.special(tags.string)], color: "#3f6212" },
-  { tag: [tags.number, tags.bool, tags.null], color: "#b45309" },
-  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "#6b7280", fontStyle: "italic" },
-  { tag: [tags.propertyName, tags.attributeName], color: "#1d4ed8" },
-  { tag: [tags.typeName, tags.className], color: "#a16207" },
-  { tag: [tags.function(tags.variableName), tags.labelName], color: "#1d4ed8" },
-  { tag: [tags.definition(tags.variableName), tags.variableName], color: "#334155" },
-  { tag: [tags.tagName, tags.heading, tags.strong], color: "#111827" },
-  { tag: [tags.link, tags.url], color: "#0e7490", textDecoration: "underline" },
-  { tag: tags.invalid, color: "#dc2626" },
+  { tag: tags.keyword, color: "var(--editor-light-keyword)" },
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--editor-light-string)" },
+  { tag: [tags.number, tags.bool, tags.null], color: "var(--editor-light-number)" },
+  {
+    tag: [tags.comment, tags.lineComment, tags.blockComment],
+    color: "var(--editor-light-comment)",
+    fontStyle: "italic",
+  },
+  { tag: [tags.propertyName, tags.attributeName], color: "var(--editor-light-property)" },
+  { tag: [tags.typeName, tags.className], color: "var(--editor-light-type)" },
+  { tag: [tags.function(tags.variableName), tags.labelName], color: "var(--editor-light-property)" },
+  { tag: [tags.definition(tags.variableName), tags.variableName], color: "var(--editor-light-variable)" },
+  { tag: [tags.tagName, tags.heading, tags.strong], color: "var(--editor-light-tag)" },
+  { tag: [tags.link, tags.url], color: "var(--editor-light-link)", textDecoration: "underline" },
+  { tag: tags.invalid, color: "var(--editor-light-invalid)" },
 ]);
 
 /**
@@ -311,8 +315,8 @@ function whitespacePlugin(settings: EditorSettings): Extension {
 /** editorTheme keeps the editor on the app's surface tokens in both themes. */
 function editorTheme(settings: EditorSettings): Extension {
   const dark = settings.theme === "dark";
-  const background = dark ? "var(--surface-warm)" : "var(--fg-2)";
-  const foreground = dark ? "var(--fg)" : "var(--surface-warm)";
+  const background = dark ? "var(--surface-warm)" : "var(--editor-light-bg)";
+  const foreground = dark ? "var(--fg)" : "var(--editor-light-fg)";
   return [
     EditorView.theme(
       {
@@ -338,7 +342,7 @@ function editorTheme(settings: EditorSettings): Extension {
         ".cm-activeLine": {
           backgroundColor: dark
             ? "color-mix(in oklab, var(--fg) 6%, transparent)"
-            : "color-mix(in oklab, var(--surface-warm) 6%, transparent)",
+            : "color-mix(in oklab, var(--editor-light-fg) 6%, transparent)",
         },
         ".cm-activeLineGutter": { backgroundColor: "transparent", color: foreground },
         ".cm-invisible-space": {
@@ -361,11 +365,14 @@ function editorTheme(settings: EditorSettings): Extension {
         ".cm-searchMatch.cm-searchMatch-selected": {
           backgroundColor: "color-mix(in oklab, var(--warn) 70%, transparent)",
         },
-        ".cm-panels": { backgroundColor: "var(--surface)", color: "var(--fg)" },
+        ".cm-panels": {
+          backgroundColor: dark ? "var(--surface)" : "var(--editor-light-bg)",
+          color: dark ? "var(--fg)" : "var(--editor-light-fg)",
+        },
         ".cm-tooltip": {
-          backgroundColor: "var(--surface)",
+          backgroundColor: dark ? "var(--surface)" : "var(--editor-light-bg)",
           border: "1px solid var(--border)",
-          color: "var(--fg)",
+          color: dark ? "var(--fg)" : "var(--editor-light-fg)",
         },
       },
       { dark },

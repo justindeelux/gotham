@@ -45,6 +45,7 @@ import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { simpleMode } from "@codemirror/legacy-modes/mode/simple-mode";
 import { tags } from "@lezer/highlight";
 
+import { completionExtensions } from "@/features/files/editor/completion";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
@@ -343,11 +344,15 @@ function editorTheme(settings: EditorSettings): Extension {
 
 /**
  * editorSettingsExtensions builds the reconfigurable part of the editor:
- * theme, font, indentation, gutter toggles, whitespace marks and wrap. This is
- * the value swapped into the settings compartment, so a preference change
- * keeps every document and its undo history.
+ * theme, font, indentation, gutter toggles, whitespace marks, wrap and the
+ * autocomplete/snippet layer for the active language. This is the value
+ * swapped into the settings compartment, so a preference change keeps every
+ * document and its undo history.
  */
-export function editorSettingsExtensions(settings: EditorSettings): Extension {
+export function editorSettingsExtensions(
+  settings: EditorSettings,
+  language: EditorLanguageId = "plain",
+): Extension {
   return [
     editorTheme(settings),
     EditorState.tabSize.of(settings.tabSize),
@@ -359,6 +364,7 @@ export function editorSettingsExtensions(settings: EditorSettings): Extension {
       : [],
     whitespacePlugin(settings),
     settings.wrap ? EditorView.lineWrapping : [],
+    completionExtensions(settings, language),
   ];
 }
 
@@ -376,6 +382,10 @@ export async function createEditorSession(
   const languageCompartment = new Compartment();
   const settingsCompartment = new Compartment();
   const readOnlyCompartment = new Compartment();
+  // The completion sources follow the language, so both dimensions are kept
+  // here and the settings compartment is rebuilt when either one changes.
+  let currentLanguage = options.language;
+  let currentSettings = options.settings;
   const initialLanguage = await loadLanguage(options.language);
 
   const saveKeymap = keymap.of([
@@ -411,7 +421,9 @@ export async function createEditorSession(
         bracketMatching(),
         rectangularSelection(),
         highlightSelectionMatches(),
-        settingsCompartment.of(editorSettingsExtensions(options.settings)),
+        settingsCompartment.of(
+          editorSettingsExtensions(options.settings, options.language),
+        ),
         languageCompartment.of(initialLanguage),
         placeholderExt("(empty file)"),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly)),
@@ -452,7 +464,13 @@ export async function createEditorSession(
     setLanguage(language: EditorLanguageId): void {
       // A rapid second switch wins over the first grammar still loading; the
       // compartment reconfigure keeps the existing state and undo history.
+      currentLanguage = language;
       const token = ++languageToken;
+      view.dispatch({
+        effects: settingsCompartment.reconfigure(
+          editorSettingsExtensions(currentSettings, language),
+        ),
+      });
       void loadLanguage(language).then((extension) => {
         if (token === languageToken) {
           view.dispatch({
@@ -462,8 +480,11 @@ export async function createEditorSession(
       });
     },
     setSettings(settings: EditorSettings): void {
+      currentSettings = settings;
       view.dispatch({
-        effects: settingsCompartment.reconfigure(editorSettingsExtensions(settings)),
+        effects: settingsCompartment.reconfigure(
+          editorSettingsExtensions(settings, currentLanguage),
+        ),
       });
     },
     setReadOnly(readOnly: boolean): void {

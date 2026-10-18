@@ -167,6 +167,8 @@ const en = {
     indent: "Indent with",
     indentSpaces: "Spaces",
     indentTabs: "Tabs",
+    autocomplete: "Live autocomplete",
+    snippets: "Snippets",
     lineNumbers: "Line numbers",
     showInvisibles: "Show invisibles",
     indentGuides: "Indent guides",

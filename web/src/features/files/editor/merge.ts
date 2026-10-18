@@ -65,7 +65,7 @@ export async function createMergeSession(
   const side = (doc: string, settings: Compartment) => ({
     doc,
     extensions: [
-      settings.of(editorSettingsExtensions(options.settings)),
+      settings.of(editorSettingsExtensions(options.settings, options.language)),
       language,
       mergeTheme,
       ...readOnlyExtensions(),
@@ -81,7 +81,7 @@ export async function createMergeSession(
   });
   return {
     setSettings(settings: EditorSettings): void {
-      const extension = editorSettingsExtensions(settings);
+      const extension = editorSettingsExtensions(settings, options.language);
       view.a.dispatch({ effects: settingsA.reconfigure(extension) });
       view.b.dispatch({ effects: settingsB.reconfigure(extension) });
     },

@@ -163,6 +163,8 @@ const vi = {
     indent: "Thụt lề bằng",
     indentSpaces: "Dấu cách",
     indentTabs: "Tab",
+    autocomplete: "Gợi ý trực tiếp",
+    snippets: "Đoạn mã mẫu",
     lineNumbers: "Số dòng",
     showInvisibles: "Hiện ký tự ẩn",
     indentGuides: "Đường thụt lề",

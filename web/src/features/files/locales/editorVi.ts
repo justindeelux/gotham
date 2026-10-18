@@ -140,6 +140,27 @@ const vi = {
   historyCount: "{count} phiên bản | {count} phiên bản",
   historyLoadFailed: "Không tải được lịch sử tệp.",
   historyUnavailable: "Lịch sử tệp không khả dụng trên bảng điều khiển này.",
+  settings: {
+    label: "Cài đặt",
+    title: "Cài đặt trình soạn thảo",
+    theme: "Giao diện",
+    themeDark: "Tối",
+    themeLight: "Sáng",
+    fontSize: "Cỡ chữ",
+    fontFamily: "Phông chữ",
+    fontMono: "Đơn cách",
+    fontSans: "Không chân",
+    tabSize: "Độ rộng tab",
+    indent: "Thụt lề bằng",
+    indentSpaces: "Dấu cách",
+    indentTabs: "Tab",
+    lineNumbers: "Số dòng",
+    showInvisibles: "Hiện ký tự ẩn",
+    indentGuides: "Đường thụt lề",
+    foldGutter: "Mép gấp mã",
+    highlightActiveLine: "Đánh dấu dòng hiện tại",
+    wrap: "Xuống dòng tự động",
+  },
 };
 
 export default vi;

@@ -14,7 +14,7 @@ interface FakeSession {
   getDoc: () => string;
   setDoc: ReturnType<typeof vi.fn>;
   setLanguage: ReturnType<typeof vi.fn>;
-  setWrap: ReturnType<typeof vi.fn>;
+  setSettings: ReturnType<typeof vi.fn>;
   setReadOnly: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   requestMeasure: ReturnType<typeof vi.fn>;
@@ -33,7 +33,7 @@ vi.mock("@/features/files/composables/useCodeMirror", () => ({
       getDoc: () => "",
       setDoc: vi.fn(),
       setLanguage: vi.fn(),
-      setWrap: vi.fn(),
+      setSettings: vi.fn(),
       setReadOnly: vi.fn(),
       focus: vi.fn(),
       requestMeasure: vi.fn(),
@@ -53,6 +53,7 @@ vi.mock("@/features/files/composables/useFileDownload", () => ({
 import FilesEditor from "@/features/files/components/FilesEditor.vue";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
+import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
 import { useTeamsStore } from "@/features/teams";
 import type { Team } from "@/features/teams/api/teams";
@@ -331,6 +332,30 @@ describe("FilesEditor guards", () => {
     files.roots = [{ name: "volumes", path: "/v", writable: false, free_bytes: 1 }];
     await flushPromises();
     expect(session.setReadOnly).toHaveBeenCalledWith(true);
+    wrapper.unmount();
+  });
+
+  it("applies a settings change to every live session", async () => {
+    const { wrapper, editor } = mountEditor();
+    const first = makeTab("t1", false);
+    const second = makeTab("t2", false);
+    editor.tabs = [first, second];
+    editor.activeId = first.id;
+    await flushPromises();
+
+    // Each tab gets its own view when it is first shown.
+    editor.activate(second.id);
+    await flushPromises();
+    expect(codemirror.sessions).toHaveLength(2);
+
+    useEditorSettingsStore().update({ wrap: true });
+    await flushPromises();
+
+    for (const session of codemirror.sessions) {
+      expect(session.setSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ wrap: true }),
+      );
+    }
     wrapper.unmount();
   });
 });

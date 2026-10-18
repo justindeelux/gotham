@@ -18,14 +18,19 @@ import {
   HighlightStyle,
   StreamLanguage,
   bracketMatching,
+  foldGutter,
+  foldKeymap,
   indentOnInput,
+  indentUnit,
   syntaxHighlighting,
 } from "@codemirror/language";
 import { gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState } from "@codemirror/state";
-import type { Extension } from "@codemirror/state";
+import type { Extension, Range } from "@codemirror/state";
 import {
+  Decoration,
   EditorView,
+  ViewPlugin,
   drawSelection,
   dropCursor,
   highlightActiveLine,
@@ -36,9 +41,11 @@ import {
   placeholder as placeholderExt,
   rectangularSelection,
 } from "@codemirror/view";
+import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { simpleMode } from "@codemirror/legacy-modes/mode/simple-mode";
 import { tags } from "@lezer/highlight";
 
+import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
 /** EditorSession is the imperative handle a Vue component keeps per tab. */
@@ -46,7 +53,7 @@ export interface EditorSession {
   getDoc: () => string;
   setDoc: (_doc: string) => void;
   setLanguage: (_language: EditorLanguageId) => void;
-  setWrap: (_wrap: boolean) => void;
+  setSettings: (_settings: EditorSettings) => void;
   setReadOnly: (_readOnly: boolean) => void;
   focus: () => void;
   requestMeasure: () => void;
@@ -61,7 +68,7 @@ export interface EditorSessionOptions {
   doc: string;
   language: EditorLanguageId;
   readOnly: boolean;
-  wrap: boolean;
+  settings: EditorSettings;
   onChange: (_doc: string) => void;
   onCursor: (_line: number, _column: number) => void;
   onSave: () => void;
@@ -216,19 +223,191 @@ export const gothamTheme = EditorView.theme(
   },
   { dark: true },
 );
+/** gothamLightHighlight is the light-theme syntax palette (JUS-219). */
+const gothamLightHighlight = HighlightStyle.define([
+  { tag: tags.keyword, color: "#7c3aed" },
+  { tag: [tags.string, tags.special(tags.string)], color: "#3f6212" },
+  { tag: [tags.number, tags.bool, tags.null], color: "#b45309" },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "#6b7280", fontStyle: "italic" },
+  { tag: [tags.propertyName, tags.attributeName], color: "#1d4ed8" },
+  { tag: [tags.typeName, tags.className], color: "#a16207" },
+  { tag: [tags.function(tags.variableName), tags.labelName], color: "#1d4ed8" },
+  { tag: [tags.definition(tags.variableName), tags.variableName], color: "#334155" },
+  { tag: [tags.tagName, tags.heading, tags.strong], color: "#111827" },
+  { tag: [tags.link, tags.url], color: "#0e7490", textDecoration: "underline" },
+  { tag: tags.invalid, color: "#dc2626" },
+]);
 
 /**
- * createEditorSession builds one editor. The wrap, language and read-only
- * facets live in Compartments so the toolbar (or a role change) can
- * reconfigure them without recreating the view, which would lose the undo
- * history. It awaits the first grammar so the first paint is already
- * highlighted; later switches load in the background.
+ * whitespaceDecorations marks leading spaces/tabs when "show invisibles" or
+ * "indent guides" is on. Only the visible ranges are walked, so a huge file
+ * costs no more than the screen.
+ */
+function whitespaceDecorations(
+  view: EditorView,
+  tabSize: number,
+  showInvisibles: boolean,
+  indentGuides: boolean,
+): DecorationSet {
+  const ranges: Range<Decoration>[] = [];
+  const spaceMark = Decoration.mark({ class: "cm-invisible-space" });
+  const tabMark = Decoration.mark({ class: "cm-invisible-tab" });
+  const guideMark = Decoration.mark({ class: "cm-indent-guide" });
+  for (const { from, to } of view.visibleRanges) {
+    let pos = from;
+    while (pos <= to) {
+      const line = view.state.doc.lineAt(pos);
+      const lead = /^[ \t]+/.exec(line.text)?.[0] ?? "";
+      let column = 0;
+      for (let index = 0; index < lead.length; index += 1) {
+        const char = lead[index];
+        const at = line.from + index;
+        if (showInvisibles) {
+          ranges.push((char === "\t" ? tabMark : spaceMark).range(at, at + 1));
+        }
+        if (indentGuides && column > 0 && column % tabSize === 0) {
+          ranges.push(guideMark.range(at, at + 1));
+        }
+        column += char === "\t" ? tabSize - (column % tabSize) : 1;
+      }
+      if (line.to >= to) {
+        break;
+      }
+      pos = line.to + 1;
+    }
+  }
+  return Decoration.set(ranges, true);
+}
+
+/** whitespacePlugin recomputes the whitespace marks on edits and scrolling. */
+function whitespacePlugin(settings: EditorSettings): Extension {
+  if (!settings.showInvisibles && !settings.indentGuides) {
+    return [];
+  }
+  const { tabSize, showInvisibles, indentGuides } = settings;
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
+
+      constructor(view: EditorView) {
+        this.decorations = whitespaceDecorations(view, tabSize, showInvisibles, indentGuides);
+      }
+
+      update(update: ViewUpdate): void {
+        if (update.docChanged || update.viewportChanged) {
+          this.decorations = whitespaceDecorations(
+            update.view,
+            tabSize,
+            showInvisibles,
+            indentGuides,
+          );
+        }
+      }
+    },
+    { decorations: (value) => value.decorations },
+  );
+}
+
+/** editorTheme keeps the editor on the app's surface tokens in both themes. */
+function editorTheme(settings: EditorSettings): Extension {
+  const dark = settings.theme === "dark";
+  const background = dark ? "var(--surface-warm)" : "var(--fg-2)";
+  const foreground = dark ? "var(--fg)" : "var(--surface-warm)";
+  return [
+    EditorView.theme(
+      {
+        "&": {
+          height: "100%",
+          backgroundColor: background,
+          color: foreground,
+          fontSize: `${settings.fontSize}px`,
+        },
+        ".cm-scroller": {
+          fontFamily:
+            settings.fontFamily === "sans" ? "var(--font-body)" : "var(--font-mono)",
+          lineHeight: "1.6",
+          overflow: "auto",
+        },
+        ".cm-content": { caretColor: "var(--accent)" },
+        ".cm-gutters": {
+          backgroundColor: background,
+          color: "var(--meta)",
+          border: "none",
+          borderRight: "1px solid var(--border)",
+        },
+        ".cm-activeLine": {
+          backgroundColor: dark
+            ? "color-mix(in oklab, var(--fg) 6%, transparent)"
+            : "color-mix(in oklab, var(--surface-warm) 6%, transparent)",
+        },
+        ".cm-activeLineGutter": { backgroundColor: "transparent", color: foreground },
+        ".cm-invisible-space": {
+          backgroundImage:
+            "radial-gradient(circle, var(--meta) 1px, transparent 1px)",
+          backgroundSize: "0.5em 1em",
+        },
+        ".cm-invisible-tab": {
+          backgroundImage:
+            "linear-gradient(90deg, var(--meta) 1px, transparent 1px)",
+          backgroundSize: "0.5em 100%",
+          opacity: "0.7",
+        },
+        ".cm-indent-guide": { boxShadow: "inset 1px 0 0 var(--border-soft)" },
+        "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
+          backgroundColor: "color-mix(in oklab, var(--accent) 40%, transparent)",
+        },
+        ".cm-cursor, .cm-dropCursor": { borderLeftColor: foreground },
+        ".cm-searchMatch": { backgroundColor: "color-mix(in oklab, var(--warn) 45%, transparent)" },
+        ".cm-searchMatch.cm-searchMatch-selected": {
+          backgroundColor: "color-mix(in oklab, var(--warn) 70%, transparent)",
+        },
+        ".cm-panels": { backgroundColor: "var(--surface)", color: "var(--fg)" },
+        ".cm-tooltip": {
+          backgroundColor: "var(--surface)",
+          border: "1px solid var(--border)",
+          color: "var(--fg)",
+        },
+      },
+      { dark },
+    ),
+    syntaxHighlighting(dark ? gothamHighlight : gothamLightHighlight),
+  ];
+}
+
+/**
+ * editorSettingsExtensions builds the reconfigurable part of the editor:
+ * theme, font, indentation, gutter toggles, whitespace marks and wrap. This is
+ * the value swapped into the settings compartment, so a preference change
+ * keeps every document and its undo history.
+ */
+export function editorSettingsExtensions(settings: EditorSettings): Extension {
+  return [
+    editorTheme(settings),
+    EditorState.tabSize.of(settings.tabSize),
+    indentUnit.of(settings.insertSpaces ? " ".repeat(settings.tabSize) : "\t"),
+    settings.lineNumbers ? lineNumbers() : [],
+    settings.foldGutter ? [foldGutter(), keymap.of(foldKeymap)] : [],
+    settings.highlightActiveLine
+      ? [highlightActiveLine(), highlightActiveLineGutter()]
+      : [],
+    whitespacePlugin(settings),
+    settings.wrap ? EditorView.lineWrapping : [],
+  ];
+}
+
+/**
+ * createEditorSession builds one editor. The language, settings (theme, font,
+ * indentation, gutters, whitespace, wrap) and read-only facets live in
+ * Compartments so the settings popover (or a role change) can reconfigure them
+ * without recreating the view, which would lose the undo history. It awaits the
+ * first grammar so the first paint is already highlighted; later switches load
+ * in the background.
  */
 export async function createEditorSession(
   options: EditorSessionOptions,
 ): Promise<EditorSession> {
   const languageCompartment = new Compartment();
-  const wrapCompartment = new Compartment();
+  const settingsCompartment = new Compartment();
   const readOnlyCompartment = new Compartment();
   const initialLanguage = await loadLanguage(options.language);
 
@@ -256,8 +435,6 @@ export async function createEditorSession(
     state: EditorState.create({
       doc: options.doc,
       extensions: [
-        lineNumbers(),
-        highlightActiveLineGutter(),
         highlightSpecialChars(),
         history(),
         drawSelection(),
@@ -266,11 +443,8 @@ export async function createEditorSession(
         indentOnInput(),
         bracketMatching(),
         rectangularSelection(),
-        highlightActiveLine(),
         highlightSelectionMatches(),
-        syntaxHighlighting(gothamHighlight),
-        gothamTheme,
-        wrapCompartment.of(options.wrap ? EditorView.lineWrapping : []),
+        settingsCompartment.of(editorSettingsExtensions(options.settings)),
         languageCompartment.of(initialLanguage),
         placeholderExt("(empty file)"),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly)),
@@ -320,9 +494,9 @@ export async function createEditorSession(
         }
       });
     },
-    setWrap(wrap: boolean): void {
+    setSettings(settings: EditorSettings): void {
       view.dispatch({
-        effects: wrapCompartment.reconfigure(wrap ? EditorView.lineWrapping : []),
+        effects: settingsCompartment.reconfigure(editorSettingsExtensions(settings)),
       });
     },
     setReadOnly(readOnly: boolean): void {

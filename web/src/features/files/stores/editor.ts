@@ -61,6 +61,12 @@ export interface EditorTab {
 /** SaveOutcome is the result of one save attempt. */
 export type SaveOutcome = "saved" | "conflict" | "error" | "blocked";
 
+/** SaveReport is one tab's outcome in a Save All run. */
+export interface SaveReport {
+  tab: EditorTab;
+  outcome: SaveOutcome;
+}
+
 let tabSeq = 0;
 
 /** nextTabId mints a stable per-session tab id. */
@@ -87,8 +93,13 @@ export const useEditorStore = defineStore("filesEditor", () => {
   const tabs = ref<EditorTab[]>([]);
   const activeId = ref("");
   const wrap = ref(false);
-  /** conflictId is the tab whose save met a stale-etag 409. */
-  const conflictId = ref<string | null>(null);
+  /**
+   * conflictQueue is the ordered list of tabs whose save met a stale-etag 409:
+   * Save All can raise several at once, and the prompt walks them one by one.
+   */
+  const conflictQueue = ref<string[]>([]);
+  /** conflictId is the queue head — the conflict prompt currently on screen. */
+  const conflictId = computed<string | null>(() => conflictQueue.value[0] ?? null);
   /** saveAsId is the tab awaiting a "save as copy" name. */
   const saveAsId = ref<string | null>(null);
 
@@ -116,6 +127,18 @@ export const useEditorStore = defineStore("filesEditor", () => {
   /** isDirty reports whether one tab has unsaved changes. */
   function isDirty(tab: EditorTab): boolean {
     return tab.status === "ready" && tab.doc !== tab.original;
+  }
+
+  /** addConflict queues a conflicting tab behind any prompt already waiting. */
+  function addConflict(id: string): void {
+    if (!conflictQueue.value.includes(id)) {
+      conflictQueue.value = [...conflictQueue.value, id];
+    }
+  }
+
+  /** clearConflict drops one tab from the conflict queue (prompt resolved). */
+  function clearConflict(id: string): void {
+    conflictQueue.value = conflictQueue.value.filter((item) => item !== id);
   }
 
   /** tabFor finds an open tab for one root-relative path. */
@@ -261,13 +284,11 @@ export const useEditorStore = defineStore("filesEditor", () => {
       tab.mode = entry.mode;
       tab.original = sentDoc;
       tab.error = "";
-      if (conflictId.value === id) {
-        conflictId.value = null;
-      }
+      clearConflict(id);
       return "saved";
     } catch (err) {
       if (filesErrorKey(err) === "files.errors.conflict") {
-        conflictId.value = id;
+        addConflict(id);
         return "conflict";
       }
       tab.error = describeFilesError(err);
@@ -277,15 +298,29 @@ export const useEditorStore = defineStore("filesEditor", () => {
     }
   }
 
+  /**
+   * saveAll saves every dirty tab in parallel (optionally only those in
+   * `ids`), skipping a tab that already has a save in flight so Mod-S cannot
+   * race Save All into a second write of the same buffer. `original` advances
+   * only on a successful write, so a failed or conflicting tab keeps its dirty
+   * marker while the rest are saved.
+   */
+  async function saveAll(teamId: string, ids?: string[]): Promise<SaveReport[]> {
+    const targets = dirtyTabs.value.filter(
+      (tab) => !tab.saving && (!ids || ids.includes(tab.id)),
+    );
+    return Promise.all(
+      targets.map(async (tab) => ({ tab, outcome: await save(tab.id, teamId) })),
+    );
+  }
+
   /** reload discards local edits and re-reads the file (conflict "reload"). */
   async function reload(id: string, teamId: string): Promise<void> {
     const tab = tabs.value.find((item) => item.id === id);
     if (!tab) {
       return;
     }
-    if (conflictId.value === id) {
-      conflictId.value = null;
-    }
+    clearConflict(id);
     tab.status = "loading";
     await load(tab, teamId);
   }
@@ -295,17 +330,15 @@ export const useEditorStore = defineStore("filesEditor", () => {
     return save(id, teamId, true);
   }
 
-  /** dismissConflict closes the conflict prompt without a choice. */
+  /** dismissConflict closes the current prompt and shows the next queued one. */
   function dismissConflict(): void {
-    conflictId.value = null;
+    conflictQueue.value = conflictQueue.value.slice(1);
   }
 
   /** openSaveAs arms the save-as-copy dialog for one conflicting tab. */
   function openSaveAs(id: string): void {
     saveAsId.value = id;
-    if (conflictId.value === id) {
-      conflictId.value = null;
-    }
+    clearConflict(id);
   }
 
   /** cancelSaveAs closes the save-as-copy dialog. */
@@ -369,9 +402,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       tab.mode = entry.mode;
       tab.original = sentDoc;
       tab.error = "";
-      if (conflictId.value === id) {
-        conflictId.value = null;
-      }
+      clearConflict(id);
       saveAsId.value = null;
       return "saved";
     } catch (err) {
@@ -395,9 +426,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       return;
     }
     tabs.value = tabs.value.filter((tab) => tab.id !== id);
-    if (conflictId.value === id) {
-      conflictId.value = null;
-    }
+    clearConflict(id);
     if (saveAsId.value === id) {
       saveAsId.value = null;
     }
@@ -410,8 +439,15 @@ export const useEditorStore = defineStore("filesEditor", () => {
   function closeAll(): void {
     tabs.value = [];
     activeId.value = "";
-    conflictId.value = null;
+    conflictQueue.value = [];
     saveAsId.value = null;
+  }
+
+  /** closeMany closes several tabs, discarding their buffers. */
+  function closeMany(ids: string[]): void {
+    for (const id of ids) {
+      close(id);
+    }
   }
 
   /** setWrap toggles soft wrapping for every editor pane. */
@@ -526,6 +562,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     setDoc,
     setLanguage,
     save,
+    saveAll,
     reload,
     overwrite,
     openSaveAs,
@@ -534,6 +571,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     saveAsCopy,
     close,
     closeAll,
+    closeMany,
     setWrap,
     blockingNames,
     applyRename,

@@ -4,15 +4,17 @@ import {
   Code,
   Minus,
   Save,
+  SaveAll,
   Search,
   WrapText,
   X,
 } from "@lucide/vue";
+import type { DropdownOption } from "naive-ui";
 import {
   NButton,
+  NDropdown,
   NEmpty,
   NModal,
-  NPopconfirm,
   useMessage,
 } from "naive-ui";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -20,6 +22,7 @@ import type { CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 
+import EditorCloseTabsDialog from "@/features/files/components/EditorCloseTabsDialog.vue";
 import EditorConflictDialog from "@/features/files/components/EditorConflictDialog.vue";
 import EditorLanguagePicker from "@/features/files/components/EditorLanguagePicker.vue";
 import EditorSaveAsDialog from "@/features/files/components/EditorSaveAsDialog.vue";
@@ -29,10 +32,16 @@ import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
 import { useEditorStore } from "@/features/files/stores/editor";
+import type { EditorTab } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
-import { clampEditorOffset } from "@/features/files/utils/editor";
-import type { EditorLanguageId } from "@/features/files/utils/editor";
+import {
+  clampEditorOffset,
+  scrollTabIntoView,
+  tabsToClose,
+} from "@/features/files/utils/editor";
+import type { EditorLanguageId, TabCloseScope } from "@/features/files/utils/editor";
 import { useTeamsStore } from "@/features/teams";
+import { useCopyText } from "@/shared/composables/useCopyText";
 import { formatBytes } from "@/shared/utils/format";
 
 interface Props {
@@ -89,6 +98,20 @@ let dragState: {
 // closeAllOpen arms the "close all with unsaved files" confirmation.
 const closeAllOpen = ref(false);
 
+// Tab management (JUS-220): one controlled dropdown serves the tab context
+// menu, and one close prompt guards every path that would drop a dirty buffer.
+const tabsElement = ref<HTMLElement | null>(null);
+const tabMenuOpen = ref(false);
+const tabMenuX = ref(0);
+const tabMenuY = ref(0);
+const tabMenuId = ref("");
+/** pendingClose holds the tab ids a close command is about to close; null = no prompt. */
+const pendingClose = ref<string[] | null>(null);
+/** pendingKeepId is the tab a scoped close (others/right) keeps active. */
+const pendingKeepId = ref("");
+const closeSaving = ref(false);
+const { copyText } = useCopyText();
+
 /** dockVisible is true while the collapsed dock is on screen. */
 const dockVisible = computed(() => editor.tabs.length > 0 && minimized.value);
 
@@ -136,6 +159,42 @@ const readyTabs = computed(() =>
 
 /** activeTab is the store's focused tab (convenience for the template). */
 const activeTab = computed(() => editor.activeTab);
+
+/** pendingCloseDirty is the dirty subset of the tabs awaiting a close prompt. */
+const pendingCloseDirty = computed<EditorTab[]>(() => {
+  const ids = pendingClose.value ?? [];
+  return editor.tabs.filter((tab) => ids.includes(tab.id) && editor.isDirty(tab));
+});
+
+/** pendingClosePaths feeds the close prompt's unsaved-file list. */
+const pendingClosePaths = computed<string[]>(() =>
+  pendingCloseDirty.value.map((tab) => tab.path),
+);
+
+/** tabMenuOptions is the context menu for the tab it was opened on. */
+const tabMenuOptions = computed<DropdownOption[]>(() => {
+  const tabs = editor.tabs;
+  const index = tabs.findIndex((tab) => tab.id === tabMenuId.value);
+  if (index === -1) {
+    return [];
+  }
+  return [
+    { label: String(t("files.editor.menuClose")), key: "close" },
+    {
+      label: String(t("files.editor.menuCloseOthers")),
+      key: "others",
+      disabled: tabs.length < 2,
+    },
+    {
+      label: String(t("files.editor.menuCloseRight")),
+      key: "right",
+      disabled: index === tabs.length - 1,
+    },
+    { label: String(t("files.editor.menuCloseAll")), key: "all" },
+    { type: "divider", key: "divider" },
+    { label: String(t("files.editor.menuCopyPath")), key: "copyPath" },
+  ];
+});
 
 /**
  * dockLabel is the dock control's accessible name. The unsaved state is folded
@@ -293,6 +352,14 @@ watch(
   },
 );
 
+// With many tabs open, the strip scrolls horizontally. Keep the active tab
+// visible after every switch/open so a newly opened file never lands off-screen.
+watch(
+  () => [editor.activeId, editor.tabs.length] as const,
+  () => void nextTick(() => revealActiveTab()),
+  { immediate: true },
+);
+
 // The floating window unmounts with its last tab (close-all, or closing the
 // last tab individually), so any dragged position is meaningless afterwards:
 // clear it here so the next open starts at the pinned default again.
@@ -368,6 +435,7 @@ async function ensureSession(): Promise<void> {
       }
     },
     onSave: () => void saveTab(tabId),
+    onSaveAll: () => void saveAllTabs(),
   }).then((session) => {
     // A rapid tab switch while the chunk loaded: keep the instance only if the
     // tab is still open.
@@ -410,6 +478,52 @@ async function saveTab(id: string): Promise<void> {
     message.error(tab.error || String(t("files.editor.saveFailed", { name: tab.name })));
   }
   // "conflict" arms the modal; "blocked" is a no-op (loading/read-only tab).
+}
+
+/** saveFailureText names the tab and, when known, its server error. */
+function saveFailureText(tab: EditorTab): string {
+  return tab.error
+    ? String(
+        t("files.editor.saveAllFailedDetail", {
+          name: tab.name,
+          error: tab.error,
+        }),
+      )
+    : String(t("files.editor.saveAllFailed", { name: tab.name }));
+}
+
+/**
+ * saveAllTabs saves every dirty tab (Ctrl/Cmd+Shift+S). A failed tab keeps its
+ * dirty marker and reports its own error; a run where everything saved gets a
+ * single success toast.
+ */
+async function saveAllTabs(): Promise<void> {
+  if (!files.canWrite || !editor.hasDirty) {
+    return;
+  }
+  // A second Ctrl+Shift+S while the first run is in flight would write the same
+  // buffers twice.
+  if (editor.dirtyTabs.some((tab) => tab.saving)) {
+    return;
+  }
+  const reports = await editor.saveAll(teams.activeTeamId);
+  let saved = 0;
+  for (const report of reports) {
+    if (report.outcome === "saved") {
+      saved += 1;
+      continue;
+    }
+    if (report.outcome === "conflict") {
+      message.warning(
+        String(t("files.editor.conflictFile", { name: report.tab.name })),
+      );
+      continue;
+    }
+    message.error(saveFailureText(report.tab));
+  }
+  if (saved > 0 && saved === reports.length) {
+    message.success(String(t("files.editor.saveAllDone")));
+  }
 }
 
 /** downloadActive hands a large or binary tab's file to the browser. */
@@ -572,6 +686,7 @@ function restoreWindow(): void {
     }
     // The window was display:none while collapsed; re-measure the live host.
     sessions.get(editor.activeId)?.requestMeasure();
+    revealActiveTab();
   });
 }
 
@@ -585,6 +700,204 @@ function focusTab(index: number): void {
   void nextTick(() => {
     document.getElementById(`ed-tab-${tab.id}`)?.focus();
   });
+}
+
+/** revealActiveTab scrolls the tab strip so the active tab stays in view. */
+function revealActiveTab(): void {
+  const strip = tabsElement.value;
+  const id = editor.activeId;
+  if (!strip || !id) {
+    return;
+  }
+  const tab = document.getElementById(`ed-tab-${id}`);
+  if (!tab) {
+    return;
+  }
+  const stripRect = strip.getBoundingClientRect();
+  const tabRect = tab.getBoundingClientRect();
+  strip.scrollLeft = scrollTabIntoView(
+    { left: stripRect.left, right: stripRect.right, scrollLeft: strip.scrollLeft },
+    { left: tabRect.left, right: tabRect.right },
+  );
+}
+
+/** cycleTab moves the active tab by one position (Ctrl+Tab / Ctrl+Shift+Tab). */
+function cycleTab(delta: number): void {
+  const count = editor.tabs.length;
+  if (count < 2) {
+    return;
+  }
+  const index = editor.tabs.findIndex((tab) => tab.id === editor.activeId);
+  editor.activate(editor.tabs[(index + delta + count) % count]!.id);
+}
+
+/** openTabMenu opens the tab context menu at the pointer. */
+function openTabMenu(event: MouseEvent, id: string): void {
+  tabMenuId.value = id;
+  tabMenuX.value = event.clientX;
+  tabMenuY.value = event.clientY;
+  tabMenuOpen.value = true;
+}
+
+/** onTabMouseDown cancels the browser's middle-click autoscroll. */
+function onTabMouseDown(event: MouseEvent): void {
+  if (event.button === 1) {
+    event.preventDefault();
+  }
+}
+
+/** onTabAuxClick closes a tab on a middle click. */
+function onTabAuxClick(event: MouseEvent, id: string): void {
+  if (event.button !== 1) {
+    return;
+  }
+  event.preventDefault();
+  requestCloseTabs([id]);
+}
+
+/** onTabMenuSelect runs one context-menu command on the targeted tab. */
+function onTabMenuSelect(key: string): void {
+  tabMenuOpen.value = false;
+  const id = tabMenuId.value;
+  const tab = editor.tabs.find((item) => item.id === id);
+  if (!tab) {
+    return;
+  }
+  if (key === "copyPath") {
+    void copyText(tab.path, tab.path);
+    return;
+  }
+  const scope: TabCloseScope = key === "close" ? "self" : (key as TabCloseScope);
+  requestCloseTabs(
+    tabsToClose(editor.tabs, scope, id),
+    scope === "self" || scope === "all" ? "" : id,
+  );
+}
+
+/**
+ * requestCloseTabs closes the given tabs after a prompt when any of them is
+ * dirty. Nothing is skipped silently: a mixed selection prompts for the dirty
+ * ones and closes the rest with them once a choice is made.
+ */
+function requestCloseTabs(ids: string[], keepId = ""): void {
+  // One prompt at a time: a second close request (Alt+W, middle click, menu)
+  // must not retarget the dialog the user is already answering.
+  if (pendingClose.value !== null || closeSaving.value) {
+    return;
+  }
+  const closing = editor.tabs.filter((tab) => ids.includes(tab.id));
+  if (closing.length === 0) {
+    return;
+  }
+  pendingKeepId.value = keepId;
+  if (closing.some((tab) => editor.isDirty(tab))) {
+    pendingClose.value = closing.map((tab) => tab.id);
+    return;
+  }
+  settleClose(closing.map((tab) => tab.id));
+}
+
+/** settleClose closes ids and keeps a scoped close's target active. */
+function settleClose(ids: string[]): void {
+  const keep = pendingKeepId.value;
+  editor.closeMany(ids);
+  if (keep && editor.tabs.some((tab) => tab.id === keep)) {
+    editor.activate(keep);
+  }
+  pendingKeepId.value = "";
+}
+
+/** cancelClose abandons the close prompt and keeps every tab. */
+function cancelClose(): void {
+  pendingClose.value = null;
+  pendingKeepId.value = "";
+}
+
+/** saveAndClose saves the pending dirty tabs, then closes what saved. */
+async function saveAndClose(): Promise<void> {
+  const ids = pendingClose.value ?? [];
+  if (ids.length === 0 || closeSaving.value) {
+    return;
+  }
+  // A tab already writing would be skipped by saveAll and then closed with its
+  // in-flight (or newly typed) text unsaved.
+  if (editor.tabs.some((tab) => ids.includes(tab.id) && tab.saving)) {
+    return;
+  }
+  closeSaving.value = true;
+  try {
+    const reports = await editor.saveAll(teams.activeTeamId, ids);
+    const failed = new Set<string>();
+    for (const report of reports) {
+      if (report.outcome === "saved") {
+        // A save writes the text it was handed; edits typed while it was in
+        // flight keep the tab dirty, so it must stay open instead of being
+        // closed as if everything was persisted.
+        if (!editor.isDirty(report.tab)) {
+          continue;
+        }
+        failed.add(report.tab.id);
+        continue;
+      }
+      failed.add(report.tab.id);
+      if (report.outcome === "conflict") {
+        message.warning(
+          String(t("files.editor.conflictFile", { name: report.tab.name })),
+        );
+        continue;
+      }
+      message.error(saveFailureText(report.tab));
+    }
+    // A failed tab stays open and dirty; everything else still closes.
+    settleClose(ids.filter((id) => !failed.has(id)));
+    pendingClose.value = null;
+  } finally {
+    closeSaving.value = false;
+  }
+}
+
+/** discardAndClose drops the pending buffers and closes their tabs. */
+function discardAndClose(): void {
+  const ids = pendingClose.value ?? [];
+  pendingClose.value = null;
+  settleClose(ids);
+}
+
+/** onEditorKeydown handles the editor-wide tab shortcuts. */
+function onEditorKeydown(event: KeyboardEvent): void {
+  if (
+    event.defaultPrevented ||
+    event.isComposing ||
+    editor.tabs.length === 0 ||
+    minimized.value ||
+    pendingClose.value !== null ||
+    closeSaving.value
+  ) {
+    return;
+  }
+  // A modal (conflict, save-as, discard) owns the keyboard while it is open.
+  if (event.target instanceof Element && event.target.closest(".n-modal")) {
+    return;
+  }
+  const mod = event.metaKey || event.ctrlKey;
+  if (mod && event.shiftKey && event.code === "KeyS") {
+    event.preventDefault();
+    void saveAllTabs();
+    return;
+  }
+  if (event.altKey && !mod && event.code === "KeyW") {
+    event.preventDefault();
+    if (editor.activeId) {
+      requestCloseTabs([editor.activeId]);
+    }
+    return;
+  }
+  // Ctrl+Tab is reserved by some browsers, but it works wherever the page can
+  // claim it (Firefox, kiosk/desktop shells).
+  if (event.ctrlKey && !event.metaKey && event.key === "Tab") {
+    event.preventDefault();
+    cycleTab(event.shiftKey ? -1 : 1);
+  }
 }
 
 /** focusCloseButton returns focus to the title-bar Close control. */
@@ -665,11 +978,13 @@ function onBeforeUnload(event: BeforeUnloadEvent): void {
 onMounted(() => {
   window.addEventListener("beforeunload", onBeforeUnload);
   window.addEventListener("resize", onWindowResize);
+  window.addEventListener("keydown", onEditorKeydown);
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", onBeforeUnload);
   window.removeEventListener("resize", onWindowResize);
+  window.removeEventListener("keydown", onEditorKeydown);
   for (const session of sessions.values()) {
     session.destroy();
   }
@@ -737,12 +1052,20 @@ onBeforeUnmount(() => {
       </NButton>
     </header>
 
-    <div class="ed-tabs" role="tablist" :aria-label="t('files.editor.heading')">
+    <div
+      ref="tabsElement"
+      class="ed-tabs"
+      role="tablist"
+      :aria-label="t('files.editor.heading')"
+    >
       <div
         v-for="(tab, index) in editor.tabs"
         :key="tab.id"
         class="ed-tab"
         :class="{ 'is-active': tab.id === editor.activeId, 'is-dirty': editor.isDirty(tab) }"
+        @mousedown="onTabMouseDown"
+        @contextmenu.prevent="openTabMenu($event, tab.id)"
+        @auxclick="onTabAuxClick($event, tab.id)"
       >
         <button
           type="button"
@@ -758,28 +1081,11 @@ onBeforeUnmount(() => {
           <span v-if="editor.isDirty(tab)" class="ed-dot" aria-hidden="true" />
           {{ tab.name }}
         </button>
-        <NPopconfirm
-          v-if="editor.isDirty(tab)"
-          :positive-text="t('files.editor.closeConfirm')"
-          @positive-click="editor.close(tab.id)"
-        >
-          <template #trigger>
-            <button
-              type="button"
-              class="ed-tab-close"
-              :aria-label="t('files.editor.closeDirty', { name: tab.name })"
-            >
-              <X :size="13" :stroke-width="2" aria-hidden="true" />
-            </button>
-          </template>
-          {{ t("files.editor.closeDirty", { name: tab.name }) }}
-        </NPopconfirm>
         <button
-          v-else
           type="button"
           class="ed-tab-close"
           :aria-label="t('files.editor.close', { name: tab.name })"
-          @click="editor.close(tab.id)"
+          @click="requestCloseTabs([tab.id])"
         >
           <X :size="13" :stroke-width="2" aria-hidden="true" />
         </button>
@@ -813,6 +1119,19 @@ onBeforeUnmount(() => {
           {{ t("files.editor.goToLine") }}
         </NButton>
         <span class="grow" />
+        <NButton
+          v-if="files.canWrite"
+          size="small"
+          secondary
+          :disabled="!editor.hasDirty"
+          :loading="editor.dirtyTabs.some((tab) => tab.saving)"
+          @click="saveAllTabs"
+        >
+          <template #icon>
+            <SaveAll :size="14" :stroke-width="1.8" aria-hidden="true" />
+          </template>
+          {{ t("files.editor.saveAll") }}
+        </NButton>
         <NButton
           v-if="files.canWrite"
           size="small"
@@ -962,6 +1281,18 @@ onBeforeUnmount(() => {
     </button>
   </div>
 
+  <NDropdown
+    :show="tabMenuOpen"
+    trigger="manual"
+    placement="bottom-start"
+    :x="tabMenuX"
+    :y="tabMenuY"
+    :options="tabMenuOptions"
+    :menu-props="() => ({ role: 'menu', 'aria-label': t('files.editor.tabMenu') })"
+    @update:show="tabMenuOpen = $event"
+    @select="onTabMenuSelect"
+  />
+
   <NModal
     class="app-modal"
     :show="leaveOpen"
@@ -1007,6 +1338,15 @@ onBeforeUnmount(() => {
     </template>
   </NModal>
 
+  <EditorCloseTabsDialog
+    :show="pendingClose !== null"
+    :paths="pendingClosePaths"
+    :can-save="files.canWrite"
+    :saving="closeSaving"
+    @save="saveAndClose"
+    @discard="discardAndClose"
+    @cancel="cancelClose"
+  />
   <EditorConflictDialog />
   <EditorSaveAsDialog />
 </template>

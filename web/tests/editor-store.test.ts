@@ -198,6 +198,63 @@ describe("editor tab store", () => {
     expect(store.isDirty(tab)).toBe(false);
   });
 
+  it("queues every conflicting tab from Save All and advances the prompt", async () => {
+    getContentMock.mockImplementation(async () => content("start", '"v1"'));
+    const store = useEditorStore();
+    await store.openFile("srv", "team", "volumes", "a.yaml");
+    await store.openFile("srv", "team", "volumes", "b.yaml");
+    const [first, second] = store.tabs;
+    store.setDoc(first!.id, "mine-a");
+    store.setDoc(second!.id, "mine-b");
+
+    putContentMock.mockRejectedValue({ message: "conflict", status: 409 });
+    const reports = await store.saveAll("team");
+    expect(reports.map((report) => report.outcome)).toEqual(["conflict", "conflict"]);
+
+    // The first conflict is on screen; dismissing it surfaces the next.
+    expect(store.conflictId).toBe(first!.id);
+    store.dismissConflict();
+    expect(store.conflictId).toBe(second!.id);
+    store.dismissConflict();
+    expect(store.conflictId).toBeNull();
+    expect(store.hasDirty).toBe(true);
+  });
+
+  it("resolves one queued conflict without dropping the next", async () => {
+    getContentMock.mockImplementation(async () => content("start", '"v1"'));
+    const store = useEditorStore();
+    await store.openFile("srv", "team", "volumes", "a.yaml");
+    await store.openFile("srv", "team", "volumes", "b.yaml");
+    const [first, second] = store.tabs;
+    store.setDoc(first!.id, "mine-a");
+    store.setDoc(second!.id, "mine-b");
+
+    putContentMock.mockRejectedValue({ message: "conflict", status: 409 });
+    await store.saveAll("team");
+    expect(store.conflictId).toBe(first!.id);
+
+    getContentMock.mockResolvedValueOnce(content("theirs", '"v9"'));
+    await store.reload(first!.id, "team");
+    expect(store.conflictId).toBe(second!.id);
+  });
+
+  it("Save All skips a tab whose save is already in flight", async () => {
+    getContentMock.mockImplementation(async () => content("start"));
+    const store = useEditorStore();
+    await store.openFile("srv", "team", "volumes", "a.yaml");
+    await store.openFile("srv", "team", "volumes", "b.yaml");
+    const [first, second] = store.tabs;
+    store.setDoc(first!.id, "mine-a");
+    store.setDoc(second!.id, "mine-b");
+    // Simulate Mod-S already writing the first tab.
+    first!.saving = true;
+
+    putContentMock.mockResolvedValue({ ...entry, etag: '"v2"' });
+    const reports = await store.saveAll("team");
+    expect(reports.map((report) => report.tab.id)).toEqual([second!.id]);
+    expect(putContentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("overwrite force-saves with overwrite=true", async () => {
     getContentMock.mockResolvedValueOnce(content("start", '"v1"'));
     const store = useEditorStore();

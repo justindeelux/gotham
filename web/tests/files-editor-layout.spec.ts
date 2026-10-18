@@ -595,7 +595,7 @@ test("the status bar stays on one line at the default window width", async ({
   );
 });
 
-test("the replace binding opens the search panel on its replace field", async ({
+test("find, the replace binding and the toolbar open the custom find bar", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -607,10 +607,44 @@ test("the replace binding opens the search panel on its replace field", async ({
   await expect(content).toBeVisible({ timeout: 15_000 });
   await content.click();
 
-  // macOS uses Cmd+Option+F (Cmd+H hides the app); other platforms Ctrl+H.
   const mac = await page.evaluate(() => navigator.platform.includes("Mac"));
+  const bar = page.locator(".ed-find");
+  const query = bar.locator("input").first();
+
+  // JUS-231: the toolbar opens find collapsed, focused on the query, and the
+  // default CodeMirror panel must not appear.
+  await page.getByRole("button", { name: "Find / replace" }).click();
+  await expect(bar).toBeVisible();
+  await expect(page.locator(".cm-panels")).toHaveCount(0);
+  await expect(bar.locator("input")).toHaveCount(1);
+  await expect(query).toBeFocused();
+
+  // Find keeps the remembered collapsed state.
+  await page.keyboard.press("Escape");
+  await expect(bar).toBeHidden();
+  await content.click();
+  await page.keyboard.press(mac ? "Meta+f" : "Control+f");
+  await expect(bar.locator("input")).toHaveCount(1);
+  await expect(query).toBeFocused();
+
+  // macOS uses Cmd+Option+F (Cmd+H hides the app); other platforms Ctrl+H.
+  // The replace binding expands the row and focuses its field.
+  await page.keyboard.press("Escape");
+  await expect(bar).toBeHidden();
+  await content.click();
   await page.keyboard.press(mac ? "Meta+Alt+f" : "Control+h");
-  await expect(page.locator('.cm-search input[name="replace"]')).toBeFocused();
+  await expect(bar).toBeVisible();
+  const replace = bar.locator("input").nth(1);
+  await expect(replace).toBeVisible();
+  await expect(replace).toBeFocused();
+
+  // The expanded row is remembered for this tab; find does not force it open
+  // or closed, it restores the tab's state and focuses the query.
+  await page.keyboard.press("Escape");
+  await content.click();
+  await page.keyboard.press(mac ? "Meta+f" : "Control+f");
+  await expect(bar.locator("input")).toHaveCount(2);
+  await expect(query).toBeFocused();
 });
 
 test("the conflict modal is an alertdialog that confirms overwrite and reload", async ({

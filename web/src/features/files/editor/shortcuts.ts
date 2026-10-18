@@ -103,7 +103,7 @@ export const editorShortcuts: readonly EditorShortcut[] = [
     keys: ["Mod-Alt-PageUp"],
     source: "command",
   },
-  { id: "find", group: "common", label: "files.editor.shortcuts.find", keys: ["Mod-f"], source: "default" },
+  { id: "find", group: "common", label: "files.editor.shortcuts.find", keys: ["Mod-f"], source: "command" },
   {
     id: "replace",
     group: "common",

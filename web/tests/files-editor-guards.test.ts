@@ -18,8 +18,17 @@ interface FakeSession {
   setReadOnly: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   requestMeasure: ReturnType<typeof vi.fn>;
-  openSearch: ReturnType<typeof vi.fn>;
-  goToLine: ReturnType<typeof vi.fn>;
+  search: {
+    setOptions: ReturnType<typeof vi.fn>;
+    status: ReturnType<typeof vi.fn>;
+    next: ReturnType<typeof vi.fn>;
+    previous: ReturnType<typeof vi.fn>;
+    replace: ReturnType<typeof vi.fn>;
+    replaceAll: ReturnType<typeof vi.fn>;
+    clear: ReturnType<typeof vi.fn>;
+  };
+  lineInfo: ReturnType<typeof vi.fn>;
+  gotoLine: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
 }
 
@@ -29,6 +38,7 @@ const codemirror = vi.hoisted(() => ({
 
 vi.mock("@/features/files/composables/useCodeMirror", () => ({
   createEditorSession: vi.fn(async () => {
+    const status = { total: 0, current: 0 };
     const session: FakeSession = {
       getDoc: () => "",
       setDoc: vi.fn(),
@@ -37,8 +47,17 @@ vi.mock("@/features/files/composables/useCodeMirror", () => ({
       setReadOnly: vi.fn(),
       focus: vi.fn(),
       requestMeasure: vi.fn(),
-      openSearch: vi.fn(),
-      goToLine: vi.fn(),
+      search: {
+        setOptions: vi.fn(() => status),
+        status: vi.fn(() => status),
+        next: vi.fn(() => status),
+        previous: vi.fn(() => status),
+        replace: vi.fn(() => status),
+        replaceAll: vi.fn(() => status),
+        clear: vi.fn(),
+      },
+      lineInfo: vi.fn(() => ({ line: 1, total: 10 })),
+      gotoLine: vi.fn(() => null),
       destroy: vi.fn(),
     };
     codemirror.sessions.push(session);
@@ -125,6 +144,21 @@ function team(id: string, role: Team["role"]): Team {  return {
     created_at: "2026-10-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
   };
+}
+
+/** toolbarButton finds an editor toolbar button by its visible label. */
+function toolbarButton(
+  wrapper: ReturnType<typeof mountEditor>["wrapper"],
+  label: string,
+) {
+  const button = wrapper
+    .find(".ed-toolbar")
+    .findAll("button")
+    .find((item) => item.text().includes(label));
+  if (!button) {
+    throw new Error(`toolbar button not found: ${label}`);
+  }
+  return button;
 }
 
 /** mountEditor mounts FilesEditor under the message provider with both teams. */
@@ -324,6 +358,60 @@ describe("FilesEditor guards", () => {
     await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
     await flushPromises();
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
+    wrapper.unmount();
+  });
+
+  it("closes the find bar on Escape without minimizing the window", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    await toolbarButton(wrapper, "Find / replace").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".ed-find").exists()).toBe(true);
+    const session = codemirror.sessions[0]!;
+    expect(session.search.setOptions).toHaveBeenCalled();
+
+    session.focus.mockClear();
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+
+    // Topmost surface: the bar closes, the window stays, focus goes back to
+    // the editor, and the highlight state is cleared.
+    expect(wrapper.find(".ed-find").exists()).toBe(false);
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    expect(session.search.clear).toHaveBeenCalled();
+    expect(session.focus).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("rejects an out-of-range go-to-line entry and jumps when valid", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    await toolbarButton(wrapper, "Go to line").trigger("click");
+    await flushPromises();
+    const panel = wrapper.find(".ed-goto");
+    expect(panel.exists()).toBe(true);
+
+    const input = panel.find("input");
+    await input.setValue("0");
+    await input.trigger("keydown", { key: "Enter" });
+    expect(panel.find('[role="alert"]').text()).toBe("Enter a line from 1 to 10");
+    expect(codemirror.sessions[0]!.gotoLine).not.toHaveBeenCalled();
+
+    await input.setValue("2:3");
+    await input.trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(codemirror.sessions[0]!.gotoLine).toHaveBeenCalledWith(2, 3);
+    expect(wrapper.find(".ed-goto").exists()).toBe(false);
     wrapper.unmount();
   });
 

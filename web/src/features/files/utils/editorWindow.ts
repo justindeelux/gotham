@@ -69,7 +69,9 @@ export function writeEditorWindow(
 
 /**
  * clampEditorSize keeps a resize drag inside the usable band: never below the
- * minimum, never larger than the viewport minus its pinned margins.
+ * minimum, never larger than the viewport. On a viewport narrower than the
+ * minimum (a phone), the floor yields to the viewport so the window always
+ * fits with its margins.
  */
 export function clampEditorSize(
   width: number,
@@ -81,12 +83,12 @@ export function clampEditorSize(
 ): { width: number; height: number } {
   return {
     width: Math.min(
-      Math.max(minWidth, Math.round(width)),
-      Math.max(minWidth, viewportWidth),
+      Math.max(Math.min(minWidth, viewportWidth), Math.round(width)),
+      Math.max(Math.min(minWidth, viewportWidth), viewportWidth),
     ),
     height: Math.min(
-      Math.max(minHeight, Math.round(height)),
-      Math.max(minHeight, viewportHeight),
+      Math.max(Math.min(minHeight, viewportHeight), Math.round(height)),
+      Math.max(Math.min(minHeight, viewportHeight), viewportHeight),
     ),
   };
 }

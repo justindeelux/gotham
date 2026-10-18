@@ -16,6 +16,13 @@ export const EDITOR_WINDOW_DEFAULT_HEIGHT = 936 as const;
 export const EDITOR_WINDOW_MIN_WIDTH = 480 as const;
 export const EDITOR_WINDOW_MIN_HEIGHT = 320 as const;
 
+/**
+ * EDITOR_WINDOW_NARROW_VIEWPORT is the width below which the floating window
+ * nearly fills the screen, so a dragged offset is meaningless and resets to
+ * the pinned default.
+ */
+export const EDITOR_WINDOW_NARROW_VIEWPORT = 640 as const;
+
 /** editorWindowSchema validates the persisted geometry fields. */
 export const editorWindowSchema = z.object({
   width: z.number().int().min(EDITOR_WINDOW_MIN_WIDTH).max(4096).catch(EDITOR_WINDOW_DEFAULT_WIDTH),

@@ -21,6 +21,8 @@ import { useRecentDeploymentsStore } from "@/features/dashboard";
 import { useBackupsStore } from "@/features/databases";
 import { useDatabasesStore } from "@/features/databases";
 import { useFilesStore } from "@/features/files";
+import { useEditorStore } from "@/features/files/stores/editor";
+import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 import { useTrashStore } from "@/features/files/stores/trash";
 import { useNotificationsStore } from "@/features/notifications";
 import { useProjectsStore } from "@/features/projects";
@@ -100,9 +102,22 @@ export const useAuthStore = defineStore("auth", () => {
   // those changes here so the store never writes a stale token back. When the
   // shared session is emptied elsewhere (forced logout on 401, cross-tab
   // sign-out) the user-scoped caches are dropped too: the redirect stays
-  // in-app now, so no reload clears them anymore.
+  // in-app now, so no reload clears them anymore. An account change rebinds
+  // the editor window to the new account's persisted geometry.
+  let lastAccountId = initial.user?.id ?? "";
   subscribeSession((session) => {
     applySession(session);
+    const nextAccountId = session.user?.id ?? "";
+    if (nextAccountId !== lastAccountId) {
+      lastAccountId = nextAccountId;
+      if (nextAccountId !== "") {
+        try {
+          useEditorWindowStore().reloadForUser(nextAccountId);
+        } catch {
+          // Sign-in must always complete; a geometry reload never blocks it.
+        }
+      }
+    }
     if (session.accessToken === null && session.refreshToken === null) {
       resetUserStores();
     }
@@ -140,7 +155,8 @@ export const useAuthStore = defineStore("auth", () => {
   /**
    * clearSession forgets the session in memory and in localStorage, and
    * drops every user-scoped Pinia cache (teams, servers, applications,
-   * databases, files, notifications, services, backups, providers, templates,
+   * databases, files, editor tabs and window geometry, notifications,
+   * services, backups, providers, templates,
    * toolchain, proxy, recent deploys) so the next sign-in cannot render the
    * previous account's data — notably the sidebar role, which the teams store
    * would otherwise keep serving from its loaded cache.
@@ -170,6 +186,8 @@ export const useAuthStore = defineStore("auth", () => {
       () => useApplicationsStore().reset(),
       () => useDatabasesStore().reset(),
       () => useFilesStore().reset(),
+      () => useEditorStore().reset(),
+      () => useEditorWindowStore().reset(),
       () => useTrashStore().reset(),
       () => useNotificationsStore().reset(),
       () => useProjectsStore().reset(),

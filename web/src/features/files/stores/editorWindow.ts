@@ -5,7 +5,9 @@ import {
   DEFAULT_EDITOR_WINDOW,
   EDITOR_WINDOW_MIN_HEIGHT,
   EDITOR_WINDOW_MIN_WIDTH,
+  EDITOR_WINDOW_NARROW_VIEWPORT,
 } from "@/features/files/schemas/editorWindow";
+import type { EditorWindowState } from "@/features/files/schemas/editorWindow";
 import { useEditorStore } from "@/features/files/stores/editor";
 import {
   clampEditorSize,
@@ -20,15 +22,17 @@ import { getSession } from "@/shared/api/token";
  * (size + dragged position) and the minimized flag so the editor survives
  * route navigation: the window component mounts once in the app shell and
  * reads everything here, while the tabs themselves stay in the editor store.
- * Geometry persists per user in localStorage and is clamped back into the
- * viewport on restore.
+ * Geometry persists per user in localStorage on user drag/resize only; the
+ * viewport fit is derived for display and never overwrites the saved size.
  */
 export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
-  // The key is per user; the id is read once because a different account
-  // remounts the app shell (and must not inherit the previous geometry).
-  const userId = getSession().user?.id ?? "";
   const storage = typeof localStorage === "undefined" ? null : localStorage;
-  const initial = storage ? readEditorWindow(storage, userId) : DEFAULT_EDITOR_WINDOW;
+  // userId rebinds on account change (see reloadForUser): capturing it once
+  // would keep writing the previous account's key after an in-SPA login.
+  const userId = ref<string>(getSession().user?.id ?? "");
+  const initial = storage
+    ? readEditorWindow(storage, userId.value)
+    : DEFAULT_EDITOR_WINDOW;
 
   const width = ref<number>(initial.width);
   const height = ref<number>(initial.height);
@@ -39,18 +43,52 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
   /** openCount is the rail badge: the number of open editor tabs. */
   const openCount = computed<number>(() => useEditorStore().tabs.length);
 
-  /** persist writes the current geometry; storage failures keep memory intact. */
-  function persist(): void {
-    if (!storage) {
-      return;
-    }
-    writeEditorWindow(storage, userId, {
+  /** snapshot reads the persistable geometry. */
+  function snapshot(): EditorWindowState {
+    return {
       width: width.value,
       height: height.value,
       x: x.value,
       y: y.value,
       minimized: minimized.value,
-    });
+    };
+  }
+
+  /** apply writes one loaded snapshot into memory (no storage touch). */
+  function apply(next: EditorWindowState): void {
+    width.value = next.width;
+    height.value = next.height;
+    x.value = next.x;
+    y.value = next.y;
+    minimized.value = next.minimized;
+  }
+
+  /** persist writes the current geometry; storage failures keep memory intact. */
+  function persist(): void {
+    if (!storage || userId.value === "") {
+      return;
+    }
+    writeEditorWindow(storage, userId.value, snapshot());
+  }
+
+  /**
+   * reloadForUser rebinds the store to another account (in-SPA login or
+   * account switch) and loads that account's persisted geometry, so one
+   * browser never leaks window state across accounts.
+   */
+  function reloadForUser(nextUserId: string): void {
+    userId.value = nextUserId;
+    apply(storage ? readEditorWindow(storage, nextUserId) : DEFAULT_EDITOR_WINDOW);
+  }
+
+  /**
+   * reset drops the in-memory geometry and the user binding (logout). It
+   * never persists: wiping storage would destroy the signed-out account's
+   * saved size, which is still theirs on the next sign-in.
+   */
+  function reset(): void {
+    userId.value = "";
+    apply(DEFAULT_EDITOR_WINDOW);
   }
 
   /** setSize applies a clamped resize and persists it. */
@@ -114,11 +152,15 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
   }
 
   /**
-   * clampToViewport pulls restored geometry back on screen after a viewport
-   * change (or a smaller screen loading stored desktop geometry). A narrow
-   * viewport drops the dragged position to the pinned default.
+   * displayGeometry fits the persisted geometry into a viewport for display
+   * only (a narrow viewport drops the dragged offset to the pinned default).
+   * It never writes state or storage, so a briefly small window cannot shrink
+   * the saved desktop size.
    */
-  function clampToViewport(viewportWidth: number, viewportHeight: number): void {
+  function displayGeometry(
+    viewportWidth: number,
+    viewportHeight: number,
+  ): { width: number; height: number; x: number | null; y: number | null } {
     const clamped = clampEditorSize(
       width.value,
       height.value,
@@ -127,24 +169,21 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
       EDITOR_WINDOW_MIN_WIDTH,
       EDITOR_WINDOW_MIN_HEIGHT,
     );
-    width.value = clamped.width;
-    height.value = clamped.height;
-    if (viewportWidth < 640) {
-      x.value = null;
-      y.value = null;
-    } else if (x.value !== null && y.value !== null) {
-      const position = clampEditorOffset(
-        x.value,
-        y.value,
-        width.value,
-        height.value,
-        viewportWidth,
-        viewportHeight,
-      );
-      x.value = position.x;
-      y.value = position.y;
+    if (viewportWidth < EDITOR_WINDOW_NARROW_VIEWPORT) {
+      return { width: clamped.width, height: clamped.height, x: null, y: null };
     }
-    persist();
+    if (x.value === null || y.value === null) {
+      return { width: clamped.width, height: clamped.height, x: null, y: null };
+    }
+    const position = clampEditorOffset(
+      x.value,
+      y.value,
+      clamped.width,
+      clamped.height,
+      viewportWidth,
+      viewportHeight,
+    );
+    return { width: clamped.width, height: clamped.height, x: position.x, y: position.y };
   }
 
   return {
@@ -158,6 +197,8 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
     setPosition,
     resetPosition,
     setMinimized,
-    clampToViewport,
+    displayGeometry,
+    reloadForUser,
+    reset,
   };
 });

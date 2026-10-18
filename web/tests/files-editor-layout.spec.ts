@@ -293,7 +293,8 @@ test("the editor window resizes from its corner within the viewport", async ({
   const before = await window_.boundingBox();
   expect(before).not.toBeNull();
 
-  // Drag the corner grip up and to the left: the window shrinks.
+  // Drag the corner grip up and to the left: the window shrinks. The drag
+  // must clear the viewport margin cap, so it moves well past it.
   const grip = page.locator(".ed-resize");
   const gripBox = await grip.boundingBox();
   expect(gripBox).not.toBeNull();
@@ -302,7 +303,7 @@ test("the editor window resizes from its corner within the viewport", async ({
     gripBox!.y + gripBox!.height / 2,
   );
   await page.mouse.down();
-  await page.mouse.move(gripBox!.x - 160, gripBox!.y - 120, { steps: 10 });
+  await page.mouse.move(gripBox!.x - 160, gripBox!.y - 320, { steps: 10 });
   await page.mouse.up();
   const resized = await window_.boundingBox();
   expect(resized).not.toBeNull();
@@ -310,6 +311,50 @@ test("the editor window resizes from its corner within the viewport", async ({
   expect(resized!.height).toBeLessThan(before!.height);
   expect(resized!.x + resized!.width).toBeLessThanOrEqual(viewport.width + 1);
   expect(resized!.y + resized!.height).toBeLessThanOrEqual(viewport.height + 1);
+});
+
+test("the editor window stays inside a 390px phone viewport with margins", async ({
+  page,
+}) => {
+  const viewport = { width: 390, height: 844 };
+  await page.setViewportSize(viewport);
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+
+  // The default size yields to the narrow viewport instead of overflowing it.
+  const box = await page.locator(".ed-window").boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height + 1);
+  // ... and dragging the corner cannot push it back out.
+  const grip = page.locator(".ed-resize");
+  const gripBox = await grip.boundingBox();
+  expect(gripBox).not.toBeNull();
+  await page.mouse.move(
+    gripBox!.x + gripBox!.width / 2,
+    gripBox!.y + gripBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(viewport.width + 400, viewport.height + 400, { steps: 10 });
+  await page.mouse.up();
+  const grown = await page.locator(".ed-window").boundingBox();
+  expect(grown).not.toBeNull();
+  expect(grown!.x + grown!.width).toBeLessThanOrEqual(viewport.width + 1);
+  expect(grown!.y + grown!.height).toBeLessThanOrEqual(viewport.height + 1);
+
+  // Below the tablet breakpoint the rail lives in the topbar drawer, and the
+  // parked icon must still restore the window from there.
+  await page.locator(".ed-window-min").click();
+  await expect(page.locator(".ed-window")).toBeHidden();
+  await page.locator(".rail-toggle").click();
+  await expect(page.locator(".rail-btn--editor")).toBeVisible();
+  await page.locator(".rail-btn--editor").click();
+  await expect(page.locator(".ed-window")).toBeVisible();
 });
 
 test("editor save conflict opens a bounded modal with pinned header and three choices", async ({
@@ -645,7 +690,7 @@ test("the conflict modal is an alertdialog that confirms overwrite and reload", 
   await expect(page.locator(".n-popconfirm")).toContainText("Overwrite replaces");
 });
 
-test("leaving the files route with a dirty tab asks before discarding", async ({
+test("leaving the files route with a dirty tab keeps the editor open", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -659,24 +704,23 @@ test("leaving the files route with a dirty tab asks before discarding", async ({
   await page.keyboard.type("# changed");
   await expect(page.locator(".ed-dot")).toHaveCount(1);
 
-  // The default window is ~30% larger now and overlays the sidebar, so park
-  // it on the rail first; the dirty buffer stays open behind the icon.
+  // The window is app-level now: parking it and navigating away prompts
+  // nothing, keeps the tab and its unsaved buffer, and the rail badge still
+  // counts it. (The window overlays the sidebar at this size, so park first.)
   await page.locator(".ed-window-min").click();
   await expect(page.locator(".rail-btn--editor")).toBeVisible();
 
   await page.locator("a.nav-item", { hasText: "Servers" }).first().click();
-  const dialog = page.locator(".n-modal.n-card");
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("Discard unsaved changes?");
-
-  // Staying keeps the buffer and the route.
-  await dialog.getByRole("button", { name: "Stay" }).click();
-  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(/\/servers$/);
+  await expect(page.locator(".n-modal.n-card")).toHaveCount(0);
   await expect(page.locator(".rail-btn--editor")).toBeVisible();
-  expect(new URL(page.url()).pathname).toContain("/files");
+  await expect(page.locator(".rail-btn--editor .rail-badge")).toHaveText("1");
 
-  // Restoring the window keeps the dirty buffer.
+  // Coming back restores the window with the dirty buffer intact.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/files/);
   await page.locator(".rail-btn--editor").click();
+  await expect(page.locator(".ed-window")).toBeVisible();
   await expect(page.locator(".cm-content")).toBeVisible();
   await expect(page.locator(".ed-dot")).toHaveCount(1);
 });

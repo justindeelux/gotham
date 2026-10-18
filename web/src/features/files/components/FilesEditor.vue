@@ -24,7 +24,7 @@ import {
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { CSSProperties, InjectionKey } from "vue";
 import { useI18n } from "vue-i18n";
-import { onBeforeRouteLeave, onBeforeRouteUpdate, routerKey } from "vue-router";
+import { routerKey } from "vue-router";
 import type { Router } from "vue-router";
 
 import EditorCloseTabsDialog from "@/features/files/components/EditorCloseTabsDialog.vue";
@@ -59,6 +59,7 @@ import type { FilesVersion } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
+import { EDITOR_WINDOW_MIN_WIDTH } from "@/features/files/schemas/editorWindow";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
 import {
@@ -143,6 +144,17 @@ const offset = computed<{ x: number; y: number } | null>(() =>
     ? { x: editorWindow.x, y: editorWindow.y }
     : null,
 );
+// viewport mirrors the window size for display-only clamping (finding 6): the
+// persisted size is never rewritten by a resize event, only fitted on screen.
+const viewport = ref({
+  width: typeof window === "undefined" ? 0 : window.innerWidth,
+  height: typeof window === "undefined" ? 0 : window.innerHeight,
+});
+/**
+ * WINDOW_VIEWPORT_MARGIN reserves the pinned window's breathing room: the
+ * bottom dock gap plus the top bar, so the default size never covers them.
+ */
+const WINDOW_VIEWPORT_MARGIN = 104;
 // windowElement is the floating window, measured for drag clamping.
 const windowElement = ref<HTMLElement | null>(null);
 // resizeState tracks one in-flight corner resize (null when idle).
@@ -193,19 +205,23 @@ const closeSaving = ref(false);
 const { copyText } = useCopyText();
 
 /**
- * windowStyle applies the persisted size and dragged position. Until the
- * window is dragged the CSS default (pinned bottom-right) applies, so a fresh
- * open is always as designed. Size stays bounded to the viewport.
+ * windowStyle applies the persisted size and dragged position, fitted into
+ * the current viewport for display only (the saved size is untouched). Until
+ * the window is dragged the CSS default (pinned bottom-right) applies, so a
+ * fresh open is always as designed.
  */
 const windowStyle = computed<CSSProperties>(() => {
+  const fitted = editorWindow.displayGeometry(viewport.value.width, viewport.value.height);
   const style: CSSProperties = {
-    width: `min(${editorWindow.width}px, calc(100vw - var(--space-6) * 2))`,
-    height: `min(${editorWindow.height}px, calc(100vh - 104px))`,
+    width: `${fitted.width}px`,
+    // The window never covers the shell chrome: cap the height below the
+    // viewport by the top-bar/bottom-gap margin.
+    height: `${Math.min(fitted.height, Math.max(0, viewport.value.height - WINDOW_VIEWPORT_MARGIN))}px`,
   };
   const position = offset.value;
-  if (position) {
-    style.left = `${position.x}px`;
-    style.top = `${position.y}px`;
+  if (position && fitted.x !== null && fitted.y !== null) {
+    style.left = `${fitted.x}px`;
+    style.top = `${fitted.y}px`;
     style.right = "auto";
     style.bottom = "auto";
   }
@@ -318,44 +334,65 @@ const tabMenuOptions = computed<DropdownOption[]>(() => {
   ];
 });
 
-// A dirty buffer must never be dropped by a route change, a server switch or
-// a team switch without an explicit confirmation (beforeunload still covers a
-// browser close/reload).
+// A dirty buffer must never be dropped by a destructive path — a server or
+// team switch, or logout — without an explicit confirmation (beforeunload
+// still covers a browser close/reload). Route navigation never drops buffers:
+// the window mounts once in the app shell and outlives the page.
 const leaveOpen = ref(false);
 let leaveResolve: ((_leave: boolean) => void) | null = null;
-// leaveResolved records that the user explicitly allowed a discard (clicked
-// "Discard and leave"). An unmount without it keeps dirty buffers in the store.
-let leaveResolved = false;
+// leavePromise is the open confirmation both Overlapping callers share: a
+// second confirmDiscard while the dialog is open returns the same promise
+// instead of orphaning the first caller's guard.
+let leavePromise: Promise<boolean> | null = null;
 
-/** confirmDiscard asks the user before discarding dirty buffers. */
+/**
+ * confirmDiscard asks the user before discarding dirty buffers. Overlapping
+ * calls share one dialog and one promise, so a team switch landing mid-prompt
+ * (or a rapid double action) can never strand a caller waiting forever.
+ */
 function confirmDiscard(): Promise<boolean> {
   if (!editor.hasDirty) {
     return Promise.resolve(true);
   }
-  return new Promise<boolean>((resolve) => {
+  if (leavePromise) {
+    return leavePromise;
+  }
+  leavePromise = new Promise<boolean>((resolve) => {
     leaveResolve = resolve;
     leaveOpen.value = true;
   });
+  return leavePromise;
 }
 
-/** resolveLeave settles the pending confirmation. */
+/** resolveLeave settles the pending confirmation and releases its promise. */
 function resolveLeave(leave: boolean): void {
   leaveOpen.value = false;
-  if (leave) {
-    leaveResolved = true;
-  }
   leaveResolve?.(leave);
   leaveResolve = null;
+  leavePromise = null;
 }
 
-onBeforeRouteLeave(async () => confirmDiscard());
-onBeforeRouteUpdate(async () => confirmDiscard());
-
-// The window mounts once in the app shell (JUS-232) and outlives the page, so
-// route navigation never unmounts it: the same dirty guard runs as a global
-// router guard instead, covering every page change while tabs stay open. Unit
-// mounts without a router skip it (the component guards above still apply).
-const stopRouteGuard = router?.beforeEach(async () => confirmDiscard()) ?? null;
+// A server switch moves the browser to another node while this window may
+// hold that node's dirty tabs: confirm before dropping them, and browse back
+// when the user stays (mirroring the team-switch revert below). A discard
+// resets the window so the next open starts clean on the new server.
+watch(
+  () => files.serverId,
+  (next) => {
+    if (!next || next === editor.serverId || !editor.hasDirty) {
+      return;
+    }
+    void confirmDiscard().then((leave) => {
+      if (leave) {
+        editor.reset();
+        return;
+      }
+      if (editor.serverId !== "") {
+        void router?.push({ name: "server-files", params: { id: editor.serverId } });
+      }
+    });
+  },
+);
 
 // A team switch changes the caller's role and the server's visibility; ask
 // before dropping dirty buffers, and revert the selection if the user stays.
@@ -985,9 +1022,9 @@ function resetWindowPosition(): void {
   dragState = null;
 }
 
-/** onWindowResize re-clamps the persisted geometry; a narrow viewport resets it. */
+/** onWindowResize records the viewport for display-only fitting. */
 function onWindowResize(): void {
-  editorWindow.clampToViewport(window.innerWidth, window.innerHeight);
+  viewport.value = { width: window.innerWidth, height: window.innerHeight };
 }
 
 /**
@@ -1080,6 +1117,42 @@ function onResizePointerUp(event: PointerEvent): void {
   if (resizeState && event.pointerId === resizeState.pointerId) {
     resizeState = null;
   }
+}
+
+/**
+ * RESIZE_KEY_STEP is the keyboard resize step; Shift multiplies it for a
+ * larger jump (mirrors the explorer splitter's 16px press).
+ */
+const RESIZE_KEY_STEP = 16;
+const RESIZE_KEY_STEP_LARGE = 64;
+
+/**
+ * onResizeKeydown resizes from the keyboard: arrows grow or shrink the window
+ * by one step, Shift+arrows by a large step. The host store clamps and
+ * persists the result, exactly like a pointer drag.
+ */
+function onResizeKeydown(event: KeyboardEvent): void {
+  const step = event.shiftKey ? RESIZE_KEY_STEP_LARGE : RESIZE_KEY_STEP;
+  let deltaWidth = 0;
+  let deltaHeight = 0;
+  switch (event.key) {
+    case "ArrowRight":
+      deltaWidth = step;
+      break;
+    case "ArrowLeft":
+      deltaWidth = -step;
+      break;
+    case "ArrowDown":
+      deltaHeight = step;
+      break;
+    case "ArrowUp":
+      deltaHeight = -step;
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
+  editorWindow.setSize(editorWindow.width + deltaWidth, editorWindow.height + deltaHeight);
 }
 
 /** minimizeWindow collapses the window into the rail icon and moves focus there. */
@@ -1450,7 +1523,7 @@ onMounted(() => {
   window.addEventListener("beforeunload", onBeforeUnload);
   window.addEventListener("resize", onWindowResize);
   window.addEventListener("keydown", onEditorKeydown);
-  editorWindow.clampToViewport(window.innerWidth, window.innerHeight);
+  onWindowResize();
   void refreshHistoryCount();
 });
 
@@ -1458,7 +1531,6 @@ onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", onBeforeUnload);
   window.removeEventListener("resize", onWindowResize);
   window.removeEventListener("keydown", onEditorKeydown);
-  stopRouteGuard?.();
   for (const session of sessions.values()) {
     session.destroy();
   }
@@ -1471,11 +1543,10 @@ onBeforeUnmount(() => {
   mergeSessions.clear();
   mergeHosts.clear();
   mergeSources.clear();
-  // An implicit unmount (a team switch, or losing the read role) must never
-  // drop a dirty buffer: reset only when nothing is dirty, or the user
-  // resolved the discard prompt. The store outlives the component, so a
-  // remount restores the tabs.
-  if (!editor.hasDirty || leaveResolved) {
+  // An implicit unmount must never drop a dirty buffer (logout and session
+  // changes reset the stores explicitly): reset only when nothing is dirty.
+  // The store outlives the component, so a remount restores the tabs.
+  if (!editor.hasDirty) {
     editor.reset();
   }
 });
@@ -1876,14 +1947,20 @@ onBeforeUnmount(() => {
     </div>
     <div
       class="ed-resize"
-      role="separator"
+      tabindex="0"
+      role="slider"
       :aria-label="t('files.editor.resize')"
-      aria-orientation="horizontal"
+      :aria-valuemin="EDITOR_WINDOW_MIN_WIDTH"
+      :aria-valuemax="4096"
+      :aria-valuenow="editorWindow.width"
+      :aria-valuetext="`${editorWindow.width} by ${editorWindow.height} pixels`"
+      aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
       @pointerdown="onResizePointerDown"
       @pointermove="onResizePointerMove"
       @pointerup="onResizePointerUp"
       @pointercancel="onResizePointerUp"
       @lostpointercapture="onResizePointerUp"
+      @keydown="onResizeKeydown"
     />
   </section>
 
@@ -1998,8 +2075,14 @@ onBeforeUnmount(() => {
   width: min(1331px, calc(100vw - var(--space-6) * 2));
   height: min(936px, calc(100vh - 104px));
   height: min(936px, calc(100dvh - 104px));
-  min-width: 480px;
-  min-height: 320px;
+  /* The minimum yields to narrow viewports so the window always fits with
+     its side margins; the maximum caps the inline size to the same margins
+     (the inline style owns the real value, the caps only trim overflow). */
+  min-width: min(480px, calc(100vw - var(--space-6) * 2));
+  min-height: min(320px, calc(100vh - var(--space-6) * 2));
+  max-width: calc(100vw - var(--space-6) * 2);
+  max-height: calc(100vh - var(--space-6) * 2);
+  max-height: calc(100dvh - var(--space-6) * 2);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -2075,6 +2158,17 @@ onBeforeUnmount(() => {
 }
 
 .ed-resize:hover::after {
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+/* Keyboard focus must be as visible as the hover state (finding 5). */
+.ed-resize:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ed-resize:focus-visible::after {
   border-color: var(--accent);
   opacity: 1;
 }

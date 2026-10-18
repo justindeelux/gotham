@@ -146,6 +146,13 @@ describe("clampEditorSize", () => {
       height: 600,
     });
   });
+
+  it("yields to a phone viewport narrower than the minimum", () => {
+    expect(clampEditorSize(1331, 936, 390, 844, 480, 320)).toEqual({
+      width: 390,
+      height: 844,
+    });
+  });
 });
 
 describe("useEditorWindowStore", () => {
@@ -165,27 +172,50 @@ describe("useEditorWindowStore", () => {
     expect(second.minimized).toBe(true);
   });
 
-  it("clamps restored geometry back into a smaller viewport", () => {
+  it("fits restored geometry into a smaller viewport for display only", () => {
     seedSession("u-1");
     const store = useEditorWindowStore();
-    store.setSize(1331, 936);
-    store.setPosition(1200, 800);
-    store.clampToViewport(800, 600);
-    expect(store.width).toBeLessThanOrEqual(800);
-    expect(store.height).toBeLessThanOrEqual(600);
-    expect(store.x).not.toBeNull();
-    expect(store.y).not.toBeNull();
-    expect(store.x! + store.width).toBeLessThanOrEqual(800);
-    expect(store.y! + store.height).toBeLessThanOrEqual(600);
+    store.setSize(900, 600);
+    store.setPosition(100, 80);
+    const fitted = store.displayGeometry(800, 600);
+    expect(fitted.width).toBeLessThanOrEqual(800);
+    expect(fitted.height).toBeLessThanOrEqual(600);
+    expect(fitted.x).not.toBeNull();
+    expect(fitted.y).not.toBeNull();
+    expect(fitted.x! + fitted.width).toBeLessThanOrEqual(800);
+    expect(fitted.y! + fitted.height).toBeLessThanOrEqual(600);
   });
 
-  it("resets a dragged position on a narrow viewport", () => {
+  it("never persists a display fit: the saved size survives a small viewport", () => {
+    seedSession("u-1");
+    const first = useEditorWindowStore();
+    first.setSize(900, 600);
+    first.setPosition(100, 80);
+    // Displaying on a phone fits on screen but leaves memory and storage alone.
+    const fitted = first.displayGeometry(390, 844);
+    expect(fitted.width).toBeLessThanOrEqual(390);
+    expect(first.width).toBe(900);
+    expect(first.height).toBe(600);
+    expect(first.x).toBe(100);
+    // A fresh store instance (a reload) still restores the desktop geometry.
+    setActivePinia(createPinia());
+    const second = useEditorWindowStore();
+    expect(second.width).toBe(900);
+    expect(second.height).toBe(600);
+  });
+
+  it("drops a dragged offset to the pinned default on a narrow viewport", () => {
     seedSession("u-1");
     const store = useEditorWindowStore();
+    store.setSize(800, 600);
     store.setPosition(30, 40);
-    store.clampToViewport(600, 800);
-    expect(store.x).toBeNull();
-    expect(store.y).toBeNull();
+    expect(store.x).toBe(30);
+    const fitted = store.displayGeometry(600, 800);
+    expect(fitted.x).toBeNull();
+    expect(fitted.y).toBeNull();
+    // Display-only: the persisted offset is untouched.
+    expect(store.x).toBe(30);
+    expect(store.y).toBe(40);
   });
 
   it("counts open editor tabs for the rail badge", () => {

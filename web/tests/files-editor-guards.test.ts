@@ -7,6 +7,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { NDropdown, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
+import { createMemoryHistory, createRouter } from "vue-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, nextTick } from "vue";
 
@@ -195,6 +196,50 @@ function mountEditor() {
     global: { plugins: [i18n], stubs: { teleport: true } },
   });
   return { wrapper, teams, files, editor };
+}
+
+/** mountEditorWithRouter mounts FilesEditor with a memory router (JUS-232 fix
+ * round 1): navigation and server-switch reverts need real route targets. */
+async function mountEditorWithRouter(initialPath = "/servers/srv-a/files") {
+  setActivePinia(createPinia());
+  const teams = useTeamsStore();
+  teams.teams = [team("team-a", "owner"), team("team-b", "owner")];
+  teams.activeTeamId = "team-a";
+
+  const files = useFilesStore();
+  files.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
+  files.rootName = "volumes";
+
+  const editor = useEditorStore();
+  const stub = { template: "<div />" };
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/dashboard", name: "dashboard", component: stub },
+      { path: "/servers/:id/files", name: "server-files", component: stub },
+    ],
+  });
+  await router.push(initialPath);
+  await router.isReady();
+  const shell = defineComponent({
+    render: () =>
+      h(NMessageProvider, null, {
+        default: () => h(FilesEditor, { serverId: "srv" }),
+      }),
+  });
+  const wrapper = mount(shell, {
+    attachTo: document.body,
+    global: { plugins: [router, i18n], stubs: { teleport: true } },
+  });
+  await flushPromises();
+  return { wrapper, teams, files, editor, router };
+}
+
+/** leaveDialog finds the open discard-confirmation dialog, if any. */
+function leaveDialog(wrapper: ReturnType<typeof mountEditor>["wrapper"]) {
+  return wrapper
+    .findAll(".app-modal")
+    .find((node) => node.text().includes("Discard unsaved changes?"));
 }
 
 beforeEach(() => {
@@ -564,6 +609,118 @@ describe("FilesEditor guards", () => {
     await nextTick();
     // The restore lands keyboard focus back on the active tab button.
     expect(document.activeElement?.id).toBe(`ed-tab-${tab.id}`);
+    wrapper.unmount();
+  });
+
+  it("never prompts on route navigation: dirty tabs survive the move", async () => {
+    const { wrapper, editor, router } = await mountEditorWithRouter();
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    await router.push("/dashboard");
+    await flushPromises();
+
+    // No confirmation, no lost buffer: the window outlives the page.
+    expect(leaveDialog(wrapper)).toBeUndefined();
+    expect(editor.tabs).toHaveLength(1);
+    expect(editor.hasDirty).toBe(true);
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    wrapper.unmount();
+  });
+
+  it("discards the window state when a server switch is confirmed", async () => {
+    const { wrapper, files, editor } = await mountEditorWithRouter();
+    files.serverId = "srv-a";
+    editor.serverId = "srv-a";
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    files.serverId = "srv-b";
+    await flushPromises();
+    expect(leaveDialog(wrapper)).toBeTruthy();
+
+    const discard = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Discard and leave");
+    expect(discard).toBeTruthy();
+    await discard!.trigger("click");
+    await flushPromises();
+
+    expect(editor.tabs).toHaveLength(0);
+    expect(leaveDialog(wrapper)).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("shares one confirmation across a team switch landing mid-prompt", async () => {
+    const { wrapper, teams, files, editor, router } = await mountEditorWithRouter(
+      "/dashboard",
+    );
+    files.serverId = "srv-a";
+    editor.serverId = "srv-a";
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    // First trigger: the team switch opens the confirmation.
+    teams.activeTeamId = "team-b";
+    await flushPromises();
+    expect(leaveDialog(wrapper)).toBeTruthy();
+
+    // Second trigger while the dialog is open: it must reuse the same
+    // promise, never orphan the team guard.
+    files.serverId = "srv-b";
+    await flushPromises();
+    expect(
+      wrapper
+        .findAll(".app-modal")
+        .filter((node) => node.text().includes("Discard unsaved changes?")),
+    ).toHaveLength(1);
+
+    // Staying settles BOTH guards: the team reverts and the browser is sent
+    // back to the tab's server. With the old single slot, the team promise
+    // hung forever and the revert below never happened.
+    const stay = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Stay");
+    expect(stay).toBeTruthy();
+    await stay!.trigger("click");
+    await flushPromises();
+    await router.isReady();
+
+    expect(teams.activeTeamId).toBe("team-a");
+    expect(router.currentRoute.value.params.id).toBe("srv-a");
+    expect(editor.tabs).toHaveLength(1);
+    expect(leaveDialog(wrapper)).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("resizes from the keyboard with arrows and Shift", async () => {
+    const { wrapper } = mountEditor();
+    const tab = makeTab("t1", false);
+    const editor = useEditorStore();
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    const windows = useEditorWindowStore();
+    windows.setSize(800, 600);
+    const grip = wrapper.find(".ed-resize");
+    expect(grip.attributes("tabindex")).toBe("0");
+    expect(grip.attributes("role")).toBe("slider");
+
+    await grip.trigger("keydown", { key: "ArrowLeft" });
+    expect(windows.width).toBe(800 - 16);
+    await grip.trigger("keydown", { key: "ArrowUp", shiftKey: true });
+    expect(windows.height).toBe(600 - 64);
+    await grip.trigger("keydown", { key: "Enter" });
+    expect(windows.width).toBe(800 - 16);
     wrapper.unmount();
   });
 

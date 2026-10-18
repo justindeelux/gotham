@@ -28,6 +28,11 @@ export const editorSettingsSchema = z.object({
   fontFamily: z.enum(["mono", "sans"]).catch("mono"),
   tabSize: z.union([z.literal(2), z.literal(4), z.literal(8)]).catch(4),
   insertSpaces: z.boolean().catch(true),
+  // Added by JUS-227. A preference file written before that has no such key:
+  // `.default(true)` fills it in instead of failing the whole parse, and
+  // `.catch(true)` resets only this field when the stored value is bogus.
+  autocomplete: z.boolean().catch(true).default(true),
+  snippets: z.boolean().catch(true).default(true),
   lineNumbers: z.boolean().catch(true),
   showInvisibles: z.boolean().catch(false),
   indentGuides: z.boolean().catch(true),
@@ -44,6 +49,8 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   fontFamily: "mono",
   tabSize: 4,
   insertSpaces: true,
+  autocomplete: true,
+  snippets: true,
   lineNumbers: true,
   showInvisibles: false,
   indentGuides: true,

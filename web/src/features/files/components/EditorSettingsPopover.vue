@@ -171,6 +171,26 @@ watch(show, async (value) => {
       <!-- Switches are not wrapped in <label>: a label click would toggle the
            switch a second time in some browsers. -->
       <div class="ed-settings-row">
+        <span>{{ t("files.editor.settings.autocomplete") }}</span>
+        <NSwitch
+          size="small"
+          :value="settings.autocomplete"
+          :aria-label="t('files.editor.settings.autocomplete')"
+          @update:value="(value: boolean) => commit({ autocomplete: value })"
+        />
+      </div>
+
+      <div class="ed-settings-row">
+        <span>{{ t("files.editor.settings.snippets") }}</span>
+        <NSwitch
+          size="small"
+          :value="settings.snippets"
+          :aria-label="t('files.editor.settings.snippets')"
+          @update:value="(value: boolean) => commit({ snippets: value })"
+        />
+      </div>
+
+      <div class="ed-settings-row">
         <span>{{ t("files.editor.settings.lineNumbers") }}</span>
         <NSwitch
           size="small"

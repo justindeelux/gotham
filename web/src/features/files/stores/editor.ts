@@ -91,11 +91,11 @@ function nextTabId(): string {
 }
 
 /**
- * Code editor tab store (P18 step 8). Owns the open documents, the active tab,
- * the wrap toggle and the 409 conflict prompt. It is deliberately standalone:
- * every call takes the server id and active team as arguments, so it never
- * imports the files-browser store (which imports this one, one-way, for tab
- * sync on rename/move/delete).
+ * Code editor tab store (P18 step 8). Owns the open documents, the active tab
+ * and the 409 conflict prompt. It is deliberately standalone: every call takes
+ * the server id and active team as arguments, so it never imports the
+ * files-browser store (which imports this one, one-way, for tab sync on
+ * rename/move/delete).
  *
  * Byte fidelity: a document is decoded by {@link splitDoc} on load and
  * re-encoded by {@link serializeDoc} on save, so an unedited CRLF or
@@ -107,7 +107,6 @@ export const useEditorStore = defineStore("filesEditor", () => {
   const serverId = ref("");
   const tabs = ref<EditorTab[]>([]);
   const activeId = ref("");
-  const wrap = ref(false);
   /**
    * conflictQueue is the ordered list of tabs whose save met a stale-etag 409:
    * Save All can raise several at once, and the prompt walks them one by one.
@@ -563,11 +562,6 @@ export const useEditorStore = defineStore("filesEditor", () => {
     }
   }
 
-  /** setWrap toggles soft wrapping for every editor pane. */
-  function setWrap(value: boolean): void {
-    wrap.value = value;
-  }
-
   /**
    * blockingNames returns the names among `names` (in directory `dir`) that
    * have unsaved changes in themselves or any descendant, so a
@@ -650,7 +644,6 @@ export const useEditorStore = defineStore("filesEditor", () => {
   function reset(): void {
     closeAll();
     serverId.value = "";
-    wrap.value = false;
   }
 
   return {
@@ -658,7 +651,6 @@ export const useEditorStore = defineStore("filesEditor", () => {
     serverId,
     tabs,
     activeId,
-    wrap,
     conflictId,
     saveAsId,
     // derived
@@ -686,7 +678,6 @@ export const useEditorStore = defineStore("filesEditor", () => {
     close,
     closeAll,
     closeMany,
-    setWrap,
     blockingNames,
     applyRename,
     applyMove,

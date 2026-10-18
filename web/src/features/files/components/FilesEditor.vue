@@ -30,6 +30,7 @@ import EditorExplorer from "@/features/files/components/EditorExplorer.vue";
 import EditorHistoryDialog from "@/features/files/components/EditorHistoryDialog.vue";
 import EditorLanguagePicker from "@/features/files/components/EditorLanguagePicker.vue";
 import EditorSaveAsDialog from "@/features/files/components/EditorSaveAsDialog.vue";
+import EditorSettingsPopover from "@/features/files/components/EditorSettingsPopover.vue";
 // Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
@@ -45,6 +46,7 @@ import {
 import type { FilesVersion } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
+import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
 import {
   clampEditorOffset,
@@ -66,6 +68,7 @@ const props = defineProps<Props>();
 const { t } = useI18n();
 const message = useMessage();
 const editor = useEditorStore();
+const editorSettings = useEditorSettingsStore();
 const files = useFilesStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
@@ -402,14 +405,18 @@ watch(
   { deep: true },
 );
 
-// Wrap is a global preference applied to every open instance.
+// Editor settings are one global preference applied to every open instance.
 watch(
-  () => editor.wrap,
-  (wrap) => {
+  () => editorSettings.settings,
+  (settings) => {
     for (const session of sessions.values()) {
-      session.setWrap(wrap);
+      session.setSettings(settings);
+    }
+    for (const session of mergeSessions.values()) {
+      session.setSettings(settings);
     }
   },
+  { deep: true },
 );
 
 // A role or writable-root change flips the write gate; a live session must
@@ -496,10 +503,14 @@ async function ensureMerge(): Promise<void> {
     base,
     current,
     language: tab.language,
+    settings: editorSettings.settings,
   }).then((session) => {
     if (editor.tabs.some((item) => item.id === tabId)) {
       mergeSessions.set(tabId, session);
       mergeSources.set(tabId, { base, current });
+      // A settings change during the lazy chunk load must still land on the
+      // fresh diff view (the global watcher ran before it existed).
+      session.setSettings(editorSettings.settings);
     } else {
       session.destroy();
     }
@@ -640,7 +651,7 @@ async function ensureSession(): Promise<void> {
     doc: tab.doc,
     language: tab.language,
     readOnly: !files.canWrite,
-    wrap: editor.wrap,
+    settings: editorSettings.settings,
     onChange: (doc) => editor.setDoc(tabId, doc),
     onCursor: (line, column) => {
       if (editor.activeId === tabId) {
@@ -656,6 +667,9 @@ async function ensureSession(): Promise<void> {
       sessions.set(tabId, session);
       sessionHosts.set(tabId, host);
       sessionLanguages.set(tabId, tab.language);
+      // A settings change during the lazy chunk load must still land on the
+      // fresh instance (the global watcher ran before it existed).
+      session.setSettings(editorSettings.settings);
       session.requestMeasure();
       session.focus();
     } else {
@@ -770,7 +784,7 @@ function openGoToLine(): void {
 
 /** toggleWrap flips the wrap preference. */
 function toggleWrap(): void {
-  editor.setWrap(!editor.wrap);
+  editorSettings.update({ wrap: !editorSettings.settings.wrap });
 }
 
 /** pickLanguage overrides the active tab's grammar without touching history. */
@@ -1344,8 +1358,8 @@ onBeforeUnmount(() => {
             <NButton
               size="tiny"
               secondary
-              :type="editor.wrap ? 'primary' : 'default'"
-              :aria-pressed="editor.wrap"
+              :type="editorSettings.settings.wrap ? 'primary' : 'default'"
+              :aria-pressed="editorSettings.settings.wrap"
               @click="toggleWrap"
             >
               <template #icon>
@@ -1365,6 +1379,7 @@ onBeforeUnmount(() => {
               </template>
               {{ t("files.editor.goToLine") }}
             </NButton>
+            <EditorSettingsPopover />
             <NButton v-if="files.canWrite" size="tiny" secondary @click="openHistory">
               <template #icon>
                 <History :size="14" :stroke-width="1.8" aria-hidden="true" />

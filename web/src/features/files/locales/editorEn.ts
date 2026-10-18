@@ -144,6 +144,27 @@ const en = {
   historyCount: "{count} version | {count} versions",
   historyLoadFailed: "Could not load the file history.",
   historyUnavailable: "File history is unavailable on this control plane.",
+  settings: {
+    label: "Settings",
+    title: "Editor settings",
+    theme: "Theme",
+    themeDark: "Dark",
+    themeLight: "Light",
+    fontSize: "Font size",
+    fontFamily: "Font family",
+    fontMono: "Monospace",
+    fontSans: "Sans-serif",
+    tabSize: "Tab size",
+    indent: "Indent with",
+    indentSpaces: "Spaces",
+    indentTabs: "Tabs",
+    lineNumbers: "Line numbers",
+    showInvisibles: "Show invisibles",
+    indentGuides: "Indent guides",
+    foldGutter: "Fold gutter",
+    highlightActiveLine: "Highlight active line",
+    wrap: "Word wrap",
+  },
 };
 
 export default en;

@@ -206,4 +206,22 @@
   --danger-ink: color-mix(in oklab, var(--danger) 68%, white);
   --float: color-mix(in oklab, var(--surface-warm) 78%, black);
   --ease-morph: cubic-bezier(0.215, 0.61, 0.355, 1);
+
+  /* ── Editor light palette (JUS-219) ──────────────────────────────
+   * The app shell is dark-only; the code editor's "light" theme inverts the
+   * surface tokens and uses these fixed syntax colors, which are readable on
+   * --editor-light-bg. Add a token here before using another light-editor
+   * color. */
+  --editor-light-bg: var(--fg-2);
+  --editor-light-fg: var(--surface-warm);
+  --editor-light-keyword: #7c3aed;
+  --editor-light-string: #3f6212;
+  --editor-light-number: #b45309;
+  --editor-light-comment: #6b7280;
+  --editor-light-property: #1d4ed8;
+  --editor-light-type: #a16207;
+  --editor-light-variable: #334155;
+  --editor-light-tag: #111827;
+  --editor-light-link: #0e7490;
+  --editor-light-invalid: #dc2626;
 }

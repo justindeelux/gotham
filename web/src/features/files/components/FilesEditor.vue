@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {
   CaseSensitive,
-  Code,
   History,
   Keyboard,
   Minus,
@@ -19,12 +18,14 @@ import {
   NDropdown,
   NEmpty,
   NModal,
+  NSpin,
   useMessage,
 } from "naive-ui";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { CSSProperties } from "vue";
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import type { CSSProperties, InjectionKey } from "vue";
 import { useI18n } from "vue-i18n";
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, routerKey } from "vue-router";
+import type { Router } from "vue-router";
 
 import EditorCloseTabsDialog from "@/features/files/components/EditorCloseTabsDialog.vue";
 import EditorConflictDialog from "@/features/files/components/EditorConflictDialog.vue";
@@ -57,10 +58,10 @@ import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { FilesVersion } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
+import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
 import {
-  clampEditorOffset,
   encodingLabel,
   scrollTabIntoView,
   tabsToClose,
@@ -76,25 +77,34 @@ import { useCopyText } from "@/shared/composables/useCopyText";
 import { formatBytes, formatDateTime } from "@/shared/utils/format";
 
 interface Props {
-  serverId: string;
+  serverId?: string;
 }
 
-const props = defineProps<Props>();
+const props = withDefaults(defineProps<Props>(), { serverId: "" });
 
 const { t } = useI18n();
 const message = useMessage();
+// The host shell always provides a router, but unit mounts may not: the
+// global dirty guard only registers when one is injected (JUS-232).
+const router = inject<Router | null>(routerKey as InjectionKey<Router | null>, null);
 const editor = useEditorStore();
+const editorWindow = useEditorWindowStore();
 const editorSettings = useEditorSettingsStore();
 const files = useFilesStore();
 const teams = useTeamsStore();
 const { download } = useFileDownload();
+// activeServerId is the file's server: the page prop while the browser owns
+// it, the editor store once the window outlives the page (JUS-232 app host).
+const activeServerId = computed<string>(() =>
+  props.serverId !== "" ? props.serverId : editor.serverId,
+);
 // Unsaved drafts survive a reload/crash; reopening a file offers Restore /
 // Discard (JUS-229). Kept out of the store so this component stays a view.
 const {
   prompt: draftPrompt,
   restore: restoreDraftPrompt,
   discard: discardDraftPrompt,
-} = useEditorDrafts(() => props.serverId);
+} = useEditorDrafts(() => activeServerId.value);
 
 /** sessions holds one live CodeMirror instance per opened tab. */
 const sessions = new Map<string, EditorSession>();
@@ -116,29 +126,33 @@ const mergeCreating = new Map<string, Promise<void>>();
  *  refreshed diff tab rebuilds instead of showing stale sides. */
 const mergeSources = new Map<string, { base: string; current: string }>();
 const cursor = ref<{ line: number; column: number }>({ line: 1, column: 1 });
-// minimized collapses the window into the bottom dock. The window stays
-// mounted (v-show) so every live session and buffer survives the toggle.
-const minimized = ref(false);
+// Window geometry (JUS-232) lives in the app-level host store so it survives
+// route navigation and reloads: `editorWindow.minimized` collapses the window
+// into the rail icon, the window stays mounted (v-show) so every live session
+// survives. The template reads the store directly.
 // explorerOpen toggles the in-editor file explorer; explorerWidth is its
 // dragged width (the panel clamps it to 200–480 px on the way back).
 const explorerOpen = ref(true);
 const explorerWidth = ref(260);
-// dockButton is the dock control that receives focus when the window collapses.
-const dockButton = ref<HTMLButtonElement | null>(null);
-// dockElement is the fixed dock band; its measured height is published as a CSS
-// variable so the fill page can reserve room for it.
-const dockElement = ref<HTMLElement | null>(null);
-
-// Below this width the floating window nearly fills the viewport, so a dragged
-// offset cannot be meaningful: it is reset to the pinned default.
-const NARROW_VIEWPORT = 640;
-
 // offset is the window's dragged top-left position, or null while it still sits
-// at the CSS default (pinned bottom-right). It is kept while the window stays
-// open and cleared on a dock restore, a narrow viewport, or a close-all.
-const offset = ref<{ x: number; y: number } | null>(null);
+// at the CSS default (pinned bottom-right). It is kept in the host store while
+// the window stays open and cleared on a dock restore, a narrow viewport, or a
+// close-all.
+const offset = computed<{ x: number; y: number } | null>(() =>
+  editorWindow.x !== null && editorWindow.y !== null
+    ? { x: editorWindow.x, y: editorWindow.y }
+    : null,
+);
 // windowElement is the floating window, measured for drag clamping.
 const windowElement = ref<HTMLElement | null>(null);
+// resizeState tracks one in-flight corner resize (null when idle).
+let resizeState: {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originWidth: number;
+  originHeight: number;
+} | null = null;
 // dragState tracks one in-flight title-bar drag (null when idle).
 let dragState: {
   pointerId: number;
@@ -178,45 +192,24 @@ const pendingKeepId = ref("");
 const closeSaving = ref(false);
 const { copyText } = useCopyText();
 
-/** dockVisible is true while the collapsed dock is on screen. */
-const dockVisible = computed(() => editor.tabs.length > 0 && minimized.value);
-
 /**
- * windowStyle applies a dragged position. Until the window is dragged the CSS
- * default (pinned bottom-right) applies, so a fresh open is always as designed.
+ * windowStyle applies the persisted size and dragged position. Until the
+ * window is dragged the CSS default (pinned bottom-right) applies, so a fresh
+ * open is always as designed. Size stays bounded to the viewport.
  */
 const windowStyle = computed<CSSProperties>(() => {
-  const position = offset.value;
-  if (!position) {
-    return {};
-  }
-  return {
-    left: `${position.x}px`,
-    top: `${position.y}px`,
-    right: "auto",
-    bottom: "auto",
+  const style: CSSProperties = {
+    width: `min(${editorWindow.width}px, calc(100vw - var(--space-6) * 2))`,
+    height: `min(${editorWindow.height}px, calc(100vh - 104px))`,
   };
-});
-
-/**
- * syncDockSpace publishes the dock height as `--ed-dock-h` (consumed by the
- * fill page's bottom padding, AppLayout `.page--fill`) or clears it when the
- * dock is hidden. The dock is `v-show`-hidden (display:none) while the window
- * is open, so it is only measured once it is actually laid out.
- */
-async function syncDockSpace(): Promise<void> {
-  await nextTick();
-  const element = dockElement.value;
-  if (dockVisible.value && element) {
-    document.documentElement.style.setProperty("--ed-dock-h", `${element.offsetHeight}px`);
-    return;
+  const position = offset.value;
+  if (position) {
+    style.left = `${position.x}px`;
+    style.top = `${position.y}px`;
+    style.right = "auto";
+    style.bottom = "auto";
   }
-  document.documentElement.style.removeProperty("--ed-dock-h");
-}
-
-watch(dockVisible, () => void syncDockSpace(), { immediate: true });
-onBeforeUnmount(() => {
-  document.documentElement.style.removeProperty("--ed-dock-h");
+  return style;
 });
 
 const readyTabs = computed(() =>
@@ -325,18 +318,6 @@ const tabMenuOptions = computed<DropdownOption[]>(() => {
   ];
 });
 
-/**
- * dockLabel is the dock control's accessible name. The unsaved state is folded
- * in because an `aria-label` overrides any child text a screen reader would
- * otherwise read.
- */
-const dockLabel = computed<string>(() => {
-  const name = activeTab.value?.name ?? String(t("files.editor.heading"));
-  return editor.hasDirty
-    ? String(t("files.editor.restoreUnsaved", { name }))
-    : String(t("files.editor.restore", { name }));
-});
-
 // A dirty buffer must never be dropped by a route change, a server switch or
 // a team switch without an explicit confirmation (beforeunload still covers a
 // browser close/reload).
@@ -370,16 +351,11 @@ function resolveLeave(leave: boolean): void {
 onBeforeRouteLeave(async () => confirmDiscard());
 onBeforeRouteUpdate(async () => confirmDiscard());
 
-watch(
-  () => props.serverId,
-  () => {
-    // A route update (server switch) resets the tabs; a discard resolved for
-    // that navigation must not linger and auto-approve a later implicit
-    // unmount.
-    leaveResolved = false;
-    editor.reset();
-  },
-);
+// The window mounts once in the app shell (JUS-232) and outlives the page, so
+// route navigation never unmounts it: the same dirty guard runs as a global
+// router guard instead, covering every page change while tabs stay open. Unit
+// mounts without a router skip it (the component guards above still apply).
+const stopRouteGuard = router?.beforeEach(async () => confirmDiscard()) ?? null;
 
 // A team switch changes the caller's role and the server's visibility; ask
 // before dropping dirty buffers, and revert the selection if the user stays.
@@ -517,7 +493,7 @@ watch(
 watch(
   () => editor.activeId,
   () => {
-    if (minimized.value) {
+    if (editorWindow.minimized) {
       restoreWindow();
     }
   },
@@ -614,7 +590,7 @@ async function refreshHistoryCount(tab: EditorTab | null = activeTab.value): Pro
   }
   try {
     const versions = await listFileVersions(
-      props.serverId,
+      activeServerId.value,
       teams.activeTeamId,
       tab.root,
       tab.path,
@@ -642,7 +618,7 @@ async function openDiff(version: FilesVersion): Promise<void> {
     return;
   }
   await editor.openDiff(
-    props.serverId,
+    activeServerId.value,
     teams.activeTeamId,
     tab.root,
     tab.path,
@@ -668,7 +644,7 @@ async function restoreVersion(version: FilesVersion): Promise<void> {
   }
   try {
     await restoreFileVersion(
-      props.serverId,
+      activeServerId.value,
       teams.activeTeamId,
       tab.root,
       tab.path,
@@ -872,7 +848,7 @@ async function downloadActive(): Promise<void> {
   if (!tab) {
     return;
   }
-  await download(props.serverId, teams.activeTeamId, tab.root, directoryOf(tab.path), {
+  await download(activeServerId.value, teams.activeTeamId, tab.root, directoryOf(tab.path), {
     name: tab.name,
   });
 }
@@ -1005,30 +981,13 @@ async function useUtf8AndSave(): Promise<void> {
 
 /** resetWindowPosition returns the window to its pinned default position. */
 function resetWindowPosition(): void {
-  offset.value = null;
+  editorWindow.resetPosition();
   dragState = null;
 }
 
-/** onWindowResize re-clamps a dragged window; a narrow viewport resets it. */
+/** onWindowResize re-clamps the persisted geometry; a narrow viewport resets it. */
 function onWindowResize(): void {
-  if (window.innerWidth < NARROW_VIEWPORT) {
-    resetWindowPosition();
-    return;
-  }
-  const element = windowElement.value;
-  const position = offset.value;
-  if (!element || !position) {
-    return;
-  }
-  const rect = element.getBoundingClientRect();
-  offset.value = clampEditorOffset(
-    position.x,
-    position.y,
-    rect.width,
-    rect.height,
-    window.innerWidth,
-    window.innerHeight,
-  );
+  editorWindow.clampToViewport(window.innerWidth, window.innerHeight);
 }
 
 /**
@@ -1068,18 +1027,9 @@ function onBarPointerMove(event: PointerEvent): void {
   if (!dragState || event.pointerId !== dragState.pointerId) {
     return;
   }
-  const element = windowElement.value;
-  if (!element) {
-    return;
-  }
-  const rect = element.getBoundingClientRect();
-  offset.value = clampEditorOffset(
+  editorWindow.setPosition(
     dragState.originX + (event.clientX - dragState.startX),
     dragState.originY + (event.clientY - dragState.startY),
-    rect.width,
-    rect.height,
-    window.innerWidth,
-    window.innerHeight,
   );
 }
 
@@ -1090,10 +1040,54 @@ function onBarPointerUp(event: PointerEvent): void {
   }
 }
 
-/** minimizeWindow collapses the window into the dock and moves focus there. */
+/**
+ * onResizePointerDown starts a corner drag-to-resize. Pointer capture keeps
+ * the tracking even outside the handle; the size is clamped to the usable
+ * band and persisted on every move by the host store.
+ */
+function onResizePointerDown(event: PointerEvent): void {
+  if (event.button !== 0) {
+    return;
+  }
+  const handle = event.currentTarget;
+  if (!(handle instanceof HTMLElement)) {
+    return;
+  }
+  resizeState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    originWidth: editorWindow.width,
+    originHeight: editorWindow.height,
+  };
+  handle.setPointerCapture(event.pointerId);
+  event.preventDefault();
+}
+
+/** onResizePointerMove resizes the window by the pointer delta. */
+function onResizePointerMove(event: PointerEvent): void {
+  if (!resizeState || event.pointerId !== resizeState.pointerId) {
+    return;
+  }
+  editorWindow.setSize(
+    resizeState.originWidth + (event.clientX - resizeState.startX),
+    resizeState.originHeight + (event.clientY - resizeState.startY),
+  );
+}
+
+/** onResizePointerUp ends the resize (also on pointercancel). */
+function onResizePointerUp(event: PointerEvent): void {
+  if (resizeState && event.pointerId === resizeState.pointerId) {
+    resizeState = null;
+  }
+}
+
+/** minimizeWindow collapses the window into the rail icon and moves focus there. */
 function minimizeWindow(): void {
-  minimized.value = true;
-  void nextTick(() => dockButton.value?.focus());
+  editorWindow.setMinimized(true);
+  void nextTick(() => {
+    document.querySelector<HTMLElement>(".rail-btn--editor")?.focus();
+  });
 }
 
 /**
@@ -1133,23 +1127,37 @@ function onWindowEsc(event: KeyboardEvent): void {
 
 /** restoreWindow reopens the window and returns focus to the active tab. */
 function restoreWindow(): void {
-  minimized.value = false;
-  // A dock restore puts the window back at its pinned default, so it never
-  // reappears stranded at a stale dragged position.
-  resetWindowPosition();
-  void nextTick(() => {
-    const tab = document.getElementById(`ed-tab-${editor.activeId}`);
-    if (tab) {
-      tab.focus();
-    } else {
-      sessions.get(editor.activeId)?.focus();
-    }
-    // The window was display:none while collapsed; re-measure the live host.
-    sessions.get(editor.activeId)?.requestMeasure();
-    mergeSessions.get(editor.activeId)?.requestMeasure();
-    revealActiveTab();
-  });
+  editorWindow.setMinimized(false);
+  // The persisted position is kept (clamped to the viewport on resize), so
+  // the window reappears where the user left it. Focusing happens in the
+  // minimized watcher below, so the rail icon's restore click shares it.
 }
+
+/** focusRestoredWindow lands focus back on the active tab after a restore. */
+function focusRestoredWindow(): void {
+  const tab = document.getElementById(`ed-tab-${editor.activeId}`);
+  if (tab) {
+    tab.focus();
+  } else {
+    sessions.get(editor.activeId)?.focus();
+  }
+  // The window was display:none while collapsed; re-measure the live host.
+  sessions.get(editor.activeId)?.requestMeasure();
+  mergeSessions.get(editor.activeId)?.requestMeasure();
+  revealActiveTab();
+}
+
+// Any restore (the title-bar control, the rail icon, or opening a file while
+// collapsed) returns focus to the active tab and re-measures the live host,
+// which was display:none while the window was collapsed.
+watch(
+  () => editorWindow.minimized,
+  (next, prev) => {
+    if (prev === true && next === false) {
+      void nextTick(() => focusRestoredWindow());
+    }
+  },
+);
 
 /** focusTab activates one tab and moves DOM focus onto its tab button. */
 function focusTab(index: number): void {
@@ -1334,7 +1342,7 @@ function onEditorKeydown(event: KeyboardEvent): void {
     event.defaultPrevented ||
     event.isComposing ||
     editor.tabs.length === 0 ||
-    minimized.value ||
+    editorWindow.minimized ||
     pendingClose.value !== null ||
     closeSaving.value
   ) {
@@ -1442,6 +1450,7 @@ onMounted(() => {
   window.addEventListener("beforeunload", onBeforeUnload);
   window.addEventListener("resize", onWindowResize);
   window.addEventListener("keydown", onEditorKeydown);
+  editorWindow.clampToViewport(window.innerWidth, window.innerHeight);
   void refreshHistoryCount();
 });
 
@@ -1449,6 +1458,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("beforeunload", onBeforeUnload);
   window.removeEventListener("resize", onWindowResize);
   window.removeEventListener("keydown", onEditorKeydown);
+  stopRouteGuard?.();
   for (const session of sessions.values()) {
     session.destroy();
   }
@@ -1474,7 +1484,7 @@ onBeforeUnmount(() => {
 <template>
   <section
     v-if="editor.tabs.length > 0"
-    v-show="!minimized"
+    v-show="!editorWindow.minimized"
     ref="windowElement"
     class="ed-window files-editor"
     :style="windowStyle"
@@ -1552,7 +1562,7 @@ onBeforeUnmount(() => {
     <div class="ed-main">
       <EditorExplorer
         v-if="explorerOpen"
-        :server-id="serverId"
+        :server-id="activeServerId"
         :width="explorerWidth"
         @resize="(width: number) => (explorerWidth = width)"
       />
@@ -1773,6 +1783,7 @@ onBeforeUnmount(() => {
             :id="'ed-panel-' + activeTab.id"
             :aria-labelledby="'ed-tab-' + activeTab.id"
           >
+            <NSpin size="medium" :aria-label="t('files.editor.loading', { name: activeTab.name })" />
             <p class="small muted">{{ t("files.editor.loading", { name: activeTab.name }) }}</p>
           </div>
 
@@ -1863,28 +1874,18 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    <div
+      class="ed-resize"
+      role="separator"
+      :aria-label="t('files.editor.resize')"
+      aria-orientation="horizontal"
+      @pointerdown="onResizePointerDown"
+      @pointermove="onResizePointerMove"
+      @pointerup="onResizePointerUp"
+      @pointercancel="onResizePointerUp"
+      @lostpointercapture="onResizePointerUp"
+    />
   </section>
-
-  <div
-    v-if="editor.tabs.length > 0"
-    v-show="minimized"
-    ref="dockElement"
-    class="ed-dock"
-    role="toolbar"
-    :aria-label="t('files.editor.dockLabel')"
-  >
-    <button
-      ref="dockButton"
-      type="button"
-      class="ed-dock-item"
-      :aria-label="dockLabel"
-      @click="restoreWindow"
-    >
-      <Code :size="14" :stroke-width="1.8" aria-hidden="true" />
-      <span class="ed-dock-name">{{ activeTab?.name ?? t("files.editor.heading") }}</span>
-      <span v-if="editor.hasDirty" class="ed-dock-dirty" aria-hidden="true" />
-    </button>
-  </div>
 
   <NDropdown
     :show="tabMenuOpen"
@@ -1976,7 +1977,7 @@ onBeforeUnmount(() => {
   <EditorHistoryDialog
     ref="historyDialog"
     v-model:show="historyOpen"
-    :server-id="props.serverId"
+    :server-id="activeServerId"
     :team-id="teams.activeTeamId"
     :root="historyTarget?.root ?? ''"
     :path="historyTarget?.path ?? ''"
@@ -1994,9 +1995,11 @@ onBeforeUnmount(() => {
   bottom: var(--space-4);
   display: flex;
   flex-direction: column;
-  width: min(1024px, calc(100vw - var(--space-6) * 2));
-  height: min(720px, calc(100vh - 104px));
-  height: min(720px, calc(100dvh - 104px));
+  width: min(1331px, calc(100vw - var(--space-6) * 2));
+  height: min(936px, calc(100vh - 104px));
+  height: min(936px, calc(100dvh - 104px));
+  min-width: 480px;
+  min-height: 320px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -2045,63 +2048,35 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* Bottom app-dock: one item while the editor window is collapsed; a click
-   restores it. Fixed so it survives any page scroll, but constrained to the
-   main content column so it never covers the ServerRail foot or the sidebar
-   MeCard (both sticky at the same bottom edge). */
-.ed-dock {
-  position: fixed;
-  left: calc(var(--rail-w) + var(--sidebar-w));
+/* Corner drag-to-resize handle (JUS-232): a bottom-right grip that resizes
+   the window within its min/max band. */
+.ed-resize {
+  position: absolute;
   right: 0;
   bottom: 0;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  background: var(--surface-warm);
-  border-top: 1px solid var(--border);
+  width: var(--space-4);
+  height: var(--space-4);
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 5;
 }
 
-/* At <=1024px the sidebar column leaves the flow and the rail becomes a
-   drawer (AppLayout grid), so the content column starts at x=0 and the dock
-   must too (JUS-135). */
-@media (max-width: 1024px) {
-  .ed-dock {
-    left: 0;
-  }
+.ed-resize::after {
+  content: "";
+  position: absolute;
+  right: var(--space-1);
+  bottom: var(--space-1);
+  width: var(--space-2);
+  height: var(--space-2);
+  border-right: 2px solid var(--meta);
+  border-bottom: 2px solid var(--meta);
+  border-end-end-radius: var(--radius-sm);
+  opacity: 0.7;
 }
 
-.ed-dock-item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  max-width: 320px;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--fg);
-  font: inherit;
-  cursor: pointer;
-}
-
-.ed-dock-item:hover {
+.ed-resize:hover::after {
   border-color: var(--accent);
-}
-
-.ed-dock-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ed-dock-dirty {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--warn);
+  opacity: 1;
 }
 
 .ed-main {

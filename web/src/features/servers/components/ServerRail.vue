@@ -12,8 +12,12 @@ import {
   statusDots,
 } from "@/features/servers/utils/serverRailView";
 import { useServersStore } from "@/features/servers/stores/servers";
+import { useEditorStore } from "@/features/files/stores/editor";
+import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 
 const serversStore = useServersStore();
+const editor = useEditorStore();
+const editorWindow = useEditorWindowStore();
 const route = useRoute();
 const { locale, t } = useI18n();
 
@@ -26,6 +30,19 @@ const alertText = computed<string>(() => alertsLabel(alertCount.value, locale.va
 const alertsLabelText = computed<string>(() =>
   t("servers.rail.alerts", { text: alertText.value }),
 );
+
+/** editorCount is the rail badge: the number of open editor tabs (JUS-232). */
+const editorCount = computed<number>(() => editor.tabs.length);
+
+/** editorLabel names the rail editor button with its open-tab count. */
+const editorLabel = computed<string>(() =>
+  t("servers.rail.editorWithCount", { count: editorCount.value }),
+);
+
+/** toggleEditor minimizes the window, or restores it when collapsed. */
+function toggleEditor(): void {
+  editorWindow.setMinimized(!editorWindow.minimized);
+}
 
 // The shared server poll is owned by the app shell (AppLayout), which stays
 // mounted for the whole session: the rail itself unmounts below the tablet
@@ -105,6 +122,33 @@ onMounted(() => {
 
     <div class="rail-foot">
       <div class="rail-sep" aria-hidden="true"></div>
+      <!-- JUS-232: the minimized editor parks here as an icon with a badge
+           counting the open tabs; a click restores the window. -->
+      <div v-if="editorCount > 0" class="rail-item">
+        <button
+          type="button"
+          class="rail-btn rail-btn--editor"
+          :aria-label="editorLabel"
+          @click="toggleEditor"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m16 18 6-6-6-6" />
+            <path d="m8 6-6 6 6 6" />
+          </svg>
+          <span class="rail-badge" aria-hidden="true">{{
+            editorCount > 9 ? "9+" : editorCount
+          }}</span>
+        </button>
+      </div>
+      <div v-if="editorCount > 0" class="rail-sep" aria-hidden="true"></div>
       <div class="rail-item">
         <RailIconButton :to="{ name: 'dashboard' }" :label="$t('servers.rail.overview')">
           <svg
@@ -222,6 +266,15 @@ onMounted(() => {
 :deep(.rail-btn--add) {
   background: var(--surface);
   color: var(--success);
+}
+
+/* JUS-232: the editor restore is a button, not a link, so it resets the
+   native button chrome to match the link-styled rail buttons. */
+.rail-btn--editor {
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
 }
 
 .rail-item.is-active :deep(.rail-btn) {

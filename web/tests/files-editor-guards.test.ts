@@ -97,6 +97,7 @@ import { createEditorSession } from "@/features/files/composables/useCodeMirror"
 import { createMergeSession } from "@/features/files/composables/useMergeView";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
+import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
 import { useTeamsStore } from "@/features/teams";
@@ -288,7 +289,7 @@ describe("FilesEditor guards", () => {
     expect(editor.tabs).toHaveLength(0);
   });
 
-  it("minimizes to the dock and restores with the dirty buffer intact", async () => {
+  it("minimizes to the rail icon and restores with the dirty buffer intact", async () => {
     const { wrapper, editor } = mountEditor();
     const tab = makeTab("t1", true);
     editor.tabs = [tab];
@@ -301,20 +302,18 @@ describe("FilesEditor guards", () => {
     await wrapper.find("button.ed-window-min").trigger("click");
     await flushPromises();
 
-    // The window folds away and its dock item takes over (and takes focus).
+    // The window folds away into the rail icon (the host store owns the
+    // flag, so the rail badge and the window agree).
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
-    expect(wrapper.find(".ed-dock").attributes("style") ?? "").not.toContain("display: none");
-    const dockItem = wrapper.find("button.ed-dock-item");
-    expect(dockItem.attributes("aria-label")).toContain("Restore");
-    expect(document.activeElement).toBe(dockItem.element);
+    expect(useEditorWindowStore().minimized).toBe(true);
     // The buffer, its dirty state and the open tab all survive the collapse.
     expect(editor.tabs).toHaveLength(1);
     expect(editor.hasDirty).toBe(true);
 
-    await dockItem.trigger("click");
+    useEditorWindowStore().setMinimized(false);
     await flushPromises();
     expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
-    expect(wrapper.find(".ed-dock").attributes("style")).toContain("display: none");
+    expect(useEditorWindowStore().minimized).toBe(false);
     expect(editor.hasDirty).toBe(true);
     wrapper.unmount();
   });
@@ -524,7 +523,7 @@ describe("FilesEditor guards", () => {
     await flushPromises();
 
     expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
-    expect(wrapper.find(".ed-dock").attributes("style")).toContain("display: none");
+    expect(useEditorWindowStore().minimized).toBe(false);
     wrapper.unmount();
   });
 
@@ -549,7 +548,7 @@ describe("FilesEditor guards", () => {
     wrapper.unmount();
   });
 
-  it("folds the unsaved state into the dock control's accessible name", async () => {
+  it("returns focus to the active tab on restore", async () => {
     const { wrapper, editor } = mountEditor();
     const tab = makeTab("t1", true);
     editor.tabs = [tab];
@@ -558,14 +557,13 @@ describe("FilesEditor guards", () => {
 
     await wrapper.find("button.ed-window-min").trigger("click");
     await flushPromises();
-    const dockItem = wrapper.find("button.ed-dock-item");
-    expect(dockItem.attributes("aria-label")).toBe("Restore t1.yaml (unsaved changes)");
-    expect(wrapper.find(".ed-sr").exists()).toBe(false);
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
 
-    // A clean buffer keeps the plain label.
-    editor.tabs[0]!.doc = editor.tabs[0]!.original;
+    useEditorWindowStore().setMinimized(false);
     await flushPromises();
-    expect(dockItem.attributes("aria-label")).toBe("Restore t1.yaml");
+    await nextTick();
+    // The restore lands keyboard focus back on the active tab button.
+    expect(document.activeElement?.id).toBe(`ed-tab-${tab.id}`);
     wrapper.unmount();
   });
 
@@ -580,7 +578,7 @@ describe("FilesEditor guards", () => {
     await flushPromises();
 
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
-    expect(wrapper.find(".ed-dock").attributes("style") ?? "").not.toContain("display: none");
+    expect(useEditorWindowStore().minimized).toBe(true);
     wrapper.unmount();
   });
 

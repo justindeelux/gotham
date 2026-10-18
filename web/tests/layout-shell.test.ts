@@ -3,6 +3,8 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NMessageProvider } from "naive-ui";
+import { defineComponent, h } from "vue";
 
 import { useAuthStore } from "../src/features/auth/stores/auth";
 import { useServersStore } from "../src/features/servers/stores/servers";
@@ -92,7 +94,15 @@ async function mountShell(): Promise<ReturnType<typeof mount>> {
   });
   await router.push("/dashboard");
   await router.isReady();
-  const wrapper = mount(AppLayout, {
+  // The app shell hosts the global editor window (JUS-232), which needs
+  // the message provider production supplies in App.vue.
+  const shell = defineComponent({
+    render: () =>
+      h(NMessageProvider, null, {
+        default: () => h(AppLayout),
+      }),
+  });
+  const wrapper = mount(shell, {
     attachTo: globalThis.document.body,
     global: { plugins: [router, i18n], stubs: { transition: false } },
   });

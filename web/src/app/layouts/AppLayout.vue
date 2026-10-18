@@ -4,6 +4,7 @@ import { computed, onMounted, onUnmounted } from "vue";
 import { RouterView, useRoute } from "vue-router";
 
 import { TaskProgressCards } from "@/features/tasks";
+import FilesEditor from "@/features/files/components/FilesEditor.vue";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
 import { useServersStore } from "@/features/servers";
 import AppSidebar from "./AppSidebar.vue";
@@ -71,6 +72,10 @@ const widePage = computed(() => route.meta.wide === true);
     ></div>
 
     <TaskProgressCards />
+
+    <!-- JUS-232: the code editor window mounts once in the app shell, so open
+         files and unsaved buffers survive route and page navigation. -->
+    <FilesEditor />
   </div>
 </template>
 
@@ -107,15 +112,13 @@ const widePage = computed(() => route.meta.wide === true);
 
 /* A fill page (JUS-118) spans the viewport as a flex column whose single
  * child owns the internal scroll, so the page itself never scrolls. The
- * bottom padding is trimmed so the panel reaches near the viewport edge, and
- * `--ed-dock-h` (set by FilesEditor while its fixed bottom dock is on screen)
- * reserves the dock band so the browser's bottom bar is never covered. */
+ * bottom padding is trimmed so the panel reaches near the viewport edge. */
 .page.page--fill {
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  padding-bottom: calc(var(--space-6) + var(--ed-dock-h, 0px));
+  padding-bottom: var(--space-6);
 }
 
 .page.page--fill > * {
@@ -155,7 +158,7 @@ const widePage = computed(() => route.meta.wide === true);
      (the only scrolling region) gets more of the viewport. */
   .page.page--fill {
     padding-top: var(--space-2);
-    padding-bottom: calc(var(--space-2) + var(--ed-dock-h, 0px));
+    padding-bottom: var(--space-2);
   }
 }
 

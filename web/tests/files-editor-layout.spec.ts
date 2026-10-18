@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, navigator:readonly, URL, window:readonly */
+/* global document:readonly, getComputedStyle:readonly, navigator:readonly, URL, window:readonly */
 // URL/window run inside the page and server callbacks (browser/Node URL
 // globals); the repo lint envs do not cover tests/, so they are declared.
 
@@ -226,12 +226,13 @@ async function openConflict(page: Page): Promise<Locator> {
 }
 
 /**
- * minimizeEditor collapses the floating editor window into the bottom dock so
+ * minimizeEditor collapses the floating editor window into the rail icon so
  * the file browser underneath becomes clickable (the window overlays it).
  */
 async function minimizeEditor(page: Page): Promise<void> {
   await page.locator(".ed-window-min").click();
-  await expect(page.locator(".ed-dock")).toBeVisible();
+  await expect(page.locator(".rail-btn--editor")).toBeVisible();
+  await expect(page.locator(".ed-window")).toBeHidden();
 }
 
 /**
@@ -244,7 +245,7 @@ async function openViaMenu(page: Page, name: string): Promise<void> {
   await page.getByRole("menuitem", { name: "Edit in editor" }).click();
 }
 
-test("the minimized dock is inset so the rail foot and sidebar stay clickable", async ({
+test("the minimized editor parks on the rail with a tab-count badge", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -255,83 +256,60 @@ test("the minimized dock is inset so the rail foot and sidebar stay clickable", 
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await minimizeEditor(page);
 
-  const dock = page.locator(".ed-dock");
-  const box = await dock.boundingBox();
-  expect(box).not.toBeNull();
-  // The dock starts after the rail (72px) + sidebar (260px) columns.
-  expect(box!.x).toBeGreaterThanOrEqual(300);
+  // The rail icon carries a badge with the open-tab count.
+  const railButton = page.locator(".rail-btn--editor");
+  await expect(railButton).toHaveAttribute("aria-label", /1 open/);
+  await expect(railButton.locator(".rail-badge")).toHaveText("1");
 
-  // Neither bottom-corner chrome column is swallowed by the opaque dock band.
-  const covered = await page.evaluate(() => {
-    const el = document.querySelector(".ed-dock");
-    if (!(el instanceof HTMLElement)) {
-      return { rail: false, sidebar: false };
-    }
-    const y = window.innerHeight - 20;
-    const rail = document.elementFromPoint(36, y);
-    const sidebar = document.elementFromPoint(160, y);
-    return {
-      rail: rail !== null && el.contains(rail),
-      sidebar: sidebar !== null && el.contains(sidebar),
-    };
-  });
-  expect(covered.rail).toBe(false);
-  expect(covered.sidebar).toBe(false);
+  // Placement: above Overview and Alert, separated by dividers from the
+  // server list and from those two buttons.
+  const footItems = await page.locator(".rail-foot .rail-item").all();
+  const labels = await Promise.all(
+    footItems.map((item) => item.innerText()),
+  );
+  const editorIndex = labels.findIndex((text) => text.includes("1"));
+  expect(editorIndex).toBeGreaterThanOrEqual(0);
+  const separators = await page.locator(".rail-foot .rail-sep").count();
+  expect(separators).toBeGreaterThanOrEqual(2);
+
+  // A click restores the window with the buffer intact.
+  await railButton.click();
+  await expect(page.locator(".ed-window")).toBeVisible();
+  await expect(page.locator(".cm-content")).toBeVisible();
 });
 
-test("the minimized dock starts where the content column starts at every width", async ({
+test("the editor window resizes from its corner within the viewport", async ({
   page,
 }) => {
-  // JUS-135: the rail is a drawer below the tablet breakpoint, so the content
-  // column starts at x=0 there (and after rail+sidebar above). The dock must
-  // track it; a stale `left: var(--rail-w)` left a 60-72px blank gutter.
-  for (const viewport of [
-    { width: 1440, height: 900 },
-    { width: 768, height: 1024 },
-    { width: 390, height: 844 },
-  ]) {
-    await page.setViewportSize(viewport);
-    await mockApi(page);
-    await page.goto(`${baseURL}/servers/${serverId}/files`);
-    await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
-    await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
-    await minimizeEditor(page);
+  const viewport = { width: 1440, height: 900 };
+  await page.setViewportSize(viewport);
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
 
-    const metrics = await page.evaluate(() => {
-      const dock = document.querySelector(".ed-dock") as HTMLElement | null;
-      const view = document.querySelector("main.view") as HTMLElement | null;
-      if (dock === null || view === null) {
-        return null;
-      }
-      const dockBox = dock.getBoundingClientRect();
-      const viewBox = view.getBoundingClientRect();
-      return {
-        dockLeft: dockBox.left,
-        dockRight: dockBox.right,
-        viewLeft: viewBox.left,
-        viewWidth: viewBox.width,
-        innerWidth: window.innerWidth,
-      };
-    });
-    expect(metrics, `dock/view missing at ${viewport.width}px`).not.toBeNull();
-    expect(
-      Math.abs(metrics!.dockLeft - metrics!.viewLeft),
-      `dock starts at the content column at ${viewport.width}px`,
-    ).toBeLessThanOrEqual(1);
-    if (viewport.width <= 1024) {
-      // The regression: a stale `left: var(--rail-w)` leaves a 60/72px gutter.
-      expect(
-        metrics!.dockLeft,
-        `no rail gutter below the tablet breakpoint at ${viewport.width}px`,
-      ).toBeLessThanOrEqual(1);
-    } else {
-      expect(metrics!.dockLeft, "desktop dock starts after rail + sidebar").toBeGreaterThanOrEqual(300);
-    }
-    expect(
-      Math.abs(metrics!.dockRight - metrics!.innerWidth),
-      `dock reaches the viewport's right edge at ${viewport.width}px`,
-    ).toBeLessThanOrEqual(1);
-  }
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+
+  const window_ = page.locator(".ed-window");
+  const before = await window_.boundingBox();
+  expect(before).not.toBeNull();
+
+  // Drag the corner grip up and to the left: the window shrinks.
+  const grip = page.locator(".ed-resize");
+  const gripBox = await grip.boundingBox();
+  expect(gripBox).not.toBeNull();
+  await page.mouse.move(
+    gripBox!.x + gripBox!.width / 2,
+    gripBox!.y + gripBox!.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(gripBox!.x - 160, gripBox!.y - 120, { steps: 10 });
+  await page.mouse.up();
+  const resized = await window_.boundingBox();
+  expect(resized).not.toBeNull();
+  expect(resized!.width).toBeLessThan(before!.width);
+  expect(resized!.height).toBeLessThan(before!.height);
+  expect(resized!.x + resized!.width).toBeLessThanOrEqual(viewport.width + 1);
+  expect(resized!.y + resized!.height).toBeLessThanOrEqual(viewport.height + 1);
 });
 
 test("editor save conflict opens a bounded modal with pinned header and three choices", async ({
@@ -681,6 +659,11 @@ test("leaving the files route with a dirty tab asks before discarding", async ({
   await page.keyboard.type("# changed");
   await expect(page.locator(".ed-dot")).toHaveCount(1);
 
+  // The default window is ~30% larger now and overlays the sidebar, so park
+  // it on the rail first; the dirty buffer stays open behind the icon.
+  await page.locator(".ed-window-min").click();
+  await expect(page.locator(".rail-btn--editor")).toBeVisible();
+
   await page.locator("a.nav-item", { hasText: "Servers" }).first().click();
   const dialog = page.locator(".n-modal.n-card");
   await expect(dialog).toBeVisible();
@@ -689,8 +672,13 @@ test("leaving the files route with a dirty tab asks before discarding", async ({
   // Staying keeps the buffer and the route.
   await dialog.getByRole("button", { name: "Stay" }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.locator(".cm-content")).toBeVisible();
+  await expect(page.locator(".rail-btn--editor")).toBeVisible();
   expect(new URL(page.url()).pathname).toContain("/files");
+
+  // Restoring the window keeps the dirty buffer.
+  await page.locator(".rail-btn--editor").click();
+  await expect(page.locator(".cm-content")).toBeVisible();
+  await expect(page.locator(".ed-dot")).toHaveCount(1);
 });
 
 /** dragWindow drags the floating editor by a point on its title bar. */
@@ -779,13 +767,13 @@ test("the Close control closes every tab, guarding dirty buffers", async ({
   await expect(page.locator(".ed-window")).toBeVisible();
   await expect(page.locator(".ed-dot")).toHaveCount(1);
 
-  // Discard and close removes the editor and its dock entirely.
+  // Discard and close removes the editor and its rail icon entirely.
   await page.locator(".ed-window-close").click();
   await dialog
     .getByRole("button", { name: "Discard and close", exact: true })
     .click();
   await expect(page.locator(".ed-window")).toHaveCount(0);
-  await expect(page.locator(".ed-dock")).toBeHidden();
+  await expect(page.locator(".rail-btn--editor")).toHaveCount(0);
 
   // A clean buffer closes at once, with no confirmation dialog.
   await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();

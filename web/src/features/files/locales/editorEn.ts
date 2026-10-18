@@ -13,6 +13,7 @@ const en = {
   contentLabel: "{name} editor content",
   minimize: "Minimize editor",
   closeWindow: "Close editor",
+  resize: "Resize editor",
   dockLabel: "Editor dock",
   restore: "Restore {name}",
   restoreUnsaved: "Restore {name} (unsaved changes)",

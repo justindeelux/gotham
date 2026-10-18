@@ -63,6 +63,10 @@ type handler struct {
 //	GET    /v1/servers/{id}/files/search?root=&path=&query=&recursive=
 //	GET    /v1/servers/{id}/files/content?root=&path=
 //	PUT    /v1/servers/{id}/files/content?root=&path=          (If-Match / ?overwrite)
+//	GET    /v1/servers/{id}/files/history?root=&path=
+//	GET    /v1/servers/{id}/files/history/{version}?root=&path=
+//	POST   /v1/servers/{id}/files/history/{version}/restore?root=&path=
+//	DELETE /v1/servers/{id}/files/history/{version}?root=&path=
 //	POST   /v1/servers/{id}/files/upload?root=&path=&overwrite=
 //	POST   /v1/servers/{id}/files/mkdir
 //	POST   /v1/servers/{id}/files/create
@@ -110,6 +114,10 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, svc FileService, 
 		protected.Get("/v1/servers/{id}/files/search", h.search)
 		protected.Get("/v1/servers/{id}/files/content", h.content)
 		protected.Put("/v1/servers/{id}/files/content", h.putContent)
+		protected.Get("/v1/servers/{id}/files/history", h.history)
+		protected.Get("/v1/servers/{id}/files/history/{version}", h.historyVersion)
+		protected.Post("/v1/servers/{id}/files/history/{version}/restore", h.restoreVersion)
+		protected.Delete("/v1/servers/{id}/files/history/{version}", h.deleteVersion)
 		protected.Post("/v1/servers/{id}/files/upload", h.upload)
 		protected.Post("/v1/servers/{id}/files/mkdir", h.mkdir)
 		protected.Post("/v1/servers/{id}/files/create", h.create)
@@ -314,6 +322,8 @@ func (h *handler) writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadGateway, errorBody{Message: "agent unavailable", Code: "agent_unavailable"})
 	case errors.Is(err, ErrDisabled):
 		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "files are disabled", Code: "disabled"})
+	case errors.Is(err, ErrHistoryUnavailable):
+		writeJSON(w, http.StatusServiceUnavailable, errorBody{Message: "file history is unavailable", Code: "history_unavailable"})
 	default:
 		h.logger.Error("files: request failed", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorBody{Message: "internal error", Code: "error"})

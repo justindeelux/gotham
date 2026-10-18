@@ -70,6 +70,14 @@ type fakeService struct {
 	purgeErr        error
 	emptyRemoved    uint64
 	emptyErr        error
+
+	versions          []Version
+	historyErr        error
+	versionBody       VersionBody
+	versionBodyErr    error
+	restoreVersion    WriteResult
+	restoreVersionErr error
+	deleteVersionErr  error
 }
 
 func (f *fakeService) record(call string) {
@@ -143,6 +151,26 @@ func (f *fakeService) Search(_ context.Context, _ uuid.UUID, root, path, query s
 func (f *fakeService) Content(_ context.Context, _ uuid.UUID, _, _ string) (Content, error) {
 	f.record("content")
 	return f.content, f.contentErr
+}
+
+func (f *fakeService) History(_ context.Context, _ uuid.UUID, _, _ string) ([]Version, error) {
+	f.record("history")
+	return f.versions, f.historyErr
+}
+
+func (f *fakeService) HistoryVersion(_ context.Context, _ uuid.UUID, _, _ string, _ uuid.UUID) (VersionBody, error) {
+	f.record("history_version")
+	return f.versionBody, f.versionBodyErr
+}
+
+func (f *fakeService) RestoreVersion(_ context.Context, _ uuid.UUID, _, _ string, _ uuid.UUID) (WriteResult, error) {
+	f.record("restore_version")
+	return f.restoreVersion, f.restoreVersionErr
+}
+
+func (f *fakeService) DeleteVersion(_ context.Context, _ uuid.UUID, _, _ string, _ uuid.UUID) error {
+	f.record("delete_version")
+	return f.deleteVersionErr
 }
 
 func (f *fakeService) IssueDownloadTicket(_ context.Context, _ uuid.UUID, _, _ string) (string, error) {

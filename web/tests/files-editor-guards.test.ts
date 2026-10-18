@@ -62,6 +62,7 @@ import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 function makeTab(id: string, dirty: boolean): EditorTab {
   return {
     id,
+    kind: "file",
     root: "volumes",
     path: `${id}.yaml`,
     name: `${id}.yaml`,

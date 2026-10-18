@@ -146,7 +146,7 @@ const languageLoaders: Record<EditorLanguageId, () => Promise<Extension>> = {
 const languageExtensions = new Map<EditorLanguageId, Promise<Extension>>();
 
 /** loadLanguage resolves one language, falling back to no grammar on failure. */
-function loadLanguage(language: EditorLanguageId): Promise<Extension> {
+export function loadLanguage(language: EditorLanguageId): Promise<Extension> {
   let extension = languageExtensions.get(language);
   if (!extension) {
     extension = languageLoaders[language]().catch(() => [] as Extension);
@@ -177,7 +177,7 @@ const gothamHighlight = HighlightStyle.define([
 ]);
 
 /** gothamTheme keeps the editor on the app's dark surface tokens. */
-const gothamTheme = EditorView.theme(
+export const gothamTheme = EditorView.theme(
   {
     "&": {
       height: "100%",

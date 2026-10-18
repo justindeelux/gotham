@@ -149,6 +149,19 @@ type FileService interface {
 	// bounds and confines the walk.
 	Search(ctx context.Context, serverID uuid.UUID, root, path, query string, recursive bool) (SearchListing, error)
 	Content(ctx context.Context, serverID uuid.UUID, root, path string) (Content, error)
+	// History lists one file's version snapshots, newest first. Owner/admin
+	// only: a snapshot holds a file body. It reads the control plane's store,
+	// so a deleted or renamed file's history is still listable.
+	History(ctx context.Context, serverID uuid.UUID, root, path string) ([]Version, error)
+	// HistoryVersion reads one snapshot body, scoped to (server, root, path).
+	HistoryVersion(ctx context.Context, serverID uuid.UUID, root, path string, versionID uuid.UUID) (VersionBody, error)
+	// RestoreVersion snapshots the current body, then writes the snapshot back
+	// through the conflict-checked write path. A dirty/current file must still
+	// match its read etag or the restore answers 409.
+	RestoreVersion(ctx context.Context, serverID uuid.UUID, root, path string, versionID uuid.UUID) (WriteResult, error)
+	// DeleteVersion permanently removes one snapshot; the live file is
+	// untouched.
+	DeleteVersion(ctx context.Context, serverID uuid.UUID, root, path string, versionID uuid.UUID) error
 	// DirectorySize returns one folder's recursive size (JUS-162). It is a read:
 	// any team member may call it, like List and Stat.
 	DirectorySize(ctx context.Context, serverID uuid.UUID, root, path string) (FolderSize, error)
@@ -215,6 +228,12 @@ type Config struct {
 	// MaxUploadBytes overrides the request-body ceiling for writes and uploads
 	// (413 above it); 0 keeps DefaultMaxUploadBytes.
 	MaxUploadBytes int64
+	// HistoryMaxVersions overrides the per-file snapshot count; 0 keeps
+	// HistoryMaxVersionsEnv or DefaultHistoryMaxVersions.
+	HistoryMaxVersions int
+	// HistoryMaxBytes overrides the per-file snapshot bytes; 0 keeps
+	// HistoryMaxBytesEnv or DefaultHistoryMaxBytes.
+	HistoryMaxBytes int64
 	// Now overrides the clock the ticket store uses; nil uses time.Now.
 	Now func() time.Time
 }
@@ -229,7 +248,12 @@ type Service struct {
 	transferTimeout time.Duration
 	maxContentBytes int64
 	maxUploadBytes  int64
-	tickets         *ticketStore
+	// history is the optional snapshot store; nil skips snapshots and answers
+	// ErrHistoryUnavailable on the history routes.
+	history            HistoryStore
+	historyMaxVersions int
+	historyMaxBytes    int64
+	tickets            *ticketStore
 }
 
 // NewService builds a Service, applying defaults for the optional fields.
@@ -258,15 +282,31 @@ func NewService(cfg Config) *Service {
 	if ttl <= 0 {
 		ttl = defaultTicketTTL
 	}
+	historyVersions := cfg.HistoryMaxVersions
+	if historyVersions <= 0 {
+		historyVersions = historyMaxVersionsFromEnv()
+	}
+	if historyVersions <= 0 {
+		historyVersions = DefaultHistoryMaxVersions
+	}
+	historyBytes := cfg.HistoryMaxBytes
+	if historyBytes <= 0 {
+		historyBytes = historyMaxBytesFromEnv()
+	}
+	if historyBytes <= 0 {
+		historyBytes = DefaultHistoryMaxBytes
+	}
 	return &Service{
-		registry:        cfg.Registry,
-		dial:            cfg.Dial,
-		logger:          logger,
-		rpcTimeout:      rpcTimeout,
-		transferTimeout: transferTimeout,
-		maxContentBytes: maxContent,
-		maxUploadBytes:  maxUpload,
-		tickets:         newTicketStore(ttl, cfg.Now),
+		registry:           cfg.Registry,
+		dial:               cfg.Dial,
+		logger:             logger,
+		rpcTimeout:         rpcTimeout,
+		transferTimeout:    transferTimeout,
+		maxContentBytes:    maxContent,
+		maxUploadBytes:     maxUpload,
+		historyMaxVersions: historyVersions,
+		historyMaxBytes:    historyBytes,
+		tickets:            newTicketStore(ttl, cfg.Now),
 	}
 }
 
@@ -288,6 +328,22 @@ func (s *Service) SetDial(dial DialFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dial = dial
+}
+
+// SetHistoryStore installs (or replaces) the version-history store. The
+// control plane wires this from its shared store; a nil store leaves snapshots
+// off and the history routes answering 503.
+func (s *Service) SetHistoryStore(history HistoryStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.history = history
+}
+
+// historyStore reads the history seam under the same lock as the dialer.
+func (s *Service) historyStore() HistoryStore {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.history
 }
 
 // MaxUploadBytes reports the write/upload body ceiling, so the HTTP layer can
@@ -401,6 +457,12 @@ func (s *Service) Content(ctx context.Context, serverID uuid.UUID, root, path st
 	if err := validatePathArg("path", path); err != nil {
 		return Content{}, err
 	}
+	return s.readContent(ctx, serverID, root, path)
+}
+
+// readContent reads one file body without validation or audit, for callers
+// that already checked the path (Content, and the pre-save snapshot read).
+func (s *Service) readContent(ctx context.Context, serverID uuid.UUID, root, path string) (Content, error) {
 	ctx, client, cancel, err := s.rpc(ctx, serverID, true)
 	if err != nil {
 		return Content{}, err

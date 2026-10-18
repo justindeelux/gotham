@@ -185,6 +185,7 @@ describe("files browser paste feedback", () => {
     const editor = useEditorStore();
     const dirty: EditorTab = {
       id: "t1",
+      kind: "file",
       root: "volumes",
       path: "app.yaml",
       name: "app.yaml",

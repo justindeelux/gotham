@@ -247,6 +247,17 @@ type Environment struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type FileVersion struct {
+	ID        pgtype.UUID        `json:"id"`
+	ServerID  pgtype.UUID        `json:"server_id"`
+	Root      string             `json:"root"`
+	Path      string             `json:"path"`
+	Etag      string             `json:"etag"`
+	Size      int64              `json:"size"`
+	Content   []byte             `json:"content"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type GithubApp struct {
 	ID                  pgtype.UUID        `json:"id"`
 	UserID              pgtype.UUID        `json:"user_id"`

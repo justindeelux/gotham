@@ -912,6 +912,9 @@ func (s *Server) fileService() files.FileService {
 	if service == nil {
 		return nil
 	}
+	if s.persistence != nil {
+		service.SetHistoryStore(files.NewStoreHistory(s.persistence))
+	}
 	if dialer, ok := s.servers.(fileDialer); ok {
 		service.SetDial(func(ctx context.Context, server *servers.Server) (files.FileClient, error) {
 			return dialer.DialFileClient(ctx, server.ID)

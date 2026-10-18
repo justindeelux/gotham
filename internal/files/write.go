@@ -103,6 +103,39 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 		body = strings.NewReader("")
 	}
 
+	// A save over a file the caller has read is snapshotted first, so the
+	// replaced body stays recoverable. A force-save or a create has no known
+	// prior, so there is nothing to record. A body that cannot be read as text
+	// (too large / binary) is simply not versioned: the save still succeeds.
+	var prior *Content
+	if op == "write" && req.ExpectEtag != "" && s.historyStore() != nil {
+		current, readErr := s.readContent(ctx, serverID, req.Root, req.Path)
+		switch {
+		case readErr == nil:
+			prior = &current
+		case errors.Is(readErr, ErrTooLarge), errors.Is(readErr, ErrNotEditable), errors.Is(readErr, ErrNotFound):
+			// Nothing readable to keep (a large/binary body or a vanished
+			// file). The save itself still proceeds.
+		default:
+			s.logger.Warn("files: could not read the pre-save body for history",
+				"server_id", serverID.String(), "root", req.Root, "relpath", req.Path, "error", readErr)
+		}
+	}
+
+	result, err = s.streamWrite(ctx, serverID, req, body)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if prior != nil {
+		s.recordVersion(ctx, serverID, req.Root, req.Path, *prior)
+	}
+	return result, nil
+}
+
+// streamWrite streams one validated request body to the agent and commits it.
+// It owns no audit or history policy: writeFile and RestoreVersion decide what
+// a commit means.
+func (s *Service) streamWrite(ctx context.Context, serverID uuid.UUID, req WriteRequest, body io.Reader) (WriteResult, error) {
 	ctx, client, cancel, err := s.rpcTransfer(ctx, serverID)
 	if err != nil {
 		return WriteResult{}, err

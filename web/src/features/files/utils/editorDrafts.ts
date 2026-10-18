@@ -1,11 +1,12 @@
 import {
-  EDITOR_DRAFT_MAX_BYTES,
+  EDITOR_DRAFT_MAX_CHARS,
   EDITOR_DRAFT_MAX_DRAFTS,
   EDITOR_DRAFT_TTL_MS,
   EDITOR_DRAFT_VERSION,
   editorDraftSchema,
 } from "@/features/files/schemas/editorDraft";
 import type { EditorDraft } from "@/features/files/schemas/editorDraft";
+import { editorDraftStorageKeyPrefix } from "@/shared/api/token";
 
 /**
  * Minimal storage surface for editor drafts, so unit tests can pass a fake
@@ -32,7 +33,7 @@ export function editorDraftStoragePrefix(
   if (serverId === "" || userId === "") {
     return "";
   }
-  return `gotham.files.draft.v1.${encodeURIComponent(serverId)}.${encodeURIComponent(userId)}.`;
+  return `${editorDraftStorageKeyPrefix}${encodeURIComponent(serverId)}.${encodeURIComponent(userId)}.`;
 }
 
 /**
@@ -116,7 +117,7 @@ function liveDrafts(
     }
     const savedAt = savedAtOf(raw);
     if (
-      raw.length > EDITOR_DRAFT_MAX_BYTES ||
+      raw.length > EDITOR_DRAFT_MAX_CHARS ||
       savedAt === null ||
       now - savedAt > EDITOR_DRAFT_TTL_MS
     ) {
@@ -153,7 +154,7 @@ export function readEditorDraft(
   let data: unknown;
   try {
     data = JSON.parse(raw) as unknown;
-    if (raw.length > EDITOR_DRAFT_MAX_BYTES) {
+    if (raw.length > EDITOR_DRAFT_MAX_CHARS) {
       throw new Error("oversized");
     }
   } catch {
@@ -194,7 +195,7 @@ export function writeEditorDraft(
   }
   const key = editorDraftStorageKey(prefix, draft.root, draft.path);
   const raw = JSON.stringify({ version: EDITOR_DRAFT_VERSION, ...draft });
-  if (raw.length > EDITOR_DRAFT_MAX_BYTES) {
+  if (raw.length > EDITOR_DRAFT_MAX_CHARS) {
     return false;
   }
   const others = liveDrafts(storage, prefix, now).filter(

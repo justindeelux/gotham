@@ -19,11 +19,13 @@ export const EDITOR_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const EDITOR_DRAFT_MAX_DRAFTS = 10;
 
 /**
- * EDITOR_DRAFT_MAX_BYTES caps one draft's raw JSON. A bigger buffer (up to the
- * editor's 2 MiB read limit) is simply not persisted: recovery degrades
- * silently instead of breaking the editor.
+ * EDITOR_DRAFT_MAX_CHARS caps one draft's raw JSON length. It is measured in
+ * UTF-16 code units (`String.length`), so a full draft is roughly 2 bytes per
+ * character in the browser's quota. A bigger buffer (up to the editor's 2 MiB
+ * read limit) is simply not persisted: recovery degrades silently instead of
+ * filling the shared origin quota.
  */
-export const EDITOR_DRAFT_MAX_BYTES = 192 * 1024;
+export const EDITOR_DRAFT_MAX_CHARS = 128 * 1024;
 
 /** editorDraftSchema validates one stored draft entry. */
 export const editorDraftSchema = z.object({

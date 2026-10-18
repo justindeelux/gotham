@@ -58,6 +58,14 @@ const storageKey = "gotham.auth.session";
 export const activeTeamStorageKey = "gotham.teams.active";
 
 /**
+ * editorDraftStorageKeyPrefix scopes the code editor's unsaved drafts. Drafts
+ * hold plaintext file bodies (which may include secrets), so every key under
+ * this prefix is purged on sign-out and on an account switch instead of being
+ * left readable in a shared browser.
+ */
+export const editorDraftStorageKeyPrefix = "gotham.files.draft.v1.";
+
+/**
  * userScopedStorageKeys holds every persisted user-scoped key beyond the
  * session itself. The cross-tab refresh lease (see ./http) is deliberately
  * absent: it coordinates tabs, not users, and must survive a sign-out.
@@ -133,6 +141,11 @@ export function setSession(session: Session): void {
   if (!storage) {
     return;
   }
+  // A different account on the same browser must not inherit the previous
+  // account's editor drafts (they contain file bodies). Read the old snapshot
+  // before overwriting it.
+  const previousUserId = getSession().user?.id ?? "";
+  const nextUserId = session.user?.id ?? "";
 
   try {
     storage.setItem(storageKey, JSON.stringify(session));
@@ -140,22 +153,48 @@ export function setSession(session: Session): void {
     // Ignore quota and private-mode failures: the in-memory store still works.
   }
 
+  if (previousUserId !== nextUserId && nextUserId !== "") {
+    clearStoragePrefix(storage, editorDraftStorageKeyPrefix);
+  }
+
   notifySession();
+}
+
+/** clearStoragePrefix removes every key under one namespace, never throwing. */
+function clearStoragePrefix(storage: Storage, prefix: string): void {
+  try {
+    const keys: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key !== null && key.startsWith(prefix)) {
+        keys.push(key);
+      }
+    }
+    for (const key of keys) {
+      storage.removeItem(key);
+    }
+  } catch {
+    // Blocked storage: sign-out and the page still work.
+  }
 }
 
 /**
  * clearSession removes the persisted session and every other persisted
- * user-scoped key (the teams store's active-team selection). It is the
- * single exit path for a dead session: the auth store and expireSession
- * (the forced logout on 401/refresh failure, which never reaches the Pinia
- * stores because it only reloads to /login) both funnel through here, so the
- * next sign-in cannot inherit the previous user's persisted selection.
+ * user-scoped key (the teams store's active-team selection and every editor
+ * draft). It is the single exit path for a dead session: the auth store and
+ * expireSession (the forced logout on 401/refresh failure, which never
+ * reaches the Pinia stores because it only reloads to /login) both funnel
+ * through here, so the next sign-in cannot inherit the previous user's
+ * persisted selection or read their unsaved file bodies.
  */
 export function clearSession(): void {
   const storage = getStorage();
   storage?.removeItem(storageKey);
   for (const key of userScopedStorageKeys) {
     storage?.removeItem(key);
+  }
+  if (storage) {
+    clearStoragePrefix(storage, editorDraftStorageKeyPrefix);
   }
   notifySession();
 }

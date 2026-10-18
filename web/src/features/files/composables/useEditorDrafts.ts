@@ -27,6 +27,12 @@ export interface EditorDraftPrompt {
   eol: EditorEol;
   bom: boolean;
   savedAt: number;
+  /** baseEtag is the version the draft was typed against (may be unknown). */
+  baseEtag: string;
+  /** loadedEtag is the server etag the tab showed when the draft was offered. */
+  loadedEtag: string;
+  /** baseDoc is the clean buffer the tab held when the draft was offered. */
+  baseDoc: string;
   /** conflict is true when the server etag moved past the draft's base. */
   conflict: boolean;
 }
@@ -216,22 +222,49 @@ export function useEditorDrafts(getServerId: () => string): {
           eol: draft.eol,
           bom: draft.bom,
           savedAt: draft.savedAt,
-          conflict: draft.etag !== "" && tab.etag !== "" && draft.etag !== tab.etag,
+          baseEtag: draft.etag,
+          loadedEtag: tab.etag,
+          baseDoc: tab.doc,
+          // An unknown etag on either side is treated as a possible conflict:
+          // silently overwriting a newer server version is worse than a warning.
+          conflict: draft.etag !== tab.etag,
         },
       ];
     }
   }
 
-  /** restore applies the offered draft; the next flush stores it again. */
+  /**
+   * restore applies the offered draft only while the tab still shows the exact
+   * clean buffer the prompt compared against. A reload, save or external
+   * refresh while the modal was open makes the stored draft stale, so it is
+   * re-offered against the new base instead of clobbering the newer buffer.
+   */
   function restore(): void {
     const item = prompt.value;
     if (!item) {
+      return;
+    }
+    const tab = editor.tabs.find((entry) => entry.id === item.tabId);
+    const stillFresh =
+      tab !== undefined &&
+      tab.kind === "file" &&
+      tab.status === "ready" &&
+      !editor.isDirty(tab) &&
+      tab.etag === item.loadedEtag &&
+      tab.doc === item.baseDoc;
+    if (!stillFresh) {
+      checked.delete(item.tabId);
+      dropPrompt(item);
+      checkDrafts();
       return;
     }
     editor.restoreDraft(item.tabId, {
       doc: item.doc,
       eol: item.eol,
       bom: item.bom,
+      // Under a conflict, save from the draft's original base so the write
+      // meets the normal 409 prompt instead of overwriting the newer version.
+      etag: item.conflict && item.baseEtag !== "" ? item.baseEtag : undefined,
     });
     dropPrompt(item);
   }

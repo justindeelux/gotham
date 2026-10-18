@@ -411,17 +411,22 @@ export const useEditorStore = defineStore("filesEditor", () => {
   /**
    * restoreDraft replaces a tab's buffer with a recovered draft, including the
    * line endings and BOM it was typed with, so a later save writes what the
-   * user saw. Only a fully loaded editable tab can take a draft.
+   * user saw. `etag` restores the draft's base version when the server moved on
+   * (a later Save then surfaces the normal conflict prompt). Only a fully
+   * loaded editable tab can take a draft.
    */
   function restoreDraft(
     id: string,
-    draft: { doc: string; eol: EditorEol; bom: boolean },
+    draft: { doc: string; eol: EditorEol; bom: boolean; etag?: string },
   ): void {
     const tab = tabs.value.find((item) => item.id === id);
     if (tab && tab.kind === "file" && tab.status === "ready") {
       tab.doc = draft.doc;
       tab.eol = draft.eol;
       tab.bom = draft.bom;
+      if (draft.etag !== undefined) {
+        tab.etag = draft.etag;
+      }
     }
   }
 

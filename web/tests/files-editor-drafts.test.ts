@@ -26,7 +26,7 @@ import EditorDraftDialog from "@/features/files/components/EditorDraftDialog.vue
 import { useEditorDrafts } from "@/features/files/composables/useEditorDrafts";
 import editorEn from "@/features/files/locales/editorEn";
 import {
-  EDITOR_DRAFT_MAX_BYTES,
+  EDITOR_DRAFT_MAX_CHARS,
   EDITOR_DRAFT_MAX_DRAFTS,
   EDITOR_DRAFT_TTL_MS,
 } from "@/features/files/schemas/editorDraft";
@@ -43,6 +43,7 @@ import type { EditorDraftStorage } from "@/features/files/utils/editorDrafts";
 import { useTeamsStore } from "@/features/teams";
 import type { Team } from "@/features/teams/api/teams";
 import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
+import { clearSession as clearStoredSession } from "@/shared/api/token";
 
 const getContentMock = vi.mocked(getContent);
 const putContentMock = vi.mocked(putContent);
@@ -102,6 +103,23 @@ function draft(overrides: Partial<Parameters<typeof writeEditorDraft>[2]> = {}) 
 /** content builds a FilesContent response. */
 function content(body: string, etag = '"v1"') {
   return { content: body, etag, sha256: "abc", size: body.length, mode: 0o100644 };
+}
+
+/** account builds one authenticated user. */
+function account(id: string) {
+  return { id, email: `${id}@example.com`, created_at: "2026-10-01T00:00:00Z" };
+}
+
+/** draftKeys lists every stored draft key in the browser. */
+function draftKeys(): string[] {
+  const keys: string[] = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (key?.startsWith("gotham.files.draft.v1.")) {
+      keys.push(key);
+    }
+  }
+  return keys;
 }
 
 /** team builds one team with a role. */
@@ -172,7 +190,7 @@ describe("editor draft storage", () => {
     expect(readEditorDraft(storage, key)).toBeNull();
     expect(storage.getItem(key)).toBeNull();
 
-    const huge = "x".repeat(EDITOR_DRAFT_MAX_BYTES + 1);
+    const huge = "x".repeat(EDITOR_DRAFT_MAX_CHARS + 1);
     expect(writeEditorDraft(storage, prefix, draft({ doc: huge }))).toBe(false);
     expect(storage.getItem(key)).toBeNull();
   });
@@ -286,6 +304,71 @@ describe("editor drafts composable", () => {
     expect(editor.activeTab?.doc).toBe("base\n");
   });
 
+  it("keeps the draft base etag after a conflicting restore, so Save hits the 409 flow", async () => {
+    vi.useFakeTimers();
+    const key = editorDraftStorageKey(prefix, "volumes", "app.yaml");
+    writeEditorDraft(
+      window.localStorage,
+      prefix,
+      draft({ doc: "recovered\n", etag: '"v0"' }),
+    );
+    const { editor, drafts } = await start("base\n", '"v1"');
+    const tab = editor.activeTab!;
+
+    drafts.restore();
+    expect(tab.etag).toBe('"v0"');
+    expect(tab.doc).toBe("recovered\n");
+
+    // A later flush must keep the draft's original base, not the loaded etag.
+    await nextTick();
+    vi.advanceTimersByTime(800);
+    expect(readEditorDraft(window.localStorage, key)?.etag).toBe('"v0"');
+
+    putContentMock.mockRejectedValueOnce({ message: "conflict", status: 409 });
+    expect(await editor.save(tab.id, "team-1")).toBe("conflict");
+    expect(editor.conflictId).toBe(tab.id);
+    expect(putContentMock).toHaveBeenCalledWith(
+      server,
+      "team-1",
+      expect.objectContaining({ etag: '"v0"', overwrite: false }),
+    );
+  });
+
+  it("does not restore over a tab that reloaded while the prompt was open", async () => {
+    writeEditorDraft(
+      window.localStorage,
+      prefix,
+      draft({ doc: "recovered\n", etag: '"v1"' }),
+    );
+    const { editor, drafts } = await start("base\n", '"v1"');
+    const tab = editor.activeTab!;
+    expect(drafts.prompt.value).not.toBeNull();
+
+    // The tab is refreshed (an external refresh or conflict reload) before the
+    // user answers: the stale draft must not clobber the newer buffer.
+    getContentMock.mockResolvedValue(content("server moved\n", '"v2"'));
+    await editor.reload(tab.id, "team-1");
+    await nextTick();
+
+    drafts.restore();
+    expect(tab.doc).toBe("server moved\n");
+    // Re-offered against the new base instead of silently dropped.
+    expect(drafts.prompt.value?.loadedEtag).toBe('"v2"');
+    expect(drafts.prompt.value?.conflict).toBe(true);
+  });
+
+  it("drops the prompt when its tab was closed before the answer", async () => {
+    writeEditorDraft(window.localStorage, prefix, draft({ doc: "recovered\n" }));
+    const { editor, drafts } = await start();
+    const tab = editor.activeTab!;
+
+    editor.close(tab.id);
+    await nextTick();
+    expect(() => drafts.restore()).not.toThrow();
+    expect(drafts.prompt.value).toBeNull();
+    expect(editor.tabs).toHaveLength(0);
+  });
+
   it("never persists a read-only root", async () => {
     vi.useFakeTimers();
     const files = useFilesStore();
@@ -320,6 +403,53 @@ describe("editor drafts composable", () => {
   });
 });
 
+describe("editor draft purge on sign-out", () => {
+  it("clears every draft on logout but keeps unrelated keys", () => {
+    const other = editorDraftStoragePrefix(server, "user-2");
+    writeEditorDraft(window.localStorage, prefix, draft({ path: "one.env" }));
+    writeEditorDraft(window.localStorage, other, draft({ path: "two.env" }));
+    window.localStorage.setItem("gotham.files.tabs.v1.srv.user-1", "{}");
+
+    useAuthStore().clearSession();
+
+    expect(draftKeys()).toEqual([]);
+    expect(window.localStorage.getItem("gotham.files.tabs.v1.srv.user-1")).toBe("{}");
+  });
+
+  it("clears drafts on the forced session-expiry path", () => {
+    writeEditorDraft(window.localStorage, prefix, draft());
+    // The axios interceptor funnels a dead session through this module-level
+    // clear, which also purges user-scoped storage without the auth store.
+    clearStoredSession();
+    expect(draftKeys()).toEqual([]);
+  });
+
+  it("clears the previous account's drafts on a user switch", () => {
+    const auth = useAuthStore();
+    auth.setSession({
+      user: account("user-1"),
+      access_token: "a",
+      refresh_token: "r",
+    });
+    writeEditorDraft(window.localStorage, prefix, draft());
+
+    // A token rotation for the same account keeps the drafts for recovery.
+    auth.setSession({
+      user: account("user-1"),
+      access_token: "b",
+      refresh_token: "s",
+    });
+    expect(draftKeys()).toHaveLength(1);
+
+    auth.setSession({
+      user: account("user-2"),
+      access_token: "c",
+      refresh_token: "t",
+    });
+    expect(draftKeys()).toEqual([]);
+  });
+});
+
 describe("editor draft dialog", () => {
   beforeEach(() => {
     resetLocaleState();
@@ -337,6 +467,9 @@ describe("editor draft dialog", () => {
       eol: "\n" as const,
       bom: false,
       savedAt: Date.UTC(2026, 9, 18, 10, 0, 0),
+      baseEtag: '"v0"',
+      loadedEtag: '"v1"',
+      baseDoc: "base\n",
       conflict: true,
     };
     const wrapper = mount(EditorDraftDialog, {

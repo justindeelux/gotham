@@ -350,6 +350,54 @@ export function clampEditorOffset(
   };
 }
 
+/** TabCloseScope is the tab-strip command a context-menu entry runs. */
+export type TabCloseScope = "self" | "others" | "all" | "right";
+
+/**
+ * tabsToClose returns the ids a close command targets, in strip order. "right"
+ * is every tab after the target; an unknown target closes nothing.
+ */
+export function tabsToClose<T extends { id: string }>(
+  tabs: T[],
+  scope: TabCloseScope,
+  targetId: string,
+): string[] {
+  const index = tabs.findIndex((tab) => tab.id === targetId);
+  if (index === -1) {
+    return [];
+  }
+  switch (scope) {
+    case "self":
+      return [tabs[index]!.id];
+    case "others":
+      return tabs.filter((_, position) => position !== index).map((tab) => tab.id);
+    case "all":
+      return tabs.map((tab) => tab.id);
+    case "right":
+      return tabs.slice(index + 1).map((tab) => tab.id);
+  }
+}
+
+/**
+ * scrollTabIntoView returns the scrollLeft that brings `tab` fully inside the
+ * horizontal tab strip, keeping `pad` px of breathing room at either edge. It
+ * takes viewport rects, so it works with the strip's own scroll offset already
+ * applied; a tab that is already visible leaves the offset untouched.
+ */
+export function scrollTabIntoView(
+  strip: { left: number; right: number; scrollLeft: number },
+  tab: { left: number; right: number },
+  pad = 8,
+): number {
+  const next =
+    tab.left < strip.left + pad
+      ? strip.scrollLeft - (strip.left + pad - tab.left)
+      : tab.right > strip.right - pad
+        ? strip.scrollLeft + (tab.right - strip.right + pad)
+        : strip.scrollLeft;
+  return Math.max(0, next);
+}
+
 /** languageLabel is the short uppercase tag shown in the status bar. */
 export function languageLabel(language: EditorLanguageId): string {
   return byLanguage.get(language)?.label ?? language.toUpperCase();

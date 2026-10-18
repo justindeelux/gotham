@@ -61,6 +61,12 @@ export interface EditorTab {
 /** SaveOutcome is the result of one save attempt. */
 export type SaveOutcome = "saved" | "conflict" | "error" | "blocked";
 
+/** SaveReport is one tab's outcome in a Save All run. */
+export interface SaveReport {
+  tab: EditorTab;
+  outcome: SaveOutcome;
+}
+
 let tabSeq = 0;
 
 /** nextTabId mints a stable per-session tab id. */
@@ -277,6 +283,18 @@ export const useEditorStore = defineStore("filesEditor", () => {
     }
   }
 
+  /**
+   * saveAll saves every dirty tab in parallel (optionally only those in
+   * `ids`). `original` advances only on a successful write, so a failed or
+   * conflicting tab keeps its dirty marker while the rest are saved.
+   */
+  async function saveAll(teamId: string, ids?: string[]): Promise<SaveReport[]> {
+    const targets = dirtyTabs.value.filter((tab) => !ids || ids.includes(tab.id));
+    return Promise.all(
+      targets.map(async (tab) => ({ tab, outcome: await save(tab.id, teamId) })),
+    );
+  }
+
   /** reload discards local edits and re-reads the file (conflict "reload"). */
   async function reload(id: string, teamId: string): Promise<void> {
     const tab = tabs.value.find((item) => item.id === id);
@@ -414,6 +432,13 @@ export const useEditorStore = defineStore("filesEditor", () => {
     saveAsId.value = null;
   }
 
+  /** closeMany closes several tabs, discarding their buffers. */
+  function closeMany(ids: string[]): void {
+    for (const id of ids) {
+      close(id);
+    }
+  }
+
   /** setWrap toggles soft wrapping for every editor pane. */
   function setWrap(value: boolean): void {
     wrap.value = value;
@@ -526,6 +551,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     setDoc,
     setLanguage,
     save,
+    saveAll,
     reload,
     overwrite,
     openSaveAs,
@@ -534,6 +560,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     saveAsCopy,
     close,
     closeAll,
+    closeMany,
     setWrap,
     blockingNames,
     applyRename,

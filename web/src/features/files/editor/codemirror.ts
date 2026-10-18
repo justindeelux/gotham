@@ -65,6 +65,7 @@ export interface EditorSessionOptions {
   onChange: (_doc: string) => void;
   onCursor: (_line: number, _column: number) => void;
   onSave: () => void;
+  onSaveAll: () => void;
 }
 
 /** logMode highlights the level, timestamp and quoted fields of a log line. */
@@ -232,6 +233,14 @@ export async function createEditorSession(
   const initialLanguage = await loadLanguage(options.language);
 
   const saveKeymap = keymap.of([
+    {
+      key: "Mod-Shift-s",
+      preventDefault: true,
+      run: () => {
+        options.onSaveAll();
+        return true;
+      },
+    },
     {
       key: "Mod-s",
       preventDefault: true,

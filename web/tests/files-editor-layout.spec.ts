@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global document:readonly, getComputedStyle:readonly, navigator:readonly, URL, window:readonly */
+/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, SVGSVGElement:readonly, navigator:readonly, URL, window:readonly */
 // URL/window run inside the page and server callbacks (browser/Node URL
 // globals); the repo lint envs do not cover tests/, so they are declared.
 
@@ -256,10 +256,48 @@ test("the minimized editor parks on the rail with a tab-count badge", async ({
   await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
   await minimizeEditor(page);
 
+  // A second file while parked reopens the window; parking again counts 2.
+  await page.locator(".fm-label", { hasText: "notes.md" }).first().dblclick();
+  await expect(page.locator(".ed-window")).toBeVisible();
+  await minimizeEditor(page);
+
   // The rail icon carries a badge with the open-tab count.
   const railButton = page.locator(".rail-btn--editor");
-  await expect(railButton).toHaveAttribute("aria-label", /1 open/);
-  await expect(railButton.locator(".rail-badge")).toHaveText("1");
+  await expect(railButton).toHaveAttribute("aria-label", /2 open/);
+  await expect(railButton.locator(".rail-badge")).toHaveText("2");
+
+  // The badge rides the button's top-right corner and never covers the
+  // icon's centre, so the icon stays fully visible at every count.
+  const geometry = await page.evaluate(() => {
+    const button = document.querySelector(".rail-btn--editor");
+    const badge = button?.querySelector(".rail-badge");
+    const icon = button?.querySelector("svg");
+    if (
+      !(button instanceof HTMLElement) ||
+      !(badge instanceof HTMLElement) ||
+      !(icon instanceof SVGSVGElement)
+    ) {
+      return null;
+    }
+    const buttonBox = button.getBoundingClientRect();
+    const badgeBox = badge.getBoundingClientRect();
+    const iconBox = icon.getBoundingClientRect();
+    const iconCenterX = iconBox.x + iconBox.width / 2;
+    const iconCenterY = iconBox.y + iconBox.height / 2;
+    return {
+      badgeCoversIconCentre:
+        iconCenterX >= badgeBox.x &&
+        iconCenterX <= badgeBox.x + badgeBox.width &&
+        iconCenterY >= badgeBox.y &&
+        iconCenterY <= badgeBox.y + badgeBox.height,
+      badgeInTopRight:
+        badgeBox.x + badgeBox.width > buttonBox.x + buttonBox.width / 2 &&
+        badgeBox.y < buttonBox.y + buttonBox.height / 2,
+    };
+  });
+  expect(geometry).not.toBeNull();
+  expect(geometry!.badgeCoversIconCentre).toBe(false);
+  expect(geometry!.badgeInTopRight).toBe(true);
 
   // Placement: above Overview and Alert, separated by dividers from the
   // server list and from those two buttons.
@@ -267,7 +305,7 @@ test("the minimized editor parks on the rail with a tab-count badge", async ({
   const labels = await Promise.all(
     footItems.map((item) => item.innerText()),
   );
-  const editorIndex = labels.findIndex((text) => text.includes("1"));
+  const editorIndex = labels.findIndex((text) => text.includes("2"));
   expect(editorIndex).toBeGreaterThanOrEqual(0);
   const separators = await page.locator(".rail-foot .rail-sep").count();
   expect(separators).toBeGreaterThanOrEqual(2);
@@ -275,7 +313,7 @@ test("the minimized editor parks on the rail with a tab-count badge", async ({
   // A click restores the window with the buffer intact.
   await railButton.click();
   await expect(page.locator(".ed-window")).toBeVisible();
-  await expect(page.locator(".cm-content")).toBeVisible();
+  await expect(page.locator(".ed-host:visible .cm-content")).toBeVisible();
 });
 
 test("the editor window resizes from its corner within the viewport", async ({

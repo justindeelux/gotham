@@ -277,6 +277,14 @@ onMounted(() => {
   cursor: pointer;
 }
 
+/* JUS-232 fix round 1: the editor badge rides the button's top-right edge
+   instead of the shared inset, so it only touches the icon's corner and never
+   covers its centre (the alert badges keep the shared inset). */
+.rail-btn--editor .rail-badge {
+  top: calc(-1 * var(--space-1));
+  right: calc(-1 * var(--space-1));
+}
+
 .rail-item.is-active :deep(.rail-btn) {
   border-radius: var(--radius-lg);
   background: var(--accent);

@@ -183,46 +183,6 @@ const gothamHighlight = HighlightStyle.define([
   { tag: tags.invalid, color: "#f23f43" },
 ]);
 
-/** gothamTheme keeps the editor on the app's dark surface tokens. */
-export const gothamTheme = EditorView.theme(
-  {
-    "&": {
-      height: "100%",
-      backgroundColor: "var(--surface-warm)",
-      color: "var(--fg)",
-      fontSize: "var(--text-sm)",
-    },
-    ".cm-scroller": {
-      fontFamily: "var(--font-mono)",
-      lineHeight: "1.6",
-      overflow: "auto",
-    },
-    ".cm-content": { caretColor: "var(--accent)" },
-    ".cm-gutters": {
-      backgroundColor: "var(--surface-warm)",
-      color: "var(--meta)",
-      border: "none",
-      borderRight: "1px solid var(--border)",
-    },
-    ".cm-activeLine": { backgroundColor: "color-mix(in oklab, var(--fg) 6%, transparent)" },
-    ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--fg-2)" },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
-      backgroundColor: "color-mix(in oklab, var(--accent) 40%, transparent)",
-    },
-    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--fg-2)" },
-    ".cm-searchMatch": { backgroundColor: "color-mix(in oklab, var(--warn) 45%, transparent)" },
-    ".cm-searchMatch.cm-searchMatch-selected": {
-      backgroundColor: "color-mix(in oklab, var(--warn) 70%, transparent)",
-    },
-    ".cm-panels": { backgroundColor: "var(--surface)", color: "var(--fg)" },
-    ".cm-tooltip": {
-      backgroundColor: "var(--surface)",
-      border: "1px solid var(--border)",
-      color: "var(--fg)",
-    },
-  },
-  { dark: true },
-);
 /** gothamLightHighlight is the light-theme syntax palette (JUS-219). */
 const gothamLightHighlight = HighlightStyle.define([
   { tag: tags.keyword, color: "var(--editor-light-keyword)" },

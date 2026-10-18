@@ -50,7 +50,30 @@ vi.mock("@/features/files/composables/useFileDownload", () => ({
   useFileDownload: () => ({ pending: { value: false }, download: vi.fn() }),
 }));
 
+interface FakeMergeSession {
+  setSettings: ReturnType<typeof vi.fn>;
+  destroy: ReturnType<typeof vi.fn>;
+  requestMeasure: ReturnType<typeof vi.fn>;
+}
+
+const mergeView = vi.hoisted(() => ({
+  sessions: [] as FakeMergeSession[],
+}));
+
+vi.mock("@/features/files/composables/useMergeView", () => ({
+  createMergeSession: vi.fn(async () => {
+    const session: FakeMergeSession = {
+      setSettings: vi.fn(),
+      destroy: vi.fn(),
+      requestMeasure: vi.fn(),
+    };
+    mergeView.sessions.push(session);
+    return session;
+  }),
+}));
+
 import FilesEditor from "@/features/files/components/FilesEditor.vue";
+import { createMergeSession } from "@/features/files/composables/useMergeView";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
@@ -82,8 +105,16 @@ function makeTab(id: string, dirty: boolean): EditorTab {
   };
 }
 
-function team(id: string, role: Team["role"]): Team {
+/** makeDiffTab builds one ready history-diff tab. */
+function makeDiffTab(id: string): EditorTab {
   return {
+    ...makeTab(id, false),
+    kind: "diff",
+    diff: { versionId: "v1", base: "a", current: "b" },
+  };
+}
+
+function team(id: string, role: Team["role"]): Team {  return {
     id,
     name: id,
     is_personal: false,
@@ -371,6 +402,29 @@ describe("FilesEditor guards", () => {
     expect(codemirror.sessions).toHaveLength(1);
     expect(codemirror.sessions[0].setSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ wrap: true }),
+    );
+    wrapper.unmount();
+  });
+
+  it("applies editor settings to history diff merge views", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeDiffTab("d1");
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    expect(mergeView.sessions).toHaveLength(1);
+    expect(createMergeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        settings: expect.objectContaining({ theme: "dark", lineNumbers: true }),
+      }),
+    );
+
+    useEditorSettingsStore().update({ lineNumbers: false, theme: "light" });
+    await flushPromises();
+
+    expect(mergeView.sessions[0].setSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lineNumbers: false, theme: "light" }),
     );
     wrapper.unmount();
   });

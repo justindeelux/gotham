@@ -1,18 +1,20 @@
 /**
  * Read-only history diff (JUS-224), built by the same lazy editor chunk as the
- * normal editor so it shares the explicit grammar set and theme and never lands
- * in the entry bundle.
+ * normal editor so it shares the explicit grammar set and settings theme and
+ * never lands in the entry bundle.
  */
 import { MergeView } from "@codemirror/merge";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
-import { EditorView, lineNumbers } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 
-import { gothamTheme, loadLanguage } from "@/features/files/editor/codemirror";
+import { editorSettingsExtensions, loadLanguage } from "@/features/files/editor/codemirror";
+import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
 /** MergeSession is the imperative handle a component keeps per diff tab. */
 export interface MergeSession {
+  setSettings: (_settings: EditorSettings) => void;
   destroy: () => void;
   /** requestMeasure re-lays out both panes after a hidden host is shown. */
   requestMeasure: () => void;
@@ -26,15 +28,12 @@ export interface MergeSessionOptions {
   /** current is the live file body at open time (right side). */
   current: string;
   language: EditorLanguageId;
+  settings: EditorSettings;
 }
 
 /** mergeTheme maps added/removed chunks onto the app's surface tokens. */
 const mergeTheme = EditorView.theme({
-  "&": {
-    height: "100%",
-    backgroundColor: "var(--surface-warm)",
-    fontSize: "var(--text-sm)",
-  },
+  "&": { height: "100%" },
   ".cm-mergeViewEditors": { height: "100%" },
   ".cm-editor": { height: "100%" },
   ".cm-changedLine": { backgroundColor: "color-mix(in oklab, var(--accent) 18%, transparent)" },
@@ -53,25 +52,39 @@ function readOnlyExtensions(): Extension[] {
 
 /**
  * createMergeSession builds one side-by-side diff. Both sides are read-only, so
- * a history tab can never be edited or saved.
+ * a history tab can never be edited or saved. Each side keeps the shared editor
+ * settings in its own compartment, so a preference change reconfigures both
+ * panes without rebuilding the view.
  */
 export async function createMergeSession(
   options: MergeSessionOptions,
 ): Promise<MergeSession> {
   const language = await loadLanguage(options.language);
-  const side = (doc: string): { doc: string; extensions: Extension[] } => ({
+  const settingsA = new Compartment();
+  const settingsB = new Compartment();
+  const side = (doc: string, settings: Compartment) => ({
     doc,
-    extensions: [lineNumbers(), language, gothamTheme, mergeTheme, ...readOnlyExtensions()],
+    extensions: [
+      settings.of(editorSettingsExtensions(options.settings)),
+      language,
+      mergeTheme,
+      ...readOnlyExtensions(),
+    ],
   });
   const view = new MergeView({
     parent: options.parent,
-    a: side(options.base),
-    b: side(options.current),
+    a: side(options.base, settingsA),
+    b: side(options.current, settingsB),
     highlightChanges: true,
     gutter: true,
     collapseUnchanged: { margin: 3, minSize: 4 },
   });
   return {
+    setSettings(settings: EditorSettings): void {
+      const extension = editorSettingsExtensions(settings);
+      view.a.dispatch({ effects: settingsA.reconfigure(extension) });
+      view.b.dispatch({ effects: settingsB.reconfigure(extension) });
+    },
     destroy: () => view.destroy(),
     requestMeasure: () => {
       view.a.requestMeasure();

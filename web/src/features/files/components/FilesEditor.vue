@@ -412,6 +412,9 @@ watch(
     for (const session of sessions.values()) {
       session.setSettings(settings);
     }
+    for (const session of mergeSessions.values()) {
+      session.setSettings(settings);
+    }
   },
   { deep: true },
 );
@@ -500,10 +503,14 @@ async function ensureMerge(): Promise<void> {
     base,
     current,
     language: tab.language,
+    settings: editorSettings.settings,
   }).then((session) => {
     if (editor.tabs.some((item) => item.id === tabId)) {
       mergeSessions.set(tabId, session);
       mergeSources.set(tabId, { base, current });
+      // A settings change during the lazy chunk load must still land on the
+      // fresh diff view (the global watcher ran before it existed).
+      session.setSettings(editorSettings.settings);
     } else {
       session.destroy();
     }

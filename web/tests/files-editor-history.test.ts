@@ -13,7 +13,7 @@ vi.mock("@/features/files/composables/useCodeMirror", () => ({
     getDoc: () => "",
     setDoc: vi.fn(),
     setLanguage: vi.fn(),
-    setWrap: vi.fn(),
+    setSettings: vi.fn(),
     setReadOnly: vi.fn(),
     focus: vi.fn(),
     requestMeasure: vi.fn(),

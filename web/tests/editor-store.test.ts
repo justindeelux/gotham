@@ -145,9 +145,52 @@ describe("editor tab store", () => {
     const tab = store.activeTab!;
     expect(tab.status).toBe("mixed");
     expect(store.isDirty(tab)).toBe(false);
+    // Neither the buffer nor its terminators can be switched.
+    store.setEol(tab.id, "\n");
+    expect(tab.eol).toBe("\r\n");
+    expect(store.isDirty(tab)).toBe(false);
     // A read-only mixed tab can never be saved (no normalising write).
     expect(await store.save(tab.id, "team")).toBe("blocked");
     expect(putContentMock).not.toHaveBeenCalled();
+  });
+
+  it("switches LF to CRLF, marks the tab dirty and saves the new endings", async () => {
+    getContentMock.mockResolvedValueOnce(content("a\nb\n", '"v1"'));
+    putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v2"' });
+    const store = useEditorStore();
+    await store.openFile("srv", "team", "volumes", "app.txt");
+    const tab = store.activeTab!;
+
+    store.setEol(tab.id, "\r\n");
+    expect(tab.eol).toBe("\r\n");
+    expect(tab.doc).toBe("a\nb\n");
+    expect(store.isDirty(tab)).toBe(true);
+
+    expect(await store.save(tab.id, "team")).toBe("saved");
+    expect(putContentMock).toHaveBeenCalledWith(
+      "srv",
+      "team",
+      expect.objectContaining({ content: "a\r\nb\r\n" }),
+    );
+    expect(store.isDirty(tab)).toBe(false);
+    expect(tab.originalEol).toBe("\r\n");
+  });
+
+  it("keeps a clean unchanged CRLF save byte-identical", async () => {
+    const original = "a\r\nb\r\n";
+    getContentMock.mockResolvedValueOnce(content(original, '"v1"'));
+    putContentMock.mockResolvedValueOnce({ ...entry, etag: '"v2"' });
+    const store = useEditorStore();
+    await store.openFile("srv", "team", "volumes", "app.txt");
+    const tab = store.activeTab!;
+
+    expect(store.isDirty(tab)).toBe(false);
+    expect(await store.save(tab.id, "team")).toBe("saved");
+    expect(putContentMock).toHaveBeenCalledWith(
+      "srv",
+      "team",
+      expect.objectContaining({ content: original }),
+    );
   });
 
   it("clears dirty on save only when the doc did not change in flight", async () => {

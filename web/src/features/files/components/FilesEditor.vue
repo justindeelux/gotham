@@ -30,9 +30,9 @@ import EditorEncodingDialog from "@/features/files/components/EditorEncodingDial
 import EditorEncodingUnsupportedDialog from "@/features/files/components/EditorEncodingUnsupportedDialog.vue";
 import EditorExplorer from "@/features/files/components/EditorExplorer.vue";
 import EditorHistoryDialog from "@/features/files/components/EditorHistoryDialog.vue";
-import EditorLanguagePicker from "@/features/files/components/EditorLanguagePicker.vue";
 import EditorSaveAsDialog from "@/features/files/components/EditorSaveAsDialog.vue";
 import EditorSettingsPopover from "@/features/files/components/EditorSettingsPopover.vue";
+import EditorStatusBar from "@/features/files/components/EditorStatusBar.vue";
 // Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
@@ -45,6 +45,7 @@ import {
   listFileVersions,
   restoreFileVersion,
 } from "@/features/files/api/files";
+import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { FilesVersion } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
@@ -53,18 +54,18 @@ import { useFilesStore } from "@/features/files/stores/files";
 import {
   clampEditorOffset,
   encodingLabel,
-  languageLabel,
   scrollTabIntoView,
   tabsToClose,
 } from "@/features/files/utils/editor";
 import type {
   EditorEncoding,
+  EditorEol,
   EditorLanguageId,
   TabCloseScope,
 } from "@/features/files/utils/editor";
 import { useTeamsStore } from "@/features/teams";
 import { useCopyText } from "@/shared/composables/useCopyText";
-import { formatBytes, formatDateTime } from "@/shared/utils/format";
+import { formatDateTime } from "@/shared/utils/format";
 
 interface Props {
   serverId: string;
@@ -807,6 +808,22 @@ function pickLanguage(language: EditorLanguageId): void {
   if (tab) {
     editor.setLanguage(tab.id, language);
   }
+}
+
+/**
+ * pickEol switches the active tab's line ending. The buffer text is untouched;
+ * the tab turns dirty and the next save writes the new terminators.
+ */
+function pickEol(eol: EditorEol): void {
+  const tab = activeTab.value;
+  if (tab) {
+    editor.setEol(tab.id, eol);
+  }
+}
+
+/** pickTabSize applies the indentation width to every open editor. */
+function pickTabSize(size: number): void {
+  editorSettings.update({ tabSize: size as EditorSettings["tabSize"] });
 }
 
 /** encodingWarningTab is the open tab the unsupported-characters prompt names. */
@@ -1603,58 +1620,19 @@ onBeforeUnmount(() => {
             </NEmpty>
           </div>
 
-          <div class="ed-foot">
-            <span class="grow">
-              {{ editor.isDirty(activeTab) ? t("files.editor.unsaved") : files.canWrite ? "" : t("files.editor.readOnly") }}
-            </span>
-            <span v-if="activeTab.kind === 'diff'" class="mono">{{ t("files.editor.readOnly") }}</span>
-            <span
-              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
-              class="mono"
-            >
-              {{ t("files.editor.historyCount", { count: historyCount }) }}
-            </span>
-            <span
-              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
-              class="mono"
-            >
-              {{ t("files.editor.lineColumn", { line: cursor.line, column: cursor.column }) }}
-            </span>
-            <button
-              v-if="activeTab.kind === 'file' && activeTab.status === 'ready' && files.canWrite"
-              type="button"
-              class="ed-encoding"
-              :aria-label="`${t('files.editor.encodingTitle')}: ${encodingLabel(activeTab.encoding)}`"
-              :title="t('files.editor.encodingTitle')"
-              @click="encodingOpen = true"
-            >
-              {{ encodingLabel(activeTab.encoding) }}
-            </button>
-            <span
-              v-else-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
-              class="mono"
-            >
-              {{ encodingLabel(activeTab.encoding) }}
-            </span>
-            <span
-              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
-              class="mono"
-            >
-              {{ activeTab.eol === "\r\n" ? "CRLF" : "LF" }}
-            </span>
-            <EditorLanguagePicker
-              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
-              :language="activeTab.language"
-              @select="pickLanguage"
-            />
-            <span
-              v-else-if="activeTab.kind === 'diff' && activeTab.status === 'ready'"
-              class="mono"
-            >
-              {{ languageLabel(activeTab.language) }}
-            </span>
-            <span class="mono">{{ formatBytes(activeTab.size) }}</span>
-          </div>
+          <EditorStatusBar
+            :tab="activeTab"
+            :cursor="cursor"
+            :history-count="historyCount"
+            :can-write="files.canWrite"
+            :tab-size="editorSettings.settings.tabSize"
+            :dirty="editor.isDirty(activeTab)"
+            @select-language="pickLanguage"
+            @set-eol="pickEol"
+            @set-tab-size="pickTabSize"
+            @open-encoding="encodingOpen = true"
+            @open-history="openHistory"
+          />
         </div>
       </div>
     </div>
@@ -2041,41 +2019,13 @@ onBeforeUnmount(() => {
   padding: var(--space-4);
 }
 
-.ed-foot {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  padding-top: var(--space-2);
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
 .ed-window-bar .grow,
-.ed-toolbar .grow,
-.ed-foot .grow {
+.ed-toolbar .grow {
   flex: 1 1 auto;
 }
 
 .mono {
   font-family: var(--font-mono);
-}
-
-.ed-encoding {
-  padding: 0 var(--space-1);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--fg-2);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.ed-encoding:hover,
-.ed-encoding:focus-visible {
-  background: color-mix(in oklab, var(--fg) 10%, transparent);
 }
 
 .dialog-foot {

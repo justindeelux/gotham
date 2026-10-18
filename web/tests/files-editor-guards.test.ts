@@ -73,6 +73,7 @@ vi.mock("@/features/files/composables/useMergeView", () => ({
 }));
 
 import FilesEditor from "@/features/files/components/FilesEditor.vue";
+import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import { createMergeSession } from "@/features/files/composables/useMergeView";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
@@ -97,6 +98,7 @@ function makeTab(id: string, dirty: boolean): EditorTab {
     bom: false,
     size: 6,
     mode: 0o100644,
+    truncated: false,
     language: "yaml",
     languageManual: false,
     status: "ready",
@@ -363,6 +365,35 @@ describe("FilesEditor guards", () => {
     files.roots = [{ name: "volumes", path: "/v", writable: false, free_bytes: 1 }];
     await flushPromises();
     expect(session.setReadOnly).toHaveBeenCalledWith(true);
+    wrapper.unmount();
+  });
+
+  it("shows a truncated tail read-only with a banner and disabled saves", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = {
+      ...makeTab("t1", false),
+      path: "server.log",
+      name: "server.log",
+      truncated: true,
+      size: 5_000_000,
+    };
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    // A live, read-only editor with the truncation banner and the badge.
+    expect(codemirror.sessions).toHaveLength(1);
+    expect(createEditorSession).toHaveBeenCalledWith(
+      expect.objectContaining({ readOnly: true }),
+    );
+    expect(wrapper.find(".ed-truncated").text()).toContain("2 MiB");
+    expect(wrapper.find(".ed-readonly-badge").text()).toBe("Read-only");
+
+    // Save and Save all are visible but inert.
+    const save = wrapper.findAll("button").find((button) => button.text() === "Save");
+    const saveAll = wrapper.findAll("button").find((button) => button.text() === "Save all");
+    expect(save?.attributes("disabled")).toBeDefined();
+    expect(saveAll?.attributes("disabled")).toBeDefined();
     wrapper.unmount();
   });
 

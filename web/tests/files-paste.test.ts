@@ -196,6 +196,7 @@ describe("files browser paste feedback", () => {
       bom: false,
       size: 6,
       mode: 0o100644,
+      truncated: false,
       language: "yaml",
       languageManual: false,
       status: "ready",

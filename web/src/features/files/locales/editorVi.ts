@@ -42,6 +42,7 @@ const vi = {
   errorTitle: "Không mở được {name}",
   largeTitle: "Quá lớn để sửa",
   largeHint: "{name} vượt giới hạn 2 MiB của trình soạn thảo. Chỉ có thể tải về.",
+  truncatedHint: "{name} vượt giới hạn 2 MiB của trình soạn thảo. Đang hiển thị phần cuối tệp ({size}), chỉ đọc.",
   binaryTitle: "Tệp nhị phân",
   binaryHint: "{name} không phải văn bản có thể sửa. Chỉ có thể tải về.",
   mixedTitle: "Kiểu xuống dòng hỗn hợp",

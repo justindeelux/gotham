@@ -381,6 +381,41 @@ func TestFileServerReadChunks(t *testing.T) {
 	}
 }
 
+func TestFileServerReadRange(t *testing.T) {
+	t.Parallel()
+	server, volumeRoot := newTestFileServer(t)
+	body := []byte("0123456789abcdef")
+	if err := os.WriteFile(filepath.Join(volumeRoot, "range"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var got bytes.Buffer
+	if err := server.Read(&agentv1.ReadRequest{
+		Root: fileRootVolumes, Path: "range", Offset: 4, Limit: 6,
+	}, &collectReadStream{sink: &got}); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.String() != "456789" {
+		t.Fatalf("read %q, want %q", got.String(), "456789")
+	}
+
+	// Only an offset: read from there to EOF.
+	got.Reset()
+	if err := server.Read(&agentv1.ReadRequest{
+		Root: fileRootVolumes, Path: "range", Offset: 10,
+	}, &collectReadStream{sink: &got}); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.String() != "abcdef" {
+		t.Fatalf("read %q, want %q", got.String(), "abcdef")
+	}
+
+	if err := server.Read(&agentv1.ReadRequest{
+		Root: fileRootVolumes, Path: "range", Offset: -1,
+	}, &collectReadStream{}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("negative offset code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
 // collectReadStream implements the Read server stream without a transport.
 type collectReadStream struct {
 	grpc.ServerStream

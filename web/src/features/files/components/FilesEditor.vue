@@ -13,6 +13,7 @@ import {
 } from "@lucide/vue";
 import type { DropdownOption } from "naive-ui";
 import {
+  NAlert,
   NButton,
   NDropdown,
   NEmpty,
@@ -440,11 +441,13 @@ watch(
 
 // A role or writable-root change flips the write gate; a live session must
 // follow it, or a demoted caller could still type into an already-open buffer.
+// A read-only tail stays read-only whatever the role.
 watch(
   () => files.canWrite,
   (canWrite) => {
-    for (const session of sessions.values()) {
-      session.setReadOnly(!canWrite);
+    for (const [id, session] of sessions) {
+      const tab = editor.tabs.find((item) => item.id === id);
+      session.setReadOnly(!canWrite || tab?.truncated === true);
     }
   },
 );
@@ -562,7 +565,9 @@ async function refreshHistoryCount(tab: EditorTab | null = activeTab.value): Pro
 
 /** openHistory shows the version-history dialog for the active file. */
 function openHistory(): void {
-  if (!historyTarget.value) {
+  // A truncated tab is a read-only tail: a restore would overwrite the whole
+  // file from a view the user never saw.
+  if (!historyTarget.value || historyTarget.value.truncated) {
     return;
   }
   historyOpen.value = true;
@@ -596,7 +601,7 @@ async function openDiff(version: FilesVersion): Promise<void> {
  */
 async function restoreVersion(version: FilesVersion): Promise<void> {
   const tab = historyTarget.value;
-  if (!tab) {
+  if (!tab || tab.truncated) {
     return;
   }
   try {
@@ -669,7 +674,7 @@ async function ensureSession(): Promise<void> {
     parent: host,
     doc: tab.doc,
     language: tab.language,
-    readOnly: !files.canWrite,
+    readOnly: !files.canWrite || tab.truncated,
     settings: editorSettings.settings,
     onChange: (doc) => editor.setDoc(tabId, doc),
     onCursor: (line, column) => {
@@ -1483,7 +1488,12 @@ onBeforeUnmount(() => {
               {{ t("files.editor.goToLine") }}
             </NButton>
             <EditorSettingsPopover />
-            <NButton v-if="files.canWrite" size="tiny" secondary @click="openHistory">
+            <NButton
+              v-if="files.canWrite && !activeTab.truncated"
+              size="tiny"
+              secondary
+              @click="openHistory"
+            >
               <template #icon>
                 <History :size="14" :stroke-width="1.8" aria-hidden="true" />
               </template>
@@ -1509,7 +1519,7 @@ onBeforeUnmount(() => {
               size="small"
               type="primary"
               :loading="activeTab.saving"
-              :disabled="!editor.isDirty(activeTab)"
+              :disabled="!editor.isDirty(activeTab) || activeTab.truncated"
               @click="() => void saveTab(activeTab!.id)"
             >
               <template #icon>
@@ -1521,6 +1531,21 @@ onBeforeUnmount(() => {
 
           <div v-if="activeTab.kind === 'diff'" class="ed-toolbar">
             <span class="small muted">{{ t("files.editor.historyDiffReadOnly") }}</span>
+          </div>
+
+          <!-- A file over the editor ceiling opens as a read-only tail: say so
+               and keep the download one click away. -->
+          <div v-if="activeTab.truncated" class="ed-truncated">
+            <NAlert type="warning" :bordered="false">
+              <div class="ed-truncated-body">
+                <span>
+                  {{ t("files.editor.truncatedHint", { name: activeTab.name, size: formatBytes(activeTab.size) }) }}
+                </span>
+                <NButton size="tiny" secondary @click="downloadActive">
+                  {{ t("files.editor.download", { name: activeTab.name }) }}
+                </NButton>
+              </div>
+            </NAlert>
           </div>
 
           <!-- One host per ready tab, kept mounted across a status switch (a
@@ -1979,6 +2004,29 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) 0;
+}
+
+.ed-truncated {
+  flex: 0 0 auto;
+  padding-bottom: var(--space-2);
+}
+
+.ed-truncated-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.ed-readonly-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--accent-softer);
+  color: var(--fg);
+  font-size: var(--text-xs);
 }
 
 .ed-host {

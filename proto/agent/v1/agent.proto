@@ -342,6 +342,14 @@ message SearchResponse {
 message ReadRequest {
   string root = 1;
   string path = 2;
+  // offset starts the read that many bytes into the file (0 = the start).
+  // limit caps the read at that many bytes (0 = to EOF). Zero/zero reads the
+  // whole file, so a request without both behaves exactly as before. An agent
+  // that predates these fields ignores them and streams from the start; the
+  // control plane then sees a body over its editor ceiling and answers 413
+  // (the download-only fallback), never a head presented as a tail.
+  int64 offset = 3;
+  int64 limit = 4;
 }
 
 // ReadChunk is one slice of a file body.

@@ -84,6 +84,7 @@ function makeTab(path: string, dirty = false): EditorTab {
     bom: false,
     size: 5,
     mode: 0o100644,
+    truncated: false,
     language: "text",
     languageManual: false,
     status: "ready",

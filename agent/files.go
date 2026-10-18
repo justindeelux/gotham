@@ -579,7 +579,9 @@ func (s *FileServer) Stat(_ context.Context, req *agentv1.StatRequest) (*agentv1
 
 // Read streams one regular file's bytes. A truncated or failed read ends the
 // stream with an error, never with a clean end, so the control plane can tell
-// a partial body from a complete one.
+// a partial body from a complete one. Offset/Limit select a byte range for the
+// editor's read-only tail of an over-limit file; a limit ending the stream
+// early is the requested range, not a failure.
 func (s *FileServer) Read(req *agentv1.ReadRequest, stream grpc.ServerStreamingServer[agentv1.ReadChunk]) error {
 	root, err := s.root(req.GetRoot())
 	if err != nil {
@@ -588,15 +590,28 @@ func (s *FileServer) Read(req *agentv1.ReadRequest, stream grpc.ServerStreamingS
 	if err := guardTrashRaw(root, "read", req.GetPath()); err != nil {
 		return err
 	}
+	if req.GetOffset() < 0 || req.GetLimit() < 0 {
+		return status.Error(codes.InvalidArgument, "read: offset and limit must not be negative")
+	}
 	file, _, err := root.OpenRegular(req.GetPath())
 	if err != nil {
 		return fileError("read", err)
 	}
 	defer func() { _ = file.Close() }()
 
+	if offset := req.GetOffset(); offset > 0 {
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return fileError("read", err)
+		}
+	}
+	var source io.Reader = file
+	if limit := req.GetLimit(); limit > 0 {
+		source = io.LimitReader(file, limit)
+	}
+
 	buffer := make([]byte, fileChunkSize)
 	for {
-		n, readErr := file.Read(buffer)
+		n, readErr := source.Read(buffer)
 		if n > 0 {
 			if sendErr := stream.Send(&agentv1.ReadChunk{Data: buffer[:n]}); sendErr != nil {
 				return sendErr

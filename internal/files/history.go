@@ -385,6 +385,11 @@ func (s *Service) saveVersionDetached(ctx context.Context, serverID uuid.UUID, r
 	if history == nil {
 		return Version{}, ErrHistoryUnavailable
 	}
+	if prior.Truncated {
+		// A tail view is not the file: snapshotting it would make a later
+		// restore replace the whole file with its last lines.
+		return Version{}, ErrTooLarge
+	}
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), historyWriteTimeout)
 	defer cancel()
 	body := prior.raw

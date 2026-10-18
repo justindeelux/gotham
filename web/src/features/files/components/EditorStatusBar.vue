@@ -49,7 +49,13 @@ const isReadOnly = computed(
     props.tab.status === "mixed" ||
     props.tab.status === "large" ||
     props.tab.status === "binary" ||
+    props.tab.truncated ||
     (isEditable.value && !props.canWrite),
+);
+
+/** canEdit marks a loaded file that this caller may write and saves whole. */
+const canEdit = computed(
+  () => isEditable.value && props.canWrite && !props.tab.truncated,
 );
 
 /** fullPath is the root-qualified path shown in the footer. */
@@ -86,7 +92,7 @@ function pickTabSize(value: string | number): void {
     <span class="grow">{{ props.dirty ? t("files.editor.unsaved") : "" }}</span>
     <span v-if="isReadOnly" class="ed-readonly">{{ t("files.editor.readOnly") }}</span>
     <button
-      v-if="isEditable && props.canWrite"
+      v-if="canEdit"
       type="button"
       class="ed-item mono"
       :aria-label="t('files.editor.historyShow', { count: props.historyCount })"
@@ -102,7 +108,7 @@ function pickTabSize(value: string | number): void {
       {{ t("files.editor.lineColumn", { line: props.cursor.line, column: props.cursor.column }) }}
     </span>
     <button
-      v-if="isEditable && props.canWrite"
+      v-if="canEdit"
       type="button"
       class="ed-item mono"
       :aria-label="`${t('files.editor.encodingTitle')}: ${encodingLabel(props.tab.encoding)}`"
@@ -115,7 +121,7 @@ function pickTabSize(value: string | number): void {
       {{ encodingLabel(props.tab.encoding) }}
     </span>
     <NPopselect
-      v-if="isEditable && props.canWrite"
+      v-if="canEdit"
       size="small"
       :value="props.tab.eol"
       :options="eolOptions"

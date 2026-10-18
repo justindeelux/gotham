@@ -90,6 +90,7 @@ type fakeFileClient struct {
 	seenSearch *agentv1.SearchRequest
 	readBody   []byte
 	readErr    error
+	seenRead   *agentv1.ReadRequest
 	closes     int
 	seenList   *agentv1.ListRequest
 
@@ -199,13 +200,27 @@ func (f *fakeFileClient) Search(_ context.Context, in *agentv1.SearchRequest, _ 
 	return &agentv1.SearchResponse{}, nil
 }
 
-func (f *fakeFileClient) Read(context.Context, *agentv1.ReadRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ReadChunk], error) {
+func (f *fakeFileClient) Read(_ context.Context, in *agentv1.ReadRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentv1.ReadChunk], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.seenRead = in
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
-	return &fakeReadStream{chunks: [][]byte{f.readBody}}, nil
+	// Honor a byte range the way the agent does, so a tail test exercises the
+	// real window rather than a hand-built slice.
+	body := f.readBody
+	if start := in.GetOffset(); start > 0 || in.GetLimit() > 0 {
+		if start > int64(len(body)) {
+			start = int64(len(body))
+		}
+		end := int64(len(body))
+		if limit := in.GetLimit(); limit > 0 && start+limit < end {
+			end = start + limit
+		}
+		body = body[start:end]
+	}
+	return &fakeReadStream{chunks: [][]byte{body}}, nil
 }
 
 func (f *fakeFileClient) Write(ctx context.Context, _ ...grpc.CallOption) (grpc.ClientStreamingClient[agentv1.WriteRequest, agentv1.WriteResponse], error) {
@@ -608,12 +623,17 @@ func TestContentLimits(t *testing.T) {
 	server := registry.seed(teamID)
 	ctx := scopeCtx(teams.RoleOwner, teamID)
 
-	t.Run("too large", func(t *testing.T) {
+	t.Run("over limit is a read-only tail", func(t *testing.T) {
 		svc := newTestService(t, registry, &fakeFileClient{
 			statResp: &agentv1.StatResponse{Entry: &agentv1.FileEntry{Name: "big", Kind: agentv1.FileKind_FILE_KIND_FILE, Size: 9}},
+			readBody: []byte("tail-nine"),
 		})
-		if _, err := svc.Content(ctx, server.ID, "root", "big"); !errors.Is(err, ErrTooLarge) {
-			t.Fatalf("err = %v, want ErrTooLarge", err)
+		content, err := svc.Content(ctx, server.ID, "root", "big")
+		if err != nil {
+			t.Fatalf("err = %v, want a tail", err)
+		}
+		if !content.Truncated || content.Size != 9 || content.Content != "ail-nine" {
+			t.Fatalf("content = %+v, want a truncated tail of 9 bytes", content)
 		}
 	})
 

@@ -68,9 +68,15 @@ const (
 	defaultTicketTTL = 60 * time.Second
 )
 
-// MaxContentBytes is the largest file the editor may load over GET /content.
-// Larger files answer 413 and are offered as a download instead.
+// MaxContentBytes is the largest file the editor loads in full over
+// GET /content. A larger file answers a read-only tail instead (see
+// TailLines); saving one is refused.
 const MaxContentBytes int64 = 2 << 20 // 2 MiB
+
+// TailLines caps the read-only tail view of a file over MaxContentBytes. The
+// tail is also bounded by MaxContentBytes, so a file of very long lines may
+// show fewer than TailLines lines.
+const TailLines = 1000
 
 // maxFileArgBytes bounds a root/path/cursor query value before it is put in a
 // proto message. A value longer than any real path is refused at the control
@@ -129,6 +135,10 @@ type Content struct {
 	SHA256   string `json:"sha256"`
 	Size     int64  `json:"size"`
 	Mode     uint32 `json:"mode"`
+	// Truncated reports a read-only tail view: Content is the end of a file
+	// larger than the editor ceiling, Size is the whole file, and SHA256 covers
+	// only the returned tail. A truncated body is never saved or snapshotted.
+	Truncated bool `json:"truncated"`
 	// raw is the file body exactly as read, kept for history snapshots so a
 	// legacy-encoded file is versioned and restored byte-for-byte. It never
 	// leaves the package as JSON.
@@ -452,9 +462,12 @@ func (s *Service) Stat(ctx context.Context, serverID uuid.UUID, root, path strin
 
 // Content reads one file body for the editor. Owner/admin only: file bodies
 // hold secrets such as 0600 compose environment files. A file larger than the
-// editor ceiling answers ErrTooLarge (413) and a genuinely binary body answers
-// ErrNotEditable (415); both should be offered as a download instead. A legacy
-// body (GBK/GB2312/BIG5) is decoded to UTF-8 and reported through Encoding.
+// editor ceiling answers a read-only tail (the last TailLines lines within
+// MaxContentBytes bytes) flagged Truncated, with Size reporting the whole file;
+// saving one answers ErrTooLarge. A genuinely binary body answers ErrNotEditable
+// (415). Both are download-only in the UI. A legacy body (GBK/GB2312/BIG5) is
+// decoded to UTF-8 and reported through Encoding; the tail is cut at a line
+// start, so a multi-byte character is never split.
 func (s *Service) Content(ctx context.Context, serverID uuid.UUID, root, path string) (content Content, err error) {
 	defer func() { s.audit(ctx, serverID, "read_content", root, path, err) }()
 	if !Enabled() {
@@ -466,11 +479,37 @@ func (s *Service) Content(ctx context.Context, serverID uuid.UUID, root, path st
 	if err := validatePathArg("path", path); err != nil {
 		return Content{}, err
 	}
-	return s.readContent(ctx, serverID, root, path)
+	return s.readForEditor(ctx, serverID, root, path)
 }
 
-// readContent reads one file body without validation or audit, for callers
-// that already checked the path (Content, and the pre-save snapshot read).
+// readForEditor reads a body for the editor, choosing a whole-file read or the
+// tail of an over-limit file from one stat.
+func (s *Service) readForEditor(ctx context.Context, serverID uuid.UUID, root, path string) (Content, error) {
+	ctx, client, cancel, err := s.rpc(ctx, serverID, true)
+	if err != nil {
+		return Content{}, err
+	}
+	defer cancel()
+	defer s.closeClient(client)
+
+	stat, err := client.Stat(ctx, &agentv1.StatRequest{Root: root, Path: path})
+	if err != nil {
+		return Content{}, mapRPCError(err)
+	}
+	info := stat.GetEntry()
+	if info == nil {
+		return Content{}, ErrNotFound
+	}
+	if info.GetSize() > s.maxContentBytes {
+		return s.readTail(ctx, client, root, path, info)
+	}
+	return s.readFull(ctx, client, root, path, info)
+}
+
+// readContent reads one whole file body without validation or audit, for
+// callers that already checked the path (Content, the pre-save snapshot read
+// and the pre-restore snapshot). It keeps the ErrTooLarge refusal on purpose:
+// history must never snapshot a truncated view of a file.
 func (s *Service) readContent(ctx context.Context, serverID uuid.UUID, root, path string) (Content, error) {
 	ctx, client, cancel, err := s.rpc(ctx, serverID, true)
 	if err != nil {
@@ -490,29 +529,119 @@ func (s *Service) readContent(ctx context.Context, serverID uuid.UUID, root, pat
 	if info.GetSize() > s.maxContentBytes {
 		return Content{}, ErrTooLarge
 	}
+	return s.readFull(ctx, client, root, path, info)
+}
 
-	stream, err := client.Read(ctx, &agentv1.ReadRequest{Root: root, Path: path})
-	if err != nil {
-		return Content{}, mapRPCError(err)
-	}
-	body, err := readAllLimited(stream, s.maxContentBytes)
+// readFull streams a whole file body from its start, failing with ErrTooLarge
+// if the file grew past the ceiling between the Stat and the read.
+func (s *Service) readFull(ctx context.Context, client FileClient, root, path string, info *agentv1.FileEntry) (Content, error) {
+	body, err := s.streamBody(ctx, client, &agentv1.ReadRequest{Root: root, Path: path}, s.maxContentBytes)
 	if err != nil {
 		return Content{}, err
 	}
+	return newContent(info, body, false)
+}
+
+// readTail streams the last maxContentBytes bytes of an over-limit file and
+// trims them to whole lines. Shortening the requested range to the ceiling
+// means the whole tail fits the editor's own budget, and starting it at a line
+// start keeps every multi-byte character intact. An agent that predates the
+// range fields streams from the start instead, so the read overruns the ceiling
+// and answers ErrTooLarge: the tab falls back to the download-only state.
+func (s *Service) readTail(ctx context.Context, client FileClient, root, path string, info *agentv1.FileEntry) (Content, error) {
+	offset := info.GetSize() - s.maxContentBytes
+	body, err := s.streamBody(ctx, client, &agentv1.ReadRequest{
+		Root:   root,
+		Path:   path,
+		Offset: offset,
+		Limit:  s.maxContentBytes,
+	}, s.maxContentBytes)
+	if err != nil {
+		return Content{}, err
+	}
+	if len(body) == 0 && info.GetSize() > 0 {
+		// The file shrank or was rotated between the Stat and the read, so the
+		// window starts past EOF. Report a conflict (the UI offers a reload)
+		// rather than an empty "tail" with a stale size.
+		return Content{}, ErrConflict
+	}
+	return newContent(info, tailBytes(body), true)
+}
+
+// streamBody opens one agent read and collects at most maxBytes.
+func (s *Service) streamBody(ctx context.Context, client FileClient, req *agentv1.ReadRequest, maxBytes int64) ([]byte, error) {
+	stream, err := client.Read(ctx, req)
+	if err != nil {
+		return nil, mapRPCError(err)
+	}
+	return readAllLimited(stream, maxBytes)
+}
+
+// tailBytes trims a raw tail window to whole lines: it drops the partial first
+// line (the window starts mid-file) and keeps at most the last TailLines lines.
+// A window whose only newline is its last byte is one over-long line, so that
+// line is shown (minus a leading multi-byte fragment) instead of an empty body.
+func tailBytes(window []byte) []byte {
+	if i := bytes.IndexByte(window, '\n'); i >= 0 {
+		if rest := window[i+1:]; len(rest) > 0 {
+			window = rest
+		} else {
+			return trimContinuation(window[:i])
+		}
+	} else {
+		return trimContinuation(window)
+	}
+	// A trailing newline terminates the last line instead of starting an empty
+	// one, so it is not counted.
+	end := len(window)
+	if end > 0 && window[end-1] == '\n' {
+		end--
+	}
+	lines := 0
+	for i := end - 1; i >= 0; i-- {
+		if window[i] != '\n' {
+			continue
+		}
+		lines++
+		if lines == TailLines {
+			return window[i+1:]
+		}
+	}
+	return window
+}
+
+// trimContinuation drops a leading UTF-8 continuation fragment, so a window cut
+// through a multi-byte character still decodes.
+func trimContinuation(window []byte) []byte {
+	for i := 0; i < 3 && len(window) > 0 && window[0]&0xC0 == 0x80; i++ {
+		window = window[1:]
+	}
+	return window
+}
+
+// newContent decodes one editor body and pairs it with the stat it belongs to.
+// truncated marks a tail view, whose Size is the whole file rather than the
+// returned bytes. A body the detector refuses (binary) answers ErrNotEditable.
+func newContent(info *agentv1.FileEntry, body []byte, truncated bool) (Content, error) {
 	encodingName, text, err := detectEncoding(body)
 	if err != nil {
 		return Content{}, err
 	}
 	sum := sha256.Sum256(body)
-	return Content{
-		Content:  text,
-		Encoding: encodingName,
-		Etag:     info.GetEtag(),
-		SHA256:   hex.EncodeToString(sum[:]),
-		Size:     int64(len(body)),
-		Mode:     info.GetMode(),
-		raw:      body,
-	}, nil
+	content := Content{
+		Content:   text,
+		Encoding:  encodingName,
+		Etag:      info.GetEtag(),
+		SHA256:    hex.EncodeToString(sum[:]),
+		Size:      int64(len(body)),
+		Mode:      info.GetMode(),
+		raw:       body,
+		Truncated: truncated,
+	}
+	if truncated {
+		content.Size = info.GetSize()
+	}
+	return content, nil
 }
 
 // IssueDownloadTicket authorizes an owner/admin read of (root, path) and returns
@@ -765,9 +894,9 @@ func validateFileArg(name, value string) error {
 	return nil
 }
 
-// readAllLimited streams a body, failing with ErrTooLarge once it exceeds limit
-// bytes. A file that grows past the ceiling between the Stat and the read is
-// still refused.
+// readAllLimited streams a body, failing with ErrTooLarge once it exceeds
+// limit bytes. A file that grows past the ceiling between the Stat and the read
+// is still refused.
 func readAllLimited(stream grpc.ServerStreamingClient[agentv1.ReadChunk], limit int64) ([]byte, error) {
 	var buf bytes.Buffer
 	for {

@@ -1,7 +1,8 @@
 // Files double-click dispatch (JUS-130): the pure rule behind a double-click
 // (or Enter) on a browser row. It maps a row's kind + extension + the caller's
 // gates onto the default action, and it decides whether the editor can show the
-// file as text at all (size ceiling + known binary families). No DOM, no store.
+// file as text at all (known binary families; an oversize text file opens as a
+// read-only tail since JUS-225). No DOM, no store.
 import { describe, expect, it } from "vitest";
 
 import type { FilesEntry } from "@/features/files/schemas/files";
@@ -70,9 +71,9 @@ describe("entryAction", () => {
     }
   });
 
-  it("does nothing for a file over the editor size ceiling", () => {
+  it("opens a file over the editor ceiling as a read-only tail", () => {
     const large = entry({ name: "server.log", size: 4 * 1024 * 1024 });
-    expect(entryAction(large, gates())).toBe("none");
+    expect(entryAction(large, gates())).toBe("editor");
   });
 
   it("does nothing for a symlink, special or unspecified entry", () => {
@@ -83,15 +84,13 @@ describe("entryAction", () => {
 });
 
 describe("canOpenInEditor", () => {
-  it("accepts a text file at or below the size ceiling", () => {
+  it("accepts a text file at any size", () => {
     expect(canOpenInEditor(entry({ name: "app.yaml" }))).toBe(true);
     expect(canOpenInEditor(entry({ name: "big.txt", size: MAX_EDITABLE_BYTES }))).toBe(true);
-  });
-
-  it("rejects a text file one byte over the ceiling", () => {
+    // Over the ceiling opens as a read-only tail, not a dead double-click.
     expect(
       canOpenInEditor(entry({ name: "big.txt", size: MAX_EDITABLE_BYTES + 1 })),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("rejects binary families and every non-file kind", () => {

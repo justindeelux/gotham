@@ -11,6 +11,7 @@ import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import { CODE_EDITOR_PRESETS } from "@/features/files/editor/presets";
 import { DEFAULT_EDITOR_SETTINGS } from "@/features/files/schemas/editorSettings";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
+import { i18n, resetLocaleState, syncComposerLocale } from "@/shared/i18n";
 
 const mocks = vi.hoisted(() => {
   interface FakeSession {
@@ -64,6 +65,8 @@ vi.mock("@/features/files/composables/useCodeMirror", () => ({
 beforeEach(() => {
   setActivePinia(createPinia());
   localStorage.clear();
+  resetLocaleState();
+  syncComposerLocale("en");
   mocks.createEditorSession.mockClear();
   mocks.sessions.length = 0;
 });
@@ -76,6 +79,7 @@ afterEach(() => {
 async function mountEditor(props: Record<string, unknown> = {}) {
   const wrapper = mount(CodeEditor, {
     props: { modelValue: "services: {}\n", ...props },
+    global: { plugins: [i18n] },
   });
   await flushPromises();
   return wrapper;
@@ -123,6 +127,22 @@ describe("CodeEditor", () => {
     const wrapper = await mountEditor({ preset: "shell", language: "nginx" });
     expect(lastOptions().language).toBe("nginx");
     wrapper.unmount();
+  });
+
+  it("defaults the aria label through i18n and keeps a caller override", async () => {
+    const wrapper = await mountEditor();
+    expect(lastOptions().ariaLabel).toBe("Code editor");
+    wrapper.unmount();
+
+    syncComposerLocale("vi");
+    const vietnamese = await mountEditor();
+    expect(lastOptions().ariaLabel).toBe("Trình soạn thảo mã");
+    vietnamese.unmount();
+
+    syncComposerLocale("en");
+    const labeled = await mountEditor({ ariaLabel: "Compose YAML" });
+    expect(lastOptions().ariaLabel).toBe("Compose YAML");
+    labeled.unmount();
   });
 
   it("applies the wrap override on top of the stored settings", async () => {
@@ -180,7 +200,10 @@ describe("CodeEditor", () => {
       }),
     );
 
-    const wrapper = mount(CodeEditor, { props: { modelValue: "" } });
+    const wrapper = mount(CodeEditor, {
+      props: { modelValue: "" },
+      global: { plugins: [i18n] },
+    });
     wrapper.unmount();
 
     const session = mocks.fakeSession("");

@@ -5,6 +5,7 @@
 const vi = {
   heading: "Trình soạn thảo",
   windowLabel: "Cửa sổ trình soạn thảo mã",
+  codeEditorLabel: "Trình soạn thảo mã",
   contentLabel: "Nội dung trình soạn thảo {name}",
   minimize: "Thu nhỏ trình soạn thảo",
   closeWindow: "Đóng trình soạn thảo",

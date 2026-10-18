@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
 import { CODE_EDITOR_PRESETS } from "@/features/files/editor/presets";
 import type { CodeEditorPreset } from "@/features/files/editor/presets";
+// Side-effect import: merges the lazy editor catalogs under `files.editor`.
+import "@/features/files/locales/editorMessages";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
@@ -27,7 +30,7 @@ interface Props {
   wrap?: boolean;
   /** height is any CSS length; the editor fills the box. */
   height?: string;
-  /** ariaLabel names the contenteditable surface for screen readers. */
+  /** ariaLabel overrides the localized generic editor name. */
   ariaLabel?: string;
 }
 
@@ -37,7 +40,7 @@ const props = withDefaults(defineProps<Props>(), {
   readOnly: false,
   wrap: undefined,
   height: "320px",
-  ariaLabel: "Code editor",
+  ariaLabel: undefined,
 });
 
 const emit = defineEmits<{
@@ -46,9 +49,15 @@ const emit = defineEmits<{
 }>();
 
 const settingsStore = useEditorSettingsStore();
+const { t } = useI18n();
 const host = ref<HTMLElement | null>(null);
 let session: EditorSession | null = null;
 let disposed = false;
+
+/** ariaLabel is the caller label, else the localized generic editor name. */
+const ariaLabel = computed<string>(
+  () => props.ariaLabel ?? t("files.editor.codeEditorLabel"),
+);
 
 /** language resolves the explicit prop, else the preset, else plain text. */
 const language = computed<EditorLanguageId>(
@@ -71,7 +80,7 @@ onMounted(() => {
     parent: element,
     doc: props.modelValue,
     language: language.value,
-    ariaLabel: props.ariaLabel,
+    ariaLabel: ariaLabel.value,
     readOnly: props.readOnly,
     settings: effectiveSettings.value,
     onChange: (doc) => emit("update:modelValue", doc),

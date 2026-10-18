@@ -3,10 +3,11 @@
 // ready tab must render no error state, and a role/root change must flip a live
 // session read-only. The CodeMirror chunk is mocked so the guards run without
 // a real editor.
-/* global document:readonly, Event:readonly, HTMLElement:readonly */
+/* global document:readonly, Element:readonly, Event:readonly, HTMLElement:readonly, MouseEvent:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NDropdown, NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
+import { createMemoryHistory, createRouter } from "vue-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, nextTick } from "vue";
 
@@ -95,8 +96,10 @@ import FilesEditor from "@/features/files/components/FilesEditor.vue";
 import EditorShortcutsDialog from "@/features/files/components/EditorShortcutsDialog.vue";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import { createMergeSession } from "@/features/files/composables/useMergeView";
+import { useAuthStore } from "@/features/auth/stores/auth";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
+import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
 import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 import { useFilesStore } from "@/features/files/stores/files";
 import { useTeamsStore } from "@/features/teams";
@@ -196,6 +199,50 @@ function mountEditor() {
   return { wrapper, teams, files, editor };
 }
 
+/** mountEditorWithRouter mounts FilesEditor with a memory router (JUS-232 fix
+ * round 1): navigation and server-switch reverts need real route targets. */
+async function mountEditorWithRouter(initialPath = "/servers/srv-a/files") {
+  setActivePinia(createPinia());
+  const teams = useTeamsStore();
+  teams.teams = [team("team-a", "owner"), team("team-b", "owner")];
+  teams.activeTeamId = "team-a";
+
+  const files = useFilesStore();
+  files.roots = [{ name: "volumes", path: "/v", writable: true, free_bytes: 1 }];
+  files.rootName = "volumes";
+
+  const editor = useEditorStore();
+  const stub = { template: "<div />" };
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: "/dashboard", name: "dashboard", component: stub },
+      { path: "/servers/:id/files", name: "server-files", component: stub },
+    ],
+  });
+  await router.push(initialPath);
+  await router.isReady();
+  const shell = defineComponent({
+    render: () =>
+      h(NMessageProvider, null, {
+        default: () => h(FilesEditor, { serverId: "srv" }),
+      }),
+  });
+  const wrapper = mount(shell, {
+    attachTo: document.body,
+    global: { plugins: [router, i18n], stubs: { teleport: true } },
+  });
+  await flushPromises();
+  return { wrapper, teams, files, editor, router };
+}
+
+/** leaveDialog finds the open discard-confirmation dialog, if any. */
+function leaveDialog(wrapper: ReturnType<typeof mountEditor>["wrapper"]) {
+  return wrapper
+    .findAll(".app-modal")
+    .find((node) => node.text().includes("Discard unsaved changes?"));
+}
+
 beforeEach(() => {
   resetLocaleState();
   syncComposerLocale("en");
@@ -288,7 +335,7 @@ describe("FilesEditor guards", () => {
     expect(editor.tabs).toHaveLength(0);
   });
 
-  it("minimizes to the dock and restores with the dirty buffer intact", async () => {
+  it("minimizes to the rail icon and restores with the dirty buffer intact", async () => {
     const { wrapper, editor } = mountEditor();
     const tab = makeTab("t1", true);
     editor.tabs = [tab];
@@ -301,20 +348,18 @@ describe("FilesEditor guards", () => {
     await wrapper.find("button.ed-window-min").trigger("click");
     await flushPromises();
 
-    // The window folds away and its dock item takes over (and takes focus).
+    // The window folds away into the rail icon (the host store owns the
+    // flag, so the rail badge and the window agree).
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
-    expect(wrapper.find(".ed-dock").attributes("style") ?? "").not.toContain("display: none");
-    const dockItem = wrapper.find("button.ed-dock-item");
-    expect(dockItem.attributes("aria-label")).toContain("Restore");
-    expect(document.activeElement).toBe(dockItem.element);
+    expect(useEditorWindowStore().minimized).toBe(true);
     // The buffer, its dirty state and the open tab all survive the collapse.
     expect(editor.tabs).toHaveLength(1);
     expect(editor.hasDirty).toBe(true);
 
-    await dockItem.trigger("click");
+    useEditorWindowStore().setMinimized(false);
     await flushPromises();
     expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
-    expect(wrapper.find(".ed-dock").attributes("style")).toContain("display: none");
+    expect(useEditorWindowStore().minimized).toBe(false);
     expect(editor.hasDirty).toBe(true);
     wrapper.unmount();
   });
@@ -524,7 +569,7 @@ describe("FilesEditor guards", () => {
     await flushPromises();
 
     expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
-    expect(wrapper.find(".ed-dock").attributes("style")).toContain("display: none");
+    expect(useEditorWindowStore().minimized).toBe(false);
     wrapper.unmount();
   });
 
@@ -549,8 +594,33 @@ describe("FilesEditor guards", () => {
     wrapper.unmount();
   });
 
-  it("folds the unsaved state into the dock control's accessible name", async () => {
-    const { wrapper, editor } = mountEditor();
+  it("forced sign-out with an open prompt neither reverts nor navigates", async () => {
+    const { wrapper, teams, editor, router } = await mountEditorWithRouter("/dashboard");
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    // A team switch opens the shared confirmation.
+    teams.activeTeamId = "team-b";
+    await flushPromises();
+    expect(leaveDialog(wrapper)).toBeTruthy();
+
+    // A forced sign-out (401, cross-tab) settles the prompt as aborted: the
+    // tabs are dropped by the session teardown, and no stay-revert runs.
+    const selectSpy = vi.spyOn(teams, "selectTeam");
+    useAuthStore().clearSession();
+    await flushPromises();
+    await router.isReady();
+
+    expect(leaveDialog(wrapper)).toBeUndefined();
+    expect(editor.tabs).toHaveLength(0);
+    expect(selectSpy).not.toHaveBeenCalled();
+    expect(router.currentRoute.value.path).toBe("/dashboard");
+    wrapper.unmount();
+  });
+
+  it("returns focus to the active tab on restore", async () => {    const { wrapper, editor } = mountEditor();
     const tab = makeTab("t1", true);
     editor.tabs = [tab];
     editor.activeId = tab.id;
@@ -558,14 +628,210 @@ describe("FilesEditor guards", () => {
 
     await wrapper.find("button.ed-window-min").trigger("click");
     await flushPromises();
-    const dockItem = wrapper.find("button.ed-dock-item");
-    expect(dockItem.attributes("aria-label")).toBe("Restore t1.yaml (unsaved changes)");
-    expect(wrapper.find(".ed-sr").exists()).toBe(false);
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
 
-    // A clean buffer keeps the plain label.
-    editor.tabs[0]!.doc = editor.tabs[0]!.original;
+    useEditorWindowStore().setMinimized(false);
     await flushPromises();
-    expect(dockItem.attributes("aria-label")).toBe("Restore t1.yaml");
+    await nextTick();
+    // The restore lands keyboard focus back on the active tab button.
+    expect(document.activeElement?.id).toBe(`ed-tab-${tab.id}`);
+    wrapper.unmount();
+  });
+
+  it("never prompts on route navigation: dirty tabs survive the move", async () => {
+    const { wrapper, editor, router } = await mountEditorWithRouter();
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    await router.push("/dashboard");
+    await flushPromises();
+
+    // No confirmation, no lost buffer: the window outlives the page.
+    expect(leaveDialog(wrapper)).toBeUndefined();
+    expect(editor.tabs).toHaveLength(1);
+    expect(editor.hasDirty).toBe(true);
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+    wrapper.unmount();
+  });
+
+  it("discards the window state when a server switch is confirmed", async () => {
+    const { wrapper, files, editor } = await mountEditorWithRouter();
+    files.serverId = "srv-a";
+    editor.serverId = "srv-a";
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    files.serverId = "srv-b";
+    await flushPromises();
+    expect(leaveDialog(wrapper)).toBeTruthy();
+
+    const discard = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Discard and leave");
+    expect(discard).toBeTruthy();
+    await discard!.trigger("click");
+    await flushPromises();
+
+    expect(editor.tabs).toHaveLength(0);
+    expect(leaveDialog(wrapper)).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("shares one confirmation across a team switch landing mid-prompt", async () => {
+    const { wrapper, teams, files, editor, router } = await mountEditorWithRouter(
+      "/dashboard",
+    );
+    files.serverId = "srv-a";
+    editor.serverId = "srv-a";
+    const tab = makeTab("t1", true);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    // First trigger: the team switch opens the confirmation.
+    teams.activeTeamId = "team-b";
+    await flushPromises();
+    expect(leaveDialog(wrapper)).toBeTruthy();
+
+    // Second trigger while the dialog is open: it must reuse the same
+    // promise, never orphan the team guard.
+    files.serverId = "srv-b";
+    await flushPromises();
+    expect(
+      wrapper
+        .findAll(".app-modal")
+        .filter((node) => node.text().includes("Discard unsaved changes?")),
+    ).toHaveLength(1);
+
+    // Staying settles BOTH guards: the team reverts and the browser is sent
+    // back to the tab's server. With the old single slot, the team promise
+    // hung forever and the revert below never happened.
+    const stay = wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Stay");
+    expect(stay).toBeTruthy();
+    await stay!.trigger("click");
+    await flushPromises();
+    await router.isReady();
+
+    expect(teams.activeTeamId).toBe("team-a");
+    expect(router.currentRoute.value.params.id).toBe("srv-a");
+    expect(editor.tabs).toHaveLength(1);
+    expect(leaveDialog(wrapper)).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("resizes from the keyboard with arrows and Shift", async () => {
+    const { wrapper } = mountEditor();
+    const tab = makeTab("t1", false);
+    const editor = useEditorStore();
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    const windows = useEditorWindowStore();
+    windows.setSize(800, 600);
+    const grip = wrapper.find(".ed-resize");
+    expect(grip.attributes("tabindex")).toBe("0");
+    expect(grip.attributes("role")).toBe("slider");
+
+    await grip.trigger("keydown", { key: "ArrowLeft" });
+    expect(windows.width).toBe(800 - 16);
+    await grip.trigger("keydown", { key: "ArrowUp", shiftKey: true });
+    expect(windows.height).toBe(600 - 64);
+    await grip.trigger("keydown", { key: "Enter" });
+    expect(windows.width).toBe(800 - 16);
+    wrapper.unmount();
+  });
+
+  it("persists a pointer drag seeded from the displayed size", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1600 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 1000 });
+    const captureHolder = window.HTMLElement.prototype as unknown as {
+      setPointerCapture?: (_id: number) => void;
+    };
+    const originalCapture = captureHolder.setPointerCapture;
+    captureHolder.setPointerCapture = () => {};
+    /** firePointer dispatches a native pointer-ish mouse event (VTU cannot
+     * synthesize PointerEvent init properties). */
+    function firePointer(
+      target: Element,
+      type: string,
+      init: { button?: number; clientX?: number; clientY?: number; pointerId?: number },
+    ): void {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: init.button ?? 0,
+        clientX: init.clientX ?? 0,
+        clientY: init.clientY ?? 0,
+      });
+      Object.defineProperty(event, "pointerId", { value: init.pointerId ?? 0 });
+      target.dispatchEvent(event);
+    }
+    try {
+      const { wrapper } = mountEditor();
+      const tab = makeTab("t1", false);
+      const editor = useEditorStore();
+      editor.tabs = [tab];
+      editor.activeId = tab.id;
+      await flushPromises();
+
+      const windows = useEditorWindowStore();
+      windows.setSize(1331, 936);
+      // Narrow the viewport: the window now displays fitted (752 wide with
+      // side margins at 800px).
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 800 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 600 });
+      window.dispatchEvent(new Event("resize"));
+      await flushPromises();
+
+      const grip = wrapper.find(".ed-resize").element;
+      firePointer(grip, "pointerdown", { button: 0, clientX: 200, clientY: 200, pointerId: 7 });
+      firePointer(grip, "pointermove", { clientX: 184, clientY: 200, pointerId: 7 });
+      firePointer(grip, "pointerup", { pointerId: 7 });
+      await flushPromises();
+
+      // No jump and no silent persist of a fitted size: the first move
+      // shrinks one step from the displayed 752 and persists the result.
+      expect(windows.width).toBe(736);
+      expect(wrapper.find(".ed-window").attributes("style") ?? "").toContain(
+        "width: 736px",
+      );
+      wrapper.unmount();
+    } finally {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: 768 });
+      if (originalCapture === undefined) {
+        delete captureHolder.setPointerCapture;
+      } else {
+        captureHolder.setPointerCapture = originalCapture;
+      }
+    }
+  });
+
+  it("reports the displayed size and viewport max on the resize handle", async () => {
+    const { wrapper } = mountEditor();
+    const tab = makeTab("t1", false);
+    const editor = useEditorStore();
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    const windows = useEditorWindowStore();
+    windows.setSize(800, 600);
+    await flushPromises();
+    const grip = wrapper.find(".ed-resize");
+    expect(grip.attributes("aria-valuemax")).toBe(String(window.innerWidth));
+    expect(grip.attributes("aria-valuenow")).toBe("800");
+    await grip.trigger("keydown", { key: "ArrowLeft" });
+    expect(grip.attributes("aria-valuenow")).toBe("784");
     wrapper.unmount();
   });
 
@@ -580,7 +846,7 @@ describe("FilesEditor guards", () => {
     await flushPromises();
 
     expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
-    expect(wrapper.find(".ed-dock").attributes("style") ?? "").not.toContain("display: none");
+    expect(useEditorWindowStore().minimized).toBe(true);
     wrapper.unmount();
   });
 

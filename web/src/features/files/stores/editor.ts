@@ -118,6 +118,13 @@ export interface SaveReport {
   outcome: SaveOutcome;
 }
 
+/**
+ * LeaveOutcome is the discard prompt's answer: "leave" discards the buffers,
+ * "stay" keeps them, "aborted" means the prompt was settled by an external
+ * teardown (forced sign-out) instead of the user.
+ */
+export type LeaveOutcome = "leave" | "stay" | "aborted";
+
 let tabSeq = 0;
 
 /** nextTabId mints a stable per-session tab id. */
@@ -152,6 +159,22 @@ export const useEditorStore = defineStore("filesEditor", () => {
   const conflictId = computed<string | null>(() => conflictQueue.value[0] ?? null);
   /** saveAsId is the tab awaiting a "save as copy" name. */
   const saveAsId = ref<string | null>(null);
+  /**
+   * leaveOpen arms the shared "discard unsaved changes?" confirmation (JUS-232
+   * fix round 2). The dialog renders once in the app-level editor window, and
+   * every destructive path (server switch, team switch, user-initiated
+   * logout) confirms through it. Forced sign-outs bypass it and reset
+   * directly.
+   */
+  const leaveOpen = ref(false);
+  /** leaveResolve settles the open confirmation (null when idle). */
+  let leaveResolve: ((_outcome: LeaveOutcome) => void) | null = null;
+  /**
+   * leavePromise is the open confirmation every overlapping caller shares: a
+   * second confirmDiscard while the dialog is open returns the same promise
+   * instead of orphaning the first caller's guard.
+   */
+  let leavePromise: Promise<LeaveOutcome> | null = null;
   /**
    * encodingWarnings is the ordered queue of saves blocked by characters the
    * target charset cannot hold: Save All can hit several at once and the prompt
@@ -856,8 +879,51 @@ export const useEditorStore = defineStore("filesEditor", () => {
 
   /** reset clears every tab and unbinds the server (server switch/sign-out). */
   function reset(): void {
+    // A forced sign-out can land while the discard prompt is open: settle it
+    // as aborted (not "stay") so no stay-revert navigation or team revert
+    // fires during the teardown.
+    abortLeave();
     closeAll();
     serverId.value = "";
+  }
+
+  /**
+   * confirmDiscard asks the user before discarding dirty buffers. Overlapping
+   * calls share one dialog and one promise, so a team switch landing
+   * mid-prompt (or a rapid double action) can never strand a caller waiting
+   * forever.
+   */
+  function confirmDiscard(): Promise<LeaveOutcome> {
+    if (!hasDirty.value) {
+      return Promise.resolve("leave");
+    }
+    if (leavePromise) {
+      return leavePromise;
+    }
+    leavePromise = new Promise<LeaveOutcome>((resolve) => {
+      leaveResolve = resolve;
+      leaveOpen.value = true;
+    });
+    return leavePromise;
+  }
+
+  /** resolveLeave settles the pending confirmation with the user's answer. */
+  function resolveLeave(leave: boolean): void {
+    leaveOpen.value = false;
+    leaveResolve?.(leave ? "leave" : "stay");
+    leaveResolve = null;
+    leavePromise = null;
+  }
+
+  /** abortLeave settles an open confirmation as abandoned by a teardown. */
+  function abortLeave(): void {
+    if (leavePromise === null) {
+      return;
+    }
+    leaveOpen.value = false;
+    leaveResolve?.("aborted");
+    leaveResolve = null;
+    leavePromise = null;
   }
 
   return {
@@ -868,6 +934,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     conflictId,
     saveAsId,
     encodingWarning,
+    leaveOpen,
     // derived
     activeTab,
     conflictTab,
@@ -905,6 +972,9 @@ export const useEditorStore = defineStore("filesEditor", () => {
     applyMove,
     applyDelete,
     reset,
+    confirmDiscard,
+    resolveLeave,
+    abortLeave,
   };
 });
 

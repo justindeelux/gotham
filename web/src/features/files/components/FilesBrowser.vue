@@ -3289,9 +3289,8 @@ function onFolderMenu(key: string): void {
           >
             <!-- JUS-216: the file-type icon sits top-left directly before the
                  name (one line); the bottom area keeps the type, owner/mode
-                 and size lines on the left while the relative modified age
-                 rides the bottom-right corner. Directories show no size line
-                 (their grid behaviour is unchanged). -->
+                 and size lines. Directories show no size line (their grid
+                 behaviour is unchanged). -->
             <span class="fm-tile-top">
               <FileTypeIcon :kind="iconKind(entry)" />
               <span class="fm-label fm-tile-name">
@@ -3304,9 +3303,14 @@ function onFolderMenu(key: string): void {
                 <span class="fm-tile-ownermode">{{ ownerModeLabel(entry) }}</span>
                 <span v-if="entry.kind !== 'directory'" class="fm-tile-size">{{ formatBytes(entry.size) }}</span>
               </span>
-              <span class="fm-tile-ago">{{ modifiedLabel(entry) }}</span>
             </span>
           </button>
+          <!-- JUS-232: the relative modified age shares the selection row at
+               the tile's bottom-left reserve: the checkbox sits left, the age
+               rides the same row's right end. -->
+          <span class="fm-tile-foot">
+            <span class="fm-tile-ago">{{ modifiedLabel(entry) }}</span>
+          </span>
           <!-- JUS-145: the tile's ⋮ row menu — the same trigger contract as the
                list (aria-haspopup/expanded, one open at a time, closes on a
                layout change), as a sibling of the tile button (never nested
@@ -4624,9 +4628,9 @@ function onFolderMenu(key: string): void {
 }
 
 /* JUS-216: the icon sits top-left directly before the name (one line, the name
-   keeps its ellipsis); the bottom area keeps the metadata lines on the left
-   while the relative modified age rides the bottom-right corner. The ⋮ stays
-   top-right, so the top row keeps its right clearance. */
+   keeps its ellipsis); the bottom area keeps the metadata lines. The ⋮ stays
+   top-right, so the top row keeps its right clearance. The relative modified
+   age shares the selection row below (JUS-232). */
 .fm-tile-top {
   display: flex;
   align-items: center;
@@ -4652,7 +4656,6 @@ function onFolderMenu(key: string): void {
 
 .fm-tile-ago {
   flex: 0 0 auto;
-  align-self: flex-end;
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--muted);
@@ -4703,6 +4706,21 @@ function onFolderMenu(key: string): void {
 .fm-tile-actions :deep(.n-button) {
   min-width: 30px;
   height: 30px;
+}
+
+/* JUS-232: the modified age shares the selection row in the tile's bottom
+   reserve: it overlays the band's right end while the checkbox sits left, so
+   selecting never changes the tile size and both stay on one row. */
+.fm-tile-foot {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  pointer-events: none;
 }
 
 /* JUS-215: the tile checkbox is a bare control in the bottom-left corner — no

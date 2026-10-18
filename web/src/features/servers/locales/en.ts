@@ -127,6 +127,7 @@ const en = {
     home: "Gotham — home",
     managedServers: "Managed servers",
     addServer: "Add server",
+    editorWithCount: "Code editor — {count} open",
     overview: "Overview",
     alerts: "System alerts — {text}",
     noAlerts: "No new alerts",

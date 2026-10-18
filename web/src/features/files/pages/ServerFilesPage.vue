@@ -6,8 +6,6 @@ import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import FilesBrowser from "@/features/files/components/FilesBrowser.vue";
-import FilesEditor from "@/features/files/components/FilesEditor.vue";
-import { useFilesStore } from "@/features/files/stores/files";
 import type { Server } from "@/features/servers/api/servers";
 import { getServer } from "@/features/servers/api/servers";
 import { useServersStore } from "@/features/servers";
@@ -16,7 +14,6 @@ const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
 const serversStore = useServersStore();
-const files = useFilesStore();
 
 const serverId = computed<string>(() => String(route.params.id ?? ""));
 const server = ref<Server | null>(null);
@@ -121,8 +118,6 @@ function switchNode(next: string | number | null): void {
         </span>
       </template>
     </FilesBrowser>
-
-    <FilesEditor v-if="files.canReadContent" :server-id="serverId" />
   </div>
 </template>
 

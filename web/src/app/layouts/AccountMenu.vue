@@ -6,6 +6,7 @@ import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 
 import { useAuthStore } from "@/features/auth";
+import { useEditorStore } from "@/features/files/stores/editor";
 import { useTeamsStore } from "@/features/teams";
 import { roleReadRetryMs, shouldRetryRoleRead } from "@/features/teams";
 import type { TeamRole } from "@/features/teams";
@@ -157,6 +158,14 @@ async function handleSelect(key: string | number): Promise<void> {
     return;
   }
   if (key !== "sign-out") {
+    return;
+  }
+  // A user-initiated logout drops the editor buffers, so dirty tabs confirm
+  // first through the shared editor dialog. Anything but an explicit "leave"
+  // (staying, or the prompt being settled by a concurrent sign-out) aborts
+  // the logout. Forced sign-outs bypass this path and reset directly.
+  const editor = useEditorStore();
+  if ((await editor.confirmDiscard()) !== "leave") {
     return;
   }
   try {

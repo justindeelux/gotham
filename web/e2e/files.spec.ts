@@ -479,7 +479,7 @@ test.describe("files editor", () => {
       .getByRole("button", { name: "Discard and close", exact: true })
       .click();
     await expect(page.locator(".ed-window")).toHaveCount(0);
-    await expect(page.locator(".ed-dock")).toHaveCount(0);
+    await expect(page.locator(".rail-btn--editor")).toHaveCount(0);
   });
 });
 

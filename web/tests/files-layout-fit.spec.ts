@@ -1027,7 +1027,7 @@ test("the toolbar groups New, keeps bulk tools right and is icon-only on small s
   }
 });
 
-test("the minimized editor dock never covers the header node switcher", async ({
+test("the minimized editor rail icon never covers the header node switcher", async ({
   page,
 }) => {
   for (const viewport of [
@@ -1038,21 +1038,29 @@ test("the minimized editor dock never covers the header node switcher", async ({
     await mockApi(page);
     await page.goto(`${baseURL}/servers/${server1}/files`);
 
-    // Open a file and collapse the editor into the fixed bottom dock. Enter on
+    // Open a file and collapse the editor into the rail icon. Enter on
     // the focused row is the same JUS-130 activation path as a double-click and
     // keeps this check independent of the selection toolbar's layout.
     await page.locator(".fm-label").first().focus();
     await page.keyboard.press("Enter");
     await expect(page.locator(".ed-window")).toBeVisible({ timeout: 15_000 });
     await page.locator(".ed-window-min").click();
-    await expect(page.locator(".ed-dock")).toBeVisible();
+    await expect(page.locator(".ed-window")).toBeHidden();
+    if (viewport.width > 1024) {
+      // On desktop the rail is in flow: the minimized editor parks there.
+      await expect(page.locator(".rail-btn--editor")).toBeVisible();
+    } else {
+      // Below the tablet breakpoint the rail lives in the topbar drawer, so
+      // there is no in-flow icon; the minimized state itself is the assert.
+      await expect(page.locator(".ed-window")).toHaveCount(1);
+    }
 
-    // The header switcher sits above the bottom dock, so its centre is
-    // clickable and never captured by the dock band (JUS-134).
+    // The minimized editor leaves no dock band behind, and the header
+    // switcher's centre resolves to the switcher itself (JUS-134).
+    await expect(page.locator(".ed-dock")).toHaveCount(0);
     const hit = await page.evaluate(() => {
-      const dock = document.querySelector(".ed-dock");
       const select = document.querySelector(".fm-node__select");
-      if (!(dock instanceof HTMLElement) || !(select instanceof HTMLElement)) {
+      if (!(select instanceof HTMLElement)) {
         return null;
       }
       const box = select.getBoundingClientRect();
@@ -1061,16 +1069,11 @@ test("the minimized editor dock never covers the header node switcher", async ({
         box.y + box.height / 2,
       );
       return {
-        hitInsideDock: target !== null && dock.contains(target),
         hitInsideSelect: target !== null && select.contains(target),
-        selectBottom: box.bottom,
-        dockTop: dock.getBoundingClientRect().top,
       };
     });
     expect(hit).not.toBeNull();
-    expect(hit!.hitInsideDock).toBe(false);
     expect(hit!.hitInsideSelect).toBe(true);
-    expect(hit!.selectBottom).toBeLessThanOrEqual(hit!.dockTop);
   }
 });
 

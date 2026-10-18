@@ -128,6 +128,7 @@ const vi: ServersMessages = {
     home: "Gotham — trang chủ",
     managedServers: "Các máy chủ được quản lý",
     addServer: "Thêm máy chủ",
+    editorWithCount: "Trình soạn thảo mã — {count} đang mở",
     overview: "Tổng quan",
     alerts: "Cảnh báo hệ thống — {text}",
     noAlerts: "Không có cảnh báo mới",

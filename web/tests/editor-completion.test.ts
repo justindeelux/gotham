@@ -14,6 +14,7 @@ import {
   completionSources,
   keywordCompletions,
   snippetCompletions,
+  snippetSpecs,
 } from "@/features/files/editor/completion";
 import {
   DEFAULT_EDITOR_SETTINGS,
@@ -38,6 +39,19 @@ function makeView(extensions: Extension, doc = "do"): EditorView {
       extensions,
     }),
   });
+}
+
+/** expandSnippet applies one snippet at the start of an empty document. */
+function expandSnippet(language: "shell" | "dockerfile" | "yaml" | "nginx", label: string): string {
+  const completion = snippetCompletions(language).find((item) => item.label === label);
+  if (typeof completion?.apply !== "function") {
+    throw new Error(`snippet not found: ${language}/${label}`);
+  }
+  const view = makeView([], "");
+  completion.apply(view, completion, 0, 0);
+  const doc = view.state.doc.toString();
+  view.destroy();
+  return doc;
 }
 
 afterEach(() => {
@@ -91,6 +105,37 @@ describe("completion sources", () => {
     expect(snippetCompletions("python")).toEqual([]);
   });
 
+  it("never leaves an empty numeric field in a snippet", () => {
+    for (const language of ["shell", "dockerfile", "yaml", "nginx"] as const) {
+      for (const spec of snippetSpecs(language)) {
+        const placeholders = [...spec.template.matchAll(/\$\{([^}]*)\}/g)];
+        placeholders.forEach(([, body = ""], index) => {
+          if (body === "") {
+            // A bare `${}` is the final cursor stop and must come last.
+            expect(index, `${language}/${spec.label}: empty field before the end`).toBe(
+              placeholders.length - 1,
+            );
+            return;
+          }
+          // `${1}` is an empty tab stop; digits must carry a default.
+          expect(body, `${language}/${spec.label}: ${body}`).not.toMatch(/^\d+$/);
+        });
+        expect(expandSnippet(language, spec.label)).not.toContain("${");
+      }
+    }
+  });
+
+  it("expands numeric placeholders with their real defaults", () => {
+    expect(expandSnippet("yaml", "compose-service")).toContain('"8080:80"');
+    expect(expandSnippet("yaml", "deployment")).toContain("replicas: 1");
+    expect(expandSnippet("yaml", "service")).toContain("port: 80");
+    expect(expandSnippet("yaml", "service")).toContain("targetPort: 8080");
+    expect(expandSnippet("nginx", "server")).toContain("listen 80;");
+    expect(expandSnippet("dockerfile", "multi-stage")).toContain(
+      "FROM golang:1 AS build",
+    );
+  });
+
   it("expands a snippet template at the cursor", () => {
     const shebang = snippetCompletions("shell").find((item) => item.label === "shebang");
     expect(shebang?.apply).toBeTypeOf("function");
@@ -122,6 +167,38 @@ describe("completion sources", () => {
 });
 
 describe("live completion reconfiguration", () => {
+  it("keeps bracket closing when autocomplete is off", () => {
+    const settings = { ...DEFAULT_EDITOR_SETTINGS, autocomplete: false };
+    const view = makeView(editorSettingsExtensions(settings, "plain"), "x");
+    const from = view.state.selection.main.from;
+    const handled = view.state
+      .facet(EditorView.inputHandler)
+      .some((handler) =>
+        (
+          handler as unknown as (
+            _view: EditorView,
+            _from: number,
+            _to: number,
+            _text: string,
+          ) => boolean
+        )(view, from, from, "("),
+      );
+
+    expect(handled).toBe(true);
+    expect(view.state.doc.toString()).toBe("x()");
+
+    view.contentDOM.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Backspace",
+        code: "Backspace",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(view.state.doc.toString()).toBe("x");
+    view.destroy();
+  });
+
   it("accepts the selected option with Tab and leaves Tab alone when closed", async () => {
     const view = makeView(
       completionExtensions(DEFAULT_EDITOR_SETTINGS, "shell"),

@@ -45,7 +45,7 @@ import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { simpleMode } from "@codemirror/legacy-modes/mode/simple-mode";
 import { tags } from "@lezer/highlight";
 
-import { completionExtensions } from "@/features/files/editor/completion";
+import { bracketExtensions, completionExtensions } from "@/features/files/editor/completion";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
@@ -365,6 +365,8 @@ export function editorSettingsExtensions(
     whitespacePlugin(settings),
     settings.wrap ? EditorView.lineWrapping : [],
     completionExtensions(settings, language),
+    // Always on, independent of the autocomplete switch (JUS-227 review).
+    bracketExtensions(),
   ];
 }
 

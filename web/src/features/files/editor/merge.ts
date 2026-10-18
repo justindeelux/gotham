@@ -51,6 +51,15 @@ function readOnlyExtensions(): Extension[] {
 }
 
 /**
+ * diffSettings drops the completion popup from the read-only panes: it could
+ * never insert text there. Bracket closing is always-on (see
+ * `editorSettingsExtensions`) and harmless on a non-editable document.
+ */
+function diffSettings(settings: EditorSettings): EditorSettings {
+  return settings.autocomplete ? { ...settings, autocomplete: false } : settings;
+}
+
+/**
  * createMergeSession builds one side-by-side diff. Both sides are read-only, so
  * a history tab can never be edited or saved. Each side keeps the shared editor
  * settings in its own compartment, so a preference change reconfigures both
@@ -65,7 +74,9 @@ export async function createMergeSession(
   const side = (doc: string, settings: Compartment) => ({
     doc,
     extensions: [
-      settings.of(editorSettingsExtensions(options.settings, options.language)),
+      settings.of(
+        editorSettingsExtensions(diffSettings(options.settings), options.language),
+      ),
       language,
       mergeTheme,
       ...readOnlyExtensions(),
@@ -81,7 +92,10 @@ export async function createMergeSession(
   });
   return {
     setSettings(settings: EditorSettings): void {
-      const extension = editorSettingsExtensions(settings, options.language);
+      const extension = editorSettingsExtensions(
+        diffSettings(settings),
+        options.language,
+      );
       view.a.dispatch({ effects: settingsA.reconfigure(extension) });
       view.b.dispatch({ effects: settingsB.reconfigure(extension) });
     },

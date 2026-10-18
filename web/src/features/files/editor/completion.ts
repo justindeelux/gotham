@@ -23,11 +23,14 @@ import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
 /** SnippetSpec is one labelled snippet template for the completion popup. */
-interface SnippetSpec {
+export interface SnippetSpec {
   label: string;
   /**
-   * template uses the snippet field syntax (`${name}`, `${}` and `$0`) that
-   * `snippetCompletion` expands; the bare `${}` is the final cursor stop.
+   * template uses the snippet field syntax that `snippetCompletion` expands:
+   * `${name}` is a placeholder whose literal name is selected for typing,
+   * `${1:8080}` is a numbered tab stop with a real default value, and the bare
+   * `${}` is the final cursor stop. A bare `${1}` would be an empty field, so
+   * every numeric field must carry a default.
    */
   template: string;
 }
@@ -199,29 +202,29 @@ const SNIPPETS: Partial<Record<EditorLanguageId, readonly SnippetSpec[]>> = {
     {
       label: "multi-stage",
       template:
-        "FROM ${golang:1} AS build\nWORKDIR /src\nCOPY . .\nRUN ${go build -o /app .}\n\nFROM ${alpine:3}\nCOPY --from=build /app /usr/local/bin/app\nENTRYPOINT [\"app\"]",
+        "FROM ${1:golang:1} AS build\nWORKDIR /src\nCOPY . .\nRUN ${2:go build -o /app .}\n\nFROM ${3:alpine:3}\nCOPY --from=build /app /usr/local/bin/app\nENTRYPOINT [\"app\"]",
     },
   ],
   yaml: [
     {
       label: "compose-service",
       template:
-        "services:\n  ${name}:\n    image: ${image}\n    restart: unless-stopped\n    ports:\n      - \"${8080}:${80}\"\n    volumes:\n      - ${./data}:/data\n    environment:\n      ${KEY}: ${value}",
+        "services:\n  ${name}:\n    image: ${image}\n    restart: unless-stopped\n    ports:\n      - \"${1:8080}:${2:80}\"\n    volumes:\n      - ${./data}:/data\n    environment:\n      ${KEY}: ${value}",
     },
     {
       label: "healthcheck",
       template:
-        'healthcheck:\n  test: ["CMD", "${command}"]\n  interval: 30s\n  timeout: 5s\n  retries: 3',
+        'healthcheck:\n  test: ["CMD", "${1:true}"]\n  interval: 30s\n  timeout: 5s\n  retries: 3',
     },
     {
       label: "deployment",
       template:
-        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${name}\nspec:\n  replicas: ${1}\n  selector:\n    matchLabels:\n      app: ${name}\n  template:\n    metadata:\n      labels:\n        app: ${name}\n    spec:\n      containers:\n        - name: ${name}\n          image: ${image}",
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${name}\nspec:\n  replicas: ${1:1}\n  selector:\n    matchLabels:\n      app: ${name}\n  template:\n    metadata:\n      labels:\n        app: ${name}\n    spec:\n      containers:\n        - name: ${name}\n          image: ${image}",
     },
     {
       label: "service",
       template:
-        "apiVersion: v1\nkind: Service\nmetadata:\n  name: ${name}\nspec:\n  selector:\n    app: ${name}\n  ports:\n    - port: ${80}\n      targetPort: ${8080}",
+        "apiVersion: v1\nkind: Service\nmetadata:\n  name: ${name}\nspec:\n  selector:\n    app: ${name}\n  ports:\n    - port: ${1:80}\n      targetPort: ${2:8080}",
     },
     { label: "key-value", template: "${key}: ${value}" },
   ],
@@ -229,7 +232,7 @@ const SNIPPETS: Partial<Record<EditorLanguageId, readonly SnippetSpec[]>> = {
     {
       label: "server",
       template:
-        "server {\n  listen ${80};\n  server_name ${example.com};\n\n  location / {\n    ${}\n  }\n}",
+        "server {\n  listen ${1:80};\n  server_name ${example.com};\n\n  location / {\n    ${}\n  }\n}",
     },
     { label: "location", template: "location ${/} {\n  ${}\n}" },
     {
@@ -270,6 +273,11 @@ function keywordLanguage(language: EditorLanguageId): EditorLanguageId {
 const keywordCache = new Map<EditorLanguageId, Completion[]>();
 const snippetCache = new Map<EditorLanguageId, Completion[]>();
 
+/** snippetSpecs returns one language's snippet templates (also used by tests). */
+export function snippetSpecs(language: EditorLanguageId): readonly SnippetSpec[] {
+  return SNIPPETS[language] ?? [];
+}
+
 /** keywordCompletions returns one language's keyword items (cached). */
 export function keywordCompletions(language: EditorLanguageId): Completion[] {
   let options = keywordCache.get(language);
@@ -287,7 +295,7 @@ export function keywordCompletions(language: EditorLanguageId): Completion[] {
 export function snippetCompletions(language: EditorLanguageId): Completion[] {
   let options = snippetCache.get(language);
   if (!options) {
-    options = (SNIPPETS[language] ?? []).map((snippet) =>
+    options = snippetSpecs(language).map((snippet) =>
       snippetCompletion(snippet.template, {
         label: snippet.label,
         detail: "snippet",
@@ -327,7 +335,9 @@ export function completionSources(
 /**
  * completionExtensions builds the autocomplete layer for the settings
  * compartment. With autocomplete disabled it returns an empty extension, so
- * the popup, its keymap and bracket closing are all removed from the view.
+ * the popup, its sources and the Tab handler are all removed from the view.
+ * Bracket closing is deliberately not part of this layer (see
+ * {@link bracketExtensions}).
  */
 export function completionExtensions(
   settings: EditorSettings,
@@ -338,9 +348,7 @@ export function completionExtensions(
   }
   return [
     autocompletion({ override: completionSources(settings, language) }),
-    closeBrackets(),
     keymap.of([
-      ...closeBracketsKeymap,
       {
         // Tab accepts only while the popup is open; otherwise it keeps moving
         // focus out of the editor (WCAG 2.1.2).
@@ -350,4 +358,14 @@ export function completionExtensions(
       },
     ]),
   ];
+}
+
+/**
+ * bracketExtensions closes brackets and deletes a matching pair. It is a
+ * separate, always-on editing behaviour rather than part of the completion
+ * toggle: turning autocomplete off must not silently change how typing `(`
+ * behaves. It lives here because the package ships in the lazy editor chunk.
+ */
+export function bracketExtensions(): Extension {
+  return [closeBrackets(), keymap.of(closeBracketsKeymap)];
 }

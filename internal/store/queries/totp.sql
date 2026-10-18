@@ -5,15 +5,22 @@ SELECT user_id, secret_enc, enabled, last_step, recovery_codes, failed_attempts,
 FROM user_totp
 WHERE user_id = $1;
 
--- name: UpsertUserTOTPSecret :exec
+-- name: UpsertUserTOTPSecret :one
 -- UpsertUserTOTPSecret installs a pending secret (enabled stays false) or
--- replaces a pending one on a re-enrollment. The service refuses to call it
--- while TOTP is already enabled, so an active secret is never silently
--- swapped; last_step and recovery_codes are only touched by enable.
+-- replaces a pending one on a re-enrollment, clearing any stale lock state with
+-- it. The `enabled = false` guard means a live secret is never overwritten even
+-- when a concurrent enable beats the caller's own check: zero rows (pgx.ErrNoRows)
+-- tells the caller the account is already enabled. last_step and recovery_codes
+-- are only touched by enable.
 INSERT INTO user_totp (user_id, secret_enc, enabled, last_step, recovery_codes)
 VALUES (sqlc.arg(user_id), sqlc.arg(secret_enc), false, NULL, '{}')
 ON CONFLICT (user_id) DO UPDATE
-SET secret_enc = EXCLUDED.secret_enc, updated_at = now();
+SET secret_enc = EXCLUDED.secret_enc,
+    failed_attempts = 0,
+    locked_until = NULL,
+    updated_at = now()
+WHERE user_totp.enabled = false
+RETURNING user_id;
 
 -- name: EnableUserTOTP :one
 -- EnableUserTOTP turns a pending secret on and installs its recovery-code set
@@ -32,12 +39,16 @@ WHERE user_id = sqlc.arg(user_id)
   AND enabled = false
 RETURNING user_id;
 
--- name: RecordUserTOTPFailure :one
--- RecordUserTOTPFailure increments the account's consecutive second-factor
--- failures and sets the lock deadline once the threshold is reached, in one
--- statement so concurrent guesses cannot lose a count. The caller computes the
--- deadline from its own clock (so tests can drive it); a row still below the
--- threshold keeps any existing deadline.
+-- name: BeginUserTOTPAttempt :one
+-- BeginUserTOTPAttempt reserves one second-factor attempt before the code is
+-- checked: it counts the attempt and arms the lock deadline once the threshold
+-- is reached, in one atomic statement, but only while the account is not already
+-- locked. Zero rows (pgx.ErrNoRows) means the account is locked at the caller's
+-- now, so the caller refuses without verifying. Counting first under the row
+-- lock means a parallel burst cannot all slip past the check: at most threshold
+-- attempts reach the verifier and the counter can never overshoot. The caller
+-- computes the deadline from its own clock (so tests can drive it) and rolls the
+-- attempt back with ClearUserTOTPFailures when the code turns out correct.
 UPDATE user_totp
 SET failed_attempts = failed_attempts + 1,
     locked_until = CASE
@@ -46,6 +57,7 @@ SET failed_attempts = failed_attempts + 1,
     END,
     updated_at = now()
 WHERE user_id = sqlc.arg(user_id)
+  AND (locked_until IS NULL OR locked_until <= sqlc.arg(now)::timestamptz)
 RETURNING failed_attempts, locked_until;
 
 -- name: ClearUserTOTPFailures :exec

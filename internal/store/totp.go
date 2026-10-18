@@ -22,12 +22,15 @@ func (s *Store) GetUserTOTP(ctx context.Context, userID pgtype.UUID) (sqlc.GetUs
 	return s.queries.GetUserTOTP(ctx, userID)
 }
 
-// UpsertUserTOTPSecret stores a pending (not yet enabled) secret.
-func (s *Store) UpsertUserTOTPSecret(ctx context.Context, userID pgtype.UUID, secretEnc string) error {
-	return s.queries.UpsertUserTOTPSecret(ctx, sqlc.UpsertUserTOTPSecretParams{
+// UpsertUserTOTPSecret stores a pending (not yet enabled) secret and clears any
+// stale lock state. It reports false when the account is already enabled, so a
+// live secret is never overwritten by a re-enrollment that lost the race.
+func (s *Store) UpsertUserTOTPSecret(ctx context.Context, userID pgtype.UUID, secretEnc string) (bool, error) {
+	_, err := s.queries.UpsertUserTOTPSecret(ctx, sqlc.UpsertUserTOTPSecretParams{
 		UserID:    userID,
 		SecretEnc: secretEnc,
 	})
+	return matched(err)
 }
 
 // EnableUserTOTP flips a pending secret on with its recovery-code hashes and
@@ -71,16 +74,20 @@ func (s *Store) ReplaceUserTOTPRecoveryCodes(ctx context.Context, userID pgtype.
 	return matched(err)
 }
 
-// RecordUserTOTPFailure increments the account's consecutive second-factor
-// failures and arms the lockout until lockedUntil once threshold is reached, in
-// one statement so two concurrent guesses cannot lose a count. A row still
-// below the threshold keeps any existing deadline.
-func (s *Store) RecordUserTOTPFailure(ctx context.Context, userID pgtype.UUID, threshold int, lockedUntil time.Time) (sqlc.RecordUserTOTPFailureRow, error) {
-	return s.queries.RecordUserTOTPFailure(ctx, sqlc.RecordUserTOTPFailureParams{
+// BeginUserTOTPAttempt reserves one second-factor attempt before the code is
+// checked, reporting false when the account is already locked at now. It counts
+// the attempt and arms the lockout once threshold is reached in one statement,
+// so a parallel burst cannot all pass the check: at most threshold attempts
+// reach the verifier and the counter never overshoots. A correct code rolls the
+// attempt back with ClearUserTOTPFailures.
+func (s *Store) BeginUserTOTPAttempt(ctx context.Context, userID pgtype.UUID, threshold int, now, lockedUntil time.Time) (bool, error) {
+	_, err := s.queries.BeginUserTOTPAttempt(ctx, sqlc.BeginUserTOTPAttemptParams{
 		UserID:      userID,
 		Threshold:   int32(threshold),
+		Now:         pgtype.Timestamptz{Time: now, Valid: true},
 		LockedUntil: pgtype.Timestamptz{Time: lockedUntil, Valid: true},
 	})
+	return matched(err)
 }
 
 // ClearUserTOTPFailures resets the consecutive-failure counter and drops any

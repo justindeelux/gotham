@@ -95,8 +95,7 @@ function pickTabSize(value: string | number): void {
       v-if="canEdit"
       type="button"
       class="ed-item mono"
-      :aria-label="t('files.editor.historyShow', { count: props.historyCount })"
-      :title="t('files.editor.history')"
+      :title="t('files.editor.historyShow', { count: props.historyCount })"
       @click="emit('openHistory')"
     >
       {{ t("files.editor.historyCount", { count: props.historyCount }) }}
@@ -147,7 +146,6 @@ function pickTabSize(value: string | number): void {
       <button
         type="button"
         class="ed-item mono"
-        :aria-label="`${t('files.editor.settings.tabSize')}: ${props.tabSize}`"
         :title="t('files.editor.settings.tabSize')"
       >
         {{ t("files.editor.tabSizeValue", { size: props.tabSize }) }}

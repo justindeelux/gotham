@@ -541,6 +541,19 @@ describe("editor tab ergonomics", () => {
     wrapper.unmount();
   });
 
+  it("closes the focused tab with Delete", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", false), makeTab("t2", false)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    await wrapper.find("#ed-tab-t1").trigger("keydown", { key: "Delete" });
+    await flushPromises();
+
+    expect(editor.tabs.map((tab) => tab.id)).toEqual(["t2"]);
+    wrapper.unmount();
+  });
+
   it("cycles tabs with Ctrl+Tab and Ctrl+Shift+Tab", async () => {
     const { wrapper, editor } = mountEditor();
     editor.tabs = [makeTab("t1", false), makeTab("t2", false), makeTab("t3", false)];

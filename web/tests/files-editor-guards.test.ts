@@ -73,6 +73,7 @@ vi.mock("@/features/files/composables/useMergeView", () => ({
 }));
 
 import FilesEditor from "@/features/files/components/FilesEditor.vue";
+import EditorShortcutsDialog from "@/features/files/components/EditorShortcutsDialog.vue";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import { createMergeSession } from "@/features/files/composables/useMergeView";
 import { useEditorStore } from "@/features/files/stores/editor";
@@ -271,6 +272,32 @@ describe("FilesEditor guards", () => {
     expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain("display: none");
     expect(wrapper.find(".ed-dock").attributes("style")).toContain("display: none");
     expect(editor.hasDirty).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("does not collapse the window on Escape while a dialog is open", async () => {
+    const { wrapper, editor } = mountEditor();
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    await wrapper.find("button.ed-window-shortcuts").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".ed-shortcuts").exists()).toBe(true);
+
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style") ?? "").not.toContain(
+      "display: none",
+    );
+
+    // Once the sheet is closed, Escape belongs to the window again.
+    wrapper.findComponent(EditorShortcutsDialog).vm.$emit("update:show", false);
+    await flushPromises();
+    await wrapper.find(".ed-window").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+    expect(wrapper.find(".ed-window").attributes("style")).toContain("display: none");
     wrapper.unmount();
   });
 

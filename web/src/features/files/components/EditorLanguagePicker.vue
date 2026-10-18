@@ -46,7 +46,7 @@ function selectLanguage(value: string | number): void {
     <button
       type="button"
       class="ed-language"
-      :aria-label="t('files.editor.language')"
+      :aria-label="`${t('files.editor.language')}: ${languageLabel(props.language)}`"
       :title="t('files.editor.language')"
     >
       {{ languageLabel(props.language) }}

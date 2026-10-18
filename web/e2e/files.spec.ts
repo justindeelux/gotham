@@ -1,6 +1,7 @@
 import { expect, test } from "./fixtures";
 import { test as plainTest } from "@playwright/test";
 import type { APIRequestContext, Locator, Page, Route } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 import {
   loadAccount,
@@ -300,6 +301,73 @@ test.describe("files editor", () => {
     expect(put.headers()["if-match"]).toBe("etag-1");
     await expect(page.getByText("Saved app.yaml")).toBeVisible();
     await expect(editor.locator(".ed-dot")).toHaveCount(0);
+  });
+
+  test("passes an axe scan on the open editor and shortcut sheet", async ({
+    page,
+    request,
+  }) => {
+    const server = await seedServer(request, uniqueSuffix());
+    await routeFiles(page, {
+      roots: (route) => json(route, 200, { roots: [writableRoot] }),
+      list: (route) =>
+        json(
+          route,
+          200,
+          listing([entry("app.yaml", "file", 11, 0o100644, "etag-1")]),
+        ),
+      content: (route) => json(route, 200, textContent),
+    });
+
+    await page.goto(`/servers/${server.id}/files`);
+    // Axe reads computed colors; a mid-flight modal/editor transition would
+    // measure a faded surface. Freeze transitions for this scan.
+    await page.addStyleTag({
+      content: "*, *::before, *::after { transition: none !important; animation: none !important; }",
+    });
+    await page.locator(".fm-label").filter({ hasText: "app.yaml" }).dblclick();
+    const editor = page.locator(".files-editor");
+    await expect(editor.locator(".cm-content")).toBeVisible();
+
+    // T-A11Y-01: the open editor (chrome, tabs, toolbar, explorer and pane)
+    // must have zero serious/critical axe findings.
+    const editorScan = await new AxeBuilder({ page }).include(".files-editor").analyze();
+    const editorBlocking = editorScan.violations.filter(
+      (violation) => violation.impact === "serious" || violation.impact === "critical",
+    );
+    expect(
+      editorBlocking.map(
+        (violation) =>
+          `${violation.id}: ${violation.help} @ ${violation.nodes
+            .map((node) => node.target.join(" "))
+            .join(" | ")}`,
+      ),
+    ).toEqual([]);
+
+    // The shortcut sheet is an editor surface too: same bar, including the
+    // dialog focus/name semantics.
+    await editor.locator(".ed-window-shortcuts").click();
+    const sheet = page.locator(".n-modal").filter({ hasText: "Keyboard shortcuts" });
+    await expect(sheet).toBeVisible();
+    const sheetScan = await new AxeBuilder({ page }).include(".n-modal").analyze();
+    const sheetBlocking = sheetScan.violations.filter(
+      (violation) => violation.impact === "serious" || violation.impact === "critical",
+    );
+    expect(
+      sheetBlocking.map(
+        (violation) =>
+          `${violation.id}: ${violation.help} @ ${violation.nodes
+            .map((node) => node.target.join(" "))
+            .join(" | ")}`,
+      ),
+    ).toEqual([]);
+
+    // T-A11Y-03 / the topmost-surface rule: Escape closes the sheet, keeps the
+    // window open, and returns focus to the header trigger.
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+    await expect(editor).toBeVisible();
+    await expect(editor.locator(".ed-window-shortcuts")).toBeFocused();
   });
 
   test("drags by the title bar and closes every tab from the close control", async ({

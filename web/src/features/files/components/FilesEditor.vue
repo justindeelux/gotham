@@ -3,6 +3,7 @@ import {
   CaseSensitive,
   Code,
   History,
+  Keyboard,
   Minus,
   PanelLeft,
   Save,
@@ -34,6 +35,7 @@ import EditorExplorer from "@/features/files/components/EditorExplorer.vue";
 import EditorHistoryDialog from "@/features/files/components/EditorHistoryDialog.vue";
 import EditorSaveAsDialog from "@/features/files/components/EditorSaveAsDialog.vue";
 import EditorSettingsPopover from "@/features/files/components/EditorSettingsPopover.vue";
+import EditorShortcutsDialog from "@/features/files/components/EditorShortcutsDialog.vue";
 import EditorStatusBar from "@/features/files/components/EditorStatusBar.vue";
 // Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
@@ -148,6 +150,11 @@ const closeAllOpen = ref(false);
 const historyOpen = ref(false);
 // encodingOpen shows the save-encoding dialog for the active file tab.
 const encodingOpen = ref(false);
+// shortcutsOpen shows the read-only shortcut sheet (one instance).
+const shortcutsOpen = ref(false);
+// surfaceTrigger remembers the control that opened the current dialog, so
+// closing it returns keyboard focus there instead of dropping it on <body>.
+const surfaceTrigger = ref<HTMLElement | null>(null);
 // historyDialog is the dialog instance, so a restore can refresh its list.
 const historyDialog = ref<InstanceType<typeof EditorHistoryDialog> | null>(null);
 // historyCounts caches the revision count per tab for the status bar. A file
@@ -674,6 +681,7 @@ async function ensureSession(): Promise<void> {
     parent: host,
     doc: tab.doc,
     language: tab.language,
+    ariaLabel: String(t("files.editor.contentLabel", { name: tab.name })),
     readOnly: !files.canWrite || tab.truncated,
     settings: editorSettings.settings,
     onChange: (doc) => editor.setDoc(tabId, doc),
@@ -684,6 +692,10 @@ async function ensureSession(): Promise<void> {
     },
     onSave: () => void saveTab(tabId),
     onSaveAll: () => void saveAllTabs(),
+    onCloseTab: () => requestCloseTabs([tabId]),
+    onToggleWrap: () => toggleWrap(),
+    onNextTab: () => cycleTab(1),
+    onPreviousTab: () => cycleTab(-1),
   }).then((session) => {
     // A rapid tab switch while the chunk loaded: keep the instance only if the
     // tab is still open.
@@ -846,6 +858,38 @@ const encodingWarningTab = computed<EditorTab | null>(
     editor.tabs.find((tab) => tab.id === editor.encodingWarning?.tabId) ?? null,
 );
 
+/** dialogOpen is true while any editor dialog owns the keyboard. */
+const dialogOpen = computed<boolean>(
+  () =>
+    shortcutsOpen.value ||
+    historyOpen.value ||
+    encodingOpen.value ||
+    closeAllOpen.value ||
+    leaveOpen.value ||
+    pendingClose.value !== null ||
+    editor.encodingWarning !== null,
+);
+
+// Capture the trigger before a dialog steals focus, and give it back after the
+// last one closes. NModal traps focus while open; this covers the return leg.
+watch(dialogOpen, (open, wasOpen) => {
+  if (open && !wasOpen) {
+    const active = document.activeElement;
+    surfaceTrigger.value =
+      active instanceof HTMLElement && !active.closest(".n-modal") ? active : null;
+    return;
+  }
+  if (!open && wasOpen && surfaceTrigger.value) {
+    const target = surfaceTrigger.value;
+    surfaceTrigger.value = null;
+    void nextTick(() => {
+      if (target.isConnected && document.activeElement === document.body) {
+        target.focus();
+      }
+    });
+  }
+});
+
 /**
  * pickEncoding changes the active tab's save charset. A clean tab is re-saved
  * immediately so the file itself moves to the new encoding (an unmodified
@@ -993,15 +1037,27 @@ function minimizeWindow(): void {
 }
 
 /**
- * onWindowEsc minimizes the window on Escape. A child that already handled the
- * key (CodeMirror's search panel) calls preventDefault, so it is left alone.
- * The leave/conflict/save-as dialogs are teleported to body, so their Escape
- * never bubbles through the window and their own handling is unaffected.
+ * onWindowEsc closes only the topmost surface. A dialog, popover or menu owns
+ * Escape while it is open, so the window must never collapse underneath it.
+ * CodeMirror's search panel cancels the key itself (defaultPrevented).
  */
 function onWindowEsc(event: KeyboardEvent): void {
-  if (!event.defaultPrevented) {
-    minimizeWindow();
+  if (event.defaultPrevented) {
+    return;
   }
+  if (tabMenuOpen.value) {
+    tabMenuOpen.value = false;
+    return;
+  }
+  if (dialogOpen.value) {
+    return;
+  }
+  // A teleported follower (settings popover, select menu) is not tracked by
+  // dialogOpen; while one is mounted it consumes Escape itself.
+  if (document.querySelector(".n-popover, .n-dropdown") !== null) {
+    return;
+  }
+  minimizeWindow();
 }
 
 /** restoreWindow reopens the window and returns focus to the active tab. */
@@ -1300,6 +1356,11 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
   } else if (event.key === "End") {
     event.preventDefault();
     focusTab(count - 1);
+  } else if (event.key === "Delete") {
+    // The inline × is presentational (a tablist may only own tabs); Delete on a
+    // focused tab is the keyboard path, next to the Alt+W binding.
+    event.preventDefault();
+    requestCloseTabs([editor.tabs[index]!.id]);
   }
 }
 
@@ -1376,6 +1437,17 @@ onBeforeUnmount(() => {
       <NButton
         quaternary
         size="tiny"
+        class="ed-window-shortcuts"
+        :aria-label="t('files.editor.shortcuts.label')"
+        @click="shortcutsOpen = true"
+      >
+        <template #icon>
+          <Keyboard :size="16" :stroke-width="1.8" aria-hidden="true" />
+        </template>
+      </NButton>
+      <NButton
+        quaternary
+        size="tiny"
         class="ed-window-explorer"
         :aria-label="
           explorerOpen
@@ -1431,6 +1503,7 @@ onBeforeUnmount(() => {
             v-for="(tab, index) in editor.tabs"
             :key="tab.id"
             class="ed-tab"
+            role="presentation"
             :class="{ 'is-active': tab.id === editor.activeId, 'is-dirty': editor.isDirty(tab) }"
             @mousedown="onTabMouseDown"
             @contextmenu.prevent="openTabMenu($event, tab.id)"
@@ -1450,14 +1523,18 @@ onBeforeUnmount(() => {
               <span v-if="editor.isDirty(tab)" class="ed-dot" aria-hidden="true" />
               {{ tab.name }}
             </button>
-            <button
-              type="button"
+            <!-- A tablist may only own tabs, so the inline close is
+                 presentational: keyboard users close the focused tab with
+                 Delete (or Alt+W anywhere in the editor), and the mouse keeps
+                 the inline affordance. -->
+            <span
               class="ed-tab-close"
-              :aria-label="t('files.editor.close', { name: tab.name })"
-              @click="requestCloseTabs([tab.id])"
+              role="presentation"
+              aria-hidden="true"
+              @click.stop="requestCloseTabs([tab.id])"
             >
               <X :size="13" :stroke-width="2" aria-hidden="true" />
-            </button>
+            </span>
           </div>
         </div>
 
@@ -1750,6 +1827,7 @@ onBeforeUnmount(() => {
     </template>
   </NModal>
 
+  <EditorShortcutsDialog v-model:show="shortcutsOpen" />
   <EditorCloseTabsDialog
     :show="pendingClose !== null"
     :paths="pendingClosePaths"

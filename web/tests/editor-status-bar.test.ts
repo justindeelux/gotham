@@ -76,6 +76,15 @@ function item(wrapper: ReturnType<typeof mountBar>, label: string) {
   return button;
 }
 
+/** byText finds a footer button by its visible text (its accessible name). */
+function byText(wrapper: ReturnType<typeof mountBar>, text: string) {
+  const button = wrapper.findAll("button").find((candidate) => candidate.text() === text);
+  if (!button) {
+    throw new Error(`status item not found: ${text}`);
+  }
+  return button;
+}
+
 describe("EditorStatusBar", () => {
   it("shows the full path, cursor, history, encoding and language", () => {
     const wrapper = mountBar();
@@ -87,20 +96,19 @@ describe("EditorStatusBar", () => {
     expect(wrapper.text()).toContain("PHP");
     expect(wrapper.text()).toContain("Tab 4");
     expect(wrapper.text()).toContain("1.50 KiB");
-    // Every clickable item carries an accessible name.
-    expect(item(wrapper, "Show file history (2)")).toBeTruthy();
+    // Every clickable item carries an accessible name; the text items take
+    // theirs from their visible label, so the name and content agree.
+    expect(byText(wrapper, "2 versions")).toBeTruthy();
     expect(item(wrapper, "Save encoding: UTF-8")).toBeTruthy();
     expect(item(wrapper, "Line ending: LF")).toBeTruthy();
-    expect(item(wrapper, "Tab size: 4")).toBeTruthy();
-    expect(
-      wrapper.find('button[aria-label="Language"]').exists(),
-    ).toBe(true);
+    expect(byText(wrapper, "Tab 4")).toBeTruthy();
+    expect(wrapper.find('button[aria-label="Language: PHP"]').exists()).toBe(true);
   });
 
   it("opens the history and encoding dialogs", async () => {
     const wrapper = mountBar();
 
-    await item(wrapper, "Show file history (2)").trigger("click");
+    await byText(wrapper, "2 versions").trigger("click");
     await item(wrapper, "Save encoding: UTF-8").trigger("click");
 
     expect(wrapper.emitted("openHistory")).toEqual([[]]);
@@ -139,7 +147,7 @@ describe("EditorStatusBar", () => {
     // The line-ending switch is an edit, so only the view-only tab-size and
     // language pickers stay available.
     expect(wrapper.findAllComponents(NPopselect)).toHaveLength(2);
-    expect(item(wrapper, "Tab size: 4")).toBeTruthy();
+    expect(byText(wrapper, "Tab 4")).toBeTruthy();
   });
 
   it("hides the edit items while a tab is loading", () => {

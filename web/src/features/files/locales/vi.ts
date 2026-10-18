@@ -33,7 +33,6 @@ const vi = {
     renameEntry: "Đổi tên {name}",
     moreActions: "Thêm thao tác cho {name}",
     folderActions: "Thao tác thư mục",
-    sizeCalculate: "Tính",
     sizeCalculateAria: "Tính kích thước của {name}",
     sizeCancelAria: "Hủy tính kích thước của {name}",
     sizeRetryAria: "Tính lại kích thước của {name}",

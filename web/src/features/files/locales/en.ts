@@ -34,7 +34,6 @@ const en = {
     renameEntry: "Rename {name}",
     moreActions: "More actions for {name}",
     folderActions: "Folder actions",
-    sizeCalculate: "Calculate",
     sizeCalculateAria: "Calculate the size of {name}",
     sizeCancelAria: "Cancel calculating the size of {name}",
     sizeRetryAria: "Retry calculating the size of {name}",

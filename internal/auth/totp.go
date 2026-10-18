@@ -19,7 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/justindeelux/gotham/internal/providers"
-	"github.com/justindeelux/gotham/internal/store/sqlc"
+	"github.com/justindeelux/gotham/internal/store"
 )
 
 // TOTP parameters (JUS-196): RFC 6238 with HMAC-SHA1, six digits and a 30-second
@@ -119,8 +119,14 @@ func (s *Service) BeginTOTPEnrollment(ctx context.Context, userID uuid.UUID) (*T
 	if err != nil {
 		return nil, fmt.Errorf("auth: seal totp secret: %w", err)
 	}
-	if err := s.store.UpsertUserTOTPSecret(ctx, id, sealed); err != nil {
+	stored, err := s.store.UpsertUserTOTPSecret(ctx, id, sealed)
+	if err != nil {
 		return nil, fmt.Errorf("auth: store totp secret: %w", err)
+	}
+	if !stored {
+		// A concurrent enable made the row live between the check above and
+		// here; the pending secret must not replace it (JUS-198).
+		return nil, ErrTOTPAlreadyEnabled
 	}
 
 	return &TOTPEnrollment{Secret: secret, OTPAuthURL: totpProvisioningURI(user.Email, secret)}, nil
@@ -149,17 +155,18 @@ func (s *Service) EnableTOTP(ctx context.Context, userID uuid.UUID, password, co
 	if row.Enabled {
 		return nil, ErrTOTPAlreadyEnabled
 	}
-	if totpLocked(row, s.now()) {
-		return nil, ErrTOTPLocked
-	}
 
 	secret, err := s.openTOTPSecret(row.SecretEnc)
 	if err != nil {
 		return nil, err
 	}
+	// Count this attempt before checking the code, so a burst of guesses cannot
+	// all slip past the lock (JUS-198); a locked account is refused here.
+	if err := s.beginTOTPAttempt(ctx, id); err != nil {
+		return nil, err
+	}
 	step, ok := verifyTOTP(secret, code, s.now())
 	if !ok {
-		s.recordTOTPFailure(ctx, id)
 		return nil, ErrInvalidCode
 	}
 
@@ -170,17 +177,22 @@ func (s *Service) EnableTOTP(ctx context.Context, userID uuid.UUID, password, co
 	// Record one step below the confirmation code so a login within the same
 	// 30-second window is not refused: the enrollment code is not a login, and
 	// from here on any step at or after it is accepted exactly once.
-	enabled, err := s.store.EnableUserTOTP(ctx, id, step-1, hashes)
+	err = s.store.InTx(ctx, func(tx *store.Store) error {
+		enabled, err := tx.EnableUserTOTP(ctx, id, step-1, hashes)
+		if err != nil {
+			return fmt.Errorf("auth: enable totp: %w", err)
+		}
+		if !enabled {
+			// A concurrent enable (or disable) won; the pending secret is not live.
+			return ErrTOTPNotEnrolled
+		}
+		// The second factor is committed; retire every chain that predates it,
+		// in the same transaction so a revocation failure rolls the enable back.
+		return s.revokeOtherSessions(ctx, tx, userID, currentSessionID)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("auth: enable totp: %w", err)
+		return nil, err
 	}
-	if !enabled {
-		// A concurrent enable (or disable) won; the pending secret is not live.
-		return nil, ErrTOTPNotEnrolled
-	}
-
-	// The second factor is committed; retire every chain that predates it.
-	s.revokeOtherSessions(ctx, userID, currentSessionID)
 	s.logger.Info("auth: two-factor enabled", "user_id", userID)
 	return codes, nil
 }
@@ -197,10 +209,17 @@ func (s *Service) DisableTOTP(ctx context.Context, userID uuid.UUID, password, c
 	if _, err := s.verifySecondFactor(ctx, id, code); err != nil {
 		return err
 	}
-	if err := s.store.DeleteUserTOTP(ctx, id); err != nil {
-		return fmt.Errorf("auth: disable totp: %w", err)
+	err := s.store.InTx(ctx, func(tx *store.Store) error {
+		if err := tx.DeleteUserTOTP(ctx, id); err != nil {
+			return fmt.Errorf("auth: disable totp: %w", err)
+		}
+		// Revoke the other chains in the same transaction, so a revocation
+		// failure aborts the disable instead of leaving old sessions alive.
+		return s.revokeOtherSessions(ctx, tx, userID, currentSessionID)
+	})
+	if err != nil {
+		return err
 	}
-	s.revokeOtherSessions(ctx, userID, currentSessionID)
 	s.logger.Info("auth: two-factor disabled", "user_id", userID)
 	return nil
 }
@@ -222,15 +241,22 @@ func (s *Service) RegenerateTOTPRecoveryCodes(ctx context.Context, userID uuid.U
 	if err != nil {
 		return nil, err
 	}
-	replaced, err := s.store.ReplaceUserTOTPRecoveryCodes(ctx, id, hashes)
+	err = s.store.InTx(ctx, func(tx *store.Store) error {
+		replaced, err := tx.ReplaceUserTOTPRecoveryCodes(ctx, id, hashes)
+		if err != nil {
+			return fmt.Errorf("auth: replace recovery codes: %w", err)
+		}
+		if !replaced {
+			return ErrTOTPNotConfigured
+		}
+		// Revoke the other chains in the same transaction, so a revocation
+		// failure aborts the regeneration.
+		return s.revokeOtherSessions(ctx, tx, userID, currentSessionID)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("auth: replace recovery codes: %w", err)
-	}
-	if !replaced {
-		return nil, ErrTOTPNotConfigured
+		return nil, err
 	}
 
-	s.revokeOtherSessions(ctx, userID, currentSessionID)
 	s.logger.Info("auth: recovery codes regenerated", "user_id", userID)
 	return codes, nil
 }
@@ -267,16 +293,30 @@ func (s *Service) CompleteMFALogin(ctx context.Context, mfaToken, code string, m
 	if err != nil {
 		return nil, err
 	}
-	// A recovery code means the authenticator is gone, so every pre-existing
-	// chain is suspect: end them all before minting the caller's new session.
-	if usedRecovery {
-		if err := s.store.DeleteUserSessions(ctx, id); err != nil {
-			return nil, fmt.Errorf("auth: revoke sessions after recovery code: %w", err)
-		}
-		s.logger.Info("auth: sessions revoked after recovery code", "user_id", userID)
+	if !usedRecovery {
+		return s.issue(ctx, user, meta)
 	}
-
-	return s.issue(ctx, user, meta)
+	// A recovery code means the authenticator is gone, so every pre-existing
+	// chain is suspect: end them all and mint the caller's new session in one
+	// transaction, so a revocation failure cannot leave an old chain alive next
+	// to the new one (JUS-198).
+	var result *AuthResult
+	err = s.store.InTx(ctx, func(tx *store.Store) error {
+		if err := tx.DeleteUserSessions(ctx, id); err != nil {
+			return fmt.Errorf("auth: revoke sessions after recovery code: %w", err)
+		}
+		issued, err := s.issueWith(ctx, tx, user, meta)
+		if err != nil {
+			return err
+		}
+		result = issued
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.logger.Info("auth: sessions revoked after recovery code", "user_id", userID)
+	return result, nil
 }
 
 // requireTOTPPassword proves the account's password when it has one, exactly
@@ -319,7 +359,9 @@ func (s *Service) requireTOTPPassword(ctx context.Context, userID pgtype.UUID, p
 //
 // Failures are counted on the account (not the caller's address or token) and
 // lock it for a few minutes after totpMaxFailures consecutive misses; a correct
-// code clears the counter. A locked account is refused before any hashing.
+// code clears the counter. The attempt is counted before the code is checked
+// (JUS-198), so a parallel burst cannot overshoot the threshold or slip a guess
+// past an already-locked account.
 func (s *Service) verifySecondFactor(ctx context.Context, userID pgtype.UUID, code string) (bool, error) {
 	row, err := s.store.GetUserTOTP(ctx, userID)
 	if err != nil {
@@ -331,12 +373,12 @@ func (s *Service) verifySecondFactor(ctx context.Context, userID pgtype.UUID, co
 	if !row.Enabled {
 		return false, ErrTOTPNotConfigured
 	}
-	if totpLocked(row, s.now()) {
-		return false, ErrTOTPLocked
-	}
 
 	secret, err := s.openTOTPSecret(row.SecretEnc)
 	if err != nil {
+		return false, err
+	}
+	if err := s.beginTOTPAttempt(ctx, userID); err != nil {
 		return false, err
 	}
 	if step, ok := verifyTOTP(secret, code, s.now()); ok {
@@ -372,23 +414,26 @@ func (s *Service) verifySecondFactor(ctx context.Context, userID pgtype.UUID, co
 			return false, ErrInvalidCode
 		}
 	}
-	s.recordTOTPFailure(ctx, userID)
+	// The attempt is already counted; a wrong code just leaves it standing.
 	return false, ErrInvalidCode
 }
 
-// totpLocked reports whether the account's second-factor lockout is still
-// active at now. A NULL or past deadline is unlocked.
-func totpLocked(row sqlc.GetUserTOTPRow, now time.Time) bool {
-	return row.LockedUntil.Valid && row.LockedUntil.Time.After(now)
-}
-
-// recordTOTPFailure bumps the account's consecutive-failure counter and arms
-// the lock at the threshold. A bookkeeping failure is logged, never surfaced:
-// the code was refused either way.
-func (s *Service) recordTOTPFailure(ctx context.Context, userID pgtype.UUID) {
-	if _, err := s.store.RecordUserTOTPFailure(ctx, userID, totpMaxFailures, s.now().Add(totpLockoutWindow)); err != nil {
-		s.logger.Error("auth: record totp failure", "error", err)
+// beginTOTPAttempt reserves one second-factor attempt on the account's row
+// before the code is checked: the count and the lockout deadline move in one
+// atomic statement, so a parallel burst cannot all pass the check and overshoot
+// the threshold (JUS-198). It answers ErrTOTPLocked while the lockout is still
+// active, in which case the attempt was not counted. A correct code rolls the
+// reservation back with clearTOTPFailures.
+func (s *Service) beginTOTPAttempt(ctx context.Context, userID pgtype.UUID) error {
+	now := s.now()
+	reserved, err := s.store.BeginUserTOTPAttempt(ctx, userID, totpMaxFailures, now, now.Add(totpLockoutWindow))
+	if err != nil {
+		return fmt.Errorf("auth: begin totp attempt: %w", err)
 	}
+	if !reserved {
+		return ErrTOTPLocked
+	}
+	return nil
 }
 
 // clearTOTPFailures resets the counter after a correct code.
@@ -399,24 +444,26 @@ func (s *Service) clearTOTPFailures(ctx context.Context, userID pgtype.UUID) {
 }
 
 // revokeOtherSessions ends every live session of the account except the
-// caller's, best effort: a sid that is missing or no longer live means the
-// caller's own row cannot be preserved, so nothing is deleted rather than
-// logging the active user out. The access tokens already issued still live out
-// their short TTL, exactly as RevokeOtherSessions documents.
-func (s *Service) revokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) {
+// caller's, on the given store so it joins the caller's transaction: a failure
+// fails the whole operation rather than leaving old sessions alive. A sid that
+// is missing or no longer live means the caller's own row cannot be preserved,
+// so nothing is deleted (a warning, not an error) rather than logging the
+// active user out. The access tokens already issued still live out their short
+// TTL, exactly as RevokeOtherSessions documents.
+func (s *Service) revokeOtherSessions(ctx context.Context, st *store.Store, userID, currentSessionID uuid.UUID) error {
 	if currentSessionID == uuid.Nil {
-		return
+		return nil
 	}
-	deleted, live, err := s.store.DeleteOtherSessionsGuarded(ctx, pgUUID(userID), pgUUID(currentSessionID))
+	deleted, live, err := st.RevokeOtherSessionsGuarded(ctx, pgUUID(userID), pgUUID(currentSessionID))
 	if err != nil {
-		s.logger.Error("auth: revoke other sessions", "error", err)
-		return
+		return fmt.Errorf("auth: revoke other sessions: %w", err)
 	}
 	if !live {
 		s.logger.Warn("auth: current session not live, nothing revoked", "user_id", userID)
-		return
+		return nil
 	}
 	s.logger.Info("auth: other sessions revoked", "user_id", userID, "count", deleted)
+	return nil
 }
 
 // openTOTPSecret unseals a stored TOTP secret. A wrong key (for example a

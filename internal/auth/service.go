@@ -477,12 +477,19 @@ func (s *Service) issueOrChallenge(ctx context.Context, user sqlc.User, meta Ses
 // the new session's id as its "sid" claim so the sessions list can mark the
 // caller's row.
 func (s *Service) issue(ctx context.Context, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
+	return s.issueWith(ctx, s.store, user, meta)
+}
+
+// issueWith is issue against a caller-supplied store, so a flow that must mint
+// the session inside its own transaction (a recovery-code login, JUS-198) can
+// pass the tx-scoped Store.
+func (s *Service) issueWith(ctx context.Context, st *store.Store, user sqlc.User, meta SessionMeta) (*AuthResult, error) {
 	refreshToken, refreshHash, err := newRefreshToken()
 	if err != nil {
 		return nil, err
 	}
 
-	created, err := s.store.CreateSession(ctx, sqlc.CreateSessionParams{
+	created, err := st.CreateSession(ctx, sqlc.CreateSessionParams{
 		UserID:            user.ID,
 		RefreshHash:       refreshHash,
 		ExpiresAt:         pgTimestamp(s.now().Add(refreshTokenTTL)),

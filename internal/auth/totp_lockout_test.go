@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -80,6 +82,56 @@ func TestTOTPLockoutAfterRepeatedFailures(t *testing.T) {
 	}
 	if row.FailedAttempts != 0 || row.LockedUntil.Valid {
 		t.Fatalf("counters after success = %+v, want 0 and no lock", row)
+	}
+}
+
+// TestTOTPLockoutBurstIsBounded: a parallel burst of wrong codes cannot slip a
+// guess past the threshold. Every attempt is either counted or refused as
+// locked, so exactly totpMaxFailures reach the verifier, the counter stops at
+// the threshold, and a correct code in the same window still buys nothing
+// (JUS-198).
+func TestTOTPLockoutBurstIsBounded(t *testing.T) {
+	svc, st := newTestService(t)
+	ctx := context.Background()
+	userID, secret, clock := enrollTOTP(t, svc, st)
+
+	const burst = 40
+	var wg sync.WaitGroup
+	var invalid, locked atomic.Int64
+	for i := 0; i < burst; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := svc.verifySecondFactor(ctx, pgUUID(userID), "000000")
+			switch {
+			case errors.Is(err, ErrInvalidCode):
+				invalid.Add(1)
+			case errors.Is(err, ErrTOTPLocked):
+				locked.Add(1)
+			default:
+				t.Errorf("burst miss = %v, want ErrInvalidCode or ErrTOTPLocked", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	row, err := st.GetUserTOTP(ctx, pgUUID(userID))
+	if err != nil {
+		t.Fatalf("GetUserTOTP: %v", err)
+	}
+	if row.FailedAttempts != totpMaxFailures {
+		t.Fatalf("counter after burst = %d, want %d (no overshoot)", row.FailedAttempts, totpMaxFailures)
+	}
+	if invalid.Load() != int64(totpMaxFailures) {
+		t.Fatalf("burst misses verified = %d, want %d", invalid.Load(), totpMaxFailures)
+	}
+	if locked.Load() != burst-int64(totpMaxFailures) {
+		t.Fatalf("burst misses refused as locked = %d, want %d", locked.Load(), burst-int64(totpMaxFailures))
+	}
+
+	// A correct code in the same window buys nothing: the account is locked.
+	if _, err := svc.verifySecondFactor(ctx, pgUUID(userID), codeForSecret(t, secret, *clock)); !errors.Is(err, ErrTOTPLocked) {
+		t.Fatalf("correct code after the burst = %v, want ErrTOTPLocked", err)
 	}
 }
 

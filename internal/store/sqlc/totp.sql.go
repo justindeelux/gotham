@@ -37,6 +37,52 @@ func (q *Queries) AdvanceUserTOTPStep(ctx context.Context, arg AdvanceUserTOTPSt
 	return user_id, err
 }
 
+const beginUserTOTPAttempt = `-- name: BeginUserTOTPAttempt :one
+UPDATE user_totp
+SET failed_attempts = failed_attempts + 1,
+    locked_until = CASE
+        WHEN failed_attempts + 1 >= $1::integer THEN $2::timestamptz
+        ELSE locked_until
+    END,
+    updated_at = now()
+WHERE user_id = $3
+  AND (locked_until IS NULL OR locked_until <= $4::timestamptz)
+RETURNING failed_attempts, locked_until
+`
+
+type BeginUserTOTPAttemptParams struct {
+	Threshold   int32              `json:"threshold"`
+	LockedUntil pgtype.Timestamptz `json:"locked_until"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	Now         pgtype.Timestamptz `json:"now"`
+}
+
+type BeginUserTOTPAttemptRow struct {
+	FailedAttempts int32              `json:"failed_attempts"`
+	LockedUntil    pgtype.Timestamptz `json:"locked_until"`
+}
+
+// BeginUserTOTPAttempt reserves one second-factor attempt before the code is
+// checked: it counts the attempt and arms the lock deadline once the threshold
+// is reached, in one atomic statement, but only while the account is not already
+// locked. Zero rows (pgx.ErrNoRows) means the account is locked at the caller's
+// now, so the caller refuses without verifying. Counting first under the row
+// lock means a parallel burst cannot all slip past the check: at most threshold
+// attempts reach the verifier and the counter can never overshoot. The caller
+// computes the deadline from its own clock (so tests can drive it) and rolls the
+// attempt back with ClearUserTOTPFailures when the code turns out correct.
+func (q *Queries) BeginUserTOTPAttempt(ctx context.Context, arg BeginUserTOTPAttemptParams) (BeginUserTOTPAttemptRow, error) {
+	row := q.db.QueryRow(ctx, beginUserTOTPAttempt,
+		arg.Threshold,
+		arg.LockedUntil,
+		arg.UserID,
+		arg.Now,
+	)
+	var i BeginUserTOTPAttemptRow
+	err := row.Scan(&i.FailedAttempts, &i.LockedUntil)
+	return i, err
+}
+
 const clearUserTOTPFailures = `-- name: ClearUserTOTPFailures :exec
 UPDATE user_totp
 SET failed_attempts = 0, locked_until = NULL, updated_at = now()
@@ -152,41 +198,6 @@ func (q *Queries) GetUserTOTP(ctx context.Context, userID pgtype.UUID) (GetUserT
 	return i, err
 }
 
-const recordUserTOTPFailure = `-- name: RecordUserTOTPFailure :one
-UPDATE user_totp
-SET failed_attempts = failed_attempts + 1,
-    locked_until = CASE
-        WHEN failed_attempts + 1 >= $1::integer THEN $2::timestamptz
-        ELSE locked_until
-    END,
-    updated_at = now()
-WHERE user_id = $3
-RETURNING failed_attempts, locked_until
-`
-
-type RecordUserTOTPFailureParams struct {
-	Threshold   int32              `json:"threshold"`
-	LockedUntil pgtype.Timestamptz `json:"locked_until"`
-	UserID      pgtype.UUID        `json:"user_id"`
-}
-
-type RecordUserTOTPFailureRow struct {
-	FailedAttempts int32              `json:"failed_attempts"`
-	LockedUntil    pgtype.Timestamptz `json:"locked_until"`
-}
-
-// RecordUserTOTPFailure increments the account's consecutive second-factor
-// failures and sets the lock deadline once the threshold is reached, in one
-// statement so concurrent guesses cannot lose a count. The caller computes the
-// deadline from its own clock (so tests can drive it); a row still below the
-// threshold keeps any existing deadline.
-func (q *Queries) RecordUserTOTPFailure(ctx context.Context, arg RecordUserTOTPFailureParams) (RecordUserTOTPFailureRow, error) {
-	row := q.db.QueryRow(ctx, recordUserTOTPFailure, arg.Threshold, arg.LockedUntil, arg.UserID)
-	var i RecordUserTOTPFailureRow
-	err := row.Scan(&i.FailedAttempts, &i.LockedUntil)
-	return i, err
-}
-
 const replaceUserTOTPRecoveryCodes = `-- name: ReplaceUserTOTPRecoveryCodes :one
 UPDATE user_totp
 SET recovery_codes = $1, updated_at = now()
@@ -210,11 +221,16 @@ func (q *Queries) ReplaceUserTOTPRecoveryCodes(ctx context.Context, arg ReplaceU
 	return user_id, err
 }
 
-const upsertUserTOTPSecret = `-- name: UpsertUserTOTPSecret :exec
+const upsertUserTOTPSecret = `-- name: UpsertUserTOTPSecret :one
 INSERT INTO user_totp (user_id, secret_enc, enabled, last_step, recovery_codes)
 VALUES ($1, $2, false, NULL, '{}')
 ON CONFLICT (user_id) DO UPDATE
-SET secret_enc = EXCLUDED.secret_enc, updated_at = now()
+SET secret_enc = EXCLUDED.secret_enc,
+    failed_attempts = 0,
+    locked_until = NULL,
+    updated_at = now()
+WHERE user_totp.enabled = false
+RETURNING user_id
 `
 
 type UpsertUserTOTPSecretParams struct {
@@ -223,10 +239,14 @@ type UpsertUserTOTPSecretParams struct {
 }
 
 // UpsertUserTOTPSecret installs a pending secret (enabled stays false) or
-// replaces a pending one on a re-enrollment. The service refuses to call it
-// while TOTP is already enabled, so an active secret is never silently
-// swapped; last_step and recovery_codes are only touched by enable.
-func (q *Queries) UpsertUserTOTPSecret(ctx context.Context, arg UpsertUserTOTPSecretParams) error {
-	_, err := q.db.Exec(ctx, upsertUserTOTPSecret, arg.UserID, arg.SecretEnc)
-	return err
+// replaces a pending one on a re-enrollment, clearing any stale lock state with
+// it. The `enabled = false` guard means a live secret is never overwritten even
+// when a concurrent enable beats the caller's own check: zero rows (pgx.ErrNoRows)
+// tells the caller the account is already enabled. last_step and recovery_codes
+// are only touched by enable.
+func (q *Queries) UpsertUserTOTPSecret(ctx context.Context, arg UpsertUserTOTPSecretParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertUserTOTPSecret, arg.UserID, arg.SecretEnc)
+	var user_id pgtype.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
 }

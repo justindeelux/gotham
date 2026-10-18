@@ -356,17 +356,29 @@ func (s *Store) DeleteSessionByID(ctx context.Context, id, userID pgtype.UUID) (
 // reports how many rows were deleted and whether the given session was live;
 // a dead sid deletes nothing.
 func (s *Store) DeleteOtherSessionsGuarded(ctx context.Context, userID, sessionID pgtype.UUID) (int64, bool, error) {
-	tx, err := s.DB.Begin(ctx)
+	var deleted int64
+	var live bool
+	err := s.InTx(ctx, func(tx *Store) error {
+		var err error
+		deleted, live, err = tx.RevokeOtherSessionsGuarded(ctx, userID, sessionID)
+		return err
+	})
 	if err != nil {
 		return 0, false, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	return deleted, live, nil
+}
 
-	queries := s.queries.WithTx(tx)
-	if err := queries.LockUserSessions(ctx, sessionLockKey(userID)); err != nil {
+// RevokeOtherSessionsGuarded is DeleteOtherSessionsGuarded's body without a
+// transaction of its own: called on a tx Store (from InTx) it joins the
+// caller's transaction, so an enable/disable that also revokes the account's
+// other sessions commits both writes together or neither, and a revocation
+// failure cannot leave old sessions alive behind the operation (JUS-198).
+func (s *Store) RevokeOtherSessionsGuarded(ctx context.Context, userID, sessionID pgtype.UUID) (int64, bool, error) {
+	if err := s.queries.LockUserSessions(ctx, sessionLockKey(userID)); err != nil {
 		return 0, false, err
 	}
-	if _, err := queries.CheckSessionLive(ctx, sqlc.CheckSessionLiveParams{
+	if _, err := s.queries.CheckSessionLive(ctx, sqlc.CheckSessionLiveParams{
 		ID:     sessionID,
 		UserID: userID,
 	}); err != nil {
@@ -375,14 +387,11 @@ func (s *Store) DeleteOtherSessionsGuarded(ctx context.Context, userID, sessionI
 		}
 		return 0, false, err
 	}
-	deleted, err := queries.DeleteOtherSessions(ctx, sqlc.DeleteOtherSessionsParams{
+	deleted, err := s.queries.DeleteOtherSessions(ctx, sqlc.DeleteOtherSessionsParams{
 		UserID: userID,
 		ID:     sessionID,
 	})
 	if err != nil {
-		return 0, false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
 		return 0, false, err
 	}
 	return deleted, true, nil

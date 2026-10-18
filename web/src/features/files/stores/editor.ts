@@ -50,6 +50,8 @@ export interface EditorTab {
   size: number;
   mode: number;
   language: EditorLanguageId;
+  /** languageManual is true once the status-bar picker overrode the detected mode. */
+  languageManual: boolean;
   status: EditorTabStatus;
   /** error is the localized message for a "error" status tab. */
   error: string;
@@ -160,6 +162,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       size: 0,
       mode: 0,
       language: detectLanguage(path),
+      languageManual: false,
       status: "loading",
       error: "",
       saving: false,
@@ -212,6 +215,19 @@ export const useEditorStore = defineStore("filesEditor", () => {
     const tab = tabs.value.find((item) => item.id === id);
     if (tab && tab.status === "ready") {
       tab.doc = doc;
+    }
+  }
+
+  /**
+   * setLanguage overrides the detected grammar for one tab. The live session
+   * reconfigures its language compartment, so the undo history is untouched;
+   * a later rename keeps the manual choice instead of re-detecting.
+   */
+  function setLanguage(id: string, language: EditorLanguageId): void {
+    const tab = tabs.value.find((item) => item.id === id);
+    if (tab) {
+      tab.language = language;
+      tab.languageManual = true;
     }
   }
 
@@ -345,7 +361,9 @@ export const useEditorStore = defineStore("filesEditor", () => {
       reserved = false;
       tab.path = target;
       tab.name = tabTitle(target);
-      tab.language = detectLanguage(target);
+      if (!tab.languageManual) {
+        tab.language = detectLanguage(target);
+      }
       tab.etag = entry.etag;
       tab.size = entry.size;
       tab.mode = entry.mode;
@@ -436,7 +454,9 @@ export const useEditorStore = defineStore("filesEditor", () => {
       if (next !== null) {
         tab.path = next;
         tab.name = tabTitle(next);
-        tab.language = detectLanguage(next);
+        if (!tab.languageManual) {
+          tab.language = detectLanguage(next);
+        }
       }
     }
   }
@@ -454,7 +474,9 @@ export const useEditorStore = defineStore("filesEditor", () => {
         if (next !== null) {
           tab.path = next;
           tab.name = tabTitle(next);
-          tab.language = detectLanguage(next);
+          if (!tab.languageManual) {
+            tab.language = detectLanguage(next);
+          }
         }
       }
     }
@@ -502,6 +524,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     activate,
     openFile,
     setDoc,
+    setLanguage,
     save,
     reload,
     overwrite,

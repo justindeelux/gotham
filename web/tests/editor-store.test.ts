@@ -73,6 +73,28 @@ describe("editor tab store", () => {
     expect(store.hasDirty).toBe(false);
   });
 
+  it("keeps a manual language override through a rename but re-detects otherwise", async () => {
+    getContentMock.mockResolvedValue(content("start"));
+    const store = useEditorStore();
+    await store.openFile("srv", "team", "volumes", "app.yaml");
+    const tab = store.activeTab!;
+    expect(tab.language).toBe("yaml");
+    expect(tab.languageManual).toBe(false);
+
+    store.setLanguage(tab.id, "php");
+    expect(tab.language).toBe("php");
+    expect(tab.languageManual).toBe(true);
+    store.applyRename("volumes", "", "app.yaml", "app.json");
+    expect(tab.language).toBe("php");
+
+    // A tab that was never overridden follows its new extension.
+    await store.openFile("srv", "team", "volumes", "other.yaml");
+    const auto = store.activeTab!;
+    store.applyRename("volumes", "", "other.yaml", "other.php");
+    expect(auto.language).toBe("php");
+    expect(auto.languageManual).toBe(false);
+  });
+
   it("round-trips a CRLF + BOM file byte-identically", async () => {
     const original = "\uFEFFline1\r\nline2\r\nline3";
     getContentMock.mockResolvedValueOnce(content(original, '"v1"'));

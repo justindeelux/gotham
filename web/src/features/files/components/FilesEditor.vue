@@ -21,6 +21,7 @@ import { useI18n } from "vue-i18n";
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 
 import EditorConflictDialog from "@/features/files/components/EditorConflictDialog.vue";
+import EditorLanguagePicker from "@/features/files/components/EditorLanguagePicker.vue";
 import EditorSaveAsDialog from "@/features/files/components/EditorSaveAsDialog.vue";
 // Side-effect import: merges the lazy editor catalogs under `files.editor`.
 import "@/features/files/locales/editorMessages";
@@ -29,7 +30,7 @@ import { createEditorSession } from "@/features/files/composables/useCodeMirror"
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
-import { clampEditorOffset, languageLabel } from "@/features/files/utils/editor";
+import { clampEditorOffset } from "@/features/files/utils/editor";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 import { useTeamsStore } from "@/features/teams";
 import { formatBytes } from "@/shared/utils/format";
@@ -441,6 +442,14 @@ function openGoToLine(): void {
 /** toggleWrap flips the wrap preference. */
 function toggleWrap(): void {
   editor.setWrap(!editor.wrap);
+}
+
+/** pickLanguage overrides the active tab's grammar without touching history. */
+function pickLanguage(language: EditorLanguageId): void {
+  const tab = activeTab.value;
+  if (tab) {
+    editor.setLanguage(tab.id, language);
+  }
 }
 
 /** resetWindowPosition returns the window to its pinned default position. */
@@ -922,7 +931,11 @@ onBeforeUnmount(() => {
         </span>
         <span v-if="activeTab.status === 'ready'" class="mono">{{ t("files.editor.encoding") }}</span>
         <span v-if="activeTab.status === 'ready'" class="mono">{{ activeTab.eol === "\r\n" ? "CRLF" : "LF" }}</span>
-        <span v-if="activeTab.status === 'ready'" class="mono">{{ languageLabel(activeTab.language) }}</span>
+        <EditorLanguagePicker
+          v-if="activeTab.status === 'ready'"
+          :language="activeTab.language"
+          @select="pickLanguage"
+        />
         <span class="mono">{{ formatBytes(activeTab.size) }}</span>
       </div>
     </div>

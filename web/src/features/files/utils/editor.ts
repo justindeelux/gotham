@@ -65,11 +65,73 @@ export type EditorLanguageId =
   | "go"
   | "markdown"
   | "css"
+  | "scss"
+  | "less"
   | "html"
+  | "vue"
   | "shell"
   | "dockerfile"
+  | "makefile"
   | "toml"
+  | "php"
+  | "sql"
+  | "xml"
+  | "rust"
+  | "java"
+  | "cpp"
+  | "lua"
+  | "ruby"
+  | "nginx"
+  | "apache"
+  | "ini"
+  | "diff"
+  | "log"
   | "plain";
+
+/** EditorLanguage is one pickable language with its display names. */
+export interface EditorLanguage {
+  id: EditorLanguageId;
+  /** name is the full name shown in the picker. */
+  name: string;
+  /** label is the short uppercase tag shown in the status bar. */
+  label: string;
+}
+
+/** editorLanguages is the status-bar picker order. */
+export const editorLanguages: readonly EditorLanguage[] = [
+  { id: "plain", name: "Plain text", label: "TEXT" },
+  { id: "json", name: "JSON", label: "JSON" },
+  { id: "yaml", name: "YAML", label: "YAML" },
+  { id: "javascript", name: "JavaScript", label: "JS" },
+  { id: "typescript", name: "TypeScript", label: "TS" },
+  { id: "html", name: "HTML", label: "HTML" },
+  { id: "vue", name: "Vue", label: "VUE" },
+  { id: "css", name: "CSS", label: "CSS" },
+  { id: "scss", name: "SCSS", label: "SCSS" },
+  { id: "less", name: "LESS", label: "LESS" },
+  { id: "markdown", name: "Markdown", label: "MD" },
+  { id: "python", name: "Python", label: "PYTHON" },
+  { id: "go", name: "Go", label: "GO" },
+  { id: "php", name: "PHP", label: "PHP" },
+  { id: "sql", name: "SQL", label: "SQL" },
+  { id: "xml", name: "XML", label: "XML" },
+  { id: "rust", name: "Rust", label: "RUST" },
+  { id: "java", name: "Java", label: "JAVA" },
+  { id: "cpp", name: "C/C++", label: "C/C++" },
+  { id: "lua", name: "Lua", label: "LUA" },
+  { id: "ruby", name: "Ruby", label: "RUBY" },
+  { id: "shell", name: "Shell", label: "SHELL" },
+  { id: "dockerfile", name: "Dockerfile", label: "DOCKERFILE" },
+  { id: "makefile", name: "Makefile", label: "MAKEFILE" },
+  { id: "nginx", name: "Nginx config", label: "NGINX" },
+  { id: "apache", name: "Apache config", label: "APACHE" },
+  { id: "ini", name: "INI / properties", label: "INI" },
+  { id: "toml", name: "TOML", label: "TOML" },
+  { id: "diff", name: "Diff", label: "DIFF" },
+  { id: "log", name: "Log", label: "LOG" },
+];
+
+const byLanguage = new Map(editorLanguages.map((language) => [language.id, language]));
 
 const byExtension: Record<string, EditorLanguageId> = {
   json: "json",
@@ -85,24 +147,125 @@ const byExtension: Record<string, EditorLanguageId> = {
   cts: "typescript",
   tsx: "typescript",
   py: "python",
+  pyi: "python",
   go: "go",
   md: "markdown",
   markdown: "markdown",
   css: "css",
+  scss: "scss",
+  less: "less",
   html: "html",
   htm: "html",
+  xhtml: "html",
+  vue: "vue",
   sh: "shell",
   bash: "shell",
   zsh: "shell",
   toml: "toml",
+  php: "php",
+  php3: "php",
+  php4: "php",
+  php5: "php",
+  phps: "php",
+  phtml: "php",
+  sql: "sql",
+  xml: "xml",
+  xsl: "xml",
+  xslt: "xml",
+  rdf: "xml",
+  rss: "xml",
+  wsdl: "xml",
+  atom: "xml",
+  mathml: "xml",
+  mml: "xml",
+  xul: "xml",
+  xbl: "xml",
+  xaml: "xml",
+  svg: "xml",
+  rs: "rust",
+  java: "java",
+  c: "cpp",
+  cc: "cpp",
+  cpp: "cpp",
+  cxx: "cpp",
+  h: "cpp",
+  hh: "cpp",
+  hpp: "cpp",
+  hxx: "cpp",
+  ino: "cpp",
+  lua: "lua",
+  rb: "ruby",
+  ru: "ruby",
+  gemspec: "ruby",
+  rake: "ruby",
+  nginx: "nginx",
+  conf: "apache",
+  htaccess: "apache",
+  htpasswd: "apache",
+  htgroups: "apache",
+  ini: "ini",
+  cfg: "ini",
+  prefs: "ini",
+  properties: "ini",
+  diff: "diff",
+  patch: "diff",
+  log: "log",
+  mk: "makefile",
+  make: "makefile",
+  txt: "plain",
 };
 
+/**
+ * byName matches the whole basename first, so a dotless file (Dockerfile,
+ * Makefile, Gemfile) and a dotted special name (nginx.conf, .htaccess) never
+ * depend on extension extraction.
+ */
 const byName: Record<string, EditorLanguageId> = {
+  ".htaccess": "apache",
+  ".htpasswd": "apache",
+  ".htgroups": "apache",
+  ".env": "ini",
+  ".editorconfig": "ini",
   dockerfile: "dockerfile",
+  makefile: "makefile",
+  gnumakefile: "makefile",
+  "nginx.conf": "nginx",
+  "httpd.conf": "apache",
+  "apache2.conf": "apache",
+  gemfile: "ruby",
+  rakefile: "ruby",
+  guardfile: "ruby",
   "docker-compose.yml": "yaml",
   "docker-compose.yaml": "yaml",
-  makefile: "plain",
+  "compose.yml": "yaml",
+  "compose.yaml": "yaml",
 };
+
+/** filenameRules cover a basename family whose extension is not enough. */
+const filenameRules: ReadonlyArray<{
+  test: (_name: string) => boolean;
+  language: EditorLanguageId;
+}> = [
+  // "Dockerfile", "Dockerfile.prod", "app.Dockerfile".
+  {
+    test: (name) => name.startsWith("dockerfile.") || name.endsWith(".dockerfile"),
+    language: "dockerfile",
+  },
+  // "Makefile.am", "Makefile.in", "app.Makefile".
+  {
+    test: (name) => name.startsWith("makefile.") || name.endsWith(".makefile"),
+    language: "makefile",
+  },
+  // ".env", ".env.local", "dev.env".
+  {
+    test: (name) => name.startsWith(".env.") || name.endsWith(".env"),
+    language: "ini",
+  },
+  {
+    test: (name) => name.endsWith(".nginx.conf"),
+    language: "nginx",
+  },
+];
 
 /** extensionOf returns the lowercased extension after the last dot. */
 function extensionOf(name: string): string {
@@ -112,15 +275,21 @@ function extensionOf(name: string): string {
   return dot > 0 ? base.slice(dot + 1).toLowerCase() : "";
 }
 
-/** detectLanguage maps a file name onto the explicit editor language set. */
-export function detectLanguage(name: string): EditorLanguageId {
-  const lower = name.slice(name.lastIndexOf("/") + 1).toLowerCase();
-  if (lower in byName) {
-    return byName[lower];
+/**
+ * detectLanguage maps a file path onto the explicit editor language set. The
+ * basename is resolved first (exact special names, then filename families),
+ * then the extension, so "Dockerfile" and "nginx.conf" do not fall back to
+ * plain text.
+ */
+export function detectLanguage(path: string): EditorLanguageId {
+  const lower = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
+  const named = byName[lower];
+  if (named) {
+    return named;
   }
-  // Dockerfile variants: "Dockerfile", "Dockerfile.prod", "*.Dockerfile".
-  if (lower === "dockerfile" || lower.startsWith("dockerfile.") || lower.endsWith(".dockerfile")) {
-    return "dockerfile";
+  const family = filenameRules.find((rule) => rule.test(lower));
+  if (family) {
+    return family.language;
   }
   return byExtension[extensionOf(lower)] ?? "plain";
 }
@@ -183,18 +352,10 @@ export function clampEditorOffset(
 
 /** languageLabel is the short uppercase tag shown in the status bar. */
 export function languageLabel(language: EditorLanguageId): string {
-  switch (language) {
-    case "javascript":
-      return "JS";
-    case "typescript":
-      return "TS";
-    case "markdown":
-      return "MD";
-    case "dockerfile":
-      return "DOCKERFILE";
-    case "plain":
-      return "TEXT";
-    default:
-      return language.toUpperCase();
-  }
+  return byLanguage.get(language)?.label ?? language.toUpperCase();
+}
+
+/** languageName is the full display name shown in the language picker. */
+export function languageName(language: EditorLanguageId): string {
+  return byLanguage.get(language)?.name ?? language;
 }

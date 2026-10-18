@@ -49,10 +49,15 @@ export function splitDoc(content: string): DocShape {
  * serializeDoc re-encodes editor text with its original line endings and BOM,
  * so a load followed by an unchanged save writes the same bytes. It takes the
  * round-trippable subset of {@link DocShape} (a mixed-EOL body is never saved).
+ * A BOM is only meaningful for UTF-8; a legacy charset drops it, since the
+ * server would refuse U+FEFF there.
  */
-export function serializeDoc(shape: Pick<DocShape, "doc" | "eol" | "bom">): string {
+export function serializeDoc(
+  shape: Pick<DocShape, "doc" | "eol" | "bom"> & { encoding?: string },
+): string {
   const body = shape.doc.replace(/\n/g, shape.eol);
-  return shape.bom ? BOM + body : body;
+  const bom = shape.bom && (shape.encoding ?? "utf-8") === "utf-8";
+  return bom ? BOM + body : body;
 }
 
 /** EditorLanguageId is the explicit language set the editor ships. */
@@ -406,4 +411,76 @@ export function languageLabel(language: EditorLanguageId): string {
 /** languageName is the full display name shown in the language picker. */
 export function languageName(language: EditorLanguageId): string {
   return byLanguage.get(language)?.name ?? language;
+}
+
+/**
+ * EditorEncoding is the save charset of one open document. UTF-8 is the only
+ * one a browser produces natively; the legacy charsets are transcoded by the
+ * control plane (internal/files/encoding.go).
+ */
+export type EditorEncoding = "ascii" | "utf-8" | "gbk" | "gb2312" | "big5";
+
+/** editorEncodings is the encoding picker order (reference panel parity). */
+export const editorEncodings: readonly EditorEncoding[] = [
+  "ascii",
+  "utf-8",
+  "gbk",
+  "gb2312",
+  "big5",
+];
+
+/** editorEncodingNames maps each charset to its display label in the UI. */
+const editorEncodingNames: Record<EditorEncoding, string> = {
+  ascii: "ASCII",
+  "utf-8": "UTF-8",
+  gbk: "GBK",
+  gb2312: "GB2312",
+  big5: "BIG5",
+};
+
+/** isEditorEncoding reports a charset name this editor knows how to save. */
+export function isEditorEncoding(value: unknown): value is EditorEncoding {
+  return (
+    typeof value === "string" &&
+    (editorEncodings as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * normalizeEditorEncoding maps a server-reported charset onto a known one,
+ * falling back to UTF-8 for a server that predates encoding detection.
+ */
+export function normalizeEditorEncoding(value: unknown): EditorEncoding {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : value;
+  return isEditorEncoding(normalized) ? normalized : "utf-8";
+}
+
+/** encodingLabel is the status-bar and picker label of one charset. */
+export function encodingLabel(encoding: EditorEncoding): string {
+  return editorEncodingNames[encoding];
+}
+
+/**
+ * unrepresentableChars returns the characters of `text` the target charset
+ * cannot hold. The check is deliberately conservative: every legacy encoding
+ * here is BMP-only, so a non-BMP code point (an emoji) is always refused, and
+ * ASCII refuses every non-ASCII rune. A BMP character outside a CJK charset is
+ * not detectable in the browser; the control plane refuses it with a clear
+ * error, so the text is still never silently dropped.
+ */
+export function unrepresentableChars(
+  text: string,
+  encoding: EditorEncoding,
+): string[] {
+  if (encoding === "utf-8") {
+    return [];
+  }
+  const found = new Set<string>();
+  for (const character of text) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint > 0xffff || (encoding === "ascii" && codePoint > 0x7f)) {
+      found.add(character);
+    }
+  }
+  return [...found];
 }

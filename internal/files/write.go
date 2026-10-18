@@ -1,6 +1,7 @@
 package files
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -40,6 +41,11 @@ type WriteRequest struct {
 	Overwrite  bool
 	Mode       uint32
 	Size       int64
+	// Encoding is the charset the body should be written in (utf-8, ascii,
+	// gbk, gb2312, big5). Empty means UTF-8, the historical behaviour. The
+	// body is always UTF-8 from the editor; writeFile transcodes it before it
+	// reaches the agent and refuses a rune the target cannot represent.
+	Encoding string
 }
 
 // WriteResult reports the committed file.
@@ -101,6 +107,32 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 	}
 	if body == nil {
 		body = strings.NewReader("")
+	}
+	encodingName, err := normalizeEncoding(req.Encoding)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if encodingName != EncodingUTF8 {
+		// Transcoding needs the whole body to know the exact byte count the
+		// agent header must declare. The editor never saves more than it could
+		// read, so keep the legacy-charset path inside the editor ceiling
+		// instead of buffering a 1 GiB upload.
+		if req.Size > s.maxContentBytes {
+			return WriteResult{}, ErrTooLarge
+		}
+		text, readErr := io.ReadAll(io.LimitReader(body, s.maxContentBytes+1))
+		if readErr != nil {
+			return WriteResult{}, fmt.Errorf("%w: reading request body: %w", ErrValidation, readErr)
+		}
+		if int64(len(text)) != req.Size {
+			return WriteResult{}, fmt.Errorf("%w: received %d of %d body bytes", ErrValidation, len(text), req.Size)
+		}
+		encoded, encodeErr := encodeContent(encodingName, string(text))
+		if encodeErr != nil {
+			return WriteResult{}, encodeErr
+		}
+		body = bytes.NewReader(encoded)
+		req.Size = int64(len(encoded))
 	}
 
 	// Guarantee: a recorded revision is exactly the body the commit replaced.

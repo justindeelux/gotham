@@ -10,14 +10,16 @@ import {
   getFileVersion,
   putContent,
 } from "@/features/files/api/files";
-import type { EditorEol, EditorLanguageId } from "@/features/files/utils/editor";
+import type { EditorEol, EditorEncoding, EditorLanguageId } from "@/features/files/utils/editor";
 import {
   detectLanguage,
+  normalizeEditorEncoding,
   pathWithin,
   rebasedPath,
   serializeDoc,
   splitDoc,
   tabTitle,
+  unrepresentableChars,
 } from "@/features/files/utils/editor";
 import { joinPath } from "@/features/files/utils/files";
 
@@ -50,6 +52,8 @@ export interface EditorTab {
   etag: string;
   eol: EditorEol;
   bom: boolean;
+  /** encoding is the charset the document is saved in (detected on load). */
+  encoding: EditorEncoding;
   size: number;
   mode: number;
   language: EditorLanguageId;
@@ -74,7 +78,22 @@ export interface EditorDiff {
 }
 
 /** SaveOutcome is the result of one save attempt. */
-export type SaveOutcome = "saved" | "conflict" | "error" | "blocked";
+export type SaveOutcome =
+  | "saved"
+  | "conflict"
+  | "error"
+  | "blocked"
+  /** "unsupported" means the buffer holds characters the save encoding cannot
+   *  represent; the encoding warning is armed instead of losing them. */
+  | "unsupported";
+
+/** EncodingWarning is a save blocked by characters the target cannot hold. */
+export interface EncodingWarning {
+  tabId: string;
+  encoding: EditorEncoding;
+  /** characters lists the distinct offending characters, for the prompt. */
+  characters: string[];
+}
 
 /** SaveReport is one tab's outcome in a Save All run. */
 export interface SaveReport {
@@ -116,6 +135,8 @@ export const useEditorStore = defineStore("filesEditor", () => {
   const conflictId = computed<string | null>(() => conflictQueue.value[0] ?? null);
   /** saveAsId is the tab awaiting a "save as copy" name. */
   const saveAsId = ref<string | null>(null);
+  /** encodingWarning is the save blocked by unrepresentable characters. */
+  const encodingWarning = ref<EncodingWarning | null>(null);
 
   /** activeTab resolves the focused tab, if any. */
   const activeTab = computed<EditorTab | null>(
@@ -203,6 +224,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       etag: "",
       eol: "\n",
       bom: false,
+      encoding: "utf-8",
       size: 0,
       mode: 0,
       language: detectLanguage(path),
@@ -295,6 +317,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
       etag: "",
       eol: "\n",
       bom: false,
+      encoding: "utf-8",
       size: 0,
       mode: 0,
       language: detectLanguage(path),
@@ -317,11 +340,15 @@ export const useEditorStore = defineStore("filesEditor", () => {
     try {
       const content = await getContent(serverId.value, teamId, tab.root, tab.path);
       const shape = splitDoc(content.content);
+      const encoding = normalizeEditorEncoding(content.encoding);
       Object.assign(tab, {
         doc: shape.doc,
         original: shape.doc,
         eol: shape.eol,
-        bom: shape.bom,
+        // A BOM belongs to UTF-8; a legacy body holding U+FEFF would be
+        // refused on save, so it is never re-applied there.
+        bom: shape.bom && encoding === "utf-8",
+        encoding,
         etag: content.etag,
         size: content.size,
         mode: content.mode,
@@ -367,6 +394,34 @@ export const useEditorStore = defineStore("filesEditor", () => {
   }
 
   /**
+   * setEncoding changes one tab's save charset. The caller re-saves a clean tab
+   * so the file itself moves to the new encoding instead of the label only.
+   */
+  function setEncoding(id: string, encoding: EditorEncoding): void {
+    const tab = tabs.value.find((item) => item.id === id);
+    if (tab && tab.kind === "file") {
+      tab.encoding = encoding;
+      if (encodingWarning.value?.tabId === id) {
+        encodingWarning.value = null;
+      }
+    }
+  }
+
+  /** dismissEncodingWarning closes the unrepresentable-characters prompt. */
+  function dismissEncodingWarning(): void {
+    encodingWarning.value = null;
+  }
+
+  /**
+   * saveAsUtf8 switches the warned tab to UTF-8 and retries the save, so a
+   * character the legacy charset cannot hold is kept instead of dropped.
+   */
+  async function saveAsUtf8(id: string, teamId: string): Promise<SaveOutcome> {
+    setEncoding(id, "utf-8");
+    return save(id, teamId);
+  }
+
+  /**
    * save writes one tab. On a stale-etag 409 it arms the conflict prompt and
    * returns "conflict"; the caller offers reload / overwrite / save-as-copy.
    * `original` advances to the exact text sent, so a change made during the
@@ -382,14 +437,27 @@ export const useEditorStore = defineStore("filesEditor", () => {
       return "blocked";
     }
     const sentDoc = tab.doc;
+    const characters = unrepresentableChars(sentDoc, tab.encoding);
+    if (characters.length > 0) {
+      // Never let the server substitute '?': stop before the write and let the
+      // caller offer a UTF-8 save.
+      encodingWarning.value = { tabId: id, encoding: tab.encoding, characters };
+      return "unsupported";
+    }
     tab.saving = true;
     try {
       const entry = await putContent(serverId.value, teamId, {
         root: tab.root,
         path: tab.path,
-        content: serializeDoc({ doc: sentDoc, eol: tab.eol, bom: tab.bom }),
+        content: serializeDoc({
+          doc: sentDoc,
+          eol: tab.eol,
+          bom: tab.bom,
+          encoding: tab.encoding,
+        }),
         etag: tab.etag,
         overwrite,
+        encoding: tab.encoding,
       });
       tab.etag = entry.etag;
       tab.size = entry.size;
@@ -500,8 +568,14 @@ export const useEditorStore = defineStore("filesEditor", () => {
       const entry = await putContent(serverId.value, teamId, {
         root: tab.root,
         path: target,
-        content: serializeDoc({ doc: sentDoc, eol: tab.eol, bom: tab.bom }),
+        content: serializeDoc({
+          doc: sentDoc,
+          eol: tab.eol,
+          bom: tab.bom,
+          encoding: tab.encoding,
+        }),
         etag,
+        encoding: tab.encoding,
       });
       reserved = false;
       tab.path = target;
@@ -539,6 +613,9 @@ export const useEditorStore = defineStore("filesEditor", () => {
     }
     tabs.value = tabs.value.filter((tab) => tab.id !== id);
     clearConflict(id);
+    if (encodingWarning.value?.tabId === id) {
+      encodingWarning.value = null;
+    }
     if (saveAsId.value === id) {
       saveAsId.value = null;
     }
@@ -553,6 +630,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     activeId.value = "";
     conflictQueue.value = [];
     saveAsId.value = null;
+    encodingWarning.value = null;
   }
 
   /** closeMany closes several tabs, discarding their buffers. */
@@ -653,6 +731,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     activeId,
     conflictId,
     saveAsId,
+    encodingWarning,
     // derived
     activeTab,
     conflictTab,
@@ -667,6 +746,9 @@ export const useEditorStore = defineStore("filesEditor", () => {
     openDiff,
     setDoc,
     setLanguage,
+    setEncoding,
+    dismissEncodingWarning,
+    saveAsUtf8,
     save,
     saveAll,
     reload,

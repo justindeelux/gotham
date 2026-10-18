@@ -287,6 +287,7 @@ const vi = {
     archiveEntry: "Tệp nén chứa mục không thể giải nén an toàn (liên kết, thiết bị, FIFO hoặc loại không hỗ trợ).",
     invalidArchive: "Tệp nén không hợp lệ hoặc bị cắt ngắn, không thể giải nén.",
     notEditable: "Tệp không phải văn bản có thể sửa. Hãy tải về thay vì mở.",
+    unrepresentable: "Tệp chứa ký tự mà bảng mã đã chọn không thể biểu diễn. Hãy chuyển tệp sang UTF-8.",
     precondition: "Tệp đã thay đổi trên node trước khi yêu cầu hoàn tất.",
     busy: "Node đang bận truyền tệp. Thử lại sau một lát.",
     insufficientStorage: "Node không đủ dung lượng trống cho tệp này.",

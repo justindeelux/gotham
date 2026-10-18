@@ -57,7 +57,7 @@ func (h *handler) historyVersion(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, versionBodyEnvelope(body))
+	writeJSON(w, http.StatusOK, versionBodyEnvelope{Version: body.Version, Content: body.Content})
 }
 
 // restoreVersion serves POST .../files/history/{version}/restore.

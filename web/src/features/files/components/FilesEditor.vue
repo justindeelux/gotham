@@ -514,7 +514,9 @@ async function saveAllTabs(): Promise<void> {
       continue;
     }
     if (report.outcome === "conflict") {
-      message.warning(String(t("files.editor.conflictTitle")));
+      message.warning(
+        String(t("files.editor.conflictFile", { name: report.tab.name })),
+      );
       continue;
     }
     message.error(saveFailureText(report.tab));
@@ -737,6 +739,13 @@ function openTabMenu(event: MouseEvent, id: string): void {
   tabMenuOpen.value = true;
 }
 
+/** onTabMouseDown cancels the browser's middle-click autoscroll. */
+function onTabMouseDown(event: MouseEvent): void {
+  if (event.button === 1) {
+    event.preventDefault();
+  }
+}
+
 /** onTabAuxClick closes a tab on a middle click. */
 function onTabAuxClick(event: MouseEvent, id: string): void {
   if (event.button !== 1) {
@@ -771,6 +780,11 @@ function onTabMenuSelect(key: string): void {
  * ones and closes the rest with them once a choice is made.
  */
 function requestCloseTabs(ids: string[], keepId = ""): void {
+  // One prompt at a time: a second close request (Alt+W, middle click, menu)
+  // must not retarget the dialog the user is already answering.
+  if (pendingClose.value !== null || closeSaving.value) {
+    return;
+  }
   const closing = editor.tabs.filter((tab) => ids.includes(tab.id));
   if (closing.length === 0) {
     return;
@@ -805,17 +819,31 @@ async function saveAndClose(): Promise<void> {
   if (ids.length === 0 || closeSaving.value) {
     return;
   }
+  // A tab already writing would be skipped by saveAll and then closed with its
+  // in-flight (or newly typed) text unsaved.
+  if (editor.tabs.some((tab) => ids.includes(tab.id) && tab.saving)) {
+    return;
+  }
   closeSaving.value = true;
   try {
     const reports = await editor.saveAll(teams.activeTeamId, ids);
     const failed = new Set<string>();
     for (const report of reports) {
       if (report.outcome === "saved") {
+        // A save writes the text it was handed; edits typed while it was in
+        // flight keep the tab dirty, so it must stay open instead of being
+        // closed as if everything was persisted.
+        if (!editor.isDirty(report.tab)) {
+          continue;
+        }
+        failed.add(report.tab.id);
         continue;
       }
       failed.add(report.tab.id);
       if (report.outcome === "conflict") {
-        message.warning(String(t("files.editor.conflictTitle")));
+        message.warning(
+          String(t("files.editor.conflictFile", { name: report.tab.name })),
+        );
         continue;
       }
       message.error(saveFailureText(report.tab));
@@ -841,8 +869,14 @@ function onEditorKeydown(event: KeyboardEvent): void {
     event.defaultPrevented ||
     event.isComposing ||
     editor.tabs.length === 0 ||
-    minimized.value
+    minimized.value ||
+    pendingClose.value !== null ||
+    closeSaving.value
   ) {
+    return;
+  }
+  // A modal (conflict, save-as, discard) owns the keyboard while it is open.
+  if (event.target instanceof Element && event.target.closest(".n-modal")) {
     return;
   }
   const mod = event.metaKey || event.ctrlKey;
@@ -1029,6 +1063,7 @@ onBeforeUnmount(() => {
         :key="tab.id"
         class="ed-tab"
         :class="{ 'is-active': tab.id === editor.activeId, 'is-dirty': editor.isDirty(tab) }"
+        @mousedown="onTabMouseDown"
         @contextmenu.prevent="openTabMenu($event, tab.id)"
         @auxclick="onTabAuxClick($event, tab.id)"
       >

@@ -2,7 +2,7 @@
 // tab context menu, the dirty-close prompt, middle-click close, Alt+W and
 // Ctrl+Tab. The CodeMirror chunk and the file API are mocked so the component
 // runs without a real editor or network.
-/* global document:readonly, KeyboardEvent:readonly, window:readonly */
+/* global document:readonly, KeyboardEvent:readonly, MouseEvent:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider, NDropdown } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -220,6 +220,41 @@ describe("editor Save All", () => {
     expect(editor.hasDirty).toBe(true);
     wrapper.unmount();
   });
+
+  it("queues every conflict from Save All and names each in its toast", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", true), makeTab("t2", true)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    api.putContent.mockRejectedValue({ message: "conflict", status: 409 });
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "S",
+        code: "KeyS",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+      }),
+    );
+    await flushPromises();
+
+    // Both conflicts are reported by name; the dialog walks them in turn.
+    expect(document.body.textContent).toContain("t1.yaml changed on the server");
+    expect(document.body.textContent).toContain("t2.yaml changed on the server");
+    expect(wrapper.text()).toContain("t1.yaml changed since you opened it");
+    expect(editor.conflictId).toBe("t1");
+
+    editor.dismissConflict();
+    await flushPromises();
+    expect(wrapper.text()).toContain("t2.yaml changed since you opened it");
+    expect(editor.conflictId).toBe("t2");
+
+    editor.dismissConflict();
+    await flushPromises();
+    expect(editor.conflictId).toBeNull();
+    wrapper.unmount();
+  });
 });
 
 describe("editor tab context menu", () => {
@@ -369,6 +404,72 @@ describe("editor dirty close prompt", () => {
     expect(editor.tabs).toHaveLength(0);
     wrapper.unmount();
   });
+
+  it("never replaces an open prompt with a later Alt+W or middle click", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", true), makeTab("t2", true)];
+    editor.activeId = "t2";
+    await flushPromises();
+
+    await wrapper.findAll(".ed-tab-close")[1]!.trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(".ed-unsaved li").map((item) => item.text())).toEqual([
+      "t2.yaml",
+    ]);
+
+    // Alt+W and a middle click while the prompt is open are ignored: the
+    // dialog keeps acting on the tab it was opened for.
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "w",
+        code: "KeyW",
+        altKey: true,
+        bubbles: true,
+      }),
+    );
+    await flushPromises();
+    await wrapper.findAll(".ed-tab")[0]!.trigger("auxclick", { button: 1 });
+    await flushPromises();
+    expect(wrapper.findAll(".ed-unsaved li").map((item) => item.text())).toEqual([
+      "t2.yaml",
+    ]);
+    expect(editor.tabs).toHaveLength(2);
+
+    await closePromptButton(wrapper, "Don't save")!.trigger("click");
+    await flushPromises();
+    expect(editor.tabs.map((tab) => tab.id)).toEqual(["t1"]);
+    wrapper.unmount();
+  });
+
+  it("keeps edits typed while the close-save is in flight", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", true)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    let resolveWrite!: (_value: unknown) => void;
+    api.putContent.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveWrite = resolve;
+      }),
+    );
+
+    await wrapper.findAll(".ed-tab-close")[0]!.trigger("click");
+    await flushPromises();
+    await closePromptButton(wrapper, "Save")!.trigger("click");
+    await flushPromises();
+
+    // The save was handed the old buffer; the new text must not be dropped by
+    // the close that follows it.
+    editor.setDoc("t1", "typed during save");
+    resolveWrite({ etag: '"v2"', size: 7, mode: 0o100644 });
+    await flushPromises();
+
+    expect(editor.tabs).toHaveLength(1);
+    expect(editor.isDirty(editor.tabs[0]!)).toBe(true);
+    expect(wrapper.text()).not.toContain("Close unsaved files?");
+    wrapper.unmount();
+  });
 });
 
 describe("editor tab ergonomics", () => {
@@ -382,6 +483,33 @@ describe("editor tab ergonomics", () => {
     await flushPromises();
 
     expect(editor.tabs.map((tab) => tab.id)).toEqual(["t1"]);
+    wrapper.unmount();
+  });
+
+  it("cancels the browser autoscroll on a middle mousedown", async () => {
+    const { wrapper, editor } = mountEditor();
+    editor.tabs = [makeTab("t1", false), makeTab("t2", false)];
+    editor.activeId = "t1";
+    await flushPromises();
+
+    const tab = wrapper.findAll(".ed-tab")[1]!.element;
+    const middle = new MouseEvent("mousedown", {
+      button: 1,
+      bubbles: true,
+      cancelable: true,
+    });
+    tab.dispatchEvent(middle);
+    expect(middle.defaultPrevented).toBe(true);
+
+    const left = new MouseEvent("mousedown", {
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
+    tab.dispatchEvent(left);
+    expect(left.defaultPrevented).toBe(false);
+    // A middle mousedown never closes by itself; auxclick does.
+    expect(editor.tabs).toHaveLength(2);
     wrapper.unmount();
   });
 

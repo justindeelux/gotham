@@ -826,20 +826,29 @@ async function pickEncoding(encoding: EditorEncoding): Promise<void> {
   if (!tab || tab.kind !== "file" || !files.canWrite) {
     return;
   }
-  const wasClean = !editor.isDirty(tab);
-  editor.setEncoding(tab.id, encoding);
-  if (!wasClean) {
-    return;
-  }
-  const outcome = await editor.save(tab.id, teams.activeTeamId);
+  const outcome = await editor.changeEncoding(
+    tab.id,
+    teams.activeTeamId,
+    encoding,
+  );
   if (outcome === "saved") {
     message.success(
       String(t("files.editor.encodingChanged", { encoding: encodingLabel(encoding) })),
     );
     void refreshHistoryCount(tab);
+  } else if (outcome === "pending") {
+    message.info(
+      String(
+        t("files.editor.encodingPending", {
+          encoding: encodingLabel(encoding),
+        }),
+      ),
+    );
   } else if (outcome === "error") {
     message.error(saveFailureText(tab));
   }
+  // "conflict"/"unsupported" arm their own prompts; the store has already
+  // reverted the label to the charset on disk when the re-save did not land.
 }
 
 /** useUtf8AndSave retries the blocked save as UTF-8, keeping the characters. */
@@ -1615,7 +1624,7 @@ onBeforeUnmount(() => {
               v-if="activeTab.kind === 'file' && activeTab.status === 'ready' && files.canWrite"
               type="button"
               class="ed-encoding"
-              :aria-label="t('files.editor.encodingTitle')"
+              :aria-label="`${t('files.editor.encodingTitle')}: ${encodingLabel(activeTab.encoding)}`"
               :title="t('files.editor.encodingTitle')"
               @click="encodingOpen = true"
             >

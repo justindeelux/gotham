@@ -31,12 +31,34 @@ const (
 // The write is refused instead of substituting '?' so a save never loses text.
 var ErrUnrepresentable = errors.New("files: text cannot be represented in the save encoding")
 
-// gbkEncoder, big5Encoder are the x/text encoders used for transcoding. Each is
-// safe for concurrent use.
+// gbkEncoding and big5Encoding are the stateless x/text Encoding values; an
+// Encoder/Decoder derived from them must be created per call and never shared,
+// because a transform is stateful.
 var (
-	gbkEncoder  = simplifiedchinese.GBK.NewEncoder()
-	big5Encoder = traditionalchinese.Big5.NewEncoder()
+	gbkEncoding  = simplifiedchinese.GBK
+	big5Encoding = traditionalchinese.Big5
 )
+
+// binarySignatures are magic prefixes that identify a file as binary even when
+// the body happens to be valid UTF-8 (a GIF header is pure ASCII) or decodes
+// cleanly as a legacy charset.
+var binarySignatures = [][]byte{
+	[]byte("\x89PNG\r\n\x1a\n"), // PNG
+	[]byte("GIF87a"),
+	[]byte("GIF89a"),
+	{0xFF, 0xD8, 0xFF},        // JPEG
+	[]byte("%PDF-"),           // PDF
+	[]byte("PK\x03\x04"),      // ZIP
+	{0x1F, 0x8B},              // gzip
+	{0x7F, 'E', 'L', 'F'},     // ELF
+	[]byte("Rar!\x1a\x07"),    // RAR
+	[]byte("\xFD7zXZ\x00"),    // xz
+	[]byte("BZh"),             // bzip2
+	[]byte("SQLite format 3"), // SQLite
+	[]byte("\x00asm"),         // WebAssembly
+	[]byte("OggS"),            // Ogg
+	[]byte("ID3"),             // MP3 with an ID3 tag
+}
 
 // normalizeEncoding canonicalises a requested save encoding. An empty value
 // keeps the historical UTF-8 behaviour; the aaPanel alias "ansi" is coerced to
@@ -60,19 +82,20 @@ func normalizeEncoding(name string) (string, error) {
 
 // detectEncoding decodes one file body for the editor: BOM, then UTF-8
 // validity, then the GB2312/GBK/BIG5 heuristic. It returns the canonical
-// encoding and the UTF-8 text the editor shows. A NUL byte, or a body no
+// encoding and the UTF-8 text the editor shows. A binary body, or a body no
 // candidate decodes, is ErrNotEditable (415) so the caller offers a download.
 //
-// Detection never guesses: a body that is valid UTF-8 is UTF-8, and a legacy
-// body must decode cleanly (no replacement characters) under a candidate. The
-// heuristic picks between GBK and BIG5 by how plausible the decoded text is
-// (see hanScore); GB2312 is reported when every character also fits GB2312,
-// which is byte-identical to GBK for those characters.
+// Detection never guesses and never accepts a lossy decode: a body that is
+// valid UTF-8 is UTF-8, and a legacy candidate must both decode cleanly (no
+// replacement characters) and re-encode to the exact same bytes. The
+// round-trip check matters because a legacy charset can have duplicate
+// mappings (BIG5 A2CC decodes to U+5341 but re-encodes to A451); accepting such
+// a body would rewrite its bytes on an otherwise unedited save.
 func detectEncoding(body []byte) (string, string, error) {
 	if len(body) == 0 {
 		return EncodingUTF8, "", nil
 	}
-	if bytes.IndexByte(body, 0) >= 0 {
+	if isBinaryBody(body) {
 		return "", "", ErrNotEditable
 	}
 	// A UTF-8 BOM is kept in the text: the editor's splitDoc strips it and
@@ -80,8 +103,13 @@ func detectEncoding(body []byte) (string, string, error) {
 	if utf8.Valid(body) {
 		return EncodingUTF8, string(body), nil
 	}
-	gbkText, gbkOK := decodeLegacy(simplifiedchinese.GBK, body)
-	big5Text, big5OK := decodeLegacy(traditionalchinese.Big5, body)
+	// Legacy text never carries a C0 control other than tab/newline/CR/form
+	// feed; one means the body is binary that merely happens to decode.
+	if hasLegacyControl(body) {
+		return "", "", ErrNotEditable
+	}
+	gbkText, gbkOK := decodeLegacy(gbkEncoding, body)
+	big5Text, big5OK := decodeLegacy(big5Encoding, body)
 	switch {
 	case gbkOK && big5OK:
 		// Both decode; prefer the more plausible text, and simplified Chinese
@@ -99,11 +127,42 @@ func detectEncoding(body []byte) (string, string, error) {
 	}
 }
 
+// isBinaryBody reports a body that is binary whatever charset it might decode
+// as: a NUL byte or a well-known file signature.
+func isBinaryBody(body []byte) bool {
+	if bytes.IndexByte(body, 0) >= 0 {
+		return true
+	}
+	for _, signature := range binarySignatures {
+		if bytes.HasPrefix(body, signature) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLegacyControl reports a byte no legacy text file contains: any C0 control
+// except tab, LF, CR and form feed, plus DEL. Legacy encodings never use a byte
+// below 0x20 inside a multi-byte character, so a raw scan is exact. The UTF-8
+// path stays permissive: an ANSI-coloured log is still text.
+func hasLegacyControl(body []byte) bool {
+	for _, b := range body {
+		switch b {
+		case '\t', '\n', '\r', '\f':
+			continue
+		}
+		if b < 0x20 || b == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // gbkLabel reports GB2312 when every decoded character also fits the narrower
 // GB2312 repertoire, and GBK otherwise. Both re-encode to the same bytes for a
 // GB2312-subset file.
 func gbkLabel(text string) string {
-	encoded, err := gbkEncoder.Bytes([]byte(text))
+	encoded, err := gbkEncoding.NewEncoder().Bytes([]byte(text))
 	if err != nil || !isGB2312Bytes(encoded) {
 		return EncodingGBK
 	}
@@ -133,9 +192,11 @@ func isGB2312Bytes(encoded []byte) bool {
 	return true
 }
 
-// decodeLegacy decodes body with one legacy charset. A decoder that emits the
-// Unicode replacement character failed: the bytes are not clean text in that
-// charset.
+// decodeLegacy decodes body with one legacy charset and requires a byte-exact
+// round trip. A decoder that emits the Unicode replacement character failed
+// (the bytes are not clean text), and a re-encode that does not reproduce the
+// original bytes failed too (the charset has duplicate mappings, so an unedited
+// save would silently rewrite the file).
 func decodeLegacy(enc encoding.Encoding, body []byte) (string, bool) {
 	decoded, _, err := transform.Bytes(enc.NewDecoder(), body)
 	if err != nil {
@@ -143,6 +204,10 @@ func decodeLegacy(enc encoding.Encoding, body []byte) (string, bool) {
 	}
 	text := string(decoded)
 	if strings.ContainsRune(text, utf8.RuneError) {
+		return "", false
+	}
+	reencoded, _, err := transform.Bytes(enc.NewEncoder(), decoded)
+	if err != nil || !bytes.Equal(reencoded, body) {
 		return "", false
 	}
 	return text, true
@@ -224,10 +289,10 @@ func encodeContent(enc, text string) ([]byte, error) {
 		}
 		return []byte(text), nil
 	case EncodingGBK, EncodingGB2312:
-		encoded, err := gbkEncoder.Bytes([]byte(text))
+		encoded, err := gbkEncoding.NewEncoder().Bytes([]byte(text))
 		if err != nil {
 			return nil, firstUnrepresentable(enc, text, func(r rune) bool {
-				_, err := gbkEncoder.Bytes([]byte(string(r)))
+				_, err := gbkEncoding.NewEncoder().Bytes([]byte(string(r)))
 				return err == nil
 			})
 		}
@@ -236,16 +301,16 @@ func encodeContent(enc, text string) ([]byte, error) {
 				if r < utf8.RuneSelf {
 					return true
 				}
-				b, err := gbkEncoder.Bytes([]byte(string(r)))
+				b, err := gbkEncoding.NewEncoder().Bytes([]byte(string(r)))
 				return err == nil && isGB2312Bytes(b)
 			})
 		}
 		return encoded, nil
 	case EncodingBIG5:
-		encoded, err := big5Encoder.Bytes([]byte(text))
+		encoded, err := big5Encoding.NewEncoder().Bytes([]byte(text))
 		if err != nil {
 			return nil, firstUnrepresentable(enc, text, func(r rune) bool {
-				_, err := big5Encoder.Bytes([]byte(string(r)))
+				_, err := big5Encoding.NewEncoder().Bytes([]byte(string(r)))
 				return err == nil
 			})
 		}

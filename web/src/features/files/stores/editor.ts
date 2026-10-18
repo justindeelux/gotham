@@ -91,9 +91,20 @@ export type SaveOutcome =
 export interface EncodingWarning {
   tabId: string;
   encoding: EditorEncoding;
-  /** characters lists the distinct offending characters, for the prompt. */
+  /** characters lists the distinct offending characters, for the prompt; it is
+   *  empty when only the server could detect the refusal. */
   characters: string[];
 }
+
+/** ChangeEncodingOutcome is the result of switching a tab's save charset.
+ *  "pending" means the tab is dirty, so the new charset applies on next save. */
+export type ChangeEncodingOutcome =
+  | "saved"
+  | "pending"
+  | "conflict"
+  | "error"
+  | "blocked"
+  | "unsupported";
 
 /** SaveReport is one tab's outcome in a Save All run. */
 export interface SaveReport {
@@ -135,8 +146,18 @@ export const useEditorStore = defineStore("filesEditor", () => {
   const conflictId = computed<string | null>(() => conflictQueue.value[0] ?? null);
   /** saveAsId is the tab awaiting a "save as copy" name. */
   const saveAsId = ref<string | null>(null);
-  /** encodingWarning is the save blocked by unrepresentable characters. */
-  const encodingWarning = ref<EncodingWarning | null>(null);
+  /**
+   * encodingWarnings is the ordered queue of saves blocked by characters the
+   * target charset cannot hold: Save All can hit several at once and the prompt
+   * walks them one by one, like the conflict queue.
+   */
+  const encodingWarnings = ref<EncodingWarning[]>([]);
+  /** encodingWarning is the queue head — the prompt currently on screen. */
+  const encodingWarning = computed<EncodingWarning | null>(
+    () => encodingWarnings.value[0] ?? null,
+  );
+  /** encodingWarningCount is the number of tabs still waiting on the prompt. */
+  const encodingWarningCount = computed<number>(() => encodingWarnings.value.length);
 
   /** activeTab resolves the focused tab, if any. */
   const activeTab = computed<EditorTab | null>(
@@ -394,27 +415,75 @@ export const useEditorStore = defineStore("filesEditor", () => {
   }
 
   /**
-   * setEncoding changes one tab's save charset. The caller re-saves a clean tab
-   * so the file itself moves to the new encoding instead of the label only.
+   * setEncoding changes one tab's save charset without touching the file. The
+   * encoding prompts for that tab are cleared: the user is answering them by
+   * choosing an encoding explicitly.
    */
   function setEncoding(id: string, encoding: EditorEncoding): void {
     const tab = tabs.value.find((item) => item.id === id);
     if (tab && tab.kind === "file") {
       tab.encoding = encoding;
-      if (encodingWarning.value?.tabId === id) {
-        encodingWarning.value = null;
-      }
+      dropEncodingWarnings(id);
     }
   }
 
-  /** dismissEncodingWarning closes the unrepresentable-characters prompt. */
+  /** armEncodingWarning queues (or refreshes) one tab's blocked save. */
+  function armEncodingWarning(warning: EncodingWarning): void {
+    const rest = encodingWarnings.value.filter(
+      (item) => item.tabId !== warning.tabId,
+    );
+    encodingWarnings.value = [...rest, warning];
+  }
+
+  /** dropEncodingWarnings removes a tab's prompts (resolved or closed). */
+  function dropEncodingWarnings(tabId: string): void {
+    encodingWarnings.value = encodingWarnings.value.filter(
+      (item) => item.tabId !== tabId,
+    );
+  }
+
+  /** dismissEncodingWarning closes the prompt on screen and shows the next. */
   function dismissEncodingWarning(): void {
-    encodingWarning.value = null;
+    encodingWarnings.value = encodingWarnings.value.slice(1);
+  }
+
+  /**
+   * changeEncoding switches one tab's save charset. A clean tab is re-saved
+   * immediately so the file itself moves to the new encoding; the label is
+   * reverted when that save does not land, so the status bar always names the
+   * charset actually on disk. A dirty tab applies the charset on its next save.
+   */
+  async function changeEncoding(
+    id: string,
+    teamId: string,
+    encoding: EditorEncoding,
+  ): Promise<ChangeEncodingOutcome> {
+    const tab = tabs.value.find((item) => item.id === id);
+    if (!tab || tab.kind !== "file" || tab.status !== "ready") {
+      return "blocked";
+    }
+    if (tab.encoding === encoding) {
+      return "blocked";
+    }
+    const previous = tab.encoding;
+    const wasClean = !isDirty(tab);
+    setEncoding(id, encoding);
+    if (!wasClean) {
+      return "pending";
+    }
+    const outcome = await save(id, teamId);
+    if (outcome !== "saved") {
+      // Nothing was written: put the label back to the charset on disk and
+      // leave the conflict/encoding prompt armed.
+      tab.encoding = previous;
+    }
+    return outcome;
   }
 
   /**
    * saveAsUtf8 switches the warned tab to UTF-8 and retries the save, so a
-   * character the legacy charset cannot hold is kept instead of dropped.
+   * character the legacy charset cannot hold is kept instead of dropped. It
+   * clears that tab's prompts; any other queued tab is shown next.
    */
   async function saveAsUtf8(id: string, teamId: string): Promise<SaveOutcome> {
     setEncoding(id, "utf-8");
@@ -441,7 +510,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     if (characters.length > 0) {
       // Never let the server substitute '?': stop before the write and let the
       // caller offer a UTF-8 save.
-      encodingWarning.value = { tabId: id, encoding: tab.encoding, characters };
+      armEncodingWarning({ tabId: id, encoding: tab.encoding, characters });
       return "unsupported";
     }
     tab.saving = true;
@@ -467,11 +536,19 @@ export const useEditorStore = defineStore("filesEditor", () => {
       clearConflict(id);
       return "saved";
     } catch (err) {
-      if (filesErrorKey(err) === "files.errors.conflict") {
+      const key = filesErrorKey(err);
+      if (key === "files.errors.conflict") {
         addConflict(id);
         return "conflict";
       }
       tab.error = describeFilesError(err);
+      if (key === "files.errors.unrepresentable") {
+        // The control plane found a BMP character the charset cannot hold (the
+        // browser cannot know the whole legacy repertoire). Offer the same
+        // Switch-to-UTF-8 prompt instead of a dead-end error.
+        armEncodingWarning({ tabId: id, encoding: tab.encoding, characters: [] });
+        return "unsupported";
+      }
       return "error";
     } finally {
       tab.saving = false;
@@ -613,9 +690,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     }
     tabs.value = tabs.value.filter((tab) => tab.id !== id);
     clearConflict(id);
-    if (encodingWarning.value?.tabId === id) {
-      encodingWarning.value = null;
-    }
+    dropEncodingWarnings(id);
     if (saveAsId.value === id) {
       saveAsId.value = null;
     }
@@ -630,7 +705,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     activeId.value = "";
     conflictQueue.value = [];
     saveAsId.value = null;
-    encodingWarning.value = null;
+    encodingWarnings.value = [];
   }
 
   /** closeMany closes several tabs, discarding their buffers. */
@@ -738,6 +813,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     saveAsTab,
     dirtyTabs,
     hasDirty,
+    encodingWarningCount,
     // actions
     isDirty,
     tabFor,
@@ -747,6 +823,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     setDoc,
     setLanguage,
     setEncoding,
+    changeEncoding,
     dismissEncodingWarning,
     saveAsUtf8,
     save,

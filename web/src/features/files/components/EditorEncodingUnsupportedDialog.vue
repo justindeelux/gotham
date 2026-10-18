@@ -43,7 +43,11 @@ const { t } = useI18n();
         })
       }}
     </p>
-    <ul class="enc-chars" :aria-label="props.name">
+    <ul
+      v-if="props.characters.length > 0"
+      class="enc-chars"
+      :aria-label="t('files.editor.encodingUnsupportedTitle', { encoding: encodingLabel(props.encoding) })"
+    >
       <li v-for="character in props.characters" :key="character" class="mono">
         {{ character }}
       </li>

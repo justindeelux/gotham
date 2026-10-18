@@ -15,7 +15,7 @@ import (
 // gbkFixture returns s encoded as GBK, failing the test on an unsupported rune.
 func gbkFixture(t *testing.T, s string) []byte {
 	t.Helper()
-	encoded, err := gbkEncoder.Bytes([]byte(s))
+	encoded, err := gbkEncoding.NewEncoder().Bytes([]byte(s))
 	if err != nil {
 		t.Fatalf("encode GBK fixture %q: %v", s, err)
 	}
@@ -25,7 +25,7 @@ func gbkFixture(t *testing.T, s string) []byte {
 // big5Fixture returns s encoded as BIG5.
 func big5Fixture(t *testing.T, s string) []byte {
 	t.Helper()
-	encoded, err := big5Encoder.Bytes([]byte(s))
+	encoded, err := big5Encoding.NewEncoder().Bytes([]byte(s))
 	if err != nil {
 		t.Fatalf("encode BIG5 fixture %q: %v", s, err)
 	}
@@ -83,10 +83,64 @@ func TestDetectEncoding(t *testing.T) {
 	}
 }
 
+func TestLegacyFixturesRoundTripByteIdentically(t *testing.T) {
+	fixtures := map[string][]byte{
+		EncodingGB2312: gbkFixture(t, "服务器配置\t已保存。\r\n\f重启服务，请检查：网络、端口。"),
+		EncodingGBK:    gbkFixture(t, "价格€明细\r\n"),
+		EncodingBIG5:   big5Fixture(t, "伺服器設定檔\t已經儲存。\r\n請重新啟動服務，並檢查網路設定。"),
+	}
+	for want, body := range fixtures {
+		t.Run(want, func(t *testing.T) {
+			encodingName, text, err := detectEncoding(body)
+			if err != nil {
+				t.Fatalf("detect: %v", err)
+			}
+			if encodingName != want {
+				t.Fatalf("encoding = %q, want %q", encodingName, want)
+			}
+			encoded, err := encodeContent(encodingName, text)
+			if err != nil {
+				t.Fatalf("re-encode: %v", err)
+			}
+			if string(encoded) != string(body) {
+				t.Fatalf("round trip = %x, want %x", encoded, body)
+			}
+		})
+	}
+}
+
+// TestDetectEncodingRejectsNonRoundTripBytes proves a candidate whose decode
+// does not re-encode byte-identically is never accepted as that charset. BIG5
+// A2CC decodes to U+5341 and re-encodes to A451, so an unchanged save would
+// rewrite the file.
+func TestDetectEncodingRejectsNonRoundTripBytes(t *testing.T) {
+	body := []byte{0xA2, 0xCC}
+	encodingName, text, err := detectEncoding(body)
+	if errors.Is(err, ErrNotEditable) {
+		return // refusing the body is the other safe outcome
+	}
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if encodingName == EncodingBIG5 {
+		t.Fatalf("detected big5, whose round trip changes the bytes")
+	}
+	encoded, err := encodeContent(encodingName, text)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if string(encoded) != string(body) {
+		t.Fatalf("round trip = %x, want %x", encoded, body)
+	}
+}
+
 func TestDetectEncodingRefusesBinary(t *testing.T) {
 	for name, body := range map[string][]byte{
-		"nul byte":    {'a', 0x00, 'b'},
-		"undecodable": {0x81, 0x20, 0x81, 0x20},
+		"nul byte":     {'a', 0x00, 'b'},
+		"undecodable":  {0x81, 0x20, 0x81, 0x20},
+		"png header":   append([]byte("\x89PNG\r\n\x1a\n"), []byte("payload")...),
+		"gif header":   []byte("GIF89a payload"),
+		"control byte": append(gbkFixture(t, "配置"), 0x01),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := detectEncoding(body); !errors.Is(err, ErrNotEditable) {

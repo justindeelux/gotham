@@ -90,7 +90,7 @@ import {
   rowMenuOptions,
 } from "@/features/files/utils/filesMenu";
 import type { FilesMenuItem } from "@/features/files/utils/filesMenu";
-import { isRowControlTarget } from "@/features/files/utils/rowControls";
+import { isRowControlEvent } from "@/features/files/utils/rowControls";
 import {
   clampScrollTop,
   gridColumnCount,
@@ -472,8 +472,8 @@ function activate(entry: FilesEntry): void {
 }
 
 /** isRowControl reports a press that belongs to a row's own control, not the row. */
-function isRowControl(target: EventTarget | null): boolean {
-  return isRowControlTarget(target);
+function isRowControl(event: Event): boolean {
+  return isRowControlEvent(event);
 }
 
 /**
@@ -500,7 +500,7 @@ function extendRange(event: MouseEvent, entry: FilesEntry): void {
  * row control.
  */
 function onRowClick(event: MouseEvent, entry: FilesEntry): void {
-  if (isRowControl(event.target) || !isSelectable(entry)) {
+  if (isRowControl(event) || !isSelectable(entry)) {
     return;
   }
   if (event.shiftKey) {
@@ -570,7 +570,7 @@ function onListMouseDown(event: MouseEvent): void {
  * entry. A plain double-click (JUS-130) is unchanged.
  */
 function onRowDblclick(event: MouseEvent, entry: FilesEntry): void {
-  if (event.shiftKey || isRowControl(event.target)) {
+  if (event.shiftKey || isRowControl(event)) {
     return;
   }
   activate(entry);
@@ -1416,7 +1416,7 @@ function onListKeydown(event: KeyboardEvent): void {
       next = current - page;
       break;
     case " ": {
-      if (isRowControl(target)) {
+      if (isRowControl(event)) {
         return;
       }
       event.preventDefault();
@@ -1427,7 +1427,7 @@ function onListKeydown(event: KeyboardEvent): void {
       return;
     }
     case "Enter": {
-      if (isRowControl(target)) {
+      if (isRowControl(event)) {
         return;
       }
       event.preventDefault();

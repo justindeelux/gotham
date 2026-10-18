@@ -358,6 +358,22 @@ describe("FilesEditor guards", () => {
     }
     wrapper.unmount();
   });
+
+  it("applies the current settings to a tab opened after a change", async () => {
+    const { wrapper, editor } = mountEditor();
+    useEditorSettingsStore().update({ wrap: true });
+
+    const tab = makeTab("t1", false);
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    expect(codemirror.sessions).toHaveLength(1);
+    expect(codemirror.sessions[0].setSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ wrap: true }),
+    );
+    wrapper.unmount();
+  });
 });
 
 describe("FilesEditor close-all", () => {

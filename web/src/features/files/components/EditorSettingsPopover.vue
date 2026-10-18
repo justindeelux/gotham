@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { SlidersHorizontal } from "@lucide/vue";
 import { NButton, NPopover, NSelect, NSwitch } from "naive-ui";
-import { computed } from "vue";
+import { storeToRefs } from "pinia";
+import { computed, nextTick, ref, watch } from "vue";
+import type { ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
 
 import {
@@ -13,7 +15,13 @@ import { useEditorSettingsStore } from "@/features/files/stores/editorSettings";
 
 const { t } = useI18n();
 const store = useEditorSettingsStore();
-const settings = store.settings;
+// storeToRefs keeps the binding live: update() replaces the settings object,
+// so a plain `store.settings` snapshot would go stale after the first change.
+const { settings } = storeToRefs(store);
+
+const show = ref(false);
+const triggerRef = ref<ComponentPublicInstance | null>(null);
+const contentRef = ref<HTMLElement | null>(null);
 
 /** themeOptions are the two editor surfaces. */
 const themeOptions = computed(() => [
@@ -43,12 +51,52 @@ const indentOptions = computed(() => [
 function commit(patch: Partial<EditorSettings>): void {
   store.update(patch);
 }
+
+/** close hides the popover and returns focus to its trigger. */
+function close(): void {
+  show.value = false;
+}
+
+// A keyboard user must land inside the panel on open and on the trigger again
+// after Escape; NPopover alone moves neither. The panel is teleported, so its
+// ref becomes available only once the body has mounted.
+watch(contentRef, (element) => {
+  if (element && show.value) {
+    element
+      .querySelector<HTMLElement>(".n-base-selection-label, [role='switch']")
+      ?.focus();
+  }
+});
+
+watch(show, async (value) => {
+  if (value) {
+    return;
+  }
+  await nextTick();
+  const trigger = triggerRef.value?.$el;
+  if (trigger instanceof HTMLElement) {
+    trigger.focus();
+  }
+});
 </script>
 
 <template>
-  <NPopover trigger="click" placement="bottom-end" class="ed-settings-popover">
+  <NPopover
+    v-model:show="show"
+    trigger="click"
+    placement="bottom-end"
+    :duration="0"
+    :animated="false"
+    class="ed-settings-popover"
+  >
     <template #trigger>
-      <NButton size="tiny" secondary :aria-label="t('files.editor.settings.label')">
+      <NButton
+        ref="triggerRef"
+        size="tiny"
+        secondary
+        :aria-label="t('files.editor.settings.label')"
+        @keydown.esc.stop.prevent="close"
+      >
         <template #icon>
           <SlidersHorizontal :size="14" :stroke-width="1.8" aria-hidden="true" />
         </template>
@@ -56,7 +104,13 @@ function commit(patch: Partial<EditorSettings>): void {
       </NButton>
     </template>
 
-    <div class="ed-settings" role="group" :aria-label="t('files.editor.settings.title')">
+    <div
+      ref="contentRef"
+      class="ed-settings"
+      role="group"
+      :aria-label="t('files.editor.settings.title')"
+      @keydown.esc.stop.prevent="close"
+    >
       <p class="ed-settings-title">{{ t("files.editor.settings.title") }}</p>
 
       <label class="ed-settings-row">
@@ -114,59 +168,67 @@ function commit(patch: Partial<EditorSettings>): void {
         />
       </label>
 
-      <label class="ed-settings-row">
+      <!-- Switches are not wrapped in <label>: a label click would toggle the
+           switch a second time in some browsers. -->
+      <div class="ed-settings-row">
         <span>{{ t("files.editor.settings.lineNumbers") }}</span>
         <NSwitch
           size="small"
           :value="settings.lineNumbers"
+          :aria-label="t('files.editor.settings.lineNumbers')"
           @update:value="(value: boolean) => commit({ lineNumbers: value })"
         />
-      </label>
+      </div>
 
-      <label class="ed-settings-row">
+      <div class="ed-settings-row">
         <span>{{ t("files.editor.settings.showInvisibles") }}</span>
         <NSwitch
           size="small"
           :value="settings.showInvisibles"
+          :aria-label="t('files.editor.settings.showInvisibles')"
           @update:value="(value: boolean) => commit({ showInvisibles: value })"
         />
-      </label>
+      </div>
 
-      <label class="ed-settings-row">
+      <div class="ed-settings-row">
         <span>{{ t("files.editor.settings.indentGuides") }}</span>
         <NSwitch
           size="small"
           :value="settings.indentGuides"
+          :aria-label="t('files.editor.settings.indentGuides')"
           @update:value="(value: boolean) => commit({ indentGuides: value })"
         />
-      </label>
+      </div>
 
-      <label class="ed-settings-row">
+      <div class="ed-settings-row">
         <span>{{ t("files.editor.settings.foldGutter") }}</span>
         <NSwitch
           size="small"
           :value="settings.foldGutter"
+          :aria-label="t('files.editor.settings.foldGutter')"
           @update:value="(value: boolean) => commit({ foldGutter: value })"
         />
-      </label>
+      </div>
 
-      <label class="ed-settings-row">
+      <div class="ed-settings-row">
         <span>{{ t("files.editor.settings.highlightActiveLine") }}</span>
         <NSwitch
           size="small"
           :value="settings.highlightActiveLine"
+          :aria-label="t('files.editor.settings.highlightActiveLine')"
           @update:value="(value: boolean) => commit({ highlightActiveLine: value })"
         />
-      </label>
+      </div>
 
-      <label class="ed-settings-row">
+      <div class="ed-settings-row">
         <span>{{ t("files.editor.settings.wrap") }}</span>
         <NSwitch
           size="small"
           :value="settings.wrap"
+          :aria-label="t('files.editor.settings.wrap')"
           @update:value="(value: boolean) => commit({ wrap: value })"
         />
-      </label>
+      </div>
     </div>
   </NPopover>
 </template>

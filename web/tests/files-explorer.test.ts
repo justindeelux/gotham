@@ -73,6 +73,7 @@ function dir(name: string): FilesEntry {
 function makeTab(path: string, dirty = false): EditorTab {
   return {
     id: `tab-${path}`,
+    kind: "file",
     root: "volumes",
     path,
     name: path.split("/").pop() ?? path,
@@ -84,6 +85,7 @@ function makeTab(path: string, dirty = false): EditorTab {
     size: 5,
     mode: 0o100644,
     language: "text",
+    languageManual: false,
     status: "ready",
     error: "",
     saving: false,

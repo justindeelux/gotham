@@ -58,6 +58,7 @@ const wrappers: Array<ReturnType<typeof mount>> = [];
 function makeTab(id: string, dirty: boolean): EditorTab {
   return {
     id,
+    kind: "file",
     root: "volumes",
     path: `${id}.yaml`,
     name: `${id}.yaml`,
@@ -69,6 +70,7 @@ function makeTab(id: string, dirty: boolean): EditorTab {
     size: 6,
     mode: 0o100644,
     language: "yaml",
+    languageManual: false,
     status: "ready",
     error: "",
     saving: false,

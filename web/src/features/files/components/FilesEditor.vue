@@ -2,6 +2,7 @@
 import {
   CaseSensitive,
   Code,
+  History,
   Minus,
   PanelLeft,
   Save,
@@ -26,6 +27,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate } from "vue-router";
 import EditorCloseTabsDialog from "@/features/files/components/EditorCloseTabsDialog.vue";
 import EditorConflictDialog from "@/features/files/components/EditorConflictDialog.vue";
 import EditorExplorer from "@/features/files/components/EditorExplorer.vue";
+import EditorHistoryDialog from "@/features/files/components/EditorHistoryDialog.vue";
 import EditorLanguagePicker from "@/features/files/components/EditorLanguagePicker.vue";
 import EditorSaveAsDialog from "@/features/files/components/EditorSaveAsDialog.vue";
 // Side-effect import: merges the lazy editor catalogs under `files.editor`.
@@ -33,18 +35,27 @@ import "@/features/files/locales/editorMessages";
 import { useFileDownload } from "@/features/files/composables/useFileDownload";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
+import { createMergeSession } from "@/features/files/composables/useMergeView";
+import type { MergeSession } from "@/features/files/composables/useMergeView";
+import {
+  describeFilesError,
+  listFileVersions,
+  restoreFileVersion,
+} from "@/features/files/api/files";
+import type { FilesVersion } from "@/features/files/schemas/files";
 import { useEditorStore } from "@/features/files/stores/editor";
 import type { EditorTab } from "@/features/files/stores/editor";
 import { useFilesStore } from "@/features/files/stores/files";
 import {
   clampEditorOffset,
+  languageLabel,
   scrollTabIntoView,
   tabsToClose,
 } from "@/features/files/utils/editor";
 import type { EditorLanguageId, TabCloseScope } from "@/features/files/utils/editor";
 import { useTeamsStore } from "@/features/teams";
 import { useCopyText } from "@/shared/composables/useCopyText";
-import { formatBytes } from "@/shared/utils/format";
+import { formatBytes, formatDateTime } from "@/shared/utils/format";
 
 interface Props {
   serverId: string;
@@ -69,6 +80,15 @@ const sessionLanguages = new Map<string, EditorLanguageId>();
 const sessionHosts = new Map<string, HTMLElement>();
 /** creating holds the in-flight session build per tab (rapid re-entry guard). */
 const creating = new Map<string, Promise<void>>();
+/** mergeSessions holds one live MergeView per open history diff tab. */
+const mergeSessions = new Map<string, MergeSession>();
+/** mergeHosts maps a diff tab id onto its diff host element. */
+const mergeHosts = new Map<string, HTMLElement>();
+/** mergeCreating holds the in-flight diff build per tab. */
+const mergeCreating = new Map<string, Promise<void>>();
+/** mergeSources remembers the two docs a live merge view was built from, so a
+ *  refreshed diff tab rebuilds instead of showing stale sides. */
+const mergeSources = new Map<string, { base: string; current: string }>();
 const cursor = ref<{ line: number; column: number }>({ line: 1, column: 1 });
 // minimized collapses the window into the bottom dock. The window stays
 // mounted (v-show) so every live session and buffer survives the toggle.
@@ -103,6 +123,13 @@ let dragState: {
 } | null = null;
 // closeAllOpen arms the "close all with unsaved files" confirmation.
 const closeAllOpen = ref(false);
+// historyOpen shows the version-history dialog for the active file tab.
+const historyOpen = ref(false);
+// historyDialog is the dialog instance, so a restore can refresh its list.
+const historyDialog = ref<InstanceType<typeof EditorHistoryDialog> | null>(null);
+// historyCounts caches the revision count per tab for the status bar. A file
+// whose history cannot be read simply shows no count.
+const historyCounts = ref<Record<string, number>>({});
 
 // Tab management (JUS-220): one controlled dropdown serves the tab context
 // menu, and one close prompt guards every path that would drop a dirty buffer.
@@ -160,11 +187,26 @@ onBeforeUnmount(() => {
 });
 
 const readyTabs = computed(() =>
-  editor.tabs.filter((tab) => tab.status === "ready"),
+  editor.tabs.filter((tab) => tab.kind === "file" && tab.status === "ready"),
+);
+
+/** readyDiffTabs are the read-only history diffs with a loaded MergeView. */
+const readyDiffTabs = computed(() =>
+  editor.tabs.filter((tab) => tab.kind === "diff" && tab.status === "ready"),
 );
 
 /** activeTab is the store's focused tab (convenience for the template). */
 const activeTab = computed(() => editor.activeTab);
+
+/** historyTarget is the editable tab the history dialog acts on, if any. */
+const historyTarget = computed<EditorTab | null>(() =>
+  activeTab.value?.kind === "file" ? activeTab.value : null,
+);
+
+/** historyCount is the active file's cached revision count. */
+const historyCount = computed<number>(() =>
+  activeTab.value ? (historyCounts.value[activeTab.value.id] ?? 0) : 0,
+);
 
 /** pendingCloseDirty is the dirty subset of the tabs awaiting a close prompt. */
 const pendingCloseDirty = computed<EditorTab[]>(() => {
@@ -289,6 +331,8 @@ watch(
   async () => {
     await nextTick();
     await ensureSession();
+    await ensureMerge();
+    void refreshHistoryCount();
   },
   { flush: "post" },
 );
@@ -306,6 +350,39 @@ watch(
         sessions.delete(id);
         sessionLanguages.delete(id);
         sessionHosts.delete(id);
+      }
+    }
+    for (const [id, session] of mergeSessions) {
+      if (!live.has(id)) {
+        session.destroy();
+        mergeSessions.delete(id);
+        mergeHosts.delete(id);
+        mergeSources.delete(id);
+      }
+    }
+    for (const tab of editor.tabs) {
+      if (tab.kind !== "diff") {
+        continue;
+      }
+      const session = mergeSessions.get(tab.id);
+      if (!session) {
+        continue;
+      }
+      const source = mergeSources.get(tab.id);
+      const stale =
+        tab.status !== "ready" ||
+        !tab.diff ||
+        !source ||
+        source.base !== tab.diff.base ||
+        source.current !== tab.diff.current;
+      if (!stale) {
+        continue;
+      }
+      session.destroy();
+      mergeSessions.delete(tab.id);
+      mergeSources.delete(tab.id);
+      if (editor.activeId === tab.id && tab.status === "ready") {
+        void ensureMerge();
       }
     }
     for (const tab of editor.tabs) {
@@ -387,6 +464,136 @@ function setHost(id: string, el: unknown): void {
   }
 }
 
+/** setMergeHost stores a diff tab's host element from its template ref. */
+function setMergeHost(id: string, el: unknown): void {
+  if (el instanceof HTMLElement) {
+    mergeHosts.set(id, el);
+  } else {
+    mergeHosts.delete(id);
+  }
+}
+
+/** ensureMerge creates the active diff tab's read-only merge view once. */
+async function ensureMerge(): Promise<void> {
+  const tab = editor.activeTab;
+  if (!tab || tab.kind !== "diff" || tab.status !== "ready" || !tab.diff) {
+    return;
+  }
+  const host = mergeHosts.get(tab.id);
+  if (!host || mergeSessions.has(tab.id)) {
+    return;
+  }
+  const pending = mergeCreating.get(tab.id);
+  if (pending) {
+    await pending;
+    return;
+  }
+  const tabId = tab.id;
+  const base = tab.diff.base;
+  const current = tab.diff.current;
+  const build = createMergeSession({
+    parent: host,
+    base,
+    current,
+    language: tab.language,
+  }).then((session) => {
+    if (editor.tabs.some((item) => item.id === tabId)) {
+      mergeSessions.set(tabId, session);
+      mergeSources.set(tabId, { base, current });
+    } else {
+      session.destroy();
+    }
+  });
+  mergeCreating.set(tabId, build);
+  try {
+    await build;
+  } finally {
+    mergeCreating.delete(tabId);
+  }
+}
+
+/** refreshHistoryCount caches one file tab's revision count for the footer. */
+async function refreshHistoryCount(tab: EditorTab | null = activeTab.value): Promise<void> {
+  if (!tab || tab.kind !== "file" || tab.status !== "ready") {
+    return;
+  }
+  try {
+    const versions = await listFileVersions(
+      props.serverId,
+      teams.activeTeamId,
+      tab.root,
+      tab.path,
+    );
+    historyCounts.value = { ...historyCounts.value, [tab.id]: versions.length };
+  } catch {
+    // History is optional: a 503 or a deleted path simply omits the count.
+  }
+}
+
+/** openHistory shows the version-history dialog for the active file. */
+function openHistory(): void {
+  if (!historyTarget.value) {
+    return;
+  }
+  historyOpen.value = true;
+}
+
+/** openDiff opens (or reuses) a read-only diff tab for one revision. */
+async function openDiff(version: FilesVersion): Promise<void> {
+  const tab = historyTarget.value;
+  if (!tab) {
+    return;
+  }
+  await editor.openDiff(
+    props.serverId,
+    teams.activeTeamId,
+    tab.root,
+    tab.path,
+    version.id,
+    `${tab.name} · ${formatDateTime(version.created_at)}`,
+  );
+  const opened = editor.activeTab;
+  if (opened?.status === "error") {
+    message.error(opened.error || String(t("files.editor.historyLoadFailed")));
+    return;
+  }
+  historyOpen.value = false;
+}
+
+/**
+ * restoreVersion writes one revision back over the file, reloads the open tab
+ * and refreshes the dialog. A dirty tab was already confirmed by the dialog.
+ */
+async function restoreVersion(version: FilesVersion): Promise<void> {
+  const tab = historyTarget.value;
+  if (!tab) {
+    return;
+  }
+  try {
+    await restoreFileVersion(
+      props.serverId,
+      teams.activeTeamId,
+      tab.root,
+      tab.path,
+      version.id,
+    );
+    // Drop any diff tab of this file: it compared a revision against the
+    // content the restore just replaced, so it is stale now.
+    for (const item of editor.tabs) {
+      if (item.kind === "diff" && item.root === tab.root && item.path === tab.path) {
+        editor.close(item.id);
+      }
+    }
+    await editor.reload(tab.id, teams.activeTeamId);
+    message.success(String(t("files.editor.historyRestored", { name: tab.name })));
+    void files.refresh();
+    await refreshHistoryCount(editor.tabs.find((item) => item.id === tab.id) ?? null);
+    await historyDialog.value?.reload();
+  } catch (err) {
+    message.error(describeFilesError(err));
+  }
+}
+
 /** isTabFocused reports whether DOM focus is on a tablist button. */
 function isTabFocused(): boolean {
   const active = document.activeElement;
@@ -396,7 +603,7 @@ function isTabFocused(): boolean {
 /** ensureSession creates the active tab's editor instance on first view. */
 async function ensureSession(): Promise<void> {
   const tab = editor.activeTab;
-  if (!tab || tab.status !== "ready") {
+  if (!tab || tab.kind !== "file" || tab.status !== "ready") {
     return;
   }
   const host = hosts.get(tab.id);
@@ -480,6 +687,7 @@ async function saveTab(id: string): Promise<void> {
   const outcome = await editor.save(id, teams.activeTeamId);
   if (outcome === "saved") {
     message.success(String(t("files.editor.saved", { name: tab.name })));
+    void refreshHistoryCount(tab);
   } else if (outcome === "error") {
     message.error(tab.error || String(t("files.editor.saveFailed", { name: tab.name })));
   }
@@ -517,6 +725,7 @@ async function saveAllTabs(): Promise<void> {
   for (const report of reports) {
     if (report.outcome === "saved") {
       saved += 1;
+      void refreshHistoryCount(report.tab);
       continue;
     }
     if (report.outcome === "conflict") {
@@ -692,6 +901,7 @@ function restoreWindow(): void {
     }
     // The window was display:none while collapsed; re-measure the live host.
     sessions.get(editor.activeId)?.requestMeasure();
+    mergeSessions.get(editor.activeId)?.requestMeasure();
     revealActiveTab();
   });
 }
@@ -985,6 +1195,7 @@ onMounted(() => {
   window.addEventListener("beforeunload", onBeforeUnload);
   window.addEventListener("resize", onWindowResize);
   window.addEventListener("keydown", onEditorKeydown);
+  void refreshHistoryCount();
 });
 
 onBeforeUnmount(() => {
@@ -997,6 +1208,12 @@ onBeforeUnmount(() => {
   sessions.clear();
   sessionLanguages.clear();
   sessionHosts.clear();
+  for (const session of mergeSessions.values()) {
+    session.destroy();
+  }
+  mergeSessions.clear();
+  mergeHosts.clear();
+  mergeSources.clear();
   // An implicit unmount (a team switch, or losing the read role) must never
   // drop a dirty buffer: reset only when nothing is dirty, or the user
   // resolved the discard prompt. The store outlives the component, so a
@@ -1123,7 +1340,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-if="activeTab" class="ed-body">
-          <div v-if="activeTab.status === 'ready'" class="ed-toolbar">
+          <div v-if="activeTab.status === 'ready' && activeTab.kind === 'file'" class="ed-toolbar">
             <NButton
               size="tiny"
               secondary
@@ -1147,6 +1364,13 @@ onBeforeUnmount(() => {
                 <CaseSensitive :size="14" :stroke-width="1.8" aria-hidden="true" />
               </template>
               {{ t("files.editor.goToLine") }}
+            </NButton>
+            <NButton v-if="files.canWrite" size="tiny" secondary @click="openHistory">
+              <template #icon>
+                <History :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+              {{ t("files.editor.history") }}
+              <span v-if="historyCount > 0" class="ed-history-count">{{ historyCount }}</span>
             </NButton>
             <span class="grow" />
             <NButton
@@ -1177,6 +1401,10 @@ onBeforeUnmount(() => {
             </NButton>
           </div>
 
+          <div v-if="activeTab.kind === 'diff'" class="ed-toolbar">
+            <span class="small muted">{{ t("files.editor.historyDiffReadOnly") }}</span>
+          </div>
+
           <!-- One host per ready tab, kept mounted across a status switch (a
                loading/large/binary/error tab must not detach a live session). -->
           <div
@@ -1186,6 +1414,18 @@ onBeforeUnmount(() => {
             :id="'ed-panel-' + tab.id"
             :ref="(el) => setHost(tab.id, el)"
             class="ed-host"
+            role="tabpanel"
+            :aria-labelledby="'ed-tab-' + tab.id"
+          />
+
+          <!-- History diffs are read-only MergeViews, one host per ready diff tab. -->
+          <div
+            v-for="tab in readyDiffTabs"
+            :key="tab.id"
+            v-show="tab.id === editor.activeId"
+            :id="'ed-panel-' + tab.id"
+            :ref="(el) => setMergeHost(tab.id, el)"
+            class="ed-host ed-diff-host"
             role="tabpanel"
             :aria-labelledby="'ed-tab-' + tab.id"
           />
@@ -1275,16 +1515,42 @@ onBeforeUnmount(() => {
             <span class="grow">
               {{ editor.isDirty(activeTab) ? t("files.editor.unsaved") : files.canWrite ? "" : t("files.editor.readOnly") }}
             </span>
-            <span v-if="activeTab.status === 'ready'" class="mono">
+            <span v-if="activeTab.kind === 'diff'" class="mono">{{ t("files.editor.readOnly") }}</span>
+            <span
+              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
+              class="mono"
+            >
+              {{ t("files.editor.historyCount", { count: historyCount }) }}
+            </span>
+            <span
+              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
+              class="mono"
+            >
               {{ t("files.editor.lineColumn", { line: cursor.line, column: cursor.column }) }}
             </span>
-            <span v-if="activeTab.status === 'ready'" class="mono">{{ t("files.editor.encoding") }}</span>
-            <span v-if="activeTab.status === 'ready'" class="mono">{{ activeTab.eol === "\r\n" ? "CRLF" : "LF" }}</span>
+            <span
+              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
+              class="mono"
+            >
+              {{ t("files.editor.encoding") }}
+            </span>
+            <span
+              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
+              class="mono"
+            >
+              {{ activeTab.eol === "\r\n" ? "CRLF" : "LF" }}
+            </span>
             <EditorLanguagePicker
-              v-if="activeTab.status === 'ready'"
+              v-if="activeTab.kind === 'file' && activeTab.status === 'ready'"
               :language="activeTab.language"
               @select="pickLanguage"
             />
+            <span
+              v-else-if="activeTab.kind === 'diff' && activeTab.status === 'ready'"
+              class="mono"
+            >
+              {{ languageLabel(activeTab.language) }}
+            </span>
             <span class="mono">{{ formatBytes(activeTab.size) }}</span>
           </div>
         </div>
@@ -1381,6 +1647,18 @@ onBeforeUnmount(() => {
   />
   <EditorConflictDialog />
   <EditorSaveAsDialog />
+  <EditorHistoryDialog
+    ref="historyDialog"
+    v-model:show="historyOpen"
+    :server-id="props.serverId"
+    :team-id="teams.activeTeamId"
+    :root="historyTarget?.root ?? ''"
+    :path="historyTarget?.path ?? ''"
+    :file-name="historyTarget?.name ?? ''"
+    :dirty="historyTarget ? editor.isDirty(historyTarget) : false"
+    @diff="(version) => void openDiff(version)"
+    @restore="(version) => void restoreVersion(version)"
+  />
 </template>
 
 <style scoped>
@@ -1610,6 +1888,32 @@ onBeforeUnmount(() => {
 
 .ed-host :deep(.cm-editor.cm-focused) {
   outline: none;
+}
+
+/* The merge view stacks its two panes; both must fill the tab host. */
+.ed-diff-host :deep(.cm-mergeView),
+.ed-diff-host :deep(.cm-mergeViewEditors) {
+  height: 100%;
+}
+
+.ed-diff-host :deep(.cm-mergeViewEditors) {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
+
+.ed-history-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--accent-softer);
+  color: var(--fg);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
 }
 
 .ed-state {

@@ -194,3 +194,29 @@ export const filesOctalModeSchema = z
   .trim()
   .regex(/^[0-7]{3}$/, "files.permissions.invalid");
 export type FilesOctalMode = z.infer<typeof filesOctalModeSchema>;
+
+/**
+ * filesVersionSchema validates one history revision (JUS-224): the opaque id
+ * the read/restore/delete routes take, its creation time and the size/etag of
+ * the body it holds. Bodies are read one at a time, never listed.
+ */
+export const filesVersionSchema = z.object({
+  id: z.string(),
+  created_at: z.string(),
+  size: z.number(),
+  etag: z.string(),
+});
+export type FilesVersion = z.infer<typeof filesVersionSchema>;
+
+/** filesVersionListSchema validates GET /history (`versions`, newest first). */
+export const filesVersionListSchema = z.object({
+  versions: z.array(filesVersionSchema),
+});
+export type FilesVersionList = z.infer<typeof filesVersionListSchema>;
+
+/** filesVersionContentSchema validates GET /history/{version}. */
+export const filesVersionContentSchema = z.object({
+  version: filesVersionSchema,
+  content: z.string(),
+});
+export type FilesVersionContent = z.infer<typeof filesVersionContentSchema>;

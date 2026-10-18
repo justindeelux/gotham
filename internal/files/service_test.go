@@ -97,24 +97,25 @@ type fakeFileClient struct {
 	sizeErr  error
 	seenSize *agentv1.DirectorySizeRequest
 
-	writeResp  *agentv1.WriteResponse
-	writeErr   error
-	lastWrite  *fakeWriteStream
-	writeCtx   context.Context
-	mkdirResp  *agentv1.MkdirResponse
-	mkdirErr   error
-	renameResp *agentv1.RenameResponse
-	renameErr  error
-	chmodErr   error
-	copyMsgs   []*agentv1.Progress
-	copyErr    error
-	deleteMsgs []*agentv1.Progress
-	deleteErr  error
-	seenRename *agentv1.RenameRequest
-	seenCopy   *agentv1.CopyRequest
-	seenDelete *agentv1.DeleteRequest
-	seenMkdir  *agentv1.MkdirRequest
-	seenChmod  *agentv1.ChmodRequest
+	writeResp    *agentv1.WriteResponse
+	writeErr     error
+	onWriteClose func()
+	lastWrite    *fakeWriteStream
+	writeCtx     context.Context
+	mkdirResp    *agentv1.MkdirResponse
+	mkdirErr     error
+	renameResp   *agentv1.RenameResponse
+	renameErr    error
+	chmodErr     error
+	copyMsgs     []*agentv1.Progress
+	copyErr      error
+	deleteMsgs   []*agentv1.Progress
+	deleteErr    error
+	seenRename   *agentv1.RenameRequest
+	seenCopy     *agentv1.CopyRequest
+	seenDelete   *agentv1.DeleteRequest
+	seenMkdir    *agentv1.MkdirRequest
+	seenChmod    *agentv1.ChmodRequest
 
 	compressMsgs []*agentv1.Progress
 	compressErr  error
@@ -214,7 +215,7 @@ func (f *fakeFileClient) Write(ctx context.Context, _ ...grpc.CallOption) (grpc.
 	if f.writeErr != nil {
 		return nil, f.writeErr
 	}
-	stream := &fakeWriteStream{resp: f.writeResp}
+	stream := &fakeWriteStream{resp: f.writeResp, onClose: f.onWriteClose}
 	f.lastWrite = stream
 	return stream, nil
 }
@@ -374,11 +375,12 @@ func (f *fakeFileClient) lastWriteClosed() bool {
 // fakeWriteStream is a scriptable Write client stream.
 type fakeWriteStream struct {
 	grpc.ClientStream
-	mu     sync.Mutex
-	header *agentv1.WriteHeader
-	body   []byte
-	resp   *agentv1.WriteResponse
-	closed bool
+	mu      sync.Mutex
+	header  *agentv1.WriteHeader
+	body    []byte
+	resp    *agentv1.WriteResponse
+	closed  bool
+	onClose func()
 }
 
 func (s *fakeWriteStream) Send(msg *agentv1.WriteRequest) error {
@@ -395,6 +397,9 @@ func (s *fakeWriteStream) Send(msg *agentv1.WriteRequest) error {
 }
 
 func (s *fakeWriteStream) CloseAndRecv() (*agentv1.WriteResponse, error) {
+	if s.onClose != nil {
+		s.onClose()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true

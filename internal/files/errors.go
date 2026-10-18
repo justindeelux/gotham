@@ -60,4 +60,8 @@ var (
 	// ErrDisabled reports FEATURE_FILES=false (503): the routes are mounted
 	// but the feature is off.
 	ErrDisabled = errors.New("files: feature disabled")
+	// ErrHistoryUnavailable reports a control plane with no history store
+	// wired (503). Production always has one; only a test or a misconfigured
+	// instance without a database reaches it.
+	ErrHistoryUnavailable = errors.New("files: file history is unavailable")
 )

@@ -103,6 +103,47 @@ func (s *Service) writeFile(ctx context.Context, serverID uuid.UUID, op string, 
 		body = strings.NewReader("")
 	}
 
+	// Guarantee: a recorded revision is exactly the body the commit replaced.
+	// The pre-save read must carry the same etag as the If-Match the agent
+	// validates under its per-path lock; only then is the body we read provably
+	// the one being replaced. A mismatch means the file moved between the
+	// caller's read and ours (the agent's etag check will either refuse the
+	// commit or the file changed back), so nothing is recorded rather than the
+	// wrong prior body. A force-save or create has no known prior at all, and a
+	// too-large/binary body is not readable as text: both skip history without
+	// failing the save.
+	var prior *Content
+	if op == "write" && req.ExpectEtag != "" && s.historyStore() != nil {
+		current, readErr := s.readContent(ctx, serverID, req.Root, req.Path)
+		switch {
+		case readErr == nil && current.Etag == req.ExpectEtag:
+			prior = &current
+		case readErr == nil:
+			s.logger.Debug("files: skipping version snapshot; the pre-save etag does not match the save",
+				"server_id", serverID.String(), "root", req.Root, "relpath", req.Path)
+		case errors.Is(readErr, ErrTooLarge), errors.Is(readErr, ErrNotEditable), errors.Is(readErr, ErrNotFound):
+			// Nothing readable to keep (a large/binary body or a vanished
+			// file). The save itself still proceeds.
+		default:
+			s.logger.Warn("files: could not read the pre-save body for history",
+				"server_id", serverID.String(), "root", req.Root, "relpath", req.Path, "error", readErr)
+		}
+	}
+
+	result, err = s.streamWrite(ctx, serverID, req, body)
+	if err != nil {
+		return WriteResult{}, err
+	}
+	if prior != nil {
+		s.recordVersion(ctx, serverID, req.Root, req.Path, *prior)
+	}
+	return result, nil
+}
+
+// streamWrite streams one validated request body to the agent and commits it.
+// It owns no audit or history policy: writeFile and RestoreVersion decide what
+// a commit means.
+func (s *Service) streamWrite(ctx context.Context, serverID uuid.UUID, req WriteRequest, body io.Reader) (WriteResult, error) {
 	ctx, client, cancel, err := s.rpcTransfer(ctx, serverID)
 	if err != nil {
 		return WriteResult{}, err

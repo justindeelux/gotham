@@ -7,6 +7,7 @@ import {
   describeFilesError,
   filesErrorKey,
   getContent,
+  getFileVersion,
   putContent,
 } from "@/features/files/api/files";
 import type { EditorEol, EditorLanguageId } from "@/features/files/utils/editor";
@@ -39,6 +40,8 @@ export type EditorTabStatus =
  */
 export interface EditorTab {
   id: string;
+  /** kind is "file" for an editable document, "diff" for a read-only history view. */
+  kind: EditorTabKind;
   root: string;
   path: string;
   name: string;
@@ -56,6 +59,18 @@ export interface EditorTab {
   /** error is the localized message for a "error" status tab. */
   error: string;
   saving: boolean;
+  /** diff carries the two read-only sides of a history diff tab. */
+  diff?: EditorDiff;
+}
+
+/** EditorTabKind distinguishes an editable file from a read-only history diff. */
+export type EditorTabKind = "file" | "diff";
+
+/** EditorDiff is one stored revision (base) against the live body (current). */
+export interface EditorDiff {
+  versionId: string;
+  base: string;
+  current: string;
 }
 
 /** SaveOutcome is the result of one save attempt. */
@@ -124,9 +139,11 @@ export const useEditorStore = defineStore("filesEditor", () => {
     () => tabs.value.find((tab) => tab.id === saveAsId.value) ?? null,
   );
 
-  /** isDirty reports whether one tab has unsaved changes. */
+  /** isDirty reports whether one editable tab has unsaved changes. */
   function isDirty(tab: EditorTab): boolean {
-    return tab.status === "ready" && tab.doc !== tab.original;
+    return (
+      tab.kind === "file" && tab.status === "ready" && tab.doc !== tab.original
+    );
   }
 
   /** addConflict queues a conflicting tab behind any prompt already waiting. */
@@ -143,7 +160,11 @@ export const useEditorStore = defineStore("filesEditor", () => {
 
   /** tabFor finds an open tab for one root-relative path. */
   function tabFor(root: string, path: string): EditorTab | null {
-    return tabs.value.find((tab) => tab.root === root && tab.path === path) ?? null;
+    return (
+      tabs.value.find(
+        (tab) => tab.kind === "file" && tab.root === root && tab.path === path,
+      ) ?? null
+    );
   }
 
   /** activate focuses one tab. */
@@ -174,6 +195,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     }
     const tab: EditorTab = {
       id: nextTabId(),
+      kind: "file",
       root,
       path,
       name: tabTitle(path),
@@ -198,6 +220,97 @@ export const useEditorStore = defineStore("filesEditor", () => {
     if (live) {
       await load(live, teamId);
     }
+  }
+
+  /**
+   * loadDiff fills a diff tab from the stored revision and the live server body.
+   * Re-reading on reuse keeps the right side current when the file changed
+   * since the tab was first opened. `title` is the caller-localized tab label.
+   */
+  async function loadDiff(
+    tab: EditorTab,
+    teamId: string,
+    versionId: string,
+    title: string,
+  ): Promise<void> {
+    tab.status = "loading";
+    tab.error = "";
+    try {
+      // The base is the stored revision; the right side is the live server body
+      // (a dirty local buffer is not the file the diff compares against).
+      const [version, current] = await Promise.all([
+        getFileVersion(serverId.value, teamId, tab.root, tab.path, versionId),
+        getContent(serverId.value, teamId, tab.root, tab.path),
+      ]);
+      tab.diff = { versionId, base: version.content, current: current.content };
+      tab.etag = current.etag;
+      tab.size = version.version.size;
+      tab.name = title;
+      tab.status = "ready";
+    } catch (err) {
+      tab.diff = undefined;
+      tab.status = "error";
+      tab.error = describeFilesError(err);
+    }
+  }
+
+  /**
+   * openDiff focuses an existing read-only diff tab for one revision or opens a
+   * new one. A reused tab is re-read, so its right side reflects the current
+   * file. A history tab is never editable or savable. A body that cannot be
+   * read (the file grew past the editor limit, or was removed) yields an error
+   * tab instead of a blank diff.
+   */
+  async function openDiff(
+    nextServerId: string,
+    teamId: string,
+    root: string,
+    path: string,
+    versionId: string,
+    title: string,
+  ): Promise<void> {
+    if (serverId.value !== nextServerId) {
+      reset();
+      serverId.value = nextServerId;
+    }
+    const existing = tabs.value.find(
+      (tab) =>
+        tab.kind === "diff" &&
+        tab.root === root &&
+        tab.path === path &&
+        tab.diff?.versionId === versionId,
+    );
+    if (existing) {
+      activeId.value = existing.id;
+      await loadDiff(existing, teamId, versionId, title);
+      return;
+    }
+    const tab: EditorTab = {
+      id: nextTabId(),
+      kind: "diff",
+      root,
+      path,
+      name: title,
+      doc: "",
+      original: "",
+      etag: "",
+      eol: "\n",
+      bom: false,
+      size: 0,
+      mode: 0,
+      language: detectLanguage(path),
+      languageManual: false,
+      status: "loading",
+      error: "",
+      saving: false,
+    };
+    tabs.value = [...tabs.value, tab];
+    activeId.value = tab.id;
+    const live = tabs.value.find((item) => item.id === tab.id);
+    if (!live) {
+      return;
+    }
+    await loadDiff(live, teamId, versionId, title);
   }
 
   /** load reads one tab's content and applies the decoded shape. */
@@ -266,7 +379,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     overwrite = false,
   ): Promise<SaveOutcome> {
     const tab = tabs.value.find((item) => item.id === id);
-    if (!tab || tab.status !== "ready") {
+    if (!tab || tab.kind !== "file" || tab.status !== "ready") {
       return "blocked";
     }
     const sentDoc = tab.doc;
@@ -317,7 +430,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
   /** reload discards local edits and re-reads the file (conflict "reload"). */
   async function reload(id: string, teamId: string): Promise<void> {
     const tab = tabs.value.find((item) => item.id === id);
-    if (!tab) {
+    if (!tab || tab.kind !== "file") {
       return;
     }
     clearConflict(id);
@@ -360,7 +473,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     name: string,
   ): Promise<SaveOutcome> {
     const tab = tabs.value.find((item) => item.id === id);
-    if (!tab || tab.status !== "ready") {
+    if (!tab || tab.kind !== "file" || tab.status !== "ready") {
       return "blocked";
     }
     const target = joinPath(directoryOf(tab.path), name);
@@ -559,6 +672,7 @@ export const useEditorStore = defineStore("filesEditor", () => {
     tabFor,
     activate,
     openFile,
+    openDiff,
     setDoc,
     setLanguage,
     save,

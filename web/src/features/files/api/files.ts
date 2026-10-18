@@ -11,6 +11,8 @@ import type {
   FilesRoot,
   FilesSearchListing,
   FilesUploadResult,
+  FilesVersion,
+  FilesVersionContent,
   TrashListing,
 } from "@/features/files/schemas/files";
 import {
@@ -23,6 +25,8 @@ import {
   filesSearchListingSchema,
   filesStatSchema,
   filesUploadEnvelopeSchema,
+  filesVersionContentSchema,
+  filesVersionListSchema,
   filesWriteEnvelopeSchema,
   trashListingSchema,
 } from "@/features/files/schemas/files";
@@ -36,6 +40,10 @@ import {
  *   GET  /servers/{id}/files/stat            any member
  *   GET  /servers/{id}/files/search          any member (name-only, bounded)
  *   GET  /servers/{id}/files/content         owner/admin
+ *   GET  /servers/{id}/files/history         owner/admin, newest first
+ *   GET  /servers/{id}/files/history/{id}    owner/admin, read-only body
+ *   POST /servers/{id}/files/history/{id}/restore owner/admin, conflict-checked
+ *   DELETE /servers/{id}/files/history/{id}  owner/admin, one revision
  *   POST /servers/{id}/files/download-ticket owner/admin -> single-use ticket
  *   GET  /servers/{id}/files/download?ticket ticket (native browser download)
  *   POST /servers/{id}/files/mkdir|/create   owner/admin, exclusive create
@@ -257,6 +265,86 @@ export async function putContent(
     context: "FilesWrite",
   });
   return data.entry;
+}
+
+/**
+ * listFileVersions returns one file's saved revisions, newest first. It reads
+ * the control plane's store, so it still answers after the file was deleted or
+ * renamed (the history is addressed by its saved path).
+ */
+export async function listFileVersions(
+  serverId: string,
+  teamId: string,
+  root: string,
+  path: string,
+): Promise<FilesVersion[]> {
+  const response = await http.get(`/servers/${serverId}/files/history`, {
+    params: { root, path },
+    headers: teamHeaders(teamId),
+  });
+  const data = parseWith(filesVersionListSchema, response.data, {
+    context: "FilesVersionList",
+  });
+  return data.versions;
+}
+
+/** getFileVersion reads one revision's body (read-only; never saves back). */
+export async function getFileVersion(
+  serverId: string,
+  teamId: string,
+  root: string,
+  path: string,
+  versionId: string,
+): Promise<FilesVersionContent> {
+  const response = await http.get(
+    `/servers/${serverId}/files/history/${encodeURIComponent(versionId)}`,
+    { params: { root, path }, headers: teamHeaders(teamId) },
+  );
+  return parseWith(filesVersionContentSchema, response.data, {
+    context: "FilesVersionContent",
+  });
+}
+
+/**
+ * restoreFileVersion writes one revision back over the file. The control plane
+ * snapshots the body it replaces first, so the restore is undoable; the write
+ * is conflict-checked against the file read immediately before it, so a
+ * concurrent change answers 409 instead of being clobbered.
+ */
+export async function restoreFileVersion(
+  serverId: string,
+  teamId: string,
+  root: string,
+  path: string,
+  versionId: string,
+): Promise<FilesEntry> {
+  const response = await http.post(
+    `/servers/${serverId}/files/history/${encodeURIComponent(versionId)}/restore`,
+    null,
+    {
+      params: { root, path },
+      headers: teamHeaders(teamId),
+      timeout: fileTransferTimeoutMs,
+    },
+  );
+  const data = parseWith(filesWriteEnvelopeSchema, response.data, {
+    context: "FilesVersionRestore",
+  });
+  return data.entry;
+}
+
+/** deleteFileVersion permanently removes one revision; the file is untouched. */
+export async function deleteFileVersion(
+  serverId: string,
+  teamId: string,
+  root: string,
+  path: string,
+  versionId: string,
+): Promise<void> {
+  await http.delete(
+    `/servers/${serverId}/files/history/${encodeURIComponent(versionId)}`,
+    { params: { root, path }, headers: teamHeaders(teamId) },
+  );
 }
 
 /**
@@ -801,4 +889,5 @@ const codeKeys: Record<string, string> = {
   archive_limit: "files.errors.archiveLimit",
   archive_entry: "files.errors.archiveEntry",
   invalid_archive: "files.errors.invalidArchive",
+  history_unavailable: "files.editor.historyUnavailable",
 };

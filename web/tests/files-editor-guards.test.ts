@@ -368,7 +368,7 @@ describe("FilesEditor guards", () => {
     wrapper.unmount();
   });
 
-  it("shows a truncated tail read-only with a banner and disabled saves", async () => {
+  it("shows a truncated tail read-only with a banner, badge and download", async () => {
     const { wrapper, editor } = mountEditor();
     const tab = {
       ...makeTab("t1", false),
@@ -386,14 +386,36 @@ describe("FilesEditor guards", () => {
     expect(createEditorSession).toHaveBeenCalledWith(
       expect.objectContaining({ readOnly: true }),
     );
-    expect(wrapper.find(".ed-truncated").text()).toContain("2 MiB");
-    expect(wrapper.find(".ed-readonly-badge").text()).toBe("Read-only");
+    const banner = wrapper.find(".ed-truncated");
+    expect(banner.text()).toContain("2 MiB");
+    expect(
+      banner.findAll("button").some((button) => button.text().includes("Download")),
+    ).toBe(true);
+    expect(wrapper.find(".ed-readonly").text()).toBe("Read-only");
 
-    // Save and Save all are visible but inert.
+    // History is a write path (restore overwrites the file): not offered here.
+    expect(wrapper.findAll("button").some((button) => button.text() === "History")).toBe(
+      false,
+    );
+
+    // Save is inert on the tail.
     const save = wrapper.findAll("button").find((button) => button.text() === "Save");
-    const saveAll = wrapper.findAll("button").find((button) => button.text() === "Save all");
     expect(save?.attributes("disabled")).toBeDefined();
+
+    // Save All reflects any other savable tab, not the active tail: inert with
+    // nothing dirty, live once a sibling has unsaved changes.
+    const saveAll = wrapper.findAll("button").find(
+      (button) => button.text() === "Save all",
+    );
     expect(saveAll?.attributes("disabled")).toBeDefined();
+
+    editor.tabs = [...editor.tabs, makeTab("t2", true)];
+    editor.activate(tab.id);
+    await flushPromises();
+    const liveSaveAll = wrapper.findAll("button").find(
+      (button) => button.text() === "Save all",
+    );
+    expect(liveSaveAll?.attributes("disabled")).toBeUndefined();
     wrapper.unmount();
   });
 

@@ -68,7 +68,7 @@ import type {
 } from "@/features/files/utils/editor";
 import { useTeamsStore } from "@/features/teams";
 import { useCopyText } from "@/shared/composables/useCopyText";
-import { formatDateTime } from "@/shared/utils/format";
+import { formatBytes, formatDateTime } from "@/shared/utils/format";
 
 interface Props {
   serverId: string;
@@ -2016,17 +2016,6 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-}
-
-.ed-readonly-badge {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 var(--space-1);
-  border-radius: var(--radius-pill);
-  background: var(--accent-softer);
-  color: var(--fg);
-  font-size: var(--text-xs);
 }
 
 .ed-host {

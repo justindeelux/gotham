@@ -22,6 +22,7 @@ import { brandFor, templateBrand } from "../utils/brands";
 const props = defineProps<{
   projectId: string;
   environmentId: string;
+  show: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -119,6 +120,13 @@ function handleTabKeydown(event: KeyboardEvent): void {
 
 /** serviceQuery filters the service cards by name or description. */
 const serviceQuery = ref("");
+
+watch(() => props.show, (show) => {
+  if (show) {
+    activeTab.value = "application";
+    serviceQuery.value = "";
+  }
+});
 
 /** filteredTemplates matches the service query against name and description. */
 const filteredTemplates = computed<TemplateSummary[]>(() => {

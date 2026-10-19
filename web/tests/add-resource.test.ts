@@ -4,7 +4,7 @@
 // JUS-71/72/76: one card per application source type with the wizard
 // preselected and its selector hidden, engine preselect without a radio
 // group, and no implementation-speak copy in the picker.
-/* global document, Element, HTMLElement: readonly */
+/* global document, Element, HTMLElement, HTMLInputElement: readonly */
 import { DOMWrapper, flushPromises, mount } from "@vue/test-utils";
 import { NEmpty, NMessageProvider, NRadio, NSelect } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -202,7 +202,7 @@ const TEMPLATES = [
 ];
 
 /** mountPage mounts the picker with stubbed catalog data and a project scope. */
-async function mountPage(templates: typeof TEMPLATES) {
+async function mountPage(templates: typeof TEMPLATES, show = ref(true)) {
   const templatesStore = useTemplatesStore();
   vi.spyOn(templatesStore, "fetchTemplates").mockResolvedValue(undefined);
   templatesStore.templates = templates as never;
@@ -222,7 +222,9 @@ async function mountPage(templates: typeof TEMPLATES) {
     render: () =>
       h(NMessageProvider, null, {
         default: () =>
-          h(ResourcePicker as never, { projectId: "proj-1", environmentId: "env-1" }),
+          h(ResourcePicker as never, {
+            projectId: "proj-1", environmentId: "env-1", show: show.value,
+          }),
       }),
   });
   const wrapper = mount(Parent, {
@@ -241,6 +243,51 @@ async function selectTab(wrapper: Awaited<ReturnType<typeof mountPage>>, name: s
 }
 
 describe("ResourcePicker", () => {
+  it("resets the tab and service filter when the parent modal reopens", async () => {
+    const show = ref(false);
+    const wrapper = await mountPage(TEMPLATES, show);
+    show.value = true;
+    await nextTick();
+    await selectTab(wrapper, "Service");
+    await wrapper.find("input").setValue("WordPress");
+    await selectTab(wrapper, "Database");
+
+    show.value = false;
+    await nextTick();
+    show.value = true;
+    await nextTick();
+
+    expect(wrapper.find('[role="tab"][aria-selected="true"]').text()).toBe("Application");
+    await selectTab(wrapper, "Service");
+    expect((wrapper.find("input").element as HTMLInputElement).value).toBe("");
+    expect(wrapper.findAll("button[data-template]")).toHaveLength(TEMPLATES.length);
+    wrapper.unmount();
+  });
+
+  it("keeps the current tab and filter when Escape closes only a child wizard", async () => {
+    const show = ref(true);
+    const wrapper = await mountPage(TEMPLATES, show);
+    await selectTab(wrapper, "Service");
+    await wrapper.find("input").setValue("WordPress");
+    await selectTab(wrapper, "Database");
+    await wrapper.find('button[data-engine="postgres"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.findComponent(CreateDatabaseWizard).props("show")).toBe(true);
+
+    document.dispatchEvent(new globalThis.KeyboardEvent("keydown", {
+      key: "Escape", code: "Escape", bubbles: true,
+    }));
+    await flushPromises();
+    await nextTick();
+
+    expect(wrapper.findComponent(CreateDatabaseWizard).props("show")).toBe(false);
+    expect(show.value).toBe(true);
+    expect(wrapper.find('[role="tab"][aria-selected="true"]').text()).toBe("Database");
+    await selectTab(wrapper, "Service");
+    expect((wrapper.find("input").element as HTMLInputElement).value).toBe("WordPress");
+    wrapper.unmount();
+  });
+
   it("switches resource tabs by keyboard and links the active panel", async () => {
     const wrapper = await mountPage(TEMPLATES);
     const tabs = wrapper.findAll('[role="tab"]');

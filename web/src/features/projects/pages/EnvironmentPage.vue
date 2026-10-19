@@ -384,6 +384,7 @@ function afterServiceCreate(service: Service): void {
           {{ t("projects.environment.creatingIn", { project: page.resources.value?.project.name ?? "", environment: page.resources.value?.environment.name ?? "" }) }}
         </NText>
         <ResourcePicker
+          :show="page.addOpen.value"
           :project-id="page.projectId.value"
           :environment-id="page.environmentId.value"
           @created="page.addOpen.value = false"

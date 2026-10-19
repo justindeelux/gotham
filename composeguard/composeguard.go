@@ -319,8 +319,7 @@ func (v *validator) document(doc map[string]any) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	declaredVolumes, err := v.topVolumes(doc["volumes"])
-	if err != nil {
+	if err := v.topVolumes(doc["volumes"]); err != nil {
 		return err
 	}
 	declaredNetworks, err := v.topNetworks(doc["networks"])
@@ -335,7 +334,7 @@ func (v *validator) document(doc map[string]any) error {
 		if !ok {
 			return at("services."+name, "service is not a mapping")
 		}
-		if err := v.service(name, service, declaredVolumes, declaredNetworks, names); err != nil {
+		if err := v.service(name, service, declaredNetworks, names); err != nil {
 			return err
 		}
 	}
@@ -343,47 +342,90 @@ func (v *validator) document(doc map[string]any) error {
 }
 
 // topVolumes validates the top-level volumes section: plain declarations
-// only. A `driver` other than local, `driver_opts` (a local bind in
-// disguise), `external` in any form and `name` overrides (which bypass the
-// per-project prefix compose applies) are all rejected. It answers the
-// declared names for the service reference check.
-func (v *validator) topVolumes(raw any) (map[string]bool, error) {
-	declared := map[string]bool{}
+// only. A `driver` other than local, an `external` volume and `name`
+// overrides (which bypass the per-project prefix compose applies) are
+// rejected. `driver_opts` is allowed only in the managed-bind shape the
+// deploy rewrite writes: type none, o bind and a device confined to the
+// application's directory.
+func (v *validator) topVolumes(raw any) error {
 	if raw == nil {
-		return declared, nil
+		return nil
 	}
 	volumes, ok := raw.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("top-level volumes is not a mapping")
+		return fmt.Errorf("top-level volumes is not a mapping")
 	}
 	for name, definition := range volumes {
 		if !namedVolumePattern.MatchString(name) {
-			return nil, fmt.Errorf("invalid volume name %q", name)
+			return fmt.Errorf("invalid volume name %q", name)
 		}
 		if err := v.reservedVolume(name); err != nil {
-			return nil, err
+			return err
 		}
 		if definition == nil {
-			declared[name] = true
 			continue
 		}
 		mapping, ok := definition.(map[string]any)
 		if !ok {
-			return nil, at("volumes."+name, "volume definition is not a mapping")
+			return at("volumes."+name, "volume definition is not a mapping")
 		}
 		for key := range mapping {
 			switch key {
-			case "driver":
+			case "driver", "driver_opts":
 			default:
-				return nil, at("volumes."+name, "volume key %q is not allowed", key)
+				return at("volumes."+name, "volume key %q is not allowed", key)
 			}
 		}
 		if driver, ok := mapping["driver"]; ok && scalarString(driver) != "local" {
-			return nil, at("volumes."+name, "volume driver %q is not allowed: only the default local driver", scalarString(driver))
+			return at("volumes."+name, "volume driver %q is not allowed: only the default local driver", scalarString(driver))
 		}
-		declared[name] = true
+		if opts, ok := mapping["driver_opts"]; ok {
+			if err := v.managedVolumeOpts("volumes."+name, name, opts); err != nil {
+				return err
+			}
+		}
 	}
-	return declared, nil
+	return nil
+}
+
+// managedVolumeOpts validates the local bind options of one top-level
+// volume. The only accepted set is the one Gotham writes on deploy: type
+// none, o bind, and a device that is exactly <root>/<appID>/<name>. Any
+// other option set is a host bind in disguise and fails closed.
+func (v *validator) managedVolumeOpts(path, name string, raw any) error {
+	opts, ok := raw.(map[string]any)
+	if !ok {
+		return at(path, "driver_opts must be a mapping")
+	}
+	for key, value := range opts {
+		switch key {
+		case "type":
+			if scalarString(value) != "none" {
+				return at(path, "driver_opts.type %q is not allowed", scalarString(value))
+			}
+		case "o":
+			if scalarString(value) != "bind" {
+				return at(path, "driver_opts.o %q is not allowed", scalarString(value))
+			}
+		case "device":
+			device := filepath.Clean(scalarString(value))
+			want := filepath.Join(v.managedDir(), name)
+			if device != want {
+				return at(path, "driver_opts.device %q must be %s", scalarString(value), want)
+			}
+			if err := checkNoSymlinks(v.managedDir(), device); err != nil {
+				return at(path, "driver_opts.device %q: %v", scalarString(value), err)
+			}
+		default:
+			return at(path, "driver_opts key %q is not allowed", key)
+		}
+	}
+	for _, key := range []string{"type", "o", "device"} {
+		if _, ok := opts[key]; !ok {
+			return at(path, "driver_opts.%s is required", key)
+		}
+	}
+	return nil
 }
 
 // reservedVolume rejects the managed-database volume namespace: without it

@@ -77,7 +77,6 @@ func TestValidateBypassTable(t *testing.T) {
 		{"external bool", "services:\n  web:\n    image: x\n    volumes:\n      - shared:/data\nvolumes:\n  shared:\n    external: true\n", "volumes.shared"},
 		{"volume name override", "services:\n  web:\n    image: x\n    volumes:\n      - shared:/data\nvolumes:\n  shared:\n    name: shared\n", "volumes.shared"},
 		{"reserved db volume", "services:\n  web:\n    image: x\n    volumes:\n      - gotham-db-main:/data\nvolumes:\n  gotham-db-main: {}\n", "gotham-db-main"},
-		{"undeclared volume", serviceDoc("    volumes:\n      - missing:/data\n"), "services.web"},
 		{"networks external", "services:\n  web:\n    image: x\n    networks:\n      - n\nnetworks:\n  n:\n    external: true\n", "networks.n"},
 		{"networks driver", "services:\n  web:\n    image: x\n    networks:\n      - n\nnetworks:\n  n:\n    driver: macvlan\n", "networks.n"},
 		{"network undeclared", serviceDoc("    networks:\n      - ghost\n"), "services.web"},
@@ -200,6 +199,66 @@ func TestValidatePublishedBandAccepts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if err := Validate(content, guardOpts()); err != nil {
 				t.Fatalf("Validate = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestValidateUndeclaredVolume pins the relaxed reference rule: a named
+// volume used by a service needs no top-level declaration, while the
+// reserved namespace and malformed names stay rejected.
+func TestValidateUndeclaredVolume(t *testing.T) {
+	accepted := map[string]string{
+		"short":      serviceDoc("    volumes:\n      - missing:/data\n"),
+		"with mode":  serviceDoc("    volumes:\n      - missing:/data:ro\n"),
+		"long form":  "services:\n  web:\n    image: x\n    volumes:\n      - type: volume\n        source: missing\n        target: /data\n",
+		"peer named": "services:\n  web:\n    image: x\n    volumes:\n      - missing:/data\n  worker:\n    image: y\n    volumes:\n      - missing:/data\n",
+	}
+	for name, content := range accepted {
+		t.Run(name, func(t *testing.T) {
+			if err := Validate(content, guardOpts()); err != nil {
+				t.Fatalf("Validate = %v, want nil", err)
+			}
+		})
+	}
+	rejected := map[string]string{
+		"reserved undeclared": serviceDoc("    volumes:\n      - gotham-db-main:/data\n"),
+		"bad name":            serviceDoc("    volumes:\n      - ../escape:/data\n"),
+	}
+	for name, content := range rejected {
+		t.Run(name, func(t *testing.T) {
+			if err := Validate(content, guardOpts()); err == nil {
+				t.Fatalf("Validate accepted %s, want rejection", name)
+			}
+		})
+	}
+}
+
+// TestValidateManagedVolumeOpts pins the driver options the deploy rewrite
+// writes: the exact managed bind shape passes, and any other device or
+// option set is a host bind in disguise.
+func TestValidateManagedVolumeOpts(t *testing.T) {
+	managed := guardRoot + "/" + guardAppID
+	doc := func(device, extra string) string {
+		return "services:\n  web:\n    image: x\n    volumes:\n      - data:/mnt\nvolumes:\n  data:\n    driver: local\n    driver_opts:\n      type: none\n      o: bind\n      device: " + device + "\n" + extra
+	}
+	if err := Validate(doc(managed+"/data", ""), guardOpts()); err != nil {
+		t.Fatalf("managed opts = %v, want nil", err)
+	}
+	rejected := map[string]string{
+		"root device":       doc("/", ""),
+		"etc device":        doc("/etc", ""),
+		"other app device":  doc(guardRoot+"/22222222-2222-2222-2222-222222222222/data", ""),
+		"nested device":     doc(managed+"/nested/data", ""),
+		"wrong volume name": doc(managed+"/other", ""),
+		"missing type":      "services:\n  web:\n    image: x\n    volumes:\n      - data:/mnt\nvolumes:\n  data:\n    driver_opts:\n      o: bind\n      device: " + managed + "/data\n",
+		"extra option":      doc(managed+"/data", "      rw: true\n"),
+		"nfs driver":        "services:\n  web:\n    image: x\n    volumes:\n      - data:/mnt\nvolumes:\n  data:\n    driver: nfs\n    driver_opts:\n      type: none\n      o: bind\n      device: " + managed + "/data\n",
+	}
+	for name, content := range rejected {
+		t.Run(name, func(t *testing.T) {
+			if err := Validate(content, guardOpts()); err == nil {
+				t.Fatalf("Validate accepted %s, want rejection", name)
 			}
 		})
 	}

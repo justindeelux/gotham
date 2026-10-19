@@ -10,8 +10,10 @@ import (
 // serviceVolumes validates one service's mounts: anonymous volumes,
 // project-local named volumes, confined host-path binds and tmpfs. The
 // source classification follows compose: a source whose first character is
-// `.`, `/` or `~` is a host path, anything else a named volume.
-func (v *validator) serviceVolumes(path string, raw any, declared map[string]bool) error {
+// `.`, `/` or `~` is a host path, anything else a named volume. An
+// undeclared named volume is accepted: the deploy rewrite auto-declares it
+// under the application's managed directory.
+func (v *validator) serviceVolumes(path string, raw any) error {
 	if raw == nil {
 		return nil
 	}
@@ -20,7 +22,7 @@ func (v *validator) serviceVolumes(path string, raw any, declared map[string]boo
 		return at(path, "volumes must be a list")
 	}
 	for _, entry := range entries {
-		if err := v.mount(path, entry, declared); err != nil {
+		if err := v.mount(path, entry); err != nil {
 			return err
 		}
 	}
@@ -28,12 +30,12 @@ func (v *validator) serviceVolumes(path string, raw any, declared map[string]boo
 }
 
 // mount validates one volume entry in short or long form.
-func (v *validator) mount(path string, entry any, declared map[string]bool) error {
+func (v *validator) mount(path string, entry any) error {
 	switch mount := entry.(type) {
 	case string:
-		return v.shortMount(path, mount, declared)
+		return v.shortMount(path, mount)
 	case map[string]any:
-		return v.longMount(path, mount, declared)
+		return v.longMount(path, mount)
 	default:
 		return at(path, "volume entries must be strings or mappings")
 	}
@@ -45,7 +47,7 @@ func (v *validator) mount(path string, entry any, declared map[string]bool) erro
 // A single-letter source is a Windows drive (`C:/...`), which compose-go
 // parses as a drive letter while the Linux daemon rejects: it fails closed
 // here rather than depending on the daemon.
-func (v *validator) shortMount(path, entry string, declared map[string]bool) error {
+func (v *validator) shortMount(path, entry string) error {
 	parts := strings.Split(entry, ":")
 	switch len(parts) {
 	case 1:
@@ -77,7 +79,7 @@ func (v *validator) shortMount(path, entry string, declared map[string]bool) err
 		if isBindSource(source) {
 			return v.bindSource(path, source)
 		}
-		return v.namedSource(path, source, declared)
+		return v.namedSource(path, source)
 	default:
 		return at(path, "volume %q has too many segments", entry)
 	}
@@ -123,7 +125,7 @@ func isBindSource(source string) bool {
 // longMount validates the long volume syntax. Only bind, volume and tmpfs
 // mounts exist for a confined project; every key outside the per-type set
 // fails closed.
-func (v *validator) longMount(path string, mount map[string]any, declared map[string]bool) error {
+func (v *validator) longMount(path string, mount map[string]any) error {
 	for key := range mount {
 		switch key {
 		case "type", "source", "target", "read_only", "bind", "volume", "tmpfs", "consistency":
@@ -156,7 +158,7 @@ func (v *validator) longMount(path string, mount map[string]any, declared map[st
 				return err
 			}
 		}
-		return v.namedSource(path, source, declared)
+		return v.namedSource(path, source)
 	case "bind":
 		if !strings.HasPrefix(target, "/") {
 			return at(path, "volume mount has no target")
@@ -216,9 +218,10 @@ func optionalBool(raw any) error {
 	}
 }
 
-// namedSource validates a named volume reference: declared top-level and
-// outside the managed-database namespace.
-func (v *validator) namedSource(path, source string, declared map[string]bool) error {
+// namedSource validates a named volume reference: a safe name outside the
+// managed-database namespace. The top-level declaration is optional: an
+// undeclared volume is auto-declared by the deploy rewrite.
+func (v *validator) namedSource(path, source string) error {
 	if isWindowsDrive(source) {
 		return at(path, "volume source %q is not supported", source)
 	}
@@ -227,9 +230,6 @@ func (v *validator) namedSource(path, source string, declared map[string]bool) e
 	}
 	if err := v.reservedVolume(source); err != nil {
 		return at(path, "%v", err)
-	}
-	if !declared[source] {
-		return at(path, "volume %q has no top-level declaration", source)
 	}
 	return nil
 }

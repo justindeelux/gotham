@@ -267,6 +267,150 @@ func portInRange(port, span string) bool {
 	return want >= lo && want <= hi
 }
 
+// composeNamedVolumePattern matches a compose named volume reference: one
+// path segment, starting with an alphanumeric character.
+var composeNamedVolumePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+// RewriteComposeManagedVolumes maps every named volume of a rendered compose
+// document onto the application's managed directory. A volume used by a
+// service without a top-level declaration is auto-declared; a declared one
+// keeps its name and is redefined. Both become local volumes whose device
+// is <root>/<appID>/<name>, so Docker stores their data where the file
+// manager and backups can reach it instead of its own default mountpoint.
+// An external declaration is left untouched.
+func RewriteComposeManagedVolumes(rendered, root string, appID uuid.UUID) (string, error) {
+	if strings.TrimSpace(rendered) == "" {
+		return "", fmt.Errorf("%w: compose document is required", ErrValidation)
+	}
+	if appID == uuid.Nil {
+		return "", fmt.Errorf("%w: compose managed volumes need an application id", ErrValidation)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &doc); err != nil {
+		return "", fmt.Errorf("%w: compose document is not valid YAML: %v", ErrValidation, err)
+	}
+	used := map[string]bool{}
+	services, _ := doc["services"].(map[string]any)
+	for _, rawService := range services {
+		service, ok := rawService.(map[string]any)
+		if !ok {
+			continue
+		}
+		entries, ok := service["volumes"].([]any)
+		if !ok {
+			continue
+		}
+		for _, entry := range entries {
+			name, ok := composeVolumeSource(entry)
+			if !ok {
+				continue
+			}
+			if err := validateComposeVolumeName(name); err != nil {
+				return "", err
+			}
+			used[name] = true
+		}
+	}
+	declared := map[string]any{}
+	if raw, ok := doc["volumes"]; ok && raw != nil {
+		var isMapping bool
+		declared, isMapping = raw.(map[string]any)
+		if !isMapping {
+			return "", fmt.Errorf("%w: top-level volumes is not a mapping", ErrValidation)
+		}
+	}
+	names := make([]string, 0, len(used)+len(declared))
+	for name := range used {
+		names = append(names, name)
+	}
+	for name := range declared {
+		if !used[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if isExternalVolume(declared[name]) {
+			continue
+		}
+		if err := validateComposeVolumeName(name); err != nil {
+			return "", err
+		}
+		declared[name] = map[string]any{
+			"driver": "local",
+			"driver_opts": map[string]any{
+				"type":   "none",
+				"o":      "bind",
+				"device": filepath.Join(appVolumeDir(root, appID), name),
+			},
+		}
+	}
+	if len(declared) > 0 {
+		doc["volumes"] = declared
+	}
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("%w: render compose document: %v", ErrValidation, err)
+	}
+	return string(out), nil
+}
+
+// composeVolumeSource returns the named-volume source of one service mount,
+// or false for an anonymous volume, a host bind or an unparseable entry.
+func composeVolumeSource(entry any) (string, bool) {
+	source := ""
+	switch mount := entry.(type) {
+	case string:
+		parts := strings.Split(mount, ":")
+		if len(parts) < 2 || len(parts) > 3 {
+			return "", false
+		}
+		source = parts[0]
+	case map[string]any:
+		mountType := strings.ToLower(strings.TrimSpace(scalarString(mount["type"])))
+		if mountType != "" && mountType != "volume" {
+			return "", false
+		}
+		source = scalarString(mount["source"])
+	default:
+		return "", false
+	}
+	if source == "" || strings.HasPrefix(source, "/") ||
+		strings.HasPrefix(source, ".") || strings.HasPrefix(source, "~") {
+		return "", false
+	}
+	return source, true
+}
+
+// validateComposeVolumeName keeps a rewritten name a safe single path
+// segment outside the managed-database namespace.
+func validateComposeVolumeName(name string) error {
+	if !composeNamedVolumePattern.MatchString(name) {
+		return fmt.Errorf("%w: volume source %q is not a valid named volume", ErrValidation, name)
+	}
+	if strings.HasPrefix(name, "gotham-db-") {
+		return fmt.Errorf("%w: volume name %q is reserved for managed databases", ErrValidation, name)
+	}
+	return nil
+}
+
+// isExternalVolume reports whether a top-level volume declaration is
+// external; an external volume is never rewritten.
+func isExternalVolume(definition any) bool {
+	mapping, ok := definition.(map[string]any)
+	if !ok {
+		return false
+	}
+	external, ok := mapping["external"]
+	if !ok || external == nil {
+		return false
+	}
+	if flag, ok := external.(bool); ok {
+		return flag
+	}
+	return true
+}
+
 // rewriteManagedBindsForPreview rewrites managed bind prefixes that name
 // another application directory to the preview's own directory, so a
 // preview inherits the document shape without ever mounting (or writing)

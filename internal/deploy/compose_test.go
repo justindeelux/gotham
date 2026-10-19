@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 
 	"github.com/justindeelux/gotham/internal/providers"
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
@@ -74,6 +75,173 @@ func TestValidateComposeContent(t *testing.T) {
 				t.Fatalf("ValidateComposeContent = %v, want %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// composeVolumeDoc is the decoded view of a rewritten document used by the
+// volume tests.
+type composeVolumeDoc struct {
+	Services map[string]struct {
+		Volumes []any `yaml:"volumes"`
+	} `yaml:"services"`
+	Volumes map[string]struct {
+		Driver     string            `yaml:"driver"`
+		DriverOpts map[string]string `yaml:"driver_opts"`
+		External   any               `yaml:"external"`
+	} `yaml:"volumes"`
+}
+
+func decodeComposeVolumeDoc(t *testing.T, content string) composeVolumeDoc {
+	t.Helper()
+	var doc composeVolumeDoc
+	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
+		t.Fatalf("decode rewritten document: %v\n%s", err, content)
+	}
+	return doc
+}
+
+// TestRewriteComposeManagedVolumes pins the deploy rewrite: declared and
+// undeclared named volumes become local binds under <root>/<appID>, host
+// binds, anonymous volumes and external declarations are untouched, and the
+// reserved namespace fails closed.
+func TestRewriteComposeManagedVolumes(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "volumes")
+	appID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	appDir := filepath.Join(root, appID.String())
+
+	t.Run("declared and undeclared", func(t *testing.T) {
+		out, err := RewriteComposeManagedVolumes(`services:
+  web:
+    image: example.com/app:1.0
+    volumes:
+      - data:/data
+      - cache:/cache:ro
+      - ./local:/local
+      - /anonymous
+  worker:
+    image: example.com/worker:1.0
+    volumes:
+      - type: volume
+        source: extra
+        target: /extra
+volumes:
+  data: {}
+`, root, appID)
+		if err != nil {
+			t.Fatalf("rewrite = %v, want nil", err)
+		}
+		doc := decodeComposeVolumeDoc(t, out)
+		for _, name := range []string{"data", "cache", "extra"} {
+			volume, ok := doc.Volumes[name]
+			if !ok {
+				t.Fatalf("volume %q not declared:\n%s", name, out)
+			}
+			if volume.Driver != "local" || volume.DriverOpts["type"] != "none" || volume.DriverOpts["o"] != "bind" {
+				t.Errorf("volume %q = %+v, want a local bind", name, volume)
+			}
+			if want := filepath.Join(appDir, name); volume.DriverOpts["device"] != want {
+				t.Errorf("volume %q device = %q, want %q", name, volume.DriverOpts["device"], want)
+			}
+		}
+		if got := doc.Services["web"].Volumes; len(got) != 4 || got[2] != "./local:/local" || got[3] != "/anonymous" {
+			t.Errorf("web mounts = %v, want host and anonymous mounts untouched", got)
+		}
+	})
+
+	t.Run("external untouched", func(t *testing.T) {
+		out, err := RewriteComposeManagedVolumes(`services:
+  web:
+    image: x
+    volumes:
+      - shared:/data
+volumes:
+  shared:
+    external: true
+`, root, appID)
+		if err != nil {
+			t.Fatalf("rewrite = %v, want nil", err)
+		}
+		doc := decodeComposeVolumeDoc(t, out)
+		volume := doc.Volumes["shared"]
+		if volume.External != true || len(volume.DriverOpts) != 0 {
+			t.Errorf("external volume = %+v, want untouched", volume)
+		}
+	})
+
+	t.Run("no volumes", func(t *testing.T) {
+		out, err := RewriteComposeManagedVolumes("services:\n  web:\n    image: x\n", root, appID)
+		if err != nil {
+			t.Fatalf("rewrite = %v, want nil", err)
+		}
+		if len(decodeComposeVolumeDoc(t, out).Volumes) != 0 {
+			t.Errorf("document gained a volumes section:\n%s", out)
+		}
+	})
+
+	t.Run("reserved namespace rejected", func(t *testing.T) {
+		_, err := RewriteComposeManagedVolumes("services:\n  web:\n    image: x\n    volumes:\n      - gotham-db-main:/data\n", root, appID)
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("err = %v, want ErrValidation", err)
+		}
+	})
+
+	t.Run("no application id rejected", func(t *testing.T) {
+		_, err := RewriteComposeManagedVolumes("services:\n  web:\n    image: x\n", root, uuid.Nil)
+		if !errors.Is(err, ErrValidation) {
+			t.Fatalf("err = %v, want ErrValidation", err)
+		}
+	})
+}
+
+// TestOrchestratorComposeManagedVolumes pins the deploy path: the document
+// the node runs carries the managed device for a declared volume and an
+// undeclared one that was auto-declared.
+func TestOrchestratorComposeManagedVolumes(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "volumes")
+	t.Setenv(envManagedVolumeRoot, root)
+	userID := uuid.New()
+	app := testComposeApp(userID)
+	app.ComposeContent = `services:
+  web:
+    image: example.com/app:1.0
+    volumes:
+      - data:/data
+      - cache:/cache
+volumes:
+  data: {}
+`
+	repo := &fakeRepository{app: app}
+	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
+	node := newMockNode()
+	node.composeContainers = []ComposeContainer{{ID: "web-id", Service: "web", State: "running", Status: "Up 1 second"}}
+	node.listed = []*agentv1.ContainerInfo{{Id: "web-id", State: "running", Status: "Up 1 second"}}
+	o := newTestOrchestrator(Config{
+		Repository: repo,
+		Source:     &fakeSource{},
+		Dial:       dialAlways(node),
+		Emitter:    NewEmitter(&recordPublisher{}),
+	})
+	o.run(context.Background(), job{app: app, dep: dep})
+
+	stored, ok := repo.deployment(dep.ID)
+	if !ok {
+		t.Fatal("deployment row is gone")
+	}
+	if stored.State != StateRunning {
+		t.Fatalf("state = %s (%q), want running", stored.State, stored.Error)
+	}
+	if len(node.composeDocuments) != 1 {
+		t.Fatalf("compose documents = %d, want 1", len(node.composeDocuments))
+	}
+	document := node.composeDocuments[0]
+	for _, name := range []string{"data", "cache"} {
+		want := "device: " + filepath.Join(root, app.ID.String(), name)
+		if !strings.Contains(document, want) {
+			t.Errorf("document lacks %q:\n%s", want, document)
+		}
+	}
+	if strings.Contains(document, "/var/lib/docker/volumes") {
+		t.Errorf("document still uses Docker's default volume mountpoint:\n%s", document)
 	}
 }
 

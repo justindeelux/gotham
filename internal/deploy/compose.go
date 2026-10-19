@@ -219,6 +219,17 @@ func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Applicatio
 	if err != nil {
 		return "", nil, nil, err
 	}
+	// Declared and auto-declared named volumes become local binds under the
+	// application's managed directory, so their data lives where the file
+	// manager and backups reach it. The rewritten document is re-validated:
+	// the driver options are part of the confinement allowlist.
+	injected, err = RewriteComposeManagedVolumes(injected, managedVolumeRoot(), app.ID)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if err := guardValidate(injected, app.ID); err != nil {
+		return "", nil, nil, composeValidationError(services.RedactError(err, env))
+	}
 	return injected, images, env, nil
 }
 

@@ -39,7 +39,7 @@ const { t } = useI18n();
 const deleteConfirm = computed<string>(() =>
   String(
     t("applications.cert.deleteConfirm", {
-      domain: props.application.base_domain || String(t("applications.cert.thisApp")),
+      domain: props.application.primary_domain || String(t("applications.cert.thisApp")),
     }),
   ),
 );
@@ -71,7 +71,7 @@ const deleteConfirm = computed<string>(() =>
       >
       <i18n-t keypath="applications.cert.rerecordHint" tag="span">
         <template #recorded><span class="mono">{{ certs.certificate.value.domain }}</span></template>
-        <template #current><span class="mono">{{ props.application.base_domain }}</span></template>
+        <template #current><span class="mono">{{ props.application.primary_domain }}</span></template>
       </i18n-t>
         <NSpace style="margin-top: 8px">
           <NButton size="small" @click="certs.handleRerecordDomain">

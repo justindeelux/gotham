@@ -87,7 +87,7 @@ func TestApplicationDomainUniquenessConcurrent(t *testing.T) {
 	for i, userID := range users {
 		go func(i int, userID uuid.UUID) {
 			<-start
-			_, err := repo.CreateApplication(ctx, Application{
+			app, err := repo.CreateApplication(ctx, Application{
 				UserID:        userID,
 				TeamID:        teamID,
 				ServerID:      serverID,
@@ -96,10 +96,18 @@ func TestApplicationDomainUniquenessConcurrent(t *testing.T) {
 				CloneURL:      "https://github.com/acme/demo.git",
 				Branch:        "main",
 				BuildPack:     "dockerfile",
-				BaseDomain:    domain,
-				Port:          3000,
-				HostPort:      18080,
 			}, nil, nil, nil)
+			if err != nil {
+				results <- err
+				return
+			}
+			_, err = repo.CreateApplicationDomain(ctx, ApplicationDomain{
+				ApplicationID: app.ID,
+				Domain:        domain,
+				IsPrimary:     true,
+				Port:          3000,
+				Protocol:      ProtocolHTTP,
+			})
 			results <- err
 		}(i, userID)
 	}

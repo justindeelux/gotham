@@ -46,6 +46,10 @@ func (o *Orchestrator) notify(ctx context.Context, st *runState, to State) {
 	}
 	notifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifyTimeout)
 	defer cancel()
+	host := ""
+	if st.app.PrimaryDomain != nil {
+		host = st.app.PrimaryDomain.Domain
+	}
 	o.notifier.DeployFinished(notifyCtx, DeployResult{
 		DeploymentID:  st.dep.ID,
 		ApplicationID: st.app.ID,
@@ -54,7 +58,7 @@ func (o *Orchestrator) notify(ctx context.Context, st *runState, to State) {
 		Kind:          st.dep.Kind,
 		State:         to,
 		Error:         st.dep.Error,
-		Host:          st.app.BaseDomain,
+		Host:          host,
 		StartedAt:     st.dep.StartedAt,
 		FinishedAt:    st.dep.FinishedAt,
 	})

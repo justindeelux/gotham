@@ -52,16 +52,14 @@ func TestBackfillApplicationCertificates(t *testing.T) {
 	})
 	teamID, envID, serverID := seedEnvColumns(t, ctx, st, pool)
 
-	newApp := func(name, base string) sqlc.Application {
+	newApp := func(name string) sqlc.Application {
 		t.Helper()
 		app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 			UserID: user.ID, TeamID: teamID, ServerID: serverID, EnvironmentID: envID,
-			Name:       name,
-			CloneUrl:   "https://github.com/acme/demo.git",
-			Branch:     "main",
-			BuildPack:  "dockerfile",
-			BaseDomain: base,
-			Port:       3000,
+			Name:      name,
+			CloneUrl:  "https://github.com/acme/demo.git",
+			Branch:    "main",
+			BuildPack: "dockerfile",
 		})
 		if err != nil {
 			t.Fatalf("create application %s: %v", name, err)
@@ -77,13 +75,13 @@ func TestBackfillApplicationCertificates(t *testing.T) {
 		}
 	}
 
-	plain := newApp("bf-plain", fmt.Sprintf("plain-%d.example.com", suffix))
+	plain := newApp("bf-plain")
 	addDomain(plain.ID, fmt.Sprintf("plain-%d.example.com", suffix), true, false)
 
-	disabled := newApp("bf-disabled", fmt.Sprintf("disabled-%d.example.com", suffix))
+	disabled := newApp("bf-disabled")
 	addDomain(disabled.ID, fmt.Sprintf("disabled-%d.example.com", suffix), true, true)
 
-	wild := newApp("bf-wild", fmt.Sprintf("wild-%d.example.com", suffix))
+	wild := newApp("bf-wild")
 	addDomain(wild.ID, fmt.Sprintf("wild-%d.example.com", suffix), true, false)
 	addDomain(wild.ID, fmt.Sprintf("sibling-%d.example.com", suffix), false, false)
 	sealed, err := providers.SealSecret("integration-key", "do-token")

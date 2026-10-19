@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -258,6 +259,56 @@ func writePE7JSON(w http.ResponseWriter, status int, payload any) {
 }
 
 // containerEnv returns the environment the container was started with.
+// addDomain attaches one routed host through the public API.
+func (h *pe7Harness) addDomain(t *testing.T, appID, domain string, port int32, protocol string) {
+	t.Helper()
+	status, body := h.api(t, http.MethodPost, "/v1/applications/"+appID+"/domains", map[string]any{
+		"domain": domain, "port": port, "protocol": protocol,
+	}, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("add domain %s: status %d (%s)", domain, status, body)
+	}
+}
+
+// appURL resolves the application's current published host port.
+func (h *pe7Harness) appURL(t *testing.T, appID string) string {
+	t.Helper()
+	return fmt.Sprintf("http://127.0.0.1:%d/index.html", pe7PublishedHostPort(t, appID, p4ContainerPort))
+}
+
+func pe7PublishedHostPort(t *testing.T, appID string, appPort int32) int32 {
+	t.Helper()
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Fatalf("docker CLI: %v", err)
+	}
+	out, err := exec.Command(docker, "ps", "-q", "--filter", "label=gotham.app_id="+appID).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker ps for %s: %v", appID, err)
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		t.Fatalf("no container for application %s", appID)
+	}
+	portSpec := fmt.Sprintf("%d/tcp", appPort)
+	out, err = exec.Command(docker, "port", ids[0], portSpec).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker port %s %s: %v", ids[0], portSpec, err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		idx := strings.LastIndex(strings.TrimSpace(line), ":")
+		if idx < 0 {
+			continue
+		}
+		var port int32
+		if _, err := fmt.Sscanf(strings.TrimSpace(line)[idx+1:], "%d", &port); err == nil && port > 0 {
+			return port
+		}
+	}
+	t.Fatalf("no published host port for %s %s", ids[0], portSpec)
+	return 0
+}
+
 func (h *pe7Harness) containerEnv(t *testing.T, containerID string) map[string]string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -358,7 +409,6 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	// 4. The application in production, with its own env: it wins every
 	// overlap, including over a shared secret (plain over sealed).
 	fixture := newP4Fixture(t, "e2e/pe7-app-"+suffix, "gotham-pe7-v1-"+suffix)
-	hostPort := freeHostPort(t)
 	var createdApp struct {
 		Application p4Application `json:"application"`
 	}
@@ -370,14 +420,13 @@ func TestPE7ProjectsFlow(t *testing.T) {
 		CloneURL:      fixture.dir,
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		Port:          p4ContainerPort,
-		HostPort:      hostPort,
 		ServerID:      h.serverID.String(),
 	}, &createdApp)
 	if status != http.StatusCreated {
 		t.Fatalf("create application: status %d: %s", status, raw)
 	}
 	appID := createdApp.Application.ID
+	h.addDomain(t, appID, "pe7-app-"+suffix+".example.test", p4ContainerPort, "http")
 	t.Cleanup(func() { removeImages(t, "gotham/"+appID) })
 	t.Cleanup(func() { removeLabelledContainers(t, "gotham.app_id="+appID) })
 	// Resource rows go before the harness server rows (registered earlier,
@@ -402,7 +451,7 @@ func TestPE7ProjectsFlow(t *testing.T) {
 	if running.ContainerID == "" {
 		t.Fatal("running deployment has no container")
 	}
-	waitForHTTPBody(t, fmt.Sprintf("http://127.0.0.1:%d/index.html", hostPort), fixture.marker)
+	waitForHTTPBody(t, h.appURL(t, appID), fixture.marker)
 
 	// 6. The merged precedence is what the container actually started with:
 	// project < environment < application, secrets materialised in plaintext

@@ -19,9 +19,15 @@ WHERE id = $1 AND user_id = $2;
 -- name: ListWebhookTargetsForRepo :many
 SELECT w.application_id, w.hook_id, w.secret, w.url,
        a.user_id, a.team_id, a.provider, a.repo, a.branch, a.clone_url,
-       a.name, a.base_domain
+       a.name, COALESCE(d.domain, '')::text AS base_domain
 FROM application_webhooks w
 JOIN applications a ON a.id = w.application_id
+LEFT JOIN LATERAL (
+    SELECT domain FROM application_domains
+    WHERE application_id = a.id AND NOT disabled
+    ORDER BY is_primary DESC, created_at, id
+    LIMIT 1
+) d ON true
 WHERE w.provider = $1 AND lower(w.repo) = $2;
 
 -- name: CreateWebhookEvent :one

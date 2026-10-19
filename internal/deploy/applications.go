@@ -14,7 +14,6 @@ import (
 
 	"github.com/justindeelux/gotham/internal/builds"
 	"github.com/justindeelux/gotham/internal/providers"
-	"github.com/justindeelux/gotham/internal/proxy"
 	"github.com/justindeelux/gotham/internal/services"
 	"github.com/justindeelux/gotham/internal/teams"
 )
@@ -71,9 +70,6 @@ type CreateApplicationInput struct {
 	ComposeContent string
 	ComposeFile    string
 	ComposeService string
-	BaseDomain     string
-	Port           int32
-	HostPort       int32
 	ServerID       uuid.UUID
 	Env            []EnvEntry
 	Storage        []Storage
@@ -96,9 +92,6 @@ type UpdateApplicationInput struct {
 	// never returned by the API.
 	RegistryUsername *string
 	RegistryPassword *string
-	BaseDomain       *string
-	Port             *int32
-	HostPort         *int32
 	ServerID         *uuid.UUID
 	EnvironmentID    *uuid.UUID
 	// GitHubAppID relinks the application: a value sets the connection (it
@@ -135,7 +128,6 @@ type ApplicationFilter struct {
 func (in UpdateApplicationInput) empty() bool {
 	return in.Name == nil && in.Branch == nil && in.BuildPack == nil &&
 		in.ImageRef == nil && in.RegistryUsername == nil && in.RegistryPassword == nil &&
-		in.BaseDomain == nil && in.Port == nil && in.HostPort == nil &&
 		in.ServerID == nil && in.EnvironmentID == nil && in.GitHubAppID == nil &&
 		in.DockerfileContent == nil && in.BuildArgs == nil &&
 		in.ComposeContent == nil && in.ComposeFile == nil && in.ComposeService == nil
@@ -175,9 +167,6 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 		ComposeContent:    in.ComposeContent,
 		ComposeFile:       strings.TrimSpace(in.ComposeFile),
 		ComposeService:    strings.TrimSpace(in.ComposeService),
-		BaseDomain:        proxy.NormalizeDomain(in.BaseDomain),
-		Port:              in.Port,
-		HostPort:          in.HostPort,
 		ServerID:          in.ServerID,
 		GitHubAppID:       in.GitHubAppID,
 		DockerfileContent: in.DockerfileContent,
@@ -236,11 +225,6 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
 	}
-	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, app.BaseDomain)
-	if domainErr != nil {
-		return Application{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)
-	}
-	defer releaseDomain()
 	// A link names a GitHub App connection the caller must own; a foreign
 	// id answers not-found, like any other foreign resource.
 	if app.GitHubAppID != uuid.Nil {
@@ -267,11 +251,8 @@ func (s *Service) CreateApplication(ctx context.Context, userID uuid.UUID, in Cr
 	if err != nil {
 		return Application{}, err
 	}
-	// A new domain starts routing as soon as it is stored; the node may not
-	// have Traefik yet, in which case the sync bootstraps it.
-	if created.BaseDomain != "" {
-		s.syncProxy(ctx, created)
-	}
+	// The application starts with no domain (JUS-233): domains are attached
+	// explicitly afterwards, and only then does the node need a route.
 	return created, nil
 }
 
@@ -412,7 +393,6 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		movedEnvironment = true
 	}
 	previousServer := app.ServerID
-	previousDomain, previousPort, previousHostPort := app.BaseDomain, app.Port, app.HostPort
 	if in.Name != nil {
 		app.Name = strings.TrimSpace(*in.Name)
 	}
@@ -510,25 +490,6 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		}
 		app.BuildArgs = normalizeBuildArgs(*in.BuildArgs)
 	}
-	if in.BaseDomain != nil {
-		next := proxy.NormalizeDomain(*in.BaseDomain)
-		// Only an actual domain change resolves a migration-disabled binding:
-		// a full-form update that resends the unchanged value (however
-		// cased) must not silently reactivate a legacy conflict. The stored
-		// value is normalized either way (BE-6.1 F6/F8).
-		if next != proxy.NormalizeDomain(app.BaseDomain) {
-			app.BaseDomainDisabled = false
-		}
-		app.BaseDomain = next
-	}
-	if in.Port != nil {
-		app.Port = *in.Port
-	}
-	if in.HostPort != nil {
-		app.HostPort = *in.HostPort
-	}
-	// Compose fields apply after the port updates: the compose validation
-	// reads the effective container port.
 	if in.ComposeContent != nil || in.ComposeFile != nil || in.ComposeService != nil {
 		var err error
 		app, err = applyComposeUpdate(app, in)
@@ -588,13 +549,8 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if app.SourceType == SourceCompose && strings.TrimSpace(app.ComposeContent) != "" {
 		app.Branch = ""
 	}
-	// Legacy rows may predate normalization: normalize the resulting value so
-	// an unrelated update (rename, branch) never fails on stored casing, even
-	// with FEATURE_PROXY=false (BE-6.1 F8). An explicitly changed domain is
-	// still validated strictly below.
-	app.BaseDomain = proxy.NormalizeDomain(app.BaseDomain)
-	// A port-only update on a compose application must keep the deploy
-	// target valid: the compose gate reads the effective row.
+	// A compose application must keep a deployable release after an update;
+	// domains and their ports are validated on their own write path.
 	if isComposeApp(app) {
 		if err := validateComposeTarget(app); err != nil {
 			return Application{}, err
@@ -606,42 +562,7 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 	if err := validateApplication(app, false); err != nil {
 		return Application{}, err
 	}
-	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, app.BaseDomain)
-	if domainErr != nil {
-		return Application{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)
-	}
-	defer releaseDomain()
-	// A base_domain write reconciles the domain rows first: the rows enforce
-	// the platform-wide uniqueness, so a conflicting host fails here before
-	// the application row is touched. Clearing the primary while aliases
-	// exist is rejected: it would silently delete every alias (use the
-	// domain endpoints to remove them explicitly). Unrelated updates skip
-	// the rows entirely. Both writes run in one transaction.
-	var updated Application
-	var updateErr error
-	if in.BaseDomain != nil {
-		if app.BaseDomain == "" {
-			rows, err := s.repo.ListApplicationDomains(ctx, app.ID)
-			if err != nil {
-				return Application{}, err
-			}
-			for _, row := range rows {
-				if !row.IsPrimary {
-					return Application{}, fmt.Errorf("%w: remove the additional domains before clearing the primary domain", ErrValidation)
-				}
-			}
-		}
-		updateErr = s.repo.InTx(ctx, func(tx Repository) error {
-			if err := s.reconcilePrimaryRow(ctx, tx, app.ID, app.BaseDomain); err != nil {
-				return err
-			}
-			var err error
-			updated, err = tx.UpdateApplication(ctx, app)
-			return err
-		})
-	} else {
-		updated, updateErr = s.repo.UpdateApplication(ctx, app)
-	}
+	updated, updateErr := s.repo.UpdateApplication(ctx, app)
 	if updateErr != nil {
 		// A concurrent create or move that committed past the pre-check trips
 		// the unique index instead: still a 409, with the move message.
@@ -652,31 +573,18 @@ func (s *Service) UpdateApplication(ctx context.Context, userID, appID uuid.UUID
 		}
 		return Application{}, updateErr
 	}
-	// Routing input changed: refresh the hosting node's configuration. A node
-	// whose route may have disappeared (a move, a changed domain, a cleared
-	// domain) is refreshed too, so no stale route is left behind.
+	// A move rebinds the application to another node: stop what it left
+	// behind (best effort) and refresh both nodes so the old one stops
+	// serving it. Domains are edited through their own endpoints, which
+	// resync the hosting node themselves.
 	moved := updated.ServerID != previousServer
 	if moved {
-		// The application is now bound to another node; stop the container it
-		// left behind on the previous one (best effort — an unreachable node
-		// must not fail the move). Deployments do not record their node, so the
-		// newest recorded container is the one that ran there. A compose
-		// application also leaves a whole project behind: down removes the
-		// sidecars the container sweep cannot see.
 		s.stopContainerOnNode(ctx, previousServer, s.latestContainer(ctx, app.ID))
 		s.composeDownApp(ctx, previousServer, updated)
-	}
-	routingChanged := updated.BaseDomain != previousDomain || updated.Port != previousPort ||
-		updated.HostPort != previousHostPort
-	targets := make(map[uuid.UUID]bool, 2)
-	if updated.BaseDomain != "" && (routingChanged || moved) {
-		targets[updated.ServerID] = true
-	}
-	if previousDomain != "" && (moved || updated.BaseDomain != previousDomain) {
-		targets[previousServer] = true
-	}
-	for serverID := range targets {
-		s.syncProxyServer(ctx, serverID)
+		s.syncProxyServer(ctx, previousServer)
+		if updated.PrimaryDomain != nil {
+			s.syncProxyServer(ctx, updated.ServerID)
+		}
 	}
 	return updated, nil
 }
@@ -781,10 +689,10 @@ func (s *Service) DeleteApplication(ctx context.Context, userID, appID uuid.UUID
 	if err := s.repo.DeleteApplication(ctx, appID); err != nil {
 		return err
 	}
-	// The application row is gone: regenerate the node's configuration so the
-	// deleted route stops being served immediately. An application without a
-	// domain never had a route to remove.
-	if app.BaseDomain != "" {
+	// The application row is gone: regenerate the node's configuration so
+	// every deleted route stops being served immediately. An application
+	// without a domain never had a route to remove.
+	if app.PrimaryDomain != nil {
 		s.syncProxyServer(ctx, app.ServerID)
 	}
 	return nil
@@ -1239,18 +1147,7 @@ func validateApplication(app Application, checkSource bool) error {
 	if _, err := builds.ParseEngineKind(app.BuildPack); err != nil {
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	}
-	if app.BaseDomain != "" {
-		// The domain ends up inside a Traefik Host() rule, so it is validated
-		// at write time: an injection attempt or a malformed hostname must
-		// never reach the generator.
-		if err := proxy.ValidateDomain(app.BaseDomain); err != nil {
-			return fmt.Errorf("%w: %v", ErrValidation, err)
-		}
-	}
-	if err := validatePort("port", app.Port); err != nil {
-		return err
-	}
-	return validatePort("host port", app.HostPort)
+	return nil
 }
 
 // Registry credential bounds: a username is an identifier, a password or
@@ -1366,34 +1263,8 @@ func validateSource(app Application) error {
 	}
 }
 
-// composePrivilegedPortEnd is the end of the privileged host-port band.
-// Compose applications bind their web service's published port on the
-// node, and the proxy routes any host port to it — but ports below 1024
-// belong to the node itself (Traefik, SSH, the registry) and to other
-// tenants' mappings. A compose application pins HostPort 0 (an ephemeral
-// port the proxy discovers) or a high port; ordinary single-container
-// applications keep their existing range.
-const composePrivilegedPortEnd = 1023
-
-// validateComposePorts checks the application's port pair: a real container
-// port for the web service, and a host port that is either auto-assigned
-// or outside the privileged band.
-func validateComposePorts(port, hostPort int32) error {
-	if port < 1 || port > 65535 {
-		return fmt.Errorf("%w: compose source needs a container port between 1 and 65535", ErrValidation)
-	}
-	if hostPort != 0 && (hostPort < 1 || hostPort > 65535) {
-		return fmt.Errorf("%w: host port must be between 0 and 65535", ErrValidation)
-	}
-	if hostPort >= 1 && hostPort <= composePrivilegedPortEnd {
-		return fmt.Errorf("%w: compose source must not pin privileged host port %d (use 0 for auto-assign or a port above %d)",
-			ErrValidation, hostPort, composePrivilegedPortEnd)
-	}
-	return nil
-}
-
 // validateComposeSource checks a compose application: exactly one of pasted
-// content or a repository with an in-repo file path, plus the routed web
+// content or a repository with an in-repo file path, plus the release web
 // service. A pasted document carries no repository and is validated whole
 // (structure, application scope, service membership); a repo-backed one
 // reuses the matching git flow's repository rules and checks membership at
@@ -1405,9 +1276,6 @@ func validateComposeSource(app Application) error {
 	if pasted == repo {
 		return fmt.Errorf("%w: compose source needs either pasted content or a repository with a compose file, not both",
 			ErrValidation)
-	}
-	if err := validateComposePorts(app.Port, app.HostPort); err != nil {
-		return err
 	}
 	if pasted {
 		if strings.TrimSpace(app.Provider) != "" {
@@ -1469,15 +1337,6 @@ func validateProviderSource(app Application, provider string) error {
 		return fmt.Errorf("%w: repository is required", ErrValidation)
 	}
 	return validateCloneURL(app.CloneURL)
-}
-
-// validatePort rejects values the applications table CHECKs would refuse, so a
-// bad port is a 400 instead of a database error.
-func validatePort(field string, port int32) error {
-	if port < 0 || port > 65535 {
-		return fmt.Errorf("%w: %s must be between 0 and 65535", ErrValidation, field)
-	}
-	return nil
 }
 
 // prepareEnv turns API entries into the two collections that are stored: plain

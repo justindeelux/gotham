@@ -123,15 +123,22 @@ type composeAppService struct {
 	Image string `yaml:"image"`
 }
 
-// InjectComposeWebPorts ensures the rendered document publishes the
-// application's port mapping on its web service, so the domain/port routing
-// stored on the application reaches that service. An existing routable
-// mapping for the container port is kept (the user's declaration wins);
-// otherwise the mapping is appended in N:port or host:port form, mirroring
-// portSpecs.
-func InjectComposeWebPorts(rendered, webService string, port, hostPort int32) (string, error) {
-	if port <= 0 {
-		return "", fmt.Errorf("%w: compose web service needs a container port", ErrValidation)
+// ComposePortTarget is one domain's routing target in a compose document: the
+// service that serves the host and the container port the proxy must reach.
+type ComposePortTarget struct {
+	Service string
+	Port    int32
+}
+
+// InjectComposeDomainPorts ensures the rendered document publishes every
+// domain's container port on the service it names. An existing routable
+// mapping for the port is kept (the user's declaration wins); otherwise a
+// bare container port is appended, letting Docker assign an ephemeral host
+// port that the proxy resolves. An application with no domains changes
+// nothing, and a target must name a service the document declares.
+func InjectComposeDomainPorts(rendered string, targets []ComposePortTarget) (string, error) {
+	if len(targets) == 0 {
+		return rendered, nil
 	}
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(rendered), &doc); err != nil {
@@ -141,29 +148,46 @@ func InjectComposeWebPorts(rendered, webService string, port, hostPort int32) (s
 	if !ok {
 		return "", fmt.Errorf("%w: compose document declares no services", ErrValidation)
 	}
-	rawService, ok := servicesMap[webService]
-	if !ok {
-		return "", fmt.Errorf("%w: unknown compose service %q", ErrValidation, webService)
-	}
-	service, ok := rawService.(map[string]any)
-	if !ok {
-		return "", fmt.Errorf("%w: compose service %q is not a mapping", ErrValidation, webService)
-	}
-	want := strconv.Itoa(int(port))
-	if hostPort > 0 {
-		want = strconv.Itoa(int(hostPort)) + ":" + want
-	}
-	entries, err := composePortEntries(service["ports"])
-	if err != nil {
-		return "", fmt.Errorf("%w: compose service %q: %v", ErrValidation, webService, err)
-	}
-	for _, entry := range entries {
-		if portMapped(entry, strconv.Itoa(int(port))) {
-			return rendered, nil
+	byService := make(map[string][]string, len(targets))
+	for _, target := range targets {
+		if target.Port <= 0 {
+			return "", fmt.Errorf("%w: compose service %q needs a container port", ErrValidation, target.Service)
 		}
+		if _, ok := servicesMap[target.Service]; !ok {
+			return "", fmt.Errorf("%w: unknown compose service %q", ErrValidation, target.Service)
+		}
+		byService[target.Service] = append(byService[target.Service], strconv.Itoa(int(target.Port)))
 	}
-	service["ports"] = append(entries, want)
-	servicesMap[webService] = service
+	changed := false
+	for serviceName, ports := range byService {
+		service, ok := servicesMap[serviceName].(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("%w: compose service %q is not a mapping", ErrValidation, serviceName)
+		}
+		entries, err := composePortEntries(service["ports"])
+		if err != nil {
+			return "", fmt.Errorf("%w: compose service %q: %v", ErrValidation, serviceName, err)
+		}
+		for _, port := range ports {
+			mapped := false
+			for _, entry := range entries {
+				if portMapped(entry, port) {
+					mapped = true
+					break
+				}
+			}
+			if mapped {
+				continue
+			}
+			entries = append(entries, port)
+			changed = true
+		}
+		service["ports"] = entries
+		servicesMap[serviceName] = service
+	}
+	if !changed {
+		return rendered, nil
+	}
 	doc["services"] = servicesMap
 	out, err := yaml.Marshal(doc)
 	if err != nil {
@@ -292,7 +316,7 @@ func teardownStubDocument() string {
 // The map is what services.Render substitutes into the document; secret
 // values never reach a stored row, a log line or an error (see Render and
 // services.Redact at the call sites).
-func composeProjectEnv(app Application, envVars []EnvVar, secrets []Secret, project, environment []SharedVariable, secretKey string) (map[string]string, error) {
+func composeProjectEnv(envVars []EnvVar, secrets []Secret, project, environment []SharedVariable, secretKey string, port int32) (map[string]string, error) {
 	envVars, secrets = mergeSharedVariables(project, environment, envVars, secrets)
 	env := make(map[string]string, len(envVars)+len(secrets)+1)
 	for _, v := range envVars {
@@ -317,7 +341,7 @@ func composeProjectEnv(app Application, envVars []EnvVar, secrets []Secret, proj
 		}
 		env[s.Key] = value
 	}
-	for key, value := range defaultPortEnv(app, envVars, secrets) {
+	for key, value := range defaultPortEnv(port, envVars, secrets) {
 		if _, ok := env[key]; !ok {
 			env[key] = value
 		}

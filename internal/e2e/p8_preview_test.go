@@ -44,11 +44,9 @@ func TestP8PreviewLifecycle(t *testing.T) {
 		CloneURL:      fixture.dir,
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		BaseDomain:    baseDomain,
-		Port:          p4ContainerPort,
-		HostPort:      freeHostPort(t),
 		ServerID:      h.serverID.String(),
 	})
+	h.addDomain(t, app.ID, baseDomain, p4ContainerPort)
 	hookSecret := "p8-e2e-secret-" + suffix
 	h.seedWebhook(t, app, hookSecret)
 
@@ -83,7 +81,7 @@ func TestP8PreviewLifecycle(t *testing.T) {
 	// The webhook service created the sibling, not createApplication, so its
 	// containers and built images need their own cleanup.
 	h.removeAppArtifacts(t, sibling.ID)
-	if sibling.Branch != "feature/preview" || sibling.BaseDomain != wantHost {
+	if sibling.Branch != "feature/preview" || sibling.PrimaryDomain != wantHost {
 		t.Fatalf("sibling = %+v, want the PR branch on %s", sibling, wantHost)
 	}
 	if sibling.CloneURL != fixture.dir || sibling.ServerID != h.serverID.String() {
@@ -211,17 +209,24 @@ func (h *p4Harness) applicationByID(t *testing.T, id string) p4Application {
 	if row.ServerID.Valid {
 		serverID = uuid.UUID(row.ServerID.Bytes).String()
 	}
+	primary := ""
+	if domains, err := h.st.ListApplicationDomainsByApplication(ctx, row.ID); err == nil {
+		for _, domain := range domains {
+			if domain.IsPrimary {
+				primary = domain.Domain
+				break
+			}
+		}
+	}
 	return p4Application{
-		ID:         uuid.UUID(row.ID.Bytes).String(),
-		Name:       row.Name,
-		Repo:       row.Repo,
-		CloneURL:   row.CloneUrl,
-		Branch:     row.Branch,
-		BuildPack:  row.BuildPack,
-		BaseDomain: row.BaseDomain,
-		Port:       row.Port,
-		HostPort:   row.HostPort,
-		ServerID:   serverID,
+		ID:            uuid.UUID(row.ID.Bytes).String(),
+		Name:          row.Name,
+		Repo:          row.Repo,
+		CloneURL:      row.CloneUrl,
+		Branch:        row.Branch,
+		BuildPack:     row.BuildPack,
+		PrimaryDomain: primary,
+		ServerID:      serverID,
 	}
 }
 

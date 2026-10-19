@@ -386,17 +386,13 @@ func newSyncFixture(t *testing.T, apps []ProxiedApplication, serverID uuid.UUID)
 // runningApp builds a routable row whose deployment container is `containerID`
 // and whose published binding is `published` ("" for none).
 func runningApp(serverID uuid.UUID, domain string, containerID string, privatePort, published int32) ProxiedApplication {
-	app := ProxiedApplication{
+	_ = published // the proxy reads the live binding; the argument stays for fixtures
+	return ProxiedApplication{
 		ID:          uuid.New(),
 		ServerID:    serverID,
-		BaseDomain:  domain,
-		Port:        privatePort,
+		Domains:     []ProxiedDomain{{Domain: domain, Port: privatePort}},
 		ContainerID: containerID,
 	}
-	if published > 0 {
-		app.HostPort = published
-	}
-	return app
 }
 
 // appContainer is an application container publishing its container port 3000
@@ -441,8 +437,7 @@ func TestSyncServerWritesVerifiedConfigFromLiveEndpoints(t *testing.T) {
 	serverB := uuid.New()
 	appID := uuid.New()
 	app := ProxiedApplication{
-		ID: appID, ServerID: serverA, BaseDomain: "App.Example.com",
-		Port: 3000, HostPort: 18080, ContainerID: "app-container-1",
+		ID: appID, ServerID: serverA, Domains: []ProxiedDomain{{Domain: "App.Example.com", Port: 3000}}, ContainerID: "app-container-1",
 	}
 	other := runningApp(serverB, "other.example.com", "other-container", 3001, 18081)
 
@@ -585,9 +580,9 @@ func TestSyncServerIsolatesPendingAndInvalidRows(t *testing.T) {
 func TestSyncServerSkipsDisabledLegacyDomainsWithNoWinner(t *testing.T) {
 	serverID := uuid.New()
 	first := runningApp(serverID, "legacy.example.com", "legacy-container-1", 3000, 18080)
-	first.Disabled = true
+	first.Domains[0].Disabled = true
 	second := runningApp(serverID, "legacy.example.com", "legacy-container-2", 3000, 18081)
-	second.Disabled = true
+	second.Domains[0].Disabled = true
 	healthy := runningApp(serverID, "healthy.example.com", "healthy-container", 3000, 18082)
 
 	fixture := newSyncFixture(t, []ProxiedApplication{first, second, healthy}, serverID)
@@ -608,7 +603,7 @@ func TestSyncServerSkipsDisabledLegacyDomainsWithNoWinner(t *testing.T) {
 	}
 	for _, diagnostic := range partial.Diagnostics {
 		if diagnostic.Domain != "legacy.example.com" ||
-			!strings.Contains(diagnostic.Reason, "uniqueness migration") {
+			!strings.Contains(diagnostic.Reason, "uniqueness") {
 			t.Fatalf("diagnostic = %#v, want an actionable disabled-domain reason", diagnostic)
 		}
 	}

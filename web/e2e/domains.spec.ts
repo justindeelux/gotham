@@ -116,9 +116,6 @@ test.describe("domains", () => {
         clone_url: cloneURL,
         branch: "main",
         build_pack: "auto",
-        base_domain: domain,
-        port: 80,
-        host_port: 0,
         server_id: server.id,
       },
     });
@@ -126,6 +123,11 @@ test.describe("domains", () => {
     const { application: app } = (await appResponse.json()) as {
       application: SeededApplication;
     };
+    const domainResponse = await request.post(`/api/v1/applications/${app.id}/domains`, {
+      headers,
+      data: { domain, port: 80, protocol: "http" },
+    });
+    expect(domainResponse.status(), await domainResponse.text()).toBe(201);
 
     // A second application without a base domain backs the API error path:
     // certificate writes for it must answer 400 and the UI must show it.
@@ -139,8 +141,6 @@ test.describe("domains", () => {
         clone_url: cloneURL,
         branch: "main",
         build_pack: "auto",
-        port: 80,
-        host_port: 0,
         server_id: server.id,
       },
     });
@@ -180,7 +180,7 @@ test.describe("domains", () => {
       .click();
     await createCertModal.getByRole("button", { name: "Save" }).click();
     await expect(
-      createCertModal.getByText(/no valid base domain/i),
+      createCertModal.getByText(/no primary domain yet/i),
     ).toBeVisible();
     await createCertModal.getByRole("button", { name: "Cancel" }).click();
     await expect(createCertModal).toBeHidden();
@@ -483,16 +483,17 @@ test.describe("domains", () => {
     // ── application detail: change the domain and re-record the cert ─────
     await page.goto(nestedURL(projectId, environmentId, "applications", app.id));
     await tab(page, "Domains").click();
-    const domainCard = page.locator(".n-card").filter({ hasText: "Application domain" });
-    await expect(domainCard.locator("input").first()).toHaveValue(domain);
-    await domainCard.locator("input").first().fill(changedDomain);
-    await page.getByRole("button", { name: "Save domain" }).click();
+    const domainCard = page.locator(".n-card").filter({ hasText: "Domains" }).first();
+    const primaryRow = domainCard.locator(".domain-row").filter({ hasText: domain });
+    await primaryRow.getByRole("button", { name: "Edit" }).click();
+    await domainCard.locator('input[aria-label="Domain hostname"]').fill(changedDomain);
+    await domainCard.getByRole("button", { name: "Save domain" }).click();
     await expect(
-      page.getByText(/records the current base domain/i),
+      page.getByText(/records the current primary domain/i),
     ).toBeVisible();
     await page.getByRole("button", { name: "Re-record domain" }).click();
     await expect(
-      page.getByText(/records the current base domain/i),
+      page.getByText(/records the current primary domain/i),
     ).toHaveCount(0);
     await expect(page.getByText(rotatedName)).toBeVisible();
 
@@ -501,16 +502,11 @@ test.describe("domains", () => {
     // reported success as "Something went wrong ... Cannot read
     // properties"): the row appears, no error banner shows, and removal
     // cleans up.
-    const aliasCard = page
-      .locator(".n-card")
-      .filter({
-        has: page.locator(".n-card-header__main", { hasText: "Additional domains" }),
-      })
-      .first();
+    const aliasCard = page.locator(".n-card").filter({ hasText: "Domains" }).first();
     const aliasDomain = `www.${zone}`;
-    await aliasCard.getByPlaceholder("www.example.com").fill(aliasDomain);
+    await aliasCard.locator('input[aria-label="Domain hostname"]').fill(aliasDomain);
     await aliasCard.getByRole("button", { name: "Add domain", exact: true }).click();
-    const aliasRow = aliasCard.locator(".alias-row").filter({ hasText: aliasDomain });
+    const aliasRow = aliasCard.locator(".domain-row").filter({ hasText: aliasDomain });
     await expect(aliasRow).toHaveCount(1);
     await expect(aliasCard.getByText(/something went wrong/i)).toHaveCount(0);
     await expect(aliasCard.getByText(/cannot read properties/i)).toHaveCount(0);

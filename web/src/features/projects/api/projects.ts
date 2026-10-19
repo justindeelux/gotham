@@ -107,10 +107,7 @@ export interface EnvironmentResourceApplication {
   clone_url: string;
   branch: string;
   build_pack: string;
-  base_domain: string;
-  base_domain_disabled: boolean;
-  port: number;
-  host_port: number;
+  primary_domain: string;
   server_id: string;
   server_name: string;
   /** True for a PR-preview sibling (only present with ?previews=1). */

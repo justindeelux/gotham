@@ -17,17 +17,15 @@ func multiNode() []containers.Container {
 }
 
 // TestRoutesForServerEmitsOneRoutePerDomain proves the JUS-89 routing model:
-// an application with two domains emits two routes, the primary keeping the
-// legacy router/service names (single-domain output is byte-identical) while
-// the alias gets its own stable routers over the shared service.
+// an application with two domains emits two routes, each with its own
+// router and service named after the host.
 func TestRoutesForServerEmitsOneRoutePerDomain(t *testing.T) {
 	serverID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
 	appID := uuid.MustParse("aaaaaaaa-1111-1111-1111-111111111111")
 	apps := []ProxiedApplication{{
 		ID: appID, ServerID: serverID, Name: "demo",
-		BaseDomain: "app.example.com",
-		Domains:    []string{"app.example.com", "www.example.com"},
-		Port:       3000, HostPort: 18080, ContainerID: "c1",
+		Domains:     []ProxiedDomain{{Domain: "app.example.com", Port: 3000}, {Domain: "www.example.com", Port: 3000}},
+		ContainerID: "c1",
 	}}
 
 	routes, diagnostics := routesForServer(apps, serverID, DefaultBackendHost, multiNode(), nil)
@@ -38,32 +36,32 @@ func TestRoutesForServerEmitsOneRoutePerDomain(t *testing.T) {
 		t.Fatalf("routes = %#v, want one per domain", routes)
 	}
 	primary, alias := routes[0], routes[1]
-	if primary.Domain != "app.example.com" || primary.Name != "" || primary.Service != "" {
-		t.Errorf("primary route = %#v, want the legacy unnamed route", primary)
+	if primary.Domain != "app.example.com" || primary.Name != AliasRouteName(appID, "app.example.com") || primary.Service != primary.Name {
+		t.Errorf("primary route = %#v, want its own stable router and service", primary)
 	}
-	if alias.Domain != "www.example.com" || alias.Name != AliasRouteName(appID, "www.example.com") {
-		t.Errorf("alias route = %#v, want stable alias routers", alias)
-	}
-	if alias.Service != serviceName(appID) {
-		t.Errorf("alias service = %q, want the shared application service", alias.Service)
+	if alias.Domain != "www.example.com" || alias.Name != AliasRouteName(appID, "www.example.com") || alias.Service != alias.Name {
+		t.Errorf("alias route = %#v, want its own stable router and service", alias)
 	}
 	if primary.Target != alias.Target {
 		t.Errorf("targets differ: %q vs %q, want one backend behind two names", primary.Target, alias.Target)
 	}
 
 	cfg := BuildConfig(routes, nil, nil, "", "")
-	legacy := serviceName(appID)
-	for _, name := range []string{legacy + "-web", AliasRouteName(appID, "www.example.com") + "-web"} {
-		router, ok := cfg.Routers[name]
+	for _, route := range routes {
+		name := route.Name
+		router, ok := cfg.Routers[name+"-web"]
 		if !ok {
 			t.Fatalf("missing router %q in %#v", name, cfg.Routers)
 		}
-		if router.Service != legacy {
-			t.Errorf("router %q serves %q, want the shared service %q", name, router.Service, legacy)
+		if router.Service != name {
+			t.Errorf("router %q serves %q, want its own service %q", name, router.Service, name)
+		}
+		if _, ok := cfg.Services[name]; !ok {
+			t.Errorf("missing service %q", name)
 		}
 	}
-	if len(cfg.Services) != 1 {
-		t.Fatalf("services = %#v, want exactly the shared application service", cfg.Services)
+	if len(cfg.Services) != 2 {
+		t.Fatalf("services = %#v, want one per domain", cfg.Services)
 	}
 }
 
@@ -109,10 +107,8 @@ func TestRoutesForServerHoldsBackDuplicateDomainsAcrossApplications(t *testing.T
 	serverID := uuid.New()
 	first, second := uuid.New(), uuid.New()
 	apps := []ProxiedApplication{
-		{ID: first, ServerID: serverID, BaseDomain: "app.example.com",
-			Domains: []string{"app.example.com"}, Port: 3000, ContainerID: "c1"},
-		{ID: second, ServerID: serverID, BaseDomain: "other.example.com",
-			Domains: []string{"other.example.com", "app.example.com"}, Port: 3000, ContainerID: "c1"},
+		{ID: first, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 3000}}, ContainerID: "c1"},
+		{ID: second, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "other.example.com", Port: 3000}, {Domain: "app.example.com", Port: 3000}}, ContainerID: "c1"},
 	}
 	routes, diagnostics := routesForServer(apps, serverID, DefaultBackendHost, multiNode(), nil)
 	if len(routes) != 1 || routes[0].Domain != "other.example.com" {
@@ -144,9 +140,7 @@ func TestRouteCertificateReusesWildcardForSibling(t *testing.T) {
 		},
 	}
 	apps := []ProxiedApplication{{
-		ID: appID, ServerID: serverID, BaseDomain: "app.example.com",
-		Domains:     []string{"app.example.com", "api.example.com"},
-		Port:        3000,
+		ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}, {Domain: "api.example.com", Port: 3000, Protocol: ProtocolHTTPS}},
 		ContainerID: "c1",
 		Certificates: []*CertificateIntent{{
 			Domain: "app.example.com", Enabled: true,
@@ -186,9 +180,7 @@ func TestRouteCertificatePerDomainIsolation(t *testing.T) {
 	serverID := uuid.New()
 	appID := uuid.New()
 	apps := []ProxiedApplication{{
-		ID: appID, ServerID: serverID, BaseDomain: "app.example.com",
-		Domains:     []string{"app.example.com", "www.example.com"},
-		Port:        3000,
+		ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}, {Domain: "www.example.com", Port: 3000, Protocol: ProtocolHTTPS}},
 		ContainerID: "c1",
 		Certificates: []*CertificateIntent{{
 			Domain: "www.example.com", Enabled: true, Challenge: ChallengeHTTP01,

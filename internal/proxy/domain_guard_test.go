@@ -16,9 +16,9 @@ func TestControlPlaneHostClashes(t *testing.T) {
 			host := "panel.example.com"
 			switch kind {
 			case "primary", "disabled app":
-				f.source.setApps(ProxiedApplication{BaseDomain: host, Disabled: kind == "disabled app"})
+				f.source.setApps(ProxiedApplication{Domains: []ProxiedDomain{{Domain: host, Disabled: kind == "disabled app"}}})
 			case "alias":
-				f.source.setApps(ProxiedApplication{BaseDomain: "app.example.com", Domains: []string{"app.example.com", host}})
+				f.source.setApps(ProxiedApplication{Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 3000}, {Domain: host, Port: 3000}}})
 			case "service":
 				f.service.services = &fakeServiceSource{services: []ProxiedService{{Domains: []ServiceDomain{{Host: host}}}}}
 			case "redirect", "disabled redirect":

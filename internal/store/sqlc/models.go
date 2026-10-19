@@ -31,12 +31,8 @@ type Application struct {
 	CloneUrl                   string             `json:"clone_url"`
 	Branch                     string             `json:"branch"`
 	BuildPack                  string             `json:"build_pack"`
-	BaseDomain                 string             `json:"base_domain"`
-	Port                       int32              `json:"port"`
-	HostPort                   int32              `json:"host_port"`
 	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
-	BaseDomainDisabled         bool               `json:"base_domain_disabled"`
 	TeamID                     pgtype.UUID        `json:"team_id"`
 	IsPreview                  bool               `json:"is_preview"`
 	EnvironmentID              pgtype.UUID        `json:"environment_id"`
@@ -73,6 +69,9 @@ type ApplicationDomain struct {
 	Disabled      bool               `json:"disabled"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	Port          int32              `json:"port"`
+	Service       *string            `json:"service"`
+	Protocol      string             `json:"protocol"`
 }
 
 type ApplicationGitCredential struct {

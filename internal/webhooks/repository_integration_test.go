@@ -274,7 +274,6 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: serverID, EnvironmentID: envID,
 		Name: "wh-app-pr-7", Provider: "github",
 		Repo: base.Repo, CloneUrl: base.CloneUrl, Branch: "feat/x", BuildPack: "auto",
-		BaseDomain: "pr-7-wh-app.example.com",
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication(sibling): %v", err)
@@ -493,8 +492,7 @@ func TestStoreRepositoryPreviewRoundtrip(t *testing.T) {
 	previewApp, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: serverID, EnvironmentID: envID,
 		Name: "wh-app-pr-11", Provider: "github",
-		Repo: base.Repo, CloneUrl: base.CloneUrl, Branch: "feat/w", BuildPack: "auto",
-		BaseDomain: "pr-11-wh-app.example.com", IsPreview: true,
+		Repo: base.Repo, CloneUrl: base.CloneUrl, Branch: "feat/w", BuildPack: "auto", IsPreview: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication(preview sibling): %v", err)
@@ -604,12 +602,16 @@ func TestStoreRepositoryTargetsCarryPreviewFields(t *testing.T) {
 	})
 
 	params := createApplicationParams(userID, uuid.UUID(envID.Bytes), uuid.UUID(serverID.Bytes))
-	params.BaseDomain = "wh-app.example.com"
 	createdApp, err := st.CreateApplication(ctx, params)
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
 	appID := uuid.UUID(createdApp.ID.Bytes)
+	if _, err := st.CreateApplicationDomain(ctx, sqlc.CreateApplicationDomainParams{
+		ApplicationID: createdApp.ID, Domain: "wh-app.example.com", IsPrimary: true, Port: 3000, Protocol: "https",
+	}); err != nil {
+		t.Fatalf("CreateApplicationDomain: %v", err)
+	}
 	if _, err := repo.CreateWebhook(ctx, Hook{
 		ApplicationID: appID, Provider: "github", Repo: createdApp.Repo, HookID: "1",
 		URL: "https://cp.example/api/v1/webhooks/github",
@@ -1060,7 +1062,7 @@ func TestStoreSiblingDeleteClearsLedger(t *testing.T) {
 		UserID: pgUUID(userID), TeamID: pgUUID(userID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
 		Name: "octo-gotham-pr-7", Provider: "github",
 		Repo: "octo/gotham", CloneUrl: "https://github.com/octo/gotham.git",
-		Branch: "feat/x", BuildPack: "auto", BaseDomain: "pr-7.example.com", IsPreview: true,
+		Branch: "feat/x", BuildPack: "auto", IsPreview: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication(sibling): %v", err)

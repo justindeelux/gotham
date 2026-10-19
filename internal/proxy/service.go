@@ -800,7 +800,7 @@ func (s *SyncService) listServices(ctx context.Context) ([]ProxiedService, error
 // applicationHosts returns every application domain claimed on the node,
 // normalized, mirroring the redirect generator's node-domain set: the wider
 // claim (not only routable rows) is what keeps two routers from ever matching
-// the same host. Since JUS-89 this is every domain row, not just the primary.
+// the same host. Every non-disabled domain row counts.
 func applicationHosts(apps []ProxiedApplication, serverID uuid.UUID) map[string]bool {
 	hosts := make(map[string]bool, len(apps))
 	for _, app := range apps {
@@ -808,26 +808,27 @@ func applicationHosts(apps []ProxiedApplication, serverID uuid.UUID) map[string]
 			continue
 		}
 		for _, domain := range appDomains(app) {
-			if domain != "" {
-				hosts[domain] = true
+			if domain.Disabled {
+				continue
+			}
+			if host := NormalizeDomain(domain.Domain); host != "" {
+				hosts[host] = true
 			}
 		}
 	}
 	return hosts
 }
 
-// appDomains returns the normalized domains an application claims: every
-// domain row when present (JUS-89), otherwise the single legacy BaseDomain so
-// unit-test construction sites keep routing exactly one host.
-func appDomains(app ProxiedApplication) []string {
-	if len(app.Domains) == 0 {
-		return []string{NormalizeDomain(app.BaseDomain)}
-	}
-	domains := make([]string, 0, len(app.Domains))
-	for _, domain := range app.Domains {
-		domains = append(domains, NormalizeDomain(domain))
-	}
-	return domains
+// appDomains returns an application's routing rows.
+func appDomains(app ProxiedApplication) []ProxiedDomain {
+	return app.Domains
+}
+
+// composeProjectName mirrors services.ProjectName without importing the
+// services package (it imports proxy; the constant is duplicated like the
+// ports label precedent).
+func composeProjectName(id uuid.UUID) string {
+	return "gotham-" + id.String()
 }
 
 // serviceRouteName is the deterministic Traefik name of one compose service
@@ -947,27 +948,21 @@ func resolveServiceEndpoint(container *containers.Container, port int32) (int32,
 	return 0, fmt.Sprintf("container port %d is not published; add it to the compose service ports", port)
 }
 
-// routesForServer filters the proxied applications down to one node, resolves
-// each one's live endpoint and classifies rows that cannot be routed as
-// per-application diagnostics. Healthy rows are routed even when a sibling is
-// pending or invalid, so no single row can freeze the node's configuration
-// (BE-6.1 F3). Every binding of a duplicate normalized domain on this node is
-// held back: row order does not prove ownership, and the unique index already
-// prevents new active duplicates (R1).
+// routesForServer filters the proxied applications down to one node and
+// classifies every domain row that cannot be routed as a diagnostic. Healthy
+// rows are routed even when a sibling is pending or invalid, so no single row
+// can freeze the node's configuration (BE-6.1 F3). Every binding of a
+// duplicate normalized domain on this node is held back: row order does not
+// prove ownership, and the unique index already prevents new active
+// duplicates (R1).
 //
-// Since JUS-89 one application emits one route per domain: the primary keeps
-// the legacy "app-<id>" router and service names (single-domain nodes render
-// byte-identical configuration), while every alias gets its own
-// "app-<id>-<domain>" routers sharing the application's service — one router
-// per domain, because each domain may need its own TLS resolver. Removing a
-// domain therefore removes only its routers; the survivors keep their names.
-// Aliases of a domain-disabled application are held back with it.
-//
-// Certificate activation (BE-6.2) is resolved per route: a route whose
-// certificate configuration is active gets an HTTPS route and the redirect,
-// while a configured-but-inactive one stays plain HTTP exactly as in BE-6.1
-// and explains itself through a diagnostic (an entry can therefore accompany
-// a routed row, not only a skipped one).
+// Each domain is its own routing target (JUS-233): it carries the container
+// port, an optional compose service and the protocol, and it gets its own
+// router and service named "app-<id>-<domain>". A domain without a compose
+// service targets the application's release container; a compose service is
+// resolved through Docker Compose's own project/service labels. Removing a
+// domain therefore removes only its own router, and the survivors keep their
+// names. A disabled (uniqueness conflict) row is reported, never routed.
 func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost string, nodeContainers []containers.Container, providers map[uuid.UUID]providerAccess) ([]Route, []Diagnostic) {
 	routes := make([]Route, 0, len(apps))
 	diagnostics := make([]Diagnostic, 0)
@@ -978,12 +973,16 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 	// duplicates.
 	domainCounts := make(map[string]int, len(apps))
 	for _, app := range apps {
-		if app.ServerID != serverID || app.Disabled {
+		if app.ServerID != serverID {
 			continue
 		}
 		for _, domain := range appDomains(app) {
-			if ValidateDomain(domain) == nil {
-				domainCounts[domain]++
+			if domain.Disabled {
+				continue
+			}
+			host := NormalizeDomain(domain.Domain)
+			if ValidateDomain(host) == nil {
+				domainCounts[host]++
 			}
 		}
 	}
@@ -992,77 +991,102 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 		if app.ServerID != serverID {
 			continue
 		}
-		if app.Disabled {
-			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: NormalizeDomain(app.BaseDomain)}
-			diagnostic.Reason = "domain disabled by the uniqueness migration; set a new domain to re-enable it"
-			diagnostics = append(diagnostics, diagnostic)
-			continue
-		}
-		// Invalid hosts are reported before any endpoint state, exactly like
-		// the single-domain path: a malformed domain is never a pending
-		// deployment.
-		domains := make([]string, 0, len(appDomains(app)))
 		for _, domain := range appDomains(app) {
-			if ValidateDomain(domain) != nil {
-				diagnostics = append(diagnostics, Diagnostic{
-					ApplicationID: app.ID,
-					Domain:        domain,
-					Reason:        "invalid domain",
-				})
+			host := NormalizeDomain(domain.Domain)
+			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: host}
+			switch {
+			case domain.Disabled:
+				diagnostic.Reason = "domain disabled by a domain-uniqueness conflict; remove it or set a new domain to re-enable it"
+				diagnostics = append(diagnostics, diagnostic)
 				continue
-			}
-			domains = append(domains, domain)
-		}
-		if len(domains) == 0 {
-			continue
-		}
-		if app.Port <= 0 {
-			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: domains[0]}
-			diagnostic.Reason = "application declares no container port"
-			diagnostics = append(diagnostics, diagnostic)
-			continue
-		}
-		if app.ContainerID == "" {
-			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: domains[0]}
-			diagnostic.Reason = "no running deployment yet"
-			diagnostics = append(diagnostics, diagnostic)
-			continue
-		}
-		hostPort, reason := resolveEndpoint(app, findContainer(byID, app.ContainerID))
-		if reason != "" {
-			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: domains[0]}
-			diagnostic.Reason = reason
-			diagnostics = append(diagnostics, diagnostic)
-			continue
-		}
-		target := fmt.Sprintf("http://%s:%d", backendHost, hostPort)
-		primary := NormalizeDomain(app.BaseDomain)
-		for _, domain := range domains {
-			diagnostic := Diagnostic{ApplicationID: app.ID, Domain: domain}
-			if domainCounts[domain] > 1 {
+			case ValidateDomain(host) != nil:
+				diagnostic.Reason = "invalid domain"
+				diagnostics = append(diagnostics, diagnostic)
+				continue
+			case domainCounts[host] > 1:
 				diagnostic.Reason = "duplicate domain on this node; all conflicting bindings are held back"
 				diagnostics = append(diagnostics, diagnostic)
 				continue
 			}
-			route := Route{
-				AppID:  app.ID,
-				Domain: domain,
-				Target: target,
-			}
-			if domain != primary {
-				route.Name = AliasRouteName(app.ID, domain)
-				route.Service = serviceName(app.ID)
-			}
-			certificate, certReason := resolveRouteCertificate(app, domain, providers)
-			route.Certificate = certificate
-			if certReason != "" {
-				diagnostic.Reason = certReason
+			target, reason := resolveDomainTarget(app, domain, backendHost, nodeContainers, byID)
+			if reason != "" {
+				diagnostic.Reason = reason
 				diagnostics = append(diagnostics, diagnostic)
+				continue
+			}
+			protocol := NormalizeProtocol(domain.Protocol)
+			// An empty protocol with a stored intent is pre-JUS-233 state (or
+			// a unit-test fixture): treat it as https, exactly like the
+			// generated TLS of the legacy model. Every stored row now
+			// defaults to http.
+			if domain.Protocol == "" && app.Certificate != nil {
+				protocol = ProtocolHTTPS
+			}
+			route := Route{
+				Name:     AliasRouteName(app.ID, host),
+				AppID:    app.ID,
+				Domain:   host,
+				Protocol: protocol,
+				Target:   target,
+			}
+			// One service per domain: every route name is unique, so the
+			// generated service does not need to be shared.
+			route.Service = route.Name
+			if protocol == ProtocolHTTPS {
+				certificate, certReason := resolveRouteCertificate(app, host, providers)
+				route.Certificate = certificate
+				if certReason != "" {
+					// A stored intent that cannot be activated (stale host,
+					// disabled provider, unopenable credential) keeps the
+					// route plain HTTP instead of redirecting to a
+					// certificate that will never be issued.
+					if certificate == nil {
+						route.Protocol = ProtocolHTTP
+					}
+					diagnostics = append(diagnostics, Diagnostic{
+						ApplicationID: app.ID,
+						Domain:        host,
+						Reason:        certReason,
+					})
+				}
 			}
 			routes = append(routes, route)
 		}
 	}
 	return routes, diagnostics
+}
+
+// resolveDomainTarget resolves the backend URL of one domain row. A row with
+// an explicit compose service finds that service's container through Docker
+// Compose's own labels; every other row targets the application's release
+// container. The host port is the engine-reported binding of the domain's
+// container port.
+func resolveDomainTarget(app ProxiedApplication, domain ProxiedDomain, backendHost string, nodeContainers []containers.Container, byID map[string]*containers.Container) (string, string) {
+	if domain.Port <= 0 {
+		return "", "domain declares no container port"
+	}
+	service := strings.TrimSpace(domain.Service)
+	var hostPort int32
+	if service != "" {
+		container := findComposeContainer(nodeContainers, composeProjectName(app.ID), service)
+		if container == nil {
+			return "", fmt.Sprintf("no running container for compose service %q found on the node", service)
+		}
+		hostPort = publishedHostPort(container, domain.Port)
+		if hostPort <= 0 {
+			return "", fmt.Sprintf("compose service %q does not publish container port %d", service, domain.Port)
+		}
+	} else {
+		if app.ContainerID == "" {
+			return "", "no running deployment yet"
+		}
+		var reason string
+		hostPort, reason = resolveEndpoint(findContainer(byID, app.ContainerID), domain.Port)
+		if reason != "" {
+			return "", reason
+		}
+	}
+	return fmt.Sprintf("http://%s:%d", backendHost, hostPort), ""
 }
 
 // redirectsForServer filters the redirect rules down to one node and holds
@@ -1095,8 +1119,9 @@ func redirectsForServer(apps []ProxiedApplication, rules []RedirectRule, serverI
 			continue
 		}
 		for _, domain := range appDomains(app) {
-			if domain != "" {
-				nodeDomains[domain] = true
+			host := NormalizeDomain(domain.Domain)
+			if host != "" {
+				nodeDomains[host] = true
 			}
 		}
 	}
@@ -1444,7 +1469,7 @@ func envFingerprint(secret string, env []string) string {
 // publication is routable: a missing, stopped or unusable container is
 // isolated instead of being pointed at its declared port, which another
 // workload may own by now (R1).
-func resolveEndpoint(app ProxiedApplication, container *containers.Container) (int32, string) {
+func resolveEndpoint(container *containers.Container, port int32) (int32, string) {
 	if container == nil {
 		return 0, "no running deployment container found on the node"
 	}
@@ -1454,10 +1479,10 @@ func resolveEndpoint(app ProxiedApplication, container *containers.Container) (i
 	if !container.PortsReported {
 		return 0, "the container has no engine-reported published ports (or the node agent is too old to report them)"
 	}
-	if hostPort := publishedHostPort(container, app.Port); hostPort > 0 {
+	if hostPort := publishedHostPort(container, port); hostPort > 0 {
 		return hostPort, ""
 	}
-	return 0, fmt.Sprintf("container port %d has no reachable published binding", app.Port)
+	return 0, fmt.Sprintf("container port %d has no reachable published binding", port)
 }
 
 // publishedHostPort returns the host port a container publishes for

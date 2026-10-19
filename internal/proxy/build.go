@@ -60,6 +60,9 @@ type Route struct {
 	AppID uuid.UUID
 	// Domain is the exact hostname to route, already lowercased and trimmed.
 	Domain string
+	// Protocol selects the entrypoint: ProtocolHTTP renders a plain-HTTP
+	// router only, ProtocolHTTPS adds the TLS router and the redirect.
+	Protocol string
 	// Target is the backend URL, e.g. http://172.17.0.1:3000.
 	Target string
 	// Service, when set, names the shared backend service this router
@@ -238,21 +241,28 @@ func BuildConfig(routes []Route, redirects []Redirect, providers []DNSProvider, 
 			Service:     service,
 			EntryPoints: []string{EntryPointWeb},
 		}
-		if route.Certificate != nil {
+		if NormalizeProtocol(route.Protocol) == ProtocolHTTPS || route.Certificate != nil {
+			certificate := route.Certificate
+			if certificate == nil {
+				// An https domain without a stored intent still terminates
+				// TLS through the default HTTP-01 resolver: the protocol is
+				// the operator's explicit choice, not a derived activation.
+				certificate = &RouteCertificate{Resolver: DefaultResolverName}
+			}
 			if route.PanelCertificate == nil || route.PanelCertificate.Status == "issued" {
 				web.Middlewares = []string{HTTPRedirectMiddleware}
 				cfg.Middlewares[HTTPRedirectMiddleware] = Middleware{
 					RedirectScheme: &RedirectScheme{Scheme: "https", Permanent: true},
 				}
 			}
-			tls := &RouterTLS{CertResolver: route.Certificate.Resolver}
-			if route.Certificate.WildcardBase != "" {
+			tls := &RouterTLS{CertResolver: certificate.Resolver}
+			if certificate.WildcardBase != "" {
 				// The exact routed host is always the main name: a wildcard
 				// SAN covers one label only, so `*.parent` alone would not
 				// cover a multi-level host such as app.sub.example.com.
 				tls.Domains = []TLSDomain{{
 					Main: route.Domain,
-					SANs: []string{"*." + route.Certificate.WildcardBase},
+					SANs: []string{"*." + certificate.WildcardBase},
 				}}
 			}
 			cfg.Routers[name+"-websecure"] = Router{
@@ -360,6 +370,28 @@ func AliasRouteName(id uuid.UUID, domain string) string {
 // so Host() rules stay canonical.
 func NormalizeDomain(domain string) string {
 	return strings.ToLower(strings.TrimSpace(domain))
+}
+
+// Domain protocols select the Traefik entrypoint a route is served on.
+const (
+	// ProtocolHTTP serves the route on the plain-HTTP entrypoint only.
+	ProtocolHTTP = "http"
+	// ProtocolHTTPS serves the route on the TLS entrypoint and redirects
+	// plain HTTP to it.
+	ProtocolHTTPS = "https"
+)
+
+// NormalizeProtocol trims and lowercases a stored domain protocol,
+// defaulting to http.
+func NormalizeProtocol(protocol string) string {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case ProtocolHTTPS:
+		return ProtocolHTTPS
+	case "", ProtocolHTTP:
+		return ProtocolHTTP
+	default:
+		return strings.TrimSpace(protocol)
+	}
 }
 
 // WildcardBase derives the wildcard base that covers the routed host. A

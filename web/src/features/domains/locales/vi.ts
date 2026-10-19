@@ -125,7 +125,7 @@ const vi = {
     statusNotReported: "chưa báo cáo",
     expiryNotReported: "chưa báo cáo",
     baseDomainChanged:
-      "{app} · tên miền gốc đã đổi thành {domain} — lưu lại để ghi nhận",
+      "{app} · tên miền chính đã đổi thành {domain} — lưu lại để ghi nhận",
     statusTitle: "Trạng thái được quan sát trực tiếp từ node sở hữu",
     statusBody:
       "present nghĩa là bộ nhớ ACME của node đang giữ chứng chỉ cho tên " +
@@ -133,8 +133,8 @@ const vi = {
       "nhưng không có; unknown nghĩa là không đọc được node. Trạng thái " +
       "được tính khi đọc — control plane chỉ lưu cấu hình mong muốn.",
     footer:
-      "Tên miền đã ghi lấy từ tên miền gốc của ứng dụng tại thời điểm " +
-      "lưu. Đổi tên miền gốc sau đó thì cần lưu lại cấu hình để ghi nhận.",
+      "Tên miền đã ghi lấy từ tên miền chính của ứng dụng tại thời điểm " +
+      "lưu. Đổi tên miền chính sau đó thì cần lưu lại cấu hình để ghi nhận.",
     saved: "Đã lưu cấu hình chứng chỉ.",
     created: "Đã tạo cấu hình chứng chỉ.",
     deleted: "Đã xóa cấu hình chứng chỉ.",
@@ -142,7 +142,7 @@ const vi = {
   certificateDialog: {
     addTitle: "Thêm chứng chỉ",
     editTitle: "Sửa cấu hình chứng chỉ",
-    note: "Tên miền đã ghi luôn lấy từ tên miền gốc của ứng dụng đã chọn — không chỉnh sửa tại đây.",
+    note: "Tên miền đã ghi luôn lấy từ tên miền chính của ứng dụng đã chọn — không chỉnh sửa tại đây.",
     cancel: "Hủy",
     save: "Lưu",
   },
@@ -151,8 +151,8 @@ const vi = {
     applicationAria: "Ứng dụng",
     selectApplication: "Chọn ứng dụng",
     domainFromApp: "Tên miền (từ ứng dụng)",
-    noBaseDomain: "Chưa có tên miền gốc — hãy đặt trên ứng dụng trước.",
-    appWithoutDomain: "{name} · chưa có tên miền gốc",
+    noBaseDomain: "Chưa có tên miền chính — hãy đặt trên ứng dụng trước.",
+    appWithoutDomain: "{name} · chưa có tên miền chính",
     challenge: "Thử thách",
     httpHint: "· bộ giải HTTP dùng chung",
     dnsHint: "· bản ghi TXT qua nhà cung cấp DNS",
@@ -196,7 +196,7 @@ const vi = {
     application: "Ứng dụng",
     applicationAria: "Ứng dụng chuyển hướng",
     selectApplication: "Chọn ứng dụng",
-    appWithoutDomain: "{name} · chưa có tên miền gốc",
+    appWithoutDomain: "{name} · chưa có tên miền chính",
     sourceDomain: "Tên miền nguồn",
     sourceAria: "Tên miền nguồn chuyển hướng",
     targetDomain: "Tên miền đích",

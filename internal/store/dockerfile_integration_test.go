@@ -126,18 +126,14 @@ func TestStoreApplicationDockerfileRoundtrip(t *testing.T) {
 		}
 
 		updated, err := st.UpdateApplication(ctx, sqlc.UpdateApplicationParams{
-			ID:                 created.ID,
-			Name:               created.Name,
-			Branch:             created.Branch,
-			BuildPack:          created.BuildPack,
-			BaseDomain:         created.BaseDomain,
-			Port:               created.Port,
-			HostPort:           created.HostPort,
-			ServerID:           created.ServerID,
-			BaseDomainDisabled: created.BaseDomainDisabled,
-			EnvironmentID:      created.EnvironmentID,
-			DockerfileContent:  "FROM alpine:3.21\n",
-			BuildArgs:          []byte(`{"APP_ENV":"staging"}`),
+			ID:                created.ID,
+			Name:              created.Name,
+			Branch:            created.Branch,
+			BuildPack:         created.BuildPack,
+			ServerID:          created.ServerID,
+			EnvironmentID:     created.EnvironmentID,
+			DockerfileContent: "FROM alpine:3.21\n",
+			BuildArgs:         []byte(`{"APP_ENV":"staging"}`),
 		})
 		if err != nil {
 			t.Fatalf("UpdateApplication: %v", err)

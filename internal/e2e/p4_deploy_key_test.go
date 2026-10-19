@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -95,7 +94,6 @@ func TestP4DeployPrivateRepoOverSSH(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]
 	fixture := newP4Fixture(t, "e2e/p4-private-"+suffix, "gotham-p4-private-v1-"+suffix)
-	hostPort := freeHostPort(t)
 
 	app := h.createApplication(t, p4CreateApplication{
 		EnvironmentID: h.envID.String(),
@@ -107,10 +105,9 @@ func TestP4DeployPrivateRepoOverSSH(t *testing.T) {
 		CloneURL:  "ssh://git@127.0.0.1" + filepath.ToSlash(fixture.dir),
 		Branch:    "main",
 		BuildPack: "dockerfile",
-		Port:      p4ContainerPort,
-		HostPort:  hostPort,
 		ServerID:  h.serverID.String(),
 	})
+	h.addDomain(t, app.ID, "p4-private-"+suffix+".example.test", p4ContainerPort)
 	// The create route installed the push hook through the production seam:
 	// the harness wires cfg.Hooks to the real webhook service (with a stub
 	// installer, since no Git host is reachable), so the row exists without
@@ -148,10 +145,10 @@ func TestP4DeployPrivateRepoOverSSH(t *testing.T) {
 	if running.State != "running" {
 		t.Fatalf("deployment state = %q, want running (error: %s)", running.State, running.Error)
 	}
-	waitForHTTPBody(t, fmt.Sprintf("http://127.0.0.1:%d/index.html", hostPort), fixture.marker)
+	waitForHTTPBody(t, h.appURL(t, app.ID), fixture.marker)
 
 	if _, err := os.Stat(keyCopyPath); err != nil {
 		t.Errorf("the ssh stand-in saw no deploy key: %v", err)
 	}
-	t.Logf("private repo deploy ok: app=%s deployment=%s port=%d", app.ID, running.ID, hostPort)
+	t.Logf("private repo deploy ok: app=%s deployment=%s port=%d", app.ID, running.ID, h.publishedHostPort(t, app.ID, p4ContainerPort))
 }

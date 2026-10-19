@@ -107,7 +107,7 @@ describe("wizard gates match recorded outcomes", () => {
     const reset = {
       sourceType: "git_public", providerId: "", publicCloneUrl: "", privateCloneUrl: "", privateAuth: "ssh", httpsUsername: "", httpsToken: "", repoFullName: "", cloneUrl: "", branch: "main", name: "",
       composeMode: "paste", composeContent: "", composeFile: "docker-compose.yml", composeService: "",
-      buildPack: "", serverId: "", port: 3000, hostPort: null, baseDomain: "", env: [], storage: [],
+      buildPack: "", serverId: "", env: [], storage: [],
     };
     const sourceCases: Array<{ name: string; patch: Record<string, unknown>; sourceValid: boolean }> = [
       { name: "empty", patch: {}, sourceValid: false },
@@ -149,23 +149,11 @@ describe("wizard gates match recorded outcomes", () => {
     }
     const runtimeCases: Array<{ name: string; patch: Record<string, unknown>; runtimeValid: boolean }> = [
       { name: "empty", patch: {}, runtimeValid: false },
-      { name: "valid", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": ""}, runtimeValid: true },
-      { name: "null-port", patch: {"serverId": "s1", "port": null, "hostPort": null, "baseDomain": ""}, runtimeValid: false },
-      { name: "port-0", patch: {"serverId": "s1", "port": 0, "hostPort": null, "baseDomain": ""}, runtimeValid: false },
-      { name: "port-65536", patch: {"serverId": "s1", "port": 65536, "hostPort": null, "baseDomain": ""}, runtimeValid: false },
-      { name: "port-1.5", patch: {"serverId": "s1", "port": 1.5, "hostPort": null, "baseDomain": ""}, runtimeValid: false },
-      { name: "port-nan", patch: { serverId: "s1", port: NaN, hostPort: null, baseDomain: "" }, runtimeValid: false },
-      { name: "hostport-0", patch: {"serverId": "s1", "port": 3000, "hostPort": 0, "baseDomain": ""}, runtimeValid: true },
-      { name: "hostport-neg", patch: {"serverId": "s1", "port": 3000, "hostPort": -1, "baseDomain": ""}, runtimeValid: false },
-      { name: "hostport-big", patch: {"serverId": "s1", "port": 3000, "hostPort": 70000, "baseDomain": ""}, runtimeValid: false },
-      { name: "domain-ok", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": "app.gotham.dev"}, runtimeValid: true },
-      { name: "domain-bad", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": "not a domain"}, runtimeValid: false },
-      { name: "domain-upper", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": "APP.EXAMPLE.COM"}, runtimeValid: false },
-      { name: "domain-spaces", patch: {"serverId": "s1", "port": 3000, "hostPort": null, "baseDomain": "  app.gotham.dev  "}, runtimeValid: true },
-      { name: "no-server-else-valid", patch: {"serverId":"","port":3000,"hostPort":null,"baseDomain":""}, runtimeValid: false },
+      { name: "valid", patch: { serverId: "s1" }, runtimeValid: true },
+      { name: "no-server-else-valid", patch: { serverId: "" }, runtimeValid: false },
     ];
     for (const c of runtimeCases) {
-      Object.assign(w.form, { serverId: "", port: 3000, hostPort: null, baseDomain: "" }, c.patch);
+      Object.assign(w.form, { serverId: "" }, c.patch);
       expect({ name: c.name, actual: w.runtimeValid.value }).toEqual({ name: c.name, actual: c.runtimeValid });
     }
     wrapper.unmount();

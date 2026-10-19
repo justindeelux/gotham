@@ -105,8 +105,8 @@ function createRedirectsState() {
 
   const applicationOptions = computed(() =>
     proxyStore.applications.map((application) => ({
-      label: application.base_domain
-        ? `${application.name} · ${application.base_domain}`
+      label: application.primary_domain
+        ? `${application.name} · ${application.primary_domain}`
         : proxyText(
             "domains.redirects.appWithoutDomain",
             "{name} · no base domain",

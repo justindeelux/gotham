@@ -175,8 +175,8 @@ func TestGitHubAppPersistence(t *testing.T) {
 	}
 	var appID pgtype.UUID
 	if err := pool.QueryRow(ctx, `INSERT INTO applications
-		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, port, host_port, github_app_id)
-		VALUES ($1, $1, $2, $3, 'web', 'github', 'acme/web', 'https://github.com/acme/web.git', 'github_app', 'main', 'dockerfile', 3000, 0, $4)
+		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, github_app_id)
+		VALUES ($1, $1, $2, $3, 'web', 'github', 'acme/web', 'https://github.com/acme/web.git', 'github_app', 'main', 'dockerfile', $4)
 		RETURNING id`, user.ID, serverID, envID, app.ID).Scan(&appID); err != nil {
 		t.Fatalf("seed application: %v", err)
 	}
@@ -213,8 +213,8 @@ func TestGitHubAppPersistence(t *testing.T) {
 	}
 	// Unlinked rows never deploy through the app, even watching the repo.
 	if _, err := pool.Exec(ctx, `INSERT INTO applications
-		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, port, host_port)
-		VALUES ($1, $1, $2, $3, 'legacy', 'github', 'acme/web', 'git@github.com:acme/web.git', 'github_app', 'main', 'dockerfile', 3000, 0)`,
+		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack)
+		VALUES ($1, $1, $2, $3, 'legacy', 'github', 'acme/web', 'git@github.com:acme/web.git', 'github_app', 'main', 'dockerfile')`,
 		user.ID, serverID, envID); err != nil {
 		t.Fatalf("seed legacy application: %v", err)
 	}
@@ -236,8 +236,8 @@ func TestGitHubAppPersistence(t *testing.T) {
 	// A linked row whose grant was revoked still counts: the disconnect
 	// clears its link.
 	if _, err := pool.Exec(ctx, `INSERT INTO applications
-		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, port, host_port, github_app_id)
-		VALUES ($1, $1, $2, $3, 'stale', 'github', 'acme/gone', 'https://github.com/acme/gone.git', 'github_app', 'main', 'dockerfile', 3000, 0, $4)`,
+		(user_id, team_id, server_id, environment_id, name, provider, repo, clone_url, source_type, branch, build_pack, github_app_id)
+		VALUES ($1, $1, $2, $3, 'stale', 'github', 'acme/gone', 'https://github.com/acme/gone.git', 'github_app', 'main', 'dockerfile', $4)`,
 		user.ID, serverID, envID, app.ID); err != nil {
 		t.Fatalf("seed revoked application: %v", err)
 	}

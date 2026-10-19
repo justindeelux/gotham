@@ -774,7 +774,7 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 		UserID: pgUUID(userID), TeamID: pgUUID(teamID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
 		Name: "preview-base", Provider: "github",
 		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git",
-		Branch: "main", BuildPack: "dockerfile", BaseDomain: "app.example.com",
+		Branch: "main", BuildPack: "dockerfile",
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication(base): %v", err)
@@ -784,7 +784,7 @@ func TestSystemTeardownRemovesLocalKey(t *testing.T) {
 		UserID: pgUUID(userID), TeamID: pgUUID(teamID), ServerID: pgUUID(serverID), EnvironmentID: pgUUID(envID),
 		Name: "preview-base-pr-7", Provider: "github",
 		Repo: "acme/demo", CloneUrl: "https://github.com/acme/demo.git",
-		Branch: "feat/x", BuildPack: "dockerfile", BaseDomain: "pr-7-app.example.com",
+		Branch: "feat/x", BuildPack: "dockerfile",
 		IsPreview: true,
 	})
 	if err != nil {

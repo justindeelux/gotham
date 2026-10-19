@@ -320,7 +320,7 @@ describe("detail dockerfile editor", () => {
     app.value = {
       ...app.value,
       dockerfile_content: "FROM alpine:3.22\n",
-      base_domain: "app.example.com",
+      primary_domain: "app.example.com",
       updated_at: "2026-10-08T00:00:01Z",
     } as never;
     await nextTick();
@@ -331,7 +331,7 @@ describe("detail dockerfile editor", () => {
     app.value = {
       ...app.value,
       dockerfile_content: "FROM alpine:3.23\n",
-      base_domain: "other.example.com",
+      primary_domain: "other.example.com",
       updated_at: "2026-10-08T00:00:02Z",
     } as never;
     await nextTick();

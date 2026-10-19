@@ -101,6 +101,11 @@ func TestCreatePreviewApplicationInheritsEnvironment(t *testing.T) {
 		Name: "base", Provider: "github", Repo: "acme/demo",
 		CloneURL: "https://github.com/acme/demo.git", Branch: "main", BuildPack: "dockerfile",
 	}}
+	if _, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+		ApplicationID: baseID, Domain: "app.example.com", IsPrimary: true, Port: 3000, Protocol: ProtocolHTTPS,
+	}); err != nil {
+		t.Fatalf("seed base domain: %v", err)
+	}
 
 	preview, err := svc.CreatePreviewApplication(context.Background(), baseID, PreviewApplicationInput{
 		Name: "base-pr-9", Branch: "feat/x", BaseDomain: "pr-9.example.com",
@@ -193,31 +198,6 @@ func TestMoveRefusedWhilePreviewsOpen(t *testing.T) {
 	}
 	if moved.EnvironmentID != otherEnv {
 		t.Fatalf("environment = %s, want %s", moved.EnvironmentID, otherEnv)
-	}
-}
-
-// TestServerChangeDomainCollisionAnswersOwn409 pins F6: a server change
-// that collides on the target node's domain answers 409 with the domain
-// message, not the deploy-in-flight text.
-func TestServerChangeDomainCollisionAnswersOwn409(t *testing.T) {
-	userID := uuid.New()
-	app := testApplication(userID)
-	app.BaseDomain = "taken.example.com"
-	repo := &fakeRepository{
-		app:          app,
-		updateErr:    ErrDomainConflict, // the per-server domain index fired
-		environments: map[uuid.UUID]EnvironmentRef{app.EnvironmentID: {ID: app.EnvironmentID}},
-	}
-	svc := newTestService(t, repo)
-
-	other := uuid.New()
-	err := func() error {
-		_, err := svc.UpdateApplication(context.Background(), userID, app.ID,
-			UpdateApplicationInput{ServerID: &other})
-		return err
-	}()
-	if !errors.Is(err, ErrDomainConflict) {
-		t.Fatalf("domain collision on server change err = %v, want ErrDomainConflict", err)
 	}
 }
 

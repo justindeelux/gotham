@@ -4,7 +4,9 @@ import {
   NButton,
   NCard,
   NInput,
+  NInputNumber,
   NPopconfirm,
+  NSelect,
   NSpace,
   NSpin,
   NTag,
@@ -13,11 +15,7 @@ import {
 import { computed, onMounted, toRef } from "vue";
 import { useI18n } from "vue-i18n";
 
-import type {
-  Application,
-  ApplicationDomain,
-} from "@/features/applications/api/applications";
-import { useApplicationDomain } from "@/features/applications/composables/useApplicationDomain";
+import type { Application } from "@/features/applications/api/applications";
 import { useApplicationDomains } from "@/features/applications/composables/useApplicationDomains";
 import {
   certificateStatusLabel,
@@ -32,15 +30,20 @@ interface Props {
 
 const props = defineProps<Props>();
 
-const domain = useApplicationDomain(toRef(props, "application"));
-const aliases = useApplicationDomains(toRef(props, "application"));
+const domains = useApplicationDomains(toRef(props, "application"));
 const proxyStore = useProxyStore();
 
 const { t } = useI18n();
 
-/** aliasRows lists every non-primary hostname; the primary stays above. */
-const aliasRows = computed<ApplicationDomain[]>(() =>
-  aliases.domains.value.filter((row) => !row.is_primary),
+const protocolOptions = computed(() => [
+  { label: t("applications.domain.protocolHttp"), value: "http" },
+  { label: t("applications.domain.protocolHttps"), value: "https" },
+]);
+
+const formTitle = computed(() =>
+  domains.editingId.value === null
+    ? t("applications.domain.addTitle")
+    : t("applications.domain.editTitle"),
 );
 
 /** certOf resolves the certificate intent recorded for one hostname. */
@@ -64,87 +67,83 @@ onMounted(() => {
         <NText depth="3">
           {{ t("applications.domain.hint") }}
         </NText>
-        <NAlert
-          v-if="domain.domainError.value"
-          type="error"
-          :show-icon="true"
-        >
-          {{ domain.domainError.value }}
+        <NAlert v-if="domains.domainsError.value" type="error" :show-icon="true">
+          {{ domains.domainsError.value }}
         </NAlert>
-        <NSpace align="center" :size="8" :wrap="false">
-          <NInput
-            v-model:value="domain.baseDomain.value"
-            class="mono"
-            style="max-width: 360px"
-            placeholder="app.example.com"
-            :input-props="{ 'aria-label': t('applications.domain.baseAria') }"
-            @keyup.enter="domain.handleSaveDomain"
-          />
-          <NButton
-            type="primary"
-            :loading="domain.savingDomain.value"
-            @click="domain.handleSaveDomain"
-          >
-            {{ t("applications.domain.save") }}
-          </NButton>
-        </NSpace>
-        <NText depth="3" class="small">
-          {{ t("applications.domain.emptyHint") }}
-        </NText>
-      </NSpace>
-    </NCard>
 
-    <NCard :title="t('applications.domain.aliasTitle')">
-      <NSpace vertical :size="12">
-        <NAlert
-          v-if="aliases.domainsError.value"
-          type="error"
-          :show-icon="true"
-        >
-          {{ aliases.domainsError.value }}
-        </NAlert>
-        <NSpace vertical :size="8">
-          <NSpace align="center" :size="8" :wrap="false">
-            <NInput
-              v-model:value="aliases.newDomain.value"
-              class="mono"
-              style="max-width: 360px"
-              placeholder="www.example.com"
-              :input-props="{ 'aria-label': t('applications.domain.aliasAria') }"
-              @keyup.enter="aliases.handleAddDomain"
-            />
-            <NButton
-              type="primary"
-              ghost
-              :loading="aliases.addingDomain.value"
-              @click="aliases.handleAddDomain"
-            >
-              {{ t("applications.domain.add") }}
-            </NButton>
+        <NCard size="small" :title="formTitle">
+          <NSpace vertical :size="10">
+            <NAlert v-if="domains.formError.value" type="error" :show-icon="true">
+              {{ domains.formError.value }}
+            </NAlert>
+            <div class="domain-form">
+              <NInput
+                v-model:value="domains.draft.domain"
+                class="mono domain-host"
+                placeholder="app.example.com"
+                :input-props="{ 'aria-label': t('applications.domain.hostAria') }"
+              />
+              <NInputNumber
+                v-model:value="domains.draft.port"
+                class="domain-port"
+                :min="1"
+                :max="65535"
+                placeholder="3000"
+                :input-props="{ 'aria-label': t('applications.domain.portAria') }"
+              />
+              <NSelect
+                v-if="domains.isCompose.value"
+                v-model:value="domains.draft.service"
+                class="domain-service"
+                filterable
+                tag
+                clearable
+                :options="domains.serviceOptions.value"
+                :placeholder="t('applications.domain.servicePlaceholder')"
+                :aria-label="t('applications.domain.serviceAria')"
+                @update:value="domains.handleServiceChange"
+              />
+              <NSelect
+                v-model:value="domains.draft.protocol"
+                class="domain-protocol"
+                :options="protocolOptions"
+                :aria-label="t('applications.domain.protocolAria')"
+              />
+            </div>
+            <NSpace :size="8">
+              <NButton
+                type="primary"
+                :loading="domains.saving.value"
+                @click="domains.handleSave"
+              >
+                {{ domains.editingId.value === null ? t("applications.domain.add") : t("applications.domain.save") }}
+              </NButton>
+              <NButton v-if="domains.editingId.value !== null" ghost @click="domains.resetDraft">
+                {{ t("applications.domain.cancel") }}
+              </NButton>
+            </NSpace>
+            <NText v-if="domains.isCompose.value" depth="3" class="small">
+              {{ t("applications.domain.serviceHint") }}
+            </NText>
           </NSpace>
-          <NAlert
-            v-if="aliases.addError.value"
-            type="error"
-            :show-icon="true"
-          >
-            {{ aliases.addError.value }}
-          </NAlert>
-          <NText depth="3">
-            {{ t("applications.domain.aliasHint") }}
-          </NText>
-        </NSpace>
-        <NSpin :show="aliases.loadingDomains.value">
-          <NSpace
-            v-if="aliasRows.length > 0"
-            vertical
-            :size="8"
-          >
-            <div
-              v-for="row in aliasRows"
-              :key="row.id"
-              class="alias-row"
-            >
+        </NCard>
+
+        <NSpin :show="domains.loadingDomains.value">
+          <NSpace v-if="domains.domains.value.length > 0" vertical :size="8">
+            <div v-for="row in domains.domains.value" :key="row.id" class="domain-row">
               <span class="mono domain-name">{{ row.domain }}</span>
+              <NTag size="small">
+                {{ row.port }}
+              </NTag>
+              <NTag v-if="row.service" size="small" type="info">
+                {{ row.service }}
+              </NTag>
+              <NTag size="small" :type="row.protocol === 'https' ? 'success' : 'default'">
+                {{ row.protocol }}
+              </NTag>
+              <NTag v-if="row.is_primary" size="small" type="success">
+                {{ t("applications.domain.primary") }}
+              </NTag>
               <NTag v-if="row.disabled" size="small" type="warning">
                 {{ t("applications.domain.disabled") }}
               </NTag>
@@ -160,29 +159,35 @@ onMounted(() => {
                 size="small"
                 ghost
                 :disabled="row.disabled"
-                :loading="aliases.busyDomainId.value === row.id"
-                @click="aliases.handleSecureDomain(row)"
+                :loading="domains.busyDomainId.value === row.id"
+                @click="domains.handleSecureDomain(row)"
               >
                 {{ t("applications.domain.secure") }}
               </NButton>
               <span class="domain-actions">
                 <NButton
                   size="small"
+                  :loading="domains.busyDomainId.value === row.id"
+                  @click="domains.startEdit(row)"
+                >
+                  {{ t("applications.domain.edit") }}
+                </NButton>
+                <NButton
+                  v-if="!row.is_primary"
+                  size="small"
                   :disabled="row.disabled"
-                  :loading="aliases.busyDomainId.value === row.id"
-                  @click="aliases.handleSetPrimary(row)"
+                  :loading="domains.busyDomainId.value === row.id"
+                  @click="domains.handleSetPrimary(row)"
                 >
                   {{ t("applications.domain.setPrimary") }}
                 </NButton>
-                <NPopconfirm
-                  @positive-click="aliases.handleRemoveDomain(row)"
-                >
+                <NPopconfirm @positive-click="domains.handleRemoveDomain(row)">
                   <template #trigger>
                     <NButton
                       size="small"
                       type="error"
                       ghost
-                      :loading="aliases.busyDomainId.value === row.id"
+                      :loading="domains.busyDomainId.value === row.id"
                     >
                       {{ t("applications.domain.remove") }}
                     </NButton>
@@ -191,21 +196,21 @@ onMounted(() => {
                 </NPopconfirm>
               </span>
               <NAlert
-                v-if="aliases.rowErrorId.value === row.id && aliases.rowError.value"
+                v-if="domains.rowErrorId.value === row.id && domains.rowError.value"
                 type="error"
                 :show-icon="true"
                 class="row-error"
               >
-                {{ aliases.rowError.value }}
+                {{ domains.rowError.value }}
               </NAlert>
             </div>
           </NSpace>
           <NText v-else depth="3" class="small">
-            {{ t("applications.domain.aliasEmpty") }}
+            {{ t("applications.domain.empty") }}
           </NText>
         </NSpin>
         <NText depth="3" class="small">
-          {{ t("applications.domain.aliasNote") }}
+          {{ t("applications.domain.note") }}
         </NText>
       </NSpace>
     </NCard>
@@ -217,7 +222,28 @@ onMounted(() => {
   font-size: var(--text-xs);
 }
 
-.alias-row {
+.domain-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.domain-host {
+  min-width: 220px;
+  max-width: 360px;
+}
+
+.domain-port {
+  width: 110px;
+}
+
+.domain-service,
+.domain-protocol {
+  width: 160px;
+}
+
+.domain-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;

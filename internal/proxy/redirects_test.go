@@ -577,7 +577,7 @@ func TestRedirectsForServerBreaksChainsAtTheLaterRule(t *testing.T) {
 	serverA := uuid.New()
 	serverB := uuid.New()
 	app := uuid.New()
-	apps := []ProxiedApplication{{ID: app, ServerID: serverA, BaseDomain: "app.example.com"}}
+	apps := []ProxiedApplication{{ID: app, ServerID: serverA, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}}}
 
 	first := RedirectRule{ID: uuid.New(), ApplicationID: app, SourceDomain: "a.example.com", TargetDomain: "b.example.com", Code: 301, Enabled: true, ServerID: serverA}
 	second := RedirectRule{ID: uuid.New(), ApplicationID: app, SourceDomain: "b.example.com", TargetDomain: "c.example.com", Code: 301, Enabled: true, ServerID: serverB}
@@ -621,7 +621,7 @@ func TestRedirectsForServerHoldsBackConflicts(t *testing.T) {
 	server := uuid.New()
 	app := uuid.New()
 	apps := []ProxiedApplication{
-		{ID: app, ServerID: server, BaseDomain: "app.example.com"},
+		{ID: app, ServerID: server, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}},
 	}
 	otherServer := uuid.New()
 	rules := []RedirectRule{

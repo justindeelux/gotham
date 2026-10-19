@@ -25,9 +25,9 @@ func (q *Queries) ClearPrimaryApplicationDomains(ctx context.Context, applicatio
 }
 
 const createApplicationDomain = `-- name: CreateApplicationDomain :one
-INSERT INTO application_domains (application_id, domain, is_primary, disabled)
-VALUES ($1, $2, $3, $4)
-RETURNING id, application_id, domain, is_primary, disabled, created_at, updated_at
+INSERT INTO application_domains (application_id, domain, is_primary, disabled, port, service, protocol)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, application_id, domain, is_primary, disabled, created_at, updated_at, port, service, protocol
 `
 
 type CreateApplicationDomainParams struct {
@@ -35,6 +35,9 @@ type CreateApplicationDomainParams struct {
 	Domain        string      `json:"domain"`
 	IsPrimary     bool        `json:"is_primary"`
 	Disabled      bool        `json:"disabled"`
+	Port          int32       `json:"port"`
+	Service       *string     `json:"service"`
+	Protocol      string      `json:"protocol"`
 }
 
 func (q *Queries) CreateApplicationDomain(ctx context.Context, arg CreateApplicationDomainParams) (ApplicationDomain, error) {
@@ -43,6 +46,9 @@ func (q *Queries) CreateApplicationDomain(ctx context.Context, arg CreateApplica
 		arg.Domain,
 		arg.IsPrimary,
 		arg.Disabled,
+		arg.Port,
+		arg.Service,
+		arg.Protocol,
 	)
 	var i ApplicationDomain
 	err := row.Scan(
@@ -53,6 +59,9 @@ func (q *Queries) CreateApplicationDomain(ctx context.Context, arg CreateApplica
 		&i.Disabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Port,
+		&i.Service,
+		&i.Protocol,
 	)
 	return i, err
 }
@@ -81,15 +90,15 @@ func (q *Queries) DeleteApplicationDomainsByApplication(ctx context.Context, app
 }
 
 const getApplicationDomainByNameAnyApp = `-- name: GetApplicationDomainByNameAnyApp :one
-SELECT id, application_id, domain, is_primary, disabled, created_at, updated_at FROM application_domains
+SELECT id, application_id, domain, is_primary, disabled, created_at, updated_at, port, service, protocol FROM application_domains
 WHERE lower(domain) = lower($1)
 ORDER BY created_at, id
 LIMIT 1
 `
 
 // GetApplicationDomainByNameAnyApp resolves the platform-wide claim on a
-// host for the uniqueness guard (JUS-89): any application's row, including
-// disabled ones, keeps its claim paused rather than released.
+// host for the uniqueness guard: any application's row, including disabled
+// ones, keeps its claim paused rather than released.
 func (q *Queries) GetApplicationDomainByNameAnyApp(ctx context.Context, lower string) (ApplicationDomain, error) {
 	row := q.db.QueryRow(ctx, getApplicationDomainByNameAnyApp, lower)
 	var i ApplicationDomain
@@ -101,20 +110,22 @@ func (q *Queries) GetApplicationDomainByNameAnyApp(ctx context.Context, lower st
 		&i.Disabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Port,
+		&i.Service,
+		&i.Protocol,
 	)
 	return i, err
 }
 
 const listApplicationDomainsByApplication = `-- name: ListApplicationDomainsByApplication :many
-SELECT id, application_id, domain, is_primary, disabled, created_at, updated_at FROM application_domains
+SELECT id, application_id, domain, is_primary, disabled, created_at, updated_at, port, service, protocol FROM application_domains
 WHERE application_id = $1
 ORDER BY is_primary DESC, created_at, id
 `
 
 // ListApplicationDomainsByApplication returns one application's domains, the
 // primary first, then oldest first. The order is the routing and promotion
-// order: generation names the primary router after the application, and
-// removing the primary promotes the next row deterministically (JUS-89).
+// order: removing the primary promotes the next row deterministically.
 func (q *Queries) ListApplicationDomainsByApplication(ctx context.Context, applicationID pgtype.UUID) ([]ApplicationDomain, error) {
 	rows, err := q.db.Query(ctx, listApplicationDomainsByApplication, applicationID)
 	if err != nil {
@@ -132,6 +143,54 @@ func (q *Queries) ListApplicationDomainsByApplication(ctx context.Context, appli
 			&i.Disabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Port,
+			&i.Service,
+			&i.Protocol,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPrimaryApplicationDomains = `-- name: ListPrimaryApplicationDomains :many
+SELECT DISTINCT ON (application_id)
+       application_id, domain, port, service, protocol
+FROM application_domains
+WHERE NOT disabled
+ORDER BY application_id, is_primary DESC, created_at, id
+`
+
+type ListPrimaryApplicationDomainsRow struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Domain        string      `json:"domain"`
+	Port          int32       `json:"port"`
+	Service       *string     `json:"service"`
+	Protocol      string      `json:"protocol"`
+}
+
+// ListPrimaryApplicationDomains enriches application reads with the primary
+// host (display and preview derivation). An application with no enabled
+// domain, or with only conflict-disabled rows, has no row here.
+func (q *Queries) ListPrimaryApplicationDomains(ctx context.Context) ([]ListPrimaryApplicationDomainsRow, error) {
+	rows, err := q.db.Query(ctx, listPrimaryApplicationDomains)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPrimaryApplicationDomainsRow{}
+	for rows.Next() {
+		var i ListPrimaryApplicationDomainsRow
+		if err := rows.Scan(
+			&i.ApplicationID,
+			&i.Domain,
+			&i.Port,
+			&i.Service,
+			&i.Protocol,
 		); err != nil {
 			return nil, err
 		}
@@ -144,7 +203,9 @@ func (q *Queries) ListApplicationDomainsByApplication(ctx context.Context, appli
 }
 
 const listProxiedApplicationDomains = `-- name: ListProxiedApplicationDomains :many
-SELECT d.application_id, a.server_id, d.domain, d.is_primary, d.disabled, d.created_at, d.id
+SELECT d.application_id, a.server_id, d.domain, d.is_primary, d.disabled,
+       d.port, COALESCE(d.service, '')::text AS service, d.protocol,
+       d.created_at, d.id
 FROM application_domains d
 JOIN applications a ON a.id = d.application_id
 ORDER BY a.created_at, a.id, d.is_primary DESC, d.created_at, d.id
@@ -156,15 +217,18 @@ type ListProxiedApplicationDomainsRow struct {
 	Domain        string             `json:"domain"`
 	IsPrimary     bool               `json:"is_primary"`
 	Disabled      bool               `json:"disabled"`
+	Port          int32              `json:"port"`
+	Service       string             `json:"service"`
+	Protocol      string             `json:"protocol"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	ID            pgtype.UUID        `json:"id"`
 }
 
-// ListProxiedApplicationDomains feeds the Traefik generator (JUS-89): every
-// domain row joined to its application's node, ordered deterministically so
-// generation input is stable. Disabled rows are included with their flag so
-// the generator can report them as diagnostics instead of silently dropping
-// them.
+// ListProxiedApplicationDomains feeds the Traefik generator: every domain row
+// joined to its application's node, ordered deterministically so generation
+// input is stable. Disabled rows are included with their flag so the
+// generator can report them as diagnostics instead of silently dropping
+// them. Each row carries its own target port, compose service and protocol.
 func (q *Queries) ListProxiedApplicationDomains(ctx context.Context) ([]ListProxiedApplicationDomainsRow, error) {
 	rows, err := q.db.Query(ctx, listProxiedApplicationDomains)
 	if err != nil {
@@ -180,6 +244,9 @@ func (q *Queries) ListProxiedApplicationDomains(ctx context.Context) ([]ListProx
 			&i.Domain,
 			&i.IsPrimary,
 			&i.Disabled,
+			&i.Port,
+			&i.Service,
+			&i.Protocol,
 			&i.CreatedAt,
 			&i.ID,
 		); err != nil {
@@ -198,9 +265,12 @@ UPDATE application_domains
 SET domain = $2,
     is_primary = $3,
     disabled = $4,
+    port = $5,
+    service = $6,
+    protocol = $7,
     updated_at = now()
 WHERE id = $1
-RETURNING id, application_id, domain, is_primary, disabled, created_at, updated_at
+RETURNING id, application_id, domain, is_primary, disabled, created_at, updated_at, port, service, protocol
 `
 
 type UpdateApplicationDomainParams struct {
@@ -208,6 +278,9 @@ type UpdateApplicationDomainParams struct {
 	Domain    string      `json:"domain"`
 	IsPrimary bool        `json:"is_primary"`
 	Disabled  bool        `json:"disabled"`
+	Port      int32       `json:"port"`
+	Service   *string     `json:"service"`
+	Protocol  string      `json:"protocol"`
 }
 
 func (q *Queries) UpdateApplicationDomain(ctx context.Context, arg UpdateApplicationDomainParams) (ApplicationDomain, error) {
@@ -216,6 +289,9 @@ func (q *Queries) UpdateApplicationDomain(ctx context.Context, arg UpdateApplica
 		arg.Domain,
 		arg.IsPrimary,
 		arg.Disabled,
+		arg.Port,
+		arg.Service,
+		arg.Protocol,
 	)
 	var i ApplicationDomain
 	err := row.Scan(
@@ -226,6 +302,9 @@ func (q *Queries) UpdateApplicationDomain(ctx context.Context, arg UpdateApplica
 		&i.Disabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Port,
+		&i.Service,
+		&i.Protocol,
 	)
 	return i, err
 }

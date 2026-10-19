@@ -18,7 +18,7 @@ import type { CertificateDraft, DNSProvider } from "@/features/domains/api/proxy
 /**
  * Certificate configuration editor used by the Domains page modal and the
  * application detail Domain editor. The recorded domain is never edited here:
- * it always comes from the selected application's base_domain.
+ * it always comes from the selected application's primary_domain.
  */
 
 interface Props {
@@ -36,8 +36,8 @@ const emit = defineEmits<{
 
 const applicationOptions = computed(() =>
   props.applications.map((application) => ({
-    label: application.base_domain
-      ? `${application.name} · ${application.base_domain}`
+    label: application.primary_domain
+      ? `${application.name} · ${application.primary_domain}`
       : proxyText(
           "domains.certificateForm.appWithoutDomain",
           "{name} · no base domain",
@@ -72,7 +72,7 @@ const selectedApplication = computed<Application | null>(
 
 /** domainPreview shows the exact host the API will record. */
 const domainPreview = computed<string>(
-  () => selectedApplication.value?.base_domain ?? "",
+  () => selectedApplication.value?.primary_domain ?? "",
 );
 
 /** isDns01 drives the provider and wildcard controls. */

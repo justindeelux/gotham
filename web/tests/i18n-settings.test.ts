@@ -279,7 +279,7 @@ describe("I18N-8 live switch preserves drafts", () => {
     const wrapper = mount(CertificateForm, {
       props: {
         modelValue: draft,
-        applications: [{ id: "app-1", name: "Shop", base_domain: "shop.example.com" }],
+        applications: [{ id: "app-1", name: "Shop", primary_domain: "shop.example.com" }],
         providers: [],
       },
       global: { plugins: [i18n] },

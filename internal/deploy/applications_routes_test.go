@@ -30,9 +30,6 @@ const applicationBody = `{
 	"clone_url": "https://github.com/acme/demo.git",
 	"branch": "main",
 	"build_pack": "dockerfile",
-	"base_domain": "demo.example.com",
-	"port": 3000,
-	"host_port": 8080,
 	"environment_id": "%s",
 	"server_id": "%s",
 	"env": [
@@ -55,7 +52,7 @@ var applicationWireKeys = []string{
 	"compose_content", "compose_file", "compose_service",
 	"branch", "build_pack",
 	"image_ref", "has_registry_credential",
-	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
+	"primary_domain", "server_id",
 	"server_name", "created_at", "updated_at",
 }
 
@@ -71,7 +68,7 @@ var applicationListWireKeys = []string{
 	"compose_file", "compose_service",
 	"branch", "build_pack",
 	"image_ref", "has_registry_credential",
-	"base_domain", "base_domain_disabled", "port", "host_port", "server_id",
+	"primary_domain", "server_id",
 	"server_name", "created_at", "updated_at",
 }
 
@@ -114,9 +111,7 @@ func sampleApplication() Application {
 		CloneURL:      "https://github.com/acme/demo.git",
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		BaseDomain:    "demo.example.com",
-		Port:          3000,
-		HostPort:      8080,
+		PrimaryDomain: &ApplicationDomain{Domain: "demo.example.com", Port: 3000, Protocol: ProtocolHTTP},
 	}
 }
 
@@ -146,9 +141,6 @@ func TestRoutesCreateApplication(t *testing.T) {
 	}
 	if in.ServerID != serverID {
 		t.Errorf("server_id = %s, want %s", in.ServerID, serverID)
-	}
-	if in.Port != 3000 || in.HostPort != 8080 {
-		t.Errorf("ports = %d/%d, want 3000/8080", in.Port, in.HostPort)
 	}
 	if len(in.Env) != 2 || in.Env[1].Key != "API_TOKEN" || in.Env[1].Value != "secret:super-secret" {
 		t.Errorf("env = %+v, want the nested environment as sent", in.Env)
@@ -526,11 +518,11 @@ func TestRoutesUpdateApplication(t *testing.T) {
 		body string
 		want int
 	}{
-		{"partial patch", `{"name":"renamed","branch":"release","port":9090}`, http.StatusOK},
+		{"partial patch", `{"name":"renamed","branch":"release"}`, http.StatusOK},
 		{"empty object", `{}`, http.StatusOK},
 		{"no body", ``, http.StatusBadRequest},
 		{"unknown field", `{"nope":1}`, http.StatusBadRequest},
-		{"invalid port", `{"port":"8080"}`, http.StatusBadRequest},
+		{"invalid server", `{"server_id":"not-a-uuid"}`, http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -560,7 +552,7 @@ func TestRoutesUpdateApplication(t *testing.T) {
 
 		rec := httptest.NewRecorder()
 		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, applicationsPath+"/"+appID.String(),
-			strings.NewReader(`{"name":"renamed","branch":"release","port":9090}`)))
+			strings.NewReader(`{"name":"renamed","branch":"release"}`)))
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
@@ -572,10 +564,7 @@ func TestRoutesUpdateApplication(t *testing.T) {
 		if in.Branch == nil || *in.Branch != "release" {
 			t.Errorf("branch = %v, want the patched value", in.Branch)
 		}
-		if in.Port == nil || *in.Port != 9090 {
-			t.Errorf("port = %v, want the patched value", in.Port)
-		}
-		if in.HostPort != nil || in.BuildPack != nil || in.ServerID != nil {
+		if in.BuildPack != nil || in.ServerID != nil {
 			t.Errorf("unpatched fields were sent: %+v", in)
 		}
 	})

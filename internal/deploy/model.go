@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -79,9 +80,11 @@ func BranchDefaultsToRemote(sourceType, provider string) bool {
 }
 
 // Application is the parent resource of every deployment: it pins the
-// repository, branch, build pack and runtime shape (server, port, domains).
-// Env vars, secrets and storages hang off the application so every redeploy
-// and rollback sees the same configuration.
+// repository, branch, build pack and the node it runs on. An application owns
+// zero or more domains; each domain carries its own target port, compose
+// service and protocol, so the application itself has no routing shape
+// (JUS-233). Env vars, secrets and storages hang off the application so every
+// redeploy and rollback sees the same configuration.
 type Application struct {
 	ID       uuid.UUID
 	UserID   uuid.UUID
@@ -122,15 +125,12 @@ type Application struct {
 	// application (empty for repo-backed ones and every other source type).
 	// ComposeFile holds the in-repo compose file path of a repo-backed
 	// compose application (empty for pasted ones). ComposeService names the
-	// compose service the application's domain/port routing targets.
+	// release web service: its container is what a deployment gates and
+	// health-checks on. Domain routing targets are per domain
+	// (ApplicationDomain.Service), defaulting to this service when empty.
 	ComposeContent string
 	ComposeFile    string
 	ComposeService string
-	BaseDomain     string
-	// BaseDomainDisabled marks a binding the domain-uniqueness migration had
-	// to disable because another application owned the domain first. The
-	// value is preserved; an explicit domain update re-enables it.
-	BaseDomainDisabled bool
 	// IsPreview marks an application created by the preview controller
 	// (BE-8.1). A preview reuses its base application's remote deploy key, so
 	// deleting one must never remove the key from the Git host; the marker is
@@ -141,8 +141,11 @@ type Application struct {
 	// ever takes the installation-token clone path; uuid.Nil (every legacy
 	// row) keeps the previous OAuth/deploy-key behaviour.
 	GitHubAppID uuid.UUID
-	Port        int32
-	HostPort    int32
+	// PrimaryDomain is the enabled primary domain row derived at read time
+	// (nil when the application has no enabled domain). It is display and
+	// preview derivation input only; it is never written to the application
+	// row.
+	PrimaryDomain *ApplicationDomain
 	// EnvironmentName, ProjectID, ProjectName and ServerName enrich the list
 	// and get responses per the Phase 13 contract; they derive from
 	// EnvironmentID and ServerID and are never written directly.
@@ -154,9 +157,37 @@ type Application struct {
 	UpdatedAt       time.Time
 }
 
-// ApplicationDomain is one hostname an application serves (JUS-89).
-// applications.base_domain mirrors the primary row so every caller that only
-// needs one host keeps working unchanged.
+// Domain protocols select the Traefik entrypoint a domain is served on.
+const (
+	// ProtocolHTTP serves the domain on the plain-HTTP entrypoint only.
+	ProtocolHTTP = "http"
+	// ProtocolHTTPS serves the domain on the TLS entrypoint and redirects
+	// plain HTTP to it.
+	ProtocolHTTPS = "https"
+)
+
+// ValidProtocol reports whether p names a supported domain protocol.
+func ValidProtocol(p string) bool {
+	return p == ProtocolHTTP || p == ProtocolHTTPS
+}
+
+// NormalizeProtocol trims and lowercases a protocol, defaulting to http.
+func NormalizeProtocol(p string) string {
+	switch strings.ToLower(strings.TrimSpace(p)) {
+	case ProtocolHTTPS:
+		return ProtocolHTTPS
+	case "", ProtocolHTTP:
+		return ProtocolHTTP
+	default:
+		return strings.TrimSpace(p)
+	}
+}
+
+// ApplicationDomain is one hostname an application serves. Each row carries
+// the routing target of that host: the container port, the optional compose
+// service (empty for single-container applications and for a compose
+// application's release service) and the protocol Traefik serves it on.
+// A primary row is the application's default host for display and previews.
 type ApplicationDomain struct {
 	ID            uuid.UUID
 	ApplicationID uuid.UUID
@@ -165,7 +196,15 @@ type ApplicationDomain struct {
 	// Disabled marks a binding held back from routing: a backfill loser of a
 	// legacy cross-node conflict, never deleted, until its owner removes it
 	// or claims a fresh host.
-	Disabled  bool
+	Disabled bool
+	// Port is the target container port (1-65535 for a routed row).
+	Port int32
+	// Service is the compose service that serves the host; empty means the
+	// application's release container (single-container applications and a
+	// compose application's ComposeService).
+	Service string
+	// Protocol is ProtocolHTTP or ProtocolHTTPS.
+	Protocol  string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

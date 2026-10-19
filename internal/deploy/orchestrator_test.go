@@ -85,6 +85,11 @@ func dialAlways(node Node) DialFunc {
 func TestOrchestratorHappyPath(t *testing.T) {
 	app := testApplication(uuid.New())
 	repo := &fakeRepository{app: app}
+	if _, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+		ApplicationID: app.ID, Domain: "app.example.com", IsPrimary: true, Port: 3000, Protocol: ProtocolHTTP,
+	}); err != nil {
+		t.Fatalf("seed domain: %v", err)
+	}
 	envVars, secrets := testEnv(t)
 	repo.envVars, repo.secrets = envVars, secrets
 	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
@@ -165,8 +170,8 @@ func TestOrchestratorHappyPath(t *testing.T) {
 	if !equalStrings(req.Env, []string{"API_TOKEN=hunter2", "FOO=bar", "PORT=3000"}) {
 		t.Errorf("env = %v, want decrypted secret, plain variable and the PORT default", req.Env)
 	}
-	if !equalStrings(req.Ports, []string{"8080:3000"}) {
-		t.Errorf("ports = %v, want [8080:3000]", req.Ports)
+	if !equalStrings(req.Ports, []string{"3000"}) {
+		t.Errorf("ports = %v, want [3000]", req.Ports)
 	}
 	if req.Labels[labelManaged] != "true" {
 		t.Errorf("label %s = %q, want true", labelManaged, req.Labels[labelManaged])

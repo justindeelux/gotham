@@ -595,3 +595,103 @@ func TestTerminalDisconnectKillsProcessGroup(t *testing.T) {
 	}
 	t.Fatalf("shell process %d still exists after disconnect", pid)
 }
+
+// TestResolveShellDirFilesystemRoot pins the default full-access layout, where
+// the only FileService root is "system" at "/". A cwd under it must resolve:
+// the previous string-prefix containment check compared against "//" and
+// rejected every child of "/". Escape/symlink refusal is covered by
+// TestResolveShellDir with a temp-dir root.
+func TestResolveShellDirFilesystemRoot(t *testing.T) {
+	state := t.TempDir()
+	files, err := NewFileServer(Config{
+		FileFullAccess:    true,
+		ManagedVolumeRoot: filepath.Join(state, "volumes"),
+		ComposeRoot:       filepath.Join(state, "compose"),
+		CertDir:           filepath.Join(state, "certs"),
+	}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewFileServer(full access): %v", err)
+	}
+	t.Cleanup(func() { _ = files.Close() })
+
+	roots, err := files.ListRoots(context.Background(), &agentv1.ListRootsRequest{})
+	if err != nil || len(roots.GetRoots()) != 1 {
+		t.Fatalf("ListRoots: %v, roots=%v", err, roots.GetRoots())
+	}
+	root := roots.GetRoots()[0]
+	if root.GetName() != fileRootSystem || root.GetPath() != "/" {
+		t.Fatalf("full-access root = %q at %q, want %q at /", root.GetName(), root.GetPath(), fileRootSystem)
+	}
+
+	for _, cwd := range []string{"tmp", "usr", "etc"} {
+		got, err := files.ResolveShellDir(root.GetName(), cwd)
+		if err != nil {
+			t.Fatalf("ResolveShellDir(%q): %v", cwd, err)
+		}
+		if !withinPath("/", got) {
+			t.Fatalf("ResolveShellDir(%q) = %q, outside /", cwd, got)
+		}
+	}
+
+	for _, cwd := range []string{"../tmp", "tmp/../../etc"} {
+		if got, err := files.ResolveShellDir(root.GetName(), cwd); err == nil {
+			t.Fatalf("ResolveShellDir(%q) = %q, want an escape refusal", cwd, got)
+		}
+	}
+	if got, err := files.ResolveShellDir(root.GetName(), "/tmp"); err == nil {
+		t.Fatalf("ResolveShellDir(absolute) = %q, want a refusal", got)
+	}
+	if got, err := files.ResolveShellDir(root.GetName(), "gotham-definitely-missing-dir"); err == nil {
+		t.Fatalf("ResolveShellDir(missing) = %q, want a refusal", got)
+	}
+}
+
+// TestTerminalOpenUnderFilesystemRoot reproduces the test-box failure: with the
+// default full-access root "system" at "/", a non-empty cwd used to be refused
+// because containment compared against "//". It must open a shell, run a
+// command and exit normally.
+func TestTerminalOpenUnderFilesystemRoot(t *testing.T) {
+	state := t.TempDir()
+	files, err := NewFileServer(Config{
+		FileFullAccess:    true,
+		ManagedVolumeRoot: filepath.Join(state, "volumes"),
+		ComposeRoot:       filepath.Join(state, "compose"),
+		CertDir:           filepath.Join(state, "certs"),
+	}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewFileServer(full access): %v", err)
+	}
+	t.Cleanup(func() { _ = files.Close() })
+
+	terminal := NewTerminalServer(TerminalConfig{
+		Logger: discardLogger(),
+		Roots:  files,
+		Shell:  testShell(t),
+	})
+	client := startTerminalServer(t, terminal)
+	stream, err := client.OpenTerminal(context.Background())
+	if err != nil {
+		t.Fatalf("OpenTerminal: %v", err)
+	}
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
+		Target: "host", Root: fileRootSystem, Cwd: "tmp", Cols: 80, Rows: 24,
+	}}}); err != nil {
+		t.Fatalf("send open: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("recv opened under / with cwd tmp: %v", err)
+	}
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("echo root-cwd-ok\r")}}); err != nil {
+		t.Fatalf("send input: %v", err)
+	}
+	waitForOutput(t, stream, "root-cwd-ok")
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("exit 0\r")}}); err != nil {
+		t.Fatalf("send exit: %v", err)
+	}
+	exited := recvUntil(t, stream, func(response *agentv1.TerminalResponse) bool {
+		return response.GetExited() != nil
+	}, 10*time.Second)
+	if exited.GetExited().GetExitCode() != 0 {
+		t.Fatalf("exit code = %d, want 0", exited.GetExited().GetExitCode())
+	}
+}

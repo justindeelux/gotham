@@ -762,7 +762,10 @@ func (h *handler) writeServiceError(w http.ResponseWriter, err error) {
 	}
 }
 
-// relayError is the bounded user-facing reason for a failed agent stream.
+// relayError is the bounded user-facing reason for a failed agent stream. It
+// never includes a host path or the agent's raw message: the cwd-invalid case
+// is recognised by the agent's stable "terminal: invalid working directory"
+// prefix and reported as a fixed phrase.
 func relayError(err error) string {
 	switch status.Code(err) {
 	case codes.Unimplemented:
@@ -776,6 +779,9 @@ func relayError(err error) string {
 	case codes.FailedPrecondition:
 		return "the node cannot start a shell"
 	case codes.InvalidArgument:
+		if strings.HasPrefix(status.Convert(err).Message(), "terminal: invalid working directory") {
+			return "invalid working directory"
+		}
 		return "the terminal request was rejected"
 	case codes.DeadlineExceeded:
 		return "the node did not start the shell in time"

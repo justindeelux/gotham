@@ -187,9 +187,13 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
 The initial cwd is resolved **on the agent** from the FileService root plus the
 relative path, using the same policy as the file manager: the root must be
 allow-listed, `..` and absolute paths are refused, a symlink whose target leaves
-the root is refused, and the result must be an existing directory. The resolved
-absolute path is set directly on the child process (`exec.Cmd.Dir`); it is never
-interpolated into a shell command, so no quoting or escaping is involved.
+the root is refused, and the result must be an existing directory. A root at `/`
+(the default full-access `system` root) contains every absolute path, so a cwd
+such as `tmp` or `usr` resolves normally. The resolved absolute path is set
+directly on the child process (`exec.Cmd.Dir`); it is never interpolated into a
+shell command, so no quoting or escaping is involved. A cwd the agent refuses is
+reported to the client as the bounded phrase `invalid working directory` (no
+host path); a missing or unreadable directory is reported separately.
 
 **The shell itself is not confined to FileService roots, and on a standard
 install it is effectively root on the host.** Host terminal access is a

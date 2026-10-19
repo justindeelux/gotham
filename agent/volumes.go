@@ -230,10 +230,18 @@ func isDangerousHostPath(host string) bool {
 	return filepath.Base(cleaned) == "docker.sock"
 }
 
-// withinPath reports whether path is base or a descendant of base.
+// withinPath reports whether path is base or a descendant of base. Both
+// arguments must be absolute; a relative or empty value is never contained.
+// It compares cleaned path components rather than a string prefix, so a
+// filesystem root base ("/") contains every absolute path and a sibling with a
+// shared prefix ("/tmpx" vs "/tmp") is not treated as a descendant.
 func withinPath(base, path string) bool {
-	if path == base {
-		return true
+	if base == "" || path == "" || !filepath.IsAbs(base) || !filepath.IsAbs(path) {
+		return false
 	}
-	return strings.HasPrefix(path, base+string(os.PathSeparator))
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }

@@ -880,3 +880,40 @@ func runExitSession(t *testing.T, f *fixture) {
 	waitSessionDone(t, session)
 	_ = conn.Close()
 }
+
+func TestRelayErrorWorkingDirectory(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "fsroot invalid cwd",
+			err:  status.Error(codes.InvalidArgument, "terminal: invalid working directory: fsroot: invalid path: \"a\" escapes the root"),
+			want: "invalid working directory",
+		},
+		{
+			name: "bare cwd rejection",
+			err:  status.Error(codes.InvalidArgument, "terminal: invalid working directory"),
+			want: "invalid working directory",
+		},
+		{
+			name: "other invalid argument",
+			err:  status.Error(codes.InvalidArgument, "terminal: input chunk exceeds 4 bytes"),
+			want: "the terminal request was rejected",
+		},
+		{
+			name: "missing cwd",
+			err:  status.Error(codes.NotFound, "terminal: working directory not found: gone"),
+			want: "the working directory no longer exists",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := relayError(testCase.err); got != testCase.want {
+				t.Fatalf("relayError(%v) = %q, want %q", testCase.err, got, testCase.want)
+			}
+		})
+	}
+}

@@ -94,11 +94,7 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 		ComposeContent: base.ComposeContent,
 		ComposeFile:    base.ComposeFile,
 		ComposeService: base.ComposeService,
-		BaseDomain:     proxy.NormalizeDomain(in.BaseDomain),
 		IsPreview:      true,
-		Port:           base.Port,
-		// HostPort stays 0: the agent assigns a free port, so the preview
-		// never collides with the base application's binding.
 	}
 	if app.Branch == "" {
 		app.Branch = base.Branch
@@ -117,11 +113,23 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	if err := validateApplication(app, true); err != nil {
 		return Application{}, err
 	}
-	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, app.BaseDomain)
-	if domainErr != nil {
-		return Application{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)
+	if base.PrimaryDomain == nil {
+		return Application{}, fmt.Errorf("%w: the base application has no routeable domain to preview", ErrValidation)
 	}
-	defer releaseDomain()
+	host := proxy.NormalizeDomain(in.BaseDomain)
+	if host != "" {
+		if err := proxy.ValidateDomain(host); err != nil {
+			return Application{}, fmt.Errorf("%w: %v", ErrValidation, err)
+		}
+		if base.PrimaryDomain == nil {
+			return Application{}, fmt.Errorf("%w: the base application has no routeable domain to preview", ErrValidation)
+		}
+		releaseDomain, domainErr := s.guardDomains.Acquire(ctx, host)
+		if domainErr != nil {
+			return Application{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)
+		}
+		defer releaseDomain()
+	}
 
 	envVars, err := s.repo.ListEnvVars(ctx, base.ID)
 	if err != nil {
@@ -132,6 +140,31 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 	if err != nil {
 		return Application{}, err
 	}
+	// The preview inherits the base's routing shape (target port, compose
+	// service and protocol) under its own host. It never shares the base's
+	// published bindings: every port is ephemeral on the node. A preview
+	// without a host stays domainless (the system path only creates one for a
+	// PR that has a host to serve).
+	if host == "" {
+		s.copyDeployKey(ctx, base, created)
+		s.copyGitCredential(ctx, base, created)
+		return created, nil
+	}
+	domain := ApplicationDomain{
+		ApplicationID: created.ID,
+		Domain:        host,
+		IsPrimary:     true,
+		Port:          base.PrimaryDomain.Port,
+		Service:       base.PrimaryDomain.Service,
+		Protocol:      base.PrimaryDomain.Protocol,
+	}
+	if _, err := s.repo.CreateApplicationDomain(ctx, domain); err != nil {
+		// A sibling without its route is unreachable; remove it so the
+		// binding never points at a half-provisioned application.
+		_ = s.repo.DeleteApplication(ctx, created.ID)
+		return Application{}, err
+	}
+	created.PrimaryDomain = &domain
 	s.copyDeployKey(ctx, base, created)
 	s.copyGitCredential(ctx, base, created)
 	s.cloneWildcardCertificate(ctx, base, created)
@@ -146,7 +179,7 @@ func (s *Service) CreatePreviewApplication(ctx context.Context, baseAppID uuid.U
 //   - only an enabled wildcard intent with a DNS provider is cloned (wildcards
 //     require DNS-01, and a plain HTTP-01 intent names the base host only);
 //   - the base intent must still record the base application's current
-//     base_domain (a stale record never activates the base route either);
+//     primary domain (a stale record never activates the base route either);
 //   - the preview host must be certifiable through the provider's DNS zones,
 //     so the sibling never gets an intent that can only stay HTTP-only.
 //
@@ -169,7 +202,7 @@ func (s *Service) cloneWildcardCertificate(ctx context.Context, base, preview Ap
 		intent.Challenge != string(proxy.ChallengeDNS01) || intent.DNSProviderID == uuid.Nil {
 		return
 	}
-	if proxy.NormalizeDomain(intent.Domain) != proxy.NormalizeDomain(base.BaseDomain) {
+	if proxy.NormalizeDomain(intent.Domain) != proxy.NormalizeDomain(base.PrimaryDomain.Domain) {
 		return
 	}
 	provider, err := s.repo.GetDNSProviderInfo(ctx, intent.DNSProviderID)
@@ -181,7 +214,7 @@ func (s *Service) cloneWildcardCertificate(ctx context.Context, base, preview Ap
 	if !provider.Enabled {
 		return
 	}
-	host := proxy.NormalizeDomain(preview.BaseDomain)
+	host := proxy.NormalizeDomain(preview.PrimaryDomain.Domain)
 	if _, ok := proxy.WildcardBase(host, provider.Zones); !ok {
 		return
 	}
@@ -316,7 +349,7 @@ func (s *Service) DeleteSystemApplication(ctx context.Context, appID uuid.UUID) 
 	}
 	// The row is gone: refresh the node's routing so the deleted preview stops
 	// being served immediately.
-	if app.BaseDomain != "" {
+	if app.PrimaryDomain != nil {
 		s.syncProxyServer(ctx, app.ServerID)
 	}
 	return nil

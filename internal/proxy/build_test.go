@@ -201,8 +201,8 @@ func TestRoutesForServer(t *testing.T) {
 	appB := uuid.MustParse("bbbbbbbb-2222-2222-2222-222222222222")
 
 	apps := []ProxiedApplication{
-		{ID: appA, ServerID: serverA, BaseDomain: "  App.Example.COM ", Port: 3000, HostPort: 18080, ContainerID: "c1"},
-		{ID: appB, ServerID: serverB, BaseDomain: "other.example.com", Port: 3001, HostPort: 18081, ContainerID: "c2"},
+		{ID: appA, ServerID: serverA, Domains: []ProxiedDomain{{Domain: "  App.Example.COM ", Port: 3000}}, ContainerID: "c1"},
+		{ID: appB, ServerID: serverB, Domains: []ProxiedDomain{{Domain: "other.example.com", Port: 3001}}, ContainerID: "c2"},
 	}
 	// The live endpoint is the engine-reported publication, not the declared
 	// pinned value (R1).
@@ -239,18 +239,18 @@ func TestRoutesForServerDiagnosesUnroutableRows(t *testing.T) {
 		containers []containers.Container
 		want       string
 	}{
-		"invalid domain": {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "bad domain", Port: 80, HostPort: 8080, ContainerID: "c"}, nil, "invalid domain"},
-		"no port":        {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", HostPort: 8080, ContainerID: "c"}, nil, "no container port"},
-		"pending":        {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, HostPort: 8080}, nil, "no running deployment"},
-		"container gone": {ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, ContainerID: "gone"}, nil, "no running deployment container"},
+		"invalid domain": {ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "bad domain", Port: 80}}, ContainerID: "c"}, nil, "invalid domain"},
+		"no port":        {ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com"}}, ContainerID: "c"}, nil, "no container port"},
+		"pending":        {ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}}, nil, "no running deployment"},
+		"container gone": {ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, ContainerID: "gone"}, nil, "no running deployment container"},
 		"not published": {
-			app: ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, ContainerID: "c1"},
+			app: ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, ContainerID: "c1"},
 			containers: []containers.Container{{ID: "c1", Name: "app", State: "running",
 				Ports: []string{"8080:8081"}, PortsReported: true}},
 			want: "no reachable published binding",
 		},
 		"legacy agent ports": {
-			app: ProxiedApplication{ID: appID, ServerID: serverID, BaseDomain: "app.example.com", Port: 80, HostPort: 8080, ContainerID: "c1"},
+			app: ProxiedApplication{ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, ContainerID: "c1"},
 			containers: []containers.Container{{ID: "c1", Name: "app", State: "running",
 				Ports: []string{"8080:80"}, PortsReported: false}},
 			want: "engine-reported",
@@ -265,7 +265,7 @@ func TestRoutesForServerDiagnosesUnroutableRows(t *testing.T) {
 			if len(diagnostics) != 1 || !strings.Contains(diagnostics[0].Reason, tc.want) {
 				t.Fatalf("diagnostics = %#v, want reason containing %q", diagnostics, tc.want)
 			}
-			if diagnostics[0].ApplicationID != appID || diagnostics[0].Domain != NormalizeDomain(tc.app.BaseDomain) {
+			if diagnostics[0].ApplicationID != appID || diagnostics[0].Domain != NormalizeDomain(tc.app.Domains[0].Domain) {
 				t.Errorf("diagnostic identity = %#v", diagnostics[0])
 			}
 		})

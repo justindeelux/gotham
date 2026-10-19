@@ -29,7 +29,7 @@ export function useDomainLabels() {
 
   /** applicationDomain shows the base domain a certificate targets. */
   function applicationDomain(certificate: Certificate): string {
-    return proxyStore.applicationOf(certificate.application_id)?.base_domain ?? "";
+    return proxyStore.applicationOf(certificate.application_id)?.primary_domain ?? "";
   }
 
   return { providerName, applicationName, applicationDomain };

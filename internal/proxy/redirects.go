@@ -249,7 +249,18 @@ func (s storeRedirect) GetApplication(ctx context.Context, id uuid.UUID) (Applic
 	if err != nil {
 		return ApplicationInfo{}, mapSSLReadError(err)
 	}
-	return applicationInfoFromRow(row), nil
+	info := applicationInfoFromRow(row)
+	domains, err := s.store.ListApplicationDomainsByApplication(ctx, pgUUID(id))
+	if err != nil {
+		return ApplicationInfo{}, err
+	}
+	for _, domain := range domains {
+		if !domain.Disabled {
+			info.Domains = append(info.Domains, domain.Domain)
+		}
+	}
+	info.DomainDisabled = len(domains) > 0 && len(info.Domains) == 0
+	return info, nil
 }
 
 // redirectFromRow maps a stored redirect row into the domain model.

@@ -65,7 +65,7 @@ export interface Application {
   compose_content?: string;
   /** In-repo compose file path of a repo-backed compose source. */
   compose_file?: string;
-  /** Compose service the domain/port routing targets. */
+  /** Compose release web service; domains default to it when no service is named. */
   compose_service?: string;
   branch: string;
   build_pack: string;
@@ -73,11 +73,8 @@ export interface Application {
   image_ref: string;
   /** Whether a private-registry credential is stored (never the credential). */
   has_registry_credential: boolean;
-  base_domain: string;
-  /** True when a legacy duplicate binding was disabled; an explicit domain update re-enables it. */
-  base_domain_disabled: boolean;
-  port: number;
-  host_port: number;
+  /** Derived enabled primary domain (empty when the application has none). */
+  primary_domain: string;
   server_id: string | null;
   server_name: string;
   created_at: string;
@@ -167,7 +164,7 @@ export interface CreateApplicationInput {
   compose_content?: string;
   /** In-repo compose file path for a repo-backed compose source. */
   compose_file?: string;
-  /** Compose service the domain/port routing targets. */
+  /** Compose release web service; domains default to it when no service is named. */
   compose_service?: string;
   branch: string;
   build_pack: string;
@@ -179,9 +176,6 @@ export interface CreateApplicationInput {
    */
   registry_username?: string;
   registry_password?: string;
-  base_domain: string;
-  port: number;
-  host_port: number;
   server_id: string;
   env: EnvVar[];
   storage: StorageMapping[];
@@ -206,9 +200,6 @@ export interface UpdateApplicationInput {
    */
   registry_username?: string;
   registry_password?: string;
-  base_domain?: string;
-  port?: number;
-  host_port?: number;
   /**
    * server_id pins the application to a node. An empty string clears the
    * assignment; omit the field to leave it unchanged.
@@ -241,9 +232,13 @@ interface DomainEnvelope {
   domain: ApplicationDomain;
 }
 
+/** Domain protocol selects the Traefik entrypoint. */
+export type DomainProtocol = "http" | "https";
+
 /**
- * One hostname an application serves (JUS-89, see `internal/deploy/domains.go`):
- * exactly one row per application is primary, and `base_domain` mirrors it.
+ * One hostname an application serves (JUS-233, see `internal/deploy/model.go`):
+ * each row carries its own target port, optional compose service and protocol.
+ * Exactly one row per application is primary.
  */
 export interface ApplicationDomain {
   id: string;
@@ -251,8 +246,19 @@ export interface ApplicationDomain {
   domain: string;
   is_primary: boolean;
   disabled: boolean;
+  port: number;
+  service: string;
+  protocol: DomainProtocol;
   created_at: string;
   updated_at: string;
+}
+
+/** Body of a domain create/edit: host plus its routing target. */
+export interface DomainInput {
+  domain: string;
+  port: number;
+  service?: string;
+  protocol: DomainProtocol;
 }
 
 /**
@@ -273,11 +279,27 @@ export async function listDomains(appId: string): Promise<ApplicationDomain[]> {
  */
 export async function addDomain(
   appId: string,
-  domain: string,
+  input: DomainInput,
 ): Promise<ApplicationDomain> {
   const response = await http.post<DomainEnvelope>(
     `/applications/${appId}/domains`,
-    { domain },
+    input,
+  );
+  return response.data.domain;
+}
+
+/**
+ * updateDomain edits one attached hostname and its routing target
+ * (PUT .../domains/{domainId} → 200).
+ */
+export async function updateDomain(
+  appId: string,
+  domainId: string,
+  input: DomainInput,
+): Promise<ApplicationDomain> {
+  const response = await http.put<DomainEnvelope>(
+    `/applications/${appId}/domains/${domainId}`,
+    input,
   );
   return response.data.domain;
 }

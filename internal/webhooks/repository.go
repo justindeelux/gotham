@@ -306,6 +306,25 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 		}
 		return Application{}, err
 	}
+	primary := ""
+	if domains, err := r.store.ListApplicationDomainsByApplication(ctx, pgUUID(appID)); err == nil {
+		for _, domain := range domains {
+			if !domain.Disabled && domain.IsPrimary {
+				primary = domain.Domain
+				break
+			}
+		}
+		if primary == "" {
+			for _, domain := range domains {
+				if !domain.Disabled {
+					primary = domain.Domain
+					break
+				}
+			}
+		}
+	} else {
+		return Application{}, err
+	}
 	return Application{
 		ID:         uuidFromPG(row.ID),
 		UserID:     uuidFromPG(row.UserID),
@@ -315,7 +334,7 @@ func (r *storeRepository) GetApplication(ctx context.Context, appID uuid.UUID) (
 		Branch:     row.Branch,
 		CloneURL:   row.CloneUrl,
 		Name:       row.Name,
-		BaseDomain: row.BaseDomain,
+		BaseDomain: primary,
 	}, nil
 }
 

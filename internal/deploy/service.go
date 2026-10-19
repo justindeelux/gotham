@@ -68,16 +68,17 @@ type DeployService interface {
 	// ListDomains returns one application's domains, primary first, then
 	// oldest first (JUS-89).
 	ListDomains(ctx context.Context, userID, appID uuid.UUID) ([]ApplicationDomain, error)
-	// AddDomain attaches one more hostname to an application: a host another
-	// application owns answers ErrDomainConflict, a host already attached
-	// answers ErrValidation.
-	AddDomain(ctx context.Context, userID, appID uuid.UUID, domain string) (ApplicationDomain, error)
+	// AddDomain attaches one more hostname with its port, optional compose
+	// service and protocol: a host another application owns answers
+	// ErrDomainConflict, a host already attached answers ErrValidation.
+	AddDomain(ctx context.Context, userID, appID uuid.UUID, in DomainInput) (ApplicationDomain, error)
+	// UpdateDomain edits one attached hostname and its routing target.
+	UpdateDomain(ctx context.Context, userID, appID, domainID uuid.UUID, in DomainInput) (ApplicationDomain, error)
 	// RemoveDomain detaches one hostname, promoting the oldest remaining row
-	// when the primary is removed, and returns the updated application.
-	RemoveDomain(ctx context.Context, userID, appID, domainID uuid.UUID) (Application, error)
-	// SetPrimaryDomain makes one attached hostname the primary and returns
-	// the updated application.
-	SetPrimaryDomain(ctx context.Context, userID, appID, domainID uuid.UUID) (Application, error)
+	// when the primary is removed.
+	RemoveDomain(ctx context.Context, userID, appID, domainID uuid.UUID) error
+	// SetPrimaryDomain makes one attached hostname the primary.
+	SetPrimaryDomain(ctx context.Context, userID, appID, domainID uuid.UUID) error
 	// DeleteApplication stops the current container best effort and deletes
 	// the application; its configuration cascades.
 	DeleteApplication(ctx context.Context, userID, appID uuid.UUID) error
@@ -761,17 +762,14 @@ func validateDeployTarget(app Application) error {
 }
 
 // validateComposeTarget rejects a compose application that cannot be
-// deployed: no routed web service, no container port, or neither pasted
-// content nor a repository with an in-repo file path. The full document
-// validation ran at write time; the deploy re-validates without executing
-// anything, so a row edited around the API still fails before touching the
-// node.
+// deployed: no release web service, or neither pasted content nor a
+// repository with an in-repo file path. The full document validation ran at
+// write time; the deploy re-validates without executing anything, so a row
+// edited around the API still fails before touching the node. Domain ports
+// are per domain and validated on the domain write path.
 func validateComposeTarget(app Application) error {
 	if strings.TrimSpace(app.ComposeService) == "" {
 		return fmt.Errorf("%w: compose source needs a web service", ErrValidation)
-	}
-	if err := validateComposePorts(app.Port, app.HostPort); err != nil {
-		return err
 	}
 	pasted := strings.TrimSpace(app.ComposeContent) != ""
 	repo := strings.TrimSpace(app.ComposeFile) != "" &&

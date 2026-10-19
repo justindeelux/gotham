@@ -33,6 +33,7 @@ func (f *fakeProviderSource) ListDNSProviders(context.Context) ([]DNSProvider, e
 // certificate configuration referencing providerID.
 func dnsCertificateApp(serverID, providerID uuid.UUID, wildcard bool) ProxiedApplication {
 	app := runningApp(serverID, "app.example.com", "app-container", 3000, 18080)
+	app.Domains[0].Protocol = ProtocolHTTPS
 	app.Certificate = &CertificateIntent{
 		Domain:        "app.example.com",
 		Enabled:       true,

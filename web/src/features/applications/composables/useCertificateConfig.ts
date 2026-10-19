@@ -60,7 +60,7 @@ export function useCertificateConfig(application: Ref<Application>) {
       (item) => item.application_id === application.value.id,
     );
     return (
-      configs.find((item) => item.domain === application.value.base_domain) ??
+      configs.find((item) => item.domain === application.value.primary_domain) ??
       configs[0] ??
       null
     );
@@ -75,7 +75,7 @@ export function useCertificateConfig(application: Ref<Application>) {
       const rows = await listDomains(application.value.id);
       attachedDomains.value = rows.map((row) => row.domain);
     } catch {
-      attachedDomains.value = [application.value.base_domain].filter(
+      attachedDomains.value = [application.value.primary_domain].filter(
         (domain) => domain !== "",
       );
     }
@@ -152,7 +152,7 @@ export function useCertificateConfig(application: Ref<Application>) {
     certificateErrorRaw.value = null;
     try {
       await proxyStore.updateCertificateConfig(existing.id, {
-        domain: application.value.base_domain,
+        domain: application.value.primary_domain,
       });
       await load();
       message.success(tr("applications.detail.certRerecorded"));
@@ -207,7 +207,7 @@ export function useCertificateConfig(application: Ref<Application>) {
    * Alias mutations bump the shared tick instead (the mirror may not move).
    */
   watch(
-    () => application.value.base_domain,
+    () => application.value.primary_domain,
     () => {
       void loadDomains();
     },

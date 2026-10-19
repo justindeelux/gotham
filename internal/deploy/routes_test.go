@@ -314,22 +314,29 @@ func (f *fakeDeployService) ListDomains(_ context.Context, userID, appID uuid.UU
 }
 
 // AddDomain implements DeployService.
-func (f *fakeDeployService) AddDomain(_ context.Context, userID, appID uuid.UUID, domain string) (ApplicationDomain, error) {
+func (f *fakeDeployService) AddDomain(_ context.Context, userID, appID uuid.UUID, in DomainInput) (ApplicationDomain, error) {
 	f.seenUser, f.seenApplication = userID, appID
-	f.seenDomain = domain
+	f.seenDomain = in.Domain
+	return f.domain, f.domainErr
+}
+
+// UpdateDomain implements DeployService.
+func (f *fakeDeployService) UpdateDomain(_ context.Context, userID, appID, domainID uuid.UUID, in DomainInput) (ApplicationDomain, error) {
+	f.seenUser, f.seenApplication = userID, appID
+	f.seenDomain = in.Domain
 	return f.domain, f.domainErr
 }
 
 // RemoveDomain implements DeployService.
-func (f *fakeDeployService) RemoveDomain(_ context.Context, userID, appID, domainID uuid.UUID) (Application, error) {
+func (f *fakeDeployService) RemoveDomain(_ context.Context, userID, appID, domainID uuid.UUID) error {
 	f.seenUser, f.seenApplication = userID, appID
-	return f.application, f.applicationErr
+	return f.applicationErr
 }
 
 // SetPrimaryDomain implements DeployService.
-func (f *fakeDeployService) SetPrimaryDomain(_ context.Context, userID, appID, domainID uuid.UUID) (Application, error) {
+func (f *fakeDeployService) SetPrimaryDomain(_ context.Context, userID, appID, domainID uuid.UUID) error {
 	f.seenUser, f.seenApplication = userID, appID
-	return f.application, f.applicationErr
+	return f.applicationErr
 }
 
 // newRouteServer mounts the deploy routes with a no-op auth middleware.

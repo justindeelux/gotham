@@ -228,8 +228,8 @@ func TestDeleteTeamSerializesWithConcurrentInsert(t *testing.T) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO applications (user_id, team_id, server_id, environment_id, name, clone_url, branch, build_pack, port, host_port)
-		 VALUES ($1, $2, $3, $4, $5, '', 'main', 'dockerfile', 0, 0)`,
+		`INSERT INTO applications (user_id, team_id, server_id, environment_id, name, clone_url, branch, build_pack)
+		 VALUES ($1, $2, $3, $4, $5, '', 'main', 'dockerfile')`,
 		user.ID, team.ID, serverRow.ID, environment.ID, "race-app"); err != nil {
 		t.Fatalf("insert racing application: %v", err)
 	}

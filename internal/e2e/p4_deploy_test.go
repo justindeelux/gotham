@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -20,7 +19,6 @@ func TestP4DeployRunning(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]
 	fixture := newP4Fixture(t, "e2e/p4-app-"+suffix, "gotham-p4-v1-"+suffix)
-	hostPort := freeHostPort(t)
 
 	app := h.createApplication(t, p4CreateApplication{
 		EnvironmentID: h.envID.String(),
@@ -30,10 +28,9 @@ func TestP4DeployRunning(t *testing.T) {
 		CloneURL:      fixture.dir,
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		Port:          p4ContainerPort,
-		HostPort:      hostPort,
 		ServerID:      h.serverID.String(),
 	})
+	h.addDomain(t, app.ID, "p4-running-"+suffix+".example.test", p4ContainerPort)
 
 	queued := h.deploy(t, app.ID)
 	if queued.State != "queued" {
@@ -56,10 +53,10 @@ func TestP4DeployRunning(t *testing.T) {
 	// The build streamed into the realtime deployment log before the container
 	// started, and the application answers on its published host port.
 	h.waitForDeployLog(t, queued.ID, "image built: ")
-	waitForHTTPBody(t, fmt.Sprintf("http://127.0.0.1:%d/index.html", hostPort), fixture.marker)
+	waitForHTTPBody(t, h.appURL(t, app.ID), fixture.marker)
 
 	t.Logf("deploy ok: app=%s deployment=%s image=%s port=%d",
-		app.ID, running.ID, running.ImageTag, hostPort)
+		app.ID, running.ID, running.ImageTag, h.publishedHostPort(t, app.ID, p4ContainerPort))
 }
 
 // TestP4FailedBuild proves the failure half of the state machine: a Dockerfile
@@ -70,7 +67,6 @@ func TestP4FailedBuild(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]
 	fixture := newBrokenP4Fixture(t, "e2e/p4-broken-"+suffix, "gotham-p4-broken-"+suffix)
-	hostPort := freeHostPort(t)
 
 	// The legacy Docker builder leaves the failed RUN step's scratch container
 	// behind without any label, so cleanup must match it by command text.
@@ -84,8 +80,6 @@ func TestP4FailedBuild(t *testing.T) {
 		CloneURL:      fixture.dir,
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		Port:          p4ContainerPort,
-		HostPort:      hostPort,
 		ServerID:      h.serverID.String(),
 	})
 
@@ -124,8 +118,6 @@ func TestP4Rollback(t *testing.T) {
 	v1Marker := "gotham-p4-v1-" + suffix
 	v2Marker := "gotham-p4-v2-" + suffix
 	fixture := newP4Fixture(t, "e2e/p4-rollback-"+suffix, v1Marker)
-	hostPort := freeHostPort(t)
-	appURL := fmt.Sprintf("http://127.0.0.1:%d/index.html", hostPort)
 
 	app := h.createApplication(t, p4CreateApplication{
 		EnvironmentID: h.envID.String(),
@@ -135,10 +127,9 @@ func TestP4Rollback(t *testing.T) {
 		CloneURL:      fixture.dir,
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		Port:          p4ContainerPort,
-		HostPort:      hostPort,
 		ServerID:      h.serverID.String(),
 	})
+	h.addDomain(t, app.ID, "p4-rollback-"+suffix+".example.test", p4ContainerPort)
 
 	// 1. Release v1.
 	first := h.deploy(t, app.ID)
@@ -146,7 +137,7 @@ func TestP4Rollback(t *testing.T) {
 	if running1.State != "running" {
 		t.Fatalf("first deployment state = %q, want running (error: %s)", running1.State, running1.Error)
 	}
-	waitForHTTPBody(t, appURL, v1Marker)
+	waitForHTTPBody(t, h.appURL(t, app.ID), v1Marker)
 
 	// 2. Publish v2 and release it over the same application.
 	fixture.commit(t, v2Marker, p4Dockerfile)
@@ -158,7 +149,7 @@ func TestP4Rollback(t *testing.T) {
 	if running2.ID == running1.ID {
 		t.Fatal("the second deploy reused the first deployment row")
 	}
-	waitForHTTPBody(t, appURL, v2Marker)
+	waitForHTTPBody(t, h.appURL(t, app.ID), v2Marker)
 
 	// 3. Roll back to the previous release.
 	rollback := h.rollback(t, app.ID, nil)
@@ -172,7 +163,7 @@ func TestP4Rollback(t *testing.T) {
 	if rolledBack.State != "running" {
 		t.Fatalf("rollback state = %q, want running (error: %s)", rolledBack.State, rolledBack.Error)
 	}
-	waitForHTTPBody(t, appURL, v1Marker)
+	waitForHTTPBody(t, h.appURL(t, app.ID), v1Marker)
 
 	t.Logf("rollback ok: %s -> %s -> %s", first.ID, second.ID, rollback.ID)
 }

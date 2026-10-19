@@ -357,9 +357,9 @@ func (o *Orchestrator) run(ctx context.Context, j job) {
 }
 
 // syncProxy pushes the routing state of the node hosting app. Applications
-// without a domain have no route to refresh, so they are skipped.
+// without an enabled domain have no route to refresh, so they are skipped.
 func (o *Orchestrator) syncProxy(ctx context.Context, app Application) {
-	if app.BaseDomain == "" {
+	if app.PrimaryDomain == nil {
 		return
 	}
 	o.syncProxyServer(ctx, app.ServerID)
@@ -748,7 +748,15 @@ func (o *Orchestrator) startContainer(ctx context.Context, st *runState) error {
 		return err
 	}
 	warnLegacyStorageResolution(o.logger, st.app.ID, storages)
-	request, err := buildRunRequest(st.app, st.dep, envVars, secrets, storages, o.secret)
+	// An application's published ports are the distinct target ports of its
+	// domains; an application with no domain publishes nothing and deploys
+	// without a route (JUS-233). The primary domain's port also seeds PORT.
+	domains, err := o.repo.ListApplicationDomains(ctx, st.app.ID)
+	if err != nil {
+		return err
+	}
+	domainPorts, primaryPort := domainTargetPorts(domains)
+	request, err := buildRunRequest(st.app, st.dep, envVars, secrets, storages, o.secret, domainPorts, primaryPort)
 	if err != nil {
 		return err
 	}

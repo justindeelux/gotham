@@ -16,6 +16,7 @@ INSERT INTO domain_certificates (application_id, domain, enabled, challenge, dns
 SELECT d.application_id, d.domain, true, 'http-01', NULL, false
 FROM application_domains d
 WHERE NOT d.disabled
+  AND d.protocol = 'https'
   AND NOT EXISTS (
       SELECT 1 FROM domain_certificates c
       WHERE c.application_id = d.application_id AND c.domain = d.domain
@@ -409,8 +410,6 @@ func (q *Queries) InsertPendingProxyConfigVersion(ctx context.Context, arg Inser
 }
 
 const listApplicationBaseDomains = `-- name: ListApplicationBaseDomains :many
-SELECT id, base_domain FROM applications WHERE base_domain <> ''
-UNION
 SELECT application_id AS id, domain AS base_domain FROM application_domains
 `
 
@@ -421,14 +420,11 @@ type ListApplicationBaseDomainsRow struct {
 
 // ListApplicationBaseDomains feeds the redirect ownership guard: a redirect
 // source must not shadow any application's domain (on any node), so the
-// two routers must not match the same host. Since JUS-89 the claim set is
-// every row of application_domains (primary and aliases alike; disabled rows
-// keep their claim paused), unioned with the applications.base_domain mirror:
-// raw store writers may lag the rows, and the guard must see the wider claim
-// either way. The guard reads
-// committed state, so a racing write can still pass against an old domain
-// set; the generator then holds the shadowing source back per committed
-// snapshot.
+// two routers must not match the same host. The claim set is every row of
+// application_domains (primary and aliases alike; disabled rows keep their
+// claim paused). The guard reads committed state, so a racing write can
+// still pass against an old domain set; the generator then holds the
+// shadowing source back per committed snapshot.
 func (q *Queries) ListApplicationBaseDomains(ctx context.Context) ([]ListApplicationBaseDomainsRow, error) {
 	rows, err := q.db.Query(ctx, listApplicationBaseDomains)
 	if err != nil {
@@ -750,7 +746,7 @@ func (q *Queries) ListEnabledRedirects(ctx context.Context) ([]ListEnabledRedire
 }
 
 const listProxiedApplications = `-- name: ListProxiedApplications :many
-SELECT a.id, a.server_id, a.name, a.base_domain, a.base_domain_disabled, a.port, a.host_port,
+SELECT a.id, a.server_id, a.name,
        COALESCE(d.container_id, '')::text AS container_id
 FROM applications a
 LEFT JOIN LATERAL (
@@ -759,31 +755,27 @@ LEFT JOIN LATERAL (
     ORDER BY created_at DESC
     LIMIT 1
 ) d ON true
-WHERE a.base_domain <> ''
+WHERE EXISTS (SELECT 1 FROM application_domains ad WHERE ad.application_id = a.id)
 ORDER BY a.created_at, a.id
 `
 
 type ListProxiedApplicationsRow struct {
-	ID                 pgtype.UUID `json:"id"`
-	ServerID           pgtype.UUID `json:"server_id"`
-	Name               string      `json:"name"`
-	BaseDomain         string      `json:"base_domain"`
-	BaseDomainDisabled bool        `json:"base_domain_disabled"`
-	Port               int32       `json:"port"`
-	HostPort           int32       `json:"host_port"`
-	ContainerID        string      `json:"container_id"`
+	ID          pgtype.UUID `json:"id"`
+	ServerID    pgtype.UUID `json:"server_id"`
+	Name        string      `json:"name"`
+	ContainerID string      `json:"container_id"`
 }
 
-// ProxiedApplications feeds the Traefik config generator (Phase 6, BE-6.1):
-// every application that declares a base_domain must be routed, on the node
-// that hosts it, from the endpoint of its newest running deployment. Rows are
-// ordered by creation time so duplicate-domain dispositions and generation
-// input stay deterministic.
+// ProxiedApplications feeds the Traefik config generator: every application
+// that declares at least one domain is routed, on the node that hosts it,
+// from the endpoint of its newest running deployment. Rows are ordered by
+// creation time so duplicate-domain dispositions and generation input stay
+// deterministic.
 //
-// The domain rows (JUS-89) and the certificate intents (BE-6.2, one row per
-// domain since JUS-89) fan out per application, so they are read by the
-// dedicated ListProxiedApplicationDomains and ListProxiedCertificates
-// queries and grouped in Go: joining them here would multiply the rows.
+// The domain rows and the certificate intents (one row per domain) fan out
+// per application, so they are read by the dedicated
+// ListProxiedApplicationDomains and ListProxiedCertificates queries and
+// grouped in Go: joining them here would multiply the rows.
 func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApplicationsRow, error) {
 	rows, err := q.db.Query(ctx, listProxiedApplications)
 	if err != nil {
@@ -797,10 +789,6 @@ func (q *Queries) ListProxiedApplications(ctx context.Context) ([]ListProxiedApp
 			&i.ID,
 			&i.ServerID,
 			&i.Name,
-			&i.BaseDomain,
-			&i.BaseDomainDisabled,
-			&i.Port,
-			&i.HostPort,
 			&i.ContainerID,
 		); err != nil {
 			return nil, err
@@ -860,7 +848,9 @@ func (q *Queries) ListProxiedCertificates(ctx context.Context) ([]ListProxiedCer
 const listRedirectRules = `-- name: ListRedirectRules :many
 SELECT r.id, r.application_id, r.source_domain, r.target_domain, r.code,
        r.preserve_path, r.enabled, r.created_at, r.updated_at,
-       a.server_id, a.base_domain_disabled
+       a.server_id,
+       COALESCE((SELECT bool_and(d.disabled) FROM application_domains d
+                 WHERE d.application_id = a.id), false)::boolean AS base_domain_disabled
 FROM domain_redirects r
 JOIN applications a ON a.id = r.application_id
 ORDER BY r.created_at, r.id
@@ -883,7 +873,7 @@ type ListRedirectRulesRow struct {
 // ListRedirectRules joins every redirect rule to its application's node state
 // for the proxy generator: the owning node decides which Traefik instance
 // serves the rule, and the domain-disabled flag holds back rules of an
-// application whose route is already excluded by the uniqueness conflict.
+// application whose every domain is excluded by a uniqueness conflict.
 func (q *Queries) ListRedirectRules(ctx context.Context) ([]ListRedirectRulesRow, error) {
 	rows, err := q.db.Query(ctx, listRedirectRules)
 	if err != nil {

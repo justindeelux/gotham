@@ -40,7 +40,7 @@ func (n *recordingNotifier) results() []DeployResult {
 func TestOrchestratorNotifiesSuccess(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.TeamID = uuid.New()
-	app.BaseDomain = "demo.example.com"
+	app.PrimaryDomain = &ApplicationDomain{Domain: "demo.example.com", Port: 3000, Protocol: ProtocolHTTP}
 	repo := &fakeRepository{app: app}
 	envVars, secrets := testEnv(t)
 	repo.envVars, repo.secrets = envVars, secrets
@@ -71,8 +71,8 @@ func TestOrchestratorNotifiesSuccess(t *testing.T) {
 	if result.TeamID != app.TeamID {
 		t.Errorf("team = %s, want %s", result.TeamID, app.TeamID)
 	}
-	if result.Host != app.BaseDomain {
-		t.Errorf("host = %q, want %q", result.Host, app.BaseDomain)
+	if result.Host != app.PrimaryDomain.Domain {
+		t.Errorf("host = %q, want %q", result.Host, app.PrimaryDomain.Domain)
 	}
 	if result.Error != "" {
 		t.Errorf("error = %q, want empty on success", result.Error)

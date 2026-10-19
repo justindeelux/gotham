@@ -125,19 +125,15 @@ func TestStoreApplicationComposeRoundtrip(t *testing.T) {
 		}
 
 		updated, err := st.UpdateApplication(ctx, sqlc.UpdateApplicationParams{
-			ID:                 created.ID,
-			Name:               created.Name,
-			Branch:             created.Branch,
-			BuildPack:          created.BuildPack,
-			BaseDomain:         created.BaseDomain,
-			Port:               created.Port,
-			HostPort:           created.HostPort,
-			ServerID:           created.ServerID,
-			BaseDomainDisabled: created.BaseDomainDisabled,
-			EnvironmentID:      created.EnvironmentID,
-			ComposeContent:     "services:\n  web:\n    image: example.com/app:2.0\n",
-			ComposeFile:        "",
-			ComposeService:     "web",
+			ID:             created.ID,
+			Name:           created.Name,
+			Branch:         created.Branch,
+			BuildPack:      created.BuildPack,
+			ServerID:       created.ServerID,
+			EnvironmentID:  created.EnvironmentID,
+			ComposeContent: "services:\n  web:\n    image: example.com/app:2.0\n",
+			ComposeFile:    "",
+			ComposeService: "web",
 			// The merged schema (GS-7) holds build_args NOT NULL: pass the
 			// empty object like the repository's marshalBuildArgs does.
 			BuildArgs: []byte("{}"),

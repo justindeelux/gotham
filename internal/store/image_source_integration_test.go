@@ -71,7 +71,6 @@ func TestApplicationImageSourceColumnsRoundtrip(t *testing.T) {
 		ImageRef:                   "registry.example.com/team/app:1.2",
 		RegistryUsername:           "robot",
 		RegistryPasswordCiphertext: "sealed-credential",
-		Port:                       3000,
 	})
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
@@ -94,9 +93,8 @@ func TestApplicationImageSourceColumnsRoundtrip(t *testing.T) {
 
 	updated, err := st.UpdateApplication(ctx, sqlc.UpdateApplicationParams{
 		ID: created.ID, Name: read.Name, Branch: read.Branch,
-		BuildPack: read.BuildPack, BaseDomain: read.BaseDomain,
-		Port: read.Port, HostPort: read.HostPort, ServerID: read.ServerID,
-		BaseDomainDisabled: read.BaseDomainDisabled, EnvironmentID: read.EnvironmentID,
+		BuildPack: read.BuildPack, ServerID: read.ServerID,
+		EnvironmentID:              read.EnvironmentID,
 		ImageRef:                   "registry.example.com/team/app:2.0",
 		RegistryUsername:           "robot",
 		RegistryPasswordCiphertext: "rotated-credential",

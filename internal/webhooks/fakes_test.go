@@ -862,7 +862,7 @@ func (f *fakeDeployer) CreatePreviewApplication(_ context.Context, _ uuid.UUID, 
 	}
 	f.provisioned = append(f.provisioned, in)
 	f.provisionID = uuid.New()
-	return deploy.Application{ID: f.provisionID, Name: in.Name, Branch: in.Branch, BaseDomain: in.BaseDomain}, nil
+	return deploy.Application{ID: f.provisionID, Name: in.Name, Branch: in.Branch}, nil
 }
 
 // DeleteSystemApplication implements PreviewProvisioner.

@@ -56,8 +56,8 @@ const team = {
 };
 
 const apps = [
-  { id: "app-1", name: "Shop", base_domain: "shop.example.com" },
-  { id: "app-2", name: "Blog", base_domain: "blog.example.com" },
+  { id: "app-1", name: "Shop", primary_domain: "shop.example.com" },
+  { id: "app-2", name: "Blog", primary_domain: "blog.example.com" },
 ];
 
 const providers = [

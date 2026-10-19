@@ -57,8 +57,6 @@ test.describe("applications", () => {
         clone_url: cloneURL,
         branch: "main",
         build_pack: "auto",
-        port: 80,
-        host_port: 0,
         server_id: node.id,
       },
     });

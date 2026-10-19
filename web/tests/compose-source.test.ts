@@ -9,7 +9,6 @@ import { defineComponent, h, nextTick, ref } from "vue";
 import {
   composeContentSchema,
   composeFileSchema,
-  composeHostPortSchema,
   composeModeSchema,
   composeServiceSchema,
   sourceTypeImplemented,
@@ -71,16 +70,6 @@ describe("compose schemas", () => {
     expect(composeServiceSchema.safeParse("").success).toBe(false);
     expect(composeServiceSchema.safeParse("  ").success).toBe(false);
     expect(composeServiceSchema.safeParse("-bad").success).toBe(false);
-  });
-
-  it("gates the compose host port above the privileged band", () => {
-    expect(composeHostPortSchema.safeParse(null).success).toBe(true);
-    expect(composeHostPortSchema.safeParse(0).success).toBe(true);
-    expect(composeHostPortSchema.safeParse(8080).success).toBe(true);
-    expect(composeHostPortSchema.safeParse(80).success).toBe(false);
-    expect(composeHostPortSchema.safeParse(443).success).toBe(false);
-    expect(composeHostPortSchema.safeParse(1023).success).toBe(false);
-    expect(composeHostPortSchema.safeParse(1024).success).toBe(true);
   });
 
   it("gates the in-repo file path", () => {
@@ -145,9 +134,6 @@ const reset = {
   name: "",
   buildPack: "",
   serverId: "",
-  port: 3000,
-  hostPort: null,
-  baseDomain: "",
   env: [],
   storage: [],
 };
@@ -293,24 +279,11 @@ describe("wizard compose source", () => {
     wrapper.unmount();
   });
 
-  it("gates privileged host ports on the Runtime step for compose", () => {
+  it("needs only a node on the Runtime step", () => {
     const { w, wrapper } = mountWizard();
-    Object.assign(w.form, {
-      ...reset,
-      sourceType: "compose",
-      serverId: "s1",
-      port: 3000,
-      hostPort: 80,
-      baseDomain: "",
-    });
+    Object.assign(w.form, { ...reset, sourceType: "compose", serverId: "" });
     expect(w.runtimeValid.value).toBe(false);
-    w.form.hostPort = 0;
-    expect(w.runtimeValid.value).toBe(true);
-    w.form.hostPort = 8080;
-    expect(w.runtimeValid.value).toBe(true);
-    // Other sources keep the existing range.
-    w.form.sourceType = "git_public";
-    w.form.hostPort = 80;
+    w.form.serverId = "s1";
     expect(w.runtimeValid.value).toBe(true);
     wrapper.unmount();
   });
@@ -479,8 +452,7 @@ describe("compose locales", () => {
         "applications.wizard.composeContent",
         "applications.wizard.composeFile",
         "applications.wizard.composeService",
-        "applications.wizard.hostPortComposeHint",
-        "applications.compose.title",
+          "applications.compose.title",
         "applications.compose.save",
         "applications.compose.saved",
         "applications.overview.composeService",

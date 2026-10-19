@@ -102,27 +102,33 @@ type (
 // marker: is_preview flags a PR-preview sibling, preview_of names its base
 // application (empty when none).
 type environmentResourceApplication struct {
-	ID                 string    `json:"id"`
-	Name               string    `json:"name"`
-	EnvironmentID      string    `json:"environment_id"`
-	EnvironmentName    string    `json:"environment_name"`
-	ProjectID          string    `json:"project_id"`
-	ProjectName        string    `json:"project_name"`
-	Provider           string    `json:"provider"`
-	Repo               string    `json:"repo"`
-	CloneURL           string    `json:"clone_url"`
-	Branch             string    `json:"branch"`
-	BuildPack          string    `json:"build_pack"`
-	BaseDomain         string    `json:"base_domain"`
-	BaseDomainDisabled bool      `json:"base_domain_disabled"`
-	Port               int32     `json:"port"`
-	HostPort           int32     `json:"host_port"`
-	ServerID           string    `json:"server_id"`
-	ServerName         string    `json:"server_name"`
-	IsPreview          bool      `json:"is_preview"`
-	PreviewOf          string    `json:"preview_of,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	EnvironmentID   string    `json:"environment_id"`
+	EnvironmentName string    `json:"environment_name"`
+	ProjectID       string    `json:"project_id"`
+	ProjectName     string    `json:"project_name"`
+	Provider        string    `json:"provider"`
+	Repo            string    `json:"repo"`
+	CloneURL        string    `json:"clone_url"`
+	Branch          string    `json:"branch"`
+	BuildPack       string    `json:"build_pack"`
+	PrimaryDomain   string    `json:"primary_domain"`
+	ServerID        string    `json:"server_id"`
+	ServerName      string    `json:"server_name"`
+	IsPreview       bool      `json:"is_preview"`
+	PreviewOf       string    `json:"preview_of,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// primaryDomain returns an application's derived primary host for the
+// resources surface, or "" when it has no enabled domain.
+func primaryDomain(application deploy.Application) string {
+	if application.PrimaryDomain == nil {
+		return ""
+	}
+	return application.PrimaryDomain.Domain
 }
 
 // environmentResourceService is one service of the resources surface: the
@@ -415,19 +421,16 @@ func (h *handler) getEnvironmentResources(w http.ResponseWriter, r *http.Request
 			Repo:            application.Repo,
 			// Display data: never echo embedded credentials (see
 			// deploy.RedactCloneURL).
-			CloneURL:           deploy.RedactCloneURL(application.CloneURL),
-			Branch:             application.Branch,
-			BuildPack:          application.BuildPack,
-			BaseDomain:         application.BaseDomain,
-			BaseDomainDisabled: application.BaseDomainDisabled,
-			Port:               application.Port,
-			HostPort:           application.HostPort,
-			ServerID:           serverID,
-			ServerName:         application.ServerName,
-			IsPreview:          application.IsPreview,
-			PreviewOf:          previewOf,
-			CreatedAt:          application.CreatedAt,
-			UpdatedAt:          application.UpdatedAt,
+			CloneURL:      deploy.RedactCloneURL(application.CloneURL),
+			Branch:        application.Branch,
+			BuildPack:     application.BuildPack,
+			PrimaryDomain: primaryDomain(application),
+			ServerID:      serverID,
+			ServerName:    application.ServerName,
+			IsPreview:     application.IsPreview,
+			PreviewOf:     previewOf,
+			CreatedAt:     application.CreatedAt,
+			UpdatedAt:     application.UpdatedAt,
 		})
 	}
 	services := make([]environmentResourceService, 0, len(resources.Services))

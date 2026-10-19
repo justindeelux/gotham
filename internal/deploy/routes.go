@@ -108,8 +108,11 @@ type applicationResponse struct {
 	ImageRef string `json:"image_ref"`
 	// HasRegistryCredential reports whether a private-registry credential is
 	// stored. The username and password are never returned by the API.
-	HasRegistryCredential bool   `json:"has_registry_credential"`
-	BaseDomain            string `json:"base_domain"`
+	HasRegistryCredential bool `json:"has_registry_credential"`
+	// PrimaryDomain is the enabled primary domain row derived at read time
+	// (empty when the application has none). Routing fields live on the
+	// domains surface (JUS-233).
+	PrimaryDomain string `json:"primary_domain"`
 	// DockerfileContent holds pasted Dockerfile text for dockerfile
 	// applications (empty otherwise); BuildArgs holds its --build-arg pairs
 	// (never nil on the wire).
@@ -119,19 +122,13 @@ type applicationResponse struct {
 	// application (empty for repo-backed and other sources); ComposeFile the
 	// in-repo path of a repo-backed compose source, and ComposeService the
 	// routed web service.
-	ComposeContent string `json:"compose_content"`
-	ComposeFile    string `json:"compose_file"`
-	ComposeService string `json:"compose_service"`
-	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
-	// migration (legacy duplicate); the value is preserved and an explicit
-	// domain update re-enables it.
-	BaseDomainDisabled bool      `json:"base_domain_disabled"`
-	Port               int32     `json:"port"`
-	HostPort           int32     `json:"host_port"`
-	ServerID           *string   `json:"server_id"`
-	ServerName         string    `json:"server_name"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ComposeContent string    `json:"compose_content"`
+	ComposeFile    string    `json:"compose_file"`
+	ComposeService string    `json:"compose_service"`
+	ServerID       *string   `json:"server_id"`
+	ServerName     string    `json:"server_name"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // applicationEnvelope wraps a single application. Webhook reports the
@@ -185,23 +182,20 @@ type applicationListItem struct {
 	ImageRef string `json:"image_ref"`
 	// HasRegistryCredential reports whether a private-registry credential
 	// is stored (never the credential itself).
-	HasRegistryCredential bool   `json:"has_registry_credential"`
-	BaseDomain            string `json:"base_domain"`
+	HasRegistryCredential bool `json:"has_registry_credential"`
+	// PrimaryDomain is the enabled primary domain row derived at read time
+	// (empty when the application has none). Routing fields live on the
+	// domains surface (JUS-233).
+	PrimaryDomain string `json:"primary_domain"`
 	// ComposeFile is the in-repo path of a repo-backed compose source and
 	// ComposeService its routed web service (routing metadata, not content,
 	// so both stay on the list).
-	ComposeFile    string `json:"compose_file"`
-	ComposeService string `json:"compose_service"`
-	// BaseDomainDisabled marks a binding disabled by the domain-uniqueness
-	// migration (legacy duplicate); the value is preserved and an explicit
-	// domain update re-enables it.
-	BaseDomainDisabled bool      `json:"base_domain_disabled"`
-	Port               int32     `json:"port"`
-	HostPort           int32     `json:"host_port"`
-	ServerID           *string   `json:"server_id"`
-	ServerName         string    `json:"server_name"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ComposeFile    string    `json:"compose_file"`
+	ComposeService string    `json:"compose_service"`
+	ServerID       *string   `json:"server_id"`
+	ServerName     string    `json:"server_name"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // envEntryRequest is one environment row on the wire (`EnvVar` in the FE). A
@@ -251,9 +245,6 @@ type createApplicationRequest struct {
 	ImageRef         string            `json:"image_ref"`
 	RegistryUsername string            `json:"registry_username"`
 	RegistryPassword string            `json:"registry_password"`
-	BaseDomain       string            `json:"base_domain"`
-	Port             int32             `json:"port"`
-	HostPort         int32             `json:"host_port"`
 	ServerID         string            `json:"server_id"`
 	Env              []envEntryRequest `json:"env"`
 	Storage          []storageRequest  `json:"storage"`
@@ -279,9 +270,6 @@ type updateApplicationRequest struct {
 	ImageRef         *string `json:"image_ref"`
 	RegistryUsername *string `json:"registry_username"`
 	RegistryPassword *string `json:"registry_password"`
-	BaseDomain       *string `json:"base_domain"`
-	Port             *int32  `json:"port"`
-	HostPort         *int32  `json:"host_port"`
 	ServerID         *string `json:"server_id"`
 	// GitHubAppID relinks the application: a UUID sets the connection, an
 	// empty string clears it, absent leaves it unchanged.
@@ -385,6 +373,7 @@ type handler struct {
 //	POST   /v1/applications/{id}/test-connection
 //	GET    /v1/applications/{id}/domains
 //	POST   /v1/applications/{id}/domains
+//	PUT    /v1/applications/{id}/domains/{domainId}
 //	DELETE /v1/applications/{id}/domains/{domainId}
 //	POST   /v1/applications/{id}/domains/{domainId}/primary
 //
@@ -423,6 +412,7 @@ func Mount(r chi.Router, auth func(http.Handler) http.Handler, userID UserIDFunc
 		protected.Post("/v1/applications/{id}/test-connection", h.testConnection)
 		protected.Get("/v1/applications/{id}/domains", h.listDomains)
 		protected.Post("/v1/applications/{id}/domains", h.addDomain)
+		protected.Put("/v1/applications/{id}/domains/{domainId}", h.updateDomain)
 		protected.Delete("/v1/applications/{id}/domains/{domainId}", h.removeDomain)
 		protected.Post("/v1/applications/{id}/domains/{domainId}/primary", h.setPrimaryDomain)
 	})
@@ -466,9 +456,6 @@ func (h *handler) createApplication(w http.ResponseWriter, r *http.Request) {
 		ImageRef:          req.ImageRef,
 		RegistryUsername:  req.RegistryUsername,
 		RegistryPassword:  req.RegistryPassword,
-		BaseDomain:        req.BaseDomain,
-		Port:              req.Port,
-		HostPort:          req.HostPort,
 		ServerID:          serverID,
 		Env:               toEnvEntries(req.Env),
 		Storage:           toStorages(req.Storage),
@@ -561,9 +548,6 @@ func (h *handler) updateApplication(w http.ResponseWriter, r *http.Request) {
 		ImageRef:          req.ImageRef,
 		RegistryUsername:  req.RegistryUsername,
 		RegistryPassword:  req.RegistryPassword,
-		BaseDomain:        req.BaseDomain,
-		Port:              req.Port,
-		HostPort:          req.HostPort,
 		GitHubAppID:       req.GitHubAppID,
 		DockerfileContent: req.DockerfileContent,
 		BuildArgs:         req.BuildArgs,
@@ -984,13 +968,16 @@ func (h *handler) testConnection(w http.ResponseWriter, r *http.Request) {
 }
 
 // applicationDomainResponse is the wire representation of one attached
-// hostname (JUS-89).
+// hostname and its routing target.
 type applicationDomainResponse struct {
 	ID            string    `json:"id"`
 	ApplicationID string    `json:"application_id"`
 	Domain        string    `json:"domain"`
 	IsPrimary     bool      `json:"is_primary"`
 	Disabled      bool      `json:"disabled"`
+	Port          int32     `json:"port"`
+	Service       string    `json:"service"`
+	Protocol      string    `json:"protocol"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -1005,9 +992,14 @@ type domainEnvelope struct {
 	Domain applicationDomainResponse `json:"domain"`
 }
 
-// addDomainRequest is the body of POST /v1/applications/{id}/domains.
+// addDomainRequest is the body of POST /v1/applications/{id}/domains and
+// PUT /v1/applications/{id}/domains/{domainId}: the host and its routing
+// target.
 type addDomainRequest struct {
-	Domain string `json:"domain"`
+	Domain   string `json:"domain"`
+	Port     int32  `json:"port"`
+	Service  string `json:"service"`
+	Protocol string `json:"protocol"`
 }
 
 // newApplicationDomainResponse maps a domain onto its wire shape.
@@ -1018,6 +1010,9 @@ func newApplicationDomainResponse(domain ApplicationDomain) applicationDomainRes
 		Domain:        domain.Domain,
 		IsPrimary:     domain.IsPrimary,
 		Disabled:      domain.Disabled,
+		Port:          domain.Port,
+		Service:       domain.Service,
+		Protocol:      domain.Protocol,
 		CreatedAt:     domain.CreatedAt,
 		UpdatedAt:     domain.UpdatedAt,
 	}
@@ -1051,12 +1046,35 @@ func (h *handler) addDomain(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &req) {
 		return
 	}
-	domain, err := h.svc.AddDomain(r.Context(), userID, appID, req.Domain)
+	domain, err := h.svc.AddDomain(r.Context(), userID, appID, DomainInput(req))
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, domainEnvelope{Domain: newApplicationDomainResponse(domain)})
+}
+
+// updateDomain serves PUT /v1/applications/{id}/domains/{domainId}.
+func (h *handler) updateDomain(w http.ResponseWriter, r *http.Request) {
+	userID, appID, ok := h.requestTarget(w, r)
+	if !ok {
+		return
+	}
+	domainID, err := uuid.Parse(chi.URLParam(r, "domainId"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid domain id"})
+		return
+	}
+	var req addDomainRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	domain, err := h.svc.UpdateDomain(r.Context(), userID, appID, domainID, DomainInput(req))
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, domainEnvelope{Domain: newApplicationDomainResponse(domain)})
 }
 
 // removeDomain serves DELETE /v1/applications/{id}/domains/{domainId}.
@@ -1070,7 +1088,7 @@ func (h *handler) removeDomain(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid domain id"})
 		return
 	}
-	if _, err := h.svc.RemoveDomain(r.Context(), userID, appID, domainID); err != nil {
+	if err := h.svc.RemoveDomain(r.Context(), userID, appID, domainID); err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
@@ -1088,7 +1106,7 @@ func (h *handler) setPrimaryDomain(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorBody{Message: "invalid domain id"})
 		return
 	}
-	if _, err := h.svc.SetPrimaryDomain(r.Context(), userID, appID, domainID); err != nil {
+	if err := h.svc.SetPrimaryDomain(r.Context(), userID, appID, domainID); err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
@@ -1333,6 +1351,15 @@ func nonNilBuildArgs(args map[string]string) map[string]string {
 	return args
 }
 
+// primaryDomainName returns the application's derived primary host for
+// display surfaces, or "" when it has no enabled domain.
+func primaryDomainName(application Application) string {
+	if application.PrimaryDomain == nil {
+		return ""
+	}
+	return application.PrimaryDomain.Domain
+}
+
 // newApplicationResponse maps a domain application to its wire representation.
 func newApplicationResponse(application Application) applicationResponse {
 	response := applicationResponse{
@@ -1359,17 +1386,14 @@ func newApplicationResponse(application Application) applicationResponse {
 		HasRegistryCredential: application.RegistryUsername != "" ||
 			application.RegistryPasswordCiphertext != "",
 		// The pasted compose document travels only on the detail routes;
-		// the file path and web service are routing metadata.
-		ComposeContent:     application.ComposeContent,
-		ComposeFile:        application.ComposeFile,
-		ComposeService:     application.ComposeService,
-		BaseDomain:         application.BaseDomain,
-		BaseDomainDisabled: application.BaseDomainDisabled,
-		Port:               application.Port,
-		HostPort:           application.HostPort,
-		ServerName:         application.ServerName,
-		CreatedAt:          application.CreatedAt,
-		UpdatedAt:          application.UpdatedAt,
+		// the file path and web service are release metadata.
+		ComposeContent: application.ComposeContent,
+		ComposeFile:    application.ComposeFile,
+		ComposeService: application.ComposeService,
+		PrimaryDomain:  primaryDomainName(application),
+		ServerName:     application.ServerName,
+		CreatedAt:      application.CreatedAt,
+		UpdatedAt:      application.UpdatedAt,
 	}
 	if application.ServerID != uuid.Nil {
 		serverID := application.ServerID.String()
@@ -1401,17 +1425,14 @@ func newApplicationListItem(application Application) applicationListItem {
 		ImageRef:        application.ImageRef,
 		HasRegistryCredential: application.RegistryUsername != "" ||
 			application.RegistryPasswordCiphertext != "",
-		// ComposeFile/ComposeService are routing metadata, not content, so
+		// ComposeFile/ComposeService are release metadata, not content, so
 		// both stay on the list (the pasted document stays detail-only).
-		ComposeFile:        application.ComposeFile,
-		ComposeService:     application.ComposeService,
-		BaseDomain:         application.BaseDomain,
-		BaseDomainDisabled: application.BaseDomainDisabled,
-		Port:               application.Port,
-		HostPort:           application.HostPort,
-		ServerName:         application.ServerName,
-		CreatedAt:          application.CreatedAt,
-		UpdatedAt:          application.UpdatedAt,
+		ComposeFile:    application.ComposeFile,
+		ComposeService: application.ComposeService,
+		PrimaryDomain:  primaryDomainName(application),
+		ServerName:     application.ServerName,
+		CreatedAt:      application.CreatedAt,
+		UpdatedAt:      application.UpdatedAt,
 	}
 	if application.ServerID != uuid.Nil {
 		serverID := application.ServerID.String()

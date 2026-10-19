@@ -39,16 +39,18 @@ var invalidNameChars = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)
 // buildRunRequest assembles the agent container-create payload for a
 // deployment: image (node registry reference when the build produced one),
 // environment variables plus decrypted secrets, the storage volume map, the
-// port mapping and the gotham.* labels.
+// port mappings and the gotham.* labels. Every port is published on an
+// ephemeral host port; the proxy resolves the published binding of the
+// container port each domain names (JUS-233).
 //
 // Secrets are opened with providers.OpenSecret, the single AES-256-GCM helper
 // in this codebase; plaintext exists only in the returned request. A secret
 // whose key collides with a plain env var wins: Docker applies the last
 // occurrence of a duplicated key, so secrets are appended after env vars.
 //
-// The payload also defaults PORT to the application's container port when the
-// application declares one (see defaultPortEnv), so images built without a
-// Dockerfile listen where the port mapping points.
+// The payload also defaults PORT to port (the primary domain's target port)
+// when one is declared, so images built without a Dockerfile listen where the
+// domain mapping points.
 func buildRunRequest(
 	app Application,
 	dep Deployment,
@@ -56,6 +58,8 @@ func buildRunRequest(
 	secrets []Secret,
 	storages []Storage,
 	secretKey string,
+	ports []int32,
+	port int32,
 ) (*agentv1.CreateContainerRequest, error) {
 	image := dep.RegistryImage
 	if strings.TrimSpace(image) == "" {
@@ -65,7 +69,7 @@ func buildRunRequest(
 		return nil, fmt.Errorf("%w: deployment has no image", ErrValidation)
 	}
 
-	env, err := buildEnv(envVars, secrets, secretKey, defaultPortEnv(app, envVars, secrets))
+	env, err := buildEnv(envVars, secrets, secretKey, defaultPortEnv(port, envVars, secrets))
 	if err != nil {
 		return nil, err
 	}
@@ -73,15 +77,15 @@ func buildRunRequest(
 	if err != nil {
 		return nil, err
 	}
-	ports := portSpecs(app)
+	specs := portSpecs(ports)
 
 	labels := map[string]string{
 		labelManaged:      "true",
 		labelAppID:        app.ID.String(),
 		labelDeploymentID: dep.ID.String(),
 	}
-	if len(ports) > 0 {
-		labels[portsLabel] = strings.Join(ports, ",")
+	if len(specs) > 0 {
+		labels[portsLabel] = strings.Join(specs, ",")
 	}
 
 	return &agentv1.CreateContainerRequest{
@@ -89,7 +93,7 @@ func buildRunRequest(
 		Name:    containerName(app, dep),
 		Env:     env,
 		Labels:  labels,
-		Ports:   ports,
+		Ports:   specs,
 		Volumes: volumes,
 	}, nil
 }
@@ -242,17 +246,40 @@ func volumeSpecs(root string, appID uuid.UUID, storages []Storage) ([]string, er
 	return specs, nil
 }
 
+// domainTargetPorts returns the distinct target ports of the enabled domain
+// rows and the port of the primary row (or the first enabled one). It is the
+// single-container port derivation: every domain's port must be published on
+// the container so the proxy can reach it. A domainless application returns
+// nil ports and port 0.
+func domainTargetPorts(domains []ApplicationDomain) ([]int32, int32) {
+	ports := make([]int32, 0, len(domains))
+	primaryPort := int32(0)
+	for _, domain := range domains {
+		if domain.Disabled || domain.Port <= 0 {
+			continue
+		}
+		ports = append(ports, domain.Port)
+		if domain.IsPrimary {
+			primaryPort = domain.Port
+		}
+	}
+	if primaryPort == 0 && len(ports) > 0 {
+		primaryPort = ports[0]
+	}
+	return ports, primaryPort
+}
+
 // defaultPortEnv returns the PORT fallback for the runtime payload: an
 // image built without a Dockerfile (Railpack, buildpacks) starts whatever the
-// repository declares — often its own default port — while the host mapping
-// points at Application.Port, so the platform tells the process which port to
-// bind, the same way Heroku, Railway and Coolify inject PORT. The default
-// applies only when the application declares a port (> 0) and neither an env
-// var nor a secret already defines PORT; an explicit value (including a
-// sealed secret reference) always wins, and a Dockerfile app that manages
-// PORT itself — or an app with no port — sees no change at all.
-func defaultPortEnv(app Application, envVars []EnvVar, secrets []Secret) map[string]string {
-	if app.Port <= 0 {
+// repository declares — often its own default port — while the proxy routes
+// the domains' container ports, so the platform tells the process which port
+// to bind, the same way Heroku, Railway and Coolify inject PORT. The default
+// applies only when a port is known (> 0) and neither an env var nor a secret
+// already defines PORT; an explicit value (including a sealed secret
+// reference) always wins, and an application with no domain sees no change at
+// all.
+func defaultPortEnv(port int32, envVars []EnvVar, secrets []Secret) map[string]string {
+	if port <= 0 {
 		return nil
 	}
 	for _, v := range envVars {
@@ -265,21 +292,25 @@ func defaultPortEnv(app Application, envVars []EnvVar, secrets []Secret) map[str
 			return nil
 		}
 	}
-	return map[string]string{portEnvKey: strconv.Itoa(int(app.Port))}
+	return map[string]string{portEnvKey: strconv.Itoa(int(port))}
 }
 
-// portSpecs renders the application port as a "host:container" mapping when
-// the operator pinned a host port, and as a bare container port otherwise
-// (the agent then lets Docker assign a free host port).
-func portSpecs(app Application) []string {
-	if app.Port <= 0 {
-		return nil
+// portSpecs renders the distinct target ports of an application's domains as
+// bare container ports, letting the agent assign a free host port; the proxy
+// resolves each domain's published binding. The order is deterministic so a
+// redeploy produces the same container-create payload.
+func portSpecs(ports []int32) []string {
+	seen := make(map[int32]bool, len(ports))
+	specs := make([]string, 0, len(ports))
+	for _, port := range ports {
+		if port <= 0 || seen[port] {
+			continue
+		}
+		seen[port] = true
+		specs = append(specs, strconv.Itoa(int(port)))
 	}
-	spec := fmt.Sprintf("%d", app.Port)
-	if app.HostPort > 0 {
-		spec = fmt.Sprintf("%d:%d", app.HostPort, app.Port)
-	}
-	return []string{spec}
+	sort.Slice(specs, func(i, j int) bool { return specs[i] < specs[j] })
+	return specs
 }
 
 // containerName derives a Docker-safe, unique container name from the

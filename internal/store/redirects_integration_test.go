@@ -74,15 +74,18 @@ func TestDomainRedirectStorage(t *testing.T) {
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID: user.ID, TeamID: teamID, ServerID: server.ID, EnvironmentID: envID,
-		Name:       "redirect-app",
-		CloneUrl:   "https://github.com/acme/demo.git",
-		Branch:     "main",
-		BuildPack:  "dockerfile",
-		BaseDomain: "app.example.com",
-		Port:       3000,
+		Name:      "redirect-app",
+		CloneUrl:  "https://github.com/acme/demo.git",
+		Branch:    "main",
+		BuildPack: "dockerfile",
 	})
 	if err != nil {
 		t.Fatalf("create application: %v", err)
+	}
+	if _, err := st.CreateApplicationDomain(ctx, sqlc.CreateApplicationDomainParams{
+		ApplicationID: app.ID, Domain: "app.example.com", IsPrimary: true, Port: 3000, Protocol: "http",
+	}); err != nil {
+		t.Fatalf("create application domain: %v", err)
 	}
 
 	rule, err := st.CreateDomainRedirect(ctx, sqlc.CreateDomainRedirectParams{

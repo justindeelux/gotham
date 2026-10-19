@@ -279,7 +279,7 @@ func TestP6ProxySyncProduction(t *testing.T) {
 
 	// Route update: renaming the domain must move the route.
 	renamedDomain := "renamed-" + suffix + ".example.test"
-	if _, err := pool.Exec(ctx, "UPDATE applications SET base_domain = $2 WHERE id = $1", pgType(pinnedApp), renamedDomain); err != nil {
+	if _, err := pool.Exec(ctx, "UPDATE application_domains SET domain = $2 WHERE application_id = $1 AND is_primary", pgType(pinnedApp), renamedDomain); err != nil {
 		t.Fatalf("update domain: %v", err)
 	}
 	if err := p6Sync(proxyService, serverID); err != nil {
@@ -508,14 +508,21 @@ func p6SeedEnvironment(t *testing.T, ctx context.Context, pool *pgxpool.Pool, st
 // creator's personal team (team_id = user_id, see migration 00019).
 func p6CreateApplication(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID, serverID, envID pgtype.UUID, name, domain string, hostPort int32, disabled bool) uuid.UUID {
 	t.Helper()
+	_ = hostPort // routing reads the container's published binding of the domain port
 	var id pgtype.UUID
 	err := pool.QueryRow(ctx,
-		`INSERT INTO applications (user_id, team_id, server_id, environment_id, name, clone_url, branch, build_pack, base_domain, port, host_port, base_domain_disabled)
-		 VALUES ($1, $1, $2, $7, $3, 'https://github.com/acme/demo.git', 'main', 'dockerfile', $4, 80, $5, $6)
+		`INSERT INTO applications (user_id, team_id, server_id, environment_id, name, clone_url, branch, build_pack)
+		 VALUES ($1, $1, $2, $3, $4, 'https://github.com/acme/demo.git', 'main', 'dockerfile')
 		 RETURNING id`,
-		userID, serverID, name, domain, hostPort, disabled, envID).Scan(&id)
+		userID, serverID, envID, name).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert application %s: %v", name, err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO application_domains (application_id, domain, is_primary, disabled, port, protocol)
+		 VALUES ($1, $2, true, $3, 80, 'http')`,
+		id, domain, disabled); err != nil {
+		t.Fatalf("insert application domain %s: %v", domain, err)
 	}
 	return uuid.UUID(id.Bytes)
 }

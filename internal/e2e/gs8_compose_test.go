@@ -50,10 +50,9 @@ func TestGS8ComposeDeployRollbackDelete(t *testing.T) {
 		SourceType:     "compose",
 		ComposeContent: v1,
 		ComposeService: "web",
-		Port:           3000,
-		HostPort:       0,
 		ServerID:       h.serverID.String(),
 	})
+	h.addDomain(t, app.ID, "gs8-"+suffix+".example.test", 3000)
 
 	queued := h.deploy(t, app.ID)
 	v1Running := h.waitForTerminal(t, app.ID, queued.ID)
@@ -123,7 +122,6 @@ func TestGS8ComposeHostileRejected(t *testing.T) {
 				SourceType:     "compose",
 				ComposeContent: document,
 				ComposeService: "web",
-				Port:           3000,
 				ServerID:       h.serverID.String(),
 			}, nil)
 			if status != http.StatusBadRequest {

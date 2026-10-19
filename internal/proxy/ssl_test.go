@@ -168,37 +168,37 @@ func TestResolveRouteCertificate(t *testing.T) {
 		wantActive bool
 		wantReason string
 	}{
-		{name: "no configuration", app: ProxiedApplication{ID: appID, BaseDomain: "app.example.com"}},
+		{name: "no configuration", app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}}},
 		{
 			name: "explicitly disabled",
-			app: ProxiedApplication{ID: appID, BaseDomain: "app.example.com", Certificate: &CertificateIntent{
+			app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, Certificate: &CertificateIntent{
 				Domain: "app.example.com", Enabled: false,
 			}},
 		},
 		{
 			name: "stale recorded domain",
-			app: ProxiedApplication{ID: appID, BaseDomain: "app.example.com", Certificate: &CertificateIntent{
+			app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, Certificate: &CertificateIntent{
 				Domain: "old.example.com", Enabled: true, Challenge: ChallengeHTTP01,
 			}},
 			wantReason: "recorded for",
 		},
 		{
 			name: "http-01 active",
-			app: ProxiedApplication{ID: appID, BaseDomain: "app.example.com", Certificate: &CertificateIntent{
+			app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, Certificate: &CertificateIntent{
 				Domain: "app.example.com", Enabled: true, Challenge: ChallengeHTTP01,
 			}},
 			wantActive: true,
 		},
 		{
 			name: "wildcard requires dns-01",
-			app: ProxiedApplication{ID: appID, BaseDomain: "app.example.com", Certificate: &CertificateIntent{
+			app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, Certificate: &CertificateIntent{
 				Domain: "app.example.com", Enabled: true, Challenge: ChallengeHTTP01, Wildcard: true,
 			}},
 			wantReason: "wildcard",
 		},
 		{
 			name: "dns-01 wildcard active",
-			app: ProxiedApplication{ID: appID, BaseDomain: "app.example.com", Certificate: &CertificateIntent{
+			app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, Certificate: &CertificateIntent{
 				Domain: "app.example.com", Enabled: true, Challenge: ChallengeDNS01, Wildcard: true,
 				DNSProviderID: providerID,
 			}},
@@ -206,7 +206,7 @@ func TestResolveRouteCertificate(t *testing.T) {
 		},
 		{
 			name: "provider disabled",
-			app: ProxiedApplication{ID: appID, BaseDomain: "app.example.com", Certificate: &CertificateIntent{
+			app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, Certificate: &CertificateIntent{
 				Domain: "app.example.com", Enabled: true, Challenge: ChallengeDNS01,
 				DNSProviderID: providerID,
 			}},
@@ -215,7 +215,7 @@ func TestResolveRouteCertificate(t *testing.T) {
 		},
 		{
 			name: "unknown provider",
-			app: ProxiedApplication{ID: appID, BaseDomain: "app.example.com", Certificate: &CertificateIntent{
+			app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, Certificate: &CertificateIntent{
 				Domain: "app.example.com", Enabled: true, Challenge: ChallengeDNS01,
 				DNSProviderID: uuid.New(),
 			}},
@@ -223,7 +223,7 @@ func TestResolveRouteCertificate(t *testing.T) {
 		},
 		{
 			name: "domain outside zones",
-			app: ProxiedApplication{ID: appID, BaseDomain: "app.example.org", Certificate: &CertificateIntent{
+			app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.org", Port: 80}}, Certificate: &CertificateIntent{
 				Domain: "app.example.org", Enabled: true, Challenge: ChallengeDNS01,
 				DNSProviderID: providerID,
 			}},
@@ -231,7 +231,7 @@ func TestResolveRouteCertificate(t *testing.T) {
 		},
 		{
 			name: "unknown challenge",
-			app: ProxiedApplication{ID: appID, BaseDomain: "app.example.com", Certificate: &CertificateIntent{
+			app: ProxiedApplication{ID: appID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}}, Certificate: &CertificateIntent{
 				Domain: "app.example.com", Enabled: true, Challenge: ChallengeMode("tls-alpn-01"),
 			}},
 			wantReason: "unknown challenge",
@@ -243,7 +243,7 @@ func TestResolveRouteCertificate(t *testing.T) {
 			if providerMap == nil {
 				providerMap = providers
 			}
-			domain := NormalizeDomain(tc.app.BaseDomain)
+			domain := NormalizeDomain(tc.app.Domains[0].Domain)
 			certificate, reason := resolveRouteCertificate(tc.app, domain, providerMap)
 			if tc.wantActive {
 				if certificate == nil || reason != "" {
@@ -339,8 +339,8 @@ func TestResolveRouteCertificateWildcardCoversRoutedHost(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.host, func(t *testing.T) {
 			app := ProxiedApplication{
-				ID:         uuid.New(),
-				BaseDomain: tc.host,
+				ID:      uuid.New(),
+				Domains: []ProxiedDomain{{Domain: tc.host}},
 				Certificate: &CertificateIntent{
 					Domain: tc.host, Enabled: true, Challenge: ChallengeDNS01, Wildcard: true,
 					DNSProviderID: providerID,

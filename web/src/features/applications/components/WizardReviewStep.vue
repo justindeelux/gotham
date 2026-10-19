@@ -44,8 +44,6 @@ const envVolumesText = computed<string>(() =>
         <dt>{{ t("applications.wizard.reviewBuildPack") }}</dt>
         <dd>{{ wizard.buildPackLabel.value }}</dd>
       </template>
-      <dt>{{ t("applications.wizard.reviewPortDomain") }}</dt>
-      <dd class="mono">{{ form.port ?? 3000 }} · {{ form.baseDomain || "—" }}</dd>
       <dt>{{ t("applications.wizard.reviewEnvVolumes") }}</dt>
       <dd class="mono">{{ envVolumesText }}</dd>
     </dl>

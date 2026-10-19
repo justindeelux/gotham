@@ -127,9 +127,6 @@ describe("image wizard flow", () => {
     name: "",
     buildPack: "",
     serverId: "",
-    port: 3000,
-    hostPort: null,
-    baseDomain: "",
     env: [],
     storage: [],
   };
@@ -165,7 +162,6 @@ describe("image wizard flow", () => {
       registryUsername: "robot",
       registryPassword: "s3cret",
       name: "storefront",
-      port: 8080,
     });
     expect(w.buildPayload()).toMatchObject({
       provider: "",
@@ -177,7 +173,6 @@ describe("image wizard flow", () => {
       image_ref: "registry.example.com/team/app:1.2",
       registry_username: "robot",
       registry_password: "s3cret",
-      port: 8080,
     });
     expect(w.reviewSource.value).toBe("registry.example.com/team/app:1.2");
     wrapper.unmount();
@@ -220,10 +215,7 @@ function imageApp(): Application {
     build_pack: "",
     image_ref: "registry.example.com/team/app:1.2",
     has_registry_credential: true,
-    base_domain: "",
-    base_domain_disabled: false,
-    port: 3000,
-    host_port: 0,
+    primary_domain: "",
     server_id: "server-1",
     server_name: "node-1",
     created_at: "2026-09-01T10:00:00Z",

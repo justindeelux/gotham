@@ -65,7 +65,7 @@ const discordChannel = {
   updated_at: "2026-01-02T00:00:00Z",
 };
 
-const shopApp = { id: "app-1", name: "Shop", base_domain: "shop.example.com" };
+const shopApp = { id: "app-1", name: "Shop", primary_domain: "shop.example.com" };
 
 /** ApiLog counts every mocked API call for no-request-on-switch proofs. */
 interface ApiLog {

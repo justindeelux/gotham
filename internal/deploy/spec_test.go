@@ -27,7 +27,7 @@ func TestBuildRunRequest(t *testing.T) {
 	envVars, secrets := testEnv(t)
 	storages := []Storage{{Name: "data", HostPath: "", ContainerPath: "/var/lib/app"}}
 
-	req, err := buildRunRequest(app, dep, envVars, secrets, storages, secretKey)
+	req, err := buildRunRequest(app, dep, envVars, secrets, storages, secretKey, []int32{3000}, 3000)
 	if err != nil {
 		t.Fatalf("buildRunRequest: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestBuildRunRequest(t *testing.T) {
 	if want := []string{"API_TOKEN=hunter2", "FOO=bar", "PORT=3000"}; !equalStrings(req.Env, want) {
 		t.Errorf("Env = %v, want %v", req.Env, want)
 	}
-	if want := []string{"8080:3000"}; !equalStrings(req.Ports, want) {
+	if want := []string{"3000"}; !equalStrings(req.Ports, want) {
 		t.Errorf("Ports = %v, want %v", req.Ports, want)
 	}
 	if want := []string{filepath.Join(managedVolumeRoot(), app.ID.String(), "data") + ":/var/lib/app"}; !equalStrings(req.Volumes, want) {
@@ -58,8 +58,8 @@ func TestBuildRunRequest(t *testing.T) {
 	if req.Labels[labelDeploymentID] != dep.ID.String() {
 		t.Errorf("deployment_id label = %q, want %q", req.Labels[labelDeploymentID], dep.ID)
 	}
-	if req.Labels[portsLabel] != "8080:3000" {
-		t.Errorf("ports label = %q, want 8080:3000", req.Labels[portsLabel])
+	if req.Labels[portsLabel] != "3000" {
+		t.Errorf("ports label = %q, want 3000", req.Labels[portsLabel])
 	}
 }
 
@@ -67,7 +67,7 @@ func TestBuildRunRequestImageFallback(t *testing.T) {
 	app := testApplication(uuid.New())
 	dep := Deployment{ID: uuid.New(), ImageTag: "gotham/app:tag"}
 
-	req, err := buildRunRequest(app, dep, nil, nil, nil, "")
+	req, err := buildRunRequest(app, dep, nil, nil, nil, "", nil, 0)
 	if err != nil {
 		t.Fatalf("buildRunRequest: %v", err)
 	}
@@ -76,32 +76,12 @@ func TestBuildRunRequestImageFallback(t *testing.T) {
 	}
 }
 
-func TestBuildRunRequestPorts(t *testing.T) {
-	app := testApplication(uuid.New())
-	dep := Deployment{ID: uuid.New(), ImageTag: "img"}
-
-	app.HostPort = 0
-	req, err := buildRunRequest(app, dep, nil, nil, nil, "")
-	if err != nil {
-		t.Fatalf("buildRunRequest: %v", err)
+func TestPortSpecs(t *testing.T) {
+	if got := portSpecs([]int32{3000, 3000, 8080}); !equalStrings(got, []string{"3000", "8080"}) {
+		t.Errorf("portSpecs = %v, want deduplicated sorted ports", got)
 	}
-	if want := []string{"3000"}; !equalStrings(req.Ports, want) {
-		t.Errorf("Ports = %v, want %v", req.Ports, want)
-	}
-	// A bare container port is still declared: containers.portsFromLabels
-	// reads the label back to surface it in the API.
-	if req.Labels[portsLabel] != "3000" {
-		t.Errorf("ports label = %q, want 3000", req.Labels[portsLabel])
-	}
-
-	app.Port = 0
-	app.HostPort = 0
-	req, err = buildRunRequest(app, dep, nil, nil, nil, "")
-	if err != nil {
-		t.Fatalf("buildRunRequest: %v", err)
-	}
-	if len(req.Ports) != 0 {
-		t.Errorf("Ports = %v, want none", req.Ports)
+	if got := portSpecs(nil); len(got) != 0 {
+		t.Errorf("portSpecs(nil) = %v, want none", got)
 	}
 }
 
@@ -116,7 +96,7 @@ func TestBuildRunRequestSecretWinsOverEnv(t *testing.T) {
 	}
 	req, err := buildRunRequest(app, dep,
 		[]EnvVar{{Key: "TOKEN", Value: "from-env"}},
-		[]Secret{{Key: "TOKEN", Ciphertext: sealed}}, nil, secretKey)
+		[]Secret{{Key: "TOKEN", Ciphertext: sealed}}, nil, secretKey, []int32{3000}, 3000)
 	if err != nil {
 		t.Fatalf("buildRunRequest: %v", err)
 	}
@@ -141,7 +121,6 @@ func TestBuildRunRequestPortDefault(t *testing.T) {
 	tests := []struct {
 		name          string
 		port          int32
-		hostPort      int32
 		envVars       []EnvVar
 		secrets       []Secret
 		wantEnv       []string
@@ -151,43 +130,38 @@ func TestBuildRunRequestPortDefault(t *testing.T) {
 		{
 			name:          "default injected when unset",
 			port:          3000,
-			hostPort:      8080,
 			wantEnv:       []string{"PORT=3000"},
-			wantPorts:     []string{"8080:3000"},
-			wantPortLabel: "8080:3000",
+			wantPorts:     []string{"3000"},
+			wantPortLabel: "3000",
 		},
 		{
 			name:          "explicit env wins",
 			port:          3000,
-			hostPort:      8080,
 			envVars:       []EnvVar{{Key: "PORT", Value: "4000"}},
 			wantEnv:       []string{"PORT=4000"},
-			wantPorts:     []string{"8080:3000"},
-			wantPortLabel: "8080:3000",
+			wantPorts:     []string{"3000"},
+			wantPortLabel: "3000",
 		},
 		{
 			name:          "sealed secret wins over env and default",
 			port:          3000,
-			hostPort:      8080,
 			envVars:       []EnvVar{{Key: "PORT", Value: "4000"}},
 			secrets:       []Secret{{Key: "PORT", Ciphertext: sealedPort}},
 			wantEnv:       []string{"PORT=9000"},
-			wantPorts:     []string{"8080:3000"},
-			wantPortLabel: "8080:3000",
+			wantPorts:     []string{"3000"},
+			wantPortLabel: "3000",
 		},
 		{
 			name:          "secret alone wins over default",
 			port:          3000,
-			hostPort:      8080,
 			secrets:       []Secret{{Key: "PORT", Ciphertext: sealedPort}},
 			wantEnv:       []string{"PORT=9000"},
-			wantPorts:     []string{"8080:3000"},
-			wantPortLabel: "8080:3000",
+			wantPorts:     []string{"3000"},
+			wantPortLabel: "3000",
 		},
 		{
 			name:          "zero port skips the injection",
 			port:          0,
-			hostPort:      0,
 			envVars:       []EnvVar{{Key: "FOO", Value: "bar"}},
 			wantEnv:       []string{"FOO=bar"},
 			wantPorts:     nil,
@@ -196,16 +170,14 @@ func TestBuildRunRequestPortDefault(t *testing.T) {
 		{
 			name:          "default sorts with the other variables",
 			port:          3000,
-			hostPort:      8080,
 			envVars:       []EnvVar{{Key: "FOO", Value: "bar"}},
 			wantEnv:       []string{"FOO=bar", "PORT=3000"},
-			wantPorts:     []string{"8080:3000"},
-			wantPortLabel: "8080:3000",
+			wantPorts:     []string{"3000"},
+			wantPortLabel: "3000",
 		},
 		{
 			name:          "bare container port mapping is unchanged",
 			port:          3000,
-			hostPort:      0,
 			wantEnv:       []string{"PORT=3000"},
 			wantPorts:     []string{"3000"},
 			wantPortLabel: "3000",
@@ -215,10 +187,12 @@ func TestBuildRunRequestPortDefault(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			app := testApplication(uuid.New())
-			app.Port = tt.port
-			app.HostPort = tt.hostPort
+			var ports []int32
+			if tt.port > 0 {
+				ports = []int32{tt.port}
+			}
 
-			req, err := buildRunRequest(app, dep, tt.envVars, tt.secrets, nil, secretKey)
+			req, err := buildRunRequest(app, dep, tt.envVars, tt.secrets, nil, secretKey, ports, tt.port)
 			if err != nil {
 				t.Fatalf("buildRunRequest: %v", err)
 			}
@@ -238,25 +212,25 @@ func TestBuildRunRequestPortDefault(t *testing.T) {
 func TestBuildRunRequestValidation(t *testing.T) {
 	app := testApplication(uuid.New())
 
-	if _, err := buildRunRequest(app, Deployment{ID: uuid.New()}, nil, nil, nil, ""); !errors.Is(err, ErrValidation) {
+	if _, err := buildRunRequest(app, Deployment{ID: uuid.New()}, nil, nil, nil, "", nil, 0); !errors.Is(err, ErrValidation) {
 		t.Errorf("missing image error = %v, want ErrValidation", err)
 	}
 
 	dep := Deployment{ID: uuid.New(), ImageTag: "img"}
 	outside := []Storage{{Name: "data", HostPath: "/data/app", ContainerPath: "/var/lib/app"}}
-	if _, err := buildRunRequest(app, dep, nil, nil, outside, ""); !errors.Is(err, ErrValidation) {
+	if _, err := buildRunRequest(app, dep, nil, nil, outside, "", nil, 0); !errors.Is(err, ErrValidation) {
 		t.Errorf("out-of-root bind error = %v, want ErrValidation", err)
 	}
 
 	emptyTarget := []Storage{{Name: "data", HostPath: "", ContainerPath: ""}}
-	if _, err := buildRunRequest(app, dep, nil, nil, emptyTarget, ""); !errors.Is(err, ErrValidation) {
+	if _, err := buildRunRequest(app, dep, nil, nil, emptyTarget, "", nil, 0); !errors.Is(err, ErrValidation) {
 		t.Errorf("empty container path error = %v, want ErrValidation", err)
 	}
 
 	// A non-absolute source is a Docker named volume: it is not a host bind
 	// and is namespaced to the application.
 	named := []Storage{{Name: "data", HostPath: "gotham-data", ContainerPath: "/var/lib/app"}}
-	req, err := buildRunRequest(app, dep, nil, nil, named, "")
+	req, err := buildRunRequest(app, dep, nil, nil, named, "", nil, 0)
 	if err != nil {
 		t.Fatalf("named volume error = %v, want accepted", err)
 	}
@@ -266,7 +240,7 @@ func TestBuildRunRequestValidation(t *testing.T) {
 	}
 
 	nested := []Storage{{Name: "data", HostPath: filepath.Join(managedVolumeRoot(), app.ID.String(), "a", "b"), ContainerPath: "/var/lib/app"}}
-	if _, err := buildRunRequest(app, dep, nil, nil, nested, ""); !errors.Is(err, ErrValidation) {
+	if _, err := buildRunRequest(app, dep, nil, nil, nested, "", nil, 0); !errors.Is(err, ErrValidation) {
 		t.Errorf("nested bind error = %v, want ErrValidation", err)
 	}
 
@@ -275,7 +249,7 @@ func TestBuildRunRequestValidation(t *testing.T) {
 		t.Fatalf("seal: %v", err)
 	}
 	secrets := []Secret{{Key: "TOKEN", Ciphertext: sealed}}
-	if _, err := buildRunRequest(app, dep, nil, secrets, nil, "wrong-key"); !errors.Is(err, ErrValidation) {
+	if _, err := buildRunRequest(app, dep, nil, secrets, nil, "wrong-key", nil, 0); !errors.Is(err, ErrValidation) {
 		t.Errorf("wrong key error = %v, want ErrValidation", err)
 	}
 }

@@ -1,5 +1,5 @@
 import { useMessage } from "naive-ui";
-import { onMounted, onUnmounted, ref, watch, type Ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch, type Ref } from "vue";
 
 import {
   addDomain,
@@ -7,118 +7,231 @@ import {
   listDomains,
   removeDomain,
   setPrimaryDomain,
+  updateDomain,
   type Application,
   type ApplicationDomain,
+  type DomainInput,
+  type DomainProtocol,
 } from "@/features/applications/api/applications";
-import { hostDomainSchema } from "@/features/applications/schemas/applications";
+import {
+  domainPortSchema,
+  domainProtocolSchema,
+  domainServiceSchema,
+  hostDomainSchema,
+} from "@/features/applications/schemas/applications";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
 import {
   bumpDomainsRefresh,
   useDomainsRefresh,
 } from "@/features/applications/composables/domainRefresh";
+import { extractComposeServicePorts } from "@/features/applications/utils/compose";
 import { describeProxyError, useProxyStore } from "@/features/domains";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
 
+/** Draft shape of the add/edit domain form. */
+export interface DomainDraft {
+  domain: string;
+  port: number | null;
+  service: string;
+  protocol: DomainProtocol;
+}
+
 /**
- * Alias-domain management behind the Domains tab (JUS-89): the primary domain
- * stays on the base-domain editor, while this composable lists the attached
- * hostnames and adds, removes or promotes them. Every mutation refetches the
- * application so the mirrored base_domain follows the rows.
+ * Domain routing behind the Domains tab (JUS-233): every hostname carries its
+ * own target port, optional compose service and protocol. The same form adds
+ * and edits; selecting a compose service pre-fills its declared port.
  */
 export function useApplicationDomains(application: Ref<Application>) {
   const message = useMessage();
   const appsStore = useApplicationsStore();
   const proxyStore = useProxyStore();
-  /**
-   * refreshTick is captured once during setup: inject() has no active
-   * component instance after an await, so the async handlers below close
-   * over this instead of calling inject() themselves.
-   */
+  /** Captured during setup: inject() has no active instance after an await. */
   const refreshTick = useDomainsRefresh();
 
   const domains = ref<ApplicationDomain[]>([]);
   const loadingDomains = ref(false);
   const domainsError = ref<string | null>(null);
-  const newDomain = ref("");
-  const addingDomain = ref(false);
-  const addError = ref<string | null>(null);
+  const draft = reactive<DomainDraft>({
+    domain: "",
+    port: 80,
+    service: "",
+    protocol: "http",
+  });
+  const editingId = ref<string | null>(null);
+  const saving = ref(false);
+  const formError = ref<string | null>(null);
   const busyDomainId = ref<string | null>(null);
   const rowErrorId = ref<string | null>(null);
   const rowError = ref<string | null>(null);
-  /** rowErrorIsProxy selects the formatter on locale switch. */
   const rowErrorIsProxy = ref(false);
-  /**
-   * addServerError keeps the add failure behind a banner so a locale switch
-   * can re-derive it; rowServerError does the same for per-row actions.
-   */
-  const addServerError = ref<unknown>(null);
+  const formServerError = ref<unknown>(null);
   const rowServerError = ref<unknown>(null);
+  /** refreshSeq drops an out-of-order response after an application switch. */
+  let refreshSeq = 0;
+
+  /** isCompose reports whether the application has compose-specific fields. */
+  const isCompose = computed<boolean>(() => application.value.source_type === "compose");
 
   /**
-   * tr resolves one applications message in the current locale. Reading
-   * activeLocale pins the caller to the language switch.
+   * composePorts maps each compose service to its declared container port.
+   * Selecting a service pre-fills the port (still editable); repo-backed
+   * documents cannot be parsed here, so the selector falls back to the
+   * release service and free text.
    */
+  const composePorts = computed<Record<string, number>>(() =>
+    extractComposeServicePorts(application.value.compose_content ?? ""),
+  );
+
+  /** serviceOptions lists the parsed services plus the release web service. */
+  const serviceOptions = computed<Array<{ label: string; value: string }>>(() => {
+    const names = new Set(Object.keys(composePorts.value));
+    if (application.value.compose_service) {
+      names.add(application.value.compose_service);
+    }
+    return [...names].map((name) => ({ label: name, value: name }));
+  });
+
   function tr(key: string): string {
     void activeLocale.value;
     return String(i18n.global.t(key));
   }
 
-  /** clearErrors drops every stale banner before a fresh attempt. */
   function clearErrors(): void {
-    addError.value = null;
-    addServerError.value = null;
+    formError.value = null;
+    formServerError.value = null;
     rowErrorId.value = null;
     rowError.value = null;
     rowErrorIsProxy.value = false;
     rowServerError.value = null;
   }
-  /** refresh reloads the domain rows of the current application. */
+
   async function refresh(silent = false): Promise<void> {
+    const appID = application.value.id;
+    const seq = ++refreshSeq;
     if (!silent) {
       loadingDomains.value = true;
     }
     try {
-      domains.value = await listDomains(application.value.id);
+      const rows = await listDomains(appID);
+      // A slow response for the previous application must never overwrite the
+      // new application's list.
+      if (seq !== refreshSeq || application.value.id !== appID) {
+        return;
+      }
+      domains.value = rows;
       domainsError.value = null;
     } catch (error) {
+      if (seq !== refreshSeq || application.value.id !== appID) {
+        return;
+      }
       domainsError.value = describeApplicationError(error);
     } finally {
-      loadingDomains.value = false;
+      if (seq === refreshSeq) {
+        loadingDomains.value = false;
+      }
     }
   }
 
-  /** handleAddDomain validates locally, then attaches the hostname. */
-  async function handleAddDomain(): Promise<void> {
+  /** resetDraft clears the form back to the add-mode defaults. */
+  function resetDraft(): void {
+    editingId.value = null;
+    draft.domain = "";
+    draft.port = 80;
+    draft.service = "";
+    draft.protocol = "http";
+    formError.value = null;
+    formServerError.value = null;
+  }
+
+  /** startEdit loads one row into the form. */
+  function startEdit(row: ApplicationDomain): void {
     clearErrors();
-    const next = newDomain.value.trim().toLowerCase();
-    const issues = fieldErrors(hostDomainSchema, next);
-    if (issues.length > 0) {
-      addError.value = issues[0];
+    editingId.value = row.id;
+    draft.domain = row.domain;
+    draft.port = row.port;
+    draft.service = row.service;
+    draft.protocol = row.protocol;
+  }
+
+  /** handleServiceChange pre-fills the port of the selected service. A
+   * cleared select emits null; treat it as the release-default empty service.
+   * A service without a declared port clears the field so a stale port from
+   * the previous selection never looks pre-filled. */
+  function handleServiceChange(service: string | null): void {
+    draft.service = service ?? "";
+    if (!isCompose.value) {
       return;
     }
-    addingDomain.value = true;
+    const port = composePorts.value[draft.service];
+    draft.port = port && port > 0 ? port : null;
+  }
+
+  /** validatedDraft returns the normalized payload, or the first error. */
+  function validatedDraft(): DomainInput | string {
+    const domain = draft.domain.trim().toLowerCase();
+    const domainIssues = fieldErrors(hostDomainSchema, domain);
+    if (domain === "" || domainIssues.length > 0) {
+      return domainIssues[0] ?? tr("applications.validation.domain");
+    }
+    const portIssues = fieldErrors(domainPortSchema, draft.port);
+    if (portIssues.length > 0) {
+      return portIssues[0];
+    }
+    const service = isCompose.value ? (draft.service ?? "").trim() : "";
+    const serviceIssues = fieldErrors(domainServiceSchema, service);
+    if (serviceIssues.length > 0) {
+      return serviceIssues[0];
+    }
+    const protocolIssues = fieldErrors(domainProtocolSchema, draft.protocol);
+    if (protocolIssues.length > 0) {
+      return protocolIssues[0];
+    }
+    return {
+      domain,
+      port: draft.port as number,
+      service,
+      protocol: draft.protocol,
+    };
+  }
+
+  /** handleSave creates or edits one domain. */
+  async function handleSave(): Promise<void> {
+    clearErrors();
+    const payload = validatedDraft();
+    if (typeof payload === "string") {
+      formError.value = payload;
+      return;
+    }
+    saving.value = true;
     try {
-      await addDomain(application.value.id, next);
-      newDomain.value = "";
+      if (editingId.value !== null) {
+        await updateDomain(application.value.id, editingId.value, payload);
+        message.success(tr("applications.detail.domainUpdated"));
+      } else {
+        await addDomain(application.value.id, payload);
+        message.success(tr("applications.detail.domainAdded"));
+      }
+      resetDraft();
       await refresh(true);
       await appsStore.fetchApplication(application.value.id);
       bumpDomainsRefresh(refreshTick);
-      message.success(tr("applications.detail.domainAdded"));
     } catch (error) {
-      addServerError.value = error;
-      addError.value = describeApplicationError(error);
+      formServerError.value = error;
+      formError.value = describeApplicationError(error);
     } finally {
-      addingDomain.value = false;
+      saving.value = false;
     }
   }
 
-  /** handleRemoveDomain detaches one hostname after confirmation. */
   async function handleRemoveDomain(domain: ApplicationDomain): Promise<void> {
     clearErrors();
     busyDomainId.value = domain.id;
     try {
       await removeDomain(application.value.id, domain.id);
+      if (editingId.value === domain.id) {
+        resetDraft();
+      }
       await refresh(true);
       await appsStore.fetchApplication(application.value.id);
       bumpDomainsRefresh(refreshTick);
@@ -132,7 +245,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     }
   }
 
-  /** handleSecureDomain creates an http-01 intent for one alias (N2). */
+  /** handleSecureDomain creates an http-01 intent for one domain. */
   async function handleSecureDomain(domain: ApplicationDomain): Promise<void> {
     clearErrors();
     busyDomainId.value = domain.id;
@@ -152,7 +265,7 @@ export function useApplicationDomains(application: Ref<Application>) {
       busyDomainId.value = null;
     }
   }
-  /** handleSetPrimary promotes one attached hostname to primary. */
+
   async function handleSetPrimary(domain: ApplicationDomain): Promise<void> {
     clearErrors();
     busyDomainId.value = domain.id;
@@ -175,15 +288,14 @@ export function useApplicationDomains(application: Ref<Application>) {
     if (domainsError.value !== null) {
       void refresh(true);
     }
-    if (addError.value !== null) {
-      if (addServerError.value !== null) {
-        addError.value = describeApplicationError(addServerError.value);
+    if (formError.value !== null) {
+      if (formServerError.value !== null) {
+        formError.value = describeApplicationError(formServerError.value);
       } else {
-        const issues = fieldErrors(
-          hostDomainSchema,
-          newDomain.value.trim().toLowerCase(),
-        );
-        addError.value = issues[0] ?? null;
+        // A local validation message is a catalog key: re-derive it from the
+        // unchanged draft in the new locale.
+        const payload = validatedDraft();
+        formError.value = typeof payload === "string" ? payload : null;
       }
     }
     if (rowError.value !== null && rowServerError.value !== null) {
@@ -197,8 +309,7 @@ export function useApplicationDomains(application: Ref<Application>) {
   watch(
     () => application.value.id,
     () => {
-      newDomain.value = "";
-      addError.value = null;
+      resetDraft();
       rowError.value = null;
       void refresh();
     },
@@ -212,14 +323,20 @@ export function useApplicationDomains(application: Ref<Application>) {
     domains,
     loadingDomains,
     domainsError,
-    newDomain,
-    addingDomain,
-    addError,
+    draft,
+    editingId,
+    saving,
+    formError,
     busyDomainId,
     rowErrorId,
     rowError,
+    isCompose,
+    serviceOptions,
     refresh,
-    handleAddDomain,
+    resetDraft,
+    startEdit,
+    handleServiceChange,
+    handleSave,
     handleRemoveDomain,
     handleSecureDomain,
     handleSetPrimary,

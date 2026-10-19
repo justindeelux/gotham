@@ -277,7 +277,8 @@ var composeNamedVolumePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$
 // keeps its name and is redefined. Both become local volumes whose device
 // is <root>/<appID>/<name>, so Docker stores their data where the file
 // manager and backups can reach it instead of its own default mountpoint.
-// An external declaration is left untouched.
+// An external declaration is left untouched (the confined allowlist rejects
+// external volumes, so this only matters to a direct caller of the rewrite).
 func RewriteComposeManagedVolumes(rendered, root string, appID uuid.UUID) (string, error) {
 	if strings.TrimSpace(rendered) == "" {
 		return "", fmt.Errorf("%w: compose document is required", ErrValidation)
@@ -395,7 +396,8 @@ func validateComposeVolumeName(name string) error {
 }
 
 // isExternalVolume reports whether a top-level volume declaration is
-// external; an external volume is never rewritten.
+// external. The rewrite never changes such a volume; a confined deploy
+// rejects it before reaching here.
 func isExternalVolume(definition any) bool {
 	mapping, ok := definition.(map[string]any)
 	if !ok {

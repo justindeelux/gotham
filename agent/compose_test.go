@@ -319,6 +319,145 @@ func TestComposeUpDownCommands(t *testing.T) {
 	}
 }
 
+// managedVolumeDocument renders the document the control plane sends for a
+// named volume: a local driver bind whose device is the managed path.
+func managedVolumeDocument(device string) []byte {
+	return []byte(fmt.Sprintf(`services:
+  web:
+    image: nginx:1.23
+    volumes:
+      - data:/data
+volumes:
+  data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: %s
+`, device))
+}
+
+// TestComposeUpCreatesManagedVolumeDirs proves the node creates the device
+// directory a rewritten named volume points at before compose up runs, so the
+// local driver can mount it on the first deploy.
+func TestComposeUpCreatesManagedVolumeDirs(t *testing.T) {
+	logPath := fakeDockerCLI(t, "exit 0")
+	volumeRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("canonical volume root: %v", err)
+	}
+	server := newTestComposeServer(t, ComposeServerConfig{
+		VolumeRoot: filepath.Join(volumeRoot, "volumes"),
+	})
+	appID := strings.TrimPrefix(composeTestProject, "gotham-")
+	device := filepath.Join(server.volumeRoot, appID, "data")
+
+	if _, err := server.ComposeUp(context.Background(), &agentv1.ComposeUpRequest{
+		ProjectName: composeTestProject,
+		ComposeYaml: managedVolumeDocument(device),
+	}); err != nil {
+		t.Fatalf("ComposeUp: %v", err)
+	}
+	info, err := os.Stat(device)
+	if err != nil {
+		t.Fatalf("volume device directory: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("volume device = %s, want a directory", device)
+	}
+	if !strings.Contains(strings.Join(composeCalls(t, logPath), "\n"), "up -d --remove-orphans") {
+		t.Error("compose up did not run after the device directory was created")
+	}
+}
+
+// TestComposeUpManagedVolumeDirRejectsOutsideRoot pins the agent-side scope:
+// a device outside <root>/<appID> or behind a symlink is refused before
+// anything is created or executed.
+func TestComposeUpManagedVolumeDirRejectsOutsideRoot(t *testing.T) {
+	volumeRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("canonical volume root: %v", err)
+	}
+	server := newTestComposeServer(t, ComposeServerConfig{VolumeRoot: volumeRoot})
+	appID := strings.TrimPrefix(composeTestProject, "gotham-")
+	appDir := filepath.Join(volumeRoot, appID)
+
+	outside := filepath.Join(filepath.Dir(volumeRoot), "outside", "data")
+	otherApp := filepath.Join(volumeRoot, "22222222-2222-2222-2222-222222222222", "data")
+	for name, device := range map[string]string{
+		"outside root":     outside,
+		"other app dir":    otherApp,
+		"nested under app": filepath.Join(appDir, "nested", "data"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := server.ensureManagedVolumeDirs(composeTestProject, managedVolumeDocument(device))
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v, want InvalidArgument (%v)", status.Code(err), err)
+			}
+			if _, statErr := os.Stat(device); !os.IsNotExist(statErr) {
+				t.Errorf("device %q was created despite rejection", device)
+			}
+		})
+	}
+
+	t.Run("traversing volume name", func(t *testing.T) {
+		document := []byte(fmt.Sprintf(`services:
+  web:
+    image: x
+volumes:
+  "../escape":
+    driver_opts:
+      type: none
+      o: bind
+      device: %s
+`, filepath.Join(volumeRoot, "escape")))
+		if err := server.ensureManagedVolumeDirs(composeTestProject, document); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("code = %v, want InvalidArgument (%v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("device symlink", func(t *testing.T) {
+		if err := os.MkdirAll(appDir, 0o755); err != nil {
+			t.Fatalf("mkdir app dir: %v", err)
+		}
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.MkdirAll(target, 0o755); err != nil {
+			t.Fatalf("mkdir target: %v", err)
+		}
+		device := filepath.Join(appDir, "data")
+		if err := os.Symlink(target, device); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		err := server.ensureManagedVolumeDirs(composeTestProject, managedVolumeDocument(device))
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("code = %v, want InvalidArgument (%v)", status.Code(err), err)
+		}
+	})
+
+	t.Run("app dir symlink", func(t *testing.T) {
+		elsewhereRoot, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatalf("canonical root: %v", err)
+		}
+		elsewhere := filepath.Join(elsewhereRoot, "elsewhere")
+		if err := os.MkdirAll(elsewhere, 0o755); err != nil {
+			t.Fatalf("mkdir elsewhere: %v", err)
+		}
+		linkedRoot := filepath.Join(elsewhereRoot, "volumes")
+		if err := os.MkdirAll(linkedRoot, 0o755); err != nil {
+			t.Fatalf("mkdir linked root: %v", err)
+		}
+		if err := os.Symlink(elsewhere, filepath.Join(linkedRoot, appID)); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		linked := newTestComposeServer(t, ComposeServerConfig{VolumeRoot: linkedRoot})
+		device := filepath.Join(linkedRoot, appID, "data")
+		if err := linked.ensureManagedVolumeDirs(composeTestProject, managedVolumeDocument(device)); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("code = %v, want InvalidArgument (%v)", status.Code(err), err)
+		}
+	})
+}
+
 // TestComposeDockerHost proves the agent's Docker endpoint reaches the CLI as
 // a normalized DOCKER_HOST.
 func TestComposeDockerHost(t *testing.T) {

@@ -154,6 +154,34 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
   }
 
   /**
+   * resizeTo applies an explicit edge or corner resize (JUS-241): the size and
+   * the position land together, so the edge opposite the grip stays put, and
+   * the result is persisted as one geometry. The size is clamped to the
+   * viewport display limits and the position keeps the window on screen.
+   */
+  function resizeTo(
+    next: { width: number; height: number; x: number; y: number },
+    viewportWidth: number = viewportSize().width,
+    viewportHeight: number = viewportSize().height,
+  ): void {
+    const fitted = fitSize(next.width, next.height, viewportWidth, viewportHeight);
+    const position = clampEditorOffset(
+      next.x,
+      next.y,
+      fitted.width,
+      fitted.height,
+      viewportWidth,
+      viewportHeight,
+    );
+    width.value = fitted.width;
+    height.value = fitted.height;
+    // Whole pixels only: the persisted schema keeps integer geometry.
+    x.value = Math.round(position.x);
+    y.value = Math.round(position.y);
+    persist();
+  }
+
+  /**
    * setPosition applies a clamped drag position and persists it. The size is
    * the DISPLAYED one (callers pass the fitted size): clamping with the
    * persisted size would snap the window to the origin whenever the saved
@@ -253,6 +281,7 @@ export const useEditorWindowStore = defineStore("filesEditorWindow", () => {
     openCount,
     setSize,
     setPosition,
+    resizeTo,
     resetPosition,
     setMinimized,
     resizeBy,

@@ -282,10 +282,18 @@ onMounted(() => {
 
 /* JUS-232 fix round 1: the editor badge rides the button's top-right edge
    instead of the shared inset, so it only touches the icon's corner and never
-   covers its centre (the alert badges keep the shared inset). */
+   covers its centre (the alert badges keep the shared inset).
+   JUS-241: the editor badge is a perfect circle for every digit count — the
+   shared padding is dropped so the badge box stays square, and the radius
+   turns the square into a circle. */
 .rail-btn--editor .rail-badge {
   top: calc(-1 * var(--space-1));
   right: calc(-1 * var(--space-1));
+  width: var(--space-6);
+  height: var(--space-6);
+  padding: 0;
+  box-sizing: border-box;
+  border-radius: 50%;
 }
 
 .rail-item.is-active :deep(.rail-btn) {

@@ -471,7 +471,7 @@ func (h *p4Harness) createApplication(t *testing.T, in p4CreateApplication) p4Ap
 // API: the domain carries its own port, optional compose service and protocol.
 func (h *p4Harness) addDomain(t *testing.T, appID, domain string, port int32) {
 	t.Helper()
-	status, body := h.api(t, http.MethodPost, "/api/v1/applications/"+appID+"/domains", map[string]any{
+	status, body := h.api(t, http.MethodPost, "/v1/applications/"+appID+"/domains", map[string]any{
 		"domain": domain, "port": port, "protocol": "http",
 	}, nil)
 	if status != http.StatusCreated {

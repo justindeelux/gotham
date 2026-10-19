@@ -6,16 +6,26 @@ import type en from "./en";
  * image tags and ports stay untranslated by design.
  */
 const vi: typeof en = {
+  tabs: {
+    label: "Loại tài nguyên",
+    application: "Ứng dụng",
+    service: "Service",
+    database: "Cơ sở dữ liệu",
+  },
+  panels: {
+    application: "Chọn nguồn để triển khai ứng dụng.",
+    service: "Chọn template service, hoặc nhập tệp Docker Compose.",
+    database: "Chọn engine cơ sở dữ liệu để cấp phát.",
+  },
   search: {
     label: "Lọc service",
     placeholder: "Lọc service…",
     empty: "Không có service nào khớp với bộ lọc.",
     emptyCatalog: "Không có template nào trong danh mục.",
   },
-  groups: {
-    application: "Ứng dụng",
-    service: "Service",
-    database: "Cơ sở dữ liệu",
+  compose: {
+    hint: "Có sẵn tệp Docker Compose?",
+    link: "Nhập tệp compose",
   },
   sources: {
     git_public: "Triển khai kho công khai bằng URL, không cần kết nối.",

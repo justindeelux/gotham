@@ -5,16 +5,26 @@
  * the templates overlay with fallback to provider metadata.
  */
 const en = {
+  tabs: {
+    label: "Resource type",
+    application: "Application",
+    service: "Service",
+    database: "Database",
+  },
+  panels: {
+    application: "Pick a source to deploy as an application.",
+    service: "Pick a service template, or import a Docker Compose file.",
+    database: "Pick a database engine to provision.",
+  },
   search: {
     label: "Filter services",
     placeholder: "Filter services…",
     empty: "No service matches this filter.",
     emptyCatalog: "No templates in the catalog.",
   },
-  groups: {
-    application: "Application",
-    service: "Service",
-    database: "Database",
+  compose: {
+    hint: "Have a Docker Compose file?",
+    link: "Import a compose file",
   },
   sources: {
     git_public: "Deploy a public repository by URL, no connection needed.",

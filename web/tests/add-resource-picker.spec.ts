@@ -204,23 +204,25 @@ async function openPicker(page: Page) {
   // state; either opens the same picker modal.
   await page.getByRole("button", { name: "Add resource" }).first().click();
   const picker = page.locator(".n-modal.app-modal");
-  await expect(picker.getByRole("heading", { name: "Application" })).toBeVisible();
+  await expect(picker.getByRole("tab", { name: "Application", exact: true })).toBeVisible();
   return picker;
 }
 
 test("picker tiles render pairwise distinct brand marks", async ({ page }) => {
   const picker = await openPicker(page);
-  // 7 source cards + 2 template cards + 5 engine cards.
-  const marks = picker.locator("button.res-card .brand-icon text");
-  expect(await marks.count()).toBe(14);
   const texts: string[] = [];
-  for (let index = 0; index < 14; index += 1) {
-    const mark = marks.nth(index);
-    const box = await mark.boundingBox();
-    expect(box, `mark ${index} renders a box`).not.toBeNull();
-    expect(box!.width, `mark ${index} has width`).toBeGreaterThan(0);
-    texts.push(((await mark.textContent()) ?? "").trim());
+  for (const [tab, count] of [["Application", 7], ["Service", 2], ["Database", 5]] as const) {
+    await picker.getByRole("tab", { name: tab, exact: true }).click();
+    const marks = picker.locator("button.res-card .brand-icon text");
+    await expect(marks).toHaveCount(count);
+    for (const mark of await marks.all()) {
+      const box = await mark.boundingBox();
+      expect(box, "mark renders a box").not.toBeNull();
+      expect(box!.width, "mark has width").toBeGreaterThan(0);
+      texts.push(((await mark.textContent()) ?? "").trim());
+    }
   }
+  expect(texts).toHaveLength(14);
   expect(texts.every((text) => text.length > 0)).toBe(true);
   expect(new Set(texts).size).toBe(texts.length);
 });
@@ -245,3 +247,28 @@ test("an open wizard hides the picker until Change closes it", async ({ page }) 
   await expect(wizard).toBeHidden();
   await expect(cards.first()).toBeVisible();
 });
+
+for (const width of [390, 480, 1280, 1366]) {
+  test(`tabs keep the modal size stable and inside the viewport at ${width}`, async ({ page }) => {
+    const picker = await openPicker(page);
+    await page.setViewportSize({ width, height: 640 });
+    await expect(picker).toHaveCSS("transform", "none");
+    const initial = await picker.boundingBox();
+    expect(initial).not.toBeNull();
+    for (const tab of ["Application", "Service", "Database"]) {
+      await picker.getByRole("tab", { name: tab, exact: true }).click();
+      await expect(picker.getByRole("tabpanel", { name: tab, exact: true })).toBeVisible();
+      const box = (await picker.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(box.y + box.height).toBeLessThanOrEqual(640);
+      expect(box.height).toBeCloseTo(initial!.height, 0);
+      expect(box.width).toBeCloseTo(initial!.width, 0);
+      const header = picker.locator(".n-card-header");
+      const headerY = (await header.boundingBox())!.y;
+      await picker.locator(".res-pane").evaluate((pane) => { pane.scrollTop = pane.scrollHeight; });
+      expect((await header.boundingBox())!.y).toBe(headerY);
+    }
+  });
+}

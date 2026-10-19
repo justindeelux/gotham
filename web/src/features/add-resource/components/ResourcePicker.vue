@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { NButton, NEmpty, NInput, NSpin } from "naive-ui";
-import { computed, onMounted, ref, watch } from "vue";
+import { NButton, NEmpty, NInput, NSpin, NTab, NTabs } from "naive-ui";
+import { computed, nextTick, onMounted, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
 
 import CreateAppWizard from "@/features/applications/components/CreateAppWizard.vue";
@@ -18,25 +18,17 @@ import { activeLocale, i18n } from "@/shared/i18n";
 import BrandIcon from "./BrandIcon.vue";
 import { brandFor, templateBrand } from "../utils/brands";
 
-/**
- * Add-resource picker (GS-1), shown
- * inside a modal on the environment page: three groups — Application (one
- * card per wizard source type), Service (one card per template from the
- * templates API), Database (one card per supported engine). Each card shows
- * an inline-SVG brand mark, the name and a one-line description; selecting a
- * card opens the matching existing create wizard in the project/environment
- * the modal was opened for, with the picked item preselected (the wizard
- * hides its own selector behind a read-only summary). While a wizard is
- * open the picker reports `wizardOpen` so the host hides its modal behind
- * the wizard. After a resource is created the picker emits `created` and
- * navigates to the new resource's detail page.
- */
+// Each resource type opens its existing wizard with the environment scope preselected.
 const props = defineProps<{
   projectId: string;
   environmentId: string;
 }>();
 
-const emit = defineEmits<{ created: []; wizardOpen: [value: boolean] }>();
+const emit = defineEmits<{
+  created: [];
+  wizardOpen: [value: boolean];
+  composeImport: [];
+}>();
 
 const router = useRouter();
 const templatesStore = useTemplatesStore();
@@ -52,6 +44,78 @@ function t(key: string, params?: Record<string, string | number>): string {
 
 const scopeProjectId = computed<string>(() => props.projectId);
 const scopeEnvironmentId = computed<string>(() => props.environmentId);
+
+const RESOURCE_TABS = ["application", "service", "database"] as const;
+
+type ResourceTab = (typeof RESOURCE_TABS)[number];
+
+const activeTab = ref<ResourceTab>("application");
+const tabsId = useId();
+
+/**
+ * tabPropsFor carries the tab semantics NTabs omits (2.45.3 renders plain
+ * divs): each tab is a roving-tabindex tab owned by the tablist.
+ */
+function tabPropsFor(tab: ResourceTab): Record<string, string | number | boolean> {
+  const selected = tab === activeTab.value;
+  return {
+    id: `${tabsId}-${tab}`,
+    "aria-controls": `${tabsId}-panel`,
+    role: "tab",
+    "aria-selected": selected,
+    tabindex: selected ? 0 : -1,
+  };
+}
+
+/**
+ * handleTabKeydown moves and activates tabs with arrows/Home/End
+ * (NTabs 2.45.3 has no key handling of its own). Keys pressed inside a
+ * tab panel belong to the panel, so only a focused tab is handled.
+ */
+function handleTabKeydown(event: KeyboardEvent): void {
+  const target = event.target as HTMLElement | null;
+  const tab = target?.closest<HTMLElement>(".n-tabs-tab");
+  if (!tab) {
+    return;
+  }
+  const tabs = Array.from(
+    (event.currentTarget as HTMLElement | null)?.querySelectorAll<HTMLElement>(
+      ".n-tabs-tab",
+    ) ?? [],
+  );
+  const current = tabs.indexOf(tab);
+  if (current < 0) {
+    return;
+  }
+  let next = -1;
+  switch (event.key) {
+    case "ArrowRight":
+      next = (current + 1) % tabs.length;
+      break;
+    case "ArrowLeft":
+      next = (current - 1 + tabs.length) % tabs.length;
+      break;
+    case "Home":
+      next = 0;
+      break;
+    case "End":
+      next = tabs.length - 1;
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
+  if (next === current) {
+    return;
+  }
+  activeTab.value = RESOURCE_TABS[next];
+  // Roving tabindex: focus follows the selection after re-render (the
+  // tab list is captured now: it reads null once dispatch ends).
+  const tablist = event.currentTarget as HTMLElement | null;
+  nextTick(() => {
+    tablist?.querySelectorAll<HTMLElement>(".n-tabs-tab")[next]?.focus();
+  });
+}
 
 /** serviceQuery filters the service cards by name or description. */
 const serviceQuery = ref("");
@@ -209,99 +273,133 @@ onMounted(() => {
 
 <template>
   <div class="resource-picker">
-    <section :aria-label="t('add-resource.groups.application')">
-      <div class="section-title">
-        <h2>{{ t("add-resource.groups.application") }}</h2>
+    <NTabs
+      v-model:value="activeTab"
+      type="line"
+      role="tablist"
+      :aria-label="t('add-resource.tabs.label')"
+      @keydown="handleTabKeydown"
+    >
+      <NTab
+        v-for="tab in RESOURCE_TABS"
+        :key="tab"
+        :name="tab"
+        v-bind="tabPropsFor(tab)"
+      >
+        {{ t(`add-resource.tabs.${tab}`) }}
+      </NTab>
+    </NTabs>
+    <div
+      :id="`${tabsId}-panel`"
+      role="tabpanel"
+      :aria-labelledby="`${tabsId}-${activeTab}`"
+      tabindex="0"
+    >
+      <div v-if="activeTab === 'application'" class="res-pane">
+        <p class="pane-hint">{{ t("add-resource.panels.application") }}</p>
+        <div class="res-grid" @keydown="handleGroupKey">
+          <button
+            v-for="source in sourceValues"
+            :key="source"
+            type="button"
+            class="res-card"
+            :data-source="source"
+            @click="openApplication(source)"
+          >
+            <span class="res-head">
+              <BrandIcon v-bind="brandFor(source, sourceLabel(source))" />
+              <span class="res-name">{{ sourceLabel(source) }}</span>
+            </span>
+            <span class="res-desc">{{ sourceDescription(source) }}</span>
+          </button>
+        </div>
       </div>
-      <div class="res-grid" @keydown="handleGroupKey">
-        <button
-          v-for="source in sourceValues"
-          :key="source"
-          type="button"
-          class="res-card"
-          :data-source="source"
-          @click="openApplication(source)"
+      <div v-else-if="activeTab === 'service'" class="res-pane">
+        <p class="pane-hint">{{ t("add-resource.panels.service") }}</p>
+        <p class="compose-hint">
+          {{ t("add-resource.compose.hint") }}
+          <a href="#" @click.prevent="emit('composeImport')">{{
+            t("add-resource.compose.link")
+          }}</a
+          >.
+        </p>
+        <div class="toolbar">
+          <NInput
+            v-model:value="serviceQuery"
+            :placeholder="t('add-resource.search.placeholder')"
+            :aria-label="t('add-resource.search.label')"
+            clearable
+            class="search"
+          />
+        </div>
+        <NSpin
+          v-if="templatesStore.loading"
+          :description="t('add-resource.search.label')"
+        />
+        <template v-else-if="templatesStore.error">
+          <p class="small muted">{{ templatesStore.error }}</p>
+          <NButton
+            size="small"
+            @click="templatesStore.fetchTemplates().catch(() => undefined)"
+          >
+            {{ t("common.actions.retry") }}
+          </NButton>
+        </template>
+        <div
+          v-else-if="filteredTemplates.length > 0"
+          class="res-grid"
+          @keydown="handleGroupKey"
         >
-          <span class="res-head">
-            <BrandIcon v-bind="brandFor(source, sourceLabel(source))" />
-            <span class="res-name">{{ sourceLabel(source) }}</span>
-          </span>
-          <span class="res-desc">{{ sourceDescription(source) }}</span>
-        </button>
-      </div>
-    </section>
-
-    <section :aria-label="t('add-resource.groups.service')">
-      <div class="section-title">
-        <h2>{{ t("add-resource.groups.service") }}</h2>
-      </div>
-      <div class="toolbar">
-        <NInput
-          v-model:value="serviceQuery"
-          :placeholder="t('add-resource.search.placeholder')"
-          :aria-label="t('add-resource.search.label')"
-          clearable
-          class="search"
+          <button
+            v-for="template in filteredTemplates"
+            :key="template.slug"
+            type="button"
+            class="res-card"
+            :data-template="template.slug"
+            @click="openTemplate(template.slug)"
+          >
+            <span class="res-head">
+              <BrandIcon v-bind="templateBrand(template.icon, template.name)" />
+              <span class="res-name">{{ template.name }}</span>
+            </span>
+            <span class="res-desc">{{ templateOverlayDescription(template) }}</span>
+          </button>
+        </div>
+        <NEmpty
+          v-else
+          :description="
+            t(
+              serviceQuery.trim() === ''
+                ? 'add-resource.search.emptyCatalog'
+                : 'add-resource.search.empty',
+            )
+          "
         />
       </div>
-      <NSpin v-if="templatesStore.loading" :description="t('add-resource.search.label')" />
-      <template v-else-if="templatesStore.error">
-        <p class="small muted">{{ templatesStore.error }}</p>
-        <NButton size="small" @click="templatesStore.fetchTemplates().catch(() => undefined)">
-          {{ t("common.actions.retry") }}
-        </NButton>
-      </template>
-      <div
-        v-else-if="filteredTemplates.length > 0"
-        class="res-grid"
-        @keydown="handleGroupKey"
-      >
-        <button
-          v-for="template in filteredTemplates"
-          :key="template.slug"
-          type="button"
-          class="res-card"
-          :data-template="template.slug"
-          @click="openTemplate(template.slug)"
-        >
-          <span class="res-head">
-            <BrandIcon v-bind="templateBrand(template.icon, template.name)" />
-            <span class="res-name">{{ template.name }}</span>
-          </span>
-          <span class="res-desc">{{ templateOverlayDescription(template) }}</span>
-        </button>
+      <div v-else class="res-pane">
+        <p class="pane-hint">{{ t("add-resource.panels.database") }}</p>
+        <div class="res-grid" @keydown="handleGroupKey">
+          <button
+            v-for="engine in ENGINES"
+            :key="engine.value"
+            type="button"
+            class="res-card"
+            :data-engine="engine.value"
+            @click="openDatabase(engine.value)"
+          >
+            <span class="res-head">
+              <BrandIcon v-bind="brandFor(engine.value, engine.label)" />
+              <span class="res-name">{{ engine.label }}</span>
+            </span>
+            <span class="res-desc">{{ engineDescription(engine.value) }}</span>
+            <span class="res-meta">
+              <span class="tag mono">{{ engineImage(engine.value) }}</span>
+              <span class="tag mono">:{{ engine.port }}</span>
+            </span>
+          </button>
+        </div>
       </div>
-      <NEmpty v-else :description="t(serviceQuery.trim() === '' ? 'add-resource.search.emptyCatalog' : 'add-resource.search.empty')" />
-    </section>
-
-    <section :aria-label="t('add-resource.groups.database')">
-      <div class="section-title">
-        <h2>{{ t("add-resource.groups.database") }}</h2>
-      </div>
-      <div
-        class="res-grid"
-        @keydown="handleGroupKey"
-      >
-        <button
-          v-for="engine in ENGINES"
-          :key="engine.value"
-          type="button"
-          class="res-card"
-          :data-engine="engine.value"
-          @click="openDatabase(engine.value)"
-        >
-          <span class="res-head">
-            <BrandIcon v-bind="brandFor(engine.value, engine.label)" />
-            <span class="res-name">{{ engine.label }}</span>
-          </span>
-          <span class="res-desc">{{ engineDescription(engine.value) }}</span>
-          <span class="res-meta">
-            <span class="tag mono">{{ engineImage(engine.value) }}</span>
-            <span class="tag mono">:{{ engine.port }}</span>
-          </span>
-        </button>
-      </div>
-    </section>
+    </div>
 
     <CreateAppWizard
       v-model:show="appOpen"
@@ -330,26 +428,22 @@ onMounted(() => {
 .resource-picker {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-3);
 }
 
-section {
+/* Reserve the same content space for each tab, including on short viewports. */
+.res-pane {
+  height: min(calc(var(--space-12) * 8), calc(100dvh - var(--space-12) * 5));
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
 }
 
-.section-title {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-
-.section-title h2 {
-  font-size: var(--text-xl);
-  color: var(--fg-2);
+.pane-hint {
   margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
 }
 
 .toolbar {
@@ -360,12 +454,12 @@ section {
 }
 
 .search {
-  max-width: 320px;
+  max-width: calc(var(--space-8) * 10);
 }
 
 .res-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--space-12) * 5)), 1fr));
   gap: var(--space-4);
 }
 
@@ -426,11 +520,17 @@ section {
   background: var(--surface-warm);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 1px 8px;
+  padding: var(--space-1) var(--space-2);
 }
 
 .mono {
   font-family: var(--font-mono);
+}
+
+.compose-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
 }
 
 .small {

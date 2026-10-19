@@ -25,7 +25,6 @@ import {
   useDomainsRefresh,
 } from "@/features/applications/composables/domainRefresh";
 import { extractComposeServicePorts } from "@/features/applications/utils/compose";
-import { describeProxyError, useProxyStore } from "@/features/domains";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
 
@@ -38,20 +37,22 @@ export interface DomainDraft {
 }
 
 /**
- * Domain routing behind the Domains tab (JUS-233): every hostname carries its
- * own target port, optional compose service and protocol. The same form adds
- * and edits; selecting a compose service pre-fills its declared port.
+ * Domain routing behind the Domains tab (JUS-236, formerly JUS-233): every
+ * hostname carries its own target port, optional compose service and
+ * protocol. The same modal adds and edits; selecting a compose service
+ * pre-fills its declared port.
  */
 export function useApplicationDomains(application: Ref<Application>) {
   const message = useMessage();
   const appsStore = useApplicationsStore();
-  const proxyStore = useProxyStore();
   /** Captured during setup: inject() has no active instance after an await. */
   const refreshTick = useDomainsRefresh();
 
   const domains = ref<ApplicationDomain[]>([]);
   const loadingDomains = ref(false);
   const domainsError = ref<string | null>(null);
+  /** formOpen drives the shared add/edit modal. */
+  const formOpen = ref(false);
   const draft = reactive<DomainDraft>({
     domain: "",
     port: 80,
@@ -64,7 +65,6 @@ export function useApplicationDomains(application: Ref<Application>) {
   const busyDomainId = ref<string | null>(null);
   const rowErrorId = ref<string | null>(null);
   const rowError = ref<string | null>(null);
-  const rowErrorIsProxy = ref(false);
   const formServerError = ref<unknown>(null);
   const rowServerError = ref<unknown>(null);
   /** refreshSeq drops an out-of-order response after an application switch. */
@@ -102,7 +102,6 @@ export function useApplicationDomains(application: Ref<Application>) {
     formServerError.value = null;
     rowErrorId.value = null;
     rowError.value = null;
-    rowErrorIsProxy.value = false;
     rowServerError.value = null;
   }
 
@@ -144,7 +143,20 @@ export function useApplicationDomains(application: Ref<Application>) {
     formServerError.value = null;
   }
 
-  /** startEdit loads one row into the form. */
+  /** openCreate opens the shared modal in add mode with a clean draft. */
+  function openCreate(): void {
+    clearErrors();
+    resetDraft();
+    formOpen.value = true;
+  }
+
+  /** closeForm dismisses the shared modal and drops the draft. */
+  function closeForm(): void {
+    formOpen.value = false;
+    resetDraft();
+  }
+
+  /** startEdit loads one row into the shared add/edit modal. */
   function startEdit(row: ApplicationDomain): void {
     clearErrors();
     editingId.value = row.id;
@@ -152,6 +164,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     draft.port = row.port;
     draft.service = row.service;
     draft.protocol = row.protocol;
+    formOpen.value = true;
   }
 
   /** handleServiceChange pre-fills the port of the selected service. A
@@ -213,6 +226,7 @@ export function useApplicationDomains(application: Ref<Application>) {
         message.success(tr("applications.detail.domainAdded"));
       }
       resetDraft();
+      formOpen.value = false;
       await refresh(true);
       await appsStore.fetchApplication(application.value.id);
       bumpDomainsRefresh(refreshTick);
@@ -240,27 +254,6 @@ export function useApplicationDomains(application: Ref<Application>) {
       rowServerError.value = error;
       rowErrorId.value = domain.id;
       rowError.value = describeApplicationError(error);
-    } finally {
-      busyDomainId.value = null;
-    }
-  }
-
-  /** handleSecureDomain creates an http-01 intent for one domain. */
-  async function handleSecureDomain(domain: ApplicationDomain): Promise<void> {
-    clearErrors();
-    busyDomainId.value = domain.id;
-    try {
-      await proxyStore.createCertificateConfig({
-        application_id: application.value.id,
-        domain: domain.domain,
-      });
-      bumpDomainsRefresh(refreshTick);
-      message.success(tr("applications.detail.certCreated"));
-    } catch (error) {
-      rowServerError.value = error;
-      rowErrorId.value = domain.id;
-      rowErrorIsProxy.value = true;
-      rowError.value = describeProxyError(error);
     } finally {
       busyDomainId.value = null;
     }
@@ -299,9 +292,7 @@ export function useApplicationDomains(application: Ref<Application>) {
       }
     }
     if (rowError.value !== null && rowServerError.value !== null) {
-      rowError.value = rowErrorIsProxy.value
-        ? describeProxyError(rowServerError.value)
-        : describeApplicationError(rowServerError.value);
+      rowError.value = describeApplicationError(rowServerError.value);
     }
   });
   onUnmounted(stopLocaleRefresh);
@@ -310,6 +301,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     () => application.value.id,
     () => {
       resetDraft();
+      formOpen.value = false;
       rowError.value = null;
       void refresh();
     },
@@ -323,6 +315,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     domains,
     loadingDomains,
     domainsError,
+    formOpen,
     draft,
     editingId,
     saving,
@@ -334,11 +327,12 @@ export function useApplicationDomains(application: Ref<Application>) {
     serviceOptions,
     refresh,
     resetDraft,
+    openCreate,
+    closeForm,
     startEdit,
     handleServiceChange,
     handleSave,
     handleRemoveDomain,
-    handleSecureDomain,
     handleSetPrimary,
   };
 }

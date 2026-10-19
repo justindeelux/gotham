@@ -3,19 +3,28 @@ import {
   NAlert,
   NButton,
   NCard,
+  NDataTable,
+  NEmpty,
+  NForm,
+  NFormItem,
   NInput,
   NInputNumber,
+  NModal,
   NPopconfirm,
   NSelect,
   NSpace,
-  NSpin,
   NTag,
   NText,
+  type DataTableColumns,
 } from "naive-ui";
-import { computed, onMounted, toRef } from "vue";
+import { computed, h, onMounted, ref, toRef } from "vue";
 import { useI18n } from "vue-i18n";
 
-import type { Application } from "@/features/applications/api/applications";
+import type {
+  Application,
+  ApplicationDomain,
+} from "@/features/applications/api/applications";
+import CertificatePanel from "@/features/applications/components/CertificatePanel.vue";
 import { useApplicationDomains } from "@/features/applications/composables/useApplicationDomains";
 import {
   certificateStatusLabel,
@@ -52,6 +61,10 @@ const submitLabel = computed(() =>
     : t("applications.domain.save"),
 );
 
+/** certificateOpen and certificateDomain drive the per-row certificate modal. */
+const certificateOpen = ref(false);
+const certificateDomain = ref("");
+
 /** certOf resolves the certificate intent recorded for one hostname. */
 function certOf(host: string): Certificate | null {
   return (
@@ -61,6 +74,146 @@ function certOf(host: string): Certificate | null {
   );
 }
 
+/** openCertificate targets exactly the clicked row's domain. */
+function openCertificate(row: ApplicationDomain): void {
+  certificateDomain.value = row.domain;
+  certificateOpen.value = true;
+}
+
+/** rowProps tags every data row for tests and the layout proof. */
+function rowProps(): Record<string, unknown> {
+  return { class: "domain-row" };
+}
+
+const columns = computed<DataTableColumns<ApplicationDomain>>(() => [
+  {
+    title: t("applications.domain.host"),
+    key: "domain",
+    minWidth: 220,
+    render: (row) => h("span", { class: "mono domain-name" }, row.domain),
+  },
+  {
+    title: t("applications.domain.port"),
+    key: "port",
+    width: 90,
+    render: (row) => h("span", { class: "mono" }, String(row.port)),
+  },
+  {
+    title: t("applications.domain.service"),
+    key: "service",
+    minWidth: 120,
+    render: (row) =>
+      row.service
+        ? h(NTag, { size: "small", type: "info" }, { default: () => row.service })
+        : h(NText, { depth: 3 }, { default: () => "—" }),
+  },
+  {
+    title: t("applications.domain.protocol"),
+    key: "protocol",
+    width: 110,
+    render: (row) =>
+      h(
+        NTag,
+        { size: "small", type: row.protocol === "https" ? "success" : "default" },
+        { default: () => row.protocol },
+      ),
+  },
+  {
+    title: t("applications.domain.primaryColumn"),
+    key: "is_primary",
+    width: 110,
+    render: (row) =>
+      row.is_primary
+        ? h(NTag, { size: "small", type: "success" }, {
+            default: () => t("applications.domain.primary"),
+          })
+        : h(NText, { depth: 3 }, { default: () => "—" }),
+  },
+  {
+    title: t("applications.domain.certificate"),
+    key: "certificate",
+    minWidth: 140,
+    render: (row) => {
+      const cert = certOf(row.domain);
+      if (!cert) {
+        return h(NText, { depth: 3 }, {
+          default: () => t("applications.domain.noCert"),
+        });
+      }
+      return h(
+        NTag,
+        { size: "small", type: certificateStatusTagType(cert.status) },
+        { default: () => certificateStatusLabel(cert.status) },
+      );
+    },
+  },
+  {
+    title: t("applications.domain.actions"),
+    key: "actions",
+    width: 330,
+    render: (row) =>
+      h(
+        NSpace,
+        { size: 8, wrap: false, align: "center", class: "domain-actions" },
+        {
+          default: () => [
+            h(
+              NButton,
+              {
+                size: "small",
+                loading: domains.busyDomainId.value === row.id,
+                onClick: () => domains.startEdit(row),
+              },
+              { default: () => t("applications.domain.edit") },
+            ),
+            row.is_primary
+              ? null
+              : h(
+                  NButton,
+                  {
+                    size: "small",
+                    disabled: row.disabled,
+                    loading: domains.busyDomainId.value === row.id,
+                    onClick: () => void domains.handleSetPrimary(row),
+                  },
+                  { default: () => t("applications.domain.setPrimary") },
+                ),
+            h(
+              NButton,
+              {
+                size: "small",
+                class: "domain-certificate",
+                onClick: () => openCertificate(row),
+              },
+              { default: () => t("applications.domain.certificate") },
+            ),
+            h(
+              NPopconfirm,
+              {
+                onPositiveClick: () => void domains.handleRemoveDomain(row),
+              },
+              {
+                trigger: () =>
+                  h(
+                    NButton,
+                    {
+                      size: "small",
+                      type: "error",
+                      ghost: true,
+                      loading: domains.busyDomainId.value === row.id,
+                    },
+                    { default: () => t("applications.domain.remove") },
+                  ),
+                default: () =>
+                  t("applications.domain.removeConfirm", { domain: row.domain }),
+              },
+            ),
+          ],
+        },
+      ),
+  },
+]);
+
 onMounted(() => {
   void proxyStore.fetchCertificates().catch(() => undefined);
 });
@@ -69,6 +222,11 @@ onMounted(() => {
 <template>
   <NSpace vertical :size="16">
     <NCard :title="t('applications.domain.title')">
+      <template #header-extra>
+        <NButton type="primary" size="small" class="domain-add" @click="domains.openCreate">
+          {{ t("applications.domain.add") }}
+        </NButton>
+      </template>
       <NSpace vertical :size="12">
         <NText depth="3">
           {{ t("applications.domain.hint") }}
@@ -76,150 +234,113 @@ onMounted(() => {
         <NAlert v-if="domains.domainsError.value" type="error" :show-icon="true">
           {{ domains.domainsError.value }}
         </NAlert>
+        <NAlert v-if="domains.rowError.value" type="error" :show-icon="true">
+          {{ domains.rowError.value }}
+        </NAlert>
 
-        <NCard size="small" :title="formTitle">
-          <NSpace vertical :size="10">
-            <NAlert v-if="domains.formError.value" type="error" :show-icon="true">
-              {{ domains.formError.value }}
-            </NAlert>
-            <div class="domain-form">
-              <NInput
-                v-model:value="domains.draft.domain"
-                class="mono domain-host"
-                placeholder="app.example.com"
-                :input-props="{ 'aria-label': t('applications.domain.hostAria') }"
-              />
-              <NInputNumber
-                v-model:value="domains.draft.port"
-                class="domain-port"
-                :min="1"
-                :max="65535"
-                placeholder="3000"
-                :input-props="{ 'aria-label': t('applications.domain.portAria') }"
-              />
-              <NSelect
-                v-if="domains.isCompose.value"
-                :value="domains.draft.service"
-                class="domain-service"
-                filterable
-                tag
-                clearable
-                :options="domains.serviceOptions.value"
-                :placeholder="t('applications.domain.servicePlaceholder')"
-                :aria-label="t('applications.domain.serviceAria')"
-                @update:value="domains.handleServiceChange"
-              />
-              <NSelect
-                v-model:value="domains.draft.protocol"
-                class="domain-protocol"
-                :options="protocolOptions"
-                :aria-label="t('applications.domain.protocolAria')"
-              />
-            </div>
-            <NSpace :size="8">
-              <NButton
-                type="primary"
-                :loading="domains.saving.value"
-                @click="domains.handleSave"
-              >
-                {{ submitLabel }}
-              </NButton>
-              <NButton v-if="domains.editingId.value !== null" ghost @click="domains.resetDraft">
-                {{ t("applications.domain.cancel") }}
-              </NButton>
-            </NSpace>
-            <NText v-if="domains.isCompose.value" depth="3" class="small">
-              {{ t("applications.domain.serviceHint") }}
-            </NText>
-          </NSpace>
-        </NCard>
+        <NDataTable
+          v-if="domains.domains.value.length > 0 || domains.loadingDomains.value"
+          class="domain-table"
+          :columns="columns"
+          :data="domains.domains.value"
+          :loading="domains.loadingDomains.value"
+          :row-key="(row: ApplicationDomain) => row.id"
+          :row-props="rowProps"
+          :bordered="false"
+          :single-line="false"
+          :scroll-x="1080"
+          :pagination="false"
+        />
+        <NEmpty v-else :description="t('applications.domain.empty')" />
 
-        <NSpin :show="domains.loadingDomains.value">
-          <NSpace v-if="domains.domains.value.length > 0" vertical :size="8">
-            <div v-for="row in domains.domains.value" :key="row.id" class="domain-row">
-              <span class="mono domain-name">{{ row.domain }}</span>
-              <NTag size="small">
-                {{ row.port }}
-              </NTag>
-              <NTag v-if="row.service" size="small" type="info">
-                {{ row.service }}
-              </NTag>
-              <NTag size="small" :type="row.protocol === 'https' ? 'success' : 'default'">
-                {{ row.protocol }}
-              </NTag>
-              <NTag v-if="row.is_primary" size="small" type="success">
-                {{ t("applications.domain.primary") }}
-              </NTag>
-              <NTag v-if="row.disabled" size="small" type="warning">
-                {{ t("applications.domain.disabled") }}
-              </NTag>
-              <NTag
-                v-if="certOf(row.domain)"
-                size="small"
-                :type="certificateStatusTagType(certOf(row.domain)?.status)"
-              >
-                {{ certificateStatusLabel(certOf(row.domain)?.status) }}
-              </NTag>
-              <NButton
-                v-else
-                size="small"
-                ghost
-                :disabled="row.disabled"
-                :loading="domains.busyDomainId.value === row.id"
-                @click="domains.handleSecureDomain(row)"
-              >
-                {{ t("applications.domain.secure") }}
-              </NButton>
-              <span class="domain-actions">
-                <NButton
-                  size="small"
-                  :loading="domains.busyDomainId.value === row.id"
-                  @click="domains.startEdit(row)"
-                >
-                  {{ t("applications.domain.edit") }}
-                </NButton>
-                <NButton
-                  v-if="!row.is_primary"
-                  size="small"
-                  :disabled="row.disabled"
-                  :loading="domains.busyDomainId.value === row.id"
-                  @click="domains.handleSetPrimary(row)"
-                >
-                  {{ t("applications.domain.setPrimary") }}
-                </NButton>
-                <NPopconfirm @positive-click="domains.handleRemoveDomain(row)">
-                  <template #trigger>
-                    <NButton
-                      size="small"
-                      type="error"
-                      ghost
-                      :loading="domains.busyDomainId.value === row.id"
-                    >
-                      {{ t("applications.domain.remove") }}
-                    </NButton>
-                  </template>
-                  {{ t("applications.domain.removeConfirm", { domain: row.domain }) }}
-                </NPopconfirm>
-              </span>
-              <NAlert
-                v-if="domains.rowErrorId.value === row.id && domains.rowError.value"
-                type="error"
-                :show-icon="true"
-                class="row-error"
-              >
-                {{ domains.rowError.value }}
-              </NAlert>
-            </div>
-          </NSpace>
-          <NText v-else depth="3" class="small">
-            {{ t("applications.domain.empty") }}
-          </NText>
-        </NSpin>
         <NText depth="3" class="small">
           {{ t("applications.domain.note") }}
         </NText>
       </NSpace>
     </NCard>
+
+    <NModal
+      v-model:show="domains.formOpen.value"
+      preset="card"
+      :title="formTitle"
+      class="app-modal domain-form-modal"
+      style="width: 520px; max-width: 94vw"
+      :mask-closable="false"
+    >
+      <NSpace vertical :size="12">
+        <NAlert v-if="domains.formError.value" type="error" :show-icon="true">
+          {{ domains.formError.value }}
+        </NAlert>
+        <NForm label-placement="top" :show-feedback="false">
+          <NFormItem :label="t('applications.domain.host')">
+            <NInput
+              v-model:value="domains.draft.domain"
+              class="mono domain-host"
+              placeholder="app.example.com"
+              :input-props="{ 'aria-label': t('applications.domain.hostAria') }"
+            />
+          </NFormItem>
+          <NFormItem :label="t('applications.domain.port')">
+            <NInputNumber
+              v-model:value="domains.draft.port"
+              class="domain-port"
+              :min="1"
+              :max="65535"
+              placeholder="3000"
+              :input-props="{ 'aria-label': t('applications.domain.portAria') }"
+            />
+          </NFormItem>
+          <NFormItem
+            v-if="domains.isCompose.value"
+            :label="t('applications.domain.service')"
+          >
+            <NSelect
+              :value="domains.draft.service"
+              class="domain-service"
+              filterable
+              tag
+              clearable
+              :options="domains.serviceOptions.value"
+              :placeholder="t('applications.domain.servicePlaceholder')"
+              :aria-label="t('applications.domain.serviceAria')"
+              @update:value="domains.handleServiceChange"
+            />
+          </NFormItem>
+          <NFormItem :label="t('applications.domain.protocol')">
+            <NSelect
+              v-model:value="domains.draft.protocol"
+              class="domain-protocol"
+              :options="protocolOptions"
+              :aria-label="t('applications.domain.protocolAria')"
+            />
+          </NFormItem>
+        </NForm>
+        <NText v-if="domains.isCompose.value" depth="3" class="small">
+          {{ t("applications.domain.serviceHint") }}
+        </NText>
+      </NSpace>
+      <template #footer>
+        <NSpace justify="end" :size="8">
+          <NButton @click="domains.closeForm">
+            {{ t("applications.domain.cancel") }}
+          </NButton>
+          <NButton
+            type="primary"
+            class="domain-submit"
+            :loading="domains.saving.value"
+            @click="domains.handleSave"
+          >
+            {{ submitLabel }}
+          </NButton>
+        </NSpace>
+      </template>
+    </NModal>
+
+    <CertificatePanel
+      v-model:show="certificateOpen"
+      :application="props.application"
+      :domain="certificateDomain"
+    />
   </NSpace>
 </template>
 
@@ -228,50 +349,30 @@ onMounted(() => {
   font-size: var(--text-xs);
 }
 
-.domain-form {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
+.domain-table {
+  width: 100%;
 }
 
-.domain-host {
-  min-width: 220px;
-  max-width: 360px;
+.domain-table :deep(.domain-row) {
+  vertical-align: middle;
+}
+
+.domain-table :deep(.domain-name) {
+  overflow-wrap: anywhere;
+}
+
+.domain-table :deep(.n-data-table-th) {
+  white-space: nowrap;
 }
 
 .domain-port {
-  width: 110px;
+  width: 100%;
+  max-width: 180px;
 }
 
 .domain-service,
 .domain-protocol {
-  width: 160px;
-}
-
-.domain-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-}
-
-.domain-name {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.domain-actions {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.row-error {
-  flex-basis: 100%;
+  width: 100%;
+  max-width: 320px;
 }
 </style>

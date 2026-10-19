@@ -27,9 +27,14 @@ interface Props {
   providers: DNSProvider[];
   /** When true the application is fixed (editing a stored configuration). */
   lockApplication?: boolean;
+  /**
+   * domain overrides the previewed host. The per-domain application editor
+   * passes the clicked row, which is not necessarily the primary domain.
+   */
+  domain?: string;
 }
 
-const props = withDefaults(defineProps<Props>(), { lockApplication: false });
+const props = withDefaults(defineProps<Props>(), { lockApplication: false, domain: "" });
 const emit = defineEmits<{
   "update:modelValue": [value: CertificateDraft];
 }>();
@@ -72,7 +77,7 @@ const selectedApplication = computed<Application | null>(
 
 /** domainPreview shows the exact host the API will record. */
 const domainPreview = computed<string>(
-  () => selectedApplication.value?.primary_domain ?? "",
+  () => props.domain || selectedApplication.value?.primary_domain || "",
 );
 
 /** isDns01 drives the provider and wildcard controls. */

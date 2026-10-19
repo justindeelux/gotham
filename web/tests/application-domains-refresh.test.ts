@@ -98,7 +98,7 @@ function testRouter() {
   return router;
 }
 
-describe("domain mutations refresh the certificate panel", () => {
+describe("domain mutations work through the table and modal", () => {
   it("add/remove/make-primary succeed without errors", async () => {
     let rows: ApplicationDomain[] = [domainRow("dom-1", "app.example.com", true)];
     let primary = "app.example.com";
@@ -129,19 +129,7 @@ describe("domain mutations refresh the certificate panel", () => {
       appRef.value.primary_domain = primary;
       return { ...appRef.value };
     });
-    vi.mocked(listCertificates).mockResolvedValue([
-      {
-        id: "cert-1",
-        application_id: appId,
-        domain: "www.example.com",
-        enabled: true,
-        challenge: "http-01",
-        dns_provider_id: "",
-        wildcard: false,
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-02T00:00:00Z",
-      },
-    ]);
+    vi.mocked(listCertificates).mockResolvedValue([]);
     vi.mocked(listDNSProviders).mockResolvedValue([]);
 
     const router = testRouter();
@@ -163,18 +151,14 @@ describe("domain mutations refresh the certificate panel", () => {
     const errorsShown = () =>
       wrapper.text().includes("Something went wrong") ||
       wrapper.text().includes("Cannot read properties");
-    const bannerShown = () => wrapper.text().includes("Saving it again");
-    const addButton = () =>
-      wrapper.findAll("button").find((button) => button.text() === "Add domain");
-
-    // www is detached: the certificate re-record banner is up.
-    expect(bannerShown()).toBe(true);
 
     // ── add ──────────────────────────────────────────────────────────
+    await wrapper.find(".domain-add").trigger("click");
+    await nextTick();
     await wrapper
       .find('input[aria-label="Domain hostname"]')
       .setValue("www.example.com");
-    await addButton()!.trigger("click");
+    await wrapper.find(".domain-submit").trigger("click");
     await flushPromises();
     await nextTick();
 
@@ -185,8 +169,6 @@ describe("domain mutations refresh the certificate panel", () => {
       appId,
       expect.objectContaining({ domain: "www.example.com", port: 80 }),
     );
-    // The domains tick reloaded the certificate panel: www is attached now.
-    expect(bannerShown()).toBe(false);
 
     // ── remove ───────────────────────────────────────────────────────
     const wwwRow = () =>
@@ -211,14 +193,14 @@ describe("domain mutations refresh the certificate panel", () => {
     expect(
       wrapper.findAll(".domain-row").some((row) => row.text().includes("www.example.com")),
     ).toBe(false);
-    // www is detached again: the banner returns without a page reload.
-    expect(bannerShown()).toBe(true);
 
     // ── make primary ─────────────────────────────────────────────────
+    await wrapper.find(".domain-add").trigger("click");
+    await nextTick();
     await wrapper
       .find('input[aria-label="Domain hostname"]')
       .setValue("cdn.example.com");
-    await addButton()!.trigger("click");
+    await wrapper.find(".domain-submit").trigger("click");
     await flushPromises();
     await nextTick();
 

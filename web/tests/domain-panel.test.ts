@@ -1,6 +1,6 @@
-// JUS-233 Domains tab behavior: compose service pre-fill, edit payloads,
-// protocol selection, clearing the service select (emits null), many domains
-// and the non-compose layout.
+// JUS-236 Domains tab: the table renders one row per domain, the add/edit
+// modal pre-fills a compose service's port, and certificate actions target the
+// clicked row's intent instead of the primary domain (JUS-233 behaviours kept).
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { defineComponent, h, nextTick, ref } from "vue";
@@ -28,6 +28,9 @@ vi.mock("@/features/domains/api/proxy", async (importOriginal) => {
     ...actual,
     listCertificates: vi.fn(),
     listDNSProviders: vi.fn(),
+    createCertificate: vi.fn(),
+    updateCertificate: vi.fn(),
+    deleteCertificate: vi.fn(),
   };
 });
 
@@ -41,7 +44,12 @@ import {
 } from "@/features/applications/api/applications";
 import { useApplicationDomains } from "@/features/applications/composables/useApplicationDomains";
 import ApplicationDomainPanel from "@/features/applications/components/ApplicationDomainPanel.vue";
-import { listCertificates, listDNSProviders } from "@/features/domains/api/proxy";
+import {
+  createCertificate,
+  listCertificates,
+  listDNSProviders,
+  updateCertificate,
+} from "@/features/domains/api/proxy";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -74,7 +82,12 @@ function composeApp(overrides: Partial<Application> = {}): Application {
   } as Application;
 }
 
-function row(id: string, domain: string, port = 3000): ApplicationDomain {
+function row(
+  id: string,
+  domain: string,
+  port = 3000,
+  overrides: Partial<ApplicationDomain> = {},
+): ApplicationDomain {
   return {
     id,
     application_id: "app-1",
@@ -86,6 +99,23 @@ function row(id: string, domain: string, port = 3000): ApplicationDomain {
     protocol: "http",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function certificate(id: string, domain: string) {
+  return {
+    id,
+    application_id: "app-1",
+    domain,
+    enabled: true,
+    challenge: "http-01" as const,
+    dns_provider_id: "",
+    wildcard: false,
+    status: "present" as const,
+    not_after: "2026-12-31T00:00:00Z",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-02T00:00:00Z",
   };
 }
 
@@ -103,6 +133,12 @@ beforeEach(() => {
   vi.mocked(updateDomain).mockImplementation(async (_id, id, input) =>
     row(id, input.domain, input.port),
   );
+  vi.mocked(createCertificate).mockImplementation(async (input) =>
+    certificate("cert-new", input.domain ?? ""),
+  );
+  vi.mocked(updateCertificate).mockImplementation(async (id, input) =>
+    certificate(id, input.domain ?? "shop.example.com"),
+  );
 });
 
 function harness(app: Application) {
@@ -118,6 +154,19 @@ function harness(app: Application) {
     render: () => h(NMessageProvider, null, { default: () => h(Inner) }),
   });
   return { wrapper, appRef, domains: () => domains! };
+}
+
+/** mountPanel renders the real domains card with the API mocked. */
+function mountPanel(app: Application = composeApp()) {
+  const Panel = defineComponent({
+    render: () =>
+      h(NMessageProvider, null, {
+        default: () => h(ApplicationDomainPanel, { application: app }),
+      }),
+  });
+  return mount(Panel, {
+    global: { plugins: [i18n], stubs: { teleport: true } },
+  });
 }
 
 describe("Domains tab behavior", () => {
@@ -162,7 +211,7 @@ describe("Domains tab behavior", () => {
     wrapper.unmount();
   });
 
-  it("loads a row into the form and sends the edited routing target", async () => {
+  it("loads a row into the modal and sends the edited routing target", async () => {
     const existing = row("dom-2", "www.example.com", 8080);
     vi.mocked(listDomains).mockResolvedValue([existing]);
     const { wrapper, domains } = harness(composeApp());
@@ -170,6 +219,7 @@ describe("Domains tab behavior", () => {
     const d = domains();
 
     d.startEdit(existing);
+    expect(d.formOpen.value).toBe(true);
     expect(d.editingId.value).toBe("dom-2");
     expect(d.draft.domain).toBe("www.example.com");
     expect(d.draft.port).toBe(8080);
@@ -184,46 +234,149 @@ describe("Domains tab behavior", () => {
       expect.objectContaining({ domain: "docs.example.com", port: 9001, protocol: "https" }),
     );
     expect(d.editingId.value).toBeNull();
+    expect(d.formOpen.value).toBe(false);
     wrapper.unmount();
   });
 
-  it("renders many domains and hides the service select for non-compose apps", async () => {
+  it("renders one table row per domain with routing and certificate cells", async () => {
     vi.mocked(listDomains).mockResolvedValue([
-      row("d1", "one.example.com", 3000),
-      row("d2", "two.example.com", 8080),
+      row("d1", "one.example.com", 3000, { is_primary: true }),
+      row("d2", "two.example.com", 8080, { service: "api", protocol: "https" }),
       row("d3", "three.example.com", 9000),
     ]);
-    const composable = harness(composeApp());
-    await flushPromises();
-    composable.wrapper.unmount();
-
-    const Panel = defineComponent({
-      render: () =>
-        h(NMessageProvider, null, {
-          default: () => h(ApplicationDomainPanel, { application: composeApp() }),
-        }),
-    });
-    const composed = mount(Panel, { global: { plugins: [i18n] } });
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-1", "one.example.com"),
+    ]);
+    const composed = mountPanel();
     await flushPromises();
     await nextTick();
+
     expect(composed.findAll(".domain-row")).toHaveLength(3);
-    expect(composed.findAll(".domain-service")).toHaveLength(1);
+    const text = composed.text();
+    for (const header of ["Host", "Port", "Service", "Protocol", "Primary", "Certificate", "Actions"]) {
+      expect(text).toContain(header);
+    }
+    const first = composed.findAll(".domain-row")[0]!;
+    expect(first.text()).toContain("one.example.com");
+    expect(first.text()).toContain("3000");
+    expect(first.text()).toContain("present");
+    expect(first.text()).toContain("primary");
+    expect(first.text()).toContain("Certificate");
+    expect(first.text()).toContain("Edit");
+    composed.unmount();
+  });
+
+  it("opens the shared add modal and hides the compose service for plain apps", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "one.example.com", 3000),
+    ]);
+    const composed = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await composed.find(".domain-add").trigger("click");
+    await nextTick();
+    expect(composed.find('input[aria-label="Domain hostname"]').exists()).toBe(true);
+    expect(composed.find(".domain-service").exists()).toBe(true);
     composed.unmount();
 
-    const plain = mount(
-      defineComponent({
-        render: () =>
-          h(NMessageProvider, null, {
-            default: () =>
-              h(ApplicationDomainPanel, {
-                application: composeApp({ source_type: "git_public", compose_content: "" }),
-              }),
-          }),
-      }),
-      { global: { plugins: [i18n] } },
+    vi.mocked(listDomains).mockResolvedValue([]);
+    const plain = mountPanel(
+      composeApp({ source_type: "git_public", compose_content: "" }),
     );
     await flushPromises();
-    expect(plain.findAll(".domain-service")).toHaveLength(0);
+    await nextTick();
+    await plain.find(".domain-add").trigger("click");
+    await nextTick();
+    expect(plain.find('input[aria-label="Domain hostname"]').exists()).toBe(true);
+    expect(plain.find(".domain-service").exists()).toBe(false);
     plain.unmount();
+  });
+
+  it("adds a domain through the modal", async () => {
+    const wrapper = mountPanel(composeApp({ source_type: "git_public", compose_content: "" }));
+    await flushPromises();
+    await nextTick();
+
+    await wrapper.find(".domain-add").trigger("click");
+    await nextTick();
+    await wrapper.find('input[aria-label="Domain hostname"]').setValue("new.example.com");
+    await wrapper.find(".domain-submit").trigger("click");
+    await flushPromises();
+
+    expect(addDomain).toHaveBeenCalledWith(
+      "app-1",
+      expect.objectContaining({ domain: "new.example.com", port: 80, protocol: "http" }),
+    );
+    expect(wrapper.find(".domain-submit").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("opens the certificate modal for the clicked row, not the primary", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "shop.example.com", 3000, { is_primary: true }),
+      row("d2", "api.example.com", 8000),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-primary", "shop.example.com"),
+      certificate("cert-api", "api.example.com"),
+    ]);
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    const apiRow = wrapper.findAll(".domain-row")[1]!;
+    await apiRow.find(".domain-certificate").trigger("click");
+    await flushPromises();
+    await nextTick();
+
+    expect(wrapper.text()).toContain("Certificate for api.example.com");
+    expect(wrapper.find('input[aria-label="Domain hostname"]').exists()).toBe(false);
+
+    await wrapper.find(".certificate-save").trigger("click");
+    await flushPromises();
+
+    expect(updateCertificate).toHaveBeenCalledWith(
+      "cert-api",
+      expect.objectContaining({ enabled: true, challenge: "http-01" }),
+    );
+    expect(wrapper.find(".certificate-modal").exists()).toBe(false);
+    expect(updateCertificate).not.toHaveBeenCalledWith(
+      "cert-primary",
+      expect.anything(),
+    );
+    wrapper.unmount();
+  });
+
+  it("creates a certificate intent for the clicked non-primary domain", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "shop.example.com", 3000, { is_primary: true }),
+      row("d2", "api.example.com", 8000),
+    ]);
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    const apiRow = wrapper.findAll(".domain-row")[1]!;
+    await apiRow.find(".domain-certificate").trigger("click");
+    await flushPromises();
+    await nextTick();
+    expect(wrapper.text()).toContain("Certificate for api.example.com");
+
+    await wrapper.find(".certificate-save").trigger("click");
+    await flushPromises();
+
+    expect(createCertificate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        application_id: "app-1",
+        domain: "api.example.com",
+        challenge: "http-01",
+      }),
+    );
+    expect(createCertificate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ domain: "shop.example.com" }),
+    );
+    expect(wrapper.find(".certificate-modal").exists()).toBe(false);
+    wrapper.unmount();
   });
 });

@@ -34,25 +34,51 @@ func (s *Server) terminalService() *terminal.Service {
 	return terminal.NewService(cfg)
 }
 
-// terminalOperator re-authorizes a terminal WebSocket handshake from the
-// verified access-token claims. It mirrors isPlatformOperator for a session
-// JWT: an admin role claim or an email listed in PLATFORM_ADMINS. A scoped API
-// token cannot open a browser stream because the WebSocket handshake carries an
-// access token, not an API token.
+// terminalOperator re-authorizes a terminal stream from the verified
+// access-token claims. It mirrors isPlatformOperator for a session JWT — an
+// admin role claim or an email listed in PLATFORM_ADMINS — and additionally
+// proves the account still exists and, when the token carries a "sid", that the
+// refresh session is still live. The terminal stream calls it at attach and
+// every revalidation tick, so a logout/revocation, role change or removed
+// PLATFORM_ADMINS entry closes an open shell within one interval. A scoped API
+// token cannot open a browser stream because the handshake carries an access
+// token, not an API token.
 func (s *Server) terminalOperator(ctx context.Context, claims *auth.Claims) bool {
-	if claims == nil {
+	if claims == nil || s.auth == nil {
 		return false
 	}
-	if strings.EqualFold(claims.Role, "admin") {
-		return true
-	}
 	userID, err := uuid.Parse(claims.Subject)
-	if err != nil || userID == uuid.Nil || s.auth == nil {
+	if err != nil || userID == uuid.Nil {
 		return false
 	}
 	user, err := s.auth.Me(ctx, userID)
 	if err != nil || user == nil {
 		return false
+	}
+	// An access token minted before PF-2 has no sid; it is still bounded by its
+	// 15-minute expiry, which the periodic token verification enforces.
+	if claims.SessionID != "" {
+		sessionID, err := uuid.Parse(claims.SessionID)
+		if err != nil {
+			return false
+		}
+		sessions, err := s.auth.ListSessions(ctx, userID, sessionID)
+		if err != nil {
+			return false
+		}
+		live := false
+		for _, info := range sessions {
+			if info.ID == sessionID {
+				live = true
+				break
+			}
+		}
+		if !live {
+			return false
+		}
+	}
+	if strings.EqualFold(claims.Role, "admin") {
+		return true
 	}
 	return s.isPlatformAdminEmail(user.Email)
 }

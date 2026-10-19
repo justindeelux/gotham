@@ -200,19 +200,33 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 
 	// stop ends the shell and waits for the output pump to deliver its final
 	// event, so no goroutine writes to the stream after the handler returns.
+	// It is idempotent and runs on every exit path once the pump exists; a
+	// pump result already consumed by the loop is not read twice.
+	var (
+		stopOnce     sync.Once
+		stopErr      error
+		pumpConsumed bool
+	)
 	stop := func() error {
-		session.terminate()
-		select {
-		case err := <-output:
-			return err
-		case <-time.After(terminalStopWait):
-			return nil
-		}
+		stopOnce.Do(func() {
+			session.terminate()
+			if pumpConsumed {
+				return
+			}
+			select {
+			case stopErr = <-output:
+				pumpConsumed = true
+			case <-time.After(terminalStopWait):
+			}
+		})
+		return stopErr
 	}
+	defer func() { _ = stop() }()
 
 	for {
 		select {
 		case err := <-output:
+			pumpConsumed = true
 			// The shell exited (or the PTY failed); the pump already sent the
 			// exit event when it could.
 			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
@@ -223,10 +237,8 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 			}
 			return nil
 		case <-ctx.Done():
-			_ = stop()
 			return status.FromContextError(ctx.Err()).Err()
 		case <-lifetime.C:
-			_ = stop()
 			return status.Error(codes.DeadlineExceeded, "terminal: session reached its maximum lifetime")
 		case msg, ok := <-incoming:
 			if !ok {
@@ -237,10 +249,8 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 			}
 			if msg.err != nil {
 				if errors.Is(msg.err, io.EOF) || errors.Is(msg.err, context.Canceled) {
-					_ = stop()
 					return nil
 				}
-				_ = stop()
 				return terminalStreamError("receive", msg.err)
 			}
 			switch part := msg.req.GetPart().(type) {
@@ -252,7 +262,6 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 					return status.Errorf(codes.InvalidArgument, "terminal: input chunk exceeds %d bytes", s.maxInputBytes)
 				}
 				if err := session.write(part.Input); err != nil {
-					_ = stop()
 					return status.Error(codes.Internal, "terminal: writing to the shell failed")
 				}
 			case *agentv1.TerminalRequest_Resize:
@@ -261,11 +270,9 @@ func (s *TerminalServer) OpenTerminal(stream grpc.BidiStreamingServer[agentv1.Te
 					return err
 				}
 				if err := session.resize(cols, rows); err != nil {
-					_ = stop()
 					return status.Error(codes.Internal, "terminal: resizing the shell failed")
 				}
 			case *agentv1.TerminalRequest_Close:
-				_ = stop()
 				return nil
 			case *agentv1.TerminalRequest_Open:
 				return status.Error(codes.InvalidArgument, "terminal: open is only valid as the first message")
@@ -498,18 +505,27 @@ func newTerminalSession(cmd *exec.Cmd, master *os.File) *terminalSession {
 }
 
 // terminate asks the process group to exit, closes the PTY and schedules a hard
-// kill if the child ignores SIGHUP. It is idempotent and never waits.
+// kill if the child ignores SIGHUP. It is idempotent and never waits. A child
+// that already exited is never signalled again: its pid could have been reused
+// as another process group. The reaping goroutine guarantees no zombie remains
+// even when no output pump ever ran (for example a failed opened event).
 func (s *terminalSession) terminate() {
 	s.termOnce.Do(func() {
-		_ = killTerminalProcessGroup(s.pid, terminalHangup)
-		_ = s.pty.Close()
-		go func() {
-			select {
-			case <-s.done:
-			case <-time.After(terminalKillGrace):
-				_ = killTerminalProcessGroup(s.pid, terminalKill)
-			}
-		}()
+		select {
+		case <-s.done:
+			_ = s.pty.Close()
+		default:
+			_ = killTerminalProcessGroup(s.pid, terminalHangup)
+			_ = s.pty.Close()
+			go func() {
+				select {
+				case <-s.done:
+				case <-time.After(terminalKillGrace):
+					_ = killTerminalProcessGroup(s.pid, terminalKill)
+				}
+			}()
+		}
+		go func() { _, _ = s.wait() }()
 	})
 }
 

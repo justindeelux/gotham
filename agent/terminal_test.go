@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -135,9 +136,9 @@ func recvUntil(t *testing.T, stream agentv1.TerminalService_OpenTerminalClient, 
 	}
 }
 
-func waitForOutput(t *testing.T, stream agentv1.TerminalService_OpenTerminalClient, marker string, timeout time.Duration) {
+func waitForOutput(t *testing.T, stream agentv1.TerminalService_OpenTerminalClient, marker string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(10 * time.Second)
 	var accumulated strings.Builder
 	for time.Now().Before(deadline) {
 		response, err := stream.Recv()
@@ -247,7 +248,7 @@ func TestTerminalEchoResizeAndExit(t *testing.T) {
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("echo gotham-pty-ok\r")}}); err != nil {
 		t.Fatalf("send input: %v", err)
 	}
-	waitForOutput(t, stream, "gotham-pty-ok", 10*time.Second)
+	waitForOutput(t, stream, "gotham-pty-ok")
 
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Resize{Resize: &agentv1.TerminalResize{Cols: 100, Rows: 40}}}); err != nil {
 		t.Fatalf("send resize: %v", err)
@@ -289,7 +290,7 @@ func TestTerminalCtrlC(t *testing.T) {
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("echo gotham-after-intr\r")}}); err != nil {
 		t.Fatalf("send echo: %v", err)
 	}
-	waitForOutput(t, stream, "gotham-after-intr", 10*time.Second)
+	waitForOutput(t, stream, "gotham-after-intr")
 }
 
 func TestTerminalCloseKillsProcessGroup(t *testing.T) {
@@ -451,4 +452,146 @@ func waitForPID(t *testing.T, path string) int {
 func processExists(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func openFDCount(t *testing.T) int {
+	t.Helper()
+	for _, directory := range []string{"/proc/self/fd", "/dev/fd"} {
+		entries, err := os.ReadDir(directory)
+		if err == nil {
+			return len(entries)
+		}
+	}
+	t.Skip("cannot count file descriptors on this platform")
+	return 0
+}
+
+func openTerminalSession(t *testing.T, client agentv1.TerminalServiceClient, rootName string) agentv1.TerminalService_OpenTerminalClient {
+	t.Helper()
+	stream, err := client.OpenTerminal(context.Background())
+	if err != nil {
+		t.Fatalf("OpenTerminal: %v", err)
+	}
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
+		Target: "host", Root: rootName, Cols: 80, Rows: 24,
+	}}}); err != nil {
+		t.Fatalf("send open: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("recv opened: %v", err)
+	}
+	return stream
+}
+
+func runAgentSession(t *testing.T, client agentv1.TerminalServiceClient, rootName string) {
+	t.Helper()
+	stream := openTerminalSession(t, client, rootName)
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("exit 0\r")}}); err != nil {
+		t.Fatalf("send exit: %v", err)
+	}
+	recvUntil(t, stream, func(response *agentv1.TerminalResponse) bool {
+		return response.GetExited() != nil
+	}, 10*time.Second)
+	_ = stream.CloseSend()
+	for {
+		if _, err := stream.Recv(); err != nil {
+			break
+		}
+	}
+}
+
+func TestTerminalSessionIsolation(t *testing.T) {
+	_, terminal, rootName, _ := terminalTestFixture(t)
+	client := startTerminalServer(t, terminal)
+	first := openTerminalSession(t, client, rootName)
+	defer func() { _ = first.CloseSend() }()
+	second := openTerminalSession(t, client, rootName)
+	defer func() { _ = second.CloseSend() }()
+
+	if err := first.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("echo agent-iso-one\r")}}); err != nil {
+		t.Fatalf("send first: %v", err)
+	}
+	waitForOutput(t, first, "agent-iso-one")
+
+	if err := second.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("echo agent-iso-two\r")}}); err != nil {
+		t.Fatalf("send second: %v", err)
+	}
+	waitForOutput(t, second, "agent-iso-two")
+
+	if err := first.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("echo agent-iso-three\r")}}); err != nil {
+		t.Fatalf("send third: %v", err)
+	}
+	var output strings.Builder
+	for !strings.Contains(output.String(), "agent-iso-three") {
+		response, err := first.Recv()
+		if err != nil {
+			t.Fatalf("recv first: %v", err)
+		}
+		output.Write(response.GetOutput())
+	}
+	if strings.Contains(output.String(), "agent-iso-two") {
+		t.Fatalf("cross-session output leak: %q", output.String())
+	}
+}
+
+func TestTerminalReleasesResources(t *testing.T) {
+	_, terminal, rootName, _ := terminalTestFixture(t)
+	client := startTerminalServer(t, terminal)
+	// Warm up lazy runtime and gRPC state before taking the baseline.
+	runAgentSession(t, client, rootName)
+	baselineFD := openFDCount(t)
+	baselineGoroutines := runtime.NumGoroutine()
+
+	for i := 0; i < 4; i++ {
+		runAgentSession(t, client, rootName)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if openFDCount(t) <= baselineFD+2 && runtime.NumGoroutine() <= baselineGoroutines+2 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("resources after sessions: fds %d (baseline %d), goroutines %d (baseline %d)",
+		openFDCount(t), baselineFD, runtime.NumGoroutine(), baselineGoroutines)
+}
+
+func TestTerminalDisconnectKillsProcessGroup(t *testing.T) {
+	_, terminal, rootName, root := terminalTestFixture(t)
+	client := startTerminalServer(t, terminal)
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := client.OpenTerminal(ctx)
+	if err != nil {
+		cancel()
+		t.Fatalf("OpenTerminal: %v", err)
+	}
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
+		Target: "host", Root: rootName, Cols: 80, Rows: 24,
+	}}}); err != nil {
+		cancel()
+		t.Fatalf("send open: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		cancel()
+		t.Fatalf("recv opened: %v", err)
+	}
+	pidFile := filepath.Join(root, "disconnect.pid")
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{
+		Input: []byte("echo $$ > " + pidFile + "; exec sleep 300\r"),
+	}}); err != nil {
+		cancel()
+		t.Fatalf("send command: %v", err)
+	}
+	pid := waitForPID(t, pidFile)
+
+	cancel()
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processExists(pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("shell process %d still exists after disconnect", pid)
 }

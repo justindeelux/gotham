@@ -94,9 +94,7 @@ func TestDirectorySizeCapsEntries(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		writeSizedFile(t, rootDir, string(rune('a'+i))+".txt", 10)
 	}
-	old := fileSizeMaxEntries
-	fileSizeMaxEntries = 3
-	t.Cleanup(func() { fileSizeMaxEntries = old })
+	server.sizeMaxEntries = 3
 
 	resp, err := server.DirectorySize(context.Background(), &agentv1.DirectorySizeRequest{
 		Root: "volumes",

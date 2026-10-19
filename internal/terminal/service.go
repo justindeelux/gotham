@@ -266,6 +266,26 @@ func (s *Service) Create(ctx context.Context, userID, serverID uuid.UUID, req Cr
 	return cloneSession(session.snapshot, session.done), nil
 }
 
+// Validate reports whether a session exists, is owned by the caller and node,
+// and is still attachable, without marking it attached. The WebSocket handler
+// runs it before the upgrade so a non-upgrade request cannot burn the session;
+// Attach then marks it in the handshake itself.
+func (s *Service) Validate(_ context.Context, userID, serverID, sessionID uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[sessionID]
+	if !ok {
+		return ErrNotFound
+	}
+	if session.snapshot.UserID != userID || session.snapshot.ServerID != serverID {
+		return ErrNotFound
+	}
+	if session.attached {
+		return ErrAlreadyAttached
+	}
+	return nil
+}
+
 // Attach marks a pending session attached and returns its snapshot. A session
 // can be attached once; a second call is ErrAlreadyAttached. A session that
 // belongs to another user or node answers ErrNotFound.

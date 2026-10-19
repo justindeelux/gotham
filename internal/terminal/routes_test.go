@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,11 +34,15 @@ import (
 type fakeVerifier struct {
 	userID uuid.UUID
 	token  string
+	valid  *atomic.Bool
 }
 
 func (f *fakeVerifier) VerifyAccessToken(token string) (*auth.Claims, error) {
 	if token != f.token {
 		return nil, errors.New("invalid token")
+	}
+	if f.valid != nil && !f.valid.Load() {
+		return nil, errors.New("token expired")
 	}
 	return &auth.Claims{
 		Role:             "admin",
@@ -54,6 +60,12 @@ type bufTerminalClient struct {
 }
 
 func (c *bufTerminalClient) Close() error { return c.conn.Close() }
+
+// sharedBufClient lets several sessions reuse one test connection. Closing a
+// session must not tear down the connection other sessions use.
+type sharedBufClient struct{ *bufTerminalClient }
+
+func (sharedBufClient) Close() error { return nil }
 
 // failingClient stands in for an agent that predates TerminalService.
 type failingClient struct{ err error }
@@ -103,6 +115,9 @@ type fixtureOptions struct {
 	operator    bool
 	pendingTTL  time.Duration
 	maxDuration time.Duration
+	revalidate  time.Duration
+	ping        time.Duration
+	idle        time.Duration
 }
 
 type fixture struct {
@@ -111,6 +126,7 @@ type fixture struct {
 	verifier *fakeVerifier
 	userID   uuid.UUID
 	serverID uuid.UUID
+	operator atomic.Bool
 }
 
 func newFixture(t *testing.T, options fixtureOptions) *fixture {
@@ -123,8 +139,9 @@ func newFixture(t *testing.T, options fixtureOptions) *fixture {
 			Roots:  fixedRoots{dir: t.TempDir()},
 			Shell:  shellPath(t),
 		})
+		shared := newBufClient(t, terminalServer)
 		options.dial = func(context.Context, *servers.Server) (TerminalClient, error) {
-			return newBufClient(t, terminalServer), nil
+			return sharedBufClient{shared}, nil
 		}
 	}
 	svc := NewService(Config{
@@ -135,17 +152,20 @@ func newFixture(t *testing.T, options fixtureOptions) *fixture {
 		MaxDuration: options.maxDuration,
 	})
 	verifier := &fakeVerifier{userID: userID, token: "good-token"}
+	f := &fixture{svc: svc, verifier: verifier, userID: userID, serverID: serverID}
+	f.operator.Store(options.operator)
 	router := chi.NewRouter()
-	Mount(router,
+	mount(router,
 		func(next http.Handler) http.Handler { return next },
 		svc, verifier,
-		func(context.Context, *auth.Claims) bool { return options.operator },
+		func(context.Context, *auth.Claims) bool { return f.operator.Load() },
 		func(context.Context) (uuid.UUID, bool) { return userID, true },
 		discardLogger(),
+		handlerOptions{revalidatePeriod: options.revalidate, pingPeriod: options.ping, idleTimeout: options.idle},
 	)
-	server := httptest.NewServer(router)
-	t.Cleanup(server.Close)
-	return &fixture{svc: svc, server: server, verifier: verifier, userID: userID, serverID: serverID}
+	f.server = httptest.NewServer(router)
+	t.Cleanup(f.server.Close)
+	return f
 }
 
 func (f *fixture) create(t *testing.T, req CreateRequest) *Session {
@@ -452,4 +472,225 @@ func TestUnsupportedAgentEndsWithError(t *testing.T) {
 	if !strings.Contains(string(payload), "does not support") {
 		t.Fatalf("error frame = %q, want unsupported message", payload)
 	}
+}
+
+func expectClose(t *testing.T, conn *websocket.Conn, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+			return
+		}
+		var payload []byte
+		err := websocket.Message.Receive(conn, &payload)
+		if err == nil {
+			continue
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			continue
+		}
+		return
+	}
+	t.Fatal("connection stayed open")
+}
+
+func waitSessionDone(t *testing.T, session *Session) {
+	t.Helper()
+	select {
+	case <-session.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("session was not released")
+	}
+}
+
+func TestNonUpgradeGetDoesNotBurnSession(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{operator: true})
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	path := f.server.URL + "/v1/servers/" + session.ServerID.String() + "/terminal/sessions/" + session.ID.String() + "/ws"
+
+	request, _ := http.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer good-token")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("plain GET: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("plain GET status = %d, want 400 (not an upgrade)", response.StatusCode)
+	}
+
+	conn, err := f.dial(t, session, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach after a non-upgrade GET: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if opcode, _ := readFrame(t, conn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened", opcode)
+	}
+}
+
+func TestOriginSchemeMustMatch(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{operator: true})
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	path := f.server.URL + "/v1/servers/" + session.ServerID.String() + "/terminal/sessions/" + session.ID.String() + "/ws"
+	httpsOrigin := "https://" + strings.TrimPrefix(f.server.URL, "http://")
+
+	request, _ := http.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer good-token")
+	request.Header.Set("Origin", httpsOrigin)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("https origin on an http connection status = %d, want 403", response.StatusCode)
+	}
+}
+
+func TestRevocationClosesStream(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{operator: true, revalidate: 40 * time.Millisecond})
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	conn, err := f.dial(t, session, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if opcode, _ := readFrame(t, conn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened", opcode)
+	}
+	f.operator.Store(false)
+	expectClose(t, conn, 5*time.Second)
+	waitSessionDone(t, session)
+}
+
+func TestExpiredTokenClosesStream(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{operator: true, revalidate: 40 * time.Millisecond})
+	valid := &atomic.Bool{}
+	valid.Store(true)
+	f.verifier.valid = valid
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	conn, err := f.dial(t, session, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if opcode, _ := readFrame(t, conn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened", opcode)
+	}
+	valid.Store(false)
+	expectClose(t, conn, 5*time.Second)
+	waitSessionDone(t, session)
+}
+
+func TestIdleConnectionCloses(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{
+		operator:   true,
+		revalidate: time.Hour,
+		ping:       20 * time.Millisecond,
+		idle:       120 * time.Millisecond,
+	})
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	conn, err := f.dial(t, session, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if opcode, _ := readFrame(t, conn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened", opcode)
+	}
+	expectClose(t, conn, 5*time.Second)
+	waitSessionDone(t, session)
+}
+
+func TestSessionsAreIsolated(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{operator: true})
+	first := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	second := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+
+	firstConn, err := f.dial(t, first, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach first: %v", err)
+	}
+	defer func() { _ = firstConn.Close() }()
+	secondConn, err := f.dial(t, second, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach second: %v", err)
+	}
+	defer func() { _ = secondConn.Close() }()
+	if opcode, _ := readFrame(t, firstConn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened", opcode)
+	}
+	if opcode, _ := readFrame(t, secondConn); opcode != opOpened {
+		t.Fatalf("second first frame opcode = %#x, want opened", opcode)
+	}
+
+	sendFrameTest(t, firstConn, opInput, []byte("echo iso-one\r"))
+	readUntilOutput(t, firstConn, "iso-one")
+	sendFrameTest(t, secondConn, opInput, []byte("echo iso-two\r"))
+	readUntilOutput(t, secondConn, "iso-two")
+
+	// Force a marker on the first stream and inspect everything it emitted:
+	// the second session's marker must never appear there.
+	output := ""
+	sendFrameTest(t, firstConn, opInput, []byte("echo iso-three\r"))
+	for !strings.Contains(output, "iso-three") {
+		opcode, payload := readFrame(t, firstConn)
+		switch opcode {
+		case opOutput:
+			output += string(payload)
+		case opExited, opError:
+			t.Fatalf("first stream ended unexpectedly: %s", payload)
+		}
+	}
+	if strings.Contains(output, "iso-two") {
+		t.Fatalf("cross-session output leak: first stream saw %q", output)
+	}
+}
+
+func TestGoroutinesReleasedAfterRelay(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{operator: true})
+	// Warm up so lazily-created gRPC and WebSocket goroutines are not counted.
+	runExitSession(t, f)
+	baseline := runtime.NumGoroutine()
+	for i := 0; i < 3; i++ {
+		runExitSession(t, f)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if runtime.NumGoroutine() <= baseline+2 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("goroutines after relays = %d, baseline %d", runtime.NumGoroutine(), baseline)
+}
+
+func runExitSession(t *testing.T, f *fixture) {
+	t.Helper()
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	conn, err := f.dial(t, session, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	if opcode, _ := readFrame(t, conn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened", opcode)
+	}
+	sendFrameTest(t, conn, opInput, []byte("exit 0\r"))
+	for {
+		opcode, _ := readFrame(t, conn)
+		if opcode == opExited {
+			break
+		}
+	}
+	waitSessionDone(t, session)
+	_ = conn.Close()
 }

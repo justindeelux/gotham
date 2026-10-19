@@ -40,6 +40,20 @@ type TokenVerifier interface {
 // capability and is re-checked so a revoked operator cannot keep a stream.
 type OperatorCheck func(ctx context.Context, claims *auth.Claims) bool
 
+// Revalidation and liveness defaults. They are fields on the handler (not
+// package globals) so tests can shorten them without racing each other.
+const (
+	// defaultRevalidatePeriod bounds how long a de-authorized operator keeps a
+	// shell. A revoked session, a role/email change or an expired access token
+	// is noticed within this window.
+	defaultRevalidatePeriod = 30 * time.Second
+	// defaultPingPeriod is how often the server sends a heartbeat frame.
+	defaultPingPeriod = 25 * time.Second
+	// defaultIdleTimeout closes a half-open socket that sends nothing (not even
+	// a heartbeat) for this long.
+	defaultIdleTimeout = 60 * time.Second
+)
+
 // handler serves the terminal HTTP and WebSocket surface.
 type handler struct {
 	svc        *Service
@@ -47,6 +61,17 @@ type handler struct {
 	operator   OperatorCheck
 	userIDFrom UserIDFunc
 	logger     *slog.Logger
+
+	revalidatePeriod time.Duration
+	pingPeriod       time.Duration
+	idleTimeout      time.Duration
+}
+
+// handlerOptions overrides the liveness timers (tests).
+type handlerOptions struct {
+	revalidatePeriod time.Duration
+	pingPeriod       time.Duration
+	idleTimeout      time.Duration
 }
 
 // UserIDFunc resolves the authenticated user set by the server's auth
@@ -64,13 +89,36 @@ type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 // cannot set an Authorization header on a WebSocket; the token arrives as a
 // "gotham.token.<jwt>" subprotocol or a Bearer header, never in the query.
 func Mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, operator OperatorCheck, userIDFrom UserIDFunc, logger *slog.Logger) {
+	mount(r, authMiddleware, svc, verifier, operator, userIDFrom, logger, handlerOptions{})
+}
+
+// mount is Mount with test-only timer overrides.
+func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, operator OperatorCheck, userIDFrom UserIDFunc, logger *slog.Logger, options handlerOptions) {
 	if svc == nil {
 		return
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	h := &handler{svc: svc, verify: verifier, operator: operator, userIDFrom: userIDFrom, logger: logger}
+	h := &handler{
+		svc:              svc,
+		verify:           verifier,
+		operator:         operator,
+		userIDFrom:       userIDFrom,
+		logger:           logger,
+		revalidatePeriod: options.revalidatePeriod,
+		pingPeriod:       options.pingPeriod,
+		idleTimeout:      options.idleTimeout,
+	}
+	if h.revalidatePeriod <= 0 {
+		h.revalidatePeriod = defaultRevalidatePeriod
+	}
+	if h.pingPeriod <= 0 {
+		h.pingPeriod = defaultPingPeriod
+	}
+	if h.idleTimeout <= 0 {
+		h.idleTimeout = defaultIdleTimeout
+	}
 
 	r.Group(func(protected chi.Router) {
 		protected.Use(authMiddleware)
@@ -166,7 +214,7 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, apiError{Message: "origin is not allowed"})
 		return
 	}
-	claims, userID, err := h.authenticate(r)
+	claims, userID, token, err := h.authenticate(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
@@ -175,12 +223,16 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, apiError{Message: "platform operator access is required"})
 		return
 	}
-	session, err := h.svc.Attach(r.Context(), userID, serverID, sessionID)
-	if err != nil {
+	// Ownership and single-use are checked before the upgrade so the client
+	// gets a real 404/409. Attach itself runs in the handshake: a plain GET
+	// (no Upgrade headers) is rejected by the WebSocket reader before that
+	// point, so a non-upgrade request can never burn the session.
+	if err := h.svc.Validate(r.Context(), userID, serverID, sessionID); err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
+	var session *Session
 	server := websocket.Server{
 		// The handshake selects exactly one subprotocol when the client offered
 		// it; the x/net server rejects the upgrade when more than one remains
@@ -199,22 +251,36 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 			} else {
 				config.Protocol = nil
 			}
+			attached, err := h.svc.Attach(req.Context(), userID, serverID, sessionID)
+			if err != nil {
+				return err
+			}
+			session = attached
 			return nil
 		},
 		Handler: func(conn *websocket.Conn) {
-			h.serve(conn, session)
+			if session == nil {
+				_ = conn.Close()
+				return
+			}
+			h.serve(conn, session, claims, token)
 		},
 	}
 	server.ServeHTTP(w, r)
 }
 
 // serve relays one WebSocket to one agent terminal stream.
-func (h *handler) serve(conn *websocket.Conn, session *Session) {
+func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Claims, token string) {
 	defer func() { _ = conn.Close() }()
 	defer h.svc.Release(session.ID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Re-authorize for the life of the stream: token expiry, logout, a role or
+	// PLATFORM_ADMINS change and an expired refresh session all end the shell
+	// within revalidatePeriod instead of the 8h cap.
+	go h.revalidate(ctx, cancel, conn, session, claims, token)
 
 	// A session expiry (or an explicit DELETE) cancels the relay, which closes
 	// the agent stream and tears the PTY down.
@@ -290,6 +356,10 @@ func (h *handler) serve(conn *websocket.Conn, session *Session) {
 		return
 	}
 
+	keepaliveDone := make(chan struct{})
+	go h.keepalive(ctx, cancel, conn, keepaliveDone)
+	defer close(keepaliveDone)
+
 	pumpDone := make(chan error, 1)
 	go func() {
 		err := pumpAgentToClient(conn, stream)
@@ -299,7 +369,7 @@ func (h *handler) serve(conn *websocket.Conn, session *Session) {
 		_ = conn.Close()
 	}()
 
-	readErr := readClientFrames(stream, conn)
+	readErr := readClientFrames(stream, conn, h.idleTimeout)
 	cancel()
 	_ = client.Close()
 
@@ -317,11 +387,67 @@ func (h *handler) serve(conn *websocket.Conn, session *Session) {
 	}
 }
 
+// revalidate polls the token and the operator/session check while the relay is
+// active. Any failure tells the client why and tears the whole session down.
+func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, session *Session, claims *auth.Claims, token string) {
+	if token == "" || claims == nil {
+		return
+	}
+	ticker := time.NewTicker(h.revalidatePeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-session.Done():
+			return
+		case <-ticker.C:
+			current, err := h.verify.VerifyAccessToken(token)
+			if err == nil && current != nil && current.Subject == claims.Subject && h.operator != nil {
+				if h.operator(ctx, current) {
+					continue
+				}
+			}
+			_ = sendFrame(conn, opError, []byte("terminal access was revoked"))
+			h.logger.Info("terminal: session authorization ended", "session_id", session.ID.String())
+			cancel()
+			_ = conn.Close()
+			return
+		}
+	}
+}
+
+// keepalive sends a heartbeat frame so a client can distinguish a quiet shell
+// from a dead socket, and so a half-open connection is noticed by the idle
+// read deadline.
+func (h *handler) keepalive(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, done <-chan struct{}) {
+	ticker := time.NewTicker(h.pingPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			if err := sendFrame(conn, opPing, nil); err != nil {
+				cancel()
+				_ = conn.Close()
+				return
+			}
+		}
+	}
+}
+
 // readClientFrames forwards browser input to the agent until the socket closes
 // or the client asks to close. It is the only goroutine that sends requests
 // after the open message.
-func readClientFrames(stream agentv1.TerminalService_OpenTerminalClient, conn *websocket.Conn) error {
+func readClientFrames(stream agentv1.TerminalService_OpenTerminalClient, conn *websocket.Conn, idleTimeout time.Duration) error {
 	for {
+		// Any inbound frame (input, resize, heartbeat) refreshes the deadline.
+		if err := conn.SetReadDeadline(time.Now().Add(idleTimeout)); err != nil {
+			return err
+		}
 		var payload []byte
 		if err := websocket.Message.Receive(conn, &payload); err != nil {
 			return err
@@ -357,6 +483,9 @@ func readClientFrames(stream agentv1.TerminalService_OpenTerminalClient, conn *w
 			}); err != nil {
 				return err
 			}
+		case opHeartbeat:
+			// Client heartbeat; it only refreshes the idle deadline.
+			continue
 		case opClose:
 			_ = stream.CloseSend()
 			return io.EOF
@@ -444,23 +573,23 @@ func (h *handler) fail(conn *websocket.Conn, session *Session, message string) {
 }
 
 // authenticate extracts and verifies the access token from the handshake.
-func (h *handler) authenticate(r *http.Request) (*auth.Claims, uuid.UUID, error) {
+func (h *handler) authenticate(r *http.Request) (*auth.Claims, uuid.UUID, string, error) {
 	if h.verify == nil {
-		return nil, uuid.Nil, errors.New("terminal: no token verifier")
+		return nil, uuid.Nil, "", errors.New("terminal: no token verifier")
 	}
 	token := tokenFromRequest(r)
 	if token == "" {
-		return nil, uuid.Nil, errors.New("terminal: no access token")
+		return nil, uuid.Nil, "", errors.New("terminal: no access token")
 	}
 	claims, err := h.verify.VerifyAccessToken(token)
 	if err != nil || claims == nil {
-		return nil, uuid.Nil, errors.New("terminal: invalid access token")
+		return nil, uuid.Nil, "", errors.New("terminal: invalid access token")
 	}
 	userID, err := uuid.Parse(claims.Subject)
 	if err != nil || userID == uuid.Nil {
-		return nil, uuid.Nil, errors.New("terminal: token has no user")
+		return nil, uuid.Nil, "", errors.New("terminal: token has no user")
 	}
-	return claims, userID, nil
+	return claims, userID, token, nil
 }
 
 // tokenFromRequest reads the access token from the Authorization header or,
@@ -492,19 +621,41 @@ func originAllowed(r *http.Request) bool {
 		return true
 	}
 	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Host == "" {
+	if err != nil || parsed.Host == "" || parsed.Scheme == "" {
 		return false
 	}
-	if strings.EqualFold(parsed.Host, r.Host) {
+	// Same origin means the same scheme as well as the same host: an https
+	// page must not drive an http connection (and vice versa).
+	if strings.EqualFold(parsed.Scheme, requestScheme(r)) && strings.EqualFold(parsed.Host, r.Host) {
 		return true
 	}
-	normalized := strings.TrimRight(origin, "/")
 	for _, allowed := range strings.Split(os.Getenv(AllowedOriginsEnv), ",") {
-		if strings.EqualFold(strings.TrimRight(strings.TrimSpace(allowed), "/"), normalized) {
+		entry, err := url.Parse(strings.TrimSpace(allowed))
+		if err != nil || entry.Host == "" || entry.Scheme == "" {
+			continue
+		}
+		if strings.EqualFold(entry.Scheme, parsed.Scheme) && strings.EqualFold(entry.Host, parsed.Host) {
 			return true
 		}
 	}
 	return false
+}
+
+// requestScheme is the scheme the browser used to reach the panel. A TLS
+// connection is https; behind a terminating proxy X-Forwarded-Proto carries
+// the original scheme. This only affects Origin comparison, never trust in
+// the proxy for authentication.
+func requestScheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
+		first, _, _ := strings.Cut(forwarded, ",")
+		if value := strings.ToLower(strings.TrimSpace(first)); value != "" {
+			return value
+		}
+	}
+	return "http"
 }
 
 // writeServiceError maps a session error onto an HTTP status.

@@ -33,7 +33,8 @@ func (s *stubServerRegistry) DialTerminalClient(_ context.Context, _ uuid.UUID, 
 
 type stubAuthService struct {
 	AuthService
-	user *auth.User
+	user     *auth.User
+	sessions []auth.SessionInfo
 }
 
 func (s stubAuthService) Me(context.Context, uuid.UUID) (*auth.User, error) {
@@ -43,12 +44,24 @@ func (s stubAuthService) Me(context.Context, uuid.UUID) (*auth.User, error) {
 	return s.user, nil
 }
 
+func (s stubAuthService) ListSessions(context.Context, uuid.UUID, uuid.UUID) ([]auth.SessionInfo, error) {
+	return s.sessions, nil
+}
+
 func TestTerminalOperator(t *testing.T) {
 	t.Setenv("PLATFORM_ADMINS", "ops@example.com")
-	server := &Server{auth: stubAuthService{user: &auth.User{Email: "ops@example.com"}}}
+	userID := uuid.New()
+	sessionID := uuid.New()
+	server := &Server{auth: stubAuthService{
+		user:     &auth.User{Email: "ops@example.com"},
+		sessions: []auth.SessionInfo{{ID: sessionID}},
+	}}
 
 	claims := func(role string) *auth.Claims {
-		return &auth.Claims{Role: role, RegisteredClaims: jwt.RegisteredClaims{Subject: uuid.NewString()}}
+		return &auth.Claims{Role: role, RegisteredClaims: jwt.RegisteredClaims{Subject: userID.String()}}
+	}
+	claimsWithSession := func(role string, sid string) *auth.Claims {
+		return &auth.Claims{Role: role, SessionID: sid, RegisteredClaims: jwt.RegisteredClaims{Subject: userID.String()}}
 	}
 	withEmail := func(email string) *Server {
 		return &Server{auth: stubAuthService{user: &auth.User{Email: email}}}
@@ -69,6 +82,19 @@ func TestTerminalOperator(t *testing.T) {
 	badSubject := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "not-a-uuid"}}
 	if server.terminalOperator(context.Background(), badSubject) {
 		t.Fatal("a token without a user id passed the operator check")
+	}
+	if !server.terminalOperator(context.Background(), claimsWithSession("admin", sessionID.String())) {
+		t.Fatal("a live refresh session was refused")
+	}
+	if server.terminalOperator(context.Background(), claimsWithSession("admin", uuid.NewString())) {
+		t.Fatal("a revoked/unknown refresh session passed the operator check")
+	}
+	if server.terminalOperator(context.Background(), claimsWithSession("admin", "not-a-uuid")) {
+		t.Fatal("a malformed sid passed the operator check")
+	}
+	deletedUser := &Server{auth: stubAuthService{}}
+	if deletedUser.terminalOperator(context.Background(), claims("admin")) {
+		t.Fatal("a deleted account passed the operator check")
 	}
 }
 

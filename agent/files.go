@@ -134,6 +134,9 @@ type FileServer struct {
 	// users) is throttled and the excess answers 429 (ResourceExhausted)
 	// instead of piling up unbounded work.
 	sizeWalks chan struct{}
+	// sizeMaxEntries is the per-server copy of fileSizeMaxEntries, so a test
+	// can lower the cap without racing other tests that read the default.
+	sizeMaxEntries int64
 	// locks are striped mutexes serialising the commit of a write to one
 	// (root, path), so a concurrent writer sees the previous commit's etag.
 	locks []sync.Mutex
@@ -194,6 +197,7 @@ func NewFileServer(cfg Config, log *slog.Logger) (*FileServer, error) {
 		archiveMaxInputBytes: archiveMaxInputBytes,
 		transfers:            make(chan struct{}, maxTransfers),
 		sizeWalks:            make(chan struct{}, fileSizeMaxConcurrent),
+		sizeMaxEntries:       fileSizeMaxEntries,
 		locks:                make([]sync.Mutex, fileLockStripes),
 		stop:                 make(chan struct{}),
 	}

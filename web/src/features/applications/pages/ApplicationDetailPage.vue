@@ -35,19 +35,25 @@ const previewsTab = computed<string>(() =>
     : String(t("applications.tabs.previewsPlain")),
 );
 
-/** isCompose hides the single-container storage editor for compose sources. */
-const isCompose = computed<boolean>(
-  () => detail.application.value?.source_type === "compose",
+/**
+ * showStorageTab gates the single-container storage editor on the loaded row:
+ * until the application arrives its source type is unknown, so rendering the
+ * tab then would flash it for compose apps. Compose sources never show it.
+ */
+const showStorageTab = computed<boolean>(
+  () =>
+    detail.application.value !== null &&
+    detail.application.value.source_type !== "compose",
 );
 
 /**
- * activeTab falls back to Overview while a compose app would select Storage:
- * the tab does not exist for compose sources, so a stale ?tab= / programmatic
- * selection must not render a missing pane.
+ * activeTab falls back to Overview while the Storage tab does not exist: the
+ * row is still loading, or it is a compose source. A stale ?tab=storage or a
+ * programmatic selection therefore never renders a missing pane.
  */
 const activeTab = computed<string>({
   get: () =>
-    isCompose.value && detail.activeTab.value === "storage"
+    detail.activeTab.value === "storage" && !showStorageTab.value
       ? "overview"
       : detail.activeTab.value,
   set: (value: string) => {
@@ -160,7 +166,7 @@ const activeTab = computed<string>({
           />
         </NTabPane>
 
-        <NTabPane v-if="!isCompose" name="storage" :tab="t('applications.tabs.storage')">
+        <NTabPane v-if="showStorageTab" name="storage" :tab="t('applications.tabs.storage')">
           <ApplicationStorageTab
             :storages-draft="detail.storagesDraft.value"
             :storages-loading="detail.storagesLoading.value"

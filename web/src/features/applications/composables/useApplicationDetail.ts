@@ -585,12 +585,27 @@ export function useApplicationDetail() {
     "settings",
   ]);
 
-  /** selectRouteTab honors a ?tab=<name> deep link to one detail tab. */
-  function selectRouteTab(): void {
+  /** routeTab returns the detail tab named by ?tab=, or null when absent. */
+  function routeTab(): string | null {
     const tab = route.query.tab;
-    if (typeof tab === "string" && DETAIL_TABS.has(tab)) {
-      activeTab.value = tab;
+    return typeof tab === "string" && DETAIL_TABS.has(tab) ? tab : null;
+  }
+
+  /**
+   * applyRouteTab selects the deep-linked tab once the application row is
+   * loaded. A compose app never selects Storage (the page hides that tab), so
+   * a stale query falls back to Overview even when the row arrives late.
+   */
+  function applyRouteTab(app: Application | null): void {
+    if (app === null) {
+      return; // wait for the row so a storage query is resolved against it
     }
+    const tab = routeTab();
+    if (tab === null) {
+      return;
+    }
+    activeTab.value =
+      tab === "storage" && app.source_type === "compose" ? "overview" : tab;
   }
 
   /** openRollbackFor preselects a deployment and opens the dialog. */
@@ -783,12 +798,21 @@ export function useApplicationDetail() {
     },
   );
 
+  // The application row can arrive after the route, and a same-route
+  // navigation only swaps params, so ?tab= is applied reactively instead of
+  // once on mount. A compose row resolves a stale storage query to Overview.
+  watch(
+    [() => application.value?.id ?? "", () => route.query.tab],
+    () => {
+      applyRouteTab(application.value);
+    },
+    { immediate: true },
+  );
+
   onMounted(() => {
-    // A ?tab= deep link selects one detail tab first; a progress-card "View
-    // logs" link (?logs=<deploymentId>, JUS-91) then wins because it carries
-    // the exact deployment to select.
+    // A progress-card "View logs" link (?logs=<deploymentId>, JUS-91) wins
+    // over ?tab= because it carries the exact deployment to select.
     void fetchAll().then(() => {
-      selectRouteTab();
       const logs = route.query.logs;
       if (typeof logs === "string" && logs !== "") {
         showLogsFor(logs);

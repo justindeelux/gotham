@@ -244,13 +244,17 @@ test.describe("applications", () => {
     };
 
     const settled = waitForDetailReads(page, application.id);
-    await page.goto(nestedURL(projectId, environmentId, "applications", application.id));
+    await page.goto(
+      `${nestedURL(projectId, environmentId, "applications", application.id)}?tab=storage`,
+    );
     await settled;
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
 
+    // The deep link is applied once the row loads, and the tab stays visible
+    // for a non-compose source.
     const storageTab = page.locator(".n-tabs-tab").filter({ hasText: "Storage" });
     await expect(storageTab).toHaveCount(1);
-    await storageTab.click();
+    await expect(page.locator(".n-tabs-tab.n-tabs-tab--active")).toHaveText("Storage");
     await expect(page.getByText("Volumes", { exact: true })).toBeVisible();
 
     expect(guardrails.apiFailures).toEqual([]);

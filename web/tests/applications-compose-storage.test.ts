@@ -6,7 +6,7 @@ import { mount } from "@vue/test-utils";
 import { NMessageProvider, NTabs } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { h, ref } from "vue";
+import { computed, h, nextTick, ref } from "vue";
 
 import type { Application } from "@/features/applications/api/applications";
 import ApplicationOverviewTab from "@/features/applications/components/ApplicationOverviewTab.vue";
@@ -66,8 +66,15 @@ function imageApp(): Application {
   } as Application;
 }
 
-let detailApplication: Application = imageApp();
-let detailTab = "overview";
+/** Shared reactive detail state so tests can move from loading to loaded. */
+const applicationRef = ref<Application | null>(imageApp());
+const tabRef = ref("overview");
+
+/** setDetail replaces the mocked detail state before mounting. */
+function setDetail(application: Application | null, tab = "overview"): void {
+  applicationRef.value = application;
+  tabRef.value = tab;
+}
 
 vi.mock("@/features/applications/composables/useApplicationDetail", () => ({
   useApplicationDetail: () => mockDetail(),
@@ -83,9 +90,9 @@ function mockDetail() {
     savingStorages: false,
   };
   const values: Record<string, unknown> = {
-    application: ref(detailApplication),
+    application: applicationRef,
     canWrite: ref(true),
-    activeTab: ref(detailTab),
+    activeTab: tabRef,
     appsStore,
     deployments: ref([]),
     previews: ref([]),
@@ -98,9 +105,9 @@ function mockDetail() {
     latest: ref(null),
     active: ref(null),
     runningDeployments: ref([]),
-    appId: ref(detailApplication.id),
-    shortId: ref(detailApplication.id.slice(0, 8)),
-    displayName: ref(detailApplication.name),
+    appId: computed(() => applicationRef.value?.id ?? ""),
+    shortId: computed(() => (applicationRef.value?.id ?? "").slice(0, 8)),
+    displayName: computed(() => applicationRef.value?.name ?? ""),
     initials: ref("AP"),
     descColumns: ref(2),
     controlHint: ref(null),
@@ -167,9 +174,31 @@ function tabLabels(wrapper: ReturnType<typeof mountDetailPage>): string[] {
 }
 
 describe("application detail storage tab", () => {
+  it("does not render Storage while loading, then follows the loaded source", async () => {
+    setDetail(null, "storage");
+    const wrapper = mountDetailPage();
+
+    // Loading: the source is unknown, so the tab strip must not contain
+    // Storage and the stale selection resolves to Overview.
+    expect(tabLabels(wrapper)).not.toContain("Storage");
+    expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
+
+    // A loaded image app reveals the tab and keeps the ?tab=storage choice.
+    applicationRef.value = imageApp();
+    await nextTick();
+    expect(tabLabels(wrapper)).toContain("Storage");
+    expect(wrapper.findComponent(NTabs).props("value")).toBe("storage");
+
+    // A loaded compose app hides it again and falls back to Overview.
+    applicationRef.value = composeApp();
+    await nextTick();
+    expect(tabLabels(wrapper)).not.toContain("Storage");
+    expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
+    wrapper.unmount();
+  });
+
   it("keeps the Storage tab for non-compose applications", () => {
-    detailApplication = imageApp();
-    detailTab = "overview";
+    setDetail(imageApp());
     const wrapper = mountDetailPage();
     expect(tabLabels(wrapper)).toContain("Storage");
     expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
@@ -177,8 +206,7 @@ describe("application detail storage tab", () => {
   });
 
   it("hides the Storage tab for compose applications", () => {
-    detailApplication = composeApp();
-    detailTab = "overview";
+    setDetail(composeApp());
     const wrapper = mountDetailPage();
     expect(tabLabels(wrapper)).not.toContain("Storage");
     expect(tabLabels(wrapper)).toContain("Overview");
@@ -186,16 +214,14 @@ describe("application detail storage tab", () => {
   });
 
   it("falls back to Overview when a compose app selects Storage", () => {
-    detailApplication = composeApp();
-    detailTab = "storage";
+    setDetail(composeApp(), "storage");
     const wrapper = mountDetailPage();
     expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
     wrapper.unmount();
   });
 
   it("keeps a selected non-storage tab for compose applications", () => {
-    detailApplication = composeApp();
-    detailTab = "env";
+    setDetail(composeApp(), "env");
     const wrapper = mountDetailPage();
     expect(wrapper.findComponent(NTabs).props("value")).toBe("env");
     wrapper.unmount();

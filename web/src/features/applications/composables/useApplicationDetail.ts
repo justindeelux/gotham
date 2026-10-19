@@ -570,6 +570,44 @@ export function useApplicationDetail() {
     activeTab.value = "logs";
   }
 
+  /**
+   * Detail tab names a `?tab=` deep link may select. The page still owns the
+   * per-application fallbacks (a compose app never shows Storage).
+   */
+  const DETAIL_TABS = new Set([
+    "overview",
+    "deployments",
+    "logs",
+    "env",
+    "storage",
+    "domains",
+    "previews",
+    "settings",
+  ]);
+
+  /** routeTab returns the detail tab named by ?tab=, or null when absent. */
+  function routeTab(): string | null {
+    const tab = route.query.tab;
+    return typeof tab === "string" && DETAIL_TABS.has(tab) ? tab : null;
+  }
+
+  /**
+   * applyRouteTab selects the deep-linked tab once the application row is
+   * loaded. A compose app never selects Storage (the page hides that tab), so
+   * a stale query falls back to Overview even when the row arrives late.
+   */
+  function applyRouteTab(app: Application | null): void {
+    if (app === null) {
+      return; // wait for the row so a storage query is resolved against it
+    }
+    const tab = routeTab();
+    if (tab === null) {
+      return;
+    }
+    activeTab.value =
+      tab === "storage" && app.source_type === "compose" ? "overview" : tab;
+  }
+
   /** openRollbackFor preselects a deployment and opens the dialog. */
   function openRollbackFor(deploymentId: string): void {
     rollbackTarget.value = deploymentId;
@@ -760,9 +798,20 @@ export function useApplicationDetail() {
     },
   );
 
+  // The application row can arrive after the route, and a same-route
+  // navigation only swaps params, so ?tab= is applied reactively instead of
+  // once on mount. A compose row resolves a stale storage query to Overview.
+  watch(
+    [() => application.value?.id ?? "", () => route.query.tab],
+    () => {
+      applyRouteTab(application.value);
+    },
+    { immediate: true },
+  );
+
   onMounted(() => {
-    // A progress-card "View logs" link lands here with ?logs=<deploymentId>
-    // (JUS-91): jump straight to the Logs tab with that deployment selected.
+    // A progress-card "View logs" link (?logs=<deploymentId>, JUS-91) wins
+    // over ?tab= because it carries the exact deployment to select.
     void fetchAll().then(() => {
       const logs = route.query.logs;
       if (typeof logs === "string" && logs !== "") {

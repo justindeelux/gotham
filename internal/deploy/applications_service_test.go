@@ -930,6 +930,36 @@ func TestServiceReplaceStorages(t *testing.T) {
 	})
 }
 
+// TestServiceReplaceStoragesCompose pins the compose refusal: the storage map
+// does not apply to a compose application, so the write names the compose
+// source instead of failing on the absolute-container-path rule.
+func TestServiceReplaceStoragesCompose(t *testing.T) {
+	userID := uuid.New()
+	app := testApplication(userID)
+	app.SourceType = SourceCompose
+	app.ComposeContent = "services:\n  web:\n    image: nginx\n"
+	app.ComposeService = "web"
+	repo := &fakeRepository{app: app}
+	svc := newTestService(t, repo)
+
+	_, err := svc.ReplaceStorages(context.Background(), userID, app.ID, []Storage{
+		{Name: "web_data", ContainerPath: ""},
+	})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if !strings.Contains(err.Error(), "compose source") {
+		t.Errorf("err = %q, want it to name the compose source", err)
+	}
+	stored, listErr := repo.ListStorages(context.Background(), app.ID)
+	if listErr != nil {
+		t.Fatalf("list storages: %v", listErr)
+	}
+	if len(stored) != 0 {
+		t.Errorf("storages = %+v, want the refused write to store nothing", stored)
+	}
+}
+
 func TestServiceStopStart(t *testing.T) {
 	newFixture := func(t *testing.T, states ...State) (*Service, *fakeRepository, *mockNode, Application) {
 		t.Helper()

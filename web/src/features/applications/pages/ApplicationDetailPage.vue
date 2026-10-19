@@ -34,6 +34,32 @@ const previewsTab = computed<string>(() =>
     ? String(t("applications.tabs.previews", { count: detail.previews.value.length }))
     : String(t("applications.tabs.previewsPlain")),
 );
+
+/**
+ * showStorageTab gates the single-container storage editor on the loaded row:
+ * until the application arrives its source type is unknown, so rendering the
+ * tab then would flash it for compose apps. Compose sources never show it.
+ */
+const showStorageTab = computed<boolean>(
+  () =>
+    detail.application.value !== null &&
+    detail.application.value.source_type !== "compose",
+);
+
+/**
+ * activeTab falls back to Overview while the Storage tab does not exist: the
+ * row is still loading, or it is a compose source. A stale ?tab=storage or a
+ * programmatic selection therefore never renders a missing pane.
+ */
+const activeTab = computed<string>({
+  get: () =>
+    detail.activeTab.value === "storage" && !showStorageTab.value
+      ? "overview"
+      : detail.activeTab.value,
+  set: (value: string) => {
+    detail.activeTab.value = value;
+  },
+});
 </script>
 
 <template>
@@ -78,7 +104,7 @@ const previewsTab = computed<string>(() =>
         @start="detail.handleStart"
       />
 
-      <NTabs v-model:value="detail.activeTab.value" type="line" animated>
+      <NTabs v-model:value="activeTab" type="line" animated>
         <NTabPane name="overview" :tab="t('applications.tabs.overview')">
           <ApplicationOverviewTab
             :application="detail.application.value"
@@ -89,7 +115,7 @@ const previewsTab = computed<string>(() =>
             :acting="detail.appsStore.acting"
             :can-write="detail.canWrite.value"
             @deploy="detail.handleDeploy"
-            @view-all="detail.activeTab.value = 'deployments'"
+            @view-all="activeTab = 'deployments'"
             @show-logs="detail.showLogsFor"
             @open-rollback="detail.openRollbackFor"
           />
@@ -140,7 +166,7 @@ const previewsTab = computed<string>(() =>
           />
         </NTabPane>
 
-        <NTabPane name="storage" :tab="t('applications.tabs.storage')">
+        <NTabPane v-if="showStorageTab" name="storage" :tab="t('applications.tabs.storage')">
           <ApplicationStorageTab
             :storages-draft="detail.storagesDraft.value"
             :storages-loading="detail.storagesLoading.value"

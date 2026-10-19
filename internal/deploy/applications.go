@@ -748,8 +748,19 @@ func (s *Service) ReplaceStorages(ctx context.Context, userID, appID uuid.UUID, 
 	if !Enabled() {
 		return nil, ErrDisabled
 	}
-	if _, err := s.application(ctx, userID, appID, true); err != nil {
+	app, err := s.application(ctx, userID, appID, true)
+	if err != nil {
 		return nil, err
+	}
+	// Compose volumes live in the compose document (and resolve under the
+	// managed root), so the single-container storage map does not apply.
+	// Refuse with a message that names the real source instead of failing
+	// later on the volume-shape validation.
+	if NormalizeSourceType(app.SourceType, app.Provider) == SourceCompose {
+		return nil, fmt.Errorf(
+			"%w: compose applications declare volumes in the compose source (mounted under %s/%s/<name>); update services[].volumes instead of storage mappings",
+			ErrValidation, managedVolumeRoot(), appID,
+		)
 	}
 	normalized, err := normalizeStorages(appID, storages)
 	if err != nil {

@@ -38,6 +38,8 @@ const en = {
     composeService: "Web service",
     composeFile: "Compose file",
     composePasted: "pasted document",
+    composeVolumesHint:
+      "Volumes are declared in the compose source and stored under the managed root (/var/lib/gotham/volumes/<appID>/<name>). The Storage tab does not apply to compose applications.",
     domain: "Domain",
     node: "Node",
     auto: "auto",

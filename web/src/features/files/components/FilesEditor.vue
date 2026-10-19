@@ -76,6 +76,12 @@ import type {
   EditorLanguageId,
   TabCloseScope,
 } from "@/features/files/utils/editor";
+import {
+  EDITOR_RESIZE_DIRECTIONS,
+  editorResizeLimits,
+  resizeEditorBox,
+} from "@/features/files/utils/editorResize";
+import type { EditorResizeDirection } from "@/features/files/utils/editorResize";
 import { useTeamsStore } from "@/features/teams";
 import { useCopyText } from "@/shared/composables/useCopyText";
 import { formatBytes, formatDateTime } from "@/shared/utils/format";
@@ -155,11 +161,16 @@ const viewport = ref({
 });
 // windowElement is the floating window, measured for drag clamping.
 const windowElement = ref<HTMLElement | null>(null);
-// resizeState tracks one in-flight corner resize (null when idle).
+// resizeState tracks one in-flight resize (null when idle). The grip, the
+// pointer and the box the drag started from: the opposite edge stays put
+// during the drag, so the box is seeded from the rendered window (JUS-241).
 let resizeState: {
   pointerId: number;
+  direction: EditorResizeDirection;
   startX: number;
   startY: number;
+  originX: number;
+  originY: number;
   originWidth: number;
   originHeight: number;
 } | null = null;
@@ -1081,23 +1092,43 @@ function onBarPointerUp(event: PointerEvent): void {
 }
 
 /**
- * onResizePointerDown starts a corner drag-to-resize from the DISPLAYED size,
- * so the first move never jumps (a fitted window would otherwise snap back to
- * the persisted size). Pointer capture keeps the tracking even outside the
- * handle; the host store clamps the result and persists it.
+ * RESIZE_GRIPS are the pointer-only grips of the window frame (JUS-241). The
+ * bottom-right corner is rendered on its own: it carries the slider
+ * semantics, so the window can also be resized from the keyboard.
  */
-function onResizePointerDown(event: PointerEvent): void {
+const RESIZE_GRIPS = EDITOR_RESIZE_DIRECTIONS.filter(
+  (direction) => direction !== "se",
+);
+
+/**
+ * onResizePointerDown starts a drag-to-resize from one grip. Pointer capture
+ * keeps the tracking even outside the handle; the host store clamps the
+ * result and persists it.
+ *
+ * The drag is seeded from the RENDERED window — the displayed size and the
+ * on-screen position — never from the persisted geometry: a stale saved size
+ * would clamp the drag and snap the window back to it (JUS-241).
+ */
+function onResizePointerDown(
+  event: PointerEvent,
+  direction: EditorResizeDirection,
+): void {
   if (event.button !== 0) {
     return;
   }
   const handle = event.currentTarget;
-  if (!(handle instanceof HTMLElement)) {
+  const element = windowElement.value;
+  if (!(handle instanceof HTMLElement) || !element) {
     return;
   }
+  const rect = element.getBoundingClientRect();
   resizeState = {
     pointerId: event.pointerId,
+    direction,
     startX: event.clientX,
     startY: event.clientY,
+    originX: rect.left,
+    originY: rect.top,
     originWidth: displayedSize.value.width,
     originHeight: displayedSize.value.height,
   };
@@ -1105,17 +1136,28 @@ function onResizePointerDown(event: PointerEvent): void {
   event.preventDefault();
 }
 
-/** onResizePointerMove resizes the window by the pointer delta. */
+/**
+ * onResizePointerMove resizes the window by the pointer delta. The grip
+ * decides which edges move: the opposite edge (or corner) stays anchored, and
+ * the size never leaves the viewport band.
+ */
 function onResizePointerMove(event: PointerEvent): void {
   if (!resizeState || event.pointerId !== resizeState.pointerId) {
     return;
   }
-  editorWindow.setSize(
-    resizeState.originWidth + (event.clientX - resizeState.startX),
-    resizeState.originHeight + (event.clientY - resizeState.startY),
-    viewport.value.width,
-    viewport.value.height,
+  const next = resizeEditorBox(
+    resizeState.direction,
+    {
+      x: resizeState.originX,
+      y: resizeState.originY,
+      width: resizeState.originWidth,
+      height: resizeState.originHeight,
+    },
+    event.clientX - resizeState.startX,
+    event.clientY - resizeState.startY,
+    editorResizeLimits(viewport.value.width, viewport.value.height),
   );
+  editorWindow.resizeTo(next, viewport.value.width, viewport.value.height);
 }
 
 /** onResizePointerUp ends the resize (also on pointercancel). */
@@ -1952,8 +1994,11 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+    <!-- JUS-241: the window resizes from every edge and corner. The
+         bottom-right corner carries the slider semantics (keyboard resize);
+         the other grips are pointer-only. -->
     <div
-      class="ed-resize"
+      class="ed-resize ed-resize--se"
       tabindex="0"
       role="slider"
       :aria-label="t('files.editor.resize')"
@@ -1962,12 +2007,24 @@ onBeforeUnmount(() => {
       :aria-valuenow="resizeAria.now"
       :aria-valuetext="resizeAria.text"
       aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight"
-      @pointerdown="onResizePointerDown"
+      @pointerdown="onResizePointerDown($event, 'se')"
       @pointermove="onResizePointerMove"
       @pointerup="onResizePointerUp"
       @pointercancel="onResizePointerUp"
       @lostpointercapture="onResizePointerUp"
       @keydown="onResizeKeydown"
+    />
+    <div
+      v-for="direction in RESIZE_GRIPS"
+      :key="direction"
+      class="ed-resize"
+      :class="`ed-resize--${direction}`"
+      aria-hidden="true"
+      @pointerdown="onResizePointerDown($event, direction)"
+      @pointermove="onResizePointerMove"
+      @pointerup="onResizePointerUp"
+      @pointercancel="onResizePointerUp"
+      @lostpointercapture="onResizePointerUp"
     />
   </section>
 
@@ -2138,35 +2195,150 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* Corner drag-to-resize handle (JUS-232): a bottom-right grip that resizes
-   the window within its min/max band. */
+/* Drag-to-resize grips (JUS-241): the window resizes from all four edges and
+   all four corners. The grips are thin strips on the frame with a visible
+   mark; they stay inside the window padding, so they never cover the editor
+   content. */
 .ed-resize {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  width: var(--space-4);
-  height: var(--space-4);
-  cursor: nwse-resize;
-  touch-action: none;
   z-index: 5;
+  touch-action: none;
 }
 
+/* The edge grips: a thin strip along the frame, inset so the corners own the
+   corner area. */
+.ed-resize--n {
+  top: 0;
+  left: var(--space-4);
+  right: var(--space-4);
+  height: var(--space-1);
+  cursor: ns-resize;
+}
+
+.ed-resize--s {
+  bottom: 0;
+  left: var(--space-4);
+  right: var(--space-4);
+  height: var(--space-1);
+  cursor: ns-resize;
+}
+
+.ed-resize--e {
+  top: var(--space-4);
+  bottom: var(--space-4);
+  right: 0;
+  width: var(--space-1);
+  cursor: ew-resize;
+}
+
+.ed-resize--w {
+  top: var(--space-4);
+  bottom: var(--space-4);
+  left: 0;
+  width: var(--space-1);
+  cursor: ew-resize;
+}
+
+/* The corner grips: a square in the corner with the matching cursor. */
+.ed-resize--nw,
+.ed-resize--ne,
+.ed-resize--sw,
+.ed-resize--se {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+.ed-resize--nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.ed-resize--ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.ed-resize--sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.ed-resize--se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+
+/* The grip mark: a corner bracket on the corners, a tick on the edges. */
 .ed-resize::after {
   content: "";
   position: absolute;
-  right: var(--space-1);
-  bottom: var(--space-1);
   width: var(--space-2);
   height: var(--space-2);
-  border-right: 2px solid var(--meta);
-  border-bottom: 2px solid var(--meta);
-  border-end-end-radius: var(--radius-sm);
+  border: 0 solid var(--meta);
+  border-radius: var(--radius-sm);
   opacity: 0.7;
+}
+
+.ed-resize--nw::after {
+  top: var(--space-1);
+  left: var(--space-1);
+  border-top-width: 2px;
+  border-left-width: 2px;
+}
+
+.ed-resize--ne::after {
+  top: var(--space-1);
+  right: var(--space-1);
+  border-top-width: 2px;
+  border-right-width: 2px;
+}
+
+.ed-resize--sw::after {
+  bottom: var(--space-1);
+  left: var(--space-1);
+  border-bottom-width: 2px;
+  border-left-width: 2px;
+}
+
+.ed-resize--se::after {
+  right: var(--space-1);
+  bottom: var(--space-1);
+  border-bottom-width: 2px;
+  border-right-width: 2px;
+}
+
+.ed-resize--n::after,
+.ed-resize--s::after {
+  left: 50%;
+  width: var(--space-3);
+  height: 2px;
+  margin-left: calc(-1 * var(--space-3) / 2);
+  background: var(--meta);
+}
+
+.ed-resize--e::after,
+.ed-resize--w::after {
+  top: 50%;
+  width: 2px;
+  height: var(--space-3);
+  margin-top: calc(-1 * var(--space-3) / 2);
+  background: var(--meta);
 }
 
 .ed-resize:hover::after {
   border-color: var(--accent);
   opacity: 1;
+}
+
+.ed-resize--n:hover::after,
+.ed-resize--s:hover::after,
+.ed-resize--e:hover::after,
+.ed-resize--w:hover::after {
+  background-color: var(--accent);
 }
 
 /* Keyboard focus must be as visible as the hover state (finding 5). */

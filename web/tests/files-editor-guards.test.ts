@@ -236,6 +236,52 @@ async function mountEditorWithRouter(initialPath = "/servers/srv-a/files") {
   return { wrapper, teams, files, editor, router };
 }
 
+/** setViewport overrides the jsdom window size. */
+function setViewport(width: number, height: number): void {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+  Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+}
+
+/** stubPointerCapture replaces the missing jsdom pointer capture API and
+ * returns the restore function. */
+function stubPointerCapture(): () => void {
+  const holder = window.HTMLElement.prototype as unknown as {
+    setPointerCapture?: (_id: number) => void;
+  };
+  const original = holder.setPointerCapture;
+  holder.setPointerCapture = () => {};
+  return () => {
+    if (original === undefined) {
+      delete holder.setPointerCapture;
+    } else {
+      holder.setPointerCapture = original;
+    }
+  };
+}
+
+/** firePointerEvent dispatches a native pointer-ish mouse event (VTU cannot
+ * synthesize PointerEvent init properties). */
+function firePointerEvent(
+  target: Element,
+  type: string,
+  init: {
+    button?: number;
+    clientX?: number;
+    clientY?: number;
+    pointerId?: number;
+  },
+): void {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: init.button ?? 0,
+    clientX: init.clientX ?? 0,
+    clientY: init.clientY ?? 0,
+  });
+  Object.defineProperty(event, "pointerId", { value: init.pointerId ?? 0 });
+  target.dispatchEvent(event);
+}
+
 /** leaveDialog finds the open discard-confirmation dialog, if any. */
 function leaveDialog(wrapper: ReturnType<typeof mountEditor>["wrapper"]) {
   return wrapper
@@ -737,7 +783,7 @@ describe("FilesEditor guards", () => {
 
     const windows = useEditorWindowStore();
     windows.setSize(800, 600);
-    const grip = wrapper.find(".ed-resize");
+    const grip = wrapper.find(".ed-resize--se");
     expect(grip.attributes("tabindex")).toBe("0");
     expect(grip.attributes("role")).toBe("slider");
 
@@ -792,7 +838,7 @@ describe("FilesEditor guards", () => {
       window.dispatchEvent(new Event("resize"));
       await flushPromises();
 
-      const grip = wrapper.find(".ed-resize").element;
+      const grip = wrapper.find(".ed-resize--se").element;
       firePointer(grip, "pointerdown", { button: 0, clientX: 200, clientY: 200, pointerId: 7 });
       firePointer(grip, "pointermove", { clientX: 184, clientY: 200, pointerId: 7 });
       firePointer(grip, "pointerup", { pointerId: 7 });
@@ -827,12 +873,126 @@ describe("FilesEditor guards", () => {
     const windows = useEditorWindowStore();
     windows.setSize(800, 600);
     await flushPromises();
-    const grip = wrapper.find(".ed-resize");
+    const grip = wrapper.find(".ed-resize--se");
     expect(grip.attributes("aria-valuemax")).toBe(String(window.innerWidth));
     expect(grip.attributes("aria-valuenow")).toBe("800");
     await grip.trigger("keydown", { key: "ArrowLeft" });
     expect(grip.attributes("aria-valuenow")).toBe("784");
     wrapper.unmount();
+  });
+
+  it("exposes a resize grip on every edge and corner (JUS-241)", async () => {
+    const { wrapper } = mountEditor();
+    const tab = makeTab("t1", false);
+    const editor = useEditorStore();
+    editor.tabs = [tab];
+    editor.activeId = tab.id;
+    await flushPromises();
+
+    expect(wrapper.findAll(".ed-resize")).toHaveLength(8);
+    for (const direction of ["n", "ne", "e", "se", "s", "sw", "w", "nw"]) {
+      expect(wrapper.find(`.ed-resize--${direction}`).exists()).toBe(true);
+    }
+    // Only the bottom-right corner is a slider: it carries the keyboard
+    // resize, the other grips are pointer-only.
+    const slider = wrapper.find(".ed-resize--se");
+    expect(slider.attributes("role")).toBe("slider");
+    expect(slider.attributes("tabindex")).toBe("0");
+    for (const direction of ["n", "ne", "e", "s", "sw", "w", "nw"]) {
+      const grip = wrapper.find(`.ed-resize--${direction}`);
+      expect(grip.attributes("aria-hidden")).toBe("true");
+      expect(grip.attributes("tabindex")).toBeUndefined();
+    }
+    wrapper.unmount();
+  });
+
+  it("resizes from the west grip, keeping the right edge in place (JUS-241)", async () => {
+    setViewport(800, 600);
+    const restoreCapture = stubPointerCapture();
+    try {
+      const { wrapper } = mountEditor();
+      const tab = makeTab("t1", false);
+      const editor = useEditorStore();
+      editor.tabs = [tab];
+      editor.activeId = tab.id;
+      await flushPromises();
+
+      const windows = useEditorWindowStore();
+      windows.setSize(800, 600);
+      await flushPromises();
+
+      // The window displays fitted (752 wide at an 800px viewport with the
+      // side margins). Dragging the west grip 40px to the right shrinks the
+      // window from the left: the right edge stays where it was.
+      const grip = wrapper.find(".ed-resize--w").element;
+      firePointerEvent(grip, "pointerdown", {
+        button: 0,
+        clientX: 200,
+        clientY: 200,
+        pointerId: 11,
+      });
+      firePointerEvent(grip, "pointermove", {
+        clientX: 240,
+        clientY: 200,
+        pointerId: 11,
+      });
+      firePointerEvent(grip, "pointerup", { pointerId: 11 });
+      await flushPromises();
+
+      expect(windows.width).toBe(712);
+      expect(windows.height).toBe(496);
+      expect(windows.x).toBe(40);
+      expect(wrapper.find(".ed-window").attributes("style") ?? "").toContain(
+        "width: 712px",
+      );
+      wrapper.unmount();
+    } finally {
+      restoreCapture();
+      setViewport(1024, 768);
+    }
+  });
+
+  it("resizes from the north grip, keeping the bottom edge in place (JUS-241)", async () => {
+    setViewport(1600, 1000);
+    const restoreCapture = stubPointerCapture();
+    try {
+      const { wrapper } = mountEditor();
+      const tab = makeTab("t1", false);
+      const editor = useEditorStore();
+      editor.tabs = [tab];
+      editor.activeId = tab.id;
+      await flushPromises();
+
+      const windows = useEditorWindowStore();
+      windows.setSize(1331, 936);
+      await flushPromises();
+
+      // The window displays fitted (896 tall at a 1000px viewport with the
+      // shell chrome). Dragging the north grip 40px down shrinks the window
+      // from the top: the bottom edge stays where it was.
+      const grip = wrapper.find(".ed-resize--n").element;
+      firePointerEvent(grip, "pointerdown", {
+        button: 0,
+        clientX: 200,
+        clientY: 200,
+        pointerId: 12,
+      });
+      firePointerEvent(grip, "pointermove", {
+        clientX: 200,
+        clientY: 240,
+        pointerId: 12,
+      });
+      firePointerEvent(grip, "pointerup", { pointerId: 12 });
+      await flushPromises();
+
+      expect(windows.width).toBe(1331);
+      expect(windows.height).toBe(856);
+      expect(windows.y).toBe(40);
+      wrapper.unmount();
+    } finally {
+      restoreCapture();
+      setViewport(1024, 768);
+    }
   });
 
   it("minimizes the window on Escape", async () => {

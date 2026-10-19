@@ -5,7 +5,7 @@ import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
-import type { Locator, Page } from "@playwright/test";
+import type { Box, Locator, Page } from "@playwright/test";
 
 /* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, SVGSVGElement:readonly, navigator:readonly, URL, window:readonly */
 // URL/window run inside the page and server callbacks (browser/Node URL
@@ -236,6 +236,29 @@ async function minimizeEditor(page: Page): Promise<void> {
 }
 
 /**
+ * badgeGeometry measures the rail badge of the code-editor button: the box it
+ * paints and the corner radius the browser resolved. The badge must be a
+ * perfect circle (JUS-241), for a one-digit count and for "9+".
+ */
+async function badgeGeometry(
+  page: Page,
+  label?: string,
+): Promise<{ width: number; height: number; radius: number }> {
+  return page.evaluate((text) => {
+    const badge = document.querySelector(".rail-btn--editor .rail-badge");
+    if (!(badge instanceof HTMLElement)) {
+      throw new Error("the editor rail badge is missing");
+    }
+    if (text !== undefined) {
+      badge.textContent = text;
+    }
+    const box = badge.getBoundingClientRect();
+    const radius = Number.parseFloat(getComputedStyle(badge).borderTopLeftRadius);
+    return { width: box.width, height: box.height, radius };
+  }, label);
+}
+
+/**
  * openViaMenu opens one file's editor tab through its row menu. A binary file
  * (JUS-130) has no double-click action, so its binary/download-only tab is only
  * reachable through "Edit in editor".
@@ -299,6 +322,18 @@ test("the minimized editor parks on the rail with a tab-count badge", async ({
   expect(geometry!.badgeCoversIconCentre).toBe(false);
   expect(geometry!.badgeInTopRight).toBe(true);
 
+  // The badge is a perfect circle, not a pill (JUS-241): equal sides and a
+  // fully rounded corner. A two-digit count ("9+") must keep that circle.
+  const single = await badgeGeometry(page);
+  expect(Math.abs(single.width - single.height)).toBeLessThanOrEqual(0.5);
+  expect(single.radius).toBeGreaterThanOrEqual(single.width / 2 - 0.5);
+  const double = await badgeGeometry(page, "9+");
+  expect(Math.abs(double.width - double.height)).toBeLessThanOrEqual(0.5);
+  expect(double.radius).toBeGreaterThanOrEqual(double.width / 2 - 0.5);
+  // The badge keeps its size whatever the label says.
+  expect(Math.abs(double.width - single.width)).toBeLessThanOrEqual(0.5);
+  await badgeGeometry(page, "2");
+
   // Placement: above Overview and Alert, separated by dividers from the
   // server list and from those two buttons.
   const footItems = await page.locator(".rail-foot .rail-item").all();
@@ -333,7 +368,7 @@ test("the editor window resizes from its corner within the viewport", async ({
 
   // Drag the corner grip up and to the left: the window shrinks. The drag
   // must clear the viewport margin cap, so it moves well past it.
-  const grip = page.locator(".ed-resize");
+  const grip = page.locator(".ed-resize--se");
   const gripBox = await grip.boundingBox();
   expect(gripBox).not.toBeNull();
   await page.mouse.move(
@@ -349,6 +384,144 @@ test("the editor window resizes from its corner within the viewport", async ({
   expect(resized!.height).toBeLessThan(before!.height);
   expect(resized!.x + resized!.width).toBeLessThanOrEqual(viewport.width + 1);
   expect(resized!.y + resized!.height).toBeLessThanOrEqual(viewport.height + 1);
+});
+
+/**
+ * RESIZE_CASES lists the eight grips of the window frame with a drag that
+ * shrinks the window from that side, and the edges that must move with it.
+ * The edge opposite the grip stays anchored.
+ */
+const RESIZE_CASES = [
+  { direction: "n", dx: 0, dy: 40, left: 0, top: 40, right: 0, bottom: 0 },
+  { direction: "s", dx: 0, dy: -40, left: 0, top: 0, right: 0, bottom: -40 },
+  { direction: "e", dx: -40, dy: 0, left: 0, top: 0, right: -40, bottom: 0 },
+  { direction: "w", dx: 40, dy: 0, left: 40, top: 0, right: 0, bottom: 0 },
+  { direction: "nw", dx: 40, dy: 40, left: 40, top: 40, right: 0, bottom: 0 },
+  { direction: "ne", dx: -40, dy: 40, left: 0, top: 40, right: -40, bottom: 0 },
+  { direction: "se", dx: -40, dy: -40, left: 0, top: 0, right: -40, bottom: -40 },
+  { direction: "sw", dx: 40, dy: -40, left: 40, top: 0, right: 0, bottom: -40 },
+];
+
+/**
+ * dragResizeGrip drags one resize grip by the given delta and returns the
+ * window box before and after the drag.
+ */
+async function dragResizeGrip(
+  page: Page,
+  direction: string,
+  dx: number,
+  dy: number,
+): Promise<{ before: Box; after: Box }> {
+  const before = await page.locator(".ed-window").boundingBox();
+  expect(before).not.toBeNull();
+  const grip = page.locator(`.ed-resize--${direction}`);
+  await expect(grip).toBeVisible();
+  const gripBox = await grip.boundingBox();
+  expect(gripBox).not.toBeNull();
+  const startX = gripBox!.x + gripBox!.width / 2;
+  const startY = gripBox!.y + gripBox!.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + dx, startY + dy, { steps: 8 });
+  await page.mouse.up();
+  const after = await page.locator(".ed-window").boundingBox();
+  expect(after).not.toBeNull();
+  return { before: before!, after: after! };
+}
+
+test("the editor window resizes from every edge and corner", async ({ page }) => {
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 1366, height: 800 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await mockApi(page);
+    await page.goto(`${baseURL}/servers/${serverId}/files`);
+    // Every pass starts from the fitted default, not from the geometry the
+    // previous pass left behind.
+    await page.evaluate(() => window.localStorage.clear());
+    await page.reload();
+    await reopenEditor(page);
+
+    for (const resizeCase of RESIZE_CASES) {
+      const { before, after } = await dragResizeGrip(
+        page,
+        resizeCase.direction,
+        resizeCase.dx,
+        resizeCase.dy,
+      );
+      const near = (value: number, expected: number): boolean =>
+        Math.abs(value - expected) <= 1.5;
+      // The grip moves its own edges; the opposite ones stay anchored.
+      expect(
+        near(after.x, before.x + resizeCase.left),
+        `${resizeCase.direction} left edge`,
+      ).toBe(true);
+      expect(
+        near(after.y, before.y + resizeCase.top),
+        `${resizeCase.direction} top edge`,
+      ).toBe(true);
+      expect(
+        near(
+          after.x + after.width,
+          before.x + before.width + resizeCase.right,
+        ),
+        `${resizeCase.direction} right edge`,
+      ).toBe(true);
+      expect(
+        near(
+          after.y + after.height,
+          before.y + before.height + resizeCase.bottom,
+        ),
+        `${resizeCase.direction} bottom edge`,
+      ).toBe(true);
+      // The window stays fully inside the viewport.
+      expect(after.x).toBeGreaterThanOrEqual(-1);
+      expect(after.y).toBeGreaterThanOrEqual(-1);
+      expect(after.x + after.width).toBeLessThanOrEqual(viewport.width + 1);
+      expect(after.y + after.height).toBeLessThanOrEqual(viewport.height + 1);
+    }
+  }
+});
+
+test("the editor window keeps its minimum size and stays on screen", async ({
+  page,
+}) => {
+  const viewport = { width: 1280, height: 800 };
+  await page.setViewportSize(viewport);
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+  await page.evaluate(() => window.localStorage.clear());
+  await page.reload();
+  await reopenEditor(page);
+
+  // Dragging the west grip far to the right stops at the minimum width: the
+  // window never shrinks below 480px, and its right edge stays put.
+  const shrunk = await dragResizeGrip(page, "w", 4000, 0);
+  expect(shrunk.after.width).toBeGreaterThanOrEqual(480);
+  expect(shrunk.after.width).toBeLessThanOrEqual(481);
+  expect(shrunk.after.x + shrunk.after.width).toBeLessThanOrEqual(
+    viewport.width + 1,
+  );
+
+  // The same for the height: the north grip stops at the minimum height.
+  const shortened = await dragResizeGrip(page, "n", 0, 4000);
+  expect(shortened.after.height).toBeGreaterThanOrEqual(320);
+  expect(shortened.after.height).toBeLessThanOrEqual(321);
+  expect(shortened.after.y + shortened.after.height).toBeLessThanOrEqual(
+    viewport.height + 1,
+  );
+
+  // Growing the east grip far to the right stops at the viewport edge: the
+  // window grows, but it never leaves the screen.
+  const grown = await dragResizeGrip(page, "e", 4000, 0);
+  expect(grown.after.x).toBeGreaterThanOrEqual(-1);
+  expect(grown.after.x + grown.after.width).toBeLessThanOrEqual(
+    viewport.width + 1,
+  );
+  expect(grown.after.y + grown.after.height).toBeLessThanOrEqual(
+    viewport.height + 1,
+  );
 });
 
 test("the editor window stays inside a 390px phone viewport with margins", async ({
@@ -370,7 +543,7 @@ test("the editor window stays inside a 390px phone viewport with margins", async
   expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width + 1);
   expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height + 1);
   // ... and dragging the corner cannot push it back out.
-  const grip = page.locator(".ed-resize");
+  const grip = page.locator(".ed-resize--se");
   const gripBox = await grip.boundingBox();
   expect(gripBox).not.toBeNull();
   await page.mouse.move(
@@ -870,7 +1043,7 @@ test("a 1366x800 resize persists, clamps the drag and survives reload", async ({
   expect(await persistedGeometry(page)).toBeNull();
 
   // Keyboard resize seeds from the displayed 1318 and persists the result.
-  const grip = page.locator(".ed-resize");
+  const grip = page.locator(".ed-resize--se");
   await grip.focus();
   await page.keyboard.press("Shift+ArrowLeft");
   await page.keyboard.press("Shift+ArrowLeft");
@@ -909,7 +1082,7 @@ test("a 1366x800 resize persists, clamps the drag and survives reload", async ({
   expect(Math.round(draggedReloaded!.y)).toBe(104);
 
   // A corner drag seeds from the displayed size and persists the result.
-  const gripBox = await page.locator(".ed-resize").boundingBox();
+  const gripBox = await page.locator(".ed-resize--se").boundingBox();
   expect(gripBox).not.toBeNull();
   const gripCenterX = gripBox!.x + gripBox!.width / 2;
   const gripCenterY = gripBox!.y + gripBox!.height / 2;

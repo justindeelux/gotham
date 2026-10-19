@@ -318,3 +318,54 @@ describe("explicit resize persists the fitted size (JUS-232 fix round 3)", () =>
     expect(second.height).toBe(696);
   });
 });
+
+describe("edge and corner resizes persist size and position together (JUS-241)", () => {
+  beforeEach(() => {
+    setViewport(1366, 800);
+  });
+
+  afterEach(() => {
+    setViewport(1024, 768);
+  });
+
+  it("keeps the anchored edge and persists the geometry", () => {
+    seedSession("u-1");
+    const store = useEditorWindowStore();
+    store.setSize(1000, 600, 1366, 800);
+    store.setPosition(100, 100, 1000, 600);
+    // The left edge grows 40px to the right: the right edge stays put.
+    store.resizeTo({ width: 960, height: 600, x: 140, y: 100 }, 1366, 800);
+    expect(store.width).toBe(960);
+    expect(store.height).toBe(600);
+    expect(store.x).toBe(140);
+    expect(store.y).toBe(100);
+  });
+
+  it("clamps the size to the viewport band", () => {
+    seedSession("u-1");
+    const store = useEditorWindowStore();
+    store.resizeTo({ width: 5000, height: 5000, x: 0, y: 0 }, 1366, 800);
+    expect(store.width).toBe(1318);
+    expect(store.height).toBe(696);
+  });
+
+  it("keeps the window on screen", () => {
+    seedSession("u-1");
+    const store = useEditorWindowStore();
+    store.resizeTo({ width: 600, height: 400, x: 5000, y: 5000 }, 1366, 800);
+    expect(store.x).toBe(1366 - 600);
+    expect(store.y).toBe(800 - 400);
+  });
+
+  it("survives a reload", () => {
+    seedSession("u-1");
+    const first = useEditorWindowStore();
+    first.resizeTo({ width: 900, height: 500, x: 60, y: 70 }, 1366, 800);
+    setActivePinia(createPinia());
+    const second = useEditorWindowStore();
+    expect(second.width).toBe(900);
+    expect(second.height).toBe(500);
+    expect(second.x).toBe(60);
+    expect(second.y).toBe(70);
+  });
+});

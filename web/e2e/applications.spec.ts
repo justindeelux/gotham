@@ -1,3 +1,5 @@
+import type { APIRequestContext, Page } from "@playwright/test";
+
 import { expect, test } from "./fixtures";
 import {
   cloneURL,
@@ -9,6 +11,51 @@ import {
   storageStatePath,
   uniqueSuffix,
 } from "./support";
+
+/** seedNode registers one configuration-only node for an application seed. */
+async function seedNode(
+  request: APIRequestContext,
+  headers: Record<string, string>,
+): Promise<string> {
+  const server = await request.post("/api/v1/servers", {
+    headers,
+    data: {
+      name: `ui-e2e-node-${uniqueSuffix()}`,
+      ip: seedNodeAddress,
+      ssh_user: "root",
+    },
+  });
+  expect(server.status(), await server.text()).toBe(201);
+  const { server: node } = (await server.json()) as { server: { id: string } };
+  return node.id;
+}
+
+/**
+ * waitForDetailReads registers the detail page's dependent reads before a
+ * navigation, so a late failure can never slip past the guardrail below.
+ */
+function waitForDetailReads(page: Page, applicationId: string): Promise<unknown[]> {
+  const detailPrefix = `/api/v1/applications/${applicationId}`;
+  return Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes(`${detailPrefix}/deployments`),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes(`${detailPrefix}/env`),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes(`${detailPrefix}/storages`),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes(`${detailPrefix}/previews`),
+    ),
+    // The rail polls the same endpoint on its own interval, so this waiter
+    // can resolve on a poll rather than the detail's own refetch.
+    page.waitForResponse((response) =>
+      response.url().endsWith("/api/v1/servers"),
+    ),
+  ]);
+}
 
 // Reuse the authenticated session so the page starts signed in; the seed call
 // authenticates separately with the access token from global setup.
@@ -112,6 +159,99 @@ test.describe("applications", () => {
     );
     await settled;
     await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+
+    expect(guardrails.apiFailures).toEqual([]);
+  });
+
+  // JUS-238: the single-container Storage tab does not apply to a compose
+  // source (volumes live in the compose document), so the tab is absent and a
+  // stale ?tab=storage deep link falls back to Overview.
+  test("compose application hides Storage and falls back to Overview", async ({
+    page,
+    guardrails,
+    request,
+  }) => {
+    const account = loadAccount();
+    const name = `ui-e2e-compose-${uniqueSuffix()}`;
+    const headers = { Authorization: `Bearer ${account.accessToken}` };
+    const nodeId = await seedNode(request, headers);
+    const { projectId, environmentId } = await seedProjectEnvironment(request, headers);
+
+    const created = await request.post("/api/v1/applications", {
+      headers,
+      data: {
+        name,
+        environment_id: environmentId,
+        provider: "",
+        repo: "",
+        clone_url: "",
+        source_type: "compose",
+        compose_content: "services:\n  web:\n    image: nginx:1.25\n",
+        compose_service: "web",
+        server_id: nodeId,
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { application } = (await created.json()) as {
+      application: { id: string; name: string };
+    };
+
+    const settled = waitForDetailReads(page, application.id);
+    await page.goto(
+      `${nestedURL(projectId, environmentId, "applications", application.id)}?tab=storage`,
+    );
+    await settled;
+    await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+
+    const tabs = page.locator(".n-tabs-tab");
+    await expect(tabs.filter({ hasText: "Storage" })).toHaveCount(0);
+    await expect(page.locator(".n-tabs-tab.n-tabs-tab--active")).toHaveText("Overview");
+    await expect(
+      page.getByText("declared in the compose source", { exact: false }),
+    ).toBeVisible();
+
+    expect(guardrails.apiFailures).toEqual([]);
+  });
+
+  // Image sources keep the single-container volume editor unchanged.
+  test("image application keeps the Storage tab", async ({
+    page,
+    guardrails,
+    request,
+  }) => {
+    const account = loadAccount();
+    const name = `ui-e2e-image-${uniqueSuffix()}`;
+    const headers = { Authorization: `Bearer ${account.accessToken}` };
+    const nodeId = await seedNode(request, headers);
+    const { projectId, environmentId } = await seedProjectEnvironment(request, headers);
+
+    const created = await request.post("/api/v1/applications", {
+      headers,
+      data: {
+        name,
+        environment_id: environmentId,
+        provider: "",
+        repo: "",
+        clone_url: "",
+        source_type: "image",
+        image_ref: "nginx:1.25",
+        server_id: nodeId,
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { application } = (await created.json()) as {
+      application: { id: string; name: string };
+    };
+
+    const settled = waitForDetailReads(page, application.id);
+    await page.goto(nestedURL(projectId, environmentId, "applications", application.id));
+    await settled;
+    await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
+
+    const storageTab = page.locator(".n-tabs-tab").filter({ hasText: "Storage" });
+    await expect(storageTab).toHaveCount(1);
+    await storageTab.click();
+    await expect(page.getByText("Volumes", { exact: true })).toBeVisible();
 
     expect(guardrails.apiFailures).toEqual([]);
   });

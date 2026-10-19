@@ -39,6 +39,8 @@ const vi: ApplicationsMessages = {
     composeService: "Service web",
     composeFile: "File compose",
     composePasted: "tài liệu đã dán",
+    composeVolumesHint:
+      "Volume được khai báo trong nguồn compose và lưu dưới thư mục quản lý (/var/lib/gotham/volumes/<appID>/<name>). Tab Lưu trữ không áp dụng cho ứng dụng compose.",
     domain: "Tên miền",
     node: "Node",
     auto: "tự động",

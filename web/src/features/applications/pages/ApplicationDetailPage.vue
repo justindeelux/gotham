@@ -34,6 +34,26 @@ const previewsTab = computed<string>(() =>
     ? String(t("applications.tabs.previews", { count: detail.previews.value.length }))
     : String(t("applications.tabs.previewsPlain")),
 );
+
+/** isCompose hides the single-container storage editor for compose sources. */
+const isCompose = computed<boolean>(
+  () => detail.application.value?.source_type === "compose",
+);
+
+/**
+ * activeTab falls back to Overview while a compose app would select Storage:
+ * the tab does not exist for compose sources, so a stale ?tab= / programmatic
+ * selection must not render a missing pane.
+ */
+const activeTab = computed<string>({
+  get: () =>
+    isCompose.value && detail.activeTab.value === "storage"
+      ? "overview"
+      : detail.activeTab.value,
+  set: (value: string) => {
+    detail.activeTab.value = value;
+  },
+});
 </script>
 
 <template>
@@ -78,7 +98,7 @@ const previewsTab = computed<string>(() =>
         @start="detail.handleStart"
       />
 
-      <NTabs v-model:value="detail.activeTab.value" type="line" animated>
+      <NTabs v-model:value="activeTab" type="line" animated>
         <NTabPane name="overview" :tab="t('applications.tabs.overview')">
           <ApplicationOverviewTab
             :application="detail.application.value"
@@ -89,7 +109,7 @@ const previewsTab = computed<string>(() =>
             :acting="detail.appsStore.acting"
             :can-write="detail.canWrite.value"
             @deploy="detail.handleDeploy"
-            @view-all="detail.activeTab.value = 'deployments'"
+            @view-all="activeTab = 'deployments'"
             @show-logs="detail.showLogsFor"
             @open-rollback="detail.openRollbackFor"
           />
@@ -140,7 +160,7 @@ const previewsTab = computed<string>(() =>
           />
         </NTabPane>
 
-        <NTabPane name="storage" :tab="t('applications.tabs.storage')">
+        <NTabPane v-if="!isCompose" name="storage" :tab="t('applications.tabs.storage')">
           <ApplicationStorageTab
             :storages-draft="detail.storagesDraft.value"
             :storages-loading="detail.storagesLoading.value"

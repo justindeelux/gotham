@@ -570,6 +570,29 @@ export function useApplicationDetail() {
     activeTab.value = "logs";
   }
 
+  /**
+   * Detail tab names a `?tab=` deep link may select. The page still owns the
+   * per-application fallbacks (a compose app never shows Storage).
+   */
+  const DETAIL_TABS = new Set([
+    "overview",
+    "deployments",
+    "logs",
+    "env",
+    "storage",
+    "domains",
+    "previews",
+    "settings",
+  ]);
+
+  /** selectRouteTab honors a ?tab=<name> deep link to one detail tab. */
+  function selectRouteTab(): void {
+    const tab = route.query.tab;
+    if (typeof tab === "string" && DETAIL_TABS.has(tab)) {
+      activeTab.value = tab;
+    }
+  }
+
   /** openRollbackFor preselects a deployment and opens the dialog. */
   function openRollbackFor(deploymentId: string): void {
     rollbackTarget.value = deploymentId;
@@ -761,9 +784,11 @@ export function useApplicationDetail() {
   );
 
   onMounted(() => {
-    // A progress-card "View logs" link lands here with ?logs=<deploymentId>
-    // (JUS-91): jump straight to the Logs tab with that deployment selected.
+    // A ?tab= deep link selects one detail tab first; a progress-card "View
+    // logs" link (?logs=<deploymentId>, JUS-91) then wins because it carries
+    // the exact deployment to select.
     void fetchAll().then(() => {
+      selectRouteTab();
       const logs = route.query.logs;
       if (typeof logs === "string" && logs !== "") {
         showLogsFor(logs);

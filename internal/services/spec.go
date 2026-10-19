@@ -470,12 +470,10 @@ func Parse(document string) (ComposeSpec, error) {
 		if err != nil {
 			return ComposeSpec{}, err
 		}
+		// A referenced volume needs no top-level declaration: the deploy
+		// rewrite auto-declares it under the application's managed
+		// directory.
 		for _, volume := range referenced {
-			if !declaredVolumes[volume] {
-				return ComposeSpec{}, fmt.Errorf(
-					"%w: service %q references named volume %q without a top-level volumes declaration",
-					ErrValidation, name, volume)
-			}
 			volumes[volume] = true
 		}
 		spec.Mounts = append(spec.Mounts, mounts...)

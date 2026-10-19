@@ -11,7 +11,7 @@ import (
 // known-safe keys pass; anything else — namespaces, capabilities, devices,
 // host configuration, secrets, build inputs — fails closed naming the
 // offending path.
-func (v *validator) service(name string, service map[string]any, volumes, networks map[string]bool, all []string) error {
+func (v *validator) service(name string, service map[string]any, networks map[string]bool, all []string) error {
 	path := "services." + name
 	image, ok := service["image"].(string)
 	if !ok || strings.TrimSpace(image) == "" {
@@ -30,7 +30,7 @@ func (v *validator) service(name string, service map[string]any, volumes, networ
 		case "expose":
 			err = checkStringList(path+"."+key, value)
 		case "volumes":
-			err = v.serviceVolumes(path+"."+key, value, volumes)
+			err = v.serviceVolumes(path+"."+key, value)
 		case "networks":
 			err = checkLocalRefs(path+"."+key, value, networks, "network")
 		case "depends_on":

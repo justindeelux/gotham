@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"gopkg.in/yaml.v3"
 )
 
 // Node-side compose layout defaults. The control plane's internal/services
@@ -77,6 +78,9 @@ var composeProjectPattern = regexp.MustCompile(`^gotham-[0-9a-f]{8}-[0-9a-f]{4}-
 // composeServicePattern is the compose service-name pattern (the CLI's own
 // restricted identifier alphabet).
 var composeServicePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$`)
+
+// composeVolumePattern matches a named volume (one safe path segment).
+var composeVolumePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 // ComposeServerConfig wires a ComposeServer. Every field falls back to the
 // node default when empty, so production passes the agent config and tests
@@ -253,6 +257,14 @@ func (s *ComposeServer) ComposeUp(ctx context.Context, req *agentv1.ComposeUpReq
 		return nil, err
 	}
 	defer release()
+	// Docker's local driver never creates a bind device, so a managed volume
+	// whose directory is missing would fail to mount on the first up. The
+	// agent creates it after its own validation and before the CLI runs.
+	if !req.GetUnconfined() {
+		if err := s.ensureManagedVolumeDirs(project, req.GetComposeYaml()); err != nil {
+			return nil, err
+		}
+	}
 	// Validate before touching the running project so a malformed document
 	// cannot bring a healthy project down.
 	if _, err := s.configList(ctx, project, "--services"); err != nil {
@@ -537,6 +549,57 @@ func (s *ComposeServer) validateComposeInput(ctx context.Context, projectName st
 		}
 	}
 	return project, composeYAML, nil
+}
+
+// composeVolumeDeclaration is the subset of a top-level volume declaration
+// the agent needs to create the device directory behind a managed bind.
+type composeVolumeDeclaration struct {
+	DriverOpts struct {
+		Device string `yaml:"device"`
+	} `yaml:"driver_opts"`
+}
+
+// ensureManagedVolumeDirs creates the device directory of every managed bind
+// volume in a confined document. The control plane rewrites named volumes as
+// a local driver bind with `device: <root>/<appID>/<name>`, and the Docker
+// local driver fails the mount when that directory does not exist (unlike a
+// short-syntax host bind, which Docker creates). Each path is re-derived from
+// the project's application id and re-validated against the node's own root,
+// with the same no-symlink walk as an application bind, so a compromised
+// control plane cannot make the agent create a directory elsewhere. The
+// directory is created 0755 under the managed root, like every other managed
+// application directory.
+func (s *ComposeServer) ensureManagedVolumeDirs(project string, document []byte) error {
+	appID := strings.TrimPrefix(project, "gotham-")
+	var doc struct {
+		Volumes map[string]composeVolumeDeclaration `yaml:"volumes"`
+	}
+	if err := yaml.Unmarshal(document, &doc); err != nil {
+		return status.Errorf(codes.InvalidArgument, "compose: volumes: %v", err)
+	}
+	base := filepath.Join(filepath.Clean(s.volumeRoot), appID)
+	for name, declaration := range doc.Volumes {
+		device := strings.TrimSpace(declaration.DriverOpts.Device)
+		if device == "" {
+			continue
+		}
+		if !composeVolumePattern.MatchString(name) {
+			return status.Errorf(codes.InvalidArgument, "compose: volume name %q is not valid", name)
+		}
+		cleaned := filepath.Clean(device)
+		want := filepath.Join(base, name)
+		if cleaned != want {
+			return status.Errorf(codes.InvalidArgument,
+				"compose: volume %q device %q must be %s", name, device, want)
+		}
+		if err := rejectSymlinkComponents(base, cleaned); err != nil {
+			return status.Errorf(codes.InvalidArgument, "compose: volume %q device %q: %v", name, device, err)
+		}
+		if err := os.MkdirAll(cleaned, 0o755); err != nil {
+			return status.Errorf(codes.Internal, "compose: create volume %q device: %v", name, err)
+		}
+	}
+	return nil
 }
 
 // writeDocument replaces the project's compose file atomically.

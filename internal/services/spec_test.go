@@ -227,10 +227,6 @@ func TestParseRejections(t *testing.T) {
 			document: "services:\n  web:\n    image: nginx\n    volumes:\n      - gotham-db-abc:/data\nvolumes:\n  gotham-db-abc:\n",
 			want:     "reserved for managed databases",
 		},
-		"undeclared named volume": {
-			document: "services:\n  web:\n    image: nginx\n    volumes:\n      - data:/data\n",
-			want:     "without a top-level volumes declaration",
-		},
 		"bad environment shape": {
 			document: "services:\n  web:\n    image: nginx\n    environment: nope\n",
 			want:     "environment must be",
@@ -307,6 +303,28 @@ volumes:
 	long := byTarget["/var/lib/postgresql/data"]
 	if long.Service != "db" || !long.Named || long.Source != "data" {
 		t.Errorf("long-form mount = %+v", long)
+	}
+}
+
+// TestParseUndeclaredVolume proves a named volume used without a top-level
+// declaration is accepted and reported as one of the project's volumes: the
+// deploy rewrite auto-declares it.
+func TestParseUndeclaredVolume(t *testing.T) {
+	document := `services:
+  web:
+    image: nginx
+    volumes:
+      - data:/data
+      - type: volume
+        source: cache
+        target: /cache
+`
+	spec, err := Parse(document)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if want := []string{"cache", "data"}; strings.Join(spec.NamedVolumes, ",") != strings.Join(want, ",") {
+		t.Errorf("named volumes = %v, want %v", spec.NamedVolumes, want)
 	}
 }
 

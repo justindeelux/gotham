@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NFormItem, NInput, NSelect, NSpace, NText } from "naive-ui";
+import { NAlert, NButton, NCard, NFormItem, NInput, NSelect, NSpace, NText, useMessage } from "naive-ui";
 import { toRef } from "vue";
 import { useI18n } from "vue-i18n";
 
@@ -17,6 +17,14 @@ const props = defineProps<Props>();
 const editor = useComposeEditor(toRef(props, "application"));
 
 const { t } = useI18n();
+const message = useMessage();
+
+/** save confirms a landed write; the error stays in the banner. */
+async function save(): Promise<void> {
+  if (await editor.handleSave()) {
+    message.success(t("applications.compose.saved"));
+  }
+}
 </script>
 
 <template>
@@ -76,7 +84,7 @@ const { t } = useI18n();
           type="primary"
           :disabled="editor.saveDisabled.value"
           :loading="editor.saving.value"
-          @click="editor.handleSave"
+          @click="save"
         >
           {{ t("applications.compose.save") }}
         </NButton>

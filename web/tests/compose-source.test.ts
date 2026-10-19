@@ -1,5 +1,6 @@
 // GS-8 compose source: schema gates, wizard Source step and detail editor.
-import { mount } from "@vue/test-utils";
+/* global HTMLButtonElement: readonly */
+import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +14,7 @@ import {
   composeServiceSchema,
   sourceTypeImplemented,
 } from "@/features/applications/schemas/applications";
+import ComposeEditor from "@/features/applications/components/ComposeEditor.vue";
 import { useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
 import { useComposeEditor } from "@/features/applications/composables/useComposeEditor";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
@@ -353,16 +355,23 @@ describe("detail compose editor", () => {
     expect(editor.isRepoMode.value).toBe(false);
     expect(editor.content.value).toBe(pasted);
     expect(editor.service.value).toBe("web");
-    expect(editor.saveDisabled.value).toBe(false);
+    // A clean draft has nothing to save.
+    expect(editor.saveDisabled.value).toBe(true);
 
     editor.service.value = "";
     expect(editor.saveDisabled.value).toBe(true);
     editor.service.value = "web";
     editor.content.value = "version: \"3\"\n";
     expect(editor.saveDisabled.value).toBe(true);
-    editor.content.value = pasted;
-    await editor.handleSave();
-    expect(seen).toEqual([{ compose_content: pasted, compose_service: "web" }]);
+    editor.content.value = `${pasted}# edited\n`;
+    expect(editor.saveDisabled.value).toBe(false);
+    expect(await editor.handleSave()).toBe(true);
+    expect(seen).toEqual([
+      { compose_content: `${pasted}# edited\n`, compose_service: "web" },
+    ]);
+    // A successful save leaves the draft clean, so Save waits for the next edit.
+    expect(editor.isDirty.value).toBe(false);
+    expect(editor.saveDisabled.value).toBe(true);
 
     // An unrelated row bump re-seeds a clean draft but keeps edits.
     app.value = { ...app.value, updated_at: "2026-10-08T00:00:01Z" };
@@ -393,12 +402,67 @@ describe("detail compose editor", () => {
     } as never);
     const editor = useComposeEditor(app);
     expect(editor.isRepoMode.value).toBe(true);
-    expect(editor.saveDisabled.value).toBe(false);
+    expect(editor.saveDisabled.value).toBe(true);
     editor.file.value = "../escape.yml";
     expect(editor.saveDisabled.value).toBe(true);
     editor.file.value = "deploy/c.yml";
-    await editor.handleSave();
+    expect(editor.saveDisabled.value).toBe(false);
+    expect(await editor.handleSave()).toBe(true);
     expect(seen).toEqual([{ compose_file: "deploy/c.yml", compose_service: "web" }]);
+  });
+});
+
+describe("detail compose save feedback", () => {
+  it("toasts a successful save and disables Save until the next edit", async () => {
+    setActivePinia(createPinia());
+    const store = useApplicationsStore();
+    const app = {
+      id: "app-1",
+      source_type: "compose",
+      compose_content: pasted,
+      compose_file: "",
+      compose_service: "web",
+      updated_at: "2026-10-08T00:00:00Z",
+    } as Record<string, unknown>;
+    store.update = vi.fn(async (_id: string, input: Record<string, unknown>) => {
+      Object.assign(app, input, { updated_at: "2026-10-08T00:00:01Z" });
+      return app as never;
+    }) as never;
+
+    const wrapper = mount(
+      defineComponent({
+        render: () =>
+          h(NMessageProvider, null, {
+            default: () => h(ComposeEditor, { application: app, canWrite: true }),
+          }),
+      }),
+      { attachTo: globalThis.document.body, global: { plugins: [i18n] } },
+    );
+    await nextTick();
+
+    const saveButton = (): HTMLButtonElement =>
+      [...globalThis.document.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Save compose source",
+      ) as HTMLButtonElement;
+    expect(saveButton().disabled).toBe(true);
+
+    await wrapper.find("textarea").setValue(`${pasted}# edited\n`);
+    expect(saveButton().disabled).toBe(false);
+
+    saveButton().click();
+    await flushPromises();
+    await nextTick();
+
+    expect(store.update).toHaveBeenCalledWith("app-1", {
+      compose_content: `${pasted}# edited\n`,
+      compose_service: "web",
+    });
+    expect(globalThis.document.body.textContent ?? "").toContain(
+      "Compose source saved.",
+    );
+    expect(saveButton().disabled).toBe(true);
+    wrapper.unmount();
+    globalThis.document.body.innerHTML = "";
   });
 });
 
@@ -418,6 +482,7 @@ describe("compose locales", () => {
         "applications.wizard.hostPortComposeHint",
         "applications.compose.title",
         "applications.compose.save",
+        "applications.compose.saved",
         "applications.overview.composeService",
         "applications.rollback.hintCompose",
         "applications.deploymentsTab.footerCompose",

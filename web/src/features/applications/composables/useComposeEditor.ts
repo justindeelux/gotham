@@ -87,19 +87,28 @@ export function useComposeEditor(source: Ref<Application | null> | Application |
     () => composeServiceSchema.safeParse(service.value).success,
   );
 
-  /** saveDisabled gates the save on a valid draft and a loaded row. */
+  /** saveDisabled gates the save on a valid, edited draft and a loaded row. */
   const saveDisabled = computed<boolean>(() => {
-    if (saving.value || toValue(source) === null || !serviceValid.value) {
+    if (
+      saving.value ||
+      toValue(source) === null ||
+      !isDirty.value ||
+      !serviceValid.value
+    ) {
       return true;
     }
     return isRepoMode.value ? !fileValid.value : !contentValid.value;
   });
 
-  /** handleSave writes the draft; the store merges the row, so the page refreshes. */
-  async function handleSave(): Promise<void> {
+  /**
+   * handleSave writes the draft; the store merges the row, so the page
+   * refreshes. Resolves true when the save landed, false when it was skipped
+   * or failed.
+   */
+  async function handleSave(): Promise<boolean> {
     const app = toValue(source);
     if (!app || saveDisabled.value) {
-      return;
+      return false;
     }
     saving.value = true;
     saveError.value = "";
@@ -116,8 +125,10 @@ export function useComposeEditor(source: Ref<Application | null> | Application |
         });
       }
       seed();
+      return true;
     } catch (error) {
       saveError.value = error instanceof Error ? error.message : String(error);
+      return false;
     } finally {
       saving.value = false;
     }

@@ -259,6 +259,7 @@ const vi: ApplicationsMessages = {
     service: "Service web",
     servicePlaceholder: "Chọn hoặc nhập service",
     save: "Lưu nguồn Compose",
+    saved: "Đã lưu nguồn Compose.",
     redeployHint: "Áp dụng cho lần triển khai tiếp theo.",
     secretsHint:
       "Không dán secret vào tài liệu. Hãy dùng biến môi trường hoặc secret đã niêm phong — chúng được thay thế làm môi trường project compose khi triển khai.",

@@ -337,6 +337,18 @@ func WithFileService(files agentv1.FileServiceServer) ServerOption {
 	}
 }
 
+// WithTerminalService registers the host terminal service so a platform
+// operator can open a PTY-backed shell on this node. It is passed only when the
+// file service (and therefore its root policy) is enabled; an agent without it
+// answers codes.Unimplemented, which the control plane reports as unsupported.
+func WithTerminalService(terminal agentv1.TerminalServiceServer) ServerOption {
+	return func(c *serverConfig) {
+		c.registers = append(c.registers, func(server *grpc.Server) {
+			agentv1.RegisterTerminalServiceServer(server, terminal)
+		})
+	}
+}
+
 // WithToolService registers the host tool catalog so the control plane can list
 // this node's tools and their detected state. Pass it to NewServer.
 func WithToolService(tools agentv1.ToolServiceServer) ServerOption {

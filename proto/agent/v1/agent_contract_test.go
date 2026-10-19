@@ -604,3 +604,37 @@ func (stubBuildServer) BuildImage(stream grpc.BidiStreamingServer[agentv1.BuildI
 		},
 	})
 }
+
+func TestTerminalMessagesProtoRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	request := &agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
+		Target: "host", Root: "volumes", Cwd: "app", Cols: 120, Rows: 32,
+	}}}
+	raw, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var gotRequest agentv1.TerminalRequest
+	if err := proto.Unmarshal(raw, &gotRequest); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	if !proto.Equal(request, &gotRequest) {
+		t.Fatalf("request roundtrip mismatch: want %v, got %v", request, &gotRequest)
+	}
+
+	response := &agentv1.TerminalResponse{Event: &agentv1.TerminalResponse_Exited{Exited: &agentv1.TerminalExited{
+		ExitCode: 3, Signal: "SIGTERM",
+	}}}
+	raw, err = proto.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	var gotResponse agentv1.TerminalResponse
+	if err := proto.Unmarshal(raw, &gotResponse); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !proto.Equal(response, &gotResponse) {
+		t.Fatalf("response roundtrip mismatch: want %v, got %v", response, &gotResponse)
+	}
+}

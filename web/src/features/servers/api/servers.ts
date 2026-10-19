@@ -304,6 +304,7 @@ const errorPrefixPackages = new Set([
   "store",
   "teams",
   "templates",
+  "terminal",
   "toolchain",
   "updates",
   "webhooks",

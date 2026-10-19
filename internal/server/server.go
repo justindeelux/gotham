@@ -38,6 +38,7 @@ import (
 	"github.com/justindeelux/gotham/internal/taskevents"
 	"github.com/justindeelux/gotham/internal/teams"
 	"github.com/justindeelux/gotham/internal/templates"
+	"github.com/justindeelux/gotham/internal/terminal"
 	"github.com/justindeelux/gotham/internal/toolchain"
 	"github.com/justindeelux/gotham/internal/updates"
 	"github.com/justindeelux/gotham/internal/webhooks"
@@ -113,6 +114,9 @@ type Server struct {
 	sessionSweeper    *auth.SessionSweeper
 	databasesRetainer *databases.RetentionSweeper
 	updates           updates.Service
+	// terminal is the host terminal session registry. It is mounted only when
+	// the server registry and authentication are present.
+	terminal *terminal.Service
 	// realtime is the mounted WebSocket hub, Redis bridge and log-stream
 	// manager; the closer owns its lifecycle.
 	realtime       *ws.Realtime
@@ -197,6 +201,11 @@ func New(cfg *config.Config, logger *slog.Logger, authService AuthService, oauth
 		// connection handlers finish instead of leaking past shutdown (B1-8).
 		if s.realtime != nil {
 			s.realtime.Close()
+		}
+		// Terminal sessions hold an agent stream each; ending them here makes
+		// the agents tear their PTYs down before the plane exits.
+		if s.terminal != nil {
+			s.terminal.CloseAll()
 		}
 		// The deploy service owns its worker pool and realtime publisher;
 		// shutting it down first stops in-flight deployments before the
@@ -462,6 +471,15 @@ func (s *Server) routes() (http.Handler, error) {
 		}
 		platformOnly := func(next http.Handler) http.Handler {
 			return s.RequireAuth(s.RequirePlatformAdmin(next))
+		}
+		// Host terminal sessions (JUS-243): platform operators only. The
+		// WebSocket route authenticates in-band (browsers cannot set an
+		// Authorization header) and re-checks the operator role; the session is
+		// bound to the creating user and node, and terminal bytes never enter
+		// Redis or the log feed.
+		if s.auth != nil && s.servers != nil {
+			s.terminal = s.terminalService()
+			terminal.Mount(api, platformOnly, s.terminal, s.auth, s.terminalOperator, UserIDFromContext, s.logger)
 		}
 		// Instance settings (JUS-92): platform operators only; a nil service
 		// (no database) mounts nothing. A network change left unconfirmed

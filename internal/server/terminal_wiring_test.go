@@ -1,0 +1,97 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+
+	"github.com/justindeelux/gotham/internal/auth"
+	"github.com/justindeelux/gotham/internal/servers"
+)
+
+// stubServerRegistry satisfies the server registry for wiring tests. The
+// embedded interface supplies the methods this test never calls.
+type stubServerRegistry struct {
+	ServerService
+	registry *servers.Server
+	dialed   bool
+}
+
+func (s *stubServerRegistry) Get(context.Context, uuid.UUID) (*servers.Server, error) {
+	return s.registry, nil
+}
+
+func (s *stubServerRegistry) DialTerminalClient(_ context.Context, _ uuid.UUID, _ ...servers.DockerDialOption) (*servers.TerminalClient, error) {
+	s.dialed = true
+	return nil, errors.New("not used in this test")
+}
+
+type stubAuthService struct {
+	AuthService
+	user *auth.User
+}
+
+func (s stubAuthService) Me(context.Context, uuid.UUID) (*auth.User, error) {
+	if s.user == nil {
+		return nil, errors.New("not found")
+	}
+	return s.user, nil
+}
+
+func TestTerminalOperator(t *testing.T) {
+	t.Setenv("PLATFORM_ADMINS", "ops@example.com")
+	server := &Server{auth: stubAuthService{user: &auth.User{Email: "ops@example.com"}}}
+
+	claims := func(role string) *auth.Claims {
+		return &auth.Claims{Role: role, RegisteredClaims: jwt.RegisteredClaims{Subject: uuid.NewString()}}
+	}
+	withEmail := func(email string) *Server {
+		return &Server{auth: stubAuthService{user: &auth.User{Email: email}}}
+	}
+
+	if server.terminalOperator(context.Background(), nil) {
+		t.Fatal("nil claims passed the operator check")
+	}
+	if !server.terminalOperator(context.Background(), claims("admin")) {
+		t.Fatal("admin role was refused")
+	}
+	if !server.terminalOperator(context.Background(), claims("member")) {
+		t.Fatal("PLATFORM_ADMINS email was refused")
+	}
+	if withEmail("someone@example.com").terminalOperator(context.Background(), claims("member")) {
+		t.Fatal("a non-operator email passed the operator check")
+	}
+	badSubject := &auth.Claims{RegisteredClaims: jwt.RegisteredClaims{Subject: "not-a-uuid"}}
+	if server.terminalOperator(context.Background(), badSubject) {
+		t.Fatal("a token without a user id passed the operator check")
+	}
+}
+
+func TestTerminalRoutesMountOnlyWithAuthAndRegistry(t *testing.T) {
+	serverID := uuid.New()
+	s := newTestServer(t, stubPinger{}, stubPinger{})
+	s.auth = stubAuthService{user: &auth.User{Email: "ops@example.com"}}
+	s.servers = &stubServerRegistry{registry: &servers.Server{ID: serverID}}
+
+	router, err := s.routes()
+	if err != nil {
+		t.Fatalf("routes: %v", err)
+	}
+	if s.terminal == nil {
+		t.Fatal("terminal service was not built")
+	}
+
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/v1/servers/"+serverID.String()+"/terminal/sessions",
+		http.NoBody)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated create status = %d, want 401", recorder.Code)
+	}
+}

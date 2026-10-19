@@ -2451,3 +2451,149 @@ var ToolService_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "agent/v1/agent.proto",
 }
+
+const (
+	TerminalService_OpenTerminal_FullMethodName = "/agent.v1.TerminalService/OpenTerminal"
+)
+
+// TerminalServiceClient is the client API for TerminalService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// TerminalService runs on the node agent. The control plane dials it to open a
+// host PTY and stream interactive bytes over the existing mTLS channel.
+//
+// The RPC is one bounded bidirectional stream whose first client message must
+// be TerminalOpen; every other message is input, resize or close. Output and
+// the final exit travel back on the same stream. There is no session id in the
+// protocol: the stream *is* the session, so a dropped stream always tears the
+// PTY down and a reconnect can never resume (or replay input into) the old
+// shell. The control plane opens a new stream only for a new session.
+//
+// Trust boundary: host shell access is a platform-operator capability. The
+// agent confines the initial working directory to a FileService root with the
+// same no-escape policy as the file manager, but the shell itself is a host
+// process running as the agent's service identity and is not confined to those
+// roots — that privilege boundary is documented in docs/terminal-session-api.md.
+// The agent bounds message size, session count and idle lifetime, and kills the
+// whole process group when the stream ends for any reason.
+type TerminalServiceClient interface {
+	// OpenTerminal opens one PTY-backed host shell. The first request carries
+	// TerminalOpen (target, root, cwd and initial dimensions); the following
+	// requests carry input, resize and close. The response stream carries one
+	// TerminalOpened, zero or more TerminalOutput chunks and exactly one
+	// TerminalExited unless the stream was cancelled. An agent that predates this
+	// service answers codes.Unimplemented, which the control plane reports as
+	// unsupported rather than retrying.
+	OpenTerminal(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalRequest, TerminalResponse], error)
+}
+
+type terminalServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewTerminalServiceClient(cc grpc.ClientConnInterface) TerminalServiceClient {
+	return &terminalServiceClient{cc}
+}
+
+func (c *terminalServiceClient) OpenTerminal(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalRequest, TerminalResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &TerminalService_ServiceDesc.Streams[0], TerminalService_OpenTerminal_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[TerminalRequest, TerminalResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type TerminalService_OpenTerminalClient = grpc.BidiStreamingClient[TerminalRequest, TerminalResponse]
+
+// TerminalServiceServer is the server API for TerminalService service.
+// All implementations must embed UnimplementedTerminalServiceServer
+// for forward compatibility.
+//
+// TerminalService runs on the node agent. The control plane dials it to open a
+// host PTY and stream interactive bytes over the existing mTLS channel.
+//
+// The RPC is one bounded bidirectional stream whose first client message must
+// be TerminalOpen; every other message is input, resize or close. Output and
+// the final exit travel back on the same stream. There is no session id in the
+// protocol: the stream *is* the session, so a dropped stream always tears the
+// PTY down and a reconnect can never resume (or replay input into) the old
+// shell. The control plane opens a new stream only for a new session.
+//
+// Trust boundary: host shell access is a platform-operator capability. The
+// agent confines the initial working directory to a FileService root with the
+// same no-escape policy as the file manager, but the shell itself is a host
+// process running as the agent's service identity and is not confined to those
+// roots — that privilege boundary is documented in docs/terminal-session-api.md.
+// The agent bounds message size, session count and idle lifetime, and kills the
+// whole process group when the stream ends for any reason.
+type TerminalServiceServer interface {
+	// OpenTerminal opens one PTY-backed host shell. The first request carries
+	// TerminalOpen (target, root, cwd and initial dimensions); the following
+	// requests carry input, resize and close. The response stream carries one
+	// TerminalOpened, zero or more TerminalOutput chunks and exactly one
+	// TerminalExited unless the stream was cancelled. An agent that predates this
+	// service answers codes.Unimplemented, which the control plane reports as
+	// unsupported rather than retrying.
+	OpenTerminal(grpc.BidiStreamingServer[TerminalRequest, TerminalResponse]) error
+	mustEmbedUnimplementedTerminalServiceServer()
+}
+
+// UnimplementedTerminalServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedTerminalServiceServer struct{}
+
+func (UnimplementedTerminalServiceServer) OpenTerminal(grpc.BidiStreamingServer[TerminalRequest, TerminalResponse]) error {
+	return status.Error(codes.Unimplemented, "method OpenTerminal not implemented")
+}
+func (UnimplementedTerminalServiceServer) mustEmbedUnimplementedTerminalServiceServer() {}
+func (UnimplementedTerminalServiceServer) testEmbeddedByValue()                         {}
+
+// UnsafeTerminalServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to TerminalServiceServer will
+// result in compilation errors.
+type UnsafeTerminalServiceServer interface {
+	mustEmbedUnimplementedTerminalServiceServer()
+}
+
+func RegisterTerminalServiceServer(s grpc.ServiceRegistrar, srv TerminalServiceServer) {
+	// If the following call panics, it indicates UnimplementedTerminalServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&TerminalService_ServiceDesc, srv)
+}
+
+func _TerminalService_OpenTerminal_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(TerminalServiceServer).OpenTerminal(&grpc.GenericServerStream[TerminalRequest, TerminalResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type TerminalService_OpenTerminalServer = grpc.BidiStreamingServer[TerminalRequest, TerminalResponse]
+
+// TerminalService_ServiceDesc is the grpc.ServiceDesc for TerminalService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var TerminalService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "agent.v1.TerminalService",
+	HandlerType: (*TerminalServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "OpenTerminal",
+			Handler:       _TerminalService_OpenTerminal_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "agent/v1/agent.proto",
+}

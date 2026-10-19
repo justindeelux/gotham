@@ -5950,6 +5950,551 @@ func (x *ComposePsResponse) GetContainers() []*ComposeContainer {
 	return nil
 }
 
+// TerminalRequest is one client message of an OpenTerminal stream.
+type TerminalRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Part:
+	//
+	//	*TerminalRequest_Open
+	//	*TerminalRequest_Input
+	//	*TerminalRequest_Resize
+	//	*TerminalRequest_Close
+	Part          isTerminalRequest_Part `protobuf_oneof:"part"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalRequest) Reset() {
+	*x = TerminalRequest{}
+	mi := &file_agent_v1_agent_proto_msgTypes[89]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalRequest) ProtoMessage() {}
+
+func (x *TerminalRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[89]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalRequest.ProtoReflect.Descriptor instead.
+func (*TerminalRequest) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{89}
+}
+
+func (x *TerminalRequest) GetPart() isTerminalRequest_Part {
+	if x != nil {
+		return x.Part
+	}
+	return nil
+}
+
+func (x *TerminalRequest) GetOpen() *TerminalOpen {
+	if x != nil {
+		if x, ok := x.Part.(*TerminalRequest_Open); ok {
+			return x.Open
+		}
+	}
+	return nil
+}
+
+func (x *TerminalRequest) GetInput() []byte {
+	if x != nil {
+		if x, ok := x.Part.(*TerminalRequest_Input); ok {
+			return x.Input
+		}
+	}
+	return nil
+}
+
+func (x *TerminalRequest) GetResize() *TerminalResize {
+	if x != nil {
+		if x, ok := x.Part.(*TerminalRequest_Resize); ok {
+			return x.Resize
+		}
+	}
+	return nil
+}
+
+func (x *TerminalRequest) GetClose() *TerminalClose {
+	if x != nil {
+		if x, ok := x.Part.(*TerminalRequest_Close); ok {
+			return x.Close
+		}
+	}
+	return nil
+}
+
+type isTerminalRequest_Part interface {
+	isTerminalRequest_Part()
+}
+
+type TerminalRequest_Open struct {
+	// open must be the first message of the stream.
+	Open *TerminalOpen `protobuf:"bytes,1,opt,name=open,proto3,oneof"`
+}
+
+type TerminalRequest_Input struct {
+	// input is raw keyboard/paste bytes written to the PTY master. The agent
+	// bounds it per message.
+	Input []byte `protobuf:"bytes,2,opt,name=input,proto3,oneof"`
+}
+
+type TerminalRequest_Resize struct {
+	Resize *TerminalResize `protobuf:"bytes,3,opt,name=resize,proto3,oneof"`
+}
+
+type TerminalRequest_Close struct {
+	// close asks the agent to end the session and release the PTY.
+	Close *TerminalClose `protobuf:"bytes,4,opt,name=close,proto3,oneof"`
+}
+
+func (*TerminalRequest_Open) isTerminalRequest_Part() {}
+
+func (*TerminalRequest_Input) isTerminalRequest_Part() {}
+
+func (*TerminalRequest_Resize) isTerminalRequest_Part() {}
+
+func (*TerminalRequest_Close) isTerminalRequest_Part() {}
+
+// TerminalOpen selects the terminal target and its initial working directory.
+type TerminalOpen struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// target selects what the PTY runs in. "host" (or empty, for compatibility
+	// with a caller that omits it) runs a host shell as the agent's service
+	// identity. Container targets are added by a later package and answer
+	// InvalidArgument on an agent that does not implement them, never a silent
+	// fallback to the host.
+	Target string `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
+	// root is the FileService root name the initial cwd is resolved under. The
+	// agent resolves it against its own allow-list; an unknown root is refused.
+	Root string `protobuf:"bytes,2,opt,name=root,proto3" json:"root,omitempty"`
+	// cwd is the initial working directory relative to root. Empty or "." means
+	// the root itself. It must be an existing directory that resolves inside the
+	// root: absolute paths, ".." segments and symlink escapes are refused. The
+	// agent sets it directly on the child process, never through a shell
+	// command, so no quoting or interpolation is involved.
+	Cwd string `protobuf:"bytes,3,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	// cols and rows are the initial PTY dimensions. They are bounded by the
+	// agent and a zero or out-of-range value is refused.
+	Cols          uint32 `protobuf:"varint,4,opt,name=cols,proto3" json:"cols,omitempty"`
+	Rows          uint32 `protobuf:"varint,5,opt,name=rows,proto3" json:"rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalOpen) Reset() {
+	*x = TerminalOpen{}
+	mi := &file_agent_v1_agent_proto_msgTypes[90]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalOpen) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalOpen) ProtoMessage() {}
+
+func (x *TerminalOpen) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[90]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalOpen.ProtoReflect.Descriptor instead.
+func (*TerminalOpen) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{90}
+}
+
+func (x *TerminalOpen) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *TerminalOpen) GetRoot() string {
+	if x != nil {
+		return x.Root
+	}
+	return ""
+}
+
+func (x *TerminalOpen) GetCwd() string {
+	if x != nil {
+		return x.Cwd
+	}
+	return ""
+}
+
+func (x *TerminalOpen) GetCols() uint32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+func (x *TerminalOpen) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+// TerminalResize changes the PTY window size.
+type TerminalResize struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cols          uint32                 `protobuf:"varint,1,opt,name=cols,proto3" json:"cols,omitempty"`
+	Rows          uint32                 `protobuf:"varint,2,opt,name=rows,proto3" json:"rows,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalResize) Reset() {
+	*x = TerminalResize{}
+	mi := &file_agent_v1_agent_proto_msgTypes[91]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalResize) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalResize) ProtoMessage() {}
+
+func (x *TerminalResize) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[91]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalResize.ProtoReflect.Descriptor instead.
+func (*TerminalResize) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{91}
+}
+
+func (x *TerminalResize) GetCols() uint32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+func (x *TerminalResize) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+// TerminalClose asks for an orderly shutdown. The agent closes the PTY, kills
+// the process group and answers with TerminalExited. A stream context
+// cancellation has the same effect, so close is an optimization, not a
+// requirement.
+type TerminalClose struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// reason is a bounded diagnostic tag such as "client_close"; it is never
+	// written to a log line and never echoed to the terminal.
+	Reason        string `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalClose) Reset() {
+	*x = TerminalClose{}
+	mi := &file_agent_v1_agent_proto_msgTypes[92]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalClose) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalClose) ProtoMessage() {}
+
+func (x *TerminalClose) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[92]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalClose.ProtoReflect.Descriptor instead.
+func (*TerminalClose) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{92}
+}
+
+func (x *TerminalClose) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+// TerminalResponse is one agent message of an OpenTerminal stream.
+type TerminalResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Event:
+	//
+	//	*TerminalResponse_Opened
+	//	*TerminalResponse_Output
+	//	*TerminalResponse_Exited
+	Event         isTerminalResponse_Event `protobuf_oneof:"event"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalResponse) Reset() {
+	*x = TerminalResponse{}
+	mi := &file_agent_v1_agent_proto_msgTypes[93]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalResponse) ProtoMessage() {}
+
+func (x *TerminalResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[93]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalResponse.ProtoReflect.Descriptor instead.
+func (*TerminalResponse) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{93}
+}
+
+func (x *TerminalResponse) GetEvent() isTerminalResponse_Event {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+func (x *TerminalResponse) GetOpened() *TerminalOpened {
+	if x != nil {
+		if x, ok := x.Event.(*TerminalResponse_Opened); ok {
+			return x.Opened
+		}
+	}
+	return nil
+}
+
+func (x *TerminalResponse) GetOutput() []byte {
+	if x != nil {
+		if x, ok := x.Event.(*TerminalResponse_Output); ok {
+			return x.Output
+		}
+	}
+	return nil
+}
+
+func (x *TerminalResponse) GetExited() *TerminalExited {
+	if x != nil {
+		if x, ok := x.Event.(*TerminalResponse_Exited); ok {
+			return x.Exited
+		}
+	}
+	return nil
+}
+
+type isTerminalResponse_Event interface {
+	isTerminalResponse_Event()
+}
+
+type TerminalResponse_Opened struct {
+	Opened *TerminalOpened `protobuf:"bytes,1,opt,name=opened,proto3,oneof"`
+}
+
+type TerminalResponse_Output struct {
+	// output is raw PTY bytes (UTF-8 plus ANSI escape sequences). Consumers
+	// must write it to the terminal without interpreting or re-encoding it.
+	Output []byte `protobuf:"bytes,2,opt,name=output,proto3,oneof"`
+}
+
+type TerminalResponse_Exited struct {
+	Exited *TerminalExited `protobuf:"bytes,3,opt,name=exited,proto3,oneof"`
+}
+
+func (*TerminalResponse_Opened) isTerminalResponse_Event() {}
+
+func (*TerminalResponse_Output) isTerminalResponse_Event() {}
+
+func (*TerminalResponse_Exited) isTerminalResponse_Event() {}
+
+// TerminalOpened acknowledges a started shell.
+type TerminalOpened struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// shell is the absolute path of the executable the agent started, for
+	// display and audit. It is chosen by the node, never by the caller.
+	Shell string `protobuf:"bytes,1,opt,name=shell,proto3" json:"shell,omitempty"`
+	// cols and rows are the dimensions the PTY actually has.
+	Cols uint32 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"`
+	Rows uint32 `protobuf:"varint,3,opt,name=rows,proto3" json:"rows,omitempty"`
+	// service_user is the OS user the shell runs as (the agent's service
+	// identity), so the UI can state the privilege boundary.
+	ServiceUser   string `protobuf:"bytes,4,opt,name=service_user,json=serviceUser,proto3" json:"service_user,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalOpened) Reset() {
+	*x = TerminalOpened{}
+	mi := &file_agent_v1_agent_proto_msgTypes[94]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalOpened) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalOpened) ProtoMessage() {}
+
+func (x *TerminalOpened) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[94]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalOpened.ProtoReflect.Descriptor instead.
+func (*TerminalOpened) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{94}
+}
+
+func (x *TerminalOpened) GetShell() string {
+	if x != nil {
+		return x.Shell
+	}
+	return ""
+}
+
+func (x *TerminalOpened) GetCols() uint32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+func (x *TerminalOpened) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *TerminalOpened) GetServiceUser() string {
+	if x != nil {
+		return x.ServiceUser
+	}
+	return ""
+}
+
+// TerminalExited closes a session with the child's termination status.
+type TerminalExited struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// exit_code is the shell's exit code, or -1 when it was terminated by a
+	// signal.
+	ExitCode int32 `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	// signal is the terminating signal name ("SIGHUP", "SIGKILL"), empty for a
+	// normal exit.
+	Signal        string `protobuf:"bytes,2,opt,name=signal,proto3" json:"signal,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalExited) Reset() {
+	*x = TerminalExited{}
+	mi := &file_agent_v1_agent_proto_msgTypes[95]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalExited) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalExited) ProtoMessage() {}
+
+func (x *TerminalExited) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_agent_proto_msgTypes[95]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalExited.ProtoReflect.Descriptor instead.
+func (*TerminalExited) Descriptor() ([]byte, []int) {
+	return file_agent_v1_agent_proto_rawDescGZIP(), []int{95}
+}
+
+func (x *TerminalExited) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
+func (x *TerminalExited) GetSignal() string {
+	if x != nil {
+		return x.Signal
+	}
+	return ""
+}
+
 var File_agent_v1_agent_proto protoreflect.FileDescriptor
 
 const file_agent_v1_agent_proto_rawDesc = "" +
@@ -6360,7 +6905,37 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x11ComposePsResponse\x12:\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x1a.agent.v1.ComposeContainerR\n" +
-	"containers*\x80\x01\n" +
+	"containers\"\xc4\x01\n" +
+	"\x0fTerminalRequest\x12,\n" +
+	"\x04open\x18\x01 \x01(\v2\x16.agent.v1.TerminalOpenH\x00R\x04open\x12\x16\n" +
+	"\x05input\x18\x02 \x01(\fH\x00R\x05input\x122\n" +
+	"\x06resize\x18\x03 \x01(\v2\x18.agent.v1.TerminalResizeH\x00R\x06resize\x12/\n" +
+	"\x05close\x18\x04 \x01(\v2\x17.agent.v1.TerminalCloseH\x00R\x05closeB\x06\n" +
+	"\x04part\"t\n" +
+	"\fTerminalOpen\x12\x16\n" +
+	"\x06target\x18\x01 \x01(\tR\x06target\x12\x12\n" +
+	"\x04root\x18\x02 \x01(\tR\x04root\x12\x10\n" +
+	"\x03cwd\x18\x03 \x01(\tR\x03cwd\x12\x12\n" +
+	"\x04cols\x18\x04 \x01(\rR\x04cols\x12\x12\n" +
+	"\x04rows\x18\x05 \x01(\rR\x04rows\"8\n" +
+	"\x0eTerminalResize\x12\x12\n" +
+	"\x04cols\x18\x01 \x01(\rR\x04cols\x12\x12\n" +
+	"\x04rows\x18\x02 \x01(\rR\x04rows\"'\n" +
+	"\rTerminalClose\x12\x16\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason\"\x9d\x01\n" +
+	"\x10TerminalResponse\x122\n" +
+	"\x06opened\x18\x01 \x01(\v2\x18.agent.v1.TerminalOpenedH\x00R\x06opened\x12\x18\n" +
+	"\x06output\x18\x02 \x01(\fH\x00R\x06output\x122\n" +
+	"\x06exited\x18\x03 \x01(\v2\x18.agent.v1.TerminalExitedH\x00R\x06exitedB\a\n" +
+	"\x05event\"q\n" +
+	"\x0eTerminalOpened\x12\x14\n" +
+	"\x05shell\x18\x01 \x01(\tR\x05shell\x12\x12\n" +
+	"\x04cols\x18\x02 \x01(\rR\x04cols\x12\x12\n" +
+	"\x04rows\x18\x03 \x01(\rR\x04rows\x12!\n" +
+	"\fservice_user\x18\x04 \x01(\tR\vserviceUser\"E\n" +
+	"\x0eTerminalExited\x12\x1b\n" +
+	"\texit_code\x18\x01 \x01(\x05R\bexitCode\x12\x16\n" +
+	"\x06signal\x18\x02 \x01(\tR\x06signal*\x80\x01\n" +
 	"\bFileKind\x12\x19\n" +
 	"\x15FILE_KIND_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eFILE_KIND_FILE\x10\x01\x12\x17\n" +
@@ -6424,7 +6999,9 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\vToolService\x12D\n" +
 	"\tListTools\x12\x1a.agent.v1.ListToolsRequest\x1a\x1b.agent.v1.ListToolsResponse\x12B\n" +
 	"\vInstallTool\x12\x1c.agent.v1.InstallToolRequest\x1a\x13.agent.v1.ToolEvent0\x01\x12D\n" +
-	"\rUninstallTool\x12\x1c.agent.v1.InstallToolRequest\x1a\x13.agent.v1.ToolEvent0\x01B7Z5github.com/justindeelux/gotham/proto/agent/v1;agentv1b\x06proto3"
+	"\rUninstallTool\x12\x1c.agent.v1.InstallToolRequest\x1a\x13.agent.v1.ToolEvent0\x012\\\n" +
+	"\x0fTerminalService\x12I\n" +
+	"\fOpenTerminal\x12\x19.agent.v1.TerminalRequest\x1a\x1a.agent.v1.TerminalResponse(\x010\x01B7Z5github.com/justindeelux/gotham/proto/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_agent_proto_rawDescOnce sync.Once
@@ -6439,7 +7016,7 @@ func file_agent_v1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_v1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 92)
+var file_agent_v1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 99)
 var file_agent_v1_agent_proto_goTypes = []any{
 	(FileKind)(0),                    // 0: agent.v1.FileKind
 	(ArchiveFormat)(0),               // 1: agent.v1.ArchiveFormat
@@ -6532,138 +7109,152 @@ var file_agent_v1_agent_proto_goTypes = []any{
 	(*ComposePsRequest)(nil),         // 88: agent.v1.ComposePsRequest
 	(*ComposeContainer)(nil),         // 89: agent.v1.ComposeContainer
 	(*ComposePsResponse)(nil),        // 90: agent.v1.ComposePsResponse
-	nil,                              // 91: agent.v1.ContainerInfo.LabelsEntry
-	nil,                              // 92: agent.v1.CreateContainerRequest.LabelsEntry
-	nil,                              // 93: agent.v1.BuildMeta.BuildArgsEntry
-	(*timestamppb.Timestamp)(nil),    // 94: google.protobuf.Timestamp
+	(*TerminalRequest)(nil),          // 91: agent.v1.TerminalRequest
+	(*TerminalOpen)(nil),             // 92: agent.v1.TerminalOpen
+	(*TerminalResize)(nil),           // 93: agent.v1.TerminalResize
+	(*TerminalClose)(nil),            // 94: agent.v1.TerminalClose
+	(*TerminalResponse)(nil),         // 95: agent.v1.TerminalResponse
+	(*TerminalOpened)(nil),           // 96: agent.v1.TerminalOpened
+	(*TerminalExited)(nil),           // 97: agent.v1.TerminalExited
+	nil,                              // 98: agent.v1.ContainerInfo.LabelsEntry
+	nil,                              // 99: agent.v1.CreateContainerRequest.LabelsEntry
+	nil,                              // 100: agent.v1.BuildMeta.BuildArgsEntry
+	(*timestamppb.Timestamp)(nil),    // 101: google.protobuf.Timestamp
 }
 var file_agent_v1_agent_proto_depIdxs = []int32{
-	3,  // 0: agent.v1.ListRootsResponse.roots:type_name -> agent.v1.FileRoot
-	0,  // 1: agent.v1.FileEntry.kind:type_name -> agent.v1.FileKind
-	94, // 2: agent.v1.FileEntry.modified_at:type_name -> google.protobuf.Timestamp
-	6,  // 3: agent.v1.ListResponse.entries:type_name -> agent.v1.FileEntry
-	6,  // 4: agent.v1.StatResponse.entry:type_name -> agent.v1.FileEntry
-	6,  // 5: agent.v1.SearchResult.entry:type_name -> agent.v1.FileEntry
-	13, // 6: agent.v1.SearchResponse.results:type_name -> agent.v1.SearchResult
-	18, // 7: agent.v1.WriteRequest.header:type_name -> agent.v1.WriteHeader
-	19, // 8: agent.v1.WriteRequest.commit:type_name -> agent.v1.WriteCommit
-	6,  // 9: agent.v1.WriteResponse.entry:type_name -> agent.v1.FileEntry
-	94, // 10: agent.v1.TrashEntry.deleted_at:type_name -> google.protobuf.Timestamp
-	0,  // 11: agent.v1.TrashEntry.kind:type_name -> agent.v1.FileKind
-	23, // 12: agent.v1.ListTrashResponse.entries:type_name -> agent.v1.TrashEntry
-	6,  // 13: agent.v1.RestoreResponse.entry:type_name -> agent.v1.FileEntry
-	1,  // 14: agent.v1.CompressRequest.format:type_name -> agent.v1.ArchiveFormat
-	6,  // 15: agent.v1.MkdirResponse.entry:type_name -> agent.v1.FileEntry
-	6,  // 16: agent.v1.RenameResponse.entry:type_name -> agent.v1.FileEntry
-	41, // 17: agent.v1.WriteProxyConfigRequest.files:type_name -> agent.v1.ProxyConfigFile
-	94, // 18: agent.v1.ACMECertificateInfo.not_after:type_name -> google.protobuf.Timestamp
-	45, // 19: agent.v1.ReadACMEStorageResponse.certificates:type_name -> agent.v1.ACMECertificateInfo
-	94, // 20: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
-	94, // 21: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
-	54, // 22: agent.v1.ListToolsResponse.tools:type_name -> agent.v1.ToolInfo
-	58, // 23: agent.v1.ToolEvent.output:type_name -> agent.v1.ToolOutput
-	59, // 24: agent.v1.ToolEvent.result:type_name -> agent.v1.ToolResult
-	94, // 25: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
-	91, // 26: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
-	63, // 27: agent.v1.ContainerInfo.ports:type_name -> agent.v1.PortBinding
-	62, // 28: agent.v1.ContainerInfo.mounts:type_name -> agent.v1.ContainerMount
-	61, // 29: agent.v1.ListContainersResponse.containers:type_name -> agent.v1.ContainerInfo
-	92, // 30: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
-	72, // 31: agent.v1.CreateContainerRequest.healthcheck:type_name -> agent.v1.ContainerHealthcheck
-	76, // 32: agent.v1.BuildImageRequest.meta:type_name -> agent.v1.BuildMeta
-	93, // 33: agent.v1.BuildMeta.build_args:type_name -> agent.v1.BuildMeta.BuildArgsEntry
-	78, // 34: agent.v1.BuildImageResponse.log:type_name -> agent.v1.BuildLogChunk
-	79, // 35: agent.v1.BuildImageResponse.result:type_name -> agent.v1.BuildImageResult
-	89, // 36: agent.v1.ComposePsResponse.containers:type_name -> agent.v1.ComposeContainer
-	47, // 37: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
-	49, // 38: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
-	51, // 39: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
-	60, // 40: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
-	65, // 41: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
-	65, // 42: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
-	65, // 43: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
-	65, // 44: agent.v1.DockerService.RemoveContainer:input_type -> agent.v1.ContainerActionRequest
-	67, // 45: agent.v1.DockerService.RemoveVolume:input_type -> agent.v1.VolumeActionRequest
-	69, // 46: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
-	71, // 47: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
-	71, // 48: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
-	73, // 49: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
-	75, // 50: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
-	42, // 51: agent.v1.ProxyService.WriteProxyConfig:input_type -> agent.v1.WriteProxyConfigRequest
-	44, // 52: agent.v1.ProxyService.ReadACMEStorage:input_type -> agent.v1.ReadACMEStorageRequest
-	80, // 53: agent.v1.ComposeService.ComposeValidate:input_type -> agent.v1.ComposeValidateRequest
-	82, // 54: agent.v1.ComposeService.ComposeUp:input_type -> agent.v1.ComposeUpRequest
-	84, // 55: agent.v1.ComposeService.ComposeDown:input_type -> agent.v1.ComposeDownRequest
-	86, // 56: agent.v1.ComposeService.ComposeLogs:input_type -> agent.v1.ComposeLogsRequest
-	88, // 57: agent.v1.ComposeService.ComposePs:input_type -> agent.v1.ComposePsRequest
-	2,  // 58: agent.v1.FileService.ListRoots:input_type -> agent.v1.ListRootsRequest
-	5,  // 59: agent.v1.FileService.List:input_type -> agent.v1.ListRequest
-	8,  // 60: agent.v1.FileService.Stat:input_type -> agent.v1.StatRequest
-	12, // 61: agent.v1.FileService.Search:input_type -> agent.v1.SearchRequest
-	15, // 62: agent.v1.FileService.Read:input_type -> agent.v1.ReadRequest
-	10, // 63: agent.v1.FileService.DirectorySize:input_type -> agent.v1.DirectorySizeRequest
-	17, // 64: agent.v1.FileService.Write:input_type -> agent.v1.WriteRequest
-	21, // 65: agent.v1.FileService.Copy:input_type -> agent.v1.CopyRequest
-	22, // 66: agent.v1.FileService.Delete:input_type -> agent.v1.DeleteRequest
-	35, // 67: agent.v1.FileService.Mkdir:input_type -> agent.v1.MkdirRequest
-	37, // 68: agent.v1.FileService.Rename:input_type -> agent.v1.RenameRequest
-	39, // 69: agent.v1.FileService.Chmod:input_type -> agent.v1.ChmodRequest
-	33, // 70: agent.v1.FileService.Compress:input_type -> agent.v1.CompressRequest
-	34, // 71: agent.v1.FileService.Extract:input_type -> agent.v1.ExtractRequest
-	24, // 72: agent.v1.FileService.ListTrash:input_type -> agent.v1.ListTrashRequest
-	26, // 73: agent.v1.FileService.Restore:input_type -> agent.v1.RestoreRequest
-	28, // 74: agent.v1.FileService.Purge:input_type -> agent.v1.PurgeRequest
-	30, // 75: agent.v1.FileService.EmptyTrash:input_type -> agent.v1.EmptyTrashRequest
-	53, // 76: agent.v1.ToolService.ListTools:input_type -> agent.v1.ListToolsRequest
-	56, // 77: agent.v1.ToolService.InstallTool:input_type -> agent.v1.InstallToolRequest
-	56, // 78: agent.v1.ToolService.UninstallTool:input_type -> agent.v1.InstallToolRequest
-	48, // 79: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
-	50, // 80: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
-	52, // 81: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
-	64, // 82: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
-	66, // 83: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
-	66, // 84: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
-	66, // 85: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
-	66, // 86: agent.v1.DockerService.RemoveContainer:output_type -> agent.v1.ContainerActionResponse
-	68, // 87: agent.v1.DockerService.RemoveVolume:output_type -> agent.v1.VolumeActionResponse
-	70, // 88: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
-	66, // 89: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
-	66, // 90: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
-	74, // 91: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
-	77, // 92: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
-	43, // 93: agent.v1.ProxyService.WriteProxyConfig:output_type -> agent.v1.WriteProxyConfigResponse
-	46, // 94: agent.v1.ProxyService.ReadACMEStorage:output_type -> agent.v1.ReadACMEStorageResponse
-	81, // 95: agent.v1.ComposeService.ComposeValidate:output_type -> agent.v1.ComposeValidateResponse
-	83, // 96: agent.v1.ComposeService.ComposeUp:output_type -> agent.v1.ComposeUpResponse
-	85, // 97: agent.v1.ComposeService.ComposeDown:output_type -> agent.v1.ComposeDownResponse
-	87, // 98: agent.v1.ComposeService.ComposeLogs:output_type -> agent.v1.ComposeLogChunk
-	90, // 99: agent.v1.ComposeService.ComposePs:output_type -> agent.v1.ComposePsResponse
-	4,  // 100: agent.v1.FileService.ListRoots:output_type -> agent.v1.ListRootsResponse
-	7,  // 101: agent.v1.FileService.List:output_type -> agent.v1.ListResponse
-	9,  // 102: agent.v1.FileService.Stat:output_type -> agent.v1.StatResponse
-	14, // 103: agent.v1.FileService.Search:output_type -> agent.v1.SearchResponse
-	16, // 104: agent.v1.FileService.Read:output_type -> agent.v1.ReadChunk
-	11, // 105: agent.v1.FileService.DirectorySize:output_type -> agent.v1.DirectorySizeResponse
-	20, // 106: agent.v1.FileService.Write:output_type -> agent.v1.WriteResponse
-	32, // 107: agent.v1.FileService.Copy:output_type -> agent.v1.Progress
-	32, // 108: agent.v1.FileService.Delete:output_type -> agent.v1.Progress
-	36, // 109: agent.v1.FileService.Mkdir:output_type -> agent.v1.MkdirResponse
-	38, // 110: agent.v1.FileService.Rename:output_type -> agent.v1.RenameResponse
-	40, // 111: agent.v1.FileService.Chmod:output_type -> agent.v1.ChmodResponse
-	32, // 112: agent.v1.FileService.Compress:output_type -> agent.v1.Progress
-	32, // 113: agent.v1.FileService.Extract:output_type -> agent.v1.Progress
-	25, // 114: agent.v1.FileService.ListTrash:output_type -> agent.v1.ListTrashResponse
-	27, // 115: agent.v1.FileService.Restore:output_type -> agent.v1.RestoreResponse
-	29, // 116: agent.v1.FileService.Purge:output_type -> agent.v1.PurgeResponse
-	31, // 117: agent.v1.FileService.EmptyTrash:output_type -> agent.v1.EmptyTrashResponse
-	55, // 118: agent.v1.ToolService.ListTools:output_type -> agent.v1.ListToolsResponse
-	57, // 119: agent.v1.ToolService.InstallTool:output_type -> agent.v1.ToolEvent
-	57, // 120: agent.v1.ToolService.UninstallTool:output_type -> agent.v1.ToolEvent
-	79, // [79:121] is the sub-list for method output_type
-	37, // [37:79] is the sub-list for method input_type
-	37, // [37:37] is the sub-list for extension type_name
-	37, // [37:37] is the sub-list for extension extendee
-	0,  // [0:37] is the sub-list for field type_name
+	3,   // 0: agent.v1.ListRootsResponse.roots:type_name -> agent.v1.FileRoot
+	0,   // 1: agent.v1.FileEntry.kind:type_name -> agent.v1.FileKind
+	101, // 2: agent.v1.FileEntry.modified_at:type_name -> google.protobuf.Timestamp
+	6,   // 3: agent.v1.ListResponse.entries:type_name -> agent.v1.FileEntry
+	6,   // 4: agent.v1.StatResponse.entry:type_name -> agent.v1.FileEntry
+	6,   // 5: agent.v1.SearchResult.entry:type_name -> agent.v1.FileEntry
+	13,  // 6: agent.v1.SearchResponse.results:type_name -> agent.v1.SearchResult
+	18,  // 7: agent.v1.WriteRequest.header:type_name -> agent.v1.WriteHeader
+	19,  // 8: agent.v1.WriteRequest.commit:type_name -> agent.v1.WriteCommit
+	6,   // 9: agent.v1.WriteResponse.entry:type_name -> agent.v1.FileEntry
+	101, // 10: agent.v1.TrashEntry.deleted_at:type_name -> google.protobuf.Timestamp
+	0,   // 11: agent.v1.TrashEntry.kind:type_name -> agent.v1.FileKind
+	23,  // 12: agent.v1.ListTrashResponse.entries:type_name -> agent.v1.TrashEntry
+	6,   // 13: agent.v1.RestoreResponse.entry:type_name -> agent.v1.FileEntry
+	1,   // 14: agent.v1.CompressRequest.format:type_name -> agent.v1.ArchiveFormat
+	6,   // 15: agent.v1.MkdirResponse.entry:type_name -> agent.v1.FileEntry
+	6,   // 16: agent.v1.RenameResponse.entry:type_name -> agent.v1.FileEntry
+	41,  // 17: agent.v1.WriteProxyConfigRequest.files:type_name -> agent.v1.ProxyConfigFile
+	101, // 18: agent.v1.ACMECertificateInfo.not_after:type_name -> google.protobuf.Timestamp
+	45,  // 19: agent.v1.ReadACMEStorageResponse.certificates:type_name -> agent.v1.ACMECertificateInfo
+	101, // 20: agent.v1.HeartbeatRequest.sent_at:type_name -> google.protobuf.Timestamp
+	101, // 21: agent.v1.HeartbeatResponse.received_at:type_name -> google.protobuf.Timestamp
+	54,  // 22: agent.v1.ListToolsResponse.tools:type_name -> agent.v1.ToolInfo
+	58,  // 23: agent.v1.ToolEvent.output:type_name -> agent.v1.ToolOutput
+	59,  // 24: agent.v1.ToolEvent.result:type_name -> agent.v1.ToolResult
+	101, // 25: agent.v1.ContainerInfo.created_at:type_name -> google.protobuf.Timestamp
+	98,  // 26: agent.v1.ContainerInfo.labels:type_name -> agent.v1.ContainerInfo.LabelsEntry
+	63,  // 27: agent.v1.ContainerInfo.ports:type_name -> agent.v1.PortBinding
+	62,  // 28: agent.v1.ContainerInfo.mounts:type_name -> agent.v1.ContainerMount
+	61,  // 29: agent.v1.ListContainersResponse.containers:type_name -> agent.v1.ContainerInfo
+	99,  // 30: agent.v1.CreateContainerRequest.labels:type_name -> agent.v1.CreateContainerRequest.LabelsEntry
+	72,  // 31: agent.v1.CreateContainerRequest.healthcheck:type_name -> agent.v1.ContainerHealthcheck
+	76,  // 32: agent.v1.BuildImageRequest.meta:type_name -> agent.v1.BuildMeta
+	100, // 33: agent.v1.BuildMeta.build_args:type_name -> agent.v1.BuildMeta.BuildArgsEntry
+	78,  // 34: agent.v1.BuildImageResponse.log:type_name -> agent.v1.BuildLogChunk
+	79,  // 35: agent.v1.BuildImageResponse.result:type_name -> agent.v1.BuildImageResult
+	89,  // 36: agent.v1.ComposePsResponse.containers:type_name -> agent.v1.ComposeContainer
+	92,  // 37: agent.v1.TerminalRequest.open:type_name -> agent.v1.TerminalOpen
+	93,  // 38: agent.v1.TerminalRequest.resize:type_name -> agent.v1.TerminalResize
+	94,  // 39: agent.v1.TerminalRequest.close:type_name -> agent.v1.TerminalClose
+	96,  // 40: agent.v1.TerminalResponse.opened:type_name -> agent.v1.TerminalOpened
+	97,  // 41: agent.v1.TerminalResponse.exited:type_name -> agent.v1.TerminalExited
+	47,  // 42: agent.v1.AgentService.Register:input_type -> agent.v1.RegisterRequest
+	49,  // 43: agent.v1.AgentService.Heartbeat:input_type -> agent.v1.HeartbeatRequest
+	51,  // 44: agent.v1.UpdateService.RequestUpdate:input_type -> agent.v1.UpdateRequest
+	60,  // 45: agent.v1.DockerService.ListContainers:input_type -> agent.v1.ListContainersRequest
+	65,  // 46: agent.v1.DockerService.StartContainer:input_type -> agent.v1.ContainerActionRequest
+	65,  // 47: agent.v1.DockerService.StopContainer:input_type -> agent.v1.ContainerActionRequest
+	65,  // 48: agent.v1.DockerService.RestartContainer:input_type -> agent.v1.ContainerActionRequest
+	65,  // 49: agent.v1.DockerService.RemoveContainer:input_type -> agent.v1.ContainerActionRequest
+	67,  // 50: agent.v1.DockerService.RemoveVolume:input_type -> agent.v1.VolumeActionRequest
+	69,  // 51: agent.v1.DockerService.PullImage:input_type -> agent.v1.PullImageRequest
+	71,  // 52: agent.v1.DockerService.CreateContainer:input_type -> agent.v1.CreateContainerRequest
+	71,  // 53: agent.v1.DockerService.RunImage:input_type -> agent.v1.CreateContainerRequest
+	73,  // 54: agent.v1.DockerService.StreamLogs:input_type -> agent.v1.StreamLogsRequest
+	75,  // 55: agent.v1.BuildService.BuildImage:input_type -> agent.v1.BuildImageRequest
+	42,  // 56: agent.v1.ProxyService.WriteProxyConfig:input_type -> agent.v1.WriteProxyConfigRequest
+	44,  // 57: agent.v1.ProxyService.ReadACMEStorage:input_type -> agent.v1.ReadACMEStorageRequest
+	80,  // 58: agent.v1.ComposeService.ComposeValidate:input_type -> agent.v1.ComposeValidateRequest
+	82,  // 59: agent.v1.ComposeService.ComposeUp:input_type -> agent.v1.ComposeUpRequest
+	84,  // 60: agent.v1.ComposeService.ComposeDown:input_type -> agent.v1.ComposeDownRequest
+	86,  // 61: agent.v1.ComposeService.ComposeLogs:input_type -> agent.v1.ComposeLogsRequest
+	88,  // 62: agent.v1.ComposeService.ComposePs:input_type -> agent.v1.ComposePsRequest
+	2,   // 63: agent.v1.FileService.ListRoots:input_type -> agent.v1.ListRootsRequest
+	5,   // 64: agent.v1.FileService.List:input_type -> agent.v1.ListRequest
+	8,   // 65: agent.v1.FileService.Stat:input_type -> agent.v1.StatRequest
+	12,  // 66: agent.v1.FileService.Search:input_type -> agent.v1.SearchRequest
+	15,  // 67: agent.v1.FileService.Read:input_type -> agent.v1.ReadRequest
+	10,  // 68: agent.v1.FileService.DirectorySize:input_type -> agent.v1.DirectorySizeRequest
+	17,  // 69: agent.v1.FileService.Write:input_type -> agent.v1.WriteRequest
+	21,  // 70: agent.v1.FileService.Copy:input_type -> agent.v1.CopyRequest
+	22,  // 71: agent.v1.FileService.Delete:input_type -> agent.v1.DeleteRequest
+	35,  // 72: agent.v1.FileService.Mkdir:input_type -> agent.v1.MkdirRequest
+	37,  // 73: agent.v1.FileService.Rename:input_type -> agent.v1.RenameRequest
+	39,  // 74: agent.v1.FileService.Chmod:input_type -> agent.v1.ChmodRequest
+	33,  // 75: agent.v1.FileService.Compress:input_type -> agent.v1.CompressRequest
+	34,  // 76: agent.v1.FileService.Extract:input_type -> agent.v1.ExtractRequest
+	24,  // 77: agent.v1.FileService.ListTrash:input_type -> agent.v1.ListTrashRequest
+	26,  // 78: agent.v1.FileService.Restore:input_type -> agent.v1.RestoreRequest
+	28,  // 79: agent.v1.FileService.Purge:input_type -> agent.v1.PurgeRequest
+	30,  // 80: agent.v1.FileService.EmptyTrash:input_type -> agent.v1.EmptyTrashRequest
+	53,  // 81: agent.v1.ToolService.ListTools:input_type -> agent.v1.ListToolsRequest
+	56,  // 82: agent.v1.ToolService.InstallTool:input_type -> agent.v1.InstallToolRequest
+	56,  // 83: agent.v1.ToolService.UninstallTool:input_type -> agent.v1.InstallToolRequest
+	91,  // 84: agent.v1.TerminalService.OpenTerminal:input_type -> agent.v1.TerminalRequest
+	48,  // 85: agent.v1.AgentService.Register:output_type -> agent.v1.RegisterResponse
+	50,  // 86: agent.v1.AgentService.Heartbeat:output_type -> agent.v1.HeartbeatResponse
+	52,  // 87: agent.v1.UpdateService.RequestUpdate:output_type -> agent.v1.UpdateResponse
+	64,  // 88: agent.v1.DockerService.ListContainers:output_type -> agent.v1.ListContainersResponse
+	66,  // 89: agent.v1.DockerService.StartContainer:output_type -> agent.v1.ContainerActionResponse
+	66,  // 90: agent.v1.DockerService.StopContainer:output_type -> agent.v1.ContainerActionResponse
+	66,  // 91: agent.v1.DockerService.RestartContainer:output_type -> agent.v1.ContainerActionResponse
+	66,  // 92: agent.v1.DockerService.RemoveContainer:output_type -> agent.v1.ContainerActionResponse
+	68,  // 93: agent.v1.DockerService.RemoveVolume:output_type -> agent.v1.VolumeActionResponse
+	70,  // 94: agent.v1.DockerService.PullImage:output_type -> agent.v1.PullImageResponse
+	66,  // 95: agent.v1.DockerService.CreateContainer:output_type -> agent.v1.ContainerActionResponse
+	66,  // 96: agent.v1.DockerService.RunImage:output_type -> agent.v1.ContainerActionResponse
+	74,  // 97: agent.v1.DockerService.StreamLogs:output_type -> agent.v1.LogChunk
+	77,  // 98: agent.v1.BuildService.BuildImage:output_type -> agent.v1.BuildImageResponse
+	43,  // 99: agent.v1.ProxyService.WriteProxyConfig:output_type -> agent.v1.WriteProxyConfigResponse
+	46,  // 100: agent.v1.ProxyService.ReadACMEStorage:output_type -> agent.v1.ReadACMEStorageResponse
+	81,  // 101: agent.v1.ComposeService.ComposeValidate:output_type -> agent.v1.ComposeValidateResponse
+	83,  // 102: agent.v1.ComposeService.ComposeUp:output_type -> agent.v1.ComposeUpResponse
+	85,  // 103: agent.v1.ComposeService.ComposeDown:output_type -> agent.v1.ComposeDownResponse
+	87,  // 104: agent.v1.ComposeService.ComposeLogs:output_type -> agent.v1.ComposeLogChunk
+	90,  // 105: agent.v1.ComposeService.ComposePs:output_type -> agent.v1.ComposePsResponse
+	4,   // 106: agent.v1.FileService.ListRoots:output_type -> agent.v1.ListRootsResponse
+	7,   // 107: agent.v1.FileService.List:output_type -> agent.v1.ListResponse
+	9,   // 108: agent.v1.FileService.Stat:output_type -> agent.v1.StatResponse
+	14,  // 109: agent.v1.FileService.Search:output_type -> agent.v1.SearchResponse
+	16,  // 110: agent.v1.FileService.Read:output_type -> agent.v1.ReadChunk
+	11,  // 111: agent.v1.FileService.DirectorySize:output_type -> agent.v1.DirectorySizeResponse
+	20,  // 112: agent.v1.FileService.Write:output_type -> agent.v1.WriteResponse
+	32,  // 113: agent.v1.FileService.Copy:output_type -> agent.v1.Progress
+	32,  // 114: agent.v1.FileService.Delete:output_type -> agent.v1.Progress
+	36,  // 115: agent.v1.FileService.Mkdir:output_type -> agent.v1.MkdirResponse
+	38,  // 116: agent.v1.FileService.Rename:output_type -> agent.v1.RenameResponse
+	40,  // 117: agent.v1.FileService.Chmod:output_type -> agent.v1.ChmodResponse
+	32,  // 118: agent.v1.FileService.Compress:output_type -> agent.v1.Progress
+	32,  // 119: agent.v1.FileService.Extract:output_type -> agent.v1.Progress
+	25,  // 120: agent.v1.FileService.ListTrash:output_type -> agent.v1.ListTrashResponse
+	27,  // 121: agent.v1.FileService.Restore:output_type -> agent.v1.RestoreResponse
+	29,  // 122: agent.v1.FileService.Purge:output_type -> agent.v1.PurgeResponse
+	31,  // 123: agent.v1.FileService.EmptyTrash:output_type -> agent.v1.EmptyTrashResponse
+	55,  // 124: agent.v1.ToolService.ListTools:output_type -> agent.v1.ListToolsResponse
+	57,  // 125: agent.v1.ToolService.InstallTool:output_type -> agent.v1.ToolEvent
+	57,  // 126: agent.v1.ToolService.UninstallTool:output_type -> agent.v1.ToolEvent
+	95,  // 127: agent.v1.TerminalService.OpenTerminal:output_type -> agent.v1.TerminalResponse
+	85,  // [85:128] is the sub-list for method output_type
+	42,  // [42:85] is the sub-list for method input_type
+	42,  // [42:42] is the sub-list for extension type_name
+	42,  // [42:42] is the sub-list for extension extendee
+	0,   // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_agent_proto_init() }
@@ -6689,15 +7280,26 @@ func file_agent_v1_agent_proto_init() {
 		(*BuildImageResponse_Log)(nil),
 		(*BuildImageResponse_Result)(nil),
 	}
+	file_agent_v1_agent_proto_msgTypes[89].OneofWrappers = []any{
+		(*TerminalRequest_Open)(nil),
+		(*TerminalRequest_Input)(nil),
+		(*TerminalRequest_Resize)(nil),
+		(*TerminalRequest_Close)(nil),
+	}
+	file_agent_v1_agent_proto_msgTypes[93].OneofWrappers = []any{
+		(*TerminalResponse_Opened)(nil),
+		(*TerminalResponse_Output)(nil),
+		(*TerminalResponse_Exited)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_agent_proto_rawDesc), len(file_agent_v1_agent_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   92,
+			NumMessages:   99,
 			NumExtensions: 0,
-			NumServices:   8,
+			NumServices:   9,
 		},
 		GoTypes:           file_agent_v1_agent_proto_goTypes,
 		DependencyIndexes: file_agent_v1_agent_proto_depIdxs,

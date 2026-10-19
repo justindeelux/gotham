@@ -52,6 +52,13 @@ live only in [`TODO.md`](TODO.md).
 (CP + Postgres + Redis + node agent): connection, provisioning, test
 workflow, Playwright UI smoke, and what has been verified on real hardware.
 
+## Terminal sessions
+
+[`terminal-session-api.md`](terminal-session-api.md) — host PTY session API and
+lifecycle contract shared with the container-exec and terminal-view work
+packages: HTTP create/close, WebSocket framing and authentication, cleanup
+guarantees, and the service identity the shell runs as.
+
 ## Install & release
 
 [`install.md`](install.md) — control-plane and node-agent install, first login,

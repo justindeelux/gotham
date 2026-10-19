@@ -43,8 +43,9 @@ const vi: typeof en = {
     nameLabel: "Tên dịch vụ",
     namePlaceholder: "blog-staging",
     nodeLabel: "Node",
-    yamlLabel: "compose.yaml",
+    yamlLabel: "Tệp compose.yaml",
     yamlExample: "services:\n  web:\n    image: nginx:1.27-alpine",
+    yamlPlaceholder: "# Dán tài liệu compose tại đây\nservices:\n  web:\n    image: nginx:1.27-alpine",
     footnote:
       "Tham chiếu {env} được thay thế từ môi trường trước khi agent kiểm tra tài liệu. Một compose service được định tuyến bằng nhãn {label}. API từ chối tệp lớn hơn 1 MiB.",
     scopeError: "Chọn dự án và môi trường.",

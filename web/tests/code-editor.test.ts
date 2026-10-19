@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
     setLanguage: ReturnType<typeof vi.fn>;
     setSettings: ReturnType<typeof vi.fn>;
     setReadOnly: ReturnType<typeof vi.fn>;
+    setAccessibility: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
     requestMeasure: ReturnType<typeof vi.fn>;
     search: {
@@ -48,6 +49,7 @@ const mocks = vi.hoisted(() => {
       setLanguage: vi.fn(),
       setSettings: vi.fn(),
       setReadOnly: vi.fn(),
+      setAccessibility: vi.fn(),
       focus: vi.fn(),
       requestMeasure: vi.fn(),
       search: {
@@ -146,6 +148,12 @@ describe("CodeEditor", () => {
     wrapper.unmount();
   });
 
+  it("forwards the empty-document placeholder hint to the session", async () => {
+    const wrapper = await mountEditor({ preset: "yaml", placeholder: "services:" });
+    expect(lastOptions().placeholder).toBe("services:");
+    wrapper.unmount();
+  });
+
   it("defaults the aria label through i18n and keeps a caller override", async () => {
     const wrapper = await mountEditor();
     expect(lastOptions().ariaLabel).toBe("Code editor");
@@ -160,6 +168,42 @@ describe("CodeEditor", () => {
     const labeled = await mountEditor({ ariaLabel: "Compose YAML" });
     expect(lastOptions().ariaLabel).toBe("Compose YAML");
     labeled.unmount();
+  });
+
+  it("reconfigures labels, hint and invalid state without rebuilding the session", async () => {
+    const wrapper = await mountEditor({
+      preset: "yaml",
+      ariaLabel: "Compose file",
+      placeholder: "services:",
+    });
+    const session = mocks.sessions[0];
+    expect(lastOptions()).toMatchObject({
+      ariaLabel: "Compose file",
+      placeholder: "services:",
+      invalid: false,
+      describedBy: undefined,
+    });
+    const setDocCalls = session.setDoc.mock.calls.length;
+
+    await wrapper.setProps({
+      ariaLabel: "File compose",
+      placeholder: "# Dán tài liệu compose tại đây\nservices:",
+      invalid: true,
+      error: "Enter a compose document.",
+    });
+    await flushPromises();
+
+    // The same view keeps the draft: no second session, no document reset.
+    expect(mocks.createEditorSession).toHaveBeenCalledTimes(1);
+    expect(session.destroy).not.toHaveBeenCalled();
+    expect(session.setDoc).toHaveBeenCalledTimes(setDocCalls);
+    expect(session.setAccessibility).toHaveBeenLastCalledWith({
+      ariaLabel: "File compose",
+      placeholder: "# Dán tài liệu compose tại đây\nservices:",
+      invalid: true,
+      describedBy: expect.stringMatching(/^code-editor-error-/),
+    });
+    wrapper.unmount();
   });
 
   it("applies the wrap override on top of the stored settings", async () => {

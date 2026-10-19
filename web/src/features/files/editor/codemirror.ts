@@ -57,6 +57,18 @@ import type { EditorLineInfo } from "@/features/files/editor/goto";
 import type { EditorSettings } from "@/features/files/schemas/editorSettings";
 import type { EditorLanguageId } from "@/features/files/utils/editor";
 
+/** EditorAccessibility is the live accessible surface of an editor session. */
+export interface EditorAccessibility {
+  /** ariaLabel names the contenteditable surface for screen readers. */
+  ariaLabel: string;
+  /** placeholder is the empty-document hint in the active locale. */
+  placeholder?: string;
+  /** invalid marks the current document as failing the caller's schema. */
+  invalid: boolean;
+  /** describedBy links the validation message shown next to the editor. */
+  describedBy?: string;
+}
+
 /** EditorSession is the imperative handle a Vue component keeps per tab. */
 export interface EditorSession {
   getDoc: () => string;
@@ -64,6 +76,7 @@ export interface EditorSession {
   setLanguage: (_language: EditorLanguageId) => void;
   setSettings: (_settings: EditorSettings) => void;
   setReadOnly: (_readOnly: boolean) => void;
+  setAccessibility: (_accessibility: EditorAccessibility) => void;
   focus: () => void;
   requestMeasure: () => void;
   /** search drives the custom find/replace bar over the CM search state. */
@@ -82,6 +95,15 @@ export interface EditorSessionOptions {
   language: EditorLanguageId;
   /** ariaLabel names the contenteditable surface for screen readers. */
   ariaLabel: string;
+  /**
+   * placeholder is the empty-document hint; embedded editors pass their
+   * format example and fall back to the file editor wording.
+   */
+  placeholder?: string;
+  /** invalid marks the document as failing the caller's schema. */
+  invalid?: boolean;
+  /** describedBy links the validation message shown next to the editor. */
+  describedBy?: string;
   readOnly: boolean;
   settings: EditorSettings;
   onChange: (_doc: string) => void;
@@ -195,6 +217,27 @@ export function loadLanguage(language: EditorLanguageId): Promise<Extension> {
  *  session can be flipped read-only when the caller's role/root changes. */
 function readOnlyExtensions(readOnly: boolean): Extension {
   return [EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)];
+}
+
+/**
+ * accessibilityExtensions keeps the label, empty-document hint and validation
+ * attributes in one compartment, so a locale switch or a schema failure
+ * reconfigures them without recreating the view (and losing the user's edits).
+ */
+function accessibilityExtensions(accessibility: EditorAccessibility): Extension {
+  const attributes: Record<string, string> = {
+    "aria-label": accessibility.ariaLabel,
+  };
+  if (accessibility.invalid) {
+    attributes["aria-invalid"] = "true";
+  }
+  if (accessibility.describedBy) {
+    attributes["aria-describedby"] = accessibility.describedBy;
+  }
+  return [
+    placeholderExt(accessibility.placeholder ?? "(empty file)"),
+    EditorView.contentAttributes.of(attributes),
+  ];
 }
 
 /** gothamHighlight maps syntax tags onto the app's dark palette. */
@@ -322,6 +365,8 @@ function editorTheme(settings: EditorSettings): Extension {
           overflow: "auto",
         },
         ".cm-content": { caretColor: "var(--accent)" },
+        // Multi-line format examples stay readable when the document is empty.
+        ".cm-placeholder": { whiteSpace: "pre-wrap" },
         ".cm-gutters": {
           backgroundColor: background,
           color: dark ? "var(--muted)" : "var(--meta)",
@@ -412,10 +457,17 @@ export async function createEditorSession(
   const languageCompartment = new Compartment();
   const settingsCompartment = new Compartment();
   const readOnlyCompartment = new Compartment();
+  const accessibilityCompartment = new Compartment();
   // The completion sources follow the language, so both dimensions are kept
   // here and the settings compartment is rebuilt when either one changes.
   let currentLanguage = options.language;
   let currentSettings = options.settings;
+  let currentAccessibility: EditorAccessibility = {
+    ariaLabel: options.ariaLabel,
+    placeholder: options.placeholder,
+    invalid: options.invalid ?? false,
+    describedBy: options.describedBy,
+  };
   const initialLanguage = await loadLanguage(options.language);
 
   // One keymap, built from the shared shortcut table, so the sheet and the
@@ -460,11 +512,10 @@ export async function createEditorSession(
           editorSettingsExtensions(options.settings, options.language),
         ),
         languageCompartment.of(initialLanguage),
-        placeholderExt("(empty file)"),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly)),
         // The contenteditable surface needs its own accessible name (axe
         // aria-input-field-name); the window title is not enough.
-        EditorView.contentAttributes.of({ "aria-label": options.ariaLabel }),
+        accessibilityCompartment.of(accessibilityExtensions(currentAccessibility)),
         // indentWithTab is deliberately omitted: it binds Tab to indentation,
         // which traps keyboard focus in the editor (WCAG 2.1.2). Tab now moves
         // focus out of the editor as usual.
@@ -560,6 +611,14 @@ export async function createEditorSession(
     setReadOnly(readOnly: boolean): void {
       view.dispatch({
         effects: readOnlyCompartment.reconfigure(readOnlyExtensions(readOnly)),
+      });
+    },
+    setAccessibility(accessibility: EditorAccessibility): void {
+      currentAccessibility = accessibility;
+      view.dispatch({
+        effects: accessibilityCompartment.reconfigure(
+          accessibilityExtensions(accessibility),
+        ),
       });
     },
     focus(): void {

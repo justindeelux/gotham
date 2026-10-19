@@ -18,6 +18,7 @@ import {
 } from "@/features/applications/composables/useCreateAppWizard";
 import en from "@/features/applications/locales/en";
 import vi from "@/features/applications/locales/vi";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -152,9 +153,27 @@ describe("JUS-75 notices are small inline alerts under their field", () => {
     expect(alerts).toHaveLength(1);
     expect(alerts[0].props("showIcon")).toBe(false);
     expect(wrapper.find(".n-alert.field-alert").exists()).toBe(true);
+    const editor = wrapper.findComponent(CodeEditor);
+    expect(editor.props("preset")).toBe("yaml");
+    expect(editor.props("placeholder")).toBe("services:");
     const html = wrapper.html();
-    expect(html.indexOf("services:")).toBeLessThan(html.indexOf(alerts[0].text().slice(0, 24)));
+    expect(html.indexOf("code-editor")).toBeLessThan(html.indexOf(alerts[0].text().slice(0, 24)));
     wrapper.unmount();
+  });
+
+  it("edits Dockerfile and compose documents in the code editor", () => {
+    const cases = [
+      { sourceType: "dockerfile", preset: "dockerfile", hint: "FROM alpine:3.20" },
+      { sourceType: "compose", preset: "yaml", hint: "services:" },
+    ];
+    for (const item of cases) {
+      const { wrapper } = mountSourceStep(item.sourceType);
+      const editor = wrapper.findComponent(CodeEditor);
+      expect(editor.props("preset")).toBe(item.preset);
+      expect(editor.props("placeholder")).toBe(item.hint);
+      expect(editor.props("readOnly")).toBe(false);
+      wrapper.unmount();
+    }
   });
 
   it("renders the build-args warning iconless and below the rows", () => {

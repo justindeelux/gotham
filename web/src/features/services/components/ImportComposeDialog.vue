@@ -13,6 +13,7 @@ import {
 import { toRef } from "vue";
 
 import { useImportService } from "@/features/services/composables/useImportService";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import { activeLocale, i18n } from "@/shared/i18n";
 import type { Service } from "@/features/services/api/services";
 import ResourceScopeSummary from "@/features/projects/components/ResourceScopeSummary.vue";
@@ -99,13 +100,12 @@ const dialog = useImportService(
           />
         </div>
         <NFormItem :label="t('services.import.yamlLabel')" class="field-import-yaml">
-          <NInput
-            v-model:value="dialog.yaml.value"
-            type="textarea"
-            class="mono"
-            spellcheck="false"
-            :autosize="{ minRows: 10, maxRows: 24 }"
-            :placeholder="t('services.import.yamlExample')"
+          <CodeEditor
+            v-model="dialog.yaml.value"
+            class="import-code"
+            preset="yaml"
+            height="280px"
+            :placeholder="t('services.import.yamlPlaceholder')"
             :aria-label="t('services.import.yamlLabel')"
           />
         </NFormItem>
@@ -141,12 +141,12 @@ const dialog = useImportService(
   gap: var(--form-item-gap) var(--space-4);
 }
 
-.mono {
-  font-family: var(--font-mono);
-}
-
 .small {
   font-size: var(--text-xs);
+}
+
+.import-code {
+  width: 100%;
 }
 
 .muted {

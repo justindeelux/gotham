@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NFormItem, NInput, NSpace, NText } from "naive-ui";
+import { NAlert, NButton, NCard, NFormItem, NSpace, NText } from "naive-ui";
 import { toRef } from "vue";
 import { useI18n } from "vue-i18n";
 
 import type { Application } from "@/features/applications/api/applications";
 import BuildArgsEditor from "@/features/applications/components/BuildArgsEditor.vue";
 import { useDockerfileEditor } from "@/features/applications/composables/useDockerfileEditor";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 
 interface Props {
   application: Application;
@@ -32,13 +33,16 @@ const { t } = useI18n();
         {{ editor.saveError.value }}
       </NAlert>
       <NFormItem :label="t('applications.dockerfile.content')">
-        <NInput
-          v-model:value="editor.content.value"
-          type="textarea"
-          class="mono"
-          :rows="12"
+        <CodeEditor
+          v-model="editor.content.value"
+          class="source-code"
+          :class="{ 'source-code--invalid': !editor.contentValid.value }"
+          preset="dockerfile"
+          height="280px"
+          :invalid="!editor.contentValid.value"
+          :error="t('applications.dockerfile.contentInvalid')"
           :placeholder="t('applications.dockerfile.placeholder')"
-          :status="editor.contentValid.value ? undefined : 'error'"
+          :aria-label="t('applications.dockerfile.content')"
         />
       </NFormItem>
       <NFormItem :label="t('applications.dockerfile.buildArgs')">
@@ -64,5 +68,13 @@ const { t } = useI18n();
 <style scoped>
 .small {
   font-size: var(--text-xs);
+}
+
+.source-code {
+  width: 100%;
+}
+
+.source-code--invalid {
+  border-color: var(--danger);
 }
 </style>

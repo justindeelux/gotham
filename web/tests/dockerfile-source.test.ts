@@ -1,10 +1,12 @@
 // GS-7 Dockerfile source: schema gates, wizard Source step and detail editor.
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, nextTick, ref } from "vue";
 
+import DockerfileEditor from "@/features/applications/components/DockerfileEditor.vue";
+import WizardSourceStep from "@/features/applications/components/WizardSourceStep.vue";
 import {
   buildArgKeySchema,
   buildArgValueSchema,
@@ -14,11 +16,14 @@ import {
 import {
   buildArgsPayload,
   buildArgsValid,
+  provideCreateWizard,
   useCreateAppWizard,
 } from "@/features/applications/composables/useCreateAppWizard";
 import { useDockerfileEditor } from "@/features/applications/composables/useDockerfileEditor";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import {
+  i18n,
   registerDiscoveredCatalogs,
   resetLocaleState,
   syncComposerLocale,
@@ -103,6 +108,25 @@ function mountWizard() {
     },
   });
   const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
+  return { w: wiz!, wrapper };
+}
+
+/** mountSourceStep renders the wizard Source step for one source type. */
+function mountSourceStep(sourceType: string) {
+  setActivePinia(createPinia());
+  let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
+  const Harness = defineComponent({
+    setup() {
+      wiz = useCreateAppWizard(ref(false), (() => undefined) as never);
+      provideCreateWizard(wiz);
+      wiz.form.sourceType = sourceType as never;
+      return () => h(WizardSourceStep);
+    },
+  });
+  const wrapper = mount(
+    { render: () => h(NMessageProvider, null, { default: () => h(Harness) }) },
+    { global: { plugins: [i18n] } },
+  );
   return { w: wiz!, wrapper };
 }
 
@@ -260,9 +284,127 @@ describe("wizard dockerfile source", () => {
     expect(w.isDockerfile.value).toBe(true);
     wrapper.unmount();
   });
+
+  it("routes the Dockerfile editor document into the form and payload", async () => {
+    const { w, wrapper } = mountSourceStep("dockerfile");
+    const code = wrapper.findComponent(CodeEditor);
+    expect(code.props("preset")).toBe("dockerfile");
+    expect(code.props("placeholder")).toBe("FROM alpine:3.20");
+    expect(code.props("ariaLabel")).toBe("Dockerfile");
+
+    code.vm.$emit("update:modelValue", "FROM alpine:3.21\n");
+    await nextTick();
+    expect(w.form.dockerfileContent).toBe("FROM alpine:3.21\n");
+
+    w.form.name = "docker-demo";
+    expect(w.buildPayload()).toMatchObject({
+      source_type: "dockerfile",
+      dockerfile_content: "FROM alpine:3.21\n",
+    });
+    wrapper.unmount();
+  });
+
+  it("follows the locale switch without losing the wizard Dockerfile draft", async () => {
+    const { w, wrapper } = mountSourceStep("dockerfile");
+    const code = wrapper.findComponent(CodeEditor);
+    const typed = "FROM alpine:3.21\nRUN echo typed\n";
+    code.vm.$emit("update:modelValue", typed);
+    await nextTick();
+    expect(w.form.dockerfileContent).toBe(typed);
+
+    syncComposerLocale("vi");
+    await nextTick();
+
+    const switched = wrapper.findComponent(CodeEditor);
+    expect(switched.props("ariaLabel")).toBe("Nội dung Dockerfile");
+    expect(switched.props("placeholder")).toBe(
+      "# Dán Dockerfile tại đây\nFROM alpine:3.20",
+    );
+    expect(switched.props("modelValue")).toBe(typed);
+    expect(w.form.dockerfileContent).toBe(typed);
+    syncComposerLocale("en");
+    wrapper.unmount();
+  });
 });
 
 describe("detail dockerfile editor", () => {
+  it("saves the document typed in the code editor", async () => {
+    setActivePinia(createPinia());
+    const store = useApplicationsStore();
+    const seen: Array<Record<string, unknown>> = [];
+    store.update = vi.fn(async (_id: string, input: Record<string, unknown>) => {
+      seen.push(input);
+      return {} as never;
+    }) as never;
+
+    const app = {
+      id: "app-1",
+      source_type: "dockerfile",
+      dockerfile_content: "FROM alpine:3.20\n",
+      build_args: {},
+      updated_at: "2026-10-08T00:00:00Z",
+    };
+    const wrapper = mount(DockerfileEditor, {
+      props: { application: app as never },
+      global: { plugins: [i18n] },
+    });
+
+    const code = wrapper.findComponent(CodeEditor);
+    expect(code.props("preset")).toBe("dockerfile");
+    expect(code.props("ariaLabel")).toBe("Dockerfile");
+    code.vm.$emit("update:modelValue", "FROM alpine:3.21\n");
+    await nextTick();
+
+    const save = wrapper.findAll("button").find((button) => button.text() === "Save Dockerfile");
+    expect(save).toBeDefined();
+    await save!.trigger("click");
+    await flushPromises();
+
+    expect(seen).toEqual([
+      { dockerfile_content: "FROM alpine:3.21\n", build_args: {} },
+    ]);
+    wrapper.unmount();
+  });
+
+  it("follows the locale switch and exposes the invalid state accessibly", async () => {
+    setActivePinia(createPinia());
+    const app = {
+      id: "app-1",
+      source_type: "dockerfile",
+      dockerfile_content: "FROM alpine:3.20\n",
+      build_args: {},
+      updated_at: "2026-10-08T00:00:00Z",
+    };
+    const wrapper = mount(DockerfileEditor, {
+      props: { application: app as never },
+      global: { plugins: [i18n] },
+    });
+    const code = wrapper.findComponent(CodeEditor);
+    const typed = "FROM alpine:3.21\nRUN echo typed\n";
+    code.vm.$emit("update:modelValue", typed);
+    await nextTick();
+
+    syncComposerLocale("vi");
+    await nextTick();
+    await flushPromises();
+
+    const switched = wrapper.findComponent(CodeEditor);
+    expect(switched.props("ariaLabel")).toBe("Nội dung Dockerfile");
+    expect(switched.props("placeholder")).toBe(
+      "# Dán Dockerfile tại đây\nFROM alpine:3.20",
+    );
+    expect(switched.props("modelValue")).toBe(typed);
+
+    switched.vm.$emit("update:modelValue", "RUN echo no-from\n");
+    await nextTick();
+    const invalidated = wrapper.findComponent(CodeEditor);
+    expect(invalidated.props("invalid")).toBe(true);
+    expect(invalidated.props("error")).toBe("Hãy nhập Dockerfile có chỉ thị FROM.");
+
+    syncComposerLocale("en");
+    wrapper.unmount();
+  });
+
   it("seeds from the row and saves text plus args", async () => {
     setActivePinia(createPinia());
     const store = useApplicationsStore();

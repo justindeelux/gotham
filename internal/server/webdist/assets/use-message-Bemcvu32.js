@@ -1,9 +1,0 @@
-<<<<<<< HEAD:internal/server/webdist/assets/use-message-Dtkkw3a2.js
-<<<<<<<< HEAD:internal/server/webdist/assets/use-message-9bj2x4AI.js
-import{bv as s,ax as o,gA as t}from"./index-X8F82YsX.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
-========
-import{bv as s,ax as o,gB as t}from"./index-XXvlwPXa.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
->>>>>>>> 8f20c8664 (refactor(applications): decouple app from port and domain):internal/server/webdist/assets/use-message-Dtkkw3a2.js
-=======
-import{bv as s,ax as o,gB as t}from"./index-1cKr61aD.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
->>>>>>> 717f990fc (refactor(applications): decouple app from port and domain):internal/server/webdist/assets/use-message-Bemcvu32.js

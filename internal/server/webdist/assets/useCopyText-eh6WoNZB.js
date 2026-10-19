@@ -1,9 +1,0 @@
-<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-BQFFyhNq.js
-<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-DWLaUBYo.js
-import{e as i}from"./index-Dy75nE_N.js";import{u as n}from"./use-message-9bj2x4AI.js";import{bc as e}from"./index-X8F82YsX.js";function l(){const o=n(),{copy:t,copied:c}=i({legacy:!0});async function a(s,r){try{if(await t(s),!c.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:a}}export{l as u};
-========
-import{e as i}from"./index-BbyNed10.js";import{u as n}from"./use-message-Dtkkw3a2.js";import{bc as e}from"./index-XXvlwPXa.js";function l(){const o=n(),{copy:t,copied:c}=i({legacy:!0});async function a(s,r){try{if(await t(s),!c.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:a}}export{l as u};
->>>>>>>> 8f20c8664 (refactor(applications): decouple app from port and domain):internal/server/webdist/assets/useCopyText-BQFFyhNq.js
-=======
-import{e as i}from"./index-DCXSx83j.js";import{u as n}from"./use-message-Bemcvu32.js";import{bc as e}from"./index-1cKr61aD.js";function l(){const o=n(),{copy:t,copied:c}=i({legacy:!0});async function a(s,r){try{if(await t(s),!c.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:a}}export{l as u};
->>>>>>> 717f990fc (refactor(applications): decouple app from port and domain):internal/server/webdist/assets/useCopyText-eh6WoNZB.js

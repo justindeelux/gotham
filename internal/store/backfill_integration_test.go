@@ -66,24 +66,30 @@ func TestBackfillApplicationCertificates(t *testing.T) {
 		}
 		return app
 	}
-	addDomain := func(appID pgtype.UUID, domain string, primary, disabled bool) {
+	addDomain := func(appID pgtype.UUID, domain string, primary, disabled bool, protocol string) {
 		t.Helper()
 		if _, err := st.CreateApplicationDomain(ctx, sqlc.CreateApplicationDomainParams{
 			ApplicationID: appID, Domain: domain, IsPrimary: primary, Disabled: disabled,
+			Port: 3000, Protocol: protocol,
 		}); err != nil {
 			t.Fatalf("create domain %s: %v", domain, err)
 		}
 	}
 
 	plain := newApp("bf-plain")
-	addDomain(plain.ID, fmt.Sprintf("plain-%d.example.com", suffix), true, false)
+	addDomain(plain.ID, fmt.Sprintf("plain-%d.example.com", suffix), true, false, "https")
 
 	disabled := newApp("bf-disabled")
-	addDomain(disabled.ID, fmt.Sprintf("disabled-%d.example.com", suffix), true, true)
+	addDomain(disabled.ID, fmt.Sprintf("disabled-%d.example.com", suffix), true, true, "https")
+
+	// A plain-HTTP domain needs no certificate order: the backfill leaves it
+	// alone.
+	httpOnly := newApp("bf-http")
+	addDomain(httpOnly.ID, fmt.Sprintf("http-%d.example.com", suffix), true, false, "http")
 
 	wild := newApp("bf-wild")
-	addDomain(wild.ID, fmt.Sprintf("wild-%d.example.com", suffix), true, false)
-	addDomain(wild.ID, fmt.Sprintf("sibling-%d.example.com", suffix), false, false)
+	addDomain(wild.ID, fmt.Sprintf("wild-%d.example.com", suffix), true, false, "https")
+	addDomain(wild.ID, fmt.Sprintf("sibling-%d.example.com", suffix), false, false, "https")
 	sealed, err := providers.SealSecret("integration-key", "do-token")
 	if err != nil {
 		t.Fatalf("seal: %v", err)
@@ -118,6 +124,14 @@ func TestBackfillApplicationCertificates(t *testing.T) {
 	}
 	if len(certs) != 1 || !certs[0].Enabled || certs[0].Challenge != "http-01" || certs[0].Wildcard {
 		t.Fatalf("plain intents = %#v, want one enabled http-01 default", certs)
+	}
+
+	certs, err = st.ListDomainCertificatesByApplication(ctx, httpOnly.ID)
+	if err != nil {
+		t.Fatalf("list http intents: %v", err)
+	}
+	if len(certs) != 0 {
+		t.Fatalf("http domain intents = %#v, want none", certs)
 	}
 
 	certs, err = st.ListDomainCertificatesByApplication(ctx, disabled.ID)

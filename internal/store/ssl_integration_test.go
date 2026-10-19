@@ -84,6 +84,12 @@ func TestSSLCertificateStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create application: %v", err)
 	}
+	if _, err := st.CreateApplicationDomain(ctx, sqlc.CreateApplicationDomainParams{
+		ApplicationID: app.ID, Domain: "app.example.com", IsPrimary: true,
+		Port: 3000, Protocol: "https",
+	}); err != nil {
+		t.Fatalf("create application domain: %v", err)
+	}
 
 	sealed, err := providers.SealSecret("integration-key", "cf-secret-token")
 	if err != nil {

@@ -224,4 +224,17 @@
   --editor-light-tag: #111827;
   --editor-light-link: #0e7490;
   --editor-light-invalid: #dc2626;
+
+  /* ── Brand assets (JUS-239) ────────────────────────────────────────
+   * The brand set ships as static files under /logo (web/public/logo).
+   * Only the height is a token: every lockup keeps the asset's own
+   * intrinsic ratio, so no width is hard-coded anywhere.
+   *   · --brand-mark-h      "GO" monogram (rail home tile)
+   *   · --brand-wordmark-h  "GOthan" wordmark (sidebar head)
+   *   · --brand-wordmark-sm-h  compact wordmark (phone auth header)
+   *   · --brand-logo-h      stacked lockup (auth shell) */
+  --brand-mark-h: 20px;
+  --brand-wordmark-h: 18px;
+  --brand-wordmark-sm-h: 16px;
+  --brand-logo-h: 120px;
 }

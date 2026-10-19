@@ -63,17 +63,7 @@ onMounted(() => {
   <nav class="rail" :aria-label="$t('servers.rail.navLabel')">
     <div class="rail-item" :class="{ 'is-active': isDashboard }">
       <RailIconButton :to="{ name: 'dashboard' }" :label="$t('servers.rail.home')">
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          aria-hidden="true"
-        >
-          <path d="M5 19V11a7 7 0 0114 0v8" />
-          <path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19" />
-        </svg>
+        <span class="rail-brand" aria-hidden="true"></span>
       </RailIconButton>
     </div>
 
@@ -261,6 +251,19 @@ onMounted(() => {
 :deep(.rail-btn) svg {
   width: 22px;
   height: 22px;
+}
+
+/* JUS-239: the rail home tile carries the brand monogram. The artwork is
+ * two-tone (accent blue + near-white), so it is painted as a mask instead of
+ * an image: the glyph then follows the tile's foreground and stays legible in
+ * every state — idle, hover and the accent-filled active tile. */
+.rail-brand {
+  display: block;
+  height: var(--brand-mark-h);
+  aspect-ratio: 942 / 534;
+  background-color: currentColor;
+  -webkit-mask: url("/logo/gotham-icon.svg") center / contain no-repeat;
+  mask: url("/logo/gotham-icon.svg") center / contain no-repeat;
 }
 
 :deep(.rail-btn--add) {

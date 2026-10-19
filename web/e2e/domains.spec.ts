@@ -485,10 +485,17 @@ test.describe("domains", () => {
     await tab(page, "Domains").click();
     const domainCard = page.locator(".n-card").filter({ hasText: "Domains" }).first();
     const primaryRow = domainCard.locator(".domain-row").filter({ hasText: domain });
-    await primaryRow.getByRole("button", { name: "Edit" }).click();
+    await primaryRow
+      .getByRole("button", { name: `Edit domain ${domain}` })
+      .click();
     const domainModal = page.locator(".domain-form-modal");
     await expect(domainModal).toBeVisible();
     await domainModal.locator('input[aria-label="Domain hostname"]').fill(changedDomain);
+    // The old host has a certificate intent: the modal must warn that saving
+    // removes it before the user commits the rename.
+    await expect(
+      domainModal.getByText(/removes the certificate configuration recorded for/i),
+    ).toBeVisible();
     await domainModal.getByRole("button", { name: "Save domain" }).click();
     await expect(domainModal).toBeHidden();
     const changedRow = domainCard.locator(".domain-row").filter({ hasText: changedDomain });
@@ -496,7 +503,9 @@ test.describe("domains", () => {
 
     // The certificate action opens the intent of the clicked row, which has
     // no certificate yet (the earlier intent was recorded for the old host).
-    await changedRow.getByRole("button", { name: "Certificate" }).click();
+    await changedRow
+      .getByRole("button", { name: `Certificate for ${changedDomain}` })
+      .click();
     const rowCertModal = page.locator(".certificate-modal");
     await expect(rowCertModal).toBeVisible();
     await expect(rowCertModal.getByText(changedDomain, { exact: true })).toBeVisible();
@@ -521,7 +530,7 @@ test.describe("domains", () => {
     await expect(aliasRow).toHaveCount(1);
     await expect(aliasCard.getByText(/something went wrong/i)).toHaveCount(0);
     await expect(aliasCard.getByText(/cannot read properties/i)).toHaveCount(0);
-    await aliasRow.getByRole("button", { name: "Remove" }).click();
+    await aliasRow.getByRole("button", { name: `Remove ${aliasDomain}` }).click();
     await page.getByRole("button", { name: "Confirm", exact: true }).click();
     await expect(aliasRow).toHaveCount(0);
     await expect(aliasCard.getByText(/something went wrong/i)).toHaveCount(0);
@@ -529,8 +538,7 @@ test.describe("domains", () => {
     // ── delete certificate, then the now-unreferenced provider ───────────
     await page.goto("/domains");
     await tab(page, "Certificates").click();
-    // Target the row by its recorded-domain cell: the table also holds the
-    // intent left for the old host under the same application.
+    // Target the row by its recorded-domain cell.
     certRow = page
       .getByRole("row")
       .filter({ has: page.locator(".mono", { hasText: changedDomain }) });
@@ -538,17 +546,6 @@ test.describe("domains", () => {
     await certRow.getByRole("button", { name: "Delete" }).click();
     await page.getByRole("button", { name: "Confirm", exact: true }).click();
     await expect(certRow).toHaveCount(0);
-
-    // Editing a domain row leaves the intent recorded for the old host; the
-    // per-domain UI no longer re-records it implicitly, so remove it before
-    // the provider (still referenced by that intent) can be deleted.
-    const staleCertRow = page
-      .getByRole("row")
-      .filter({ has: page.locator(".mono", { hasText: domain }) });
-    await expect(staleCertRow).toHaveCount(1);
-    await staleCertRow.getByRole("button", { name: "Delete" }).click();
-    await page.getByRole("button", { name: "Confirm", exact: true }).click();
-    await expect(staleCertRow).toHaveCount(0);
 
     await tab(page, "DNS providers").click();
     providerCard = page.locator(".channel-card").filter({ hasText: rotatedName });

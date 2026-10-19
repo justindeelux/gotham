@@ -32,6 +32,7 @@ vi.mock("@/features/domains/api/proxy", async (importOriginal) => {
     ...actual,
     listCertificates: vi.fn(),
     listDNSProviders: vi.fn(),
+    deleteCertificate: vi.fn(),
   };
 });
 
@@ -45,6 +46,7 @@ import {
   type DomainInput,
 } from "@/features/applications/api/applications";
 import {
+  deleteCertificate,
   listCertificates,
   listDNSProviders,
 } from "@/features/domains/api/proxy";
@@ -129,8 +131,21 @@ describe("domain mutations work through the table and modal", () => {
       appRef.value.primary_domain = primary;
       return { ...appRef.value };
     });
-    vi.mocked(listCertificates).mockResolvedValue([]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      {
+        id: "cert-1",
+        application_id: appId,
+        domain: "www.example.com",
+        enabled: true,
+        challenge: "http-01",
+        dns_provider_id: "",
+        wildcard: false,
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-02T00:00:00Z",
+      },
+    ]);
     vi.mocked(listDNSProviders).mockResolvedValue([]);
+    vi.mocked(deleteCertificate).mockResolvedValue(undefined);
 
     const router = testRouter();
     await router.isReady();
@@ -190,6 +205,7 @@ describe("domain mutations work through the table and modal", () => {
 
     expect(errorsShown()).toBe(false);
     expect(wrapper.text()).toContain("Domain detached.");
+    expect(vi.mocked(deleteCertificate)).toHaveBeenCalledWith("cert-1");
     expect(
       wrapper.findAll(".domain-row").some((row) => row.text().includes("www.example.com")),
     ).toBe(false);

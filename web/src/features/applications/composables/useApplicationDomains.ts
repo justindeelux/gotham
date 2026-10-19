@@ -25,6 +25,7 @@ import {
   useDomainsRefresh,
 } from "@/features/applications/composables/domainRefresh";
 import { extractComposeServicePorts } from "@/features/applications/utils/compose";
+import { describeProxyError, useProxyStore } from "@/features/domains";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
 
@@ -45,6 +46,7 @@ export interface DomainDraft {
 export function useApplicationDomains(application: Ref<Application>) {
   const message = useMessage();
   const appsStore = useApplicationsStore();
+  const proxyStore = useProxyStore();
   /** Captured during setup: inject() has no active instance after an await. */
   const refreshTick = useDomainsRefresh();
 
@@ -65,6 +67,7 @@ export function useApplicationDomains(application: Ref<Application>) {
   const busyDomainId = ref<string | null>(null);
   const rowErrorId = ref<string | null>(null);
   const rowError = ref<string | null>(null);
+  const rowErrorIsProxy = ref(false);
   const formServerError = ref<unknown>(null);
   const rowServerError = ref<unknown>(null);
   /** refreshSeq drops an out-of-order response after an application switch. */
@@ -102,7 +105,46 @@ export function useApplicationDomains(application: Ref<Application>) {
     formServerError.value = null;
     rowErrorId.value = null;
     rowError.value = null;
+    rowErrorIsProxy.value = false;
     rowServerError.value = null;
+  }
+
+  /** certificateIntent finds the intent recorded for exactly this host. */
+  function certificateIntent(host: string) {
+    return (
+      proxyStore.certificates.find(
+        (item) => item.application_id === application.value.id && item.domain === host,
+      ) ?? null
+    );
+  }
+
+  /**
+   * removeCertificateIntent deletes the intent recorded for a host that is no
+   * longer attached. A failure is returned (not swallowed) so the host row can
+   * surface it: the domain mutation already succeeded, so the stale intent
+   * must stay visible rather than disappear silently.
+   */
+  async function removeCertificateIntent(host: string): Promise<unknown | null> {
+    const intent = certificateIntent(host);
+    if (intent === null) {
+      return null;
+    }
+    try {
+      await proxyStore.removeCertificate(intent.id);
+      return null;
+    } catch (error) {
+      return error;
+    }
+  }
+
+  /** surfaceRowError keeps one failure in the row banner across locale switches. */
+  function surfaceRowError(id: string | null, error: unknown, isProxy: boolean): void {
+    rowServerError.value = error;
+    rowErrorId.value = id;
+    rowErrorIsProxy.value = isProxy;
+    rowError.value = isProxy
+      ? describeProxyError(error)
+      : describeApplicationError(error);
   }
 
   async function refresh(silent = false): Promise<void> {
@@ -216,20 +258,37 @@ export function useApplicationDomains(application: Ref<Application>) {
       formError.value = payload;
       return;
     }
+    const editingID = editingId.value;
+    const editing =
+      editingID === null
+        ? null
+        : domains.value.find((row) => row.id === editingID) ?? null;
+    const oldHost = editing?.domain ?? "";
+    const renamed = editing !== null && payload.domain !== oldHost;
     saving.value = true;
     try {
-      if (editingId.value !== null) {
-        await updateDomain(application.value.id, editingId.value, payload);
+      if (editingID !== null) {
+        await updateDomain(application.value.id, editingID, payload);
         message.success(tr("applications.detail.domainUpdated"));
       } else {
         await addDomain(application.value.id, payload);
         message.success(tr("applications.detail.domainAdded"));
       }
+      // A renamed host keeps no route for its old certificate, so drop that
+      // intent instead of leaving ACME orders for a host the app no longer
+      // serves. The edit modal warned before this happened.
+      const cleanupError = renamed ? await removeCertificateIntent(oldHost) : null;
       resetDraft();
       formOpen.value = false;
       await refresh(true);
       await appsStore.fetchApplication(application.value.id);
       bumpDomainsRefresh(refreshTick);
+      if (cleanupError !== null) {
+        surfaceRowError(null, cleanupError, true);
+        if (rowError.value !== null) {
+          message.error(rowError.value);
+        }
+      }
     } catch (error) {
       formServerError.value = error;
       formError.value = describeApplicationError(error);
@@ -243,6 +302,9 @@ export function useApplicationDomains(application: Ref<Application>) {
     busyDomainId.value = domain.id;
     try {
       await removeDomain(application.value.id, domain.id);
+      // Removing a host detaches its routes; delete the now-unreachable
+      // certificate intent too. The popconfirm warned when one existed.
+      const cleanupError = await removeCertificateIntent(domain.domain);
       if (editingId.value === domain.id) {
         resetDraft();
       }
@@ -250,10 +312,14 @@ export function useApplicationDomains(application: Ref<Application>) {
       await appsStore.fetchApplication(application.value.id);
       bumpDomainsRefresh(refreshTick);
       message.success(tr("applications.detail.domainRemoved"));
+      if (cleanupError !== null) {
+        surfaceRowError(domain.id, cleanupError, true);
+        if (rowError.value !== null) {
+          message.error(rowError.value);
+        }
+      }
     } catch (error) {
-      rowServerError.value = error;
-      rowErrorId.value = domain.id;
-      rowError.value = describeApplicationError(error);
+      surfaceRowError(domain.id, error, false);
     } finally {
       busyDomainId.value = null;
     }
@@ -269,9 +335,7 @@ export function useApplicationDomains(application: Ref<Application>) {
       bumpDomainsRefresh(refreshTick);
       message.success(tr("applications.detail.primaryChanged"));
     } catch (error) {
-      rowServerError.value = error;
-      rowErrorId.value = domain.id;
-      rowError.value = describeApplicationError(error);
+      surfaceRowError(domain.id, error, false);
     } finally {
       busyDomainId.value = null;
     }
@@ -292,7 +356,9 @@ export function useApplicationDomains(application: Ref<Application>) {
       }
     }
     if (rowError.value !== null && rowServerError.value !== null) {
-      rowError.value = describeApplicationError(rowServerError.value);
+      rowError.value = rowErrorIsProxy.value
+        ? describeProxyError(rowServerError.value)
+        : describeApplicationError(rowServerError.value);
     }
   });
   onUnmounted(stopLocaleRefresh);

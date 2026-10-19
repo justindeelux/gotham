@@ -25,7 +25,6 @@ export function useCertificateConfig(
   const message = useMessage();
   const proxyStore = useProxyStore();
 
-  const certificateOpen = ref(false);
   const certificateSaving = ref(false);
   /**
    * certificateErrorRaw keeps the failure behind the dialog banner;
@@ -84,7 +83,6 @@ export function useCertificateConfig(
     certificateDraft.value = existing
       ? draftFromCertificate(existing)
       : emptyDraft();
-    certificateOpen.value = true;
   }
 
   /** handleSaveCertificate creates or updates the selected domain's intent. */
@@ -105,7 +103,6 @@ export function useCertificateConfig(
         });
         message.success(tr("applications.detail.certCreated"));
       }
-      certificateOpen.value = false;
     } catch (error) {
       certificateErrorRaw.value = error;
     } finally {
@@ -121,7 +118,6 @@ export function useCertificateConfig(
     }
     try {
       await proxyStore.removeCertificate(existing.id);
-      certificateOpen.value = false;
       message.success(tr("applications.detail.certDeleted"));
     } catch (error) {
       message.error(describeProxyError(error));
@@ -164,7 +160,6 @@ export function useCertificateConfig(
   return {
     proxyStore,
     certificate,
-    certificateOpen,
     certificateSaving,
     certificateError,
     certificateDraft,

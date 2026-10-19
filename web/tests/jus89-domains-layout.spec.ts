@@ -338,7 +338,11 @@ for (const width of [390, 480, 1280, 1366]) {
     await expect(primary).toBeVisible();
     await expect(primary).toContainText("3000");
     await expect(primary).toContainText("http");
-    await expect(primary.getByRole("button", { name: "Edit" })).toBeVisible();
-    await expect(primary.getByRole("button", { name: "Certificate" })).toBeVisible();
+    await expect(
+      primary.getByRole("button", { name: "Edit domain shop.example.com" }),
+    ).toBeVisible();
+    await expect(
+      primary.getByRole("button", { name: "Certificate for shop.example.com" }),
+    ).toBeVisible();
   });
 }

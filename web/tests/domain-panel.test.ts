@@ -38,6 +38,7 @@ import {
   addDomain,
   getApplication,
   listDomains,
+  removeDomain,
   updateDomain,
   type Application,
   type ApplicationDomain,
@@ -46,10 +47,12 @@ import { useApplicationDomains } from "@/features/applications/composables/useAp
 import ApplicationDomainPanel from "@/features/applications/components/ApplicationDomainPanel.vue";
 import {
   createCertificate,
+  deleteCertificate,
   listCertificates,
   listDNSProviders,
   updateCertificate,
 } from "@/features/domains/api/proxy";
+import type { Certificate } from "@/features/domains";
 import {
   i18n,
   registerDiscoveredCatalogs,
@@ -103,19 +106,24 @@ function row(
   };
 }
 
-function certificate(id: string, domain: string) {
+function certificate(
+  id: string,
+  domain: string,
+  overrides: Partial<Certificate> = {},
+): Certificate {
   return {
     id,
     application_id: "app-1",
     domain,
     enabled: true,
-    challenge: "http-01" as const,
+    challenge: "http-01",
     dns_provider_id: "",
     wildcard: false,
-    status: "present" as const,
+    status: "present",
     not_after: "2026-12-31T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-02T00:00:00Z",
+    ...overrides,
   };
 }
 
@@ -139,6 +147,8 @@ beforeEach(() => {
   vi.mocked(updateCertificate).mockImplementation(async (id, input) =>
     certificate(id, input.domain ?? "shop.example.com"),
   );
+  vi.mocked(deleteCertificate).mockResolvedValue(undefined);
+  vi.mocked(removeDomain).mockResolvedValue(undefined);
 });
 
 function harness(app: Application) {
@@ -377,6 +387,214 @@ describe("Domains tab behavior", () => {
       expect.objectContaining({ domain: "shop.example.com" }),
     );
     expect(wrapper.find(".certificate-modal").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("deletes the old host's intent after a rename and leaves other intents alone", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "old.example.com", 3000, { is_primary: true }),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-old", "old.example.com"),
+      certificate("cert-other", "other.example.com"),
+    ]);
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    const domainRow = wrapper.find(".domain-row");
+    await domainRow
+      .findAll("button")
+      .find((button) => button.text() === "Edit")!
+      .trigger("click");
+    await nextTick();
+    await wrapper.find('input[aria-label="Domain hostname"]').setValue("new.example.com");
+    expect(wrapper.text()).toContain(
+      "removes the certificate configuration recorded for old.example.com",
+    );
+
+    await wrapper.find(".domain-submit").trigger("click");
+    await flushPromises();
+
+    expect(updateDomain).toHaveBeenCalledWith(
+      "app-1",
+      "d1",
+      expect.objectContaining({ domain: "new.example.com" }),
+    );
+    expect(deleteCertificate).toHaveBeenCalledTimes(1);
+    expect(deleteCertificate).toHaveBeenCalledWith("cert-old");
+    expect(deleteCertificate).not.toHaveBeenCalledWith("cert-other");
+    wrapper.unmount();
+  });
+
+  it("surfaces a certificate cleanup failure after a rename instead of swallowing it", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "old.example.com", 3000, { is_primary: true }),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-old", "old.example.com"),
+    ]);
+    vi.mocked(deleteCertificate).mockRejectedValue(new Error("cert cleanup down"));
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await wrapper
+      .findAll(".domain-row")[0]!
+      .findAll("button")
+      .find((button) => button.text() === "Edit")!
+      .trigger("click");
+    await nextTick();
+    await wrapper.find('input[aria-label="Domain hostname"]').setValue("new.example.com");
+    await wrapper.find(".domain-submit").trigger("click");
+    await flushPromises();
+
+    expect(updateDomain).toHaveBeenCalled();
+    expect(deleteCertificate).toHaveBeenCalledWith("cert-old");
+    expect(wrapper.text()).toContain("cert cleanup down");
+    wrapper.unmount();
+  });
+
+  it("warns in the remove confirmation and deletes the row's certificate intent", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "old.example.com", 3000, { is_primary: true }),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-old", "old.example.com"),
+      certificate("cert-other", "other.example.com"),
+    ]);
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await wrapper
+      .find(".domain-row")
+      .findAll("button")
+      .find((button) => button.text() === "Remove")!
+      .trigger("click");
+    await nextTick();
+    expect(wrapper.text()).toContain(
+      "delete its certificate configuration",
+    );
+
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Confirm")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(removeDomain).toHaveBeenCalledWith("app-1", "d1");
+    expect(deleteCertificate).toHaveBeenCalledWith("cert-old");
+    expect(deleteCertificate).not.toHaveBeenCalledWith("cert-other");
+    wrapper.unmount();
+  });
+
+  it("resets the certificate draft and heading when reopening on another row", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "a.example.com", 3000, { is_primary: true }),
+      row("d2", "b.example.com", 8000),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-a", "a.example.com", {
+        challenge: "dns-01",
+        dns_provider_id: "provider-1",
+        wildcard: true,
+      }),
+      certificate("cert-b", "b.example.com"),
+    ]);
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    const rows = wrapper.findAll(".domain-row");
+    await rows[0]!.find(".domain-certificate").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".certificate-modal").text()).toContain(
+      "Certificate for a.example.com",
+    );
+    await wrapper
+      .find(".certificate-modal")
+      .findAll("button")
+      .find((button) => button.text() === "Cancel")!
+      .trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".certificate-modal").exists()).toBe(false);
+
+    await rows[1]!.find(".domain-certificate").trigger("click");
+    await flushPromises();
+    const reopened = wrapper.find(".certificate-modal").text();
+    expect(reopened).toContain("Certificate for b.example.com");
+    expect(reopened).not.toContain("a.example.com");
+
+    await wrapper.find(".certificate-save").trigger("click");
+    await flushPromises();
+    expect(updateCertificate).toHaveBeenCalledWith(
+      "cert-b",
+      expect.objectContaining({
+        challenge: "http-01",
+      }),
+    );
+    wrapper.unmount();
+  });
+
+  it("deletes exactly the clicked row's certificate when two intents exist", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "a.example.com", 3000, { is_primary: true }),
+      row("d2", "b.example.com", 8000),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-a", "a.example.com"),
+      certificate("cert-b", "b.example.com"),
+    ]);
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await wrapper
+      .findAll(".domain-row")[1]!
+      .find(".domain-certificate")
+      .trigger("click");
+    await flushPromises();
+    await wrapper
+      .find(".certificate-modal")
+      .findAll("button")
+      .find((button) => button.text() === "Delete configuration")!
+      .trigger("click");
+    await nextTick();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Confirm")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(deleteCertificate).toHaveBeenCalledWith("cert-b");
+    expect(deleteCertificate).not.toHaveBeenCalledWith("cert-a");
+    wrapper.unmount();
+  });
+
+  it("keeps the certificate modal open when the save fails", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "b.example.com", 8000),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-b", "b.example.com"),
+    ]);
+    vi.mocked(updateCertificate).mockRejectedValue(new Error("save down"));
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await wrapper.find(".domain-row").find(".domain-certificate").trigger("click");
+    await flushPromises();
+    await wrapper.find(".certificate-save").trigger("click");
+    await flushPromises();
+
+    expect(updateCertificate).toHaveBeenCalledWith(
+      "cert-b",
+      expect.anything(),
+    );
+    expect(wrapper.find(".certificate-modal").exists()).toBe(true);
+    expect(wrapper.find(".certificate-modal").text()).toContain("save down");
     wrapper.unmount();
   });
 });

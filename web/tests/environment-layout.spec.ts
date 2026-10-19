@@ -412,9 +412,9 @@ test("add resource dialog shows the picker groups at both widths", async ({
     await page.locator(".resource-table").waitFor();
     await page.getByRole("button", { name: "Add resource" }).click();
     const dialog = page.locator(".n-modal");
-    await expect(dialog.getByRole("heading", { name: "Application" })).toBeVisible();
-    await expect(dialog.getByRole("heading", { name: "Service" })).toBeVisible();
-    await expect(dialog.getByRole("heading", { name: "Database" })).toBeVisible();
+    await expect(dialog.getByRole("tab", { name: "Application", exact: true })).toBeVisible();
+    await expect(dialog.getByRole("tab", { name: "Service", exact: true })).toBeVisible();
+    await expect(dialog.getByRole("tab", { name: "Database", exact: true })).toBeVisible();
     await expect(dialog).toContainText("storefront / production");
     // The brand cards stay inside the viewport horizontally at phone width.
     const cards = dialog.locator("button.res-card");
@@ -456,20 +456,24 @@ test("JUS-69 add resource modal pins its header and scrolls only the body", asyn
     await page.setViewportSize(viewport);
     await mockApi(page);
     await page.route("**/api/v1/templates", async (route) => {
-      await route.fulfill({ json: { templates: [] } });
+      await route.fulfill({ json: { templates: Array.from({ length: 24 }, (_, index) => ({
+        slug: `service-${index}`, name: `Service ${index}`, description: "A service template.",
+      })) } });
     });
     await page.goto(`${baseURL}/projects/${envPath}`);
     await page.locator(".resource-table").waitFor();
     await page.getByRole("button", { name: "Add resource" }).click();
     const dialog = page.locator(".n-modal.app-modal");
     await expect(dialog.getByRole("heading", { name: "Add resource", exact: true })).toBeVisible();
+    await dialog.getByRole("tab", { name: "Service", exact: true }).click();
+    await expect(dialog).toHaveCSS("transform", "none");
     // The card never exceeds the viewport even with the full picker inside.
     const cardBox = await dialog.boundingBox();
     expect(cardBox, "modal has a box").not.toBeNull();
     expect(cardBox!.y).toBeGreaterThanOrEqual(0);
     expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(viewport.height);
     // Only the body scrolls: it overflows while the header stays put.
-    const scroller = dialog.locator(".n-card-content");
+    const scroller = dialog.locator(".res-pane");
     expect(await scroller.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
       await scroller.evaluate((element) => element.clientHeight),
     );
@@ -530,7 +534,7 @@ test("JUS-69 create application modal keeps its footer visible on Dockerfile and
     await page.locator(".resource-table").waitFor();
     await page.getByRole("button", { name: "Add resource" }).click();
     const picker = page.locator(".n-modal.app-modal");
-    await expect(picker.getByRole("heading", { name: "Application" })).toBeVisible();
+    await expect(picker.getByRole("tab", { name: "Application", exact: true })).toBeVisible();
     await picker.locator("button.res-card").filter({ hasText: source }).first().click();
     const wizard = page.locator(".n-modal.wizard-modal");
     await expect(wizard.getByRole("heading", { name: "Create application", exact: true })).toBeVisible();

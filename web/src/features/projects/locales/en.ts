@@ -120,9 +120,6 @@ const en = {
     previewNote:
       "Preview deployments of an application run in this environment on the same server; flip the switch to list them nested under their base.",
     creatingIn: "Creating in {project} / {environment}.",
-    composeHintPrefix: "Have a Docker Compose file? ",
-    composeHintLink: "Import a compose file",
-    composeHintSuffix: ". Services from the library are listed above.",
     status: {
       unknown: "unknown",
       notDeployed: "not deployed",

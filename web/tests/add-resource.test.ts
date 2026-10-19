@@ -4,7 +4,7 @@
 // JUS-71/72/76: one card per application source type with the wizard
 // preselected and its selector hidden, engine preselect without a radio
 // group, and no implementation-speak copy in the picker.
-/* global document, Element, HTMLElement: readonly */
+/* global document, Element, HTMLElement, HTMLInputElement: readonly */
 import { DOMWrapper, flushPromises, mount } from "@vue/test-utils";
 import { NEmpty, NMessageProvider, NRadio, NSelect } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
@@ -18,6 +18,7 @@ import CreateDatabaseWizard from "@/features/databases/components/CreateDatabase
 import CreateAppWizard from "@/features/applications/components/CreateAppWizard.vue";
 import WizardSourceStep from "@/features/applications/components/WizardSourceStep.vue";
 import { provideCreateWizard, useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
+import TemplateWizard from "@/features/templates/components/TemplateWizard.vue";
 import ResourcePicker from "@/features/add-resource/components/ResourcePicker.vue";
 import addResourceEn from "@/features/add-resource/locales/en";
 import addResourceVi from "@/features/add-resource/locales/vi";
@@ -201,7 +202,7 @@ const TEMPLATES = [
 ];
 
 /** mountPage mounts the picker with stubbed catalog data and a project scope. */
-async function mountPage(templates: typeof TEMPLATES) {
+async function mountPage(templates: typeof TEMPLATES, show = ref(true)) {
   const templatesStore = useTemplatesStore();
   vi.spyOn(templatesStore, "fetchTemplates").mockResolvedValue(undefined);
   templatesStore.templates = templates as never;
@@ -221,7 +222,9 @@ async function mountPage(templates: typeof TEMPLATES) {
     render: () =>
       h(NMessageProvider, null, {
         default: () =>
-          h(ResourcePicker as never, { projectId: "proj-1", environmentId: "env-1" }),
+          h(ResourcePicker as never, {
+            projectId: "proj-1", environmentId: "env-1", show: show.value,
+          }),
       }),
   });
   const wrapper = mount(Parent, {
@@ -233,7 +236,99 @@ async function mountPage(templates: typeof TEMPLATES) {
   return wrapper;
 }
 
+async function selectTab(wrapper: Awaited<ReturnType<typeof mountPage>>, name: string) {
+  const tab = wrapper.findAll('[role="tab"]').find((item) => item.text() === name)!;
+  await tab.trigger("click");
+  await flushPromises();
+}
+
 describe("ResourcePicker", () => {
+  it("resets the tab and service filter when the parent modal reopens", async () => {
+    const show = ref(false);
+    const wrapper = await mountPage(TEMPLATES, show);
+    show.value = true;
+    await nextTick();
+    await selectTab(wrapper, "Service");
+    await wrapper.find("input").setValue("WordPress");
+    await selectTab(wrapper, "Database");
+
+    show.value = false;
+    await nextTick();
+    show.value = true;
+    await nextTick();
+
+    expect(wrapper.find('[role="tab"][aria-selected="true"]').text()).toBe("Application");
+    await selectTab(wrapper, "Service");
+    expect((wrapper.find("input").element as HTMLInputElement).value).toBe("");
+    expect(wrapper.findAll("button[data-template]")).toHaveLength(TEMPLATES.length);
+    wrapper.unmount();
+  });
+
+  it("keeps the current tab and filter when Escape closes only a child wizard", async () => {
+    const show = ref(true);
+    const wrapper = await mountPage(TEMPLATES, show);
+    await selectTab(wrapper, "Service");
+    await wrapper.find("input").setValue("WordPress");
+    await selectTab(wrapper, "Database");
+    await wrapper.find('button[data-engine="postgres"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.findComponent(CreateDatabaseWizard).props("show")).toBe(true);
+
+    document.dispatchEvent(new globalThis.KeyboardEvent("keydown", {
+      key: "Escape", code: "Escape", bubbles: true,
+    }));
+    await flushPromises();
+    await nextTick();
+
+    expect(wrapper.findComponent(CreateDatabaseWizard).props("show")).toBe(false);
+    expect(show.value).toBe(true);
+    expect(wrapper.find('[role="tab"][aria-selected="true"]').text()).toBe("Database");
+    await selectTab(wrapper, "Service");
+    expect((wrapper.find("input").element as HTMLInputElement).value).toBe("WordPress");
+    wrapper.unmount();
+  });
+
+  it("switches resource tabs by keyboard and links the active panel", async () => {
+    const wrapper = await mountPage(TEMPLATES);
+    const tabs = wrapper.findAll('[role="tab"]');
+    expect(tabs.map((tab) => tab.text())).toEqual(["Application", "Service", "Database"]);
+    (tabs[0].element as HTMLElement).focus();
+    for (const [key, index] of [["ArrowRight", 1], ["End", 2], ["Home", 0], ["ArrowLeft", 2]] as const) {
+      await new DOMWrapper(document.activeElement!).trigger("keydown", { key });
+      await nextTick();
+      expect(document.activeElement).toBe(tabs[index].element);
+      expect(tabs[index].attributes("aria-selected")).toBe("true");
+      expect(wrapper.find('[role="tabpanel"]').attributes("aria-labelledby")).toBe(
+        tabs[index].attributes("id"),
+      );
+    }
+    wrapper.unmount();
+  });
+
+  it("opens a service template with scope and preserves its filter across tabs", async () => {
+    const wrapper = await mountPage(TEMPLATES);
+    expect(wrapper.find("button[data-template]").exists()).toBe(false);
+    await selectTab(wrapper, "Service");
+    await wrapper.find("input").setValue("WordPress");
+    await selectTab(wrapper, "Database");
+    await selectTab(wrapper, "Service");
+    expect(wrapper.findAll("button[data-template]")).toHaveLength(1);
+    await wrapper.find('button[data-template="wordpress"]').trigger("click");
+    const wizard = wrapper.findComponent(TemplateWizard);
+    expect(wizard.props()).toMatchObject({
+      show: true, slug: "wordpress", projectId: "proj-1", environmentId: "env-1",
+    });
+    wrapper.unmount();
+  });
+
+  it("offers compose import from the Service tab", async () => {
+    const wrapper = await mountPage(TEMPLATES);
+    await selectTab(wrapper, "Service");
+    await wrapper.find('a[href="#"]').trigger("click");
+    expect(wrapper.findComponent(ResourcePicker).emitted("composeImport")).toEqual([[]]);
+    wrapper.unmount();
+  });
+
   it("passes the project and environment scope to the wizards", async () => {
     const wrapper = await mountPage(TEMPLATES);
     const wizard = wrapper.findComponent(CreateDatabaseWizard);
@@ -244,6 +339,7 @@ describe("ResourcePicker", () => {
 
   it("moves focus inside a group with the arrow keys", async () => {
     const wrapper = await mountPage(TEMPLATES);
+    await selectTab(wrapper, "Database");
     const cards = wrapper.findAll('button[data-engine]');
     expect(cards.length).toBe(ENGINES.length);
     const grids = wrapper.findAll(".res-grid");
@@ -258,6 +354,7 @@ describe("ResourcePicker", () => {
 
   it("opens the database wizard with the card engine preselected", async () => {
     const wrapper = await mountPage(TEMPLATES);
+    await selectTab(wrapper, "Database");
     await wrapper.find('button[data-engine="redis"]').trigger("click");
     const wizard = wrapper.findComponent(CreateDatabaseWizard);
     expect(wizard.props("show")).toBe(true);
@@ -267,12 +364,14 @@ describe("ResourcePicker", () => {
 
   it("branches the empty copy on catalog-empty versus filter-no-match", async () => {
     const emptyCatalog = await mountPage([]);
+    await selectTab(emptyCatalog, "Service");
     expect(emptyCatalog.findComponent(NEmpty).props("description")).toBe(
       "No templates in the catalog.",
     );
     emptyCatalog.unmount();
 
     const filtered = await mountPage(TEMPLATES);
+    await selectTab(filtered, "Service");
     await filtered.find("input").setValue("zzz-no-match");
     await nextTick();
     expect(filtered.findComponent(NEmpty).props("description")).toBe(
@@ -323,6 +422,7 @@ describe("ResourcePicker", () => {
     ]) {
       expect(copy).not.toContain(dropped);
     }
+    await selectTab(wrapper, "Service");
     expect(wrapper.find("input").exists()).toBe(true);
     wrapper.unmount();
   });
@@ -584,6 +684,7 @@ describe("preselect fix round 1", () => {
 
   it("Change in the database summary closes the wizard back to the picker", async () => {
     const wrapper = await mountPage(TEMPLATES);
+    await selectTab(wrapper, "Database");
     await wrapper.find('button[data-engine="postgres"]').trigger("click");
     await flushPromises();
     await nextTick();

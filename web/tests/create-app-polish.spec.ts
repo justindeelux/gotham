@@ -180,7 +180,7 @@ async function openWizard(page: Page, cardText: string): Promise<Locator> {
   await page.locator(".environment-page .title").waitFor();
   await page.getByRole("button", { name: "Add resource" }).first().click();
   const picker = page.locator(".n-modal.app-modal");
-  await expect(picker.getByRole("heading", { name: "Application" })).toBeVisible();
+  await expect(picker.getByRole("tab", { name: "Application", exact: true })).toBeVisible();
   await picker.locator("button.res-card").filter({ hasText: cardText }).first().click();
   const wizard = page.locator(".n-modal.wizard-modal");
   await expect(

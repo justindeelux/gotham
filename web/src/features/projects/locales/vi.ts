@@ -119,9 +119,6 @@ const vi = {
     previewNote:
       "Các bản triển khai xem trước của một ứng dụng chạy trong môi trường này trên cùng máy chủ; bật công tắc để liệt kê chúng lồng dưới ứng dụng gốc.",
     creatingIn: "Đang tạo trong {project} / {environment}.",
-    composeHintPrefix: "Có sẵn tệp Docker Compose? ",
-    composeHintLink: "Nhập tệp compose",
-    composeHintSuffix: ". Các dịch vụ trong thư viện được liệt kê ở trên.",
     status: {
       unknown: "không rõ",
       notDeployed: "chưa triển khai",

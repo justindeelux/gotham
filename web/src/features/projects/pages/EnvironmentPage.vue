@@ -363,10 +363,12 @@ function afterServiceCreate(service: Service): void {
       </section>
     </template>
 
-    <!-- Add resource: header stays pinned, only the picker scrolls
-      (shared scroll contract in shared/styles/main.css). Hidden (not
-      unmounted) while a wizard is open, so no card bleeds through behind
-      it; the wizard's close restores the picker. -->
+    <!-- Add resource: the picker tabs the three resource types (one tab
+      per type) inside a fixed-height pane, so the modal keeps its size
+      while the user switches. Header stays pinned, only the content
+      scrolls (shared scroll contract in shared/styles/main.css). Hidden
+      (not unmounted) while a wizard is open, so no card bleeds through
+      behind it; the wizard's close restores the picker. -->
     <NModal
       :show="page.addOpen.value && !wizardOpen"
       preset="card"
@@ -382,16 +384,13 @@ function afterServiceCreate(service: Service): void {
           {{ t("projects.environment.creatingIn", { project: page.resources.value?.project.name ?? "", environment: page.resources.value?.environment.name ?? "" }) }}
         </NText>
         <ResourcePicker
+          :show="page.addOpen.value"
           :project-id="page.projectId.value"
           :environment-id="page.environmentId.value"
           @created="page.addOpen.value = false"
           @wizard-open="wizardOpen = $event"
+          @compose-import="openImport"
         />
-        <NText depth="3">
-          {{ t("projects.environment.composeHintPrefix") }}
-          <a href="#" @click.prevent="openImport">{{ t("projects.environment.composeHintLink") }}</a>
-          {{ t("projects.environment.composeHintSuffix") }}
-        </NText>
       </NSpace>
     </NModal>
 

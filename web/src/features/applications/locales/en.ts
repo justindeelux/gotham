@@ -258,6 +258,7 @@ const en = {
     service: "Web service",
     servicePlaceholder: "Select or type a service",
     save: "Save compose source",
+    saved: "Compose source saved.",
     redeployHint: "Applies to the next deploy.",
     secretsHint:
       "Do not paste secrets into the document. Use environment variables or sealed secrets instead — they substitute as the compose project env at deploy time.",

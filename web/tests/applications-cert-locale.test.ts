@@ -51,7 +51,10 @@ describe("certificate failure follows the locale without resubmitting", () => {
     let certs: ReturnType<typeof useCertificateConfig> | null = null;
     const Harness = defineComponent({
       setup() {
-        certs = useCertificateConfig(ref({ id: "app-1" }) as never);
+        certs = useCertificateConfig(
+          ref({ id: "app-1" }) as never,
+          ref("app.example.com"),
+        );
         return () => h("div");
       },
     });

@@ -123,8 +123,6 @@ const en = {
     statusUnknown: "unknown",
     statusNotReported: "not reported",
     expiryNotReported: "not reported",
-    baseDomainChanged:
-      "{app} · primary domain changed to {domain} — re-save to re-record",
     statusTitle: "Status is observed live from the owning node",
     statusBody:
       "present means the node's ACME storage holds a certificate for the " +

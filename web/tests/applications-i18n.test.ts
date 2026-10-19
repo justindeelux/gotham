@@ -248,12 +248,13 @@ describe("visible domain feedback follows the locale", () => {
     const Root = defineComponent({
       render: () => h(NMessageProvider, null, { default: () => h(Harness) }),
     });
-    const panel = mount(Root, { global: { plugins: [i18n] } });
+    const panel = mount(Root, { global: { plugins: [i18n], stubs: { teleport: true } } });
+    await panel.find(".domain-add").trigger("click");
+    await panel.vm.$nextTick();
     const host = panel.find('input[aria-label="Domain hostname"]');
     await host.setValue("not a domain");
     await panel
-      .findAll("button")
-      .find((button) => button.text() === "Add domain")!
+      .find(".domain-submit")
       .trigger("click");
     await panel.vm.$nextTick();
     expect(panel.text()).toContain(
@@ -322,7 +323,9 @@ describe("native textbox names follow the locale", () => {
     const Root = defineComponent({
       render: () => h(NMessageProvider, null, { default: () => h(Harness) }),
     });
-    const panel = mount(Root, { global: { plugins: [i18n] } });
+    const panel = mount(Root, { global: { plugins: [i18n], stubs: { teleport: true } } });
+    await panel.find(".domain-add").trigger("click");
+    await panel.vm.$nextTick();
     expect(panel.find('input[aria-label="Domain hostname"]').exists()).toBe(true);
     setLocale("vi", null);
     await panel.vm.$nextTick();

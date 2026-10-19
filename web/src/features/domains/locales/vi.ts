@@ -124,8 +124,6 @@ const vi = {
     statusUnknown: "không rõ",
     statusNotReported: "chưa báo cáo",
     expiryNotReported: "chưa báo cáo",
-    baseDomainChanged:
-      "{app} · tên miền chính đã đổi thành {domain} — lưu lại để ghi nhận",
     statusTitle: "Trạng thái được quan sát trực tiếp từ node sở hữu",
     statusBody:
       "present nghĩa là bộ nhớ ACME của node đang giữ chứng chỉ cho tên " +

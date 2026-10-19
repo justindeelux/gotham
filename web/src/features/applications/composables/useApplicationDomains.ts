@@ -26,6 +26,7 @@ import {
 } from "@/features/applications/composables/domainRefresh";
 import { extractComposeServicePorts } from "@/features/applications/utils/compose";
 import { describeProxyError, useProxyStore } from "@/features/domains";
+import { isApiError } from "@/features/servers";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
 
@@ -38,9 +39,10 @@ export interface DomainDraft {
 }
 
 /**
- * Domain routing behind the Domains tab (JUS-233): every hostname carries its
- * own target port, optional compose service and protocol. The same form adds
- * and edits; selecting a compose service pre-fills its declared port.
+ * Domain routing behind the Domains tab (JUS-236, formerly JUS-233): every
+ * hostname carries its own target port, optional compose service and
+ * protocol. The same modal adds and edits; selecting a compose service
+ * pre-fills its declared port.
  */
 export function useApplicationDomains(application: Ref<Application>) {
   const message = useMessage();
@@ -52,6 +54,8 @@ export function useApplicationDomains(application: Ref<Application>) {
   const domains = ref<ApplicationDomain[]>([]);
   const loadingDomains = ref(false);
   const domainsError = ref<string | null>(null);
+  /** formOpen drives the shared add/edit modal. */
+  const formOpen = ref(false);
   const draft = reactive<DomainDraft>({
     domain: "",
     port: 80,
@@ -106,6 +110,62 @@ export function useApplicationDomains(application: Ref<Application>) {
     rowServerError.value = null;
   }
 
+  /** certificateIntent finds the intent recorded for exactly this host. */
+  function certificateIntent(host: string) {
+    return (
+      proxyStore.certificates.find(
+        (item) => item.application_id === application.value.id && item.domain === host,
+      ) ?? null
+    );
+  }
+
+  /**
+   * refreshCertificateIntents reloads the proxy list before a cleanup lookup.
+   * The backend already removes a renamed/detached host's default http-01
+   * intent, so a stale cache would make the client delete an id that is
+   * already gone. A refresh failure is not fatal: the cached list is a safe
+   * fallback, and a delete that still races the server is handled below.
+   */
+  async function refreshCertificateIntents(): Promise<void> {
+    await proxyStore.fetchCertificates().catch(() => undefined);
+  }
+
+  /**
+   * removeCertificateIntent deletes an intent that is still recorded for a
+   * host that is no longer attached. The server removing it first (or a
+   * concurrent delete) answers 404, which means the desired state already
+   * holds and is treated as success. Any other failure is returned (not
+   * swallowed) so the row banner can surface it.
+   */
+  async function removeCertificateIntent(host: string): Promise<unknown | null> {
+    await refreshCertificateIntents();
+    const intent = certificateIntent(host);
+    if (intent === null) {
+      return null;
+    }
+    try {
+      await proxyStore.removeCertificate(intent.id);
+      return null;
+    } catch (error) {
+      if (isApiError(error) && error.status === 404) {
+        // Already gone server-side: resync so the stale row disappears too.
+        await refreshCertificateIntents();
+        return null;
+      }
+      return error;
+    }
+  }
+
+  /** surfaceRowError keeps one failure in the row banner across locale switches. */
+  function surfaceRowError(id: string | null, error: unknown, isProxy: boolean): void {
+    rowServerError.value = error;
+    rowErrorId.value = id;
+    rowErrorIsProxy.value = isProxy;
+    rowError.value = isProxy
+      ? describeProxyError(error)
+      : describeApplicationError(error);
+  }
+
   async function refresh(silent = false): Promise<void> {
     const appID = application.value.id;
     const seq = ++refreshSeq;
@@ -144,7 +204,20 @@ export function useApplicationDomains(application: Ref<Application>) {
     formServerError.value = null;
   }
 
-  /** startEdit loads one row into the form. */
+  /** openCreate opens the shared modal in add mode with a clean draft. */
+  function openCreate(): void {
+    clearErrors();
+    resetDraft();
+    formOpen.value = true;
+  }
+
+  /** closeForm dismisses the shared modal and drops the draft. */
+  function closeForm(): void {
+    formOpen.value = false;
+    resetDraft();
+  }
+
+  /** startEdit loads one row into the shared add/edit modal. */
   function startEdit(row: ApplicationDomain): void {
     clearErrors();
     editingId.value = row.id;
@@ -152,6 +225,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     draft.port = row.port;
     draft.service = row.service;
     draft.protocol = row.protocol;
+    formOpen.value = true;
   }
 
   /** handleServiceChange pre-fills the port of the selected service. A
@@ -203,19 +277,37 @@ export function useApplicationDomains(application: Ref<Application>) {
       formError.value = payload;
       return;
     }
+    const editingID = editingId.value;
+    const editing =
+      editingID === null
+        ? null
+        : domains.value.find((row) => row.id === editingID) ?? null;
+    const oldHost = editing?.domain ?? "";
+    const renamed = editing !== null && payload.domain !== oldHost;
     saving.value = true;
     try {
-      if (editingId.value !== null) {
-        await updateDomain(application.value.id, editingId.value, payload);
+      if (editingID !== null) {
+        await updateDomain(application.value.id, editingID, payload);
         message.success(tr("applications.detail.domainUpdated"));
       } else {
         await addDomain(application.value.id, payload);
         message.success(tr("applications.detail.domainAdded"));
       }
+      // A renamed host keeps no route for its old certificate, so drop that
+      // intent instead of leaving ACME orders for a host the app no longer
+      // serves. The edit modal warned before this happened.
+      const cleanupError = renamed ? await removeCertificateIntent(oldHost) : null;
       resetDraft();
+      formOpen.value = false;
       await refresh(true);
       await appsStore.fetchApplication(application.value.id);
       bumpDomainsRefresh(refreshTick);
+      if (cleanupError !== null) {
+        surfaceRowError(null, cleanupError, true);
+        if (rowError.value !== null) {
+          message.error(rowError.value);
+        }
+      }
     } catch (error) {
       formServerError.value = error;
       formError.value = describeApplicationError(error);
@@ -229,6 +321,9 @@ export function useApplicationDomains(application: Ref<Application>) {
     busyDomainId.value = domain.id;
     try {
       await removeDomain(application.value.id, domain.id);
+      // Removing a host detaches its routes; delete the now-unreachable
+      // certificate intent too. The popconfirm warned when one existed.
+      const cleanupError = await removeCertificateIntent(domain.domain);
       if (editingId.value === domain.id) {
         resetDraft();
       }
@@ -236,31 +331,14 @@ export function useApplicationDomains(application: Ref<Application>) {
       await appsStore.fetchApplication(application.value.id);
       bumpDomainsRefresh(refreshTick);
       message.success(tr("applications.detail.domainRemoved"));
+      if (cleanupError !== null) {
+        surfaceRowError(domain.id, cleanupError, true);
+        if (rowError.value !== null) {
+          message.error(rowError.value);
+        }
+      }
     } catch (error) {
-      rowServerError.value = error;
-      rowErrorId.value = domain.id;
-      rowError.value = describeApplicationError(error);
-    } finally {
-      busyDomainId.value = null;
-    }
-  }
-
-  /** handleSecureDomain creates an http-01 intent for one domain. */
-  async function handleSecureDomain(domain: ApplicationDomain): Promise<void> {
-    clearErrors();
-    busyDomainId.value = domain.id;
-    try {
-      await proxyStore.createCertificateConfig({
-        application_id: application.value.id,
-        domain: domain.domain,
-      });
-      bumpDomainsRefresh(refreshTick);
-      message.success(tr("applications.detail.certCreated"));
-    } catch (error) {
-      rowServerError.value = error;
-      rowErrorId.value = domain.id;
-      rowErrorIsProxy.value = true;
-      rowError.value = describeProxyError(error);
+      surfaceRowError(domain.id, error, false);
     } finally {
       busyDomainId.value = null;
     }
@@ -276,9 +354,7 @@ export function useApplicationDomains(application: Ref<Application>) {
       bumpDomainsRefresh(refreshTick);
       message.success(tr("applications.detail.primaryChanged"));
     } catch (error) {
-      rowServerError.value = error;
-      rowErrorId.value = domain.id;
-      rowError.value = describeApplicationError(error);
+      surfaceRowError(domain.id, error, false);
     } finally {
       busyDomainId.value = null;
     }
@@ -310,6 +386,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     () => application.value.id,
     () => {
       resetDraft();
+      formOpen.value = false;
       rowError.value = null;
       void refresh();
     },
@@ -323,6 +400,7 @@ export function useApplicationDomains(application: Ref<Application>) {
     domains,
     loadingDomains,
     domainsError,
+    formOpen,
     draft,
     editingId,
     saving,
@@ -334,11 +412,12 @@ export function useApplicationDomains(application: Ref<Application>) {
     serviceOptions,
     refresh,
     resetDraft,
+    openCreate,
+    closeForm,
     startEdit,
     handleServiceChange,
     handleSave,
     handleRemoveDomain,
-    handleSecureDomain,
     handleSetPrimary,
   };
 }

@@ -29,7 +29,7 @@ import { expiryLabel, formatDate } from "@/shared/utils/format";
 const proxyStore = useProxyStore();
 const { openCertificateCreate, openCertificateEdit, handleDeleteCertificate } =
   useCertificates();
-const { applicationName, applicationDomain } = useDomainLabels();
+const { applicationName } = useDomainLabels();
 
 /**
  * cellStack lays out a two-line cell with a token gap. These VNodes are built
@@ -56,22 +56,12 @@ const cellSubStyle = {
 
 /** domainCell renders the recorded domain with its application. */
 function domainCell(certificate: Certificate): VNode {
-  const domain = applicationDomain(certificate);
   return h("div", { style: cellStackStyle }, [
     h("span", { class: "mono", style: cellNameStyle }, certificate.domain),
     h(
       "span",
       { style: cellSubStyle },
-      domain && domain !== certificate.domain
-        ? proxyText(
-            "domains.certificates.baseDomainChanged",
-            "{app} · base domain changed to {domain} — re-save to re-record",
-            {
-              app: applicationName(certificate.application_id),
-              domain,
-            },
-          )
-        : applicationName(certificate.application_id),
+      applicationName(certificate.application_id),
     ),
   ]);
 }

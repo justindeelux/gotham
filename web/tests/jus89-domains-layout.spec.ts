@@ -8,14 +8,14 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 
-/* global URL, window:readonly */
-// JUS-89 layout proof: the multi-domain editor on the application detail
-// page renders the primary card unchanged plus the aliases card, alias rows
-// never overlap, the add hint sits below its field, row actions stay
-// right-aligned, and rows keep the 8px token gap. Every claim is a measured
-// box on the committed webdist served statically with the API mocked;
-// element screenshots land in .playwright-mcp/ (gitignored) for human
-// review.
+/* global URL, document:readonly, window:readonly */
+// JUS-236 layout proof: the application Domains tab renders every hostname as
+// a table row (host, port, service, protocol, primary, certificate, actions),
+// the add/edit form lives in a bounded modal, row actions stay inside their
+// row, and the table scrolls horizontally inside its card instead of pushing
+// the page wider at 390/480/1280/1366px. Every claim is a measured box on the
+// committed webdist served statically with the API mocked; element
+// screenshots land in .playwright-mcp/ (gitignored) for human review.
 
 const testsDir = dirname(fileURLToPath(import.meta.url));
 const webdistRoot = resolve(testsDir, "../../internal/server/webdist");
@@ -264,22 +264,22 @@ async function boxOf(locator: Locator, label: string) {
   return box!;
 }
 
-for (const width of [1280, 480]) {
-  test(`alias rows stack without overlap at ${width}px`, async ({ page }) => {
+for (const width of [390, 480, 1280, 1366]) {
+  test(`table rows stack without overlap at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page);
     const card = await openDomainsTab(page);
-    await card.screenshot({ path: resolve(shotsDir, `jus89-aliases-${width}.png`) });
+    await card.screenshot({ path: resolve(shotsDir, `jus236-domains-${width}.png`) });
     const rows = card.locator(".domain-row");
     await expect(rows).toHaveCount(3);
-    const first = await boxOf(rows.nth(0), "first alias row");
-    const second = await boxOf(rows.nth(1), "second alias row");
-    // Rows stack vertically with the 8px token gap (sub-pixel tolerance).
-    expect(second.y, "second row below first").toBeGreaterThanOrEqual(first.y + first.height + 8 - 0.5);
+    const first = await boxOf(rows.nth(0), "first domain row");
+    const second = await boxOf(rows.nth(1), "second domain row");
+    // Table rows stack directly below each other, never overlapping.
+    expect(second.y, "second row below first").toBeGreaterThanOrEqual(first.y + first.height - 0.5);
     expect(first.x, "rows share the left edge").toBeLessThanOrEqual(second.x + 0.5);
   });
 
-  test(`alias actions stay right-aligned at ${width}px`, async ({ page }) => {
+  test(`row actions stay inside their row at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page);
     const card = await openDomainsTab(page);
@@ -298,17 +298,36 @@ for (const width of [1280, 480]) {
     }
   });
 
-  test(`the add form exposes host, port, service and protocol at ${width}px`, async ({ page }) => {
+  test(`the add modal exposes host, port, service and protocol at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page);
     const card = await openDomainsTab(page);
-    const host = card.locator('input[aria-label="Domain hostname"]');
-    const port = card.locator('input[aria-label="Target container port"]');
+    await card.locator(".domain-add").click();
+    const modal = page.locator(".domain-form-modal");
+    await expect(modal).toBeVisible();
+    const host = modal.locator('input[aria-label="Domain hostname"]');
+    const port = modal.locator('input[aria-label="Target container port"]');
     await expect(host).toBeVisible();
     await expect(port).toBeVisible();
-    await expect(card.locator('.domain-protocol')).toBeVisible();
+    await expect(modal.locator('.domain-protocol')).toBeVisible();
     expect(await boxOf(host, "host field")).not.toBeNull();
     expect(await boxOf(port, "port field")).not.toBeNull();
+  });
+
+  test(`the table scrolls inside the card instead of overflowing the page at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockApi(page);
+    const card = await openDomainsTab(page);
+    await expect(card.locator(".domain-table")).toBeVisible();
+    const fitsViewport = await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+    );
+    expect(fitsViewport, "page does not scroll horizontally").toBe(true);
+    const cardBox = await boxOf(card, "domains card");
+    const tableBox = await boxOf(card.locator(".domain-table"), "domains table");
+    expect(tableBox.x + tableBox.width, "table stays inside the card").toBeLessThanOrEqual(
+      cardBox.x + cardBox.width + 1,
+    );
   });
 
   test(`rows expose their routing target at ${width}px`, async ({ page }) => {
@@ -319,6 +338,11 @@ for (const width of [1280, 480]) {
     await expect(primary).toBeVisible();
     await expect(primary).toContainText("3000");
     await expect(primary).toContainText("http");
-    await expect(primary.getByRole("button", { name: "Edit" })).toBeVisible();
+    await expect(
+      primary.getByRole("button", { name: "Edit domain shop.example.com" }),
+    ).toBeVisible();
+    await expect(
+      primary.getByRole("button", { name: "Certificate for shop.example.com" }),
+    ).toBeVisible();
   });
 }

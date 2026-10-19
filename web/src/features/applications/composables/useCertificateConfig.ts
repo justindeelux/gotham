@@ -3,8 +3,6 @@ import { activeLocale, i18n } from "@/shared/i18n";
 import { computed, onMounted, ref, watch, type Ref } from "vue";
 
 import type { Application } from "@/features/applications/api/applications";
-import { listDomains } from "@/features/applications/api/applications";
-import { useDomainsRefresh } from "@/features/applications/composables/domainRefresh";
 import {
   describeProxyError,
   draftFromCertificate,
@@ -15,24 +13,23 @@ import {
 import type { Certificate, CertificateDraft, DNSProvider } from "@/features/domains";
 
 /**
- * Certificate-configuration editing behind the Domains tab. One intent
- * exists per domain (JUS-89): this editor manages the primary domain's
- * intent, while an intent recorded for a detached host is flagged until it
- * is explicitly re-recorded onto the primary domain.
+ * Certificate configuration for exactly one domain row (JUS-236). The proxy
+ * API records one intent per hostname (JUS-89), so every action here reads
+ * and writes the intent of the domain the user clicked — never the primary
+ * domain implicitly.
  */
-export function useCertificateConfig(application: Ref<Application>) {
+export function useCertificateConfig(
+  application: Ref<Application>,
+  domain: Ref<string>,
+) {
   const message = useMessage();
   const proxyStore = useProxyStore();
 
-  const certificateOpen = ref(false);
   const certificateSaving = ref(false);
   /**
    * certificateErrorRaw keeps the failure behind the dialog banner;
    * certificateError derives its display text in the current locale, so a
-   * language switch refreshes a retained failure without resubmitting. The
-   * shared describeProxyError stays the single formatter: it resolves at
-   * display time, so a future locale-aware domains helper flows through with
-   * no consumer change.
+   * language switch refreshes a retained failure without resubmitting.
    */
   const certificateErrorRaw = ref<unknown>(null);
   const certificateError = computed<string | null>(() => {
@@ -42,52 +39,29 @@ export function useCertificateConfig(application: Ref<Application>) {
     void activeLocale.value;
     return describeProxyError(certificateErrorRaw.value);
   });
-  const certificateDraft = ref<CertificateDraft>({
-    application_id: application.value.id,
-    challenge: "http-01",
-    dns_provider_id: "",
-    wildcard: false,
-    enabled: true,
-  });
+  const certificateDraft = ref<CertificateDraft>(emptyDraft());
 
-  /**
-   * certificate prefers the primary domain's intent; a stale intent recorded
-   * for a detached host is shown (with the re-record banner) when no primary
-   * intent exists.
-   */
-  const certificate = computed<Certificate | null>(() => {
-    const configs = proxyStore.certificates.filter(
-      (item) => item.application_id === application.value.id,
-    );
-    return (
-      configs.find((item) => item.domain === application.value.primary_domain) ??
-      configs[0] ??
-      null
-    );
-  });
-
-  /** attachedDomains lists the hostnames currently attached to the app. */
-  const attachedDomains = ref<string[]>([]);
-
-  /** loadDomains refreshes the attached hostnames the banner compares. */
-  async function loadDomains(): Promise<void> {
-    try {
-      const rows = await listDomains(application.value.id);
-      attachedDomains.value = rows.map((row) => row.domain);
-    } catch {
-      attachedDomains.value = [application.value.primary_domain].filter(
-        (domain) => domain !== "",
-      );
-    }
+  function emptyDraft(): CertificateDraft {
+    return {
+      application_id: application.value.id,
+      challenge: "http-01",
+      dns_provider_id: "",
+      wildcard: false,
+      enabled: true,
+    };
   }
 
-  /** recordedDomainDiffers flags an intent recorded for a detached host. */
-  const recordedDomainDiffers = computed<boolean>(() => {
-    const current = certificate.value;
-    if (current === null || attachedDomains.value.length === 0) {
-      return false;
+  /** certificate is the intent recorded for the selected domain only. */
+  const certificate = computed<Certificate | null>(() => {
+    const host = domain.value;
+    if (host === "") {
+      return null;
     }
-    return !attachedDomains.value.includes(current.domain);
+    return (
+      proxyStore.certificates.find(
+        (item) => item.application_id === application.value.id && item.domain === host,
+      ) ?? null
+    );
   });
 
   /** providerName resolves a stored provider id to its display label. */
@@ -102,23 +76,16 @@ export function useCertificateConfig(application: Ref<Application>) {
     return `${provider.name || providerLabel(provider.provider)} · ${provider.provider}`;
   }
 
-  /** openCertificateEdit seeds the dialog from the stored configuration. */
+  /** openCertificateEdit seeds the dialog from the selected domain's intent. */
   function openCertificateEdit(): void {
     certificateErrorRaw.value = null;
     const existing = certificate.value;
     certificateDraft.value = existing
       ? draftFromCertificate(existing)
-      : {
-          application_id: application.value.id,
-          challenge: "http-01",
-          dns_provider_id: "",
-          wildcard: false,
-          enabled: true,
-        };
-    certificateOpen.value = true;
+      : emptyDraft();
   }
 
-  /** handleSaveCertificate creates or updates the configuration. */
+  /** handleSaveCertificate creates or updates the selected domain's intent. */
   async function handleSaveCertificate(): Promise<void> {
     certificateErrorRaw.value = null;
     certificateSaving.value = true;
@@ -132,10 +99,10 @@ export function useCertificateConfig(application: Ref<Application>) {
         await proxyStore.createCertificateConfig({
           ...input,
           application_id: application.value.id,
+          domain: domain.value,
         });
         message.success(tr("applications.detail.certCreated"));
       }
-      certificateOpen.value = false;
     } catch (error) {
       certificateErrorRaw.value = error;
     } finally {
@@ -143,25 +110,7 @@ export function useCertificateConfig(application: Ref<Application>) {
     }
   }
 
-  /** handleRerecordDomain re-targets a detached intent onto the primary domain. */
-  async function handleRerecordDomain(): Promise<void> {
-    const existing = certificate.value;
-    if (!existing) {
-      return;
-    }
-    certificateErrorRaw.value = null;
-    try {
-      await proxyStore.updateCertificateConfig(existing.id, {
-        domain: application.value.primary_domain,
-      });
-      await load();
-      message.success(tr("applications.detail.certRerecorded"));
-    } catch (error) {
-      message.error(describeProxyError(error));
-    }
-  }
-
-  /** handleDeleteCertificate removes the configuration. */
+  /** handleDeleteCertificate removes the selected domain's intent. */
   async function handleDeleteCertificate(): Promise<void> {
     const existing = certificate.value;
     if (!existing) {
@@ -184,12 +133,11 @@ export function useCertificateConfig(application: Ref<Application>) {
     return String(i18n.global.t(key));
   }
 
-  /** load refreshes the providers, certificates and attached domains. */
+  /** load refreshes the providers and certificate intents. */
   async function load(): Promise<void> {
     await Promise.allSettled([
       proxyStore.fetchProviders(),
       proxyStore.fetchCertificates(),
-      loadDomains(),
     ]);
   }
 
@@ -201,24 +149,9 @@ export function useCertificateConfig(application: Ref<Application>) {
     },
   );
 
-  /**
-   * A same-page base-domain save keeps the application id but changes the
-   * mirror: reload the rows so the re-record banner appears immediately.
-   * Alias mutations bump the shared tick instead (the mirror may not move).
-   */
-  watch(
-    () => application.value.primary_domain,
-    () => {
-      void loadDomains();
-    },
-  );
-
-  const domainsTick = useDomainsRefresh();
-  if (domainsTick != null) {
-    watch(domainsTick, () => {
-      void loadDomains();
-    });
-  }
+  watch(domain, () => {
+    certificateErrorRaw.value = null;
+  });
 
   onMounted(() => {
     void load();
@@ -227,15 +160,12 @@ export function useCertificateConfig(application: Ref<Application>) {
   return {
     proxyStore,
     certificate,
-    certificateOpen,
     certificateSaving,
     certificateError,
     certificateDraft,
-    recordedDomainDiffers,
     providerName,
     openCertificateEdit,
     handleSaveCertificate,
-    handleRerecordDomain,
     handleDeleteCertificate,
   };
 }

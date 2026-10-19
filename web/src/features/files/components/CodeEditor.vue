@@ -33,6 +33,8 @@ interface Props {
   wrap?: boolean;
   /** height is any CSS length; the editor fills the box. */
   height?: string;
+  /** placeholder is shown while the document is empty. */
+  placeholder?: string;
   /** ariaLabel overrides the localized generic editor name. */
   ariaLabel?: string;
 }
@@ -43,6 +45,7 @@ const props = withDefaults(defineProps<Props>(), {
   readOnly: false,
   wrap: undefined,
   height: "320px",
+  placeholder: undefined,
   ariaLabel: undefined,
 });
 
@@ -125,6 +128,7 @@ onMounted(() => {
     doc: props.modelValue,
     language: language.value,
     ariaLabel: ariaLabel.value,
+    placeholder: props.placeholder,
     readOnly: props.readOnly,
     settings: effectiveSettings.value,
     onChange: (doc) => {

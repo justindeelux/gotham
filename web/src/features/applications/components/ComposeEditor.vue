@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 
 import type { Application } from "@/features/applications/api/applications";
 import { useComposeEditor } from "@/features/applications/composables/useComposeEditor";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 
 interface Props {
   application: Application;
@@ -44,14 +45,15 @@ async function save(): Promise<void> {
         v-if="!editor.isRepoMode.value"
         :label="t('applications.compose.content')"
       >
-        <NInput
-          v-model:value="editor.content.value"
-          type="textarea"
-          class="mono"
-          :rows="12"
+        <CodeEditor
+          v-model="editor.content.value"
+          class="source-code"
+          :class="{ 'source-code--invalid': !editor.contentValid.value }"
+          preset="yaml"
+          height="280px"
+          :read-only="!props.canWrite"
           :placeholder="t('applications.compose.placeholder')"
-          :disabled="!props.canWrite"
-          :status="editor.contentValid.value ? undefined : 'error'"
+          :aria-label="t('applications.compose.content')"
         />
       </NFormItem>
       <NFormItem
@@ -99,6 +101,14 @@ async function save(): Promise<void> {
 <style scoped>
 .small {
   font-size: var(--text-xs);
+}
+
+.source-code {
+  width: 100%;
+}
+
+.source-code--invalid {
+  border-color: var(--danger);
 }
 
 /* NAlert has no size prop: the light inline look overrides its theme vars

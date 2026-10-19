@@ -7,6 +7,7 @@ import { RouterLink } from "vue-router";
 import BuildArgsEditor from "@/features/applications/components/BuildArgsEditor.vue";
 import { useCreateWizardState } from "@/features/applications/composables/useCreateAppWizard";
 import { isLatestImageTag } from "@/features/applications/schemas/applications";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 
 const wizard = useCreateWizardState();
 const { form } = wizard;
@@ -57,12 +58,13 @@ const latestTagWarn = computed<boolean>(
     <template v-else-if="wizard.isDockerfile.value">
       <div class="form-row">
         <NFormItem :label="t('applications.wizard.dockerfileContent')">
-          <NInput
-            v-model:value="form.dockerfileContent"
-            type="textarea"
-            class="mono"
-            :rows="12"
+          <CodeEditor
+            v-model="form.dockerfileContent"
+            class="wizard-code"
+            preset="dockerfile"
+            height="220px"
             placeholder="FROM alpine:3.20"
+            :aria-label="t('applications.wizard.dockerfileContent')"
           />
           <span class="field-hint">{{ t("applications.wizard.dockerfileHint") }}</span>
         </NFormItem>
@@ -228,12 +230,13 @@ const latestTagWarn = computed<boolean>(
       <template v-if="wizard.isComposePaste.value">
         <div class="form-row">
           <NFormItem :label="t('applications.wizard.composeContent')">
-            <NInput
-              v-model:value="form.composeContent"
-              type="textarea"
-              class="mono"
-              :rows="10"
+            <CodeEditor
+              v-model="form.composeContent"
+              class="wizard-code"
+              preset="yaml"
+              height="220px"
               placeholder="services:"
+              :aria-label="t('applications.wizard.composeContent')"
             />
             <span class="field-hint">{{ t("applications.wizard.composeContentHint") }}</span>
             <NAlert class="field-alert" type="warning" :show-icon="false" :bordered="false">
@@ -381,5 +384,9 @@ const latestTagWarn = computed<boolean>(
 
 .mono {
   font-family: var(--font-mono);
+}
+
+.wizard-code {
+  width: 100%;
 }
 </style>

@@ -14,10 +14,13 @@ import {
   sourceTypeImplemented,
 } from "@/features/applications/schemas/applications";
 import ComposeEditor from "@/features/applications/components/ComposeEditor.vue";
+import WizardSourceStep from "@/features/applications/components/WizardSourceStep.vue";
 import { useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
+import { provideCreateWizard } from "@/features/applications/composables/useCreateAppWizard";
 import { useComposeEditor } from "@/features/applications/composables/useComposeEditor";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
 import { extractComposeServiceNames } from "@/features/applications/utils/compose";
+import CodeEditor from "@/features/files/components/CodeEditor.vue";
 import {
   registerDiscoveredCatalogs,
   resetLocaleState,
@@ -117,6 +120,25 @@ function mountWizard() {
     },
   });
   const wrapper = mount({ render: () => h(NMessageProvider, null, { default: () => h(Harness) }) });
+  return { w: wiz!, wrapper };
+}
+
+/** mountSourceStep renders the wizard Source step for one source type. */
+function mountSourceStep(sourceType: string) {
+  setActivePinia(createPinia());
+  let wiz: ReturnType<typeof useCreateAppWizard> | null = null;
+  const Harness = defineComponent({
+    setup() {
+      wiz = useCreateAppWizard(ref(false), (() => undefined) as never);
+      provideCreateWizard(wiz);
+      wiz.form.sourceType = sourceType as never;
+      return () => h(WizardSourceStep);
+    },
+  });
+  const wrapper = mount(
+    { render: () => h(NMessageProvider, null, { default: () => h(Harness) }) },
+    { global: { plugins: [i18n] } },
+  );
   return { w: wiz!, wrapper };
 }
 
@@ -304,6 +326,27 @@ describe("wizard compose source", () => {
     });
     wrapper.unmount();
   });
+
+  it("routes the compose editor document into the form and payload", async () => {
+    const { w, wrapper } = mountSourceStep("compose");
+    const code = wrapper.findComponent(CodeEditor);
+    expect(code.props("preset")).toBe("yaml");
+    expect(code.props("placeholder")).toBe("services:");
+    expect(code.props("ariaLabel")).toBe("Compose file");
+
+    code.vm.$emit("update:modelValue", pasted);
+    await nextTick();
+    expect(w.form.composeContent).toBe(pasted);
+
+    w.form.composeService = "web";
+    w.form.name = "compose-demo";
+    expect(w.buildPayload()).toMatchObject({
+      source_type: "compose",
+      compose_content: pasted,
+      compose_service: "web",
+    });
+    wrapper.unmount();
+  });
 });
 
 describe("detail compose editor", () => {
@@ -419,7 +462,11 @@ describe("detail compose save feedback", () => {
       ) as HTMLButtonElement;
     expect(saveButton().disabled).toBe(true);
 
-    await wrapper.find("textarea").setValue(`${pasted}# edited\n`);
+    const code = wrapper.findComponent(CodeEditor);
+    expect(code.props("preset")).toBe("yaml");
+    expect(code.props("readOnly")).toBe(false);
+    code.vm.$emit("update:modelValue", `${pasted}# edited\n`);
+    await nextTick();
     expect(saveButton().disabled).toBe(false);
 
     saveButton().click();

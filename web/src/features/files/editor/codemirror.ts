@@ -82,6 +82,11 @@ export interface EditorSessionOptions {
   language: EditorLanguageId;
   /** ariaLabel names the contenteditable surface for screen readers. */
   ariaLabel: string;
+  /**
+   * placeholder is the empty-document hint; embedded editors pass their
+   * format example and fall back to the file editor wording.
+   */
+  placeholder?: string;
   readOnly: boolean;
   settings: EditorSettings;
   onChange: (_doc: string) => void;
@@ -322,6 +327,8 @@ function editorTheme(settings: EditorSettings): Extension {
           overflow: "auto",
         },
         ".cm-content": { caretColor: "var(--accent)" },
+        // Multi-line format examples stay readable when the document is empty.
+        ".cm-placeholder": { whiteSpace: "pre-wrap" },
         ".cm-gutters": {
           backgroundColor: background,
           color: dark ? "var(--muted)" : "var(--meta)",
@@ -460,7 +467,7 @@ export async function createEditorSession(
           editorSettingsExtensions(options.settings, options.language),
         ),
         languageCompartment.of(initialLanguage),
-        placeholderExt("(empty file)"),
+        placeholderExt(options.placeholder ?? "(empty file)"),
         readOnlyCompartment.of(readOnlyExtensions(options.readOnly)),
         // The contenteditable surface needs its own accessible name (axe
         // aria-input-field-name); the window title is not enough.

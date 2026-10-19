@@ -146,6 +146,12 @@ describe("CodeEditor", () => {
     wrapper.unmount();
   });
 
+  it("forwards the empty-document placeholder hint to the session", async () => {
+    const wrapper = await mountEditor({ preset: "yaml", placeholder: "services:" });
+    expect(lastOptions().placeholder).toBe("services:");
+    wrapper.unmount();
+  });
+
   it("defaults the aria label through i18n and keeps a caller override", async () => {
     const wrapper = await mountEditor();
     expect(lastOptions().ariaLabel).toBe("Code editor");

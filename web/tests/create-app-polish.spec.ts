@@ -237,6 +237,45 @@ test("JUS-75 notices render light and short in a real DOM", async ({ page }) => 
   expect(args.height, "build-args notice height").toBeLessThanOrEqual(64);
 });
 
+test("JUS-237 file-content sources edit in the code editor", async ({ page }) => {
+  const compose = await openWizard(page, "Docker Compose");
+  const composeEditor = compose.locator(".code-editor .cm-content").first();
+  await expect(composeEditor).toBeVisible();
+  await expect(compose.locator(".cm-placeholder").first()).toHaveText("services:");
+  await composeEditor.click();
+  await page.keyboard.type("services:\n  web:\n    image: nginx:1.27-alpine");
+  await expect(composeEditor).toContainText("image: nginx:1.27-alpine");
+  await page.keyboard.press("Escape");
+
+  const docker = await openWizard(page, "Dockerfile");
+  const dockerEditor = docker.locator(".code-editor .cm-content").first();
+  await expect(dockerEditor).toBeVisible();
+  await expect(docker.locator(".cm-placeholder").first()).toHaveText("FROM alpine:3.20");
+  await dockerEditor.click();
+  await page.keyboard.type("FROM alpine:3.21");
+  await expect(dockerEditor).toContainText("FROM alpine:3.21");
+  await page.keyboard.press("Escape");
+});
+
+test("JUS-237 compose editor fits the wizard at the target widths", async ({ page }) => {
+  const wizard = await openWizard(page, "Docker Compose");
+  for (const width of [390, 480, 1280, 1366]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(250);
+    const editor = wizard.locator(".code-editor").first();
+    await expect(editor).toBeVisible();
+    const box = await editor.boundingBox();
+    expect(box, `editor has a box at ${width}px`).not.toBeNull();
+    expect(box!.width, `editor fits ${width}px`).toBeLessThanOrEqual(width);
+    const overflow = await editor.evaluate((element) => element.scrollWidth - element.clientWidth);
+    expect(overflow, `no horizontal overflow at ${width}px`).toBeLessThanOrEqual(1);
+    const card = await wizard.boundingBox();
+    expect(card, `modal has a box at ${width}px`).not.toBeNull();
+    expect(card!.height, `modal fits the viewport at ${width}px`).toBeLessThanOrEqual(900);
+  }
+  await page.keyboard.press("Escape");
+});
+
 test("JUS-75 the two header links are unambiguous in a real DOM", async ({ page }) => {
   const wizard = await openWizard(page, "Docker Compose");
   await expect(wizard.getByRole("button", { name: "Change scope" })).toBeVisible();

@@ -35,14 +35,16 @@ func (s *Server) terminalService() *terminal.Service {
 }
 
 // terminalOperator re-authorizes a terminal stream from the verified
-// access-token claims. It mirrors isPlatformOperator for a session JWT — an
-// admin role claim or an email listed in PLATFORM_ADMINS — and additionally
-// proves the account still exists and, when the token carries a "sid", that the
-// refresh session is still live. The terminal stream calls it at attach and
-// every revalidation tick, so a logout/revocation, role change or removed
-// PLATFORM_ADMINS entry closes an open shell within one interval. A scoped API
-// token cannot open a browser stream because the handshake carries an access
-// token, not an API token.
+// access-token identity. It proves the account still exists, resolves the
+// operator role from that current account record (never from the immutable
+// role claim baked into the handshake token), and, when the token carries a
+// "sid", proves the refresh session is still live. The terminal stream calls it
+// at attach and every revalidation tick, so a logout/revocation, role demotion
+// or removed PLATFORM_ADMINS entry closes an open shell within one interval.
+// The token's own expiry is checked once at the handshake; revalidation uses
+// server-side state only so an 8h shell is not cut at the 15m access-token
+// lifetime. A scoped API token cannot open a browser stream because the
+// handshake carries an access token, not an API token.
 func (s *Server) terminalOperator(ctx context.Context, claims *auth.Claims) bool {
 	if claims == nil || s.auth == nil {
 		return false
@@ -55,8 +57,8 @@ func (s *Server) terminalOperator(ctx context.Context, claims *auth.Claims) bool
 	if err != nil || user == nil {
 		return false
 	}
-	// An access token minted before PF-2 has no sid; it is still bounded by its
-	// 15-minute expiry, which the periodic token verification enforces.
+	// An access token minted before PF-2 has no sid; the account and its
+	// current operator role still bound the stream.
 	if claims.SessionID != "" {
 		sessionID, err := uuid.Parse(claims.SessionID)
 		if err != nil {
@@ -77,7 +79,7 @@ func (s *Server) terminalOperator(ctx context.Context, claims *auth.Claims) bool
 			return false
 		}
 	}
-	if strings.EqualFold(claims.Role, "admin") {
+	if strings.EqualFold(user.Role, "admin") {
 		return true
 	}
 	return s.isPlatformAdminEmail(user.Email)

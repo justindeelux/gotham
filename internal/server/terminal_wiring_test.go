@@ -53,7 +53,7 @@ func TestTerminalOperator(t *testing.T) {
 	userID := uuid.New()
 	sessionID := uuid.New()
 	server := &Server{auth: stubAuthService{
-		user:     &auth.User{Email: "ops@example.com"},
+		user:     &auth.User{Email: "ops@example.com", Role: "admin"},
 		sessions: []auth.SessionInfo{{ID: sessionID}},
 	}}
 
@@ -119,5 +119,27 @@ func TestTerminalRoutesMountOnlyWithAuthAndRegistry(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated create status = %d, want 401", recorder.Code)
+	}
+}
+
+func TestTerminalOperatorUsesCurrentAccountRole(t *testing.T) {
+	t.Setenv("PLATFORM_ADMINS", "")
+	userID := uuid.New()
+	claims := func(role string) *auth.Claims {
+		return &auth.Claims{Role: role, RegisteredClaims: jwt.RegisteredClaims{Subject: userID.String()}}
+	}
+
+	// A demoted account must not keep operator access from the stale role claim
+	// baked into the handshake token.
+	demoted := &Server{auth: stubAuthService{user: &auth.User{Email: "user@example.com", Role: "member"}}}
+	if demoted.terminalOperator(context.Background(), claims("admin")) {
+		t.Fatal("a demoted account kept operator access via the token role claim")
+	}
+
+	// Conversely, a promoted account is accepted even when its handshake token
+	// still carries the old member role.
+	promoted := &Server{auth: stubAuthService{user: &auth.User{Email: "user@example.com", Role: "admin"}}}
+	if !promoted.terminalOperator(context.Background(), claims("member")) {
+		t.Fatal("a promoted account was refused because of its stale token role")
 	}
 }

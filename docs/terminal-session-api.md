@@ -81,13 +81,16 @@ Pre-upgrade checks, each answering an HTTP status before the upgrade:
    `Sec-WebSocket-Protocol: gotham.token.<jwt>` (browser path) or
    `Authorization: Bearer <jwt>`. It is never accepted from the query string, so
    no reusable credential appears in URLs, proxy logs or history.
-3. **Operator.** The token's role claim is `admin`, or its account email is in
-   `PLATFORM_ADMINS`; the account must still exist and, when the token carries a
-   `sid`, its refresh session must still be live. This check runs at attach and
-   again every 30 seconds for the life of the stream, so a logout/revocation,
-   role change or removed `PLATFORM_ADMINS` entry closes the shell within that
-   interval. Token expiry is enforced by the same periodic check; the 8-hour cap
-   is not the revocation window.
+3. **Operator.** The handshake token is verified once, here. Operator access is
+   then resolved from the **current account record** (its role is `admin`) or
+   from its account email being in `PLATFORM_ADMINS`; the account must still
+   exist and, when the token carries a `sid`, its refresh session must still be
+   live. This check runs again every 30 seconds for the life of the stream, so a
+   logout/revocation, demotion or removed `PLATFORM_ADMINS` entry closes the
+   shell within that interval. The access token's own 15-minute expiry is
+   deliberately **not** re-checked: a browser cannot present a refreshed token
+   on an open socket, and the session contract is 8 hours. A demotion is read
+   from the account, not from the token's immutable role claim.
 4. **Ownership.** The session must belong to the authenticated user and the
    `{server_id}` in the path. Another user's session answers 404, not 403, so a
    session id cannot be probed. Ownership is validated before the upgrade;
@@ -149,9 +152,11 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   the relay confirms a live socket.
 * **Confirm** switches to the full 8 h lifetime (the agent enforces the same cap
   independently).
-* **Revalidation** runs every 30 s: the access token is verified again and the
-  operator/account/refresh-session check is repeated. A failure sends an error
-  frame and cancels the relay.
+* **Revalidation** runs every 30 s against server-side state only: the account
+  must still exist, its *current* role (or `PLATFORM_ADMINS` entry) must still
+  grant operator access, and the `sid` refresh session must still be live. The
+  handshake token's expiry is not consulted again. A real failure sends an
+  error frame and cancels the relay; a tick that races a normal close is silent.
 * **Idle timeout** closes a socket that receives no frame for 60 s; the server
   sends a `0x05` heartbeat every 25 s so a live client can tell a quiet shell
   from a dead one.

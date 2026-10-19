@@ -214,7 +214,7 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, apiError{Message: "origin is not allowed"})
 		return
 	}
-	claims, userID, token, err := h.authenticate(r)
+	claims, userID, err := h.authenticate(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
@@ -263,24 +263,26 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 				_ = conn.Close()
 				return
 			}
-			h.serve(conn, session, claims, token)
+			h.serve(conn, session, claims)
 		},
 	}
 	server.ServeHTTP(w, r)
 }
 
 // serve relays one WebSocket to one agent terminal stream.
-func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Claims, token string) {
+func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Claims) {
 	defer func() { _ = conn.Close() }()
 	defer h.svc.Release(session.ID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Re-authorize for the life of the stream: token expiry, logout, a role or
-	// PLATFORM_ADMINS change and an expired refresh session all end the shell
-	// within revalidatePeriod instead of the 8h cap.
-	go h.revalidate(ctx, cancel, conn, session, claims, token)
+	// Re-authorize for the life of the stream from server-side state only:
+	// logout/revocation, a current-role demotion and a removed PLATFORM_ADMINS
+	// entry end the shell within revalidatePeriod. The handshake token's own
+	// expiry is deliberately not consulted here: the browser cannot present a
+	// refreshed token on an open socket, and the session contract is 8h.
+	go h.revalidate(ctx, cancel, conn, session, claims)
 
 	// A session expiry (or an explicit DELETE) cancels the relay, which closes
 	// the agent stream and tears the PTY down.
@@ -387,10 +389,16 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 	}
 }
 
-// revalidate polls the token and the operator/session check while the relay is
-// active. Any failure tells the client why and tears the whole session down.
-func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, session *Session, claims *auth.Claims, token string) {
-	if token == "" || claims == nil {
+// revalidate polls server-side authorization state while the relay is active:
+// the account must still exist, its current role (or PLATFORM_ADMINS entry) must
+// still grant operator access, and the refresh session named by the token's sid
+// must still be live. It never re-verifies the access token: the browser cannot
+// present a refreshed token on an open socket, so the token's 15-minute expiry
+// must not bound an 8-hour shell. Any real failure tells the client why and
+// tears the whole session down; a failure that is only the relay's own
+// cancellation is silent.
+func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, session *Session, claims *auth.Claims) {
+	if claims == nil || h.operator == nil {
 		return
 	}
 	ticker := time.NewTicker(h.revalidatePeriod)
@@ -402,13 +410,21 @@ func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, con
 		case <-session.Done():
 			return
 		case <-ticker.C:
-			current, err := h.verify.VerifyAccessToken(token)
-			if err == nil && current != nil && current.Subject == claims.Subject && h.operator != nil {
-				if h.operator(ctx, current) {
-					continue
-				}
+			if h.operator(ctx, claims) {
+				continue
 			}
-			_ = sendFrame(conn, opError, []byte("terminal access was revoked"))
+			// A tick that raced a normal close sees a cancelled context and a
+			// failed lookup; that is not a revocation and must not emit an
+			// error frame on a socket that is already going away.
+			if ctx.Err() != nil {
+				return
+			}
+			select {
+			case <-session.Done():
+				return
+			default:
+			}
+			_ = sendFrame(conn, opError, []byte("terminal session was revoked"))
 			h.logger.Info("terminal: session authorization ended", "session_id", session.ID.String())
 			cancel()
 			_ = conn.Close()
@@ -573,23 +589,23 @@ func (h *handler) fail(conn *websocket.Conn, session *Session, message string) {
 }
 
 // authenticate extracts and verifies the access token from the handshake.
-func (h *handler) authenticate(r *http.Request) (*auth.Claims, uuid.UUID, string, error) {
+func (h *handler) authenticate(r *http.Request) (*auth.Claims, uuid.UUID, error) {
 	if h.verify == nil {
-		return nil, uuid.Nil, "", errors.New("terminal: no token verifier")
+		return nil, uuid.Nil, errors.New("terminal: no token verifier")
 	}
 	token := tokenFromRequest(r)
 	if token == "" {
-		return nil, uuid.Nil, "", errors.New("terminal: no access token")
+		return nil, uuid.Nil, errors.New("terminal: no access token")
 	}
 	claims, err := h.verify.VerifyAccessToken(token)
 	if err != nil || claims == nil {
-		return nil, uuid.Nil, "", errors.New("terminal: invalid access token")
+		return nil, uuid.Nil, errors.New("terminal: invalid access token")
 	}
 	userID, err := uuid.Parse(claims.Subject)
 	if err != nil || userID == uuid.Nil {
-		return nil, uuid.Nil, "", errors.New("terminal: token has no user")
+		return nil, uuid.Nil, errors.New("terminal: token has no user")
 	}
-	return claims, userID, token, nil
+	return claims, userID, nil
 }
 
 // tokenFromRequest reads the access token from the Authorization header or,

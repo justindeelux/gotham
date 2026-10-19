@@ -113,6 +113,7 @@ func shellPath(t *testing.T) string {
 type fixtureOptions struct {
 	dial        DialFunc
 	operator    bool
+	operatorFn  func(context.Context) bool
 	pendingTTL  time.Duration
 	maxDuration time.Duration
 	revalidate  time.Duration
@@ -154,11 +155,14 @@ func newFixture(t *testing.T, options fixtureOptions) *fixture {
 	verifier := &fakeVerifier{userID: userID, token: "good-token"}
 	f := &fixture{svc: svc, verifier: verifier, userID: userID, serverID: serverID}
 	f.operator.Store(options.operator)
+	operatorCheck := func(context.Context, *auth.Claims) bool { return f.operator.Load() }
+	if options.operatorFn != nil {
+		operatorCheck = func(ctx context.Context, _ *auth.Claims) bool { return options.operatorFn(ctx) }
+	}
 	router := chi.NewRouter()
 	mount(router,
 		func(next http.Handler) http.Handler { return next },
-		svc, verifier,
-		func(context.Context, *auth.Claims) bool { return f.operator.Load() },
+		svc, verifier, operatorCheck,
 		func(context.Context) (uuid.UUID, bool) { return userID, true },
 		discardLogger(),
 		handlerOptions{revalidatePeriod: options.revalidate, pingPeriod: options.ping, idleTimeout: options.idle},
@@ -495,6 +499,37 @@ func expectClose(t *testing.T, conn *websocket.Conn, timeout time.Duration) {
 	t.Fatal("connection stayed open")
 }
 
+func expectErrorAndClose(t *testing.T, conn *websocket.Conn, want string, timeout time.Duration) {
+	t.Helper()
+	sawError := false
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+			break
+		}
+		var payload []byte
+		err := websocket.Message.Receive(conn, &payload)
+		if err == nil {
+			if len(payload) > 0 && payload[0] == opError {
+				sawError = true
+				if !strings.Contains(string(payload[1:]), want) {
+					t.Fatalf("error frame = %q, want %q", payload[1:], want)
+				}
+			}
+			continue
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			continue
+		}
+		if !sawError {
+			t.Fatal("stream closed without a revocation frame")
+		}
+		return
+	}
+	t.Fatal("connection stayed open")
+}
+
 func waitSessionDone(t *testing.T, session *Session) {
 	t.Helper()
 	select {
@@ -564,11 +599,54 @@ func TestRevocationClosesStream(t *testing.T) {
 		t.Fatalf("first frame opcode = %#x, want opened", opcode)
 	}
 	f.operator.Store(false)
-	expectClose(t, conn, 5*time.Second)
+	expectErrorAndClose(t, conn, "terminal session was revoked", 5*time.Second)
 	waitSessionDone(t, session)
 }
 
-func TestExpiredTokenClosesStream(t *testing.T) {
+func TestCloseDoesNotSendRevokedFrame(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{
+		revalidate: 10 * time.Millisecond,
+		// Emulate a lookup that fails because the relay context was cancelled
+		// by the normal close: that must not be reported as a revocation.
+		operatorFn: func(ctx context.Context) bool { return ctx.Err() == nil },
+	})
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	conn, err := f.dial(t, session, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if opcode, _ := readFrame(t, conn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened", opcode)
+	}
+	// Let a few revalidation ticks pass, then close while a tick may be in
+	// flight.
+	time.Sleep(25 * time.Millisecond)
+	sendFrameTest(t, conn, opClose, nil)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+			return
+		}
+		var payload []byte
+		err := websocket.Message.Receive(conn, &payload)
+		if err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				continue
+			}
+			return
+		}
+		if len(payload) > 0 && payload[0] == opError {
+			t.Fatalf("normal close emitted a revocation frame: %s", payload[1:])
+		}
+	}
+	t.Fatal("connection did not close")
+}
+
+func TestShellSurvivesAccessTokenExpiry(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, fixtureOptions{operator: true, revalidate: 40 * time.Millisecond})
 	valid := &atomic.Bool{}
@@ -583,8 +661,25 @@ func TestExpiredTokenClosesStream(t *testing.T) {
 	if opcode, _ := readFrame(t, conn); opcode != opOpened {
 		t.Fatalf("first frame opcode = %#x, want opened", opcode)
 	}
+
+	// The handshake token expires; the browser cannot refresh it on an open
+	// socket, so the live shell must survive while its session/operator state
+	// is valid.
 	valid.Store(false)
-	expectClose(t, conn, 5*time.Second)
+	time.Sleep(3 * 40 * time.Millisecond)
+
+	sendFrameTest(t, conn, opInput, []byte("echo still-alive\r"))
+	readUntilOutput(t, conn, "still-alive")
+	sendFrameTest(t, conn, opInput, []byte("exit 0\r"))
+	for {
+		opcode, payload := readFrame(t, conn)
+		if opcode == opExited {
+			break
+		}
+		if opcode == opError {
+			t.Fatalf("stream was closed after token expiry: %s", payload)
+		}
+	}
 	waitSessionDone(t, session)
 }
 

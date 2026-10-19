@@ -26,6 +26,7 @@ import {
 } from "@/features/applications/composables/domainRefresh";
 import { extractComposeServicePorts } from "@/features/applications/utils/compose";
 import { describeProxyError, useProxyStore } from "@/features/domains";
+import { isApiError } from "@/features/servers";
 import { activeLocale, i18n, onLocaleChange } from "@/shared/i18n";
 import { fieldErrors } from "@/shared/validation/naiveAdapter";
 
@@ -119,12 +120,25 @@ export function useApplicationDomains(application: Ref<Application>) {
   }
 
   /**
-   * removeCertificateIntent deletes the intent recorded for a host that is no
-   * longer attached. A failure is returned (not swallowed) so the host row can
-   * surface it: the domain mutation already succeeded, so the stale intent
-   * must stay visible rather than disappear silently.
+   * refreshCertificateIntents reloads the proxy list before a cleanup lookup.
+   * The backend already removes a renamed/detached host's default http-01
+   * intent, so a stale cache would make the client delete an id that is
+   * already gone. A refresh failure is not fatal: the cached list is a safe
+   * fallback, and a delete that still races the server is handled below.
+   */
+  async function refreshCertificateIntents(): Promise<void> {
+    await proxyStore.fetchCertificates().catch(() => undefined);
+  }
+
+  /**
+   * removeCertificateIntent deletes an intent that is still recorded for a
+   * host that is no longer attached. The server removing it first (or a
+   * concurrent delete) answers 404, which means the desired state already
+   * holds and is treated as success. Any other failure is returned (not
+   * swallowed) so the row banner can surface it.
    */
   async function removeCertificateIntent(host: string): Promise<unknown | null> {
+    await refreshCertificateIntents();
     const intent = certificateIntent(host);
     if (intent === null) {
       return null;
@@ -133,6 +147,11 @@ export function useApplicationDomains(application: Ref<Application>) {
       await proxyStore.removeCertificate(intent.id);
       return null;
     } catch (error) {
+      if (isApiError(error) && error.status === 404) {
+        // Already gone server-side: resync so the stale row disappears too.
+        await refreshCertificateIntents();
+        return null;
+      }
       return error;
     }
   }

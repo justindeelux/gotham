@@ -106,6 +106,11 @@ function row(
   };
 }
 
+/** apiError builds the normalized ApiError shape the proxy client throws. */
+function apiError(status: number, message = "") {
+  return { status, message, cause: null };
+}
+
 function certificate(
   id: string,
   domain: string,
@@ -595,6 +600,153 @@ describe("Domains tab behavior", () => {
     );
     expect(wrapper.find(".certificate-modal").exists()).toBe(true);
     expect(wrapper.find(".certificate-modal").text()).toContain("save down");
+    wrapper.unmount();
+  });
+
+  it("does not call delete when the server cascade already removed the renamed intent", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "old.example.com", 3000, { is_primary: true }),
+    ]);
+    vi.mocked(listCertificates)
+      .mockResolvedValueOnce([
+        certificate("cert-old", "old.example.com"),
+        certificate("cert-other", "other.example.com"),
+      ])
+      .mockResolvedValue([certificate("cert-other", "other.example.com")]);
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await wrapper
+      .find(".domain-row")
+      .findAll("button")
+      .find((button) => button.text() === "Edit")!
+      .trigger("click");
+    await nextTick();
+    await wrapper.find('input[aria-label="Domain hostname"]').setValue("new.example.com");
+    await wrapper.find(".domain-submit").trigger("click");
+    await flushPromises();
+
+    expect(updateDomain).toHaveBeenCalled();
+    expect(deleteCertificate).not.toHaveBeenCalled();
+    expect(wrapper.text()).not.toContain("It may have been deleted already");
+    wrapper.unmount();
+  });
+
+  it("treats a 404 certificate delete after a rename as already done", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "old.example.com", 3000, { is_primary: true }),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-old", "old.example.com"),
+    ]);
+    vi.mocked(deleteCertificate).mockRejectedValue(apiError(404, "not found"));
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await wrapper
+      .find(".domain-row")
+      .findAll("button")
+      .find((button) => button.text() === "Edit")!
+      .trigger("click");
+    await nextTick();
+    await wrapper.find('input[aria-label="Domain hostname"]').setValue("new.example.com");
+    await wrapper.find(".domain-submit").trigger("click");
+    await flushPromises();
+
+    expect(deleteCertificate).toHaveBeenCalledWith("cert-old");
+    expect(wrapper.text()).not.toContain("It may have been deleted already");
+    wrapper.unmount();
+  });
+
+  it("does not call delete when the server cascade already removed the detached intent", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "old.example.com", 3000, { is_primary: true }),
+    ]);
+    vi.mocked(listCertificates)
+      .mockResolvedValueOnce([
+        certificate("cert-old", "old.example.com"),
+        certificate("cert-other", "other.example.com"),
+      ])
+      .mockResolvedValue([certificate("cert-other", "other.example.com")]);
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await wrapper
+      .find(".domain-row")
+      .findAll("button")
+      .find((button) => button.text() === "Remove")!
+      .trigger("click");
+    await nextTick();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Confirm")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(removeDomain).toHaveBeenCalledWith("app-1", "d1");
+    expect(deleteCertificate).not.toHaveBeenCalled();
+    expect(wrapper.text()).not.toContain("It may have been deleted already");
+    wrapper.unmount();
+  });
+
+  it("treats a 404 certificate delete after a remove as already done", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "old.example.com", 3000, { is_primary: true }),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-old", "old.example.com"),
+    ]);
+    vi.mocked(deleteCertificate).mockRejectedValue(apiError(404, "not found"));
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await wrapper
+      .find(".domain-row")
+      .findAll("button")
+      .find((button) => button.text() === "Remove")!
+      .trigger("click");
+    await nextTick();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Confirm")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(deleteCertificate).toHaveBeenCalledWith("cert-old");
+    expect(wrapper.text()).not.toContain("It may have been deleted already");
+    wrapper.unmount();
+  });
+
+  it("surfaces a non-404 certificate cleanup failure on remove", async () => {
+    vi.mocked(listDomains).mockResolvedValue([
+      row("d1", "old.example.com", 3000, { is_primary: true }),
+    ]);
+    vi.mocked(listCertificates).mockResolvedValue([
+      certificate("cert-old", "old.example.com"),
+    ]);
+    vi.mocked(deleteCertificate).mockRejectedValue(new Error("remove cleanup down"));
+    const wrapper = mountPanel();
+    await flushPromises();
+    await nextTick();
+
+    await wrapper
+      .find(".domain-row")
+      .findAll("button")
+      .find((button) => button.text() === "Remove")!
+      .trigger("click");
+    await nextTick();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Confirm")!
+      .trigger("click");
+    await flushPromises();
+
+    expect(deleteCertificate).toHaveBeenCalledWith("cert-old");
+    expect(wrapper.text()).toContain("remove cleanup down");
     wrapper.unmount();
   });
 });

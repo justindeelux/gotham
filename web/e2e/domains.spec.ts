@@ -500,6 +500,15 @@ test.describe("domains", () => {
     await expect(domainModal).toBeHidden();
     const changedRow = domainCard.locator(".domain-row").filter({ hasText: changedDomain });
     await expect(changedRow).toHaveCount(1);
+    // The backend already removed the old host's auto intent on rename; the
+    // follow-up client cleanup must not surface a spurious 404.
+    await expect(domainCard.getByText(/not found/i)).toHaveCount(0);
+    await expect(
+      page.locator(".n-message").filter({ hasText: "Domain updated." }),
+    ).toBeVisible();
+    await expect(
+      page.locator(".n-message").filter({ hasText: "Not found" }),
+    ).toHaveCount(0);
 
     // The certificate action opens the intent of the clicked row, which has
     // no certificate yet (the earlier intent was recorded for the old host).

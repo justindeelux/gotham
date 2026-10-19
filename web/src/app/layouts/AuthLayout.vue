@@ -47,20 +47,7 @@ const valueProps = computed<ValueProp[]>(() => [
     <aside class="auth-aside" data-od-id="auth-aside">
       <div class="stack gap-8">
         <div class="brand-lockup">
-          <span class="brand-mark">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              aria-hidden="true"
-            >
-              <path d="M5 19V11a7 7 0 0114 0v8" />
-              <path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19" />
-            </svg>
-          </span>
-          <span class="wordmark">Gotham</span>
+          <img class="brand-logo" src="/logo/gotham-logo.svg" alt="Gotham" />
         </div>
 
         <div class="stack gap-4">
@@ -97,20 +84,7 @@ const valueProps = computed<ValueProp[]>(() => [
            would sign in on a logo-less card. This compact lockup renders only
            there. -->
       <div class="auth-mobile-brand" aria-hidden="true">
-        <span class="brand-mark">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            aria-hidden="true"
-          >
-            <path d="M5 19V11a7 7 0 0114 0v8" />
-            <path d="M9.5 19v-6.5a2.5 2.5 0 015 0V19" />
-          </svg>
-        </span>
-        <span class="wordmark">Gotham</span>
+        <img class="brand-wordmark" src="/logo/gotham-wordmark.svg" alt="" />
       </div>
       <RouterView />
     </main>
@@ -183,34 +157,30 @@ const valueProps = computed<ValueProp[]>(() => [
   margin-top: 2px;
 }
 
+/* JUS-239: the brand ships as static artwork under /logo. Only the height is
+ * a token — the width follows each asset's own ratio, so the lockups never
+ * hard-code a pixel width. */
 .brand-lockup {
   display: flex;
   align-items: center;
   gap: var(--space-3);
 }
 
-.brand-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-md);
-  background: var(--accent);
-  color: var(--accent-on);
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
+.brand-logo {
+  display: block;
+  height: var(--brand-logo-h);
+  width: auto;
+  max-width: 100%;
+  aspect-ratio: 946 / 759;
+  object-fit: contain;
 }
 
-.brand-mark svg {
-  width: 24px;
-  height: 24px;
-}
-
-.wordmark {
-  font-family: var(--font-display);
-  font-size: var(--text-lg);
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  color: var(--fg-2);
+.brand-wordmark {
+  display: block;
+  height: var(--brand-wordmark-sm-h);
+  width: auto;
+  aspect-ratio: 946 / 232;
+  object-fit: contain;
 }
 
 .eyebrow {

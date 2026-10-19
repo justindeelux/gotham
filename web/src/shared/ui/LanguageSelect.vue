@@ -44,7 +44,7 @@ function handleSelect(locale: string | number): void {
       :aria-expanded="show"
     >
       <template #icon>
-        <GothamIcon name="globe" />
+        <GothamIcon name="languages" />
       </template>
     </NButton>
   </NDropdown>

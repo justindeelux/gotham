@@ -40,7 +40,7 @@ const sections = computed(() => visibleNavSections(navSections, authStore.isPlat
     tabindex="-1"
   >
     <div class="sidebar-head">
-      <span class="brand">Gotham</span>
+      <img class="brand" src="/logo/gotham-wordmark.svg" alt="Gotham" />
       <span v-if="versionTag" class="tag" :title="`Control plane ${versionTag}`">{{
         versionTag
       }}</span>
@@ -94,10 +94,19 @@ const sections = computed(() => visibleNavSections(navSections, authStore.isPlat
   color: var(--fg-2);
 }
 
+/* JUS-239: the head shows the brand wordmark instead of a text label. Only
+ * the height is a token — the width follows the asset's own ratio, so the
+ * lockup never needs a hard-coded pixel width. */
 .brand {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: block;
+  height: var(--brand-wordmark-h);
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  flex: 0 1 auto;
+  aspect-ratio: 946 / 232;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .tag {

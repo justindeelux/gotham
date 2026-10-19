@@ -9,6 +9,7 @@ import {
   Folder,
   Globe,
   History,
+  Languages,
   Layers,
   LayoutGrid,
   Play,
@@ -37,6 +38,7 @@ export type IconName =
   | "layers"
   | "db"
   | "globe"
+  | "languages"
   | "users"
   | "bell"
   | "search"
@@ -65,6 +67,7 @@ const components: Record<IconName, Component> = {
   layers: Layers,
   db: Database,
   globe: Globe,
+  languages: Languages,
   users: Users,
   bell: Bell,
   search: Search,

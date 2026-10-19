@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -32,7 +31,6 @@ func TestP4WebhookAutoDeploy(t *testing.T) {
 	h := newP4Harness(t)
 	suffix := uuid.New().String()[:8]
 	fixture := newP4Fixture(t, "e2e/p4-hook-"+suffix, "gotham-p4-hook-"+suffix)
-	hostPort := freeHostPort(t)
 
 	app := h.createApplication(t, p4CreateApplication{
 		EnvironmentID: h.envID.String(),
@@ -42,10 +40,9 @@ func TestP4WebhookAutoDeploy(t *testing.T) {
 		CloneURL:      fixture.dir,
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		Port:          p4ContainerPort,
-		HostPort:      hostPort,
 		ServerID:      h.serverID.String(),
 	})
+	h.addDomain(t, app.ID, "p4-hook-"+suffix+".example.test", p4ContainerPort)
 
 	hookSecret := "p4-e2e-secret-" + suffix
 	h.seedWebhook(t, app, hookSecret)
@@ -85,7 +82,7 @@ func TestP4WebhookAutoDeploy(t *testing.T) {
 	if running.State != "running" {
 		t.Fatalf("webhook deployment state = %q, want running (error: %s)", running.State, running.Error)
 	}
-	waitForHTTPBody(t, "http://127.0.0.1:"+strconv.Itoa(int(hostPort))+"/index.html", fixture.marker)
+	waitForHTTPBody(t, h.appURL(t, app.ID), fixture.marker)
 
 	// 4. The replay queued nothing extra after the run finished either.
 	if again := h.deployments(t, app.ID); len(again) != 1 {

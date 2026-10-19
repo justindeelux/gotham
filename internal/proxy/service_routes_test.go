@@ -301,7 +301,7 @@ func TestSyncServerApplicationWinsServiceHost(t *testing.T) {
 	serviceID := uuid.New()
 	appContainer := "app-container"
 	fixture := newSyncFixture(t, []ProxiedApplication{{
-		ID: appID, ServerID: serverID, BaseDomain: "shop.example.com", Port: 80, ContainerID: appContainer,
+		ID: appID, ServerID: serverID, Domains: []ProxiedDomain{{Domain: "shop.example.com", Port: 80}}, ContainerID: appContainer,
 	}}, serverID)
 	fixture.containers.list = append(fixture.containers.list, containers.Container{
 		ID: appContainer, Name: "app", State: "running", Ports: []string{"32770:80"}, PortsReported: true,
@@ -325,7 +325,7 @@ func TestSyncServerApplicationWinsServiceHost(t *testing.T) {
 	if strings.Contains(dynamic, "svc-"+serviceID.String()) {
 		t.Fatalf("the service must not claim an application host:\n%s", dynamic)
 	}
-	if !strings.Contains(dynamic, "app-"+appID.String()+"-web") {
+	if !strings.Contains(dynamic, AliasRouteName(appID, "shop.example.com")+"-web") {
 		t.Fatalf("the application route must survive:\n%s", dynamic)
 	}
 }

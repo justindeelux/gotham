@@ -7,7 +7,7 @@ import { z } from "zod";
  * schemas so there is a single source of truth.
  *
  * Regex exceptions (deliberate, historic patterns kept verbatim):
- * NAME_PATTERN, WIZARD_DOMAIN_PATTERN and HOST_PATTERN stay inside plain
+ * NAME_PATTERN and HOST_PATTERN stay inside plain
  * `.regex`/`.refine` rules because they ARE the exact historic expressions —
  * re-spelling them in another form would risk acceptance drift. Only
  * hostDomainSchema carries a user-visible message; every other schema below
@@ -22,10 +22,11 @@ import { z } from "zod";
  */
 export const applicationMessages = {
   domain: "applications.validation.domain",
+  domainPort: "applications.validation.domainPort",
+  domainService: "applications.validation.domainService",
 } as const;
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]{2,30}$/;
-const WIZARD_DOMAIN_PATTERN = /^[a-z0-9.-]+\.[a-z]{2,}$/;
 /** HOST_PATTERN mirrors the generator's ValidateDomain boundary. */
 const HOST_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 
@@ -594,35 +595,28 @@ export function isHttpsGitUrl(value: string): boolean {
 export const repoSchema = z.string().min(1);/** serverSchema replaces serverId === "" (a select output, never padded). */
 export const serverSchema = z.string().min(1);
 
-/**
- * hostPortSchema replaces the host-port check: null means auto-assigned and
- * passes, otherwise an integer 0-65535 is required. Gate-only. The container
- * port reuses the shared portSchema from primitives (same 1-65535 shape).
- */
-export const hostPortSchema = z.number().int().min(0).max(65535).nullable();
+/** domainPortSchema gates one domain's target container port (1-65535). */
+export const domainPortSchema = z
+  .number({
+    required_error: "applications.validation.domainPort",
+    invalid_type_error: "applications.validation.domainPort",
+  })
+  .int("applications.validation.domainPort")
+  .min(1, "applications.validation.domainPort")
+  .max(65535, "applications.validation.domainPort");
 
-/**
- * composeHostPortSchema gates a compose application's host port: 0 (or
- * null) auto-assigns, otherwise the port must sit above the privileged
- * band the node reserves. Gate-only; the server re-validates.
- */
-export const composeHostPortSchema = z
-  .number()
-  .int()
-  .min(0)
-  .max(65535)
-  .nullable()
-  .refine((value) => value === null || value === 0 || value > 1023);
+/** domainProtocolSchema selects the Traefik entrypoint; http is the default. */
+export const domainProtocolSchema = z.enum(["http", "https"]);
 
-/**
- * wizardDomainSchema replaces `domain === "" || DOMAIN_PATTERN.test(domain)`
- * on the trimmed value: empty clears the domain, otherwise the pattern holds.
- * Gate-only.
- */
-export const wizardDomainSchema = z
+/** domainServiceSchema allows an empty service (the release web service) or a
+ * structurally valid compose service name. */
+export const domainServiceSchema = z
   .string()
   .trim()
-  .refine((value) => value === "" || WIZARD_DOMAIN_PATTERN.test(value));
+  .refine(
+    (value) => value === "" || COMPOSE_SERVICE_PATTERN.test(value),
+    { message: "applications.validation.domainService" },
+  );
 
 /**
  * hostDomainSchema mirrors isValidDomain exactly: the caller lowercases and

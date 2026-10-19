@@ -38,9 +38,6 @@ func validCreateInput(serverID uuid.UUID) CreateApplicationInput {
 		CloneURL:      "https://github.com/acme/demo.git",
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		BaseDomain:    fmt.Sprintf("demo-%d.example.com", validCreateInputCounter),
-		Port:          3000,
-		HostPort:      8080,
 		ServerID:      serverID,
 		Env: []EnvEntry{
 			{Key: "NODE_ENV", Value: "production"},
@@ -177,21 +174,6 @@ func TestServiceCreateApplicationValidation(t *testing.T) {
 		{
 			name:    "unknown build pack",
 			mutate:  func(in *CreateApplicationInput, _ *fakeRepository, _ uuid.UUID) { in.BuildPack = "cobol" },
-			wantErr: ErrValidation,
-		},
-		{
-			name:    "negative port",
-			mutate:  func(in *CreateApplicationInput, _ *fakeRepository, _ uuid.UUID) { in.Port = -1 },
-			wantErr: ErrValidation,
-		},
-		{
-			name:    "port above 65535",
-			mutate:  func(in *CreateApplicationInput, _ *fakeRepository, _ uuid.UUID) { in.Port = 65536 },
-			wantErr: ErrValidation,
-		},
-		{
-			name:    "host port above 65535",
-			mutate:  func(in *CreateApplicationInput, _ *fakeRepository, _ uuid.UUID) { in.HostPort = 70000 },
 			wantErr: ErrValidation,
 		},
 		{
@@ -423,21 +405,19 @@ func TestServiceUpdateApplication(t *testing.T) {
 	svc := newTestService(t, repo)
 	name := "renamed app"
 	branch := "release"
-	port := int32(9090)
 	newServer := uuid.New()
 
 	updated, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{
 		Name:   &name,
 		Branch: &branch,
-		Port:   &port,
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if updated.Name != name || updated.Branch != branch || updated.Port != port {
+	if updated.Name != name || updated.Branch != branch {
 		t.Errorf("updated = %+v, want the patched fields applied", updated)
 	}
-	if updated.CloneURL != app.CloneURL || updated.HostPort != app.HostPort {
+	if updated.CloneURL != app.CloneURL {
 		t.Errorf("unpatched fields changed: %+v", updated)
 	}
 
@@ -467,11 +447,6 @@ func TestServiceUpdateApplication(t *testing.T) {
 	})
 
 	t.Run("rejects invalid values", func(t *testing.T) {
-		badPort := int32(70000)
-		if _, err := svc.UpdateApplication(context.Background(), userID, app.ID,
-			UpdateApplicationInput{Port: &badPort}); !errors.Is(err, ErrValidation) {
-			t.Fatalf("err = %v, want ErrValidation", err)
-		}
 		badPack := "cobol"
 		if _, err := svc.UpdateApplication(context.Background(), userID, app.ID,
 			UpdateApplicationInput{BuildPack: &badPack}); !errors.Is(err, ErrValidation) {

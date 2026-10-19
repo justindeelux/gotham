@@ -369,9 +369,11 @@ describe("JUS-19 CreateAppWizard rows", () => {
     expect(sourceStep).not.toMatch(/<NSpace[^>]*>\s*<NFormItem[^>]*wizard\.branch"/);
   });
 
-  it("pairs Node|Domain and Internal port|Host port in their own rows", () => {
-    expectPair(runtimeStep, "applications.wizard.node", "app.gotham.dev");
-    expectPair(runtimeStep, "applications.wizard.internalPort", "applications.wizard.hostPort");
+  it("keeps the node picker and explains domain routing moved to the Domains tab", () => {
+    expect(runtimeStep).toContain("applications.wizard.node");
+    expect(runtimeStep).toContain("applications.wizard.routingHint");
+    expect(runtimeStep).not.toContain("applications.wizard.internalPort");
+    expect(runtimeStep).not.toContain("applications.wizard.hostPort");
   });
 });
 

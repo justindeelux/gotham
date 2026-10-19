@@ -11,7 +11,7 @@ import { provideDomainsRefresh } from "@/features/applications/composables/domai
  * application detail page). The base domain is written through the
  * applications API; the certificate configuration through the proxy SSL API.
  * The certificate's recorded domain always comes from the application's
- * current base_domain, so a domain change is flagged until the configuration
+ * current primary_domain, so a domain change is flagged until the configuration
  * is saved again.
  */
 

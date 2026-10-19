@@ -5,7 +5,7 @@
 -- caller.
 INSERT INTO applications (
     id, user_id, server_id, environment_id, name, provider, repo, clone_url,
-    branch, build_pack, base_domain, port, host_port, team_id, is_preview,
+    branch, build_pack, team_id, is_preview,
     source_type, github_app_id, dockerfile_content, build_args,
     image_ref, registry_username, registry_password_ciphertext,
     compose_content, compose_file, compose_service
@@ -14,7 +14,7 @@ VALUES (
     COALESCE(sqlc.arg(id)::uuid, gen_random_uuid()),
     sqlc.arg(user_id), sqlc.arg(server_id), sqlc.arg(environment_id), sqlc.arg(name), sqlc.arg(provider),
     sqlc.arg(repo), sqlc.arg(clone_url), sqlc.arg(branch), sqlc.arg(build_pack),
-    sqlc.arg(base_domain), sqlc.arg(port), sqlc.arg(host_port), sqlc.arg(team_id),
+    sqlc.arg(team_id),
     -- Direct sqlc callers (fixtures, previews) may pass an empty source
     -- type; COALESCE maps it onto the default so the CHECK never sees it.
     -- The deploy repository normalizes the same way in Go.
@@ -101,21 +101,17 @@ UPDATE applications
 SET name = $2,
     branch = $3,
     build_pack = $4,
-    base_domain = $5,
-    port = $6,
-    host_port = $7,
-    server_id = $8,
-    base_domain_disabled = $9,
-    environment_id = $10,
-    github_app_id = $11,
-    dockerfile_content = $12,
-    build_args = $13,
-    image_ref = $14,
-    registry_username = $15,
-    registry_password_ciphertext = $16,
-    compose_content = $17,
-    compose_file = $18,
-    compose_service = $19,
+    server_id = $5,
+    environment_id = $6,
+    github_app_id = $7,
+    dockerfile_content = $8,
+    build_args = $9,
+    image_ref = $10,
+    registry_username = $11,
+    registry_password_ciphertext = $12,
+    compose_content = $13,
+    compose_file = $14,
+    compose_service = $15,
     updated_at = now()
 WHERE id = $1
 RETURNING *;

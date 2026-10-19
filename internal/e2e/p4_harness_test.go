@@ -81,24 +81,19 @@ type p4CreateApplication struct {
 	ComposeService string `json:"compose_service"`
 	Branch         string `json:"branch"`
 	BuildPack      string `json:"build_pack"`
-	BaseDomain     string `json:"base_domain"`
-	Port           int32  `json:"port"`
-	HostPort       int32  `json:"host_port"`
 	ServerID       string `json:"server_id"`
 }
 
 // p4Application is the application half of the API wire format.
 type p4Application struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Repo       string `json:"repo"`
-	CloneURL   string `json:"clone_url"`
-	Branch     string `json:"branch"`
-	BuildPack  string `json:"build_pack"`
-	BaseDomain string `json:"base_domain"`
-	Port       int32  `json:"port"`
-	HostPort   int32  `json:"host_port"`
-	ServerID   string `json:"server_id"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Repo          string `json:"repo"`
+	CloneURL      string `json:"clone_url"`
+	Branch        string `json:"branch"`
+	BuildPack     string `json:"build_pack"`
+	PrimaryDomain string `json:"primary_domain"`
+	ServerID      string `json:"server_id"`
 }
 
 // p4ApplicationEnvelope wraps a single application.
@@ -472,6 +467,61 @@ func (h *p4Harness) createApplication(t *testing.T, in p4CreateApplication) p4Ap
 }
 
 // deploy queues a deployment of the current revision (202).
+// addDomain attaches one routed host to an application through the public
+// API: the domain carries its own port, optional compose service and protocol.
+func (h *p4Harness) addDomain(t *testing.T, appID, domain string, port int32) {
+	t.Helper()
+	status, body := h.api(t, http.MethodPost, "/v1/applications/"+appID+"/domains", map[string]any{
+		"domain": domain, "port": port, "protocol": "http",
+	}, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("add domain %s: status %d (%s)", domain, status, body)
+	}
+}
+
+// publishedHostPort resolves the node-assigned host port of an application
+// container's target port (the proxy reads the same engine-reported binding).
+func (h *p4Harness) publishedHostPort(t *testing.T, appID string, appPort int32) int32 {
+	t.Helper()
+	docker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Fatalf("docker CLI: %v", err)
+	}
+	out, err := exec.Command(docker, "ps", "-q", "--filter", "label=gotham.app_id="+appID).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker ps for %s: %v: %s", appID, err, strings.TrimSpace(string(out)))
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		t.Fatalf("no container for application %s", appID)
+	}
+	portSpec := fmt.Sprintf("%d/tcp", appPort)
+	out, err = exec.Command(docker, "port", ids[0], portSpec).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker port %s %s: %v: %s", ids[0], portSpec, err, strings.TrimSpace(string(out)))
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		idx := strings.LastIndex(line, ":")
+		if idx < 0 {
+			continue
+		}
+		var port int32
+		if _, err := fmt.Sscanf(line[idx+1:], "%d", &port); err == nil && port > 0 {
+			return port
+		}
+	}
+	t.Fatalf("no published host port for %s %s (%s)", ids[0], portSpec, strings.TrimSpace(string(out)))
+	return 0
+}
+
+// appURL resolves the application's current published host port and returns
+// its fixture page URL.
+func (h *p4Harness) appURL(t *testing.T, appID string) string {
+	t.Helper()
+	return fmt.Sprintf("http://127.0.0.1:%d/index.html", h.publishedHostPort(t, appID, p4ContainerPort))
+}
+
 func (h *p4Harness) deploy(t *testing.T, appID string) p4Deployment {
 	t.Helper()
 	var envelope p4DeploymentEnvelope

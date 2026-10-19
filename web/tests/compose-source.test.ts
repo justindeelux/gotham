@@ -1,5 +1,6 @@
 // GS-8 compose source: schema gates, wizard Source step and detail editor.
-import { mount } from "@vue/test-utils";
+/* global HTMLButtonElement: readonly */
+import { flushPromises, mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,11 +9,11 @@ import { defineComponent, h, nextTick, ref } from "vue";
 import {
   composeContentSchema,
   composeFileSchema,
-  composeHostPortSchema,
   composeModeSchema,
   composeServiceSchema,
   sourceTypeImplemented,
 } from "@/features/applications/schemas/applications";
+import ComposeEditor from "@/features/applications/components/ComposeEditor.vue";
 import { useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
 import { useComposeEditor } from "@/features/applications/composables/useComposeEditor";
 import { useApplicationsStore } from "@/features/applications/stores/applications";
@@ -69,16 +70,6 @@ describe("compose schemas", () => {
     expect(composeServiceSchema.safeParse("").success).toBe(false);
     expect(composeServiceSchema.safeParse("  ").success).toBe(false);
     expect(composeServiceSchema.safeParse("-bad").success).toBe(false);
-  });
-
-  it("gates the compose host port above the privileged band", () => {
-    expect(composeHostPortSchema.safeParse(null).success).toBe(true);
-    expect(composeHostPortSchema.safeParse(0).success).toBe(true);
-    expect(composeHostPortSchema.safeParse(8080).success).toBe(true);
-    expect(composeHostPortSchema.safeParse(80).success).toBe(false);
-    expect(composeHostPortSchema.safeParse(443).success).toBe(false);
-    expect(composeHostPortSchema.safeParse(1023).success).toBe(false);
-    expect(composeHostPortSchema.safeParse(1024).success).toBe(true);
   });
 
   it("gates the in-repo file path", () => {
@@ -143,9 +134,6 @@ const reset = {
   name: "",
   buildPack: "",
   serverId: "",
-  port: 3000,
-  hostPort: null,
-  baseDomain: "",
   env: [],
   storage: [],
 };
@@ -291,24 +279,11 @@ describe("wizard compose source", () => {
     wrapper.unmount();
   });
 
-  it("gates privileged host ports on the Runtime step for compose", () => {
+  it("needs only a node on the Runtime step", () => {
     const { w, wrapper } = mountWizard();
-    Object.assign(w.form, {
-      ...reset,
-      sourceType: "compose",
-      serverId: "s1",
-      port: 3000,
-      hostPort: 80,
-      baseDomain: "",
-    });
+    Object.assign(w.form, { ...reset, sourceType: "compose", serverId: "" });
     expect(w.runtimeValid.value).toBe(false);
-    w.form.hostPort = 0;
-    expect(w.runtimeValid.value).toBe(true);
-    w.form.hostPort = 8080;
-    expect(w.runtimeValid.value).toBe(true);
-    // Other sources keep the existing range.
-    w.form.sourceType = "git_public";
-    w.form.hostPort = 80;
+    w.form.serverId = "s1";
     expect(w.runtimeValid.value).toBe(true);
     wrapper.unmount();
   });
@@ -353,16 +328,23 @@ describe("detail compose editor", () => {
     expect(editor.isRepoMode.value).toBe(false);
     expect(editor.content.value).toBe(pasted);
     expect(editor.service.value).toBe("web");
-    expect(editor.saveDisabled.value).toBe(false);
+    // A clean draft has nothing to save.
+    expect(editor.saveDisabled.value).toBe(true);
 
     editor.service.value = "";
     expect(editor.saveDisabled.value).toBe(true);
     editor.service.value = "web";
     editor.content.value = "version: \"3\"\n";
     expect(editor.saveDisabled.value).toBe(true);
-    editor.content.value = pasted;
-    await editor.handleSave();
-    expect(seen).toEqual([{ compose_content: pasted, compose_service: "web" }]);
+    editor.content.value = `${pasted}# edited\n`;
+    expect(editor.saveDisabled.value).toBe(false);
+    expect(await editor.handleSave()).toBe(true);
+    expect(seen).toEqual([
+      { compose_content: `${pasted}# edited\n`, compose_service: "web" },
+    ]);
+    // A successful save leaves the draft clean, so Save waits for the next edit.
+    expect(editor.isDirty.value).toBe(false);
+    expect(editor.saveDisabled.value).toBe(true);
 
     // An unrelated row bump re-seeds a clean draft but keeps edits.
     app.value = { ...app.value, updated_at: "2026-10-08T00:00:01Z" };
@@ -393,12 +375,67 @@ describe("detail compose editor", () => {
     } as never);
     const editor = useComposeEditor(app);
     expect(editor.isRepoMode.value).toBe(true);
-    expect(editor.saveDisabled.value).toBe(false);
+    expect(editor.saveDisabled.value).toBe(true);
     editor.file.value = "../escape.yml";
     expect(editor.saveDisabled.value).toBe(true);
     editor.file.value = "deploy/c.yml";
-    await editor.handleSave();
+    expect(editor.saveDisabled.value).toBe(false);
+    expect(await editor.handleSave()).toBe(true);
     expect(seen).toEqual([{ compose_file: "deploy/c.yml", compose_service: "web" }]);
+  });
+});
+
+describe("detail compose save feedback", () => {
+  it("toasts a successful save and disables Save until the next edit", async () => {
+    setActivePinia(createPinia());
+    const store = useApplicationsStore();
+    const app = {
+      id: "app-1",
+      source_type: "compose",
+      compose_content: pasted,
+      compose_file: "",
+      compose_service: "web",
+      updated_at: "2026-10-08T00:00:00Z",
+    } as Record<string, unknown>;
+    store.update = vi.fn(async (_id: string, input: Record<string, unknown>) => {
+      Object.assign(app, input, { updated_at: "2026-10-08T00:00:01Z" });
+      return app as never;
+    }) as never;
+
+    const wrapper = mount(
+      defineComponent({
+        render: () =>
+          h(NMessageProvider, null, {
+            default: () => h(ComposeEditor, { application: app, canWrite: true }),
+          }),
+      }),
+      { attachTo: globalThis.document.body, global: { plugins: [i18n] } },
+    );
+    await nextTick();
+
+    const saveButton = (): HTMLButtonElement =>
+      [...globalThis.document.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Save compose source",
+      ) as HTMLButtonElement;
+    expect(saveButton().disabled).toBe(true);
+
+    await wrapper.find("textarea").setValue(`${pasted}# edited\n`);
+    expect(saveButton().disabled).toBe(false);
+
+    saveButton().click();
+    await flushPromises();
+    await nextTick();
+
+    expect(store.update).toHaveBeenCalledWith("app-1", {
+      compose_content: `${pasted}# edited\n`,
+      compose_service: "web",
+    });
+    expect(globalThis.document.body.textContent ?? "").toContain(
+      "Compose source saved.",
+    );
+    expect(saveButton().disabled).toBe(true);
+    wrapper.unmount();
+    globalThis.document.body.innerHTML = "";
   });
 });
 
@@ -415,9 +452,9 @@ describe("compose locales", () => {
         "applications.wizard.composeContent",
         "applications.wizard.composeFile",
         "applications.wizard.composeService",
-        "applications.wizard.hostPortComposeHint",
-        "applications.compose.title",
+          "applications.compose.title",
         "applications.compose.save",
+        "applications.compose.saved",
         "applications.overview.composeService",
         "applications.rollback.hintCompose",
         "applications.deploymentsTab.footerCompose",

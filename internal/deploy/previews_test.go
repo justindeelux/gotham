@@ -13,6 +13,19 @@ import (
 func seedBaseForPreview(t *testing.T, app Application) *fakeRepository {
 	t.Helper()
 	repo := &fakeRepository{app: app}
+	primary := app.PrimaryDomain
+	if primary == nil {
+		primary = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
+	}
+	if _, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+		ApplicationID: app.ID,
+		Domain:        primary.Domain,
+		IsPrimary:     true,
+		Port:          primary.Port,
+		Protocol:      primary.Protocol,
+	}); err != nil {
+		t.Fatalf("seed primary domain: %v", err)
+	}
 	if _, err := repo.CreateDeployKey(context.Background(), DeployKey{
 		ApplicationID: app.ID,
 		Provider:      "github",
@@ -29,7 +42,7 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 	userID := uuid.New()
 	base := testApplication(userID)
 	base.TeamID = uuid.New()
-	base.BaseDomain = "app.example.com"
+	base.PrimaryDomain = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
 	repo := seedBaseForPreview(t, base)
 	repo.envVars = []EnvVar{{ApplicationID: base.ID, Key: "FOO", Value: "bar"}}
 	repo.secrets = []Secret{{ID: uuid.New(), ApplicationID: base.ID, Key: "TOKEN", Ciphertext: "sealed"}}
@@ -48,15 +61,15 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 	if created.UserID != base.UserID || created.TeamID != base.TeamID ||
 		created.ServerID != base.ServerID || created.Provider != base.Provider ||
 		created.Repo != base.Repo || created.CloneURL != base.CloneURL ||
-		created.BuildPack != base.BuildPack || created.Port != base.Port {
+		created.BuildPack != base.BuildPack {
 		t.Errorf("clone config = %+v, want everything copied from %+v", created, base)
 	}
 	if created.Name != "demo app-pr-7" || created.Branch != "feat/x" ||
-		created.BaseDomain != "pr-7-demo.app.example.com" {
+		created.PrimaryDomain == nil || created.PrimaryDomain.Domain != "pr-7-demo.app.example.com" {
 		t.Errorf("clone identity = %+v", created)
 	}
-	if created.HostPort != 0 {
-		t.Errorf("HostPort = %d, want 0 so the preview never fights the base port binding", created.HostPort)
+	if created.PrimaryDomain.Port != base.PrimaryDomain.Port || created.PrimaryDomain.Protocol != base.PrimaryDomain.Protocol {
+		t.Errorf("preview target = %#v, want the base routing shape", created.PrimaryDomain)
 	}
 	if !created.IsPreview {
 		t.Error("the clone is not marked is_preview")
@@ -114,11 +127,11 @@ func TestCreatePreviewApplicationClonesConfig(t *testing.T) {
 // cascade.
 func TestCreatePreviewApplicationClonesWildcardCertificate(t *testing.T) {
 	base := testApplication(uuid.New())
-	base.BaseDomain = "app.example.com"
+	base.PrimaryDomain = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
 	repo := seedBaseForPreview(t, base)
 	providerID := uuid.New()
 	repo.certificates = []CertificateIntent{{
-		ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+		ApplicationID: base.ID, Domain: base.PrimaryDomain.Domain, Enabled: true,
 		Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
 	}}
 	repo.dnsProviders = map[uuid.UUID]DNSProviderInfo{
@@ -160,7 +173,7 @@ func TestCreatePreviewApplicationClonesWildcardCertificate(t *testing.T) {
 // the sibling HTTP-only.
 func TestCreatePreviewApplicationSkipsUncoveredCertificates(t *testing.T) {
 	base := testApplication(uuid.New())
-	base.BaseDomain = "app.example.com"
+	base.PrimaryDomain = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
 	providerID := uuid.New()
 	enabled := map[uuid.UUID]DNSProviderInfo{
 		providerID: {Zones: []string{"example.com"}, Enabled: true},
@@ -173,10 +186,10 @@ func TestCreatePreviewApplicationSkipsUncoveredCertificates(t *testing.T) {
 	}{
 		{name: "no intent"},
 		{name: "plain http-01 intent", intent: &CertificateIntent{
-			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true, Challenge: "http-01",
+			ApplicationID: base.ID, Domain: base.PrimaryDomain.Domain, Enabled: true, Challenge: "http-01",
 		}},
 		{name: "disabled wildcard intent", intent: &CertificateIntent{
-			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: false,
+			ApplicationID: base.ID, Domain: base.PrimaryDomain.Domain, Enabled: false,
 			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
 		}, providers: enabled},
 		{name: "stale recorded domain", intent: &CertificateIntent{
@@ -184,19 +197,19 @@ func TestCreatePreviewApplicationSkipsUncoveredCertificates(t *testing.T) {
 			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
 		}, providers: enabled},
 		{name: "disabled provider", intent: &CertificateIntent{
-			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+			ApplicationID: base.ID, Domain: base.PrimaryDomain.Domain, Enabled: true,
 			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
 		}, providers: map[uuid.UUID]DNSProviderInfo{
 			providerID: {Zones: []string{"example.com"}, Enabled: false},
 		}},
 		{name: "provider zones do not cover the preview host", intent: &CertificateIntent{
-			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+			ApplicationID: base.ID, Domain: base.PrimaryDomain.Domain, Enabled: true,
 			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
 		}, providers: map[uuid.UUID]DNSProviderInfo{
 			providerID: {Zones: []string{"other.com"}, Enabled: true},
 		}},
 		{name: "missing provider", intent: &CertificateIntent{
-			ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+			ApplicationID: base.ID, Domain: base.PrimaryDomain.Domain, Enabled: true,
 			Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
 		}},
 	}
@@ -226,11 +239,11 @@ func TestCreatePreviewApplicationSkipsUncoveredCertificates(t *testing.T) {
 // stays HTTP-only).
 func TestCreatePreviewApplicationCertificateFailureIsBestEffort(t *testing.T) {
 	base := testApplication(uuid.New())
-	base.BaseDomain = "app.example.com"
+	base.PrimaryDomain = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
 	repo := seedBaseForPreview(t, base)
 	providerID := uuid.New()
 	repo.certificates = []CertificateIntent{{
-		ApplicationID: base.ID, Domain: base.BaseDomain, Enabled: true,
+		ApplicationID: base.ID, Domain: base.PrimaryDomain.Domain, Enabled: true,
 		Challenge: "dns-01", DNSProviderID: providerID, Wildcard: true,
 	}}
 	repo.dnsProviders = map[uuid.UUID]DNSProviderInfo{
@@ -252,7 +265,7 @@ func TestCreatePreviewApplicationCertificateFailureIsBestEffort(t *testing.T) {
 
 func TestCreatePreviewApplicationRejectsUnusableInput(t *testing.T) {
 	base := testApplication(uuid.New())
-	base.BaseDomain = "app.example.com"
+	base.PrimaryDomain = &ApplicationDomain{Domain: "app.example.com", Port: 3000, Protocol: ProtocolHTTPS}
 
 	cases := []struct {
 		name  string
@@ -265,7 +278,7 @@ func TestCreatePreviewApplicationRejectsUnusableInput(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := &fakeRepository{app: base}
+			repo := seedBaseForPreview(t, base)
 			svc := newTestService(t, repo)
 			created, err := svc.CreatePreviewApplication(context.Background(), base.ID, tc.input)
 			if tc.want == nil {

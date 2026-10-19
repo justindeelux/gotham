@@ -28,6 +28,7 @@ func routerFixture(t *testing.T, serverID uuid.UUID) (*syncFixture, ProxiedAppli
 	t.Helper()
 	app := runningApp(serverID, "app.example.com", "app-container", appContainerPort, 8080)
 	app.Name = "shop"
+	app.Domains[0].Protocol = ProtocolHTTPS
 	app.Certificate = &CertificateIntent{Domain: "app.example.com", Enabled: true, Challenge: ChallengeHTTP01}
 	fixture := newSyncFixture(t, []ProxiedApplication{app}, serverID)
 	fixture.containers.list = append(fixture.containers.list, appContainer("app-container", 8080))
@@ -115,8 +116,8 @@ func TestListRoutersSyncStatusPendingThenSynced(t *testing.T) {
 	}
 	// A held-back row is reported as a diagnostic, not a router.
 	fixture.source.setApps(append(fixture.source.apps, ProxiedApplication{
-		ID: uuid.New(), ServerID: serverID, BaseDomain: "app.example.com",
-		Port: appContainerPort, ContainerID: "other",
+		ID: uuid.New(), ServerID: serverID, Domains: []ProxiedDomain{{Domain: "app.example.com", Port: 80}},
+		ContainerID: "other",
 	})...)
 	response, err = fixture.service.ListRouters(context.Background(), serverID)
 	if err != nil {

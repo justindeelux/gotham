@@ -124,7 +124,7 @@ const en = {
     statusNotReported: "not reported",
     expiryNotReported: "not reported",
     baseDomainChanged:
-      "{app} · base domain changed to {domain} — re-save to re-record",
+      "{app} · primary domain changed to {domain} — re-save to re-record",
     statusTitle: "Status is observed live from the owning node",
     statusBody:
       "present means the node's ACME storage holds a certificate for the " +
@@ -133,8 +133,8 @@ const en = {
       "status is computed on read — the control plane stores the desired " +
       "configuration only.",
     footer:
-      "The recorded domain comes from the application's base domain at save " +
-      "time. Changing the base domain later requires saving the configuration " +
+      "The recorded domain comes from the application's primary domain at save " +
+      "time. Changing the primary domain later requires saving the configuration " +
       "again to re-record it.",
     saved: "Certificate configuration saved.",
     created: "Certificate configuration created.",
@@ -143,7 +143,7 @@ const en = {
   certificateDialog: {
     addTitle: "Add certificate",
     editTitle: "Edit certificate configuration",
-    note: "The recorded domain always comes from the selected application's base domain — it is not editable here.",
+    note: "The recorded domain always comes from the selected application's primary domain — it is not editable here.",
     cancel: "Cancel",
     save: "Save",
   },
@@ -152,8 +152,8 @@ const en = {
     applicationAria: "Application",
     selectApplication: "Select an application",
     domainFromApp: "Domain (from the application)",
-    noBaseDomain: "No base domain yet — set one on the application first.",
-    appWithoutDomain: "{name} · no base domain",
+    noBaseDomain: "No primary domain yet — set one on the application first.",
+    appWithoutDomain: "{name} · no primary domain",
     challenge: "Challenge",
     httpHint: "· shared HTTP resolver",
     dnsHint: "· TXT record via a DNS provider",
@@ -197,7 +197,7 @@ const en = {
     application: "Application",
     applicationAria: "Redirect application",
     selectApplication: "Select an application",
-    appWithoutDomain: "{name} · no base domain",
+    appWithoutDomain: "{name} · no primary domain",
     sourceDomain: "Source domain",
     sourceAria: "Redirect source domain",
     targetDomain: "Target domain",

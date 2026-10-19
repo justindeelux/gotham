@@ -384,7 +384,6 @@ func TestRoutesImageApplicationRedactsCredential(t *testing.T) {
 		"image_ref": "registry.example.com/team/app:1.2",
 		"registry_username": "robot",
 		"registry_password": "s3cret-token",
-		"port": 3000,
 		"environment_id": "` + uuid.New().String() + `",
 		"server_id": "` + uuid.New().String() + `"
 	}`

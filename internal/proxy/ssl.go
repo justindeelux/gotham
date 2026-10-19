@@ -183,29 +183,32 @@ type ApplicationInfo struct {
 	ID uuid.UUID
 	// TeamID is the team that owns the application; per-application SSL and
 	// redirect resources authorize against it.
-	TeamID         uuid.UUID
-	BaseDomain     string
+	TeamID uuid.UUID
+	// DomainDisabled is true when the application has domain rows but every
+	// one of them is held back by a uniqueness conflict.
 	DomainDisabled bool
 	// Domains lists every non-disabled domain attached to the application,
-	// primary first (JUS-89). A per-domain intent must name one of them.
+	// primary first. A per-domain intent must name one of them.
 	Domains []string
+	// BaseDomain is a fallback for unit-test construction sites that do not
+	// build a domain list; the production loader always fills Domains.
+	BaseDomain string
 	// ServerID is the node hosting the application; uuid.Nil when none is
 	// assigned (a redirect rule cannot be generated then).
 	ServerID uuid.UUID
 }
 
 // PrimaryDomain returns the application's primary domain: the first attached
-// domain when present, otherwise the legacy base_domain mirror.
+// enabled domain, or "" when it has none.
 func (a ApplicationInfo) PrimaryDomain() string {
 	if len(a.Domains) > 0 {
 		return a.Domains[0]
 	}
-	return a.BaseDomain
+	return NormalizeDomain(a.BaseDomain)
 }
 
 // HasDomain reports whether domain (already normalized) is attached to the
-// application, falling back to the base_domain mirror for callers without a
-// domain list.
+// application.
 func (a ApplicationInfo) HasDomain(domain string) bool {
 	if len(a.Domains) == 0 {
 		return NormalizeDomain(a.BaseDomain) == domain
@@ -483,6 +486,7 @@ func (s storeSSL) GetApplication(ctx context.Context, id uuid.UUID) (Application
 			info.Domains = append(info.Domains, domain.Domain)
 		}
 	}
+	info.DomainDisabled = len(domains) > 0 && len(info.Domains) == 0
 	return info, nil
 }
 
@@ -490,11 +494,9 @@ func (s storeSSL) GetApplication(ctx context.Context, id uuid.UUID) (Application
 // view shared by the certificate and redirect services.
 func applicationInfoFromRow(row sqlc.Application) ApplicationInfo {
 	return ApplicationInfo{
-		ID:             uuidFromPG(row.ID),
-		TeamID:         uuidFromPG(row.TeamID),
-		BaseDomain:     row.BaseDomain,
-		DomainDisabled: row.BaseDomainDisabled,
-		ServerID:       uuidFromPG(row.ServerID),
+		ID:       uuidFromPG(row.ID),
+		TeamID:   uuidFromPG(row.TeamID),
+		ServerID: uuidFromPG(row.ServerID),
 	}
 }
 

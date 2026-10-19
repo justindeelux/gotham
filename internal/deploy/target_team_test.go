@@ -91,7 +91,6 @@ func TestRollbackRefusesApplicationBoundToForeignNode(t *testing.T) {
 	app := testApplication(alice)
 	app.TeamID = teamA
 	app.ServerID = foreignNode
-	app.BaseDomain = ""
 	repo.app = app
 	release := Deployment{
 		ID:            uuid.New(),
@@ -124,7 +123,6 @@ func TestSystemDeployRefusesApplicationBoundToForeignNode(t *testing.T) {
 	app := testApplication(uuid.New())
 	app.TeamID = teamA
 	app.ServerID = repo.seedServerForTeam(teamB)
-	app.BaseDomain = ""
 	repo.app = app
 	svc := newTestService(t, repo)
 
@@ -147,7 +145,6 @@ func TestQueueingAllowsLegacySharedNode(t *testing.T) {
 	app := testApplication(alice)
 	app.TeamID = teamA
 	app.ServerID = repo.seedServerForTeam(uuid.Nil)
-	app.BaseDomain = ""
 	repo.app = app
 	release := Deployment{
 		ID:            uuid.New(),

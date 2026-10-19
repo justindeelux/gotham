@@ -70,10 +70,7 @@ const application = {
   build_pack: "dockerfile",
   image_ref: "",
   has_registry_credential: false,
-  base_domain: "shop.example.com",
-  base_domain_disabled: false,
-  port: 3000,
-  host_port: 0,
+  primary_domain: "shop.example.com",
   server_id: "node-1",
   server_name: "gotham-prod-01",
   created_at: "2026-01-01T00:00:00Z",
@@ -87,6 +84,9 @@ const domains = [
     domain: "shop.example.com",
     is_primary: true,
     disabled: false,
+    port: 3000,
+    service: "",
+    protocol: "http",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   },
@@ -96,6 +96,9 @@ const domains = [
     domain: "www.shop.example.com",
     is_primary: false,
     disabled: false,
+    port: 8080,
+    service: "",
+    protocol: "https",
     created_at: "2026-01-02T00:00:00Z",
     updated_at: "2026-01-02T00:00:00Z",
   },
@@ -105,6 +108,9 @@ const domains = [
     domain: "staging.shop.example.com",
     is_primary: false,
     disabled: false,
+    port: 8080,
+    service: "",
+    protocol: "https",
     created_at: "2026-01-03T00:00:00Z",
     updated_at: "2026-01-03T00:00:00Z",
   },
@@ -244,7 +250,7 @@ async function openDomainsTab(page: Page): Promise<Locator> {
   const card = page
     .locator(".n-card")
     .filter({
-      has: page.locator(".n-card-header__main", { hasText: "Additional domains" }),
+      has: page.locator(".n-card-header__main", { hasText: "Domains" }),
     })
     .first();
   await expect(card).toBeVisible();
@@ -264,8 +270,8 @@ for (const width of [1280, 480]) {
     await mockApi(page);
     const card = await openDomainsTab(page);
     await card.screenshot({ path: resolve(shotsDir, `jus89-aliases-${width}.png`) });
-    const rows = card.locator(".alias-row");
-    await expect(rows).toHaveCount(2);
+    const rows = card.locator(".domain-row");
+    await expect(rows).toHaveCount(3);
     const first = await boxOf(rows.nth(0), "first alias row");
     const second = await boxOf(rows.nth(1), "second alias row");
     // Rows stack vertically with the 8px token gap (sub-pixel tolerance).
@@ -277,9 +283,9 @@ for (const width of [1280, 480]) {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page);
     const card = await openDomainsTab(page);
-    const rows = card.locator(".alias-row");
-    await expect(rows).toHaveCount(2);
-    for (const index of [0, 1]) {
+    const rows = card.locator(".domain-row");
+    await expect(rows).toHaveCount(3);
+    for (const index of [0, 1, 2]) {
       const row = await boxOf(rows.nth(index), `row ${index}`);
       const actions = await boxOf(
         rows.nth(index).locator(".domain-actions"),
@@ -292,35 +298,27 @@ for (const width of [1280, 480]) {
     }
   });
 
-  test(`add hint sits below its field at ${width}px`, async ({ page }) => {
+  test(`the add form exposes host, port, service and protocol at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page);
     const card = await openDomainsTab(page);
-    const input = card.getByPlaceholder("www.example.com");
-    await expect(input).toBeVisible();
-    const hint = card.getByText(
-      "One application can serve several hostnames at once.",
-    );
-    await expect(hint).toBeVisible();
-    const inputBox = await boxOf(input, "alias input");
-    const hintBox = await boxOf(hint, "alias hint");
-    expect(hintBox.y, "hint below the add field").toBeGreaterThanOrEqual(
-      inputBox.y + inputBox.height - 0.5,
-    );
+    const host = card.locator('input[aria-label="Domain hostname"]');
+    const port = card.locator('input[aria-label="Target container port"]');
+    await expect(host).toBeVisible();
+    await expect(port).toBeVisible();
+    await expect(card.locator('.domain-protocol')).toBeVisible();
+    expect(await boxOf(host, "host field")).not.toBeNull();
+    expect(await boxOf(port, "port field")).not.toBeNull();
   });
 
-  test(`primary editor keeps its single-domain shape at ${width}px`, async ({ page }) => {
+  test(`rows expose their routing target at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await mockApi(page);
-    await page.goto(`${baseURL}/projects/proj-1/environments/env-1/applications/app-1`);
-    await page.locator(".n-tabs-tab").filter({ hasText: "Domains" }).click();
-    const primary = page
-      .locator(".n-card")
-      .filter({
-        has: page.locator(".n-card-header__main", { hasText: "Application domain" }),
-      })
-      .first();
-    await expect(primary.locator("input").first()).toHaveValue("shop.example.com");
-    await expect(primary.getByRole("button", { name: "Save domain" })).toBeVisible();
+    const card = await openDomainsTab(page);
+    const primary = card.locator(".domain-row").filter({ hasText: "shop.example.com" }).first();
+    await expect(primary).toBeVisible();
+    await expect(primary).toContainText("3000");
+    await expect(primary).toContainText("http");
+    await expect(primary.getByRole("button", { name: "Edit" })).toBeVisible();
   });
 }

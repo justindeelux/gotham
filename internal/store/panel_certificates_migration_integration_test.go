@@ -71,7 +71,7 @@ func TestPanelCertificatesMigrationPreservesExistingIntents(t *testing.T) {
 	if err := pool.QueryRow(ctx, `INSERT INTO servers (name, ip, port, ssh_user) VALUES ('localhost', '127.0.0.1', 22, 'root') RETURNING id`).Scan(&nodeID); err != nil {
 		t.Fatal(err)
 	}
-	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{UserID: user.ID, TeamID: team, EnvironmentID: environment, ServerID: nodeID, Name: "existing-app", CloneUrl: "https://example.com/repo.git", Branch: "main", BuildPack: "dockerfile", BaseDomain: "app.example.com", Port: 3000})
+	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{UserID: user.ID, TeamID: team, EnvironmentID: environment, ServerID: nodeID, Name: "existing-app", CloneUrl: "https://example.com/repo.git", Branch: "main", BuildPack: "dockerfile"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -172,7 +172,7 @@ func readComposeFile(dir, ref string) (string, error) {
 // shared scopes exactly like a container start, plus the PORT default. The
 // map also redacts node errors on the compose path, so secret values the
 // CLI echoes never reach the deployment row or the log.
-func (o *Orchestrator) loadComposeEnv(ctx context.Context, app Application) (map[string]string, error) {
+func (o *Orchestrator) loadComposeEnv(ctx context.Context, app Application, port int32) (map[string]string, error) {
 	envVars, secrets, err := o.repo.ListEnvConfig(ctx, app.ID)
 	if err != nil {
 		return nil, err
@@ -181,17 +181,55 @@ func (o *Orchestrator) loadComposeEnv(ctx context.Context, app Application) (map
 	if err != nil {
 		return nil, err
 	}
-	return composeProjectEnv(app, envVars, secrets, sharedProject, sharedEnvironment, o.secret)
+	return composeProjectEnv(envVars, secrets, sharedProject, sharedEnvironment, o.secret, port)
+}
+
+// composeDomainTargets resolves the (service, port) pairs every enabled
+// domain of a compose application must publish, and the primary port that
+// seeds PORT. A domain without an explicit service targets the release web
+// service. An application with no domain injects nothing and deploys
+// unchanged.
+func (o *Orchestrator) composeDomainTargets(ctx context.Context, app Application) ([]ComposePortTarget, int32, error) {
+	domains, err := o.repo.ListApplicationDomains(ctx, app.ID)
+	if err != nil {
+		return nil, 0, err
+	}
+	targets := make([]ComposePortTarget, 0, len(domains))
+	primaryPort := int32(0)
+	for _, domain := range domains {
+		if domain.Disabled || domain.Port <= 0 {
+			continue
+		}
+		service := strings.TrimSpace(domain.Service)
+		if service == "" {
+			service = strings.TrimSpace(app.ComposeService)
+		}
+		if service == "" {
+			return nil, 0, fmt.Errorf("%w: domain %q has no compose service to target", ErrValidation, domain.Domain)
+		}
+		targets = append(targets, ComposePortTarget{Service: service, Port: domain.Port})
+		if domain.IsPrimary {
+			primaryPort = domain.Port
+		}
+	}
+	if primaryPort == 0 && len(targets) > 0 {
+		primaryPort = targets[0].Port
+	}
+	return targets, primaryPort, nil
 }
 
 // renderComposeDocument renders the raw document against the merged project
 // environment (app env and secrets are the compose project env) and injects
-// the web service's port mapping, so the stored domain/port routing reaches
-// that service. It answers the rendered document, the image references it
+// every domain's target port mapping, so the per-domain routing reaches the
+// service it names. It answers the rendered document, the image references it
 // declares and the environment it was rendered with. A render failure is
 // redacted of environment values, exactly like the Services surface.
 func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Application, raw string) (rendered string, images []string, env map[string]string, err error) {
-	env, err = o.loadComposeEnv(ctx, app)
+	targets, primaryPort, err := o.composeDomainTargets(ctx, app)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	env, err = o.loadComposeEnv(ctx, app, primaryPort)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -215,7 +253,7 @@ func (o *Orchestrator) renderComposeDocument(ctx context.Context, app Applicatio
 	if err != nil {
 		return "", nil, nil, err
 	}
-	injected, err := InjectComposeWebPorts(spec.ComposeYAML, app.ComposeService, app.Port, app.HostPort)
+	injected, err := InjectComposeDomainPorts(spec.ComposeYAML, targets)
 	if err != nil {
 		return "", nil, nil, err
 	}

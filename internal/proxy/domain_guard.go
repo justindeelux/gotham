@@ -48,7 +48,7 @@ func (s *SyncService) CheckControlPlaneHost(ctx context.Context, raw string) err
 	}
 	for _, app := range apps {
 		for _, domain := range appDomains(app) {
-			if domain == host {
+			if NormalizeDomain(domain.Domain) == host {
 				return fmt.Errorf("host %q is already used by an application", host)
 			}
 		}

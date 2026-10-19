@@ -190,8 +190,7 @@ type Repository interface {
 	ClearPrimaryApplicationDomains(ctx context.Context, appID uuid.UUID) error
 	// InTx runs fn with a transaction-scoped Repository: every Repository
 	// method called on tx shares one snapshot and commits atomically, so a
-	// domain row write and its base_domain mirror update can never drift
-	// apart (JUS-89 fix round 1).
+	// domain write and its certificate intent can never drift apart.
 	InTx(ctx context.Context, fn func(tx Repository) error) error
 	// DeleteApplicationDomain removes one domain row of an application, or
 	// ErrNotFound.
@@ -359,8 +358,34 @@ func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Application) (
 	envs := make(map[uuid.UUID]sqlc.Environment)
 	projects := make(map[uuid.UUID]sqlc.Project)
 	servers := make(map[uuid.UUID]string)
+	// Primary domains are display derivation only (primary host, preview
+	// target), so they are read in one batch for the whole page.
+	primaries := make(map[uuid.UUID]ApplicationDomain)
+	if len(rows) > 0 {
+		ids := make([]pgtype.UUID, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.ID)
+		}
+		domainRows, err := r.store.ListPrimaryApplicationDomains(ctx, ids)
+		if err != nil {
+			return nil, fmt.Errorf("deploy: list primary domains: %w", err)
+		}
+		for _, row := range domainRows {
+			primaries[uuidFromPG(row.ApplicationID)] = ApplicationDomain{
+				ApplicationID: uuidFromPG(row.ApplicationID),
+				Domain:        row.Domain,
+				Port:          row.Port,
+				Service:       derefString(row.Service),
+				Protocol:      row.Protocol,
+				IsPrimary:     true,
+			}
+		}
+	}
 	for _, row := range rows {
 		app := applicationFromRow(row)
+		if primary, ok := primaries[app.ID]; ok {
+			app.PrimaryDomain = &primary
+		}
 		envID := uuidFromPG(row.EnvironmentID)
 		if envID != uuid.Nil {
 			env, ok := envs[envID]
@@ -432,10 +457,7 @@ func (r *storeRepository) CreateApplication(
 		CloneUrl:                   app.CloneURL,
 		Branch:                     app.Branch,
 		BuildPack:                  app.BuildPack,
-		BaseDomain:                 app.BaseDomain,
 		SourceType:                 NormalizeSourceType(app.SourceType, app.Provider),
-		Port:                       app.Port,
-		HostPort:                   app.HostPort,
 		IsPreview:                  app.IsPreview,
 		GithubAppID:                pgUUID(app.GitHubAppID),
 		DockerfileContent:          app.DockerfileContent,
@@ -447,19 +469,11 @@ func (r *storeRepository) CreateApplication(
 		ComposeFile:                app.ComposeFile,
 		ComposeService:             app.ComposeService,
 	}
-	var domainParams *sqlc.CreateApplicationDomainParams
-	if app.BaseDomain != "" {
-		domainParams = &sqlc.CreateApplicationDomainParams{
-			Domain:    app.BaseDomain,
-			IsPrimary: true,
-		}
-	}
-	row, err := r.store.CreateApplicationWithConfigAndDomain(ctx,
+	row, err := r.store.CreateApplicationWithConfig(ctx,
 		appParams,
 		envVarParams(envVars),
 		secretParams(secrets),
 		storageParams(storages),
-		domainParams,
 	)
 	if err != nil {
 		return Application{}, applicationWriteError(err, app.Name)
@@ -478,11 +492,7 @@ func (r *storeRepository) UpdateApplication(ctx context.Context, app Application
 		Name:                       app.Name,
 		Branch:                     app.Branch,
 		BuildPack:                  app.BuildPack,
-		BaseDomain:                 app.BaseDomain,
-		Port:                       app.Port,
-		HostPort:                   app.HostPort,
 		ServerID:                   pgUUID(app.ServerID),
-		BaseDomainDisabled:         app.BaseDomainDisabled,
 		EnvironmentID:              pgUUID(app.EnvironmentID),
 		GithubAppID:                pgUUID(app.GitHubAppID),
 		DockerfileContent:          app.DockerfileContent,
@@ -1047,8 +1057,16 @@ func (r *storeRepository) GetCertificateIntent(ctx context.Context, appID uuid.U
 		return CertificateIntent{}, ErrNotFound
 	}
 	primary := ""
-	if app, err := r.store.GetApplication(ctx, pgUUID(appID)); err == nil {
-		primary = app.BaseDomain
+	if rows, err := r.store.ListApplicationDomainsByApplication(ctx, pgUUID(appID)); err == nil {
+		for _, d := range rows {
+			if d.IsPrimary {
+				primary = d.Domain
+				break
+			}
+		}
+		if primary == "" && len(rows) > 0 {
+			primary = rows[0].Domain
+		}
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return CertificateIntent{}, fmt.Errorf("deploy: get certificate intent: %w", err)
 	}
@@ -1176,6 +1194,9 @@ func (r *storeRepository) CreateApplicationDomain(ctx context.Context, domain Ap
 		Domain:        domain.Domain,
 		IsPrimary:     domain.IsPrimary,
 		Disabled:      domain.Disabled,
+		Port:          domain.Port,
+		Service:       nullableString(domain.Service),
+		Protocol:      NormalizeProtocol(domain.Protocol),
 	})
 	if err != nil {
 		if pgErr := uniqueViolation(err); pgErr != nil {
@@ -1200,6 +1221,9 @@ func (r *storeRepository) UpdateApplicationDomain(ctx context.Context, domain Ap
 		Domain:    domain.Domain,
 		IsPrimary: domain.IsPrimary,
 		Disabled:  domain.Disabled,
+		Port:      domain.Port,
+		Service:   nullableString(domain.Service),
+		Protocol:  NormalizeProtocol(domain.Protocol),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1270,6 +1294,9 @@ func applicationDomainFromRow(row sqlc.ApplicationDomain) ApplicationDomain {
 		Domain:        row.Domain,
 		IsPrimary:     row.IsPrimary,
 		Disabled:      row.Disabled,
+		Port:          row.Port,
+		Service:       derefString(row.Service),
+		Protocol:      NormalizeProtocol(row.Protocol),
 	}
 	if row.CreatedAt.Valid {
 		domain.CreatedAt = row.CreatedAt.Time
@@ -1330,11 +1357,7 @@ func applicationFromRow(row sqlc.Application) Application {
 		ComposeContent:             row.ComposeContent,
 		ComposeFile:                row.ComposeFile,
 		ComposeService:             row.ComposeService,
-		BaseDomain:                 row.BaseDomain,
-		BaseDomainDisabled:         row.BaseDomainDisabled,
 		IsPreview:                  row.IsPreview,
-		Port:                       row.Port,
-		HostPort:                   row.HostPort,
 		CreatedAt:                  timeFromPG(row.CreatedAt),
 		UpdatedAt:                  timeFromPG(row.UpdatedAt),
 	}
@@ -1540,6 +1563,22 @@ func pgUUID(id uuid.UUID) pgtype.UUID {
 		return pgtype.UUID{}
 	}
 	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+// nullableString maps an empty domain string onto a SQL NULL.
+func nullableString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+// derefString maps a nullable SQL string onto an empty domain string.
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // uuidFromPG converts a sqlc UUID column to the domain type (NULL → zero).

@@ -243,9 +243,20 @@ func (s *Store) ListProxiedCertificates(ctx context.Context) ([]sqlc.ListProxied
 }
 
 // ListProxiedApplicationDomains returns every domain row joined to its
-// application's node for the Traefik generator (JUS-89).
+// application's node for the Traefik generator.
 func (s *Store) ListProxiedApplicationDomains(ctx context.Context) ([]sqlc.ListProxiedApplicationDomainsRow, error) {
 	return s.queries.ListProxiedApplicationDomains(ctx)
+}
+
+// ListPrimaryApplicationDomains returns one enabled primary domain per
+// requested application, for read enrichment (display and preview
+// derivation). Scoping the query to the page's ids keeps a single-application
+// read proportional to that application, not to every domain on the platform.
+func (s *Store) ListPrimaryApplicationDomains(ctx context.Context, applicationIDs []pgtype.UUID) ([]sqlc.ListPrimaryApplicationDomainsRow, error) {
+	if len(applicationIDs) == 0 {
+		return []sqlc.ListPrimaryApplicationDomainsRow{}, nil
+	}
+	return s.queries.ListPrimaryApplicationDomains(ctx, applicationIDs)
 }
 
 // ListApplicationDomainsByApplication returns one application's domain rows,

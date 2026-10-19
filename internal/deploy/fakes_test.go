@@ -216,7 +216,27 @@ func (r *fakeRepository) GetApplication(_ context.Context, appID uuid.UUID) (App
 	if !ok {
 		return Application{}, ErrNotFound
 	}
+	app.PrimaryDomain = r.primaryDomainLocked(app.ID)
 	return app, nil
+}
+
+// primaryDomainLocked returns the enabled primary domain of an application.
+// The caller holds r.mu.
+func (r *fakeRepository) primaryDomainLocked(appID uuid.UUID) *ApplicationDomain {
+	var fallback *ApplicationDomain
+	for i := range r.domains {
+		domain := r.domains[i]
+		if domain.ApplicationID != appID || domain.Disabled {
+			continue
+		}
+		if domain.IsPrimary {
+			return &domain
+		}
+		if fallback == nil {
+			fallback = &domain
+		}
+	}
+	return fallback
 }
 
 // ListRecentDeployments implements Repository: the newest deployments across
@@ -332,17 +352,6 @@ func (r *fakeRepository) CreateApplication(_ context.Context, app Application, e
 	}
 	app.CreatedAt = now
 	app.UpdatedAt = now
-	// The primary domain row joins the create atomically, like production:
-	// a conflicting host fails the create without storing the application.
-	if app.BaseDomain != "" {
-		if _, err := r.insertDomain(ApplicationDomain{
-			ApplicationID: app.ID,
-			Domain:        app.BaseDomain,
-			IsPrimary:     true,
-		}); err != nil {
-			return Application{}, err
-		}
-	}
 	r.apps = append(r.apps, app)
 	for _, v := range envVars {
 		v.ApplicationID = app.ID
@@ -373,6 +382,7 @@ func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (
 	if r.app.ID == app.ID {
 		app.CreatedAt = r.app.CreatedAt
 		app.UpdatedAt = time.Now().UTC()
+		app.PrimaryDomain = r.primaryDomainLocked(app.ID)
 		r.app = app
 		return app, nil
 	}
@@ -380,6 +390,7 @@ func (r *fakeRepository) UpdateApplication(_ context.Context, app Application) (
 		if existing.ID == app.ID {
 			app.CreatedAt = existing.CreatedAt
 			app.UpdatedAt = time.Now().UTC()
+			app.PrimaryDomain = r.primaryDomainLocked(app.ID)
 			r.apps[i] = app
 			return app, nil
 		}
@@ -1054,13 +1065,8 @@ func (r *fakeRepository) GetCertificateIntent(_ context.Context, appID uuid.UUID
 		return CertificateIntent{}, r.getErr
 	}
 	primary := ""
-	if r.app.ID == appID {
-		primary = r.app.BaseDomain
-	}
-	for _, existing := range r.apps {
-		if existing.ID == appID {
-			primary = existing.BaseDomain
-		}
+	if domain := r.primaryDomainLocked(appID); domain != nil {
+		primary = domain.Domain
 	}
 	for _, cert := range r.certificates {
 		if cert.ApplicationID == appID && (primary == "" || cert.Domain == primary) {
@@ -1744,8 +1750,6 @@ func testApplication(userID uuid.UUID) Application {
 		CloneURL:      "https://github.com/acme/demo.git",
 		Branch:        "main",
 		BuildPack:     "dockerfile",
-		Port:          3000,
-		HostPort:      8080,
 	}
 }
 

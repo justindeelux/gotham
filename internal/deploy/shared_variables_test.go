@@ -223,7 +223,7 @@ func TestSharedSecretWithBrokenCiphertextFailsClosed(t *testing.T) {
 		ImageTag:      "gotham/app:tag",
 		RegistryImage: "127.0.0.1:5000/gotham/app:tag",
 	}
-	if _, err := buildRunRequest(app, dep, vars, secrets, nil, testSecretKey); err == nil {
+	if _, err := buildRunRequest(app, dep, vars, secrets, nil, testSecretKey, nil, 0); err == nil {
 		t.Fatal("buildRunRequest with a broken shared secret succeeded, want ErrValidation")
 	} else if got := err.Error(); strings.Contains(got, "not-a-sealed-value") || !strings.Contains(got, "DB_PASSWORD") {
 		t.Fatalf("error = %q, want the key name without the ciphertext", got)

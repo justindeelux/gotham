@@ -37,10 +37,8 @@ import {
   dockerfileContentSchema,
   composeContentSchema,
   composeFileSchema,
-  composeHostPortSchema,
   composeModeSchema,
   composeServiceSchema,
-  hostPortSchema,
   imageRefSchema,
   isHttpsGitUrl,
   privateCloneUrlSchema,
@@ -50,11 +48,9 @@ import {
   serverSchema,
   sourceTypeImplemented,
   sourceTypeSchema,
-  wizardDomainSchema,
   type ComposeMode,
   type SourceType,
 } from "@/features/applications/schemas/applications";
-import { portSchema } from "@/shared/validation/primitives";
 import type { BuildArgRow } from "@/features/applications/utils/buildArgs";
 import { extractComposeServiceNames } from "@/features/applications/utils/compose";
 
@@ -96,9 +92,6 @@ export interface WizardForm {
   /** Environment the application is created in (required by the API). */
   environmentId: string;
   serverId: string;
-  port: number | null;
-  hostPort: number | null;
-  baseDomain: string;
   env: EnvVar[];
   storage: StorageMapping[];
 }
@@ -497,9 +490,6 @@ export function useCreateAppWizard(
     projectId: toValue(scope.projectId),
     environmentId: toValue(scope.environmentId),
     serverId: "",
-    port: 3000,
-    hostPort: null,
-    baseDomain: "",
     env: [{ key: "NODE_ENV", value: "production" }],
     storage: [],
   });
@@ -781,25 +771,11 @@ export function useCreateAppWizard(
     return branchOk && appNameSchema.safeParse(form.name).success;
   });
 
-  /** runtimeValid gates the Runtime step: a node and a valid port. */
-  const runtimeValid = computed<boolean>(() => {
-    if (!serverSchema.safeParse(form.serverId).success) {
-      return false;
-    }
-    if (!portSchema.safeParse(form.port).success) {
-      return false;
-    }
-    // Compose applications publish their web service on the node: a pinned
-    // privileged host port is refused (auto-assign or above 1023).
-    if (form.sourceType === "compose") {
-      if (!composeHostPortSchema.safeParse(form.hostPort).success) {
-        return false;
-      }
-    } else if (!hostPortSchema.safeParse(form.hostPort).success) {
-      return false;
-    }
-    return wizardDomainSchema.safeParse(form.baseDomain).success;
-  });
+  /** runtimeValid gates the Runtime step: a node is required. Domains and
+   * their ports are attached after creation, on the Domains tab. */
+  const runtimeValid = computed<boolean>(() =>
+    serverSchema.safeParse(form.serverId).success,
+  );
 
   /** scopeValid gates the submit: the API requires an environment. */
   const scopeValid = computed<boolean>(() => form.environmentId !== "");
@@ -1124,9 +1100,6 @@ export function useCreateAppWizard(
         image_ref: form.imageRef.trim(),
         registry_username: form.registryUsername.trim(),
         registry_password: form.registryPassword,
-        base_domain: form.baseDomain.trim(),
-        port: form.port ?? 3000,
-        host_port: form.hostPort ?? 0,
         server_id: form.serverId,
         env: form.env.filter((row) => row.key.trim() !== ""),
         storage: form.storage.filter((row) => row.name.trim() !== ""),
@@ -1155,9 +1128,6 @@ export function useCreateAppWizard(
         branch: pasted ? "" : form.branch.trim(),
         build_pack: "",
         image_ref: "",
-        base_domain: form.baseDomain.trim(),
-        port: form.port ?? 3000,
-        host_port: form.hostPort ?? 0,
         server_id: form.serverId,
         env: form.env.filter((row) => row.key.trim() !== ""),
         storage: form.storage.filter((row) => row.name.trim() !== ""),
@@ -1192,9 +1162,6 @@ export function useCreateAppWizard(
       // build-pack choice is hidden and never sent.
       build_pack: form.sourceType === "dockerfile" ? "" : form.buildPack,
       image_ref: "",
-      base_domain: form.baseDomain.trim(),
-      port: form.port ?? 3000,
-      host_port: form.hostPort ?? 0,
       server_id: form.serverId,
       env: form.env.filter((row) => row.key.trim() !== ""),
       storage: form.storage.filter((row) => row.name.trim() !== ""),
@@ -1428,9 +1395,6 @@ export function useCreateAppWizard(
     form.buildPack = "";
     seedScope();
     form.serverId = "";
-    form.port = 3000;
-    form.hostPort = null;
-    form.baseDomain = "";
     form.env = [{ key: "NODE_ENV", value: "production" }];
     form.storage = [];
     submitFailure.value = null;

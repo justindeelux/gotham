@@ -131,7 +131,6 @@ func TestApplicationServerMustBelongToTheActiveTeam(t *testing.T) {
 	legacyApp := testApplication(alice)
 	legacyApp.TeamID = teamA
 	legacyApp.ServerID = foreignNode
-	legacyApp.BaseDomain = ""
 	repo.mu.Lock()
 	repo.apps = append(repo.apps, legacyApp)
 	repo.mu.Unlock()

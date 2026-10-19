@@ -76,15 +76,19 @@ func TestSSLCertificateStorage(t *testing.T) {
 
 	app, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID: user.ID, TeamID: teamID, ServerID: server.ID, EnvironmentID: envID,
-		Name:       "ssl-app",
-		CloneUrl:   "https://github.com/acme/demo.git",
-		Branch:     "main",
-		BuildPack:  "dockerfile",
-		BaseDomain: "app.example.com",
-		Port:       3000,
+		Name:      "ssl-app",
+		CloneUrl:  "https://github.com/acme/demo.git",
+		Branch:    "main",
+		BuildPack: "dockerfile",
 	})
 	if err != nil {
 		t.Fatalf("create application: %v", err)
+	}
+	if _, err := st.CreateApplicationDomain(ctx, sqlc.CreateApplicationDomainParams{
+		ApplicationID: app.ID, Domain: "app.example.com", IsPrimary: true,
+		Port: 3000, Protocol: "https",
+	}); err != nil {
+		t.Fatalf("create application domain: %v", err)
 	}
 
 	sealed, err := providers.SealSecret("integration-key", "cf-secret-token")
@@ -151,12 +155,10 @@ func TestSSLCertificateStorage(t *testing.T) {
 	// Wildcard is dns-01 only and dns-01 needs a provider.
 	app2, err := st.CreateApplication(ctx, sqlc.CreateApplicationParams{
 		UserID: user.ID, TeamID: teamID, ServerID: server.ID, EnvironmentID: envID,
-		Name:       "ssl-app-wild",
-		CloneUrl:   "https://github.com/acme/demo.git",
-		Branch:     "main",
-		BuildPack:  "dockerfile",
-		BaseDomain: "wild.example.com",
-		Port:       3000,
+		Name:      "ssl-app-wild",
+		CloneUrl:  "https://github.com/acme/demo.git",
+		Branch:    "main",
+		BuildPack: "dockerfile",
 	})
 	if err != nil {
 		t.Fatalf("create second application: %v", err)

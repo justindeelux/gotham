@@ -24,7 +24,7 @@ function createDomainsOverviewState() {
   );
 
   const applicationsWithDomain = computed<number>(
-    () => proxyStore.applications.filter((item) => item.base_domain !== "").length,
+    () => proxyStore.applications.filter((item) => item.primary_domain !== "").length,
   );
 
   const enabledCertificates = computed<number>(

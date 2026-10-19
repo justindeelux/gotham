@@ -1,14 +1,8 @@
-// Regression test for the JUS-89 fix-round-2 live bug: bumpDomainsRefresh()
-// called inject() after an await, where no component instance is active, so
-// every alias mutation reported success as
-// "Something went wrong ... Cannot read properties of undefined" and the
-// certificate panel never reloaded.
-//
-// This mounts the real DomainEditor tree (alias panel + certificate panel)
-// with the real refresh helper and only the HTTP layer mocked, then drives
-// add/remove/make-primary through the UI: success must show no error and a
-// toast, and the certificate panel must reload (the re-record banner
-// appears/disappears without a page reload).
+// Regression test for the JUS-89 fix-round-2 live bug (kept for the JUS-233
+// Domains tab): bumpDomainsRefresh() called inject() after an await, so every
+// domain mutation reported success as "Something went wrong". This mounts the
+// real DomainEditor tree with the HTTP layer mocked and drives add/remove/
+// make-primary through the UI.
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
@@ -23,6 +17,7 @@ vi.mock("@/features/applications/api/applications", async (importOriginal) => {
     ...actual,
     listDomains: vi.fn(),
     addDomain: vi.fn(),
+    updateDomain: vi.fn(),
     removeDomain: vi.fn(),
     setPrimaryDomain: vi.fn(),
     getApplication: vi.fn(),
@@ -47,6 +42,7 @@ import {
   removeDomain,
   setPrimaryDomain,
   type ApplicationDomain,
+  type DomainInput,
 } from "@/features/applications/api/applications";
 import {
   listCertificates,
@@ -74,6 +70,7 @@ function domainRow(
   id: string,
   domain: string,
   isPrimary: boolean,
+  port = 3000,
 ): ApplicationDomain {
   return {
     id,
@@ -81,6 +78,9 @@ function domainRow(
     domain,
     is_primary: isPrimary,
     disabled: false,
+    port,
+    service: "",
+    protocol: "http",
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   };
@@ -98,22 +98,20 @@ function testRouter() {
   return router;
 }
 
-describe("alias mutations refresh the certificate panel", () => {
-  it("add/remove/make-primary succeed without errors and move the banner", async () => {
-    // One intent recorded for www, which starts detached: the banner shows.
-    // Adding www attaches it (banner hides); removing it detaches it again
-    // (banner returns) — both without a page reload.
+describe("domain mutations refresh the certificate panel", () => {
+  it("add/remove/make-primary succeed without errors", async () => {
     let rows: ApplicationDomain[] = [domainRow("dom-1", "app.example.com", true)];
-    let mirror = "app.example.com";
+    let primary = "app.example.com";
     const appRef = ref({
       id: appId,
       name: "Shop",
-      base_domain: "app.example.com",
+      source_type: "git_public",
+      primary_domain: primary,
     });
 
     vi.mocked(listDomains).mockImplementation(async () => [...rows]);
-    vi.mocked(addDomain).mockImplementation(async (_id, domain) => {
-      const row = domainRow(`dom-${rows.length + 1}`, domain, false);
+    vi.mocked(addDomain).mockImplementation(async (_id, input: DomainInput) => {
+      const row = domainRow(`dom-${rows.length + 1}`, input.domain, false, input.port);
       rows = [...rows, row];
       return row;
     });
@@ -123,12 +121,12 @@ describe("alias mutations refresh the certificate panel", () => {
     vi.mocked(setPrimaryDomain).mockImplementation(async (_id, domainId) => {
       const target = rows.find((row) => row.id === domainId);
       if (target) {
-        mirror = target.domain;
+        primary = target.domain;
         rows = rows.map((row) => ({ ...row, is_primary: row.id === domainId }));
       }
     });
     vi.mocked(getApplication).mockImplementation(async () => {
-      appRef.value.base_domain = mirror;
+      appRef.value.primary_domain = primary;
       return { ...appRef.value };
     });
     vi.mocked(listCertificates).mockResolvedValue([
@@ -162,70 +160,71 @@ describe("alias mutations refresh the certificate panel", () => {
     await flushPromises();
     await nextTick();
 
-    const bannerShown = () => wrapper.text().includes("Saving it again");
     const errorsShown = () =>
       wrapper.text().includes("Something went wrong") ||
       wrapper.text().includes("Cannot read properties");
+    const bannerShown = () => wrapper.text().includes("Saving it again");
+    const addButton = () =>
+      wrapper.findAll("button").find((button) => button.text() === "Add domain");
 
-    // www is detached: the re-record banner is up.
+    // www is detached: the certificate re-record banner is up.
     expect(bannerShown()).toBe(true);
 
     // ── add ──────────────────────────────────────────────────────────
-    await wrapper.find('input[placeholder="www.example.com"]').setValue("www.example.com");
-    const addButton = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Add domain");
-    expect(addButton, "expected an Add domain button").toBeDefined();
-    await addButton!.trigger("click");
+    await wrapper
+      .find('input[aria-label="Domain hostname"]')
+      .setValue("www.example.com");
+    await addButton()!.trigger("click");
     await flushPromises();
     await nextTick();
 
     expect(errorsShown()).toBe(false);
     expect(wrapper.text()).toContain("Domain attached.");
     expect(wrapper.text()).toContain("www.example.com");
-    // The tick reloaded the attached list: www is attached, banner hides.
+    expect(vi.mocked(addDomain)).toHaveBeenCalledWith(
+      appId,
+      expect.objectContaining({ domain: "www.example.com", port: 80 }),
+    );
+    // The domains tick reloaded the certificate panel: www is attached now.
     expect(bannerShown()).toBe(false);
 
     // ── remove ───────────────────────────────────────────────────────
-    const wwwRow = wrapper
-      .findAll(".alias-row")
-      .find((row) => row.text().includes("www.example.com"));
-    expect(wwwRow, "expected the www alias row").toBeDefined();
-    const removeButton = wwwRow!
+    const wwwRow = () =>
+      wrapper
+        .findAll(".domain-row")
+        .find((row) => row.text().includes("www.example.com") && row.text().includes("Remove"));
+    const removeButton = wwwRow()!
       .findAll("button")
       .find((button) => button.text() === "Remove");
-    expect(removeButton, "expected a Remove button").toBeDefined();
     await removeButton!.trigger("click");
     await flushPromises();
     await nextTick();
     const confirmButton = wrapper
       .findAll("button")
       .find((button) => button.text() === "Confirm");
-    expect(confirmButton, "expected a Confirm button").toBeDefined();
     await confirmButton!.trigger("click");
     await flushPromises();
     await nextTick();
 
     expect(errorsShown()).toBe(false);
     expect(wrapper.text()).toContain("Domain detached.");
-    // The tick reloaded again: www is detached, banner returns.
+    expect(
+      wrapper.findAll(".domain-row").some((row) => row.text().includes("www.example.com")),
+    ).toBe(false);
+    // www is detached again: the banner returns without a page reload.
     expect(bannerShown()).toBe(true);
 
     // ── make primary ─────────────────────────────────────────────────
-    // Re-add www, then promote the other alias instead: cdn first.
-    await wrapper.find('input[placeholder="www.example.com"]').setValue("cdn.example.com");
     await wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Add domain")!
-      .trigger("click");
+      .find('input[aria-label="Domain hostname"]')
+      .setValue("cdn.example.com");
+    await addButton()!.trigger("click");
     await flushPromises();
     await nextTick();
-    expect(errorsShown()).toBe(false);
 
     const cdnRow = wrapper
-      .findAll(".alias-row")
+      .findAll(".domain-row")
       .find((row) => row.text().includes("cdn.example.com"));
-    expect(cdnRow, "expected the cdn alias row").toBeDefined();
     await cdnRow!
       .findAll("button")
       .find((button) => button.text() === "Make primary")!
@@ -235,10 +234,6 @@ describe("alias mutations refresh the certificate panel", () => {
 
     expect(errorsShown()).toBe(false);
     expect(wrapper.text()).toContain("Primary domain changed.");
-    expect(
-      (wrapper.find('input[placeholder="app.example.com"]').element as unknown as { value: string }).value,
-    ).toBe("cdn.example.com");
-
-    wrapper.unmount();
+    expect(appRef.value.primary_domain).toBe("cdn.example.com");
   });
 });

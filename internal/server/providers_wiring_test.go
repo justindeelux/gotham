@@ -137,7 +137,7 @@ func TestProviderDisconnectInUseEndToEnd(t *testing.T) {
 		`{"name":"shop","environment_id":"`+project.Environments[0].ID+`",`+
 			`"server_id":"`+server.Server.ID+`","provider":"gitlab",`+
 			`"repo":"acme/shop","clone_url":"https://git.example/acme/shop.git",`+
-			`"source_type":"gitlab_app","branch":"main","port":3000}`)
+			`"source_type":"gitlab_app","branch":"main"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("application create = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}

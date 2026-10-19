@@ -105,10 +105,7 @@ const isCompose = computed<boolean>(() => props.application?.source_type === "co
           <span class="mono">{{ props.application.compose_file || t("applications.overview.composePasted") }}</span>
         </NDescriptionsItem>
         <NDescriptionsItem :label="t('applications.overview.domain')">
-          <span class="mono">{{ props.application.base_domain || "—" }}</span>
-        </NDescriptionsItem>
-        <NDescriptionsItem :label="t('applications.overview.port')">
-          <span class="mono">{{ props.application.port }}:{{ props.application.host_port }}</span>
+          <span class="mono">{{ props.application.primary_domain || "—" }}</span>
         </NDescriptionsItem>
         <NDescriptionsItem :label="t('applications.overview.node')">
           <span class="mono">{{ props.application.server_name || (props.application.server_id ? props.application.server_id.slice(0, 8) : t("applications.overview.unassigned")) }}</span>

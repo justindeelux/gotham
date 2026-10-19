@@ -74,7 +74,7 @@ func New(pool *pgxpool.Pool) *Store {
 // InTx runs fn with a transaction-scoped Store: every Store method called on
 // tx shares one snapshot and commits atomically. A fn error (or a commit
 // failure) rolls everything back, so multi-step mutations such as a domain
-// row write plus its base_domain mirror update can never drift apart (JUS-89).
+// row write plus its certificate intent can never drift apart.
 func (s *Store) InTx(ctx context.Context, fn func(tx *Store) error) error {
 	dbTx, err := s.DB.Begin(ctx)
 	if err != nil {

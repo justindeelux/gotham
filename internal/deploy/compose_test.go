@@ -18,6 +18,13 @@ import (
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
 
+// InjectComposeWebPorts is the old single-target test helper: the production
+// path injects every domain's target, but these cases exercise one service.
+func InjectComposeWebPorts(rendered, service string, port, hostPort int32) (string, error) {
+	_ = hostPort
+	return InjectComposeDomainPorts(rendered, []ComposePortTarget{{Service: service, Port: port}})
+}
+
 // composeAppID is the fixed application id the scope tests confine binds to:
 // <managed root>/<appID> under the default root.
 var composeAppID = uuid.MustParse("11111111-1111-1111-1111-111111111111")
@@ -376,8 +383,8 @@ func TestInjectComposeWebPorts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inject = %v, want nil", err)
 		}
-		if !strings.Contains(out, "8080:3000") {
-			t.Errorf("document = %q, want the 8080:3000 mapping", out)
+		if !strings.Contains(out, "- \"3000\"") {
+			t.Errorf("document = %q, want the bare 3000 mapping", out)
 		}
 	})
 
@@ -397,7 +404,7 @@ func TestInjectComposeWebPorts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inject = %v, want nil", err)
 		}
-		if strings.Contains(out, "8080:3000") {
+		if strings.Contains(out, "- \"3000\"") {
 			t.Errorf("document = %q, want the user mapping kept", out)
 		}
 	})
@@ -419,7 +426,7 @@ func TestInjectComposeWebPorts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inject = %v, want nil", err)
 		}
-		if !strings.Contains(out, "8080:9000") {
+		if !strings.Contains(out, "- \"9000\"") {
 			t.Errorf("document = %q, want the injected mapping", out)
 		}
 	})
@@ -430,7 +437,7 @@ func TestInjectComposeWebPorts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inject = %v, want nil", err)
 		}
-		if !strings.Contains(out, "8080:3000") {
+		if !strings.Contains(out, "- \"3000\"") {
 			t.Errorf("document = %q, want a routable mapping next to the loopback one", out)
 		}
 	})
@@ -441,7 +448,7 @@ func TestInjectComposeWebPorts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inject = %v, want nil", err)
 		}
-		if strings.Contains(out, "8080:3000") {
+		if strings.Contains(out, "- \"3000\"") {
 			t.Errorf("document = %q, want the user mapping kept", out)
 		}
 	})
@@ -452,7 +459,7 @@ func TestInjectComposeWebPorts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inject = %v, want nil", err)
 		}
-		if !strings.Contains(out, "8080:3000") {
+		if !strings.Contains(out, "- \"3000\"") {
 			t.Errorf("document = %q, want a routable mapping next to the loopback one", out)
 		}
 	})
@@ -463,7 +470,7 @@ func TestInjectComposeWebPorts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inject = %v, want nil", err)
 		}
-		if !strings.Contains(out, "8080") {
+		if !strings.Contains(out, "- \"3000\"") {
 			t.Errorf("document = %q, want a routable mapping next to the loopback one", out)
 		}
 	})
@@ -485,7 +492,7 @@ func TestInjectComposeWebPorts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inject = %v, want nil", err)
 		}
-		if strings.Contains(out, "worker:\n      ports") || strings.Count(out, "8080:3000") != 1 {
+		if strings.Contains(out, "worker:\n      ports") || strings.Count(out, "- \"3000\"") != 1 {
 			t.Errorf("document = %q, want the mapping on web only", out)
 		}
 	})
@@ -520,7 +527,6 @@ func TestValidateComposeSourceTable(t *testing.T) {
 			SourceType:     SourceCompose,
 			ComposeContent: composeSafe,
 			ComposeService: "web",
-			Port:           3000,
 		}
 		if mutate != nil {
 			mutate(&app)
@@ -540,31 +546,27 @@ func TestValidateComposeSourceTable(t *testing.T) {
 			a.ComposeService = "web"
 		}), ErrValidation},
 		{"pasted with provider", pasted(func(a *Application) { a.Provider = "github" }), ErrValidation},
-		{"pasted no port", pasted(func(a *Application) { a.Port = 0 }), ErrValidation},
-		{"pasted privileged host port", pasted(func(a *Application) { a.HostPort = 80 }), ErrValidation},
-		{"pasted host port 443", pasted(func(a *Application) { a.HostPort = 443 }), ErrValidation},
-		{"pasted high host port", pasted(func(a *Application) { a.HostPort = 8080 }), nil},
 		{"both modes", pasted(func(a *Application) { a.CloneURL = "https://example.com/r.git"; a.ComposeFile = "c.yml" }), ErrValidation},
 		{"neither mode", pasted(func(a *Application) { a.ComposeContent = "" }), ErrValidation},
 		{"repo public", Application{
 			ID: composeAppID, SourceType: SourceCompose,
 			Repo: "o/r", CloneURL: "https://example.com/o/r.git",
-			ComposeFile: "docker-compose.yml", ComposeService: "web", Port: 3000,
+			ComposeFile: "docker-compose.yml", ComposeService: "web",
 		}, nil},
 		{"repo github", Application{
 			ID: composeAppID, SourceType: SourceCompose, Provider: "github",
 			Repo: "o/r", CloneURL: "git@github.com:o/r.git",
-			ComposeFile: "c.yml", ComposeService: "web", Port: 3000,
+			ComposeFile: "c.yml", ComposeService: "web",
 		}, nil},
 		{"repo no file", Application{
 			ID: composeAppID, SourceType: SourceCompose,
 			Repo: "o/r", CloneURL: "https://example.com/o/r.git",
-			ComposeService: "web", Port: 3000,
+			ComposeService: "web",
 		}, ErrValidation},
 		{"repo bad url", Application{
 			ID: composeAppID, SourceType: SourceCompose,
 			Repo: "o/r", CloneURL: "ftp://example.com/r.git",
-			ComposeFile: "c.yml", ComposeService: "web", Port: 3000,
+			ComposeFile: "c.yml", ComposeService: "web",
 		}, ErrValidation},
 	}
 	for _, tc := range cases {
@@ -642,8 +644,6 @@ func testComposeApp(userID uuid.UUID) Application {
     image: example.com/worker:1.0
 `,
 		ComposeService: "web",
-		Port:           3000,
-		HostPort:       8080,
 	}
 }
 
@@ -654,6 +654,11 @@ func TestOrchestratorComposePastedHappyPath(t *testing.T) {
 	userID := uuid.New()
 	app := testComposeApp(userID)
 	repo := &fakeRepository{app: app}
+	if _, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+		ApplicationID: app.ID, Domain: "app.example.com", IsPrimary: true, Port: 3000, Service: "web", Protocol: ProtocolHTTP,
+	}); err != nil {
+		t.Fatalf("seed domain: %v", err)
+	}
 	envVars, secrets := testEnv(t)
 	repo.envVars, repo.secrets = envVars, secrets
 	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})
@@ -696,8 +701,8 @@ func TestOrchestratorComposePastedHappyPath(t *testing.T) {
 		t.Fatalf("compose documents = %d, want 1", len(node.composeDocuments))
 	}
 	document := node.composeDocuments[0]
-	if !strings.Contains(document, "8080:3000") {
-		t.Errorf("document lacks the injected 8080:3000 mapping:\n%s", document)
+	if !strings.Contains(document, "- \"3000\"") {
+		t.Errorf("document lacks the injected 3000 mapping:\n%s", document)
 	}
 	if !strings.Contains(document, "TOKEN: hunter2") {
 		t.Errorf("document lacks the injected secret project env:\n%s", document)
@@ -909,8 +914,6 @@ func TestValidateComposeTarget(t *testing.T) {
 	}{
 		{"pasted", func(a *Application) {}, nil},
 		{"no service", func(a *Application) { a.ComposeService = "" }, ErrValidation},
-		{"no port", func(a *Application) { a.Port = 0 }, ErrValidation},
-		{"privileged host port", func(a *Application) { a.HostPort = 22 }, ErrValidation},
 		{"no source", func(a *Application) { a.ComposeContent = "" }, ErrValidation},
 		{"repo mode", func(a *Application) {
 			a.ComposeContent = ""
@@ -969,8 +972,6 @@ func TestRoutesComposeFields(t *testing.T) {
 		"compose_service": "web",
 		"branch":          "",
 		"build_pack":      "",
-		"port":            3000,
-		"host_port":       8080,
 		"server_id":       uuid.New().String(),
 	}
 
@@ -1009,7 +1010,7 @@ func TestRoutesComposeFields(t *testing.T) {
 			"name": "listed compose", "environment_id": base["environment_id"],
 			"provider": "", "repo": "", "clone_url": "", "source_type": SourceCompose,
 			"compose_content": composeSafe, "compose_service": "web",
-			"port": 3000, "server_id": base["server_id"],
+			"server_id": base["server_id"],
 		})
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("setup create status = %d (body %s)", rec.Code, rec.Body.String())
@@ -1334,7 +1335,6 @@ func TestServiceCreateComposeHostile(t *testing.T) {
 			in.ComposeService = "web"
 			in.Branch = ""
 			in.BuildPack = ""
-			in.Port = 3000
 			if _, err := svc.CreateApplication(context.Background(), userID, in); !errors.Is(err, ErrValidation) {
 				t.Fatalf("err = %v, want ErrValidation", err)
 			}
@@ -1353,6 +1353,11 @@ func TestPreviewComposeBinds(t *testing.T) {
 	baseDir := "/var/lib/gotham/volumes/" + baseID.String()
 	base.ComposeContent = "services:\n  web:\n    image: example.com/app:1.0\n    volumes:\n      - " + baseDir + "/data:/data\n"
 	repo := &fakeRepository{app: base}
+	if _, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+		ApplicationID: base.ID, Domain: "app.example.com", IsPrimary: true, Port: 3000, Service: "web", Protocol: ProtocolHTTP,
+	}); err != nil {
+		t.Fatalf("seed base domain: %v", err)
+	}
 	svc := newTestService(t, repo)
 
 	preview, err := svc.CreatePreviewApplication(context.Background(), base.ID, PreviewApplicationInput{

@@ -118,11 +118,14 @@ func TestCreatePreviewApplicationClonesCertificateIntent(t *testing.T) {
 		CloneURL:      "https://github.com/octo/gotham.git",
 		Branch:        "main",
 		BuildPack:     "auto",
-		BaseDomain:    baseDomain,
-		Port:          3000,
 	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("create base application: %v", err)
+	}
+	if _, err := st.CreateApplicationDomain(ctx, sqlc.CreateApplicationDomainParams{
+		ApplicationID: pgUUID(base.ID), Domain: baseDomain, IsPrimary: true, Port: 3000, Protocol: "https",
+	}); err != nil {
+		t.Fatalf("create base domain: %v", err)
 	}
 	if _, err := st.CreateDomainCertificate(ctx, sqlc.CreateDomainCertificateParams{
 		ApplicationID: pgUUID(base.ID),

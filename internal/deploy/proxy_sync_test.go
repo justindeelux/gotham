@@ -44,37 +44,65 @@ func newProxyTestService(t *testing.T, repo *fakeRepository, proxySync ProxySync
 	return svc
 }
 
-func TestServiceCreateApplicationSyncsProxyForDomain(t *testing.T) {
+func withPrimaryDomain(app Application, domain string) Application {
+	app.PrimaryDomain = &ApplicationDomain{
+		ApplicationID: app.ID, Domain: domain, IsPrimary: true, Port: 3000, Protocol: ProtocolHTTP,
+	}
+	return app
+}
+
+func TestDomainChangesSyncProxy(t *testing.T) {
 	userID := uuid.New()
-	repo := &fakeRepository{}
+	app := testApplication(userID)
+	repo := &fakeRepository{app: app}
 	proxySync := &fakeProxySync{}
 	svc := newProxyTestService(t, repo, proxySync)
 
+	// Create is domainless: no route, no sync.
 	in := validCreateInput(uuid.New())
 	created, err := svc.CreateApplication(context.Background(), userID, in)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	if calls := proxySync.calls(); len(calls) != 0 {
+		t.Fatalf("proxy calls = %v, want none for a domainless application", calls)
+	}
+
+	domain, err := svc.AddDomain(context.Background(), userID, created.ID, domainInput("app.example.com"))
+	if err != nil {
+		t.Fatalf("add domain: %v", err)
+	}
 	if calls := proxySync.calls(); len(calls) != 1 || calls[0] != created.ServerID {
 		t.Fatalf("proxy calls = %v, want [%s]", calls, created.ServerID)
 	}
 
-	noDomain := validCreateInput(uuid.New())
-	noDomain.Name = "plain app"
-	noDomain.BaseDomain = ""
-	if _, err := svc.CreateApplication(context.Background(), userID, noDomain); err != nil {
-		t.Fatalf("create without domain: %v", err)
+	if _, err := svc.UpdateDomain(context.Background(), userID, created.ID, domain.ID, DomainInput{
+		Domain: "www.example.com", Port: 8080, Protocol: ProtocolHTTPS,
+	}); err != nil {
+		t.Fatalf("update domain: %v", err)
 	}
-	if calls := proxySync.calls(); len(calls) != 1 {
-		t.Fatalf("proxy calls = %v, want no sync for an application without a domain", calls)
+	if calls := proxySync.calls(); len(calls) != 2 || calls[1] != created.ServerID {
+		t.Fatalf("proxy calls = %v, want a second sync for the edit", calls)
+	}
+
+	if err := svc.RemoveDomain(context.Background(), userID, created.ID, domain.ID); err != nil {
+		t.Fatalf("remove domain: %v", err)
+	}
+	if calls := proxySync.calls(); len(calls) != 3 || calls[2] != created.ServerID {
+		t.Fatalf("proxy calls = %v, want a third sync for the removal", calls)
 	}
 }
 
-func TestServiceUpdateApplicationSyncsProxy(t *testing.T) {
+func TestServiceUpdateApplicationMovedBetweenNodesSyncsBoth(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
-	app.BaseDomain = "old.example.com"
+	app = withPrimaryDomain(app, "app.example.com")
 	repo := &fakeRepository{app: app}
+	if _, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+		ApplicationID: app.ID, Domain: "app.example.com", IsPrimary: true, Port: 3000, Protocol: ProtocolHTTP,
+	}); err != nil {
+		t.Fatalf("seed domain: %v", err)
+	}
 	proxySync := &fakeProxySync{}
 	svc := newProxyTestService(t, repo, proxySync)
 
@@ -86,33 +114,6 @@ func TestServiceUpdateApplicationSyncsProxy(t *testing.T) {
 	if calls := proxySync.calls(); len(calls) != 0 {
 		t.Fatalf("proxy calls = %v, want none for a rename", calls)
 	}
-
-	// A domain change regenerates the node's configuration.
-	domain := "New.Example.COM"
-	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{BaseDomain: &domain}); err != nil {
-		t.Fatalf("update domain: %v", err)
-	}
-	if calls := proxySync.calls(); len(calls) != 1 || calls[0] != app.ServerID {
-		t.Fatalf("proxy calls = %v, want [%s]", calls, app.ServerID)
-	}
-
-	// Clearing the domain drops the route on the same node.
-	cleared := ""
-	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{BaseDomain: &cleared}); err != nil {
-		t.Fatalf("clear domain: %v", err)
-	}
-	if calls := proxySync.calls(); len(calls) != 2 || calls[1] != app.ServerID {
-		t.Fatalf("proxy calls = %v, want a second sync for the cleared route", calls)
-	}
-}
-
-func TestServiceUpdateApplicationMovedBetweenNodesSyncsBoth(t *testing.T) {
-	userID := uuid.New()
-	app := testApplication(userID)
-	app.BaseDomain = "app.example.com"
-	repo := &fakeRepository{app: app}
-	proxySync := &fakeProxySync{}
-	svc := newProxyTestService(t, repo, proxySync)
 
 	newServer := uuid.New()
 	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{ServerID: &newServer}); err != nil {
@@ -131,8 +132,13 @@ func TestServiceUpdateApplicationMovedBetweenNodesSyncsBoth(t *testing.T) {
 func TestServiceDeleteApplicationSyncsProxyForDomain(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
-	app.BaseDomain = "app.example.com"
+	app = withPrimaryDomain(app, "app.example.com")
 	repo := &fakeRepository{app: app}
+	if _, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+		ApplicationID: app.ID, Domain: "app.example.com", IsPrimary: true, Port: 3000, Protocol: ProtocolHTTP,
+	}); err != nil {
+		t.Fatalf("seed domain: %v", err)
+	}
 	proxySync := &fakeProxySync{}
 	svc := newProxyTestService(t, repo, proxySync)
 
@@ -157,32 +163,30 @@ func TestServiceDeleteApplicationSyncsProxyForDomain(t *testing.T) {
 	}
 }
 
-func TestServiceUpdateApplicationRejectsInvalidDomain(t *testing.T) {
+func TestAddDomainRejectsInvalidDomain(t *testing.T) {
 	userID := uuid.New()
 	app := testApplication(userID)
-	app.BaseDomain = "app.example.com"
 	repo := &fakeRepository{app: app}
 	svc := newProxyTestService(t, repo, &fakeProxySync{})
 
 	invalid := "app.example.com`) || Host(`evil.example.com"
-	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{BaseDomain: &invalid}); !errors.Is(err, ErrValidation) {
+	if _, err := svc.AddDomain(context.Background(), userID, app.ID, domainInput(invalid)); !errors.Is(err, ErrValidation) {
 		t.Fatalf("err = %v, want ErrValidation", err)
 	}
-
-	in := validCreateInput(uuid.New())
-	in.BaseDomain = "not a domain"
-	if _, err := svc.CreateApplication(context.Background(), userID, in); !errors.Is(err, ErrValidation) {
-		t.Fatalf("create err = %v, want ErrValidation", err)
-	}
-	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{BaseDomain: nil}); err == nil {
+	if _, err := svc.UpdateApplication(context.Background(), userID, app.ID, UpdateApplicationInput{}); err == nil {
 		t.Fatal("empty update = nil error, want ErrValidation")
 	}
 }
 
 func TestOrchestratorSyncsProxyAfterSuccessfulDeployment(t *testing.T) {
 	app := testApplication(uuid.New())
-	app.BaseDomain = "app.example.com"
+	app = withPrimaryDomain(app, "app.example.com")
 	repo := &fakeRepository{app: app}
+	if _, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+		ApplicationID: app.ID, Domain: "app.example.com", IsPrimary: true, Port: 3000, Protocol: ProtocolHTTP,
+	}); err != nil {
+		t.Fatalf("seed domain: %v", err)
+	}
 	envVars, secrets := testEnv(t)
 	repo.envVars, repo.secrets = envVars, secrets
 	dep := seedDeployment(t, repo, app, Deployment{Kind: KindDeploy})

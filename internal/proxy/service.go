@@ -1060,7 +1060,8 @@ func routesForServer(apps []ProxiedApplication, serverID uuid.UUID, backendHost 
 // an explicit compose service finds that service's container through Docker
 // Compose's own labels; every other row targets the application's release
 // container. The host port is the engine-reported binding of the domain's
-// container port.
+// container port. The backend is always plain HTTP: the domain protocol only
+// chooses the public entrypoint (TLS terminates at Traefik).
 func resolveDomainTarget(app ProxiedApplication, domain ProxiedDomain, backendHost string, nodeContainers []containers.Container, byID map[string]*containers.Container) (string, string) {
 	if domain.Port <= 0 {
 		return "", "domain declares no container port"

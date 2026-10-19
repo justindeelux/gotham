@@ -162,6 +162,7 @@ SELECT DISTINCT ON (application_id)
        application_id, domain, port, service, protocol
 FROM application_domains
 WHERE NOT disabled
+  AND application_id = ANY($1::uuid[])
 ORDER BY application_id, is_primary DESC, created_at, id
 `
 
@@ -176,8 +177,8 @@ type ListPrimaryApplicationDomainsRow struct {
 // ListPrimaryApplicationDomains enriches application reads with the primary
 // host (display and preview derivation). An application with no enabled
 // domain, or with only conflict-disabled rows, has no row here.
-func (q *Queries) ListPrimaryApplicationDomains(ctx context.Context) ([]ListPrimaryApplicationDomainsRow, error) {
-	rows, err := q.db.Query(ctx, listPrimaryApplicationDomains)
+func (q *Queries) ListPrimaryApplicationDomains(ctx context.Context, applicationIds []pgtype.UUID) ([]ListPrimaryApplicationDomainsRow, error) {
+	rows, err := q.db.Query(ctx, listPrimaryApplicationDomains, applicationIds)
 	if err != nil {
 		return nil, err
 	}

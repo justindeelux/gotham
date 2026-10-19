@@ -203,7 +203,10 @@ type ApplicationDomain struct {
 	// application's release container (single-container applications and a
 	// compose application's ComposeService).
 	Service string
-	// Protocol is ProtocolHTTP or ProtocolHTTPS.
+	// Protocol selects the PUBLIC entrypoint only: ProtocolHTTP serves the
+	// Traefik web entrypoint, ProtocolHTTPS serves websecure with TLS
+	// termination and an http->https redirect. Traefik always forwards plain
+	// HTTP to the container; the backend scheme is not modeled here.
 	Protocol  string
 	CreatedAt time.Time
 	UpdatedAt time.Time

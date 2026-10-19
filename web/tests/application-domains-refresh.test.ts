@@ -163,8 +163,12 @@ describe("domain mutations refresh the certificate panel", () => {
     const errorsShown = () =>
       wrapper.text().includes("Something went wrong") ||
       wrapper.text().includes("Cannot read properties");
+    const bannerShown = () => wrapper.text().includes("Saving it again");
     const addButton = () =>
       wrapper.findAll("button").find((button) => button.text() === "Add domain");
+
+    // www is detached: the certificate re-record banner is up.
+    expect(bannerShown()).toBe(true);
 
     // ── add ──────────────────────────────────────────────────────────
     await wrapper
@@ -181,6 +185,8 @@ describe("domain mutations refresh the certificate panel", () => {
       appId,
       expect.objectContaining({ domain: "www.example.com", port: 80 }),
     );
+    // The domains tick reloaded the certificate panel: www is attached now.
+    expect(bannerShown()).toBe(false);
 
     // ── remove ───────────────────────────────────────────────────────
     const wwwRow = () =>
@@ -205,6 +211,8 @@ describe("domain mutations refresh the certificate panel", () => {
     expect(
       wrapper.findAll(".domain-row").some((row) => row.text().includes("www.example.com")),
     ).toBe(false);
+    // www is detached again: the banner returns without a page reload.
+    expect(bannerShown()).toBe(true);
 
     // ── make primary ─────────────────────────────────────────────────
     await wrapper

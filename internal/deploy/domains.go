@@ -176,6 +176,12 @@ func (s *Service) UpdateDomain(ctx context.Context, userID, appID, domainID uuid
 	next.IsPrimary = target.IsPrimary
 	next.Disabled = target.Disabled
 	previousHost := target.Domain
+	// Editing the host is the explicit conflict resolution: once the new host
+	// passes the platform-wide claim, a row the uniqueness migration disabled
+	// is re-enabled, mirroring the old base-domain update semantics.
+	if next.Domain != previousHost {
+		next.Disabled = false
+	}
 	releaseDomain, domainErr := s.guardDomains.Acquire(ctx, next.Domain)
 	if domainErr != nil {
 		return ApplicationDomain{}, fmt.Errorf("%w: %v", ErrValidation, domainErr)

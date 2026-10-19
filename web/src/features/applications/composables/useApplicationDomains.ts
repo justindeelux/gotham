@@ -15,6 +15,7 @@ import {
 } from "@/features/applications/api/applications";
 import {
   domainPortSchema,
+  domainProtocolSchema,
   domainServiceSchema,
   hostDomainSchema,
 } from "@/features/applications/schemas/applications";
@@ -66,6 +67,8 @@ export function useApplicationDomains(application: Ref<Application>) {
   const rowErrorIsProxy = ref(false);
   const formServerError = ref<unknown>(null);
   const rowServerError = ref<unknown>(null);
+  /** refreshSeq drops an out-of-order response after an application switch. */
+  let refreshSeq = 0;
 
   /** isCompose reports whether the application has compose-specific fields. */
   const isCompose = computed<boolean>(() => application.value.source_type === "compose");
@@ -104,16 +107,29 @@ export function useApplicationDomains(application: Ref<Application>) {
   }
 
   async function refresh(silent = false): Promise<void> {
+    const appID = application.value.id;
+    const seq = ++refreshSeq;
     if (!silent) {
       loadingDomains.value = true;
     }
     try {
-      domains.value = await listDomains(application.value.id);
+      const rows = await listDomains(appID);
+      // A slow response for the previous application must never overwrite the
+      // new application's list.
+      if (seq !== refreshSeq || application.value.id !== appID) {
+        return;
+      }
+      domains.value = rows;
       domainsError.value = null;
     } catch (error) {
+      if (seq !== refreshSeq || application.value.id !== appID) {
+        return;
+      }
       domainsError.value = describeApplicationError(error);
     } finally {
-      loadingDomains.value = false;
+      if (seq === refreshSeq) {
+        loadingDomains.value = false;
+      }
     }
   }
 
@@ -138,16 +154,17 @@ export function useApplicationDomains(application: Ref<Application>) {
     draft.protocol = row.protocol;
   }
 
-  /** handleServiceChange pre-fills the port of the selected service. */
-  function handleServiceChange(service: string): void {
-    draft.service = service;
+  /** handleServiceChange pre-fills the port of the selected service. A
+   * cleared select emits null; treat it as the release-default empty service.
+   * A service without a declared port clears the field so a stale port from
+   * the previous selection never looks pre-filled. */
+  function handleServiceChange(service: string | null): void {
+    draft.service = service ?? "";
     if (!isCompose.value) {
       return;
     }
-    const port = composePorts.value[service];
-    if (port && port > 0) {
-      draft.port = port;
-    }
+    const port = composePorts.value[draft.service];
+    draft.port = port && port > 0 ? port : null;
   }
 
   /** validatedDraft returns the normalized payload, or the first error. */
@@ -161,10 +178,14 @@ export function useApplicationDomains(application: Ref<Application>) {
     if (portIssues.length > 0) {
       return portIssues[0];
     }
-    const service = isCompose.value ? draft.service.trim() : "";
+    const service = isCompose.value ? (draft.service ?? "").trim() : "";
     const serviceIssues = fieldErrors(domainServiceSchema, service);
     if (serviceIssues.length > 0) {
       return serviceIssues[0];
+    }
+    const protocolIssues = fieldErrors(domainProtocolSchema, draft.protocol);
+    if (protocolIssues.length > 0) {
+      return protocolIssues[0];
     }
     return {
       domain,
@@ -267,8 +288,15 @@ export function useApplicationDomains(application: Ref<Application>) {
     if (domainsError.value !== null) {
       void refresh(true);
     }
-    if (formError.value !== null && formServerError.value !== null) {
-      formError.value = describeApplicationError(formServerError.value);
+    if (formError.value !== null) {
+      if (formServerError.value !== null) {
+        formError.value = describeApplicationError(formServerError.value);
+      } else {
+        // A local validation message is a catalog key: re-derive it from the
+        // unchanged draft in the new locale.
+        const payload = validatedDraft();
+        formError.value = typeof payload === "string" ? payload : null;
+      }
     }
     if (rowError.value !== null && rowServerError.value !== null) {
       rowError.value = rowErrorIsProxy.value

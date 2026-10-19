@@ -362,7 +362,11 @@ func (r *storeRepository) enrich(ctx context.Context, rows []sqlc.Application) (
 	// target), so they are read in one batch for the whole page.
 	primaries := make(map[uuid.UUID]ApplicationDomain)
 	if len(rows) > 0 {
-		domainRows, err := r.store.ListPrimaryApplicationDomains(ctx)
+		ids := make([]pgtype.UUID, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.ID)
+		}
+		domainRows, err := r.store.ListPrimaryApplicationDomains(ctx, ids)
 		if err != nil {
 			return nil, fmt.Errorf("deploy: list primary domains: %w", err)
 		}

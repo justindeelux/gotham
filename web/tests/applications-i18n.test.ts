@@ -4,7 +4,7 @@
 import { mount } from "@vue/test-utils";
 import { NMessageProvider } from "naive-ui";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, ref } from "vue";
 
 import {
@@ -13,10 +13,9 @@ import {
 import { describePreviewError } from "@/features/applications/api/previews";
 import { describeProviderError } from "@/features/applications/api/providers";
 import { useCreateAppWizard } from "@/features/applications/composables/useCreateAppWizard";
-import { hostDomainSchema } from "@/features/applications/schemas/applications";
-import { fieldErrors } from "@/shared/validation/naiveAdapter";
+import * as applicationsApi from "@/features/applications/api/applications";
 import en from "@/features/applications/locales/en";
-import vi from "@/features/applications/locales/vi";
+import viMessages from "@/features/applications/locales/vi";
 import { durationText } from "@/features/applications/utils/deploymentDuration";
 import type { Deployment } from "@/features/applications/api/applications";
 import { pipelineStepsFor } from "@/features/applications/utils/deployPipeline";
@@ -45,7 +44,7 @@ function apiError(status: number, message = "") {
 
 describe("applications catalog", () => {
   it("has matching en/vi keys, params and message syntax", () => {
-    expect(checkCatalogParity(en, vi)).toEqual([]);
+    expect(checkCatalogParity(en, viMessages)).toEqual([]);
   });
 
   it("renders 0/1/many deployment and preview counts", () => {
@@ -231,15 +230,45 @@ describe("wizard live switch", () => {
 });
 
 describe("visible domain feedback follows the locale", () => {
-  it("resolves the hostname message in the active locale", async () => {
-    expect(fieldErrors(hostDomainSchema, "not a domain")[0]).toBe(
+  it("refreshes an already-visible validation error without touching the draft", async () => {
+    setActivePinia(createPinia());
+    vi.spyOn(applicationsApi, "listDomains").mockResolvedValue([]);
+    const Harness = defineComponent({
+      setup() {
+        return () =>
+          h(ApplicationDomainPanel, {
+            application: {
+              id: "app-1",
+              source_type: "git_public",
+              primary_domain: "app.example.com",
+            },
+          });
+      },
+    });
+    const Root = defineComponent({
+      render: () => h(NMessageProvider, null, { default: () => h(Harness) }),
+    });
+    const panel = mount(Root, { global: { plugins: [i18n] } });
+    const host = panel.find('input[aria-label="Domain hostname"]');
+    await host.setValue("not a domain");
+    await panel
+      .findAll("button")
+      .find((button) => button.text() === "Add domain")!
+      .trigger("click");
+    await panel.vm.$nextTick();
+    expect(panel.text()).toContain(
       "Enter a plain hostname such as app.example.com (letters, digits, hyphens and dots; no wildcard).",
     );
     setLocale("vi", null);
-    expect(fieldErrors(hostDomainSchema, "not a domain")[0]).toBe(
+    await panel.vm.$nextTick();
+    expect(panel.text()).toContain(
       "Nhập hostname thuần như app.example.com (chữ cái, chữ số, gạch ngang và dấu chấm; không dùng ký tự đại diện).",
     );
-    setLocale("en", null);
+    expect(
+      (panel.find('input[aria-label="Tên miền"]').element as unknown as { value: string }).value,
+    ).toBe("not a domain");
+    vi.restoreAllMocks();
+    panel.unmount();
   });
 });
 

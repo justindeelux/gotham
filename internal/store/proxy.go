@@ -249,9 +249,14 @@ func (s *Store) ListProxiedApplicationDomains(ctx context.Context) ([]sqlc.ListP
 }
 
 // ListPrimaryApplicationDomains returns one enabled primary domain per
-// application, for read enrichment (display and preview derivation).
-func (s *Store) ListPrimaryApplicationDomains(ctx context.Context) ([]sqlc.ListPrimaryApplicationDomainsRow, error) {
-	return s.queries.ListPrimaryApplicationDomains(ctx)
+// requested application, for read enrichment (display and preview
+// derivation). Scoping the query to the page's ids keeps a single-application
+// read proportional to that application, not to every domain on the platform.
+func (s *Store) ListPrimaryApplicationDomains(ctx context.Context, applicationIDs []pgtype.UUID) ([]sqlc.ListPrimaryApplicationDomainsRow, error) {
+	if len(applicationIDs) == 0 {
+		return []sqlc.ListPrimaryApplicationDomainsRow{}, nil
+	}
+	return s.queries.ListPrimaryApplicationDomains(ctx, applicationIDs)
 }
 
 // ListApplicationDomainsByApplication returns one application's domain rows,

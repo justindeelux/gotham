@@ -393,3 +393,42 @@ func TestDomainServiceValidatesComposeService(t *testing.T) {
 		t.Fatalf("empty service err = %v, want nil", err)
 	}
 }
+
+// TestUpdateDomainReenablesDisabledRow proves editing the host of a
+// conflict-disabled row is the explicit resolution: a free host re-enables
+// it, while a port-only edit leaves the conflict flag untouched.
+func TestUpdateDomainReenablesDisabledRow(t *testing.T) {
+	userID := uuid.New()
+	repo := &fakeRepository{}
+	app := seedDomainApp(t, repo, userID, "app.example.com")
+	svc := newTestService(t, repo)
+
+	disabled, err := repo.CreateApplicationDomain(context.Background(), ApplicationDomain{
+		ApplicationID: app.ID, Domain: "conflict.example.com", Disabled: true, Port: 3000, Protocol: ProtocolHTTP,
+	})
+	if err != nil {
+		t.Fatalf("seed disabled row: %v", err)
+	}
+
+	// A port-only edit keeps the conflict visible.
+	stillDisabled, err := svc.UpdateDomain(context.Background(), userID, app.ID, disabled.ID, DomainInput{
+		Domain: "conflict.example.com", Port: 8080, Protocol: ProtocolHTTP,
+	})
+	if err != nil {
+		t.Fatalf("port edit: %v", err)
+	}
+	if !stillDisabled.Disabled {
+		t.Fatalf("row = %#v, want the disabled flag preserved", stillDisabled)
+	}
+
+	// A new, unclaimed host resolves the conflict and routes again.
+	reenabled, err := svc.UpdateDomain(context.Background(), userID, app.ID, disabled.ID, DomainInput{
+		Domain: "fresh.example.com", Port: 8080, Protocol: ProtocolHTTPS,
+	})
+	if err != nil {
+		t.Fatalf("host edit: %v", err)
+	}
+	if reenabled.Disabled || reenabled.Domain != "fresh.example.com" || reenabled.Protocol != ProtocolHTTPS {
+		t.Fatalf("row = %#v, want the re-enabled fresh host", reenabled)
+	}
+}

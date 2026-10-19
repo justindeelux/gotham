@@ -223,6 +223,12 @@ describe("wizard create payload carries the source type", () => {
       clone_url: "git@h:o/r.git",
       source_type: "git_private",
     });
+    // Routing is attached after creation on the Domains tab: the create
+    // payload carries no app-level port or domain.
+    const payload = w.buildPayload();
+    expect(payload).not.toHaveProperty("port");
+    expect(payload).not.toHaveProperty("host_port");
+    expect(payload).not.toHaveProperty("base_domain");
     wrapper.unmount();
   });
 

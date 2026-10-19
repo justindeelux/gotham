@@ -151,7 +151,7 @@ const en = {
   },
   domain: {
     title: "Domains",
-    hint: "Every hostname routes to its own target port, optional compose service and protocol. An application can deploy without any domain.",
+    hint: "Every hostname routes to its own target port, optional compose service and protocol. HTTPS terminates TLS at the proxy and forwards plain HTTP to the container. An application can deploy without any domain.",
     addTitle: "Add a domain",
     editTitle: "Edit domain",
     hostAria: "Domain hostname",

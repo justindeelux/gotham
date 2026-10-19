@@ -53,6 +53,7 @@ SELECT DISTINCT ON (application_id)
        application_id, domain, port, service, protocol
 FROM application_domains
 WHERE NOT disabled
+  AND application_id = ANY(sqlc.arg(application_ids)::uuid[])
 ORDER BY application_id, is_primary DESC, created_at, id;
 
 -- name: ListProxiedApplicationDomains :many

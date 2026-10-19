@@ -152,7 +152,7 @@ const vi: ApplicationsMessages = {
   },
   domain: {
     title: "Tên miền",
-    hint: "Mỗi tên miền định tuyến tới cổng đích, service compose tùy chọn và giao thức của riêng nó. Ứng dụng có thể triển khai mà không cần tên miền.",
+    hint: "Mỗi tên miền định tuyến tới cổng đích, service compose tùy chọn và giao thức của riêng nó. HTTPS kết thúc TLS tại proxy và chuyển tiếp HTTP thuần tới container. Ứng dụng có thể triển khai mà không cần tên miền.",
     addTitle: "Thêm tên miền",
     editTitle: "Sửa tên miền",
     hostAria: "Tên miền",

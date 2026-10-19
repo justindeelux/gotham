@@ -61,4 +61,23 @@ describe("compose service port pre-fill", () => {
     expect(ports.api).toBe(8000);
     expect(ports.worker).toBe(0);
   });
+
+  it("only reads port/expose lists, not unrelated service lists", () => {
+    const ports = extractComposeServicePorts(`services:
+  web:
+    image: example.com/app:1.0
+    volumes:
+      - 3000:/data
+    command:
+      - 8080
+    ports:
+      - "9000-9010:9000"
+  api:
+    image: example.com/api:1.0
+    expose:
+      - "7000"
+`);
+    expect(ports.web).toBe(9000);
+    expect(ports.api).toBe(7000);
+  });
 });

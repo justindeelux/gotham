@@ -60,8 +60,9 @@ type Route struct {
 	AppID uuid.UUID
 	// Domain is the exact hostname to route, already lowercased and trimmed.
 	Domain string
-	// Protocol selects the entrypoint: ProtocolHTTP renders a plain-HTTP
-	// router only, ProtocolHTTPS adds the TLS router and the redirect.
+	// Protocol selects the PUBLIC entrypoint only: ProtocolHTTP renders a
+	// plain-HTTP router, ProtocolHTTPS adds the TLS router and the redirect.
+	// The generated backend URL is always http:// (TLS terminates at Traefik).
 	Protocol string
 	// Target is the backend URL, e.g. http://172.17.0.1:3000.
 	Target string

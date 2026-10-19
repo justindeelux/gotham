@@ -46,6 +46,12 @@ const formTitle = computed(() =>
     : t("applications.domain.editTitle"),
 );
 
+const submitLabel = computed(() =>
+  domains.editingId.value === null
+    ? t("applications.domain.add")
+    : t("applications.domain.save"),
+);
+
 /** certOf resolves the certificate intent recorded for one hostname. */
 function certOf(host: string): Certificate | null {
   return (
@@ -93,7 +99,7 @@ onMounted(() => {
               />
               <NSelect
                 v-if="domains.isCompose.value"
-                v-model:value="domains.draft.service"
+                :value="domains.draft.service"
                 class="domain-service"
                 filterable
                 tag
@@ -116,7 +122,7 @@ onMounted(() => {
                 :loading="domains.saving.value"
                 @click="domains.handleSave"
               >
-                {{ domains.editingId.value === null ? t("applications.domain.add") : t("applications.domain.save") }}
+                {{ submitLabel }}
               </NButton>
               <NButton v-if="domains.editingId.value !== null" ghost @click="domains.resetDraft">
                 {{ t("applications.domain.cancel") }}

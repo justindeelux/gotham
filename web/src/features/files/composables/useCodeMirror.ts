@@ -1,4 +1,5 @@
 import type {
+  EditorAccessibility,
   EditorSession,
   EditorSessionOptions,
 } from "@/features/files/editor/codemirror";
@@ -20,4 +21,4 @@ export async function createEditorSession(
   return module.createEditorSession(options);
 }
 
-export type { EditorSession, EditorSessionOptions };
+export type { EditorAccessibility, EditorSession, EditorSessionOptions };

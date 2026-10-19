@@ -52,6 +52,8 @@ async function save(): Promise<void> {
           preset="yaml"
           height="280px"
           :read-only="!props.canWrite"
+          :invalid="!editor.contentValid.value"
+          :error="t('applications.compose.contentInvalid')"
           :placeholder="t('applications.compose.placeholder')"
           :aria-label="t('applications.compose.content')"
         />

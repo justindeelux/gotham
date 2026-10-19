@@ -105,7 +105,7 @@ const dialog = useImportService(
             class="import-code"
             preset="yaml"
             height="280px"
-            :placeholder="t('services.import.yamlExample')"
+            :placeholder="t('services.import.yamlPlaceholder')"
             :aria-label="t('services.import.yamlLabel')"
           />
         </NFormItem>

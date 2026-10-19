@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import EditorGotoLine from "@/features/files/components/EditorGotoLine.vue";
 import EditorSearchBar from "@/features/files/components/EditorSearchBar.vue";
 import { useEditorFind } from "@/features/files/composables/useEditorFind";
 import { createEditorSession } from "@/features/files/composables/useCodeMirror";
+import type { EditorAccessibility } from "@/features/files/composables/useCodeMirror";
 import type { EditorSession } from "@/features/files/composables/useCodeMirror";
 import { CODE_EDITOR_PRESETS } from "@/features/files/editor/presets";
 import type { CodeEditorPreset } from "@/features/files/editor/presets";
@@ -37,6 +38,10 @@ interface Props {
   placeholder?: string;
   /** ariaLabel overrides the localized generic editor name. */
   ariaLabel?: string;
+  /** invalid marks the document as failing the caller's schema. */
+  invalid?: boolean;
+  /** error is the visible validation message linked to the editor surface. */
+  error?: string;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -47,6 +52,8 @@ const props = withDefaults(defineProps<Props>(), {
   height: "320px",
   placeholder: undefined,
   ariaLabel: undefined,
+  invalid: false,
+  error: undefined,
 });
 
 const emit = defineEmits<{
@@ -101,10 +108,25 @@ const {
   canReplace: () => !props.readOnly,
 });
 
+/** errorId links the visible validation message to the editable surface. */
+const errorId = `code-editor-error-${useId()}`;
+
 /** ariaLabel is the caller label, else the localized generic editor name. */
 const ariaLabel = computed<string>(
   () => props.ariaLabel ?? t("files.editor.codeEditorLabel"),
 );
+
+/**
+ * accessibility tracks the live label, hint and invalid state. The session
+ * reconfigures its CodeMirror compartment from this value, so switching the UI
+ * language updates the editor without remounting it or dropping the draft.
+ */
+const accessibility = computed<EditorAccessibility>(() => ({
+  ariaLabel: ariaLabel.value,
+  placeholder: props.placeholder,
+  invalid: props.invalid,
+  describedBy: props.invalid && props.error ? errorId : undefined,
+}));
 
 /** language resolves the explicit prop, else the preset, else plain text. */
 const language = computed<EditorLanguageId>(
@@ -127,8 +149,10 @@ onMounted(() => {
     parent: element,
     doc: props.modelValue,
     language: language.value,
-    ariaLabel: ariaLabel.value,
-    placeholder: props.placeholder,
+    ariaLabel: accessibility.value.ariaLabel,
+    placeholder: accessibility.value.placeholder,
+    invalid: accessibility.value.invalid,
+    describedBy: accessibility.value.describedBy,
     readOnly: props.readOnly,
     settings: effectiveSettings.value,
     onChange: (doc) => {
@@ -160,6 +184,7 @@ onMounted(() => {
     created.setDoc(props.modelValue);
     created.setReadOnly(props.readOnly);
     created.setSettings(effectiveSettings.value);
+    created.setAccessibility(accessibility.value);
   });
 });
 
@@ -173,6 +198,9 @@ watch(
   () => props.readOnly,
   (readOnly) => session?.setReadOnly(readOnly),
 );
+// A locale switch (or a schema change) reconfigures the live session, so the
+// label, hint and validation attrs follow without losing the typed document.
+watch(accessibility, (next) => session?.setAccessibility(next));
 
 onBeforeUnmount(() => {
   disposed = true;
@@ -210,6 +238,9 @@ onBeforeUnmount(() => {
       @replace-all="replaceEveryMatch"
     />
     <div ref="host" class="code-editor-host" />
+    <p v-if="invalid && error" :id="errorId" class="code-editor-error">
+      {{ error }}
+    </p>
     <EditorGotoLine
       :show="gotoOpen"
       :current="gotoCurrent"
@@ -235,5 +266,14 @@ onBeforeUnmount(() => {
 .code-editor-host {
   flex: 1 1 auto;
   min-height: 0;
+}
+
+.code-editor-error {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--danger);
+  font-size: var(--text-xs);
 }
 </style>

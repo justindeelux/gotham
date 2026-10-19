@@ -303,6 +303,28 @@ describe("wizard dockerfile source", () => {
     });
     wrapper.unmount();
   });
+
+  it("follows the locale switch without losing the wizard Dockerfile draft", async () => {
+    const { w, wrapper } = mountSourceStep("dockerfile");
+    const code = wrapper.findComponent(CodeEditor);
+    const typed = "FROM alpine:3.21\nRUN echo typed\n";
+    code.vm.$emit("update:modelValue", typed);
+    await nextTick();
+    expect(w.form.dockerfileContent).toBe(typed);
+
+    syncComposerLocale("vi");
+    await nextTick();
+
+    const switched = wrapper.findComponent(CodeEditor);
+    expect(switched.props("ariaLabel")).toBe("Nội dung Dockerfile");
+    expect(switched.props("placeholder")).toBe(
+      "# Dán Dockerfile tại đây\nFROM alpine:3.20",
+    );
+    expect(switched.props("modelValue")).toBe(typed);
+    expect(w.form.dockerfileContent).toBe(typed);
+    syncComposerLocale("en");
+    wrapper.unmount();
+  });
 });
 
 describe("detail dockerfile editor", () => {
@@ -341,6 +363,45 @@ describe("detail dockerfile editor", () => {
     expect(seen).toEqual([
       { dockerfile_content: "FROM alpine:3.21\n", build_args: {} },
     ]);
+    wrapper.unmount();
+  });
+
+  it("follows the locale switch and exposes the invalid state accessibly", async () => {
+    setActivePinia(createPinia());
+    const app = {
+      id: "app-1",
+      source_type: "dockerfile",
+      dockerfile_content: "FROM alpine:3.20\n",
+      build_args: {},
+      updated_at: "2026-10-08T00:00:00Z",
+    };
+    const wrapper = mount(DockerfileEditor, {
+      props: { application: app as never },
+      global: { plugins: [i18n] },
+    });
+    const code = wrapper.findComponent(CodeEditor);
+    const typed = "FROM alpine:3.21\nRUN echo typed\n";
+    code.vm.$emit("update:modelValue", typed);
+    await nextTick();
+
+    syncComposerLocale("vi");
+    await nextTick();
+    await flushPromises();
+
+    const switched = wrapper.findComponent(CodeEditor);
+    expect(switched.props("ariaLabel")).toBe("Nội dung Dockerfile");
+    expect(switched.props("placeholder")).toBe(
+      "# Dán Dockerfile tại đây\nFROM alpine:3.20",
+    );
+    expect(switched.props("modelValue")).toBe(typed);
+
+    switched.vm.$emit("update:modelValue", "RUN echo no-from\n");
+    await nextTick();
+    const invalidated = wrapper.findComponent(CodeEditor);
+    expect(invalidated.props("invalid")).toBe(true);
+    expect(invalidated.props("error")).toBe("Hãy nhập Dockerfile có chỉ thị FROM.");
+
+    syncComposerLocale("en");
     wrapper.unmount();
   });
 

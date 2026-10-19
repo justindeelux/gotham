@@ -44,6 +44,7 @@ const en = {
     nodeLabel: "Node",
     yamlLabel: "compose.yaml",
     yamlExample: "services:\n  web:\n    image: nginx:1.27-alpine",
+    yamlPlaceholder: "services:\n  web:\n    image: nginx:1.27-alpine",
     footnote:
       "{env} references are substituted from the environment before the agent validates the document. A compose service is routed by the {label} label. Files larger than 1 MiB are rejected by the API.",
     scopeError: "Select a project and environment.",

@@ -63,7 +63,7 @@ const latestTagWarn = computed<boolean>(
             class="wizard-code"
             preset="dockerfile"
             height="220px"
-            placeholder="FROM alpine:3.20"
+            :placeholder="t('applications.wizard.dockerfilePlaceholder')"
             :aria-label="t('applications.wizard.dockerfileContent')"
           />
           <span class="field-hint">{{ t("applications.wizard.dockerfileHint") }}</span>
@@ -235,7 +235,7 @@ const latestTagWarn = computed<boolean>(
               class="wizard-code"
               preset="yaml"
               height="220px"
-              placeholder="services:"
+              :placeholder="t('applications.wizard.composePlaceholder')"
               :aria-label="t('applications.wizard.composeContent')"
             />
             <span class="field-hint">{{ t("applications.wizard.composeContentHint") }}</span>

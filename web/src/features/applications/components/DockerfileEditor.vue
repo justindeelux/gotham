@@ -39,6 +39,8 @@ const { t } = useI18n();
           :class="{ 'source-code--invalid': !editor.contentValid.value }"
           preset="dockerfile"
           height="280px"
+          :invalid="!editor.contentValid.value"
+          :error="t('applications.dockerfile.contentInvalid')"
           :placeholder="t('applications.dockerfile.placeholder')"
           :aria-label="t('applications.dockerfile.content')"
         />

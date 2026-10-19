@@ -347,6 +347,28 @@ describe("wizard compose source", () => {
     });
     wrapper.unmount();
   });
+
+  it("follows the locale switch without losing the wizard compose draft", async () => {
+    const { w, wrapper } = mountSourceStep("compose");
+    const code = wrapper.findComponent(CodeEditor);
+    const typed = `${pasted}# typed before locale switch\n`;
+    code.vm.$emit("update:modelValue", typed);
+    await nextTick();
+    expect(w.form.composeContent).toBe(typed);
+
+    syncComposerLocale("vi");
+    await nextTick();
+
+    const switched = wrapper.findComponent(CodeEditor);
+    expect(switched.props("ariaLabel")).toBe("Tệp compose");
+    expect(switched.props("placeholder")).toBe(
+      "# Dán tài liệu compose tại đây\nservices:",
+    );
+    expect(switched.props("modelValue")).toBe(typed);
+    expect(w.form.composeContent).toBe(typed);
+    syncComposerLocale("en");
+    wrapper.unmount();
+  });
 });
 
 describe("detail compose editor", () => {
@@ -397,6 +419,51 @@ describe("detail compose editor", () => {
     app.value = { ...app.value, updated_at: "2026-10-08T00:00:02Z" };
     await nextTick();
     expect(editor.content.value).toBe(`${pasted}# edited\n`);
+  });
+
+  it("follows the locale switch and exposes the invalid state accessibly", async () => {
+    setActivePinia(createPinia());
+    const app = {
+      id: "app-1",
+      source_type: "compose",
+      compose_content: pasted,
+      compose_file: "",
+      compose_service: "web",
+      updated_at: "2026-10-08T00:00:00Z",
+    } as Record<string, unknown>;
+    const wrapper = mount(
+      defineComponent({
+        render: () =>
+          h(NMessageProvider, null, {
+            default: () => h(ComposeEditor, { application: app, canWrite: true }),
+          }),
+      }),
+      { global: { plugins: [i18n] } },
+    );
+    const code = wrapper.findComponent(CodeEditor);
+    const typed = `${pasted}# typed before locale switch\n`;
+    code.vm.$emit("update:modelValue", typed);
+    await nextTick();
+
+    syncComposerLocale("vi");
+    await nextTick();
+    await flushPromises();
+
+    const switched = wrapper.findComponent(CodeEditor);
+    expect(switched.props("ariaLabel")).toBe("File compose");
+    expect(switched.props("placeholder")).toBe(
+      "# Dán tài liệu compose tại đây\nservices:",
+    );
+    expect(switched.props("modelValue")).toBe(typed);
+
+    switched.vm.$emit("update:modelValue", "not a compose document\n");
+    await nextTick();
+    const invalidated = wrapper.findComponent(CodeEditor);
+    expect(invalidated.props("invalid")).toBe(true);
+    expect(invalidated.props("error")).toBe("Hãy nhập tài liệu compose có ít nhất một service.");
+
+    syncComposerLocale("en");
+    wrapper.unmount();
   });
 
   it("saves file plus service for repo-backed rows", async () => {

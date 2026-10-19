@@ -90,4 +90,54 @@ describe("import compose code editor", () => {
     });
     wrapper.unmount();
   });
+
+  it("follows the locale switch without losing the imported YAML draft", async () => {
+    const services = useServicesStore();
+    const create = vi
+      .spyOn(services, "create")
+      .mockResolvedValue({ id: "service-1", name: "blog-staging" } as never);
+    const servers = useServersStore();
+    vi.spyOn(servers, "fetchServers").mockResolvedValue(undefined);
+
+    const wrapper = mount(
+      defineComponent({
+        render: () =>
+          h(NMessageProvider, null, {
+            default: () =>
+              h(ImportComposeDialog, {
+                show: true,
+                projectId: "proj-1",
+                environmentId: "env-1",
+              }),
+          }),
+      }),
+      {
+        attachTo: globalThis.document.body,
+        global: {
+          plugins: [i18n],
+          stubs: { teleport: true, ResourceScopeSummary: true, ServerPicker: ServerPickerStub },
+        },
+      },
+    );
+    await flushPromises();
+
+    const code = wrapper.findComponent(CodeEditor);
+    const typed = `${typedYaml}# typed before locale switch\n`;
+    code.vm.$emit("update:modelValue", typed);
+    await nextTick();
+
+    syncComposerLocale("vi");
+    await nextTick();
+    await flushPromises();
+
+    const switched = wrapper.findComponent(CodeEditor);
+    expect(switched.props("ariaLabel")).toBe("Tệp compose.yaml");
+    expect(switched.props("placeholder")).toBe(
+      "# Dán tài liệu compose tại đây\nservices:\n  web:\n    image: nginx:1.27-alpine",
+    );
+    expect(switched.props("modelValue")).toBe(typed);
+    expect(create).not.toHaveBeenCalled();
+    syncComposerLocale("en");
+    wrapper.unmount();
+  });
 });

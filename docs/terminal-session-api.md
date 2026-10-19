@@ -81,13 +81,18 @@ Pre-upgrade checks, each answering an HTTP status before the upgrade:
    `Sec-WebSocket-Protocol: gotham.token.<jwt>` (browser path) or
    `Authorization: Bearer <jwt>`. It is never accepted from the query string, so
    no reusable credential appears in URLs, proxy logs or history.
-3. **Operator.** The handshake token is verified once, here. Operator access is
-   then resolved from the **current account record** (its role is `admin`) or
-   from its account email being in `PLATFORM_ADMINS`; the account must still
-   exist and, when the token carries a `sid`, its refresh session must still be
-   live. This check runs again every 30 seconds for the life of the stream, so a
-   logout/revocation, demotion or removed `PLATFORM_ADMINS` entry closes the
-   shell within that interval. The access token's own 15-minute expiry is
+3. **Operator.** The handshake token is verified once, here, and must carry a
+   `sid`; a token without one is refused because no server-side lineage exists
+   that a logout could revoke. Operator access is then resolved from the
+   **current account record** (its role is `admin`) or from its account email
+   being in `PLATFORM_ADMINS`. The stream is pinned to the session's **sign-in
+   lineage** — the session's `created_at`, captured at attach. Refresh-token
+   rotation revokes the presented row and inserts a replacement with a new `sid`
+   but the same `created_at`, so ordinary rotation keeps the shell; logout,
+   revoke-all, password reset and account deletion remove the lineage and close
+   it. This check runs again every 30 seconds (with a 5-second lookup timeout),
+   so a logout/revocation, demotion or removed `PLATFORM_ADMINS` entry closes
+   the shell within that interval. The access token's own 15-minute expiry is
    deliberately **not** re-checked: a browser cannot present a refreshed token
    on an open socket, and the session contract is 8 hours. A demotion is read
    from the account, not from the token's immutable role claim.
@@ -152,11 +157,15 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   the relay confirms a live socket.
 * **Confirm** switches to the full 8 h lifetime (the agent enforces the same cap
   independently).
-* **Revalidation** runs every 30 s against server-side state only: the account
-  must still exist, its *current* role (or `PLATFORM_ADMINS` entry) must still
-  grant operator access, and the `sid` refresh session must still be live. The
-  handshake token's expiry is not consulted again. A real failure sends an
-  error frame and cancels the relay; a tick that races a normal close is silent.
+* **Revalidation** runs every 30 s against server-side state only (each lookup
+  gets a 5 s timeout): the account must still exist, its *current* role (or
+  `PLATFORM_ADMINS` entry) must still grant operator access, and a live session
+  carrying the same sign-in `created_at` must still exist. The handshake token's
+  expiry is not consulted again. Rotation of the refresh token is not a logout:
+  it preserves `created_at`. A definitive refusal sends an error frame and
+  cancels the relay; a tick that races a normal close is silent. A transient
+  lookup error keeps the shell and is logged; three consecutive failures
+  (about 90 s) fail closed with a "could not be confirmed" error.
 * **Idle timeout** closes a socket that receives no frame for 60 s; the server
   sends a `0x05` heartbeat every 25 s so a live client can tell a quiet shell
   from a dead one.

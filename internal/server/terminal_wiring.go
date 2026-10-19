@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
@@ -34,53 +36,104 @@ func (s *Server) terminalService() *terminal.Service {
 	return terminal.NewService(cfg)
 }
 
-// terminalOperator re-authorizes a terminal stream from the verified
-// access-token identity. It proves the account still exists, resolves the
-// operator role from that current account record (never from the immutable
-// role claim baked into the handshake token), and, when the token carries a
-// "sid", proves the refresh session is still live. The terminal stream calls it
-// at attach and every revalidation tick, so a logout/revocation, role demotion
-// or removed PLATFORM_ADMINS entry closes an open shell within one interval.
-// The token's own expiry is checked once at the handshake; revalidation uses
-// server-side state only so an 8h shell is not cut at the 15m access-token
-// lifetime. A scoped API token cannot open a browser stream because the
-// handshake carries an access token, not an API token.
-func (s *Server) terminalOperator(ctx context.Context, claims *auth.Claims) bool {
-	if claims == nil || s.auth == nil {
-		return false
+// terminalAuthorizer implements terminal.Authorizer from the auth service.
+// The access token is verified once at the handshake; every later check reads
+// server-side state only. The liveness key is the sign-in lineage
+// (SessionInfo.CreatedAt), not the token's sid: refresh-token rotation revokes
+// the presented session row and inserts a replacement with a new id but the
+// same created_at, so matching the created_at survives ordinary rotation while
+// logout/revoke-all/password reset delete the lineage.
+type terminalAuthorizer struct {
+	auth                 AuthService
+	isPlatformAdminEmail func(string) bool
+}
+
+// terminalAuthorizer builds the authorizer used by the terminal routes.
+func (s *Server) terminalAuthorizer() terminal.Authorizer {
+	return terminalAuthorizer{auth: s.auth, isPlatformAdminEmail: s.isPlatformAdminEmail}
+}
+
+// Authorize runs at the WebSocket handshake. A token without a sid is refused:
+// no server-side lineage exists that a logout could revoke.
+func (a terminalAuthorizer) Authorize(ctx context.Context, claims *auth.Claims) (terminal.Marker, error) {
+	if claims == nil || a.auth == nil {
+		return terminal.Marker{}, errors.New("terminal: no authorizer")
 	}
 	userID, err := uuid.Parse(claims.Subject)
 	if err != nil || userID == uuid.Nil {
-		return false
+		return terminal.Marker{}, errors.New("terminal: token has no user")
 	}
-	user, err := s.auth.Me(ctx, userID)
-	if err != nil || user == nil {
-		return false
+	if claims.SessionID == "" {
+		return terminal.Marker{}, errors.New("terminal: access token has no session id; sign in again")
 	}
-	// An access token minted before PF-2 has no sid; the account and its
-	// current operator role still bound the stream.
-	if claims.SessionID != "" {
-		sessionID, err := uuid.Parse(claims.SessionID)
-		if err != nil {
-			return false
+	sessionID, err := uuid.Parse(claims.SessionID)
+	if err != nil || sessionID == uuid.Nil {
+		return terminal.Marker{}, errors.New("terminal: malformed session id")
+	}
+	user, err := a.auth.Me(ctx, userID)
+	if err != nil {
+		return terminal.Marker{}, fmt.Errorf("terminal: load account: %w", err)
+	}
+	if !a.operator(user) {
+		return terminal.Marker{}, errors.New("terminal: platform operator access is required")
+	}
+	sessions, err := a.auth.ListSessions(ctx, userID, sessionID)
+	if err != nil {
+		return terminal.Marker{}, fmt.Errorf("terminal: list sessions: %w", err)
+	}
+	for _, info := range sessions {
+		if info.ID == sessionID {
+			return terminal.Marker{SignInAt: info.CreatedAt}, nil
 		}
-		sessions, err := s.auth.ListSessions(ctx, userID, sessionID)
-		if err != nil {
-			return false
+	}
+	return terminal.Marker{}, errors.New("terminal: the session is no longer live")
+}
+
+// Revalidate re-checks the account, the current operator role and the sign-in
+// lineage. Only a definitive refusal returns (false, nil); a lookup failure
+// returns an error so the caller can keep the shell and retry.
+func (a terminalAuthorizer) Revalidate(ctx context.Context, claims *auth.Claims, marker terminal.Marker) (bool, error) {
+	if claims == nil || a.auth == nil {
+		return false, nil
+	}
+	userID, err := uuid.Parse(claims.Subject)
+	if err != nil || userID == uuid.Nil {
+		return false, nil
+	}
+	user, err := a.auth.Me(ctx, userID)
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			return false, nil
 		}
-		live := false
-		for _, info := range sessions {
-			if info.ID == sessionID {
-				live = true
-				break
-			}
+		return false, fmt.Errorf("terminal: load account: %w", err)
+	}
+	if !a.operator(user) {
+		return false, nil
+	}
+	sessions, err := a.auth.ListSessions(ctx, userID, uuid.Nil)
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			return false, nil
 		}
-		if !live {
-			return false
+		return false, fmt.Errorf("terminal: list sessions: %w", err)
+	}
+	for _, info := range sessions {
+		if info.CreatedAt.Equal(marker.SignInAt) {
+			return true, nil
 		}
+	}
+	return false, nil
+}
+
+// operator resolves the operator role from the current account record, never
+// from the immutable role claim in the handshake token, so a demotion is
+// noticed on revalidation.
+func (a terminalAuthorizer) operator(user *auth.User) bool {
+	if user == nil {
+		return false
 	}
 	if strings.EqualFold(user.Role, "admin") {
 		return true
 	}
-	return s.isPlatformAdminEmail(user.Email)
+	return a.isPlatformAdminEmail != nil && a.isPlatformAdminEmail(user.Email)
 }

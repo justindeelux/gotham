@@ -479,7 +479,7 @@ func (s *Server) routes() (http.Handler, error) {
 		// Redis or the log feed.
 		if s.auth != nil && s.servers != nil {
 			s.terminal = s.terminalService()
-			terminal.Mount(api, platformOnly, s.terminal, s.auth, s.terminalOperator, UserIDFromContext, s.logger)
+			terminal.Mount(api, platformOnly, s.terminal, s.auth, s.terminalAuthorizer(), UserIDFromContext, s.logger)
 		}
 		// Instance settings (JUS-92): platform operators only; a nil service
 		// (no database) mounts nothing. A network change left unconfirmed

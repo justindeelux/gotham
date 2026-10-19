@@ -35,10 +35,32 @@ type TokenVerifier interface {
 	VerifyAccessToken(token string) (*auth.Claims, error)
 }
 
-// OperatorCheck re-authorizes the caller at attach time. The session itself is
-// bound to the user who created it, but host access is a platform-operator
-// capability and is re-checked so a revoked operator cannot keep a stream.
-type OperatorCheck func(ctx context.Context, claims *auth.Claims) bool
+// Marker identifies one sign-in lineage. Refresh-token rotation revokes the
+// presented session row and inserts a replacement that inherits the original
+// sign-in created_at, so the marker survives normal rotation while logout,
+// revoke-all, account deletion and password reset remove every row carrying it.
+type Marker struct {
+	SignInAt time.Time
+}
+
+// Authorizer performs attach-time authorization and periodic revalidation of
+// an open terminal session.
+//
+// Authorize runs once, at the WebSocket handshake, and returns the sign-in
+// lineage marker for the session. Revalidate runs on every interval:
+//
+//   - (true, nil)  keep the shell;
+//   - (false, nil) authorization is definitively revoked (logout, revoke-all,
+//     account deletion, demotion) and the shell ends;
+//   - (_, err)     the lookup failed transiently; the shell is kept and the
+//     error is retried, failing closed only after several consecutive errors.
+//
+// Authorize must refuse a token that carries no session id: without a sid there
+// is no lineage a logout could revoke.
+type Authorizer interface {
+	Authorize(ctx context.Context, claims *auth.Claims) (Marker, error)
+	Revalidate(ctx context.Context, claims *auth.Claims, marker Marker) (bool, error)
+}
 
 // Revalidation and liveness defaults. They are fields on the handler (not
 // package globals) so tests can shorten them without racing each other.
@@ -52,26 +74,35 @@ const (
 	// defaultIdleTimeout closes a half-open socket that sends nothing (not even
 	// a heartbeat) for this long.
 	defaultIdleTimeout = 60 * time.Second
+	// defaultRevalidateTimeout bounds one authorization lookup, so a hung
+	// database cannot delay revocation indefinitely.
+	defaultRevalidateTimeout = 5 * time.Second
+	// revalidateMaxErrors is how many consecutive transient lookup failures are
+	// tolerated before the shell fails closed (3 ticks is about 90 s at the
+	// production interval).
+	revalidateMaxErrors = 3
 )
 
 // handler serves the terminal HTTP and WebSocket surface.
 type handler struct {
 	svc        *Service
 	verify     TokenVerifier
-	operator   OperatorCheck
+	authorizer Authorizer
 	userIDFrom UserIDFunc
 	logger     *slog.Logger
 
-	revalidatePeriod time.Duration
-	pingPeriod       time.Duration
-	idleTimeout      time.Duration
+	revalidatePeriod  time.Duration
+	revalidateTimeout time.Duration
+	pingPeriod        time.Duration
+	idleTimeout       time.Duration
 }
 
 // handlerOptions overrides the liveness timers (tests).
 type handlerOptions struct {
-	revalidatePeriod time.Duration
-	pingPeriod       time.Duration
-	idleTimeout      time.Duration
+	revalidatePeriod  time.Duration
+	revalidateTimeout time.Duration
+	pingPeriod        time.Duration
+	idleTimeout       time.Duration
 }
 
 // UserIDFunc resolves the authenticated user set by the server's auth
@@ -88,12 +119,12 @@ type UserIDFunc func(ctx context.Context) (uuid.UUID, bool)
 // operator chain). The WebSocket route authenticates in-band because browsers
 // cannot set an Authorization header on a WebSocket; the token arrives as a
 // "gotham.token.<jwt>" subprotocol or a Bearer header, never in the query.
-func Mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, operator OperatorCheck, userIDFrom UserIDFunc, logger *slog.Logger) {
-	mount(r, authMiddleware, svc, verifier, operator, userIDFrom, logger, handlerOptions{})
+func Mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger) {
+	mount(r, authMiddleware, svc, verifier, authorizer, userIDFrom, logger, handlerOptions{})
 }
 
 // mount is Mount with test-only timer overrides.
-func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, operator OperatorCheck, userIDFrom UserIDFunc, logger *slog.Logger, options handlerOptions) {
+func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Service, verifier TokenVerifier, authorizer Authorizer, userIDFrom UserIDFunc, logger *slog.Logger, options handlerOptions) {
 	if svc == nil {
 		return
 	}
@@ -101,17 +132,21 @@ func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Se
 		logger = slog.Default()
 	}
 	h := &handler{
-		svc:              svc,
-		verify:           verifier,
-		operator:         operator,
-		userIDFrom:       userIDFrom,
-		logger:           logger,
-		revalidatePeriod: options.revalidatePeriod,
-		pingPeriod:       options.pingPeriod,
-		idleTimeout:      options.idleTimeout,
+		svc:               svc,
+		verify:            verifier,
+		authorizer:        authorizer,
+		userIDFrom:        userIDFrom,
+		logger:            logger,
+		revalidatePeriod:  options.revalidatePeriod,
+		revalidateTimeout: options.revalidateTimeout,
+		pingPeriod:        options.pingPeriod,
+		idleTimeout:       options.idleTimeout,
 	}
 	if h.revalidatePeriod <= 0 {
 		h.revalidatePeriod = defaultRevalidatePeriod
+	}
+	if h.revalidateTimeout <= 0 {
+		h.revalidateTimeout = defaultRevalidateTimeout
 	}
 	if h.pingPeriod <= 0 {
 		h.pingPeriod = defaultPingPeriod
@@ -219,7 +254,15 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, apiError{Message: "unauthorized"})
 		return
 	}
-	if h.operator == nil || !h.operator(r.Context(), claims) {
+	if h.authorizer == nil {
+		writeJSON(w, http.StatusForbidden, apiError{Message: "platform operator access is required"})
+		return
+	}
+	authCtx, authCancel := context.WithTimeout(r.Context(), h.revalidateTimeout)
+	marker, authErr := h.authorizer.Authorize(authCtx, claims)
+	authCancel()
+	if authErr != nil {
+		h.logger.Warn("terminal: authorization refused", "error", authErr)
 		writeJSON(w, http.StatusForbidden, apiError{Message: "platform operator access is required"})
 		return
 	}
@@ -263,14 +306,14 @@ func (h *handler) attach(w http.ResponseWriter, r *http.Request) {
 				_ = conn.Close()
 				return
 			}
-			h.serve(conn, session, claims)
+			h.serve(conn, session, claims, marker)
 		},
 	}
 	server.ServeHTTP(w, r)
 }
 
 // serve relays one WebSocket to one agent terminal stream.
-func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Claims) {
+func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Claims, marker Marker) {
 	defer func() { _ = conn.Close() }()
 	defer h.svc.Release(session.ID)
 
@@ -282,7 +325,7 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 	// entry end the shell within revalidatePeriod. The handshake token's own
 	// expiry is deliberately not consulted here: the browser cannot present a
 	// refreshed token on an open socket, and the session contract is 8h.
-	go h.revalidate(ctx, cancel, conn, session, claims)
+	go h.revalidate(ctx, cancel, conn, session, claims, marker)
 
 	// A session expiry (or an explicit DELETE) cancels the relay, which closes
 	// the agent stream and tears the PTY down.
@@ -391,18 +434,20 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 
 // revalidate polls server-side authorization state while the relay is active:
 // the account must still exist, its current role (or PLATFORM_ADMINS entry) must
-// still grant operator access, and the refresh session named by the token's sid
-// must still be live. It never re-verifies the access token: the browser cannot
-// present a refreshed token on an open socket, so the token's 15-minute expiry
-// must not bound an 8-hour shell. Any real failure tells the client why and
-// tears the whole session down; a failure that is only the relay's own
-// cancellation is silent.
-func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, session *Session, claims *auth.Claims) {
-	if claims == nil || h.operator == nil {
+// still grant operator access, and a live session carrying the same sign-in
+// lineage must still exist. It never re-verifies the access token: the browser
+// cannot present a refreshed token on an open socket, so the token's 15-minute
+// expiry must not bound an 8-hour shell. A transient lookup error keeps the
+// shell and is retried; after revalidateMaxErrors consecutive failures the
+// shell fails closed.
+func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, session *Session, claims *auth.Claims, marker Marker) {
+	if claims == nil || h.authorizer == nil {
 		return
 	}
 	ticker := time.NewTicker(h.revalidatePeriod)
 	defer ticker.Stop()
+
+	consecutiveErrors := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -410,26 +455,50 @@ func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, con
 		case <-session.Done():
 			return
 		case <-ticker.C:
-			if h.operator(ctx, claims) {
-				continue
+			checkCtx, checkCancel := context.WithTimeout(ctx, h.revalidateTimeout)
+			ok, err := h.authorizer.Revalidate(checkCtx, claims, marker)
+			checkCancel()
+
+			if err != nil {
+				// A tick that raced a normal close sees a cancelled context and
+				// a failed lookup; that is not a revocation.
+				if ctx.Err() != nil || sessionClosed(session) {
+					return
+				}
+				consecutiveErrors++
+				h.logger.Warn("terminal: revalidation unavailable",
+					"session_id", session.ID.String(), "consecutive", consecutiveErrors, "error", err)
+				if consecutiveErrors < revalidateMaxErrors {
+					continue
+				}
+			} else {
+				consecutiveErrors = 0
+				if ok {
+					continue
+				}
 			}
-			// A tick that raced a normal close sees a cancelled context and a
-			// failed lookup; that is not a revocation and must not emit an
-			// error frame on a socket that is already going away.
-			if ctx.Err() != nil {
-				return
+
+			message := "terminal session was revoked"
+			if err != nil {
+				message = "terminal session authorization could not be confirmed"
 			}
-			select {
-			case <-session.Done():
-				return
-			default:
-			}
-			_ = sendFrame(conn, opError, []byte("terminal session was revoked"))
-			h.logger.Info("terminal: session authorization ended", "session_id", session.ID.String())
+			_ = sendFrame(conn, opError, []byte(message))
+			h.logger.Info("terminal: session authorization ended",
+				"session_id", session.ID.String(), "consecutive_errors", consecutiveErrors)
 			cancel()
 			_ = conn.Close()
 			return
 		}
+	}
+}
+
+// sessionClosed reports whether the service released the session.
+func sessionClosed(session *Session) bool {
+	select {
+	case <-session.Done():
+		return true
+	default:
+		return false
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,6 +68,53 @@ type sharedBufClient struct{ *bufTerminalClient }
 
 func (sharedBufClient) Close() error { return nil }
 
+// fakeAuthorizer is a controllable terminal.Authorizer for relay tests.
+type fakeAuthorizer struct {
+	mu           sync.Mutex
+	allow        bool
+	marker       Marker
+	err          error
+	revalidateFn func(context.Context) (bool, error)
+}
+
+func (f *fakeAuthorizer) Authorize(context.Context, *auth.Claims) (Marker, error) {
+	f.mu.Lock()
+	allow, err, marker := f.allow, f.err, f.marker
+	f.mu.Unlock()
+	if err != nil {
+		return Marker{}, err
+	}
+	if !allow {
+		return Marker{}, errors.New("not a platform operator")
+	}
+	return marker, nil
+}
+
+func (f *fakeAuthorizer) Revalidate(ctx context.Context, _ *auth.Claims, _ Marker) (bool, error) {
+	f.mu.Lock()
+	allow, err, hook := f.allow, f.err, f.revalidateFn
+	f.mu.Unlock()
+	if hook != nil {
+		return hook(ctx)
+	}
+	if err != nil {
+		return false, err
+	}
+	return allow, nil
+}
+
+func (f *fakeAuthorizer) setAllow(allow bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.allow = allow
+}
+
+func (f *fakeAuthorizer) setErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
 // failingClient stands in for an agent that predates TerminalService.
 type failingClient struct{ err error }
 
@@ -111,23 +159,23 @@ func shellPath(t *testing.T) string {
 }
 
 type fixtureOptions struct {
-	dial        DialFunc
-	operator    bool
-	operatorFn  func(context.Context) bool
-	pendingTTL  time.Duration
-	maxDuration time.Duration
-	revalidate  time.Duration
-	ping        time.Duration
-	idle        time.Duration
+	dial         DialFunc
+	operator     bool
+	revalidateFn func(context.Context) (bool, error)
+	pendingTTL   time.Duration
+	maxDuration  time.Duration
+	revalidate   time.Duration
+	ping         time.Duration
+	idle         time.Duration
 }
 
 type fixture struct {
-	svc      *Service
-	server   *httptest.Server
-	verifier *fakeVerifier
-	userID   uuid.UUID
-	serverID uuid.UUID
-	operator atomic.Bool
+	svc        *Service
+	server     *httptest.Server
+	verifier   *fakeVerifier
+	userID     uuid.UUID
+	serverID   uuid.UUID
+	authorizer *fakeAuthorizer
 }
 
 func newFixture(t *testing.T, options fixtureOptions) *fixture {
@@ -153,16 +201,16 @@ func newFixture(t *testing.T, options fixtureOptions) *fixture {
 		MaxDuration: options.maxDuration,
 	})
 	verifier := &fakeVerifier{userID: userID, token: "good-token"}
-	f := &fixture{svc: svc, verifier: verifier, userID: userID, serverID: serverID}
-	f.operator.Store(options.operator)
-	operatorCheck := func(context.Context, *auth.Claims) bool { return f.operator.Load() }
-	if options.operatorFn != nil {
-		operatorCheck = func(ctx context.Context, _ *auth.Claims) bool { return options.operatorFn(ctx) }
+	authorizer := &fakeAuthorizer{
+		allow:        options.operator,
+		marker:       Marker{SignInAt: time.Unix(1, 0)},
+		revalidateFn: options.revalidateFn,
 	}
+	f := &fixture{svc: svc, verifier: verifier, userID: userID, serverID: serverID, authorizer: authorizer}
 	router := chi.NewRouter()
 	mount(router,
 		func(next http.Handler) http.Handler { return next },
-		svc, verifier, operatorCheck,
+		svc, verifier, authorizer,
 		func(context.Context) (uuid.UUID, bool) { return userID, true },
 		discardLogger(),
 		handlerOptions{revalidatePeriod: options.revalidate, pingPeriod: options.ping, idleTimeout: options.idle},
@@ -598,18 +646,61 @@ func TestRevocationClosesStream(t *testing.T) {
 	if opcode, _ := readFrame(t, conn); opcode != opOpened {
 		t.Fatalf("first frame opcode = %#x, want opened", opcode)
 	}
-	f.operator.Store(false)
+	f.authorizer.setAllow(false)
 	expectErrorAndClose(t, conn, "terminal session was revoked", 5*time.Second)
+	waitSessionDone(t, session)
+}
+
+func TestTransientRevalidationErrorKeepsShell(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{operator: true, revalidate: 30 * time.Millisecond})
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	conn, err := f.dial(t, session, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if opcode, _ := readFrame(t, conn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened", opcode)
+	}
+
+	// A database blip must not end the shell; fewer than the fail-closed
+	// threshold of consecutive errors keeps it alive.
+	f.authorizer.setErr(errors.New("database is down"))
+	time.Sleep(40 * time.Millisecond)
+	sendFrameTest(t, conn, opInput, []byte("echo survived-blip\r"))
+	readUntilOutput(t, conn, "survived-blip")
+
+	f.authorizer.setErr(nil)
+	sendFrameTest(t, conn, opInput, []byte("echo after-blip\r"))
+	readUntilOutput(t, conn, "after-blip")
+}
+
+func TestPersistentRevalidationErrorFailsClosed(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{operator: true, revalidate: 30 * time.Millisecond})
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	conn, err := f.dial(t, session, f.server.URL)
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if opcode, _ := readFrame(t, conn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened", opcode)
+	}
+	f.authorizer.setErr(errors.New("database is down"))
+	expectErrorAndClose(t, conn, "could not be confirmed", 5*time.Second)
 	waitSessionDone(t, session)
 }
 
 func TestCloseDoesNotSendRevokedFrame(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, fixtureOptions{
+		operator:   true,
 		revalidate: 10 * time.Millisecond,
 		// Emulate a lookup that fails because the relay context was cancelled
 		// by the normal close: that must not be reported as a revocation.
-		operatorFn: func(ctx context.Context) bool { return ctx.Err() == nil },
+		revalidateFn: func(ctx context.Context) (bool, error) { return ctx.Err() == nil, nil },
 	})
 	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
 	conn, err := f.dial(t, session, f.server.URL)

@@ -1389,3 +1389,76 @@ test("raw backend text never reaches the floating window", async ({ page }) => {
   ).toBeVisible();
   await expectNoRawText(page);
 });
+
+// JUS-262: the page head was a flex row, so its three children (eyebrow,
+// title, description) rendered side by side — "OPERATIONS  Terminal  Open a
+// host shell…" on one line. The text group is one flex item now (same markup
+// as every other page); real boxes prove the stack at desktop and phone
+// widths, with a long description wrapping inside its own column.
+test("the page head stacks eyebrow, title and description at every width", async ({
+  page,
+}) => {
+  for (const size of [
+    { width: 390, height: 844 },
+    { width: 480, height: 900 },
+    { width: 1280, height: 800 },
+    { width: 1366, height: 800 },
+  ]) {
+    await page.setViewportSize(size);
+    await mockApi(page, freshState());
+    await seedApp(page, "/terminal");
+    await expect(page.locator(".page-head h1")).toBeVisible();
+
+    const geometry = await page.locator(".page-head").evaluate((element) => {
+      const box = (node: ReturnType<HTMLElement["querySelector"]>) => {
+        if (node === null) {
+          return null;
+        }
+        const rect = node.getBoundingClientRect();
+        return { x: rect.x, top: rect.top, bottom: rect.bottom };
+      };
+      const head = element as HTMLElement;
+      return {
+        eyebrow: box(head.querySelector(".eyebrow")),
+        title: box(head.querySelector("h1")),
+        description: box(head.querySelector(".page-desc")),
+        overflowX: head.scrollWidth - head.clientWidth,
+        pageOverflow:
+          document.documentElement.scrollWidth - window.innerWidth,
+      };
+    });
+    const { eyebrow, title, description } = geometry;
+    const label = `${size.width}px`;
+    expect(eyebrow, `${label}: eyebrow`).not.toBeNull();
+    expect(title, `${label}: title`).not.toBeNull();
+    expect(description, `${label}: description`).not.toBeNull();
+
+    // Eyebrow above title above description: separate lines, never one row.
+    expect(
+      eyebrow!.bottom,
+      `${label}: eyebrow sits above the title`,
+    ).toBeLessThanOrEqual(title!.top + 0.5);
+    expect(
+      title!.bottom,
+      `${label}: title sits above the description`,
+    ).toBeLessThanOrEqual(description!.top + 0.5);
+    // One stacked text column: the same left edge for all three.
+    expect(
+      Math.abs(title!.x - eyebrow!.x),
+      `${label}: shared left edge`,
+    ).toBeLessThan(1);
+    expect(
+      Math.abs(description!.x - eyebrow!.x),
+      `${label}: description left edge`,
+    ).toBeLessThan(1);
+    // The description wraps inside its column; nothing overflows sideways.
+    expect(
+      geometry.overflowX,
+      `${label}: head does not overflow`,
+    ).toBeLessThanOrEqual(1);
+    expect(
+      geometry.pageOverflow,
+      `${label}: no page overflow`,
+    ).toBeLessThanOrEqual(1);
+  }
+});

@@ -2195,10 +2195,10 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-/* Drag-to-resize grips (JUS-241): the window resizes from all four edges and
-   all four corners. The grips are thin strips on the frame with a visible
-   mark; they stay inside the window padding, so they never cover the editor
-   content. */
+/* Drag-to-resize grips (JUS-241, JUS-269): the window resizes from all four
+   edges and all four corners. The grips are invisible hit strips on the frame
+   — no icon, mark or highlight — and only the resize cursor signals them. They
+   stay inside the window padding, so they never cover the editor content. */
 .ed-resize {
   position: absolute;
   z-index: 5;
@@ -2272,84 +2272,12 @@ onBeforeUnmount(() => {
   cursor: nwse-resize;
 }
 
-/* The grip mark: a corner bracket on the corners, a tick on the edges. */
-.ed-resize::after {
-  content: "";
-  position: absolute;
-  width: var(--space-2);
-  height: var(--space-2);
-  border: 0 solid var(--meta);
-  border-radius: var(--radius-sm);
-  opacity: 0.7;
-}
-
-.ed-resize--nw::after {
-  top: var(--space-1);
-  left: var(--space-1);
-  border-top-width: 2px;
-  border-left-width: 2px;
-}
-
-.ed-resize--ne::after {
-  top: var(--space-1);
-  right: var(--space-1);
-  border-top-width: 2px;
-  border-right-width: 2px;
-}
-
-.ed-resize--sw::after {
-  bottom: var(--space-1);
-  left: var(--space-1);
-  border-bottom-width: 2px;
-  border-left-width: 2px;
-}
-
-.ed-resize--se::after {
-  right: var(--space-1);
-  bottom: var(--space-1);
-  border-bottom-width: 2px;
-  border-right-width: 2px;
-}
-
-.ed-resize--n::after,
-.ed-resize--s::after {
-  left: 50%;
-  width: var(--space-3);
-  height: 2px;
-  margin-left: calc(-1 * var(--space-3) / 2);
-  background: var(--meta);
-}
-
-.ed-resize--e::after,
-.ed-resize--w::after {
-  top: 50%;
-  width: 2px;
-  height: var(--space-3);
-  margin-top: calc(-1 * var(--space-3) / 2);
-  background: var(--meta);
-}
-
-.ed-resize:hover::after {
-  border-color: var(--accent);
-  opacity: 1;
-}
-
-.ed-resize--n:hover::after,
-.ed-resize--s:hover::after,
-.ed-resize--e:hover::after,
-.ed-resize--w:hover::after {
-  background-color: var(--accent);
-}
-
-/* Keyboard focus must be as visible as the hover state (finding 5). */
+/* Keyboard focus stays visible even though the grip is invisible: the
+   bottom-right corner is the keyboard resize slider. */
 .ed-resize:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.ed-resize:focus-visible::after {
-  border-color: var(--accent);
-  opacity: 1;
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
 }
 
 .ed-main {

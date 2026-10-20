@@ -484,6 +484,71 @@ test("the editor window resizes from every edge and corner", async ({ page }) =>
   }
 });
 
+/**
+ * RESIZE_GRIP_CURSORS maps every grip to the resize cursor it must keep. JUS-269
+ * removed the grip marks; the invisible hit strip is now the only affordance,
+ * so the cursor carries the resize signal.
+ */
+const RESIZE_GRIP_CURSORS: Record<string, string> = {
+  n: "ns-resize",
+  s: "ns-resize",
+  e: "ew-resize",
+  w: "ew-resize",
+  nw: "nwse-resize",
+  ne: "nesw-resize",
+  sw: "nesw-resize",
+  se: "nwse-resize",
+};
+
+test("the editor resize grips paint nothing and keep their hit areas and cursors", async ({
+  page,
+}) => {
+  const viewport = { width: 1280, height: 800 };
+  await page.setViewportSize(viewport);
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+  await page.evaluate(() => window.localStorage.clear());
+  await page.reload();
+  await reopenEditor(page);
+
+  for (const [direction, cursor] of Object.entries(RESIZE_GRIP_CURSORS)) {
+    const grip = page.locator(`.ed-resize--${direction}`);
+    // The invisible strip still occupies its frame area, so the drag target
+    // survives even though the mark is gone.
+    await expect(grip).toBeVisible();
+    const gripBox = await grip.boundingBox();
+    expect(gripBox, `${direction} grip box`).not.toBeNull();
+    expect(gripBox!.width, `${direction} grip width`).toBeGreaterThan(0);
+    expect(gripBox!.height, `${direction} grip height`).toBeGreaterThan(0);
+
+    // Nothing is painted: no pseudo-element mark, no background, no border.
+    // The cursor is the one visible affordance left.
+    const paint = await grip.evaluate((element) => {
+      const mark = getComputedStyle(element, "::after");
+      const style = getComputedStyle(element);
+      return {
+        markContent: mark.content,
+        markWidth: mark.width,
+        background: style.backgroundColor,
+        backgroundImage: style.backgroundImage,
+        borderWidth: style.borderTopWidth,
+        cursor: style.cursor,
+      };
+    });
+    expect(paint.markContent, `${direction} mark`).toBe("none");
+    expect(paint.markWidth, `${direction} mark width`).toBe("auto");
+    expect(paint.background, `${direction} background`).toBe("rgba(0, 0, 0, 0)");
+    expect(paint.backgroundImage, `${direction} background image`).toBe("none");
+    expect(paint.borderWidth, `${direction} border`).toBe("0px");
+    expect(paint.cursor, `${direction} cursor`).toBe(cursor);
+  }
+
+  // The hit area still resizes: dragging the east strip shrinks the window.
+  const { before, after } = await dragResizeGrip(page, "e", -40, 0);
+  expect(Math.abs(after.width - (before.width - 40))).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(after.height - before.height)).toBeLessThanOrEqual(1.5);
+});
+
 test("the editor window keeps its minimum size and stays on screen", async ({
   page,
 }) => {

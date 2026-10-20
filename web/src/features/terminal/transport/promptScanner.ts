@@ -152,8 +152,15 @@ export class PromptScanner {
   private completeCsi(): void {
     const body = ascii(this.pending, 2);
     this.pending = [];
-    const match = /^\?(47|1047|1049)([hl])$/.exec(body);
+    // CSI private modes can carry a semicolon list, e.g. `?1049;25h`.
+    const match = /^\?([0-9;]+)([hl])$/.exec(body);
     if (!match) {
+      return;
+    }
+    const modes = match[1]!
+      .split(";")
+      .map((value) => Number.parseInt(value, 10));
+    if (!modes.some((mode) => mode === 47 || mode === 1047 || mode === 1049)) {
       return;
     }
     const enter = match[2] === "h";
@@ -169,9 +176,10 @@ export class PromptScanner {
     this.setState({
       phase,
       detected,
-      // An OSC mark means the alternate-screen flag is stale at worst; a
-      // shell prompt after a TUI exits clears it below.
-      alternateScreen: phase === "input" ? false : this.state.alternateScreen,
+      // Only an explicit alternate-screen exit clears this flag: a shell can
+      // print a prompt while a fullscreen app still owns the alternate
+      // buffer, and staying conservative is safer than suggesting there.
+      alternateScreen: this.state.alternateScreen,
     });
   }
 

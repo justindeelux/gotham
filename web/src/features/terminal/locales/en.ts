@@ -95,6 +95,8 @@ const en = {
       "Alt+M minimizes the window when focus is on its header or a tab.",
     hint:
       "Ctrl+Shift+E or Shift+Tab leaves the terminal input. Inside the shell, Alt and Option keys go to the terminal (readline, vim, tmux); Alt+M and Alt+Shift+W work from the window chrome.",
+    chooseSuggestion:
+      "Ctrl+Shift+Space focuses a visible quick-command suggestion; Enter inserts it without running it.",
   },
   page: {
     navLabel: "Terminal",
@@ -149,6 +151,7 @@ const en = {
     title: "Quick commands",
     count: "{count} saved",
     add: "Add command",
+    atLimit: "You have reached the 40-command limit. Delete one to add another.",
     addTitle: "New command",
     editTitle: "Edit command",
     insert: "Insert",
@@ -196,6 +199,9 @@ const en = {
       commandRequired: "Enter the command text to insert.",
       commandTooLong: "Commands are limited to 2,048 characters.",
       commandNul: "Commands cannot contain NUL characters.",
+      commandControl:
+        "Commands cannot contain control characters other than newline and tab.",
+      commandBidi: "Commands cannot contain bidirectional text control characters.",
       abbreviationTooLong: "Abbreviations are limited to 24 characters.",
       abbreviationFormat:
         "Use letters, digits, dot, dash or underscore, starting with a letter or digit.",
@@ -206,10 +212,10 @@ const en = {
   },
   suggestions: {
     label: "Quick command suggestions",
-    accept: "Insert quick command {label}",
     announce:
-      "Suggestion: {label} for {abbreviation}. Press Ctrl+Space to choose or Escape to dismiss.",
-    hint: "Ctrl+Space to choose · Esc to dismiss",
+      "Suggestion: {label} for {abbreviation}. Press Control+Shift+Space to choose or Escape to dismiss.",
+    hint: "Ctrl+Shift+Space to choose · Esc dismisses",
+    choose: "Choose",
     dismiss: "Dismiss suggestion",
   },
 };

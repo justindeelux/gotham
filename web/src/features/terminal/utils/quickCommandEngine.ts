@@ -35,6 +35,8 @@ export interface QuickCommandSuggestionState {
   suggestion: QuickCommandSuggestion | null;
   /** dismissed is true after Escape until the mirror changes. */
   dismissed: boolean;
+  /** suspended is true when the remote line state is unknown. */
+  suspended: boolean;
 }
 
 /** SuggestionAcceptance is the erase+insert pair returned by accept(). */
@@ -68,11 +70,13 @@ export class QuickCommandEngine {
   private suggestion: QuickCommandSuggestion | null = null;
   private dismissed = false;
   /**
-   * awaitingPrompt is set by Enter and cleared by the next B mark. It keeps a
-   * shell without a C mark (older bash) from suggesting while a submitted
-   * command is still running.
+   * suspended means the local mirror no longer knows the remote line: Enter,
+   * Esc/vi normal mode, Ctrl-R/Ctrl-S, Tab completion, history recall, cursor
+   * movement, paste or IME all set it. Suggestions resume only at the next
+   * OSC 133 B mark, so a reset buffer can never pass the word-boundary guard
+   * for text this client did not type.
    */
-  private awaitingPrompt = false;
+  private suspended = false;
 
   constructor(options: QuickCommandEngineOptions) {
     this.options = options;
@@ -87,17 +91,17 @@ export class QuickCommandEngine {
       composing: this.composing,
       suggestion: this.suggestion,
       dismissed: this.dismissed,
+      suspended: this.suspended,
     };
   }
 
   /** setPrompt applies a scanner snapshot, clearing stale line state. */
   setPrompt(next: PromptState): void {
     this.prompt = { ...next };
-    if (next.phase === "input") {
-      // A B mark always starts a fresh editable line: even a redraw makes the
-      // old mirror untrustworthy, and it is the only safe resume point.
-      this.awaitingPrompt = false;
-    }
+    // Only a B mark proves a fresh editable line. Everything else (prompt
+    // drawing, command running, alternate screen) is unknown to this mirror
+    // and disables suggestions until B arrives again.
+    this.suspended = next.phase !== "input";
     this.clearMirror();
     this.recompute();
     this.emit();
@@ -109,21 +113,28 @@ export class QuickCommandEngine {
       return;
     }
     this.composing = composing;
+    // The committed composition changes a line this mirror cannot see.
+    this.suspended = true;
     this.clearMirror();
     this.emit();
   }
 
   /**
    * handleInput observes one xterm onData chunk and returns the bytes to
-   * forward, or null to swallow them (Escape dismissing a suggestion). The
-   * mirror only advances on a single printable character or Backspace.
+   * forward. It never swallows a byte: Esc, Ctrl-Space, Tab and Enter belong
+   * to the shell, so they are always delivered. The mirror only advances on a
+   * single printable character or Backspace while the line state is known.
    */
   handleInput(data: string): string | null {
+    if (this.suspended) {
+      // The remote line is unknown; forward untouched and wait for a B mark.
+      return data;
+    }
     if (data === "\x1b" && this.suggestion !== null) {
-      this.dismissed = true;
-      this.suggestion = null;
-      this.emit();
-      return null;
+      // Esc may be vi normal mode or a readline meta prefix; never swallow it.
+      // Dismiss the visible suggestion and stop tracking until the next B.
+      this.suspend();
+      return data;
     }
     if (data.length === 1) {
       const code = data.charCodeAt(0);
@@ -142,13 +153,10 @@ export class QuickCommandEngine {
         return data;
       }
     }
-    // Cursor movement, paste, IME, Enter, Ctrl-C or any other control: the
-    // remote line is no longer something this mirror can vouch for.
-    if (data.includes("\r") || data.includes("\n")) {
-      this.awaitingPrompt = true;
-    }
-    this.clearMirror();
-    this.emit();
+    // Cursor movement, Tab completion, history recall, Ctrl-R/Ctrl-S, paste,
+    // IME, Enter or any other control: the remote line is no longer something
+    // this mirror can vouch for.
+    this.suspend();
     return data;
   }
 
@@ -159,7 +167,7 @@ export class QuickCommandEngine {
    */
   accept(commandId?: string): SuggestionAcceptance | null {
     const suggestion = this.suggestion;
-    if (!suggestion) {
+    if (!suggestion || this.suspended) {
       return null;
     }
     if (commandId !== undefined && commandId !== suggestion.commandId) {
@@ -180,27 +188,33 @@ export class QuickCommandEngine {
    * manual insertion. Suggestions resume at the next prompt mark.
    */
   clearTracking(): void {
+    this.suspended = true;
     this.clearMirror();
     this.dismissed = true;
     this.recompute();
     this.emit();
   }
 
-  /** dismiss hides the current suggestion (Escape / UI close). */
+  /** dismiss hides the current suggestion and stops tracking until B. */
   dismiss(): void {
-    if (this.suggestion === null && this.dismissed) {
+    if (this.suggestion === null && this.dismissed && this.suspended) {
       return;
     }
-    this.dismissed = true;
-    this.suggestion = null;
-    this.emit();
+    this.suspend();
   }
 
   /** reset clears everything for a new session. */
   reset(): void {
     this.prompt = { phase: "unknown", detected: false, alternateScreen: false };
     this.composing = false;
-    this.awaitingPrompt = false;
+    this.suspended = true;
+    this.clearMirror();
+    this.emit();
+  }
+
+  /** suspend forgets the line and waits for the next B mark. */
+  private suspend(): void {
+    this.suspended = true;
     this.clearMirror();
     this.emit();
   }
@@ -223,7 +237,7 @@ export class QuickCommandEngine {
       this.prompt.alternateScreen ||
       this.composing ||
       this.dismissed ||
-      this.awaitingPrompt ||
+      this.suspended ||
       this.buffer === ""
     ) {
       this.suggestion = null;

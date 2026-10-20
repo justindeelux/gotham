@@ -95,6 +95,8 @@ const vi = {
       "Alt+M thu nhỏ cửa sổ khi tiêu điểm ở thanh tiêu đề hoặc tab.",
     hint:
       "Ctrl+Shift+E hoặc Shift+Tab rời khỏi vùng nhập terminal. Trong shell, phím Alt và Option được gửi tới terminal (readline, vim, tmux); Alt+M và Alt+Shift+W hoạt động từ thanh cửa sổ.",
+    chooseSuggestion:
+      "Ctrl+Shift+Space chọn gợi ý lệnh nhanh đang hiện; Enter chèn mà không chạy.",
   },
   page: {
     navLabel: "Terminal",
@@ -149,6 +151,7 @@ const vi = {
     title: "Lệnh nhanh",
     count: "{count} lệnh đã lưu",
     add: "Thêm lệnh",
+    atLimit: "Bạn đã đạt giới hạn 40 lệnh. Hãy xóa một lệnh để thêm lệnh khác.",
     addTitle: "Lệnh mới",
     editTitle: "Sửa lệnh",
     insert: "Chèn",
@@ -196,6 +199,10 @@ const vi = {
       commandRequired: "Nhập nội dung lệnh cần chèn.",
       commandTooLong: "Lệnh tối đa 2.048 ký tự.",
       commandNul: "Lệnh không được chứa ký tự NUL.",
+      commandControl:
+        "Lệnh không được chứa ký tự điều khiển ngoài xuống dòng và tab.",
+      commandBidi:
+        "Lệnh không được chứa ký tự điều khiển hướng văn bản hai chiều.",
       abbreviationTooLong: "Viết tắt tối đa 24 ký tự.",
       abbreviationFormat:
         "Dùng chữ, số, dấu chấm, gạch ngang hoặc gạch dưới, bắt đầu bằng chữ hoặc số.",
@@ -206,10 +213,10 @@ const vi = {
   },
   suggestions: {
     label: "Gợi ý lệnh nhanh",
-    accept: "Chèn lệnh nhanh {label}",
     announce:
-      "Gợi ý: {label} cho {abbreviation}. Nhấn Ctrl+Space để chọn hoặc Escape để bỏ qua.",
-    hint: "Ctrl+Space để chọn · Esc để bỏ qua",
+      "Gợi ý: {label} cho {abbreviation}. Nhấn Control+Shift+Space để chọn hoặc Escape để bỏ qua.",
+    hint: "Ctrl+Shift+Space để chọn · Esc để bỏ qua",
+    choose: "Chọn",
     dismiss: "Bỏ qua gợi ý",
   },
 };

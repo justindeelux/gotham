@@ -181,6 +181,27 @@ describe("quick command schemas", () => {
     }
   });
 
+  it("allows newline/tab but rejects other control and bidi characters", () => {
+    expect(
+      quickCommandDraftSchema([]).safeParse({
+        label: "multi",
+        command: "echo one\necho two\tend",
+      }).success,
+    ).toBe(true);
+    for (const text of ["echo \x1b[31mred", "echo \x07", "echo \x00"]) {
+      expect(
+        quickCommandDraftSchema([]).safeParse({ label: "x", command: text })
+          .success,
+      ).toBe(false);
+    }
+    expect(
+      quickCommandDraftSchema([]).safeParse({
+        label: "x",
+        command: "echo \u202egnp.exe",
+      }).success,
+    ).toBe(false);
+  });
+
   it("parses stored data defensively and deduplicates", () => {
     const valid = command("a", "One", "echo one", "gs");
     expect(
@@ -260,6 +281,17 @@ describe("quick command storage", () => {
     );
     expect(writeQuickCommands(storage, "u-1", many)).toBe(false);
   });
+
+  it("can store the full 40-command list with JSON-escaped text", () => {
+    const storage = memoryStorage();
+    // Quotes double under JSON escaping; 40 x 2048 is the worst allowed
+    // payload shape and must fit the 512 KiB guard.
+    const many = Array.from({ length: QUICK_COMMANDS_MAX }, (_, index) =>
+      command(`id-${index}`, `Label ${index}`, '"'.repeat(QUICK_COMMAND_TEXT_MAX)),
+    );
+    expect(writeQuickCommands(storage, "u-1", many)).toBe(true);
+    expect(readQuickCommands(storage, "u-1")).toHaveLength(QUICK_COMMANDS_MAX);
+  });
 });
 
 describe("safe insertion", () => {
@@ -297,6 +329,10 @@ describe("safe insertion", () => {
         sequence: "",
       });
     }
+    expect(prepareInsertion("echo \u202egnp.exe", true)).toMatchObject({
+      ok: false,
+      failure: "control",
+    });
   });
 
   it("erases exactly the abbreviation and computes insertion first", () => {
@@ -357,6 +393,10 @@ describe("prompt scanner", () => {
       phase: "unknown",
       alternateScreen: false,
     });
+    // Private-mode lists are common (`?1049;25h`); the alternate buffer still
+    // wins even when another mode is set in the same CSI.
+    scanner.push(bytes("\x1b[?25;1049h"));
+    expect(scanner.getState().alternateScreen).toBe(true);
   });
 
   it("stays unknown for a shell that emits no marks", () => {
@@ -410,7 +450,7 @@ describe("quick command engine", () => {
     expect(engine.getState().suggestion).toBeNull();
   });
 
-  it("updates on backspace and invalidates on cursor movement/paste/IME", () => {
+  it("updates on backspace, then suspends after cursor/paste/IME until a new B", () => {
     const { engine } = makeEngine();
     engine.handleInput("g");
     engine.handleInput("s");
@@ -420,10 +460,16 @@ describe("quick command engine", () => {
     engine.handleInput("s");
     expect(engine.getState().suggestion).not.toBeNull();
 
-    // Arrow-left is an escape sequence chunk; the mirror is dropped and the
-    // bytes are still forwarded to the shell.
+    // Arrow-left is an escape sequence chunk; the mirror is dropped, the
+    // bytes are still forwarded, and typing cannot re-enable suggestions
+    // until a fresh B mark.
     expect(engine.handleInput("\x1b[D")).toBe("\x1b[D");
     expect(engine.getState().suggestion).toBeNull();
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).toBeNull();
+    engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
 
     engine.handleInput("g");
     engine.handleInput("s");
@@ -431,23 +477,38 @@ describe("quick command engine", () => {
     // Bracketed paste arrives as one chunk.
     expect(engine.handleInput("\x1b[200~text\x1b[201~")).toContain("text");
     expect(engine.getState().suggestion).toBeNull();
-
     engine.handleInput("g");
     engine.handleInput("s");
+    expect(engine.getState().suggestion).toBeNull();
+    engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
+
     // Multi-character IME commit / paste.
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).not.toBeNull();
     expect(engine.handleInput("gs")).toBe("gs");
+    expect(engine.getState().suggestion).toBeNull();
+    engine.handleInput("g");
+    engine.handleInput("s");
     expect(engine.getState().suggestion).toBeNull();
   });
 
-  it("dismisses with Escape and swallows that lone byte", () => {
+  it("forwards Escape, dismisses, and suspends until a new prompt", () => {
     const { engine } = makeEngine();
     engine.handleInput("g");
     engine.handleInput("s");
-    expect(engine.handleInput("\x1b")).toBeNull();
-    expect(engine.getState().suggestion).toBeNull();
-    // A second Escape is normal shell input.
+    // Esc belongs to the shell (vi normal mode / readline meta), so it is
+    // always forwarded; it also dismisses the suggestion and stops tracking.
     expect(engine.handleInput("\x1b")).toBe("\x1b");
-    // Typing the abbreviation again makes the suggestion available.
+    expect(engine.getState().suggestion).toBeNull();
+    expect(engine.getState().suspended).toBe(true);
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).toBeNull();
+    // Only a fresh B mark re-enables matching.
+    engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).not.toBeNull();
@@ -476,13 +537,19 @@ describe("quick command engine", () => {
     expect(engine.getState().suggestion).not.toBeNull();
   });
 
-  it("suspends during IME composition", () => {
+  it("suspends during IME composition and after its commit", () => {
     const { engine } = makeEngine();
     engine.setComposing(true);
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).toBeNull();
     engine.setComposing(false);
+    engine.handleInput("g");
+    engine.handleInput("s");
+    // The composition changed a line the mirror cannot see; wait for B.
+    expect(engine.getState().suggestion).toBeNull();
+    engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).not.toBeNull();
@@ -541,6 +608,63 @@ describe("quick command engine", () => {
       detected: false,
       suggestion: null,
     });
+  });
+
+  it("suspends inside Ctrl-R/Ctrl-S search and Tab completion", () => {
+    const { engine } = makeEngine();
+    // Ctrl-R is a single control byte; it must reach readline and stop the
+    // mirror, not be swallowed.
+    expect(engine.handleInput("\x12")).toBe("\x12");
+    expect(engine.getState().suggestion).toBeNull();
+    expect(engine.getState().suspended).toBe(true);
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).toBeNull();
+
+    // A fresh prompt resumes; then Tab completion suspends again.
+    engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).not.toBeNull();
+    expect(engine.handleInput("\t")).toBe("\t");
+    expect(engine.getState().suggestion).toBeNull();
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).toBeNull();
+  });
+
+  it("does not false-match after a history/arrow reset", () => {
+    const { engine } = makeEngine();
+    // A clean line ending in `foo`, then history recall (Up) resets the
+    // mirror. The old bug let `gs` match as if it started the line, so the
+    // replacement would leave `fooecho ...` behind.
+    engine.handleInput("e");
+    engine.handleInput("c");
+    engine.handleInput("h");
+    engine.handleInput("o");
+    engine.handleInput(" ");
+    engine.handleInput("f");
+    engine.handleInput("o");
+    engine.handleInput("o");
+    expect(engine.handleInput("\x1b[A")).toBe("\x1b[A");
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).toBeNull();
+    expect(engine.getState().suspended).toBe(true);
+  });
+
+  it("does not match a suffix glued to real text from a clean prompt", () => {
+    const { engine } = makeEngine();
+    for (const char of "foogs") {
+      engine.handleInput(char);
+    }
+    expect(engine.getState().suggestion).toBeNull();
+    // A word boundary still matches after real text.
+    engine.handleInput(" ");
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).not.toBeNull();
   });
 
   it("does not guess when stored data is ambiguous", () => {
@@ -896,17 +1020,24 @@ describe("terminal runtime quick commands", () => {
     });
   });
 
-  it("swallows Escape only while a suggestion is visible", async () => {
+  it("forwards Escape while dismissing and suspends until a new prompt mark", async () => {
     const context = await connectedRuntime(saved);
     output(context, concat([osc("B")]));
     context.terminal().type("g");
     context.terminal().type("s");
     context.socket.sent = [];
     context.terminal().type("\x1b");
-    expect(context.socket.inputs()).toEqual([]);
-    expect(context.runtime.getSuggestionState().suggestion).toBeNull();
-    context.terminal().type("\x1b");
+    // Esc always reaches the shell (it may be vi normal mode).
     expect(context.socket.inputs()).toEqual(["\x1b"]);
+    expect(context.runtime.getSuggestionState().suggestion).toBeNull();
+    context.terminal().type("g");
+    context.terminal().type("s");
+    expect(context.runtime.getSuggestionState().suggestion).toBeNull();
+    // A new prompt resumes suggestions.
+    output(context, concat([osc("A"), osc("B")]));
+    context.terminal().type("g");
+    context.terminal().type("s");
+    expect(context.runtime.getSuggestionState().suggestion).not.toBeNull();
   });
 
   it("closes cleanly with a suggestion pending", async () => {

@@ -1,7 +1,7 @@
 // JUS-249 UI: the quick-command editor and the abbreviation suggestion strip.
 // The runtime is a faithful fake that records every accept/insert call, so the
 // tests assert the action target and that no path presses Enter on its own.
-/* global document:readonly, HTMLElement:readonly, navigator:readonly, window:readonly */
+/* global document:readonly, HTMLElement:readonly, KeyboardEvent:readonly, navigator:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -196,7 +196,7 @@ describe("terminal suggestion UI", () => {
     wrapper.unmount();
   });
 
-  it("Ctrl+Space focuses the option, Enter accepts, Escape dismisses", async () => {
+  it("Ctrl+Shift+Space focuses the option, Enter accepts, Escape dismisses", async () => {
     const { wrapper, runtime } = await mountSurface();
     runtime.emitSuggestion(suggestionState());
     await flushPromises();
@@ -205,6 +205,7 @@ describe("terminal suggestion UI", () => {
       key: " ",
       code: "Space",
       ctrlKey: true,
+      shiftKey: true,
     });
     await flushPromises();
     const option = wrapper.find(".term-suggest-option");
@@ -215,8 +216,43 @@ describe("terminal suggestion UI", () => {
 
     runtime.emitSuggestion(suggestionState());
     await flushPromises();
+    await wrapper.find(".term-surface").trigger("keydown", {
+      key: " ",
+      code: "Space",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    await flushPromises();
     await wrapper.find(".term-suggest-option").trigger("keydown", { key: "Escape" });
     expect(runtime.dismissed).toBeGreaterThan(0);
+    wrapper.unmount();
+  });
+
+  it("leaves Esc and Ctrl+Space to the terminal while the list is not focused", async () => {
+    const { wrapper, runtime } = await mountSurface();
+    runtime.emitSuggestion(suggestionState());
+    await flushPromises();
+
+    const surface = wrapper.find(".term-surface");
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    surface.element.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+
+    const ctrlSpace = new KeyboardEvent("keydown", {
+      key: " ",
+      code: "Space",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    surface.element.dispatchEvent(ctrlSpace);
+    expect(ctrlSpace.defaultPrevented).toBe(false);
+    // The fake runtime owns the engine; the UI did not dismiss on its own.
+    expect(runtime.dismissed).toBe(0);
     wrapper.unmount();
   });
 

@@ -1284,7 +1284,7 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   expect(state.sessions[0]?.input.length).toBe(afterInsert);
 
   // A real prompt mark enables the abbreviation suggestion. Typing `gs` is
-  // forwarded; Control+Space focuses the option; Enter accepts it.
+  // forwarded; Ctrl+Shift+Space focuses the option; Enter accepts it.
   state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
   const input = page.locator(
     ".term-window .term-surface:visible .xterm-helper-textarea",
@@ -1295,7 +1295,8 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await expect(suggestion).toBeVisible();
   await expect(suggestion).toContainText("Git status");
 
-  // The strip stays inside the viewport at phone and desktop widths.
+  // The strip stays inside the viewport at phone and desktop widths and never
+  // covers the xterm viewport (the prompt line).
   for (const width of [390, 480, 1366]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(suggestion).toBeVisible();
@@ -1306,14 +1307,19 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
       })
       .toBeGreaterThanOrEqual(0);
     const box = await page.locator(".term-window .term-suggest").boundingBox();
+    const screen = await page
+      .locator(".term-window .term-surface:visible .term-screen")
+      .boundingBox();
     expect(box).not.toBeNull();
+    expect(screen).not.toBeNull();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(screen!.y + 1);
   }
   await page.setViewportSize({ width: 1280, height: 800 });
   await input.focus();
 
-  await page.keyboard.press("Control+Space");
+  await page.keyboard.press("Control+Shift+Space");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.getAttribute("role") ?? ""))
     .toBe("option");
@@ -1325,14 +1331,18 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   expect(state.sessions[0]?.input ?? "").not.toContain("\r");
   await expect(suggestion).toBeHidden();
 
-  // Escape dismisses a visible suggestion without sending the ESC byte.
+  // A fresh prompt (mark) is required after accept; then Escape is forwarded
+  // to the shell (vi normal mode) and also dismisses the suggestion.
+  state.sessions[0]?.socket?.send(outputFrame("\x1b]133;A\x07\x1b]133;B\x07"));
+  await input.focus();
   await page.keyboard.type("gs");
   await expect(suggestion).toBeVisible();
   const beforeEscape = state.sessions[0]?.input ?? "";
   await page.keyboard.press("Escape");
   await expect(suggestion).toBeHidden();
-  await page.waitForTimeout(50);
-  expect(state.sessions[0]?.input).toBe(beforeEscape);
+  await expect
+    .poll(() => state.sessions[0]?.input ?? "")
+    .toBe(`${beforeEscape}\x1b`);
 
   // The list survives a reload for the same account. Close the live shell
   // first so the beforeunload guard does not prompt during the reload.

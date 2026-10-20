@@ -26,7 +26,7 @@ export const QUICK_COMMAND_TEXT_MAX = 2048 as const;
 export const QUICK_COMMAND_ABBREVIATION_MAX = 24 as const;
 
 /** QUICK_COMMANDS_MAX_BYTES rejects a runaway stored payload. */
-export const QUICK_COMMANDS_MAX_BYTES = 128 * 1024;
+export const QUICK_COMMANDS_MAX_BYTES = 512 * 1024;
 
 /**
  * QUICK_COMMAND_ABBREVIATION_PATTERN keeps shortcuts unambiguous in a shell
@@ -43,6 +43,8 @@ const messages = {
   commandRequired: "terminal.quickCommands.validation.commandRequired",
   commandTooLong: "terminal.quickCommands.validation.commandTooLong",
   commandNul: "terminal.quickCommands.validation.commandNul",
+  commandControl: "terminal.quickCommands.validation.commandControl",
+  commandBidi: "terminal.quickCommands.validation.commandBidi",
   abbreviationTooLong: "terminal.quickCommands.validation.abbreviationTooLong",
   abbreviationFormat: "terminal.quickCommands.validation.abbreviationFormat",
   abbreviationDuplicate: "terminal.quickCommands.validation.abbreviationDuplicate",
@@ -65,7 +67,13 @@ export const quickCommandTextSchema = z
   .trim()
   .min(1, messages.commandRequired)
   .max(QUICK_COMMAND_TEXT_MAX, messages.commandTooLong)
-  .refine((value) => !value.includes("\u0000"), messages.commandNul);
+  .refine((value) => !value.includes("\u0000"), messages.commandNul)
+  // Newline and tab are the only controls insertion can handle (inside
+  // bracketed paste). Reject the rest at save time for earlier feedback;
+  // prepareInsertion still refuses them for legacy stored data.
+  // eslint-disable-next-line no-control-regex -- deliberate C0/C1 range.
+  .refine((value) => !/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(value), messages.commandControl)
+  .refine((value) => !/\p{Bidi_Control}/u.test(value), messages.commandBidi);
 
 /**
  * quickCommandAbbreviationSchema normalises an empty optional field to

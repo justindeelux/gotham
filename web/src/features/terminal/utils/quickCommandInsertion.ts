@@ -46,7 +46,7 @@ export function prepareInsertion(
   if (text.trim() === "") {
     return { ok: false, sequence: "", failure: "empty" };
   }
-  if (CONTROL_CHARS.test(text)) {
+  if (CONTROL_CHARS.test(text) || /\p{Bidi_Control}/u.test(text)) {
     return { ok: false, sequence: "", failure: "control" };
   }
   const needsPaste = text.includes("\n") || text.includes("\t");
@@ -104,13 +104,16 @@ export function shellIntegrationSnippet(shell: string): string {
       "# ~/.bashrc — optional Gotham prompt marks (bash >= 4.4).",
       "# Additive: keeps your existing prompt and PROMPT_COMMAND.",
       "__gotham_prompt_command() {",
-      "  local status=$?",
-      "  printf '\\033]133;D;%s\\a' \"$status\"",
+      "  local st=$?",
+      "  printf '\\033]133;D;%s\\a' \"$st\"",
       "  printf '\\033]133;A\\a'",
-      "  return $status",
+      "  case \"$PS1\" in",
+      "    *'133;B'*) ;;",
+      "    *) PS1=\"$PS1\"'\\[\\033]133;B\\a\\]' ;;",
+      "  esac",
+      "  return $st",
       "}",
       "PROMPT_COMMAND=\"__gotham_prompt_command${PROMPT_COMMAND:+; $PROMPT_COMMAND}\"",
-      "PS1=\"${PS1}\\[\\033]133;B\\a\\]\"",
       "PS0=\"\\[\\033]133;C\\a\\]${PS0:-}\"",
     ].join("\n");
   }
@@ -119,8 +122,8 @@ export function shellIntegrationSnippet(shell: string): string {
       "# ~/.zshrc — optional Gotham prompt marks (zsh >= 5.3).",
       "# Additive: keeps your theme and existing hooks.",
       "__gotham_precmd() {",
-      "  local status=$?",
-      "  print -n $'\\e]133;D;'\"$status\"$'\\a\\e]133;A\\a'",
+      "  local st=$?",
+      "  print -n $'\\e]133;D;'\"$st\"$'\\a\\e]133;A\\a'",
       "  if [[ $PROMPT != *$'\\e]133;B\\a'* ]]; then",
       "    PROMPT=\"${PROMPT}\"$'%{\\e]133;B\\a%}'",
       "  fi",

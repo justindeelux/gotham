@@ -443,6 +443,28 @@ export function joinPath(base: string, name: string): string {
   return base === "" ? name : `${base}/${name}`;
 }
 
+/**
+ * terminalDirectoryFor resolves the folder an "Open terminal here" action
+ * targets (JUS-248): the folder on screen for the empty-space/current-directory
+ * case (`entry === null`), or a directory row's own folder. Files, symlinks and
+ * special entries return null and never masquerade as a directory.
+ *
+ * The result is a root-relative path handed verbatim to the agent's cwd
+ * resolver. It is never quoted, escaped or interpolated into a shell command.
+ */
+export function terminalDirectoryFor(
+  entry: FilesEntry | null,
+  currentPath: string,
+): string | null {
+  if (entry === null) {
+    return currentPath;
+  }
+  if (entry.kind !== "directory") {
+    return null;
+  }
+  return joinPath(currentPath, entry.name);
+}
+
 /** parentPath returns the enclosing relative path ("" at the root). */
 export function parentPath(path: string): string {
   const slash = path.lastIndexOf("/");

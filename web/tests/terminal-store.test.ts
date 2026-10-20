@@ -204,6 +204,20 @@ describe("terminal store sessions", () => {
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
   });
 
+  it("restores and raises the floating window for a new window session", async () => {
+    const terminal = useTerminalStore();
+    const windowStore = useTerminalWindowStore();
+    windowStore.setMinimized(true);
+    windowStore.lower();
+
+    const tab = await terminal.openWindowSession(options("data"));
+
+    expect(tab.mode).toBe("window");
+    expect(tab.cwd).toBe("data");
+    expect(windowStore.minimized).toBe(false);
+    expect(windowStore.raised).toBe(true);
+  });
+
   it("transfers page → window with the same session id and no create", async () => {
     const terminal = useTerminalStore();
     const tab = await terminal.openPageSession(options());

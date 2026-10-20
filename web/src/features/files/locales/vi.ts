@@ -121,6 +121,10 @@ const vi = {
     goTarget: "Đi tới đích liên kết",
     recycleBin: "Thùng rác…",
   },
+  terminal: {
+    openHere: "Mở terminal tại đây",
+    openIn: "Mở terminal trong {name}",
+  },
   tabs: {
     list: "Các tab trình duyệt",
     new: "Tab mới",

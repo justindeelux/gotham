@@ -59,6 +59,10 @@ const vi = {
     unsupported: "Agent trên máy chủ này không hỗ trợ phiên terminal.",
     unavailable: "Agent trên máy chủ không khả dụng. Hãy thử lại khi agent kết nối lại.",
     network: "Không thể kết nối tới bảng điều khiển.",
+    cwdInvalid:
+      "Thư mục làm việc không hợp lệ. Hãy mở một thư mục bên trong vùng gốc được cho phép của máy chủ.",
+    cwdMissing: "Thư mục đó không còn tồn tại trên máy chủ.",
+    cwdUnreadable: "Agent trên máy chủ không thể đọc thư mục đó.",
     generic: "Không thể khởi động terminal.",
   },
   actions: {

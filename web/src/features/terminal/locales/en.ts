@@ -60,6 +60,10 @@ const en = {
     unsupported: "This node agent does not support terminal sessions.",
     unavailable: "The node agent is unavailable. Try again once it reconnects.",
     network: "The control plane could not be reached.",
+    cwdInvalid:
+      "The working directory is not allowed. Open a folder inside the server's allowed root.",
+    cwdMissing: "That folder no longer exists on the server.",
+    cwdUnreadable: "The node agent cannot read that folder.",
     generic: "The terminal could not be started.",
   },
   actions: {

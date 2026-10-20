@@ -337,7 +337,11 @@ export const useTerminalStore = defineStore("terminal", () => {
   async function openWindowSession(
     options: TerminalOpenOptions,
   ): Promise<TerminalTab> {
-    useTerminalWindowStore().setMinimized(false);
+    const windowStore = useTerminalWindowStore();
+    // Restore a minimized window and bring it to the front so a new shell
+    // opened from another surface is actually visible (JUS-248).
+    windowStore.setMinimized(false);
+    windowStore.raise();
     return createTab(options, "window");
   }
 

@@ -17,6 +17,7 @@ export default defineConfig({
     "files-regions.spec.ts",
     "files-row-actions.spec.ts",
     "files-tabs.spec.ts",
+    "files-terminal.spec.ts",
     "files-virtual.spec.ts",
     "form-feedback.spec.ts",
     "form-layout.spec.ts",

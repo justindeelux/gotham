@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Scissors,
   Search,
+  Terminal,
   Trash2,
   Upload,
   X,
@@ -42,6 +43,7 @@ import {
 import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
+import { useAuthStore } from "@/features/auth";
 import ConflictDialog from "@/features/files/components/ConflictDialog.vue";
 import CompressDialog from "@/features/files/components/CompressDialog.vue";
 import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue";
@@ -81,6 +83,7 @@ import {
   joinPath,
   ownerModeLabel,
   resolveSymlinkTarget,
+  terminalDirectoryFor,
   typeaheadIndex,
   widestBytesLabel,
 } from "@/features/files/utils/files";
@@ -98,7 +101,9 @@ import {
   renderedKey,
   windowRange,
 } from "@/features/files/utils/virtual";
+import { useServersStore } from "@/features/servers";
 import { useTeamsStore } from "@/features/teams";
+import { useTerminalStore } from "@/features/terminal";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
 
@@ -114,6 +119,9 @@ const files = useFilesStore();
 const trash = useTrashStore();
 const editor = useEditorStore();
 const teams = useTeamsStore();
+const auth = useAuthStore();
+const serversStore = useServersStore();
+const terminal = useTerminalStore();
 const { download } = useFileDownload();
 /** initBrowser loads the listing, then restores this user+server's tabs. */
 const { initBrowser } = useFilesTabsPersist(() => props.serverId);
@@ -2203,12 +2211,66 @@ async function pasteAction(destination = files.path): Promise<void> {
   }
 }
 
+/**
+ * serverName labels a terminal tab with the node on screen. The server list is
+ * seeded by the app shell; before it resolves the id still names the target
+ * unambiguously.
+ */
+const serverName = computed<string>(
+  () =>
+    serversStore.servers.find((server) => server.id === props.serverId)?.name ??
+    props.serverId,
+);
+
+/**
+ * canOpenTerminal mirrors the backend gate (JUS-243/248): only a platform
+ * operator may open a host shell. It deliberately ignores the team file role
+ * and root writability — file read access alone must never grant a shell — and
+ * requires a root that is still in this node's allow-list, so a stale root
+ * hides the action instead of promising a path the agent no longer knows.
+ */
+const canOpenTerminal = computed<boolean>(
+  () =>
+    auth.isPlatformAdmin &&
+    props.serverId !== "" &&
+    files.currentRoot !== null,
+);
+
+/**
+ * openTerminalHere opens a floating-window host session in the folder on
+ * screen, or in a directory row's own folder. The relative path travels in the
+ * create-session payload for the agent to resolve and validate; no `cd`
+ * command string is ever built from a file name, so spaces, quotes, Unicode
+ * and shell metacharacters stay data. A failure (deleted folder, stale root,
+ * offline node, unsupported agent, role change) lands in the new tab, whose
+ * error overlay names the reason.
+ */
+function openTerminalHere(entry: FilesEntry | null = null): void {
+  if (!canOpenTerminal.value) {
+    return;
+  }
+  const directory = terminalDirectoryFor(entry, files.path);
+  const root = files.rootName;
+  if (directory === null || root === "") {
+    return;
+  }
+  void terminal.openWindowSession({
+    serverId: props.serverId,
+    serverName: serverName.value,
+    target: "host",
+    root,
+    cwd: directory,
+  });
+}
+
 /** menuContext is the gate set both menus read, rebuilt as the gates change. */
 const menuContext = computed(() => ({
   canWrite: files.canWrite,
   canReadContent: files.canReadContent,
   canPaste: files.hasClipboard && files.pasteProblem === null,
-  t: (key: string) => String(t(key)),
+  canOpenTerminal: canOpenTerminal.value,
+  t: (key: string, named?: Record<string, unknown>) =>
+    String(t(key, named ?? {})),
 }));
 
 /**
@@ -2238,6 +2300,10 @@ function onRowMenu(key: string, entry: FilesEntry): void {
     case "open-tab":
       // Open the folder in a new tab, leaving this one where it is.
       void files.openTab({ root: files.rootName, path: joinPath(files.path, entry.name) });
+      break;
+    case "open-terminal":
+      // Only a real directory row carries this key; the helper re-checks it.
+      openTerminalHere(entry);
       break;
     case "edit":
       openInEditor(entry);
@@ -2502,6 +2568,9 @@ function onFolderMenu(key: string): void {
       break;
     case "upload":
       openUpload();
+      break;
+    case "open-terminal":
+      openTerminalHere();
       break;
     case "recycle-bin":
       recycleOpen.value = true;
@@ -2793,6 +2862,21 @@ function onFolderMenu(key: string): void {
         </div>
 
         <div class="fm-toolbar-group fm-toolbar-end">
+          <!-- JUS-248: platform-operator only; opens a host shell in this
+               folder in the floating window. Hidden (not disabled) for anyone
+               else, because file read access never grants a shell. Icon-only:
+               the toolbar row must not grow a second line at 1024px. -->
+          <NButton
+            v-if="canOpenTerminal"
+            size="small"
+            class="fm-terminal-action"
+            :aria-label="$t('files.terminal.openHere')"
+            @click="openTerminalHere()"
+          >
+            <template #icon>
+              <Terminal :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+          </NButton>
           <!-- The bin belongs to the root, not the folder: any member may open
                it, while restore/purge inside need write. -->
           <NButton
@@ -3810,6 +3894,17 @@ function onFolderMenu(key: string): void {
    phone rule below takes over <=640px). */
 .fm-toolbar .fm-root-select {
   max-width: 100%;
+}
+
+/* JUS-248: the terminal action is icon-only and a 24px square. At 1366px the
+   grid toolbar's two groups are within 2px of the row width, so this control
+   must not take a full small-button box (it would wrap the end group to a
+   second row). 24px still meets the WCAG 2.2 target minimum. */
+.fm-terminal-action {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
 }
 
 /* JUS-153: the right-hand cluster now follows the per-root actions directly

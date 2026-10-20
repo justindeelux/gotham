@@ -488,6 +488,31 @@ describe("TerminalRuntime lifecycle", () => {
     expect(context.socket.sent).toEqual([]);
   });
 
+  it("classifies working-directory and agent error frames (JUS-248)", async () => {
+    const cases: Array<[string, string]> = [
+      ["invalid working directory", "cwdInvalid"],
+      ["the working directory no longer exists", "cwdMissing"],
+      ["the working directory is not readable", "cwdUnreadable"],
+      [
+        "the node agent does not support terminal sessions",
+        "unsupported",
+      ],
+      ["the node is running the maximum number of terminal sessions", "quota"],
+      ["the node agent is unavailable", "unavailable"],
+    ];
+    for (const [message, code] of cases) {
+      const context = await connectedRuntime();
+      context.socket.message(serverFrame(0x03, new TextEncoder().encode(message)));
+      expect(context.runtime.getStatus()).toBe("error");
+      expect(context.states.at(-1)).toEqual({
+        status: "error",
+        errorCode: code,
+        errorMessage: message,
+      });
+      context.runtime.dispose(false);
+    }
+  });
+
   it("records the exit code when the shell ends", async () => {
     const context = await connectedRuntime();
     context.socket.message(jsonFrame(0x02, { exit_code: 130, signal: "" }));

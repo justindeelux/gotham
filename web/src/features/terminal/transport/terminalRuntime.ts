@@ -8,7 +8,10 @@ import {
 } from "@/features/terminal/transport/frames";
 import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
 import type { TerminalSessionInfo } from "@/features/terminal/schemas/terminal";
-import { terminalWebSocketUrl } from "@/features/terminal/api/terminal";
+import {
+  terminalStreamFailureCode,
+  terminalWebSocketUrl,
+} from "@/features/terminal/api/terminal";
 import {
   DEFAULT_TERMINAL_THEME,
   type TerminalThemeName,
@@ -481,8 +484,17 @@ export class TerminalRuntime {
         this.stopHeartbeat();
         this.clearBannerTimer();
         // The server's message is already a bounded, localized-agnostic
-        // diagnostic; the catalog supplies the title and generic fallback.
-        this.setStatus("error", { errorMessage: frame.message });
+        // diagnostic; a known working-directory/agent phrase becomes a
+        // translatable class, and anything else stays verbatim (JUS-248).
+        {
+          const code = terminalStreamFailureCode(frame.message);
+          this.setStatus(
+            "error",
+            code === null
+              ? { errorMessage: frame.message }
+              : { errorCode: code, errorMessage: frame.message },
+          );
+        }
         return;
       case "ping":
         return;

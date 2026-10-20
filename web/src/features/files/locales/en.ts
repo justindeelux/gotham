@@ -122,6 +122,13 @@ const en = {
     goTarget: "Go to target",
     recycleBin: "Recycle bin…",
   },
+  // JUS-248: the floating host shell is a platform-operator action, never a
+  // file action. Labels only; the terminal window owns session state and its
+  // own error copy.
+  terminal: {
+    openHere: "Open terminal here",
+    openIn: "Open terminal in {name}",
+  },
   tabs: {
     list: "Browser tabs",
     new: "New tab",

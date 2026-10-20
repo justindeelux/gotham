@@ -842,7 +842,14 @@ test("heartbeat, disconnect, exit and error states use real frames", async ({
     frame(3, Buffer.from("the node agent is unavailable", "utf8")),
   );
   await expect(status).toHaveText("Error");
-  await expect(page.getByText("the node agent is unavailable")).toBeVisible();
+  // JUS-248 maps the bounded relay phrase to catalog copy; the raw phrase
+  // stays as the diagnostic detail.
+  await expect(
+    page.getByText("The node agent is unavailable. Try again once it reconnects."),
+  ).toBeVisible();
+  await expect(
+    page.getByText("the node agent is unavailable", { exact: true }),
+  ).toBeVisible();
 });
 
 test("shortcuts are discoverable and the documented escape leaves xterm", async ({

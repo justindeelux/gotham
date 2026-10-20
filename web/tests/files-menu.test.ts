@@ -29,6 +29,7 @@ function ctx(overrides: Partial<FilesMenuContext> = {}): FilesMenuContext {
     canWrite: true,
     canReadContent: true,
     canPaste: true,
+    canOpenTerminal: false,
     t: (key: string) => key,
     ...overrides,
   };
@@ -85,6 +86,53 @@ describe("rowMenuOptions", () => {
       "paste",
       "delete",
     ]);
+  });
+
+  it("offers Open terminal here on a directory row only for an operator", () => {
+    const folder = entry({
+      name: "config",
+      kind: "directory",
+      mode: 0o040755,
+    });
+    const labelled: string[] = [];
+    const options = rowMenuOptions(
+      folder,
+      ctx({
+        canOpenTerminal: true,
+        t: (key, named) => {
+          labelled.push(`${key}:${String(named?.name ?? "")}`);
+          return key;
+        },
+      }),
+    );
+
+    expect(keys(options).slice(0, 3)).toEqual([
+      "open",
+      "open-tab",
+      "open-terminal",
+    ]);
+    // The row action names its target, so two open folders stay distinct.
+    expect(labelled).toContain("files.terminal.openIn:config");
+
+    // Files, symlinks and special entries never masquerade as directories.
+    for (const kind of ["file", "symlink", "special"] as const) {
+      const row = entry({ name: "item", kind, mode: 0o100644 });
+      expect(
+        keys(rowMenuOptions(row, ctx({ canOpenTerminal: true }))),
+      ).not.toContain("open-terminal");
+    }
+  });
+
+  it("hides Open terminal here from a non-operator", () => {
+    const folder = entry({
+      name: "config",
+      kind: "directory",
+      mode: 0o040755,
+    });
+    expect(
+      keys(rowMenuOptions(folder, ctx({ canOpenTerminal: false }))),
+    ).not.toContain("open-terminal");
+    expect(keys(rowMenuOptions(folder, ctx()))).not.toContain("open-terminal");
   });
 
   it("adds Extract for an archive file only", () => {
@@ -209,6 +257,20 @@ describe("folderMenuOptions", () => {
       "recycle-bin",
       "refresh",
     ]);
+  });
+
+  it("adds Open terminal here only for a platform operator", () => {
+    const operator = folderMenuOptions(ctx({ canOpenTerminal: true }));
+    expect(keys(operator)).toContain("open-terminal");
+    expect(byKey(operator, "open-terminal")?.disabled).toBe(false);
+    // A read-only root does not hide the shell: it is not a file write.
+    const readOnly = folderMenuOptions(
+      ctx({ canOpenTerminal: true, canWrite: false }),
+    );
+    expect(byKey(readOnly, "open-terminal")?.disabled).toBe(false);
+
+    // A non-operator never sees the action (file read access is not a shell).
+    expect(keys(folderMenuOptions(ctx()))).not.toContain("open-terminal");
   });
 
   it("follows canWrite, keeping refresh and the recycle bin usable on a read-only root", () => {

@@ -462,15 +462,41 @@ describe("TerminalRuntime lifecycle", () => {
     expect(context.socket.sent).toEqual([]);
   });
 
-  it("reports a close before opened as disconnected and never reconnects", async () => {
+  it("reports a refused handshake before opened as an origin refusal and never reconnects", async () => {
     const context = setup();
     await context.runtime.connect();
+    // The handshake never upgraded (the control plane's 403 origin check
+    // answers before the upgrade), so onopen is never called.
+    context.socket.serverClose(1006);
+    expect(context.runtime.getStatus()).toBe("error");
+    expect(context.states.at(-1)).toEqual({
+      status: "error",
+      errorCode: "originRefused",
+    });
+    vi.advanceTimersByTime(TERMINAL_HEARTBEAT_MS * 4);
+    // One socket was created for the whole lifetime: retry is the only path.
+    expect(context.states.filter((state) => state.status === "error")).toHaveLength(1);
+  });
+
+  it("reports a close between the upgrade and the opened frame as an expired session", async () => {
+    const context = setup();
+    await context.runtime.connect();
+    context.socket.open();
+    // The upgrade succeeded but the server closed before confirming the PTY
+    // (for example the relay failed or the pending session expired).
+    context.socket.serverClose(1006);
+    expect(context.runtime.getStatus()).toBe("error");
+    expect(context.states.at(-1)).toEqual({
+      status: "error",
+      errorCode: "sessionExpired",
+    });
+  });
+
+  it("keeps an established stream's close as disconnected", async () => {
+    const context = await connectedRuntime();
     context.socket.serverClose(1006);
     expect(context.runtime.getStatus()).toBe("disconnected");
     expect(context.states.at(-1)).toMatchObject({ status: "disconnected" });
-    vi.advanceTimersByTime(TERMINAL_HEARTBEAT_MS * 4);
-    // One socket was created for the whole lifetime: retry is the only path.
-    expect(context.states.filter((state) => state.status === "disconnected")).toHaveLength(1);
   });
 
   it("surfaces a server error frame and keeps only the bounded code", async () => {

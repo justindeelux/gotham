@@ -33,6 +33,12 @@ export type TerminalErrorCode =
   | "agentUpdate"
   | "badResponse"
   | "generic"
+  // Attach failures observed before the server confirms the PTY (JUS-260).
+  // A browser cannot read the HTTP status of a refused WebSocket handshake;
+  // these two classes come from what is observable: whether the socket ever
+  // opened, and whether the `opened` frame arrived before it closed.
+  | "originRefused"
+  | "sessionExpired"
   // Application container targets (JUS-247). Kept distinct from the host
   // classes so a container failure never borrows host-only copy ("platform
   // operator", "server root") and vice versa.

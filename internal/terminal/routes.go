@@ -1017,16 +1017,23 @@ func originAllowed(r *http.Request) bool {
 
 // requestScheme is the scheme the browser used to reach the panel. A TLS
 // connection is https; behind a terminating proxy X-Forwarded-Proto carries
-// the original scheme. This only affects Origin comparison, never trust in
-// the proxy for authentication.
+// the original scheme. Traefik reports a WebSocket upgrade as `wss` (or `ws`),
+// so a forwarded value is normalised to the origin scheme it stands for: an
+// https page and a wss upgrade are the same origin. An unknown value never
+// grants a scheme (it falls back to http, or https on a direct TLS
+// connection); this only affects Origin comparison, never trust in the proxy
+// for authentication.
 func requestScheme(r *http.Request) string {
 	if r.TLS != nil {
 		return "https"
 	}
 	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
 		first, _, _ := strings.Cut(forwarded, ",")
-		if value := strings.ToLower(strings.TrimSpace(first)); value != "" {
-			return value
+		switch strings.ToLower(strings.TrimSpace(first)) {
+		case "https", "wss":
+			return "https"
+		case "http", "ws":
+			return "http"
 		}
 	}
 	return "http"

@@ -196,6 +196,12 @@ export class TerminalRuntime {
   private disposed = false;
   private ended = false;
   /**
+   * upgraded records the browser's WebSocket handshake result. A refused
+   * handshake (for example the control plane's 403 origin check) never calls
+   * onopen; a socket that did upgrade can still close before `opened`.
+   */
+  private upgraded = false;
+  /**
    * pendingSize is the fitted size measured before the server confirmed the
    * PTY. `opened` flushes it, so the PTY never stays at the create-time
    * default while the renderer is already fitted to a different box.
@@ -527,6 +533,7 @@ export class TerminalRuntime {
       if (this.disposed) {
         return;
       }
+      this.upgraded = true;
       this.startHeartbeat();
       // The fitted size is flushed on `opened`, once the PTY exists.
     };
@@ -536,6 +543,14 @@ export class TerminalRuntime {
     socket.onclose = () => {
       this.stopHeartbeat();
       if (this.disposed || this.ended) {
+        return;
+      }
+      // Before `opened` there is no live stream to report as disconnected: the
+      // failure is an attach refusal (handshake never upgraded) or a close
+      // between the upgrade and the PTY confirmation. The browser cannot read
+      // the handshake's HTTP status, so classify only what is observable.
+      if (this.status !== "connected") {
+        this.fail(this.upgraded ? "sessionExpired" : "originRefused");
         return;
       }
       // The catalog owns the disconnected copy; no English reaches the UI.

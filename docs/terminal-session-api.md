@@ -324,9 +324,14 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   exit status. If the helper cannot run or still reports survivors, the cleanup
   error is returned by `Close` and logged at `ERROR` with the container id — it
   is never silently treated as success. If the helper cannot inspect markers at
-  all (`tr`/`grep` missing, `/proc` absent, or an unreadable
-  `/proc/<pid>/environ`), it exits non-zero with `marker-scan-unavailable`
-  instead of claiming success, even if the tree/session part did run. The host
+  all (`tr`/`grep` missing or `/proc` absent), it exits non-zero with
+  `marker-scan-unavailable` instead of claiming success, even if the
+  tree/session part did run. An unreadable `/proc/<pid>/environ` is treated the
+  same way only when that process is owned by the **same uid** as the terminal
+  (the process could carry our marker); an unreadable environment of a
+  **different uid** is skipped, because a process we cannot signal or inspect
+  cannot carry a marker we placed and must not turn every non-root close into a
+  false failure. The host
   child is always reaped (even when the opened event could not be sent), and a
   child that already exited is never signalled again. File descriptors,
   hijacked connections and goroutines are released on both sides.
@@ -350,7 +355,10 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   process can outlive the close; ordinary `nohup`, background, trapped and
   single-`setsid` jobs are covered. A command name made to contain a newline is
   still parsed correctly: the helper reads the whole `/proc/<pid>/stat` record,
-  not only its first line.
+  not only its first line. A terminal user who uses `su`/`sudo` to switch to
+  another uid and leaves processes there is also outside the helper's reach: a
+  different-uid process cannot be inspected or signalled by a non-root helper,
+  so it is not reported and may outlive the close.
 * **Agent failure / old agent** ends the stream with an error frame:
   `codes.Unimplemented` is reported as "the node agent does not support terminal
   sessions". The control plane never retries, reconnects or replays input.
@@ -503,9 +511,12 @@ start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /
 * a cleanup-failure case (`chmod -x /bin/sh` after the terminal opens) proving
   `Close` surfaces the failure instead of reporting success;
 * `marker-scan-unavailable` cases: no `tr`/`grep` in the image, and a
-  `nobody` helper up against a root-owned marked process (unreadable
-  `/proc/<pid>/environ`);
-* helper-output cleanliness while processes exit during the `/proc` scan;
+  same-uid non-dumpable process (unreadable `/proc/<pid>/environ`);
+* a **non-root** terminal (`nobody`) sharing the container with a root-owned
+  process: the foreign-uid unreadable environment is skipped and `Close`
+  succeeds, while the unrelated root process keeps running;
+* helper-output cleanliness while processes exit during the `/proc` scan, on
+  alpine (ash) and debian (dash);
 * resize observed through `stty size`, Ctrl-C, and three open/close cycles.
 
 ```sh

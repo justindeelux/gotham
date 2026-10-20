@@ -592,13 +592,17 @@ if [ ! -d /proc ]; then
 fi
 read_stat() {
   stat_line=""
-  while IFS= read -r line || [ -n "$line" ]; do
-    stat_line="$stat_line$line "
-  done < "$1/stat" 2>/dev/null
+  { while IFS= read -r line || [ -n "$line" ]; do
+      stat_line="$stat_line$line "
+    done < "$1/stat"; } 2>/dev/null
   [ -n "$stat_line" ]
 }
 marker_match() {
-  { tr '\0' '\n' < "$1/environ" | grep -qx "GOTHAM_TERMINAL_ID=$marker"; } 2>/dev/null
+  marker_data=$({ tr '\0' '\n' < "$1/environ"; } 2>/dev/null) || return 2
+  case "$marker_data" in
+    *"GOTHAM_TERMINAL_ID=$marker"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 parse_stat() {
   stat_rest=${1##*) }
@@ -606,6 +610,19 @@ parse_stat() {
   stat_state=$1
   stat_ppid=$2
   stat_sid=$4
+}
+marker_unreadable() {
+  marker_match "$1"
+  [ $? -eq 2 ] || return 1
+  sleep 0.05 2>/dev/null || :
+  marker_match "$1"
+  [ $? -eq 2 ] || return 1
+  if [ -O "$1" ] && read_stat "$1"; then
+    parse_stat "$stat_line"
+    [ "$stat_state" = "Z" ] && return 1
+    return 0
+  fi
+  return 1
 }
 marker_tools=""
 inspect_failed=""
@@ -648,10 +665,13 @@ if [ -n "$marker" ] && [ -n "$marker_tools" ]; then
     [ "$pid" -gt 1 ] || continue
     [ "$pid" = "$$" ] && continue
     if [ -r "$d/environ" ]; then
-      if marker_match "$d"; then add_pid "$pid"; fi
-    elif read_stat "$d"; then
-      parse_stat "$stat_line"
-      [ "$stat_state" = "Z" ] || inspect_failed=1
+      marker_match "$d"
+      case $? in
+        0) add_pid "$pid" ;;
+        2) if marker_unreadable "$d"; then inspect_failed=1; fi ;;
+      esac
+    elif marker_unreadable "$d"; then
+      inspect_failed=1
     fi
   done
 fi
@@ -679,8 +699,12 @@ while [ "$attempt" -lt 5 ]; do
     if [ "$stat_sid" = "$root" ]; then survivors="$survivors $pid"; continue; fi
     if [ -n "$marker" ] && [ -n "$marker_tools" ]; then
       if [ -r "$d/environ" ]; then
-        if marker_match "$d"; then survivors="$survivors $pid"; fi
-      else
+        marker_match "$d"
+        case $? in
+          0) survivors="$survivors $pid" ;;
+          2) if marker_unreadable "$d"; then inspect_failed=1; fi ;;
+        esac
+      elif marker_unreadable "$d"; then
         inspect_failed=1
       fi
     fi
@@ -713,18 +737,35 @@ if ! command -v tr >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then
 fi
 read_stat() {
   stat_line=""
-  while IFS= read -r line || [ -n "$line" ]; do
-    stat_line="$stat_line$line "
-  done < "$1/stat" 2>/dev/null
+  { while IFS= read -r line || [ -n "$line" ]; do
+      stat_line="$stat_line$line "
+    done < "$1/stat"; } 2>/dev/null
   [ -n "$stat_line" ]
 }
 marker_match() {
-  { tr '\0' '\n' < "$1/environ" | grep -qx "GOTHAM_TERMINAL_ID=$marker"; } 2>/dev/null
+  marker_data=$({ tr '\0' '\n' < "$1/environ"; } 2>/dev/null) || return 2
+  case "$marker_data" in
+    *"GOTHAM_TERMINAL_ID=$marker"*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 parse_stat() {
   stat_rest=${1##*) }
   set -- $stat_rest
   stat_state=$1
+}
+marker_unreadable() {
+  marker_match "$1"
+  [ $? -eq 2 ] || return 1
+  sleep 0.05 2>/dev/null || :
+  marker_match "$1"
+  [ $? -eq 2 ] || return 1
+  if [ -O "$1" ] && read_stat "$1"; then
+    parse_stat "$stat_line"
+    [ "$stat_state" = "Z" ] && return 1
+    return 0
+  fi
+  return 1
 }
 inspect_failed=""
 list=""
@@ -739,10 +780,13 @@ for d in /proc/[0-9]*; do
   [ "$pid" -gt 1 ] || continue
   [ "$pid" = "$$" ] && continue
   if [ -r "$d/environ" ]; then
-    if marker_match "$d"; then add_pid "$pid"; fi
-  elif read_stat "$d"; then
-    parse_stat "$stat_line"
-    [ "$stat_state" = "Z" ] || inspect_failed=1
+    marker_match "$d"
+    case $? in
+      0) add_pid "$pid" ;;
+      2) if marker_unreadable "$d"; then inspect_failed=1; fi ;;
+    esac
+  elif marker_unreadable "$d"; then
+    inspect_failed=1
   fi
 done
 for sig in HUP TERM KILL; do
@@ -764,10 +808,13 @@ while [ "$attempt" -lt 5 ]; do
     [ "$pid" -gt 1 ] || continue
     [ "$pid" = "$$" ] && continue
     if [ -r "$d/environ" ]; then
-      if marker_match "$d"; then survivors="$survivors $pid"; fi
-    elif read_stat "$d"; then
-      parse_stat "$stat_line"
-      [ "$stat_state" = "Z" ] || inspect_failed=1
+      marker_match "$d"
+      case $? in
+        0) survivors="$survivors $pid" ;;
+        2) if marker_unreadable "$d"; then inspect_failed=1; fi ;;
+      esac
+    elif marker_unreadable "$d"; then
+      inspect_failed=1
     fi
   done
   if [ -z "$survivors" ] && [ -z "$inspect_failed" ]; then exit 0; fi

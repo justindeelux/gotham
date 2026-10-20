@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +31,7 @@ type fakeDockerState struct {
 	pullImage   string
 	pullAuth    string
 	logsQuery   string
+	listQuery   string
 	versionHits int
 	// createdID is the id the create endpoint returns (default created123).
 	createdID string
@@ -55,6 +57,7 @@ func (s *fakeDockerState) snapshot() fakeDockerState {
 		pullImage:   s.pullImage,
 		pullAuth:    s.pullAuth,
 		logsQuery:   s.logsQuery,
+		listQuery:   s.listQuery,
 		versionHits: s.versionHits,
 		createdID:   s.createdID,
 		startFail:   s.startFail,
@@ -76,7 +79,10 @@ func newFakeDockerServer(t *testing.T) (*httptest.Server, *fakeDockerState) {
 		writeJSON(t, w, map[string]string{"Version": "24.0.5"})
 	})
 
-	mux.HandleFunc("/containers/json", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/containers/json", func(w http.ResponseWriter, r *http.Request) {
+		state.mu.Lock()
+		state.listQuery = r.URL.RawQuery
+		state.mu.Unlock()
 		writeJSON(t, w, []map[string]any{
 			{
 				"Id":      "abc123",
@@ -257,7 +263,7 @@ func TestDockerClientListContainers(t *testing.T) {
 	server, _ := newFakeDockerServer(t)
 	client := newFakeDockerClient(t, server.URL)
 
-	containers, err := client.ListContainers(context.Background(), true)
+	containers, err := client.ListContainers(context.Background(), true, nil)
 	if err != nil {
 		t.Fatalf("ListContainers: %v", err)
 	}
@@ -273,6 +279,42 @@ func TestDockerClientListContainers(t *testing.T) {
 	}
 	if got.GetCreatedAt() == nil || got.GetCreatedAt().AsTime().Unix() != 1700000000 {
 		t.Errorf("CreatedAt = %v; want unix 1700000000", got.GetCreatedAt())
+	}
+}
+
+// TestDockerClientListContainersLabelFilter proves the filter runs inside
+// Docker: the request carries every label pair and only running containers are
+// asked for, so the terminal's project-scoped resolution never pulls the whole
+// node list over the wire.
+func TestDockerClientListContainersLabelFilter(t *testing.T) {
+	server, state := newFakeDockerServer(t)
+	client := newFakeDockerClient(t, server.URL)
+
+	labels := map[string]string{
+		"com.docker.compose.project": "gotham-3f2a4b6c-8d0e-4f1a-9b2c-3d4e5f607182",
+		"com.docker.compose.service": "web",
+	}
+	if _, err := client.ListContainers(context.Background(), false, labels); err != nil {
+		t.Fatalf("ListContainers: %v", err)
+	}
+	query := state.snapshot().listQuery
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		t.Fatalf("parse query %q: %v", query, err)
+	}
+	if got := values.Get("all"); got != "0" {
+		t.Fatalf("all = %q, want 0 (running only)", got)
+	}
+	var filters map[string][]string
+	if err := json.Unmarshal([]byte(values.Get("filters")), &filters); err != nil {
+		t.Fatalf("decode filters %q: %v", values.Get("filters"), err)
+	}
+	want := []string{
+		"com.docker.compose.project=gotham-3f2a4b6c-8d0e-4f1a-9b2c-3d4e5f607182",
+		"com.docker.compose.service=web",
+	}
+	if got := filters["label"]; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("label filters = %v, want %v", got, want)
 	}
 }
 

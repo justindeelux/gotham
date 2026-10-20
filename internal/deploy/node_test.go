@@ -20,6 +20,10 @@ func TestMapRPCError(t *testing.T) {
 		{"unavailable", status.Error(codes.Unavailable, "down"), ErrAgentUnavailable},
 		{"deadline", status.Error(codes.DeadlineExceeded, "slow"), ErrAgentUnavailable},
 		{"canceled", status.Error(codes.Canceled, "gone"), ErrAgentUnavailable},
+		// An oversized node reply (the gRPC receive limit) is the node being
+		// unable to answer, not a client error: it must reach the caller as the
+		// bounded 502 family, never a generic 500.
+		{"resource exhausted", status.Error(codes.ResourceExhausted, "reply too large"), ErrAgentUnavailable},
 		{"invalid argument", status.Error(codes.InvalidArgument, "bad"), ErrValidation},
 		{"not found", status.Error(codes.NotFound, "missing"), ErrNotFound},
 		{"internal passthrough", status.Error(codes.Internal, "boom"), nil},

@@ -96,6 +96,11 @@ type Node interface {
 	Remove(ctx context.Context, containerID string) error
 	// Containers lists every container on the node, including stopped ones.
 	Containers(ctx context.Context) ([]*agentv1.ContainerInfo, error)
+	// ContainersByLabel lists the node's running containers that carry every
+	// label in labels (key=value). The agent applies Docker's native label
+	// filter, so the response carries only the matching containers instead of
+	// the whole node.
+	ContainersByLabel(ctx context.Context, labels map[string]string) ([]*agentv1.ContainerInfo, error)
 	// Close releases the underlying agent connection.
 	Close() error
 }
@@ -399,6 +404,15 @@ func (n *agentNode) Containers(ctx context.Context) ([]*agentv1.ContainerInfo, e
 	return response.GetContainers(), nil
 }
 
+// ContainersByLabel implements Node.
+func (n *agentNode) ContainersByLabel(ctx context.Context, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
+	response, err := n.docker.ListContainers(ctx, &agentv1.ListContainersRequest{Labels: labels})
+	if err != nil {
+		return nil, mapRPCError(err)
+	}
+	return response.GetContainers(), nil
+}
+
 // Close implements Node.
 func (n *agentNode) Close() error { return n.docker.Close() }
 
@@ -464,7 +478,11 @@ func mapRPCError(err error) error {
 		return nil
 	}
 	switch status.Code(err) {
-	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled, codes.ResourceExhausted:
+		// ResourceExhausted covers a node whose reply exceeds the gRPC
+		// receive limit: it is the node being unable to answer this call, not
+		// a client error, so it maps to the same bounded 502 family instead of
+		// escaping as a generic 500.
 		return fmt.Errorf("%w: %v", ErrAgentUnavailable, err)
 	case codes.InvalidArgument:
 		return fmt.Errorf("%w: %v", ErrValidation, err)

@@ -306,7 +306,7 @@ type e2eDockerClient struct {
 
 func (f *e2eDockerClient) Version(context.Context) (string, error) { return f.version, nil }
 
-func (f *e2eDockerClient) ListContainers(context.Context, bool) ([]*agentv1.ContainerInfo, error) {
+func (f *e2eDockerClient) ListContainers(context.Context, bool, map[string]string) ([]*agentv1.ContainerInfo, error) {
 	return f.containers, nil
 }
 

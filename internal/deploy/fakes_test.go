@@ -1624,6 +1624,30 @@ func (m *mockNode) Containers(_ context.Context) ([]*agentv1.ContainerInfo, erro
 	return out, nil
 }
 
+// ContainersByLabel implements Node: it answers the seeded containers carrying
+// every requested label, mirroring a node's server-side Docker label filter.
+func (m *mockNode) ContainersByLabel(_ context.Context, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	out := make([]*agentv1.ContainerInfo, 0, len(m.listed)+len(m.orphans))
+	for _, container := range append(append([]*agentv1.ContainerInfo{}, m.listed...), m.orphans...) {
+		matched := true
+		for key, value := range labels {
+			if container.GetLabels()[key] != value {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			out = append(out, container)
+		}
+	}
+	return out, nil
+}
+
 // Close implements Node.
 func (m *mockNode) Close() error {
 	m.mu.Lock()

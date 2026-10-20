@@ -35,7 +35,7 @@ const (
 // interface so tests can substitute a fake.
 type dockerClient interface {
 	Version(ctx context.Context) (string, error)
-	ListContainers(ctx context.Context, all bool) ([]*agentv1.ContainerInfo, error)
+	ListContainers(ctx context.Context, all bool, labels map[string]string) ([]*agentv1.ContainerInfo, error)
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string) error
 	Restart(ctx context.Context, id string) error
@@ -105,7 +105,7 @@ func NewDockerServer(docker dockerClient, log *slog.Logger, options ...DockerSer
 
 // ListContainers returns the node's containers.
 func (s *DockerServer) ListContainers(ctx context.Context, req *agentv1.ListContainersRequest) (*agentv1.ListContainersResponse, error) {
-	containers, err := s.docker.ListContainers(ctx, req.GetAll())
+	containers, err := s.docker.ListContainers(ctx, req.GetAll(), req.GetLabels())
 	if err != nil {
 		return nil, dockerError("list containers", err)
 	}

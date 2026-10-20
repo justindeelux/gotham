@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -145,11 +146,26 @@ func (c *DockerClient) Version(ctx context.Context) (string, error) {
 }
 
 // ListContainers returns the containers known to the engine, optionally
-// including stopped ones.
-func (c *DockerClient) ListContainers(ctx context.Context, all bool) ([]*agentv1.ContainerInfo, error) {
+// including stopped ones and restricted to containers carrying every label in
+// labels. The label filter runs inside Docker, so a caller that only needs one
+// compose project never receives the node's whole container list.
+func (c *DockerClient) ListContainers(ctx context.Context, all bool, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
 	path := "/containers/json?all=0"
 	if all {
 		path = "/containers/json?all=1"
+	}
+	if len(labels) > 0 {
+		pairs := make([]string, 0, len(labels))
+		for key, value := range labels {
+			pairs = append(pairs, key+"="+value)
+		}
+		// A stable order keeps the URL (and test assertions) deterministic.
+		sort.Strings(pairs)
+		filters, err := json.Marshal(map[string][]string{"label": pairs})
+		if err != nil {
+			return nil, fmt.Errorf("docker: encode label filter: %w", err)
+		}
+		path += "&filters=" + url.QueryEscape(string(filters))
 	}
 	var summaries []dockerContainerSummary
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &summaries); err != nil {

@@ -831,6 +831,11 @@ message ToolResult {
 // ListContainersRequest filters the container list.
 message ListContainersRequest {
   bool all = 1; // include stopped containers
+  // labels restricts the list to containers carrying every key=value pair.
+  // The agent applies them through Docker's native label filter, so only the
+  // matching containers travel back (the terminal id resolution asks for one
+  // compose project instead of listing the whole node).
+  map<string, string> labels = 2;
 }
 
 // ContainerInfo describes one container.

@@ -510,6 +510,28 @@ async function pickServer(page: Page, name: string): Promise<void> {
     .filter({ hasText: name })
     .click();
 }
+
+/**
+ * pointHit reports what a real pointer would hit at one viewport point
+ * (JUS-255). Playwright's locator clicks assert actionability, but only an
+ * elementsFromPoint probe proves the topmost painted element is the floating
+ * window (or its subtree) and that no page card sits above the shell.
+ */
+async function pointHit(
+  page: Page,
+  point: { x: number; y: number },
+): Promise<{ windowTop: boolean; noticeTop: boolean; surfaceTop: boolean }> {
+  return page.evaluate(({ x, y }) => {
+    const top = document.elementsFromPoint(x, y)[0] ?? null;
+    const root = document.querySelector(".term-window");
+    return {
+      windowTop: root !== null && top !== null && root.contains(top),
+      noticeTop: top !== null && top.closest(".term-detached") !== null,
+      surfaceTop: top !== null && top.closest(".term-surface") !== null,
+    };
+  }, point);
+}
+
 async function navLabels(page: Page): Promise<string[]> {
   return page.locator(".sidebar .nav-item").allInnerTexts();
 }
@@ -664,6 +686,110 @@ test("page → window transfer keeps the session id and buffer, one way only", a
   expect((await tabInfo(page))?.sessionId).toBe(before?.sessionId);
 });
 
+// JUS-255: the floating window must own the stacking order at every supported
+// width. The page pane sits behind it (a passive line, no buttons), so the
+// probe checks every window point against the real painted stack, not a fake.
+for (const size of [
+  { width: 390, height: 844 },
+  { width: 480, height: 900 },
+  { width: 1280, height: 800 },
+  { width: 1366, height: 800 },
+]) {
+  test(`the floating window paints above the page at ${size.width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(size);
+    const state = freshState();
+    await mockApi(page, state);
+    await seedApp(page, `/terminal?server=${SERVER_A}`);
+    await expect.poll(() => state.creates).toBe(1);
+
+    await page.locator(".term-open-in-window").click();
+    const window = page.locator(".term-window");
+    await expect(window).toBeVisible();
+    await expect(page.locator(".term-detached")).toBeVisible();
+    // While the window is open the pane offers no actions at all: nothing can
+    // hide under the terminal and nothing can steal its pointer events.
+    await expect(page.locator(".term-detached-actions")).toHaveCount(0);
+
+    const box = await window.boundingBox();
+    expect(box).not.toBeNull();
+    const { x, y, width, height } = box!;
+    // Centre, three corners, the tab strip and the terminal's bottom edge.
+    const points = [
+      { x: x + width / 2, y: y + height / 2 },
+      { x: x + 12, y: y + 12 },
+      { x: x + width - 12, y: y + 12 },
+      { x: x + width - 12, y: y + height - 12 },
+      { x: x + Math.min(180, width / 2), y: y + 16 },
+      { x: x + width / 2, y: y + height - 40 },
+    ];
+    for (const [index, point] of points.entries()) {
+      const hit = await pointHit(page, point);
+      expect(hit.windowTop, `point ${index} at ${size.width}px is the window`).toBe(
+        true,
+      );
+      expect(hit.noticeTop, `point ${index} at ${size.width}px has no notice`).toBe(
+        false,
+      );
+    }
+    // The centre is the live shell, not window chrome and not the page behind.
+    expect((await pointHit(page, points[0]!)).surfaceTop).toBe(true);
+
+    // The window is still draggable with the notice underneath, and it stays
+    // on top after the move.
+    if (size.width === 1366) {
+      const bar = await page.locator(".term-window-bar").boundingBox();
+      await page.mouse.move(bar!.x + 40, bar!.y + 20);
+      await page.mouse.down();
+      await page.mouse.move(bar!.x - 80, bar!.y + 70, { steps: 5 });
+      await page.mouse.up();
+      const moved = await window.boundingBox();
+      expect(moved!.x).toBeLessThan(box!.x);
+      expect(moved!.y).toBeGreaterThan(box!.y);
+      const movedHit = await pointHit(page, {
+        x: moved!.x + moved!.width / 2,
+        y: moved!.y + moved!.height / 2,
+      });
+      expect(movedHit.windowTop).toBe(true);
+      expect(movedHit.noticeTop).toBe(false);
+    }
+    expect(state.creates).toBe(1);
+  });
+}
+
+test("the server detail Terminal tab keeps the window above its moved notice", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockApi(page, state);
+  await seedApp(page, `/servers/${SERVER_A}?tab=terminal`);
+  await expect.poll(() => state.creates).toBe(1);
+
+  await page.locator(".term-open-in-window").click();
+  const window = page.locator(".term-window");
+  await expect(window).toBeVisible();
+  await expect(page.locator(".term-detached")).toBeVisible();
+  await expect(page.locator(".term-detached-actions")).toHaveCount(0);
+
+  const box = await window.boundingBox();
+  const centre = {
+    x: box!.x + box!.width / 2,
+    y: box!.y + box!.height / 2,
+  };
+  const hit = await pointHit(page, centre);
+  expect(hit.windowTop).toBe(true);
+  expect(hit.noticeTop).toBe(false);
+  expect(hit.surfaceTop).toBe(true);
+
+  // Minimizing the window reveals the notice with its actions on the tab.
+  await page.locator(".term-window-min").click();
+  await expect(window).toBeHidden();
+  await expect(page.locator(".term-detached-actions")).toBeVisible();
+  expect(state.creates).toBe(1);
+});
+
 test("the server detail Terminal tab is lazy, single-flight and server-correct", async ({
   page,
 }) => {
@@ -774,14 +900,19 @@ test("the moved-to-window notice starts a new page session only on demand", asyn
   await page.locator(".term-open-in-window").click();
   await expect(page.locator(".term-detached")).toBeVisible();
   await expect(page.getByText("This terminal is open in the window")).toBeVisible();
-  // Nothing starts from the notice itself.
+  // Nothing starts from the notice itself. While the window is open the pane
+  // is passive (JUS-255), so no page action can sit under the shell.
   expect(state.creates).toBe(1);
+  await expect(page.locator(".term-detached-actions")).toHaveCount(0);
 
-  // The notice sits above the floating window (JUS-246 r2 finding 4), so the
-  // real pointer path works; keyboard was the only path before.
+  // Collapsing the window makes the notice the visible pointer path; the
+  // actions still start nothing by themselves.
+  await page.locator(".term-window-min").click();
   const startNew = page
     .locator(".term-detached")
     .getByRole("button", { name: "Start new session" });
+  await expect(startNew).toBeVisible();
+  expect(state.creates).toBe(1);
   await startNew.click();
   await expect.poll(() => state.creates).toBe(2);
   // Scope to the page pane: the floating window keeps its own (already
@@ -790,6 +921,89 @@ test("the moved-to-window notice starts a new page session only on demand", asyn
     "Connected",
   );
   expect(await tabCounts(page)).toEqual({ page: 1, window: 1 });
+});
+
+test("the moved notice actions are real pointer and keyboard targets", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 800 });
+  const state = freshState();
+  await mockApi(page, state);
+  await seedApp(page, `/terminal?server=${SERVER_A}`);
+  await expect.poll(() => state.creates).toBe(1);
+
+  await page.locator(".term-open-in-window").click();
+  const window = page.locator(".term-window");
+  await expect(window).toBeVisible();
+  await expect(page.locator(".term-detached-actions")).toHaveCount(0);
+  // The transfer removes the trigger, so focus lands on the window tab rather
+  // than document.body (keyboard users stay in the moved session).
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
+    .toContain("term-tab-");
+
+  // Minimize with the real header button: the notice is now the way back.
+  await page.locator(".term-window-min").click();
+  await expect(window).toBeHidden();
+  const notice = page.locator(".term-detached");
+  await expect(notice).toBeVisible();
+  await expect(page.locator(".term-detached-actions")).toBeVisible();
+
+  // "Show window" is hit-testable and clickable by a real pointer.
+  const show = notice.getByRole("button", { name: "Show window" });
+  const showBox = await show.boundingBox();
+  const showHit = await pointHit(page, {
+    x: showBox!.x + showBox!.width / 2,
+    y: showBox!.y + showBox!.height / 2,
+  });
+  expect(showHit.noticeTop).toBe(true);
+  expect(showHit.windowTop).toBe(false);
+  await show.click();
+  await expect(window).toBeVisible();
+  await expect(page.locator(".term-detached-actions")).toHaveCount(0);
+  // Restoring hands focus to the window tab, never to document.body.
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
+    .toContain("term-tab-");
+  expect(state.creates).toBe(1);
+
+  // The same action works from the keyboard, and Tab walks the notice buttons
+  // in order: Show window -> Start new session.
+  await page.locator(".term-window-min").click();
+  await expect(window).toBeHidden();
+  await show.focus();
+  await page.keyboard.press("Tab");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.textContent ?? ""))
+    .toContain("Start new session");
+  await page.keyboard.press("Shift+Tab");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.textContent ?? ""))
+    .toContain("Show window");
+  await page.keyboard.press("Enter");
+  await expect(window).toBeVisible();
+
+  // "Close terminal" still asks through the one shared confirmation.
+  await page.locator(".term-window-min").click();
+  await expect(window).toBeHidden();
+  await notice.getByRole("button", { name: "Close terminal" }).click();
+  const dialog = page.locator(".term-close-modal");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Keep terminals" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(notice).toBeVisible();
+  expect(state.deletes).toBe(0);
+
+  // "Start new session" opens one fresh page shell; the moved tab keeps its
+  // session and buffer in the window.
+  await notice.getByRole("button", { name: "Start new session" }).click();
+  await expect.poll(() => state.creates).toBe(2);
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  expect(await tabCounts(page)).toEqual({ page: 1, window: 1 });
+  await expect
+    .poll(() => window.locator(".xterm-rows").innerText())
+    .toContain("welcome session-1");
+  expect(state.deletes).toBe(0);
 });
 
 test("the server detail tab recovers from a closed session with an explicit restart", async ({

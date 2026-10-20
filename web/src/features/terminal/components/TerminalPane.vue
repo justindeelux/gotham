@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { NButton } from "naive-ui";
-import { computed } from "vue";
+import { computed, nextTick, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import TerminalSurface from "@/features/terminal/components/TerminalSurface.vue";
@@ -33,6 +33,30 @@ const windowStore = useTerminalWindowStore();
 
 const tab = computed(() => terminal.findTab(props.tabId));
 const detached = computed<boolean>(() => tab.value?.mode === "window");
+/**
+ * windowMinimized decides which moved state the pane shows (JUS-255).
+ *
+ * The floating window always owns the stacking order: a page pane can never
+ * paint above it, so an interactive notice in the pane would either be hidden
+ * behind the terminal or (the JUS-246 regression) be lifted over it and cover
+ * the shell. The pane therefore offers its actions only while the window is
+ * collapsed — that is exactly when the actions are the visible way back — and
+ * shows a passive line while the window is open on screen.
+ */
+const windowMinimized = computed<boolean>(() => windowStore.minimized);
+
+// A one-way transfer unmounts the surface that owned the trigger, so focus
+// would fall to document.body. Hand it to the window tab instead (the same
+// target minimize/restore use). Mounting an already detached pane — returning
+// to the source route — does not steal focus.
+watch(detached, (moved, previous) => {
+  if (!moved || previous) {
+    return;
+  }
+  void nextTick(() => {
+    document.getElementById(`term-tab-${props.tabId}`)?.focus();
+  });
+});
 
 /** showWindow brings the floating window forward for a detached session. */
 function showWindow(): void {
@@ -55,7 +79,7 @@ function closeDetached(): void {
     <div v-if="detached" class="term-detached" role="status">
       <h2 class="term-detached-title">{{ t("terminal.pane.movedTitle") }}</h2>
       <p class="small muted">{{ t("terminal.pane.movedBody") }}</p>
-      <div class="term-detached-actions">
+      <div v-if="windowMinimized" class="term-detached-actions">
         <NButton size="small" type="primary" @click="showWindow">
           {{ t("terminal.pane.showWindow") }}
         </NButton>
@@ -66,6 +90,9 @@ function closeDetached(): void {
           {{ t("terminal.pane.close") }}
         </NButton>
       </div>
+      <p v-else class="small muted term-detached-hint">
+        {{ t("terminal.pane.movedOpenHint") }}
+      </p>
     </div>
     <TerminalSurface v-else :tab-id="tab.id" variant="page" />
   </section>
@@ -92,22 +119,21 @@ function closeDetached(): void {
   margin: auto;
   padding: var(--space-6);
   text-align: center;
-  /* The one-way notice must stay reachable when the floating window opens
-   * over the page (JUS-246 r2): paint it above the window's chrome and give it
-   * a surface so its buttons are real pointer targets, not hidden behind the
-   * terminal. */
-  position: relative;
-  z-index: 74;
+  /* In-flow page content, never an overlay: the floating window owns the
+   * stacking order (JUS-255), so this card must not carry a z-index. */
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--elev-raised);
 }
 
 .term-detached-title {
   margin: 0;
   font-size: var(--text-lg);
   color: var(--fg-2);
+}
+
+.term-detached-hint {
+  margin: 0;
 }
 
 .term-detached-actions {

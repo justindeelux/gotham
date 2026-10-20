@@ -460,6 +460,19 @@ test("toolbar opens a window session in the folder on screen", async ({ page }) 
   await expect(terminalWindow(page)).toBeVisible();
   await expect(page.getByRole("tab", { name: "prod-01 · data" })).toBeVisible();
   await expect(terminalWindow(page).getByText("Connected")).toBeVisible();
+
+  // JUS-255: the window paints above the file browser at the point a user
+  // would click. Nothing from the page (toolbars, bands, menus) sits on top.
+  const box = await terminalWindow(page).boundingBox();
+  const windowTop = await page.evaluate(
+    ({ x, y }) => {
+      const root = document.querySelector(".term-window");
+      const top = document.elementsFromPoint(x, y)[0] ?? null;
+      return root !== null && top !== null && root.contains(top);
+    },
+    { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 },
+  );
+  expect(windowTop).toBe(true);
 });
 
 test("the empty-space menu targets the current directory", async ({ page }) => {

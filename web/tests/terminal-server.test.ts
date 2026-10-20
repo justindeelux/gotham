@@ -113,6 +113,9 @@ vi.mock("naive-ui", async (importOriginal) => {
 });
 
 const { useTerminalStore } = await import("@/features/terminal/stores/terminal");
+const { useTerminalWindowStore } = await import(
+  "@/features/terminal/stores/terminalWindow"
+);
 const { useServersStore } = await import("@/features/servers/stores/servers");
 const { useAuthStore } = await import("@/features/auth");
 const { default: TerminalPage } = await import(
@@ -747,9 +750,27 @@ describe("page session recovery (JUS-246 fix round 1)", () => {
     await wrapper.find(".term-open-in-window").trigger("click");
     await flushPromises();
     expect(wrapper.find(".term-detached").exists()).toBe(true);
-    // Nothing starts until the explicit button is pressed.
+    // JUS-255: while the window is open the pane is a passive line. Its
+    // actions only appear once the window is collapsed, so nothing in the page
+    // can ever paint over (or swallow clicks from) the floating terminal.
+    expect(wrapper.find(".term-detached-actions").exists()).toBe(false);
+    expect(wrapper.find(".term-detached").text()).toContain("Minimize the window");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
+    const windowStore = useTerminalWindowStore();
+    windowStore.setMinimized(true);
+    await flushPromises();
+    expect(wrapper.find(".term-detached-actions").exists()).toBe(true);
+
+    // "Show window" restores the same window without creating a shell.
+    await clickButtonByText(wrapper, "Show window");
+    await flushPromises();
+    expect(windowStore.minimized).toBe(false);
+    expect(wrapper.find(".term-detached-actions").exists()).toBe(false);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    windowStore.setMinimized(true);
+    await flushPromises();
     const detached = wrapper.find(".term-detached");
     const start = detached
       .findAll("button")

@@ -1,5 +1,3 @@
-import type { ITheme } from "@xterm/xterm";
-
 import {
   clampDimension,
   decodeServerFrame,
@@ -11,6 +9,19 @@ import {
 import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
 import type { TerminalSessionInfo } from "@/features/terminal/schemas/terminal";
 import { terminalWebSocketUrl } from "@/features/terminal/api/terminal";
+import {
+  DEFAULT_TERMINAL_THEME,
+  type TerminalThemeName,
+} from "@/features/terminal/schemas/terminalAppearance";
+import {
+  buildTerminalBanner,
+  isHostTerminalTarget,
+  type TerminalBannerInfo,
+} from "@/features/terminal/utils/terminalBanner";
+import {
+  readDesignToken,
+  terminalTheme,
+} from "@/features/terminal/utils/terminalTheme";
 
 /**
  * One live terminal session (JUS-245): the xterm renderer, the WebSocket
@@ -79,6 +90,10 @@ export interface TerminalRuntimeOptions {
   session: Pick<TerminalSessionInfo, "id" | "websocket_path" | "cols" | "rows">;
   getToken: () => string | null;
   onState: (_patch: TerminalStatePatch) => void;
+  /** theme is the named renderer palette; it can change without a reconnect. */
+  theme?: TerminalThemeName;
+  /** banner is display-only metadata written once after `opened` (host only). */
+  banner?: TerminalBannerInfo;
   deps?: Partial<TerminalRuntimeDeps>;
 }
 
@@ -103,39 +118,14 @@ async function defaultLoadTerminal(): Promise<TerminalModules> {
   return { Terminal: xterm.Terminal, FitAddon: fit.FitAddon };
 }
 
-/** readToken returns one resolved design token, or undefined when absent. */
-function readToken(name: string): string | undefined {
-  if (typeof document === "undefined") {
-    return undefined;
-  }
-  const value = getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
-  return value === "" ? undefined : value;
-}
-
-/** terminalTheme maps the design tokens onto xterm's theme (no literals). */
-function terminalTheme(): ITheme {
-  const background = readToken("--surface-warm");
-  const foreground = readToken("--fg");
-  const cursor = readToken("--accent");
-  const selectionBackground = readToken("--border-soft");
-  return {
-    ...(background ? { background } : {}),
-    ...(foreground ? { foreground } : {}),
-    ...(cursor ? { cursor } : {}),
-    ...(selectionBackground ? { selectionBackground } : {}),
-  };
-}
-
 /** terminalFontFamily returns the mono stack, or undefined for xterm's own. */
 function terminalFontFamily(): string | undefined {
-  return readToken("--font-mono");
+  return readDesignToken("--font-mono");
 }
 
 /** terminalFontSize reads the compact text token; xterm needs a number. */
 function terminalFontSize(): number {
-  const raw = readToken("--text-sm");
+  const raw = readDesignToken("--text-sm");
   const parsed = raw === undefined ? Number.NaN : Number.parseFloat(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 14;
 }
@@ -165,9 +155,14 @@ export class TerminalRuntime {
   private pendingSize: { cols: number; rows: number } | null = null;
   /** lastResize deduplicates identical 0x02 frames. */
   private lastResize = "";
+  /** themeName is the live palette; setTheme swaps it without a reconnect. */
+  private themeName: TerminalThemeName;
+  /** bannerWritten ensures one display banner per runtime/session. */
+  private bannerWritten = false;
 
   constructor(options: TerminalRuntimeOptions) {
     this.options = options;
+    this.themeName = options.theme ?? DEFAULT_TERMINAL_THEME;
     this.deps = {
       createSocket: options.deps?.createSocket ?? defaultCreateSocket,
       loadTerminal: options.deps?.loadTerminal ?? defaultLoadTerminal,
@@ -220,6 +215,18 @@ export class TerminalRuntime {
   /** getStatus exposes the local lifecycle copy. */
   getStatus(): TerminalStatus {
     return this.status;
+  }
+
+  /**
+   * setTheme swaps the renderer palette in place. xterm repaints from
+   * `options.theme`; the PTY, buffer and socket are untouched, so page/window
+   * mode and focus do not matter.
+   */
+  setTheme(theme: TerminalThemeName): void {
+    this.themeName = theme;
+    if (this.terminal) {
+      this.terminal.options.theme = terminalTheme(theme);
+    }
   }
 
   /** sendInput sends raw keystrokes; nothing is queued while disconnected. */
@@ -307,7 +314,7 @@ export class TerminalRuntime {
       screenReaderMode: true,
       fontFamily: terminalFontFamily(),
       fontSize: terminalFontSize(),
-      theme: terminalTheme(),
+      theme: terminalTheme(this.themeName),
     });
     const fitAddon = new modules.FitAddon();
     terminal.loadAddon(fitAddon);
@@ -432,6 +439,8 @@ export class TerminalRuntime {
         this.pendingSize = null;
         this.sendResize(size.cols, size.rows);
         this.fit();
+        // Display-only welcome: written to xterm, never to the socket.
+        this.writeBanner();
         return;
       }
       case "exited":
@@ -457,6 +466,26 @@ export class TerminalRuntime {
         this.setStatus("error", { errorCode: "generic", errorMessage: "" });
         return;
     }
+  }
+
+  /**
+   * writeBanner prints the Gotham welcome once, on the `opened` frame of this
+   * runtime. A tab switch, fit, minimize/restore, theme change or page→window
+   * detach re-parents the same renderer and never re-runs this. Non-host
+   * targets (containers) are filtered before anything reaches the screen.
+   */
+  private writeBanner(): void {
+    const banner = this.options.banner;
+    if (
+      this.bannerWritten ||
+      !banner ||
+      !isHostTerminalTarget(banner.target)
+    ) {
+      return;
+    }
+    this.bannerWritten = true;
+    const columns = this.terminal?.cols ?? this.options.session.cols;
+    this.terminal?.write(buildTerminalBanner(banner, columns));
   }
 
   /**

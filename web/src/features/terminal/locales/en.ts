@@ -87,6 +87,14 @@ const en = {
     closeWindow: "Alt+Shift+W closes all terminals after confirmation.",
     minimize: "Alt+M minimizes the window.",
   },
+  appearance: {
+    label: "Terminal theme",
+    title: "Terminal theme",
+    themes: {
+      gothamDark: "Gotham Dark",
+      gothamLight: "Gotham Light",
+    },
+  },
 };
 
 export default en;

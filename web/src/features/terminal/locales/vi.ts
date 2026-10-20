@@ -86,6 +86,14 @@ const vi = {
     closeWindow: "Alt+Shift+W đóng tất cả terminal sau khi xác nhận.",
     minimize: "Alt+M thu nhỏ cửa sổ.",
   },
+  appearance: {
+    label: "Giao diện terminal",
+    title: "Giao diện terminal",
+    themes: {
+      gothamDark: "Gotham Tối",
+      gothamLight: "Gotham Sáng",
+    },
+  },
 };
 
 export default vi;

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page, WebSocketRoute } from "@playwright/test";
 
-/* global Event:readonly, document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL:readonly, window:readonly */
+/* global Event:readonly, document:readonly, getComputedStyle:readonly, HTMLElement:readonly, localStorage:readonly, URL:readonly, window:readonly */
 // URL/window run inside the page (browser globals); the repo lint envs do not
 // cover tests/, so they are declared.
 
@@ -327,6 +327,33 @@ async function storeCall(
     },
     { name: action, arg: argument },
   );
+}
+
+/** windowStoreCall runs one action on the live Pinia terminal-window store. */
+async function windowStoreCall(
+  page: Page,
+  action: string,
+  args: unknown[] = [],
+): Promise<unknown> {
+  return page.evaluate(
+    async ({ name, params }) => {
+      const app = (document.querySelector("#app") as unknown as {
+        __vue_app__: {
+          config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
+        };
+      }).__vue_app__;
+      const store = app.config.globalProperties.$pinia._s.get("terminalWindow") as {
+        [key: string]: (..._args: unknown[]) => unknown;
+      };
+      return store[name]!(...params);
+    },
+    { name: action, params: args },
+  );
+}
+
+/** countOf counts non-overlapping occurrences of one marker in the buffer. */
+function countOf(text: string, marker: string): number {
+  return text.split(marker).length - 1;
 }
 
 /** openWindow opens one floating-window session through the public store API. */
@@ -967,3 +994,144 @@ test("beforeunload only warns while a session is live", async ({ page }) => {
   });
   expect(warnedClosed).toBe(false);
 });
+
+test("the theme applies immediately and survives page → window without a new session", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+
+  // A page-mode session has no mounted route in JUS-250 (JUS-246 owns it), but
+  // its renderer and PTY are live; the preference is the public store API.
+  const tab = (await storeCall(page, "openPageSession", {
+    serverId,
+    serverName: "prod-01",
+    root: "volumes",
+    cwd: "app",
+  })) as { id: string; sessionId: string };
+  await expect.poll(() => state.sessions[0]?.socket !== null).toBe(true);
+  await storeCall(page, "setTheme", "gotham-light");
+
+  // Account-scoped persistence, not a global key.
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("gotham.terminal.appearance.v1.u-1"),
+    ),
+  ).toContain('"theme":"gotham-light"');
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("gotham.terminal.appearance.v1"),
+    ),
+  ).toBeNull();
+
+  // The transfer keeps the session, buffer and chosen palette.
+  await storeCall(page, "detachToWindow", tab.id);
+  const surface = page.locator(".term-window .term-surface:visible");
+  await expect(page.locator(".term-window")).toBeVisible();
+  await expect(surface).toHaveAttribute("data-theme", "gotham-light");
+  await expect.poll(() => terminalText(page)).toContain("welcome session-1");
+  expect(state.creates).toBe(1);
+
+  // Choosing through the real control repaints in place: the PTY and buffer
+  // are untouched and the banner was not replayed by the transfer.
+  await surface.locator(".term-theme-btn").click();
+  const group = page.getByRole("radiogroup", { name: "Terminal theme" });
+  await expect(group).toBeVisible();
+  await expect(group.getByRole("radio", { name: "Gotham Light" })).toBeChecked();
+  await group.getByRole("radio", { name: "Gotham Dark" }).click();
+  await expect(surface).toHaveAttribute("data-theme", "gotham-dark");
+  await page.locator(".term-window-title").click();
+  await expect(page.getByRole("radiogroup", { name: "Terminal theme" })).toBeHidden();
+  expect(state.creates).toBe(1);
+  expect((await tabState(page, tab.id)).status).toBe("connected");
+  await expect
+    .poll(async () => countOf(await terminalText(page), "Gotham v0.2.1-dev"))
+    .toBe(1);
+
+  // Minimize/restore is not a new session and keeps the chosen theme.
+  await page.locator(".term-window-min").click();
+  await expect(page.locator(".term-window")).toBeHidden();
+  await page.locator(".rail-btn--terminal").click();
+  await expect(page.locator(".term-window")).toBeVisible();
+  await expect(surface).toHaveAttribute("data-theme", "gotham-dark");
+  expect(state.creates).toBe(1);
+});
+
+test("the host banner shows the exact logo, real version and server once", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+  // A wide renderer is the only size that can show the 179-column artwork
+  // without wrapping it into the prompt.
+  await windowStoreCall(page, "setSize", [1860, 900, 1920, 1080]);
+
+  const first = await openWindow(page, "one");
+  await expect(page.locator(".term-window")).toBeVisible();
+  await expect.poll(() => state.sessions[0]?.resizes.length ?? 0).toBeGreaterThan(0);
+  await expect.poll(() => terminalText(page)).toContain("▓");
+  const banner = await terminalText(page);
+  expect(banner).toContain("Gotham v0.2.1-dev");
+  expect(banner).toContain("server: prod-01");
+  expect(countOf(banner, "Gotham v0.2.1-dev")).toBe(1);
+
+  // A second tab, tab switches, a viewport resize, minimize/restore and a
+  // theme change must not replay the banner into the first tab.
+  await openWindow(page, "two");
+  await page.locator(".term-tab-name", { hasText: "prod-01 · one" }).click();
+  await expect.poll(() => surfaceToText(page)).toContain("Gotham v0.2.1-dev");
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await expect.poll(() => state.sessions[0]?.resizes.length ?? 0).toBeGreaterThan(0);
+  await page.locator(".term-window-min").click();
+  await page.locator(".rail-btn--terminal").click();
+  await page
+    .locator(".term-window .term-surface:visible .term-theme-btn")
+    .click();
+  await page.getByRole("radio", { name: "Gotham Light" }).click();
+  await page.locator(".term-window-title").click();
+  const firstTab = page.locator(".term-tab-name", { hasText: "prod-01 · one" });
+  await firstTab.click();
+  await expect
+    .poll(async () => countOf(await terminalText(page), "Gotham v0.2.1-dev"))
+    .toBe(1);
+  expect((await tabState(page, first.id)).status).toBe("connected");
+  expect(state.creates).toBe(2);
+
+  // A container target is not a host shell: no Gotham banner at all.
+  const container = (await storeCall(page, "openWindowSession", {
+    serverId,
+    serverName: "prod-01",
+    target: "container:web-1",
+    cwd: "container",
+  })) as { sessionId: string };
+  await expect.poll(() => terminalText(page)).toContain(
+    `welcome ${container.sessionId}`,
+  );
+  const containerText = await terminalText(page);
+  expect(containerText).not.toContain("Gotham");
+  expect(containerText).not.toContain("▓");
+
+  // A phone-width window gets the compact banner: no artwork, no wrapped
+  // title, and the prompt still follows it.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrow = await openWindow(page, "narrow");
+  await expect.poll(() => terminalText(page)).toContain(
+    `welcome ${narrow.sessionId}`,
+  );
+  const narrowText = await terminalText(page);
+  expect(narrowText).not.toContain("▓");
+  expect(countOf(narrowText, "Gotham v0.2.1-dev")).toBe(1);
+  expect(narrowText).toContain("server: prod-01");
+  expect(state.creates).toBe(4);
+});
+
+/** surfaceToText reads the active window pane's xterm rows. */
+async function surfaceToText(page: Page): Promise<string> {
+  return page
+    .locator(".term-window .term-surface:visible .xterm-rows")
+    .innerText();
+}

@@ -2,7 +2,7 @@
 // faithful fakes that record creates, attaches and disposes, so the tests can
 // prove a page→window transfer issues no new session and that closing releases
 // exactly the confirmed tabs.
-/* global document:readonly, HTMLElement:readonly, window:readonly */
+/* global document:readonly, HTMLElement:readonly, localStorage:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,15 +20,19 @@ const runtimeFakes = vi.hoisted(() => {
     options: {
       onState: (_patch: Record<string, unknown>) => void;
       session: { id: string };
+      theme?: string;
+      banner?: { version: string | null; serverName: string; target: string };
     };
     host: HTMLElement;
     attached: HTMLElement | null = null;
     disposed = false;
     focused = false;
     fitted = 0;
+    theme: string | undefined;
 
     constructor(options: FakeRuntime["options"]) {
       this.options = options;
+      this.theme = options.theme;
       this.host = document.createElement("div");
       this.host.className = "term-host";
       instances.push(this);
@@ -49,6 +53,10 @@ const runtimeFakes = vi.hoisted(() => {
 
     fit(): void {
       this.fitted += 1;
+    }
+
+    setTheme(theme: string): void {
+      this.theme = theme;
     }
 
     dispose(): void {
@@ -73,6 +81,17 @@ const apiFakes = vi.hoisted(() => ({
 vi.mock("@/features/terminal/transport/terminalRuntime", () => ({
   TerminalRuntime: runtimeFakes.FakeRuntime,
 }));
+
+vi.mock("@/features/terminal/utils/terminalBanner", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/features/terminal/utils/terminalBanner")
+    >();
+  return {
+    ...actual,
+    runningGothamVersion: () => Promise.resolve("v0.2.1-dev"),
+  };
+});
 
 vi.mock("@/features/terminal/api/terminal", () => ({
   createTerminalSession: apiFakes.create,
@@ -222,6 +241,67 @@ describe("terminal store sessions", () => {
     expect(tab.sessionId).toBe("session-2");
     expect(tab.status).toBe("connected");
     expect(apiFakes.close).toHaveBeenCalledWith("server-1", "session-1");
+  });
+});
+
+describe("terminal appearance and host banner", () => {
+  it("passes banner metadata only for host sessions", async () => {
+    const terminal = useTerminalStore();
+    await terminal.openWindowSession(options("one"));
+    expect(runtimeFakes.instances[0]!.options.banner).toEqual({
+      version: "v0.2.1-dev",
+      serverName: "prod-01",
+      serverId: "server-1",
+      target: "host",
+    });
+
+    await terminal.openWindowSession({
+      serverId: "server-1",
+      serverName: "prod-01",
+      target: "container:web-1",
+      cwd: "app",
+    });
+    // A container exec is not a host shell: no Gotham host banner is queued.
+    expect(runtimeFakes.instances[1]!.options.banner).toBeUndefined();
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("themes every live renderer without recreating sessions", async () => {
+    localStorage.setItem(
+      "gotham.auth.session",
+      JSON.stringify({
+        user: { id: "u-1" },
+        accessToken: "a",
+        refreshToken: "r",
+      }),
+    );
+    const terminal = useTerminalStore();
+    const first = await terminal.openWindowSession(options("one"));
+    const second = await terminal.openWindowSession(options("two"));
+    const runtimes = [runtimeFakes.instances[0]!, runtimeFakes.instances[1]!];
+    expect(terminal.theme).toBe("gotham-dark");
+    expect(runtimes.every((runtime) => runtime.theme === "gotham-dark")).toBe(
+      true,
+    );
+
+    terminal.setTheme("gotham-light");
+
+    expect(terminal.theme).toBe("gotham-light");
+    expect(runtimes.every((runtime) => runtime.theme === "gotham-light")).toBe(
+      true,
+    );
+    // Repainting is not a reconnect: no renderer was disposed or recreated.
+    expect(runtimes.some((runtime) => runtime.disposed)).toBe(false);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(first.sessionId).toBe("session-1");
+    expect(second.sessionId).toBe("session-2");
+    expect(
+      localStorage.getItem("gotham.terminal.appearance.v1.u-1"),
+    ).toContain('"theme":"gotham-light"');
+
+    // A terminal opened afterwards starts on the persisted theme.
+    await terminal.openWindowSession(options("three"));
+    expect(runtimeFakes.instances[2]!.options.theme).toBe("gotham-light");
   });
 });
 

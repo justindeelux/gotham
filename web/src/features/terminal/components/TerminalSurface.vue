@@ -6,6 +6,7 @@ import { useI18n } from "vue-i18n";
 
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
+import TerminalThemeMenu from "@/features/terminal/components/TerminalThemeMenu.vue";
 import {
   errorKey,
   isLive,
@@ -164,6 +165,7 @@ watch(
     :aria-labelledby="variant === 'window' ? labelledBy : undefined"
     :aria-describedby="hintId"
     aria-keyshortcuts="Control+Shift+Escape"
+    :data-theme="terminal.theme"
     @click="focusTerminal"
     @keydown.capture="onSurfaceKeydown"
   >
@@ -223,6 +225,7 @@ watch(
         </div>
       </NPopover>
       <span class="grow" />
+      <TerminalThemeMenu />
       <template v-if="variant === 'page'">
         <NButton
           size="tiny"

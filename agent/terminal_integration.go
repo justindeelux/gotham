@@ -157,6 +157,11 @@ func containerBashRcCommand() string {
 	return containerBashRcPrelude + terminalBashIntegrationScript + containerBashRcEpilogue
 }
 
+// terminalRcDirPrefix is the os.MkdirTemp prefix for a host session's private
+// integration directory. terminalBashRcArgs creates these directories; the
+// startup sweep only ever touches names that start with this exact prefix.
+const terminalRcDirPrefix = "gotham-terminal-"
+
 // bashShell reports whether path names the bash shell. The integration is
 // bash-only; zsh, sh/dash, ash and an operator-configured shell are never given
 // bash startup arguments.
@@ -172,7 +177,7 @@ func terminalBashRcArgs(shell string, integration bool) ([]string, func(), error
 	if !integration || !bashShell(shell) {
 		return nil, nil, nil
 	}
-	dir, err := os.MkdirTemp("", "gotham-terminal-")
+	dir, err := os.MkdirTemp("", terminalRcDirPrefix)
 	if err != nil {
 		return nil, nil, fmt.Errorf("terminal: create integration directory: %w", err)
 	}

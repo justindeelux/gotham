@@ -583,6 +583,14 @@ func TestTerminalBashIntegrationScript(t *testing.T) {
 		t.Fatalf("no UTF-8 locale reached the shell: %q", shell.all())
 	}
 
+	// PS0 carries the C mark. Asserting the variable as well as the emitted
+	// escape covers bash 3.2, where PS0 exists but is not evaluated.
+	shell.write("printf 'ps0=%s\\n' \"$PS0\"; echo PS0-\"\"DONE\r")
+	ps0Output := shell.waitFor("PS0-DONE\r\n")
+	if !strings.Contains(ps0Output, "133;C") {
+		t.Fatalf("PS0 does not carry the OSC 133 C mark: %q", ps0Output)
+	}
+
 	// A succeeding then a failing command: D carries the real status. The
 	// follow-up command proves the prompt after `false` was rendered.
 	shell.write("true\r")
@@ -629,6 +637,97 @@ func TestTerminalBashIntegrationScript(t *testing.T) {
 	}
 	if count := strings.Count(kinds, "A"); count > 12 {
 		t.Fatalf("marks %q; %d A marks suggests the rcfile doubled PROMPT_COMMAND", kinds, count)
+	}
+}
+
+// TestTerminalBashRcfileIsIdempotent proves the "already loaded" guard: sourcing
+// the rcfile a second time does not re-run the operator's startup file and does
+// not duplicate the per-prompt marks.
+func TestTerminalBashRcfileIsIdempotent(t *testing.T) {
+	bash := terminalTestBash(t)
+	args, cleanup, err := terminalBashRcArgs(bash, true)
+	if err != nil {
+		t.Fatalf("terminalBashRcArgs: %v", err)
+	}
+	t.Cleanup(cleanup)
+	rcfile := args[1]
+	home := writeTempBashrc(t, `printf 'sourced\n' >> "$HOME/rc-sources"`)
+	shell := startTerminalTestBash(t, bash, []string{"--rcfile", rcfile}, home)
+	defer shell.stop()
+	shell.waitFor("$ ")
+	shell.settle()
+
+	shell.write(". '" + rcfile + "'; echo SOURCE-\"\"DONE\r")
+	shell.waitFor("SOURCE-DONE\r\n")
+	shell.write("echo AFTER-\"\"SOURCE\r")
+	shell.waitFor("AFTER-SOURCE\r\n")
+
+	sources, err := os.ReadFile(filepath.Join(home, "rc-sources"))
+	if err != nil {
+		t.Fatalf("read rc-sources: %v", err)
+	}
+	if got := strings.Count(string(sources), "sourced"); got != 1 {
+		t.Fatalf("the operator rc ran %d times; the second source must be a no-op (%q)", got, sources)
+	}
+
+	marks := scanPromptMarks(shell.all())
+	if len(marks) == 0 {
+		t.Fatal("no prompt marks")
+	}
+	kinds := markKinds(marks)
+	if strings.Count(kinds, "A") != strings.Count(kinds, "B") || strings.Count(kinds, "D") > strings.Count(kinds, "A") {
+		t.Fatalf("marks %q; sourcing twice duplicated the per-prompt marks", kinds)
+	}
+	if strings.Contains(kinds, "DAD") {
+		t.Fatalf("marks %q; a prompt emitted D and A twice", kinds)
+	}
+}
+
+// TestTerminalBashErrexitUserRcKeepsSession proves a user rc that enables
+// set -e/-u cannot kill the integration: the probes run with errexit disabled
+// and the user's intent is restored afterwards.
+func TestTerminalBashErrexitUserRcKeepsSession(t *testing.T) {
+	bash := terminalTestBash(t)
+	args, cleanup, err := terminalBashRcArgs(bash, true)
+	if err != nil {
+		t.Fatalf("terminalBashRcArgs: %v", err)
+	}
+	t.Cleanup(cleanup)
+	home := writeTempBashrc(t, "set -u\nset -e\n")
+	shell := startTerminalTestBash(t, bash, []string{"--rcfile", args[1]}, home)
+	defer shell.stop()
+	shell.waitFor("$ ")
+	shell.settle()
+
+	shell.write("echo ERR-\"\"EXIT-OK\r")
+	shell.waitFor("ERR-EXIT-OK\r\n")
+	shell.write("false\r")
+	shell.write("echo STILL-\"\"ALIVE\r")
+	shell.waitFor("STILL-ALIVE\r\n")
+}
+
+// TestTerminalBashStartFailureRemovesRcfile proves the integration directory is
+// removed when the PTY cannot be started (the shell binary is missing).
+func TestTerminalBashStartFailureRemovesRcfile(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	terminal := NewTerminalServer(TerminalConfig{Logger: discardLogger()})
+	spec := terminalStart{
+		Target: terminalTargetHost,
+		Shell:  filepath.Join(tmp, "missing", "bash"), // basename bash, parent absent
+		Dir:    tmp,
+		Cols:   80,
+		Rows:   24,
+	}
+	if _, err := terminal.startSession(spec); err == nil {
+		t.Fatal("startSession succeeded with a missing shell binary")
+	}
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("read TMPDIR: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("rcfile directory leaked after a failed start: %v", entries)
 	}
 }
 

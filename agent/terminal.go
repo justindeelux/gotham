@@ -165,8 +165,11 @@ type terminalProcess interface {
 	wait() (int32, string)
 }
 
-// NewTerminalServer returns a TerminalService implementation.
+// NewTerminalServer returns a TerminalService implementation. It sweeps stale
+// per-session integration directories left behind by a hard kill of a previous
+// agent process; that maintenance is best-effort and never blocks startup.
 func NewTerminalServer(cfg TerminalConfig) *TerminalServer {
+	sweepStaleTerminalRcDirs(time.Now())
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
@@ -772,9 +775,15 @@ func terminalStartError(err error) error {
 
 // resolveTerminalShell picks the shell the node runs. A configured value must
 // be an absolute, executable regular file and is used exactly as given.
-// Otherwise an integration-enabled node prefers bash (/bin/bash, /usr/bin/bash,
-// then bash from PATH), then $SHELL and /bin/sh; a node with the integration
-// disabled keeps the pre-JUS-263 order ($SHELL, /bin/bash, /bin/sh).
+//
+// Bash is preferred over the service user's $SHELL on purpose: the terminal
+// experience this package promises (colours and the OSC 133 prompt marks that
+// quick-command suggestions need) is implemented only for bash, and the product
+// owner asked for /bin/bash rather than whatever shell the service account was
+// created with. A node whose $SHELL is zsh or fish therefore gets bash by
+// design; set GOTHAM_AGENT_TERMINAL_SHELL to opt a node back to another shell.
+// The old order ($SHELL, /bin/bash, /bin/sh) is kept only when the integration
+// is disabled with GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
 func resolveTerminalShell(configured string, integration bool) (string, error) {
 	return resolveTerminalShellWith(configured, integration, exec.LookPath, os.Stat)
 }
@@ -796,6 +805,7 @@ func resolveTerminalShellWith(
 	}
 	var candidates []string
 	if integration {
+		// Deliberately before $SHELL; see the function comment.
 		candidates = append(candidates, "/bin/bash", "/usr/bin/bash")
 		if path, err := lookPath("bash"); err == nil {
 			candidates = append(candidates, path)

@@ -64,6 +64,12 @@ OSC 133/633 prompt marks for bash/zsh that enable terminal quick-command
 abbreviation suggestions, supported-shell status, and the PTY verification
 story. Snippets are shown in the UI; Gotham never injects them into a shell.
 
+[`terminal-operations.md`](terminal-operations.md) — operator guide and
+validation record: host identity and privileges, close/disconnect/expiry
+semantics and residual limits, container cleanup, browser-local quick commands
+and themes, upgrade compatibility, keyboard shortcuts, troubleshooting, and
+the real-stack scenario matrix (JUS-251).
+
 ## Install & release
 
 [`install.md`](install.md) — control-plane and node-agent install, first login,

@@ -1,5 +1,12 @@
 # Terminal session API and lifecycle (JUS-243, container exec JUS-244)
 
+> Operator-facing procedures, the real-stack validation matrix, upgrade
+> compatibility and troubleshooting live in
+> [`terminal-operations.md`](terminal-operations.md). This page is the
+> byte-level contract; JUS-251 added the end-to-end regressions for the four
+> defects found in the live browser proof (no-root create, response tolerance,
+> whole-session close with PTY release, and the window/notice stacking).
+
 This document is the contract dependent work packages (JUS-245 shared terminal
 view, JUS-247 application terminal tab) build on. It describes the browser →
 control plane → node agent path for a host shell and for an interactive

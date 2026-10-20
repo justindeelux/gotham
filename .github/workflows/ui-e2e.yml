@@ -70,6 +70,11 @@ jobs:
       # key; the domains smoke exercises the DNS-provider CRUD path.
       GOTHAM_SECRET_KEY: "ui-e2e-secret-key-not-for-production"
       GOTHAM_E2E_BASE_URL: http://127.0.0.1:8099
+      # JUS-251: the terminal journeys drive a real node agent started below
+      # on this runner. `localhost` is the co-located identity the control
+      # plane maps to 127.0.0.1:9443 without an operator-recorded address.
+      GOTHAM_E2E_TERMINAL_NODE: localhost
+      GOTHAM_E2E_TERMINAL_IMAGE: nginx:1.28.0-alpine
       # The smoke account is a platform operator so the platform-global DNS
       # surface (BE-8.2) is reachable; per-application cert/redirect management
       # stays team-scoped.
@@ -100,8 +105,21 @@ jobs:
       - name: Migrate test database
         run: go run ./cmd/gotham migrate up
 
-      - name: Build control plane
-        run: go build -o bin/gotham ./cmd/gotham
+      - name: Build control plane and node agent
+        run: |
+          go build -o bin/gotham ./cmd/gotham
+          go build -o bin/gotham-agent ./cmd/gotham-agent
+
+      - name: Pre-pull application images
+        run: |
+          for image in nginx:1.28.0-alpine busybox:1.36; do
+            for attempt in 1 2 3 4; do
+              if docker pull "$image"; then break; fi
+              echo "pull $image attempt $attempt failed; retrying" >&2
+              sleep 5
+            done
+            docker image inspect "$image" >/dev/null
+          done
 
       - name: Stop any leftover control plane
         run: pkill -f 'bin/gotham serve' || true
@@ -120,6 +138,37 @@ jobs:
           cat gotham-ui-e2e.log
           exit 1
 
+      # JUS-251: the terminal specs exercise real PTYs and real application
+      # containers, so the node agent is the repository build registered to
+      # this control plane (plaintext dev mode, loopback only). The file
+      # service is on by default; compose root and volumes live in the
+      # runner's temp dir so the run leaves nothing behind.
+      - name: Start node agent
+        env:
+          GOTHAM_AGENT_CP_ADDR: 127.0.0.1:9444
+          GOTHAM_AGENT_NODE_ID: localhost
+          GOTHAM_AGENT_LISTEN_ADDR: 127.0.0.1:9443
+          GOTHAM_AGENT_INSECURE: "true"
+          GOTHAM_AGENT_HEALTH_ADDR: 127.0.0.1:9446
+        run: |
+          mkdir -p "$RUNNER_TEMP/gotham-agent" "$RUNNER_TEMP/gotham-agent/compose" "$RUNNER_TEMP/gotham-agent/volumes"
+          GOTHAM_AGENT_CERT_DIR="$RUNNER_TEMP/gotham-agent" \
+          GOTHAM_AGENT_COMPOSE_ROOT="$RUNNER_TEMP/gotham-agent/compose" \
+          GOTHAM_AGENT_MANAGED_VOLUME_ROOT="$RUNNER_TEMP/gotham-agent/volumes" \
+            nohup ./bin/gotham-agent serve > gotham-ui-e2e-agent.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/gotham-agent.pid"
+          echo "GOTHAM_E2E_AGENT_PID=$(cat "$RUNNER_TEMP/gotham-agent.pid")" >> "$GITHUB_ENV"
+          for _ in $(seq 1 60); do
+            if grep -q 'registered with control plane' gotham-ui-e2e-agent.log; then
+              echo "node agent registered"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "node agent failed to register"
+          cat gotham-ui-e2e-agent.log
+          exit 1
+
       - name: Install web dependencies
         working-directory: web
         run: npm ci
@@ -132,9 +181,12 @@ jobs:
         working-directory: web
         run: npm run e2e
 
-      - name: Show control-plane log on failure
+      - name: Show control-plane and agent logs on failure
         if: failure()
-        run: cat gotham-ui-e2e.log
+        run: |
+          cat gotham-ui-e2e.log
+          cat gotham-ui-e2e-agent.log || true
+          docker ps -a || true
 
       - name: Upload Playwright report
         if: failure()
@@ -154,6 +206,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Stop control plane
+      - name: Stop control plane and node agent
         if: always()
-        run: pkill -f 'bin/gotham serve' || true
+        run: |
+          if [ -f "$RUNNER_TEMP/gotham-agent.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/gotham-agent.pid")" || true
+          fi
+          pkill -f 'bin/gotham-agent serve' || true
+          pkill -f 'bin/gotham serve' || true
+          docker ps -aq --filter "label=com.docker.compose.project" | xargs -r docker rm -f || true

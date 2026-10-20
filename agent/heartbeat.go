@@ -509,7 +509,7 @@ func (a *Agent) containerCount(ctx context.Context) int64 {
 	}
 	callCtx, cancel := context.WithTimeout(ctx, dockerCallTimeout)
 	defer cancel()
-	containers, err := a.docker.ListContainers(callCtx, true)
+	containers, err := a.docker.ListContainers(callCtx, true, nil)
 	if err != nil {
 		a.log.Debug("container count unavailable", "error", err)
 		return 0

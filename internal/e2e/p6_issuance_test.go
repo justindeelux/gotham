@@ -1237,7 +1237,7 @@ func p6ExecCleanup(t *testing.T, pool *pgxpool.Pool, statement string, args ...a
 func p6DiscoverOwnedTraefik(engine *agent.DockerClient, configDir string) (string, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	listed, err := engine.ListContainers(ctx, true)
+	listed, err := engine.ListContainers(ctx, true, nil)
 	if err != nil {
 		return "", false, err
 	}

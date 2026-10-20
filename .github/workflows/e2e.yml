@@ -128,6 +128,14 @@ jobs:
           GOTHAM_E2E: "1"
         run: go test ./agent -run 'TestDockerClientExecReal|TestDockerExecReal' -count=1 -timeout 10m -v
 
+      # JUS-256: the real Compose check drives the production control-plane
+      # resolution (internal/deploy) against a throwaway gotham-<uuid> project,
+      # so a scoping or full-id regression fails the gate.
+      - name: Compose terminal resolution (real Docker)
+        env:
+          GOTHAM_E2E: "1"
+        run: go test ./internal/deploy -run 'TestTerminalComposeReal' -count=1 -timeout 10m -v
+
       - name: Dump container state on failure
         if: failure()
         run: |

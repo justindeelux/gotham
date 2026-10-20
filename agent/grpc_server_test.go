@@ -21,6 +21,8 @@ import (
 // fakeDockerClient is a configurable dockerClient for server tests.
 type fakeDockerClient struct {
 	containers     []*agentv1.ContainerInfo
+	listAll        bool
+	listLabels     map[string]string
 	version        string
 	err            error
 	logs           []byte
@@ -37,7 +39,9 @@ func (f *fakeDockerClient) Version(context.Context) (string, error) {
 	return f.version, f.err
 }
 
-func (f *fakeDockerClient) ListContainers(context.Context, bool) ([]*agentv1.ContainerInfo, error) {
+func (f *fakeDockerClient) ListContainers(_ context.Context, all bool, labels map[string]string) ([]*agentv1.ContainerInfo, error) {
+	f.listAll = all
+	f.listLabels = labels
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -160,12 +164,18 @@ func TestDockerServerListContainers(t *testing.T) {
 	fake := &fakeDockerClient{containers: []*agentv1.ContainerInfo{{Id: "abc", Name: "web"}}}
 	client := newDockerServiceClient(t, fake)
 
-	response, err := client.ListContainers(context.Background(), &agentv1.ListContainersRequest{All: true})
+	labels := map[string]string{"com.docker.compose.project": "gotham-11111111-2222-4333-8444-555555555555"}
+	response, err := client.ListContainers(context.Background(), &agentv1.ListContainersRequest{All: true, Labels: labels})
 	if err != nil {
 		t.Fatalf("ListContainers: %v", err)
 	}
 	if len(response.GetContainers()) != 1 || response.GetContainers()[0].GetId() != "abc" {
 		t.Errorf("containers = %v; want one with id abc", response.GetContainers())
+	}
+	// The label filter must reach the Docker client (which applies it in
+	// Docker), not be dropped at the gRPC boundary.
+	if !fake.listAll || fake.listLabels["com.docker.compose.project"] != labels["com.docker.compose.project"] {
+		t.Errorf("docker client got (all=%v, labels=%v), want (true, %v)", fake.listAll, fake.listLabels, labels)
 	}
 }
 

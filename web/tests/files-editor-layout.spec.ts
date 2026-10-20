@@ -1169,6 +1169,127 @@ test("a 1366x800 resize persists, clamps the drag and survives reload", async ({
   expect(Math.round(resizedReloaded!.height)).toBe(696 - 100);
 });
 
+/**
+ * floatingShadow resolves the shared elevation tokens in the browser and
+ * reports the window's computed shadow. The token is resolved through a probe
+ * element so the assertion compares computed values rather than the raw
+ * custom-property text.
+ */
+async function floatingShadow(
+  page: Page,
+  selector: string,
+): Promise<{ actual: string; expected: string; raised: string }> {
+  return page.evaluate((target) => {
+    const element = document.querySelector(target);
+    if (!(element instanceof HTMLElement)) {
+      throw new Error(`${target} is missing`);
+    }
+    const resolve = (name: string): string => {
+      const raw = getComputedStyle(document.documentElement)
+        .getPropertyValue(name)
+        .trim();
+      if (!raw) {
+        throw new Error(`${name} is missing`);
+      }
+      const probe = document.createElement("div");
+      probe.style.boxShadow = raw;
+      document.body.append(probe);
+      const value = getComputedStyle(probe).boxShadow;
+      probe.remove();
+      return value;
+    };
+    return {
+      actual: getComputedStyle(element).boxShadow,
+      expected: resolve("--elev-floating"),
+      raised: resolve("--elev-raised"),
+    };
+  }, selector);
+}
+
+/** updateEditorSettings patches the live editor preferences store. */
+async function updateEditorSettings(
+  page: Page,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await page.evaluate((value) => {
+    const app = (document.querySelector("#app") as unknown as {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
+      };
+    }).__vue_app__;
+    const store = app.config.globalProperties.$pinia._s.get(
+      "filesEditorSettings",
+    ) as { update: (_patch: Record<string, unknown>) => void };
+    store.update(value);
+  }, patch);
+}
+
+test("the editor window floats on the soft elevation shadow in both themes", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await mockApi(page);
+  await page.goto(`${baseURL}/servers/${serverId}/files`);
+
+  await page.locator(".fm-label", { hasText: "app.yaml" }).first().dblclick();
+  await expect(page.locator(".cm-content")).toBeVisible({ timeout: 15_000 });
+  const editorWindow = page.locator(".ed-window");
+  await expect(editorWindow).toBeVisible();
+
+  // Dark editor theme: the window paints the dedicated floating elevation,
+  // not the compact raised shadow the smaller popovers use.
+  const dark = await floatingShadow(page, ".ed-window");
+  expect(dark.expected).not.toBe("none");
+  expect(dark.actual).toBe(dark.expected);
+  expect(dark.actual).not.toBe(dark.raised);
+
+  const editorBackground = () =>
+    page
+      .locator(".ed-host:visible .cm-editor")
+      .evaluate((element) => getComputedStyle(element as HTMLElement).backgroundColor);
+  await expect.poll(editorBackground).toBe("rgb(30, 31, 34)");
+  const darkBox = await editorWindow.boundingBox();
+
+  // The light editor theme only repaints the code surface: the lift and the
+  // window geometry stay identical, so the shadow never shifts the layout.
+  await updateEditorSettings(page, { theme: "light" });
+  await expect.poll(editorBackground).toBe("rgb(242, 243, 245)");
+  const light = await floatingShadow(page, ".ed-window");
+  expect(light.actual).toBe(light.expected);
+  const lightBox = await editorWindow.boundingBox();
+  expect(Math.round(lightBox!.x)).toBe(Math.round(darkBox!.x));
+  expect(Math.round(lightBox!.y)).toBe(Math.round(darkBox!.y));
+  expect(Math.round(lightBox!.width)).toBe(Math.round(darkBox!.width));
+  expect(Math.round(lightBox!.height)).toBe(Math.round(darkBox!.height));
+
+  // A 390px phone keeps the same lift, the window inside the viewport and no
+  // horizontal document overflow.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const phone = await floatingShadow(page, ".ed-window");
+  expect(phone.actual).toBe(phone.expected);
+  const phoneFit = await page.evaluate(() => {
+    const element = document.querySelector(".ed-window");
+    if (!(element instanceof HTMLElement)) {
+      throw new Error(".ed-window is missing");
+    }
+    const box = element.getBoundingClientRect();
+    return {
+      left: box.left,
+      right: box.right,
+      top: box.top,
+      bottom: box.bottom,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+  expect(phoneFit.left).toBeGreaterThanOrEqual(0);
+  expect(phoneFit.right).toBeLessThanOrEqual(phoneFit.width);
+  expect(phoneFit.top).toBeGreaterThanOrEqual(0);
+  expect(phoneFit.bottom).toBeLessThanOrEqual(phoneFit.height);
+  expect(phoneFit.overflow).toBeLessThanOrEqual(0);
+});
+
 test("the Close control closes every tab, guarding dirty buffers", async ({
   page,
 }) => {  await page.setViewportSize({ width: 1440, height: 900 });

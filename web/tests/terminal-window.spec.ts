@@ -425,6 +425,43 @@ async function expectInsideViewport(
   expect(box.width).toBeLessThanOrEqual(viewport.width);
 }
 
+/**
+ * floatingShadow resolves the shared elevation tokens in the browser and
+ * reports the window's computed shadow. The token is resolved through a probe
+ * element so the assertion compares computed values rather than the raw
+ * custom-property text.
+ */
+async function floatingShadow(
+  page: Page,
+  selector: string,
+): Promise<{ actual: string; expected: string; raised: string }> {
+  return page.evaluate((target) => {
+    const element = document.querySelector(target);
+    if (!(element instanceof HTMLElement)) {
+      throw new Error(`${target} is missing`);
+    }
+    const resolve = (name: string): string => {
+      const raw = getComputedStyle(document.documentElement)
+        .getPropertyValue(name)
+        .trim();
+      if (!raw) {
+        throw new Error(`${name} is missing`);
+      }
+      const probe = document.createElement("div");
+      probe.style.boxShadow = raw;
+      document.body.append(probe);
+      const value = getComputedStyle(probe).boxShadow;
+      probe.remove();
+      return value;
+    };
+    return {
+      actual: getComputedStyle(element).boxShadow,
+      expected: resolve("--elev-floating"),
+      raised: resolve("--elev-raised"),
+    };
+  }, selector);
+}
+
 /** expectDialogActionGap asserts the footer actions keep a token-sized gap. */
 async function expectDialogActionGap(page: Page): Promise<void> {
   // Naive zooms the card in; a raw bounding box taken mid-transition would
@@ -1624,4 +1661,56 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   await expect(page.locator(".qc-item")).toHaveCount(1);
   await expect(page.locator(".qc-item")).toContainText("git status");
   expect(tab.id).toBeTruthy();
+});
+
+test("the terminal window floats on the soft elevation shadow in both themes", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+  await openWindow(page, "app");
+
+  const terminalWindow = page.locator(".term-window");
+  await expect(terminalWindow).toBeVisible();
+
+  // Gotham Dark: the window paints the dedicated floating elevation, not the
+  // compact raised shadow the smaller overlays use.
+  const dark = await floatingShadow(page, ".term-window");
+  expect(dark.expected).not.toBe("none");
+  expect(dark.actual).toBe(dark.expected);
+  expect(dark.actual).not.toBe(dark.raised);
+
+  // Gotham Light repaints the xterm frame in place; the lift and the window
+  // geometry stay identical, so the shadow never shifts the layout.
+  const surface = page.locator(".term-window .term-surface:visible");
+  const darkBox = await windowBox(page);
+  await storeCall(page, "setTheme", "gotham-light");
+  await expect(surface).toHaveAttribute("data-theme", "gotham-light");
+  await expect
+    .poll(() =>
+      surface.evaluate((element) =>
+        getComputedStyle(element as HTMLElement).backgroundColor,
+      ),
+    )
+    .toBe("rgb(247, 248, 250)");
+  const light = await floatingShadow(page, ".term-window");
+  expect(light.actual).toBe(light.expected);
+  const lightBox = await windowBox(page);
+  expect(Math.round(lightBox.x)).toBe(Math.round(darkBox.x));
+  expect(Math.round(lightBox.y)).toBe(Math.round(darkBox.y));
+  expect(Math.round(lightBox.width)).toBe(Math.round(darkBox.width));
+  expect(Math.round(lightBox.height)).toBe(Math.round(darkBox.height));
+
+  // A 390px phone keeps the same lift, the window inside the viewport and no
+  // horizontal document overflow.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const phone = await floatingShadow(page, ".term-window");
+  expect(phone.actual).toBe(phone.expected);
+  await expectInsideViewport(page, { width: 390, height: 844 });
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
 });

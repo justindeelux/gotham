@@ -690,7 +690,9 @@ defineExpose({ restoreWindow });
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--elev-raised);
+  /* JUS-270: the same soft lift as the code editor window; the shadow paints
+     outside the border box, so the body's overflow clip never trims it. */
+  box-shadow: var(--elev-floating);
   overflow: hidden;
 }
 

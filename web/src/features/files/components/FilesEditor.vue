@@ -2150,7 +2150,9 @@ onBeforeUnmount(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--elev-raised);
+  /* JUS-270: a soft, static lift. The shadow paints outside the border box,
+     so the window's own overflow clip cannot cut it off. */
+  box-shadow: var(--elev-floating);
   overflow: hidden;
   z-index: 70;
 }

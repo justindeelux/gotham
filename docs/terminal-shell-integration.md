@@ -100,13 +100,23 @@ session the agent then:
   where none were set, and installs the OSC 133 marks;
 * starts **zsh** with `ZDOTDIR` pointing at a fresh private directory whose
   constant `.zshenv`/`.zshrc` source the operator's own `.zshenv`/`.zshrc`
-  first (with the operator's normal `ZDOTDIR`), then install the same marks;
+  first (with the operator's normal `ZDOTDIR`), then install the same marks.
+  After startup the integration restores the operator's `ZDOTDIR` (or unsets it
+  when they had none), so `$ZDOTDIR` and nested `zsh` processes use the
+  operator's own rc files, not the private directory. A relative `ZDOTDIR` is
+  ignored and `HOME` is used, because it would otherwise depend on the shell's
+  cwd;
 * leaves every other shell alone: no arguments, no extra environment, no marks.
 
 Nothing is written to the shell's stdin or to the terminal transcript. The
 private directory is `0700` with `0600` files, is removed when the session ends,
 and is swept at agent startup if a previous process was hard-killed. A failing
-operator rc does not disable the marks or the shell.
+operator rc does not disable the marks or the shell. A custom operator `ZDOTDIR`
+is read from the agent service environment (for example the unit file), not from
+the login shell of the person opening the terminal; set it where `gotham-agent`
+is started. zsh prints `B` twice on a fresh prompt (at the end of `PROMPT` and
+again from the line-init widget that recovers after Ctrl-C); the web prompt
+scanner treats the repeat as a no-op, so no de-duplication is needed.
 
 Selection with the integration on: an absolute `$SHELL` that is bash or zsh is
 honored; otherwise bash is preferred, with zsh as the fallback. Setting

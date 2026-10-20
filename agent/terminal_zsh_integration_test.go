@@ -167,6 +167,7 @@ func TestTerminalZshIntegrationScript(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(strings.Join([]string{
 		`export GOTHAM_TEST_ZSHRC=1`,
+		`if [ -z "${ZDOTDIR-}" ]; then export GOTHAM_TEST_ZSHRC_ZDOTDIR_UNSET=1; fi`,
 		`printf 'sourced\n' >> "$HOME/rc-sources"`,
 		`PROMPT='GOTHAMCUSTOM> '`,
 		`alias gotham-user-alias='echo GOTHAM_USER_ALIAS'`,
@@ -186,12 +187,13 @@ func TestTerminalZshIntegrationScript(t *testing.T) {
 	shell.settle()
 
 	// Both operator startup files ran before the integration, their prompt and
-	// alias win, and the operator's .zshenv saw an unset ZDOTDIR exactly like a
-	// plain zsh. The session itself runs with the private ZDOTDIR.
-	shell.write("echo \"userrc=$GOTHAM_TEST_ZSHRC shenv=$GOTHAM_TEST_ZSHENV unset=$GOTHAM_TEST_ZSHENV_UNSET\"\r")
-	shell.waitFor("userrc=1 shenv=1 unset=1")
-	shell.write("echo \"zdotdir=$ZDOTDIR userzdot=$GOTHAM_TERMINAL_USER_ZDOTDIR\"\r")
-	shell.waitFor("zdotdir=" + dir + " userzdot=" + home)
+	// alias win, and they saw ZDOTDIR exactly as a plain zsh would (unset here).
+	// After startup the private registry is no longer exported: the session has
+	// the operator's value (unset) and no Gotham variables.
+	shell.write("echo \"userrc=$GOTHAM_TEST_ZSHRC shenv=$GOTHAM_TEST_ZSHENV unset=$GOTHAM_TEST_ZSHENV_UNSET rcunset=$GOTHAM_TEST_ZSHRC_ZDOTDIR_UNSET\"\r")
+	shell.waitFor("userrc=1 shenv=1 unset=1 rcunset=1")
+	shell.write("echo \"zdotdir=${ZDOTDIR-<unset>} userzdot=${GOTHAM_TERMINAL_USER_ZDOTDIR-<unset>}\"\r")
+	shell.waitFor("zdotdir=<unset> userzdot=<unset>")
 	shell.write("gotham-user-alias\r")
 	shell.waitFor("GOTHAM_USER_ALIAS")
 	if strings.Contains(shell.all(), "read-only") {
@@ -206,9 +208,10 @@ func TestTerminalZshIntegrationScript(t *testing.T) {
 	shell.waitFor("after-false\r\n")
 
 	// Sourcing the generated .zshrc again is a no-op: no second operator rc, no
-	// duplicated hooks.
-	shell.write(". \"$ZDOTDIR/.zshrc\"\r")
-	shell.write(". \"$ZDOTDIR/.zshrc\"\r")
+	// duplicated hooks. The private path is known to the agent, not to the live
+	// session (which now has the operator's ZDOTDIR).
+	shell.write(". '" + filepath.Join(dir, ".zshrc") + "'\r")
+	shell.write(". '" + filepath.Join(dir, ".zshrc") + "'\r")
 	shell.write("echo idempotent-ok\r")
 	shell.waitFor("idempotent-ok\r\n")
 	sources, err := os.ReadFile(filepath.Join(home, "rc-sources"))
@@ -313,6 +316,102 @@ func TestTerminalZshUnusualHomeStillIntegrates(t *testing.T) {
 	if !strings.Contains(markKinds(scanPromptMarks(shell.all())), "AB") {
 		t.Fatalf("no prompt marks with an unusual HOME: %q", shell.all())
 	}
+}
+
+// TestTerminalZshRestoresUserZdotdirForChildren proves the private ZDOTDIR is
+// only used for startup. In the live session `$ZDOTDIR` is again the operator's
+// value (or unset, which falls back to HOME), a nested `zsh -i` reads the
+// operator's own rc files, and no Gotham variable leaks into children.
+func TestTerminalZshRestoresUserZdotdirForChildren(t *testing.T) {
+	zsh := terminalTestZsh(t)
+
+	t.Run("unset ZDOTDIR", func(t *testing.T) {
+		t.Setenv("ZDOTDIR", "")
+		setup, err := terminalZshSetup()
+		if err != nil {
+			t.Fatalf("terminalZshSetup: %v", err)
+		}
+		t.Cleanup(setup.cleanup)
+		home := t.TempDir()
+		if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(strings.Join([]string{
+			`printf 'sourced\n' >> "$HOME/rc-sources"`,
+			`export GOTHAM_HOME_RC=1`,
+		}, "\n")), 0o600); err != nil {
+			t.Fatalf("write .zshrc: %v", err)
+		}
+		env := terminalEnv()
+		env = terminalEnvSet(env, "HOME", home)
+		env = append(env, setup.env...)
+		shell := startTerminalTestShell(t, zsh, setup.args, env)
+		defer shell.stop()
+		shell.waitFor("\x1b]133;B")
+		shell.settle()
+
+		shell.write("echo \"outerzd=${ZDOTDIR-<unset>}\"\r")
+		shell.waitFor("outerzd=<unset>")
+		shell.write("zsh -i -c 'print -r -- \"nestedzd=${ZDOTDIR-<unset>} nestedhome=${GOTHAM_HOME_RC-<unset>}\"'\r")
+		shell.waitFor("nestedzd=<unset> nestedhome=1")
+		sources, err := os.ReadFile(filepath.Join(home, "rc-sources"))
+		if err != nil {
+			t.Fatalf("read rc-sources: %v", err)
+		}
+		if got := strings.Count(string(sources), "sourced"); got != 2 {
+			t.Fatalf("HOME .zshrc ran %d times; want the outer and the nested shell (%q)", got, sources)
+		}
+	})
+
+	t.Run("custom ZDOTDIR with spaces", func(t *testing.T) {
+		custom := filepath.Join(t.TempDir(), "zdot dir $x")
+		if err := os.MkdirAll(custom, 0o700); err != nil {
+			t.Fatalf("create custom ZDOTDIR: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(custom, ".zshenv"), []byte("export GOTHAM_CUSTOM_ZSHENV=1\n"), 0o600); err != nil {
+			t.Fatalf("write custom .zshenv: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(custom, ".zshrc"), []byte(strings.Join([]string{
+			`printf 'sourced\n' >> "$HOME/rc-sources"`,
+			`export GOTHAM_CUSTOM_ZSHRC=1`,
+			`PROMPT='CUSTOMZD> '`,
+		}, "\n")), 0o600); err != nil {
+			t.Fatalf("write custom .zshrc: %v", err)
+		}
+		home := t.TempDir()
+		if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(strings.Join([]string{
+			`printf 'home-rc\n' >> "$HOME/home-rc-sources"`,
+			`export GOTHAM_HOME_RC=1`,
+		}, "\n")), 0o600); err != nil {
+			t.Fatalf("write HOME .zshrc: %v", err)
+		}
+
+		t.Setenv("ZDOTDIR", custom)
+		setup, err := terminalZshSetup()
+		if err != nil {
+			t.Fatalf("terminalZshSetup: %v", err)
+		}
+		t.Cleanup(setup.cleanup)
+		env := terminalEnv()
+		env = terminalEnvSet(env, "HOME", home)
+		env = append(env, setup.env...)
+		shell := startTerminalTestShell(t, zsh, setup.args, env)
+		defer shell.stop()
+		shell.waitFor("CUSTOMZD> ")
+		shell.settle()
+
+		shell.write("echo \"outerzd=$ZDOTDIR custom=$GOTHAM_CUSTOM_ZSHRC shenv=$GOTHAM_CUSTOM_ZSHENV\"\r")
+		shell.waitFor("outerzd=" + custom + " custom=1 shenv=1")
+		shell.write("zsh -i -c 'print -r -- \"nestedzd=${ZDOTDIR-<unset>} nestedcustom=${GOTHAM_CUSTOM_ZSHRC-<unset>} nestedhome=${GOTHAM_HOME_RC-<unset>}\"'\r")
+		shell.waitFor("nestedzd=" + custom + " nestedcustom=1 nestedhome=<unset>")
+		sources, err := os.ReadFile(filepath.Join(home, "rc-sources"))
+		if err != nil {
+			t.Fatalf("read rc-sources: %v", err)
+		}
+		if got := strings.Count(string(sources), "sourced"); got != 2 {
+			t.Fatalf("custom .zshrc ran %d times; want the outer and the nested shell (%q)", got, sources)
+		}
+		if _, err := os.Stat(filepath.Join(home, "home-rc-sources")); !os.IsNotExist(err) {
+			t.Fatalf("HOME .zshrc ran despite the custom ZDOTDIR: %v", err)
+		}
+	})
 }
 
 // TestTerminalZshHostSessionIntegration proves the gRPC host path starts zsh

@@ -551,10 +551,16 @@ files themselves remain readable by the service user, as described above.
 With the optional bash/zsh startup integration (section 5) on, a zsh session
 additionally receives the three agent-owned `GOTHAM_TERMINAL_*` variables and a
 `ZDOTDIR` that points at its private startup directory. The operator's own
-`ZDOTDIR`, when it is absolute, is read from the agent's environment and passed
-to the generated script as a quoted value; it is never interpolated into shell
-code. The generated files are constants, so nothing from the request, the
-browser or the transcript selects what the shell executes.
+`ZDOTDIR` is read from the **agent service environment** — the systemd unit or
+whatever process starts `gotham-agent`, not the login shell of the person using
+the terminal — when that value is absolute; it is passed to the generated script
+as a quoted value and never interpolated into shell code. A relative `ZDOTDIR`
+is ignored and the operator's `HOME` startup files are used instead. The private
+`ZDOTDIR` is only exported for the startup files: once the operator's rc has run,
+the generated `.zshrc` restores the operator's value (or unsets it), so
+`echo $ZDOTDIR` and child `zsh` processes see the operator's own directory. The
+generated files are constants, so nothing from the request, the browser or the
+transcript selects what the shell executes.
 
 ## 4a. Container resolution and privilege boundary
 
@@ -614,12 +620,16 @@ setup sequence to the PTY, and it only ever applies to the host target.
   A/B/D; the `C` mark needs bash 4.4+.
 * **zsh** starts with `ZDOTDIR=<private>`. zsh has no `--rcfile`, so the
   private directory contains a constant `.zshenv` and `.zshrc`. The `.zshenv`
-  restores the operator's `ZDOTDIR` (or `HOME`) and sources the operator's
-  `.zshenv`; if that file changes `ZDOTDIR`, the new value is used for
-  `.zshrc`. The generated `.zshrc` sources the operator's `.zshrc` with its
-  normal `ZDOTDIR` and then installs `add-zsh-hook precmd/preexec` and, on zsh
-  5.3+, an `add-zle-hook-widget line-init` that re-emits `B` after Ctrl-C. The
-  prompt is only appended to; a theme's prompt wins. Host sessions are
+  restores the operator's `ZDOTDIR` (or unsets it so `HOME` is used) and sources
+  the operator's `.zshenv`; if that file sets or changes `ZDOTDIR`, the new value
+  is used for `.zshrc`. The generated `.zshrc` sources the operator's `.zshrc`
+  with that same value, installs `add-zsh-hook precmd/preexec` and, on zsh 5.3+,
+  an `add-zle-hook-widget line-init` that re-emits `B` after Ctrl-C, and finally
+  restores the operator's `ZDOTDIR` (or unsets it) for the live session. Children
+  and lazy rc code therefore see the operator's value, never the private
+  directory, and a nested `zsh -i` reads the operator's own rc files. The prompt
+  is only appended to; a theme's prompt wins. A relative operator `ZDOTDIR` is
+  ignored (it would be cwd-relative) and `HOME` is used. Host sessions are
   interactive but not login shells, so `.zprofile`/`.zlogin` are not read, the
   same as a plain `zsh -i`.
 * **Other shells** (`sh`, dash, ash, fish, an operator-configured binary) start
@@ -767,8 +777,10 @@ integration (plain shell, no marks, no `ZDOTDIR`), non-integrated shells
 (`/bin/sh`, dash, ash, fish), private `0700`/`0600` files, a relative operator
 `ZDOTDIR`, a HOME and temp path containing spaces and `$` with no operator rc
 files, an operator `ZDOTDIR` containing shell metacharacters (it stays a quoted
-environment value and never reaches the script text), and cleanup on a failed
-start. The gRPC host tests
+environment value and never reaches the script text), restoration of the
+operator's `ZDOTDIR` (or no `ZDOTDIR`) after startup with nested `zsh -i`
+reading the operator's own rc files for both an unset and a custom path
+containing spaces, and cleanup on a failed start. The gRPC host tests
 `TestTerminalBashHostSessionIntegration` and
 `TestTerminalZshHostSessionIntegration` prove the same through
 `OpenTerminal`, including removal of the private directory when the shell exits.

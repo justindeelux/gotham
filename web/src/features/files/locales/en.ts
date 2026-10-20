@@ -126,6 +126,7 @@ const en = {
   // file action. Labels only; the terminal window owns session state and its
   // own error copy.
   terminal: {
+    label: "Terminal",
     openHere: "Open terminal here",
     openHereHint: "Open a host shell in this folder in the floating terminal window.",
     openIn: "Open terminal in {name}",

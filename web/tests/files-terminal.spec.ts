@@ -1012,13 +1012,17 @@ test("a symlink escape is refused as an invalid working directory", async ({
   ).toBeVisible();
 });
 
-test("the icon-only toolbar action names itself and shows a tooltip", async ({
+test("the toolbar action shows its label, names itself and shows a tooltip", async ({
   page,
 }) => {
   const state = newState();
   await openFiles(page, state);
 
   const button = terminalButton(page);
+  // JUS-261: icon + visible label, while the aria-label stays the accessible
+  // name and the described-by hint stays the tooltip.
+  await expect(button.locator(".fm-btn-label")).toHaveText("Terminal");
+  await expect(button.locator(".fm-btn-label")).toBeVisible();
   await expect(button).toHaveAttribute("aria-label", "Open terminal here");
   const describedBy = await button.getAttribute("aria-describedby");
   expect(describedBy).toBeTruthy();
@@ -1036,6 +1040,83 @@ test("the icon-only toolbar action names itself and shows a tooltip", async ({
   await expect(hint).toHaveCSS("opacity", "0");
   await button.focus();
   await expect(hint).toHaveCSS("opacity", "1");
+});
+
+test("the terminal action follows File operations at every toolbar width", async ({
+  page,
+}) => {
+  const state = newState();
+  await openFiles(page, state);
+
+  for (const width of [1366, 1280, 480, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+
+    const ops = page.getByRole("button", { name: "File operations" });
+    const terminal = terminalButton(page);
+    await terminal.scrollIntoViewIfNeeded();
+    const opsBox = await ops.boundingBox();
+    const terminalBox = await terminal.boundingBox();
+    if (!opsBox || !terminalBox) {
+      throw new Error(`toolbar boxes missing at ${width}px`);
+    }
+
+    // Directly after File operations and on the same row (a horizontal
+    // scrollport when the phone layout kicks in).
+    expect(terminalBox.x).toBeGreaterThanOrEqual(opsBox.x + opsBox.width - 0.5);
+    // Adjacent, not merely somewhere to the right (the old icon-only button
+    // lived in the far-right cluster): the space between the two controls is
+    // one toolbar gap, never free-floating group space.
+    expect(terminalBox.x - (opsBox.x + opsBox.width)).toBeLessThanOrEqual(16);
+    expect(
+      Math.abs(
+        terminalBox.y + terminalBox.height / 2 -
+          (opsBox.y + opsBox.height / 2),
+      ),
+    ).toBeLessThanOrEqual(1);
+
+    // DOM order too: no other toolbar control sits between the two.
+    const order = await page.evaluate(() =>
+      [...document.querySelectorAll(".fm-toolbar-group button")].map(
+        (button) => button.getAttribute("aria-label") ?? button.textContent?.trim(),
+      ),
+    );
+    expect(order[order.indexOf("File operations") + 1]).toBe(
+      "Open terminal here",
+    );
+
+    // The label is visible exactly where the shared toolbar breakpoint shows
+    // labels; the aria-label remains the accessible name at every width.
+    if (width <= 640) {
+      await expect(terminal.locator(".fm-btn-label")).toBeHidden();
+    } else {
+      await expect(terminal.locator(".fm-btn-label")).toBeVisible();
+      await expect(terminal.locator(".fm-btn-label")).toHaveText("Terminal");
+    }
+
+    // Group integrity: no group splits its controls onto separate rows, and
+    // the whole toolbar never grows past two rows (one on wide screens).
+    const layout = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll(".fm-toolbar-group")].map(
+        (group) => [
+          ...new Set(
+            [...group.children]
+              // The phone layout hides the "Root" caption (display:none); it
+              // has no box and therefore no row.
+              .filter((element) => element.getBoundingClientRect().height > 0)
+              .map((element) => {
+                const rect = element.getBoundingClientRect();
+                return Math.round(rect.top + rect.height / 2);
+              }),
+          ),
+        ],
+      );
+      const toolbar = document.querySelector(".fm-toolbar")!.getBoundingClientRect();
+      return { rows, height: toolbar.height };
+    });
+    expect(layout.rows.every((centres) => centres.length === 1)).toBe(true);
+    // The labelled action keeps the whole toolbar on its 32px row.
+    expect(layout.height).toBeLessThanOrEqual(44);
+  }
 });
 
 test("the toolbar action stays reachable at phone and tablet widths", async ({

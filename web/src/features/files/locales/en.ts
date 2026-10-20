@@ -127,7 +127,10 @@ const en = {
   // own error copy.
   terminal: {
     openHere: "Open terminal here",
+    openHereHint: "Open a host shell in this folder in the floating terminal window.",
     openIn: "Open terminal in {name}",
+    symlinkTargetUnknown:
+      "The link target is not a directory listed here. Open a real folder instead.",
   },
   tabs: {
     list: "Browser tabs",

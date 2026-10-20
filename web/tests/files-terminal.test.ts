@@ -4,7 +4,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { FilesEntry } from "@/features/files/schemas/files";
-import { terminalDirectoryFor } from "@/features/files/utils/files";
+import {
+  symlinkTargetsDirectory,
+  terminalDirectoryFor,
+} from "@/features/files/utils/files";
 
 /** entry builds one listing row with sensible defaults. */
 function entry(overrides: Partial<FilesEntry> & { name: string }): FilesEntry {
@@ -30,11 +33,104 @@ describe("terminalDirectoryFor", () => {
     expect(terminalDirectoryFor(folder, "my-app")).toBe("my-app/config");
   });
 
-  it("refuses files, symlinks and special entries", () => {
+  it("refuses files, symlinks and special entries without directory proof", () => {
     for (const kind of ["file", "symlink", "special", "unspecified"] as const) {
       const row = entry({ name: "item", kind, mode: 0o100644 });
       expect(terminalDirectoryFor(row, "my-app")).toBeNull();
     }
+  });
+
+  it("enables a symlink only when the listing proves a directory target", () => {
+    const config = entry({
+      name: "config",
+      kind: "directory",
+      mode: 0o040755,
+    });
+    const link = entry({
+      name: "current",
+      kind: "symlink",
+      mode: 0o120777,
+      symlink_target: "config",
+    });
+
+    // The listing names `config` as a directory: the link's own path is the
+    // cwd, so the agent follows it and still enforces the root policy.
+    expect(
+      terminalDirectoryFor(link, "", { entries: [config] }),
+    ).toBe("current");
+    expect(
+      terminalDirectoryFor(link, "my-app", { entries: [config] }),
+    ).toBe("my-app/current");
+
+    // A link to the folder itself or to the root is a known directory.
+    expect(
+      terminalDirectoryFor(
+        entry({
+          name: "here",
+          kind: "symlink",
+          symlink_target: ".",
+        }),
+        "my-app",
+        { entries: [] },
+      ),
+    ).toBe("my-app/here");
+
+    // An unlisted target, a file target, a chained symlink and an escape are
+    // never guessed.
+    for (const target of ["nowhere", "app.yaml", "another-link", "../escape"]) {
+      const unknown = entry({
+        name: "mystery",
+        kind: "symlink",
+        symlink_target: target,
+      });
+      expect(
+        terminalDirectoryFor(unknown, "", {
+          entries: [
+            config,
+            entry({ name: "app.yaml" }),
+            entry({ name: "another-link", kind: "symlink" }),
+          ],
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("identifies a directory target from the current listing", () => {
+    const config = entry({ name: "config", kind: "directory" });
+    const link = entry({
+      name: "current",
+      kind: "symlink",
+      symlink_target: "config",
+    });
+    expect(symlinkTargetsDirectory(link, "", [config])).toBe(true);
+    expect(symlinkTargetsDirectory(link, "", [entry({ name: "config" })])).toBe(
+      false,
+    );
+    expect(symlinkTargetsDirectory(link, "", [])).toBe(false);
+    // A nested target is outside what this listing can vouch for.
+    expect(
+      symlinkTargetsDirectory(
+        entry({
+          name: "nested",
+          kind: "symlink",
+          symlink_target: "config/sub",
+        }),
+        "",
+        [config],
+      ),
+    ).toBe(false);
+    // An escape above the root is never a known directory.
+    expect(
+      symlinkTargetsDirectory(
+        entry({
+          name: "escape",
+          kind: "symlink",
+          symlink_target: "../outside",
+        }),
+        "",
+        [],
+      ),
+    ).toBe(false);
   });
 
   it("keeps spaces, quotes, Unicode and shell metacharacters as one path", () => {

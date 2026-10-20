@@ -218,6 +218,63 @@ describe("terminal store sessions", () => {
     expect(windowStore.raised).toBe(true);
   });
 
+  it("shares one in-flight window create for the same target, then allows a new one", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    apiFakes.create.mockImplementationOnce(
+      async (
+        serverId: string,
+        input: { target?: string; root?: string; cwd?: string; cols: number; rows: number },
+      ) => {
+        await gate;
+        sessionSeq += 1;
+        return {
+          id: `session-${sessionSeq}`,
+          server_id: serverId,
+          target: input.target ?? "host",
+          root: input.root ?? "",
+          cwd: input.cwd ?? "",
+          cols: input.cols,
+          rows: input.rows,
+          expires_at: "2026-10-20T12:01:00Z",
+          websocket_path: `/api/v1/servers/${serverId}/terminal/sessions/session-${sessionSeq}/ws`,
+          subprotocol: "gotham.terminal.v1",
+        };
+      },
+    );
+
+    const terminal = useTerminalStore();
+    const first = terminal.openWindowSession(options("data"));
+    const second = terminal.openWindowSession(options("data"));
+    // The second activation joins the in-flight call: no second shell is asked
+    // for, even before either promise settles.
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    expect(b.id).toBe(a.id);
+    expect(terminal.windowOpenCount).toBe(1);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    // A deliberate later activation still opens a new independent tab.
+    const later = await terminal.openWindowSession(options("data"));
+    expect(later.id).not.toBe(a.id);
+    expect(terminal.windowOpenCount).toBe(2);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens different targets concurrently instead of sharing one create", async () => {
+    const terminal = useTerminalStore();
+    const one = terminal.openWindowSession(options("one"));
+    const two = terminal.openWindowSession(options("two"));
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    const [a, b] = await Promise.all([one, two]);
+    expect(a.id).not.toBe(b.id);
+    expect(terminal.windowOpenCount).toBe(2);
+  });
+
   it("transfers page → window with the same session id and no create", async () => {
     const terminal = useTerminalStore();
     const tab = await terminal.openPageSession(options());

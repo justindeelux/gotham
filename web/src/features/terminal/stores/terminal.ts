@@ -32,6 +32,8 @@ import { i18n } from "@/shared/i18n";
  *
  *   - openPageSession({ serverId, root, cwd })  page mode, idempotent per target
  *   - openWindowSession({ serverId, root, cwd }) floating window, one new tab
+ *                                               per deliberate call; a same-target
+ *                                               create already in flight is shared
  *   - detachToWindow(tabId)                     one-way page → window transfer
  *   - requestClose([tabId])                     same confirmation path as the UI
  *
@@ -131,6 +133,14 @@ export const useTerminalStore = defineStore("terminal", () => {
   const surfaces = new Map<string, HTMLElement>();
   /** inflight deduplicates rapid page opens for the same target. */
   const inflight = new Map<string, Promise<TerminalTab>>();
+  /**
+   * windowInflight deduplicates accidental window activations (double-click,
+   * key repeat, a menu item fired twice) for one target while its create call
+   * is in flight (JUS-248 fix round 1). It is cleared as soon as that call
+   * settles, so a deliberate later activation still opens a new independent
+   * shell, matching the documented `openWindowSession` contract.
+   */
+  const windowInflight = new Map<string, Promise<TerminalTab>>();
   /** retrying guards a second explicit retry while the first is running. */
   const retrying = new Set<string>();
   /** closeResolve settles an awaited close confirmation (logout path). */
@@ -331,18 +341,30 @@ export const useTerminalStore = defineStore("terminal", () => {
   }
 
   /**
-   * openWindowSession opens a new tab in the floating window. Repeating the
-   * call is intentional (each call is a new independent shell).
+   * openWindowSession opens a new tab in the floating window. A deliberate
+   * later call is intentional (each call is a new independent shell); a second
+   * activation for the SAME target while the first create is still in flight
+   * is an accident from one gesture and joins that call instead of starting a
+   * second shell.
    */
   async function openWindowSession(
     options: TerminalOpenOptions,
   ): Promise<TerminalTab> {
+    const key = targetKey(options);
+    const pending = windowInflight.get(key);
+    if (pending) {
+      return pending;
+    }
     const windowStore = useTerminalWindowStore();
     // Restore a minimized window and bring it to the front so a new shell
     // opened from another surface is actually visible (JUS-248).
     windowStore.setMinimized(false);
     windowStore.raise();
-    return createTab(options, "window");
+    const created = createTab(options, "window").finally(() => {
+      windowInflight.delete(key);
+    });
+    windowInflight.set(key, created);
+    return created;
   }
 
   /**
@@ -556,6 +578,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     runtimes.clear();
     surfaces.clear();
     inflight.clear();
+    windowInflight.clear();
     retrying.clear();
     tabs.value = [];
     activeTabId.value = "";

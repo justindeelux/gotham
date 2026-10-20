@@ -47,16 +47,17 @@ const retryable = computed<boolean>(() =>
   isRetryable(tab.value?.status ?? "connecting"),
 );
 
-/** failureText prefers the control-plane message for an unknown failure. */
+/**
+ * failureText is BOUNDED catalog copy only (JUS-248 r1). Backend response text
+ * and relay phrases can carry host paths, so they are never rendered: every
+ * known code maps to its translated message and anything else falls back to the
+ * generic terminal copy.
+ */
 const failureText = computed<string>(() => {
-  const current = tab.value;
-  if (!current) {
+  if (!tab.value) {
     return "";
   }
-  if (current.errorCode !== null) {
-    return t(errorKey(current.errorCode));
-  }
-  return current.errorMessage || t("terminal.errors.generic");
+  return t(errorKey(tab.value.errorCode));
 });
 
 /** exitText describes how the shell ended. */
@@ -307,9 +308,6 @@ watch(
       <div v-else-if="tab.status === 'error'" class="term-overlay-body">
         <p class="term-overlay-title">{{ t("terminal.errors.title") }}</p>
         <p class="small muted">{{ failureText }}</p>
-        <p v-if="tab.errorMessage && tab.errorCode !== null" class="small term-detail mono">
-          {{ tab.errorMessage }}
-        </p>
         <NButton v-if="retryable" size="small" secondary @click.stop="retrySession">
           <template #icon>
             <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -504,12 +502,6 @@ watch(
   margin: 0;
   font-weight: 600;
   color: var(--fg-2);
-}
-
-.term-detail {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  color: var(--meta);
 }
 
 .term-statusbar {

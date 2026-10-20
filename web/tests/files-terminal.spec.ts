@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page, WebSocketRoute } from "@playwright/test";
 
-/* global document:readonly, URL:readonly, window:readonly */
+/* global document:readonly, HTMLElement:readonly, setTimeout:readonly, URL:readonly, window:readonly */
 // URL/window run inside the page (browser globals); the repo lint envs do not
 // cover tests/, so they are declared.
 
@@ -101,6 +101,32 @@ function listing() {
       etag: '"c"',
     },
     {
+      name: "gone",
+      kind: "directory",
+      size: 0,
+      mode: 0o040755,
+      modified_at: "2026-10-12T08:53:00Z",
+      etag: '"f"',
+    },
+    {
+      name: "current",
+      kind: "symlink",
+      size: 0,
+      mode: 0o120777,
+      modified_at: "2026-10-12T08:54:00Z",
+      symlink_target: "config",
+      etag: '"g"',
+    },
+    {
+      name: "mystery",
+      kind: "symlink",
+      size: 0,
+      mode: 0o120777,
+      modified_at: "2026-10-12T08:55:00Z",
+      symlink_target: "nowhere",
+      etag: '"h"',
+    },
+    {
       name: oddName,
       kind: "directory",
       size: 0,
@@ -144,6 +170,10 @@ interface State {
   seq: number;
   /** createError answers the create call with an HTTP failure instead. */
   createError: { status: number; message: string } | null;
+  /** createDelayMs holds a create response so an in-flight gesture is testable. */
+  createDelayMs: number;
+  /** failListPath answers GET /files/list for exactly this path with 404. */
+  failListPath: string | null;
   /** streamError ends the PTY stream with this bounded error-frame phrase. */
   streamError: string | null;
 }
@@ -222,6 +252,8 @@ function newState(): State {
     deletes: 0,
     seq: 0,
     createError: null,
+    createDelayMs: 0,
+    failListPath: null,
     streamError: null,
   };
 }
@@ -259,6 +291,14 @@ async function mockApi(page: Page, state: State): Promise<void> {
     await route.fulfill({ json: { roots: [root] } });
   });
   await page.route(`**/api/v1/servers/${serverId}/files/list*`, async (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+    if (state.failListPath !== null && path === state.failListPath) {
+      await route.fulfill({
+        status: 404,
+        json: { message: "gone" },
+      });
+      return;
+    }
     await route.fulfill({
       json: { entries: listing(), truncated: false, cursor: "" },
     });
@@ -279,6 +319,9 @@ async function mockApi(page: Page, state: State): Promise<void> {
       }
       const body = request.postDataJSON() as CreateBody;
       state.creates.push(body);
+      if (state.createDelayMs > 0) {
+        await new Promise((done) => setTimeout(done, state.createDelayMs));
+      }
       if (state.createError !== null) {
         await route.fulfill({
           status: state.createError.status,
@@ -359,6 +402,11 @@ async function openDirectory(page: Page, name: string): Promise<void> {
 /** terminalWindow is the floating window region. */
 function terminalWindow(page: Page) {
   return page.getByRole("region", { name: "Terminal window" });
+}
+
+/** terminalButton is the toolbar action. */
+function terminalButton(page: Page) {
+  return page.getByRole("button", { name: "Open terminal here" });
 }
 
 // Every test that opens a shell leaves a live PTY behind. Close them through
@@ -716,6 +764,244 @@ test("surfaces an unknown node and an unsupported agent", async ({ page }) => {
     ),
   ).toBeVisible();
   expect(state.sessions).toHaveLength(0);
+});
+
+test("a double-click on the toolbar creates exactly one shell", async ({
+  page,
+}) => {
+  const state = newState();
+  state.createDelayMs = 600;
+  await openFiles(page, state);
+
+  const button = terminalButton(page);
+  const box = (await button.boundingBox())!;
+  await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+
+  // Both clicks are one gesture: one POST while the first create is in flight.
+  await expect.poll(() => state.creates.length).toBe(1);
+  await expect(button).toHaveAttribute("aria-busy", "true");
+  await expect(button).toHaveClass(/n-button--loading/);
+  await expect(terminalWindow(page).getByRole("tab")).toHaveCount(1);
+
+  // The delay elapses; the control becomes usable again.
+  await expect(button).toHaveAttribute("aria-busy", "false");
+
+  // A later, separate activation is deliberate and starts a new shell.
+  await button.click();
+  await expect.poll(() => state.creates.length).toBe(2);
+  await expect(terminalWindow(page).getByRole("tab")).toHaveCount(2);
+  expect(state.creates.map((body) => body.cwd ?? "")).toEqual(["", ""]);
+});
+
+test("key repeat on the focused toolbar action creates one shell", async ({
+  page,
+}) => {
+  const state = newState();
+  state.createDelayMs = 500;
+  await openFiles(page, state);
+
+  const button = terminalButton(page);
+  await button.focus();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Enter");
+
+  await expect.poll(() => state.creates.length).toBe(1);
+  await expect(terminalWindow(page).getByRole("tab")).toHaveCount(1);
+});
+
+test("double-activating a menu item creates one shell", async ({ page }) => {
+  const state = newState();
+  state.createDelayMs = 500;
+  await openFiles(page, state);
+
+  await rowFor(page, "config").click({ button: "right" });
+  const menuItem = page
+    .getByRole("menu", { name: "More actions for config" })
+    .getByRole("menuitem", { name: "Open terminal in config" });
+  await expect(menuItem).toBeVisible();
+
+  // Two activations in the same task, before the dropdown unmounts.
+  await menuItem.evaluate((element) => {
+    (element as HTMLElement).click();
+    (element as HTMLElement).click();
+  });
+
+  await expect.poll(() => state.creates.length).toBe(1);
+  await expect(terminalWindow(page).getByRole("tab")).toHaveCount(1);
+  expect(state.creates[0]).toMatchObject({ cwd: "config" });
+});
+
+test("never renders raw backend text or host paths in the error overlay", async ({
+  page,
+}) => {
+  const state = newState();
+  await openFiles(page, state);
+
+  const cases = [
+    {
+      status: 403,
+      body: "forbidden: /var/lib/gotham/volumes/secret",
+      text: "Only a platform operator can open a host terminal.",
+    },
+    {
+      status: 429,
+      body: "quota reached at /root/.ssh",
+      text: "The terminal session quota is reached. Close a session and try again.",
+    },
+    {
+      status: 500,
+      body: "boom at /root/.ssh/authorized_keys",
+      text: "The terminal could not be started.",
+    },
+  ];
+  for (const item of cases) {
+    state.createError = { status: item.status, message: item.body };
+    await terminalButton(page).click();
+    await expect(terminalWindow(page).getByText(item.text)).toBeVisible();
+  }
+
+  // The response bodies are never part of the DOM, hidden tabs included.
+  await expect(terminalWindow(page)).not.toContainText("/var/lib/gotham");
+  await expect(terminalWindow(page)).not.toContainText("/root/.ssh");
+  await expect(terminalWindow(page).locator(".term-detail")).toHaveCount(0);
+  expect(state.sessions).toHaveLength(0);
+});
+
+test("a failed navigation removes the dead-cwd action until a listing loads", async ({
+  page,
+}) => {
+  const state = newState();
+  await openFiles(page, state);
+
+  state.failListPath = "gone";
+  await rowFor(page, "gone").dblclick();
+  await expect(
+    page.getByRole("heading", { name: "Could not load entries" }),
+  ).toBeVisible();
+
+  // No toolbar action and no menu action for a folder that never listed.
+  await expect(terminalButton(page)).toHaveCount(0);
+  await page.locator(".fm-state").click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "Folder actions" });
+  await expect(menu).toBeVisible();
+  await expect(
+    menu.getByRole("menuitem", { name: /Open terminal/ }),
+  ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  // Retrying the folder loads it; the action returns and targets it.
+  state.failListPath = null;
+  await page.locator(".fm-state").getByRole("button", { name: "Retry" }).click();
+  await expect(terminalButton(page)).toBeVisible();
+  await terminalButton(page).click();
+  await expect.poll(() => state.creates.length).toBe(1);
+  expect(state.creates[0]).toMatchObject({ cwd: "gone" });
+});
+
+test("a failed refresh keeps the last successfully loaded target", async ({
+  page,
+}) => {
+  const state = newState();
+  await openFiles(page, state);
+  await openDirectory(page, "data");
+
+  state.failListPath = "data";
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.locator(".fm-inline-error")).toBeVisible();
+
+  // The rows are still the loaded listing, so the action keeps working there.
+  await expect(terminalButton(page)).toBeVisible();
+  await terminalButton(page).click();
+  await expect.poll(() => state.creates.length).toBe(1);
+  expect(state.creates[0]).toMatchObject({ cwd: "data" });
+});
+
+test("a symlink with a proven directory target opens the link path", async ({
+  page,
+}) => {
+  const state = newState();
+  await openFiles(page, state);
+
+  await rowFor(page, "current").click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "More actions for current" });
+  const item = menu.getByRole("menuitem", {
+    name: "Open terminal in current",
+  });
+  await expect(item).not.toHaveAttribute("aria-disabled", "true");
+  await item.click();
+
+  await expect.poll(() => state.creates.length).toBe(1);
+  // The LINK path is the cwd: the agent follows it and enforces the root policy.
+  expect(state.creates[0]).toMatchObject({ root: "volumes", cwd: "current" });
+  await expect(page.getByRole("tab", { name: "prod-01 · current" })).toBeVisible();
+});
+
+test("an unproven symlink target is disabled with an explanatory hint", async ({
+  page,
+}) => {
+  const state = newState();
+  await openFiles(page, state);
+
+  await rowFor(page, "mystery").click({ button: "right" });
+  const item = page
+    .getByRole("menu", { name: "More actions for mystery" })
+    .getByRole("menuitem", { name: "Open terminal in mystery" });
+  await expect(item).toBeVisible();
+  await expect(item).toHaveClass(/n-dropdown-option-body--disabled/);
+  await expect(item).toHaveAttribute(
+    "title",
+    "The link target is not a directory listed here. Open a real folder instead.",
+  );
+
+  await item.evaluate((element) => (element as HTMLElement).click());
+  await page.waitForTimeout(150);
+  expect(state.creates).toHaveLength(0);
+});
+
+test("a symlink escape is refused as an invalid working directory", async ({
+  page,
+}) => {
+  const state = newState();
+  state.streamError = "invalid working directory";
+  await openFiles(page, state);
+
+  await rowFor(page, "current").click({ button: "right" });
+  await page
+    .getByRole("menu", { name: "More actions for current" })
+    .getByRole("menuitem", { name: "Open terminal in current" })
+    .click();
+
+  await expect.poll(() => state.creates.length).toBe(1);
+  expect(state.creates[0]).toMatchObject({ cwd: "current" });
+  await expect(
+    terminalWindow(page).getByText(
+      "The working directory is not allowed. Open a folder inside the server's allowed root.",
+    ),
+  ).toBeVisible();
+});
+
+test("the icon-only toolbar action names itself and shows a tooltip", async ({
+  page,
+}) => {
+  const state = newState();
+  await openFiles(page, state);
+
+  const button = terminalButton(page);
+  await expect(button).toHaveAttribute("aria-label", "Open terminal here");
+  await expect(button).toHaveAttribute("aria-describedby", "fm-terminal-hint");
+  const hint = page.locator("#fm-terminal-hint");
+  await expect(hint).toHaveAttribute("role", "tooltip");
+  await expect(hint).toHaveText(
+    "Open a host shell in this folder in the floating terminal window.",
+  );
+
+  await button.hover();
+  await expect(hint).toHaveCSS("opacity", "1");
+  await page.mouse.move(0, 0);
+  await expect(hint).toHaveCSS("opacity", "0");
+  await button.focus();
+  await expect(hint).toHaveCSS("opacity", "1");
 });
 
 test("the toolbar action stays reachable at phone and tablet widths", async ({

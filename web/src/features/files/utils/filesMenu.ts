@@ -50,17 +50,32 @@ export interface FilesMenuContext {
    *  writability: a host shell is administration, not a file action, so read
    *  access alone must never expose it. */
   canOpenTerminal: boolean;
+  /** symlinkTargetDirectory is true only when the current listing identifies a
+   *  symlink's target as a directory. A symlink without that proof keeps the
+   *  action visible but disabled, with an explanatory hint. Ignored for other
+   *  rows. */
+  symlinkTargetDirectory?: boolean;
   t: (_key: string, _named?: Record<string, unknown>) => string;
 }
 
-/** item builds one menu row with the menuitem role NDropdown needs. */
+/** item builds one menu row with the menuitem role NDropdown needs. A `hint`
+ *  becomes the row's native tooltip, used only to explain a disabled action. */
 function item(
   label: string,
   key: string,
   disabled = false,
   icon?: () => VNode,
+  hint?: string,
 ): FilesMenuItem {
-  return { label, key, disabled, icon, props: { role: "menuitem" } };
+  return {
+    label,
+    key,
+    disabled,
+    icon,
+    props: hint
+      ? { role: "menuitem", title: hint }
+      : { role: "menuitem" },
+  };
 }
 
 /** menuIcon renders one lucide icon for a dropdown option, matching the sort menu. */
@@ -90,8 +105,8 @@ export function rowMenuOptions(
       item(t("files.menu.openTab"), "open-tab", false, menuIcon(ExternalLink)),
     );
     // A real directory can receive a shell in that exact folder (JUS-248). The
-    // action is platform-operator only and never offered for a file, symlink or
-    // special entry, which must not masquerade as a directory.
+    // action is platform-operator only; files and special entries never offer
+    // it, and a symlink only when its listing target is a known directory.
     if (ctx.canOpenTerminal) {
       options.push(
         item(
@@ -136,6 +151,23 @@ export function rowMenuOptions(
         "go-target",
         false,
         menuIcon(ChevronRight),
+      ),
+    );
+  }
+  // A symlink row can receive a shell only when the current listing proves the
+  // target is a directory. Without that proof the item stays visible (for the
+  // operator) but disabled, with a native hint explaining why (JUS-248 r1).
+  if (entry.kind === "symlink" && ctx.canOpenTerminal) {
+    const knownDirectory = ctx.symlinkTargetDirectory === true;
+    options.push(
+      item(
+        t("files.terminal.openIn", { name: entry.name }),
+        "open-terminal",
+        !knownDirectory,
+        menuIcon(Terminal),
+        knownDirectory
+          ? undefined
+          : t("files.terminal.symlinkTargetUnknown"),
       ),
     );
   }

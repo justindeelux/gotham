@@ -716,7 +716,7 @@ describe("multi-service discovery and explicit selection (JUS-247)", () => {
     await flushPromises();
     await nextTick();
     expect(apiFakes.close).toHaveBeenCalledTimes(1);
-    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, first.sessionId]);
+    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, first.sessionId, "team-1"]);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
     expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
       service: "db",
@@ -895,7 +895,7 @@ describe("application terminal failure states (JUS-247)", () => {
     await flushPromises();
 
     expect(apiFakes.close).toHaveBeenCalledTimes(1);
-    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, "session-1"]);
+    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, "session-1", "team-1"]);
     expect(apiFakes.listTargets).toHaveBeenCalledTimes(2);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
     expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
@@ -1282,7 +1282,7 @@ describe("application terminal permissions (JUS-247)", () => {
     await nextTick();
 
     expect(apiFakes.close).toHaveBeenCalledTimes(1);
-    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, tab.sessionId]);
+    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, tab.sessionId, "team-1"]);
     expect(terminal.pageTabs).toHaveLength(0);
     expect(apiFakes.hostClose).toHaveBeenCalledTimes(0);
     boundary.unmount();

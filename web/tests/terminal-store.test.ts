@@ -706,3 +706,52 @@ describe("terminal pane transfer", () => {
     window.unmount();
   });
 });
+
+describe("page tabs (JUS-265)", () => {
+  it("keeps the newest page session selected and switches without creating", async () => {
+    const terminal = useTerminalStore();
+    const first = await terminal.openPageSession(options("one"));
+    expect(terminal.activePageTabId).toBe(first.id);
+    const second = await terminal.openPageSession({
+      ...options("two"),
+      fresh: true,
+    });
+    expect(second.id).not.toBe(first.id);
+    expect(terminal.pageTabs).toHaveLength(2);
+    expect(terminal.activePageTabId).toBe(second.id);
+    expect(terminal.pageActiveTab?.id).toBe(second.id);
+
+    terminal.activatePage(first.id);
+    expect(terminal.pageActiveTab?.id).toBe(first.id);
+    // Window selection is deliberately separate from the page's.
+    await terminal.openWindowSession(options("window"));
+    expect(terminal.pageActiveTab?.id).toBe(first.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(3);
+  });
+
+  it("falls back to the remaining page tab when the active one moves to the window", async () => {
+    const terminal = useTerminalStore();
+    const first = await terminal.openPageSession(options("one"));
+    const second = await terminal.openPageSession({
+      ...options("two"),
+      fresh: true,
+    });
+    expect(terminal.activePageTabId).toBe(second.id);
+
+    terminal.detachToWindow(second.id);
+    expect(terminal.pageTabs.map((tab) => tab.id)).toEqual([first.id]);
+    expect(terminal.activePageTabId).toBe(first.id);
+    expect(terminal.pageActiveTab?.id).toBe(first.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the page selection when the last page tab closes", async () => {
+    const terminal = useTerminalStore();
+    const only = await terminal.openPageSession(options());
+    terminal.closeTabs([only.id]);
+    expect(terminal.pageTabs).toHaveLength(0);
+    expect(terminal.activePageTabId).toBe("");
+    expect(terminal.pageActiveTab).toBeNull();
+    expect(apiFakes.close).toHaveBeenCalledTimes(1);
+  });
+});

@@ -762,8 +762,10 @@ test("window controls stay at the header's right edge at every width", async ({
       };
       const bar = document.querySelector(".term-window-bar") as HTMLElement;
       const tabs = document.querySelector(".term-tabs") as HTMLElement;
+      const add = document.querySelector(".term-add-tab") as HTMLElement;
       const min = document.querySelector(".term-window-min") as HTMLElement;
       const close = document.querySelector(".term-window-close") as HTMLElement;
+      const addBox = box(add);
       const minBox = box(min);
       const closeBox = box(close);
       return {
@@ -775,8 +777,14 @@ test("window controls stay at the header's right edge at every width", async ({
           client: tabs.clientWidth,
         },
         tabRects: [...document.querySelectorAll(".term-tab")].map(box),
+        add: addBox,
         min: minBox,
         close: closeBox,
+        // The (+)-after-tabs contract: the add control follows the strip and
+        // the pinned controls stay at the far right, in that DOM order.
+        addHit: document
+          .elementsFromPoint((addBox.left + addBox.right) / 2, (addBox.top + addBox.bottom) / 2)
+          .some((element) => element === add || add.contains(element)),
         // The topmost element at each control's centre must be the control (or
         // one of its children), proving no tab/label paints over it.
         minHit: document
@@ -793,8 +801,10 @@ test("window controls stay at the header's right edge at every width", async ({
     expect(
       Math.abs(geometry.close.right - (geometry.bar.right - geometry.paddingRight)),
     ).toBeLessThanOrEqual(1);
-    expect(geometry.tabs.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
+    expect(geometry.tabs.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
+    expect(geometry.add.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
     expect(geometry.min.right).toBeLessThanOrEqual(geometry.close.left);
+    expect(geometry.addHit).toBe(true);
     expect(geometry.minHit).toBe(true);
     expect(geometry.closeHit).toBe(true);
 
@@ -803,7 +813,7 @@ test("window controls stay at the header's right edge at every width", async ({
     } else {
       // A non-scrolling strip shows every tab strictly left of the controls.
       for (const tab of geometry.tabRects) {
-        expect(tab.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
+        expect(tab.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
       }
     }
   }
@@ -817,19 +827,23 @@ test("window controls stay at the header's right edge at every width", async ({
   });
   const scrolled = await page.evaluate(() => {
     const tabs = document.querySelector(".term-tabs") as HTMLElement;
-    const min = document.querySelector(".term-window-min") as HTMLElement;
+    const add = document.querySelector(".term-add-tab") as HTMLElement;
     const last = [...document.querySelectorAll(".term-tab")].at(-1) as HTMLElement;
     return {
       tabsRight: tabs.getBoundingClientRect().right,
       lastRight: last.getBoundingClientRect().right,
-      minLeft: min.getBoundingClientRect().left,
+      addLeft: add.getBoundingClientRect().left,
     };
   });
   expect(scrolled.lastRight).toBeLessThanOrEqual(scrolled.tabsRight + 0.5);
-  expect(scrolled.tabsRight).toBeLessThanOrEqual(scrolled.minLeft + 0.5);
+  expect(scrolled.tabsRight).toBeLessThanOrEqual(scrolled.addLeft + 0.5);
 
-  // Keyboard reachable: Tab from the active tab lands on minimize, then close.
+  // Keyboard reachable in DOM order: active tab → add → minimize → close.
   await page.locator('.term-tab-name[aria-selected="true"]').focus();
+  await page.keyboard.press("Tab");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
+    .toContain("term-add-tab");
   await page.keyboard.press("Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))

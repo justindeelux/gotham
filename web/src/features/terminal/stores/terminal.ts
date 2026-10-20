@@ -33,6 +33,7 @@ import {
   knownGothamVersion,
   runningGothamVersion,
 } from "@/features/terminal/utils/terminalBanner";
+import { useTeamsStore } from "@/features/teams/stores/teams";
 import { i18n } from "@/shared/i18n";
 import type { PromptPhase } from "@/features/terminal/transport/promptScanner";
 import type {
@@ -212,6 +213,13 @@ function terminalTitle(options: TerminalOpenOptions): string {
 export const useTerminalStore = defineStore("terminal", () => {
   const tabs = ref<TerminalTab[]>([]);
   const activeTabId = ref<string>("");
+  /**
+   * activePageTabId is the page surface's selected tab. Page tabs can now be
+   * several at once (JUS-265 add-tab), so the floating window's activeTabId is
+   * deliberately separate: switching a window tab never changes what the page
+   * shows, and vice versa.
+   */
+  const activePageTabId = ref<string>("");
   const closeRequest = ref<TerminalCloseRequest | null>(null);
   const appearance = useTerminalAppearanceStore();
 
@@ -273,6 +281,17 @@ export const useTerminalStore = defineStore("terminal", () => {
   );
   const pageTabs = computed<TerminalTab[]>(() =>
     tabs.value.filter((tab) => tab.mode === "page"),
+  );
+  /**
+   * pageActiveTab is the page's displayed tab. It resolves only among page
+   * tabs, so a window tab that happens to share the activePageTabId (or a
+   * detach) can never be shown in the page pane.
+   */
+  const pageActiveTab = computed<TerminalTab | null>(
+    () =>
+      pageTabs.value.find((tab) => tab.id === activePageTabId.value) ??
+      pageTabs.value[pageTabs.value.length - 1] ??
+      null,
   );
   const windowTabs = computed<TerminalTab[]>(() =>
     tabs.value.filter((tab) => tab.mode === "window"),
@@ -416,6 +435,9 @@ export const useTerminalStore = defineStore("terminal", () => {
           rows: tab.rows,
         },
         signal,
+        // The application route is team-scoped; the same header the
+        // discovery read used must travel with the create (JUS-265).
+        useTeamsStore().activeTeamId,
       );
     }
     return createTerminalSession(
@@ -434,7 +456,11 @@ export const useTerminalStore = defineStore("terminal", () => {
   /** closeSession releases one tab's session through its owning route. */
   function closeSession(tab: TerminalTab, sessionId: string): Promise<void> {
     if (isContainerTerminalTarget(tab.target)) {
-      return closeApplicationTerminalSession(tab.applicationId, sessionId);
+      return closeApplicationTerminalSession(
+        tab.applicationId,
+        sessionId,
+        useTeamsStore().activeTeamId,
+      );
     }
     return closeTerminalSession(tab.serverId, sessionId);
   }
@@ -577,6 +603,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     const stored = tabs.value[tabs.value.length - 1]!;
     if (mode === "window") {
       activeTabId.value = stored.id;
+    } else {
+      // A new page session becomes the page's selected tab (JUS-265); the
+      // window's own selection is untouched.
+      activePageTabId.value = stored.id;
     }
     createTargets.set(stored.id, { key: targetKey(options), mode });
     await startSession(stored);
@@ -667,6 +697,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
     tab.mode = "window";
     activeTabId.value = tab.id;
+    if (activePageTabId.value === id) {
+      const next = pageTabs.value[pageTabs.value.length - 1];
+      activePageTabId.value = next?.id ?? "";
+    }
     useTerminalWindowStore().setMinimized(false);
   }
 
@@ -674,6 +708,14 @@ export const useTerminalStore = defineStore("terminal", () => {
   function activate(id: string): void {
     if (findTab(id)) {
       activeTabId.value = id;
+    }
+  }
+
+  /** activatePage selects one page tab; a window tab is ignored. */
+  function activatePage(id: string): void {
+    const tab = findTab(id);
+    if (tab?.mode === "page") {
+      activePageTabId.value = id;
     }
   }
 
@@ -996,8 +1038,13 @@ export const useTerminalStore = defineStore("terminal", () => {
     if (activeTabId.value !== "" && findTab(activeTabId.value) === null) {
       activeTabId.value = tabs.value[tabs.value.length - 1]?.id ?? "";
     }
+    if (activePageTabId.value !== "" && findTab(activePageTabId.value) === null) {
+      const pages = tabs.value.filter((tab) => tab.mode === "page");
+      activePageTabId.value = pages[pages.length - 1]?.id ?? "";
+    }
     if (tabs.value.length === 0) {
       activeTabId.value = "";
+      activePageTabId.value = "";
       if (closeRequest.value !== null) {
         closeRequest.value = null;
         settleClose(true);
@@ -1061,6 +1108,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     dismissedContainerRestarts.clear();
     tabs.value = [];
     activeTabId.value = "";
+    activePageTabId.value = "";
     closeRequest.value = null;
     settleClose(false);
   }
@@ -1068,7 +1116,9 @@ export const useTerminalStore = defineStore("terminal", () => {
   return {
     tabs,
     activeTabId,
+    activePageTabId,
     activeTab,
+    pageActiveTab,
     pageTabs,
     windowTabs,
     windowOpenCount,
@@ -1083,6 +1133,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     openWindowSession,
     detachToWindow,
     activate,
+    activatePage,
     attach,
     detach,
     isDisplayed,

@@ -6,18 +6,23 @@ import { useAuthStore } from "@/features/auth";
 import type { Server } from "@/features/servers";
 import { serverStatusKey, useServersStore } from "@/features/servers";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
+import { isContainerTerminalTarget as isContainerTarget } from "@/features/terminal/utils/terminal";
+import type {
+  TerminalOpenOptions,
+  TerminalTab,
+} from "@/features/terminal/stores/terminal";
 
 /**
- * Selection and single-flight session lifecycle for the standalone terminal
- * page (JUS-246).
+ * Page-mode tab lifecycle for the standalone terminal page (JUS-246/JUS-265).
  *
- * The operator picks an authorized server first; only then is a page-mode
- * session requested. `openPageSession` is idempotent and single-flight, so a
- * revisiting route (or the app dock's resume action) reuses the live session.
- * Switching servers runs the shared confirmation before the old page shell is
- * released. When the selected tab disappears (closed/removed) the composable
- * forgets its id and exposes an explicit restart state; it never creates a
- * replacement on its own.
+ * The page now owns a tab strip: several page sessions can be open at once and
+ * the active one is selected here. Sessions are created only by an explicit
+ * action (a server card in the empty state, the add-tab picker, or the
+ * restart/transfer actions); a route change never starts a shell on its own.
+ *
+ * `openPageSession` remains idempotent per target, and the picker asks for a
+ * fresh tab per deliberate pick with the store's single-flight key, so one
+ * gesture can never create two shells.
  */
 export function useTerminalPageSession() {
   const { t } = useI18n();
@@ -27,36 +32,29 @@ export function useTerminalPageSession() {
   const serversStore = useServersStore();
   const terminal = useTerminalStore();
 
-  const selectedId = ref<string>("");
-  const tabId = ref<string>("");
+  const selectedId = ref<string>(terminal.pageActiveTab?.serverId ?? "");
   const starting = ref(false);
-  /** closed marks a tab that vanished under a mounted page/tab host. */
+  /** closed is true after the last page tab was confirmed closed. */
   const closed = ref(false);
+  /** detachedId is the page tab that moved into the floating window. */
+  const detachedId = ref<string>("");
+  /** unknownServerId is a deep link to a node this control plane never knew. */
+  const unknownServerId = ref<string>("");
+  /** lastClosed remembers the target the restart button re-opens. */
+  const lastClosed = ref<TerminalOpenOptions | null>(null);
   /** syncingQuery guards the route → selection echo while we write the URL. */
   let syncingQuery = false;
-  /** selectionToken discards a dialog result superseded by a newer pick. */
-  let selectionToken = 0;
 
   const servers = computed<Server[]>(() => serversStore.servers);
+  const pageTabs = computed(() => terminal.pageTabs);
+  const activeTab = computed(() => terminal.pageActiveTab);
+  const tabId = computed<string>(() => activeTab.value?.id ?? "");
   const selectedServer = computed<Server | null>(
-    () => servers.value.find((server) => server.id === selectedId.value) ?? null,
+    () =>
+      servers.value.find((server) => server.id === selectedId.value) ?? null,
   );
   const serverReady = computed<boolean>(
     () => selectedServer.value?.status === "ready",
-  );
-  const activeTab = computed(() =>
-    tabId.value === "" ? null : terminal.findTab(tabId.value),
-  );
-
-  /** serverOptions label each node with its live status for the switcher. */
-  const serverOptions = computed(() =>
-    servers.value.map((server) => ({
-      label:
-        server.status === "ready"
-          ? server.name
-          : `${server.name} · ${t(serverStatusKey(server.status))}`,
-      value: server.id,
-    })),
   );
 
   /** selectedStatusLabel localizes the current server's lifecycle word. */
@@ -66,105 +64,280 @@ export function useTerminalPageSession() {
       : "",
   );
 
-  /** sourcePath is the route the app dock resumes for this page session. */
+  /** sourcePathFor is the resume route of one server's host shell. */
   function sourcePathFor(serverId: string): string {
-    return router.resolve({ name: "terminal", query: { server: serverId } })
-      .fullPath;
+    return router.resolve({
+      name: "terminal",
+      query: { ...route.query, server: serverId },
+    }).fullPath;
   }
 
-  /** syncQuery mirrors the selection into the URL for reload/dock resume. */
-  function syncQuery(): void {
-    const current =
-      typeof route.query.server === "string" ? route.query.server : "";
-    if (current === selectedId.value) {
-      return;
+  /** fetchServers loads the empty-state card list once per mount. */
+  async function fetchServers(): Promise<void> {
+    if (servers.value.length === 0 && !serversStore.loading) {
+      await serversStore.fetchServers().catch(() => undefined);
     }
-    syncingQuery = true;
-    const query = { ...route.query };
-    if (selectedId.value === "") {
-      delete query.server;
-    } else {
-      query.server = selectedId.value;
-    }
-    void router
-      .replace({ name: "terminal", query })
-      .finally(() => {
-        syncingQuery = false;
-      });
   }
 
   /**
-   * startSession creates or reuses the shell. It is the only creation path;
-   * `fresh` is the explicit "start a new session" action from a closed pane or
-   * a moved-to-window notice.
+   * resolveServer waits for the shell's server read to settle before deciding
+   * a deep-linked id is unknown: the app shell may already be fetching the
+   * list when the page mounts, so a non-empty "loading" store is not "empty".
+   */
+  async function resolveServer(serverId: string): Promise<Server | null> {
+    const known = servers.value.find((server) => server.id === serverId);
+    if (known !== undefined || serverId === "") {
+      return known ?? null;
+    }
+    await fetchServers();
+    for (
+      let attempt = 0;
+      attempt < 40 && servers.value.length === 0 && serversStore.loading;
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return servers.value.find((server) => server.id === serverId) ?? null;
+  }
+
+  /** activateTab selects one page tab. */
+  function activateTab(id: string): void {
+    terminal.activatePage(id);
+  }
+
+  /** optionsFor reconstructs one tab's open options (restart path). */
+  function optionsFor(
+    tab: TerminalTab,
+    fresh: boolean,
+  ): TerminalOpenOptions {
+    return {
+      serverId: tab.serverId,
+      serverName: tab.serverName,
+      target: tab.target,
+      root: tab.root,
+      cwd: tab.cwd,
+      applicationId: tab.applicationId,
+      applicationName: tab.applicationName,
+      service: tab.service,
+      containerId: tab.containerId,
+      containerName: tab.containerName,
+      targetLabel: tab.targetLabel,
+      sourcePath: route.fullPath,
+      ...(fresh ? { fresh: true } : {}),
+    };
+  }
+
+  /** optionsForTab reconstructs the active tab's open options. */
+  function optionsForTab(fresh: boolean): TerminalOpenOptions | null {
+    const tab = activeTab.value;
+    return tab === null ? null : optionsFor(tab, fresh);
+  }
+
+  /**
+   * startSession is the explicit restart/transfer action for the active tab.
+   * It never runs on mount and never replaces a live session on its own.
    */
   async function startSession(fresh = false): Promise<void> {
-    const server = selectedServer.value;
-    if (!server || server.id === "" || server.status !== "ready") {
-      tabId.value = "";
+    const options = optionsForTab(fresh);
+    if (options === null) {
       return;
-    }
-    closed.value = false;
-    const request = {
-      serverId: server.id,
-      serverName: server.name,
-      sourcePath: sourcePathFor(server.id),
-    };
-    if (!fresh) {
-      const existing = terminal.findTabForTarget(request);
-      if (existing) {
-        tabId.value = existing.id;
-        return;
-      }
     }
     starting.value = true;
     try {
-      const tab = await terminal.openPageSession(
-        fresh ? { ...request, fresh: true } : request,
-      );
-      if (selectedId.value === server.id) {
-        tabId.value = tab.id;
-      }
+      const opened = await terminal.openPageSession(options);
+      terminal.activatePage(opened.id);
     } finally {
       starting.value = false;
     }
   }
 
   /**
-   * selectServer runs the confirmed close lifecycle when the old page shell
-   * would otherwise be stranded: cancel keeps it and restores the switcher,
-   * confirm releases exactly that session before the next one starts.
+   * selectServer starts (or reuses) a host page session from the empty state.
+   * The picker uses the same store entry point, so both paths share the
+   * single-flight key and the authorization boundary.
    */
-  async function selectServer(nextId: string): Promise<void> {
-    if (nextId === "" || nextId === selectedId.value) {
-      return;
-    }
-    const token = ++selectionToken;
-    const previous = selectedId.value;
-    const previousTab = previous
-      ? terminal.pageTabs.find((tab) => tab.serverId === previous)
-      : undefined;
-    if (previousTab && previousTab.mode === "page") {
-      const confirmed = await terminal.requestClose([previousTab.id]);
-      if (!confirmed || token !== selectionToken) {
-        selectedId.value = previous;
-        return;
+  async function selectServer(serverId: string): Promise<void> {
+    const server = await resolveServer(serverId);
+    if (server === null || server.id === "") {
+      if (serverId !== "") {
+        unknownServerId.value = serverId;
+        selectedId.value = serverId;
       }
-    }
-    if (selectedId.value !== previous) {
       return;
     }
-    selectedId.value = nextId;
-    tabId.value = "";
-    closed.value = false;
-    syncQuery();
-    await startSession();
+    unknownServerId.value = "";
+    selectedId.value = server.id;
+    const existing = terminal.pageTabs.find(
+      (tab) => tab.serverId === server.id && tab.target === "host",
+    );
+    if (existing) {
+      terminal.activatePage(existing.id);
+      return;
+    }
+    if (server.status !== "ready") {
+      return;
+    }
+    starting.value = true;
+    try {
+      const tab = await terminal.openPageSession({
+        serverId: server.id,
+        serverName: server.name,
+        sourcePath: sourcePathFor(server.id),
+      });
+      terminal.activatePage(tab.id);
+    } finally {
+      starting.value = false;
+    }
   }
 
-  /** onServerSelect adapts Naive's value type to the selection flow. */
-  function onServerSelect(value: string | number | null): void {
-    void selectServer(String(value ?? ""));
+  /**
+   * detachedTab is the moved session this page still owns: either the tab the
+   * transfer just detached, or (after a remount/back navigation) the window
+   * tab that records this exact route as its source.
+   */
+  const detachedTab = computed<TerminalTab | null>(() => {
+    if (detachedId.value !== "") {
+      const tracked = terminal.findTab(detachedId.value);
+      if (tracked?.mode === "window") {
+        return tracked;
+      }
+    }
+    return (
+      terminal.tabs.find(
+        (tab) => tab.mode === "window" && tab.sourcePath === route.fullPath,
+      ) ?? null
+    );
+  });
+
+  /** closedIsContainer keeps the restart card's mode truthful. */
+  const closedIsContainer = computed<boolean>(() =>
+    isContainerTarget(lastClosed.value?.target ?? ""),
+  );
+
+  /**
+   * restartClosed re-opens the target of the last closed page tab, only after
+   * the explicit Start new session button.
+   */
+  async function restartClosed(): Promise<void> {
+    const options = lastClosed.value;
+    if (options === null) {
+      return;
+    }
+    starting.value = true;
+    try {
+      const opened = await terminal.openPageSession({ ...options, fresh: true });
+      closed.value = false;
+      lastClosed.value = null;
+      terminal.activatePage(opened.id);
+    } finally {
+      starting.value = false;
+    }
   }
+
+  /** restartDetached opens a new page session for the moved target. */
+  async function restartDetached(): Promise<void> {
+    const tab = terminal.findTab(detachedId.value);
+    if (tab === null) {
+      return;
+    }
+    starting.value = true;
+    try {
+      const opened = await terminal.openPageSession(optionsFor(tab, true));
+      detachedId.value = "";
+      terminal.activatePage(opened.id);
+    } finally {
+      starting.value = false;
+    }
+  }
+
+  /** closeDetached closes the moved session through the shared dialog. */
+  function closeDetached(): void {
+    const tab = terminal.findTab(detachedId.value);
+    if (tab !== null) {
+      void terminal.requestClose([tab.id]);
+    }
+  }
+
+  /** syncQuery mirrors the active tab's server into the URL for resume. */
+  function syncQuery(): void {
+    const next = selectedId.value;
+    const current =
+      typeof route.query.server === "string" ? route.query.server : "";
+    if (current === next) {
+      return;
+    }
+    syncingQuery = true;
+    const query = { ...route.query };
+    if (next === "") {
+      delete query.server;
+    } else {
+      query.server = next;
+    }
+    void router.replace({ name: "terminal", query }).finally(() => {
+      syncingQuery = false;
+    });
+  }
+
+  // The active tab owns the server selection label; a detached/closed tab
+  // falls back to the next page tab (or the empty picker) through the store.
+  watch(
+    () => activeTab.value?.id,
+    () => {
+      // Keep the last server while the empty/closed card is showing, so its
+      // restart copy can still name the node the session belonged to.
+      if (activeTab.value !== null) {
+        selectedId.value = activeTab.value.serverId;
+      }
+    },
+  );
+
+  watch(selectedId, syncQuery);
+
+  // Track what the page should show when its last tab goes away: a session
+  // moved into the window keeps the one-way notice, while a closed tab keeps
+  // the explicit restart card. Neither path starts a shell by itself.
+  watch(activeTab, (next, previous) => {
+    if (next !== null) {
+      closed.value = false;
+      detachedId.value = "";
+      lastClosed.value = null;
+      unknownServerId.value = "";
+      return;
+    }
+    if (previous === null) {
+      return;
+    }
+    const existing = terminal.findTab(previous.id);
+    if (existing === null) {
+      closed.value = true;
+      detachedId.value = "";
+      lastClosed.value = optionsFor(previous, false);
+      return;
+    }
+    if (existing.mode === "window") {
+      closed.value = false;
+      detachedId.value = existing.id;
+    }
+  });
+
+  // A node that comes online while it is the selected empty-state server
+  // starts the shell the operator already asked for. After a close the user
+  // must press the button.
+  watch(
+    () => selectedServer.value?.status,
+    (status) => {
+      if (
+        status === "ready" &&
+        selectedId.value !== "" &&
+        pageTabs.value.length === 0 &&
+        !closed.value &&
+        detachedId.value === "" &&
+        !starting.value
+      ) {
+        void selectServer(selectedId.value);
+      }
+    },
+  );
 
   // The URL is the resume contract (dock, bookmarks, back/forward).
   watch(
@@ -174,55 +347,22 @@ export function useTerminalPageSession() {
         return;
       }
       const next = typeof value === "string" ? value : "";
-      if (next === selectedId.value) {
+      if (next === "" || next === selectedId.value) {
         return;
       }
-      if (next === "") {
-        selectedId.value = "";
-        tabId.value = "";
-        closed.value = false;
+      const existing = terminal.pageTabs.find(
+        (tab) => tab.serverId === next && tab.target === "host",
+      );
+      if (existing) {
+        terminal.activatePage(existing.id);
         return;
       }
       void selectServer(next);
     },
   );
 
-  // A tab removed by any route (close confirmation, reset) must not leave the
-  // host pointing at a dead id. This only forgets the id; the stage renders an
-  // explicit restart button, never an automatic create.
-  watch(
-    () => (tabId.value === "" ? undefined : terminal.findTab(tabId.value)),
-    (tab) => {
-      if (tabId.value !== "" && tab === null) {
-        tabId.value = "";
-        starting.value = false;
-        closed.value = true;
-      }
-    },
-  );
-
-  // A node that comes online while its server is selected starts the shell the
-  // operator already asked for. After a close the user must press the button.
-  watch(
-    () => selectedServer.value?.status,
-    (status) => {
-      if (
-        status === "ready" &&
-        selectedId.value !== "" &&
-        tabId.value === "" &&
-        !closed.value &&
-        !starting.value
-      ) {
-        void startSession();
-      }
-    },
-  );
-
   // Demotion is a backend-enforced boundary; the client leaves the operator
   // surface immediately with the same forbidden page the route guard uses.
-  // A sign-out empties the account too, but that is NOT a demotion: the auth
-  // flow owns the redirect, and treating logout as one would send the login
-  // page a `?redirect=/forbidden` and strand the next sign-in there.
   const demoted = computed<boolean>(
     () => authStore.isAuthenticated && !authStore.isPlatformAdmin,
   );
@@ -241,39 +381,50 @@ export function useTerminalPageSession() {
       void router.replace({ name: "forbidden" });
       return;
     }
-    if (servers.value.length === 0 && !serversStore.loading) {
-      await serversStore.fetchServers().catch(() => undefined);
-    }
+    await fetchServers();
     const queryId =
       typeof route.query.server === "string" ? route.query.server : "";
     if (queryId !== "") {
-      selectedId.value = queryId;
-      await startSession();
+      const existing = terminal.pageTabs.find(
+        (tab) => tab.serverId === queryId && tab.target === "host",
+      );
+      if (existing) {
+        terminal.activatePage(existing.id);
+        selectedId.value = existing.serverId;
+      } else {
+        await selectServer(queryId);
+      }
       return;
     }
-    // Re-entering the menu with exactly one live page session resumes it; the
+    // Re-entering the menu with live page sessions resumes the newest one; the
     // store reuses the shell, so no second create is issued.
-    const pageTabs = terminal.pageTabs;
-    if (pageTabs.length === 1) {
-      selectedId.value = pageTabs[0]!.serverId;
-      syncQuery();
-      await startSession();
+    const last = terminal.pageActiveTab;
+    if (last !== null) {
+      terminal.activatePage(last.id);
+      selectedId.value = last.serverId;
     }
   });
 
   return {
     servers,
+    pageTabs,
     selectedId,
     selectedServer,
     serverReady,
-    serverOptions,
     selectedStatusLabel,
     tabId,
+    activeTab,
     starting,
     closed,
-    activeTab,
+    closedIsContainer,
+    detachedId,
+    detachedTab,
+    unknownServerId,
     startSession,
+    restartClosed,
+    restartDetached,
+    closeDetached,
     selectServer,
-    onServerSelect,
+    activateTab,
   };
 }

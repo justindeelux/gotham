@@ -195,8 +195,10 @@ test.describe("terminal UI polish", () => {
         };
         const bar = document.querySelector(".term-window-bar") as HTMLElement;
         const tabs = document.querySelector(".term-tabs") as HTMLElement;
+        const add = document.querySelector(".term-add-tab") as HTMLElement;
         const min = document.querySelector(".term-window-min") as HTMLElement;
         const close = document.querySelector(".term-window-close") as HTMLElement;
+        const addBox = box(add);
         const minBox = box(min);
         const closeBox = box(close);
         return {
@@ -205,8 +207,15 @@ test.describe("terminal UI polish", () => {
           tabs: box(tabs),
           scroll: { width: tabs.scrollWidth, client: tabs.clientWidth },
           tabRects: [...document.querySelectorAll(".term-tab")].map(box),
+          add: addBox,
           min: minBox,
           close: closeBox,
+          addHit: document
+            .elementsFromPoint(
+              (addBox.left + addBox.right) / 2,
+              (addBox.top + addBox.bottom) / 2,
+            )
+            .some((element) => element === add || add.contains(element)),
           minHit: document
             .elementsFromPoint(
               (minBox.left + minBox.right) / 2,
@@ -230,9 +239,11 @@ test.describe("terminal UI polish", () => {
         ),
       ).toBeLessThanOrEqual(1);
       expect(geometry.tabs.right).toBeLessThanOrEqual(
-        geometry.min.left + 0.5,
+        geometry.add.left + 0.5,
       );
+      expect(geometry.add.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
       expect(geometry.min.right).toBeLessThanOrEqual(geometry.close.left);
+      expect(geometry.addHit).toBe(true);
       expect(geometry.minHit).toBe(true);
       expect(geometry.closeHit).toBe(true);
 
@@ -240,13 +251,17 @@ test.describe("terminal UI polish", () => {
         expect(geometry.scroll.width).toBeGreaterThan(geometry.scroll.client);
       } else {
         for (const tab of geometry.tabRects) {
-          expect(tab.right).toBeLessThanOrEqual(geometry.min.left + 0.5);
+          expect(tab.right).toBeLessThanOrEqual(geometry.add.left + 0.5);
         }
       }
     }
 
-    // Keyboard reachable: Tab from the active tab lands on minimize, then close.
+    // Keyboard reachable in DOM order: active tab → add → minimize → close.
     await page.locator('.term-tab-name[aria-selected="true"]').focus();
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))
+      .toContain("term-add-tab");
     await page.keyboard.press("Tab");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.className ?? ""))

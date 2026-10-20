@@ -35,6 +35,7 @@ export default defineConfig({
     "services-templates-layout.spec.ts",
     "sessions-layout.spec.ts",
     "terminal-page.spec.ts",
+    "terminal-targets.spec.ts",
     "terminal-window.spec.ts",
     "shared-variables-layout.spec.ts",
     "shell-mobile-layout.spec.ts",

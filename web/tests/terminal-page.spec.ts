@@ -293,6 +293,19 @@ async function mockApi(
   await page.route("**/api/v1/servers", async (route) => {
     await route.fulfill({ json: { servers } });
   });
+  // The add-tab discovery read (JUS-265): this fixture only lists host nodes;
+  // the container journeys live in terminal-targets.spec.ts and terminal-application.spec.ts.
+  await page.route("**/api/v1/terminal/targets", async (route) => {
+    await route.fulfill({
+      json: {
+        servers: servers
+          .filter((row) => row.status === "ready")
+          .map((row) => ({ id: row.id, name: row.name, status: row.status })),
+        applications: [],
+        errors: [],
+      },
+    });
+  });
   for (const row of servers) {
     await page.route(`**/api/v1/servers/${row.id}`, async (route) => {
       await route.fulfill({ json: { server: row } });
@@ -502,15 +515,6 @@ async function tabCounts(
       window: store.tabs.filter((tab) => tab.mode === "window").length,
     };
   });
-}
-
-/** openServerSelect opens the Naive select and picks one server. */
-async function pickServer(page: Page, name: string): Promise<void> {
-  await page.locator(".term-server-select").click();
-  await page
-    .locator(".n-base-select-option")
-    .filter({ hasText: name })
-    .click();
 }
 
 /**
@@ -1000,7 +1004,9 @@ test("the moved notice actions are real pointer and keyboard targets", async ({
   // session and buffer in the window.
   await notice.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(2);
-  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  await expect(page.locator(".term-page .term-surface .term-state")).toHaveText(
+    "Connected",
+  );
   expect(await tabCounts(page)).toEqual({ page: 1, window: 1 });
   await expect
     .poll(() => window.locator(".xterm-rows").innerText())
@@ -1221,7 +1227,7 @@ test("rapid tab flapping while a create is in flight issues one POST", async ({
   expect(state.creates).toBe(1);
 });
 
-test("cancelling a server switch keeps the shell, confirming closes only it", async ({
+test("closing one page tab confirms and keeps the other session", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -1230,24 +1236,41 @@ test("cancelling a server switch keeps the shell, confirming closes only it", as
   await seedApp(page, `/terminal?server=${SERVER_A}`);
   await expect.poll(() => state.creates).toBe(1);
 
+  // A second page tab comes from the add-tab picker, not a destructive switch.
+  await page.locator(".term-add-tab").click();
+  await page
+    .locator(".term-target-option")
+    .filter({ hasText: "prod-02" })
+    .click();
+  await expect.poll(() => state.creates).toBe(2);
+  expect(state.createServers).toEqual([SERVER_A, SERVER_B]);
+  expect(state.deletes).toBe(0);
+  await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_B}`));
+  await expect(page.locator(".term-page-tab")).toHaveCount(2);
+
+  // Cancel keeps both shells and the active tab.
+  const close = page.locator(".term-page-tab.is-active .term-page-tab-close");
+  await close.click();
   const dialog = page.locator(".term-close-modal");
-  await pickServer(page, "prod-02");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Keep terminals" }).click();
   await expect(dialog).toBeHidden();
-  expect(state.creates).toBe(1);
+  expect(state.creates).toBe(2);
   expect(state.deletes).toBe(0);
-  await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_A}`));
-  await expect(page.locator(".term-server-select")).toContainText("prod-01");
+  await expect(page.locator(".term-page-tab")).toHaveCount(2);
 
-  await pickServer(page, "prod-02");
+  // Confirm releases exactly the active tab; the first shell keeps running.
+  await close.click();
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
-  await expect.poll(() => state.creates).toBe(2);
-  expect(state.deletes).toBe(1);
-  expect(state.createServers).toEqual([SERVER_A, SERVER_B]);
-  await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_B}`));
-  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  await expect.poll(() => state.deletes).toBe(1);
+  expect(state.creates).toBe(2);
+  await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_A}`));
+  await expect(page.locator(".term-page-tab")).toHaveCount(1);
+  await expect(page.locator(".term-page-tab")).toContainText("prod-01");
+  await expect(page.locator(".term-page .term-surface .term-state")).toHaveText(
+    "Connected",
+  );
 });
 
 test("signing out from /terminal lands on login with no forbidden redirect", async ({

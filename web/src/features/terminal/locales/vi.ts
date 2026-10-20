@@ -129,8 +129,10 @@ const vi = {
     title: "Terminal",
     eyebrow: "Vận hành",
     description:
-      "Mở shell trên máy chủ đã quản lý. Quyền terminal là quản trị toàn bộ máy chủ và chỉ dành cho quản trị viên nền tảng.",
+      "Mở shell trên máy chủ được quản lý hoặc shell bên trong container ứng dụng đang chạy. Quyền terminal là quản trị toàn bộ máy chủ và chỉ dành cho quản trị viên nền tảng.",
     tabLabel: "Terminal",
+    tabs: "Các tab terminal",
+    closeTab: "Đóng {title}",
     switchServer: "Máy chủ",
     chooseServer: "Chọn máy chủ",
     chooseHint: "Chọn một máy chủ sẵn sàng để mở terminal trên trang.",
@@ -148,6 +150,35 @@ const vi = {
     notReadyBody:
       "Máy chủ này đang ở trạng thái {status}. Terminal chỉ có thể bắt đầu trên node sẵn sàng.",
     unknownServer: "Máy chủ này không được quản lý bởi bảng điều khiển.",
+  },
+  targets: {
+    open: "Mở terminal mới",
+    title: "Mở terminal",
+    search: "Tìm đích",
+    searchPlaceholder: "Tìm máy chủ và container",
+    servers: "Máy chủ",
+    hostShell: "Shell trên máy chủ",
+    containerMeta: "{service} · bản sao {replica}",
+    replicaOnly: "Bản sao {replica}",
+    loading: "Đang tải danh sách…",
+    empty: "Không có đích terminal khả dụng",
+    emptyHint:
+      "Bạn cần một máy chủ sẵn sàng hoặc một container ứng dụng đang chạy mà bạn có quyền ghi.",
+    noMatches: "Không có đích nào khớp với tìm kiếm.",
+    retry: "Thử lại",
+    partial: "Một số đích không tải được.",
+    createFailed: "Không thể khởi động terminal.",
+    opening: "Đang mở…",
+    errors: {
+      auth: "Phiên đăng nhập đã kết thúc. Hãy đăng nhập lại để mở terminal.",
+      network: "Không thể kết nối tới bảng điều khiển.",
+      unavailable:
+        "Danh sách đích hiện không khả dụng. Hãy thử lại khi máy chủ hoặc bảng điều khiển kết nối được.",
+      disabled:
+        "Terminal container bị tắt trên bảng điều khiển này. Hãy nhờ quản trị viên nền tảng bật lại.",
+      internal:
+        "Bảng điều khiển đã trả về phản hồi không mong đợi. Hãy thử lại hoặc tải lại trang.",
+    },
   },
   dock: {
     label: "Terminal trên trang đang tạm dừng",

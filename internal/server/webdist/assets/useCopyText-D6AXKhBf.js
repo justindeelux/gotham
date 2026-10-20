@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-BMw2gOuT.js
+import{e as i}from"./index-BW8997HE.js";import{u as n}from"./use-message-DxcDLWcU.js";import{bq as e}from"./index-BmeihhAz.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+========
+import{e as i}from"./index-Bd67OqF0.js";import{u as n}from"./use-message-CgkKyHLu.js";import{bq as e}from"./index-D0sQcN8R.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+>>>>>>>> bd87bd12a (feat(terminal): add a tab button with a target picker):internal/server/webdist/assets/useCopyText-D6AXKhBf.js

@@ -124,7 +124,6 @@ const vi = {
   terminal: {
     label: "Terminal",
     openHere: "Mở terminal tại đây",
-    openHereHint: "Mở shell trên máy chủ tại thư mục này trong cửa sổ terminal nổi.",
     openIn: "Mở terminal trong {name}",
     symlinkTargetUnknown:
       "Đích của liên kết không phải thư mục có trong danh sách này. Hãy mở một thư mục thật.",

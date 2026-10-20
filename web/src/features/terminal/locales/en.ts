@@ -189,8 +189,10 @@ const en = {
     insertLabel: "Insert {label} into the terminal",
     editLabel: "Edit {label}",
     deleteLabel: "Delete {label}",
+    delete: "Delete",
     save: "Save command",
     cancel: "Cancel",
+    done: "Done",
     label: "Label",
     labelPlaceholder: "Deploy API",
     command: "Command",
@@ -200,6 +202,8 @@ const en = {
     abbreviationHint:
       "Type this at a supported prompt to see the command. Letters, digits, dot, dash and underscore only.",
     empty: "No saved commands yet.",
+    emptyExample:
+      "Example: save `docker-compose up -d --build` as {shortcut}, then type {shortcut} at the prompt and accept the suggestion.",
     storageNote:
       "Saved in this browser for this account. Not encrypted — do not store secrets.",
     saveFailed:
@@ -215,15 +219,6 @@ const en = {
     insertEmpty: "The command is empty; nothing was inserted.",
     insertUnavailable: "The terminal is not ready; nothing was inserted.",
     dismissNotice: "Dismiss",
-    hintTitle: "Abbreviation suggestions are off",
-    hintBody:
-      "This shell does not emit prompt marks. Add the optional snippet to your shell rc file; Gotham never injects it into the shell.",
-    hintAlternate:
-      "A fullscreen application is active; suggestions stay off until the shell prompt returns.",
-    hintUnsupported:
-      "Automatic suggestions support bash and zsh. Manual insertion works in every shell.",
-    copySnippet: "Copy setup snippet",
-    copied: "Copied",
     validation: {
       labelRequired: "Give this command a label.",
       labelTooLong: "Labels are limited to 64 characters.",
@@ -248,6 +243,8 @@ const en = {
     hint: "Ctrl+Shift+Space to choose · Esc dismisses",
     placeholder: "Type an abbreviation to insert a saved command.",
     placeholderEmpty: "Save a quick command with an abbreviation to see suggestions here.",
+    noPromptMarks:
+      "This shell does not report prompts, so shortcuts cannot suggest commands.",
     choose: "Choose",
     dismiss: "Dismiss suggestion",
   },

@@ -38,6 +38,45 @@ const commandNotice = ref("");
 const hintId = computed<string>(() => `term-hint-${props.tabId}`);
 const tab = computed<TerminalTab | null>(() => terminal.findTab(props.tabId));
 
+/**
+ * NO_PROMPT_MARKS_GRACE_MS lets a healthy shell deliver its first OSC 133
+ * mark before the strip claims marks are unavailable. Without it the hint
+ * flashes on every connect, while the shell is still printing its prompt.
+ */
+const NO_PROMPT_MARKS_GRACE_MS = 1500;
+const noPromptMarksHint = ref(false);
+let promptHintTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** clearPromptHintTimer stops the pending grace check. */
+function clearPromptHintTimer(): void {
+  if (promptHintTimer !== null) {
+    clearTimeout(promptHintTimer);
+    promptHintTimer = null;
+  }
+}
+
+/**
+ * The hint only appears after a connected session has stayed mark-less for
+ * the grace period; a first prompt mark clears it immediately.
+ */
+watch(
+  () => [tab.value?.status, tab.value?.integrationDetected] as const,
+  ([status, detected]) => {
+    clearPromptHintTimer();
+    noPromptMarksHint.value = false;
+    if (status !== "connected" || detected) {
+      return;
+    }
+    promptHintTimer = setTimeout(() => {
+      promptHintTimer = null;
+      if (tab.value?.status === "connected" && !tab.value?.integrationDetected) {
+        noPromptMarksHint.value = true;
+      }
+    }, NO_PROMPT_MARKS_GRACE_MS);
+  },
+  { immediate: true },
+);
+
 /** suggestion is the single abbreviation match the runtime reports. */
 const suggestion = computed(() => tab.value?.suggestion ?? null);
 
@@ -98,6 +137,11 @@ function returnFocus(): void {
 /** onMetaInserted announces a manual insert and lands focus in the shell. */
 function onMetaInserted(label: string): void {
   commandNotice.value = t("terminal.quickCommands.inserted", { label });
+  void nextTick(() => terminal.focus(props.tabId));
+}
+
+/** onMetaClosed returns focus to the shell after the quick-command modal. */
+function onMetaClosed(): void {
   void nextTick(() => terminal.focus(props.tabId));
 }
 
@@ -207,6 +251,7 @@ function onSurfaceKeydown(event: KeyboardEvent): void {
 
 onMounted(attachSurface);
 onBeforeUnmount(() => {
+  clearPromptHintTimer();
   const element = surface.value;
   if (element) {
     terminal.detach(props.tabId, element);
@@ -252,7 +297,12 @@ watch(
     @compositionstart.capture="onCompositionStart"
     @compositionend.capture="onCompositionEnd"
   >
-    <TerminalMetaBar :tab="tab" :variant="variant" @inserted="onMetaInserted" />
+    <TerminalMetaBar
+      :tab="tab"
+      :variant="variant"
+      @inserted="onMetaInserted"
+      @focus-terminal="onMetaClosed"
+    />
 
     <p :id="hintId" class="term-sr">
       {{ t("terminal.shortcuts.hint") }}
@@ -262,6 +312,7 @@ watch(
       :suggestion="suggestion"
       :notice="commandNotice"
       :has-abbreviations="hasAbbreviations"
+      :no-prompt-marks-hint="noPromptMarksHint"
       @accept="acceptSuggestion"
       @dismiss="dismissSuggestion"
       @dismiss-notice="commandNotice = ''"

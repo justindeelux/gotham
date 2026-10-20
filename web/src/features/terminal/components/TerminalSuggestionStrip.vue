@@ -25,11 +25,14 @@ interface Props {
   notice?: string;
   /** hasAbbreviations switches the empty hint between setup and usage. */
   hasAbbreviations?: boolean;
+  /** noPromptMarksHint only turns true after the post-connect grace period. */
+  noPromptMarksHint?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   notice: "",
   hasAbbreviations: false,
+  noPromptMarksHint: false,
 });
 const emit = defineEmits<{
   accept: [];
@@ -141,6 +144,12 @@ function onOptionKeydown(event: KeyboardEvent): void {
         </template>
       </NButton>
     </template>
+    <span
+      v-else-if="props.hasAbbreviations && props.noPromptMarksHint"
+      class="term-suggest-placeholder"
+    >
+      {{ t("terminal.suggestions.noPromptMarks") }}
+    </span>
     <span v-else class="term-suggest-placeholder">
       {{
         props.hasAbbreviations

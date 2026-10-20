@@ -777,7 +777,11 @@ test("the moved-to-window notice starts a new page session only on demand", asyn
     .getByRole("button", { name: "Start new session" });
   await startNew.click();
   await expect.poll(() => state.creates).toBe(2);
-  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  // Scope to the page pane: the floating window keeps its own (already
+  // Connected) surface, so a bare .term-surface locator is ambiguous here.
+  await expect(page.locator(".term-page .term-surface .term-state")).toHaveText(
+    "Connected",
+  );
   expect(await tabCounts(page)).toEqual({ page: 1, window: 1 });
 });
 

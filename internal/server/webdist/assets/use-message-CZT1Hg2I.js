@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/use-message-D_7WluZC.js
+import{bI as s,aM as o,h2 as t}from"./index-Ds9r13vT.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+========
+import{bJ as s,aN as o,g_ as t}from"./index-BixTaOkY.js";function a(){const e=o(t,null);return e===null&&s("use-message","No outer <n-message-provider /> founded. See prerequisite in https://www.naiveui.com/en-US/os-theme/components/message for more details. If you want to use `useMessage` outside setup, please check https://www.naiveui.com/zh-CN/os-theme/components/message#Q-&-A."),e}export{a as u};
+>>>>>>>> 4de2e388f (feat(terminal): add application terminal tab):internal/server/webdist/assets/use-message-CZT1Hg2I.js

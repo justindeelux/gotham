@@ -36,6 +36,15 @@ export function isLive(status: TerminalStatus): boolean {
   return status === "connecting" || status === "connected";
 }
 
+/**
+ * isContainerTerminalTarget reports whether a tab targets an application
+ * container. The value is the exact contract target, never a heuristic on a
+ * server/application id, so host and container paths can never be confused.
+ */
+export function isContainerTerminalTarget(target: string): boolean {
+  return target === "container";
+}
+
 /** errorKey maps a stable failure class onto its catalog key. */
 export function errorKey(code: TerminalErrorCode | null): string {
   return `terminal.errors.${code ?? "generic"}`;

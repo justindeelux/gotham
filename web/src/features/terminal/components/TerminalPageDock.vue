@@ -8,6 +8,7 @@ import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/features/auth";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
+import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 
 /**
  * App-level host for page sessions (JUS-246).
@@ -52,17 +53,31 @@ function onMediaChange(event: MediaQueryListEvent): void {
  * duplicate the same session. Non-operators never see the cards, even if a
  * demotion left a tab in memory for the backend to revoke.
  */
-const pausedTabs = computed<TerminalTab[]>(() => {
-  if (!authStore.isPlatformAdmin) {
-    return [];
-  }
-  return terminal.pageTabs.filter(
-    (tab) => !terminal.isDisplayed(tab.id) && tab.sourcePath !== route.fullPath,
-  );
-});
+/**
+ * visibleTabs applies the capability split: a host shell is a platform
+ * operator surface, while a container shell belongs to the application's team
+ * (the backend enforces application write access on every handshake). A
+ * container card therefore stays reachable for a non-operator team member; a
+ * read_only account loses the tab at the demotion boundary instead.
+ */
+const visibleTabs = computed<TerminalTab[]>(() =>
+  terminal.pageTabs.filter((tab) =>
+    isContainerTerminalTarget(tab.target) ? true : authStore.isPlatformAdmin,
+  ),
+);
 
-/** target describes the server and starting directory of one paused tab. */
+const pausedTabs = computed<TerminalTab[]>(() =>
+  visibleTabs.value.filter(
+    (tab) => !terminal.isDisplayed(tab.id) && tab.sourcePath !== route.fullPath,
+  ),
+);
+
+/** target describes the target and location of one paused tab. */
 function target(tab: TerminalTab): string {
+  if (isContainerTerminalTarget(tab.target)) {
+    const label = tab.targetLabel || tab.containerName;
+    return label || tab.applicationName || tab.title;
+  }
   const where = tab.cwd && tab.cwd !== "." ? tab.cwd : tab.root;
   return where ? `${tab.serverName || tab.serverId} · ${where}` : tab.serverName || tab.serverId;
 }

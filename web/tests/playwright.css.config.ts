@@ -8,6 +8,7 @@ export default defineConfig({
   testMatch: [
     "create-app-polish.spec.ts",
     "add-resource-picker.spec.ts",
+    "application-terminal.spec.ts",
     "environment-layout.spec.ts",
     "files-context-menu.spec.ts",
     "files-editor-layout.spec.ts",

@@ -34,6 +34,8 @@ const vi = {
     size: "{cols} × {rows}",
     serviceUser: "Chạy dưới {user}",
     privilege: "Quản trị toàn bộ máy chủ (thực tế là root).",
+    application: "Ứng dụng",
+    containerNote: "Shell này chạy bên trong container ứng dụng đã chọn.",
     detailLabel: "Terminal cho {title}",
   },
   status: {
@@ -71,6 +73,20 @@ const vi = {
     badResponse:
       "Bảng điều khiển đã trả về phản hồi không mong đợi. Hãy bắt đầu phiên mới để thử lại.",
     generic: "Không thể khởi động terminal.",
+    applicationForbidden:
+      "Bạn cần quyền ghi vào nhóm của ứng dụng này để mở shell trong container.",
+    applicationNotFound: "Ứng dụng này không còn tồn tại.",
+    noDeployment:
+      "Ứng dụng này chưa có đợt triển khai nào đang chạy. Hãy triển khai rồi thử lại.",
+    deployInFlight:
+      "Đang có một đợt triển khai. Hãy đợi đợt triển khai kết thúc rồi thử lại.",
+    containerStopped:
+      "Container đã chọn không chạy. Hãy khởi động ứng dụng rồi làm mới danh sách service.",
+    containerGone:
+      "Container đã chọn không còn khả dụng. Hãy làm mới danh sách service và chọn một container đang chạy.",
+    containerNoShell: "Container này không có shell được hỗ trợ.",
+    terminalDisabled:
+      "Terminal container đang bị tắt trên bản điều khiển này. Hãy đề nghị quản trị viên nền tảng bật lại.",
   },
   actions: {
     retry: "Bắt đầu phiên mới",

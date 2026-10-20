@@ -35,6 +35,8 @@ const en = {
     size: "{cols} × {rows}",
     serviceUser: "Runs as {user}",
     privilege: "Full host administration (effectively root).",
+    application: "Application",
+    containerNote: "This shell runs inside the selected application container.",
     detailLabel: "Terminal for {title}",
   },
   status: {
@@ -72,6 +74,22 @@ const en = {
     badResponse:
       "The control plane sent an unexpected response. Start a new session to try again.",
     generic: "The terminal could not be started.",
+    // Application container targets (JUS-247). Deliberately distinct from the
+    // host classes above: a container failure must never claim a host capability.
+    applicationForbidden:
+      "You need write access to this application's team to open a container shell.",
+    applicationNotFound: "This application is no longer available.",
+    noDeployment:
+      "This application has no running deployment. Deploy it, then try again.",
+    deployInFlight:
+      "A deployment is in progress. Wait for it to finish, then try again.",
+    containerStopped:
+      "The selected container is not running. Start the application, then refresh the service list.",
+    containerGone:
+      "The selected container is no longer available. Refresh the service list and choose a running container.",
+    containerNoShell: "This container has no supported shell.",
+    terminalDisabled:
+      "Container terminals are disabled on this control plane. Ask a platform administrator to enable them.",
   },
   actions: {
     retry: "Start new session",

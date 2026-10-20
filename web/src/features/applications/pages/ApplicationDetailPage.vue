@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NEmpty, NSpace, NSpin, NTabPane, NTabs } from "naive-ui";
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRoute } from "vue-router";
 
 import ApplicationDeleteDialog from "@/features/applications/components/ApplicationDeleteDialog.vue";
 
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
+import ApplicationTerminalTab from "@/features/applications/components/ApplicationTerminalTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
 import ApplicationHeader from "@/features/applications/components/ApplicationHeader.vue";
 import ApplicationLogsTab from "@/features/applications/components/ApplicationLogsTab.vue";
@@ -18,10 +20,50 @@ import RollbackDialog from "@/features/applications/components/RollbackDialog.vu
 import { useApplicationDetail } from "@/features/applications/composables/useApplicationDetail";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
+import { useAuthStore } from "@/features/auth";
+import { useTerminalStore } from "@/features/terminal";
 
 const detail = useApplicationDetail();
+const authStore = useAuthStore();
+const terminal = useTerminalStore();
+const route = useRoute();
 
 const { t } = useI18n();
+
+/**
+ * canUseTerminal mirrors the backend capability exactly: a container shell
+ * needs team write access (owner/admin), never file or platform-operator
+ * access. While the application row is still loading the tab stays hidden, so
+ * a read_only account never even mounts the discovery host.
+ */
+const canUseTerminal = computed<boolean>(
+  () => detail.canWrite.value && detail.application.value !== null,
+);
+
+/**
+ * blockedTerminal exposes the clear not-allowed state for a crafted
+ * `?tab=terminal` deep link: no tab, no request, and a bounded explanation.
+ */
+const blockedTerminal = computed<boolean>(
+  () =>
+    detail.application.value !== null &&
+    route?.query?.tab === "terminal" &&
+    !canUseTerminal.value,
+);
+
+/**
+ * Demotion to read_only is a security boundary: release this application's
+ * container sessions before the hidden pane unmounts, then leave the tab. The
+ * page owns this (not only the tab host) so the close still runs when `v-if`
+ * removes the host in the same tick. A sign-out is not a demotion; the auth
+ * flow resets the store itself.
+ */
+watch(canUseTerminal, (allowed) => {
+  if (!allowed && authStore.isAuthenticated) {
+    terminal.closeContainerSessions(detail.appId.value);
+    detail.activeTab.value = "overview";
+  }
+});
 
 /** deploymentsTab names the deployment count; 0/1/many all render. */
 const deploymentsTab = computed<string>(() =>
@@ -52,10 +94,15 @@ const showStorageTab = computed<boolean>(
  * programmatic selection therefore never renders a missing pane.
  */
 const activeTab = computed<string>({
-  get: () =>
-    detail.activeTab.value === "storage" && !showStorageTab.value
-      ? "overview"
-      : detail.activeTab.value,
+  get: () => {
+    if (detail.activeTab.value === "storage" && !showStorageTab.value) {
+      return "overview";
+    }
+    if (detail.activeTab.value === "terminal" && !canUseTerminal.value) {
+      return "overview";
+    }
+    return detail.activeTab.value;
+  },
   set: (value: string) => {
     detail.activeTab.value = value;
   },
@@ -84,6 +131,18 @@ const activeTab = computed<string>({
         style="margin-bottom: 12px"
       >
         {{ detail.appsStore.error }}
+      </NAlert>
+
+      <NAlert
+        v-if="blockedTerminal"
+        type="info"
+        :show-icon="true"
+        class="app-blocked-terminal"
+      >
+        <template #header>
+          {{ t("applications.terminal.notAllowedTitle") }}
+        </template>
+        {{ t("applications.terminal.notAllowedBody") }}
       </NAlert>
 
       <ApplicationHeader
@@ -163,6 +222,23 @@ const activeTab = computed<string>({
             @update:draft="detail.envDraft.value = $event"
             @save="detail.handleSaveEnv"
             @retry="detail.loadEnv()"
+          />
+        </NTabPane>
+
+        <NTabPane
+          v-if="canUseTerminal"
+          name="terminal"
+          :tab="t('applications.terminal.tab')"
+          display-directive="show"
+        >
+          <ApplicationTerminalTab
+            v-if="detail.application.value"
+            class="application-terminal"
+            :application-id="detail.application.value.id"
+            :application-name="detail.application.value.name"
+            :can-write="canUseTerminal"
+            :active="activeTab === 'terminal'"
+            @blocked="detail.activeTab.value = 'overview'"
           />
         </NTabPane>
 
@@ -267,5 +343,17 @@ const activeTab = computed<string>({
 
 .mono {
   font-family: var(--font-mono);
+}
+
+.application-terminal {
+  /* The shared stage needs a bounded pane; 60vh stays inside the modal-free
+     page on phones and leaves the tab strip reachable. */
+  display: flex;
+  flex-direction: column;
+  min-height: min(60vh, 34rem);
+}
+
+.app-blocked-terminal {
+  margin-bottom: 12px;
 }
 </style>

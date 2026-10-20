@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/Add-D2wF3pye.js
+import{d as o,eR as t,a as r}from"./index-Ds9r13vT.js";var a=o({name:"Add",render(){return(()=>{const e=t("b30130fbba5c5b23");return e[0]||(e[0]=r("svg",{width:"512",height:"512",viewBox:"0 0 512 512",fill:"none",xmlns:"http://www.w3.org/2000/svg"},[r("path",{d:"M256 112V400M400 256H112",stroke:"currentColor","stroke-width":"32","stroke-linecap":"round","stroke-linejoin":"round"})],-1))})()}});export{a as A};
+========
+import{d as o,eN as t,a as r}from"./index-BixTaOkY.js";var a=o({name:"Add",render(){return(()=>{const e=t("b30130fbba5c5b23");return e[0]||(e[0]=r("svg",{width:"512",height:"512",viewBox:"0 0 512 512",fill:"none",xmlns:"http://www.w3.org/2000/svg"},[r("path",{d:"M256 112V400M400 256H112",stroke:"currentColor","stroke-width":"32","stroke-linecap":"round","stroke-linejoin":"round"})],-1))})()}});export{a as A};
+>>>>>>>> 4de2e388f (feat(terminal): add application terminal tab):internal/server/webdist/assets/Add-cJdLsHN9.js

@@ -5,6 +5,7 @@ import { http } from "@/shared/api/http";
 import { getAccessToken } from "@/shared/api/token";
 import {
   terminalSessionSchema,
+  type CreateApplicationTerminalInput,
   type CreateTerminalInput,
   type TerminalSessionInfo,
 } from "@/features/terminal/schemas/terminal";
@@ -29,7 +30,18 @@ export type TerminalErrorCode =
   | "cwdUnreadable"
   | "agentUpdate"
   | "badResponse"
-  | "generic";
+  | "generic"
+  // Application container targets (JUS-247). Kept distinct from the host
+  // classes so a container failure never borrows host-only copy ("platform
+  // operator", "server root") and vice versa.
+  | "applicationForbidden"
+  | "applicationNotFound"
+  | "noDeployment"
+  | "deployInFlight"
+  | "containerStopped"
+  | "containerGone"
+  | "containerNoShell"
+  | "terminalDisabled";
 
 /** TerminalFailure is a bounded failure a tab can render. */
 export interface TerminalFailure {
@@ -70,6 +82,48 @@ export async function closeTerminalSession(
   try {
     await http.delete(
       `/servers/${encodeURIComponent(serverId)}/terminal/sessions/${encodeURIComponent(sessionId)}`,
+    );
+  } catch (error) {
+    const status = (error as ApiError | null)?.status ?? null;
+    if (status === 404 || status === 409) {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * createApplicationTerminalSession asks for a container exec with the exact
+ * `(service, container_id)` pair the discovery response returned (JUS-244).
+ * The browser never invents an id: the control plane re-resolves the running
+ * set and rejects a stale target with 404.
+ */
+export async function createApplicationTerminalSession(
+  applicationId: string,
+  input: CreateApplicationTerminalInput,
+  signal?: AbortSignal,
+): Promise<TerminalSessionInfo> {
+  const response = await http.post<unknown>(
+    `/applications/${encodeURIComponent(applicationId)}/terminal/sessions`,
+    {
+      service: input.service,
+      container_id: input.containerId,
+      cols: input.cols,
+      rows: input.rows,
+    },
+    signal ? { signal } : undefined,
+  );
+  return terminalSessionSchema.parse(response.data);
+}
+
+/** closeApplicationTerminalSession releases a pending or attached container exec. */
+export async function closeApplicationTerminalSession(
+  applicationId: string,
+  sessionId: string,
+): Promise<void> {
+  try {
+    await http.delete(
+      `/applications/${encodeURIComponent(applicationId)}/terminal/sessions/${encodeURIComponent(sessionId)}`,
     );
   } catch (error) {
     const status = (error as ApiError | null)?.status ?? null;
@@ -143,6 +197,56 @@ function isInvalidWorkingDirectory(message: string): boolean {
 }
 
 /**
+ * applicationTerminalFailure classifies a container target/session failure.
+ *
+ * The contract returns fixed, bounded phrases per status (409 has three
+ * meanings: no running deployment, an in-flight deploy, a stopped container).
+ * The classifier reads those phrases only to pick a catalog code; the phrase
+ * itself is never rendered, so a drifting or hostile body cannot reach the DOM.
+ */
+export function applicationTerminalFailure(
+  error: unknown,
+): TerminalFailure {
+  const api = error as Partial<ApiError> | null;
+  const status = typeof api?.status === "number" ? api.status : null;
+  const message = typeof api?.message === "string" ? api.message : "";
+  const text = message.toLowerCase();
+  switch (status) {
+    case 400:
+      return { code: "generic", message };
+    case 401:
+      return { code: "auth", message };
+    case 403:
+      return { code: "applicationForbidden", message };
+    case 404:
+      return text.includes("container")
+        ? { code: "containerGone", message }
+        : { code: "applicationNotFound", message };
+    case 409:
+      if (text.includes("no running deployment")) {
+        return { code: "noDeployment", message };
+      }
+      if (text.includes("deployment is in progress")) {
+        return { code: "deployInFlight", message };
+      }
+      if (text.includes("not running")) {
+        return { code: "containerStopped", message };
+      }
+      return { code: "generic", message };
+    case 429:
+      return { code: "quota", message };
+    case 501:
+      return { code: "unsupported", message };
+    case 502:
+      return { code: "unavailable", message };
+    case 503:
+      return { code: "terminalDisabled", message };
+    default:
+      return { code: status === null ? "network" : "generic", message };
+  }
+}
+
+/**
  * terminalStreamFailureCode maps the control plane's bounded error-frame text
  * onto a translatable class (JUS-248). The relay deliberately never sends a
  * host path, so these exact phrases are the contract surface; an unknown text
@@ -171,6 +275,17 @@ export function terminalStreamFailureCode(
     case "the node registry is unavailable":
     case "the node did not start the shell in time":
     case "the session expired before it started":
+      return "unavailable";
+    // Container exec stream failures (JUS-244 relayError phrases).
+    case "the container no longer exists; redeploy the application":
+      return "containerGone";
+    case "the container is not running; start the application first":
+      return "containerStopped";
+    case "the container has no supported shell":
+      return "containerNoShell";
+    case "this node agent does not support container terminals":
+      return "unsupported";
+    case "the node agent or docker daemon is unavailable":
       return "unavailable";
     default:
       return null;

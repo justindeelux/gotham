@@ -9,14 +9,19 @@ import { z } from "zod";
 /** TerminalTarget is the execution target; JUS-244 adds containers later. */
 export const terminalTargetSchema = z.string().min(1).max(64);
 
-/** terminalSessionSchema validates one created session (201 body). */
+/**
+ * terminalSessionSchema validates one created session (201 body). A container
+ * session (JUS-244) omits `root`/`cwd` and adds the resolved target identity;
+ * the browser never supplies a container id on its own, so these fields are
+ * mandatory display metadata only when the control plane returns them.
+ */
 export const terminalSessionSchema = z.object({
   id: z.string().min(1),
   server_id: z.string().min(1),
   target: terminalTargetSchema,
   // root and cwd are omitted by the control plane when the session was created
-  // without a File manager context (the Terminal page and the server detail
-  // tab); default them to "" so the no-root response stays valid.
+  // without a File manager context (the Terminal page, the server detail tab
+  // and application container sessions); default them to "" so it stays valid.
   root: z.string().default(""),
   cwd: z.string().default(""),
   cols: z.number().int().min(1).max(1000),
@@ -24,14 +29,31 @@ export const terminalSessionSchema = z.object({
   expires_at: z.string().min(1),
   websocket_path: z.string().startsWith("/"),
   subprotocol: z.literal("gotham.terminal.v1"),
+  application_id: z.string().min(1).optional(),
+  service: z.string().optional(),
+  container_id: z.string().min(1).optional(),
+  container_name: z.string().min(1).optional(),
+  target_label: z.string().min(1).optional(),
 });
 export type TerminalSessionInfo = z.infer<typeof terminalSessionSchema>;
 
-/** CreateTerminalInput is the body accepted by the create endpoint. */
+/** CreateTerminalInput is the body accepted by the host create endpoint. */
 export interface CreateTerminalInput {
   target?: string;
   root?: string;
   cwd?: string;
+  cols: number;
+  rows: number;
+}
+
+/**
+ * CreateApplicationTerminalInput is the exact container selection the discovery
+ * response returned. The control plane re-validates the pair and answers 404
+ * "the selected container is no longer available" when it moved.
+ */
+export interface CreateApplicationTerminalInput {
+  service: string;
+  containerId: string;
   cols: number;
   rows: number;
 }

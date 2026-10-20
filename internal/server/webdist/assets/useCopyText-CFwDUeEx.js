@@ -1,0 +1,5 @@
+<<<<<<<< HEAD:internal/server/webdist/assets/useCopyText-Bh8pjBwD.js
+import{e as i}from"./index-BqeFdg3s.js";import{u as n}from"./use-message-D_7WluZC.js";import{bp as e}from"./index-Ds9r13vT.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+========
+import{e as i}from"./index-CkcuwEeQ.js";import{u as n}from"./use-message-CZT1Hg2I.js";import{bq as e}from"./index-BixTaOkY.js";function l(){const o=n(),{copy:t,copied:a}=i({legacy:!0});async function c(s,r){try{if(await t(s),!a.value)throw new Error("Copy was not confirmed");o.success(String(e.global.t("common.clipboard.copied",{label:r})))}catch{o.error(String(e.global.t("common.clipboard.copyFailed",{label:r.toLowerCase()})))}}return{copyText:c}}export{l as u};
+>>>>>>>> 4de2e388f (feat(terminal): add application terminal tab):internal/server/webdist/assets/useCopyText-CFwDUeEx.js

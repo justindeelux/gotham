@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { BookMarked, ExternalLink, Keyboard, X } from "@lucide/vue";
 import { NButton, NPopover } from "naive-ui";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 import QuickCommandPanel from "@/features/terminal/components/QuickCommandPanel.vue";
 import TerminalThemeMenu from "@/features/terminal/components/TerminalThemeMenu.vue";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
-import { shortSessionId } from "@/features/terminal/utils/terminal";
+import {
+  isContainerTerminalTarget,
+  shortSessionId,
+} from "@/features/terminal/utils/terminal";
 
 /**
  * Terminal meta bar (JUS-249 extraction): target/cwd/session chips, the
@@ -27,6 +30,22 @@ const terminal = useTerminalStore();
 
 const shortcutsOpen = ref(false);
 const commandsOpen = ref(false);
+
+const isContainer = computed<boolean>(() =>
+  isContainerTerminalTarget(props.tab.target),
+);
+
+/**
+ * targetText is the visible target identity. A container session shows the
+ * server-resolved "service · container name" label; a host session keeps the
+ * contract target. The label is server data shown on purpose, never a raw
+ * backend error body.
+ */
+const targetText = computed<string>(() =>
+  isContainer.value
+    ? props.tab.targetLabel || props.tab.containerName || props.tab.target
+    : props.tab.target,
+);
 
 /** detachToWindow is the one-way page → window transfer. */
 function detachToWindow(): void {
@@ -49,7 +68,15 @@ function onInserted(label: string): void {
   <div class="term-meta">
     <span class="term-chip">
       <span class="term-key">{{ t("terminal.pane.target") }}</span>
-      <span class="mono">{{ props.tab.target }}</span>
+      <span class="mono">{{ targetText }}</span>
+    </span>
+    <span
+      v-if="isContainer && props.tab.applicationName"
+      class="term-chip term-container"
+      :title="t('terminal.pane.containerNote')"
+    >
+      <span class="term-key">{{ t("terminal.pane.application") }}</span>
+      <span class="mono">{{ props.tab.applicationName }}</span>
     </span>
     <span v-if="props.tab.cwd" class="term-chip term-cwd" :title="props.tab.cwd">
       <span class="term-key">{{ t("terminal.pane.cwd") }}</span>

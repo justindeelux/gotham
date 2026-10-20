@@ -2,7 +2,10 @@ import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 
 import {
+  applicationTerminalFailure,
+  closeApplicationTerminalSession,
   closeTerminalSession,
+  createApplicationTerminalSession,
   createTerminalSession,
   currentTerminalToken,
   terminalFailure,
@@ -18,6 +21,7 @@ import type {
   TerminalStatePatch,
   TerminalStatus,
 } from "@/features/terminal/transport/terminalRuntime";
+import { isContainerTerminalTarget } from "@/features/terminal/utils/terminal";
 import {
   isHostTerminalTarget,
   knownGothamVersion,
@@ -56,7 +60,13 @@ import type {
 /** TerminalMode is where one live session is shown. */
 export type TerminalMode = "page" | "window";
 
-/** TerminalTab is the reactive metadata of one live terminal. */
+/**
+ * TerminalTab is the reactive metadata of one live terminal. Host tabs leave
+ * every container field empty; a container tab keeps the server-resolved
+ * identity (application, service, container id/name and the display label) so
+ * the pane, the paused dock and the window tab cannot confuse it with a host
+ * shell.
+ */
 export interface TerminalTab {
   id: string;
   serverId: string;
@@ -65,6 +75,16 @@ export interface TerminalTab {
   root: string;
   cwd: string;
   title: string;
+  /** applicationId is set only for a container target. */
+  applicationId: string;
+  /** applicationName labels a container session beside its target label. */
+  applicationName: string;
+  /** service is the Compose service, empty for a single-container app. */
+  service: string;
+  containerId: string;
+  containerName: string;
+  /** targetLabel is the server-resolved "service · container name" label. */
+  targetLabel: string;
   mode: TerminalMode;
   sessionId: string;
   status: TerminalStatus;
@@ -102,6 +122,13 @@ export interface TerminalOpenOptions {
   cols?: number;
   rows?: number;
   title?: string;
+  /** Container target identity (JUS-247); all empty for a host session. */
+  applicationId?: string;
+  applicationName?: string;
+  service?: string;
+  containerId?: string;
+  containerName?: string;
+  targetLabel?: string;
   /** sourcePath is the fullPath of the page/tab that opened the session. */
   sourcePath?: string;
   /**
@@ -140,13 +167,21 @@ function tabId(): string {
   return `term-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-/** targetKey identifies a page session request for idempotent opens. */
+/**
+ * targetKey identifies a page session request for idempotent opens. A
+ * container target includes the application and the exact container identity:
+ * two replicas of one service are distinct targets, and the same server never
+ * lets a container shell collide with a host shell.
+ */
 function targetKey(options: TerminalOpenOptions): string {
   return [
     options.serverId,
     options.target ?? "host",
     options.root ?? "",
     options.cwd ?? "",
+    options.applicationId ?? "",
+    options.service ?? "",
+    options.containerId ?? "",
   ].join("\u0000");
 }
 
@@ -154,6 +189,14 @@ function targetKey(options: TerminalOpenOptions): string {
 function terminalTitle(options: TerminalOpenOptions): string {
   if (options.title) {
     return options.title;
+  }
+  if (isContainerTerminalTarget(options.target ?? "")) {
+    const application = options.applicationName || options.serverName;
+    const target = options.targetLabel || options.containerName;
+    if (application && target) {
+      return `${application} · ${target}`;
+    }
+    return target || application || options.serverId;
   }
   const name = options.serverName || options.serverId;
   const where = options.cwd && options.cwd !== "." ? options.cwd : options.root;
@@ -332,6 +375,49 @@ export const useTerminalStore = defineStore("terminal", () => {
     tab.suggestion = state.suggestion;
   }
 
+  /**
+   * requestSession creates the HTTP session for one tab. A container tab uses
+   * only the application route with the exact discovered target — there is no
+   * host fallback, ever, and the create response's websocket path is the one
+   * the runtime attaches to.
+   */
+  async function requestSession(
+    tab: TerminalTab,
+    signal: AbortSignal,
+  ) {
+    if (isContainerTerminalTarget(tab.target)) {
+      return createApplicationTerminalSession(
+        tab.applicationId,
+        {
+          service: tab.service,
+          containerId: tab.containerId,
+          cols: tab.cols,
+          rows: tab.rows,
+        },
+        signal,
+      );
+    }
+    return createTerminalSession(
+      tab.serverId,
+      {
+        target: tab.target,
+        ...(tab.root !== "" ? { root: tab.root } : {}),
+        ...(tab.cwd !== "" ? { cwd: tab.cwd } : {}),
+        cols: tab.cols,
+        rows: tab.rows,
+      },
+      signal,
+    );
+  }
+
+  /** closeSession releases one tab's session through its owning route. */
+  function closeSession(tab: TerminalTab, sessionId: string): Promise<void> {
+    if (isContainerTerminalTarget(tab.target)) {
+      return closeApplicationTerminalSession(tab.applicationId, sessionId);
+    }
+    return closeTerminalSession(tab.serverId, sessionId);
+  }
+
   /** startSession creates the HTTP session and starts its runtime. */
   async function startSession(tab: TerminalTab): Promise<void> {
     tab.status = "connecting";
@@ -346,30 +432,41 @@ export const useTerminalStore = defineStore("terminal", () => {
     tab.suggestion = null;
     try {
       // The version lookup runs beside the HTTP create and never gates the
-      // session: a hung /version only drops the banner's version tag.
+      // session: a hung /version only drops the banner's version tag. A
+      // container exec never gets the Gotham host banner.
       const hostSession = isHostTerminalTarget(tab.target);
       const versionRequest = hostSession ? runningGothamVersion() : null;
-      const session = await createTerminalSession(
-        tab.serverId,
-        {
-          target: tab.target,
-          ...(tab.root !== "" ? { root: tab.root } : {}),
-          ...(tab.cwd !== "" ? { cwd: tab.cwd } : {}),
-          cols: tab.cols,
-          rows: tab.rows,
-        },
-        controller.signal,
-      );
+      const session = await requestSession(tab, controller.signal);
       // A closed tab/window aborts the create; never revive its state.
       if (controller.signal.aborted) {
         return;
       }
       // A tab can be closed while the create call is in flight.
       if (!findTab(tab.id)) {
-        await closeTerminalSession(tab.serverId, session.id).catch(() => {
+        await closeSession(tab, session.id).catch(() => {
           // The tab is gone; the server expires an unattached session anyway.
         });
         return;
+      }
+      // The control plane echoes the resolved target identity; trust it over
+      // the request so a replaced/re-labelled container is displayed exactly
+      // as the session was authorized.
+      if (isContainerTerminalTarget(session.target)) {
+        tab.applicationId = session.application_id ?? tab.applicationId;
+        tab.service = session.service ?? tab.service;
+        tab.containerId = session.container_id ?? tab.containerId;
+        tab.containerName = session.container_name ?? tab.containerName;
+        tab.targetLabel = session.target_label ?? tab.targetLabel;
+        tab.title = terminalTitle({
+          serverId: tab.serverId,
+          serverName: tab.serverName,
+          target: tab.target,
+          applicationId: tab.applicationId,
+          applicationName: tab.applicationName,
+          containerId: tab.containerId,
+          containerName: tab.containerName,
+          targetLabel: tab.targetLabel,
+        });
       }
       tab.sessionId = session.id;
       tab.cols = session.cols;
@@ -406,7 +503,11 @@ export const useTerminalStore = defineStore("terminal", () => {
         return;
       }
       tab.status = "error";
-      tab.errorCode = terminalFailure(error).code;
+      // Container failures use the application classifier: the host classes
+      // would claim a server/operator cause the container route never has.
+      tab.errorCode = isContainerTerminalTarget(tab.target)
+        ? applicationTerminalFailure(error).code
+        : terminalFailure(error).code;
     } finally {
       controllers.delete(tab.id);
     }
@@ -425,6 +526,12 @@ export const useTerminalStore = defineStore("terminal", () => {
       root: options.root ?? "",
       cwd: options.cwd ?? "",
       title: terminalTitle(options),
+      applicationId: options.applicationId ?? "",
+      applicationName: options.applicationName ?? "",
+      service: options.service ?? "",
+      containerId: options.containerId ?? "",
+      containerName: options.containerName ?? "",
+      targetLabel: options.targetLabel ?? "",
       mode,
       sessionId: "",
       status: "connecting",
@@ -638,14 +745,13 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
     retrying.add(id);
     const previousSession = tab.sessionId;
-    const previousServer = tab.serverId;
     const runtime = runtimes.get(id);
     runtimes.delete(id);
     runtime?.dispose(true);
     tab.sessionId = "";
     try {
       if (previousSession !== "") {
-        await closeTerminalSession(previousServer, previousSession).catch(() => {
+        await closeSession(tab, previousSession).catch(() => {
           // Best-effort: an ended session answers 404, which is success here.
         });
       }
@@ -747,7 +853,7 @@ export const useTerminalStore = defineStore("terminal", () => {
       displayed.value.delete(id);
       retrying.delete(id);
       if (tab.sessionId !== "") {
-        void closeTerminalSession(tab.serverId, tab.sessionId).catch(() => {
+        void closeSession(tab, tab.sessionId).catch(() => {
           // The server also revokes an ended session; cleanup is best-effort.
         });
       }
@@ -772,6 +878,27 @@ export const useTerminalStore = defineStore("terminal", () => {
   /** closeAll strips every session through the same cleanup path. */
   function closeAll(): void {
     closeTabs(tabs.value.map((tab) => tab.id));
+  }
+
+  /**
+   * closeContainerSessions releases container tabs without a prompt. It is the
+   * security-boundary path (team switch or a demotion to read_only): the
+   * backend already refuses the session on its next revalidation, so the UI
+   * drops the tab instead of leaving a shell that can no longer be authorized
+   * reachable from the dock or the rail. Host tabs are never touched, and a
+   * logout still uses `reset` (no DELETE).
+   */
+  function closeContainerSessions(applicationId = ""): void {
+    const ids = tabs.value
+      .filter(
+        (tab) =>
+          isContainerTerminalTarget(tab.target) &&
+          (applicationId === "" || tab.applicationId === applicationId),
+      )
+      .map((tab) => tab.id);
+    if (ids.length > 0) {
+      closeTabs(ids);
+    }
   }
 
   /**
@@ -840,6 +967,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     confirmCloseAll,
     closeTabs,
     closeAll,
+    closeContainerSessions,
     reset,
   };
 });

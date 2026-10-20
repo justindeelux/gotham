@@ -393,6 +393,75 @@ export interface E2EAccount {
   userId: string;
 }
 
+/** FreshSession is the token pair a terminal file logs in with. */
+export interface FreshSession {
+  user: { id: string; email: string };
+  accessToken: string;
+  refreshToken: string;
+}
+
+/**
+ * loginFresh signs the shared account in once per terminal spec file.
+ *
+ * The other suites may rotate the run's refresh token (a normal refresh
+ * revokes the row behind the access token and issues a new sid). Playwright's
+ * storage snapshot is taken in global setup and cannot follow that rotation,
+ * so a later context would hold a signature-valid token whose sid was rotated
+ * away. A fresh sign-in makes each terminal file independent of suite order
+ * without weakening any assertion (the session is still real and server-side).
+ */
+let cachedSession: { email: string; session: FreshSession } | null = null;
+
+export async function loginFresh(
+  request: APIRequestContext,
+  account: E2EAccount,
+): Promise<FreshSession> {
+  // The terminal spec files share the worker process, so one sign-in serves
+  // all of them. A per-file login would spend the auth endpoint's short-window
+  // rate limit for no extra coverage.
+  if (cachedSession !== null && cachedSession.email === account.email) {
+    return cachedSession.session;
+  }
+  const response = await request.post("/api/v1/auth/login", {
+    data: { email: account.email, password: account.password },
+  });
+  if (!response.ok()) {
+    throw new Error(`login: ${response.status()} ${await response.text()}`);
+  }
+  const body = (await response.json()) as {
+    user: { id: string; email: string };
+    access_token: string;
+    refresh_token: string;
+  };
+  const session: FreshSession = {
+    user: body.user,
+    accessToken: body.access_token,
+    refreshToken: body.refresh_token,
+  };
+  cachedSession = { email: account.email, session };
+  return session;
+}
+
+/** installSession pins the SPA's session storage before every navigation. */
+export async function installSession(
+  page: Page,
+  session: FreshSession,
+): Promise<void> {
+  await page.addInitScript(
+    ({ key, value }) => {
+      window.localStorage.setItem(key, value);
+    },
+    {
+      key: "gotham.auth.session",
+      value: JSON.stringify({
+        user: session.user,
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+      }),
+    },
+  );
+}
+
 /** authHeaders is the bearer header for API calls. */
 export function authHeaders(account: E2EAccount): Record<string, string> {
   return { Authorization: `Bearer ${account.accessToken}` };

@@ -7,6 +7,8 @@ import {
   terminalServer,
   waitForCreate,
   watchTerminal,
+  installSession,
+  loginFresh,
 } from "./terminal-support";
 import type { CreateRequest, TerminalTraffic } from "./terminal-support";
 import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
@@ -25,6 +27,16 @@ import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
 test.use({ storageState: storageStatePath, viewport: { width: 1366, height: 900 } });
 
 const account = loadAccount();
+/** fresh is this file's own sign-in (see loginFresh). */
+let fresh: Awaited<ReturnType<typeof loginFresh>>;
+
+test.beforeAll(async ({ request }) => {
+  fresh = await loginFresh(request, account);
+});
+
+test.beforeEach(async ({ page }) => {
+  await installSession(page, fresh);
+});
 /** Images deployed by this spec. The workflow pre-pulls the nginx image. */
 const APP_IMAGE = process.env.GOTHAM_E2E_TERMINAL_IMAGE ?? "nginx:1.28.0-alpine";
 

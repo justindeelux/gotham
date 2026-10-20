@@ -626,3 +626,40 @@ func TestTerminalContainersRequireApplicationWriteAccess(t *testing.T) {
 		t.Fatalf("admin within the team: %v", err)
 	}
 }
+
+// TestComposeResolutionIgnoresNonComposeAndForeignProjects is the JUS-251
+// cross-resolution regression for the JUS-256 scoping fix: a node-wide list
+// from TWO Compose projects plus a non-Compose container (no compose labels)
+// that all share the target's 12-hex prefix must resolve only this project's
+// running service, never the first prefix/name match.
+func TestComposeResolutionIgnoresNonComposeAndForeignProjects(t *testing.T) {
+	userID := uuid.New()
+	app := Application{
+		ID: uuid.New(), UserID: userID, TeamID: teams.PersonalTeamID(userID),
+		ServerID: uuid.New(), Name: "shop", SourceType: SourceCompose, ComposeService: "web",
+	}
+	project := services.ProjectName(app.ID)
+	otherProject := "gotham-22222222-3333-4444-8555-666666666666"
+	short := "abc123def456"
+	own := testFullContainerID(short)
+	listed := []*agentv1.ContainerInfo{
+		// A plain container from another source, no compose labels, same prefix.
+		{Id: testFullContainerID(short), Name: "unrelated-web", Image: "nginx:1", State: "running"},
+		// A second Compose project's running web, same prefix and name suffix.
+		composeContainerInfo(otherProject, "web", testFullContainerID(short), "shop-web-1", "running"),
+		// This application's own running web container.
+		composeContainerInfo(project, "web", own, "shop-web-1", "running"),
+	}
+
+	candidates := composeContainerCandidates(listed, project, "web")
+	if len(candidates) != 1 || candidates[0].Id != own {
+		t.Fatalf("candidates = %+v, want only this project's running web container", candidates)
+	}
+
+	svc, _ := terminalFixture(t, app, Deployment{State: StateRunning, ContainerID: short})
+	targets := []TerminalContainer{{Service: "web", ContainerID: short, Name: "shop-web-1"}}
+	resolved := svc.resolveComposeTargetIDs(targets, listed, project, app.ID)
+	if len(resolved) != 1 || resolved[0].ContainerID != own {
+		t.Fatalf("resolved = %+v, want only %s", resolved, own)
+	}
+}

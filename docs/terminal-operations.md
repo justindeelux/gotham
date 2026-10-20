@@ -87,6 +87,26 @@ a developer machine (see [`test-server.md`](test-server.md)).
 | Agent loss mid-session | — | `TestTerminalDisconnectKillsProcessGroup` |
 | Container loss / replaced container / Docker loss | — | JUS-244 lifecycle suite (`agent` real-Docker tests) |
 
+### Linux PTY evidence (2026-10-20, both release architectures)
+
+The agent PTY suite was cross-compiled (`go test -c ./agent`) and run inside
+resource-limited Linux containers so the kernel, PTY driver and shell are Linux
+even on a macOS workstation:
+
+```sh
+docker run --rm --platform linux/arm64 --pids-limit=100 --memory=256m --cpus=1 \
+  -v "$D/agent-arm64.test:/agent.test" alpine:3 /agent.test \
+  -test.run 'TestTerminalEchoResizeAndExit|TestTerminalCtrlC|TestTerminalCloseKillsJobControlBackgroundJob|TestTerminalReleasesResources'
+# linux/amd64: same command with --platform linux/amd64 and agent-amd64.test
+```
+
+All four pass on **arm64** and **amd64**: initial 80×24 geometry, a multi-byte
+UTF-8 round-trip (`echo gotham-pty-é✓ñ`), Ctrl-C interrupting a foreground
+job, `sleep N &` killed on close, and `/dev/ptmx`/fd release back to baseline.
+The supported-shell shortcut proof is `web/tests/terminal-quick-command-pty.test.ts`
+(real bash PTY, OSC 133 A/B marks, suggestion insert without running); it runs
+in the CI web job, which installs bash and zsh.
+
 ## Supported shells and shortcut integration
 
 A host terminal runs `$SHELL` when it is a usable absolute path, else
@@ -262,6 +282,17 @@ Log lines worth knowing:
 
 ## Known limits found during validation
 
+* **JUS-258 (open):** a pre-rotation access token can create but not attach a
+  terminal session. Refresh-token rotation revokes the session row behind the
+  old access token and issues a new sid; the old token stays signature-valid
+  for the rest of its 15 minutes and every other API route accepts it, but the
+  terminal attach requires a live row with that exact sid and answers 403
+  "the session is no longer live". A second tab that has not refreshed can
+  therefore fail to open a terminal while its other calls work. Sign in again
+  (or refresh) before opening a terminal from that tab. An **already-attached**
+  shell survives rotation, because revalidation matches the sign-in
+  `created_at` lineage. The browser suite isolates itself with one fresh
+  sign-in per worker rather than pinning this refusal.
 * **JUS-257 (open):** a shared-team application detail page answers 404 for
   every member because `getApplication` sends no `X-Team-Id` while the backend
   defaults to the personal team. This blocks the UI half of the read-only

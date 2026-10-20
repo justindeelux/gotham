@@ -322,7 +322,11 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   team, and the application must still exist on the same node), and a live
   session carrying the same sign-in `created_at` must still exist. The
   handshake token's expiry is not consulted again. Rotation of the refresh token is not a logout:
-  it preserves `created_at`. A definitive refusal sends an error frame and
+  it preserves `created_at`, so an **already-attached** shell survives it. A
+  **new attach** with a pre-rotation access token is a different case: that
+  token's sid row was rotated away, so the attach gate refuses it even though
+  the token stays signature-valid for the rest of its 15 minutes (JUS-258);
+  sign in or refresh again before opening another terminal from that tab. A definitive refusal sends an error frame and
   cancels the relay; a tick that races a normal close is silent. A transient
   lookup error keeps the shell and is logged; three consecutive failures
   (about 90 s) fail closed with a "could not be confirmed" error.

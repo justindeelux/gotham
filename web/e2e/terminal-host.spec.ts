@@ -16,6 +16,8 @@ import {
   typeReal,
   waitForCreate,
   watchTerminal,
+  installSession,
+  loginFresh,
 } from "./terminal-support";
 
 /**
@@ -40,6 +42,16 @@ import {
 test.use({ storageState: storageStatePath, viewport: { width: 1366, height: 900 } });
 
 const account = loadAccount();
+/** fresh is this file's own sign-in (see loginFresh). */
+let fresh: Awaited<ReturnType<typeof loginFresh>>;
+
+test.beforeAll(async ({ request }) => {
+  fresh = await loginFresh(request, account);
+});
+
+test.beforeEach(async ({ page }) => {
+  await installSession(page, fresh);
+});
 
 /** requireTerminalNode skips when the real node is unavailable. */
 async function requireTerminalNode(request: Parameters<typeof terminalServer>[0]) {

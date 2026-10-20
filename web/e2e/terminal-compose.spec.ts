@@ -1,6 +1,13 @@
 import { expect, test } from "./fixtures";
 import { loadAccount, storageStatePath, uniqueSuffix } from "./support";
-import { authHeaders, terminalServer, waitForCreate, watchTerminal } from "./terminal-support";
+import {
+  authHeaders,
+  installSession,
+  loginFresh,
+  terminalServer,
+  waitForCreate,
+  watchTerminal,
+} from "./terminal-support";
 import type { APIRequestContext } from "@playwright/test";
 
 /**
@@ -22,6 +29,16 @@ import type { APIRequestContext } from "@playwright/test";
 test.use({ storageState: storageStatePath, viewport: { width: 1366, height: 900 } });
 
 const account = loadAccount();
+/** fresh is this file's own sign-in (see loginFresh). */
+let fresh: Awaited<ReturnType<typeof loginFresh>>;
+
+test.beforeAll(async ({ request }) => {
+  fresh = await loginFresh(request, account);
+});
+
+test.beforeEach(async ({ page }) => {
+  await installSession(page, fresh);
+});
 const COMPOSE_IMAGE = "busybox:1.36";
 
 interface ComposeSeed {

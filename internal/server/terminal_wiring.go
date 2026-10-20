@@ -54,8 +54,13 @@ func (s *Server) terminalAuthorizer() terminal.Authorizer {
 }
 
 // Authorize runs at the WebSocket handshake. A token without a sid is refused:
-// no server-side lineage exists that a logout could revoke.
-func (a terminalAuthorizer) Authorize(ctx context.Context, claims *auth.Claims) (terminal.Marker, error) {
+// no server-side lineage exists that a logout could revoke. Only a host target
+// is accepted: application container streams use their own authorizer, so host
+// operator access never implies container access.
+func (a terminalAuthorizer) Authorize(ctx context.Context, claims *auth.Claims, target terminal.Target) (terminal.Marker, error) {
+	if target.Kind != terminal.TargetHost {
+		return terminal.Marker{}, errors.New("terminal: the host authorizer does not serve container targets")
+	}
 	if claims == nil || a.auth == nil {
 		return terminal.Marker{}, errors.New("terminal: no authorizer")
 	}
@@ -92,8 +97,8 @@ func (a terminalAuthorizer) Authorize(ctx context.Context, claims *auth.Claims) 
 // Revalidate re-checks the account, the current operator role and the sign-in
 // lineage. Only a definitive refusal returns (false, nil); a lookup failure
 // returns an error so the caller can keep the shell and retry.
-func (a terminalAuthorizer) Revalidate(ctx context.Context, claims *auth.Claims, marker terminal.Marker) (bool, error) {
-	if claims == nil || a.auth == nil {
+func (a terminalAuthorizer) Revalidate(ctx context.Context, claims *auth.Claims, marker terminal.Marker, target terminal.Target) (bool, error) {
+	if target.Kind != terminal.TargetHost || claims == nil || a.auth == nil {
 		return false, nil
 	}
 	userID, err := uuid.Parse(claims.Subject)

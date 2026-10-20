@@ -176,10 +176,43 @@ func (s *DockerServer) PullImage(ctx context.Context, req *agentv1.PullImageRequ
 	return &agentv1.PullImageResponse{Digest: digest}, nil
 }
 
+// Resource bounds for optional CreateContainerRequest limits. Zero keeps
+// Docker's default (the previous behaviour); negative values and values above
+// these caps are rejected so a test-only or future caller cannot ask the node
+// for an unbounded or nonsensical allocation.
+const (
+	maxContainerPidsLimit   = 1 << 20
+	maxContainerMemoryBytes = 1 << 40
+	maxContainerNanoCPUs    = 1024 * 1_000_000_000
+)
+
+// validateContainerResources checks the optional resource limits.
+func validateContainerResources(req *agentv1.CreateContainerRequest) error {
+	if value := req.GetPidsLimit(); value < 0 {
+		return status.Error(codes.InvalidArgument, "pids_limit must not be negative")
+	} else if value > maxContainerPidsLimit {
+		return status.Errorf(codes.InvalidArgument, "pids_limit exceeds %d", maxContainerPidsLimit)
+	}
+	if value := req.GetMemoryBytes(); value < 0 {
+		return status.Error(codes.InvalidArgument, "memory_bytes must not be negative")
+	} else if value > maxContainerMemoryBytes {
+		return status.Errorf(codes.InvalidArgument, "memory_bytes exceeds %d", maxContainerMemoryBytes)
+	}
+	if value := req.GetNanoCpus(); value < 0 {
+		return status.Error(codes.InvalidArgument, "nano_cpus must not be negative")
+	} else if value > maxContainerNanoCPUs {
+		return status.Errorf(codes.InvalidArgument, "nano_cpus exceeds %d", maxContainerNanoCPUs)
+	}
+	return nil
+}
+
 // CreateContainer creates a container without starting it.
 func (s *DockerServer) CreateContainer(ctx context.Context, req *agentv1.CreateContainerRequest) (*agentv1.ContainerActionResponse, error) {
 	if req.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "image is required")
+	}
+	if err := validateContainerResources(req); err != nil {
+		return nil, err
 	}
 	if err := validateContainerVolumes(s.volumeRoot, s.proxyVolumeRoot, req); err != nil {
 		return nil, dockerError("create container", err)
@@ -195,6 +228,9 @@ func (s *DockerServer) CreateContainer(ctx context.Context, req *agentv1.CreateC
 func (s *DockerServer) RunImage(ctx context.Context, req *agentv1.CreateContainerRequest) (*agentv1.ContainerActionResponse, error) {
 	if req.GetImage() == "" {
 		return nil, status.Error(codes.InvalidArgument, "image is required")
+	}
+	if err := validateContainerResources(req); err != nil {
+		return nil, err
 	}
 	if err := validateContainerVolumes(s.volumeRoot, s.proxyVolumeRoot, req); err != nil {
 		return nil, dockerError("run image", err)

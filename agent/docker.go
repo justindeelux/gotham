@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -50,6 +52,16 @@ var ErrDockerUnavailable = errors.New("docker: daemon unavailable")
 // distinct from ErrDockerNotFound so a bad image reference is reported as bad
 // input, not as a missing container.
 var ErrDockerImageNotFound = errors.New("docker: image not found")
+
+// ErrDockerContainerNotRunning marks an exec request against a container that
+// exists but is stopped, restarting or otherwise not running. The terminal
+// service reports it as an actionable precondition instead of a stream failure.
+var ErrDockerContainerNotRunning = errors.New("docker: container is not running")
+
+// ErrDockerNoShell marks a container image that exposes none of the supported
+// shells. A container terminal never starts a half-working exec: the caller
+// gets an explicit "no supported shell" error instead.
+var ErrDockerNoShell = errors.New("docker: container has no supported shell")
 
 // DockerClient talks to the Docker Engine API over a unix socket or TCP
 // endpoint. It implements the subset of the engine API the agent exposes to
@@ -521,6 +533,830 @@ func (c *DockerClient) action(ctx context.Context, id, verb string) error {
 	_, _ = io.Copy(io.Discard, response.Body)
 	return nil
 }
+
+// execProbeTimeout bounds the non-interactive shell probe run in a container.
+const execProbeTimeout = 10 * time.Second
+
+// execResizeTimeout bounds one exec resize call.
+const execResizeTimeout = 5 * time.Second
+
+// execExitTimeout bounds how long ExitCode waits for the daemon to publish the
+// process's final status after the attached stream ended.
+const execExitTimeout = 2 * time.Second
+
+// execExitPoll is the interval between exit-status reads.
+const execExitPoll = 50 * time.Millisecond
+
+// execProbeMaxBytes bounds the shell probe output kept in memory.
+const execProbeMaxBytes = 4 << 10
+
+// execKillTimeout bounds the fixed helper exec that ends a terminal's process
+// tree. It is a safety net, not a retry budget.
+const execKillTimeout = 8 * time.Second
+
+// execStillRunningTimeout bounds how long Kill waits for Docker to report the
+// exec as no longer Running after the helper signalled it.
+const execStillRunningTimeout = 3 * time.Second
+
+// execWrapperCommand records the process id that will become the interactive
+// shell and then execs the requested command in place. The id is the only
+// output consumed before the terminal is handed to the user; it is used by the
+// fixed kill helper on close. No caller input is interpolated into it.
+const execWrapperCommand = `printf '%s\n' "$$"; exec "$@"`
+
+// execKillTreeScript ends a container exec's shell and every process it started.
+// It is a constant; only the validated decimal root pid ($1) and the generated
+// terminal marker ($2) are passed as arguments. It collects:
+//
+//   - every process whose session id equals the shell's (foreground/background
+//     jobs in their own process groups, and their descendants);
+//   - every process whose parent chain reaches the shell (walked to a fixpoint,
+//     parsing /proc/<pid>/stat after the last ")" so TAB/space separators and
+//     spaces in the command name are irrelevant);
+//   - every process whose readable environment carries the terminal's unique
+//     marker. This is what catches a job that called setsid or was reparented
+//     to pid 1 before the snapshot; a daemon that also scrubs its environment
+//     can still escape (documented limit). An unreadable environment is not a
+//     failure by itself: an attributed in-tree pid is still found through
+//     /proc/<pid>/stat, while an out-of-tree process cannot be attributed and
+//     is skipped.
+//
+// It then sends HUP/TERM/KILL with a short grace, ignores zombies, re-scans,
+// and exits non-zero with "marker-scan-unavailable" when it cannot inspect at
+// all or "survivors:<pids>" if an attributed process remains. It never signals
+// pid 1 or itself and never uses kill -1 or pkill by name.
+const execKillTreeScript = `root=$1
+marker=$2
+case "$root" in ''|*[!0-9]*) exit 2;; esac
+[ "$root" -gt 1 ] || exit 2
+case "$marker" in ''|*[!A-Za-z0-9-]*) marker="";; esac
+if [ ! -d /proc ]; then
+  echo "marker-scan-unavailable (no /proc)"
+  exit 4
+fi
+read_stat() {
+  stat_line=""
+  { while IFS= read -r line || [ -n "$line" ]; do
+      stat_line="$stat_line$line "
+    done < "$1/stat"; } 2>/dev/null
+  [ -n "$stat_line" ]
+}
+marker_match() {
+  marker_data=$({ tr '\0' '\n' < "$1/environ"; } 2>/dev/null) || return 2
+  case "$marker_data" in
+    *"GOTHAM_TERMINAL_ID=$marker"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+parse_stat() {
+  stat_rest=${1##*) }
+  set -- $stat_rest
+  stat_state=$1
+  stat_ppid=$2
+  stat_sid=$4
+}
+marker_tools=""
+inspect_failed=""
+if [ -z "$marker" ]; then
+  inspect_failed=1
+elif command -v tr >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
+  marker_tools=1
+else
+  inspect_failed=1
+fi
+list=" $root "
+add_pid() {
+  case " $list " in
+    *" $1 "*) ;;
+    *) list="$list$1 " ;;
+  esac
+}
+frontier="$root"
+while [ -n "$frontier" ]; do
+  next=""
+  for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    read_stat "$d" || continue
+    parse_stat "$stat_line"
+    if [ "$stat_sid" = "$root" ]; then add_pid "$pid"; fi
+    case " $frontier " in
+      *" $stat_ppid "*)
+        add_pid "$pid"
+        next="$next$pid "
+        ;;
+    esac
+  done
+  frontier=$next
+done
+if [ -n "$marker" ] && [ -n "$marker_tools" ]; then
+  for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    [ -r "$d/environ" ] || continue
+    if marker_match "$d"; then add_pid "$pid"; fi
+  done
+fi
+for sig in HUP TERM KILL; do
+  for pid in $list; do
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    kill -"$sig" "$pid" 2>/dev/null
+  done
+  [ "$sig" = "KILL" ] && break
+  sleep 0.2 2>/dev/null || :
+done
+sleep 0.2 2>/dev/null || :
+attempt=0
+survivors=""
+while [ "$attempt" -lt 5 ]; do
+  survivors=""
+  for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    read_stat "$d" || continue
+    parse_stat "$stat_line"
+    [ "$stat_state" = "Z" ] && continue
+    case " $list " in
+      *" $pid "*) survivors="$survivors $pid"; continue ;;
+    esac
+    if [ "$stat_sid" = "$root" ]; then survivors="$survivors $pid"; continue; fi
+    if [ -n "$marker" ] && [ -n "$marker_tools" ] && [ -r "$d/environ" ]; then
+      if marker_match "$d"; then survivors="$survivors $pid"; fi
+    fi
+  done
+  if [ -z "$survivors" ] && [ -z "$inspect_failed" ]; then exit 0; fi
+  sleep 0.2 2>/dev/null || :
+  attempt=$((attempt + 1))
+done
+if [ -n "$inspect_failed" ]; then
+  echo "marker-scan-unavailable"
+  [ -n "$survivors" ] && echo "survivors:$survivors"
+  exit 4
+fi
+echo "survivors:$survivors"
+exit 3`
+
+// execKillMarkerScript is the safer cleanup used when Docker already reports
+// the exec as not Running. The shell's pid may have been reused, so it does not
+// walk the tree or the session; it only kills processes still carrying this
+// terminal's unique environment marker (orphaned nohup/background jobs).
+const execKillMarkerScript = `marker=$1
+case "$marker" in ''|*[!A-Za-z0-9-]*) exit 2;; esac
+if [ ! -d /proc ]; then
+  echo "marker-scan-unavailable (no /proc)"
+  exit 4
+fi
+if ! command -v tr >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then
+  echo "marker-scan-unavailable (no tr/grep)"
+  exit 4
+fi
+marker_match() {
+  marker_data=$({ tr '\0' '\n' < "$1/environ"; } 2>/dev/null) || return 2
+  case "$marker_data" in
+    *"GOTHAM_TERMINAL_ID=$marker"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+list=""
+add_pid() {
+  case " $list " in
+    *" $1 "*) ;;
+    *) list="$list$1 " ;;
+  esac
+}
+for d in /proc/[0-9]*; do
+  pid=${d#/proc/}
+  [ "$pid" -gt 1 ] || continue
+  [ "$pid" = "$$" ] && continue
+  [ -r "$d/environ" ] || continue
+  if marker_match "$d"; then add_pid "$pid"; fi
+done
+for sig in HUP TERM KILL; do
+  for pid in $list; do
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    kill -"$sig" "$pid" 2>/dev/null
+  done
+  [ "$sig" = "KILL" ] && break
+  sleep 0.2 2>/dev/null || :
+done
+sleep 0.2 2>/dev/null || :
+attempt=0
+survivors=""
+while [ "$attempt" -lt 5 ]; do
+  survivors=""
+  for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    [ "$pid" -gt 1 ] || continue
+    [ "$pid" = "$$" ] && continue
+    [ -r "$d/environ" ] || continue
+    if marker_match "$d"; then survivors="$survivors $pid"; fi
+  done
+  [ -z "$survivors" ] && exit 0
+  sleep 0.2 2>/dev/null || :
+  attempt=$((attempt + 1))
+done
+echo "survivors:$survivors"
+exit 3`
+
+// shellProbeCommand asks the container's POSIX shell for the first supported
+// interactive shell. It is a fixed command written by the agent; no caller
+// input is interpolated into it.
+const shellProbeCommand = `for s in bash sh ash; do p=$(command -v "$s" 2>/dev/null) && { echo "$p"; exit 0; }; done; exit 127`
+
+// ExecOptions describes one interactive exec. Cmd empty selects the first
+// supported shell inside the container. User and WorkingDir default to the
+// container's configured values.
+type ExecOptions struct {
+	Cmd        []string
+	Env        []string
+	User       string
+	WorkingDir string
+	Cols       uint16
+	Rows       uint16
+}
+
+// ExecSession is one attached interactive exec. Read/Write are the container
+// process's stdio over the hijacked Docker connection. Close ends the exec
+// process tree (not only the attachment) and releases the connection, without
+// stopping the container. Resize changes the TTY window and ExitCode reports
+// the process status once it has ended.
+type ExecSession interface {
+	io.Reader
+	io.Writer
+	io.Closer
+	Resize(ctx context.Context, cols, rows uint16) error
+	ExitCode(ctx context.Context) (int32, string, error)
+	// Kill ends the exec process tree and verifies the exec is no longer
+	// Running. It is idempotent; the application container is never stopped.
+	Kill(ctx context.Context) error
+	// Shell is the shell executable the agent chose inside the container.
+	Shell() string
+	// User is the container user the process runs as ("root" when unset).
+	User() string
+}
+
+// containerInspect is the subset of GET /containers/{id}/json the exec path
+// needs.
+type containerInspect struct {
+	State struct {
+		Running bool   `json:"Running"`
+		Status  string `json:"Status"`
+	} `json:"State"`
+	Config struct {
+		User       string   `json:"User"`
+		WorkingDir string   `json:"WorkingDir"`
+		Env        []string `json:"Env"`
+	} `json:"Config"`
+}
+
+// Exec starts an interactive exec in containerID and returns its attached
+// stream. The container must exist and be running. When opts.Cmd is empty the
+// agent probes the image for a supported shell and answers ErrDockerNoShell
+// when none exists; it never starts a broken terminal. Closing the returned
+// session ends the exec process tree (see Kill) and the attach connection: the
+// application container is never stopped or restarted.
+func (c *DockerClient) Exec(ctx context.Context, containerID string, opts ExecOptions) (ExecSession, error) {
+	if strings.TrimSpace(containerID) == "" {
+		return nil, errors.New("docker: container id is required")
+	}
+	inspect, err := c.inspectContainer(ctx, containerID)
+	if err != nil {
+		return nil, err
+	}
+	if !inspect.State.Running {
+		state := strings.TrimSpace(inspect.State.Status)
+		if state == "" {
+			state = "stopped"
+		}
+		return nil, fmt.Errorf("%w: %s", ErrDockerContainerNotRunning, state)
+	}
+
+	user := strings.TrimSpace(opts.User)
+	if user == "" {
+		user = strings.TrimSpace(inspect.Config.User)
+	}
+	workdir := strings.TrimSpace(opts.WorkingDir)
+	if workdir == "" {
+		workdir = strings.TrimSpace(inspect.Config.WorkingDir)
+	}
+
+	// The probe runs through /bin/sh and finds the interactive shell. It also
+	// proves the fixed wrapper below has a POSIX shell to run.
+	shellPath, err := c.probeShell(ctx, containerID, user, workdir, inspect.Config.Env)
+	if err != nil {
+		return nil, err
+	}
+	command := opts.Cmd
+	if len(command) == 0 {
+		command = []string{shellPath}
+	}
+	// Record the pid that becomes the shell (`exec` keeps it), then run the
+	// requested command. The fixed helper terminates that whole tree on Close;
+	// the daemon alone does not end an exec process when its attach stream goes
+	// away.
+	wrapped := append([]string{"/bin/sh", "-c", execWrapperCommand, "gotham-terminal"}, command...)
+
+	// The marker is generated per session and inherited by every descendant.
+	// The kill helper finds setsid/reparented jobs by it even after they leave
+	// the shell's session or process tree.
+	marker := uuid.NewString()
+	env := append([]string(nil), opts.Env...)
+	env = append(env, "GOTHAM_TERMINAL_ID="+marker, "TERM=xterm-256color")
+	execID, err := c.createExec(ctx, containerID, wrapped, user, workdir, env, true)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := c.startExec(ctx, execID, true)
+	if err != nil {
+		return nil, err
+	}
+	reader := bufio.NewReaderSize(stream, 32<<10)
+	pid, err := readExecPID(reader, execProbeTimeout)
+	if err != nil {
+		_ = stream.Close()
+		return nil, fmt.Errorf("docker: exec did not report its process id: %w", err)
+	}
+	session := &dockerExecSession{
+		client:      c,
+		id:          execID,
+		containerID: containerID,
+		pid:         pid,
+		stream:      stream,
+		reader:      reader,
+		shell:       shellPath,
+		user:        displayContainerUser(user),
+		execUser:    user,
+		workdir:     workdir,
+		marker:      marker,
+		ctx:         ctx,
+	}
+	if opts.Cols > 0 && opts.Rows > 0 {
+		if err := session.Resize(ctx, opts.Cols, opts.Rows); err != nil {
+			_ = session.Kill(context.Background())
+			_ = session.Close()
+			return nil, err
+		}
+	}
+	return session, nil
+}
+
+// readExecPID consumes the wrapper's first output line: the decimal pid that
+// becomes the interactive shell. Reading it before handing the session to the
+// terminal keeps it out of the user's terminal.
+func readExecPID(reader *bufio.Reader, timeout time.Duration) (int, error) {
+	type result struct {
+		pid int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			done <- result{err: err}
+			return
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil || pid <= 1 {
+			done <- result{err: fmt.Errorf("invalid pid %q", strings.TrimSpace(line))}
+			return
+		}
+		done <- result{pid: pid}
+	}()
+	select {
+	case value := <-done:
+		return value.pid, value.err
+	case <-time.After(timeout):
+		return 0, errors.New("timed out waiting for the exec process id")
+	}
+}
+
+// inspectContainer reads the container's run state and configured user.
+func (c *DockerClient) inspectContainer(ctx context.Context, containerID string) (containerInspect, error) {
+	var out containerInspect
+	path := "/containers/" + url.PathEscape(containerID) + "/json"
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// probeShell runs a fixed non-interactive command inside the container to find
+// a supported shell. Running it detached from the caller's stream keeps the
+// interactive session free of probe output.
+func (c *DockerClient) probeShell(ctx context.Context, containerID, user, workdir string, imageEnv []string) (string, error) {
+	env := append(append([]string(nil), imageEnv...), "TERM=xterm-256color")
+	execID, err := c.createExec(ctx, containerID, []string{"/bin/sh", "-c", shellProbeCommand}, user, workdir, env, true)
+	if err != nil {
+		// A container without /bin/sh cannot offer any supported shell. A
+		// missing container or unreachable daemon keeps its own identity.
+		if errors.Is(err, ErrDockerNotFound) || errors.Is(err, ErrDockerUnavailable) {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: %v", ErrDockerNoShell, err)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, execProbeTimeout)
+	defer cancel()
+	stream, err := c.startExec(probeCtx, execID, true)
+	if err != nil {
+		if errors.Is(err, ErrDockerNotFound) || errors.Is(err, ErrDockerUnavailable) {
+			return "", err
+		}
+		return "", fmt.Errorf("%w: %v", ErrDockerNoShell, err)
+	}
+	type probeResult struct {
+		output string
+		err    error
+	}
+	readDone := make(chan probeResult, 1)
+	go func() {
+		output, readErr := readProbeOutput(stream, execProbeMaxBytes)
+		readDone <- probeResult{output: output, err: readErr}
+	}()
+	var probe probeResult
+	select {
+	case probe = <-readDone:
+	case <-probeCtx.Done():
+		// A wedged probe must not pin the open path: close the stream so the
+		// reader unblocks and report the image as unsupported.
+		_ = stream.Close()
+		probe = <-readDone
+	}
+	_ = stream.Close()
+	code, _, exitErr := c.execExitCode(probeCtx, execID)
+	if probe.err != nil || exitErr != nil || code != 0 {
+		return "", fmt.Errorf("%w: the image exposes no /bin/sh", ErrDockerNoShell)
+	}
+	output := probe.output
+	shell := firstLine(output)
+	if !validContainerShell(shell) {
+		return "", fmt.Errorf("%w: the image exposes no supported shell", ErrDockerNoShell)
+	}
+	return shell, nil
+}
+
+// readProbeOutput reads at most limit bytes from a probe stream.
+func readProbeOutput(stream io.Reader, limit int) (string, error) {
+	var buffer bytes.Buffer
+	_, err := io.Copy(&buffer, io.LimitReader(stream, int64(limit)))
+	return buffer.String(), err
+}
+
+// firstLine returns the first non-empty output line.
+func firstLine(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if line = strings.TrimSpace(strings.TrimSuffix(line, "\r")); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+// validContainerShell accepts the absolute path the probe printed. Anything
+// with whitespace or a non-absolute shape is refused so a weird image cannot
+// smuggle an argument into the exec command.
+func validContainerShell(shell string) bool {
+	if !strings.HasPrefix(shell, "/") || strings.ContainsAny(shell, " \t\r\n\x00") {
+		return false
+	}
+	return true
+}
+
+// displayContainerUser renders the container user for the opened event.
+func displayContainerUser(user string) string {
+	if user = strings.TrimSpace(user); user == "" {
+		return "root"
+	}
+	return user
+}
+
+// createExec creates one exec instance and returns its id.
+func (c *DockerClient) createExec(ctx context.Context, containerID string, command []string, user, workdir string, env []string, tty bool) (string, error) {
+	body := map[string]any{
+		"AttachStdin":  true,
+		"AttachStdout": true,
+		"AttachStderr": true,
+		"Tty":          tty,
+		"Cmd":          command,
+	}
+	if len(env) > 0 {
+		body["Env"] = env
+	}
+	if user != "" {
+		body["User"] = user
+	}
+	if workdir != "" {
+		body["WorkingDir"] = workdir
+	}
+	var out struct {
+		ID string `json:"Id"`
+	}
+	path := "/containers/" + url.PathEscape(containerID) + "/exec"
+	if err := c.doJSON(ctx, http.MethodPost, path, body, &out); err != nil {
+		return "", err
+	}
+	if out.ID == "" {
+		return "", errors.New("docker: exec create response missing Id")
+	}
+	return out.ID, nil
+}
+
+// startExec starts an exec and hijacks the connection. Docker answers 101 and
+// the response body is the duplex stdio stream.
+func (c *DockerClient) startExec(ctx context.Context, execID string, tty bool) (io.ReadWriteCloser, error) {
+	encoded, err := json.Marshal(map[string]any{"Detach": false, "Tty": tty})
+	if err != nil {
+		return nil, fmt.Errorf("docker: marshal exec start: %w", err)
+	}
+	path := "/exec/" + url.PathEscape(execID) + "/start"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(encoded))
+	if err != nil {
+		return nil, fmt.Errorf("docker: %s %s: %w", http.MethodPost, path, err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Connection", "Upgrade")
+	request.Header.Set("Upgrade", "tcp")
+	request.Header.Set("Accept", "application/vnd.docker.raw-stream")
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, dockerTransportError(http.MethodPost, path, err)
+	}
+	if response.StatusCode != http.StatusSwitchingProtocols {
+		return nil, statusError(http.MethodPost, path, response)
+	}
+	stream, ok := response.Body.(io.ReadWriteCloser)
+	if !ok {
+		_ = response.Body.Close()
+		return nil, errors.New("docker: exec start did not return a duplex stream")
+	}
+	return stream, nil
+}
+
+// execExitCode reads the exec's final status, waiting briefly for the daemon to
+// publish it after the attached stream ended. A missing exec (the container was
+// removed or replaced) reports -1 without an error: the stream has already
+// ended, and the terminal contract treats that as a normal close.
+func (c *DockerClient) execExitCode(ctx context.Context, execID string) (int32, string, error) {
+	if strings.TrimSpace(execID) == "" {
+		return -1, "", errors.New("docker: exec id is required")
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, execExitTimeout)
+	defer cancel()
+	path := "/exec/" + url.PathEscape(execID) + "/json"
+	for {
+		var out struct {
+			ExitCode int32 `json:"ExitCode"`
+			Running  bool  `json:"Running"`
+		}
+		err := c.doJSON(waitCtx, http.MethodGet, path, nil, &out)
+		if err != nil {
+			if errors.Is(err, ErrDockerNotFound) {
+				return -1, "", nil
+			}
+			return -1, "", err
+		}
+		if !out.Running {
+			return out.ExitCode, "", nil
+		}
+		select {
+		case <-waitCtx.Done():
+			return -1, "", nil
+		case <-time.After(execExitPoll):
+		}
+	}
+}
+
+// dockerExecSession is one attached exec. It owns the hijacked connection and
+// the shell's process id recorded by the fixed wrapper.
+type dockerExecSession struct {
+	client      *DockerClient
+	id          string
+	containerID string
+	pid         int
+	stream      io.ReadWriteCloser
+	reader      *bufio.Reader
+	shell       string
+	user        string
+	execUser    string
+	workdir     string
+	marker      string
+	ctx         context.Context
+
+	closeOnce sync.Once
+	closeErr  error
+	killMu    sync.Mutex
+	killed    bool
+}
+
+// Read reads the exec process's TTY output. The buffered reader preserves any
+// bytes that arrived together with the wrapper's pid line.
+func (s *dockerExecSession) Read(p []byte) (int, error) { return s.reader.Read(p) }
+
+// Write sends bytes to the exec process's stdin.
+func (s *dockerExecSession) Write(p []byte) (int, error) { return s.stream.Write(p) }
+
+// Close ends the exec process tree, verifies the exec is no longer Running and
+// then releases the attachment. It never stops the application container.
+func (s *dockerExecSession) Close() error {
+	s.closeOnce.Do(func() {
+		// The helper must run before the attach connection is closed: the
+		// daemon keeps an exec alive after the client disconnects. A cleanup
+		// failure is returned, never swallowed.
+		cleanupErr := s.Kill(context.Background())
+		s.closeErr = errors.Join(cleanupErr, s.stream.Close())
+	})
+	return s.closeErr
+}
+
+// Kill ends the exec's shell and every descendant, then verifies through the
+// Docker exec inspect endpoint that the exec is no longer Running. It is
+// idempotent and uses a detached, bounded context so it still works when the
+// terminal stream was cancelled. It never stops the application container.
+func (s *dockerExecSession) Kill(ctx context.Context) error {
+	s.killMu.Lock()
+	defer s.killMu.Unlock()
+	if s.killed || s.pid <= 1 || s.client == nil || s.containerID == "" {
+		return nil
+	}
+	callCtx, cancel := context.WithTimeout(ctx, execKillTimeout)
+	defer cancel()
+	running, verifyErr := s.client.execRunning(callCtx, s.id)
+	if verifyErr != nil {
+		return fmt.Errorf("docker: inspect exec %s: %w", s.id, verifyErr)
+	}
+	var helperOutput string
+	var killErr error
+	if running {
+		// The shell is alive, so its pid cannot have been reused: the full
+		// tree/session/marker walk is safe.
+		helperOutput, killErr = s.client.killExecTree(callCtx, s.containerID, s.pid, s.execUser, s.workdir, s.marker)
+	} else {
+		// The exec already ended. The recorded pid may now belong to an
+		// unrelated process, so only the unique marker is matched; orphaned
+		// nohup/background jobs are still cleaned up.
+		helperOutput, killErr = s.client.killExecMarker(callCtx, s.containerID, s.execUser, s.workdir, s.marker)
+	}
+	running, verifyErr = s.client.execRunning(callCtx, s.id)
+	if verifyErr == nil && !running {
+		// The container disappearing leaves nothing to clean up.
+		if errors.Is(killErr, ErrDockerNotFound) {
+			s.killed = true
+			return nil
+		}
+		// A helper that still reported survivors (or could not run) is
+		// surfaced instead of being treated as success.
+		if killErr != nil {
+			return fmt.Errorf("docker: exec %s cleanup incomplete: %w", s.id, killErr)
+		}
+		s.killed = true
+		return nil
+	}
+	// Give the daemon a short window to publish the shutdown, then check once
+	// more. A still-running exec is a real cleanup failure and is reported.
+	deadline := time.Now().Add(execStillRunningTimeout)
+	for running && time.Now().Before(deadline) {
+		select {
+		case <-callCtx.Done():
+			return fmt.Errorf("docker: verify exec %s stopped: %w", s.id, callCtx.Err())
+		case <-time.After(execExitPoll):
+		}
+		if verifyErr != nil {
+			break
+		}
+		running, verifyErr = s.client.execRunning(callCtx, s.id)
+	}
+	if verifyErr != nil {
+		return fmt.Errorf("docker: verify exec %s stopped: %w", s.id, verifyErr)
+	}
+	if running {
+		if killErr != nil {
+			return fmt.Errorf("docker: exec %s still running after kill helper (%s): %w", s.id, helperOutput, killErr)
+		}
+		return fmt.Errorf("docker: exec %s still running after kill helper", s.id)
+	}
+	if killErr != nil && !errors.Is(killErr, ErrDockerNotFound) {
+		return fmt.Errorf("docker: exec %s cleanup incomplete (%s): %w", s.id, helperOutput, killErr)
+	}
+	s.killed = true
+	return nil
+}
+
+// execRunning reports whether the exec is still Running. A missing exec (the
+// container was removed) is not running.
+func (c *DockerClient) execRunning(ctx context.Context, execID string) (bool, error) {
+	if strings.TrimSpace(execID) == "" {
+		return false, errors.New("docker: exec id is required")
+	}
+	var out struct {
+		Running bool `json:"Running"`
+	}
+	path := "/exec/" + url.PathEscape(execID) + "/json"
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		if errors.Is(err, ErrDockerNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return out.Running, nil
+}
+
+// killExecTree runs the fixed full kill helper in the same container as the
+// terminal exec. The helper receives the validated numeric pid as $1 and the
+// generated terminal marker as $2; no caller input is interpolated into the
+// script. Its bounded output is returned for the error message when survivors
+// remain.
+func (c *DockerClient) killExecTree(ctx context.Context, containerID string, pid int, user, workdir, marker string) (string, error) {
+	if pid <= 1 {
+		return "", nil
+	}
+	command := []string{"/bin/sh", "-c", execKillTreeScript, "gotham-terminal-kill", strconv.Itoa(pid), marker}
+	return c.runKillHelper(ctx, containerID, command, user, workdir)
+}
+
+// killExecMarker runs the marker-only helper. It is used when the exec is
+// already gone, so the recorded pid may have been reused and must not be used
+// for a tree/session walk.
+func (c *DockerClient) killExecMarker(ctx context.Context, containerID, user, workdir, marker string) (string, error) {
+	command := []string{"/bin/sh", "-c", execKillMarkerScript, "gotham-terminal-kill", marker}
+	return c.runKillHelper(ctx, containerID, command, user, workdir)
+}
+
+// runKillHelper runs one fixed helper exec and returns its bounded output.
+func (c *DockerClient) runKillHelper(ctx context.Context, containerID string, command []string, user, workdir string) (string, error) {
+	// The helper must not inherit the terminal marker: it would match itself.
+	env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+	execID, err := c.createExec(ctx, containerID, command, user, workdir, env, true)
+	if err != nil {
+		return "", err
+	}
+	stream, err := c.startExec(ctx, execID, true)
+	if err != nil {
+		return "", err
+	}
+	// The helper is finite, but bound the read anyway: a wedged container must
+	// not pin the close path after the attach connection is gone.
+	var output bytes.Buffer
+	readDone := make(chan error, 1)
+	go func() {
+		_, readErr := io.Copy(&output, io.LimitReader(stream, execProbeMaxBytes))
+		readDone <- readErr
+	}()
+	var readErr error
+	select {
+	case readErr = <-readDone:
+	case <-ctx.Done():
+		_ = stream.Close()
+		readErr = <-readDone
+	}
+	_ = stream.Close()
+	if readErr != nil && ctx.Err() != nil {
+		return output.String(), ctx.Err()
+	}
+	code, _, exitErr := c.execExitCode(ctx, execID)
+	if exitErr != nil {
+		return output.String(), exitErr
+	}
+	if code != 0 {
+		return output.String(), fmt.Errorf("docker: kill helper exited with code %d: %s", code, strings.TrimSpace(output.String()))
+	}
+	return output.String(), nil
+}
+
+// Resize applies a new TTY window size through the Docker exec resize endpoint.
+func (s *dockerExecSession) Resize(ctx context.Context, cols, rows uint16) error {
+	if s.client == nil || s.id == "" {
+		return errors.New("docker: exec session is not attached")
+	}
+	if cols == 0 || rows == 0 {
+		return errors.New("docker: exec dimensions must be positive")
+	}
+	query := url.Values{}
+	query.Set("w", strconv.FormatUint(uint64(cols), 10))
+	query.Set("h", strconv.FormatUint(uint64(rows), 10))
+	callCtx, cancel := context.WithTimeout(ctx, execResizeTimeout)
+	defer cancel()
+	return s.client.doJSON(callCtx, http.MethodPost,
+		"/exec/"+url.PathEscape(s.id)+"/resize?"+query.Encode(), nil, nil)
+}
+
+// ExitCode waits for the exec's final status.
+func (s *dockerExecSession) ExitCode(ctx context.Context) (int32, string, error) {
+	if s.client == nil || s.id == "" {
+		return -1, "", errors.New("docker: exec session is not attached")
+	}
+	return s.client.execExitCode(ctx, s.id)
+}
+
+// Shell reports the shell executable the agent chose.
+func (s *dockerExecSession) Shell() string { return s.shell }
+
+// User reports the container user the exec runs as.
+func (s *dockerExecSession) User() string { return s.user }
 
 // doJSON issues a request, optionally encoding body as JSON, and decodes a JSON
 // response into out when out is non-nil.
@@ -1029,6 +1865,11 @@ type dockerHostConfig struct {
 	// NetworkMode pins the container to one network. The registry uses it to
 	// stay off the default bridge that workloads share.
 	NetworkMode string `json:"NetworkMode,omitempty"`
+	// Optional resource bounds. Zero values are omitted so Docker's defaults
+	// apply; the terminal e2e harness sets them to keep test containers safe.
+	PidsLimit int64 `json:"PidsLimit,omitempty"`
+	Memory    int64 `json:"Memory,omitempty"`
+	NanoCpus  int64 `json:"NanoCpus,omitempty"`
 }
 
 // dockerPort is one host-side port binding.
@@ -1082,7 +1923,11 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) (*dockerCreateBody, er
 	if policy := strings.TrimSpace(req.GetRestartPolicy()); policy != "" {
 		host.RestartPolicy = &dockerRestartPolicy{Name: policy}
 	}
-	if len(host.Binds) > 0 || len(host.PortBindings) > 0 || host.RestartPolicy != nil {
+	host.PidsLimit = req.GetPidsLimit()
+	host.Memory = req.GetMemoryBytes()
+	host.NanoCpus = req.GetNanoCpus()
+	if len(host.Binds) > 0 || len(host.PortBindings) > 0 || host.RestartPolicy != nil ||
+		host.PidsLimit > 0 || host.Memory > 0 || host.NanoCpus > 0 {
 		body.HostConfig = host
 	}
 

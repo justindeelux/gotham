@@ -78,12 +78,14 @@ type fakeAuthorizer struct {
 	allow        bool
 	marker       Marker
 	err          error
+	target       Target
 	revalidateFn func(context.Context) (bool, error)
 }
 
-func (f *fakeAuthorizer) Authorize(context.Context, *auth.Claims) (Marker, error) {
+func (f *fakeAuthorizer) Authorize(_ context.Context, _ *auth.Claims, target Target) (Marker, error) {
 	f.mu.Lock()
 	allow, err, marker := f.allow, f.err, f.marker
+	f.target = target
 	f.mu.Unlock()
 	if err != nil {
 		return Marker{}, err
@@ -94,9 +96,10 @@ func (f *fakeAuthorizer) Authorize(context.Context, *auth.Claims) (Marker, error
 	return marker, nil
 }
 
-func (f *fakeAuthorizer) Revalidate(ctx context.Context, _ *auth.Claims, _ Marker) (bool, error) {
+func (f *fakeAuthorizer) Revalidate(ctx context.Context, _ *auth.Claims, _ Marker, target Target) (bool, error) {
 	f.mu.Lock()
 	allow, err, hook := f.allow, f.err, f.revalidateFn
+	f.target = target
 	f.mu.Unlock()
 	if hook != nil {
 		return hook(ctx)
@@ -172,6 +175,8 @@ type fixtureOptions struct {
 	ping         time.Duration
 	idle         time.Duration
 	writeTimeout time.Duration
+	applications ApplicationTargets
+	containers   agent.ContainerExec
 }
 
 type fixture struct {
@@ -189,9 +194,10 @@ func newFixture(t *testing.T, options fixtureOptions) *fixture {
 	serverID := uuid.New()
 	if options.dial == nil {
 		terminalServer := agent.NewTerminalServer(agent.TerminalConfig{
-			Logger: discardLogger(),
-			Roots:  fixedRoots{dir: t.TempDir()},
-			Shell:  shellPath(t),
+			Logger:     discardLogger(),
+			Roots:      fixedRoots{dir: t.TempDir()},
+			Shell:      shellPath(t),
+			Containers: options.containers,
 		})
 		shared := newBufClient(t, terminalServer)
 		options.dial = func(context.Context, *servers.Server) (TerminalClient, error) {
@@ -199,11 +205,12 @@ func newFixture(t *testing.T, options fixtureOptions) *fixture {
 		}
 	}
 	svc := NewService(Config{
-		Registry:    &fakeRegistry{server: &servers.Server{ID: serverID}},
-		Dial:        options.dial,
-		Logger:      discardLogger(),
-		PendingTTL:  options.pendingTTL,
-		MaxDuration: options.maxDuration,
+		Registry:     &fakeRegistry{server: &servers.Server{ID: serverID}},
+		Dial:         options.dial,
+		Applications: options.applications,
+		Logger:       discardLogger(),
+		PendingTTL:   options.pendingTTL,
+		MaxDuration:  options.maxDuration,
 	})
 	verifier := &fakeVerifier{userID: userID, token: "good-token"}
 	authorizer := &fakeAuthorizer{
@@ -213,18 +220,18 @@ func newFixture(t *testing.T, options fixtureOptions) *fixture {
 	}
 	f := &fixture{svc: svc, verifier: verifier, userID: userID, serverID: serverID, authorizer: authorizer}
 	router := chi.NewRouter()
-	mount(router,
-		func(next http.Handler) http.Handler { return next },
-		svc, verifier, authorizer,
-		func(context.Context) (uuid.UUID, bool) { return userID, true },
-		discardLogger(),
-		handlerOptions{
-			revalidatePeriod: options.revalidate,
-			pingPeriod:       options.ping,
-			idleTimeout:      options.idle,
-			writeTimeout:     options.writeTimeout,
-		},
-	)
+	userIDFrom := func(context.Context) (uuid.UUID, bool) { return userID, true }
+	passThrough := func(next http.Handler) http.Handler { return next }
+	timers := handlerOptions{
+		revalidatePeriod: options.revalidate,
+		pingPeriod:       options.ping,
+		idleTimeout:      options.idle,
+		writeTimeout:     options.writeTimeout,
+	}
+	mount(router, passThrough, svc, verifier, authorizer, userIDFrom, discardLogger(), timers)
+	if options.applications != nil {
+		mountApplications(router, passThrough, svc, verifier, authorizer, userIDFrom, discardLogger(), timers)
+	}
 	f.server = httptest.NewServer(router)
 	t.Cleanup(f.server.Close)
 	return f
@@ -921,7 +928,7 @@ func TestRelayErrorWorkingDirectory(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := relayError(testCase.err); got != testCase.want {
+			if got := relayError(testCase.err, Target{Kind: TargetHost}); got != testCase.want {
 				t.Fatalf("relayError(%v) = %q, want %q", testCase.err, got, testCase.want)
 			}
 		})

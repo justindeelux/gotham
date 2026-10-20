@@ -2461,14 +2461,16 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // TerminalService runs on the node agent. The control plane dials it to open a
-// host PTY and stream interactive bytes over the existing mTLS channel.
+// host PTY or an interactive container exec and stream bytes over the existing
+// mTLS channel.
 //
 // The RPC is one bounded bidirectional stream whose first client message must
 // be TerminalOpen; every other message is input, resize or close. Output and
 // the final exit travel back on the same stream. There is no session id in the
 // protocol: the stream *is* the session, so a dropped stream always tears the
-// PTY down and a reconnect can never resume (or replay input into) the old
-// shell. The control plane opens a new stream only for a new session.
+// PTY (or the exec attachment) down and a reconnect can never resume (or
+// replay input into) the old shell. The control plane opens a new stream only
+// for a new session.
 //
 // Trust boundary: host shell access is a platform-operator capability. The
 // agent confines the initial working directory to a FileService root with the
@@ -2514,14 +2516,16 @@ type TerminalService_OpenTerminalClient = grpc.BidiStreamingClient[TerminalReque
 // for forward compatibility.
 //
 // TerminalService runs on the node agent. The control plane dials it to open a
-// host PTY and stream interactive bytes over the existing mTLS channel.
+// host PTY or an interactive container exec and stream bytes over the existing
+// mTLS channel.
 //
 // The RPC is one bounded bidirectional stream whose first client message must
 // be TerminalOpen; every other message is input, resize or close. Output and
 // the final exit travel back on the same stream. There is no session id in the
 // protocol: the stream *is* the session, so a dropped stream always tears the
-// PTY down and a reconnect can never resume (or replay input into) the old
-// shell. The control plane opens a new stream only for a new session.
+// PTY (or the exec attachment) down and a reconnect can never resume (or
+// replay input into) the old shell. The control plane opens a new stream only
+// for a new session.
 //
 // Trust boundary: host shell access is a platform-operator capability. The
 // agent confines the initial working directory to a FileService root with the

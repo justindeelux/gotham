@@ -64,12 +64,21 @@ const (
 	openTimeout = 20 * time.Second
 )
 
-// openedEvent is the JSON payload of an opOpened frame.
+// openedEvent is the JSON payload of an opOpened frame. The container fields
+// are omitted for a host shell, so the host contract is unchanged.
 type openedEvent struct {
 	Shell       string `json:"shell"`
 	Cols        uint32 `json:"cols"`
 	Rows        uint32 `json:"rows"`
 	ServiceUser string `json:"service_user"`
+	// Target is "host" or "container".
+	Target string `json:"target,omitempty"`
+	// Service, ContainerID, ContainerName and TargetLabel identify a container
+	// session so the UI always states which application container it drives.
+	Service       string `json:"service,omitempty"`
+	ContainerID   string `json:"container_id,omitempty"`
+	ContainerName string `json:"container_name,omitempty"`
+	TargetLabel   string `json:"target_label,omitempty"`
 }
 
 // exitedEvent is the JSON payload of an opExited frame.

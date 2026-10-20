@@ -44,10 +44,13 @@ type BuildOutcome struct {
 }
 
 // ComposeContainer is one container of a compose project on the node: the
-// compose service it belongs to and the state the health gate reads.
+// compose service it belongs to and the state the health gate reads. Name and
+// Image are display metadata for the terminal target picker.
 type ComposeContainer struct {
 	ID      string
 	Service string
+	Name    string
+	Image   string
 	State   string
 	Status  string
 }
@@ -295,6 +298,8 @@ func (n *agentNode) ComposePs(ctx context.Context, projectName string) ([]Compos
 		containers = append(containers, ComposeContainer{
 			ID:      container.GetContainerId(),
 			Service: container.GetService(),
+			Name:    container.GetName(),
+			Image:   container.GetImage(),
 			State:   container.GetState(),
 			Status:  container.GetStatus(),
 		})

@@ -387,10 +387,11 @@ func TestAuthScopeWrappers(t *testing.T) {
 	const session = "Bearer valid-token"
 
 	wrappers := map[string]func(http.Handler) http.Handler{
-		"readScopeAuth":     s.readScopeAuth,
-		"adminScopeAuth":    s.adminScopeAuth,
-		"resourceScopeAuth": s.resourceScopeAuth,
-		"withTeam":          s.withTeam(),
+		"readScopeAuth":           s.readScopeAuth,
+		"adminScopeAuth":          s.adminScopeAuth,
+		"resourceScopeAuth":       s.resourceScopeAuth,
+		"withTeam":                s.withTeam(),
+		"applicationTerminalAuth": s.applicationTerminalAuth(),
 	}
 
 	tests := map[string]struct {
@@ -418,6 +419,14 @@ func TestAuthScopeWrappers(t *testing.T) {
 		"team read cannot mutate":     {"withTeam", http.MethodPost, "Bearer " + readToken, http.StatusForbidden},
 		"team deploy mutates":         {"withTeam", http.MethodPost, "Bearer " + deployToken, http.StatusOK},
 		"team rejects none":           {"withTeam", http.MethodPost, "", http.StatusUnauthorized},
+		// Container terminal control routes require an interactive session:
+		// neither a read-scope nor a deploy-scope API token may list or create.
+		"terminal read token cannot list":     {"applicationTerminalAuth", http.MethodGet, "Bearer " + readToken, http.StatusForbidden},
+		"terminal deploy token cannot create": {"applicationTerminalAuth", http.MethodPost, "Bearer " + deployToken, http.StatusForbidden},
+		"terminal admin token refused":        {"applicationTerminalAuth", http.MethodPost, "Bearer " + adminToken, http.StatusForbidden},
+		"terminal jwt lists":                  {"applicationTerminalAuth", http.MethodGet, session, http.StatusOK},
+		"terminal jwt creates":                {"applicationTerminalAuth", http.MethodPost, session, http.StatusOK},
+		"terminal rejects none":               {"applicationTerminalAuth", http.MethodPost, "", http.StatusUnauthorized},
 	}
 
 	for label, tc := range tests {

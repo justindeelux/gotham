@@ -579,6 +579,18 @@ func (s *Server) routes() (http.Handler, error) {
 		// resync after application mutations and successful deployments.
 		s.deploy = s.deployService(providerSvc, s.proxy, githubAppSvc)
 		deploy.Mount(api, s.withTeam(), UserIDFromContext, s.deploy)
+		// Application container terminals (JUS-244): team write-level access,
+		// resolved server-side from the application's running deployment. They
+		// are separate from the platform-operator host terminal: neither grants
+		// the other, and a read-only team member never gets a shell.
+		if s.terminal != nil && s.deploy != nil {
+			if resolver, ok := s.deploy.(deploy.TerminalResolver); ok {
+				s.terminal.SetApplications(terminalApplicationResolver{deploy: resolver})
+				terminal.MountApplications(api, s.applicationTerminalAuth(), s.terminal, s.auth,
+					applicationTerminalAuthorizer{resolver: resolver, auth: s.auth, teams: s.teamService},
+					UserIDFromContext, s.logger)
+			}
+		}
 
 		// Background-task progress (JUS-91): the deploy worker publishes
 		// queued/running/succeeded/failed events on tasks:{teamID}, and every

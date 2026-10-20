@@ -191,15 +191,21 @@ func runServe() int {
 			}
 			if fileServer != nil {
 				serverOptions = append(serverOptions, agent.WithFileService(fileServer))
-				// The host terminal resolves its initial cwd through the same
-				// root policy, so it is only offered when the file service is.
-				serverOptions = append(serverOptions, agent.WithTerminalService(agent.NewTerminalServer(agent.TerminalConfig{
-					Logger:      log,
-					Roots:       fileServer,
-					Shell:       cfg.TerminalShell,
-					MaxSessions: cfg.TerminalMaxSessions,
-				})))
 			}
+			// The host terminal resolves its initial cwd through the FileService
+			// root policy, so Roots stays nil when files are disabled and a host
+			// open answers FailedPrecondition. Container exec does not need a
+			// file root, so the service is always registered.
+			terminalConfig := agent.TerminalConfig{
+				Logger:      log,
+				Shell:       cfg.TerminalShell,
+				Containers:  docker,
+				MaxSessions: cfg.TerminalMaxSessions,
+			}
+			if fileServer != nil {
+				terminalConfig.Roots = fileServer
+			}
+			serverOptions = append(serverOptions, agent.WithTerminalService(agent.NewTerminalServer(terminalConfig)))
 			if allowAnyPeer {
 				// The only opt-out is the explicit, loudly-logged dev-insecure mode.
 				serverOptions = append(serverOptions, agent.WithoutControlPlanePeer())

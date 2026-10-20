@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 
 import { useAuthStore } from "@/features/auth";
 import type { Server } from "@/features/servers";
-import { useServersStore } from "@/features/servers";
+import { serverStatusKey, useServersStore } from "@/features/servers";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 
 /**
@@ -54,20 +54,22 @@ export function useTerminalPageSession() {
       label:
         server.status === "ready"
           ? server.name
-          : `${server.name} · ${t(`servers.status.${server.status}`)}`,
+          : `${server.name} · ${t(serverStatusKey(server.status))}`,
       value: server.id,
     })),
+  );
+
+  /** selectedStatusLabel localizes the current server's lifecycle word. */
+  const selectedStatusLabel = computed<string>(() =>
+    selectedServer.value
+      ? t(serverStatusKey(selectedServer.value.status))
+      : "",
   );
 
   /** sourcePath is the route the app dock resumes for this page session. */
   function sourcePathFor(serverId: string): string {
     return router.resolve({ name: "terminal", query: { server: serverId } })
       .fullPath;
-  }
-
-  /** statusLabel localizes the server lifecycle word. */
-  function statusLabel(server: Server): string {
-    return t(`servers.status.${server.status}`);
   }
 
   /** syncQuery mirrors the selection into the URL for reload/dock resume. */
@@ -218,16 +220,23 @@ export function useTerminalPageSession() {
 
   // Demotion is a backend-enforced boundary; the client leaves the operator
   // surface immediately with the same forbidden page the route guard uses.
-  watch(
-    () => authStore.isPlatformAdmin,
-    (isAdmin) => {
-      if (!isAdmin) {
-        void router.replace({ name: "forbidden" });
-      }
-    },
+  // A sign-out empties the account too, but that is NOT a demotion: the auth
+  // flow owns the redirect, and treating logout as one would send the login
+  // page a `?redirect=/forbidden` and strand the next sign-in there.
+  const demoted = computed<boolean>(
+    () => authStore.isAuthenticated && !authStore.isPlatformAdmin,
   );
+  watch(demoted, (isDemoted) => {
+    if (isDemoted) {
+      void router.replace({ name: "forbidden" });
+    }
+  });
 
   onMounted(async () => {
+    if (!authStore.isAuthenticated) {
+      // The route guard owns the sign-in redirect.
+      return;
+    }
     if (!authStore.isPlatformAdmin) {
       void router.replace({ name: "forbidden" });
       return;
@@ -258,7 +267,7 @@ export function useTerminalPageSession() {
     selectedServer,
     serverReady,
     serverOptions,
-    statusLabel,
+    selectedStatusLabel,
     tabId,
     starting,
     closed,

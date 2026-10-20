@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { RouterLink } from "vue-router";
 
 import type { Server } from "@/features/servers";
+import { serverStatusKey } from "@/features/servers";
 
 /**
  * Server chooser for the standalone terminal page (JUS-246). It only emits a
@@ -21,7 +22,7 @@ const { t } = useI18n();
 
 /** statusLabel localizes the server lifecycle word. */
 function statusLabel(server: Server): string {
-  return t(`servers.status.${server.status}`);
+  return t(serverStatusKey(server.status));
 }
 </script>
 

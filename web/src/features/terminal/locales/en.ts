@@ -25,7 +25,6 @@ const en = {
     movedBody:
       "Its session, buffer and working directory moved to the floating window. This session cannot return to the page.",
     showWindow: "Show window",
-    startNew: "Start new session",
     close: "Close terminal",
     host: "Host shell",
     target: "Target",
@@ -69,7 +68,7 @@ const en = {
     generic: "The terminal could not be started.",
   },
   actions: {
-    retry: "Start a new session",
+    retry: "Start new session",
     show: "Show terminal",
     minimize: "Minimize",
     close: "Close",
@@ -113,8 +112,7 @@ const en = {
     starting: "Starting terminal…",
     sessionClosedTitle: "Session closed",
     sessionClosedBody:
-      "This page no longer has a live terminal. Start a new session when you are ready; nothing starts automatically.",
-    startNew: "Start new session",
+      "This page no longer has a live terminal. Nothing starts automatically; use the button below when you are ready.",
     notAvailableTitle: "Terminal not available",
     notAvailableBody:
       "The terminal is reserved for platform operators. Ask an operator for access, then reload this page.",

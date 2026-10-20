@@ -26,9 +26,10 @@ import {
   ServerMetricsKey,
   useServerMetrics,
 } from "@/features/servers/composables/useServerMetrics";
+import { useServerDetailTab } from "@/features/servers/composables/useServerDetailTab";
 import { useAuthStore } from "@/features/auth";
 import { useServersStore } from "@/features/servers/stores/servers";
-import { TerminalPane, useTerminalStore } from "@/features/terminal";
+import ServerTerminalTab from "@/features/servers/components/ServerTerminalTab.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -36,42 +37,10 @@ const message = useMessage();
 const { locale, t } = useI18n();
 const serversStore = useServersStore();
 const authStore = useAuthStore();
-const terminal = useTerminalStore();
 
 const serverId = computed<string>(() => String(route.params.id ?? ""));
 
-/** DETAIL_TABS is the tab order shared with the URL `tab` query. */
-const DETAIL_TABS = [
-  "overview",
-  "containers",
-  "files",
-  "terminal",
-  "metrics",
-  "proxy",
-  "settings",
-] as const;
-type DetailTab = (typeof DETAIL_TABS)[number];
-
-/** isDetailTab narrows one untrusted query value. */
-function isDetailTab(value: unknown): value is DetailTab {
-  return typeof value === "string" && (DETAIL_TABS as readonly string[]).includes(value);
-}
-
-/**
- * tabFromQuery restores the tab after a reload or a dock resume. The
- * operator-only tabs are ignored for a caller who cannot see them, so a
- * crafted URL never leaves the tab strip on a hidden pane.
- */
-function tabFromQuery(): DetailTab {
-  const value = route.query.tab;
-  if (!isDetailTab(value)) {
-    return "overview";
-  }
-  if ((value === "files" || value === "terminal") && !authStore.isPlatformAdmin) {
-    return "overview";
-  }
-  return value;
-}
+const { activeTab, blockedTerminal, showOverview } = useServerDetailTab(serverId);
 
 const server = ref<Server | null>(null);
 const loading = ref(false);
@@ -94,32 +63,6 @@ const error = computed<string | null>(() => {
 const validating = ref(false);
 const deleting = ref(false);
 const editOpen = ref(false);
-const activeTab = ref<DetailTab>(tabFromQuery());
-
-/**
- * Terminal tab state (JUS-246). The tab is lazy: `activeTab === "terminal"`
- * is what requests the page session, so opening the server detail page or
- * switching other tabs issues zero create calls. The id is reset on a route
- * change so one server's pane can never render another server's session.
- */
-const terminalTabId = ref<string>("");
-/** terminalClosed marks a tab that disappeared under the mounted pane. */
-const terminalClosed = ref(false);
-/** terminalStarting drives the first-start spinner (never the restart card). */
-const terminalStarting = ref(false);
-/** terminalTab is the live store row, or null once it is gone. */
-const terminalTab = computed(() =>
-  terminalTabId.value === "" ? null : terminal.findTab(terminalTabId.value),
-);
-
-/**
- * blockedTerminal backs the clear notice for a non-operator deep link
- * (`?tab=terminal`): the tab falls back to Overview instead of rendering a
- * blank body, and the notice explains why.
- */
-const blockedTerminal = computed<boolean>(
-  () => route.query.tab === "terminal" && !authStore.isPlatformAdmin,
-);
 
 /**
  * liveServer merges the polled list status into the detail row, so a node
@@ -136,93 +79,6 @@ const liveServer = computed<Server | null>(() => {
   }
   return { ...local, status: cached.status };
 });
-
-/** terminalStatus is the lifecycle word the unavailable panel shows. */
-const terminalStatus = computed<string>(() =>
-  liveServer.value ? t(`servers.status.${liveServer.value.status}`) : t("terminal.page.unknownServer"),
-);
-
-/** terminalSourcePath is the route the app dock resumes for this session. */
-function terminalSourcePath(id: string): string {
-  return router.resolve({
-    name: "server-detail",
-    params: { id },
-    query: { tab: "terminal" },
-  }).fullPath;
-}
-
-/**
- * ensureTerminalSession creates or reuses the page shell for this server.
- * `openPageSession` is single-flight and idempotent per target, so rapid tab
- * changes or a remount never open a concurrent duplicate.
- */
-async function ensureTerminalSession(): Promise<void> {
-  const current = liveServer.value;
-  if (
-    !current ||
-    current.id !== serverId.value ||
-    current.status !== "ready" ||
-    !authStore.isPlatformAdmin
-  ) {
-    return;
-  }
-  const request = {
-    serverId: current.id,
-    serverName: current.name,
-    sourcePath: terminalSourcePath(current.id),
-  };
-  const existing = terminal.findTabForTarget(request);
-  if (existing) {
-    terminalTabId.value = existing.id;
-    return;
-  }
-  terminalClosed.value = false;
-  terminalStarting.value = true;
-  try {
-    const tab = await terminal.openPageSession(request);
-    if (serverId.value === current.id) {
-      terminalTabId.value = tab.id;
-    }
-  } catch {
-    // The pane renders its own retry/error state; the tab stays mountable.
-  } finally {
-    terminalStarting.value = false;
-  }
-}
-
-/**
- * startNewDetailSession is the explicit restart path (closed pane or moved to
- * window). It never runs automatically; `fresh` leaves a detached window copy
- * alone and starts a new page shell.
- */
-async function startNewDetailSession(): Promise<void> {
-  const current = liveServer.value;
-  if (
-    !current ||
-    current.id !== serverId.value ||
-    current.status !== "ready" ||
-    !authStore.isPlatformAdmin
-  ) {
-    return;
-  }
-  terminalClosed.value = false;
-  terminalStarting.value = true;
-  try {
-    const tab = await terminal.openPageSession({
-      serverId: current.id,
-      serverName: current.name,
-      sourcePath: terminalSourcePath(current.id),
-      fresh: true,
-    });
-    if (serverId.value === current.id) {
-      terminalTabId.value = tab.id;
-    }
-  } catch {
-    // The pane renders its own retry/error state; the restart stays explicit.
-  } finally {
-    terminalStarting.value = false;
-  }
-}
 
 // One shared metrics window for the page and the metrics tab.
 const { context: metricsContext, resetForServer } = useServerMetrics(serverId, activeTab);
@@ -299,105 +155,20 @@ async function handleDelete(): Promise<void> {
 }
 
 watch(serverId, () => {
-  activeTab.value = tabFromQuery();
-  terminalTabId.value = "";
-  terminalClosed.value = false;
-  terminalStarting.value = false;
   resetForServer();
   void fetchServer();
 });
 
-// A tab removed by any route (close confirmation, logout reset) must not leave
-// the host pointing at a dead id. This only forgets the id; the template then
-// shows the explicit restart card and never creates on its own.
-watch(terminalTab, (tab) => {
-  if (terminalTabId.value !== "" && tab === null) {
-    terminalTabId.value = "";
-    terminalStarting.value = false;
-    terminalClosed.value = true;
-  }
-});
-
-// Entering the Terminal tab is an explicit activation: it clears a previous
-// closed state so the ensure watcher below may reuse/create once.
-watch(activeTab, (next) => {
-  if (next === "terminal") {
-    terminalClosed.value = false;
-  }
-});
-
-// Demotion is enforced by the backend; the client leaves the operator tab
-// immediately (no blank pane) and hides the operator-only entry points.
+// Demotion is enforced by the backend and must leave the operator tab even
+// though its pane is removed by `v-if` at the same moment. A sign-out is not
+// a demotion: the auth flow owns that redirect.
 watch(
-  () => authStore.isPlatformAdmin,
-  (isAdmin) => {
-    if (!isAdmin) {
-      if (activeTab.value === "terminal" || activeTab.value === "files") {
-        activeTab.value = "overview";
-      }
-      terminalTabId.value = "";
-      terminalClosed.value = false;
-      terminalStarting.value = false;
+  [() => authStore.isAuthenticated, () => authStore.isPlatformAdmin],
+  ([authenticated, admin]) => {
+    if (authenticated && !admin) {
+      showOverview();
     }
   },
-);
-
-// The URL keeps the active tab so the dock can resume a paused page session
-// (`?tab=terminal`) and a reload lands on the same pane.
-let syncingTabQuery = false;
-watch(activeTab, (next) => {
-  const desired = next === "terminal" ? "terminal" : null;
-  const current = typeof route.query.tab === "string" ? route.query.tab : null;
-  if (current === desired) {
-    return;
-  }
-  syncingTabQuery = true;
-  const query = { ...route.query };
-  if (desired === null) {
-    delete query.tab;
-  } else {
-    query.tab = desired;
-  }
-  void router
-    .replace({
-      name: "server-detail",
-      params: { id: serverId.value },
-      query,
-    })
-    .finally(() => {
-      syncingTabQuery = false;
-    });
-});
-
-watch(
-  () => route.query.tab,
-  (value) => {
-    if (syncingTabQuery) {
-      return;
-    }
-    const next = isDetailTab(value) ? value : "overview";
-    const visible =
-      (next === "files" || next === "terminal") && !authStore.isPlatformAdmin
-        ? "overview"
-        : next;
-    if (visible !== activeTab.value) {
-      activeTab.value = visible;
-    }
-  },
-);
-
-// First activation of the Terminal tab starts the shell; a revisit reuses the
-// live tab through the store's idempotent open. Nothing is created while
-// another tab is active, and an offline/unready node is never dialled.
-watch(
-  [activeTab, () => liveServer.value?.status, () => liveServer.value?.id],
-  () => {
-    if (activeTab.value !== "terminal" || terminalClosed.value) {
-      return;
-    }
-    void ensureTerminalSession();
-  },
-  { immediate: true },
 );
 
 onMounted(() => {
@@ -504,45 +275,16 @@ onMounted(() => {
             v-if="authStore.isPlatformAdmin"
             name="terminal"
             :tab="$t('terminal.page.tabLabel')"
+            display-directive="show"
           >
-            <div class="server-terminal">
-              <NAlert
-                v-if="!liveServer || liveServer.status !== 'ready'"
-                type="warning"
-                :show-icon="true"
-              >
-                <template #header>{{ $t("terminal.page.notReadyTitle") }}</template>
-                {{
-                  $t("terminal.page.notReadyBody", {
-                    status: terminalStatus,
-                  })
-                }}
-              </NAlert>
-              <div v-else-if="terminalStarting && terminalTabId === ''" class="server-terminal-loading">
-                <NSpin size="small" :aria-label="$t('terminal.page.starting')" />
-              </div>
-              <NCard v-else-if="terminalTabId === ''" class="server-terminal-closed">
-                <p class="server-terminal-closed-title">
-                  {{ $t("terminal.page.sessionClosedTitle") }}
-                </p>
-                <p class="small muted server-terminal-closed-body">
-                  {{ $t("terminal.page.sessionClosedBody") }}
-                </p>
-                <NButton
-                  type="primary"
-                  size="small"
-                  @click="startNewDetailSession"
-                >
-                  {{ $t("terminal.page.startNew") }}
-                </NButton>
-              </NCard>
-              <TerminalPane
-                v-else
-                :tab-id="terminalTabId"
-                class="server-terminal-pane"
-                @start-new="startNewDetailSession"
-              />
-            </div>
+            <ServerTerminalTab
+              class="server-terminal"
+              :server="liveServer"
+              :server-id="serverId"
+              :ready="liveServer?.status === 'ready'"
+              :active="activeTab === 'terminal'"
+              @blocked="showOverview"
+            />
           </NTabPane>
 
           <NTabPane name="metrics" :tab="$t('servers.detail.tabMetrics')">
@@ -585,38 +327,16 @@ onMounted(() => {
 }
 
 .server-terminal {
+  /* The extracted stage owns the state view; keep a usable terminal height
+   * on the detail page without letting the page grow unbounded. */
   display: flex;
   flex-direction: column;
+  height: clamp(18rem, 60vh, 44rem);
   min-height: 0;
   margin-top: var(--space-4);
 }
 
-.server-terminal-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: clamp(12rem, 30vh, 24rem);
-}
-
-/* The pane owns xterm's scroll area; keep a usable terminal height at every
- * viewport without letting the page grow unbounded. */
-.server-terminal-pane {
-  height: clamp(18rem, 60vh, 44rem);
-  min-height: 0;
-}
-
 .server-blocked-tab {
   margin-bottom: var(--space-3);
-}
-
-.server-terminal-closed-title {
-  margin: 0;
-  font-weight: 600;
-  color: var(--fg-2);
-}
-
-.server-terminal-closed-body {
-  margin: var(--space-2) 0 var(--space-4);
-  max-width: 60ch;
 }
 </style>

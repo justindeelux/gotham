@@ -108,6 +108,7 @@ interface FakeSession {
 type CreateBehavior =
   | { kind: "ok" }
   | { kind: "status"; status: number }
+  | { kind: "body"; status: number; message: string }
   | { kind: "network" }
   | { kind: "delay" }
   | { kind: "close" };
@@ -257,6 +258,15 @@ async function mockApi(
       await route.fulfill({
         status: behavior.status,
         json: { error: `scripted ${behavior.status}` },
+      });
+      return;
+    }
+    if (behavior.kind === "body") {
+      // A backend body message reaches the ApiError verbatim; the UI must map
+      // the failure to a bounded catalog code and never echo this text.
+      await route.fulfill({
+        status: behavior.status,
+        json: { message: behavior.message },
       });
       return;
     }
@@ -672,13 +682,12 @@ test("the moved-to-window notice starts a new page session only on demand", asyn
   // Nothing starts from the notice itself.
   expect(state.creates).toBe(1);
 
-  // The floating window can cover the page notice; drive the button from the
-  // keyboard, which is also its real accessible path.
+  // The notice sits above the floating window (JUS-246 r2 finding 4), so the
+  // real pointer path works; keyboard was the only path before.
   const startNew = page
     .locator(".term-detached")
     .getByRole("button", { name: "Start new session" });
-  await startNew.focus();
-  await page.keyboard.press("Enter");
+  await startNew.click();
   await expect.poll(() => state.creates).toBe(2);
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
   expect(await tabCounts(page)).toEqual({ page: 1, window: 1 });
@@ -700,12 +709,23 @@ test("the server detail tab recovers from a closed session with an explicit rest
 
   await expect(page.locator(".term-surface")).toHaveCount(0);
   await expect.poll(() => state.deletes).toBe(1);
-  await expect(page.locator(".server-terminal-closed")).toBeVisible();
+  await expect(page.locator(".term-stage-closed")).toBeVisible();
   await expect(page.getByText("Session closed")).toBeVisible();
   expect(state.creates).toBe(1);
 
+  // Focus lands on the explicit restart, not on a rail link.
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.textContent ?? ""))
+    .toContain("Start new session");
+
+  // Switching Overview -> Terminal keeps the closed card and creates nothing.
+  await page.locator(".n-tabs-tab", { hasText: "Overview" }).click();
+  await page.locator(".n-tabs-tab", { hasText: "Terminal" }).click();
+  await expect(page.locator(".term-stage-closed")).toBeVisible();
+  expect(state.creates).toBe(1);
+
   await page
-    .locator(".server-terminal-closed")
+    .locator(".term-stage-closed")
     .getByRole("button", { name: "Start new session" })
     .click();
   await expect.poll(() => state.creates).toBe(2);
@@ -765,7 +785,7 @@ for (const failure of createFailures) {
     expect(state.createServers).toEqual([SERVER_A]);
     await expect(page.getByText(failure.message)).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Start a new session" }),
+      page.getByRole("button", { name: "Start new session" }),
     ).toBeVisible();
 
     // No reconnect loop: the count is unchanged after a full retry window.
@@ -773,7 +793,7 @@ for (const failure of createFailures) {
     expect(state.creates).toBe(1);
 
     // Starting a new session is explicit and creates exactly once.
-    await page.getByRole("button", { name: "Start a new session" }).click();
+    await page.getByRole("button", { name: "Start new session" }).click();
     await expect.poll(() => state.creates).toBe(2);
     await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
   });
@@ -795,7 +815,7 @@ test("a dropped stream shows Disconnected and retries only on demand", async ({
   await page.waitForTimeout(2000);
   expect(state.creates).toBe(1);
 
-  await page.getByRole("button", { name: "Start a new session" }).click();
+  await page.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(2);
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
 });
@@ -816,7 +836,7 @@ test("server detail create failure is explicit and never auto-retries", async ({
   await page.waitForTimeout(2000);
   expect(state.creates).toBe(1);
 
-  await page.getByRole("button", { name: "Start a new session" }).click();
+  await page.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(2);
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
 });
@@ -883,4 +903,144 @@ test("cancelling a server switch keeps the shell, confirming closes only it", as
   expect(state.createServers).toEqual([SERVER_A, SERVER_B]);
   await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_B}`));
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+});
+
+test("signing out from /terminal lands on login with no forbidden redirect", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockApi(page, state);
+  await seedApp(page, `/terminal?server=${SERVER_A}`);
+  await expect.poll(() => state.creates).toBe(1);
+
+  // The real account-menu path: sign-out confirms the live shell, then the
+  // auth flow redirects to login. It must not be mistaken for a demotion.
+  await page.locator(".topbar").getByRole("button", { name: "Account" }).click();
+  await page.locator(".n-dropdown-option", { hasText: "Sign out" }).click();
+  const dialog = page.locator(".term-close-modal");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/login$/);
+  expect(new URL(page.url()).searchParams.get("redirect")).toBeNull();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  expect(await tabCounts(page)).toEqual({ page: 0, window: 0 });
+});
+
+/** RAW_PATTERNS are backend/axios strings that must never reach the DOM. */
+const RAW_PATTERNS = [
+  "/srv/gotham/secret",
+  "Request failed with status code",
+  "Network Error",
+];
+
+/** expectNoRawText asserts no raw failure text in text or attributes. */
+async function expectNoRawText(page: Page): Promise<void> {
+  const html = await page.content();
+  for (const pattern of RAW_PATTERNS) {
+    expect(html).not.toContain(pattern);
+  }
+}
+
+const rawFailures = [
+  {
+    name: "409 backend body",
+    behavior: {
+      kind: "body",
+      status: 409,
+      message: "scripted /srv/gotham/secret 409",
+    } as const,
+    bounded: "The terminal could not be started.",
+  },
+  {
+    name: "503 backend body",
+    behavior: {
+      kind: "body",
+      status: 503,
+      message: "scripted /srv/gotham/secret 503",
+    } as const,
+    bounded: "The node agent is unavailable. Try again once it reconnects.",
+  },
+  {
+    name: "500 axios text",
+    behavior: { kind: "status", status: 500 } as const,
+    bounded: "The terminal could not be started.",
+  },
+];
+
+for (const failure of rawFailures) {
+  test(`create failure (${failure.name}) never leaks raw text into the page DOM`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const state = freshState();
+    state.behaviors = [failure.behavior];
+    await mockApi(page, state);
+    await seedApp(page, `/terminal?server=${SERVER_A}`);
+
+    await expect.poll(() => state.creates).toBe(1);
+    await expect(page.getByText(failure.bounded)).toBeVisible();
+    await expectNoRawText(page);
+    await page.waitForTimeout(1000);
+    expect(state.creates).toBe(1);
+  });
+}
+
+test("raw backend text never reaches the detail tab or the paused dock", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  state.behaviors = [
+    {
+      kind: "body",
+      status: 409,
+      message: "scripted /srv/gotham/secret 409",
+    },
+  ];
+  await mockApi(page, state);
+  await seedApp(page, `/servers/${SERVER_A}?tab=terminal`);
+
+  await expect.poll(() => state.creates).toBe(1);
+  await expect(page.getByText("The terminal could not be started.")).toBeVisible();
+  await expectNoRawText(page);
+
+  // Leaving the route keeps the failed tab in the dock; the card must not
+  // echo the backend message.
+  await page.locator('a[href="/dashboard"]').first().click();
+  await expect(page.locator(".term-dock")).toBeVisible();
+  await expect(page.locator(".term-dock")).toContainText("Error");
+  await expectNoRawText(page);
+});
+
+test("raw backend text never reaches the floating window", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  state.behaviors = [
+    {
+      kind: "body",
+      status: 409,
+      message: "scripted /srv/gotham/secret 409",
+    },
+  ];
+  await mockApi(page, state);
+  await seedApp(page, "/dashboard");
+  await page.evaluate(async ({ id }) => {
+    const app = (document.querySelector("#app") as unknown as {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
+      };
+    }).__vue_app__;
+    const store = app.config.globalProperties.$pinia._s.get("terminal") as {
+      openWindowSession: (_options: Record<string, unknown>) => Promise<unknown>;
+    };
+    await store.openWindowSession({ serverId: id, serverName: "prod-01" });
+  }, { id: SERVER_A });
+
+  await expect(page.locator(".term-window")).toBeVisible();
+  await expect(
+    page.getByText("The terminal could not be started.").last(),
+  ).toBeVisible();
+  await expectNoRawText(page);
 });

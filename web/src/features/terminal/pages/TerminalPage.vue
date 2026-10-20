@@ -21,7 +21,7 @@ const {
   selectedServer,
   serverReady,
   serverOptions,
-  statusLabel,
+  selectedStatusLabel,
   tabId,
   starting,
   closed,
@@ -57,7 +57,7 @@ const {
         class="term-toolbar-status"
         :class="`is-${selectedServer.status}`"
       >
-        {{ statusLabel(selectedServer) }}
+        {{ selectedStatusLabel }}
       </span>
     </div>
 

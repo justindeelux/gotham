@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NSpin } from "naive-ui";
+import { nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
-import TerminalPane from "@/features/terminal/components/TerminalPane.vue";
 import type { Server } from "@/features/servers";
+import { serverStatusKey } from "@/features/servers";
+import TerminalPane from "@/features/terminal/components/TerminalPane.vue";
 
 /**
  * Host and state view for one page session (JUS-246).
  *
  * The stage never starts a session by itself: `start` is emitted only from an
  * explicit button (closed session, or the moved-to-window notice), so a route
- * change, a close or a demotion can never silently spawn a shell.
+ * change, a close or a demotion can never silently spawn a shell. The closed
+ * card is a polite live region and takes focus after a confirmed close, so the
+ * keyboard flow continues on "Start new session" rather than on a rail tile.
  */
 interface Props {
   server: Server | null;
@@ -20,13 +24,37 @@ interface Props {
   closed: boolean;
 }
 
-defineProps<Props>();
+const props = defineProps<Props>();
 const emit = defineEmits<{ start: [fresh: boolean] }>();
 const { t } = useI18n();
 
+const startButton = ref<InstanceType<typeof NButton> | null>(null);
+
+/** focusStart moves focus onto the explicit restart control. */
+function focusStart(): void {
+  const element = startButton.value?.$el;
+  if (element instanceof HTMLElement) {
+    element.focus();
+  }
+}
+
+// A confirmed close removes the tab; the dialog restores focus to its own
+// fallback on the next tick, so wait two ticks and land on the restart button.
+watch(
+  () => props.closed,
+  async (closed) => {
+    if (!closed) {
+      return;
+    }
+    await nextTick();
+    await nextTick();
+    focusStart();
+  },
+);
+
 /** statusLabel localizes the server lifecycle word. */
 function statusLabel(server: Server): string {
-  return t(`servers.status.${server.status}`);
+  return t(serverStatusKey(server.status));
 }
 </script>
 
@@ -59,11 +87,21 @@ function statusLabel(server: Server): string {
       class="term-stage-pane"
       @start-new="emit('start', true)"
     />
-    <div v-else-if="starting" class="term-stage-loading">
+    <div
+      v-else-if="starting"
+      class="term-stage-loading"
+      role="status"
+      aria-live="polite"
+    >
       <NSpin size="small" :aria-label="t('terminal.page.starting')" />
       <p class="small muted">{{ t("terminal.page.starting") }}</p>
     </div>
-    <NCard v-else class="term-stage-closed">
+    <NCard
+      v-else
+      class="term-stage-closed"
+      role="status"
+      aria-live="polite"
+    >
       <p class="term-closed-title">
         {{ t("terminal.page.sessionClosedTitle") }}
       </p>
@@ -71,8 +109,8 @@ function statusLabel(server: Server): string {
         {{ t("terminal.page.sessionClosedBody") }}
       </p>
       <div class="term-closed-actions">
-        <NButton type="primary" @click="emit('start', true)">
-          {{ t("terminal.page.startNew") }}
+        <NButton ref="startButton" type="primary" @click="emit('start', true)">
+          {{ t("terminal.actions.retry") }}
         </NButton>
       </div>
     </NCard>

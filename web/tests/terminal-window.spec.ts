@@ -841,7 +841,7 @@ test("heartbeat, disconnect, exit and error states use real frames", async ({
   expect(state.creates).toBe(1);
 
   // Retry is explicit and creates exactly one new session.
-  await page.getByRole("button", { name: "Start a new session" }).click();
+  await page.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(2);
   await expect(status).toHaveText("Connected");
 
@@ -851,7 +851,7 @@ test("heartbeat, disconnect, exit and error states use real frames", async ({
   await expect(status).toHaveText("Exited");
   await expect(page.getByText("The shell exited with code 7.")).toBeVisible();
 
-  await page.getByRole("button", { name: "Start a new session" }).click();
+  await page.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(3);
   const third = state.sessions[2]!;
   third.socket!.send(

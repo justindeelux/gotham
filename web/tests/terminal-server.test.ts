@@ -3,7 +3,7 @@
 // (they record creates, deletes and server ids) so request counts and target
 // identity are asserted, not only rendered text.
 /* global document:readonly, HTMLElement:readonly, window:readonly */
-import { NSelect } from "naive-ui";
+import { NSelect, NTabs } from "naive-ui";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -171,6 +171,7 @@ function pageRouter() {
     routes: [
       { path: "/terminal", name: "terminal", component: stub },
       { path: "/dashboard", name: "dashboard", component: stub },
+      { path: "/login", name: "login", component: stub },
       { path: "/forbidden", name: "forbidden", component: stub },
       { path: "/servers", name: "servers", component: stub },
       {
@@ -247,7 +248,12 @@ afterEach(() => {
 /** login sets the platform-operator flag the page and route guard read. */
 function login(pinia: Pinia, isAdmin = true): void {
   setActivePinia(pinia);
-  useAuthStore().user = {
+  const auth = useAuthStore();
+  // A real signed-in session, not just a user row: the page now distinguishes
+  // logout from demotion via isAuthenticated.
+  auth.accessToken = "test-access";
+  auth.refreshToken = "test-refresh";
+  auth.user = {
     id: "u-1",
     email: "ada@gotham.dev",
     display_name: "Ada",
@@ -770,10 +776,28 @@ describe("page session recovery (JUS-246 fix round 1)", () => {
     terminal.closeTabs([tabId]);
     await flushPromises();
     await nextTick();
+    await nextTick();
 
     expect(wrapper.find(".term-surface").exists()).toBe(false);
+    expect(wrapper.find(".term-stage-closed").exists()).toBe(true);
     expect(wrapper.text()).toContain("Session closed");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    // Confirming Close lands focus on the explicit restart, not the rail.
+    expect(globalThis.document.activeElement?.textContent).toContain(
+      "Start new session",
+    );
+
+    // Re-entering the tab keeps the closed card and creates nothing (JUS-246
+    // r2 finding 3: no auto-create after a close).
+    const tabButton = (label: string) =>
+      wrapper.findAll(".n-tabs-tab").find((node) => node.text() === label)!;
+    await tabButton("Overview").trigger("click");
+    await flushPromises();
+    await tabButton("Terminal").trigger("click");
+    await flushPromises();
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".term-stage-closed").exists()).toBe(true);
 
     await clickButtonByText(wrapper, "Start new session");
     await flushPromises();
@@ -804,6 +828,28 @@ describe("role demotion (JUS-246 fix round 1)", () => {
     wrapper.unmount();
   });
 
+  it("does not treat a sign-out as demotion (JUS-246 r2 finding 8)", async () => {
+    const { wrapper, router } = await mountPage(
+      `/terminal?server=${SERVER_A.id}`,
+    );
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    const auth = useAuthStore();
+
+    // The real AccountMenu clears the session and then pushes /login. The
+    // page must not race it with a /forbidden redirect.
+    auth.accessToken = null;
+    auth.refreshToken = null;
+    auth.user = null;
+    await flushPromises();
+    await nextTick();
+    expect(router.currentRoute.value.name).not.toBe("forbidden");
+
+    await router.push({ name: "login" });
+    expect(router.currentRoute.value.fullPath).toBe("/login");
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
   it("resets the detail tab to Overview instead of leaving a blank body", async () => {
     const { wrapper } = await mountDetail(
       `/servers/${SERVER_A.id}?tab=terminal`,
@@ -819,7 +865,7 @@ describe("role demotion (JUS-246 fix round 1)", () => {
     await nextTick();
 
     expect(wrapper.find(".term-surface").exists()).toBe(false);
-    expect(wrapper.find(".n-tabs-tab--active").text()).toBe("Overview");
+    expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });

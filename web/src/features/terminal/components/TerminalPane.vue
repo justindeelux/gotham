@@ -60,7 +60,7 @@ function closeDetached(): void {
           {{ t("terminal.pane.showWindow") }}
         </NButton>
         <NButton size="small" secondary @click="emit('startNew')">
-          {{ t("terminal.pane.startNew") }}
+          {{ t("terminal.actions.retry") }}
         </NButton>
         <NButton size="small" quaternary @click="closeDetached">
           {{ t("terminal.pane.close") }}
@@ -92,6 +92,16 @@ function closeDetached(): void {
   margin: auto;
   padding: var(--space-6);
   text-align: center;
+  /* The one-way notice must stay reachable when the floating window opens
+   * over the page (JUS-246 r2): paint it above the window's chrome and give it
+   * a surface so its buttons are real pointer targets, not hidden behind the
+   * terminal. */
+  position: relative;
+  z-index: 74;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elev-raised);
 }
 
 .term-detached-title {

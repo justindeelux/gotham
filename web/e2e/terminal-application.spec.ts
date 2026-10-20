@@ -531,32 +531,39 @@ test.describe("application terminal on the real stack", () => {
       expect(foreign.status()).toBe(404);
     });
 
-    test("sees no Terminal tab and issues zero terminal requests", async ({
+    test("opens the shared-team application and issues zero terminal requests", async ({
       browser,
     }) => {
-      // JUS-257: the SPA's getApplication sends no X-Team-Id, so a shared-team
-      // application page answers 404 before the member gate can render. This
-      // fixture adds the header the fixed client would send, so the read-only
-      // gate is exercised NOW instead of being skipped. Remove the route when
-      // JUS-257 lands; the rest of the test is unchanged.
+      // JUS-257: the shared request layer attaches the active team, so this
+      // page now loads for a read-only member instead of answering 404 before
+      // the role gate can render. The gate then keeps every terminal request
+      // in the browser.
       const visitor = await viewerContext(browser, readOnly);
 
       try {
         const viewerPage = await visitor.newPage();
         const appPrefix = `/api/v1/applications/${readOnly.applicationId}`;
-        await viewerPage.route(`**${appPrefix}*`, (route) => {
-          void route.continue({
-            headers: {
-              ...route.request().headers(),
-              "x-team-id": readOnly.teamId,
-            },
-          });
+        // The page and every tab read must carry the shared team; a missing
+        // header is the original bug (personal-team fallback -> 404).
+        const teamHeadersOnRequests: Array<string | undefined> = [];
+        viewerPage.on("request", (request) => {
+          if (request.url().includes(appPrefix)) {
+            teamHeadersOnRequests.push(request.headers()["x-team-id"]);
+          }
         });
         const { paths } = watchApplicationTerminal(viewerPage);
         await viewerPage.goto(applicationURL(readOnly));
+        // A project link only exists once the application row loaded, so this
+        // fails on the 404 the bug produced (the fallback breadcrumb has none).
         await expect(
-          viewerPage.locator('nav[aria-label="Breadcrumb"]'),
+          viewerPage.locator('nav[aria-label="Breadcrumb"] a').first(),
         ).toBeVisible();
+        await expect
+          .poll(() => teamHeadersOnRequests.length)
+          .toBeGreaterThan(0);
+        expect(
+          teamHeadersOnRequests.every((header) => header === readOnly.teamId),
+        ).toBe(true);
         await expect(
           viewerPage.locator(".n-tabs-tab", { hasText: /^Terminal$/ }),
         ).toHaveCount(0);

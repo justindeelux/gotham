@@ -587,6 +587,8 @@ describe("quick command engine", () => {
     expect(engine.getState().suggestion).toBeNull();
 
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
+    engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).not.toBeNull();
@@ -652,6 +654,34 @@ describe("quick command engine", () => {
     engine.handleInput("s");
     expect(engine.getState().suggestion).toBeNull();
     expect(engine.getState().suspended).toBe(true);
+  });
+
+  it("never matches type-ahead queued while a command was running", () => {
+    const { engine } = makeEngine();
+    // A command is running (no B mark); the user types ahead.
+    engine.setPrompt({ phase: "running", detected: true, alternateScreen: false });
+    engine.handleInput("f");
+    engine.handleInput("o");
+    engine.handleInput("o");
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).toBeNull();
+
+    // The next prompt is tainted by that queued input: even typing `gs`
+    // there cannot match, because the real line already contains `foogs`.
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
+    expect(engine.getState().suspended).toBe(true);
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).toBeNull();
+
+    // Enter submits the type-ahead; the following prompt is clean.
+    engine.handleInput("\r");
+    engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).not.toBeNull();
   });
 
   it("does not match a suffix glued to real text from a clean prompt", () => {

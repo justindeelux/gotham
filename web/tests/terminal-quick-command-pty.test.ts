@@ -28,6 +28,7 @@ const PYTHON_RELAY = String.raw`
 import json, os, pty, select, subprocess, sys
 payload = json.loads(sys.argv[1])
 argv = payload["argv"]
+signal_int = payload.get("signal_int", False)
 master, slave = pty.openpty()
 env = dict(os.environ)
 env["TERM"] = "xterm-256color"
@@ -51,7 +52,12 @@ try:
             data = os.read(inp.fileno(), 4096)
             if not data:
                 break
-            os.write(master, data)
+            # A real terminal sends SIGINT for Ctrl-C when ISIG is enabled;
+            # the relay's pipe side cannot do that implicitly.
+            if signal_int and b"\x03" in data:
+                os.killpg(os.getpgid(proc.pid), 2)
+            else:
+                os.write(master, data)
         if master in ready:
             try:
                 data = os.read(master, 65536)
@@ -112,10 +118,10 @@ class PtyProcess {
   private output = "";
   private waiters: Array<{ match: RegExp; resolve: () => void; reject: (_error: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
 
-  constructor(argv: string[], env: Record<string, string> = {}) {
+  constructor(argv: string[], env: Record<string, string> = {}, signalInt = false) {
     this.child = spawn(
       "python3",
-      ["-c", PYTHON_RELAY, JSON.stringify({ argv, env })],
+      ["-c", PYTHON_RELAY, JSON.stringify({ argv, env, signal_int: signalInt })],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
     this.child.stdout?.on("data", (chunk: Buffer) => {
@@ -191,6 +197,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** countMatches counts non-overlapping occurrences of a literal needle. */
+function countMatches(haystack: string, needle: string): number {
+  let count = 0;
+  let index = 0;
+  while ((index = haystack.indexOf(needle, index)) !== -1) {
+    count += 1;
+    index += needle.length;
+  }
+  return count;
+}
+
 /** command builds one saved command for the engine. */
 function command(text: string, abbreviation: string): QuickCommand {
   return { id: "cmd-1", label: "PTY proof", command: text, abbreviation };
@@ -208,10 +225,11 @@ class ShellSession {
     argv: string[],
     commands: QuickCommand[],
     env: Record<string, string> = {},
+    signalInt = false,
   ) {
     this.engine = new QuickCommandEngine({ getCommands: () => commands });
     this.scanner = new PromptScanner((state) => this.engine.setPrompt(state));
-    this.pty = new PtyProcess(argv, env);
+    this.pty = new PtyProcess(argv, env, signalInt);
     sessions.push(this.pty);
     this.drain = setInterval(() => this.scan(), 10);
   }
@@ -519,6 +537,11 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
       session.key("\r");
       await session.waitForPrompt();
 
+      // The password type-ahead may have been consumed by `read`; the next
+      // prompt is conservatively tainted. Submit the empty line once more.
+      session.key("\r");
+      await session.waitForPrompt();
+
       session.typeText("gs");
       expect(session.engine.getState().suggestion).not.toBeNull();
       session.accept();
@@ -570,6 +593,65 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
       session.stop();
     }
   });
+
+  it("type-ahead during a running command cannot false-match after the prompt", async () => {
+    const session = await startBash([command("printf 'TA_%s\\n' OK", "gs")]);
+    try {
+      // Submit a slow command, then type `foogs` while it still runs. That
+      // text is queued for the next prompt, so the next B is tainted.
+      session.run("sleep 0.6");
+      session.typeText("foogs");
+      await session.waitForPrompt();
+      session.typeText("gs");
+      await session.expectNoSuggestion();
+      expect(session.engine.getState().suspended).toBe(true);
+
+      // Submit the type-ahead, then the following prompt is clean.
+      session.key("\r");
+      await session.waitForPrompt();
+      session.typeText("gs");
+      expect(session.engine.getState().suggestion).not.toBeNull();
+      session.accept();
+      session.key("\r");
+      await session.waitFor(/TA_OK/);
+    } finally {
+      session.stop();
+    }
+  });
+
+  it("is idempotent when the same rc snippet is sourced twice", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gotham-twice-"));
+    tempDirs.push(dir);
+    const rc = join(dir, "bashrc");
+    const snippet = shellIntegrationSnippet("/bin/bash");
+    writeFileSync(rc, ["PS1='gotham$ '", snippet, snippet, ""].join("\n"));
+    const session = bashSession(
+      [command("printf 'TWICE_%s\\n' OK", "gs")],
+      rc,
+    );
+    try {
+      await session.waitForPrompt();
+      const startup = session.text();
+      expect(countMatches(startup, "\x1b]133;A\x07")).toBe(1);
+      expect(countMatches(startup, "\x1b]133;B\x07")).toBe(1);
+
+      session.typeText("gs");
+      expect(session.engine.getState().suggestion).not.toBeNull();
+      session.accept();
+      await session.waitFor(/TWICE_%s/);
+      session.key("\r");
+      await session.waitFor(/TWICE_OK/);
+      // PS0 exists only on bash >= 4.4. Where it exists, sourcing twice must
+      // still emit exactly one C; on older bash there is no C at all.
+      const cCount = countMatches(session.text(), "\x1b]133;C\x07");
+      expect(cCount).toBeLessThanOrEqual(1);
+      if (session.text().includes("\x1b]133;C\x07")) {
+        expect(cCount).toBe(1);
+      }
+    } finally {
+      session.stop();
+    }
+  });
 });
 
 describe.skipIf(!hasPty || zshPath === "")("real PTY: zsh", () => {
@@ -594,6 +676,40 @@ describe.skipIf(!hasPty || zshPath === "")("real PTY: zsh", () => {
       await session.waitFor(/ZSH_OK/);
       expect(session.text().match(/ZSH_OK/g)).toHaveLength(1);
       expect(session.text()).not.toContain("read-only variable");
+    } finally {
+      session.stop();
+    }
+  });
+
+  it("re-emits the B mark after Ctrl-C so suggestions recover", async () => {
+    const { dir, zdotdir } = makeZshRc();
+    const session = new ShellSession(
+      [zshPath, "-i"],
+      [command("printf 'ZLE_%s\\n' OK", "gs")],
+      { ZDOTDIR: zdotdir, HOME: dir },
+      true,
+    );
+    try {
+      await session.waitForPrompt();
+      session.typeText("gs");
+      expect(session.engine.getState().suggestion).not.toBeNull();
+      // Let zsh finish processing the typed keys before interrupting.
+      await sleep(150);
+
+      // Ctrl-C cancels the line; zle-line-init must emit a fresh B. Wait for
+      // the engine to leave the suspended state, not merely for a known phase.
+      session.key("\x03");
+      await sleep(150);
+      await session.waitUntil(
+        () =>
+          session.engine.getState().phase === "input" &&
+          !session.engine.getState().suspended,
+      );
+      session.typeText("gs");
+      expect(session.engine.getState().suggestion).not.toBeNull();
+      session.accept();
+      session.key("\r");
+      await session.waitFor(/ZLE_OK/);
     } finally {
       session.stop();
     }

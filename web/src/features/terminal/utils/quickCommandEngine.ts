@@ -37,6 +37,10 @@ export interface QuickCommandSuggestionState {
   dismissed: boolean;
   /** suspended is true when the remote line state is unknown. */
   suspended: boolean;
+  /** tainted is true when type-ahead may be queued into the next prompt. */
+  tainted: boolean;
+  /** submitted is true between Enter and the next prompt mark. */
+  submitted: boolean;
 }
 
 /** SuggestionAcceptance is the erase+insert pair returned by accept(). */
@@ -77,6 +81,19 @@ export class QuickCommandEngine {
    * for text this client did not type.
    */
   private suspended = false;
+  /**
+   * tainted records printable input forwarded while no B mark was current
+   * (type-ahead typed while a command ran). That text is already queued in
+   * the PTY, so the next B prompt may not start with an empty editable line;
+   * keep suggestions off for that prompt and resume at the one after it.
+   */
+  private tainted = false;
+  /**
+   * submitted is true after Enter until the next prompt mark. It marks the
+   * window in which printable input is type-ahead for the running command,
+   * even on a shell that never emits a C mark (bash 3.2).
+   */
+  private submitted = false;
 
   constructor(options: QuickCommandEngineOptions) {
     this.options = options;
@@ -92,16 +109,36 @@ export class QuickCommandEngine {
       suggestion: this.suggestion,
       dismissed: this.dismissed,
       suspended: this.suspended,
+      tainted: this.tainted,
+      submitted: this.submitted,
     };
   }
 
   /** setPrompt applies a scanner snapshot, clearing stale line state. */
   setPrompt(next: PromptState): void {
     this.prompt = { ...next };
-    // Only a B mark proves a fresh editable line. Everything else (prompt
-    // drawing, command running, alternate screen) is unknown to this mirror
-    // and disables suggestions until B arrives again.
-    this.suspended = next.phase !== "input";
+    if (next.phase === "input" || next.phase === "prompt") {
+      this.submitted = false;
+    } else if (next.alternateScreen) {
+      // A fullscreen app owns the input; nothing typed there is shell
+      // type-ahead for the next prompt.
+      this.submitted = false;
+    } else if (next.phase === "running") {
+      this.submitted = true;
+    }
+    // Only a B mark proves a fresh editable line. If printable input was
+    // forwarded while no B was current, that text may already be queued in
+    // the PTY, so this prompt is tainted: stay off until the next B.
+    if (next.phase === "input") {
+      if (this.tainted) {
+        this.tainted = false;
+        this.suspended = true;
+      } else {
+        this.suspended = false;
+      }
+    } else {
+      this.suspended = true;
+    }
     this.clearMirror();
     this.recompute();
     this.emit();
@@ -128,6 +165,22 @@ export class QuickCommandEngine {
   handleInput(data: string): string | null {
     if (this.suspended) {
       // The remote line is unknown; forward untouched and wait for a B mark.
+      // Ctrl-C/Ctrl-U cancel the line, so queued type-ahead no longer taints
+      // the next prompt.
+      if (data === "\x03" || data === "\x15") {
+        this.tainted = false;
+        this.submitted = false;
+        return data;
+      }
+      // Printable input sent while a command is submitted (type-ahead) may
+      // already be queued into the next prompt; taint that prompt.
+      if (
+        (this.submitted || this.prompt.phase === "running") &&
+        !this.prompt.alternateScreen &&
+        this.mayEnterLine(data)
+      ) {
+        this.tainted = true;
+      }
       return data;
     }
     if (data === "\x1b" && this.suggestion !== null) {
@@ -156,6 +209,9 @@ export class QuickCommandEngine {
     // Cursor movement, Tab completion, history recall, Ctrl-R/Ctrl-S, paste,
     // IME, Enter or any other control: the remote line is no longer something
     // this mirror can vouch for.
+    if (data.includes("\r") || data.includes("\n")) {
+      this.submitted = true;
+    }
     this.suspend();
     return data;
   }
@@ -208,6 +264,8 @@ export class QuickCommandEngine {
     this.prompt = { phase: "unknown", detected: false, alternateScreen: false };
     this.composing = false;
     this.suspended = true;
+    this.tainted = false;
+    this.submitted = false;
     this.clearMirror();
     this.emit();
   }
@@ -217,6 +275,21 @@ export class QuickCommandEngine {
     this.suspended = true;
     this.clearMirror();
     this.emit();
+  }
+
+  /**
+   * mayEnterLine reports whether a chunk forwarded while suspended can leave
+   * printable text in the shell's input queue. Enter, Ctrl-C, Ctrl-U, cursor
+   * keys and other controls do not; printable text and paste do.
+   */
+  private mayEnterLine(data: string): boolean {
+    for (const char of data) {
+      const code = char.charCodeAt(0);
+      if (code >= 0x20 && code <= 0x7e) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** clearMirror drops the local line model and the visible suggestion. */

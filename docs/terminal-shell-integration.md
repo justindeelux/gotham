@@ -33,6 +33,11 @@ keys/Home/End, paste, IME composition, and any other control byte. A reset
 mirror can therefore never pass the word-boundary check for text the client
 did not type (`foogs` does not match `gs`, even after Up/Tab/Ctrl-E).
 
+Printable **type-ahead sent while a command is still running** is queued in
+the PTY and may appear on the next prompt's line. That prompt is treated as
+tainted (suggestions stay off for it); the following prompt resumes. Ctrl-C or
+Ctrl-U cancels the line and clears the taint.
+
 Accepting sends **Backspace × the typed abbreviation length** and then the
 command text. It never sends Enter. The count is safe because the mirror
 proves the abbreviation is the last text before the cursor. In bash/zsh **vi
@@ -44,29 +49,34 @@ no suggestion can appear and no readline/vi command is injected.
 The shell keeps its keys. **Esc, Ctrl+Space, Tab and Enter are forwarded to the
 PTY** unless the suggestion list is explicitly focused.
 
+The suggestion bar is a **fixed-height sibling above the terminal viewport**
+whose space is always reserved. Showing or dismissing a suggestion never
+changes the renderer box, so it sends **no resize frame** and never reflows the
+shell; it also never overlays the active prompt row.
+
 | Chord | Effect |
 |---|---|
-| type the abbreviation | the strip appears above the terminal viewport (never over the prompt line) |
+| type the abbreviation | the bar shows the match above the terminal viewport (never over the prompt line) |
 | `Ctrl+Shift+Space` | focus the visible suggestion list |
 | `Enter` (list focused) | insert the command, without running it |
 | `Tab` (list focused) | return focus to the terminal, list stays open |
 | `Esc` (list focused) | dismiss the suggestion and return focus |
 | `Esc` while typing | forwarded to the shell; the suggestion is dismissed and matching pauses until the next prompt |
 
-The strip is a valid `listbox` owning one `option`, with a `role="status"`
-live announcement and a **Choose** button for pointer/screen-reader access.
-The option's accessible name is its visible text (abbreviation, label,
-command).
+The bar is a valid `listbox` owning one `option`, with a `role="status"`
+live announcement (visually hidden in the bar itself) and a **Choose** button
+for pointer/screen-reader access. The option's accessible name is its visible
+text (abbreviation, label, command).
 
 ## Supported shells
 
 | Shell | Status | Notes |
 |---|---|---|
-| bash ≥ 4.4 | **Supported, PTY-tested** | `PS0` emits the `C` mark. Older bash still emits A/B/D through `PROMPT_COMMAND`; Enter suspends matching, so the absence of `C` is safe, only less precise. |
-| zsh ≥ 5.3 | **Supported, PTY-tested** | `add-zsh-hook precmd/preexec`; the snippet adds the `B` mark to `PROMPT` once and re-checks every prompt so themes that rebuild `PROMPT` recover on the next prompt. |
-| fish | **Not supported in JUS-249** | No tested integration is shipped; suggestions stay off, manual insertion still works. |
-| sh / dash | **Not supported** | No prompt hook or `PS0`; suggestions stay off, manual insertion still works. |
-| ksh / others | **Not supported** | Same as sh/dash. |
+| bash ≥ 4.4 | **Supported; PTY-proven in CI (Linux bash 5.x) and locally (bash 3.2/5.2)** | `PS0` emits the `C` mark. Older bash still emits A/B/D through `PROMPT_COMMAND`; Enter suspends matching, so the absence of `C` is safe, only less precise. The snippet is idempotent when sourced twice. |
+| zsh ≥ 5.3 | **Supported; PTY-proven locally (macOS zsh 5.9) and in CI (zsh installed in the web job)** | `add-zsh-hook precmd/preexec` plus `add-zle-hook-widget line-init` so Ctrl-C re-emits `B`; the `B` mark is added to `PROMPT` once and re-checked every prompt. |
+| fish | **Unsupported and untested in JUS-249** | No tested integration is shipped; suggestions stay off, manual insertion still works. |
+| sh / dash | **Unsupported; negative PTY proof in CI/local** | No prompt hook or `PS0`; suggestions stay off, manual insertion still works. |
+| ksh / others | **Unsupported** | Same as sh/dash. |
 
 "Not supported" is a clean state, not an error: the terminal keeps working,
 typing is forwarded unchanged, and the quick-command panel shows the setup
@@ -75,25 +85,34 @@ hint without offering a snippet for an untested shell.
 ## bash setup (additive, optional)
 
 Append to `~/.bashrc` (or the file passed with `--rcfile`). It keeps the
-existing prompt and `PROMPT_COMMAND`, and re-adds the `B` mark if a theme
-rewrote `PS1`. Bash 5.1+ allows `PROMPT_COMMAND` to be an array; if you use an
-array, call `__gotham_prompt_command` as its first element instead of the
-string assignment below.
+existing prompt and `PROMPT_COMMAND`, re-adds the `B` mark if a theme rewrote
+`PS1`, and is idempotent if sourced twice. Bash 5.1+ allows `PROMPT_COMMAND`
+to be an array; if you use an array, call `__gotham_prompt_command` as its
+first element instead of the string assignment below.
 
 ```bash
 # ~/.bashrc — optional Gotham prompt marks (bash >= 4.4).
-__gotham_prompt_command() {
-  local st=$?
-  printf '\033]133;D;%s\a' "$st"
-  printf '\033]133;A\a'
-  case "$PS1" in
-    *'133;B'*) ;;
-    *) PS1="$PS1"'\[\033]133;B\a\]' ;;
-  esac
-  return $st
-}
-PROMPT_COMMAND="__gotham_prompt_command${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
-PS0="\[\033]133;C\a\]${PS0:-}"
+# Additive and idempotent: safe to source more than once.
+if ! declare -F __gotham_prompt_command >/dev/null 2>&1; then
+  __gotham_prompt_command() {
+    local st=$?
+    printf '\033]133;D;%s\a' "$st"
+    printf '\033]133;A\a'
+    case "$PS1" in
+      *'133;B'*) ;;
+      *) PS1="$PS1"'\[\033]133;B\a\]' ;;
+    esac
+    return $st
+  }
+fi
+case "$PROMPT_COMMAND" in
+  *__gotham_prompt_command*) ;;
+  *) PROMPT_COMMAND="__gotham_prompt_command${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;
+esac
+case "$PS0" in
+  *'133;C'*) ;;
+  *) PS0="\[\033]133;C\a\]${PS0:-}" ;;
+esac
 ```
 
 The `B` mark is appended by `PROMPT_COMMAND` before each prompt. If a theme's
@@ -105,11 +124,13 @@ case.
 
 Append to `~/.zshrc` after your theme/hook setup. `status` is a read-only
 special parameter in zsh, so the snippet uses `st`. `add-zsh-hook` appends the
-function to the existing hook list, and the `B` mark is added to `PROMPT` once
-(guarded) so repeated prompts do not accumulate escape bytes.
+function to the existing hook list, `add-zle-hook-widget line-init` re-emits
+`B` after Ctrl-C, and the `B` mark is added to `PROMPT` once (guarded) so
+repeated prompts do not accumulate escape bytes.
 
 ```zsh
 # ~/.zshrc — optional Gotham prompt marks (zsh >= 5.3).
+# Additive and safe to source more than once.
 __gotham_precmd() {
   local st=$?
   print -n $'\e]133;D;'"$st"$'\a\e]133;A\a'
@@ -120,9 +141,14 @@ __gotham_precmd() {
 __gotham_preexec() {
   print -n $'\e]133;C\a'
 }
+__gotham_line_init() {
+  print -n $'\e]133;B\a'
+}
 autoload -Uz add-zsh-hook
 add-zsh-hook precmd __gotham_precmd
 add-zsh-hook preexec __gotham_preexec
+autoload -Uz add-zle-hook-widget
+add-zle-hook-widget line-init __gotham_line_init
 ```
 
 If your theme recomputes `PROMPT` in its own `precmd` after this hook, append
@@ -165,6 +191,8 @@ absent:
 |---|---|
 | bash happy path | `gs` → command, one run, no duplicated prefix |
 | bash vi mode | Esc (normal mode) → no suggestion; fresh insert prompt → replacement runs once, no `echoecho` |
+| type-ahead | `foogs` typed while `sleep` runs taints the next prompt; no false match; following prompt recovers |
+| rc sourced twice | one A/B per prompt and at most one C per command |
 | Ctrl-R | no suggestion inside reverse search; fresh prompt recovers |
 | history/Tab/Ctrl-E/`foogs` | no false match after a reset; fresh prompt recovers |
 | PS2 | continuation has no `B`; no suggestion; next prompt recovers |
@@ -172,8 +200,12 @@ absent:
 | alternate screen | `?1049h` disables; `?1049l` + prompt restores |
 | failing rc file | no marks, no suggestion, shell still runs commands |
 | zsh | marks emitted, no `read-only variable` error, replacement runs once |
+| zsh Ctrl-C | `zle-line-init` re-emits `B`; suggestions recover after cancel |
 | sh/dash | no marks, no suggestion, ordinary typing works |
 
 The zsh run sets `ZDOTDIR` to a temp directory so the operator's own config is
-not involved. Bash on macOS 3.2 is exercised too (A/B/D via `PROMPT_COMMAND`);
-the `C`/`PS0` path is exercised on the Linux CI runner where bash is 5.x.
+not involved. The CI web job installs zsh on the Ubuntu runner, so the zsh
+suite runs there; the local macOS run uses zsh 5.9. Bash on macOS 3.2 is
+exercised too (A/B/D via `PROMPT_COMMAND`); the `C`/`PS0` path is exercised on
+the Linux CI runner where bash is 5.x. A suite skips with an explicit
+`[quick-command-pty] ... not found` warning only when that shell is absent.

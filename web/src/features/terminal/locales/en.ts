@@ -215,6 +215,8 @@ const en = {
     announce:
       "Suggestion: {label} for {abbreviation}. Press Control+Shift+Space to choose or Escape to dismiss.",
     hint: "Ctrl+Shift+Space to choose · Esc dismisses",
+    placeholder: "Type an abbreviation to insert a saved command.",
+    placeholderEmpty: "Save a quick command with an abbreviation to see suggestions here.",
     choose: "Choose",
     dismiss: "Dismiss suggestion",
   },

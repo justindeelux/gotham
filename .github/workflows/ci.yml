@@ -105,6 +105,9 @@ jobs:
         working-directory: web
         run: npm ci
 
+      - name: Install zsh for the real-PTY proof
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+
       - name: Type-check
         working-directory: web
         run: npm run type-check

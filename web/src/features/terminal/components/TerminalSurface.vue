@@ -2,11 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
-import TerminalCommandNotice from "@/features/terminal/components/TerminalCommandNotice.vue";
 import TerminalMetaBar from "@/features/terminal/components/TerminalMetaBar.vue";
 import TerminalStatusBar from "@/features/terminal/components/TerminalStatusBar.vue";
 import TerminalStatusOverlay from "@/features/terminal/components/TerminalStatusOverlay.vue";
 import TerminalSuggestionStrip from "@/features/terminal/components/TerminalSuggestionStrip.vue";
+import { useQuickCommandsStore } from "@/features/terminal/stores/quickCommands";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
 import type { TerminalCommandFailure } from "@/features/terminal/transport/terminalRuntime";
@@ -31,6 +31,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), { labelledBy: "" });
 const { t } = useI18n();
 const terminal = useTerminalStore();
+const quickCommands = useQuickCommandsStore();
 const surface = ref<HTMLElement | null>(null);
 const suggestionStrip = ref<{ focusOption: () => void } | null>(null);
 const commandNotice = ref("");
@@ -39,6 +40,11 @@ const tab = computed<TerminalTab | null>(() => terminal.findTab(props.tabId));
 
 /** suggestion is the single abbreviation match the runtime reports. */
 const suggestion = computed(() => tab.value?.suggestion ?? null);
+
+/** hasAbbreviations chooses the fixed bar's setup vs usage hint. */
+const hasAbbreviations = computed<boolean>(() =>
+  quickCommands.commands.some((command) => command.abbreviation !== undefined),
+);
 
 /** surfaceLabel names the region for screen readers. */
 const surfaceLabel = computed<string>(() =>
@@ -252,17 +258,14 @@ watch(
       {{ t("terminal.shortcuts.hint") }}
     </p>
     <TerminalSuggestionStrip
-      v-if="suggestion"
       ref="suggestionStrip"
       :suggestion="suggestion"
+      :notice="commandNotice"
+      :has-abbreviations="hasAbbreviations"
       @accept="acceptSuggestion"
       @dismiss="dismissSuggestion"
+      @dismiss-notice="commandNotice = ''"
       @return-focus="returnFocus"
-    />
-    <TerminalCommandNotice
-      v-else-if="commandNotice"
-      :message="commandNotice"
-      @dismiss="commandNotice = ''"
     />
     <div ref="surface" class="term-screen" data-testid="terminal-screen" />
 

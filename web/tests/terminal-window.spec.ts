@@ -1359,10 +1359,17 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
   const suggestion = page.locator(".term-window .term-suggest-option");
   await expect(suggestion).toBeVisible();
   await expect(suggestion).toContainText("Git status");
+  // The live announcement is exposed to AT but visually hidden.
+  const live = page.locator(".term-window .term-suggest .term-sr");
+  await expect(live).toHaveAttribute("role", "status");
+  await expect(live).toHaveAttribute("aria-live", "polite");
+  const liveBox = await live.boundingBox();
+  expect(liveBox?.width ?? 0).toBeLessThanOrEqual(1);
+  expect(liveBox?.height ?? 0).toBeLessThanOrEqual(1);
 
   // The strip stays inside the viewport at phone and desktop widths and never
   // covers the xterm viewport (the prompt line).
-  for (const width of [390, 480, 1366]) {
+  for (const width of [390, 480, 1280, 1366]) {
     await page.setViewportSize({ width, height: 800 });
     await expect(suggestion).toBeVisible();
     await expect
@@ -1409,16 +1416,35 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
 
   // A fresh prompt (mark) is required after accept; then Escape is forwarded
   // to the shell (vi normal mode) and also dismisses the suggestion.
+  await page.waitForTimeout(100);
+  const resizesBefore = state.sessions[0]?.resizes.length ?? 0;
+  const screenBefore = await page
+    .locator(".term-window .term-surface:visible .term-screen")
+    .boundingBox();
   state.sessions[0]?.socket?.send(outputFrame("\x1b]133;A\x07\x1b]133;B\x07"));
   await input.focus();
   await page.keyboard.type("gs");
   await expect(suggestion).toBeVisible();
+  const screenShown = await page
+    .locator(".term-window .term-surface:visible .term-screen")
+    .boundingBox();
+  expect(screenBefore).not.toBeNull();
+  expect(screenShown).not.toBeNull();
+  expect(state.sessions[0]?.resizes.length).toBe(resizesBefore);
+  expect(screenShown?.height).toBe(screenBefore?.height);
+
   const beforeEscape = state.sessions[0]?.input ?? "";
   await page.keyboard.press("Escape");
   await expect(suggestion).toBeHidden();
   await expect
     .poll(() => state.sessions[0]?.input ?? "")
     .toBe(`${beforeEscape}\x1b`);
+  const screenHidden = await page
+    .locator(".term-window .term-surface:visible .term-screen")
+    .boundingBox();
+  expect(screenHidden).not.toBeNull();
+  expect(state.sessions[0]?.resizes.length).toBe(resizesBefore);
+  expect(screenHidden?.height).toBe(screenBefore?.height);
 
   // The list survives a reload for the same account. Close the live shell
   // first so the beforeunload guard does not prompt during the reload.

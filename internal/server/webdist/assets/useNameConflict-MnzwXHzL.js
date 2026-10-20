@@ -1,1 +1,0 @@
-import{da as o,f as n,j as c,aV as i,bp as s}from"./index-CHNBotSN.js";function v(){const e=c(null),t=n(()=>{if(e.value!==null)return i.value,String(s.global.t("projects.conflict.nameTaken"))}),u=n(()=>e.value===null?void 0:"error");function l(){e.value=null}function r(a){return o(a)?(e.value=a,!0):!1}return{feedback:t,status:u,clear:l,take:r}}export{v as u};

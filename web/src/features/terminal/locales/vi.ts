@@ -216,6 +216,8 @@ const vi = {
     announce:
       "Gợi ý: {label} cho {abbreviation}. Nhấn Control+Shift+Space để chọn hoặc Escape để bỏ qua.",
     hint: "Ctrl+Shift+Space để chọn · Esc để bỏ qua",
+    placeholder: "Gõ viết tắt để chèn một lệnh đã lưu.",
+    placeholderEmpty: "Lưu lệnh nhanh có viết tắt để thấy gợi ý tại đây.",
     choose: "Chọn",
     dismiss: "Bỏ qua gợi ý",
   },

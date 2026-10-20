@@ -62,10 +62,10 @@ func TestDockerExecRealMarkerScanUnreadableEnviron(t *testing.T) {
 	}
 }
 
-// TestDockerClientExecHelperOutputIsClean is the round-3 finding-4 regression:
+// TestDockerClientExecRealHelperOutputIsClean is the round-3 finding-4 regression:
 // processes exiting during the scan must not print redirection errors into the
 // helper output.
-func TestDockerClientExecHelperOutputIsClean(t *testing.T) {
+func TestDockerClientExecRealHelperOutputIsClean(t *testing.T) {
 	client := e2eContainerClient(t)
 	containerID := e2eContainer(t, client)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

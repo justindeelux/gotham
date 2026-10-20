@@ -73,6 +73,10 @@ const vi = {
     badResponse:
       "Bảng điều khiển đã trả về phản hồi không mong đợi. Hãy bắt đầu phiên mới để thử lại.",
     generic: "Không thể khởi động terminal.",
+    originRefused:
+      "Kết nối terminal đã bị từ chối trước khi mở. Phiên của bạn có thể đã hết hạn, hoặc proxy chặn origin của bảng điều khiển. Hãy đăng nhập lại rồi bắt đầu phiên mới.",
+    sessionExpired:
+      "Terminal đã đóng trước khi shell khởi động. Phiên có thể đã hết hạn; hãy bắt đầu phiên mới.",
     applicationForbidden:
       "Bạn cần quyền ghi vào nhóm của ứng dụng này để mở shell trong container.",
     applicationNotFound: "Ứng dụng này không còn tồn tại.",

@@ -404,7 +404,9 @@ async function mockApi(
       }
       current.socket = ws;
       if (current.closeOnOpen) {
-        // The PTY stream dropped right after attach (transport failure).
+        // The PTY confirmed the attach, then the stream dropped: the browser
+        // sees a live session close (disconnected), not a refused handshake.
+        ws.send(openFrame());
         ws.close({ code: 1006 });
         return;
       }

@@ -3,6 +3,7 @@ package terminal
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -12,8 +13,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -754,6 +758,85 @@ func TestOriginSchemeMustMatch(t *testing.T) {
 	}
 }
 
+// TestOriginAllowedForwardedScheme is the JUS-260 regression table: Traefik
+// reports a WebSocket upgrade as `wss` (or `ws`), which must compare as the
+// page's own `https` (or `http`) scheme. An unknown value may never turn a
+// cross-origin request into a pass, and a genuinely different host or scheme
+// is refused in every combination.
+func TestOriginAllowedForwardedScheme(t *testing.T) {
+	t.Parallel()
+	const host = "gotham.example"
+	forwarded := []string{
+		"https", "http", "wss", "ws", "WSS", "wss,wss", "https, http", "", "garbage",
+	}
+	origins := []struct {
+		name   string
+		value  string
+		scheme string
+		host   string
+	}{
+		{"https origin", "https://" + host, "https", host},
+		{"http origin", "http://" + host, "http", host},
+		{"other host", "https://evil.example", "https", "evil.example"},
+	}
+	for _, terminated := range []bool{false, true} {
+		for _, proto := range forwarded {
+			first, _, _ := strings.Cut(proto, ",")
+			first = strings.ToLower(strings.TrimSpace(first))
+			wantScheme := "http"
+			if terminated || first == "https" || first == "wss" {
+				wantScheme = "https"
+			}
+			for _, origin := range origins {
+				name := fmt.Sprintf("tls=%t/proto=%q/%s", terminated, proto, origin.name)
+				t.Run(name, func(t *testing.T) {
+					request := httptest.NewRequest(http.MethodGet, "http://"+host+"/ws", nil)
+					request.Host = host
+					if terminated {
+						request.TLS = &tls.ConnectionState{}
+					}
+					if proto != "" {
+						request.Header.Set("X-Forwarded-Proto", proto)
+					}
+					request.Header.Set("Origin", origin.value)
+
+					want := origin.scheme == wantScheme && origin.host == host
+					if got := originAllowed(request); got != want {
+						t.Fatalf("originAllowed(%s, forwarded proto %q, tls %t) = %t, want %t",
+							origin.value, proto, terminated, got, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestOriginAllowedExplicitAllowList keeps TERMINAL_ALLOWED_ORIGINS working
+// independently of the request scheme: an exact scheme/host entry is accepted,
+// while a different scheme, a port or another host stays refused.
+func TestOriginAllowedExplicitAllowList(t *testing.T) {
+	t.Setenv(AllowedOriginsEnv, "https://panel.example, http://legacy.example")
+	const host = "gotham.example"
+	cases := []struct {
+		origin string
+		want   bool
+	}{
+		{"https://panel.example", true},
+		{"http://legacy.example", true},
+		{"https://legacy.example", false},
+		{"https://panel.example:8443", false},
+		{"https://evil.example", false},
+	}
+	for _, testCase := range cases {
+		request := httptest.NewRequest(http.MethodGet, "http://"+host+"/ws", nil)
+		request.Host = host
+		request.Header.Set("Origin", testCase.origin)
+		if got := originAllowed(request); got != testCase.want {
+			t.Fatalf("originAllowed(%s) = %t, want %t", testCase.origin, got, testCase.want)
+		}
+	}
+}
+
 func TestRevocationClosesStream(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, fixtureOptions{operator: true, revalidate: 40 * time.Millisecond})
@@ -1041,6 +1124,119 @@ func TestRelayErrorWorkingDirectory(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAttachThroughTraefikWebSocketProxy is the JUS-260 end-to-end proof: a
+// real WebSocket attach crosses a reverse-proxy hop shaped exactly like
+// Traefik (public Host, X-Forwarded-Proto: wss, X-Forwarded-Host,
+// X-Forwarded-Port: 443) before reaching the control plane. The https Origin
+// must be accepted; another host or a genuinely different scheme must still
+// be refused through the same chain.
+func TestAttachThroughTraefikWebSocketProxy(t *testing.T) {
+	t.Parallel()
+	const publicHost = "gotham.deelux.dev"
+	f := newFixture(t, fixtureOptions{operator: true})
+	proxy := newTraefikProxy(t, f.server, publicHost, "wss")
+
+	pathFor := func(session *Session) string {
+		return "/v1/servers/" + session.ServerID.String() + "/terminal/sessions/" + session.ID.String() + "/ws"
+	}
+
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	conn, err := dialTerminalThrough(t, proxy, pathFor(session), "https://"+publicHost)
+	if err != nil {
+		t.Fatalf("attach through wss proxy: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if opcode, payload := readFrame(t, conn); opcode != opOpened {
+		t.Fatalf("first frame opcode = %#x, want opened (%s)", opcode, payload)
+	}
+
+	crossOrigins := []struct {
+		name   string
+		origin string
+	}{
+		{"different host", "https://evil.example"},
+		{"different scheme", "http://" + publicHost},
+	}
+	for _, testCase := range crossOrigins {
+		t.Run(testCase.name, func(t *testing.T) {
+			pending := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+			if status := handshakeStatusThrough(t, proxy, pathFor(pending), testCase.origin); status != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403 for %s", status, testCase.origin)
+			}
+		})
+	}
+}
+
+// newTraefikProxy fronts the control-plane test server with the forwarded
+// header shape Traefik produces for an upgraded WebSocket request.
+func newTraefikProxy(t *testing.T, backend *httptest.Server, publicHost, forwardedProto string) *httptest.Server {
+	t.Helper()
+	target, err := url.Parse(backend.URL)
+	if err != nil {
+		t.Fatalf("parse backend url: %v", err)
+	}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(request *httputil.ProxyRequest) {
+			request.SetURL(target)
+			request.SetXForwarded()
+			request.Out.Host = publicHost
+			request.Out.Header.Set("X-Forwarded-Host", publicHost)
+			request.Out.Header.Set("X-Forwarded-Port", "443")
+			request.Out.Header.Set("X-Forwarded-Proto", forwardedProto)
+		},
+	}
+	server := httptest.NewServer(proxy)
+	t.Cleanup(server.Close)
+	return server
+}
+
+// dialTerminalThrough opens the terminal WebSocket through proxy with origin.
+func dialTerminalThrough(t *testing.T, proxy *httptest.Server, path, origin string) (*websocket.Conn, error) {
+	t.Helper()
+	config, err := websocket.NewConfig("ws"+strings.TrimPrefix(proxy.URL, "http")+path, origin)
+	if err != nil {
+		t.Fatalf("websocket config: %v", err)
+	}
+	config.Protocol = []string{Subprotocol, TokenProtocolPrefix + "good-token"}
+	return websocket.DialConfig(config)
+}
+
+// handshakeStatusThrough sends a raw WebSocket handshake through proxy and
+// returns the HTTP status, so a refused upgrade can be asserted as 403 (the
+// browser cannot observe this status, but the server contract can).
+func handshakeStatusThrough(t *testing.T, proxy *httptest.Server, path, origin string) int {
+	t.Helper()
+	address := strings.TrimPrefix(proxy.URL, "http://")
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	request := fmt.Sprintf(
+		"GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
+			"Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n"+
+			"Sec-WebSocket-Protocol: %s, %sgood-token\r\nOrigin: %s\r\n\r\n",
+		path, address, key, Subprotocol, TokenProtocolPrefix, origin,
+	)
+	if _, err := conn.Write([]byte(request)); err != nil {
+		t.Fatalf("send handshake: %v", err)
+	}
+	status, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read handshake status: %v", err)
+	}
+	fields := strings.Fields(status)
+	if len(fields) < 2 {
+		t.Fatalf("unexpected status line %q", status)
+	}
+	code, err := strconv.Atoi(fields[1])
+	if err != nil {
+		t.Fatalf("parse status %q: %v", status, err)
+	}
+	return code
 }
 
 // rawWS is a minimal RFC 6455 client used to send protocol-level ping and close

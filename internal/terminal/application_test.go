@@ -467,6 +467,46 @@ func TestApplicationRelayStreamsContainerSession(t *testing.T) {
 	}
 }
 
+// TestApplicationAttachThroughTraefikWebSocketProxy is the JUS-260 end-to-end
+// proof for the container route: a real exec attach crosses the same
+// Traefik-shaped wss hop as the host route, and a cross-origin handshake is
+// still refused there.
+func TestApplicationAttachThroughTraefikWebSocketProxy(t *testing.T) {
+	t.Parallel()
+	const publicHost = "gotham.deelux.dev"
+	exec := &appFakeExec{sessions: make(chan *appFakeSession, 1)}
+	targets := defaultApplicationTargets(uuid.New())
+	f, appID := newApplicationFixture(t, targets, exec)
+	proxy := newTraefikProxy(t, f.server, publicHost, "wss")
+	path := func(session *Session) string {
+		return "/v1/applications/" + appID.String() + "/terminal/sessions/" + session.ID.String() + "/ws"
+	}
+
+	session, err := f.svc.CreateApplication(context.Background(), f.userID, appID,
+		AppCreateRequest{Service: "web", ContainerID: fakeWebContainerID, Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+	conn, err := dialTerminalThrough(t, proxy, path(session), "https://"+publicHost)
+	if err != nil {
+		t.Fatalf("attach through wss proxy: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	opcode, payload := readFrame(t, conn)
+	if opcode != opOpened {
+		t.Fatalf("first opcode = %#x, want opened (%s)", opcode, payload)
+	}
+
+	refused, err := f.svc.CreateApplication(context.Background(), f.userID, appID,
+		AppCreateRequest{Service: "web", ContainerID: fakeWebContainerID, Cols: 80, Rows: 24})
+	if err != nil {
+		t.Fatalf("CreateApplication: %v", err)
+	}
+	if status := handshakeStatusThrough(t, proxy, path(refused), "https://evil.example"); status != http.StatusForbidden {
+		t.Fatalf("cross-origin status = %d, want 403", status)
+	}
+}
+
 // waitForTest polls cond until true or the deadline expires.
 func waitForTest(t *testing.T, timeout time.Duration, cond func() bool, message string) {
 	t.Helper()

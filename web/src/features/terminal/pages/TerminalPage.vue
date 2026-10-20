@@ -34,9 +34,11 @@ const {
 <template>
   <div class="term-page">
     <div class="page-head">
-      <p class="eyebrow">{{ t("terminal.page.eyebrow") }}</p>
-      <h1>{{ t("terminal.page.title") }}</h1>
-      <p class="page-desc">{{ t("terminal.page.description") }}</p>
+      <div>
+        <p class="eyebrow">{{ t("terminal.page.eyebrow") }}</p>
+        <h1>{{ t("terminal.page.title") }}</h1>
+        <p class="page-desc">{{ t("terminal.page.description") }}</p>
+      </div>
     </div>
 
     <div v-if="selectedId !== ''" class="term-toolbar">

@@ -496,7 +496,9 @@ watch(
 
 onMounted(() => {
   window.addEventListener("resize", onWindowResize);
-  window.addEventListener("keydown", onGlobalKeydown);
+  // Capture phase: xterm consumes some modified keys before they bubble, so
+  // the documented terminal chords must see them first.
+  window.addEventListener("keydown", onGlobalKeydown, true);
   window.addEventListener("pointerdown", onDocumentPointerDown, true);
   window.addEventListener("beforeunload", onBeforeUnload);
   onWindowResize();
@@ -504,7 +506,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", onWindowResize);
-  window.removeEventListener("keydown", onGlobalKeydown);
+  window.removeEventListener("keydown", onGlobalKeydown, true);
   window.removeEventListener("pointerdown", onDocumentPointerDown, true);
   window.removeEventListener("beforeunload", onBeforeUnload);
 });

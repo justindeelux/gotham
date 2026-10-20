@@ -269,6 +269,15 @@ func TestApplicationCreateRejectsForgedAndForbiddenTargets(t *testing.T) {
 			if response.StatusCode != testCase.want {
 				t.Fatalf("status = %d, want %d", response.StatusCode, testCase.want)
 			}
+			if testCase.want == http.StatusNotFound {
+				var body apiError
+				if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+					t.Fatalf("decode error: %v", err)
+				}
+				if !strings.Contains(body.Message, "no longer available") {
+					t.Fatalf("message = %q, want the no-longer-available refusal", body.Message)
+				}
+			}
 			resolved, _, _, service, container := targets.snapshot()
 			if resolved != 1 || service != "web" || container != "someone-elses" {
 				t.Fatalf("resolver saw (%d, %q, %q), want the requested forged target", resolved, service, container)

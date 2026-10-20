@@ -212,11 +212,30 @@ func (s *Service) terminalTargets(ctx context.Context, userID, appID uuid.UUID) 
 		if len(set.Containers) == 0 {
 			return TerminalTargetSet{}, fmt.Errorf("%w: the compose project has no running container", ErrContainerNotRunning)
 		}
+		// `docker compose ps --format json` reports the 12-character short id
+		// on some Compose versions. The terminal contract, the create-time
+		// match and the agent's strict validation all require the full
+		// 64-character id, so every running target is normalized here, the
+		// single place a Compose container id enters the terminal flow. The
+		// ids come from the node's container list (Docker's summary `Id` is
+		// always full); ComposePs itself keeps its shape for the deploy and
+		// services paths.
+		if composeTargetsNeedFullIDs(set.Containers) {
+			listed, listErr := node.Containers(callCtx)
+			if listErr != nil {
+				return TerminalTargetSet{}, listErr
+			}
+			if err := resolveComposeTargetIDs(set.Containers, listed); err != nil {
+				return TerminalTargetSet{}, err
+			}
+		}
 		// The release's recorded web container must be part of the running set:
 		// an older release's leftover container is never a terminal target.
+		// Compose deployments recorded the CLI's id, which can be the short
+		// prefix of the normalized id.
 		found := false
 		for _, candidate := range set.Containers {
-			if candidate.ContainerID == running.ContainerID {
+			if containerIDMatches(candidate.ContainerID, running.ContainerID) {
 				found = true
 				break
 			}
@@ -283,6 +302,104 @@ func runningComposeTargets(containers []ComposeContainer) []TerminalContainer {
 		targets[i].Label = terminalTargetLabel(targets[i].Service, targets[i].Name, targets[i].ContainerID)
 	}
 	return targets
+}
+
+// composeTargetsNeedFullIDs reports whether any resolved Compose target still
+// carries a short CLI id. The node's container list is only read when it does,
+// so a Compose version that already prints full ids costs no extra RPC.
+func composeTargetsNeedFullIDs(targets []TerminalContainer) bool {
+	for _, target := range targets {
+		if !isFullContainerID(target.ContainerID) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveComposeTargetIDs replaces each target's CLI-reported id with the full
+// Docker id read from the node's container list. It runs on the slice in place
+// so the caller's deterministic service/replica order and visible labels stay
+// unchanged. A running container that the list does not contain (it vanished
+// between the two reads, or the name/prefix is ambiguous) is refused rather
+// than attached to a guessed id.
+func resolveComposeTargetIDs(targets []TerminalContainer, listed []*agentv1.ContainerInfo) error {
+	for i := range targets {
+		if isFullContainerID(targets[i].ContainerID) {
+			continue
+		}
+		id, ok := fullContainerIDFor(targets[i], listed)
+		if !ok {
+			label := strings.TrimSpace(targets[i].Name)
+			if label == "" {
+				label = targets[i].ContainerID
+			}
+			return fmt.Errorf("%w: the compose container %q is no longer present on the node; refresh the targets",
+				ErrContainerNotFound, label)
+		}
+		targets[i].ContainerID = id
+		targets[i].Label = terminalTargetLabel(targets[i].Service, targets[i].Name, id)
+	}
+	return nil
+}
+
+// fullContainerIDFor resolves one Compose target against the node's container
+// list: an exact container name is authoritative (Docker names are unique on a
+// node), and a unique full-id prefix is the fallback when Compose printed no
+// name. A short id is never returned and an ambiguous prefix never resolves.
+func fullContainerIDFor(target TerminalContainer, listed []*agentv1.ContainerInfo) (string, bool) {
+	if name := strings.TrimSpace(target.Name); name != "" {
+		for _, container := range listed {
+			if container.GetName() == name && isFullContainerID(container.GetId()) {
+				return container.GetId(), true
+			}
+		}
+	}
+	prefix := strings.TrimSpace(target.ContainerID)
+	if prefix == "" {
+		return "", false
+	}
+	matched := ""
+	for _, container := range listed {
+		id := container.GetId()
+		if !isFullContainerID(id) || !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		if matched != "" && matched != id {
+			return "", false
+		}
+		matched = id
+	}
+	return matched, matched != ""
+}
+
+// isFullContainerID reports whether id is the full lowercase hexadecimal Docker
+// id the terminal contract uses.
+func isFullContainerID(id string) bool {
+	if len(id) != 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// containerIDMatches reports whether full (a resolved target id) is the
+// container the running deployment recorded. A Compose deployment persisted
+// the CLI's id, which is a 12-character prefix on some Compose versions; the
+// full id starts with it. A single-container deployment records the full id.
+func containerIDMatches(full, recorded string) bool {
+	recorded = strings.TrimSpace(recorded)
+	if recorded == "" {
+		return false
+	}
+	if full == recorded {
+		return true
+	}
+	return len(recorded) < len(full) && strings.HasPrefix(full, recorded)
 }
 
 // findContainer resolves a container by exact id.

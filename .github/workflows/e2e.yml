@@ -126,7 +126,7 @@ jobs:
       - name: Container terminal lifecycle (real Docker)
         env:
           GOTHAM_E2E: "1"
-        run: go test ./agent -run 'TestDockerClientExecReal|TestDockerExecReal' -count=1 -timeout 10m -v
+        run: go test ./agent -run 'TestDockerClientExecReal|TestDockerExecReal|TestComposeTerminalReal' -count=1 -timeout 10m -v
 
       - name: Dump container state on failure
         if: failure()

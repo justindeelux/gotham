@@ -151,7 +151,11 @@ answers an actionable error (409/404/502) instead of an empty list.
   ordered by service, then container name, then id, so the same running set
   always produces the same visible selection.
 * `container_id` is always resolved server-side. A browser never supplies a
-  trusted container id to the agent.
+  trusted container id to the agent. It is always the **full** 64-character
+  lowercase Docker id, even when the Compose CLI reports a 12-character short
+  id: the control plane resolves each Compose target through the node's
+  container list, so the targets response, the create-time match and the
+  attach-time re-resolution all use the same full id.
 
 `POST /api/v1/applications/{application_id}/terminal/sessions`
 
@@ -544,8 +548,11 @@ A container terminal is an **application** capability, not a node capability:
   409 with "no running deployment"; an unreachable agent answers 502.
 * For a Compose application, the project name is derived from the application
   id (`gotham-<uuid>`) and every running service container is listed with
-  `ComposePs`. The project's stopped containers are not targets; a stale or
-  forged id cannot be used.
+  `ComposePs`. Some Compose versions report the 12-character short id there, so
+  the control plane resolves each target through the node's container list and
+  uses Docker's full `Id`; other `ComposePs` consumers keep the CLI's value.
+  The project's stopped containers are not targets; a stale or forged id cannot
+  be used.
 * For a single-container application, the deployment's recorded container is
   read back from Docker. A missing container ("redeploy the application") and a
   stopped container ("start the application first") are distinct errors.
@@ -708,8 +715,16 @@ start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /
 * resize observed through `stty size`, Ctrl-C, and three open/close cycles.
 
 ```sh
-GOTHAM_E2E=1 go test -race ./agent -run 'TestDockerClientExecReal|TestDockerExecReal' -v
+GOTHAM_E2E=1 go test -race ./agent -run 'TestDockerClientExecReal|TestDockerExecReal|TestComposeTerminalReal' -v
 ```
+
+`TestComposeTerminalReal` is the JUS-256 live regression: it starts a throwaway
+alpine Compose project named `gotham-<uuid>` (bounded by `pids_limit: 64`,
+`mem_limit: 64m` and one CPU), reads the real `ComposePs` id, resolves it to the
+full id through the node's container list exactly as the control plane does,
+opens an exec shell on that id, runs a command and closes. `t.Cleanup` removes
+the project even on failure; the shared development containers are never
+touched.
 
 The same suite is a step in `.github/workflows/e2e.yml` (the existing
 `GOTHAM_E2E=1` job on GitHub-hosted Ubuntu with Docker), so the lifecycle is

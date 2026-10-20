@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -81,6 +82,8 @@ const (
 	// tolerated before the shell fails closed (3 ticks is about 90 s at the
 	// production interval).
 	revalidateMaxErrors = 3
+	// defaultWriteTimeout bounds one frame write we initiate.
+	defaultWriteTimeout = 10 * time.Second
 )
 
 // handler serves the terminal HTTP and WebSocket surface.
@@ -95,6 +98,11 @@ type handler struct {
 	revalidateTimeout time.Duration
 	pingPeriod        time.Duration
 	idleTimeout       time.Duration
+	writeTimeout      time.Duration
+
+	// writeMu serializes our own frame writes so one writer's deadline reset
+	// cannot clear another writer's in-flight deadline.
+	writeMu sync.Mutex
 }
 
 // handlerOptions overrides the liveness timers (tests).
@@ -103,6 +111,7 @@ type handlerOptions struct {
 	revalidateTimeout time.Duration
 	pingPeriod        time.Duration
 	idleTimeout       time.Duration
+	writeTimeout      time.Duration
 }
 
 // UserIDFunc resolves the authenticated user set by the server's auth
@@ -141,6 +150,7 @@ func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Se
 		revalidateTimeout: options.revalidateTimeout,
 		pingPeriod:        options.pingPeriod,
 		idleTimeout:       options.idleTimeout,
+		writeTimeout:      options.writeTimeout,
 	}
 	if h.revalidatePeriod <= 0 {
 		h.revalidatePeriod = defaultRevalidatePeriod
@@ -153,6 +163,9 @@ func mount(r chi.Router, authMiddleware func(http.Handler) http.Handler, svc *Se
 	}
 	if h.idleTimeout <= 0 {
 		h.idleTimeout = defaultIdleTimeout
+	}
+	if h.writeTimeout <= 0 {
+		h.writeTimeout = defaultWriteTimeout
 	}
 
 	r.Group(func(protected chi.Router) {
@@ -397,7 +410,7 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 		Rows:        opened.GetRows(),
 		ServiceUser: opened.GetServiceUser(),
 	})
-	if err := sendFrame(conn, opOpened, payload); err != nil {
+	if err := h.sendFrame(conn, opOpened, payload); err != nil {
 		return
 	}
 
@@ -407,7 +420,7 @@ func (h *handler) serve(conn *websocket.Conn, session *Session, claims *auth.Cla
 
 	pumpDone := make(chan error, 1)
 	go func() {
-		err := pumpAgentToClient(conn, stream)
+		err := h.pumpAgentToClient(conn, stream)
 		pumpDone <- err
 		// The shell ended (or the stream failed): close the socket so the
 		// client reader below returns instead of blocking forever.
@@ -482,7 +495,7 @@ func (h *handler) revalidate(ctx context.Context, cancel context.CancelFunc, con
 			if err != nil {
 				message = "terminal session authorization could not be confirmed"
 			}
-			_ = sendFrame(conn, opError, []byte(message))
+			_ = h.sendFrame(conn, opError, []byte(message))
 			h.logger.Info("terminal: session authorization ended",
 				"session_id", session.ID.String(), "consecutive_errors", consecutiveErrors)
 			cancel()
@@ -515,7 +528,7 @@ func (h *handler) keepalive(ctx context.Context, cancel context.CancelFunc, conn
 		case <-done:
 			return
 		case <-ticker.C:
-			if err := sendFrame(conn, opPing, nil); err != nil {
+			if err := h.sendFrame(conn, opPing, nil); err != nil {
 				cancel()
 				_ = conn.Close()
 				return
@@ -581,7 +594,7 @@ func readClientFrames(stream agentv1.TerminalService_OpenTerminalClient, conn *w
 }
 
 // pumpAgentToClient forwards agent output and the final exit event.
-func pumpAgentToClient(conn *websocket.Conn, stream agentv1.TerminalService_OpenTerminalClient) error {
+func (h *handler) pumpAgentToClient(conn *websocket.Conn, stream agentv1.TerminalService_OpenTerminalClient) error {
 	for {
 		response, err := stream.Recv()
 		if err != nil {
@@ -592,7 +605,7 @@ func pumpAgentToClient(conn *websocket.Conn, stream agentv1.TerminalService_Open
 		}
 		switch event := response.GetEvent().(type) {
 		case *agentv1.TerminalResponse_Output:
-			if err := sendFrame(conn, opOutput, event.Output); err != nil {
+			if err := h.sendFrame(conn, opOutput, event.Output); err != nil {
 				return err
 			}
 		case *agentv1.TerminalResponse_Exited:
@@ -600,7 +613,7 @@ func pumpAgentToClient(conn *websocket.Conn, stream agentv1.TerminalService_Open
 				ExitCode: event.Exited.GetExitCode(),
 				Signal:   event.Exited.GetSignal(),
 			})
-			_ = sendFrame(conn, opExited, payload)
+			_ = h.sendFrame(conn, opExited, payload)
 			return nil
 		default:
 			return errors.New("terminal: unexpected agent event")
@@ -639,13 +652,24 @@ func recvOpened(ctx context.Context, stream agentv1.TerminalService_OpenTerminal
 	}
 }
 
-// sendFrame writes one server frame with a bounded write deadline.
-func sendFrame(conn *websocket.Conn, opcode byte, payload []byte) error {
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+// sendFrame writes one server frame with a bounded write deadline and then
+// clears it. The deadline must not outlive this write: the x/net read path also
+// writes on the same connection (a protocol-level pong, or a close reply), and
+// a stale deadline left by our last frame would make that write fail with
+// i/o timeout and tear down an otherwise healthy shell.
+func (h *handler) sendFrame(conn *websocket.Conn, opcode byte, payload []byte) error {
 	frame := make([]byte, len(payload)+1)
 	frame[0] = opcode
 	copy(frame[1:], payload)
-	return websocket.Message.Send(conn, frame)
+
+	h.writeMu.Lock()
+	defer h.writeMu.Unlock()
+	if err := conn.SetWriteDeadline(time.Now().Add(h.writeTimeout)); err != nil {
+		return err
+	}
+	err := websocket.Message.Send(conn, frame)
+	_ = conn.SetWriteDeadline(time.Time{})
+	return err
 }
 
 // fail reports a bounded error frame and ends the session.
@@ -653,7 +677,7 @@ func (h *handler) fail(conn *websocket.Conn, session *Session, message string) {
 	if len(message) > maxErrorBytes {
 		message = message[:maxErrorBytes]
 	}
-	_ = sendFrame(conn, opError, []byte(message))
+	_ = h.sendFrame(conn, opError, []byte(message))
 	h.logger.Info("terminal: session failed", "session_id", session.ID.String(), "reason", message)
 }
 

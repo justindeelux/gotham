@@ -1,10 +1,14 @@
 package terminal
 
 import (
+	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -167,6 +171,7 @@ type fixtureOptions struct {
 	revalidate   time.Duration
 	ping         time.Duration
 	idle         time.Duration
+	writeTimeout time.Duration
 }
 
 type fixture struct {
@@ -213,7 +218,12 @@ func newFixture(t *testing.T, options fixtureOptions) *fixture {
 		svc, verifier, authorizer,
 		func(context.Context) (uuid.UUID, bool) { return userID, true },
 		discardLogger(),
-		handlerOptions{revalidatePeriod: options.revalidate, pingPeriod: options.ping, idleTimeout: options.idle},
+		handlerOptions{
+			revalidatePeriod: options.revalidate,
+			pingPeriod:       options.ping,
+			idleTimeout:      options.idle,
+			writeTimeout:     options.writeTimeout,
+		},
 	)
 	f.server = httptest.NewServer(router)
 	t.Cleanup(f.server.Close)
@@ -916,4 +926,175 @@ func TestRelayErrorWorkingDirectory(t *testing.T) {
 			}
 		})
 	}
+}
+
+// rawWS is a minimal RFC 6455 client used to send protocol-level ping and close
+// control frames, which golang.org/x/net/websocket's public client cannot do.
+type rawWS struct {
+	conn net.Conn
+	br   *bufio.Reader
+}
+
+func dialRawWS(t *testing.T, baseURL, path, token string) *rawWS {
+	t.Helper()
+	host := strings.TrimPrefix(baseURL, "http://")
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatalf("dial raw ws: %v", err)
+	}
+	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
+	request := fmt.Sprintf(
+		"GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
+			"Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n"+
+			"Sec-WebSocket-Protocol: %s, %s%s\r\nOrigin: %s\r\n\r\n",
+		path, host, key, Subprotocol, TokenProtocolPrefix, token, baseURL,
+	)
+	if _, err := conn.Write([]byte(request)); err != nil {
+		_ = conn.Close()
+		t.Fatalf("send handshake: %v", err)
+	}
+	reader := bufio.NewReader(conn)
+	status, err := reader.ReadString('\n')
+	if err != nil {
+		_ = conn.Close()
+		t.Fatalf("read handshake status: %v", err)
+	}
+	if !strings.Contains(status, "101") {
+		_ = conn.Close()
+		t.Fatalf("handshake status = %q, want 101", strings.TrimSpace(status))
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			_ = conn.Close()
+			t.Fatalf("read handshake headers: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	return &rawWS{conn: conn, br: reader}
+}
+
+func (c *rawWS) writeFrame(opcode byte, payload []byte) error {
+	frame := []byte{0x80 | opcode}
+	switch {
+	case len(payload) < 126:
+		frame = append(frame, byte(0x80|len(payload)))
+	case len(payload) <= 0xffff:
+		frame = append(frame, 0x80|126, byte(len(payload)>>8), byte(len(payload)))
+	default:
+		return errors.New("raw test frame too large")
+	}
+	mask := []byte{0x12, 0x34, 0x56, 0x78}
+	frame = append(frame, mask...)
+	for i, value := range payload {
+		frame = append(frame, value^mask[i%4])
+	}
+	_, err := c.conn.Write(frame)
+	return err
+}
+
+func (c *rawWS) readFrame(timeout time.Duration) (byte, []byte, error) {
+	if err := c.conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return 0, nil, err
+	}
+	first, err := c.br.ReadByte()
+	if err != nil {
+		return 0, nil, err
+	}
+	second, err := c.br.ReadByte()
+	if err != nil {
+		return 0, nil, err
+	}
+	length := int(second & 0x7f)
+	switch length {
+	case 126:
+		var size [2]byte
+		if _, err := io.ReadFull(c.br, size[:]); err != nil {
+			return 0, nil, err
+		}
+		length = int(size[0])<<8 | int(size[1])
+	case 127:
+		var size [8]byte
+		if _, err := io.ReadFull(c.br, size[:]); err != nil {
+			return 0, nil, err
+		}
+		length = 0
+		for _, value := range size {
+			length = length<<8 | int(value)
+		}
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(c.br, payload); err != nil {
+		return 0, nil, err
+	}
+	return first & 0x0f, payload, nil
+}
+
+func TestProtocolPingAfterWriteDeadlineKeepsSession(t *testing.T) {
+	f := newFixture(t, fixtureOptions{
+		operator:     true,
+		revalidate:   time.Hour,
+		ping:         time.Hour,
+		idle:         time.Hour,
+		writeTimeout: 80 * time.Millisecond,
+	})
+	session := f.create(t, CreateRequest{Target: "host", Root: "volumes", Cols: 80, Rows: 24})
+	path := "/v1/servers/" + session.ServerID.String() + "/terminal/sessions/" + session.ID.String() + "/ws"
+	client := dialRawWS(t, f.server.URL, path, "good-token")
+	defer func() { _ = client.conn.Close() }()
+
+	wsOpcode, payload, err := client.readFrame(5 * time.Second)
+	if err != nil {
+		t.Fatalf("read opened: %v", err)
+	}
+	if wsOpcode != 0x2 || len(payload) == 0 || payload[0] != opOpened {
+		t.Fatalf("first frame = ws %#x payload %x, want a binary opened frame", wsOpcode, payload)
+	}
+
+	// Wait past the server's write deadline. A stale deadline would make the
+	// read path's pong write fail and kill the shell.
+	time.Sleep(200 * time.Millisecond)
+	if err := client.writeFrame(0x9, []byte("hi")); err != nil {
+		t.Fatalf("send protocol ping: %v", err)
+	}
+	for {
+		wsOpcode, payload, err := client.readFrame(5 * time.Second)
+		if err != nil {
+			t.Fatalf("pong not received; session died: %v", err)
+		}
+		if wsOpcode == 0xA {
+			if string(payload) != "hi" {
+				t.Fatalf("pong payload = %q, want %q", payload, "hi")
+			}
+			break
+		}
+	}
+
+	// The data path must still work after the ping.
+	input := append([]byte{opInput}, []byte("echo ping-ok\r")...)
+	if err := client.writeFrame(0x2, input); err != nil {
+		t.Fatalf("send input: %v", err)
+	}
+	var output strings.Builder
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(output.String(), "ping-ok") {
+		wsOpcode, payload, err := client.readFrame(5 * time.Second)
+		if err != nil {
+			t.Fatalf("read output: %v", err)
+		}
+		if wsOpcode == 0x2 && len(payload) > 0 && payload[0] == opOutput {
+			output.Write(payload[1:])
+		}
+	}
+	if !strings.Contains(output.String(), "ping-ok") {
+		t.Fatalf("output = %q, want ping-ok", output.String())
+	}
+
+	// A client close still ends the session cleanly.
+	if err := client.writeFrame(0x8, []byte{0x03, 0xe8}); err != nil {
+		t.Fatalf("send close: %v", err)
+	}
+	waitSessionDone(t, session)
 }

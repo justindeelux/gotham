@@ -130,21 +130,16 @@ func (s *Service) TerminalApplicationAccess(ctx context.Context, appID uuid.UUID
 	}, nil
 }
 
-// terminalTargets is the single resolution path for listing and creating a
-// container session. It proves application write access first, holds the
-// application lock across target selection and the node call, and reports a
-// deployment in progress, no running deployment, a missing container and a
-// stopped container as distinct actionable errors.
-func (s *Service) terminalTargets(ctx context.Context, userID, appID uuid.UUID) (TerminalTargetSet, error) {
-	if !Enabled() {
-		return TerminalTargetSet{}, ErrDisabled
-	}
+// terminalDeploymentSnapshot authorizes the caller, then reads the application
+// and its newest running deployment under the per-application lock. The lock is
+// released before any node dial or RPC.
+func (s *Service) terminalDeploymentSnapshot(ctx context.Context, userID, appID uuid.UUID) (Application, *Deployment, error) {
 	app, err := s.application(ctx, userID, appID, true)
 	if err != nil {
-		return TerminalTargetSet{}, err
+		return Application{}, nil, err
 	}
 	if app.ServerID == uuid.Nil {
-		return TerminalTargetSet{}, ErrServerNotFound
+		return Application{}, nil, ErrServerNotFound
 	}
 	unlock := s.locks.lock(app.ID)
 	defer unlock()
@@ -152,23 +147,40 @@ func (s *Service) terminalTargets(ctx context.Context, userID, appID uuid.UUID) 
 	// node while the caller still holds the old authorization decision.
 	app, err = s.application(ctx, userID, appID, true)
 	if err != nil {
-		return TerminalTargetSet{}, err
+		return Application{}, nil, err
 	}
 	deployments, err := s.repo.ListDeployments(ctx, app.ID)
 	if err != nil {
-		return TerminalTargetSet{}, err
+		return Application{}, nil, err
 	}
 	var running *Deployment
 	for i := range deployments { // newest first
 		if !deployments[i].State.Terminal() {
-			return TerminalTargetSet{}, fmt.Errorf("%w: a deployment is in progress", ErrConflict)
+			return Application{}, nil, fmt.Errorf("%w: a deployment is in progress", ErrConflict)
 		}
 		if running == nil && deployments[i].State == StateRunning && deployments[i].ContainerID != "" {
 			running = &deployments[i]
 		}
 	}
 	if running == nil {
-		return TerminalTargetSet{}, fmt.Errorf("%w: application has no running deployment", ErrNoRunningDeployment)
+		return Application{}, nil, fmt.Errorf("%w: application has no running deployment", ErrNoRunningDeployment)
+	}
+	return app, running, nil
+}
+
+// terminalTargets is the single resolution path for listing and creating a
+// container session. It proves application write access first, snapshots the
+// running deployment under the application lock, then dials the node outside
+// that lock: a slow node must not delay deploys or other mutations. A stale
+// snapshot is safe because create re-resolves, attach re-resolves again (after
+// the pending window) and the agent verifies the exact container is running.
+func (s *Service) terminalTargets(ctx context.Context, userID, appID uuid.UUID) (TerminalTargetSet, error) {
+	if !Enabled() {
+		return TerminalTargetSet{}, ErrDisabled
+	}
+	app, running, err := s.terminalDeploymentSnapshot(ctx, userID, appID)
+	if err != nil {
+		return TerminalTargetSet{}, err
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, s.controlTimeout)

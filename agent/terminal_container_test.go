@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,9 @@ import (
 
 	agentv1 "github.com/justindeelux/gotham/proto/agent/v1"
 )
+
+// testContainerID is a full lowercase Docker id (the only shape the agent accepts).
+const testContainerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 // fakeContainerExec hands the terminal server one controllable exec session.
 type fakeContainerExec struct {
@@ -57,8 +61,18 @@ type fakeExecSession struct {
 	rows     uint16
 	exitCode int32
 	closeErr error
+	killed   bool
 	closed   chan struct{}
 	once     sync.Once
+}
+
+// Kill records that the exec process tree was ended. The fake's Close is
+// independent so the test can assert the terminal calls Kill before releasing.
+func (s *fakeExecSession) Kill(context.Context) error {
+	s.mu.Lock()
+	s.killed = true
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *fakeExecSession) Read(p []byte) (int, error) { return s.reader.Read(p) }
@@ -115,7 +129,7 @@ func TestTerminalContainerStreamsResizesAndExits(t *testing.T) {
 		t.Fatalf("OpenTerminal: %v", err)
 	}
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
-		Target: "container", ContainerId: "abc123def456", Cols: 80, Rows: 24,
+		Target: "container", ContainerId: testContainerID, Cols: 80, Rows: 24,
 	}}}); err != nil {
 		t.Fatalf("send open: %v", err)
 	}
@@ -189,7 +203,7 @@ func TestTerminalContainerErrorsAreActionable(t *testing.T) {
 				t.Fatalf("OpenTerminal: %v", err)
 			}
 			if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
-				Target: "container", ContainerId: "abc123", Cols: 80, Rows: 24,
+				Target: "container", ContainerId: testContainerID, Cols: 80, Rows: 24,
 			}}}); err != nil {
 				t.Fatalf("send open: %v", err)
 			}
@@ -251,15 +265,23 @@ func TestDockerClientExecHijacksStream(t *testing.T) {
 	creates := append([][]string(nil), api.commands...)
 	api.mu.Unlock()
 	input := api.input()
-	if len(creates) != 2 {
-		t.Fatalf("exec creates = %d, want the probe plus the interactive exec", len(creates))
+	if len(creates) != 3 {
+		t.Fatalf("exec creates = %d, want the probe, the interactive exec and the kill helper", len(creates))
 	}
 	// The probe must be the fixed shell-probe command, never caller input.
 	if len(creates[0]) != 3 || creates[0][0] != "/bin/sh" || creates[0][1] != "-c" || creates[0][2] != shellProbeCommand {
 		t.Fatalf("probe command = %v", creates[0])
 	}
-	if len(creates[1]) != 1 || creates[1][0] != "/bin/sh" {
-		t.Fatalf("interactive command = %v, want the probed shell", creates[1])
+	if len(creates[1]) != 5 || creates[1][0] != "/bin/sh" || creates[1][1] != "-c" ||
+		creates[1][2] != execWrapperCommand || creates[1][3] != "gotham-terminal" || creates[1][4] != "/bin/sh" {
+		t.Fatalf("interactive command = %v, want the fixed wrapper plus the probed shell", creates[1])
+	}
+	if len(creates[2]) != 5 || creates[2][0] != "/bin/sh" || creates[2][1] != "-c" ||
+		creates[2][2] != execKillTreeScript || creates[2][3] != "gotham-terminal-kill" {
+		t.Fatalf("kill command = %v, want the fixed kill helper", creates[2])
+	}
+	if _, err := strconv.Atoi(creates[2][4]); err != nil {
+		t.Fatalf("kill pid = %q, want a decimal process id", creates[2][4])
 	}
 	if input != "echo hi\n" {
 		t.Fatalf("exec input = %q, want the written bytes", input)
@@ -450,7 +472,11 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 			api.mu.Unlock()
 			return
 		}
-		_, _ = conn.Write([]byte("shell-ready\r\n"))
+		if id != "exec2" {
+			// The kill helper runs non-interactively and exits immediately.
+			return
+		}
+		_, _ = conn.Write([]byte("1234\nshell-ready\r\n"))
 		reader := bufio.NewReader(conn)
 		for {
 			line, err := reader.ReadString('\n')
@@ -476,7 +502,7 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 		default:
 			id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/exec/"), "/json")
 			code := int32(0)
-			if id != "exec1" {
+			if id == "exec2" {
 				code = 7
 			}
 			api.mu.Lock()

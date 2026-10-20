@@ -86,13 +86,15 @@ no WebSocket attaches. `DELETE /api/v1/servers/{id}/terminal/sessions/{sessionID
 
 `GET /api/v1/applications/{application_id}/terminal/targets`
 
-Requires the application write permission: the caller must be an owner or admin
-of the application's active team. A `read_only` member is refused (403); another
-team's application answers 404, never 403, so application IDs cannot be probed.
-Listing resolves the application's **newest running deployment** and reads the
-node's Docker/Compose metadata; an application with no running deployment, an
-in-flight deployment, a stopped container or an unreachable node answers an
-actionable error (409/404/502) instead of an empty list.
+Requires an **interactive JWT session** and the application write permission:
+the caller must be an owner or admin of the application's active team. Scoped
+API tokens are refused even when their owner has the team write role, because a
+shell is an interactive capability. A `read_only` member is refused (403);
+another team's application answers 404, never 403, so application IDs cannot be
+probed. Listing resolves the application's **newest running deployment** and
+reads the node's Docker/Compose metadata; an application with no running
+deployment, an in-flight deployment, a stopped container or an unreachable node
+answers an actionable error (409/404/502) instead of an empty list.
 
 ```json
 {
@@ -146,7 +148,10 @@ The control plane re-resolves the application's running set and requires an
 exact `(service, container_id)` match. A forged id, another application's
 container, an id from an older deployment, or a container labelled as another
 service answers 404 `the selected container is no longer available`; it never
-falls back to another service or deployment. The response is the same
+falls back to another service or deployment. The same resolution runs again at
+the WebSocket attach, so a container replaced during the 60 s pending window, a
+target that stopped, or a deployment that started in between is rejected with
+the same actionable error before any agent stream is opened. The response is the same
 `201` shape as the host create, plus the container fields:
 
 ```json
@@ -295,9 +300,17 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   revocation, DELETE, agent failure, control-plane shutdown — cancels the agent
   stream. For a host shell the agent closes the PTY master, sends `SIGHUP` to
   the shell's process group, and `SIGKILL`s it after a 2 s grace, so the shell's
-  children die with it. For a container exec the agent closes the hijacked
-  Docker connection and reads the exec's final status; the daemon ends the
-  interactive process with the PTY master. **Neither path stops, restarts or
+  children die with it. For a container exec, closing the hijacked Docker
+  connection **does not** end the process: the daemon keeps the exec alive. The
+  agent therefore wraps the shell in a fixed recorder that prints its pid before
+  `exec`ing the shell, and on every end runs a second, fixed helper exec inside
+  the same container. The helper snapshots the shell's descendant tree (so
+  foreground/background jobs are included even though an interactive shell puts
+  them in their own process groups), sends `SIGHUP`/`SIGTERM`/`SIGKILL` with a
+  short grace, never signals pid 1, and uses only the validated numeric pid — no
+  caller input is interpolated. The agent then verifies through Docker's exec
+  inspect that the exec is no longer `Running`, and only then closes the attach
+  connection and reports the exit status. **Neither path stops, restarts or
   removes the application container.** The host child is always reaped (even
   when the opened event could not be sent), and a child that already exited is
   never signalled again. File descriptors, hijacked connections and goroutines
@@ -368,6 +381,10 @@ A container terminal is an **application** capability, not a node capability:
 * Creating a session re-resolves the set and requires an exact match on both
   `service` and `container_id`. This is what prevents a forged target, a
   container of another application and an old release from being attached.
+* The agent accepts only the full 64-character lowercase hexadecimal Docker id
+  the control plane resolved; container names, short prefixes and upper-case
+  spellings are refused, so the agent never resolves an ambiguous or
+  caller-chosen name.
 * The exec runs as the container's configured user (`root` when unset), inside
   the container's namespaces and mounts. It does not grant host access, and the
   host shell does not grant container access.
@@ -432,20 +449,36 @@ The same suites also run natively on the development host (darwin). `go test
 terminal tests cover session isolation, fd/goroutine release after close and
 disconnect, and process-group death on connection loss.
 
-Container exec additionally runs a **real throwaway container** check. It
-starts a unique `alpine:3` container (never the shared `gotham-dev-postgres` /
-`gotham-dev-redis`), opens an interactive exec, runs a command, resizes it,
-closes the exec, verifies the container is still running, and removes the
-container:
+Container exec additionally runs **real throwaway container** checks. They
+start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /
+`gotham-dev-redis`) and remove them afterwards. The suite covers:
+
+* open, run a foreground job, **Close**, and assert neither the shell pid nor
+  the job survives (the finding-1 regression);
+* the same after **transport loss** (cancelled terminal stream);
+* Ctrl-C interrupting a foreground job with the shell still usable;
+* resize observed through `stty size`;
+* the application container still running after every close;
+* three open/close cycles leaking no shell or job.
 
 ```sh
-GOTHAM_E2E=1 go test ./agent -run TestDockerClientExecRealContainer -v
+GOTHAM_E2E=1 go test ./agent -run 'TestDockerClientExecReal|TestDockerExecReal' -v
 ```
 
+The same command is a step in `.github/workflows/e2e.yml` (the existing
+`GOTHAM_E2E=1` job on GitHub-hosted Ubuntu with Docker), so the lifecycle is
+gated in CI; `alpine:3` is pre-pulled with the other e2e images. A developer
+without a local Docker daemon can run the unit suite only.
+
 Unit coverage (no daemon needed) exercises the hijacked exec stream, shell
-probe, resize and exit status against a faithful Docker HTTP fake, plus the
-terminal server's container target mapping, stopped/missing/no-shell errors and
-the control-plane resolution/permission/error cases.
+probe, wrapper pid, fixed kill helper, resize and exit status against a faithful
+Docker HTTP fake, plus the terminal server's container target mapping,
+stopped/missing/no-shell errors, attach-time re-resolution and the
+control-plane resolution/permission/error cases.
 Findings from review round 1 (periodic revalidation, privilege wording, arm64
 proof, isolation/resource tests, idle bound, early-return reaping, post-reap
 signalling, Origin scheme and non-upgrade attach) are covered by these tests.
+The JUS-244 round-1 fixes add: explicit exec cleanup verified through Docker
+inspect, the real-container lifecycle suite above, attach-time target
+re-resolution, interactive-session-only control routes, strict 64-hex container
+ids, and a bounded container write.

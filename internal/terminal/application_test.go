@@ -17,6 +17,10 @@ import (
 	"github.com/justindeelux/gotham/agent"
 )
 
+// fakeWebContainerID is a full lowercase Docker id; the agent accepts only
+// that shape, so the application fixtures use one too.
+const fakeWebContainerID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 // fakeApplicationTargets is a controllable resolver for the application routes.
 type fakeApplicationTargets struct {
 	mu         sync.Mutex
@@ -88,8 +92,17 @@ type appFakeSession struct {
 	input     strings.Builder
 	cols      uint16
 	rows      uint16
+	killed    bool
 	closed    chan struct{}
 	closeOnce sync.Once
+}
+
+// Kill marks the exec process tree ended, like the Docker client does.
+func (s *appFakeSession) Kill(context.Context) error {
+	s.mu.Lock()
+	s.killed = true
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *appFakeSession) Read(p []byte) (int, error) { return s.reader.Read(p) }
@@ -154,7 +167,7 @@ func newApplicationFixture(t *testing.T, targets *fakeApplicationTargets, exec a
 func defaultApplicationTargets(appID uuid.UUID) *fakeApplicationTargets {
 	container := ContainerTarget{
 		Service:       "web",
-		ContainerID:   "web-1",
+		ContainerID:   fakeWebContainerID,
 		Name:          "shop-web-1",
 		Image:         "nginx:1",
 		State:         "running",
@@ -197,7 +210,7 @@ func TestApplicationTargetsAndSessionRoutes(t *testing.T) {
 		t.Fatalf("resolver saw user=%s app=%s", user, app)
 	}
 
-	body := strings.NewReader(`{"service":"web","container_id":"web-1","cols":100,"rows":30}`)
+	body := strings.NewReader(`{"service":"web","container_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","cols":100,"rows":30}`)
 	created, err := http.Post(f.server.URL+"/v1/applications/"+appID.String()+"/terminal/sessions", "application/json", body)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -211,7 +224,7 @@ func TestApplicationTargetsAndSessionRoutes(t *testing.T) {
 		t.Fatalf("decode create: %v", err)
 	}
 	if session.Target != TargetContainer || session.ApplicationID != appID.String() ||
-		session.ContainerID != "web-1" || session.TargetLabel != "web · shop-web-1" {
+		session.ContainerID != fakeWebContainerID || session.TargetLabel != "web · shop-web-1" {
 		t.Fatalf("session = %+v", session)
 	}
 
@@ -265,7 +278,7 @@ func TestApplicationSessionOwnershipAndSingleUse(t *testing.T) {
 	targets := defaultApplicationTargets(uuid.New())
 	f, appID := newApplicationFixture(t, targets, &appFakeExec{sessions: make(chan *appFakeSession, 1)})
 	session, err := f.svc.CreateApplication(context.Background(), f.userID, appID,
-		AppCreateRequest{Service: "web", ContainerID: "web-1", Cols: 80, Rows: 24})
+		AppCreateRequest{Service: "web", ContainerID: fakeWebContainerID, Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
@@ -304,12 +317,74 @@ func TestApplicationSessionOwnershipAndSingleUse(t *testing.T) {
 	}
 }
 
+// TestApplicationAttachReResolvesTarget is the round-1 finding 3 regression: a
+// container replaced (or a deploy started) during the pending window must be
+// rejected at attach, not trusted from create.
+func TestApplicationAttachReResolvesTarget(t *testing.T) {
+	cases := []struct {
+		name      string
+		configure func(*fakeApplicationTargets)
+		want      int
+	}{
+		{
+			name: "container replaced",
+			configure: func(targets *fakeApplicationTargets) {
+				targets.resolveErr = ErrContainerNotFound
+			},
+			want: http.StatusNotFound,
+		},
+		{
+			name: "deploy in progress",
+			configure: func(targets *fakeApplicationTargets) {
+				targets.resolveErr = ErrDeployInProgress
+			},
+			want: http.StatusConflict,
+		},
+		{
+			name: "resolved target changed",
+			configure: func(targets *fakeApplicationTargets) {
+				targets.target.ContainerID = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+			},
+			want: http.StatusNotFound,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			targets := defaultApplicationTargets(uuid.New())
+			f, appID := newApplicationFixture(t, targets, &appFakeExec{sessions: make(chan *appFakeSession, 1)})
+			session, err := f.svc.CreateApplication(context.Background(), f.userID, appID,
+				AppCreateRequest{Service: "web", ContainerID: fakeWebContainerID, Cols: 80, Rows: 24})
+			if err != nil {
+				t.Fatalf("CreateApplication: %v", err)
+			}
+			testCase.configure(targets)
+			request, err := http.NewRequest(http.MethodGet,
+				f.server.URL+"/v1/applications/"+appID.String()+"/terminal/sessions/"+session.ID.String()+"/ws", nil)
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			request.Header.Set("Sec-WebSocket-Protocol", Subprotocol+", "+TokenProtocolPrefix+"good-token")
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatalf("attach preflight: %v", err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != testCase.want {
+				t.Fatalf("status = %d, want %d", response.StatusCode, testCase.want)
+			}
+			if resolved, _, _, _, _ := targets.snapshot(); resolved < 2 {
+				t.Fatalf("resolver calls = %d, want create plus attach", resolved)
+			}
+		})
+	}
+}
+
 func TestApplicationRelayStreamsContainerSession(t *testing.T) {
 	exec := &appFakeExec{sessions: make(chan *appFakeSession, 1)}
 	targets := defaultApplicationTargets(uuid.New())
 	f, appID := newApplicationFixture(t, targets, exec)
 	session, err := f.svc.CreateApplication(context.Background(), f.userID, appID,
-		AppCreateRequest{Service: "web", ContainerID: "web-1", Cols: 80, Rows: 24})
+		AppCreateRequest{Service: "web", ContainerID: fakeWebContainerID, Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
@@ -329,13 +404,13 @@ func TestApplicationRelayStreamsContainerSession(t *testing.T) {
 
 	opcode, payload := readFrame(t, conn)
 	if opcode != opOpened {
-		t.Fatalf("first opcode = %#x, want opened", opcode)
+		t.Fatalf("first opcode = %#x, want opened (%s)", opcode, payload)
 	}
 	var opened openedEvent
 	if err := json.Unmarshal(payload, &opened); err != nil {
 		t.Fatalf("decode opened: %v", err)
 	}
-	if opened.Target != TargetContainer || opened.ContainerID != "web-1" ||
+	if opened.Target != TargetContainer || opened.ContainerID != fakeWebContainerID ||
 		opened.TargetLabel != "web · shop-web-1" || opened.Shell != "/bin/sh" || opened.ServiceUser != "app" {
 		t.Fatalf("opened = %+v", opened)
 	}

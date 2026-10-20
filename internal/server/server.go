@@ -586,7 +586,7 @@ func (s *Server) routes() (http.Handler, error) {
 		if s.terminal != nil && s.deploy != nil {
 			if resolver, ok := s.deploy.(deploy.TerminalResolver); ok {
 				s.terminal.SetApplications(terminalApplicationResolver{deploy: resolver})
-				terminal.MountApplications(api, s.withTeam(), s.terminal, s.auth,
+				terminal.MountApplications(api, s.applicationTerminalAuth(), s.terminal, s.auth,
 					applicationTerminalAuthorizer{resolver: resolver, auth: s.auth, teams: s.teamService},
 					UserIDFromContext, s.logger)
 			}

@@ -492,6 +492,29 @@ func (s *Service) AttachApplication(_ context.Context, userID, appID, sessionID 
 	return cloneSession(session.snapshot, session.done), nil
 }
 
+// RevalidateApplicationTarget re-resolves a pending session's container through
+// the application resolver before the WebSocket upgrade. The create-time
+// resolution is not trusted for the 60 s pending window: a replaced container,
+// a stopped target or a deployment that started in between answers the same
+// actionable error as create, before any agent stream is opened.
+func (s *Service) RevalidateApplicationTarget(ctx context.Context, userID, appID uuid.UUID, session *Session) error {
+	if session == nil || session.Target != TargetContainer || session.ApplicationID != appID {
+		return ErrNotFound
+	}
+	if s.applications == nil {
+		return fmt.Errorf("%w: application terminals are not configured", ErrUnsupportedTarget)
+	}
+	_, target, err := s.applications.ResolveContainer(ctx, userID, appID, session.Service, session.ContainerID)
+	if err != nil {
+		return err
+	}
+	if target.ServerID != session.ServerID || target.Service != session.Service ||
+		target.ContainerID != session.ContainerID {
+		return fmt.Errorf("%w: the selected container changed since the session was created; refresh the targets", ErrContainerNotFound)
+	}
+	return nil
+}
+
 // CloseApplication releases a container session on behalf of its owner.
 func (s *Service) CloseApplication(_ context.Context, userID, appID, sessionID uuid.UUID) error {
 	s.mu.Lock()

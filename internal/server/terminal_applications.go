@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/google/uuid"
 
@@ -99,6 +100,16 @@ func mapTerminalTargetError(err error) error {
 		return fmt.Errorf("%w: %v", terminal.ErrInvalid, err)
 	default:
 		return err
+	}
+}
+
+// applicationTerminalAuth is the control-route chain for container terminal
+// discovery, creation and deletion: authentication, an interactive JWT session
+// (a scoped API token must never drive a shell), the team scope and the team
+// write gate. The WebSocket attach has its own in-band JWT check.
+func (s *Server) applicationTerminalAuth() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return s.withTeam()(s.requireInteractiveSession(next))
 	}
 }
 

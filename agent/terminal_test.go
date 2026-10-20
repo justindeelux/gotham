@@ -190,8 +190,11 @@ func TestTerminalOpenValidation(t *testing.T) {
 		want codes.Code
 	}{
 		{"unsupported target", &agentv1.TerminalOpen{Target: "docker", Root: rootName, Cols: 80, Rows: 24}, codes.InvalidArgument},
-		{"container exec not configured", &agentv1.TerminalOpen{Target: "container", ContainerId: "abc123", Cols: 80, Rows: 24}, codes.FailedPrecondition},
+		{"container exec not configured", &agentv1.TerminalOpen{Target: "container", ContainerId: testContainerID, Cols: 80, Rows: 24}, codes.FailedPrecondition},
 		{"missing container id", &agentv1.TerminalOpen{Target: "container", Cols: 80, Rows: 24}, codes.InvalidArgument},
+		{"container name", &agentv1.TerminalOpen{Target: "container", ContainerId: "web", Cols: 80, Rows: 24}, codes.InvalidArgument},
+		{"short container id", &agentv1.TerminalOpen{Target: "container", ContainerId: "abc123def456", Cols: 80, Rows: 24}, codes.InvalidArgument},
+		{"upper-case container id", &agentv1.TerminalOpen{Target: "container", ContainerId: "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef", Cols: 80, Rows: 24}, codes.InvalidArgument},
 		{"zero columns", &agentv1.TerminalOpen{Target: "host", Root: rootName, Cols: 0, Rows: 24}, codes.InvalidArgument},
 		{"huge rows", &agentv1.TerminalOpen{Target: "host", Root: rootName, Cols: 80, Rows: 1001}, codes.InvalidArgument},
 		{"missing root", &agentv1.TerminalOpen{Target: "host", Cols: 80, Rows: 24}, codes.InvalidArgument},

@@ -543,6 +543,12 @@ func (h *handler) attachApplication(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, apiError{Message: "application write access is required"})
 		return
 	}
+	// A container replaced during the pending window (or a deploy that started
+	// after create) must not attach to the old release.
+	if err := h.svc.RevalidateApplicationTarget(r.Context(), userID, appID, pending); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
 
 	var session *Session
 	server := websocket.Server{

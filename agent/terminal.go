@@ -402,19 +402,16 @@ func (s *TerminalServer) prepareContainer(open *agentv1.TerminalOpen) (terminalS
 	return terminalStart{Target: terminalTargetContainer, ContainerID: containerID, Shell: shell, Cols: cols, Rows: rows}, nil
 }
 
-// validContainerID bounds the id the control plane resolved. Docker ids are
-// hexadecimal; the extra separators keep the check forward-compatible without
-// accepting whitespace or shell metacharacters.
+// validContainerID requires the full lowercase hexadecimal Docker id the
+// control plane resolves. Names, short prefixes and upper-case spellings are
+// refused so the agent never resolves an ambiguous or caller-chosen name.
 func validContainerID(id string) bool {
-	if len(id) == 0 || len(id) > 128 {
+	if len(id) != 64 {
 		return false
 	}
 	for i := 0; i < len(id); i++ {
 		c := id[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == '_', c == '.', c == ':', c == '-':
-		default:
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}
@@ -523,13 +520,14 @@ func (s *TerminalServer) startContainer(ctx context.Context, spec terminalStart)
 	if err != nil {
 		return nil, err
 	}
-	return &containerTerminalSession{stream: stream, ctx: ctx, done: make(chan struct{})}, nil
+	return &containerTerminalSession{stream: stream, ctx: ctx, log: s.log, done: make(chan struct{})}, nil
 }
 
 // containerTerminalSession adapts one Docker exec to terminalProcess.
 type containerTerminalSession struct {
 	stream ExecSession
 	ctx    context.Context
+	log    *slog.Logger
 
 	termOnce sync.Once
 	waitOnce sync.Once
@@ -541,10 +539,26 @@ type containerTerminalSession struct {
 // read reads the exec process's output.
 func (s *containerTerminalSession) read(p []byte) (int, error) { return s.stream.Read(p) }
 
-// write sends input to the exec process.
+// write sends input to the exec process with a bounded wait. The hijacked
+// Docker stream exposes no write deadline, so a wedged container can otherwise
+// block the handler, which would also make it deaf to context cancellation.
+// The stream is closed on timeout to unblock the writer.
 func (s *containerTerminalSession) write(data []byte) error {
-	_, err := s.stream.Write(data)
-	return err
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.stream.Write(data)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(terminalWriteTimeout):
+		_ = s.stream.Close()
+		return errors.New("terminal: writing to the container timed out")
+	case <-s.ctx.Done():
+		_ = s.stream.Close()
+		return s.ctx.Err()
+	}
 }
 
 // resize applies a new window size to the container TTY.
@@ -552,10 +566,18 @@ func (s *containerTerminalSession) resize(cols, rows uint16) error {
 	return s.stream.Resize(s.ctx, cols, rows)
 }
 
-// terminate releases the exec attachment. The application container keeps
-// running: only the interactive process goes away.
+// terminate ends the exec process tree and releases the attachment. Closing
+// the hijacked connection alone does not stop the container process, so the
+// explicit Kill runs first with a detached, bounded context (the terminal
+// stream's context is usually already cancelled on this path). The application
+// container keeps running: only the interactive process and its jobs go away.
 func (s *containerTerminalSession) terminate() {
 	s.termOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), terminalStopWait)
+		if err := s.stream.Kill(ctx); err != nil && s.log != nil {
+			s.log.Warn("terminal: container exec cleanup failed", "error", err)
+		}
+		cancel()
 		_ = s.stream.Close()
 	})
 }

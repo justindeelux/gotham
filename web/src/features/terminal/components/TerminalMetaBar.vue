@@ -4,7 +4,7 @@ import { NButton, NPopover } from "naive-ui";
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
-import QuickCommandPanel from "@/features/terminal/components/QuickCommandPanel.vue";
+import QuickCommandsModal from "@/features/terminal/components/QuickCommandsModal.vue";
 import TerminalThemeMenu from "@/features/terminal/components/TerminalThemeMenu.vue";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
@@ -14,9 +14,9 @@ import {
 } from "@/features/terminal/utils/terminal";
 
 /**
- * Terminal meta bar (JUS-249 extraction): target/cwd/session chips, the
- * shortcuts popover, the quick-command popover, the theme menu, and page-mode
- * actions.
+ * Terminal meta bar (JUS-249, quick-command modal JUS-264): target/cwd/session
+ * chips, the shortcuts popover, the quick-command modal trigger, the theme
+ * menu, and page-mode actions.
  */
 interface Props {
   tab: TerminalTab;
@@ -24,7 +24,7 @@ interface Props {
 }
 
 const props = defineProps<Props>();
-const emit = defineEmits<{ inserted: [label: string] }>();
+const emit = defineEmits<{ inserted: [label: string]; "focus-terminal": [] }>();
 const { t } = useI18n();
 const terminal = useTerminalStore();
 
@@ -57,10 +57,14 @@ function closeTerminal(): void {
   terminal.requestClose([props.tab.id]);
 }
 
-/** onInserted closes the panel and lets the surface announce the insertion. */
+/** onInserted lets the surface announce the insertion. */
 function onInserted(label: string): void {
-  commandsOpen.value = false;
   emit("inserted", label);
+}
+
+/** onCommandsClosed restores keyboard focus to the shell after the modal. */
+function onCommandsClosed(): void {
+  emit("focus-terminal");
 }
 </script>
 
@@ -135,34 +139,25 @@ function onInserted(label: string): void {
         </p>
       </div>
     </NPopover>
-    <NPopover
-      v-model:show="commandsOpen"
-      trigger="click"
-      placement="bottom-end"
-      :duration="0"
-      :animated="false"
+    <NButton
+      quaternary
+      size="tiny"
+      class="term-commands-btn"
+      :aria-label="t('terminal.quickCommands.open')"
+      aria-haspopup="dialog"
+      :aria-expanded="commandsOpen"
+      @click.stop="commandsOpen = true"
     >
-      <template #trigger>
-        <NButton
-          quaternary
-          size="tiny"
-          class="term-commands-btn"
-          :aria-label="t('terminal.quickCommands.open')"
-          @click.stop
-        >
-          <template #icon>
-            <BookMarked :size="14" :stroke-width="1.8" aria-hidden="true" />
-          </template>
-        </NButton>
+      <template #icon>
+        <BookMarked :size="14" :stroke-width="1.8" aria-hidden="true" />
       </template>
-      <QuickCommandPanel
-        :tab-id="props.tab.id"
-        :shell="props.tab.shell"
-        :integration-detected="props.tab.integrationDetected"
-        :alternate-screen="props.tab.alternateScreen"
-        @inserted="onInserted"
-      />
-    </NPopover>
+    </NButton>
+    <QuickCommandsModal
+      v-model:show="commandsOpen"
+      :tab-id="props.tab.id"
+      @inserted="onInserted"
+      @closed="onCommandsClosed"
+    />
     <span class="grow" />
     <TerminalThemeMenu />
     <template v-if="props.variant === 'page'">

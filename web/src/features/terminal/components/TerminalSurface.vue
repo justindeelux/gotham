@@ -101,6 +101,11 @@ function onMetaInserted(label: string): void {
   void nextTick(() => terminal.focus(props.tabId));
 }
 
+/** onMetaClosed returns focus to the shell after the quick-command modal. */
+function onMetaClosed(): void {
+  void nextTick(() => terminal.focus(props.tabId));
+}
+
 /** onCompositionStart suspends suggestions during IME composition. */
 function onCompositionStart(): void {
   terminal.setComposing(props.tabId, true);
@@ -252,7 +257,12 @@ watch(
     @compositionstart.capture="onCompositionStart"
     @compositionend.capture="onCompositionEnd"
   >
-    <TerminalMetaBar :tab="tab" :variant="variant" @inserted="onMetaInserted" />
+    <TerminalMetaBar
+      :tab="tab"
+      :variant="variant"
+      @inserted="onMetaInserted"
+      @focus-terminal="onMetaClosed"
+    />
 
     <p :id="hintId" class="term-sr">
       {{ t("terminal.shortcuts.hint") }}
@@ -262,6 +272,7 @@ watch(
       :suggestion="suggestion"
       :notice="commandNotice"
       :has-abbreviations="hasAbbreviations"
+      :prompt-marks-detected="tab.integrationDetected"
       @accept="acceptSuggestion"
       @dismiss="dismissSuggestion"
       @dismiss-notice="commandNotice = ''"

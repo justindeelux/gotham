@@ -48,7 +48,11 @@ const { t } = useI18n();
           <Pencil :size="13" :stroke-width="1.8" aria-hidden="true" />
         </template>
       </NButton>
-      <NPopconfirm @positive-click="emit('delete')">
+      <NPopconfirm
+        :positive-text="t('terminal.quickCommands.delete')"
+        :negative-text="t('terminal.quickCommands.cancel')"
+        @positive-click="emit('delete')"
+      >
         <template #trigger>
           <NButton
             quaternary

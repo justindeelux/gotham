@@ -1,7 +1,7 @@
 // JUS-249 UI: the quick-command editor and the abbreviation suggestion strip.
 // The runtime is a faithful fake that records every accept/insert call, so the
 // tests assert the action target and that no path presses Enter on its own.
-/* global document:readonly, HTMLElement:readonly, KeyboardEvent:readonly, navigator:readonly, window:readonly */
+/* global document:readonly, HTMLElement:readonly, KeyboardEvent:readonly, Event:readonly, HTMLButtonElement:readonly, HTMLInputElement:readonly, HTMLTextAreaElement:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -110,8 +110,8 @@ const { useQuickCommandsStore } = await import(
 const { default: TerminalSurface } = await import(
   "../src/features/terminal/components/TerminalSurface.vue"
 );
-const { default: QuickCommandPanel } = await import(
-  "../src/features/terminal/components/QuickCommandPanel.vue"
+const { default: QuickCommandsModal } = await import(
+  "../src/features/terminal/components/QuickCommandsModal.vue"
 );
 
 /** suggestionState builds one runtime suggestion snapshot. */
@@ -265,35 +265,59 @@ describe("terminal suggestion UI", () => {
     wrapper.unmount();
   });
 
-  it("never shows the setup hint when prompt marks were seen", async () => {
-    const { wrapper, runtime } = await mountSurface();
-    runtime.emitSuggestion(suggestionState({ detected: true, suggestion: null }));
-    await flushPromises();
-    // The panel is teleported; open it and assert the hint is absent.
+  it("opens the quick-command manager as a modal from the meta bar", async () => {
+    const { wrapper } = await mountSurface();
+    expect(document.body.textContent).not.toContain(
+      i18n.global.t("terminal.quickCommands.title"),
+    );
+
     await wrapper.find(".term-commands-btn").trigger("click");
     await flushPromises();
-    expect(document.body.textContent).not.toContain(
-      i18n.global.t("terminal.quickCommands.hintTitle"),
+
+    // The modal is teleported to body and lists the empty state with the
+    // example that explains the feature. This assertion is the mutation
+    // target for "the button must open the modal".
+    expect(document.body.textContent).toContain(
+      i18n.global.t("terminal.quickCommands.title"),
     );
+    expect(document.body.textContent).toContain(
+      i18n.global.t("terminal.quickCommands.emptyExample", { shortcut: "dcup" }),
+    );
+    expect(document.querySelector(".term-quick-commands")).not.toBeNull();
+    wrapper.unmount();
+  });
+
+  it("shows a one-line hint instead of suggestions without prompt marks", async () => {
+    const { wrapper, runtime } = await mountSurface();
+    useQuickCommandsStore().add({
+      label: "Git status",
+      command: "git status",
+      abbreviation: "gs",
+    });
+    runtime.emitSuggestion(
+      suggestionState({ detected: false, suggestion: null }),
+    );
+    await flushPromises();
+
+    expect(document.body.textContent).toContain(
+      i18n.global.t("terminal.suggestions.noPromptMarks"),
+    );
+    // The override ships a plain one-line hint: no documentation snippet.
+    expect(document.querySelector(".qc-snippet")).toBeNull();
     wrapper.unmount();
   });
 });
 
-describe("quick command panel", () => {
-  /** mountPanel creates one session, seeds commands, and mounts the panel. */
-  async function mountPanel() {
+describe("quick command modal", () => {
+  /** mountModal creates one session and mounts the manager modal open. */
+  async function mountModal() {
     const terminal = useTerminalStore();
     const commands = useQuickCommandsStore();
-    // The panel is normally opened by a live tab; create one so insert has a
+    // The modal is normally opened by a live tab; create one so insert has a
     // real target.
     const tab = await terminal.openPageSession({ serverId: "server-1", serverName: "prod" });
-    const wrapper = mount(QuickCommandPanel, {
-      props: {
-        tabId: tab.id,
-        shell: "/bin/bash",
-        integrationDetected: false,
-        alternateScreen: false,
-      },
+    const wrapper = mount(QuickCommandsModal, {
+      props: { show: true, tabId: tab.id },
       attachTo: document.body,
       global: { plugins: [i18n] },
     });
@@ -301,18 +325,40 @@ describe("quick command panel", () => {
     return { wrapper, commands, runtime: runtimeFakes.instances[0]! };
   }
 
-  it("adds, edits and inserts a command without executing it", async () => {
-    const { wrapper, commands, runtime } = await mountPanel();
+  /** click finds one button by its visible text and clicks it. */
+  function click(text: string): void {
+    const button = [...document.querySelectorAll("button")].find((element) =>
+      element.textContent?.includes(text),
+    );
+    expect(button, `button ${text}`).toBeDefined();
+    button!.click();
+  }
 
-    await wrapper.find(".qc-add").trigger("click");
+  /** fill writes a value into a modal field. */
+  async function fill(selector: string, value: string): Promise<void> {
+    const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      selector,
+    );
+    expect(input, selector).not.toBeNull();
+    input!.value = value;
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
     await flushPromises();
-    const label = wrapper.find(".qc-form input");
-    await label.setValue("Deploy");
-    const textarea = wrapper.find(".qc-form textarea");
-    await textarea.setValue("docker compose up -d");
-    const abbreviation = wrapper.findAll(".qc-form input")[1]!;
-    await abbreviation.setValue("dcu");
-    await wrapper.find(".qc-form").trigger("submit");
+  }
+
+  it("adds, edits and inserts a command without executing it", async () => {
+    const { wrapper, commands, runtime } = await mountModal();
+
+    click("Add command");
+    await flushPromises();
+    await fill(".qc-form input", "Deploy");
+    await fill(".qc-form textarea", "docker compose up -d");
+    // The abbreviation input is the second text input in the form.
+    const inputs = document.querySelectorAll(".qc-form input");
+    expect(inputs.length).toBeGreaterThanOrEqual(2);
+    const abbreviation = inputs[1] as HTMLInputElement;
+    abbreviation.value = "dcu";
+    abbreviation.dispatchEvent(new Event("input", { bubbles: true }));
+    click("Save command");
     await flushPromises();
 
     expect(commands.commands).toHaveLength(1);
@@ -322,15 +368,22 @@ describe("quick command panel", () => {
       abbreviation: "dcu",
     });
 
-    await wrapper.find(".qc-insert").trigger("click");
+    click("Insert");
+    // Insertion is the exact reviewed text: acceptance never appends Enter.
     expect(runtime.inserted).toEqual(["docker compose up -d"]);
+    expect(runtime.inserted[0]).not.toContain("\r");
     expect(wrapper.emitted("inserted")?.at(-1)).toEqual(["Deploy"]);
+    expect(wrapper.emitted("update:show")?.at(-1)).toEqual([false]);
 
     // Edit reopens the same command and updates it in place.
-    await wrapper.findAll(".qc-actions button")[1]!.trigger("click");
+    const edit = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Edit Deploy"]',
+    );
+    expect(edit).not.toBeNull();
+    edit!.click();
     await flushPromises();
-    await wrapper.find(".qc-form input").setValue("Deploy prod");
-    await wrapper.find(".qc-form").trigger("submit");
+    await fill(".qc-form input", "Deploy prod");
+    click("Save command");
     await flushPromises();
     expect(commands.commands[0]!.label).toBe("Deploy prod");
 
@@ -338,16 +391,17 @@ describe("quick command panel", () => {
   });
 
   it("rejects a duplicate abbreviation and keeps the old list", async () => {
-    const { wrapper, commands } = await mountPanel();
+    const { wrapper, commands } = await mountModal();
     commands.add({ label: "Status", command: "git status", abbreviation: "gs" });
 
-    await wrapper.find(".qc-add").trigger("click");
+    click("Add command");
     await flushPromises();
-    await wrapper.find(".qc-form input").setValue("Other");
-    await wrapper.find(".qc-form textarea").setValue("git stash");
-    const abbreviation = wrapper.findAll(".qc-form input")[1]!;
-    await abbreviation.setValue("GS");
-    await wrapper.find(".qc-form").trigger("submit");
+    await fill(".qc-form input", "Other");
+    await fill(".qc-form textarea", "git stash");
+    const abbreviation = document.querySelectorAll(".qc-form input")[1] as HTMLInputElement;
+    abbreviation.value = "GS";
+    abbreviation.dispatchEvent(new Event("input", { bubbles: true }));
+    click("Save command");
     await flushPromises();
 
     // Naive shows the zod message; the store is untouched.
@@ -359,32 +413,43 @@ describe("quick command panel", () => {
   });
 
   it("refuses unsafe multiline insertion in a shell without bracketed paste", async () => {
-    const { wrapper, commands, runtime } = await mountPanel();
+    const { wrapper, commands, runtime } = await mountModal();
     commands.add({ label: "Multi", command: "echo one\necho two", abbreviation: "mm" });
     await flushPromises();
     runtime.insertCommand = () => ({ ok: false, failure: "multiline-no-paste" });
 
-    await wrapper.find(".qc-insert").trigger("click");
+    click("Insert");
+    await flushPromises();
     expect(document.body.textContent).toContain(
       i18n.global.t("terminal.quickCommands.insertMultiline"),
+    );
+    expect(wrapper.emitted("update:show")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("explains the feature with the dcup example when empty", async () => {
+    const { wrapper } = await mountModal();
+    expect(document.body.textContent).toContain(
+      i18n.global.t("terminal.quickCommands.emptyExample", { shortcut: "dcup" }),
     );
     wrapper.unmount();
   });
 
-  it("shows the copyable snippet only when no prompt marks were seen", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
-    const { wrapper } = await mountPanel();
-    expect(document.body.textContent).toContain(
-      i18n.global.t("terminal.quickCommands.hintTitle"),
-    );
-    expect(wrapper.find(".qc-snippet").text()).toContain("]133;B");
-    await wrapper.find(".qc-copy").trigger("click");
+  it("deletes a command after confirmation", async () => {
+    const { wrapper, commands } = await mountModal();
+    commands.add({ label: "Status", command: "git status", abbreviation: "gs" });
     await flushPromises();
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("]133;B"));
+
+    const remove = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Delete Status"]',
+    );
+    expect(remove).not.toBeNull();
+    remove!.click();
+    await flushPromises();
+    click("Delete");
+    await flushPromises();
+
+    expect(commands.commands).toHaveLength(0);
     wrapper.unmount();
   });
 });

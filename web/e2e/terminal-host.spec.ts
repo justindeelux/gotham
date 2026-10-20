@@ -21,6 +21,7 @@ import {
   installSession,
   loginFresh,
 } from "./terminal-support";
+import type { SocketLog } from "./terminal-support";
 
 /**
  * JUS-251 host-terminal journeys against the REAL stack.
@@ -81,6 +82,31 @@ async function openServerPage(page: import("@playwright/test").Page, name: strin
     page.getByRole("heading", { name: "Terminal", level: 1 }),
   ).toBeVisible();
   await pickServer(page, name);
+}
+
+/** openQuickCommands opens the JUS-264 manager modal from the meta bar. */
+async function openQuickCommands(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "Quick commands" }).click();
+  await expect(page.locator(".term-quick-commands")).toBeVisible();
+}
+
+/** addQuickCommand fills the modal's add form and saves one command. */
+async function addQuickCommand(
+  page: import("@playwright/test").Page,
+  command: { label: string; command: string; abbreviation: string },
+) {
+  const dialog = page.locator(".term-quick-commands");
+  await dialog.getByRole("button", { name: "Add command" }).click();
+  await dialog.locator(".qc-form input").first().fill(command.label);
+  await dialog.locator(".qc-form textarea").fill(command.command);
+  await dialog.locator(".qc-form input").nth(1).fill(command.abbreviation);
+  await dialog.getByRole("button", { name: "Save command" }).click();
+  await expect(dialog.locator(".qc-item")).toContainText(command.label);
+}
+
+/** inputFrames returns the client input frames of one terminal socket. */
+function inputFrames(socket: SocketLog): string[] {
+  return socket.frames.filter((frame) => frame.opcode === 0x01).map((frame) => frame.text);
 }
 
 test.describe("host terminal on the real stack", () => {
@@ -330,6 +356,121 @@ test.describe("host terminal on the real stack", () => {
     await expect(page.getByText("Session ended")).toBeVisible();
   });
 
+  test("the quick-commands modal adds, edits, deletes and inserts without Enter", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90_000);
+    const server = await requireTerminalNode(request);
+    const traffic = watchTerminal(page);
+
+    await openServerPage(page, server.name);
+    await waitForCreate(traffic);
+    await expectBanner(page, server.name);
+
+    // JUS-264: the button opens one bounded dialog, not a floating popover.
+    await openQuickCommands(page);
+    const dialog = page.locator(".term-quick-commands");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("dcup");
+
+    await addQuickCommand(page, {
+      label: "Deploy",
+      command: "docker-compose up -d --build",
+      abbreviation: "dcup",
+    });
+    await expect(dialog.locator(".qc-item")).toHaveCount(1);
+    await expect(dialog).toContainText("docker-compose up -d --build");
+    await expect(dialog.locator(".qc-item .n-tag")).toContainText("dcup");
+
+    // The Insert path sends the exact reviewed bytes, never Enter, and hands
+    // focus back to the shell.
+    const socket = traffic.currentSocket();
+    const before = inputFrames(socket).length;
+    await dialog
+      .getByRole("button", { name: "Insert Deploy into the terminal" })
+      .click();
+    await expect.poll(() => inputFrames(socket).length).toBe(before + 1);
+    const inserted = inputFrames(socket).at(-1)!;
+    expect(inserted).toBe("docker-compose up -d --build");
+    expect(inserted).not.toContain("\r");
+    await expect(dialog).toBeHidden();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            document.activeElement?.classList.contains("xterm-helper-textarea") ??
+            false,
+        ),
+      )
+      .toBe(true);
+
+    // Edit keeps the same row and updates the label in place.
+    await openQuickCommands(page);
+    await dialog.getByRole("button", { name: "Edit Deploy" }).click();
+    await dialog.locator(".qc-form input").first().fill("Deploy stack");
+    await dialog.getByRole("button", { name: "Save command" }).click();
+    await expect(dialog.locator(".qc-item")).toContainText("Deploy stack");
+
+    // Delete asks first, then removes the row.
+    await dialog.getByRole("button", { name: "Delete Deploy stack" }).click();
+    await page
+      .locator(".n-popconfirm")
+      .getByRole("button", { name: "Delete", exact: true })
+      .click();
+    await expect(dialog.locator(".qc-item")).toHaveCount(0);
+    await expect(dialog).toContainText("dcup");
+
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test("a phone viewport keeps the modal bounded, focus-trapped and Escape returns to the shell", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90_000);
+    const server = await requireTerminalNode(request);
+    const traffic = watchTerminal(page);
+
+    await openServerPage(page, server.name);
+    await waitForCreate(traffic);
+    await expectBanner(page, server.name);
+
+    await page.setViewportSize({ width: 390, height: 800 });
+    await openQuickCommands(page);
+    const dialog = page.locator(".term-quick-commands");
+    await expect(dialog).toBeVisible();
+    const box = await dialog.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.width).toBeLessThanOrEqual(390);
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(800);
+    await expect(dialog.getByRole("button", { name: "Add command" })).toBeVisible();
+
+    // Tab cycles inside the dialog: the trap never lets focus escape.
+    for (let index = 0; index < 12; index += 1) {
+      await page.keyboard.press("Tab");
+      const inside = await page.evaluate(
+        () => document.activeElement?.closest(".term-quick-commands") !== null,
+      );
+      expect(inside).toBe(true);
+    }
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            document.activeElement?.classList.contains("xterm-helper-textarea") ??
+            false,
+        ),
+      )
+      .toBe(true);
+  });
+
   test("a real bash prompt mark drives a saved quick-command suggestion", async ({
     page,
     context,
@@ -343,16 +484,15 @@ test.describe("host terminal on the real stack", () => {
     await waitForCreate(traffic);
     await expectBanner(page, server.name);
 
-    // Save a command through the real UI; it is browser-local to this account.
-    await page.getByRole("button", { name: "Quick commands" }).click();
-    await page.getByRole("button", { name: "Add command" }).click();
-    await page.getByPlaceholder("Deploy API").fill("E2E quick command");
-    await page
-      .getByPlaceholder("docker compose up -d")
-      .fill("echo QUICK-$((6*7))");
-    await page.getByPlaceholder("dcu").fill("dcu");
-    await page.getByRole("button", { name: "Save command" }).click();
-    await page.keyboard.press("Escape");
+    // Save the ticket's example through the real modal; it is browser-local
+    // to this account.
+    await openQuickCommands(page);
+    await addQuickCommand(page, {
+      label: "Docker Compose up",
+      command: "docker-compose up -d --build",
+      abbreviation: "dcup",
+    });
+    await page.locator(".term-quick-commands").getByRole("button", { name: "Done" }).click();
 
     // A real shell emits OSC 133 A/B at every prompt when its rc enables
     // shell integration. Emit the same marks from the live bash prompt so the
@@ -360,21 +500,35 @@ test.describe("host terminal on the real stack", () => {
     await runCommand(context, page, "printf '\\033]133;A\\007\\033]133;B\\007'");
     await page.waitForTimeout(500);
     await focusTerminal(page);
-    await typeReal(context, page, "dcu");
+    const socket = traffic.currentSocket();
+    const beforeTyping = inputFrames(socket).length;
+    await typeReal(context, page, "dcup");
 
     const option = page.getByRole("option");
     await expect(option).toBeVisible();
-    await expect(option).toContainText("E2E quick command");
-    await expect(option).toContainText("echo QUICK-$((6*7))");
+    await expect(option).toContainText("Docker Compose up");
+    await expect(option).toContainText("docker-compose up -d --build");
+
+    // Accepting replaces the typed abbreviation with the command and never
+    // presses Enter: one frame, exactly delete ×4 + the reviewed text.
+    const beforeAccept = inputFrames(socket).length;
+    expect(beforeAccept).toBe(beforeTyping + 4);
     await option.click();
-    // Accepting replaces the abbreviation without running it.
+    await expect.poll(() => inputFrames(socket).length).toBe(beforeAccept + 1);
+    const accepted = inputFrames(socket).at(-1)!;
+    expect(accepted).toBe("\x7f\x7f\x7f\x7fdocker-compose up -d --build");
+    expect(accepted).not.toContain("\r");
     await expect
-      .poll(async () => (await screenText(page)).includes("echo QUICK-$((6*7))"))
+      .poll(async () => (await screenText(page)).includes("docker-compose up -d --build"))
       .toBe(true);
-    await pressEnter(page);
-    await expect
-      .poll(async () => (await screenText(page)).includes("QUICK-42"))
-      .toBe(true);
+
+    // Enter was never sent until the user asks for it: no frame after typing
+    // began (and no acceptance frame) carries CR.
+    expect(
+      inputFrames(socket)
+        .slice(beforeTyping)
+        .some((frame) => frame.includes("\r")),
+    ).toBe(false);
   });
 
   test("signing out with a live shell asks to close it and Cancel keeps the PTY", async ({

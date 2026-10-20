@@ -184,8 +184,10 @@ const vi = {
     insertLabel: "Chèn {label} vào terminal",
     editLabel: "Sửa {label}",
     deleteLabel: "Xóa {label}",
+    delete: "Xóa",
     save: "Lưu lệnh",
     cancel: "Hủy",
+    done: "Xong",
     label: "Nhãn",
     labelPlaceholder: "Deploy API",
     command: "Lệnh",
@@ -195,6 +197,8 @@ const vi = {
     abbreviationHint:
       "Gõ tại dấu nhắc được hỗ trợ để thấy lệnh. Chỉ dùng chữ, số, dấu chấm, gạch ngang và gạch dưới.",
     empty: "Chưa có lệnh nào được lưu.",
+    emptyExample:
+      "Ví dụ: lưu `docker-compose up -d --build` với viết tắt {shortcut}, gõ {shortcut} tại dấu nhắc rồi chấp nhận gợi ý.",
     storageNote:
       "Được lưu trong trình duyệt này cho tài khoản này. Không mã hóa — không lưu bí mật.",
     saveFailed:
@@ -210,15 +214,6 @@ const vi = {
     insertEmpty: "Lệnh trống; không có gì được chèn.",
     insertUnavailable: "Terminal chưa sẵn sàng; không có gì được chèn.",
     dismissNotice: "Bỏ qua",
-    hintTitle: "Gợi ý viết tắt đang tắt",
-    hintBody:
-      "Shell này không phát dấu nhắc. Hãy thêm đoạn mã tùy chọn vào tệp rc của shell; Gotham không bao giờ tự chèn vào shell.",
-    hintAlternate:
-      "Ứng dụng toàn màn hình đang hoạt động; gợi ý sẽ tắt cho đến khi dấu nhắc shell trở lại.",
-    hintUnsupported:
-      "Gợi ý tự động hỗ trợ bash và zsh. Chèn thủ công hoạt động với mọi shell.",
-    copySnippet: "Sao chép đoạn mã",
-    copied: "Đã sao chép",
     validation: {
       labelRequired: "Hãy đặt nhãn cho lệnh này.",
       labelTooLong: "Nhãn tối đa 64 ký tự.",
@@ -244,6 +239,7 @@ const vi = {
     hint: "Ctrl+Shift+Space để chọn · Esc để bỏ qua",
     placeholder: "Gõ viết tắt để chèn một lệnh đã lưu.",
     placeholderEmpty: "Lưu lệnh nhanh có viết tắt để thấy gợi ý tại đây.",
+    noPromptMarks: "Shell này không báo dấu nhắc nên phím tắt không thể gợi ý lệnh.",
     choose: "Chọn",
     dismiss: "Bỏ qua gợi ý",
   },

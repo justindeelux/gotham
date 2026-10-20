@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -31,6 +32,7 @@ type AuthService interface {
 	UpdateProfile(ctx context.Context, userID uuid.UUID, displayName *string) (*auth.User, error)
 	ChangePassword(ctx context.Context, userID uuid.UUID, current, newPassword string, meta auth.SessionMeta) (*auth.AuthResult, error)
 	ListSessions(ctx context.Context, userID, currentSessionID uuid.UUID) ([]auth.SessionInfo, error)
+	SessionSignInAt(ctx context.Context, userID, sessionID uuid.UUID) (time.Time, bool, error)
 	RevokeSession(ctx context.Context, userID, id uuid.UUID) error
 	RevokeOtherSessions(ctx context.Context, userID, currentSessionID uuid.UUID) error
 	VerifyAccessToken(token string) (*auth.Claims, error)

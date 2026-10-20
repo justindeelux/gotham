@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // maxUserAgentLength bounds the stored User-Agent in characters (PF-2).
@@ -102,6 +104,31 @@ func (s *Service) ListSessions(ctx context.Context, userID, currentSessionID uui
 		out = append(out, info)
 	}
 	return out, nil
+}
+
+// SessionSignInAt resolves the sign-in lineage (created_at) of one session
+// row, including a row that refresh-token rotation has already revoked: those
+// rows stay on record for the reuse-detection window, while logout and
+// password reset delete them. The lookup is scoped to userID, so another
+// account's sid resolves to nothing. found is false when no row exists; the
+// caller must then refuse rather than guess.
+//
+// The terminal attach path uses this to authorize a pre-rotation access token
+// whose sid is no longer live: it matches the resolved lineage against the
+// user's live sessions, exactly as revalidation does. An unrelated second
+// sign-in therefore never authorizes the stale token.
+func (s *Service) SessionSignInAt(ctx context.Context, userID, sessionID uuid.UUID) (signInAt time.Time, found bool, err error) {
+	if userID == uuid.Nil || sessionID == uuid.Nil {
+		return time.Time{}, false, nil
+	}
+	signInAt, err = s.store.SessionSignInAt(ctx, pgUUID(sessionID), pgUUID(userID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, fmt.Errorf("auth: session sign-in: %w", err)
+	}
+	return signInAt, true, nil
 }
 
 // RevokeSession ends one of the caller's sessions by deleting its row, like

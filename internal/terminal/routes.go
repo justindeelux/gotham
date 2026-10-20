@@ -57,10 +57,14 @@ type Marker struct {
 //     error is retried, failing closed only after several consecutive errors.
 //
 // Authorize must refuse a token that carries no session id: without a sid there
-// is no lineage a logout could revoke. target tells the authorizer which
-// capability the session needs: a host authorizer must refuse a container
-// target and an application authorizer must refuse a host target, so the two
-// permissions never imply each other.
+// is no lineage a logout could revoke. A token whose sid row refresh rotation
+// already revoked is still accepted while its sign-in lineage (the row's
+// created_at) has a live session, matching what Revalidate keeps alive; a row
+// deleted by logout, revoke-session or password reset, and a revoked family
+// with no live row, are refused. target tells the authorizer which capability
+// the session needs: a host authorizer must refuse a container target and an
+// application authorizer must refuse a host target, so the two permissions
+// never imply each other.
 type Authorizer interface {
 	Authorize(ctx context.Context, claims *auth.Claims, target Target) (Marker, error)
 	Revalidate(ctx context.Context, claims *auth.Claims, marker Marker, target Target) (bool, error)

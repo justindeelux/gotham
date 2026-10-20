@@ -62,8 +62,13 @@ type rotatingAuth struct {
 	mu       sync.Mutex
 	user     *auth.User
 	sessions []auth.SessionInfo
-	meErr    error
-	listErr  error
+	// lineages keeps the created_at of every row that still exists, including
+	// revoked rows left behind by rotation or revoke-all. Logout removes the
+	// entry because it deletes the row, like the real store.
+	lineages   map[uuid.UUID]time.Time
+	meErr      error
+	listErr    error
+	lineageErr error
 }
 
 func (r *rotatingAuth) Me(context.Context, uuid.UUID) (*auth.User, error) {
@@ -89,12 +94,27 @@ func (r *rotatingAuth) ListSessions(context.Context, uuid.UUID, uuid.UUID) ([]au
 	return out, nil
 }
 
+func (r *rotatingAuth) SessionSignInAt(_ context.Context, _ uuid.UUID, sessionID uuid.UUID) (time.Time, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lineageErr != nil {
+		return time.Time{}, false, r.lineageErr
+	}
+	signInAt, ok := r.lineages[sessionID]
+	return signInAt, ok, nil
+}
+
 func (r *rotatingAuth) rotate(oldID, newID uuid.UUID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.lineages == nil {
+		r.lineages = make(map[uuid.UUID]time.Time)
+	}
 	for i := range r.sessions {
 		if r.sessions[i].ID == oldID {
+			r.lineages[oldID] = r.sessions[i].CreatedAt
 			r.sessions[i].ID = newID
+			r.lineages[newID] = r.sessions[i].CreatedAt
 			return
 		}
 	}
@@ -110,12 +130,25 @@ func (r *rotatingAuth) logout(id uuid.UUID) {
 		}
 	}
 	r.sessions = kept
+	delete(r.lineages, id)
+}
+
+// revokeAll models reuse detection or revoke-all: every live row is revoked
+// and therefore leaves the live list, but the rows stay on record.
+func (r *rotatingAuth) revokeAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sessions = nil
 }
 
 func (r *rotatingAuth) addSession(id uuid.UUID, createdAt time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions = append(r.sessions, auth.SessionInfo{ID: id, CreatedAt: createdAt})
+	if r.lineages == nil {
+		r.lineages = make(map[uuid.UUID]time.Time)
+	}
+	r.lineages[id] = createdAt
 }
 
 func (r *rotatingAuth) setMeErr(err error) {
@@ -130,12 +163,19 @@ func (r *rotatingAuth) setListErr(err error) {
 	r.listErr = err
 }
 
+func (r *rotatingAuth) setLineageErr(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lineageErr = err
+}
+
 func newRotatingAuthorizer(t *testing.T, user *auth.User, signIn time.Time) (*rotatingAuth, terminalAuthorizer, uuid.UUID) {
 	t.Helper()
 	sessionID := uuid.New()
 	store := &rotatingAuth{
 		user:     user,
 		sessions: []auth.SessionInfo{{ID: sessionID, CreatedAt: signIn}},
+		lineages: map[uuid.UUID]time.Time{sessionID: signIn},
 	}
 	return store, terminalAuthorizer{auth: store, isPlatformAdminEmail: func(string) bool { return false }}, sessionID
 }
@@ -184,6 +224,92 @@ func TestTerminalAuthorizerSurvivesSessionRotation(t *testing.T) {
 	ok, err = authorizer.Revalidate(context.Background(), claims, marker, hostTarget())
 	if err != nil || ok {
 		t.Fatalf("after logout = (%v, %v), want (false, nil)", ok, err)
+	}
+	// The same deleted lineage must not authorize a fresh attach either, even
+	// though the decoy sign-in is still live.
+	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err == nil {
+		t.Fatal("a logged-out lineage authorized attach while another sign-in was live")
+	}
+}
+
+// TestTerminalAuthorizerAcceptsPreRotationToken is the JUS-258 regression: the
+// tab that did not refresh still holds the access token minted before another
+// tab rotated the refresh token, so its sid row is revoked while the sign-in
+// lineage is alive. Attach must accept it, exactly like Revalidate does.
+func TestTerminalAuthorizerAcceptsPreRotationToken(t *testing.T) {
+	t.Setenv("PLATFORM_ADMINS", "")
+	userID := uuid.New()
+	signIn := time.Now().UTC().Truncate(time.Microsecond)
+	store, authorizer, oldSessionID := newRotatingAuthorizer(t,
+		&auth.User{Email: "op@example.com", Role: "admin"}, signIn)
+	claims := authorizerClaims(userID, oldSessionID)
+
+	// Another tab refreshes: the presented row is revoked, a replacement with
+	// the same sign-in created_at becomes live.
+	replacementID := uuid.New()
+	store.rotate(oldSessionID, replacementID)
+
+	marker, err := authorizer.Authorize(context.Background(), claims, hostTarget())
+	if err != nil {
+		t.Fatalf("Authorize with a pre-rotation token: %v", err)
+	}
+	if !marker.SignInAt.Equal(signIn) {
+		t.Fatalf("marker = %s, want %s", marker.SignInAt, signIn)
+	}
+	if ok, err := authorizer.Revalidate(context.Background(), claims, marker, hostTarget()); err != nil || !ok {
+		t.Fatalf("revalidate after attach = (%v, %v), want (true, nil)", ok, err)
+	}
+}
+
+// TestTerminalAuthorizerRefusesPreRotationTokenOfRevokedFamily proves the
+// lineage, not the sid, is the authority: when reuse detection revokes every
+// live session the retained revoked row resolves but no live row matches it,
+// so a pre-rotation token is refused.
+func TestTerminalAuthorizerRefusesPreRotationTokenOfRevokedFamily(t *testing.T) {
+	t.Setenv("PLATFORM_ADMINS", "")
+	userID := uuid.New()
+	signIn := time.Now().UTC().Truncate(time.Microsecond)
+	store, authorizer, oldSessionID := newRotatingAuthorizer(t,
+		&auth.User{Email: "op@example.com", Role: "admin"}, signIn)
+	claims := authorizerClaims(userID, oldSessionID)
+	store.rotate(oldSessionID, uuid.New())
+	store.revokeAll()
+
+	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err == nil {
+		t.Fatal("a revoked family authorized a pre-rotation token")
+	}
+}
+
+// TestTerminalAuthorizerRefusesPreRotationTokenOfDeletedRow proves a sid row
+// deleted by logout or a password reset cannot resolve a lineage at all.
+func TestTerminalAuthorizerRefusesPreRotationTokenOfDeletedRow(t *testing.T) {
+	t.Setenv("PLATFORM_ADMINS", "")
+	userID := uuid.New()
+	signIn := time.Now().UTC().Truncate(time.Microsecond)
+	store, authorizer, sessionID := newRotatingAuthorizer(t,
+		&auth.User{Email: "op@example.com", Role: "admin"}, signIn)
+	claims := authorizerClaims(userID, sessionID)
+	store.logout(sessionID)
+
+	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err == nil {
+		t.Fatal("a deleted session row authorized attach")
+	}
+}
+
+// TestTerminalAuthorizerLineageLookupFailure keeps a database failure a
+// transient error rather than a definitive refusal of attach.
+func TestTerminalAuthorizerLineageLookupFailure(t *testing.T) {
+	t.Setenv("PLATFORM_ADMINS", "")
+	userID := uuid.New()
+	signIn := time.Now().UTC().Truncate(time.Microsecond)
+	store, authorizer, sessionID := newRotatingAuthorizer(t,
+		&auth.User{Email: "op@example.com", Role: "admin"}, signIn)
+	claims := authorizerClaims(userID, sessionID)
+	store.rotate(sessionID, uuid.New())
+	store.setLineageErr(errors.New("database is down"))
+
+	if _, err := authorizer.Authorize(context.Background(), claims, hostTarget()); err == nil {
+		t.Fatal("a transient lineage lookup failure was treated as success")
 	}
 }
 

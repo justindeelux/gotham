@@ -4569,7 +4569,13 @@ type CreateContainerRequest struct {
 	// control plane uses it for managed databases so readiness is an engine
 	// probe (the image's own ping tool run inside the container) rather than the
 	// bare container state. Empty leaves the image's own healthcheck (or none).
-	Healthcheck   *ContainerHealthcheck `protobuf:"bytes,11,opt,name=healthcheck,proto3" json:"healthcheck,omitempty"`
+	Healthcheck *ContainerHealthcheck `protobuf:"bytes,11,opt,name=healthcheck,proto3" json:"healthcheck,omitempty"`
+	// pids_limit, memory_bytes and nano_cpus bound the container's resources.
+	// Zero leaves Docker's default. They let a caller create a container that
+	// cannot exhaust the node (the terminal e2e safety harness uses them).
+	PidsLimit     int64 `protobuf:"varint,12,opt,name=pids_limit,json=pidsLimit,proto3" json:"pids_limit,omitempty"`
+	MemoryBytes   int64 `protobuf:"varint,13,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
+	NanoCpus      int64 `protobuf:"varint,14,opt,name=nano_cpus,json=nanoCpus,proto3" json:"nano_cpus,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4679,6 +4685,27 @@ func (x *CreateContainerRequest) GetHealthcheck() *ContainerHealthcheck {
 		return x.Healthcheck
 	}
 	return nil
+}
+
+func (x *CreateContainerRequest) GetPidsLimit() int64 {
+	if x != nil {
+		return x.PidsLimit
+	}
+	return 0
+}
+
+func (x *CreateContainerRequest) GetMemoryBytes() int64 {
+	if x != nil {
+		return x.MemoryBytes
+	}
+	return 0
+}
+
+func (x *CreateContainerRequest) GetNanoCpus() int64 {
+	if x != nil {
+		return x.NanoCpus
+	}
+	return 0
 }
 
 // ContainerHealthcheck is a container's native Docker healthcheck. test is the
@@ -6829,7 +6856,7 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\busername\x18\x02 \x01(\tR\busername\x12\x1a\n" +
 	"\bpassword\x18\x03 \x01(\tR\bpassword\"+\n" +
 	"\x11PullImageResponse\x12\x16\n" +
-	"\x06digest\x18\x01 \x01(\tR\x06digest\"\xc4\x03\n" +
+	"\x06digest\x18\x01 \x01(\tR\x06digest\"\xa3\x04\n" +
 	"\x16CreateContainerRequest\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +
@@ -6844,7 +6871,11 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\bnetworks\x18\t \x03(\tR\bnetworks\x12%\n" +
 	"\x0erestart_policy\x18\n" +
 	" \x01(\tR\rrestartPolicy\x12@\n" +
-	"\vhealthcheck\x18\v \x01(\v2\x1e.agent.v1.ContainerHealthcheckR\vhealthcheck\x1a9\n" +
+	"\vhealthcheck\x18\v \x01(\v2\x1e.agent.v1.ContainerHealthcheckR\vhealthcheck\x12\x1d\n" +
+	"\n" +
+	"pids_limit\x18\f \x01(\x03R\tpidsLimit\x12!\n" +
+	"\fmemory_bytes\x18\r \x01(\x03R\vmemoryBytes\x12\x1b\n" +
+	"\tnano_cpus\x18\x0e \x01(\x03R\bnanoCpus\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xca\x01\n" +

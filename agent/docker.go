@@ -573,14 +573,18 @@ const execWrapperCommand = `printf '%s\n' "$$"; exec "$@"`
 //   - every process whose parent chain reaches the shell (walked to a fixpoint,
 //     parsing /proc/<pid>/stat after the last ")" so TAB/space separators and
 //     spaces in the command name are irrelevant);
-//   - every process carrying the terminal's unique environment marker. This is
-//     what catches a job that called setsid or was reparented to pid 1 before
-//     the snapshot; a daemon that also scrubs its environment can still escape
-//     (documented limit).
+//   - every process whose readable environment carries the terminal's unique
+//     marker. This is what catches a job that called setsid or was reparented
+//     to pid 1 before the snapshot; a daemon that also scrubs its environment
+//     can still escape (documented limit). An unreadable environment is not a
+//     failure by itself: an attributed in-tree pid is still found through
+//     /proc/<pid>/stat, while an out-of-tree process cannot be attributed and
+//     is skipped.
 //
 // It then sends HUP/TERM/KILL with a short grace, ignores zombies, re-scans,
-// and exits non-zero with "survivors:<pids>" if anything remains. It never
-// signals pid 1 or itself and never uses kill -1 or pkill by name.
+// and exits non-zero with "marker-scan-unavailable" when it cannot inspect at
+// all or "survivors:<pids>" if an attributed process remains. It never signals
+// pid 1 or itself and never uses kill -1 or pkill by name.
 const execKillTreeScript = `root=$1
 marker=$2
 case "$root" in ''|*[!0-9]*) exit 2;; esac
@@ -610,19 +614,6 @@ parse_stat() {
   stat_state=$1
   stat_ppid=$2
   stat_sid=$4
-}
-marker_unreadable() {
-  marker_match "$1"
-  [ $? -eq 2 ] || return 1
-  sleep 0.05 2>/dev/null || :
-  marker_match "$1"
-  [ $? -eq 2 ] || return 1
-  if [ -O "$1" ] && read_stat "$1"; then
-    parse_stat "$stat_line"
-    [ "$stat_state" = "Z" ] && return 1
-    return 0
-  fi
-  return 1
 }
 marker_tools=""
 inspect_failed=""
@@ -664,15 +655,8 @@ if [ -n "$marker" ] && [ -n "$marker_tools" ]; then
     pid=${d#/proc/}
     [ "$pid" -gt 1 ] || continue
     [ "$pid" = "$$" ] && continue
-    if [ -r "$d/environ" ]; then
-      marker_match "$d"
-      case $? in
-        0) add_pid "$pid" ;;
-        2) if marker_unreadable "$d"; then inspect_failed=1; fi ;;
-      esac
-    elif marker_unreadable "$d"; then
-      inspect_failed=1
-    fi
+    [ -r "$d/environ" ] || continue
+    if marker_match "$d"; then add_pid "$pid"; fi
   done
 fi
 for sig in HUP TERM KILL; do
@@ -696,17 +680,12 @@ while [ "$attempt" -lt 5 ]; do
     read_stat "$d" || continue
     parse_stat "$stat_line"
     [ "$stat_state" = "Z" ] && continue
+    case " $list " in
+      *" $pid "*) survivors="$survivors $pid"; continue ;;
+    esac
     if [ "$stat_sid" = "$root" ]; then survivors="$survivors $pid"; continue; fi
-    if [ -n "$marker" ] && [ -n "$marker_tools" ]; then
-      if [ -r "$d/environ" ]; then
-        marker_match "$d"
-        case $? in
-          0) survivors="$survivors $pid" ;;
-          2) if marker_unreadable "$d"; then inspect_failed=1; fi ;;
-        esac
-      elif marker_unreadable "$d"; then
-        inspect_failed=1
-      fi
+    if [ -n "$marker" ] && [ -n "$marker_tools" ] && [ -r "$d/environ" ]; then
+      if marker_match "$d"; then survivors="$survivors $pid"; fi
     fi
   done
   if [ -z "$survivors" ] && [ -z "$inspect_failed" ]; then exit 0; fi
@@ -735,13 +714,6 @@ if ! command -v tr >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then
   echo "marker-scan-unavailable (no tr/grep)"
   exit 4
 fi
-read_stat() {
-  stat_line=""
-  { while IFS= read -r line || [ -n "$line" ]; do
-      stat_line="$stat_line$line "
-    done < "$1/stat"; } 2>/dev/null
-  [ -n "$stat_line" ]
-}
 marker_match() {
   marker_data=$({ tr '\0' '\n' < "$1/environ"; } 2>/dev/null) || return 2
   case "$marker_data" in
@@ -749,25 +721,6 @@ marker_match() {
     *) return 1 ;;
   esac
 }
-parse_stat() {
-  stat_rest=${1##*) }
-  set -- $stat_rest
-  stat_state=$1
-}
-marker_unreadable() {
-  marker_match "$1"
-  [ $? -eq 2 ] || return 1
-  sleep 0.05 2>/dev/null || :
-  marker_match "$1"
-  [ $? -eq 2 ] || return 1
-  if [ -O "$1" ] && read_stat "$1"; then
-    parse_stat "$stat_line"
-    [ "$stat_state" = "Z" ] && return 1
-    return 0
-  fi
-  return 1
-}
-inspect_failed=""
 list=""
 add_pid() {
   case " $list " in
@@ -779,15 +732,8 @@ for d in /proc/[0-9]*; do
   pid=${d#/proc/}
   [ "$pid" -gt 1 ] || continue
   [ "$pid" = "$$" ] && continue
-  if [ -r "$d/environ" ]; then
-    marker_match "$d"
-    case $? in
-      0) add_pid "$pid" ;;
-      2) if marker_unreadable "$d"; then inspect_failed=1; fi ;;
-    esac
-  elif marker_unreadable "$d"; then
-    inspect_failed=1
-  fi
+  [ -r "$d/environ" ] || continue
+  if marker_match "$d"; then add_pid "$pid"; fi
 done
 for sig in HUP TERM KILL; do
   for pid in $list; do
@@ -807,25 +753,13 @@ while [ "$attempt" -lt 5 ]; do
     pid=${d#/proc/}
     [ "$pid" -gt 1 ] || continue
     [ "$pid" = "$$" ] && continue
-    if [ -r "$d/environ" ]; then
-      marker_match "$d"
-      case $? in
-        0) survivors="$survivors $pid" ;;
-        2) if marker_unreadable "$d"; then inspect_failed=1; fi ;;
-      esac
-    elif marker_unreadable "$d"; then
-      inspect_failed=1
-    fi
+    [ -r "$d/environ" ] || continue
+    if marker_match "$d"; then survivors="$survivors $pid"; fi
   done
-  if [ -z "$survivors" ] && [ -z "$inspect_failed" ]; then exit 0; fi
+  [ -z "$survivors" ] && exit 0
   sleep 0.2 2>/dev/null || :
   attempt=$((attempt + 1))
 done
-if [ -n "$inspect_failed" ]; then
-  echo "marker-scan-unavailable"
-  [ -n "$survivors" ] && echo "survivors:$survivors"
-  exit 4
-fi
 echo "survivors:$survivors"
 exit 3`
 
@@ -1931,6 +1865,11 @@ type dockerHostConfig struct {
 	// NetworkMode pins the container to one network. The registry uses it to
 	// stay off the default bridge that workloads share.
 	NetworkMode string `json:"NetworkMode,omitempty"`
+	// Optional resource bounds. Zero values are omitted so Docker's defaults
+	// apply; the terminal e2e harness sets them to keep test containers safe.
+	PidsLimit int64 `json:"PidsLimit,omitempty"`
+	Memory    int64 `json:"Memory,omitempty"`
+	NanoCpus  int64 `json:"NanoCpus,omitempty"`
 }
 
 // dockerPort is one host-side port binding.
@@ -1984,7 +1923,11 @@ func buildCreateBody(req *agentv1.CreateContainerRequest) (*dockerCreateBody, er
 	if policy := strings.TrimSpace(req.GetRestartPolicy()); policy != "" {
 		host.RestartPolicy = &dockerRestartPolicy{Name: policy}
 	}
-	if len(host.Binds) > 0 || len(host.PortBindings) > 0 || host.RestartPolicy != nil {
+	host.PidsLimit = req.GetPidsLimit()
+	host.Memory = req.GetMemoryBytes()
+	host.NanoCpus = req.GetNanoCpus()
+	if len(host.Binds) > 0 || len(host.PortBindings) > 0 || host.RestartPolicy != nil ||
+		host.PidsLimit > 0 || host.Memory > 0 || host.NanoCpus > 0 {
 		body.HostConfig = host
 	}
 

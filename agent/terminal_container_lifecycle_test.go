@@ -52,9 +52,12 @@ func e2eContainerImage(t *testing.T, client *DockerClient, image string) string 
 		t.Logf("pull %s: %v (using a local image if present)", image, err)
 	}
 	id, err := client.RunImage(ctx, &agentv1.CreateContainerRequest{
-		Image:   image,
-		Name:    "gotham-exec-lifecycle-" + uuid.NewString()[:8],
-		Command: []string{"sleep", "600"},
+		Image:       image,
+		Name:        "gotham-exec-lifecycle-" + uuid.NewString()[:8],
+		Command:     []string{"sleep", "600"},
+		PidsLimit:   256,
+		MemoryBytes: 256 << 20,
+		NanoCpus:    1_000_000_000,
 	})
 	if err != nil {
 		t.Skipf("run throwaway %s container: %v", image, err)

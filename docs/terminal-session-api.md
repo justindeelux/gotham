@@ -318,7 +318,10 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   is interpolated into the script. When Docker already reports the exec as not
   `Running`, the agent skips the tree/session walk (the recorded pid may have
   been reused) and runs a marker-only helper, so orphaned jobs are still cleaned
-  up without touching an unrelated process.
+  up without touching an unrelated process. In that path only readable marker
+  holders are attributable; an unreadable same-uid orphan that inherited the
+  marker is a documented residual limit (the helper has no readable tree to
+  attribute it from once the shell is gone).
   The agent then verifies through Docker's exec inspect that the exec is no
   longer `Running`, and only then closes the attach connection and reports the
   exit status. If the helper cannot run or still reports survivors, the cleanup
@@ -326,12 +329,19 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   is never silently treated as success. If the helper cannot inspect markers at
   all (`tr`/`grep` missing or `/proc` absent), it exits non-zero with
   `marker-scan-unavailable` instead of claiming success, even if the
-  tree/session part did run. An unreadable `/proc/<pid>/environ` is treated the
-  same way only when that process is owned by the **same uid** as the terminal
-  (the process could carry our marker); an unreadable environment of a
-  **different uid** is skipped, because a process we cannot signal or inspect
-  cannot carry a marker we placed and must not turn every non-root close into a
-  false failure. The host
+  tree/session part did run. An unreadable `/proc/<pid>/environ` is **not** a
+  failure by itself. The helper attributes a process only when it is the
+  recorded root, in the root's session/process group, a descendant found
+  through the readable `/proc/<pid>/stat` fields, or a process whose readable
+  environment carries the terminal marker. A process outside that set — a
+  pre-existing worker, a different-uid process, or a daemon reparented to pid 1
+  that cannot be attributed — is skipped: it cannot be shown to carry our
+  marker, and a same-uid non-dumpable worker that predates the terminal must not
+  turn every close into a failure. Cleanup fails on **positive evidence**: an
+  attributed process is still alive after `SIGKILL`, Docker still reports the
+  exec `Running`, or the helper cannot inspect at all. An in-session non-dumpable
+  descendant is still attributed through `/proc/<pid>/stat` and killed; if it
+  survived the kill it would be reported as a survivor. The host
   child is always reaped (even when the opened event could not be sent), and a
   child that already exited is never signalled again. File descriptors,
   hijacked connections and goroutines are released on both sides.
@@ -355,10 +365,15 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   process can outlive the close; ordinary `nohup`, background, trapped and
   single-`setsid` jobs are covered. A command name made to contain a newline is
   still parsed correctly: the helper reads the whole `/proc/<pid>/stat` record,
-  not only its first line. A terminal user who uses `su`/`sudo` to switch to
-  another uid and leaves processes there is also outside the helper's reach: a
-  different-uid process cannot be inspected or signalled by a non-root helper,
-  so it is not reported and may outlive the close.
+  not only its first line. A same-uid non-dumpable process that predates the
+  terminal (for example a worker that dropped privileges) is not attributed and
+  is skipped; it cannot carry the terminal's marker. A terminal user who uses
+  `su`/`sudo` to switch to another uid and leaves processes there is also
+  outside the helper's reach: a process the helper does not own cannot be
+  inspected or signalled by a helper without `CAP_SYS_PTRACE`, so it is not
+  reported and may outlive the close. The marker-only path after the shell has
+  already exited has the same attribution limit for an unreadable same-uid
+  orphan.
 * **Agent failure / old agent** ends the stream with an error frame:
   `codes.Unimplemented` is reported as "the node agent does not support terminal
   sessions". The control plane never retries, reconnects or replays input.
@@ -510,11 +525,18 @@ start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /
   cap** (short `MaxDuration`) with no double-kill panic, run under `-race`;
 * a cleanup-failure case (`chmod -x /bin/sh` after the terminal opens) proving
   `Close` surfaces the failure instead of reporting success;
-* `marker-scan-unavailable` cases: no `tr`/`grep` in the image, and a
-  same-uid non-dumpable process (unreadable `/proc/<pid>/environ`);
-* a **non-root** terminal (`nobody`) sharing the container with a root-owned
-  process: the foreign-uid unreadable environment is skipped and `Close`
-  succeeds, while the unrelated root process keeps running;
+* `marker-scan-unavailable` when the image has no `tr`/`grep` or no `/proc`;
+* a **pre-existing** same-uid non-dumpable worker (a perl process that drops to
+  `nobody`, like an nginx/php-fpm worker) does not fail a nobody terminal's
+  Close and survives; an **in-tree** non-dumpable descendant is attributed via
+  `/proc/<pid>/stat` and killed;
+* a **non-root** terminal (`nobody`, numeric uid `2000`) sharing the container
+  with a root-owned process on alpine, busybox and debian: the foreign-uid
+  unreadable environment is skipped and `Close` succeeds, while the unrelated
+  root process keeps running;
+* **120 foreign-uid processes** with a nobody terminal: `Close` completes in
+  about 0.7 s, well inside the 8 s helper budget (the test asserts <4 s and
+  logs the elapsed time);
 * helper-output cleanliness while processes exit during the `/proc` scan, on
   alpine (ash) and debian (dash);
 * resize observed through `stty size`, Ctrl-C, and three open/close cycles.

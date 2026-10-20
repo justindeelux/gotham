@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Plus } from "@lucide/vue";
 import { NButton, NModal } from "naive-ui";
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import QuickCommandEditor from "@/features/terminal/components/QuickCommandEditor.vue";
@@ -61,6 +61,25 @@ function failureText(failure?: TerminalCommandFailure): string {
 /** close requests the modal to hide; after-leave owns focus restoration. */
 function close(): void {
   emit("update:show", false);
+}
+
+/**
+ * onWindowKeydown owns Escape while the modal is open. The editor gets the
+ * first Escape (the half-typed draft is discarded explicitly); a second
+ * Escape closes the modal. NModal's own close-on-esc is off so it cannot
+ * discard an in-progress form in one keystroke.
+ */
+function onWindowKeydown(event: KeyboardEvent): void {
+  if (!props.show || event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (showForm.value) {
+    resetForm();
+    return;
+  }
+  close();
 }
 
 /** startAdd opens a blank editor. */
@@ -136,6 +155,29 @@ watch(
     }
   },
 );
+
+// The capture listener only exists while the dialog is open, so Escape never
+// leaks into the shell or another surface after the modal closes.
+watch(
+  () => props.show,
+  (visible) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (visible) {
+      window.addEventListener("keydown", onWindowKeydown, true);
+      return;
+    }
+    window.removeEventListener("keydown", onWindowKeydown, true);
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  if (typeof window !== "undefined") {
+    window.removeEventListener("keydown", onWindowKeydown, true);
+  }
+});
 </script>
 
 <template>
@@ -148,7 +190,7 @@ watch(
     :mask-closable="false"
     :auto-focus="true"
     :trap-focus="true"
-    :close-on-esc="true"
+    :close-on-esc="false"
     @update:show="(value: boolean) => emit('update:show', value)"
     @after-leave="emit('closed')"
   >

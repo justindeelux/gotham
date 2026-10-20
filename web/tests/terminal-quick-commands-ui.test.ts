@@ -287,7 +287,32 @@ describe("terminal suggestion UI", () => {
     wrapper.unmount();
   });
 
-  it("shows a one-line hint instead of suggestions without prompt marks", async () => {
+  it("returns focus to the terminal when the modal closes (after-leave)", async () => {
+    const { wrapper, runtime } = await mountSurface();
+    const before = runtime.focused;
+    await wrapper.find(".term-commands-btn").trigger("click");
+    await flushPromises();
+
+    const done = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (element) =>
+        element.textContent?.includes(i18n.global.t("terminal.quickCommands.done")),
+    );
+    expect(done).toBeDefined();
+    done!.click();
+    await flushPromises();
+
+    // The hide went through the modal; jsdom has no CSS transition, so replay
+    // the `closed` event NModal emits on after-leave in a real browser.
+    const modal = wrapper.findComponent(QuickCommandsModal);
+    expect(modal.props("show")).toBe(false);
+    modal.vm.$emit("closed");
+    await flushPromises();
+
+    expect(runtime.focused).toBeGreaterThan(before);
+    wrapper.unmount();
+  });
+
+  it("does not flash the no-marks hint before the grace period", async () => {
     const { wrapper, runtime } = await mountSurface();
     useQuickCommandsStore().add({
       label: "Git status",
@@ -299,10 +324,21 @@ describe("terminal suggestion UI", () => {
     );
     await flushPromises();
 
-    expect(document.body.textContent).toContain(
+    // Right after connect a healthy shell may still be printing its prompt.
+    expect(document.body.textContent).not.toContain(
       i18n.global.t("terminal.suggestions.noPromptMarks"),
     );
-    // The override ships a plain one-line hint: no documentation snippet.
+
+    // A shell that never reports marks shows the one-line hint after the
+    // grace period; there is no documentation snippet.
+    await vi.waitFor(
+      () => {
+        expect(document.body.textContent).toContain(
+          i18n.global.t("terminal.suggestions.noPromptMarks"),
+        );
+      },
+      { timeout: 4_000, interval: 50 },
+    );
     expect(document.querySelector(".qc-snippet")).toBeNull();
     wrapper.unmount();
   });
@@ -343,6 +379,12 @@ describe("quick command modal", () => {
     input!.value = value;
     input!.dispatchEvent(new Event("input", { bubbles: true }));
     await flushPromises();
+  }
+
+  /** modalIsHidden reads the teleported card's v-show state. */
+  function modalIsHidden(): boolean {
+    const root = document.querySelector<HTMLElement>(".term-quick-commands");
+    return root === null || root.style.display === "none";
   }
 
   it("adds, edits and inserts a command without executing it", async () => {
@@ -450,6 +492,44 @@ describe("quick command modal", () => {
     await flushPromises();
 
     expect(commands.commands).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("closes the form on the first Escape and the modal on the second", async () => {
+    const { wrapper } = await mountSurface();
+    await wrapper.find(".term-commands-btn").trigger("click");
+    await flushPromises();
+
+    click("Add command");
+    await flushPromises();
+    await fill(".qc-form input", "Discarded draft");
+
+    const label = document.querySelector<HTMLInputElement>(".qc-form input");
+    expect(label).not.toBeNull();
+    label!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushPromises();
+    // The draft is discarded, not saved, and the modal stays open.
+    expect(document.querySelector(".qc-form")).toBeNull();
+    expect(useQuickCommandsStore().commands).toHaveLength(0);
+    expect(modalIsHidden()).toBe(false);
+
+    // The second Escape (now no form) closes the modal.
+    document.querySelector<HTMLButtonElement>(".qc-add")!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await flushPromises();
+    await flushPromises();
+    expect(modalIsHidden()).toBe(true);
     wrapper.unmount();
   });
 });

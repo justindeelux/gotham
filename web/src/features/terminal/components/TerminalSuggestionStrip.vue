@@ -25,14 +25,14 @@ interface Props {
   notice?: string;
   /** hasAbbreviations switches the empty hint between setup and usage. */
   hasAbbreviations?: boolean;
-  /** promptMarksDetected is false until the shell emits an OSC 133 mark. */
-  promptMarksDetected?: boolean;
+  /** noPromptMarksHint only turns true after the post-connect grace period. */
+  noPromptMarksHint?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   notice: "",
   hasAbbreviations: false,
-  promptMarksDetected: true,
+  noPromptMarksHint: false,
 });
 const emit = defineEmits<{
   accept: [];
@@ -145,7 +145,7 @@ function onOptionKeydown(event: KeyboardEvent): void {
       </NButton>
     </template>
     <span
-      v-else-if="props.hasAbbreviations && !props.promptMarksDetected"
+      v-else-if="props.hasAbbreviations && props.noPromptMarksHint"
       class="term-suggest-placeholder"
     >
       {{ t("terminal.suggestions.noPromptMarks") }}

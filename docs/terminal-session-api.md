@@ -241,12 +241,20 @@ Pre-upgrade checks, each answering an HTTP status before the upgrade:
    rotation revokes the presented row and inserts a replacement with a new `sid`
    but the same `created_at`, so ordinary rotation keeps the shell; logout,
    revoke-all, password reset and account deletion remove the lineage and close
-   it. This check runs again every 30 seconds (with a 5-second lookup timeout),
-   so a logout/revocation, demotion or removed `PLATFORM_ADMINS` entry closes
-   the shell within that interval. The access token's own 15-minute expiry is
-   deliberately **not** re-checked: a browser cannot present a refreshed token
-   on an open socket, and the session contract is 8 hours. A demotion is read
-   from the account, not from the token's immutable role claim.
+   it. **Attach accepts the same rule.** A signed access token whose `sid` row
+   rotation already revoked (the tab that did not refresh still holds it)
+   attaches while its lineage has a live session: the revoked row is resolved
+   read-only, scoped to its owner, and must still be on record. A row deleted
+   by logout or password reset resolves to nothing, and a reuse-detected or
+   revoke-all family has no live row on its lineage, so neither ever attaches.
+   An unrelated second sign-in of the same account never authorizes the
+   stream. This check runs again every 30 seconds (with a 5-second lookup
+   timeout), so a logout/revocation, demotion or removed `PLATFORM_ADMINS`
+   entry closes the shell within that interval. The access token's own 15-minute
+   expiry is deliberately **not** re-checked: a browser cannot present a
+   refreshed token on an open socket, and the session contract is 8 hours. A
+   demotion is read from the account, not from the token's immutable role
+   claim.
 4. **Ownership.** The session must belong to the authenticated user and the
    `{server_id}` in the path. Another user's session answers 404, not 403, so a
    session id cannot be probed. Ownership is validated before the upgrade;

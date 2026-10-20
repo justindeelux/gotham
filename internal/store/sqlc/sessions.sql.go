@@ -372,3 +372,27 @@ func (q *Queries) RotateSession(ctx context.Context, arg RotateSessionParams) (S
 	)
 	return i, err
 }
+
+const sessionSignInAt = `-- name: SessionSignInAt :one
+SELECT created_at
+FROM sessions
+WHERE id = $1
+  AND user_id = $2
+`
+
+type SessionSignInAtParams struct {
+	ID     pgtype.UUID `json:"id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+// SessionSignInAt returns the sign-in lineage (created_at) of one session row,
+// live or revoked, scoped to its owner. Refresh-token rotation revokes the
+// presented row but keeps it for the reuse-detection window, so a pre-rotation
+// access token can still be resolved to the lineage it belongs to. A row that
+// logout or a password reset deleted is unknown (no rows) and must be refused.
+func (q *Queries) SessionSignInAt(ctx context.Context, arg SessionSignInAtParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, sessionSignInAt, arg.ID, arg.UserID)
+	var created_at pgtype.Timestamptz
+	err := row.Scan(&created_at)
+	return created_at, err
+}

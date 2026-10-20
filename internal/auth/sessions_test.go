@@ -171,6 +171,75 @@ func TestServiceListSessionsExcludesDeadRows(t *testing.T) {
 	}
 }
 
+func TestServiceSessionSignInAtResolvesRotatedRow(t *testing.T) {
+	svc, st := scratchService(t)
+	ctx := context.Background()
+
+	email := uniqueEmail("sessions-lineage")
+	cleanupUser(t, st, email)
+	first, err := svc.Register(ctx, email, "s3cret-password", "", nil, SessionMeta{})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	userID, _ := uuid.Parse(first.User.ID)
+
+	// A second sign-in gives the lineage check a different created_at to
+	// contrast with (the decoy case); its refresh token is the one rotated.
+	other, err := svc.Login(ctx, email, "s3cret-password", SessionMeta{})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	oldSID := sidOf(t, svc, other.AccessToken)
+	rotated, err := svc.Refresh(ctx, other.RefreshToken, SessionMeta{})
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	newSID := sidOf(t, svc, rotated.AccessToken)
+
+	// Rotation revokes the presented row but keeps it, so the pre-rotation sid
+	// still resolves to the sign-in time that the replacement inherited.
+	signInAt, found, err := svc.SessionSignInAt(ctx, userID, oldSID)
+	if err != nil {
+		t.Fatalf("SessionSignInAt(rotated-away row): %v", err)
+	}
+	if !found {
+		t.Fatal("a rotated-away row did not resolve its lineage")
+	}
+	live, err := svc.ListSessions(ctx, userID, newSID)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	var liveSignIn time.Time
+	for _, info := range live {
+		if info.ID == newSID {
+			liveSignIn = info.CreatedAt
+		}
+	}
+	if liveSignIn.IsZero() || !signInAt.Equal(liveSignIn) {
+		t.Fatalf("stale lineage = %v, want the live replacement %v", signInAt, liveSignIn)
+	}
+
+	// Logout deletes the live row: its own sid no longer resolves.
+	if err := svc.Logout(ctx, rotated.RefreshToken); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	if _, found, err := svc.SessionSignInAt(ctx, userID, newSID); err != nil || found {
+		t.Fatalf("SessionSignInAt(deleted row) = (%v, %v), want (false, nil)", found, err)
+	}
+
+	// The lookup is scoped to the owner: another account cannot resolve this
+	// sid, so a decoy sign-in cannot lend it a lineage.
+	svc.AllowOpenRegistration = true
+	foreign, err := svc.Register(ctx, uniqueEmail("sessions-lineage-foreign"), "s3cret-password", "", nil, SessionMeta{})
+	if err != nil {
+		t.Fatalf("Register foreign: %v", err)
+	}
+	foreignID, _ := uuid.Parse(foreign.User.ID)
+	if _, found, err := svc.SessionSignInAt(ctx, foreignID, oldSID); err != nil || found {
+		t.Fatalf("SessionSignInAt(foreign user) = (%v, %v), want (false, nil)", found, err)
+	}
+}
+
 func TestServiceRotateUpdatesMeta(t *testing.T) {
 	svc, st := scratchService(t)
 	ctx := context.Background()

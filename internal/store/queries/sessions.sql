@@ -103,6 +103,17 @@ WHERE user_id = $1
 ORDER BY last_used_at DESC
 LIMIT 50;
 
+-- name: SessionSignInAt :one
+-- SessionSignInAt returns the sign-in lineage (created_at) of one session row,
+-- live or revoked, scoped to its owner. Refresh-token rotation revokes the
+-- presented row but keeps it for the reuse-detection window, so a pre-rotation
+-- access token can still be resolved to the lineage it belongs to. A row that
+-- logout or a password reset deleted is unknown (no rows) and must be refused.
+SELECT created_at
+FROM sessions
+WHERE id = $1
+  AND user_id = $2;
+
 -- name: CheckSessionLive :one
 -- CheckSessionLive reports whether a session id is a live session of a user
 -- (present, not revoked, not expired). The guarded bulk delete uses it to

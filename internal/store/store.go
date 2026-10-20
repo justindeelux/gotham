@@ -336,6 +336,22 @@ func (s *Store) ListSessionsByUser(ctx context.Context, userID pgtype.UUID, now 
 	})
 }
 
+// SessionSignInAt returns the sign-in lineage (created_at) of one session row,
+// live or revoked, scoped to its owner. Refresh-token rotation revokes the
+// presented row but keeps it for the reuse-detection window, so a pre-rotation
+// access token can still be resolved to its lineage. pgx.ErrNoRows means the
+// row was deleted (logout, password reset) or never existed.
+func (s *Store) SessionSignInAt(ctx context.Context, id, userID pgtype.UUID) (time.Time, error) {
+	createdAt, err := s.queries.SessionSignInAt(ctx, sqlc.SessionSignInAtParams{
+		ID:     id,
+		UserID: userID,
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return createdAt.Time, nil
+}
+
 // DeleteSessionByID deletes one live session scoped to its owner and reports
 // how many rows were removed (0 when the id is unknown, foreign, already
 // revoked, or expired). Like logout, deletion (not revocation) means a

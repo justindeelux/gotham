@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -132,6 +133,20 @@ func (f *fakeAuthService) ListSessions(_ context.Context, userID, currentSession
 		out = append(out, session)
 	}
 	return out, nil
+}
+
+// SessionSignInAt resolves a fake session row's sign-in lineage. The fakes
+// carry no created_at, so any known row maps to the zero time.
+func (f *fakeAuthService) SessionSignInAt(_ context.Context, userID, sessionID uuid.UUID) (time.Time, bool, error) {
+	if userID != testUserID {
+		return time.Time{}, false, auth.ErrUnauthorized
+	}
+	for _, session := range fakeSessions {
+		if session.ID == sessionID {
+			return session.CreatedAt, true, nil
+		}
+	}
+	return time.Time{}, false, nil
 }
 
 func (f *fakeAuthService) RevokeSession(_ context.Context, userID, id uuid.UUID) error {

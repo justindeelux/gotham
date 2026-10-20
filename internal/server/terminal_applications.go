@@ -126,7 +126,9 @@ type applicationTerminalAuthorizer struct {
 
 var _ terminal.Authorizer = applicationTerminalAuthorizer{}
 
-// Authorize runs at the application WebSocket handshake.
+// Authorize runs at the application WebSocket handshake. A token minted before
+// a refresh rotation is accepted while its sign-in lineage still has a live
+// session, exactly like the host authorizer.
 func (a applicationTerminalAuthorizer) Authorize(ctx context.Context, claims *auth.Claims, target terminal.Target) (terminal.Marker, error) {
 	if target.Kind != terminal.TargetContainer || target.ApplicationID == uuid.Nil {
 		return terminal.Marker{}, errors.New("terminal: the application authorizer only serves container targets")
@@ -159,12 +161,14 @@ func (a applicationTerminalAuthorizer) Authorize(ctx context.Context, claims *au
 	if err != nil {
 		return terminal.Marker{}, fmt.Errorf("terminal: list sessions: %w", err)
 	}
-	for _, info := range sessions {
-		if info.ID == sessionID {
-			return terminal.Marker{SignInAt: info.CreatedAt}, nil
-		}
+	signInAt, ok, err := resolveSignIn(ctx, a.auth, userID, sessionID, sessions)
+	if err != nil {
+		return terminal.Marker{}, fmt.Errorf("terminal: resolve sign-in lineage: %w", err)
 	}
-	return terminal.Marker{}, errors.New("terminal: the session is no longer live")
+	if !ok {
+		return terminal.Marker{}, errors.New("terminal: the session is no longer live")
+	}
+	return terminal.Marker{SignInAt: signInAt}, nil
 }
 
 // Revalidate re-checks the application's current write permission and the
@@ -202,12 +206,7 @@ func (a applicationTerminalAuthorizer) Revalidate(ctx context.Context, claims *a
 		}
 		return false, fmt.Errorf("terminal: list sessions: %w", err)
 	}
-	for _, info := range sessions {
-		if info.CreatedAt.Equal(marker.SignInAt) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return liveSignIn(sessions, marker.SignInAt), nil
 }
 
 // authorizeWrite resolves the caller's current role in the application's team.

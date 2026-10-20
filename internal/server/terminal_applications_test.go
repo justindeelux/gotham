@@ -155,6 +155,44 @@ func TestApplicationAuthorizerSurvivesRefreshRotation(t *testing.T) {
 	}
 }
 
+// TestApplicationAuthorizerAcceptsPreRotationToken pins the same JUS-258 rule
+// on the container route: a token minted before a refresh rotation attaches
+// while its sign-in lineage is alive.
+func TestApplicationAuthorizerAcceptsPreRotationToken(t *testing.T) {
+	userID := uuid.New()
+	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+	target := terminal.Target{Kind: terminal.TargetContainer, ServerID: access.ServerID, ApplicationID: access.ID}
+	claims := authorizerClaims(userID, sessionID)
+	signIn := store.sessions[0].CreatedAt
+	store.rotate(sessionID, uuid.New())
+
+	marker, err := authorizer.Authorize(context.Background(), claims, target)
+	if err != nil {
+		t.Fatalf("Authorize with a pre-rotation token: %v", err)
+	}
+	if !marker.SignInAt.Equal(signIn) {
+		t.Fatalf("marker = %s, want %s", marker.SignInAt, signIn)
+	}
+	if ok, err := authorizer.Revalidate(context.Background(), claims, marker, target); err != nil || !ok {
+		t.Fatalf("revalidate after attach = (%v, %v), want (true, nil)", ok, err)
+	}
+}
+
+// TestApplicationAuthorizerRefusesPreRotationTokenOfRevokedFamily proves a
+// revoked family never attaches even though its revoked row is on record.
+func TestApplicationAuthorizerRefusesPreRotationTokenOfRevokedFamily(t *testing.T) {
+	userID := uuid.New()
+	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)
+	target := terminal.Target{Kind: terminal.TargetContainer, ServerID: access.ServerID, ApplicationID: access.ID}
+	claims := authorizerClaims(userID, sessionID)
+	store.rotate(sessionID, uuid.New())
+	store.revokeAll()
+
+	if _, err := authorizer.Authorize(context.Background(), claims, target); err == nil {
+		t.Fatal("a revoked family authorized a pre-rotation token")
+	}
+}
+
 func TestApplicationAuthorizerTransientErrorsKeepShell(t *testing.T) {
 	userID := uuid.New()
 	authorizer, store, sessionID, access := newApplicationAuthorizer(t, userID, teams.RoleOwner)

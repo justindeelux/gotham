@@ -24,6 +24,8 @@ const en = {
     movedTitle: "This terminal is open in the window",
     movedBody:
       "Its session, buffer and working directory moved to the floating window. This session cannot return to the page.",
+    movedOpenHint:
+      "Minimize the window to start a new page session or close this terminal from here.",
     showWindow: "Show window",
     close: "Close terminal",
     host: "Host shell",

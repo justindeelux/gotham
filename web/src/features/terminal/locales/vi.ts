@@ -23,6 +23,8 @@ const vi = {
     movedTitle: "Terminal này đang mở trong cửa sổ",
     movedBody:
       "Phiên, bộ đệm và thư mục làm việc đã chuyển sang cửa sổ nổi. Phiên này không thể quay lại trang.",
+    movedOpenHint:
+      "Thu nhỏ cửa sổ để bắt đầu phiên mới trên trang hoặc đóng terminal này tại đây.",
     showWindow: "Hiện cửa sổ",
     close: "Đóng terminal",
     host: "Shell trên máy chủ",

@@ -199,17 +199,17 @@ type Config struct {
 	FileArchiveMaxInputBytes int64
 
 	// TerminalShell is the absolute shell a host terminal session runs. Empty
-	// selects the first usable candidate from $SHELL, /bin/bash and /bin/sh
-	// (GOTHAM_AGENT_TERMINAL_SHELL). The shell runs as the agent's service
-	// identity; see docs/terminal-session-api.md.
+	// honors $SHELL when it is bash or zsh, then prefers bash, then zsh, then
+	// /bin/sh (GOTHAM_AGENT_TERMINAL_SHELL). The shell runs as the agent's
+	// service identity; see docs/terminal-session-api.md.
 	TerminalShell string
 	// TerminalMaxSessions bounds concurrent host terminal sessions on this
 	// node (GOTHAM_AGENT_TERMINAL_MAX_SESSIONS). Zero uses the package default.
 	TerminalMaxSessions int
-	// TerminalIntegration enables the optional bash startup integration:
-	// bash-first host shells, colour defaults and OSC 133 prompt marks from a
-	// constant agent rcfile. It is on by default and can be disabled with
-	// GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
+	// TerminalIntegration enables the optional bash/zsh startup integration:
+	// the integrated shell selection, bash colour defaults and the constant
+	// OSC 133 prompt-mark startup files. It is on by default and can be disabled
+	// with GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
 	TerminalIntegration bool
 
 	// Version is the running agent build version. It is set by the entrypoint

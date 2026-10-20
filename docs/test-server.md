@@ -300,17 +300,6 @@ npm run e2e:install           # Linux: Chromium + OS deps (with --with-deps)
 GOTHAM_E2E_BASE_URL=http://localhost:8000 npm run e2e
 ```
 
-The terminal journeys (JUS-251) additionally need a **node agent built from
-the repository**, registered to the same control plane, with the file service
-on and a real Docker daemon for the application/Compose scenarios. The UI E2E
-workflow starts one as node `localhost` on `127.0.0.1:9443` and exports its pid
-as `GOTHAM_E2E_AGENT_PID`; point `GOTHAM_E2E_TERMINAL_NODE` at the node id and
-`GOTHAM_E2E_TERMINAL_IMAGE` at a pre-pulled image (`nginx:1.28.0-alpine` by
-default). A run without an agent skips those specs with an explicit reason
-instead of fabricating a shell. The Compose spec follows JUS-256 and asserts a
-full 64-hex container id; the read-only UI half auto-skips while JUS-257 (the
-shared-team application detail 404) is open.
-
 Scenarios:
 
 - **auth** — register one account through the API, then sign in through the

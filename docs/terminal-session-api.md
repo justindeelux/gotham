@@ -1,12 +1,5 @@
 # Terminal session API and lifecycle (JUS-243, container exec JUS-244)
 
-> Operator-facing procedures, the real-stack validation matrix, upgrade
-> compatibility and troubleshooting live in
-> [`terminal-operations.md`](terminal-operations.md). This page is the
-> byte-level contract; JUS-251 added the end-to-end regressions for the four
-> defects found in the live browser proof (no-root create, response tolerance,
-> whole-session close with PTY release, and the window/notice stacking).
-
 This document is the contract dependent work packages (JUS-245 shared terminal
 view, JUS-247 application terminal tab) build on. It describes the browser →
 control plane → node agent path for a host shell and for an interactive
@@ -322,11 +315,7 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   team, and the application must still exist on the same node), and a live
   session carrying the same sign-in `created_at` must still exist. The
   handshake token's expiry is not consulted again. Rotation of the refresh token is not a logout:
-  it preserves `created_at`, so an **already-attached** shell survives it. A
-  **new attach** with a pre-rotation access token is a different case: that
-  token's sid row was rotated away, so the attach gate refuses it even though
-  the token stays signature-valid for the rest of its 15 minutes (JUS-258);
-  sign in or refresh again before opening another terminal from that tab. A definitive refusal sends an error frame and
+  it preserves `created_at`. A definitive refusal sends an error frame and
   cancels the relay; a tick that races a normal close is silent. A transient
   lookup error keeps the shell and is logged; three consecutive failures
   (about 90 s) fail closed with a "could not be confirmed" error.

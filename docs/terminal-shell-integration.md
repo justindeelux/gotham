@@ -1,9 +1,5 @@
 # Terminal shell integration and quick-command suggestions (JUS-249)
 
-> See [`terminal-operations.md`](terminal-operations.md) for the supported-shell
-> matrix as validated end to end (real bash OSC 133 marks in the browser and
-> Go PTY suites) and the browser-local storage rules.
-
 Saved quick commands work in every shell: the editor stores a label, the
 command text and an optional abbreviation in this browser for the signed-in
 account, and **Insert** puts the text on the prompt without pressing Enter.

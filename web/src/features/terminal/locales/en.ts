@@ -134,8 +134,10 @@ const en = {
     title: "Terminal",
     eyebrow: "Operations",
     description:
-      "Open a host shell on a managed server. Terminal access is full host administration and is limited to platform operators.",
+      "Open a host shell on a managed server or a shell inside a running application container. Terminal access is full host administration and is limited to platform operators.",
     tabLabel: "Terminal",
+    tabs: "Terminal tabs",
+    closeTab: "Close {title}",
     switchServer: "Server",
     chooseServer: "Choose a server",
     chooseHint: "Select a ready server to start a page terminal.",
@@ -153,6 +155,38 @@ const en = {
     notReadyBody:
       "This server is {status}. A terminal can only start on a ready node.",
     unknownServer: "This server is not managed by this control plane.",
+  },
+  targets: {
+    open: "Open a new terminal",
+    title: "Open terminal",
+    search: "Search targets",
+    searchPlaceholder: "Search servers and containers",
+    servers: "Servers",
+    hostShell: "Host shell",
+    containerMeta: "{service} · replica {replica}",
+    replicaOnly: "Replica {replica}",
+    loading: "Loading targets…",
+    empty: "No terminal targets available",
+    emptyHint:
+      "You need a ready server, or a running application container you can write to.",
+    noMatches: "No targets match your search.",
+    retry: "Retry",
+    partial: "Some targets could not be loaded.",
+    truncated: "Showing the first {count} of the available targets.",
+    createFailed: "The terminal could not be started.",
+    opening: "Opening…",
+    errors: {
+      auth: "Your session has ended. Sign in again to open a terminal.",
+      network: "The control plane could not be reached.",
+      unavailable:
+        "The target list is unavailable right now. Retry once the node or control plane is reachable.",
+      disabled:
+        "Container terminals are disabled on this control plane. Ask a platform administrator to enable them.",
+      internal:
+        "The control plane sent an unexpected response. Retry, or reload the page.",
+      timeout:
+        "Some targets took too long to load. Retry once the node or control plane is reachable.",
+    },
   },
   dock: {
     label: "Paused page terminals",

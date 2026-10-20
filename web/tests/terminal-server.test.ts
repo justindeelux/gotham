@@ -3,7 +3,7 @@
 // (they record creates, deletes and server ids) so request counts and target
 // identity are asserted, not only rendered text.
 /* global document:readonly, HTMLElement:readonly, window:readonly */
-import { NSelect, NTabs } from "naive-ui";
+import { NTabs } from "naive-ui";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -77,6 +77,8 @@ vi.mock("@/features/terminal/api/terminal", () => ({
   closeTerminalSession: apiFakes.close,
   currentTerminalToken: () => "jwt-token",
   terminalFailure: () => ({ code: "generic", message: "start failed" }),
+  applicationTerminalFailure: () => ({ code: "generic", message: "start failed" }),
+  listTerminalTargets: async () => ({ servers: [], applications: [], errors: [] }),
   terminalWebSocketUrl: (path: string) => `ws://test${path}`,
 }));
 
@@ -377,9 +379,10 @@ describe("standalone Terminal page (JUS-246)", () => {  it("creates nothing befo
     expect(wrapper.find(".term-surface").exists()).toBe(true);
     expect(runtimeFakes.instances[0]?.attached).not.toBeNull();
 
-    // Choosing the same server again is a no-op, not a second shell.
-    wrapper.findComponent(NSelect).vm.$emit("update:value", SERVER_A.id);
-    await flushPromises();
+    // The session now lives in its own tab; the empty picker is gone and the
+    // add-tab control is still available.
+    expect(wrapper.findAll(".term-page-tab")).toHaveLength(1);
+    expect(wrapper.find(".term-add-tab").exists()).toBe(true);
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
   });
 
@@ -413,36 +416,46 @@ describe("standalone Terminal page (JUS-246)", () => {  it("creates nothing befo
     second.unmount();
   });
 
-  it("switching servers confirms before releasing the page shell", async () => {
+  it("keeps several page tabs and closes only the confirmed one", async () => {
     const { wrapper, router, terminal } = await mountPage(
       `/terminal?server=${SERVER_A.id}`,
     );
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    // Cancel: the old shell stays, the selector stays on the old server.
-    wrapper.findComponent(NSelect).vm.$emit("update:value", SERVER_B.id);
+    // The add-tab path opens a second, independent page tab.
+    const second = await terminal.openPageSession({
+      serverId: SERVER_B.id,
+      serverName: SERVER_B.name,
+      sourcePath: `/terminal?server=${SERVER_B.id}`,
+      fresh: true,
+    });
     await flushPromises();
-    expect(terminal.closeRequest?.ids).toHaveLength(1);
-    terminal.cancelClose();
-    await flushPromises();
-    await nextTick();
-    expect(router.currentRoute.value.query.server).toBe(SERVER_A.id);
-    expect(apiFakes.create).toHaveBeenCalledTimes(1);
-    expect(apiFakes.close).not.toHaveBeenCalled();
-
-    // Confirm: exactly one DELETE for the old shell, one create for the new.
-    wrapper.findComponent(NSelect).vm.$emit("update:value", SERVER_B.id);
-    await flushPromises();
-    terminal.confirmClose();
-    await flushPromises();
-    await nextTick();
-    expect(apiFakes.close).toHaveBeenCalledTimes(1);
-    expect(apiFakes.close.mock.calls[0]?.[0]).toBe(SERVER_A.id);
+    expect(terminal.pageTabs).toHaveLength(2);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);
     expect(apiFakes.create.mock.calls[1]?.[0]).toBe(SERVER_B.id);
     expect(router.currentRoute.value.query.server).toBe(SERVER_B.id);
+    expect(wrapper.findAll(".term-page-tab")).toHaveLength(2);
+    expect(wrapper.find(".term-surface").exists()).toBe(true);
+
+    // Closing the active tab asks first; Cancel keeps both shells.
+    terminal.requestClose([second.id]);
+    await flushPromises();
+    terminal.cancelClose();
+    await flushPromises();
+    expect(terminal.pageTabs).toHaveLength(2);
+    expect(apiFakes.close).not.toHaveBeenCalled();
+
+    // Confirm releases exactly that session; the first tab is untouched.
+    terminal.requestClose([second.id]);
+    await flushPromises();
+    terminal.confirmClose();
+    await flushPromises();
+    expect(apiFakes.close).toHaveBeenCalledTimes(1);
+    expect(apiFakes.close.mock.calls[0]?.[0]).toBe(SERVER_B.id);
     expect(terminal.pageTabs).toHaveLength(1);
-    expect(terminal.pageTabs[0]!.serverId).toBe(SERVER_B.id);
+    expect(terminal.pageTabs[0]!.serverId).toBe(SERVER_A.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
   });
 
   it("never dials an offline node and starts once it becomes ready", async () => {

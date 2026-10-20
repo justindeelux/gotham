@@ -14,6 +14,7 @@ import { useI18n } from "vue-i18n";
 
 import TerminalCloseDialog from "@/features/terminal/components/TerminalCloseDialog.vue";
 import TerminalSurface from "@/features/terminal/components/TerminalSurface.vue";
+import TerminalTargetPicker from "@/features/terminal/components/TerminalTargetPicker.vue";
 import {
   TERMINAL_WINDOW_CHROME_MARGIN,
   TERMINAL_WINDOW_MIN_HEIGHT,
@@ -592,9 +593,10 @@ defineExpose({ restoreWindow });
           </button>
         </div>
       </div>
-      <!-- JUS-261: the add-tab (+) slot. A later ticket renders it here, right
-           after the tab strip and before the window controls, so the flexible
-           space never separates the tabs from their add control. -->
+      <!-- JUS-261/JUS-265: the add-tab (+) control sits directly after the tab
+           strip, so the flexible space never separates the tabs from their add
+           control while minimize/close stay pinned at the far right. -->
+      <TerminalTargetPicker surface="window" class="term-window-add" />
       <div class="term-window-controls">
         <NButton
           quaternary

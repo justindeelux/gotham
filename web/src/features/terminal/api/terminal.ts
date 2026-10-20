@@ -1,15 +1,17 @@
 import { ZodError } from "zod";
 
 import type { ApiError } from "@/shared/api/http";
-import { http } from "@/shared/api/http";
+import { http, teamHeaders } from "@/shared/api/http";
 import { getAccessToken } from "@/shared/api/token";
 import {
   applicationTerminalTargetsSchema,
   terminalSessionSchema,
+  terminalTargetsSchema,
   type ApplicationTerminalTargets,
   type CreateApplicationTerminalInput,
   type CreateTerminalInput,
   type TerminalSessionInfo,
+  type TerminalTargets,
 } from "@/features/terminal/schemas/terminal";
 
 /**
@@ -122,6 +124,23 @@ export async function listApplicationTerminalTargets(
 }
 
 /**
+ * listTerminalTargets is the add-tab picker's one read (JUS-265): the ready
+ * host servers an operator may shell into and the running containers of the
+ * applications the caller may write, scoped to the active team. Per-source
+ * failures are part of the payload, not a failed request.
+ */
+export async function listTerminalTargets(
+  teamId: string,
+  signal?: AbortSignal,
+): Promise<TerminalTargets> {
+  const response = await http.get<unknown>("/terminal/targets", {
+    headers: teamHeaders(teamId),
+    ...(signal ? { signal } : {}),
+  });
+  return terminalTargetsSchema.parse(response.data);
+}
+
+/**
  * createApplicationTerminalSession asks for a container exec with the exact
  * `(service, container_id)` pair the discovery response returned (JUS-244).
  * The browser never invents an id: the control plane re-resolves the running
@@ -131,6 +150,7 @@ export async function createApplicationTerminalSession(
   applicationId: string,
   input: CreateApplicationTerminalInput,
   signal?: AbortSignal,
+  teamId = "",
 ): Promise<TerminalSessionInfo> {
   const response = await http.post<unknown>(
     `/applications/${encodeURIComponent(applicationId)}/terminal/sessions`,
@@ -140,7 +160,10 @@ export async function createApplicationTerminalSession(
       cols: input.cols,
       rows: input.rows,
     },
-    signal ? { signal } : undefined,
+    {
+      headers: teamHeaders(teamId),
+      ...(signal ? { signal } : {}),
+    },
   );
   return terminalSessionSchema.parse(response.data);
 }
@@ -149,10 +172,12 @@ export async function createApplicationTerminalSession(
 export async function closeApplicationTerminalSession(
   applicationId: string,
   sessionId: string,
+  teamId = "",
 ): Promise<void> {
   try {
     await http.delete(
       `/applications/${encodeURIComponent(applicationId)}/terminal/sessions/${encodeURIComponent(sessionId)}`,
+      { headers: teamHeaders(teamId) },
     );
   } catch (error) {
     const status = (error as ApiError | null)?.status ?? null;

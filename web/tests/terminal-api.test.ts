@@ -13,6 +13,7 @@ import {
 import {
   applicationTerminalTargetsSchema,
   terminalSessionSchema,
+  terminalTargetsSchema,
 } from "@/features/terminal/schemas/terminal";
 
 // Literal create responses from docs/terminal-session-api.md section 1/1a.
@@ -251,5 +252,75 @@ describe("applicationTerminalTargetsSchema (JUS-247)", () => {
         server_id: "srv-1",
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("terminalTargetsSchema (JUS-265)", () => {
+  // The backend shape, with every optional field omitted where the control
+  // plane omits it: target errors carry only source+code.
+  const TARGETS = {
+    servers: [
+      { id: "11111111-1111-4111-8111-111111111111", name: "prod-01", status: "ready" },
+    ],
+    truncated: false,
+    applications: [
+      {
+        application_id: "22222222-2222-4222-8222-222222222222",
+        application_name: "shop",
+        server_id: "11111111-1111-4111-8111-111111111111",
+        source_type: "image",
+        containers: [
+          {
+            service: "web",
+            container_id: "a".repeat(64),
+            name: "shop-web-1",
+            image: "nginx:1.28.0-alpine",
+            state: "running",
+            replica: 1,
+            label: "web · shop-web-1",
+          },
+        ],
+      },
+    ],
+    errors: [{ source: "application", code: "unavailable" }],
+  } as const;
+
+  it("accepts the backend shape with optional source fields omitted", () => {
+    const parsed = terminalTargetsSchema.parse(TARGETS);
+    expect(parsed.servers).toHaveLength(1);
+    expect(parsed.applications[0]?.containers[0]?.container_id).toBe("a".repeat(64));
+    expect(parsed.errors[0]).toEqual({ source: "application", code: "unavailable" });
+  });
+
+  it("accepts empty lists (a caller with no targets)", () => {
+    expect(
+      terminalTargetsSchema.parse({
+        servers: [],
+        applications: [],
+        errors: [],
+        truncated: false,
+      }),
+    ).toEqual({ servers: [], applications: [], errors: [], truncated: false });
+  });
+
+  it("rejects a drifted body instead of rendering a half-valid list", () => {
+    expect(() => terminalTargetsSchema.parse({ servers: [] })).toThrow(ZodError);
+    expect(() =>
+      terminalTargetsSchema.parse({
+        ...TARGETS,
+        errors: [{ source: "application", code: "raw backend text" }],
+      }),
+    ).toThrow(ZodError);
+    expect(() =>
+      terminalTargetsSchema.parse({
+        ...TARGETS,
+        applications: [
+          {
+            ...TARGETS.applications[0],
+            containers: [{ ...TARGETS.applications[0].containers[0], container_id: "" }],
+          },
+        ],
+      }),
+    ).toThrow(ZodError);
   });
 });

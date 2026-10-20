@@ -85,6 +85,8 @@ const runtimeFakes = vi.hoisted(() => {
 const apiFakes = vi.hoisted(() => ({
   create: vi.fn(),
   close: vi.fn(),
+  applicationCreate: vi.fn(),
+  applicationClose: vi.fn(),
 }));
 
 /** versionFakes controls the metadata lookup without touching HTTP. */
@@ -112,14 +114,16 @@ vi.mock("@/features/terminal/utils/terminalBanner", async (importOriginal) => {
 vi.mock("@/features/terminal/api/terminal", () => ({
   createTerminalSession: apiFakes.create,
   closeTerminalSession: apiFakes.close,
+  createApplicationTerminalSession: apiFakes.applicationCreate,
+  closeApplicationTerminalSession: apiFakes.applicationClose,
   currentTerminalToken: () => "jwt-token",
   terminalFailure: () => ({ code: "generic", message: "start failed" }),
+  applicationTerminalFailure: () => ({ code: "generic", message: "start failed" }),
   terminalWebSocketUrl: (path: string) => `ws://test${path}`,
 }));
 
-const { useTerminalStore, WINDOW_SINGLE_FLIGHT_HOLD_MS } = await import(
-  "@/features/terminal/stores/terminal"
-);
+const { useTerminalStore, WINDOW_SINGLE_FLIGHT_HOLD_MS, PAGE_SINGLE_FLIGHT_HOLD_MS } =
+  await import("@/features/terminal/stores/terminal");
 const { useTerminalWindowStore } = await import(
   "@/features/terminal/stores/terminalWindow"
 );
@@ -153,6 +157,32 @@ beforeEach(() => {
   apiFakes.create.mockReset();
   apiFakes.close.mockReset();
   apiFakes.close.mockResolvedValue(undefined);
+  apiFakes.applicationCreate.mockReset();
+  apiFakes.applicationClose.mockReset();
+  apiFakes.applicationClose.mockResolvedValue(undefined);
+  apiFakes.applicationCreate.mockImplementation(
+    async (
+      applicationId: string,
+      input: { service: string; containerId: string; cols: number; rows: number },
+    ) => {
+      sessionSeq += 1;
+      return {
+        id: `session-app-${sessionSeq}`,
+        server_id: "server-1",
+        target: "container",
+        cols: input.cols,
+        rows: input.rows,
+        expires_at: "2026-10-20T12:01:00Z",
+        websocket_path: `/api/v1/applications/${applicationId}/terminal/sessions/session-app-${sessionSeq}/ws`,
+        subprotocol: "gotham.terminal.v1",
+        application_id: applicationId,
+        service: input.service,
+        container_id: input.containerId,
+        container_name: "web-1",
+        target_label: "web · web-1",
+      };
+    },
+  );
   apiFakes.create.mockImplementation(
     async (
       serverId: string,
@@ -704,5 +734,104 @@ describe("terminal pane transfer", () => {
     expect(terminal.findTab(tab.id)?.sessionId).not.toBe(second.sessionId);
     expect(window.findAll(".term-window-body .term-surface")).toHaveLength(2);
     window.unmount();
+  });
+});
+
+describe("page tabs (JUS-265)", () => {
+  it("keeps the newest page session selected and switches without creating", async () => {
+    const terminal = useTerminalStore();
+    const first = await terminal.openPageSession(options("one"));
+    expect(terminal.activePageTabId).toBe(first.id);
+    const second = await terminal.openPageSession({
+      ...options("two"),
+      fresh: true,
+    });
+    expect(second.id).not.toBe(first.id);
+    expect(terminal.pageTabs).toHaveLength(2);
+    expect(terminal.activePageTabId).toBe(second.id);
+    expect(terminal.pageActiveTab?.id).toBe(second.id);
+
+    terminal.activatePage(first.id);
+    expect(terminal.pageActiveTab?.id).toBe(first.id);
+    // Window selection is deliberately separate from the page's.
+    await terminal.openWindowSession(options("window"));
+    expect(terminal.pageActiveTab?.id).toBe(first.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(3);
+  });
+
+  it("falls back to the remaining page tab when the active one moves to the window", async () => {
+    const terminal = useTerminalStore();
+    const first = await terminal.openPageSession(options("one"));
+    const second = await terminal.openPageSession({
+      ...options("two"),
+      fresh: true,
+    });
+    expect(terminal.activePageTabId).toBe(second.id);
+
+    terminal.detachToWindow(second.id);
+    expect(terminal.pageTabs.map((tab) => tab.id)).toEqual([first.id]);
+    expect(terminal.activePageTabId).toBe(first.id);
+    expect(terminal.pageActiveTab?.id).toBe(first.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the page selection when the last page tab closes", async () => {
+    const terminal = useTerminalStore();
+    const only = await terminal.openPageSession(options());
+    terminal.closeTabs([only.id]);
+    expect(terminal.pageTabs).toHaveLength(0);
+    expect(terminal.activePageTabId).toBe("");
+    expect(terminal.pageActiveTab).toBeNull();
+    expect(apiFakes.close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("page single-flight settle window (JUS-265 fix)", () => {
+  it("joins a second fresh page open inside the hold and opens a new tab after it", async () => {
+    vi.useFakeTimers();
+    const terminal = useTerminalStore();
+    const first = await terminal.openPageSession({
+      ...options("one"),
+      fresh: true,
+    });
+    const second = await terminal.openPageSession({
+      ...options("one"),
+      fresh: true,
+    });
+    expect(second.id).toBe(first.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    expect(terminal.pageTabs).toHaveLength(1);
+
+    vi.advanceTimersByTime(PAGE_SINGLE_FLIGHT_HOLD_MS + 1);
+    const third = await terminal.openPageSession({
+      ...options("one"),
+      fresh: true,
+    });
+    expect(third.id).not.toBe(first.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(terminal.pageTabs).toHaveLength(2);
+  });
+});
+
+describe("terminal banner capability (JUS-265 fix)", () => {
+  it("gives each host session a banner and no container session one", async () => {
+    const terminal = useTerminalStore();
+    await terminal.openWindowSession(options("one"));
+    await terminal.openWindowSession(options("two"));
+    await terminal.openPageSession({
+      serverId: "server-1",
+      target: "container",
+      applicationId: "app-1",
+      applicationName: "shop",
+      service: "web",
+      containerId: "cid-1",
+      containerName: "web-1",
+      targetLabel: "web · web-1",
+    });
+    const [hostOne, hostTwo, container] = runtimeFakes.instances;
+    expect(hostOne?.options.banner).toBeDefined();
+    expect(hostTwo?.options.banner).toBeDefined();
+    expect(container?.options.banner).toBeUndefined();
+    expect(apiFakes.applicationCreate).toHaveBeenCalledTimes(1);
   });
 });

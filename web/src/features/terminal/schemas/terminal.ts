@@ -68,6 +68,58 @@ export type ApplicationTerminalTargets = z.infer<
   typeof applicationTerminalTargetsSchema
 >;
 
+/**
+ * Add-tab target discovery (JUS-265). One authorised read returns every target
+ * the caller may open: ready host servers (platform operators only) and the
+ * running containers of applications the caller may write, grouped by
+ * application. Per-source failures arrive in `errors` so one unreachable node
+ * never blanks the list. The error carries a bounded code, never backend text.
+ */
+export const terminalHostTargetSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  status: z.string(),
+});
+export type TerminalHostTarget = z.infer<typeof terminalHostTargetSchema>;
+
+export const terminalTargetGroupSchema = z.object({
+  application_id: z.string().min(1),
+  application_name: z.string(),
+  server_id: z.string().min(1),
+  source_type: z.string(),
+  containers: z.array(applicationTerminalTargetSchema),
+});
+export type TerminalTargetGroup = z.infer<typeof terminalTargetGroupSchema>;
+
+export const terminalTargetErrorCodeSchema = z.enum([
+  "unavailable",
+  "disabled",
+  "internal",
+  "timeout",
+]);
+export type TerminalTargetErrorCode = z.infer<
+  typeof terminalTargetErrorCodeSchema
+>;
+
+export const terminalTargetErrorSchema = z.object({
+  source: z.string(),
+  id: z.string().optional(),
+  name: z.string().optional(),
+  code: terminalTargetErrorCodeSchema,
+  // Count is present only on the collapsed timeout entry.
+  count: z.number().int().min(1).optional(),
+});
+export type TerminalTargetError = z.infer<typeof terminalTargetErrorSchema>;
+
+export const terminalTargetsSchema = z.object({
+  servers: z.array(terminalHostTargetSchema),
+  applications: z.array(terminalTargetGroupSchema),
+  errors: z.array(terminalTargetErrorSchema),
+  // Truncated means a bound cut the list; the picker says "showing the first N".
+  truncated: z.boolean(),
+});
+export type TerminalTargets = z.infer<typeof terminalTargetsSchema>;
+
 /** CreateTerminalInput is the body accepted by the host create endpoint. */
 export interface CreateTerminalInput {
   target?: string;

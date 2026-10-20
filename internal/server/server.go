@@ -591,6 +591,14 @@ func (s *Server) routes() (http.Handler, error) {
 					UserIDFromContext, s.logger)
 			}
 		}
+		// The add-tab target picker (JUS-265): one interactive-session-only read
+		// of the authorised targets. Host shells stay operator-only and container
+		// targets reuse the per-application resolver, so the picker can never
+		// widen either capability.
+		if s.terminal != nil && s.auth != nil {
+			terminal.MountTargets(api, s.terminalTargetsAuth(), s.terminalTargetsSourceFor,
+				UserIDFromContext, s.logger)
+		}
 
 		// Background-task progress (JUS-91): the deploy worker publishes
 		// queued/running/succeeded/failed events on tasks:{teamID}, and every

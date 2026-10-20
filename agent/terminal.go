@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -76,10 +77,10 @@ type TerminalConfig struct {
 	// Logger receives session lifecycle lines. It never receives terminal
 	// bytes or input.
 	Logger *slog.Logger
-	// Roots resolves the initial working directory for host targets. It is
-	// required for host sessions; without a file service there is no root
-	// policy to confine cwd to, so a host open fails with FailedPrecondition.
-	// Container targets do not use it.
+	// Roots resolves the initial working directory for host targets that name a
+	// FileService root. A host session without a root does not use it and opens
+	// in the agent's default directory, so a node with the file service
+	// disabled can still run a shell. Container targets do not use it.
 	Roots TerminalRoots
 	// Shell is the absolute shell path to run for host targets. Empty selects
 	// the first usable candidate from $SHELL, /bin/bash and /bin/sh.
@@ -348,24 +349,42 @@ func (s *TerminalServer) prepare(open *agentv1.TerminalOpen) (terminalStart, err
 }
 
 // prepareHost validates a host shell open and resolves its initial directory.
+//
+// A root and cwd are optional. With both omitted the shell starts in a default
+// directory the agent resolves from the service user's passwd entry — never
+// from the request, a browser value or the agent environment — so a host shell
+// does not depend on file roots being configured. A cwd without a root is
+// refused. A provided root keeps the file manager's exact allow-list, relative
+// path, escape and existence policy.
 func (s *TerminalServer) prepareHost(open *agentv1.TerminalOpen) (terminalStart, error) {
-	if s.roots == nil {
-		return terminalStart{}, status.Error(codes.FailedPrecondition,
-			"terminal: the node has no file roots to resolve a working directory")
+	root := open.GetRoot()
+	cwd := open.GetCwd()
+	if len(root) > terminalMaxRootBytes {
+		return terminalStart{}, status.Error(codes.InvalidArgument, "terminal: invalid file root")
 	}
-	if len(open.GetRoot()) == 0 || len(open.GetRoot()) > terminalMaxRootBytes {
-		return terminalStart{}, status.Error(codes.InvalidArgument, "terminal: a bounded root name is required")
-	}
-	if len(open.GetCwd()) > terminalMaxCwdBytes || strings.IndexByte(open.GetCwd(), 0) >= 0 {
+	if len(cwd) > terminalMaxCwdBytes || strings.IndexByte(cwd, 0) >= 0 {
 		return terminalStart{}, status.Error(codes.InvalidArgument, "terminal: invalid working directory")
 	}
 	cols, rows, err := terminalDimensions(open.GetCols(), open.GetRows())
 	if err != nil {
 		return terminalStart{}, err
 	}
-	dir, err := s.roots.ResolveShellDir(open.GetRoot(), open.GetCwd())
-	if err != nil {
-		return terminalStart{}, terminalDirError(err)
+	var dir string
+	if root == "" {
+		if cwd != "" {
+			return terminalStart{}, status.Error(codes.InvalidArgument,
+				"terminal: a working directory requires a file root")
+		}
+		dir = defaultTerminalDir()
+	} else {
+		if s.roots == nil {
+			return terminalStart{}, status.Error(codes.FailedPrecondition,
+				"terminal: the node has no file roots to resolve a working directory")
+		}
+		dir, err = s.roots.ResolveShellDir(root, cwd)
+		if err != nil {
+			return terminalStart{}, terminalDirError(err)
+		}
 	}
 	shell, err := resolveTerminalShell(s.shell)
 	if err != nil {
@@ -373,6 +392,45 @@ func (s *TerminalServer) prepareHost(open *agentv1.TerminalOpen) (terminalStart,
 		return terminalStart{}, status.Error(codes.FailedPrecondition, "terminal: no usable shell is installed on the node")
 	}
 	return terminalStart{Target: terminalTargetHost, Shell: shell, Dir: dir, Cols: cols, Rows: rows}, nil
+}
+
+// defaultTerminalDir resolves the initial working directory for a host shell
+// opened without a file root. It is decided on the agent, from the service
+// user's passwd entry — never from the request, a browser value or the agent
+// environment. The home directory is resolved (symlinks evaluated) and must be
+// an existing directory; anything else falls back to the filesystem root. The
+// result is set directly on the child process, never interpolated into a shell
+// command.
+func defaultTerminalDir() string {
+	return resolveDefaultTerminalDir(serviceHomeDir())
+}
+
+// serviceHomeDir reads the service user's home directory from its passwd entry.
+func serviceHomeDir() string {
+	current, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return current.HomeDir
+}
+
+// resolveDefaultTerminalDir validates one default-directory candidate. It is
+// separate from defaultTerminalDir so the fallback paths are testable: an
+// empty or relative home, a missing target, a symlink that does not resolve to
+// a directory, and a file all fall back to "/".
+func resolveDefaultTerminalDir(home string) string {
+	if home == "" || !filepath.IsAbs(home) {
+		return "/"
+	}
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return "/"
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "/"
+	}
+	return resolved
 }
 
 // prepareContainer validates a container exec open. The container id is

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func TestCreateValidatesRequest(t *testing.T) {
 		req  CreateRequest
 	}{
 		{"unsupported target", CreateRequest{Target: "container", Root: "volumes", Cols: 80, Rows: 24}},
-		{"empty root", CreateRequest{Target: "host", Cols: 80, Rows: 24}},
+		{"cwd without root", CreateRequest{Target: "host", Cwd: "app", Cols: 80, Rows: 24}},
 		{"bad root", CreateRequest{Target: "host", Root: "../etc", Cols: 80, Rows: 24}},
 		{"absolute cwd", CreateRequest{Target: "host", Root: "volumes", Cwd: "/etc", Cols: 80, Rows: 24}},
 		{"parent cwd", CreateRequest{Target: "host", Root: "volumes", Cwd: "a/../b", Cols: 80, Rows: 24}},
@@ -71,6 +72,36 @@ func TestCreateValidatesRequest(t *testing.T) {
 				t.Fatalf("Create(%+v) = nil error, want validation failure", testCase.req)
 			}
 		})
+	}
+}
+
+func TestCreateHostWithoutRoot(t *testing.T) {
+	t.Parallel()
+	svc, userID, serverID := newTestService(t, Config{})
+	for _, target := range []string{"host", ""} {
+		session, err := svc.Create(context.Background(), userID, serverID, CreateRequest{
+			Target: target, Cols: 120, Rows: 32,
+		})
+		if err != nil {
+			t.Fatalf("Create(target=%q, no root): %v", target, err)
+		}
+		if session.Target != TargetHost || session.Root != "" || session.Cwd != "" {
+			t.Fatalf("session = %+v, want a host session with no root/cwd", session)
+		}
+	}
+}
+
+func TestCreateRejectsCwdWithoutRoot(t *testing.T) {
+	t.Parallel()
+	svc, userID, serverID := newTestService(t, Config{})
+	_, err := svc.Create(context.Background(), userID, serverID, CreateRequest{
+		Target: "host", Cwd: "app", Cols: 80, Rows: 24,
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create(cwd without root) = %v, want ErrInvalid", err)
+	}
+	if !strings.Contains(err.Error(), "requires a file root") {
+		t.Fatalf("error = %q, want a clear missing-root message", err)
 	}
 }
 

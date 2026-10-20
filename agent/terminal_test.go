@@ -213,7 +213,8 @@ func TestTerminalOpenValidation(t *testing.T) {
 		{"upper-case container id", &agentv1.TerminalOpen{Target: "container", ContainerId: "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef", Cols: 80, Rows: 24}, codes.InvalidArgument},
 		{"zero columns", &agentv1.TerminalOpen{Target: "host", Root: rootName, Cols: 0, Rows: 24}, codes.InvalidArgument},
 		{"huge rows", &agentv1.TerminalOpen{Target: "host", Root: rootName, Cols: 80, Rows: 1001}, codes.InvalidArgument},
-		{"missing root", &agentv1.TerminalOpen{Target: "host", Cols: 80, Rows: 24}, codes.InvalidArgument},
+		{"cwd without root", &agentv1.TerminalOpen{Target: "host", Cwd: "app", Cols: 80, Rows: 24}, codes.InvalidArgument},
+		{"over-long root", &agentv1.TerminalOpen{Target: "host", Root: strings.Repeat("a", terminalMaxRootBytes+1), Cols: 80, Rows: 24}, codes.InvalidArgument},
 		{"unknown root", &agentv1.TerminalOpen{Target: "host", Root: "nope", Cols: 80, Rows: 24}, codes.InvalidArgument},
 		{"absolute cwd", &agentv1.TerminalOpen{Target: "host", Root: rootName, Cwd: "/etc", Cols: 80, Rows: 24}, codes.InvalidArgument},
 		{"parent escape", &agentv1.TerminalOpen{Target: "host", Root: rootName, Cwd: "../x", Cols: 80, Rows: 24}, codes.InvalidArgument},
@@ -236,6 +237,164 @@ func TestTerminalOpenValidation(t *testing.T) {
 			_, err = stream.Recv()
 			if status.Code(err) != testCase.want {
 				t.Fatalf("code = %v, want %v (%v)", status.Code(err), testCase.want, err)
+			}
+		})
+	}
+}
+
+func TestTerminalDefaultWorkingDirectory(t *testing.T) {
+	_, terminal, _, _ := terminalTestFixture(t)
+	client := startTerminalServer(t, terminal)
+	stream, err := client.OpenTerminal(context.Background())
+	if err != nil {
+		t.Fatalf("OpenTerminal: %v", err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	// Exactly what the Terminal page and the Server detail tab send: no root
+	// and no cwd.
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
+		Target: "host", Cols: 80, Rows: 24,
+	}}}); err != nil {
+		t.Fatalf("send open: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("recv opened without a root: %v", err)
+	}
+	// The shell must start where the agent decided: the service user's home
+	// when it is a real directory, otherwise "/".
+	expected := resolveDefaultTerminalDir(serviceHomeDir())
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{
+		Input: []byte("printf 'GOTHAM_PWD=%s\\n' \"$PWD\"\r"),
+	}}); err != nil {
+		t.Fatalf("send pwd: %v", err)
+	}
+	waitForOutput(t, stream, "GOTHAM_PWD="+expected)
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("exit 0\r")}}); err != nil {
+		t.Fatalf("send exit: %v", err)
+	}
+	exited := recvUntil(t, stream, func(response *agentv1.TerminalResponse) bool {
+		return response.GetExited() != nil
+	})
+	if exited.GetExited().GetExitCode() != 0 {
+		t.Fatalf("exit code = %d, want 0", exited.GetExited().GetExitCode())
+	}
+}
+
+// TestTerminalHostWithoutFileRoots proves a node with the file service disabled
+// (no TerminalRoots, GOTHAM_AGENT_FILES=false) still opens a host shell in the
+// agent's default directory. A named root is still refused: there is no
+// allow-list to resolve it against.
+func TestTerminalHostWithoutFileRoots(t *testing.T) {
+	terminal := NewTerminalServer(TerminalConfig{
+		Logger: discardLogger(),
+		Shell:  testShell(t),
+	})
+	client := startTerminalServer(t, terminal)
+
+	named, err := client.OpenTerminal(context.Background())
+	if err != nil {
+		t.Fatalf("OpenTerminal: %v", err)
+	}
+	if err := named.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
+		Target: "host", Root: "volumes", Cols: 80, Rows: 24,
+	}}}); err != nil {
+		t.Fatalf("send open with root: %v", err)
+	}
+	if _, err := named.Recv(); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("open with a root and no file service = %v, want FailedPrecondition", err)
+	}
+
+	stream, err := client.OpenTerminal(context.Background())
+	if err != nil {
+		t.Fatalf("OpenTerminal without root: %v", err)
+	}
+	defer func() { _ = stream.CloseSend() }()
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
+		Target: "host", Cols: 80, Rows: 24,
+	}}}); err != nil {
+		t.Fatalf("send open: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("recv opened without file roots: %v", err)
+	}
+	expected := resolveDefaultTerminalDir(serviceHomeDir())
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{
+		Input: []byte("printf 'GOTHAM_PWD=%s\\n' \"$PWD\"\r"),
+	}}); err != nil {
+		t.Fatalf("send pwd: %v", err)
+	}
+	waitForOutput(t, stream, "GOTHAM_PWD="+expected)
+}
+
+// TestTerminalCwdWithoutRootDoesNotStart proves the cwd-without-root refusal
+// happens in validation, before a shell process is started.
+func TestTerminalCwdWithoutRootDoesNotStart(t *testing.T) {
+	_, terminal, _, _ := terminalTestFixture(t)
+	started := 0
+	terminal.start = func(terminalStart) (terminalProcess, error) {
+		started++
+		return nil, errors.New("a shell must not start")
+	}
+	client := startTerminalServer(t, terminal)
+	stream, err := client.OpenTerminal(context.Background())
+	if err != nil {
+		t.Fatalf("OpenTerminal: %v", err)
+	}
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
+		Target: "host", Cwd: "app", Cols: 80, Rows: 24,
+	}}}); err != nil {
+		t.Fatalf("send open: %v", err)
+	}
+	if _, err := stream.Recv(); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("cwd without root = %v, want InvalidArgument", err)
+	}
+	if started != 0 {
+		t.Fatalf("started = %d shells, want 0", started)
+	}
+}
+
+// TestResolveDefaultTerminalDir pins the fallback rules without spawning a
+// shell: only an absolute home that resolves to an existing directory wins.
+func TestResolveDefaultTerminalDir(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	if err := os.Mkdir(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "home-link")
+	if err := os.Symlink(home, link); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(base, "file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fileLink := filepath.Join(base, "file-link")
+	if err := os.Symlink(file, fileLink); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		home string
+		want string
+	}{
+		{"directory", home, resolvedHome},
+		{"symlink to directory", link, resolvedHome},
+		{"empty", "", "/"},
+		{"relative", "home", "/"},
+		{"missing", filepath.Join(base, "missing"), "/"},
+		{"file", file, "/"},
+		{"symlink to file", fileLink, "/"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := resolveDefaultTerminalDir(testCase.home); got != testCase.want {
+				t.Fatalf("resolveDefaultTerminalDir(%q) = %q, want %q", testCase.home, got, testCase.want)
 			}
 		})
 	}

@@ -335,6 +335,33 @@ func TestCreateAndCloseRoutes(t *testing.T) {
 	}
 }
 
+func TestCreateHostWithoutRootRoute(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, fixtureOptions{operator: true})
+	// Exactly what the Terminal page and the Server detail Terminal tab send:
+	// no File manager context at all.
+	body := `{"target":"host","cols":120,"rows":32}`
+	response, err := http.Post(f.server.URL+"/v1/servers/"+f.serverID.String()+"/terminal/sessions",
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("POST status = %d, want 201", response.StatusCode)
+	}
+	var created createResponse
+	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Target != TargetHost || created.Root != "" || created.Cwd != "" {
+		t.Fatalf("created = %+v, want a host session with no root/cwd", created)
+	}
+	if created.WebSocketPath == "" || created.Subprotocol != Subprotocol {
+		t.Fatalf("unexpected create response: %+v", created)
+	}
+}
+
 func TestCreateRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, fixtureOptions{operator: true})
@@ -345,6 +372,7 @@ func TestCreateRejectsInvalidInput(t *testing.T) {
 		{`{"target":"host","root":"volumes","cols":0,"rows":24}`, http.StatusBadRequest},
 		{`{"target":"container","root":"volumes","cols":80,"rows":24}`, http.StatusNotImplemented},
 		{`{"target":"host","root":"../etc","cols":80,"rows":24}`, http.StatusBadRequest},
+		{`{"target":"host","cwd":"app","cols":80,"rows":24}`, http.StatusBadRequest},
 		{`{"target":"host","root":"volumes","unknown":true}`, http.StatusBadRequest},
 	}
 	for _, testCase := range cases {
@@ -919,6 +947,11 @@ func TestRelayErrorWorkingDirectory(t *testing.T) {
 			name: "other invalid argument",
 			err:  status.Error(codes.InvalidArgument, "terminal: input chunk exceeds 4 bytes"),
 			want: "the terminal request was rejected",
+		},
+		{
+			name: "old agent without root support",
+			err:  status.Error(codes.InvalidArgument, "terminal: a bounded root name is required"),
+			want: "the node agent needs an update to open a terminal without a folder",
 		},
 		{
 			name: "missing cwd",

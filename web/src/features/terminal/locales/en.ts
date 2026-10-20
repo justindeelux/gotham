@@ -65,6 +65,8 @@ const en = {
       "The working directory is not allowed. Open a folder inside the server's allowed root.",
     cwdMissing: "That folder no longer exists on the server.",
     cwdUnreadable: "The node agent cannot read that folder.",
+    agentUpdate:
+      "This node agent needs an update to open a terminal without a folder.",
     generic: "The terminal could not be started.",
   },
   actions: {

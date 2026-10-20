@@ -25,6 +25,7 @@ export type TerminalErrorCode =
   | "cwdInvalid"
   | "cwdMissing"
   | "cwdUnreadable"
+  | "agentUpdate"
   | "generic";
 
 /** TerminalFailure is a bounded failure a tab can render. */
@@ -152,6 +153,8 @@ export function terminalStreamFailureCode(
       return "cwdUnreadable";
     case "the node agent does not support terminal sessions":
       return "unsupported";
+    case "the node agent needs an update to open a terminal without a folder":
+      return "agentUpdate";
     case "the node is running the maximum number of terminal sessions":
       return "quota";
     case "the node is unavailable":

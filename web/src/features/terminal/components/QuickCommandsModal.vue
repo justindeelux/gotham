@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { Plus } from "@lucide/vue";
 import { NButton, NModal } from "naive-ui";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import type { ComponentPublicInstance } from "vue";
 import { useI18n } from "vue-i18n";
 
 import QuickCommandEditor from "@/features/terminal/components/QuickCommandEditor.vue";
@@ -13,11 +14,13 @@ import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalCommandFailure } from "@/features/terminal/transport/terminalRuntime";
 
 /**
- * Quick-command manager modal (JUS-264). The list, editor and every action
- * live in one bounded Naive UI modal: the header and footer stay fixed and
- * only the body scrolls (shared `.app-modal` contract). Inserting writes the
- * command to the active PTY without Enter, closes the modal and lets the
- * surface return focus to the terminal.
+ * Quick-command manager modal (JUS-264). The list and the editor are mutually
+ * exclusive views inside one bounded Naive UI modal: the header and footer stay
+ * fixed and only the body scrolls (shared `.app-modal` contract). Add and Edit
+ * swap the list for the editor, so the form is always the first thing in the
+ * scrollable body and can never be appended below the fold (JUS-267). Inserting
+ * writes the command to the active PTY without Enter, closes the modal and lets
+ * the surface return focus to the terminal.
  */
 interface Props {
   show: boolean;
@@ -38,6 +41,10 @@ const showForm = ref(false);
 const editingId = ref("");
 const formError = ref("");
 const insertError = ref("");
+/** bodyRef is the modal's content root; the editor replaces the list there. */
+const bodyRef = ref<HTMLElement | null>(null);
+const addButtonRef = ref<ComponentPublicInstance | null>(null);
+const editorRef = ref<InstanceType<typeof QuickCommandEditor> | null>(null);
 
 const editing = computed<QuickCommand | null>(
   () => store.commands.find((command) => command.id === editingId.value) ?? null,
@@ -76,10 +83,50 @@ function onWindowKeydown(event: KeyboardEvent): void {
   event.preventDefault();
   event.stopPropagation();
   if (showForm.value) {
-    resetForm();
+    resetForm({ restoreFocus: true });
     return;
   }
   close();
+}
+
+/** buttonElement unwraps a Naive button instance to its real <button>. */
+function buttonElement(instance: ComponentPublicInstance | null): HTMLElement | null {
+  const element = instance?.$el;
+  return element instanceof HTMLElement ? element : null;
+}
+
+/**
+ * restoreListFocus puts the keyboard back where the editor was opened from:
+ * Add for a new command, the edited row's Edit button otherwise. Focus is
+ * restored after the list renders (JUS-267 fix round 1).
+ */
+async function restoreListFocus(commandId: string): Promise<void> {
+  await nextTick();
+  if (commandId !== "") {
+    const row = [
+      ...(bodyRef.value?.querySelectorAll<HTMLElement>("[data-qc-edit]") ?? []),
+    ].find((element) => element.dataset.qcEdit === commandId);
+    if (row) {
+      row.focus();
+      return;
+    }
+  }
+  buttonElement(addButtonRef.value)?.focus();
+}
+
+/**
+ * openEditor swaps the list for the editor. The editor is the modal's only
+ * body view (never appended below the list), so it is visible without
+ * scrolling whatever the list length or viewport height; nextTick resets the
+ * shared scroll container so the Label field starts at the top (JUS-267).
+ */
+async function openEditor(): Promise<void> {
+  showForm.value = true;
+  await nextTick();
+  const scroller = bodyRef.value?.closest(".n-card-content");
+  if (scroller instanceof HTMLElement) {
+    scroller.scrollTop = 0;
+  }
 }
 
 /** startAdd opens a blank editor. */
@@ -90,7 +137,7 @@ function startAdd(): void {
   editingId.value = "";
   formError.value = "";
   insertError.value = "";
-  showForm.value = true;
+  void openEditor();
 }
 
 /** startEdit opens the editor on one saved command. */
@@ -98,14 +145,27 @@ function startEdit(command: QuickCommand): void {
   editingId.value = command.id;
   formError.value = "";
   insertError.value = "";
-  showForm.value = true;
+  void openEditor();
 }
 
-/** resetForm closes the editor without saving. */
-function resetForm(): void {
+/**
+ * resetForm closes the editor without saving. Only the in-modal exits
+ * (Cancel, Save, Escape-in-form) restore keyboard focus; closing the dialog
+ * or reopening it must leave focus to the surface's own after-leave logic.
+ */
+function resetForm(options: { restoreFocus?: boolean } = {}): void {
+  const restoreId = editingId.value;
   showForm.value = false;
   editingId.value = "";
   formError.value = "";
+  if (options.restoreFocus) {
+    void restoreListFocus(restoreId);
+  }
+}
+
+/** saveFromFooter submits the pinned footer Save through the editor. */
+function saveFromFooter(): void {
+  void editorRef.value?.submit();
 }
 
 /** saveCommand persists a validated draft and updates the list immediately. */
@@ -122,7 +182,7 @@ function saveCommand(draft: QuickCommandDraft): void {
     formError.value = t("terminal.quickCommands.saveRejected");
     return;
   }
-  resetForm();
+  resetForm({ restoreFocus: true });
 }
 
 /** insertCommand puts the command on the prompt without running it. */
@@ -194,58 +254,68 @@ onBeforeUnmount(() => {
     @update:show="(value: boolean) => emit('update:show', value)"
     @after-leave="emit('closed')"
   >
-    <div class="qc" role="group" :aria-label="t('terminal.quickCommands.title')">
-      <div class="qc-summary">
-        <span class="qc-count">
-          {{ t("terminal.quickCommands.count", { count: store.commands.length }) }}
-        </span>
-        <span class="qc-note">{{ t("terminal.quickCommands.storageNote") }}</span>
-      </div>
+    <div
+      ref="bodyRef"
+      class="qc"
+      role="group"
+      :aria-label="t('terminal.quickCommands.title')"
+    >
+      <template v-if="!showForm">
+        <div class="qc-summary">
+          <span class="qc-count">
+            {{ t("terminal.quickCommands.count", { count: store.commands.length }) }}
+          </span>
+          <span class="qc-note">{{ t("terminal.quickCommands.storageNote") }}</span>
+        </div>
 
-      <p v-if="store.saveFailed" class="qc-alert" role="alert">
-        {{ t("terminal.quickCommands.saveFailed") }}
-      </p>
-
-      <div v-if="store.commands.length === 0" class="qc-empty">
-        <p>{{ t("terminal.quickCommands.empty") }}</p>
-        <p>
-          {{
-            t("terminal.quickCommands.emptyExample", {
-              shortcut: "dcup",
-            })
-          }}
+        <p v-if="store.saveFailed" class="qc-alert" role="alert">
+          {{ t("terminal.quickCommands.saveFailed") }}
         </p>
-      </div>
-      <ul v-else class="qc-list">
-        <QuickCommandRow
-          v-for="command in store.commands"
-          :key="command.id"
-          :command="command"
-          @insert="insertCommand(command)"
-          @edit="startEdit(command)"
-          @delete="removeCommand(command.id)"
-        />
-      </ul>
 
-      <p v-if="insertError" class="qc-alert" role="alert">{{ insertError }}</p>
+        <div v-if="store.commands.length === 0" class="qc-empty">
+          <p>{{ t("terminal.quickCommands.empty") }}</p>
+          <p>
+            {{
+              t("terminal.quickCommands.emptyExample", {
+                shortcut: "dcup",
+              })
+            }}
+          </p>
+        </div>
+        <ul v-else class="qc-list">
+          <QuickCommandRow
+            v-for="command in store.commands"
+            :key="command.id"
+            :command="command"
+            @insert="insertCommand(command)"
+            @edit="startEdit(command)"
+            @delete="removeCommand(command.id)"
+          />
+        </ul>
+
+        <p v-if="insertError" class="qc-alert" role="alert">{{ insertError }}</p>
+
+        <p v-if="atLimit" class="qc-note">
+          {{ t("terminal.quickCommands.atLimit") }}
+        </p>
+      </template>
 
       <QuickCommandEditor
-        v-if="showForm"
+        v-else
+        ref="editorRef"
         :key="editingId === '' ? 'new' : editingId"
         :commands="store.commands"
         :editing="editing"
         :error="formError"
         @save="saveCommand"
-        @cancel="resetForm"
       />
-
-      <p v-if="atLimit" class="qc-note">{{ t("terminal.quickCommands.atLimit") }}</p>
     </div>
 
     <template #footer>
       <div class="qc-foot">
         <NButton
           v-if="!showForm"
+          ref="addButtonRef"
           size="small"
           secondary
           class="qc-add"
@@ -257,6 +327,27 @@ onBeforeUnmount(() => {
           </template>
           {{ t("terminal.quickCommands.add") }}
         </NButton>
+        <!-- The footer always keeps the mode actions visible: Add on the
+             list, Save + Cancel in the editor, so a primary action is never
+             below the fold on a short viewport (JUS-267). -->
+        <template v-else>
+          <NButton
+            size="small"
+            type="primary"
+            class="qc-save"
+            @click="saveFromFooter"
+          >
+            {{ t("terminal.quickCommands.save") }}
+          </NButton>
+          <NButton
+            size="small"
+            secondary
+            class="qc-cancel"
+            @click="resetForm({ restoreFocus: true })"
+          >
+            {{ t("terminal.quickCommands.cancel") }}
+          </NButton>
+        </template>
         <span class="qc-foot-spacer" />
         <NButton size="small" class="qc-close" @click="close">
           {{ t("terminal.quickCommands.done") }}

@@ -383,6 +383,31 @@ test.describe("host terminal on the real stack", () => {
     await expect(dialog).toContainText("docker-compose up -d --build");
     await expect(dialog.locator(".qc-item .n-tag")).toContainText("dcup");
 
+    // JUS-267: Add swaps the list for the editor (never appends it below the
+    // list) and the footer keeps a visible action, so the click can never look
+    // dead; Cancel returns to the list with Add visible again.
+    await dialog.getByRole("button", { name: "Add command" }).click();
+    await expect(dialog.locator(".qc-form")).toBeVisible();
+    await expect(dialog.locator(".qc-list")).toHaveCount(0);
+    await expect(
+      dialog.getByRole("button", { name: "Save command" }),
+    ).toBeInViewport();
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog.locator(".qc-form")).toHaveCount(0);
+    await expect(dialog.locator(".qc-item")).toHaveCount(1);
+    await expect(
+      dialog.getByRole("button", { name: "Add command" }),
+    ).toBeVisible();
+    // Cancel puts the keyboard back on Add.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.activeElement?.classList.contains("qc-add") ?? false,
+        ),
+      )
+      .toBe(true);
+
     // The Insert path sends the exact reviewed bytes, never Enter, and hands
     // focus back to the shell.
     const socket = traffic.currentSocket();
@@ -411,6 +436,14 @@ test.describe("host terminal on the real stack", () => {
     await dialog.locator(".qc-form input").first().fill("Deploy stack");
     await dialog.getByRole("button", { name: "Save command" }).click();
     await expect(dialog.locator(".qc-item")).toContainText("Deploy stack");
+    // Saving an edit returns the keyboard to that row's Edit button.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.activeElement?.getAttribute("aria-label") ?? "",
+        ),
+      )
+      .toBe("Edit Deploy stack");
 
     // Delete asks first, then removes the row.
     await dialog.getByRole("button", { name: "Delete Deploy stack" }).click();
@@ -448,6 +481,60 @@ test.describe("host terminal on the real stack", () => {
     expect(box!.y).toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height).toBeLessThanOrEqual(800);
     await expect(dialog.getByRole("button", { name: "Add command" })).toBeVisible();
+
+    // JUS-267 on a phone: Add opens the editor in place of the list, both
+    // primary actions stay in the fixed footer, and leaving the editor puts
+    // the keyboard back on the control that opened it.
+    await dialog.getByRole("button", { name: "Add command" }).click();
+    await expect(dialog.locator(".qc-form")).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: "Save command" }),
+    ).toBeInViewport();
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+    await dialog.locator(".qc-form input").first().fill("Phone command");
+    await dialog.locator(".qc-form textarea").fill("echo phone");
+    await dialog.getByRole("button", { name: "Save command" }).click();
+    await expect(dialog.locator(".qc-item")).toHaveCount(1);
+    // Save returns focus to Add.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.activeElement?.classList.contains("qc-add") ?? false,
+        ),
+      )
+      .toBe(true);
+
+    // Keyboard: Escape from the editor returns focus to that row's Edit button.
+    await dialog.getByRole("button", { name: "Edit Phone command" }).click();
+    await page.keyboard.press("Escape");
+    await expect(dialog.locator(".qc-form")).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.activeElement?.getAttribute("aria-label") ?? "",
+        ),
+      )
+      .toBe("Edit Phone command");
+
+    // At 390x500 the footer keeps both Save and Cancel visible, and Cancel is
+    // reachable by pointer without scrolling the editor.
+    await page.setViewportSize({ width: 390, height: 500 });
+    await dialog.getByRole("button", { name: "Add command" }).click();
+    await expect(
+      dialog.getByRole("button", { name: "Save command" }),
+    ).toBeInViewport();
+    await expect(
+      dialog.getByRole("button", { name: "Cancel" }),
+    ).toBeInViewport();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.activeElement?.classList.contains("qc-add") ?? false,
+        ),
+      )
+      .toBe(true);
+    await page.setViewportSize({ width: 390, height: 800 });
 
     // Tab cycles inside the dialog: the trap never lets focus escape.
     for (let index = 0; index < 12; index += 1) {

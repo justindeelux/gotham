@@ -41,6 +41,7 @@ const { t } = useI18n();
       <NButton
         quaternary
         size="tiny"
+        :data-qc-edit="props.command.id"
         :aria-label="t('terminal.quickCommands.editLabel', { label: props.command.label })"
         @click="emit('edit')"
       >

@@ -362,6 +362,81 @@ func TestCreateHostWithoutRootRoute(t *testing.T) {
 	}
 }
 
+// TestCreateResponseJSONShape pins the key set of the 201 body against
+// docs/terminal-session-api.md: root/cwd are omitted when empty (a rootless
+// host session and every container session), while the required fields are
+// always present. The web fixtures in terminal-api.test.ts use the same shape.
+func TestCreateResponseJSONShape(t *testing.T) {
+	t.Parallel()
+	base := Session{
+		ID:        uuid.New(),
+		ServerID:  uuid.New(),
+		Target:    TargetHost,
+		Cols:      120,
+		Rows:      32,
+		ExpiresAt: time.Now(),
+	}
+	container := base
+	container.Target = TargetContainer
+	container.ApplicationID = uuid.New()
+	container.Service = "web"
+	container.ContainerID = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+	container.ContainerName = "gotham-web-1"
+	container.TargetLabel = "web · gotham-web-1"
+
+	hostWithRoot := base
+	hostWithRoot.Root = "volumes"
+	hostWithRoot.Cwd = "my-app/data"
+
+	cases := []struct {
+		name    string
+		session *Session
+		present []string
+		absent  []string
+	}{
+		{
+			name:    "host without a root",
+			session: &base,
+			present: []string{"id", "server_id", "target", "cols", "rows", "expires_at", "websocket_path", "subprotocol"},
+			absent:  []string{"root", "cwd", "application_id", "service", "container_id", "container_name", "target_label"},
+		},
+		{
+			name:    "host with a root",
+			session: &hostWithRoot,
+			present: []string{"id", "server_id", "target", "root", "cwd", "cols", "rows", "expires_at", "websocket_path", "subprotocol"},
+			absent:  []string{"application_id", "service", "container_id", "container_name", "target_label"},
+		},
+		{
+			name:    "container",
+			session: &container,
+			present: []string{"id", "server_id", "target", "cols", "rows", "expires_at", "websocket_path", "subprotocol", "application_id", "service", "container_id", "container_name", "target_label"},
+			absent:  []string{"root", "cwd"},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			encoded, err := json.Marshal(newCreateResponse(testCase.session, "/api/v1/terminal/ws"))
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var keys map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &keys); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			for _, key := range testCase.present {
+				if _, ok := keys[key]; !ok {
+					t.Errorf("response is missing %q: %s", key, encoded)
+				}
+			}
+			for _, key := range testCase.absent {
+				if _, ok := keys[key]; ok {
+					t.Errorf("response must omit %q: %s", key, encoded)
+				}
+			}
+		})
+	}
+}
+
 func TestCreateRejectsInvalidInput(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, fixtureOptions{operator: true})

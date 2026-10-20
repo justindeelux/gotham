@@ -66,6 +66,8 @@ const vi = {
     cwdUnreadable: "Agent trên máy chủ không thể đọc thư mục đó.",
     agentUpdate:
       "Agent trên máy chủ này cần được cập nhật để mở terminal mà không cần thư mục.",
+    badResponse:
+      "Bảng điều khiển đã trả về phản hồi không mong đợi. Hãy bắt đầu phiên mới để thử lại.",
     generic: "Không thể khởi động terminal.",
   },
   actions: {

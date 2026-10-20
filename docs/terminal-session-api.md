@@ -75,7 +75,6 @@ agent decides the start directory.
 
 Response `201` (the example includes a File manager root; when `root`/`cwd` are
 omitted the response omits those two fields):
-
 ```json
 {
   "id": "…",
@@ -90,6 +89,10 @@ omitted the response omits those two fields):
   "subprotocol": "gotham.terminal.v1"
 }
 ```
+
+The response body is a closed contract. A client validates it, and a `201`
+whose shape drifts is reported as an unexpected response rather than a network
+or transport failure.
 
 Errors: `400` invalid request (including a `cwd` without a `root`), `404`
 unknown node, `429` quota reached, `501` unsupported target, `503`/`500`
@@ -580,11 +583,17 @@ resolver (`GOTHAM_AGENT_FILES=false`) still opens that shell while a named root
 is refused with `FailedPrecondition`; a `cwd` without a root fails in validation
 before `start` is called; and an older agent's `InvalidArgument` refusal is
 mapped in the relay test. Default-directory fallbacks (file, missing target,
-symlink to a file, relative or empty home) are unit-tested without a shell. The
-web regression in `web/tests/terminal-page.spec.ts` drives both the Terminal page
+symlink to a file, relative or empty home) are unit-tested without a shell. A
+Go test pins the exact 201 key set (`root`/`cwd` omitted when empty, for both a
+rootless host and a container), and the same literals are parsed by the web
+schema tests (host with/without a root and the container response). The web
+regression in `web/tests/terminal-page.spec.ts` drives both the Terminal page
 and the Server detail tab against a fake that validates the create body with the
-backend rules (root optional but shaped like the regex; `cwd` requires `root`)
-and asserts the exact payload `{"target":"host","cols":120,"rows":32}`.
+backend rules (root optional but shaped like the regex; `cwd` requires `root`),
+returns backend-shaped responses, and asserts the exact payload
+`{"target":"host","cols":120,"rows":32}`. A malformed 2xx body is asserted to
+show the bounded "unexpected response" copy, never a network error, and to open
+no socket.
 
 Container exec additionally runs **real throwaway container** checks. They
 start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /

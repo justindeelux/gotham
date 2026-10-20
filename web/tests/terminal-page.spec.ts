@@ -119,6 +119,7 @@ type CreateBehavior =
   | { kind: "ok" }
   | { kind: "status"; status: number }
   | { kind: "body"; status: number; message: string }
+  | { kind: "malformed" }
   | { kind: "network" }
   | { kind: "delay" }
   | { kind: "close" };
@@ -348,6 +349,12 @@ async function mockApi(
         status: behavior.status,
         json: { message: behavior.message },
       });
+      return;
+    }
+    if (behavior.kind === "malformed") {
+      // A 2xx body that violates the create contract: the UI must report an
+      // unexpected response, never a network error, and never open a socket.
+      await route.fulfill({ status: 201, json: { id: "only-an-id" } });
       return;
     }
     if (behavior.kind === "delay") {
@@ -931,6 +938,36 @@ test("server detail create failure is explicit and never auto-retries", async ({
   await page.getByRole("button", { name: "Start new session" }).click();
   await expect.poll(() => state.creates).toBe(2);
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+});
+
+test("an unexpected create response is bounded and never reported as network", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  state.behaviors = [{ kind: "malformed" }];
+  await mockApi(page, state);
+  await seedApp(page, `/terminal?server=${SERVER_A}`);
+
+  await expect.poll(() => state.creates).toBe(1);
+  await expect(
+    page.getByText(
+      "The control plane sent an unexpected response. Start a new session to try again.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("The control plane could not be reached."),
+  ).toHaveCount(0);
+  // No session was registered, so no WebSocket could be opened.
+  expect(state.sessions).toHaveLength(0);
+  await page.waitForTimeout(1500);
+  expect(state.creates).toBe(1);
+
+  // Explicit retry only; the next create is a well-formed response.
+  await page.getByRole("button", { name: "Start new session" }).click();
+  await expect.poll(() => state.creates).toBe(2);
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  expect(state.sessions).toHaveLength(1);
 });
 
 test("rapid tab flapping while a create is in flight issues one POST", async ({

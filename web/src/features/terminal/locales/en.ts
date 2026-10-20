@@ -67,6 +67,8 @@ const en = {
     cwdUnreadable: "The node agent cannot read that folder.",
     agentUpdate:
       "This node agent needs an update to open a terminal without a folder.",
+    badResponse:
+      "The control plane sent an unexpected response. Start a new session to try again.",
     generic: "The terminal could not be started.",
   },
   actions: {

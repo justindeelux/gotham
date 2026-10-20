@@ -9,6 +9,7 @@ import type {
 import {
   clearSession,
   getAccessToken,
+  getActiveTeamId,
   getRefreshToken,
   getSession,
   setSession,
@@ -77,12 +78,52 @@ export const http: AxiosInstance = axios.create({
   headers: { Accept: "application/json" },
 });
 
+/**
+ * teamScopedPathPrefixes lists the routes the control plane resolves inside
+ * one team: applications and their nested resources (env, deployments, logs,
+ * domains, storage, previews, terminal targets/sessions) plus the dashboard's
+ * deployment feed. The server reads the optional `X-Team-Id` header through
+ * RequireTeam and falls back to the caller's PERSONAL team when it is absent
+ * (see internal/teams/doc.go), so a shared-team resource read without the
+ * header is indistinguishable from a foreign id and answers 404. That fallback
+ * is deliberate team isolation and stays server-side; the client therefore
+ * attaches the active team to every team-scoped request in one place instead
+ * of each caller threading the id through. A caller that sets its own
+ * non-empty `X-Team-Id` (the notifications dialog lists a specific team)
+ * keeps it.
+ */
+const teamScopedPathPrefixes = ["/applications", "/deployments"];
+
+/** isTeamScopedPath reports whether url addresses a team-scoped route. */
+function isTeamScopedPath(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  const path = url.startsWith("/") ? url : `/${url}`;
+  return teamScopedPathPrefixes.some(
+    (prefix) =>
+      path === prefix ||
+      path.startsWith(`${prefix}/`) ||
+      path.startsWith(`${prefix}?`),
+  );
+}
+
 http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const accessToken = getAccessToken();
   if (accessToken) {
     config.headers.set("Authorization", `Bearer ${accessToken}`);
   } else {
     config.headers.delete("Authorization");
+  }
+  // Team scope: an empty selection means the caller's personal team, which the
+  // server resolves without the header. A caller-supplied non-empty header
+  // wins so a surface that targets one specific team (notifications) is never
+  // silently retargeted by a team switch.
+  if (!config.headers.has("X-Team-Id") && isTeamScopedPath(config.url)) {
+    const teamId = getActiveTeamId();
+    if (teamId) {
+      config.headers.set("X-Team-Id", teamId);
+    }
   }
   return config;
 });
@@ -451,9 +492,10 @@ function redirectToLogin(): void {
 }
 
 /**
- * teamHeaders scopes a request to one team (`X-Team-Id`). An empty id means
- * the caller's personal team, which the control plane resolves without the
- * header.
+ * teamHeaders scopes a request to one team (`X-Team-Id`). An empty id omits
+ * the header: on a team-scoped route the request interceptor then attaches the
+ * active team (the personal team when none is selected), while a non-empty id
+ * always wins.
  */
 export function teamHeaders(teamId: string): Record<string, string> {
   return teamId ? { "X-Team-Id": teamId } : {};

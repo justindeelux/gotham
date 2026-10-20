@@ -561,8 +561,9 @@ export async function rollbackDeployment(
 
 /**
  * listApplications returns one team's applications, newest first
- * (GET /applications → 200). An empty teamId reads the caller's personal
- * team, matching the other pre-teams surfaces. `filter` optionally scopes
+ * (GET /applications → 200). An empty teamId follows the caller's active team
+ * — the personal team when none is selected — because the request layer
+ * attaches it to every /applications route. `filter` optionally scopes
  * the list to one environment or project (?environment_id= / ?project_id=,
  * mutually exclusive server-side).
  */

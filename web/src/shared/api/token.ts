@@ -58,6 +58,25 @@ const storageKey = "gotham.auth.session";
 export const activeTeamStorageKey = "gotham.teams.active";
 
 /**
+ * getActiveTeamId returns the persisted active-team selection, or "" when the
+ * caller is on their personal team. The HTTP layer reads it on every
+ * team-scoped request (see ./http), so a resource route does not depend on
+ * each caller threading the id through — the teams store remains the only
+ * writer of the key.
+ */
+export function getActiveTeamId(): string {
+  const storage = getStorage();
+  if (!storage) {
+    return "";
+  }
+  try {
+    return storage.getItem(activeTeamStorageKey) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
  * editorDraftStorageKeyPrefix scopes the code editor's unsaved drafts. Drafts
  * hold plaintext file bodies (which may include secrets), so every key under
  * this prefix is purged on sign-out and on an account switch instead of being

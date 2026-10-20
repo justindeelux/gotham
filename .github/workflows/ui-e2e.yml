@@ -1,8 +1,11 @@
 name: UI E2E
 
 # Browser-level smoke for the embedded SPA against a real control plane.
-# Separate from ci.yml (unit/build) and internal/e2e (API-level suite) so the
-# Playwright run only fires on UI changes.
+# Separate from ci.yml (unit/build) and internal/e2e (API-level suite).
+# JUS-251: the terminal specs drive real PTYs and real containers through the
+# control plane + node agent, so backend terminal/agent/auth changes must run
+# this job too (a regression that re-requires `root`, breaks the relay or the
+# authorizer has to reach the browser proof).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -11,6 +14,11 @@ on:
   pull_request:
     paths:
       - "web/**"
+      - "internal/terminal/**"
+      - "internal/servers/**"
+      - "internal/auth/**"
+      - "agent/**"
+      - "proto/**"
       - ".github/workflows/ui-e2e.yml"
 
 permissions:
@@ -70,6 +78,16 @@ jobs:
       # key; the domains smoke exercises the DNS-provider CRUD path.
       GOTHAM_SECRET_KEY: "ui-e2e-secret-key-not-for-production"
       GOTHAM_E2E_BASE_URL: http://127.0.0.1:8099
+      # JUS-251: the terminal journeys drive a real node agent started below
+      # on this runner. `localhost` is the co-located identity the control
+      # plane maps to 127.0.0.1:9443 without an operator-recorded address.
+      GOTHAM_E2E_TERMINAL_NODE: localhost
+      GOTHAM_E2E_TERMINAL_IMAGE: nginx:1.28.0-alpine
+      # JUS-251: CI must FAIL, not skip, when the node/agent/permission/pid
+      # prerequisites are missing; the final step also asserts the terminal
+      # specs actually executed.
+      GOTHAM_E2E_REQUIRE_TERMINAL: "1"
+      GOTHAM_E2E_RUN_ID: ${{ github.run_id }}
       # The smoke account is a platform operator so the platform-global DNS
       # surface (BE-8.2) is reachable; per-application cert/redirect management
       # stays team-scoped.
@@ -100,8 +118,21 @@ jobs:
       - name: Migrate test database
         run: go run ./cmd/gotham migrate up
 
-      - name: Build control plane
-        run: go build -o bin/gotham ./cmd/gotham
+      - name: Build control plane and node agent
+        run: |
+          go build -o bin/gotham ./cmd/gotham
+          go build -o bin/gotham-agent ./cmd/gotham-agent
+
+      - name: Pre-pull application images
+        run: |
+          for image in nginx:1.28.0-alpine busybox:1.36; do
+            for attempt in 1 2 3 4; do
+              if docker pull "$image"; then break; fi
+              echo "pull $image attempt $attempt failed; retrying" >&2
+              sleep 5
+            done
+            docker image inspect "$image" >/dev/null
+          done
 
       - name: Stop any leftover control plane
         run: pkill -f 'bin/gotham serve' || true
@@ -120,6 +151,37 @@ jobs:
           cat gotham-ui-e2e.log
           exit 1
 
+      # JUS-251: the terminal specs exercise real PTYs and real application
+      # containers, so the node agent is the repository build registered to
+      # this control plane (plaintext dev mode, loopback only). The file
+      # service is on by default; compose root and volumes live in the
+      # runner's temp dir so the run leaves nothing behind.
+      - name: Start node agent
+        env:
+          GOTHAM_AGENT_CP_ADDR: 127.0.0.1:9444
+          GOTHAM_AGENT_NODE_ID: localhost
+          GOTHAM_AGENT_LISTEN_ADDR: 127.0.0.1:9443
+          GOTHAM_AGENT_INSECURE: "true"
+          GOTHAM_AGENT_HEALTH_ADDR: 127.0.0.1:9446
+        run: |
+          mkdir -p "$RUNNER_TEMP/gotham-agent" "$RUNNER_TEMP/gotham-agent/compose" "$RUNNER_TEMP/gotham-agent/volumes"
+          GOTHAM_AGENT_CERT_DIR="$RUNNER_TEMP/gotham-agent" \
+          GOTHAM_AGENT_COMPOSE_ROOT="$RUNNER_TEMP/gotham-agent/compose" \
+          GOTHAM_AGENT_MANAGED_VOLUME_ROOT="$RUNNER_TEMP/gotham-agent/volumes" \
+            nohup ./bin/gotham-agent serve > gotham-ui-e2e-agent.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/gotham-agent.pid"
+          echo "GOTHAM_E2E_AGENT_PID=$(cat "$RUNNER_TEMP/gotham-agent.pid")" >> "$GITHUB_ENV"
+          for _ in $(seq 1 60); do
+            if grep -q 'registered with control plane' gotham-ui-e2e-agent.log; then
+              echo "node agent registered"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "node agent failed to register"
+          cat gotham-ui-e2e-agent.log
+          exit 1
+
       - name: Install web dependencies
         working-directory: web
         run: npm ci
@@ -130,11 +192,47 @@ jobs:
 
       - name: Run Playwright smoke
         working-directory: web
-        run: npm run e2e
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/terminal-report.json
+        run: npx playwright test --reporter=list,html,json
 
-      - name: Show control-plane log on failure
+      - name: Assert the terminal specs ran
+        working-directory: web
+        run: |
+          node - <<'NODE'
+          const report = require("./test-results/terminal-report.json");
+          const specs = [];
+          const walk = (suite) => {
+            for (const child of suite.suites ?? []) walk(child);
+            for (const spec of suite.specs ?? []) specs.push(spec);
+          };
+          walk(report);
+          const terminal = specs.filter((spec) =>
+            /terminal-(host|regressions|application|compose)\.spec/.test(spec.file ?? ""),
+          );
+          const skipped = terminal.filter((spec) =>
+            (spec.tests ?? []).some((t) => t.status === "skipped"),
+          );
+          const passed = terminal.filter((spec) => spec.ok === true);
+          if (terminal.length < 20 || skipped.length > 0 || passed.length !== terminal.length) {
+            console.error({
+              total: terminal.length,
+              passed: passed.length,
+              skipped: skipped.length,
+            });
+            process.exit(1);
+          }
+          console.log(
+            `terminal specs: ${terminal.length} total, ${passed.length} passed, 0 skipped`,
+          );
+          NODE
+
+      - name: Show control-plane and agent logs on failure
         if: failure()
-        run: cat gotham-ui-e2e.log
+        run: |
+          cat gotham-ui-e2e.log
+          cat gotham-ui-e2e-agent.log || true
+          docker ps -a || true
 
       - name: Upload Playwright report
         if: failure()
@@ -154,6 +252,29 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Stop control plane
+      - name: Stop control plane and node agent
         if: always()
-        run: pkill -f 'bin/gotham serve' || true
+        run: |
+          if [ -f "$RUNNER_TEMP/gotham-agent.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/gotham-agent.pid")" || true
+          fi
+          pkill -f 'bin/gotham-agent serve' || true
+          pkill -f 'bin/gotham serve' || true
+
+          # JUS-251: remove ONLY this run's containers/network/volumes. The
+          # generic com.docker.compose.project label also matches unrelated
+          # projects (on a developer machine or a self-hosted runner it would
+          # remove gotham-dev-postgres and gotham-dev-redis). Compose services
+          # carry e2e.gotham.run=<run id>; image-source applications seeded by
+          # the specs use the gotham-ui-e2e-term- name prefix.
+          RUN_ID="${GOTHAM_E2E_RUN_ID:-local-run}"
+          projects="$(docker ps -a --filter "label=e2e.gotham.run=$RUN_ID" \
+            --format '{{.Label "com.docker.compose.project"}}' | sort -u)"
+          docker ps -aq --filter "label=e2e.gotham.run=$RUN_ID" | xargs -r docker rm -f || true
+          docker ps -aq --filter "name=gotham-ui-e2e-term-" | xargs -r docker rm -f || true
+          for project in $projects; do
+            docker network ls -q --filter "label=com.docker.compose.project=$project" \
+              | xargs -r docker network rm || true
+            docker volume ls -q --filter "label=com.docker.compose.project=$project" \
+              | xargs -r docker volume rm || true
+          done

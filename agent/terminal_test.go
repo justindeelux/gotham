@@ -473,6 +473,14 @@ func TestTerminalEchoResizeAndExit(t *testing.T) {
 	}
 	waitForOutput(t, stream, "gotham-pty-ok")
 
+	// JUS-251: a real PTY round-trip for multi-byte UTF-8 (the browser suite
+	// covers the same bytes through xterm; this pins the Linux kernel/PTY path
+	// used in the amd64/arm64 container evidence).
+	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Input{Input: []byte("echo gotham-pty-é✓ñ\r")}}); err != nil {
+		t.Fatalf("send utf8 input: %v", err)
+	}
+	waitForOutput(t, stream, "gotham-pty-é✓ñ")
+
 	if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Resize{Resize: &agentv1.TerminalResize{Cols: 100, Rows: 40}}}); err != nil {
 		t.Fatalf("send resize: %v", err)
 	}

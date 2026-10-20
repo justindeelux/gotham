@@ -786,14 +786,17 @@ const shellProbeCommand = `for s in bash sh ash; do p=$(command -v "$s" 2>/dev/n
 
 // ExecOptions describes one interactive exec. Cmd empty selects the first
 // supported shell inside the container. User and WorkingDir default to the
-// container's configured values.
+// container's configured values. Integration enables the agent's additive bash
+// startup rcfile (prompt marks and colour defaults); it is agent policy, never
+// caller input.
 type ExecOptions struct {
-	Cmd        []string
-	Env        []string
-	User       string
-	WorkingDir string
-	Cols       uint16
-	Rows       uint16
+	Cmd         []string
+	Env         []string
+	User        string
+	WorkingDir  string
+	Cols        uint16
+	Rows        uint16
+	Integration bool
 }
 
 // ExecSession is one attached interactive exec. Read/Write are the container
@@ -871,6 +874,12 @@ func (c *DockerClient) Exec(ctx context.Context, containerID string, opts ExecOp
 	if len(command) == 0 {
 		command = []string{shellPath}
 	}
+	// Report the shell the user actually gets, before the fixed pid/kill
+	// wrapper (which runs /bin/sh -c) hides it.
+	interactiveShell := command[0]
+	if opts.Integration {
+		command = containerBashCommand(command, opts.Integration)
+	}
 	// Record the pid that becomes the shell (`exec` keeps it), then run the
 	// requested command. The fixed helper terminates that whole tree on Close;
 	// the daemon alone does not end an exec process when its attach stream goes
@@ -881,8 +890,12 @@ func (c *DockerClient) Exec(ctx context.Context, containerID string, opts ExecOp
 	// The kill helper finds setsid/reparented jobs by it even after they leave
 	// the shell's session or process tree.
 	marker := uuid.NewString()
+	// Docker's daemon merges the container's configured environment with this
+	// list (our values win), so image-provided HOME/USER/LANG/PATH stay intact.
+	// TERM, COLORTERM and a UTF-8 locale are added by the agent only.
 	env := append([]string(nil), opts.Env...)
-	env = append(env, "GOTHAM_TERMINAL_ID="+marker, "TERM=xterm-256color")
+	env = append(env, "GOTHAM_TERMINAL_ID="+marker)
+	env = terminalEnvDescription(env, inspect.Config.Env)
 	execID, err := c.createExec(ctx, containerID, wrapped, user, workdir, env, true)
 	if err != nil {
 		return nil, err
@@ -904,7 +917,7 @@ func (c *DockerClient) Exec(ctx context.Context, containerID string, opts ExecOp
 		pid:         pid,
 		stream:      stream,
 		reader:      reader,
-		shell:       shellPath,
+		shell:       interactiveShell,
 		user:        displayContainerUser(user),
 		execUser:    user,
 		workdir:     workdir,

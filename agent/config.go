@@ -53,6 +53,10 @@ const (
 	// file; empty selects $SHELL, /bin/bash or /bin/sh.
 	envTerminalShell       = "GOTHAM_AGENT_TERMINAL_SHELL"
 	envTerminalMaxSessions = "GOTHAM_AGENT_TERMINAL_MAX_SESSIONS"
+	// envTerminalIntegration turns the additive bash startup integration off
+	// ("false"/"0"/"no"/"off"), restoring the pre-JUS-263 shell selection and
+	// startup files.
+	envTerminalIntegration = "GOTHAM_AGENT_TERMINAL_INTEGRATION"
 
 	envAutoUpdate     = "GOTHAM_AGENT_AUTO_UPDATE"
 	envUpdateInterval = "GOTHAM_AGENT_UPDATE_INTERVAL"
@@ -202,6 +206,11 @@ type Config struct {
 	// TerminalMaxSessions bounds concurrent host terminal sessions on this
 	// node (GOTHAM_AGENT_TERMINAL_MAX_SESSIONS). Zero uses the package default.
 	TerminalMaxSessions int
+	// TerminalIntegration enables the optional bash startup integration:
+	// bash-first host shells, colour defaults and OSC 133 prompt marks from a
+	// constant agent rcfile. It is on by default and can be disabled with
+	// GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
+	TerminalIntegration bool
 
 	// Version is the running agent build version. It is set by the entrypoint
 	// (not the environment) and reported to the CP in heartbeats and update
@@ -272,6 +281,7 @@ func Load() (Config, error) {
 
 		TerminalShell:       strings.TrimSpace(os.Getenv(envTerminalShell)),
 		TerminalMaxSessions: int(int64FromEnv(envTerminalMaxSessions, 0)),
+		TerminalIntegration: !envOff(envTerminalIntegration),
 
 		AutoUpdate:        strings.EqualFold(strings.TrimSpace(os.Getenv(envAutoUpdate)), "true"),
 		UpdateInterval:    updateIntervalFromEnv(),

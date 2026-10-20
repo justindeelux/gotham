@@ -30,12 +30,18 @@ const testContainerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456
 type fakeContainerExec struct {
 	sessions chan *fakeExecSession
 	err      error
+
+	mu       sync.Mutex
+	lastOpts ExecOptions
 }
 
 func (f *fakeContainerExec) Exec(_ context.Context, containerID string, opts ExecOptions) (ExecSession, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
+	f.mu.Lock()
+	f.lastOpts = opts
+	f.mu.Unlock()
 	reader, writer := io.Pipe()
 	session := &fakeExecSession{
 		containerID: containerID,
@@ -48,6 +54,13 @@ func (f *fakeContainerExec) Exec(_ context.Context, containerID string, opts Exe
 	}
 	f.sessions <- session
 	return session, nil
+}
+
+// options returns the options the terminal server passed to Exec.
+func (f *fakeContainerExec) options() ExecOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastOpts
 }
 
 type fakeExecSession struct {
@@ -112,6 +125,48 @@ func (s *fakeExecSession) dimensions() (uint16, uint16) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cols, s.rows
+}
+
+// TestTerminalContainerIntegrationWiring proves the terminal server's container
+// path forwards its own integration policy to Exec: on by default, off when the
+// server was built with IntegrationDisabled (the GOTHAM_AGENT_TERMINAL_INTEGRATION
+// switch). Driving Exec directly would not cover this wiring.
+func TestTerminalContainerIntegrationWiring(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		terminal   TerminalConfig
+		wantIntegr bool
+	}{
+		{name: "enabled", terminal: TerminalConfig{}, wantIntegr: true},
+		{name: "off switch", terminal: TerminalConfig{IntegrationDisabled: true}, wantIntegr: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			exec := &fakeContainerExec{sessions: make(chan *fakeExecSession, 1)}
+			cfg := testCase.terminal
+			cfg.Logger = discardLogger()
+			cfg.Containers = exec
+			terminal := NewTerminalServer(cfg)
+			client := startTerminalServer(t, terminal)
+			stream, err := client.OpenTerminal(context.Background())
+			if err != nil {
+				t.Fatalf("OpenTerminal: %v", err)
+			}
+			defer func() { _ = stream.CloseSend() }()
+			if err := stream.Send(&agentv1.TerminalRequest{Part: &agentv1.TerminalRequest_Open{Open: &agentv1.TerminalOpen{
+				Target: "container", ContainerId: testContainerID, Cols: 80, Rows: 24,
+			}}}); err != nil {
+				t.Fatalf("send open: %v", err)
+			}
+			opened, err := stream.Recv()
+			if err != nil || opened.GetOpened() == nil {
+				t.Fatalf("recv opened: %v (%v)", err, opened)
+			}
+			<-exec.sessions
+			if got := exec.options().Integration; got != testCase.wantIntegr {
+				t.Fatalf("ExecOptions.Integration = %v; want %v (server wiring must forward the policy)", got, testCase.wantIntegr)
+			}
+		})
+	}
 }
 
 // TestTerminalContainerStreamsResizesAndExits covers the transport contract for
@@ -462,6 +517,8 @@ type fakeExecAPI struct {
 	killSurvivors  bool
 	execRunning    bool
 	commands       [][]string
+	envs           [][]string
+	imageEnv       []string
 	inputs         strings.Builder
 	resizeQuery    string
 }
@@ -474,18 +531,23 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 		api.mu.Lock()
 		running := api.running
 		api.mu.Unlock()
+		api.mu.Lock()
+		imageEnv := append([]string(nil), api.imageEnv...)
+		api.mu.Unlock()
 		writeJSON(t, w, map[string]any{
 			"State":  map[string]any{"Running": running, "Status": "exited"},
-			"Config": map[string]any{"User": "app", "WorkingDir": "/srv"},
+			"Config": map[string]any{"User": "app", "WorkingDir": "/srv", "Env": imageEnv},
 		})
 	})
 	mux.HandleFunc("/containers/c1/exec", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Cmd []string `json:"Cmd"`
+			Env []string `json:"Env"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		api.mu.Lock()
 		api.commands = append(api.commands, body.Cmd)
+		api.envs = append(api.envs, body.Env)
 		number := len(api.commands)
 		fail := api.killCreateFail && number == 3
 		api.mu.Unlock()
@@ -578,6 +640,26 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 	api.server = httptest.NewServer(mux)
 	t.Cleanup(api.server.Close)
 	return api
+}
+
+// command returns the recorded Cmd of the n-th created exec (1-based).
+func (a *fakeExecAPI) command(number int) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if number < 1 || number > len(a.commands) {
+		return nil
+	}
+	return append([]string(nil), a.commands[number-1]...)
+}
+
+// env returns the recorded Env of the n-th created exec (1-based).
+func (a *fakeExecAPI) env(number int) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if number < 1 || number > len(a.envs) {
+		return nil
+	}
+	return append([]string(nil), a.envs[number-1]...)
 }
 
 func (a *fakeExecAPI) resize() string {

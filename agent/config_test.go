@@ -53,6 +53,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Insecure {
 		t.Error("Insecure = true; want false by default")
 	}
+	if !cfg.TerminalIntegration {
+		t.Error("TerminalIntegration = false; want the bash integration on by default")
+	}
 }
 
 // TestLoadRejectsPlaintextWithoutOptIn is the FX-3 item-9 guard: no CA and no
@@ -133,6 +136,15 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.ManagedVolumeRoot != "/srv/gotham/volumes" {
 		t.Errorf("ManagedVolumeRoot = %q", cfg.ManagedVolumeRoot)
+	}
+
+	t.Setenv(envTerminalIntegration, "false")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load (integration off): %v", err)
+	}
+	if cfg.TerminalIntegration {
+		t.Error("TerminalIntegration = true; GOTHAM_AGENT_TERMINAL_INTEGRATION=false must disable it")
 	}
 }
 

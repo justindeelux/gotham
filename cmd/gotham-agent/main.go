@@ -21,6 +21,21 @@ import (
 // -ldflags "-X main.version=<tag>".
 var version = "dev"
 
+// newTerminalConfig maps the agent configuration onto the terminal service.
+// It is a separate function so the config-to-server wiring (including the
+// GOTHAM_AGENT_TERMINAL_INTEGRATION off switch) is unit-tested directly.
+// Roots is left for the caller because a nil *agent.FileServer must not become
+// a non-nil agent.TerminalRoots interface.
+func newTerminalConfig(cfg agent.Config, log *slog.Logger, containers agent.ContainerExec) agent.TerminalConfig {
+	return agent.TerminalConfig{
+		Logger:              log,
+		Shell:               cfg.TerminalShell,
+		Containers:          containers,
+		MaxSessions:         cfg.TerminalMaxSessions,
+		IntegrationDisabled: !cfg.TerminalIntegration,
+	}
+}
+
 // Exit codes returned by run.
 const (
 	exitOK    = 0
@@ -196,12 +211,7 @@ func runServe() int {
 			// root policy, so Roots stays nil when files are disabled and a host
 			// open answers FailedPrecondition. Container exec does not need a
 			// file root, so the service is always registered.
-			terminalConfig := agent.TerminalConfig{
-				Logger:      log,
-				Shell:       cfg.TerminalShell,
-				Containers:  docker,
-				MaxSessions: cfg.TerminalMaxSessions,
-			}
+			terminalConfig := newTerminalConfig(cfg, log, docker)
 			if fileServer != nil {
 				terminalConfig.Roots = fileServer
 			}

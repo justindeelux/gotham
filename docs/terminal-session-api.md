@@ -323,16 +323,34 @@ create ──pending (60s)──▶ attach ──confirmed (≤8h)──▶ rela
   longer `Running`, and only then closes the attach connection and reports the
   exit status. If the helper cannot run or still reports survivors, the cleanup
   error is returned by `Close` and logged at `ERROR` with the container id — it
-  is never silently treated as success. **Neither path stops, restarts or
-  removes the application container.** The host child is always reaped (even
-  when the opened event could not be sent), and a child that already exited is
-  never signalled again. File descriptors, hijacked connections and goroutines
-  are released on both sides.
+  is never silently treated as success. If the helper cannot inspect markers at
+  all (`tr`/`grep` missing, `/proc` absent, or an unreadable
+  `/proc/<pid>/environ`), it exits non-zero with `marker-scan-unavailable`
+  instead of claiming success, even if the tree/session part did run. The host
+  child is always reaped (even when the opened event could not be sent), and a
+  child that already exited is never signalled again. File descriptors,
+  hijacked connections and goroutines are released on both sides.
+
+  **What the terminal owns.** The container itself is **never stopped,
+  restarted or removed** by closing a terminal. However, the marker is
+  inherited by every process **started or restarted from that terminal**,
+  including intentionally persistent ones — a service restarted with
+  `service x restart` or `supervisorctl restart`, or a `tmux`/`screen` server
+  attached from another tab. Closing the terminal ends those processes too;
+  that is the intended cleanup semantics: the terminal owns the processes it
+  starts. This includes application service processes other than pid 1 if they
+  were started or restarted from that terminal. To keep a service alive across
+  terminals, restart it from outside a terminal (the platform's deploy/restart
+  path). Processes not started or restarted from the terminal, including the
+  application's pid 1, are not signalled.
+
   **Remaining limit:** a daemon that double-forks, calls `setsid` **and** clears
   its environment before the terminal is closed is reparented to pid 1 and
   carries no marker, so the helper cannot attribute it to the terminal. Such a
   process can outlive the close; ordinary `nohup`, background, trapped and
-  single-`setsid` jobs are covered.
+  single-`setsid` jobs are covered. A command name made to contain a newline is
+  still parsed correctly: the helper reads the whole `/proc/<pid>/stat` record,
+  not only its first line.
 * **Agent failure / old agent** ends the stream with an error frame:
   `codes.Unimplemented` is reported as "the node agent does not support terminal
   sessions". The control plane never retries, reconnects or replays input.
@@ -473,7 +491,8 @@ start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /
 
 * the review table on `alpine:3`, `busybox:1.36` and `debian:bookworm-slim`:
   foreground `sleep`, `trap '' HUP TERM INT`, `nohup x &`, plain `x &`,
-  `(setsid x &)`, nested `( (x &) & )` and a shell that exits before Close. Each
+  `(setsid x &)`, nested `( (x &) & )`, a shell whose command name contains a
+  newline with an env-scrubbed child, and a shell that exits before Close. Each
   case scans `/proc` from a fresh exec (not the kill helper) for the session's
   unique environment marker and checks Docker's exec inspect after Close;
 * the same hard rows after **transport loss** (cancelled terminal stream),
@@ -483,6 +502,10 @@ start unique `alpine:3` containers (never the shared `gotham-dev-postgres` /
   cap** (short `MaxDuration`) with no double-kill panic, run under `-race`;
 * a cleanup-failure case (`chmod -x /bin/sh` after the terminal opens) proving
   `Close` surfaces the failure instead of reporting success;
+* `marker-scan-unavailable` cases: no `tr`/`grep` in the image, and a
+  `nobody` helper up against a root-owned marked process (unreadable
+  `/proc/<pid>/environ`);
+* helper-output cleanliness while processes exit during the `/proc` scan;
 * resize observed through `stty size`, Ctrl-C, and three open/close cycles.
 
 ```sh

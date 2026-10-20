@@ -586,12 +586,19 @@ marker=$2
 case "$root" in ''|*[!0-9]*) exit 2;; esac
 [ "$root" -gt 1 ] || exit 2
 case "$marker" in ''|*[!A-Za-z0-9-]*) marker="";; esac
-list=" $root "
-add_pid() {
-  case " $list " in
-    *" $1 "*) ;;
-    *) list="$list$1 " ;;
-  esac
+if [ ! -d /proc ]; then
+  echo "marker-scan-unavailable (no /proc)"
+  exit 4
+fi
+read_stat() {
+  stat_line=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    stat_line="$stat_line$line "
+  done < "$1/stat" 2>/dev/null
+  [ -n "$stat_line" ]
+}
+marker_match() {
+  { tr '\0' '\n' < "$1/environ" | grep -qx "GOTHAM_TERMINAL_ID=$marker"; } 2>/dev/null
 }
 parse_stat() {
   stat_rest=${1##*) }
@@ -600,17 +607,30 @@ parse_stat() {
   stat_ppid=$2
   stat_sid=$4
 }
+marker_tools=""
+inspect_failed=""
+if [ -z "$marker" ]; then
+  inspect_failed=1
+elif command -v tr >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
+  marker_tools=1
+else
+  inspect_failed=1
+fi
+list=" $root "
+add_pid() {
+  case " $list " in
+    *" $1 "*) ;;
+    *) list="$list$1 " ;;
+  esac
+}
 frontier="$root"
 while [ -n "$frontier" ]; do
   next=""
   for d in /proc/[0-9]*; do
-    [ -r "$d/stat" ] || continue
     pid=${d#/proc/}
     [ "$pid" -gt 1 ] || continue
     [ "$pid" = "$$" ] && continue
-    stat_line=""
-    read -r stat_line < "$d/stat" 2>/dev/null
-    [ -n "$stat_line" ] || continue
+    read_stat "$d" || continue
     parse_stat "$stat_line"
     if [ "$stat_sid" = "$root" ]; then add_pid "$pid"; fi
     case " $frontier " in
@@ -622,14 +642,16 @@ while [ -n "$frontier" ]; do
   done
   frontier=$next
 done
-if [ -n "$marker" ] && command -v tr >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
+if [ -n "$marker" ] && [ -n "$marker_tools" ]; then
   for d in /proc/[0-9]*; do
     pid=${d#/proc/}
     [ "$pid" -gt 1 ] || continue
     [ "$pid" = "$$" ] && continue
-    [ -r "$d/environ" ] || continue
-    if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$marker"; then
-      add_pid "$pid"
+    if [ -r "$d/environ" ]; then
+      if marker_match "$d"; then add_pid "$pid"; fi
+    elif read_stat "$d"; then
+      parse_stat "$stat_line"
+      [ "$stat_state" = "Z" ] || inspect_failed=1
     fi
   done
 fi
@@ -651,23 +673,27 @@ while [ "$attempt" -lt 5 ]; do
     pid=${d#/proc/}
     [ "$pid" -gt 1 ] || continue
     [ "$pid" = "$$" ] && continue
-    [ -r "$d/stat" ] || continue
-    stat_line=""
-    read -r stat_line < "$d/stat" 2>/dev/null
-    [ -n "$stat_line" ] || continue
+    read_stat "$d" || continue
     parse_stat "$stat_line"
     [ "$stat_state" = "Z" ] && continue
     if [ "$stat_sid" = "$root" ]; then survivors="$survivors $pid"; continue; fi
-    if [ -n "$marker" ] && command -v tr >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
-      if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$marker"; then
-        survivors="$survivors $pid"
+    if [ -n "$marker" ] && [ -n "$marker_tools" ]; then
+      if [ -r "$d/environ" ]; then
+        if marker_match "$d"; then survivors="$survivors $pid"; fi
+      else
+        inspect_failed=1
       fi
     fi
   done
-  [ -z "$survivors" ] && exit 0
+  if [ -z "$survivors" ] && [ -z "$inspect_failed" ]; then exit 0; fi
   sleep 0.2 2>/dev/null || :
   attempt=$((attempt + 1))
 done
+if [ -n "$inspect_failed" ]; then
+  echo "marker-scan-unavailable"
+  [ -n "$survivors" ] && echo "survivors:$survivors"
+  exit 4
+fi
 echo "survivors:$survivors"
 exit 3`
 
@@ -677,9 +703,30 @@ exit 3`
 // terminal's unique environment marker (orphaned nohup/background jobs).
 const execKillMarkerScript = `marker=$1
 case "$marker" in ''|*[!A-Za-z0-9-]*) exit 2;; esac
-if ! command -v tr >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then
-  exit 0
+if [ ! -d /proc ]; then
+  echo "marker-scan-unavailable (no /proc)"
+  exit 4
 fi
+if ! command -v tr >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then
+  echo "marker-scan-unavailable (no tr/grep)"
+  exit 4
+fi
+read_stat() {
+  stat_line=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    stat_line="$stat_line$line "
+  done < "$1/stat" 2>/dev/null
+  [ -n "$stat_line" ]
+}
+marker_match() {
+  { tr '\0' '\n' < "$1/environ" | grep -qx "GOTHAM_TERMINAL_ID=$marker"; } 2>/dev/null
+}
+parse_stat() {
+  stat_rest=${1##*) }
+  set -- $stat_rest
+  stat_state=$1
+}
+inspect_failed=""
 list=""
 add_pid() {
   case " $list " in
@@ -691,9 +738,11 @@ for d in /proc/[0-9]*; do
   pid=${d#/proc/}
   [ "$pid" -gt 1 ] || continue
   [ "$pid" = "$$" ] && continue
-  [ -r "$d/environ" ] || continue
-  if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$marker"; then
-    add_pid "$pid"
+  if [ -r "$d/environ" ]; then
+    if marker_match "$d"; then add_pid "$pid"; fi
+  elif read_stat "$d"; then
+    parse_stat "$stat_line"
+    [ "$stat_state" = "Z" ] || inspect_failed=1
   fi
 done
 for sig in HUP TERM KILL; do
@@ -714,15 +763,22 @@ while [ "$attempt" -lt 5 ]; do
     pid=${d#/proc/}
     [ "$pid" -gt 1 ] || continue
     [ "$pid" = "$$" ] && continue
-    [ -r "$d/environ" ] || continue
-    if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GOTHAM_TERMINAL_ID=$marker"; then
-      survivors="$survivors $pid"
+    if [ -r "$d/environ" ]; then
+      if marker_match "$d"; then survivors="$survivors $pid"; fi
+    elif read_stat "$d"; then
+      parse_stat "$stat_line"
+      [ "$stat_state" = "Z" ] || inspect_failed=1
     fi
   done
-  [ -z "$survivors" ] && exit 0
+  if [ -z "$survivors" ] && [ -z "$inspect_failed" ]; then exit 0; fi
   sleep 0.2 2>/dev/null || :
   attempt=$((attempt + 1))
 done
+if [ -n "$inspect_failed" ]; then
+  echo "marker-scan-unavailable"
+  [ -n "$survivors" ] && echo "survivors:$survivors"
+  exit 4
+fi
 echo "survivors:$survivors"
 exit 3`
 

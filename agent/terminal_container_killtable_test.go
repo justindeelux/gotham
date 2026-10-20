@@ -15,16 +15,21 @@ import (
 // closes, and then scans /proc from a fresh exec (not the kill helper) for the
 // session's unique environment marker.
 var killTableCases = []struct {
-	name  string
-	input string
+	name   string
+	input  string
+	needle string
 }{
-	{"foreground", "sleep 7101\n"},
-	{"trap-ignores-hup-term-int", "trap '' HUP TERM INT; sleep 7102\n"},
-	{"nohup-background", "nohup sleep 7103 &\n"},
-	{"plain-background", "sleep 7104 &\n"},
-	{"setsid-background", "(setsid sleep 7105 &); sleep 7106\n"},
-	{"nested-background", "( (sleep 7107 &) & ); sleep 7108\n"},
-	{"shell-exit-before-close", "exit 0\n"},
+	{"foreground", "sleep 7101\n", ""},
+	{"trap-ignores-hup-term-int", "trap '' HUP TERM INT; sleep 7102\n", ""},
+	{"nohup-background", "nohup sleep 7103 &\n", ""},
+	{"plain-background", "sleep 7104 &\n", ""},
+	{"setsid-background", "(setsid sleep 7105 &); sleep 7106\n", ""},
+	{"nested-background", "( (sleep 7107 &) & ); sleep 7108\n", ""},
+	// A newline in the shell's comm used to truncate /proc/<pid>/stat on the
+	// first line; the child scrubs its environment so only the parent chain can
+	// find it.
+	{"comm-newline-env-scrubbed", "printf 'a\nb' > /proc/self/comm; env -i sleep 7701 &\n", "sleep 7701"},
+	{"shell-exit-before-close", "exit 0\n", ""},
 }
 
 func TestDockerExecRealKillTable(t *testing.T) {
@@ -59,6 +64,9 @@ func TestDockerExecRealKillTable(t *testing.T) {
 						t.Fatal("Docker still reports the exec as Running after Close")
 					}
 					waitNoMarker(t, client, containerID, dockerSession.marker)
+					if testCase.needle != "" {
+						waitNoCmdline(t, client, containerID, testCase.needle)
+					}
 					if !containerRunning(t, client, containerID) {
 						t.Fatal("closing the terminal stopped the application container")
 					}

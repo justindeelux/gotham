@@ -194,3 +194,35 @@ func TestDockerServerRejectsOutOfRootBind(t *testing.T) {
 		t.Fatalf("proxy bind run = %v, want accepted", err)
 	}
 }
+
+func TestWithinPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		base string
+		path string
+		want bool
+	}{
+		{"filesystem root contains itself", "/", "/", true},
+		{"filesystem root contains a child", "/", "/tmp", true},
+		{"filesystem root contains a nested child", "/", "/var/lib/gotham", true},
+		{"exact base", "/tmp", "/tmp", true},
+		{"direct child", "/tmp", "/tmp/work", true},
+		{"nested child", "/tmp", "/tmp/work/app", true},
+		{"sibling with a shared prefix", "/tmp", "/tmpx", false},
+		{"sibling child with a shared prefix", "/tmp", "/tmp2/work", false},
+		{"parent", "/tmp/work", "/tmp", false},
+		{"relative path", "/tmp", "work", false},
+		{"relative base", "tmp", "/tmp/work", false},
+		{"empty path", "/tmp", "", false},
+		{"empty base", "", "/tmp", false},
+		{"dot-dot component is cleaned", "/tmp", "/tmp/../etc", false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := withinPath(testCase.base, testCase.path); got != testCase.want {
+				t.Fatalf("withinPath(%q, %q) = %v, want %v", testCase.base, testCase.path, got, testCase.want)
+			}
+		})
+	}
+}

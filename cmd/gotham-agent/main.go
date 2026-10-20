@@ -191,6 +191,14 @@ func runServe() int {
 			}
 			if fileServer != nil {
 				serverOptions = append(serverOptions, agent.WithFileService(fileServer))
+				// The host terminal resolves its initial cwd through the same
+				// root policy, so it is only offered when the file service is.
+				serverOptions = append(serverOptions, agent.WithTerminalService(agent.NewTerminalServer(agent.TerminalConfig{
+					Logger:      log,
+					Roots:       fileServer,
+					Shell:       cfg.TerminalShell,
+					MaxSessions: cfg.TerminalMaxSessions,
+				})))
 			}
 			if allowAnyPeer {
 				// The only opt-out is the explicit, loudly-logged dev-insecure mode.

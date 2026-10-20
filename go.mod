@@ -3,6 +3,7 @@ module github.com/justindeelux/gotham
 go 1.27
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/golang-jwt/jwt/v5 v5.3.1

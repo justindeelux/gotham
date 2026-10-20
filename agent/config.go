@@ -49,6 +49,11 @@ const (
 	// extract will read, before any parser allocates.
 	envFileArchiveMaxInput = "GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES"
 
+	// Host terminal (JUS-243). The shell must be an absolute, executable
+	// file; empty selects $SHELL, /bin/bash or /bin/sh.
+	envTerminalShell       = "GOTHAM_AGENT_TERMINAL_SHELL"
+	envTerminalMaxSessions = "GOTHAM_AGENT_TERMINAL_MAX_SESSIONS"
+
 	envAutoUpdate     = "GOTHAM_AGENT_AUTO_UPDATE"
 	envUpdateInterval = "GOTHAM_AGENT_UPDATE_INTERVAL"
 	envUpdateChannel  = "GOTHAM_AGENT_UPDATE_CHANNEL"
@@ -189,6 +194,15 @@ type Config struct {
 	// extract will read (GOTHAM_AGENT_ARCHIVE_MAX_INPUT_BYTES).
 	FileArchiveMaxInputBytes int64
 
+	// TerminalShell is the absolute shell a host terminal session runs. Empty
+	// selects the first usable candidate from $SHELL, /bin/bash and /bin/sh
+	// (GOTHAM_AGENT_TERMINAL_SHELL). The shell runs as the agent's service
+	// identity; see docs/terminal-session-api.md.
+	TerminalShell string
+	// TerminalMaxSessions bounds concurrent host terminal sessions on this
+	// node (GOTHAM_AGENT_TERMINAL_MAX_SESSIONS). Zero uses the package default.
+	TerminalMaxSessions int
+
 	// Version is the running agent build version. It is set by the entrypoint
 	// (not the environment) and reported to the CP in heartbeats and update
 	// requests.
@@ -255,6 +269,9 @@ func Load() (Config, error) {
 		FileArchiveMaxBytes:      int64FromEnv(envFileArchiveMaxBytes, defaultFileArchiveMaxBytes),
 		FileArchiveMaxEntries:    int64FromEnv(envFileArchiveMaxEntries, defaultFileArchiveMaxEntries),
 		FileArchiveMaxInputBytes: int64FromEnv(envFileArchiveMaxInput, defaultFileArchiveMaxInputBytes),
+
+		TerminalShell:       strings.TrimSpace(os.Getenv(envTerminalShell)),
+		TerminalMaxSessions: int(int64FromEnv(envTerminalMaxSessions, 0)),
 
 		AutoUpdate:        strings.EqualFold(strings.TrimSpace(os.Getenv(envAutoUpdate)), "true"),
 		UpdateInterval:    updateIntervalFromEnv(),

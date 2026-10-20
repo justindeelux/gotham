@@ -1157,3 +1157,118 @@ message ComposeContainer {
 message ComposePsResponse {
   repeated ComposeContainer containers = 1;
 }
+
+// TerminalService runs on the node agent. The control plane dials it to open a
+// host PTY and stream interactive bytes over the existing mTLS channel.
+//
+// The RPC is one bounded bidirectional stream whose first client message must
+// be TerminalOpen; every other message is input, resize or close. Output and
+// the final exit travel back on the same stream. There is no session id in the
+// protocol: the stream *is* the session, so a dropped stream always tears the
+// PTY down and a reconnect can never resume (or replay input into) the old
+// shell. The control plane opens a new stream only for a new session.
+//
+// Trust boundary: host shell access is a platform-operator capability. The
+// agent confines the initial working directory to a FileService root with the
+// same no-escape policy as the file manager, but the shell itself is a host
+// process running as the agent's service identity and is not confined to those
+// roots — that privilege boundary is documented in docs/terminal-session-api.md.
+// The agent bounds message size, session count and idle lifetime, and kills the
+// whole process group when the stream ends for any reason.
+service TerminalService {
+  // OpenTerminal opens one PTY-backed host shell. The first request carries
+  // TerminalOpen (target, root, cwd and initial dimensions); the following
+  // requests carry input, resize and close. The response stream carries one
+  // TerminalOpened, zero or more TerminalOutput chunks and exactly one
+  // TerminalExited unless the stream was cancelled. An agent that predates this
+  // service answers codes.Unimplemented, which the control plane reports as
+  // unsupported rather than retrying.
+  rpc OpenTerminal(stream TerminalRequest) returns (stream TerminalResponse);
+}
+
+// TerminalRequest is one client message of an OpenTerminal stream.
+message TerminalRequest {
+  oneof part {
+    // open must be the first message of the stream.
+    TerminalOpen open = 1;
+    // input is raw keyboard/paste bytes written to the PTY master. The agent
+    // bounds it per message.
+    bytes input = 2;
+    TerminalResize resize = 3;
+    // close asks the agent to end the session and release the PTY.
+    TerminalClose close = 4;
+  }
+}
+
+// TerminalOpen selects the terminal target and its initial working directory.
+message TerminalOpen {
+  // target selects what the PTY runs in. "host" (or empty, for compatibility
+  // with a caller that omits it) runs a host shell as the agent's service
+  // identity. Container targets are added by a later package and answer
+  // InvalidArgument on an agent that does not implement them, never a silent
+  // fallback to the host.
+  string target = 1;
+  // root is the FileService root name the initial cwd is resolved under. The
+  // agent resolves it against its own allow-list; an unknown root is refused.
+  string root = 2;
+  // cwd is the initial working directory relative to root. Empty or "." means
+  // the root itself. It must be an existing directory that resolves inside the
+  // root: absolute paths, ".." segments and symlink escapes are refused. The
+  // agent sets it directly on the child process, never through a shell
+  // command, so no quoting or interpolation is involved.
+  string cwd = 3;
+  // cols and rows are the initial PTY dimensions. They are bounded by the
+  // agent and a zero or out-of-range value is refused.
+  uint32 cols = 4;
+  uint32 rows = 5;
+}
+
+// TerminalResize changes the PTY window size.
+message TerminalResize {
+  uint32 cols = 1;
+  uint32 rows = 2;
+}
+
+// TerminalClose asks for an orderly shutdown. The agent closes the PTY, kills
+// the process group and answers with TerminalExited. A stream context
+// cancellation has the same effect, so close is an optimization, not a
+// requirement.
+message TerminalClose {
+  // reason is a bounded diagnostic tag such as "client_close"; it is never
+  // written to a log line and never echoed to the terminal.
+  string reason = 1;
+}
+
+// TerminalResponse is one agent message of an OpenTerminal stream.
+message TerminalResponse {
+  oneof event {
+    TerminalOpened opened = 1;
+    // output is raw PTY bytes (UTF-8 plus ANSI escape sequences). Consumers
+    // must write it to the terminal without interpreting or re-encoding it.
+    bytes output = 2;
+    TerminalExited exited = 3;
+  }
+}
+
+// TerminalOpened acknowledges a started shell.
+message TerminalOpened {
+  // shell is the absolute path of the executable the agent started, for
+  // display and audit. It is chosen by the node, never by the caller.
+  string shell = 1;
+  // cols and rows are the dimensions the PTY actually has.
+  uint32 cols = 2;
+  uint32 rows = 3;
+  // service_user is the OS user the shell runs as (the agent's service
+  // identity), so the UI can state the privilege boundary.
+  string service_user = 4;
+}
+
+// TerminalExited closes a session with the child's termination status.
+message TerminalExited {
+  // exit_code is the shell's exit code, or -1 when it was terminated by a
+  // signal.
+  int32 exit_code = 1;
+  // signal is the terminating signal name ("SIGHUP", "SIGKILL"), empty for a
+  // normal exit.
+  string signal = 2;
+}

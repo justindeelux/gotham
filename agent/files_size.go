@@ -63,7 +63,7 @@ func (s *FileServer) DirectorySize(ctx context.Context, req *agentv1.DirectorySi
 	}
 	defer release()
 
-	walk := &dirSizeWalk{root: root, maxEntries: fileSizeMaxEntries}
+	walk := &dirSizeWalk{root: root, maxEntries: s.sizeMaxEntries}
 	err = walk.walk(ctx, rel, 0)
 	if err != nil && !errors.Is(err, errSizeLimit) {
 		return nil, fileError("size", err)

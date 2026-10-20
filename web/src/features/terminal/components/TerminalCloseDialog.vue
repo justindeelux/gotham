@@ -7,11 +7,12 @@ import { useTerminalStore } from "@/features/terminal/stores/terminal";
 
 /**
  * Close confirmation for terminals (JUS-245). Every terminating path — the
- * window close control, a tab's close button, Alt+W/Alt+Shift+W and Delete on
- * a focused tab — routes through `requestClose`, so this one dialog owns the
- * cancel/confirm semantics. Cancel keeps every PTY alive; confirm releases
- * exactly the listed sessions.
+ * window close control, a tab's close button, Alt+Shift+W, Delete on a focused
+ * tab and the sign-out gate — routes through `requestClose`, so this one
+ * dialog owns the cancel/confirm semantics. Cancel keeps every PTY alive;
+ * confirm releases exactly the listed sessions.
  */
+const emit = defineEmits<{ confirmed: [] }>();
 const { t } = useI18n();
 const terminal = useTerminalStore();
 
@@ -32,6 +33,9 @@ function cancel(): void {
 /** confirm closes exactly the sessions listed in the dialog. */
 function confirm(): void {
   terminal.confirmClose();
+  // The caller (window/page host) returns keyboard focus to a surviving tab or
+  // the rail; the dialog's trigger may have just been removed.
+  emit("confirmed");
 }
 </script>
 
@@ -40,7 +44,7 @@ function confirm(): void {
     class="app-modal term-close-modal"
     :show="show"
     preset="card"
-    style="width: 460px; max-width: 94vw"
+    style="width: min(30rem, 94vw)"
     :title="multi ? t('terminal.close.titleWindow') : t('terminal.close.titleTab')"
     :mask-closable="false"
     @update:show="(value: boolean) => { if (!value) cancel(); }"
@@ -79,7 +83,7 @@ function confirm(): void {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-  max-height: 220px;
+  max-height: min(14rem, 40vh);
   overflow-y: auto;
   font-size: var(--text-sm);
 }

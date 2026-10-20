@@ -34,6 +34,16 @@ function jsonFrame(opcode: number, value: unknown): ArrayBuffer {
   return serverFrame(opcode, new TextEncoder().encode(JSON.stringify(value)));
 }
 
+/** openFrame is the server's PTY confirmation with its create-time size. */
+function openFrame(): ArrayBuffer {
+  return jsonFrame(0x04, {
+    shell: "/bin/bash",
+    cols: 120,
+    rows: 32,
+    service_user: "gotham-agent",
+  });
+}
+
 /** FakeSocket is a fully controllable WebSocket stand-in. */
 class FakeSocket implements TerminalSocket {
   binaryType = "arraybuffer";
@@ -145,12 +155,17 @@ class FakeTerminal {
   }
 }
 
-/** FakeFit records fits; the runtime only calls it for a measurable host. */
+/** FakeFit records fits and reports the fitted box through the terminal. */
 class FakeFit {
   static fits = 0;
+  static cols = 100;
+  static rows = 30;
 
   fit(): void {
     FakeFit.fits += 1;
+    // A real FitAddon calls terminal.resize(), which fires onResize with the
+    // measured columns/rows; the fake does the same so ordering is exercised.
+    FakeTerminal.last?.resize(FakeFit.cols, FakeFit.rows);
   }
 
   dispose(): void {
@@ -162,6 +177,8 @@ class FakeFit {
 function setup() {
   FakeTerminal.last = null;
   FakeFit.fits = 0;
+  FakeFit.cols = 100;
+  FakeFit.rows = 30;
   let socket: FakeSocket | null = null;
   let url = "";
   let protocols: string[] = [];
@@ -263,8 +280,6 @@ describe("TerminalRuntime handshake", () => {
       status: "connected",
       shell: "/bin/bash",
       serviceUser: "gotham-agent",
-      cols: 100,
-      rows: 30,
     });
   });
 
@@ -307,6 +322,116 @@ describe("TerminalRuntime handshake", () => {
     expect(resize).toBeDefined();
     expect([...(resize ?? new Uint8Array())]).toEqual([CLIENT_RESIZE, 0, 90, 0, 24]);
     expect(context.states.at(-1)).toEqual({ cols: 90, rows: 24 });
+  });
+});
+
+describe("TerminalRuntime failure copy", () => {
+  it("reports a missing token as a translatable auth error", async () => {
+    const context = setup();
+    const runtime = new TerminalRuntime({
+      session: {
+        id: "session-1",
+        websocket_path: "/api/v1/servers/s1/terminal/sessions/session-1/ws",
+        cols: 120,
+        rows: 32,
+      },
+      getToken: () => null,
+      onState: (patch) => context.states.push(patch),
+      deps: {
+        createSocket: () => {
+          throw new Error("must not connect without a token");
+        },
+        loadTerminal: async () =>
+          ({ Terminal: FakeTerminal, FitAddon: FakeFit }) as unknown as TerminalModules,
+      },
+    });
+    await runtime.connect();
+    expect(runtime.getStatus()).toBe("error");
+    // No English runtime string reaches the UI: the catalog owns the copy.
+    expect(context.states.at(-1)).toEqual({
+      status: "error",
+      errorCode: "auth",
+      errorMessage: "",
+    });
+  });
+
+  it("reports an unsupported frame as a generic translatable error", async () => {
+    const context = await connectedRuntime();
+    context.socket.message(serverFrame(0x09));
+    expect(context.states.at(-1)).toEqual({
+      status: "error",
+      errorCode: "generic",
+      errorMessage: "",
+    });
+  });
+});
+
+describe("TerminalRuntime initial size", () => {
+  /** measure makes the detached xterm host look laid out to FitAddon. */
+  function measure(runtime: TerminalRuntime): void {
+    const host = runtime.getHost();
+    if (!host) {
+      throw new Error("host missing");
+    }
+    Object.defineProperty(host, "clientWidth", {
+      configurable: true,
+      value: 900,
+    });
+    Object.defineProperty(host, "clientHeight", {
+      configurable: true,
+      value: 500,
+    });
+  }
+
+  it("queues a fit that happens BEFORE opened and flushes it once", async () => {
+    const context = setup();
+    await context.runtime.connect();
+    context.socket.open();
+    const terminal = context.terminal();
+    // The surface attaches and ResizeObserver fits while the PTY is still
+    // pending; the frame must wait for `opened` and then use the fitted box.
+    measure(context.runtime);
+    FakeFit.cols = 104;
+    FakeFit.rows = 28;
+    context.runtime.fit();
+    expect(context.socket.opcodes()).not.toContain(CLIENT_RESIZE);
+    expect(terminal.cols).toBe(104);
+
+    context.socket.message(openFrame());
+    const resizes = context.socket.sent.filter(
+      (frame) => frame[0] === CLIENT_RESIZE,
+    );
+    expect(resizes).toHaveLength(1);
+    expect([...resizes[0]!]).toEqual([CLIENT_RESIZE, 0, 104, 0, 28]);
+    // The server's create-time size never overwrites the fitted one.
+    const connected = context.states.find(
+      (patch) => patch.status === "connected",
+    );
+    expect(connected).toMatchObject({
+      status: "connected",
+      shell: "/bin/bash",
+    });
+    expect(connected).not.toHaveProperty("cols");
+    expect(context.states.at(-1)).toEqual({ cols: 104, rows: 28 });
+  });
+
+  it("sends the fitted size when the fit happens AFTER opened", async () => {
+    const context = await connectedRuntime();
+    measure(context.runtime);
+    FakeFit.cols = 96;
+    FakeFit.rows = 24;
+    context.socket.sent = [];
+    context.runtime.fit();
+    const resizes = context.socket.sent.filter(
+      (frame) => frame[0] === CLIENT_RESIZE,
+    );
+    expect(resizes).toHaveLength(1);
+    expect([...resizes[0]!]).toEqual([CLIENT_RESIZE, 0, 96, 0, 24]);
+    // A repeated identical fit does not spam the PTY.
+    context.runtime.fit();
+    expect(
+      context.socket.sent.filter((frame) => frame[0] === CLIENT_RESIZE),
+    ).toHaveLength(1);
   });
 });
 

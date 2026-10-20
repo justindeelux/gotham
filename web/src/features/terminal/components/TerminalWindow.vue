@@ -413,8 +413,10 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
 
 /**
  * onGlobalKeydown owns the terminal-wide shortcuts. They deliberately avoid
- * Alt+W (the editor's close-tab binding): Alt+Shift+W closes the window and
- * Delete on a focused tab closes that tab, both through the dialog.
+ * Alt+W (the editor's close-tab binding) and are scoped to focus inside a
+ * terminal surface/window, so typing Option+M in a page input is never eaten.
+ * Alt+Shift+W closes the window; Alt+M minimizes it; both go through the
+ * dialog/document path and are listed in the surface shortcuts popover.
  */
 function onGlobalKeydown(event: KeyboardEvent): void {
   if (
@@ -429,15 +431,43 @@ function onGlobalKeydown(event: KeyboardEvent): void {
   if (event.target instanceof Element && event.target.closest(".n-modal")) {
     return;
   }
+  const active = document.activeElement;
+  const inWindow =
+    active instanceof Element && active.closest(".term-window") !== null;
+  const inTerminal =
+    active instanceof Element && active.closest(".term-surface") !== null;
   if (event.altKey && event.shiftKey && event.code === "KeyW") {
+    if (!inWindow && !inTerminal) {
+      return;
+    }
     event.preventDefault();
     requestCloseWindow();
     return;
   }
   if (event.altKey && !event.shiftKey && event.code === "KeyM") {
+    if (!inWindow) {
+      return;
+    }
     event.preventDefault();
     minimizeWindow();
   }
+}
+
+/** onConfirmed returns focus after the dialog removes its trigger. */
+function onConfirmed(): void {
+  void nextTick(() => {
+    const active = activeTab.value;
+    if (active) {
+      document.getElementById(`term-tab-${active.id}`)?.focus();
+      return;
+    }
+    const pageTab = terminal.pageTabs[0];
+    if (pageTab) {
+      terminal.focus(pageTab.id);
+      return;
+    }
+    document.querySelector<HTMLElement>(".rail .rail-btn")?.focus();
+  });
 }
 
 /** onBeforeUnload warns when a browser unload would kill a live PTY. */
@@ -458,7 +488,7 @@ watch(
       // A new session (entry point or page transfer) comes to the front.
       windowStore.raise();
     }
-    if (count > 0 && (previous === 0 || windowStore.minimized)) {
+    if (count > (previous ?? 0) && (previous === 0 || windowStore.minimized)) {
       windowStore.setMinimized(false);
     }
   },
@@ -526,23 +556,23 @@ defineExpose({ restoreWindow });
             :aria-controls="`term-panel-${tab.id}`"
             :tabindex="tab.id === activeTab?.id ? 0 : -1"
             :title="tab.title"
+            aria-keyshortcuts="Delete"
             @click="activateTab(tab.id)"
             @keydown="onTabKeydown($event, index)"
           >
             <span class="term-tab-status" :class="`is-${tab.status}`" aria-hidden="true" />
             {{ tab.title }}
           </button>
-          <!-- A tablist may only own tabs, so the inline close is
-               presentational; Delete on the focused tab is the keyboard
-               path. -->
-          <span
+          <!-- A real button: Enter/Space closes, its label names the tab, and
+               Delete on the focused tab is the alternative keyboard path. -->
+          <button
+            type="button"
             class="term-tab-close"
-            role="presentation"
-            aria-hidden="true"
+            :aria-label="t('terminal.window.closeTab', { title: tab.title })"
             @click.stop="requestCloseTab(tab.id)"
           >
             <X :size="12" :stroke-width="2" aria-hidden="true" />
-          </span>
+          </button>
         </div>
       </div>
       <span class="grow" />
@@ -614,7 +644,7 @@ defineExpose({ restoreWindow });
     />
   </section>
 
-  <TerminalCloseDialog />
+  <TerminalCloseDialog @confirmed="onConfirmed" />
 </template>
 
 <style scoped>
@@ -625,11 +655,11 @@ defineExpose({ restoreWindow });
   z-index: var(--term-window-z, 68);
   display: flex;
   flex-direction: column;
-  width: min(880px, calc(100vw - var(--space-6) * 2));
-  height: min(600px, calc(100vh - var(--term-window-chrome, 104px)));
-  height: min(600px, calc(100dvh - var(--term-window-chrome, 104px)));
-  min-width: min(460px, calc(100vw - var(--space-6) * 2));
-  min-height: min(300px, calc(100vh - var(--space-6) * 2));
+  width: min(55rem, calc(100vw - var(--space-6) * 2));
+  height: min(37.5rem, calc(100vh - var(--term-window-chrome)));
+  height: min(37.5rem, calc(100dvh - var(--term-window-chrome)));
+  min-width: min(28.75rem, calc(100vw - var(--space-6) * 2));
+  min-height: min(18.75rem, calc(100vh - var(--space-6) * 2));
   max-width: calc(100vw - var(--space-6) * 2);
   max-height: calc(100vh - var(--space-6) * 2);
   max-height: calc(100dvh - var(--space-6) * 2);
@@ -646,7 +676,7 @@ defineExpose({ restoreWindow });
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 42px;
+  min-height: calc(var(--space-8) + var(--space-2));
   padding: var(--space-1) var(--space-2);
   padding-left: var(--space-3);
   background: var(--surface);
@@ -684,7 +714,7 @@ defineExpose({ restoreWindow });
   display: inline-flex;
   align-items: center;
   min-width: 0;
-  max-width: 220px;
+  max-width: min(14rem, 45vw);
   border-radius: var(--radius-sm);
   background: var(--surface-warm);
   color: var(--muted);
@@ -700,7 +730,7 @@ defineExpose({ restoreWindow });
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-  max-width: 190px;
+  max-width: min(12rem, 40vw);
   padding: var(--space-1) var(--space-2);
   border: 0;
   background: transparent;
@@ -720,8 +750,8 @@ defineExpose({ restoreWindow });
 }
 
 .term-tab-status {
-  width: 6px;
-  height: 6px;
+  width: var(--space-1);
+  height: var(--space-1);
   border-radius: var(--radius-pill);
   flex: 0 0 auto;
   background: var(--meta);
@@ -747,12 +777,20 @@ defineExpose({ restoreWindow });
 .term-tab-close {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: var(--space-6);
+  height: var(--space-6);
   margin-right: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: transparent;
   border-radius: var(--radius-sm);
   color: var(--meta);
   cursor: pointer;
+}
+
+.term-tab-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .term-tab-close:hover {
@@ -779,66 +817,66 @@ defineExpose({ restoreWindow });
 }
 
 .term-resize--n {
-  top: -3px;
-  left: 10px;
-  right: 10px;
-  height: 6px;
+  top: calc(-1 * var(--space-1) / 2);
+  left: var(--space-3);
+  right: var(--space-3);
+  height: var(--space-1);
   cursor: ns-resize;
 }
 
 .term-resize--s {
-  bottom: -3px;
-  left: 10px;
-  right: 10px;
-  height: 6px;
+  bottom: calc(-1 * var(--space-1) / 2);
+  left: var(--space-3);
+  right: var(--space-3);
+  height: var(--space-1);
   cursor: ns-resize;
 }
 
 .term-resize--e {
-  right: -3px;
-  top: 10px;
-  bottom: 10px;
-  width: 6px;
+  right: calc(-1 * var(--space-1) / 2);
+  top: var(--space-3);
+  bottom: var(--space-3);
+  width: var(--space-1);
   cursor: ew-resize;
 }
 
 .term-resize--w {
-  left: -3px;
-  top: 10px;
-  bottom: 10px;
-  width: 6px;
+  left: calc(-1 * var(--space-1) / 2);
+  top: var(--space-3);
+  bottom: var(--space-3);
+  width: var(--space-1);
   cursor: ew-resize;
 }
 
 .term-resize--ne {
-  top: -3px;
-  right: -3px;
-  width: 14px;
-  height: 14px;
+  top: calc(-1 * var(--space-1) / 2);
+  right: calc(-1 * var(--space-1) / 2);
+  width: var(--space-3);
+  height: var(--space-3);
   cursor: nesw-resize;
 }
 
 .term-resize--nw {
-  top: -3px;
-  left: -3px;
-  width: 14px;
-  height: 14px;
+  top: calc(-1 * var(--space-1) / 2);
+  left: calc(-1 * var(--space-1) / 2);
+  width: var(--space-3);
+  height: var(--space-3);
   cursor: nwse-resize;
 }
 
 .term-resize--sw {
-  bottom: -3px;
-  left: -3px;
-  width: 14px;
-  height: 14px;
+  bottom: calc(-1 * var(--space-1) / 2);
+  left: calc(-1 * var(--space-1) / 2);
+  width: var(--space-3);
+  height: var(--space-3);
   cursor: nesw-resize;
 }
 
 .term-resize--se {
   bottom: 0;
   right: 0;
-  width: 16px;
-  height: 16px;
+  width: var(--space-4);
+  height: var(--space-4);
   cursor: nwse-resize;
 }
 
@@ -853,8 +891,23 @@ defineExpose({ restoreWindow });
     bottom: var(--space-2);
   }
 
+  /* A phone keeps both tabs legible: the window title and status dots yield,
+     leaving the tab labels (and their close buttons) the header width. */
+  .term-window-title,
+  .term-tab-status {
+    display: none;
+  }
+
   .term-tabs {
-    max-width: 50%;
+    max-width: calc(100% - var(--space-12));
+  }
+
+  .term-tab {
+    max-width: min(8.5rem, 42vw);
+  }
+
+  .term-tab-name {
+    max-width: min(7rem, 36vw);
   }
 }
 

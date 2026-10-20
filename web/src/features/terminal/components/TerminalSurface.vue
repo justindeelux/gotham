@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ExternalLink, RefreshCw, X } from "@lucide/vue";
-import { NButton, NSpin } from "naive-ui";
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { ExternalLink, Keyboard, RefreshCw, X } from "@lucide/vue";
+import { NButton, NPopover, NSpin } from "naive-ui";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
@@ -31,6 +31,8 @@ const props = withDefaults(defineProps<Props>(), { labelledBy: "" });
 const { t } = useI18n();
 const terminal = useTerminalStore();
 const surface = ref<HTMLElement | null>(null);
+const shortcutsOpen = ref<boolean>(false);
+const hintId = computed<string>(() => `term-hint-${props.tabId}`);
 const tab = computed<TerminalTab | null>(() => terminal.findTab(props.tabId));
 
 /** statusText is the localized lifecycle label. */
@@ -106,7 +108,39 @@ function retrySession(): void {
   void terminal.retry(props.tabId);
 }
 
+/**
+ * onSurfaceKeydown provides the documented escape from xterm's input trap.
+ * Ctrl+Shift+Escape moves focus out of the shell to the window tab (or the
+ * page pane's action), so keyboard users are never stuck in the terminal.
+ */
+function onSurfaceKeydown(event: KeyboardEvent): void {
+  if (!event.ctrlKey || !event.shiftKey || event.key !== "Escape") {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  const element = surface.value;
+  if (!element) {
+    return;
+  }
+  const windowRoot = element.closest(".term-window");
+  if (windowRoot) {
+    document.getElementById(`term-tab-${props.tabId}`)?.focus();
+    return;
+  }
+  const action = element.parentElement?.querySelector<HTMLElement>(
+    ".term-open-in-window",
+  );
+  action?.focus();
+}
+
 onMounted(attachSurface);
+onBeforeUnmount(() => {
+  const element = surface.value;
+  if (element) {
+    terminal.detach(props.tabId, element);
+  }
+});
 watch(() => props.tabId, attachSurface);
 // A retry swaps the runtime under the still-mounted surface; re-attach once
 // the new session exists so the fresh renderer lands in the same pane.
@@ -128,7 +162,10 @@ watch(
     :role="variant === 'window' ? 'tabpanel' : 'region'"
     :aria-label="variant === 'window' ? undefined : surfaceLabel"
     :aria-labelledby="variant === 'window' ? labelledBy : undefined"
+    :aria-describedby="hintId"
+    aria-keyshortcuts="Control+Shift+Escape"
     @click="focusTerminal"
+    @keydown.capture="onSurfaceKeydown"
   >
     <div class="term-meta">
       <span class="term-chip">
@@ -146,9 +183,53 @@ watch(
       >
         {{ shortSessionId(tab.sessionId) }}
       </span>
+      <NPopover
+        v-model:show="shortcutsOpen"
+        trigger="click"
+        placement="bottom-end"
+      >
+        <template #trigger>
+          <NButton
+            quaternary
+            size="tiny"
+            class="term-shortcuts-btn"
+            :aria-label="t('terminal.shortcuts.show')"
+          >
+            <template #icon>
+              <Keyboard :size="14" :stroke-width="1.8" aria-hidden="true" />
+            </template>
+          </NButton>
+        </template>
+        <div class="term-shortcuts">
+          <p class="term-shortcuts-title">{{ t("terminal.shortcuts.title") }}</p>
+          <dl>
+            <div>
+              <dt class="mono">Alt+Shift+W</dt>
+              <dd>{{ t("terminal.shortcuts.closeWindow") }}</dd>
+            </div>
+            <div>
+              <dt class="mono">Alt+M</dt>
+              <dd>{{ t("terminal.shortcuts.minimize") }}</dd>
+            </div>
+            <div>
+              <dt class="mono">Delete</dt>
+              <dd>{{ t("terminal.shortcuts.closeTab") }}</dd>
+            </div>
+            <div>
+              <dt class="mono">Ctrl+Shift+Escape</dt>
+              <dd>{{ t("terminal.shortcuts.escape") }}</dd>
+            </div>
+          </dl>
+        </div>
+      </NPopover>
       <span class="grow" />
       <template v-if="variant === 'page'">
-        <NButton size="tiny" secondary @click.stop="detachToWindow">
+        <NButton
+          size="tiny"
+          secondary
+          class="term-open-in-window"
+          @click.stop="detachToWindow"
+        >
           <template #icon>
             <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
           </template>
@@ -167,6 +248,9 @@ watch(
       </template>
     </div>
 
+    <p :id="hintId" class="term-sr">
+      {{ t("terminal.shortcuts.escape") }}
+    </p>
     <div ref="surface" class="term-screen" data-testid="terminal-screen" />
 
     <div
@@ -288,12 +372,66 @@ watch(
   color: var(--meta);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-size: 10px;
+  font-size: var(--text-xs);
 }
 
 .term-session {
   color: var(--meta);
-  font-size: 10px;
+  font-size: var(--text-xs);
+}
+
+.term-shortcuts-btn {
+  margin-left: var(--space-1);
+}
+
+.term-shortcuts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: min(26rem, 80vw);
+}
+
+.term-shortcuts-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+.term-shortcuts dl {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.term-shortcuts dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 9rem) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.term-shortcuts dt {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+}
+
+.term-shortcuts dd {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.term-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .term-screen {
@@ -325,7 +463,7 @@ watch(
   flex-direction: column;
   align-items: center;
   gap: var(--space-2);
-  max-width: 420px;
+  max-width: min(26rem, 100%);
   padding: var(--space-4);
   text-align: center;
   background: color-mix(in oklab, var(--surface) 92%, transparent);
@@ -368,8 +506,8 @@ watch(
 
 .term-state::before {
   content: "";
-  width: 8px;
-  height: 8px;
+  width: var(--space-2);
+  height: var(--space-2);
   border-radius: var(--radius-pill);
   background: currentColor;
 }

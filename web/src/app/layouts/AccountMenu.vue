@@ -8,6 +8,7 @@ import { useRouter } from "vue-router";
 import { useAuthStore } from "@/features/auth";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useTeamsStore } from "@/features/teams";
+import { useTerminalStore } from "@/features/terminal";
 import { roleReadRetryMs, shouldRetryRoleRead } from "@/features/teams";
 import type { TeamRole } from "@/features/teams";
 import GothamIcon from "@/shared/ui/GothamIcon.vue";
@@ -166,6 +167,13 @@ async function handleSelect(key: string | number): Promise<void> {
   // the logout. Forced sign-outs bypass this path and reset directly.
   const editor = useEditorStore();
   if ((await editor.confirmDiscard()) !== "leave") {
+    return;
+  }
+  // Live shells are a session-terminating resource too: sign-out runs the
+  // same close dialog, and a cancel aborts the logout with the PTYs intact.
+  // Forced sign-outs (401/revocation/cross-tab) bypass this path and reset.
+  const terminal = useTerminalStore();
+  if (!(await terminal.confirmCloseAll())) {
     return;
   }
   try {

@@ -267,6 +267,23 @@ describe("terminal store close semantics", () => {
     expect(apiFakes.close).not.toHaveBeenCalledWith("server-1", "session-2");
   });
 
+  it("awaits the shared confirmation for a session-terminating flow", async () => {
+    const terminal = useTerminalStore();
+    await terminal.openWindowSession(options("one"));
+    await terminal.openWindowSession(options("two"));
+
+    const pending = terminal.confirmCloseAll();
+    expect(terminal.closeRequest?.scope).toBe("window");
+    terminal.cancelClose();
+    await expect(pending).resolves.toBe(false);
+    expect(terminal.tabs).toHaveLength(2);
+
+    const confirmed = terminal.confirmCloseAll();
+    terminal.confirmClose();
+    await expect(confirmed).resolves.toBe(true);
+    expect(terminal.tabs).toHaveLength(0);
+  });
+
   it("disposes every renderer on logout without issuing DELETE", async () => {
     const terminal = useTerminalStore();
     await terminal.openWindowSession(options("one"));
@@ -296,7 +313,7 @@ describe("terminal pane transfer", () => {
     expect(runtime.attached?.querySelector(".term-host")).not.toBeNull();
     const host = runtime.host;
 
-    await pane.find(".term-meta button").trigger("click");
+    await pane.find(".term-open-in-window").trigger("click");
     await flushPromises();
     expect(tab.mode).toBe("window");
     expect(pane.find(".term-detached").exists()).toBe(true);

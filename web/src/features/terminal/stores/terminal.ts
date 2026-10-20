@@ -124,6 +124,10 @@ export const useTerminalStore = defineStore("terminal", () => {
   const inflight = new Map<string, Promise<TerminalTab>>();
   /** retrying guards a second explicit retry while the first is running. */
   const retrying = new Set<string>();
+  /** closeResolve settles an awaited close confirmation (logout path). */
+  let closeResolve: ((_confirmed: boolean) => void) | null = null;
+  /** closePromise is shared by overlapping awaited close requests. */
+  let closePromise: Promise<boolean> | null = null;
 
   const activeTab = computed<TerminalTab | null>(
     () => tabs.value.find((tab) => tab.id === activeTabId.value) ?? null,
@@ -171,6 +175,9 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
     if (patch.exitSignal !== undefined) {
       tab.exitSignal = patch.exitSignal;
+    }
+    if (patch.errorCode !== undefined) {
+      tab.errorCode = patch.errorCode;
     }
     if (patch.errorMessage !== undefined) {
       tab.errorMessage = patch.errorMessage;
@@ -335,6 +342,17 @@ export const useTerminalStore = defineStore("terminal", () => {
     runtimes.get(id)?.attach(container);
   }
 
+  /**
+   * detach drops a pane's remembered element when that pane unmounts. The
+   * runtime keeps its own host, so a later mount (or a transfer) re-attaches;
+   * the store never holds a removed DOM node.
+   */
+  function detach(id: string, container: HTMLElement): void {
+    if (surfaces.get(id) === container) {
+      surfaces.delete(id);
+    }
+  }
+
   /** focus focuses the live renderer of one tab. */
   function focus(id: string): void {
     runtimes.get(id)?.focus();
@@ -380,34 +398,68 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
   }
 
-  /** requestClose asks for confirmation before releasing the given tabs. */
-  function requestClose(ids: string[]): void {
+  /**
+   * requestClose asks for confirmation before releasing the given tabs. The
+   * returned promise lets a session-terminating flow (logout) wait for the
+   * user's answer: true means the listed sessions were released, false means
+   * the user kept them. UI callers that do not care can ignore it.
+   */
+  function requestClose(ids: string[]): Promise<boolean> {
     if (closeRequest.value !== null) {
-      return;
+      return closePromise ?? Promise.resolve(false);
     }
     const unique = [...new Set(ids)].filter((id) => findTab(id) !== null);
     if (unique.length === 0) {
-      return;
+      return Promise.resolve(true);
     }
+    closePromise = new Promise<boolean>((resolve) => {
+      closeResolve = resolve;
+    });
     closeRequest.value = {
       ids: unique,
       scope: unique.length > 1 ? "window" : "tab",
     };
+    return closePromise;
+  }
+
+  /** settleClose resolves the awaited confirmation exactly once. */
+  function settleClose(confirmed: boolean): void {
+    const resolve = closeResolve;
+    closeResolve = null;
+    closePromise = null;
+    resolve?.(confirmed);
   }
 
   /** cancelClose keeps every session intact and returns to the window. */
   function cancelClose(): void {
     closeRequest.value = null;
+    settleClose(false);
   }
 
   /** confirmClose releases exactly the sessions the dialog listed. */
   function confirmClose(): void {
     const request = closeRequest.value;
     closeRequest.value = null;
-    if (!request) {
-      return;
+    if (request) {
+      closeTabs(request.ids);
     }
-    closeTabs(request.ids);
+    settleClose(request !== null);
+  }
+
+  /**
+   * confirmCloseAll runs the shared close path until no live session remains.
+   * It is the logout gate: a cancel returns false and aborts the sign-out; an
+   * already-open dialog is awaited and, if it targeted a subset, the remaining
+   * live sessions get their own confirmation rather than being killed silently.
+   */
+  async function confirmCloseAll(): Promise<boolean> {
+    while (hasLiveSessions.value) {
+      const confirmed = await requestClose(tabs.value.map((tab) => tab.id));
+      if (!confirmed) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /** closeTabs disposes renderers and removes the tabs (no prompt). */
@@ -437,7 +489,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
     if (tabs.value.length === 0) {
       activeTabId.value = "";
-      closeRequest.value = null;
+      if (closeRequest.value !== null) {
+        closeRequest.value = null;
+        settleClose(true);
+      }
       useTerminalWindowStore().setMinimized(false);
     }
   }
@@ -463,6 +518,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     tabs.value = [];
     activeTabId.value = "";
     closeRequest.value = null;
+    settleClose(false);
   }
 
   return {
@@ -481,12 +537,14 @@ export const useTerminalStore = defineStore("terminal", () => {
     detachToWindow,
     activate,
     attach,
+    detach,
     focus,
     fit,
     retry,
     requestClose,
     cancelClose,
     confirmClose,
+    confirmCloseAll,
     closeTabs,
     closeAll,
     reset,

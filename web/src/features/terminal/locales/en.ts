@@ -11,6 +11,7 @@ const en = {
     close: "Close terminal window",
     resize: "Resize terminal window",
     tabs: "Terminal sessions",
+    closeTab: "Close {title}",
     activeTarget: "Target",
     activeCwd: "Working directory",
   },
@@ -78,6 +79,10 @@ const en = {
     confirmAll: "Close all",
   },
   shortcuts: {
+    title: "Terminal keyboard shortcuts",
+    show: "Terminal keyboard shortcuts",
+    escape:
+      "Ctrl+Shift+Escape leaves the terminal input and returns focus to the window tab.",
     closeTab: "Delete on a focused tab closes that terminal after confirmation.",
     closeWindow: "Alt+Shift+W closes all terminals after confirmation.",
     minimize: "Alt+M minimizes the window.",

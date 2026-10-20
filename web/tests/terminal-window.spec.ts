@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page, WebSocketRoute } from "@playwright/test";
 
-/* global document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL:readonly, window:readonly */
+/* global Event:readonly, document:readonly, getComputedStyle:readonly, HTMLElement:readonly, URL:readonly, window:readonly */
 // URL/window run inside the page (browser globals); the repo lint envs do not
 // cover tests/, so they are declared.
 
@@ -88,6 +88,11 @@ interface FakeSession {
   input: string;
   socket: WebSocketRoute | null;
   closeFrames: number;
+  /** opcodes records every client frame in order. */
+  opcodes: number[];
+  /** resizes records each 0x02 payload decoded from the bytes. */
+  resizes: Array<{ cols: number; rows: number }>;
+  heartbeats: number;
 }
 
 /** terminalState is the per-test mock ledger. */
@@ -203,7 +208,16 @@ async function mockTerminalApi(
     state.creates += 1;
     const id = `session-${state.seq}`;
     const cwd = body.cwd ?? "app";
-    state.sessions.push({ id, cwd, input: "", socket: null, closeFrames: 0 });
+    state.sessions.push({
+      id,
+      cwd,
+      input: "",
+      socket: null,
+      closeFrames: 0,
+      opcodes: [],
+      resizes: [],
+      heartbeats: 0,
+    });
     await route.fulfill({
       status: 201,
       json: {
@@ -243,10 +257,18 @@ async function mockTerminalApi(
         if (bytes.length === 0) {
           return;
         }
+        current.opcodes.push(bytes[0]!);
         if (bytes[0] === 1) {
           current.input += bytes.subarray(1).toString("utf8");
+        } else if (bytes[0] === 2 && bytes.length === 5) {
+          current.resizes.push({
+            cols: bytes.readUInt16BE(1),
+            rows: bytes.readUInt16BE(3),
+          });
         } else if (bytes[0] === 3) {
           current.closeFrames += 1;
+        } else if (bytes[0] === 4) {
+          current.heartbeats += 1;
         }
       });
     },
@@ -333,6 +355,28 @@ async function openWindow(
   }, { serverId, dir: cwd })) as { id: string; sessionId: string };
 }
 
+/** tabState reads one live tab's reactive size/status from Pinia. */
+async function tabState(
+  page: Page,
+  tabId: string,
+): Promise<{ id: string; cols: number; rows: number; status: string }> {
+  return page.evaluate((id) => {
+    const app = (document.querySelector("#app") as unknown as {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
+      };
+    }).__vue_app__;
+    const store = app.config.globalProperties.$pinia._s.get("terminal") as {
+      tabs: Array<{ id: string; cols: number; rows: number; status: string }>;
+    };
+    const tab = store.tabs.find((item) => item.id === id);
+    if (!tab) {
+      throw new Error(`tab ${id} missing`);
+    }
+    return { id: tab.id, cols: tab.cols, rows: tab.rows, status: tab.status };
+  }, tabId);
+}
+
 /** terminalText reads the visible xterm rows. */
 async function terminalText(page: Page): Promise<string> {
   return page
@@ -400,6 +444,27 @@ test("two terminal tabs stay isolated through typing, switches and minimize", as
     page.locator(".term-window .term-surface:visible .term-state"),
   ).toHaveText("Connected");
 
+  // The fitted renderer size must reach the PTY as one 0x02 frame right after
+  // `opened`, and the footer must show that size (not the server's 120x32).
+  await expect
+    .poll(() => state.sessions[0]?.resizes.length ?? 0)
+    .toBeGreaterThan(0);
+  const firstState = await tabState(page, first.id);
+  expect(state.sessions[0]?.resizes.at(-1)).toEqual({
+    cols: firstState.cols,
+    rows: firstState.rows,
+  });
+  expect(firstState.cols).not.toBe(120);
+  await page
+    .locator(".term-tab-name", { hasText: "prod-01 · one" })
+    .click();
+  await expect(
+    page.locator(".term-window .term-surface:visible .term-statusbar"),
+  ).toContainText(`${firstState.cols} × ${firstState.rows}`);
+  await page
+    .locator(".term-tab-name", { hasText: "prod-01 · two" })
+    .click();
+
   // Type into the active (second) tab.
   await page.locator(".term-window .term-surface:visible .xterm-screen").click();
   await page.keyboard.type("echo two");
@@ -423,11 +488,27 @@ test("two terminal tabs stay isolated through typing, switches and minimize", as
     state.sessions.find((item) => item.id === second.sessionId)?.input,
   ).toBe("echo two");
 
-  // A window resize re-fits the visible renderer; typing still reaches the
-  // same session.
+  // A window resize re-fits the visible renderer, sends a fresh 0x02 with the
+  // new size, and typing still reaches the same session.
+  const resizeCount = state.sessions.find(
+    (item) => item.id === first.sessionId,
+  )?.resizes.length ?? 0;
   await page.locator(".term-resize--se").focus();
   await page.keyboard.press("Shift+ArrowLeft");
   await page.keyboard.press("Shift+ArrowUp");
+  await expect
+    .poll(
+      () =>
+        state.sessions.find((item) => item.id === first.sessionId)?.resizes
+          .length ?? 0,
+    )
+    .toBeGreaterThan(resizeCount);
+  const resizedState = await tabState(page, first.id);
+  expect(
+    state.sessions
+      .find((item) => item.id === first.sessionId)
+      ?.resizes.at(-1),
+  ).toEqual({ cols: resizedState.cols, rows: resizedState.rows });
   await page.locator(".term-window .term-surface:visible .xterm-screen").click();
   await page.keyboard.type(" pwd");
   await expect
@@ -507,6 +588,14 @@ test("page → window transfer keeps the session, buffer and no new shell", asyn
   await expect
     .poll(() => terminalText(page))
     .toContain(`welcome ${tab.sessionId}`);
+  // The transfer kept the same renderer, and `opened` flushed its real size to
+  // the PTY exactly as a direct window session does.
+  await expect.poll(() => state.sessions[0]?.resizes.length ?? 0).toBeGreaterThan(0);
+  const transferred = await tabState(page, tab.id);
+  expect(state.sessions[0]?.resizes.at(-1)).toEqual({
+    cols: transferred.cols,
+    rows: transferred.rows,
+  });
 
   // Returning to the page source returns the same detached tab; it must not
   // create a duplicate shell. No window → page action is offered.
@@ -547,11 +636,18 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   expect(state.deletes).toBe(0);
   expect(state.sessions.every((item) => item.closeFrames === 0)).toBe(true);
 
-  // A single tab's inline close confirms and releases only that session.
-  await page
+  // A single tab's close button is a real keyboard button with a name and a
+  // WCAG-sized target.
+  const closeButton = page
     .locator(".term-tab", { hasText: "prod-01 · one" })
-    .locator(".term-tab-close")
-    .click();
+    .locator(".term-tab-close");
+  await expect(closeButton).toHaveAttribute("aria-label", "Close prod-01 · one");
+  const closeBox = await closeButton.boundingBox();
+  expect(closeBox?.width ?? 0).toBeGreaterThanOrEqual(24);
+  expect(closeBox?.height ?? 0).toBeGreaterThanOrEqual(24);
+  // Keyboard path: focus the real button and activate it with Enter.
+  await closeButton.focus();
+  await page.keyboard.press("Enter");
   await expect(dialog).toContainText("Close this terminal?");
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
   await expect(page.locator(".term-tab")).toHaveCount(1);
@@ -559,6 +655,22 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   expect(state.deletes).toBe(1);
   expect(state.sessions[0]?.closeFrames).toBe(1);
   expect(state.sessions[1]?.closeFrames).toBe(0);
+
+  // Focus returns to the surviving tab, not to document.body.
+  const remaining = await page.evaluate(() => {
+    const app = (document.querySelector("#app") as unknown as {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
+      };
+    }).__vue_app__;
+    const store = app.config.globalProperties.$pinia._s.get("terminal") as {
+      tabs: Array<{ id: string }>;
+    };
+    return store.tabs[0]?.id ?? "";
+  });
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
+    .toBe(`term-tab-${remaining}`);
 
   // Closing the window confirms the remaining session and removes the badge.
   await page.locator(".term-window-close").click();
@@ -680,4 +792,165 @@ test("the terminal window coexists with the code editor without replacing it", a
   await expect(page.locator(".ed-window")).toBeHidden();
   await expect(terminal).toBeVisible();
   expect(state.creates).toBe(1);
+});
+
+
+test("heartbeat, disconnect, exit and error states use real frames", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+
+  await openWindow(page, "app");
+  const status = page.locator(".term-window .term-surface:visible .term-state");
+  await expect(status).toHaveText("Connected");
+  const first = state.sessions[0]!;
+
+  // The 25s client heartbeat is on the wire (0x04), not just a README claim.
+  await page.clock.fastForward(25_500);
+  await expect.poll(() => first.heartbeats).toBeGreaterThanOrEqual(1);
+
+  // A transport close is reported as disconnected; nothing reconnects itself.
+  await first.socket!.close({ code: 1006 });
+  await expect(status).toHaveText("Disconnected");
+  await page.clock.fastForward(5_000);
+  expect(state.creates).toBe(1);
+
+  // Retry is explicit and creates exactly one new session.
+  await page.getByRole("button", { name: "Start a new session" }).click();
+  await expect.poll(() => state.creates).toBe(2);
+  await expect(status).toHaveText("Connected");
+
+  // The shell exit carries its code and offers a new session.
+  const second = state.sessions[1]!;
+  second.socket!.send(jsonFrame(2, { exit_code: 7, signal: "" }));
+  await expect(status).toHaveText("Exited");
+  await expect(page.getByText("The shell exited with code 7.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Start a new session" }).click();
+  await expect.poll(() => state.creates).toBe(3);
+  const third = state.sessions[2]!;
+  third.socket!.send(
+    frame(3, Buffer.from("the node agent is unavailable", "utf8")),
+  );
+  await expect(status).toHaveText("Error");
+  await expect(page.getByText("the node agent is unavailable")).toBeVisible();
+});
+
+test("shortcuts are discoverable and the documented escape leaves xterm", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+  const tab = await openWindow(page, "app");
+  await expect(
+    page.locator(".term-window .term-surface:visible .term-state"),
+  ).toHaveText("Connected");
+
+  await page.locator(".term-shortcuts-btn").click();
+  const shortcuts = page.locator(".term-shortcuts");
+  await expect(shortcuts).toBeVisible();
+  await expect(shortcuts).toContainText("Ctrl+Shift+Escape");
+  await expect(shortcuts).toContainText("Alt+Shift+W");
+  await page.keyboard.press("Escape");
+
+  // The chord pulls focus out of the shell onto the window tab.
+  await page.locator(".term-window .term-surface:visible .xterm-screen").click();
+  await page.keyboard.press("Control+Shift+Escape");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
+    .toBe(`term-tab-${tab.id}`);
+
+  // Alt+Shift+W works from the shell and uses the shared dialog.
+  await page.locator(".term-window .term-surface:visible .xterm-screen").click();
+  await page.keyboard.press("Alt+Shift+W");
+  const dialog = page.locator(".term-close-modal");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Keep terminals" }).click();
+  await expect(page.locator(".term-tab")).toHaveCount(1);
+
+  // Alt+M is scoped to the terminal: from page chrome it does nothing, from
+  // the shell it minimizes to the rail.
+  await page.locator(".topbar").click();
+  await page.keyboard.press("Alt+M");
+  await expect(page.locator(".term-window")).toBeVisible();
+  await page.locator(".term-window .term-surface:visible .xterm-screen").click();
+  await page.keyboard.press("Alt+M");
+  await expect(page.locator(".term-window")).toBeHidden();
+  await expect(page.locator(".rail-btn--terminal")).toBeVisible();
+});
+
+test("signing out confirms live shells and cancel aborts the logout", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+  await openWindow(page, "app");
+  await expect(
+    page.locator(".term-window .term-surface:visible .term-state"),
+  ).toHaveText("Connected");
+
+  const signOut = async (): Promise<void> => {
+    await page.locator(".topbar").getByRole("button", { name: "Account" }).click();
+    await page
+      .locator(".n-dropdown-option", { hasText: "Sign out" })
+      .click();
+  };
+
+  await signOut();
+  const dialog = page.locator(".term-close-modal");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Close this terminal?");
+  await dialog.getByRole("button", { name: "Keep terminals" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await expect(page.locator(".term-tab")).toHaveCount(1);
+  expect(state.sessions[0]?.closeFrames).toBe(0);
+  expect(state.deletes).toBe(0);
+
+  // A confirmed sign-out releases the shell and lands on the login page.
+  await signOut();
+  await expect(dialog).toContainText("Close this terminal?");
+  await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  expect(state.sessions[0]?.closeFrames).toBe(1);
+});
+
+test("beforeunload only warns while a session is live", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+  await openWindow(page, "app");
+  await expect(
+    page.locator(".term-window .term-surface:visible .term-state"),
+  ).toHaveText("Connected");
+
+  const warnedLive = await page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(warnedLive).toBe(true);
+
+  await page.locator(".term-window-close").click();
+  await page
+    .locator(".term-close-modal")
+    .getByRole("button", { name: "Close terminal", exact: true })
+    .click();
+  await expect(page.locator(".term-window")).toBeHidden();
+
+  const warnedClosed = await page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+  expect(warnedClosed).toBe(false);
 });

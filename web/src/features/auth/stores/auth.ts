@@ -113,6 +113,10 @@ export const useAuthStore = defineStore("auth", () => {
       lastAccountId = nextAccountId;
       if (nextAccountId !== "") {
         try {
+          // An in-SPA account switch is a sign-out plus sign-in even when no
+          // empty-session step lands in between: drop the previous account's
+          // live terminals before rebinding the window geometry.
+          useTerminalStore().reset();
           useEditorWindowStore().reloadForUser(nextAccountId);
           useTerminalWindowStore().reloadForUser(nextAccountId);
         } catch {

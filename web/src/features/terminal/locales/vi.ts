@@ -10,6 +10,7 @@ const vi = {
     close: "Đóng cửa sổ terminal",
     resize: "Thay đổi kích thước cửa sổ terminal",
     tabs: "Các phiên terminal",
+    closeTab: "Đóng {title}",
     activeTarget: "Đích",
     activeCwd: "Thư mục làm việc",
   },
@@ -77,6 +78,10 @@ const vi = {
     confirmAll: "Đóng tất cả",
   },
   shortcuts: {
+    title: "Phím tắt terminal",
+    show: "Phím tắt terminal",
+    escape:
+      "Ctrl+Shift+Escape rời khỏi vùng nhập terminal và đưa tiêu điểm về tab cửa sổ.",
     closeTab: "Nhấn Delete trên tab đang chọn để đóng terminal đó sau khi xác nhận.",
     closeWindow: "Alt+Shift+W đóng tất cả terminal sau khi xác nhận.",
     minimize: "Alt+M thu nhỏ cửa sổ.",

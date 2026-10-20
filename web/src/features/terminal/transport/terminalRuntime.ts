@@ -1,12 +1,14 @@
 import type { ITheme } from "@xterm/xterm";
 
 import {
+  clampDimension,
   decodeServerFrame,
   encodeClose,
   encodeHeartbeat,
   encodeInput,
   encodeResize,
 } from "@/features/terminal/transport/frames";
+import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
 import type { TerminalSessionInfo } from "@/features/terminal/schemas/terminal";
 import { terminalWebSocketUrl } from "@/features/terminal/api/terminal";
 
@@ -35,6 +37,7 @@ export interface TerminalStatePatch {
   exitCode?: number;
   exitSignal?: string;
   errorMessage?: string;
+  errorCode?: TerminalErrorCode | null;
   shell?: string;
   serviceUser?: string;
   cols?: number;
@@ -130,6 +133,13 @@ function terminalFontFamily(): string | undefined {
   return readToken("--font-mono");
 }
 
+/** terminalFontSize reads the compact text token; xterm needs a number. */
+function terminalFontSize(): number {
+  const raw = readToken("--text-sm");
+  const parsed = raw === undefined ? Number.NaN : Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 14;
+}
+
 export class TerminalRuntime {
   private readonly options: TerminalRuntimeOptions;
   private readonly deps: TerminalRuntimeDeps;
@@ -147,6 +157,14 @@ export class TerminalRuntime {
   private status: TerminalStatus = "connecting";
   private disposed = false;
   private ended = false;
+  /**
+   * pendingSize is the fitted size measured before the server confirmed the
+   * PTY. `opened` flushes it, so the PTY never stays at the create-time
+   * default while the renderer is already fitted to a different box.
+   */
+  private pendingSize: { cols: number; rows: number } | null = null;
+  /** lastResize deduplicates identical 0x02 frames. */
+  private lastResize = "";
 
   constructor(options: TerminalRuntimeOptions) {
     this.options = options;
@@ -168,10 +186,8 @@ export class TerminalRuntime {
       }
       this.mount(modules);
       this.openSocket();
-    } catch (error) {
-      this.fail(
-        error instanceof Error ? error.message : "The terminal could not start.",
-      );
+    } catch {
+      this.fail("", "generic");
     }
   }
 
@@ -290,7 +306,7 @@ export class TerminalRuntime {
       // for keyboard and screen-reader operation.
       screenReaderMode: true,
       fontFamily: terminalFontFamily(),
-      fontSize: 13,
+      fontSize: terminalFontSize(),
       theme: terminalTheme(),
     });
     const fitAddon = new modules.FitAddon();
@@ -310,18 +326,23 @@ export class TerminalRuntime {
       }
     });
     this.resizeSubscription = terminal.onResize(({ cols, rows }) => {
-      if (this.status === "connected") {
-        this.send(encodeResize(cols, rows));
-      }
       this.options.onState({ cols, rows });
+      if (this.status === "connected") {
+        this.sendResize(cols, rows);
+      } else {
+        // The renderer fits as soon as its box exists, usually before the
+        // server's `opened`. Keep the latest measurement and flush it there.
+        this.pendingSize = { cols, rows };
+      }
     });
 
     if (typeof ResizeObserver !== "undefined") {
       this.observer = new ResizeObserver(() => this.fit());
       this.observer.observe(host);
     }
-    // Layout is readable synchronously after append; this also seeds the
-    // resize frame the server needs before the first output.
+    // Layout is readable synchronously after append. A fit here happens
+    // before `opened`; onResize stores it as pendingSize and `opened` flushes
+    // the exact frame the PTY needs before the first prompt.
     this.fit();
   }
 
@@ -329,7 +350,7 @@ export class TerminalRuntime {
   private openSocket(): void {
     const token = this.options.getToken();
     if (!token) {
-      this.fail("Your session has ended. Sign in again to open a terminal.");
+      this.fail("", "auth");
       return;
     }
     const url = terminalWebSocketUrl(this.options.session.websocket_path);
@@ -339,12 +360,8 @@ export class TerminalRuntime {
         "gotham.terminal.v1",
         `gotham.token.${token}`,
       ]);
-    } catch (error) {
-      this.fail(
-        error instanceof Error
-          ? error.message
-          : "The terminal connection could not be opened.",
-      );
+    } catch {
+      this.fail("", "generic");
       return;
     }
     socket.binaryType = "arraybuffer";
@@ -355,12 +372,7 @@ export class TerminalRuntime {
         return;
       }
       this.startHeartbeat();
-      // The server may have sized the PTY already; the fitted size is sent
-      // once the renderer knows its box.
-      const terminal = this.terminal;
-      if (terminal && this.status === "connected") {
-        this.send(encodeResize(terminal.cols, terminal.rows));
-      }
+      // The fitted size is flushed on `opened`, once the PTY exists.
     };
     socket.onmessage = (event) => {
       this.handleMessage(event.data);
@@ -370,9 +382,8 @@ export class TerminalRuntime {
       if (this.disposed || this.ended) {
         return;
       }
-      this.setStatus("disconnected", {
-        errorMessage: "The terminal connection closed.",
-      });
+      // The catalog owns the disconnected copy; no English reaches the UI.
+      this.setStatus("disconnected");
     };
     socket.onerror = () => {
       // Browsers follow an error with close; the close handler owns the state
@@ -402,18 +413,27 @@ export class TerminalRuntime {
       case "output":
         this.terminal?.write(frame.bytes);
         return;
-      case "opened":
+      case "opened": {
         this.ended = false;
+        this.status = "connected";
+        // The renderer's fitted size is the truth shown in the footer and sent
+        // to the PTY; the server's create defaults are not surfaced.
         this.options.onState({
           status: "connected",
           shell: frame.info.shell,
           serviceUser: frame.info.service_user,
-          cols: frame.info.cols,
-          rows: frame.info.rows,
         });
-        this.status = "connected";
+        const size =
+          this.pendingSize ??
+          {
+            cols: this.terminal?.cols ?? this.options.session.cols,
+            rows: this.terminal?.rows ?? this.options.session.rows,
+          };
+        this.pendingSize = null;
+        this.sendResize(size.cols, size.rows);
         this.fit();
         return;
+      }
       case "exited":
         this.ended = true;
         this.stopHeartbeat();
@@ -425,6 +445,8 @@ export class TerminalRuntime {
       case "error":
         this.ended = true;
         this.stopHeartbeat();
+        // The server's message is already a bounded, localized-agnostic
+        // diagnostic; the catalog supplies the title and generic fallback.
         this.setStatus("error", { errorMessage: frame.message });
         return;
       case "ping":
@@ -432,11 +454,23 @@ export class TerminalRuntime {
       case "invalid":
         this.ended = true;
         this.stopHeartbeat();
-        this.setStatus("error", {
-          errorMessage: "The terminal sent an unsupported frame.",
-        });
+        this.setStatus("error", { errorCode: "generic", errorMessage: "" });
         return;
     }
+  }
+
+  /**
+   * sendResize sends one 0x02 frame, deduplicated against the last size. It is
+   * only called once the PTY is confirmed, so the server never keeps the
+   * create-time default while xterm is fitted to another box.
+   */
+  private sendResize(cols: number, rows: number): void {
+    const key = `${clampDimension(cols)}x${clampDimension(rows)}`;
+    if (key === this.lastResize) {
+      return;
+    }
+    this.lastResize = key;
+    this.send(encodeResize(cols, rows));
   }
 
   /** send writes one client frame when the socket is open. */
@@ -483,12 +517,12 @@ export class TerminalRuntime {
   }
 
   /** fail ends a session that never reached `opened`. */
-  private fail(message: string): void {
+  private fail(message: string, code: TerminalErrorCode): void {
     if (this.disposed || this.ended) {
       return;
     }
     this.ended = true;
     this.stopHeartbeat();
-    this.setStatus("error", { errorMessage: message });
+    this.setStatus("error", { errorCode: code, errorMessage: message });
   }
 }

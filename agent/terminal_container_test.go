@@ -462,6 +462,8 @@ type fakeExecAPI struct {
 	killSurvivors  bool
 	execRunning    bool
 	commands       [][]string
+	envs           [][]string
+	imageEnv       []string
 	inputs         strings.Builder
 	resizeQuery    string
 }
@@ -474,18 +476,23 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 		api.mu.Lock()
 		running := api.running
 		api.mu.Unlock()
+		api.mu.Lock()
+		imageEnv := append([]string(nil), api.imageEnv...)
+		api.mu.Unlock()
 		writeJSON(t, w, map[string]any{
 			"State":  map[string]any{"Running": running, "Status": "exited"},
-			"Config": map[string]any{"User": "app", "WorkingDir": "/srv"},
+			"Config": map[string]any{"User": "app", "WorkingDir": "/srv", "Env": imageEnv},
 		})
 	})
 	mux.HandleFunc("/containers/c1/exec", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Cmd []string `json:"Cmd"`
+			Env []string `json:"Env"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		api.mu.Lock()
 		api.commands = append(api.commands, body.Cmd)
+		api.envs = append(api.envs, body.Env)
 		number := len(api.commands)
 		fail := api.killCreateFail && number == 3
 		api.mu.Unlock()
@@ -578,6 +585,26 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 	api.server = httptest.NewServer(mux)
 	t.Cleanup(api.server.Close)
 	return api
+}
+
+// command returns the recorded Cmd of the n-th created exec (1-based).
+func (a *fakeExecAPI) command(number int) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if number < 1 || number > len(a.commands) {
+		return nil
+	}
+	return append([]string(nil), a.commands[number-1]...)
+}
+
+// env returns the recorded Env of the n-th created exec (1-based).
+func (a *fakeExecAPI) env(number int) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if number < 1 || number > len(a.envs) {
+		return nil
+	}
+	return append([]string(nil), a.envs[number-1]...)
 }
 
 func (a *fakeExecAPI) resize() string {

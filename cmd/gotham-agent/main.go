@@ -197,10 +197,11 @@ func runServe() int {
 			// open answers FailedPrecondition. Container exec does not need a
 			// file root, so the service is always registered.
 			terminalConfig := agent.TerminalConfig{
-				Logger:      log,
-				Shell:       cfg.TerminalShell,
-				Containers:  docker,
-				MaxSessions: cfg.TerminalMaxSessions,
+				Logger:              log,
+				Shell:               cfg.TerminalShell,
+				Containers:          docker,
+				MaxSessions:         cfg.TerminalMaxSessions,
+				IntegrationDisabled: !cfg.TerminalIntegration,
 			}
 			if fileServer != nil {
 				terminalConfig.Roots = fileServer

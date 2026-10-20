@@ -99,9 +99,16 @@ type TerminalConfig struct {
 	// in the agent's default directory, so a node with the file service
 	// disabled can still run a shell. Container targets do not use it.
 	Roots TerminalRoots
-	// Shell is the absolute shell path to run for host targets. Empty selects
+	// Shell is the absolute shell path to run for host targets. Empty prefers
+	// bash (/bin/bash, /usr/bin/bash, then bash from PATH) for host sessions,
+	// falling back to $SHELL and /bin/sh; with IntegrationDisabled it selects
 	// the first usable candidate from $SHELL, /bin/bash and /bin/sh.
 	Shell string
+	// IntegrationDisabled turns off the optional bash startup integration: the
+	// bash-first host shell selection and the additive rcfile that adds colour
+	// defaults and OSC 133 prompt marks. False (the default) keeps it on; the
+	// agent config sets it from GOTHAM_AGENT_TERMINAL_INTEGRATION=false.
+	IntegrationDisabled bool
 	// Containers runs container targets. nil makes them fail with
 	// FailedPrecondition instead of falling back to a host shell.
 	Containers ContainerExec
@@ -124,6 +131,7 @@ type TerminalServer struct {
 	log           *slog.Logger
 	roots         TerminalRoots
 	shell         string
+	integration   bool
 	maxInputBytes int
 	maxDuration   time.Duration
 	sessions      chan struct{}
@@ -179,6 +187,7 @@ func NewTerminalServer(cfg TerminalConfig) *TerminalServer {
 		log:           log,
 		roots:         cfg.Roots,
 		shell:         cfg.Shell,
+		integration:   !cfg.IntegrationDisabled,
 		containers:    cfg.Containers,
 		maxInputBytes: maxInput,
 		maxDuration:   maxDuration,
@@ -408,7 +417,7 @@ func (s *TerminalServer) prepareHost(open *agentv1.TerminalOpen) (terminalStart,
 			return terminalStart{}, terminalDirError(err)
 		}
 	}
-	shell, err := resolveTerminalShell(s.shell)
+	shell, err := resolveTerminalShell(s.shell, s.integration)
 	if err != nil {
 		s.log.Error("terminal: no usable shell", "configured", s.shell, "error", err)
 		return terminalStart{}, status.Error(codes.FailedPrecondition, "terminal: no usable shell is installed on the node")
@@ -585,13 +594,25 @@ func (s *TerminalServer) pumpOutput(
 	})
 }
 
-// startSession starts the configured shell on a new PTY.
+// startSession starts the configured shell on a new PTY. A bash host session
+// gets the constant integration rcfile as --rcfile (never through stdin); if
+// the private file cannot be created the shell still starts without it.
 func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, error) {
-	cmd := exec.Command(spec.Shell) // #nosec G204 -- the shell is chosen by the node, not the caller.
+	args, cleanup, err := terminalBashRcArgs(spec.Shell, s.integration)
+	if err != nil {
+		if s.log != nil {
+			s.log.Warn("terminal: bash integration unavailable", "error", err)
+		}
+		args, cleanup = nil, nil
+	}
+	cmd := exec.Command(spec.Shell, args...) // #nosec G204 -- the shell is chosen by the node, not the caller.
 	cmd.Dir = spec.Dir
 	cmd.Env = terminalEnv()
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: spec.Cols, Rows: spec.Rows})
 	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
 		return nil, fmt.Errorf("start %s: %w", spec.Shell, err)
 	}
 	// pty's ioctl helpers use os.File.Fd, which puts the master back into
@@ -601,9 +622,12 @@ func (s *TerminalServer) startSession(spec terminalStart) (terminalProcess, erro
 		_ = killTerminalProcessGroup(cmd.Process.Pid, terminalKill)
 		_ = master.Close()
 		go func() { _, _ = cmd.Process.Wait() }()
+		if cleanup != nil {
+			cleanup()
+		}
 		return nil, fmt.Errorf("start %s: %w", spec.Shell, err)
 	}
-	return newTerminalSession(cmd, master, s.log, &s.walks), nil
+	return newTerminalSession(cmd, master, s.log, &s.walks, cleanup), nil
 }
 
 // startContainer opens an interactive exec in the resolved container.
@@ -611,7 +635,7 @@ func (s *TerminalServer) startContainer(ctx context.Context, spec terminalStart)
 	if s.containers == nil {
 		return nil, errors.New("container exec is not configured")
 	}
-	opts := ExecOptions{Cols: spec.Cols, Rows: spec.Rows}
+	opts := ExecOptions{Cols: spec.Cols, Rows: spec.Rows, Integration: s.integration}
 	if spec.Shell != "" {
 		opts.Cmd = []string{spec.Shell}
 	}
@@ -746,26 +770,59 @@ func terminalStartError(err error) error {
 	}
 }
 
-// resolveTerminalShell picks the shell the node runs. The configured value
-// must be an absolute, executable regular file; otherwise the first usable
-// candidate from $SHELL, /bin/bash and /bin/sh wins.
-func resolveTerminalShell(configured string) (string, error) {
-	candidates := []string{configured}
-	if strings.TrimSpace(configured) == "" {
-		candidates = []string{os.Getenv("SHELL"), "/bin/bash", "/bin/sh"}
+// resolveTerminalShell picks the shell the node runs. A configured value must
+// be an absolute, executable regular file and is used exactly as given.
+// Otherwise an integration-enabled node prefers bash (/bin/bash, /usr/bin/bash,
+// then bash from PATH), then $SHELL and /bin/sh; a node with the integration
+// disabled keeps the pre-JUS-263 order ($SHELL, /bin/bash, /bin/sh).
+func resolveTerminalShell(configured string, integration bool) (string, error) {
+	return resolveTerminalShellWith(configured, integration, exec.LookPath, os.Stat)
+}
+
+// resolveTerminalShellWith is resolveTerminalShell with injectable lookup and
+// stat so the bash-present/bash-absent branches are testable.
+func resolveTerminalShellWith(
+	configured string,
+	integration bool,
+	lookPath func(string) (string, error),
+	stat func(string) (os.FileInfo, error),
+) (string, error) {
+	if strings.TrimSpace(configured) != "" {
+		candidates := []string{configured}
+		if shell, ok := firstUsableShell(candidates, stat); ok {
+			return shell, nil
+		}
+		return "", errors.New("configured shell is not an absolute executable file")
 	}
+	var candidates []string
+	if integration {
+		candidates = append(candidates, "/bin/bash", "/usr/bin/bash")
+		if path, err := lookPath("bash"); err == nil {
+			candidates = append(candidates, path)
+		}
+	}
+	candidates = append(candidates, os.Getenv("SHELL"), "/bin/sh")
+	if shell, ok := firstUsableShell(candidates, stat); ok {
+		return shell, nil
+	}
+	return "", errors.New("no absolute executable shell found")
+}
+
+// firstUsableShell returns the first candidate that is an absolute executable
+// regular file. Duplicates are harmless: the first match wins.
+func firstUsableShell(candidates []string, stat func(string) (os.FileInfo, error)) (string, bool) {
 	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" || !filepath.IsAbs(candidate) {
 			continue
 		}
-		info, err := os.Stat(candidate)
+		info, err := stat(candidate)
 		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 			continue
 		}
-		return candidate, nil
+		return candidate, true
 	}
-	return "", errors.New("no absolute executable shell found")
+	return "", false
 }
 
 // terminalSafeEnv is the environment a host shell inherits. It is an allowlist
@@ -779,9 +836,11 @@ var terminalSafeEnv = map[string]bool{
 
 // terminalEnv builds the child environment from the allowlist plus a terminal
 // description. LC_* locale variables are kept so UTF-8 and collation behave
-// like the operator's locale.
+// like the operator's locale. The extra values are derived from the agent's
+// own environment and the service user's passwd entry, never from a request or
+// the browser.
 func terminalEnv() []string {
-	env := make([]string, 0, 16)
+	env := make([]string, 0, 20)
 	for _, entry := range os.Environ() {
 		name, _, ok := strings.Cut(entry, "=")
 		if !ok {
@@ -791,8 +850,72 @@ func terminalEnv() []string {
 			env = append(env, entry)
 		}
 	}
-	env = append(env, "TERM=xterm-256color", "COLORTERM=truecolor")
+	// Keep HOME/USER/LOGNAME correct even when the service was started without
+	// them (systemd with a bare environment). Existing non-empty values from the
+	// operator's environment are kept.
+	if home := serviceHomeDir(); home != "" {
+		env = terminalEnvDefault(env, "HOME", home)
+	}
+	if name := currentUsername(); name != "" {
+		env = terminalEnvDefault(env, "USER", name)
+		env = terminalEnvDefault(env, "LOGNAME", name)
+	}
+	return terminalEnvDescription(env)
+}
+
+// terminalEnvDescription forces the terminal description for every PTY session
+// and fills in a UTF-8 locale when the child would otherwise start without one.
+// inherited lists are only consulted for the locale decision (a container's
+// image environment is merged by Docker, so its locale must not be replaced).
+func terminalEnvDescription(env []string, inherited ...[]string) []string {
+	env = terminalEnvSet(env, "TERM", "xterm-256color")
+	env = terminalEnvSet(env, "COLORTERM", "truecolor")
+	hasLocale := terminalEnvHasLocale(env)
+	for _, list := range inherited {
+		hasLocale = hasLocale || terminalEnvHasLocale(list)
+	}
+	if !hasLocale {
+		env = terminalEnvSet(env, "LANG", "C.UTF-8")
+	}
 	return env
+}
+
+// terminalEnvHasLocale reports whether any locale variable is already set.
+// An explicit non-UTF-8 locale is the operator's choice and is left alone.
+func terminalEnvHasLocale(env []string) bool {
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || value == "" {
+			continue
+		}
+		if key == "LANG" || key == "LC_ALL" || key == "LC_CTYPE" {
+			return true
+		}
+	}
+	return false
+}
+
+// terminalEnvDefault appends name=value only when name is unset or empty.
+func terminalEnvDefault(env []string, name, value string) []string {
+	for _, entry := range env {
+		key, current, ok := strings.Cut(entry, "=")
+		if ok && key == name && current != "" {
+			return env
+		}
+	}
+	return terminalEnvSet(env, name, value)
+}
+
+// terminalEnvSet replaces every existing occurrence of name and appends one.
+func terminalEnvSet(env []string, name, value string) []string {
+	next := env[:0]
+	for _, entry := range env {
+		if key, _, ok := strings.Cut(entry, "="); ok && key == name {
+			continue
+		}
+		next = append(next, entry)
+	}
+	return append(next, name+"="+value)
 }
 
 // serviceUser reports the OS identity the shell runs as.
@@ -813,6 +936,11 @@ type terminalSession struct {
 	walks *sync.WaitGroup
 	done  chan struct{}
 
+	// cleanup removes the per-session integration rcfile (0700 directory,
+	// 0600 file). nil for non-bash sessions and when the integration is off.
+	cleanup     func()
+	cleanupOnce sync.Once
+
 	// leaderStart is the shell's /proc start time, captured at fork time. It
 	// lets the session walk tell the recorded session apart from a reused pid.
 	leaderStart uint64
@@ -823,7 +951,7 @@ type terminalSession struct {
 	waitErr  error
 }
 
-func newTerminalSession(cmd *exec.Cmd, master *os.File, log *slog.Logger, walks *sync.WaitGroup) *terminalSession {
+func newTerminalSession(cmd *exec.Cmd, master *os.File, log *slog.Logger, walks *sync.WaitGroup, cleanup func()) *terminalSession {
 	pid := cmd.Process.Pid
 	return &terminalSession{
 		cmd:         cmd,
@@ -832,9 +960,20 @@ func newTerminalSession(cmd *exec.Cmd, master *os.File, log *slog.Logger, walks 
 		sid:         pid,
 		log:         log,
 		walks:       walks,
+		cleanup:     cleanup,
 		leaderStart: terminalProcessStartTime(pid),
 		done:        make(chan struct{}),
 	}
+}
+
+// removeCleanup deletes the session's private rcfile once. It never runs while
+// the shell still needs it: terminate ends the shell first, and a naturally
+// exited shell has already read the file.
+func (s *terminalSession) removeCleanup() {
+	if s.cleanup == nil {
+		return
+	}
+	s.cleanupOnce.Do(s.cleanup)
 }
 
 // WaitTerminations waits up to timeout for in-flight session cleanup walks to
@@ -1030,11 +1169,14 @@ func (s *terminalSession) resize(cols, rows uint16) error {
 	return pty.Setsize(s.pty, &pty.Winsize{Cols: cols, Rows: rows})
 }
 
-// wait reaps the child and reports its exit status.
+// wait reaps the child and reports its exit status. The private integration
+// rcfile is removed once the shell has exited, so a shell that starts slowly
+// can still read it.
 func (s *terminalSession) wait() (int32, string) {
 	s.waitOnce.Do(func() {
 		s.waitErr = s.cmd.Wait()
 		s.state = s.cmd.ProcessState
+		s.removeCleanup()
 		close(s.done)
 	})
 	<-s.done

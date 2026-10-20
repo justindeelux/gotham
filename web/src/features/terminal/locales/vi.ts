@@ -24,6 +24,7 @@ const vi = {
     movedBody:
       "Phiên, bộ đệm và thư mục làm việc đã chuyển sang cửa sổ nổi. Phiên này không thể quay lại trang.",
     showWindow: "Hiện cửa sổ",
+    startNew: "Bắt đầu phiên mới",
     close: "Đóng terminal",
     host: "Shell trên máy chủ",
     target: "Đích",
@@ -110,6 +111,13 @@ const vi = {
     emptyHint: "Hãy thêm và kiểm tra một máy chủ trước khi mở terminal.",
     addServer: "Thêm máy chủ",
     starting: "Đang khởi động terminal…",
+    sessionClosedTitle: "Phiên đã đóng",
+    sessionClosedBody:
+      "Trang này không còn terminal đang hoạt động. Hãy bắt đầu phiên mới khi bạn sẵn sàng; hệ thống sẽ không tự khởi động.",
+    startNew: "Bắt đầu phiên mới",
+    notAvailableTitle: "Không thể dùng terminal",
+    notAvailableBody:
+      "Terminal chỉ dành cho quản trị viên nền tảng. Hãy đề nghị quyền truy cập rồi tải lại trang này.",
     notReadyTitle: "Không thể mở terminal",
     notReadyBody:
       "Máy chủ này đang ở trạng thái {status}. Terminal chỉ có thể bắt đầu trên node sẵn sàng.",
@@ -120,7 +128,11 @@ const vi = {
     heading: "Terminal trên trang",
     paused: "Tạm dừng",
     resume: "Tiếp tục",
+    resumeTab: "Tiếp tục terminal {title}",
     openInWindow: "Mở trong cửa sổ",
+    openInWindowTab: "Mở {title} trong cửa sổ",
+    expand: "Hiện các terminal trên trang đang tạm dừng",
+    collapse: "Ẩn các terminal trên trang đang tạm dừng",
     closeTab: "Đóng {title}",
   },
   appearance: {

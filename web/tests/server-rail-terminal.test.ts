@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { useEditorStore } from "../src/features/files/stores/editor";
 import type { EditorTab } from "../src/features/files/stores/editor";
+import { useAuthStore } from "../src/features/auth";
 import { useServersStore } from "../src/features/servers/stores/servers";
 import { useTerminalStore } from "../src/features/terminal/stores/terminal";
 import type { TerminalTab } from "../src/features/terminal/stores/terminal";
@@ -96,6 +97,14 @@ beforeEach(() => {
   syncComposerLocale("en");
   document.body.innerHTML = "";
   setActivePinia(createPinia());
+  // The terminal rail entry is operator-only (JUS-246).
+  useAuthStore().user = {
+    id: "u-1",
+    email: "ada@gotham.dev",
+    display_name: "Ada",
+    created_at: "2026-01-01T00:00:00Z",
+    is_platform_admin: true,
+  };
 });
 
 /** mountRail mounts the rail with the given terminal/editor tab counts. */
@@ -182,6 +191,18 @@ describe("ServerRail terminal icon (JUS-245)", () => {
     ];
     await flushPromises();
     expect(wrapper.find(".rail-btn--terminal .rail-badge").text()).toBe("3");
+    wrapper.unmount();
+  });
+
+  it("hides the terminal entry point after a demotion (JUS-246)", async () => {
+    const { wrapper } = await mountRail(1);
+    expect(wrapper.find(".rail-btn--terminal").exists()).toBe(true);
+    useAuthStore().user = {
+      ...useAuthStore().user!,
+      is_platform_admin: false,
+    };
+    await flushPromises();
+    expect(wrapper.find(".rail-btn--terminal").exists()).toBe(false);
     wrapper.unmount();
   });
 });

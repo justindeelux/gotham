@@ -21,6 +21,12 @@ interface Props {
 }
 
 const props = defineProps<Props>();
+/**
+ * startNew is emitted only from the moved-to-window notice. The host owns the
+ * decision and opens a fresh page shell; the pane never creates a session on
+ * its own.
+ */
+const emit = defineEmits<{ startNew: [] }>();
 const { t } = useI18n();
 const terminal = useTerminalStore();
 const windowStore = useTerminalWindowStore();
@@ -53,7 +59,10 @@ function closeDetached(): void {
         <NButton size="small" type="primary" @click="showWindow">
           {{ t("terminal.pane.showWindow") }}
         </NButton>
-        <NButton size="small" secondary @click="closeDetached">
+        <NButton size="small" secondary @click="emit('startNew')">
+          {{ t("terminal.pane.startNew") }}
+        </NButton>
+        <NButton size="small" quaternary @click="closeDetached">
           {{ t("terminal.pane.close") }}
         </NButton>
       </div>

@@ -437,6 +437,40 @@ describe("terminal store sessions", () => {
     expect(terminal.isDisplayed(tab.id)).toBe(false);
   });
 
+  it("starts a fresh page shell only when explicitly asked", async () => {
+    const terminal = useTerminalStore();
+    const first = await terminal.openPageSession(options());
+    terminal.detachToWindow(first.id);
+    expect(first.mode).toBe("window");
+
+    // A normal reopen still resolves to the detached tab (no duplicate).
+    const reopened = await terminal.openPageSession(options());
+    expect(reopened.id).toBe(first.id);
+
+    // An explicit fresh open creates a page tab while the window copy stays.
+    const fresh = await terminal.openPageSession({ ...options(), fresh: true });
+    expect(fresh.id).not.toBe(first.id);
+    expect(fresh.mode).toBe("page");
+    expect(fresh.sessionId).toBe("session-2");
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(terminal.windowTabs).toHaveLength(1);
+    expect(terminal.pageTabs).toHaveLength(1);
+
+    // Later normal opens prefer the live page tab over the older window copy.
+    const reuse = await terminal.openPageSession(options());
+    expect(reuse.id).toBe(fresh.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("deduplicates a rapid double fresh open before the first resolve", async () => {
+    const terminal = useTerminalStore();
+    const first = terminal.openPageSession({ ...options(), fresh: true });
+    const second = terminal.openPageSession({ ...options(), fresh: true });
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.id).toBe(b.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+  });
+
   it("queues a surface that mounted before the runtime existed", async () => {    const terminal = useTerminalStore();
     const pending = terminal.openPageSession(options());
     const tab = terminal.findTabForTarget(options());

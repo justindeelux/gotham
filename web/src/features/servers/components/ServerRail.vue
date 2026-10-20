@@ -14,9 +14,11 @@ import {
 import { useServersStore } from "@/features/servers/stores/servers";
 import { useEditorStore } from "@/features/files/stores/editor";
 import { useEditorWindowStore } from "@/features/files/stores/editorWindow";
+import { useAuthStore } from "@/features/auth";
 import { useTerminalStore, useTerminalWindowStore } from "@/features/terminal";
 
 const serversStore = useServersStore();
+const authStore = useAuthStore();
 const editor = useEditorStore();
 const editorWindow = useEditorWindowStore();
 const terminal = useTerminalStore();
@@ -180,8 +182,9 @@ onMounted(() => {
         </button>
       </div>
       <!-- JUS-245: the minimized terminal window parks beside the editor with
-           its own count badge; a click restores the same live sessions. -->
-      <div v-if="terminalCount > 0" class="rail-item">
+           its own count badge; a click restores the same live sessions.
+           JUS-246: operator-only, like the backend host-terminal gate. -->
+      <div v-if="authStore.isPlatformAdmin && terminalCount > 0" class="rail-item">
         <button
           type="button"
           class="rail-btn rail-btn--terminal"
@@ -206,7 +209,7 @@ onMounted(() => {
         </button>
       </div>
       <div
-        v-if="editorCount > 0 || terminalCount > 0"
+        v-if="editorCount > 0 || (authStore.isPlatformAdmin && terminalCount > 0)"
         class="rail-sep"
         aria-hidden="true"
       ></div>

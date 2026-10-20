@@ -89,6 +89,13 @@ export interface TerminalOpenOptions {
   title?: string;
   /** sourcePath is the fullPath of the page/tab that opened the session. */
   sourcePath?: string;
+  /**
+   * fresh asks for a new page tab even when a detached tab for the same
+   * target exists. Hosts use it only for an explicit "start a new session"
+   * action (for example after the page session moved into the window);
+   * ordinary opens still reuse the live shell.
+   */
+  fresh?: boolean;
 }
 
 /** TerminalCloseRequest is the pending confirmation (always one at a time). */
@@ -212,11 +219,17 @@ export const useTerminalStore = defineStore("terminal", () => {
     return tabs.value.find((tab) => tab.id === id) ?? null;
   }
 
-  /** findTabForTarget returns an existing session for one page target. */
+  /**
+   * findTabForTarget returns an existing session for one page target. A live
+   * page tab wins over a detached copy of the same target: after an explicit
+   * "start a new page session", later opens must reuse the page tab instead of
+   * jumping back to the old window tab.
+   */
   function findTabForTarget(options: TerminalOpenOptions): TerminalTab | null {
     const key = targetKey(options);
+    const matches = tabs.value.filter((tab) => targetKey(tab) === key);
     return (
-      tabs.value.find((tab) => targetKey(tab) === key) ?? null
+      matches.find((tab) => tab.mode === "page") ?? matches[0] ?? null
     );
   }
 
@@ -409,20 +422,29 @@ export const useTerminalStore = defineStore("terminal", () => {
    * remounting the page cannot spawn a duplicate shell. A session that was
    * detached is returned as-is: the caller renders its "open in window" state
    * instead of creating a second session.
+   *
+   * `fresh: true` is the explicit exception: the host asked for a brand-new
+   * page shell (for example from the moved-to-window notice), so the detached
+   * tab is left in the window and a page tab is created. Rapid repeated fresh
+   * opens for one target still share the in-flight promise.
    */
   function openPageSession(
     options: TerminalOpenOptions,
   ): Promise<TerminalTab> {
-    const existing = findTabForTarget(options);
-    if (existing) {
-      // Another entry point (menu page, server tab) reused this shell: keep
-      // the latest source so the dock can resume the pane the user came from.
-      if (options.sourcePath) {
-        existing.sourcePath = options.sourcePath;
+    if (options.fresh !== true) {
+      const existing = findTabForTarget(options);
+      if (existing) {
+        // Another entry point (menu page, server tab) reused this shell: keep
+        // the latest source so the dock can resume the pane the user came from.
+        if (options.sourcePath) {
+          existing.sourcePath = options.sourcePath;
+        }
+        return Promise.resolve(existing);
       }
-      return Promise.resolve(existing);
     }
-    const key = targetKey(options);
+    const key = options.fresh === true
+      ? `${targetKey(options)}\u0000fresh`
+      : targetKey(options);
     const pending = inflight.get(key);
     if (pending) {
       return pending;

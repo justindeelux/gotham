@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ExternalLink, Play, X } from "@lucide/vue";
+import { ChevronDown, ChevronUp, ExternalLink, Play, X } from "@lucide/vue";
 import { NButton } from "naive-ui";
-import { computed, nextTick } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
+import { useAuthStore } from "@/features/auth";
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
 
@@ -19,23 +20,46 @@ import type { TerminalTab } from "@/features/terminal/stores/terminal";
  *
  * The dock never attaches the xterm host: the card is the paused state, not
  * a second view of the session, so the buffer keeps running in the runtime.
+ * It is hidden for non-operators (the backend remains the real guard) and
+ * collapses to a compact bar on phone widths so it cannot cover page content.
  */
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const authStore = useAuthStore();
 const terminal = useTerminalStore();
+
+/** expanded is false by default on narrow viewports (compact dock). */
+const expanded = ref(true);
+const narrow = ref(false);
+let mediaQuery: MediaQueryList | null = null;
+
+/** syncViewport collapses the dock when the layout moves to a phone. */
+function syncViewport(matches: boolean): void {
+  narrow.value = matches;
+  expanded.value = !matches;
+}
+
+/** onMediaChange follows the same breakpoint the shell uses for the rail. */
+function onMediaChange(event: MediaQueryListEvent): void {
+  syncViewport(event.matches);
+}
 
 /**
  * pausedTabs filters page tabs without a live pane. A tab whose source route
  * is already on screen is intentionally excluded: the page is mounting its
  * pane (or showing a connection/offline state), so a dock card would only
- * duplicate the same session.
+ * duplicate the same session. Non-operators never see the cards, even if a
+ * demotion left a tab in memory for the backend to revoke.
  */
-const pausedTabs = computed<TerminalTab[]>(() =>
-  terminal.pageTabs.filter(
+const pausedTabs = computed<TerminalTab[]>(() => {
+  if (!authStore.isPlatformAdmin) {
+    return [];
+  }
+  return terminal.pageTabs.filter(
     (tab) => !terminal.isDisplayed(tab.id) && tab.sourcePath !== route.fullPath,
-  ),
-);
+  );
+});
 
 /** target describes the server and starting directory of one paused tab. */
 function target(tab: TerminalTab): string {
@@ -72,20 +96,43 @@ async function close(tab: TerminalTab): Promise<void> {
     next?.focus();
   });
 }
+
+onMounted(() => {
+  if (typeof window.matchMedia !== "function") {
+    return;
+  }
+  mediaQuery = window.matchMedia("(max-width: 1024px)");
+  syncViewport(mediaQuery.matches);
+  mediaQuery.addEventListener("change", onMediaChange);
+});
+
+onBeforeUnmount(() => {
+  mediaQuery?.removeEventListener("change", onMediaChange);
+  mediaQuery = null;
+});
 </script>
 
 <template>
-  <section
-    v-if="pausedTabs.length > 0"
-    class="term-dock"
-    role="region"
-    :aria-label="t('terminal.dock.label')"
-  >
-    <header class="term-dock-head">
+  <section v-if="pausedTabs.length > 0" class="term-dock" :aria-label="t('terminal.dock.label')">
+    <button
+      type="button"
+      class="term-dock-head"
+      :aria-expanded="expanded"
+      aria-controls="term-dock-list"
+      :aria-label="expanded ? t('terminal.dock.collapse') : t('terminal.dock.expand')"
+      @click="expanded = !expanded"
+    >
       <span class="term-dock-title">{{ t("terminal.dock.heading") }}</span>
       <span class="term-dock-count mono">{{ pausedTabs.length }}</span>
-    </header>
-    <ul class="term-dock-list">
+      <component
+        :is="expanded ? ChevronDown : ChevronUp"
+        class="term-dock-chevron"
+        :size="14"
+        :stroke-width="1.8"
+        aria-hidden="true"
+      />
+    </button>
+    <ul v-show="expanded" id="term-dock-list" class="term-dock-list">
       <li v-for="tab in pausedTabs" :key="tab.id" class="term-dock-row">
         <span class="term-dock-status" :class="`is-${tab.status}`" aria-hidden="true" />
         <span class="term-dock-meta">
@@ -100,6 +147,7 @@ async function close(tab: TerminalTab): Promise<void> {
             size="tiny"
             secondary
             class="term-dock-resume"
+            :aria-label="t('terminal.dock.resumeTab', { title: tab.title })"
             @click="resume(tab)"
           >
             <template #icon>
@@ -110,8 +158,8 @@ async function close(tab: TerminalTab): Promise<void> {
           <NButton
             size="tiny"
             quaternary
-            :aria-label="t('terminal.dock.openInWindow')"
-            :title="t('terminal.dock.openInWindow')"
+            :aria-label="t('terminal.dock.openInWindowTab', { title: tab.title })"
+            :title="t('terminal.dock.openInWindowTab', { title: tab.title })"
             @click="openInWindow(tab)"
           >
             <template #icon>
@@ -161,7 +209,21 @@ async function close(tab: TerminalTab): Promise<void> {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
+  width: 100%;
+  min-height: var(--space-6);
   padding: 0 var(--space-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.term-dock-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .term-dock-title {
@@ -171,6 +233,7 @@ async function close(tab: TerminalTab): Promise<void> {
 }
 
 .term-dock-count {
+  margin-left: auto;
   min-width: var(--space-5);
   padding: 0 var(--space-1);
   border-radius: var(--radius-pill);
@@ -178,6 +241,11 @@ async function close(tab: TerminalTab): Promise<void> {
   color: var(--muted);
   font-size: var(--text-xs);
   text-align: center;
+}
+
+.term-dock-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
 }
 
 .term-dock-list {
@@ -229,7 +297,8 @@ async function close(tab: TerminalTab): Promise<void> {
 .term-dock-meta {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  /* 1px from the token scale, not a raw pixel. */
+  gap: calc(var(--space-1) / 4);
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -265,9 +334,12 @@ async function close(tab: TerminalTab): Promise<void> {
 }
 
 @media (max-width: 1024px) {
+  /* The dock collapses to its header on phones; the list only opens on an
+     explicit tap, so it cannot blanket the page content. */
   .term-dock {
     left: var(--space-2);
     right: var(--space-2);
+    bottom: var(--space-2);
     width: auto;
   }
 }

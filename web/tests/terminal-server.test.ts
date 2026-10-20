@@ -5,6 +5,7 @@
 /* global document:readonly, HTMLElement:readonly, window:readonly */
 import { NSelect } from "naive-ui";
 import { flushPromises, mount } from "@vue/test-utils";
+import type { VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import type { Pinia } from "pinia";
 import { nextTick } from "vue";
@@ -170,10 +171,21 @@ function pageRouter() {
     routes: [
       { path: "/terminal", name: "terminal", component: stub },
       { path: "/dashboard", name: "dashboard", component: stub },
+      { path: "/forbidden", name: "forbidden", component: stub },
       { path: "/servers", name: "servers", component: stub },
       {
         path: "/servers/:id",
         name: "server-detail",
+        component: stub,
+      },
+      {
+        path: "/servers/:id/containers",
+        name: "server-containers",
+        component: stub,
+      },
+      {
+        path: "/servers/:id/files",
+        name: "server-files",
         component: stub,
       },
     ],
@@ -260,6 +272,48 @@ async function mountPage(path = "/terminal") {
   await flushPromises();
   await nextTick();
   return { wrapper, router, terminal: useTerminalStore() };
+}
+
+/** mountDetail mounts the server detail page with its heavy tabs stubbed. */
+async function mountDetail(path: string, isAdmin = true) {
+  const pinia = createPinia();
+  setActivePinia(pinia);
+  login(pinia, isAdmin);
+  useServersStore().servers = [SERVER_A, SERVER_B, SERVER_OFFLINE];
+  const router = pageRouter();
+  await router.push(path);
+  await router.isReady();
+  const { default: ServerDetailPage } = await import(
+    "../src/features/servers/pages/ServerDetailPage.vue"
+  );
+  const wrapper = mount(ServerDetailPage, {
+    attachTo: document.body,
+    global: {
+      plugins: [pinia, router, i18n],
+      stubs: {
+        ServerDetailHeader: true,
+        ServerOverviewTab: true,
+        ServerMetricsTab: true,
+        ServerProxyTab: true,
+        ServerSettingsTab: true,
+        EditServerModal: true,
+      },
+    },
+  });
+  await flushPromises();
+  await nextTick();
+  return { wrapper, router, terminal: useTerminalStore() };
+}
+
+/** clickButtonByText finds one button by its visible label. */
+function clickButtonByText(wrapper: VueWrapper, label: string) {
+  const button = wrapper
+    .findAll("button")
+    .find((node) => node.text().trim().includes(label));
+  if (!button) {
+    throw new Error(`button ${label} not found`);
+  }
+  return button.trigger("click");
 }
 
 describe("terminal catalogs (JUS-246)", () => {
@@ -649,6 +703,209 @@ describe("server detail Terminal tab (JUS-246)", () => {
     const labels = wrapper.findAll(".n-tabs-tab").map((node) => node.text());
     expect(labels).not.toContain("Files");
     expect(labels).not.toContain("Terminal");
+    wrapper.unmount();
+  });
+});
+
+describe("page session recovery (JUS-246 fix round 1)", () => {
+  it("shows an explicit restart state on /terminal after its session closes", async () => {
+    const { wrapper, terminal } = await mountPage(
+      `/terminal?server=${SERVER_A.id}`,
+    );
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    const tabId = terminal.pageTabs[0]!.id;
+
+    terminal.closeTabs([tabId]);
+    await flushPromises();
+    await nextTick();
+
+    // No dead tab id, no blank pane, and no automatic replacement shell.
+    expect(wrapper.find(".term-surface").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Session closed");
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    await clickButtonByText(wrapper, "Start new session");
+    await flushPromises();
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(wrapper.find(".term-surface").exists()).toBe(true);
+    expect(terminal.pageTabs).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it("offers an explicit new page session after a one-way move to the window", async () => {
+    const { wrapper, terminal } = await mountPage(
+      `/terminal?server=${SERVER_A.id}`,
+    );
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    await wrapper.find(".term-open-in-window").trigger("click");
+    await flushPromises();
+    expect(wrapper.find(".term-detached").exists()).toBe(true);
+    // Nothing starts until the explicit button is pressed.
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    const detached = wrapper.find(".term-detached");
+    const start = detached
+      .findAll("button")
+      .find((node) => node.text().includes("Start new session"));
+    await start!.trigger("click");
+    await flushPromises();
+
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(terminal.pageTabs).toHaveLength(1);
+    expect(terminal.windowTabs).toHaveLength(1);
+    expect(wrapper.find(".term-surface").exists()).toBe(true);
+    expect(wrapper.find(".term-detached").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("shows the restart state on the server detail tab after its session closes", async () => {
+    const { wrapper, terminal } = await mountDetail(
+      `/servers/${SERVER_A.id}?tab=terminal`,
+    );
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".term-surface").exists()).toBe(true);
+    const tabId = terminal.pageTabs[0]!.id;
+
+    terminal.closeTabs([tabId]);
+    await flushPromises();
+    await nextTick();
+
+    expect(wrapper.find(".term-surface").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Session closed");
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    await clickButtonByText(wrapper, "Start new session");
+    await flushPromises();
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(wrapper.find(".term-surface").exists()).toBe(true);
+    // The tab is still active: no longer requires switching away and back.
+    expect(wrapper.find(".n-tabs-tab--active").text()).toBe("Terminal");
+    wrapper.unmount();
+  });
+});
+
+describe("role demotion (JUS-246 fix round 1)", () => {
+  it("leaves /terminal for /forbidden when the account loses operator access", async () => {
+    const { wrapper, router } = await mountPage(
+      `/terminal?server=${SERVER_A.id}`,
+    );
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    useAuthStore().user = {
+      ...useAuthStore().user!,
+      is_platform_admin: false,
+    };
+    await flushPromises();
+    await nextTick();
+    expect(router.currentRoute.value.name).toBe("forbidden");
+    // The demotion itself never issues another create.
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it("resets the detail tab to Overview instead of leaving a blank body", async () => {
+    const { wrapper } = await mountDetail(
+      `/servers/${SERVER_A.id}?tab=terminal`,
+    );
+    expect(wrapper.find(".term-surface").exists()).toBe(true);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    useAuthStore().user = {
+      ...useAuthStore().user!,
+      is_platform_admin: false,
+    };
+    await flushPromises();
+    await nextTick();
+
+    expect(wrapper.find(".term-surface").exists()).toBe(false);
+    expect(wrapper.find(".n-tabs-tab--active").text()).toBe("Overview");
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+});
+
+describe("non-operator terminal deep link (JUS-246 fix round 1)", () => {
+  it("renders a clear not-available notice instead of silently falling back", async () => {
+    const { wrapper } = await mountDetail(
+      `/servers/${SERVER_A.id}?tab=terminal`,
+      false,
+    );
+    expect(wrapper.text()).toContain("Terminal not available");
+    expect(wrapper.text()).toContain("platform operators");
+    const labels = wrapper.findAll(".n-tabs-tab").map((node) => node.text());
+    expect(labels).not.toContain("Terminal");
+    expect(apiFakes.create).toHaveBeenCalledTimes(0);
+    wrapper.unmount();
+  });
+});
+
+describe("paused dock accessibility and demotion (JUS-246 fix round 1)", () => {
+  it("gives every card a unique accessible name, drops the redundant role and collapses", async () => {
+    const pinia = createPinia();
+    setActivePinia(pinia);
+    login(pinia);
+    useServersStore().servers = [SERVER_A, SERVER_B];
+    const terminal = useTerminalStore();
+    await terminal.openPageSession({
+      serverId: SERVER_A.id,
+      serverName: SERVER_A.name,
+      root: "volumes",
+      cwd: "one",
+      sourcePath: `/terminal?server=${SERVER_A.id}`,
+    });
+    await terminal.openPageSession({
+      serverId: SERVER_B.id,
+      serverName: SERVER_B.name,
+      root: "volumes",
+      cwd: "two",
+      sourcePath: `/terminal?server=${SERVER_B.id}`,
+    });
+    const router = pageRouter();
+    await router.push("/dashboard");
+    await router.isReady();
+    const wrapper = mount(TerminalPageDock, {
+      attachTo: document.body,
+      global: { plugins: [pinia, router, i18n] },
+    });
+    await flushPromises();
+
+    const resumeLabels = wrapper
+      .findAll(".term-dock-resume")
+      .map((button) => button.attributes("aria-label"));
+    expect(resumeLabels).toHaveLength(2);
+    expect(new Set(resumeLabels).size).toBe(2);
+    expect(resumeLabels[0]).toContain("Resume");
+    expect(resumeLabels[0]).toContain("prod-01 · one");
+    expect(resumeLabels[1]).toContain("prod-02 · two");
+
+    // <section aria-label> already exposes the region role.
+    expect(wrapper.find(".term-dock").attributes("role")).toBeUndefined();
+
+    // The header toggles the list (compact dock on phones).
+    const head = wrapper.find(".term-dock-head");
+    expect(head.attributes("aria-expanded")).toBe("true");
+    await head.trigger("click");
+    expect(head.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.find(".term-dock-list").isVisible()).toBe(false);
+    await head.trigger("click");
+    expect(wrapper.find(".term-dock-list").isVisible()).toBe(true);
+
+    // A demotion hides every card, even before the backend closes the shell.
+    useAuthStore().user = {
+      ...useAuthStore().user!,
+      is_platform_admin: false,
+    };
+    await flushPromises();
+    expect(wrapper.find(".term-dock").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("renders the standalone page in Vietnamese", async () => {
+    syncComposerLocale("vi");
+    const { wrapper } = await mountPage("/terminal");
+    expect(wrapper.text()).toContain("Chọn máy chủ");
+    expect(wrapper.text()).toContain("Mở shell trên máy chủ");
     wrapper.unmount();
   });
 });

@@ -100,7 +100,17 @@ interface FakeSession {
   input: string;
   socket: WebSocketRoute | null;
   closeFrames: number;
+  /** closeOnOpen makes the PTY socket drop as soon as it attaches. */
+  closeOnOpen: boolean;
 }
+
+/** CreateBehavior scripts one POST /terminal/sessions response. */
+type CreateBehavior =
+  | { kind: "ok" }
+  | { kind: "status"; status: number }
+  | { kind: "network" }
+  | { kind: "delay" }
+  | { kind: "close" };
 
 interface TerminalState {
   sessions: FakeSession[];
@@ -108,6 +118,10 @@ interface TerminalState {
   deletes: number;
   createServers: string[];
   seq: number;
+  /** behaviors is consumed per create; empty means "ok". */
+  behaviors: CreateBehavior[];
+  /** releases settle a delayed create during the flapping test. */
+  releases: Array<() => void>;
 }
 
 let server: Server;
@@ -178,7 +192,15 @@ function outputFrame(text: string): Buffer {
 
 /** freshState resets the mock ledger. */
 function freshState(): TerminalState {
-  return { sessions: [], creates: 0, deletes: 0, createServers: [], seq: 0 };
+  return {
+    sessions: [],
+    creates: 0,
+    deletes: 0,
+    createServers: [],
+    seq: 0,
+    behaviors: [],
+    releases: [],
+  };
 }
 
 /** mockApi answers the shell, server and terminal routes. */
@@ -221,9 +243,30 @@ async function mockApi(
     }
     const segments = new URL(request.url()).pathname.split("/");
     const serverId = segments[segments.indexOf("servers") + 1] ?? "";
-    state.seq += 1;
+    const behavior: CreateBehavior = state.behaviors.shift() ?? { kind: "ok" };
     state.creates += 1;
     state.createServers.push(serverId);
+
+    // A fault scripted by a test: count the request first so a "no retry"
+    // assertion sees the exact number of attempts.
+    if (behavior.kind === "network") {
+      await route.abort("failed");
+      return;
+    }
+    if (behavior.kind === "status") {
+      await route.fulfill({
+        status: behavior.status,
+        json: { error: `scripted ${behavior.status}` },
+      });
+      return;
+    }
+    if (behavior.kind === "delay") {
+      await new Promise<void>((resolve) => {
+        state.releases.push(resolve);
+      });
+    }
+
+    state.seq += 1;
     const id = `session-${state.seq}`;
     state.sessions.push({
       id,
@@ -231,6 +274,7 @@ async function mockApi(
       input: "",
       socket: null,
       closeFrames: 0,
+      closeOnOpen: behavior.kind === "close",
     });
     await route.fulfill({
       status: 201,
@@ -260,6 +304,11 @@ async function mockApi(
         return;
       }
       current.socket = ws;
+      if (current.closeOnOpen) {
+        // The PTY stream dropped right after attach (transport failure).
+        ws.close({ code: 1006 });
+        return;
+      }
       ws.send(openFrame());
       ws.send(outputFrame(`welcome ${id}\r\n$ `));
       ws.onMessage((message) => {
@@ -321,7 +370,8 @@ async function tabInfo(page: Page): Promise<{
         sourcePath: string;
       }>;
     };
-    const tab = store.tabs[0];
+    const tab =
+      store.tabs.find((item) => item.mode === "page") ?? store.tabs[0];
     return tab
       ? {
           id: tab.id,
@@ -333,7 +383,34 @@ async function tabInfo(page: Page): Promise<{
   });
 }
 
-/** navLabels returns the sidebar entries in order. */
+/** tabCounts returns how many page/window tabs the live store holds. */
+async function tabCounts(
+  page: Page,
+): Promise<{ page: number; window: number }> {
+  return page.evaluate(() => {
+    const app = (document.querySelector("#app") as unknown as {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
+      };
+    }).__vue_app__;
+    const store = app.config.globalProperties.$pinia._s.get("terminal") as {
+      tabs: Array<{ mode: string }>;
+    };
+    return {
+      page: store.tabs.filter((tab) => tab.mode === "page").length,
+      window: store.tabs.filter((tab) => tab.mode === "window").length,
+    };
+  });
+}
+
+/** openServerSelect opens the Naive select and picks one server. */
+async function pickServer(page: Page, name: string): Promise<void> {
+  await page.locator(".term-server-select").click();
+  await page
+    .locator(".n-base-select-option")
+    .filter({ hasText: name })
+    .click();
+}
 async function navLabels(page: Page): Promise<string[]> {
   return page.locator(".sidebar .nav-item").allInnerTexts();
 }
@@ -390,6 +467,15 @@ test("the standalone page creates one shell for the chosen server and survives r
   expect(state.creates).toBe(1);
   expect(state.deletes).toBe(0);
 
+  // On a phone the dock is a compact bar until the operator expands it, so
+  // it cannot blanket the page content.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".term-dock-head")).toBeVisible();
+  await expect(page.locator(".term-dock-list")).toBeHidden();
+  await page.locator(".term-dock-head").click();
+  await expect(page.locator(".term-dock-list")).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
+
   // Resume returns to the owning route and reuses the same session/buffer.
   await dock.locator(".term-dock-resume").click();
   await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_A}`));
@@ -414,8 +500,20 @@ test("the standalone page creates one shell for the chosen server and survives r
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
   await expect(page.locator(".term-surface")).toHaveCount(0);
   await expect.poll(() => state.deletes).toBe(1);
+  await expect(page.getByText("Session closed")).toBeVisible();
+  // Closing never starts a replacement on its own.
+  expect(state.creates).toBe(1);
   await expect(page.locator(".term-dock")).toHaveCount(0);
   await expect(page.locator(".rail-btn--terminal")).toHaveCount(0);
+
+  // The explicit restart is the only path back, and it creates exactly once.
+  await page
+    .locator(".term-stage-closed")
+    .getByRole("button", { name: "Start new session" })
+    .click();
+  await expect.poll(() => state.creates).toBe(2);
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  expect((await tabInfo(page))?.sessionId).toBe("session-2");
 });
 
 test("page → window transfer keeps the session id and buffer, one way only", async ({
@@ -557,4 +655,232 @@ test("a non-operator sees no Terminal entry point and no shell", async ({
   expect(tabs).not.toContain("Terminal");
   expect(tabs).not.toContain("Files");
   expect(state.creates).toBe(0);
+});
+
+test("the moved-to-window notice starts a new page session only on demand", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockApi(page, state);
+  await seedApp(page, `/terminal?server=${SERVER_A}`);
+  await expect.poll(() => state.creates).toBe(1);
+
+  await page.locator(".term-open-in-window").click();
+  await expect(page.locator(".term-detached")).toBeVisible();
+  await expect(page.getByText("This terminal is open in the window")).toBeVisible();
+  // Nothing starts from the notice itself.
+  expect(state.creates).toBe(1);
+
+  // The floating window can cover the page notice; drive the button from the
+  // keyboard, which is also its real accessible path.
+  const startNew = page
+    .locator(".term-detached")
+    .getByRole("button", { name: "Start new session" });
+  await startNew.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => state.creates).toBe(2);
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  expect(await tabCounts(page)).toEqual({ page: 1, window: 1 });
+});
+
+test("the server detail tab recovers from a closed session with an explicit restart", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockApi(page, state);
+  await seedApp(page, `/servers/${SERVER_A}?tab=terminal`);
+  await expect.poll(() => state.creates).toBe(1);
+
+  await page.locator('.term-surface [aria-label="Close terminal"]').click();
+  const dialog = page.locator(".term-close-modal");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
+
+  await expect(page.locator(".term-surface")).toHaveCount(0);
+  await expect.poll(() => state.deletes).toBe(1);
+  await expect(page.locator(".server-terminal-closed")).toBeVisible();
+  await expect(page.getByText("Session closed")).toBeVisible();
+  expect(state.creates).toBe(1);
+
+  await page
+    .locator(".server-terminal-closed")
+    .getByRole("button", { name: "Start new session" })
+    .click();
+  await expect.poll(() => state.creates).toBe(2);
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  expect((await tabInfo(page))?.sessionId).toBe("session-2");
+});
+
+test("a deleted server shows the unknown state and never dials a shell", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockApi(page, state);
+  await seedApp(page, "/terminal?server=deleted-server-id");
+
+  await expect(
+    page.getByText("This server is not managed by this control plane."),
+  ).toBeVisible();
+  expect(state.creates).toBe(0);
+  expect(state.deletes).toBe(0);
+});
+
+const createFailures = [
+  {
+    name: "403 forbidden",
+    behavior: { kind: "status", status: 403 } as const,
+    message: "Only a platform operator can open a host terminal.",
+  },
+  {
+    name: "429 quota",
+    behavior: { kind: "status", status: 429 } as const,
+    message: "The terminal session quota is reached. Close a session and try again.",
+  },
+  {
+    name: "501 unsupported agent",
+    behavior: { kind: "status", status: 501 } as const,
+    message: "This node agent does not support terminal sessions.",
+  },
+  {
+    name: "network failure",
+    behavior: { kind: "network" } as const,
+    message: "The control plane could not be reached.",
+  },
+];
+
+for (const failure of createFailures) {
+  test(`create failure (${failure.name}) is explicit and never auto-retries`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const state = freshState();
+    state.behaviors = [failure.behavior];
+    await mockApi(page, state);
+    await seedApp(page, `/terminal?server=${SERVER_A}`);
+
+    await expect.poll(() => state.creates).toBe(1);
+    expect(state.createServers).toEqual([SERVER_A]);
+    await expect(page.getByText(failure.message)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Start a new session" }),
+    ).toBeVisible();
+
+    // No reconnect loop: the count is unchanged after a full retry window.
+    await page.waitForTimeout(2000);
+    expect(state.creates).toBe(1);
+
+    // Starting a new session is explicit and creates exactly once.
+    await page.getByRole("button", { name: "Start a new session" }).click();
+    await expect.poll(() => state.creates).toBe(2);
+    await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  });
+}
+
+test("a dropped stream shows Disconnected and retries only on demand", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  state.behaviors = [{ kind: "close" }];
+  await mockApi(page, state);
+  await seedApp(page, `/terminal?server=${SERVER_A}`);
+
+  await expect.poll(() => state.creates).toBe(1);
+  await expect(page.locator(".term-surface .term-state")).toHaveText(
+    "Disconnected",
+  );
+  await page.waitForTimeout(2000);
+  expect(state.creates).toBe(1);
+
+  await page.getByRole("button", { name: "Start a new session" }).click();
+  await expect.poll(() => state.creates).toBe(2);
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+});
+
+test("server detail create failure is explicit and never auto-retries", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  state.behaviors = [{ kind: "status", status: 501 }];
+  await mockApi(page, state);
+  await seedApp(page, `/servers/${SERVER_A}?tab=terminal`);
+
+  await expect.poll(() => state.creates).toBe(1);
+  await expect(
+    page.getByText("This node agent does not support terminal sessions."),
+  ).toBeVisible();
+  await page.waitForTimeout(2000);
+  expect(state.creates).toBe(1);
+
+  await page.getByRole("button", { name: "Start a new session" }).click();
+  await expect.poll(() => state.creates).toBe(2);
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+});
+
+test("rapid tab flapping while a create is in flight issues one POST", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  state.behaviors = [{ kind: "delay" }];
+  await mockApi(page, state);
+  await seedApp(page, `/servers/${SERVER_A}`);
+
+  await expect(
+    page.locator(".n-tabs-tab", { hasText: "Overview" }),
+  ).toBeVisible();
+  const terminalTab = page.locator(".n-tabs-tab", { hasText: "Terminal" });
+  await terminalTab.click();
+  await expect.poll(() => state.creates).toBe(1);
+
+  // Ten switches, a double-click and arrow-key moves while the POST is held.
+  const overview = page.locator(".n-tabs-tab", { hasText: "Overview" });
+  for (let index = 0; index < 10; index += 1) {
+    await overview.click();
+    await terminalTab.click();
+  }
+  await terminalTab.dblclick();
+  await terminalTab.focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowRight");
+  expect(state.creates).toBe(1);
+  expect(state.createServers).toEqual([SERVER_A]);
+
+  // Release the single in-flight create; the session lands in the tab.
+  state.releases.shift()?.();
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
+  expect(state.creates).toBe(1);
+});
+
+test("cancelling a server switch keeps the shell, confirming closes only it", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockApi(page, state);
+  await seedApp(page, `/terminal?server=${SERVER_A}`);
+  await expect.poll(() => state.creates).toBe(1);
+
+  const dialog = page.locator(".term-close-modal");
+  await pickServer(page, "prod-02");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Keep terminals" }).click();
+  await expect(dialog).toBeHidden();
+  expect(state.creates).toBe(1);
+  expect(state.deletes).toBe(0);
+  await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_A}`));
+  await expect(page.locator(".term-server-select")).toContainText("prod-01");
+
+  await pickServer(page, "prod-02");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
+  await expect.poll(() => state.creates).toBe(2);
+  expect(state.deletes).toBe(1);
+  expect(state.createServers).toEqual([SERVER_A, SERVER_B]);
+  await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_B}`));
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
 });

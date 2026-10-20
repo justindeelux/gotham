@@ -25,6 +25,7 @@ const en = {
     movedBody:
       "Its session, buffer and working directory moved to the floating window. This session cannot return to the page.",
     showWindow: "Show window",
+    startNew: "Start new session",
     close: "Close terminal",
     host: "Host shell",
     target: "Target",
@@ -110,6 +111,13 @@ const en = {
     emptyHint: "Add and validate a server before opening a terminal.",
     addServer: "Add a server",
     starting: "Starting terminal…",
+    sessionClosedTitle: "Session closed",
+    sessionClosedBody:
+      "This page no longer has a live terminal. Start a new session when you are ready; nothing starts automatically.",
+    startNew: "Start new session",
+    notAvailableTitle: "Terminal not available",
+    notAvailableBody:
+      "The terminal is reserved for platform operators. Ask an operator for access, then reload this page.",
     notReadyTitle: "Terminal unavailable",
     notReadyBody:
       "This server is {status}. A terminal can only start on a ready node.",
@@ -120,7 +128,11 @@ const en = {
     heading: "Page terminals",
     paused: "Paused",
     resume: "Resume",
+    resumeTab: "Resume {title} terminal",
     openInWindow: "Open in window",
+    openInWindowTab: "Open {title} in the window",
+    expand: "Show paused page terminals",
+    collapse: "Hide paused page terminals",
     closeTab: "Close {title}",
   },
   appearance: {

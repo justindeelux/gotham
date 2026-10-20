@@ -103,6 +103,23 @@ const activeTab = ref<DetailTab>(tabFromQuery());
  * change so one server's pane can never render another server's session.
  */
 const terminalTabId = ref<string>("");
+/** terminalClosed marks a tab that disappeared under the mounted pane. */
+const terminalClosed = ref(false);
+/** terminalStarting drives the first-start spinner (never the restart card). */
+const terminalStarting = ref(false);
+/** terminalTab is the live store row, or null once it is gone. */
+const terminalTab = computed(() =>
+  terminalTabId.value === "" ? null : terminal.findTab(terminalTabId.value),
+);
+
+/**
+ * blockedTerminal backs the clear notice for a non-operator deep link
+ * (`?tab=terminal`): the tab falls back to Overview instead of rendering a
+ * blank body, and the notice explains why.
+ */
+const blockedTerminal = computed<boolean>(
+  () => route.query.tab === "terminal" && !authStore.isPlatformAdmin,
+);
 
 /**
  * liveServer merges the polled list status into the detail row, so a node
@@ -159,6 +176,8 @@ async function ensureTerminalSession(): Promise<void> {
     terminalTabId.value = existing.id;
     return;
   }
+  terminalClosed.value = false;
+  terminalStarting.value = true;
   try {
     const tab = await terminal.openPageSession(request);
     if (serverId.value === current.id) {
@@ -166,6 +185,42 @@ async function ensureTerminalSession(): Promise<void> {
     }
   } catch {
     // The pane renders its own retry/error state; the tab stays mountable.
+  } finally {
+    terminalStarting.value = false;
+  }
+}
+
+/**
+ * startNewDetailSession is the explicit restart path (closed pane or moved to
+ * window). It never runs automatically; `fresh` leaves a detached window copy
+ * alone and starts a new page shell.
+ */
+async function startNewDetailSession(): Promise<void> {
+  const current = liveServer.value;
+  if (
+    !current ||
+    current.id !== serverId.value ||
+    current.status !== "ready" ||
+    !authStore.isPlatformAdmin
+  ) {
+    return;
+  }
+  terminalClosed.value = false;
+  terminalStarting.value = true;
+  try {
+    const tab = await terminal.openPageSession({
+      serverId: current.id,
+      serverName: current.name,
+      sourcePath: terminalSourcePath(current.id),
+      fresh: true,
+    });
+    if (serverId.value === current.id) {
+      terminalTabId.value = tab.id;
+    }
+  } catch {
+    // The pane renders its own retry/error state; the restart stays explicit.
+  } finally {
+    terminalStarting.value = false;
   }
 }
 
@@ -246,9 +301,46 @@ async function handleDelete(): Promise<void> {
 watch(serverId, () => {
   activeTab.value = tabFromQuery();
   terminalTabId.value = "";
+  terminalClosed.value = false;
+  terminalStarting.value = false;
   resetForServer();
   void fetchServer();
 });
+
+// A tab removed by any route (close confirmation, logout reset) must not leave
+// the host pointing at a dead id. This only forgets the id; the template then
+// shows the explicit restart card and never creates on its own.
+watch(terminalTab, (tab) => {
+  if (terminalTabId.value !== "" && tab === null) {
+    terminalTabId.value = "";
+    terminalStarting.value = false;
+    terminalClosed.value = true;
+  }
+});
+
+// Entering the Terminal tab is an explicit activation: it clears a previous
+// closed state so the ensure watcher below may reuse/create once.
+watch(activeTab, (next) => {
+  if (next === "terminal") {
+    terminalClosed.value = false;
+  }
+});
+
+// Demotion is enforced by the backend; the client leaves the operator tab
+// immediately (no blank pane) and hides the operator-only entry points.
+watch(
+  () => authStore.isPlatformAdmin,
+  (isAdmin) => {
+    if (!isAdmin) {
+      if (activeTab.value === "terminal" || activeTab.value === "files") {
+        activeTab.value = "overview";
+      }
+      terminalTabId.value = "";
+      terminalClosed.value = false;
+      terminalStarting.value = false;
+    }
+  },
+);
 
 // The URL keeps the active tab so the dock can resume a paused page session
 // (`?tab=terminal`) and a reload lands on the same pane.
@@ -300,7 +392,7 @@ watch(
 watch(
   [activeTab, () => liveServer.value?.status, () => liveServer.value?.id],
   () => {
-    if (activeTab.value !== "terminal") {
+    if (activeTab.value !== "terminal" || terminalClosed.value) {
       return;
     }
     void ensureTerminalSession();
@@ -338,6 +430,16 @@ onMounted(() => {
           @edit="editOpen = true"
           @validate="handleValidate"
         />
+
+        <NAlert
+          v-if="blockedTerminal"
+          type="info"
+          :show-icon="true"
+          class="server-blocked-tab"
+        >
+          <template #header>{{ $t("terminal.page.notAvailableTitle") }}</template>
+          {{ $t("terminal.page.notAvailableBody") }}
+        </NAlert>
 
         <NTabs v-model:value="activeTab" type="line" animated>
           <NTabPane name="overview" :tab="$t('servers.detail.tabOverview')">
@@ -416,13 +518,29 @@ onMounted(() => {
                   })
                 }}
               </NAlert>
-              <div v-else-if="terminalTabId === ''" class="server-terminal-loading">
+              <div v-else-if="terminalStarting && terminalTabId === ''" class="server-terminal-loading">
                 <NSpin size="small" :aria-label="$t('terminal.page.starting')" />
               </div>
+              <NCard v-else-if="terminalTabId === ''" class="server-terminal-closed">
+                <p class="server-terminal-closed-title">
+                  {{ $t("terminal.page.sessionClosedTitle") }}
+                </p>
+                <p class="small muted server-terminal-closed-body">
+                  {{ $t("terminal.page.sessionClosedBody") }}
+                </p>
+                <NButton
+                  type="primary"
+                  size="small"
+                  @click="startNewDetailSession"
+                >
+                  {{ $t("terminal.page.startNew") }}
+                </NButton>
+              </NCard>
               <TerminalPane
                 v-else
                 :tab-id="terminalTabId"
                 class="server-terminal-pane"
+                @start-new="startNewDetailSession"
               />
             </div>
           </NTabPane>
@@ -485,5 +603,20 @@ onMounted(() => {
 .server-terminal-pane {
   height: clamp(18rem, 60vh, 44rem);
   min-height: 0;
+}
+
+.server-blocked-tab {
+  margin-bottom: var(--space-3);
+}
+
+.server-terminal-closed-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+.server-terminal-closed-body {
+  margin: var(--space-2) 0 var(--space-4);
+  max-width: 60ch;
 }
 </style>

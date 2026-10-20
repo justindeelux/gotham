@@ -237,4 +237,56 @@
   --brand-wordmark-h: 18px;
   --brand-wordmark-sm-h: 16px;
   --brand-logo-h: 120px;
+
+  /* ── Terminal palettes (JUS-250) ──────────────────────────────────
+   * Named xterm themes are defined here (and only here): the runtime maps
+   * these tokens onto xterm's ITheme, so the renderer has no literal colors
+   * of its own. The dark set is the app's own surfaces plus a Discord-like
+   * ANSI ramp; the light set is a legible day palette. A theme change only
+   * repaints xterm — the shell, its id and buffer are untouched. */
+  --term-dark-bg: var(--surface-warm);
+  --term-dark-fg: var(--fg);
+  --term-dark-cursor: #7b87ff;
+  --term-dark-cursor-accent: var(--surface-warm);
+  --term-dark-selection: rgba(123, 135, 255, 0.35);
+  --term-dark-selection-fg: var(--fg-2);
+  --term-dark-ansi-black: #6b7280;
+  --term-dark-ansi-red: #f65a5e;
+  --term-dark-ansi-green: #23a55a;
+  --term-dark-ansi-yellow: #f0b232;
+  --term-dark-ansi-blue: #6b7cff;
+  --term-dark-ansi-magenta: #c47cf5;
+  --term-dark-ansi-cyan: #4fc3f7;
+  --term-dark-ansi-white: #dbdee1;
+  --term-dark-ansi-bright-black: #828a94;
+  --term-dark-ansi-bright-red: #ff6b6e;
+  --term-dark-ansi-bright-green: #3fd27a;
+  --term-dark-ansi-bright-yellow: #ffd166;
+  --term-dark-ansi-bright-blue: #7b87ff;
+  --term-dark-ansi-bright-magenta: #d9a0ff;
+  --term-dark-ansi-bright-cyan: #7cdcff;
+  --term-dark-ansi-bright-white: #ffffff;
+
+  --term-light-bg: #f7f8fa;
+  --term-light-fg: #1e1f22;
+  --term-light-cursor: #4f46e5;
+  --term-light-cursor-accent: #ffffff;
+  --term-light-selection: rgba(79, 70, 229, 0.2);
+  --term-light-selection-fg: #111827;
+  --term-light-ansi-black: #313338;
+  --term-light-ansi-red: #b91c1c;
+  --term-light-ansi-green: #15803d;
+  --term-light-ansi-yellow: #a16207;
+  --term-light-ansi-blue: #1d4ed8;
+  --term-light-ansi-magenta: #9333ea;
+  --term-light-ansi-cyan: #0e7490;
+  --term-light-ansi-white: #4b5563;
+  --term-light-ansi-bright-black: #5b6270;
+  --term-light-ansi-bright-red: #c81e1e;
+  --term-light-ansi-bright-green: #166534;
+  --term-light-ansi-bright-yellow: #8a6400;
+  --term-light-ansi-bright-blue: #2563eb;
+  --term-light-ansi-bright-magenta: #7e22ce;
+  --term-light-ansi-bright-cyan: #155e75;
+  --term-light-ansi-bright-white: #111827;
 }

@@ -2,7 +2,7 @@
 // heartbeat. These tests use a faithful fake socket (open/message/close/error
 // are all controllable), so lifecycle bugs — an early "connected", a reconnect,
 // input before open, a leaked timer — fail here instead of hiding behind a stub.
-/* global document:readonly, HTMLElement:readonly, TextEncoder:readonly, URL:readonly, window:readonly */
+/* global document:readonly, HTMLElement:readonly, TextDecoder:readonly, TextEncoder:readonly, URL:readonly, window:readonly */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -12,14 +12,20 @@ import {
   CLIENT_RESIZE,
 } from "@/features/terminal/transport/frames";
 import {
+  BANNER_VERSION_WAIT_MS,
   TERMINAL_HEARTBEAT_MS,
   TerminalRuntime,
 } from "@/features/terminal/transport/terminalRuntime";
 import type {
   TerminalModules,
+  TerminalRuntimeOptions,
   TerminalSocket,
   TerminalStatePatch,
 } from "@/features/terminal/transport/terminalRuntime";
+import {
+  TERMINAL_LOGO_DISPLAY,
+  buildTerminalBanner,
+} from "@/features/terminal/utils/terminalBanner";
 
 /** serverFrame wraps an opcode + payload into one binary frame. */
 function serverFrame(opcode: number, payload: Uint8Array = new Uint8Array()): ArrayBuffer {
@@ -91,6 +97,7 @@ class FakeTerminal {
 
   cols: number;
   rows: number;
+  options: Record<string, unknown>;
   written: Uint8Array[] = [];
   disposed = false;
   focused = false;
@@ -98,9 +105,10 @@ class FakeTerminal {
   private dataListeners: Array<(_data: string) => void> = [];
   private resizeListeners: Array<(_size: { cols: number; rows: number }) => void> = [];
 
-  constructor(options: { cols: number; rows: number }) {
+  constructor(options: { cols: number; rows: number } & Record<string, unknown>) {
     this.cols = options.cols;
     this.rows = options.rows;
+    this.options = options;
     FakeTerminal.last = this;
   }
 
@@ -174,7 +182,7 @@ class FakeFit {
 }
 
 /** setup builds one runtime with a captured socket and state log. */
-function setup() {
+function setup(extra: Partial<TerminalRuntimeOptions> = {}) {
   FakeTerminal.last = null;
   FakeFit.fits = 0;
   FakeFit.cols = 100;
@@ -192,6 +200,7 @@ function setup() {
     },
     getToken: () => "jwt-token",
     onState: (patch) => states.push(patch),
+    ...extra,
     deps: {
       createSocket: (nextUrl, nextProtocols) => {
         url = nextUrl;
@@ -201,6 +210,7 @@ function setup() {
       },
       loadTerminal: async () =>
         ({ Terminal: FakeTerminal, FitAddon: FakeFit }) as unknown as TerminalModules,
+      ...extra.deps,
     },
   });
   return {
@@ -527,5 +537,213 @@ describe("TerminalRuntime attach", () => {
     context.runtime.attach(container);
     await context.runtime.connect();
     expect(context.runtime.getHost()?.parentElement).toBe(container);
+  });
+});
+
+/** measure makes the detached xterm host look laid out to FitAddon. */
+function measureHost(runtime: TerminalRuntime, width = 2200, height = 900): void {
+  const host = runtime.getHost();
+  if (!host) {
+    throw new Error("host missing");
+  }
+  Object.defineProperty(host, "clientWidth", {
+    configurable: true,
+    value: width,
+  });
+  Object.defineProperty(host, "clientHeight", {
+    configurable: true,
+    value: height,
+  });
+}
+
+/** BANNER_INFO is one host session's display metadata. */
+const BANNER_INFO = {
+  version: "v0.2.1-dev",
+  serverName: "prod-01",
+  serverId: "server-1",
+  target: "host",
+};
+
+/** decodeWrites turns xterm's recorded byte writes back into text. */
+function decodeWrites(terminal: FakeTerminal): string[] {
+  return terminal.written.map((bytes) => new TextDecoder().decode(bytes));
+}
+
+describe("TerminalRuntime theme", () => {
+  it("repaints in place without a reconnect or input frame", async () => {
+    document.documentElement.style.setProperty("--term-dark-bg", "#101010");
+    document.documentElement.style.setProperty("--term-light-bg", "#fafafa");
+    const context = await connectedRuntime();
+    const terminal = context.terminal();
+    expect(terminal.options.theme).toMatchObject({ background: "#101010" });
+
+    context.socket.sent = [];
+    context.runtime.setTheme("gotham-light");
+
+    // xterm's option is the live palette: the same renderer, socket and
+    // session keep running, and no keystroke was fabricated.
+    expect(terminal.options.theme).toMatchObject({ background: "#fafafa" });
+    expect(terminal.disposed).toBe(false);
+    expect(context.socket.closed).toBe(false);
+    expect(context.socket.opcodes()).not.toContain(CLIENT_INPUT);
+    expect(context.runtime.getStatus()).toBe("connected");
+    document.documentElement.style.removeProperty("--term-dark-bg");
+    document.documentElement.style.removeProperty("--term-light-bg");
+  });
+});
+
+describe("TerminalRuntime welcome banner", () => {
+  it("writes the exact wide banner once and never through the PTY", async () => {
+    const context = setup({ banner: BANNER_INFO });
+    await context.runtime.connect();
+    context.socket.open();
+    measureHost(context.runtime);
+    FakeFit.cols = 220;
+    FakeFit.rows = 40;
+    const opened = openFrame();
+    context.socket.message(opened);
+    // A duplicate confirmation still yields exactly one banner.
+    context.socket.message(opened);
+    const terminal = context.terminal();
+    const banners = decodeWrites(terminal).filter((text) =>
+      text.includes("Gotham"),
+    );
+    expect(banners).toHaveLength(1);
+    expect(banners[0]).toBe(buildTerminalBanner(BANNER_INFO, 220));
+    expect(banners[0]!.startsWith(TERMINAL_LOGO_DISPLAY)).toBe(true);
+    expect(banners[0]).toContain("server: prod-01");
+    expect(context.socket.opcodes()).not.toContain(CLIENT_INPUT);
+    expect(context.socket.opcodes()).toContain(CLIENT_RESIZE);
+
+    // Attach, fit, theme change and detach are not new sessions.
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    document.body.append(first, second);
+    context.runtime.attach(first);
+    context.runtime.fit();
+    context.runtime.setTheme("gotham-light");
+    context.runtime.attach(second);
+    expect(
+      decodeWrites(terminal).filter((text) => text.includes("Gotham")),
+    ).toHaveLength(1);
+    expect(context.socket.opcodes()).not.toContain(CLIENT_INPUT);
+  });
+
+  it("uses the compact banner on a narrow renderer", async () => {
+    const context = setup({ banner: BANNER_INFO });
+    await context.runtime.connect();
+    context.socket.open();
+    measureHost(context.runtime);
+    FakeFit.cols = 52;
+    FakeFit.rows = 20;
+    context.socket.message(openFrame());
+    const banner = decodeWrites(context.terminal())[0]!;
+    expect(banner).not.toContain("▓");
+    expect(banner).toBe("Gotham v0.2.1-dev\r\nserver: prod-01\r\n\r\n");
+    for (const line of banner.split("\r\n")) {
+      expect(line.length).toBeLessThanOrEqual(52);
+    }
+  });
+
+  it("never shows a host banner for a container target", async () => {
+    const context = setup({
+      banner: { ...BANNER_INFO, target: "container:web-1" },
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+    expect(context.terminal().written).toHaveLength(0);
+    expect(context.runtime.getStatus()).toBe("connected");
+  });
+
+  it("never delays output or input for a hung version lookup", async () => {
+    // A /version request that never settles: the session must still connect
+    // and the first server bytes must flush a version-less banner first.
+    const hung = new Promise<string | null>(() => {
+      // Intentionally never resolves.
+    });
+    const context = setup({
+      banner: { ...BANNER_INFO, version: null },
+      bannerVersion: hung,
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+    expect(context.runtime.getStatus()).toBe("connected");
+    expect(context.terminal().written).toHaveLength(0);
+
+    context.socket.message(serverFrame(0x01, new TextEncoder().encode("hello")));
+    const writes = decodeWrites(context.terminal());
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).toBe(
+      buildTerminalBanner({ ...BANNER_INFO, version: null }, 120, 32),
+    );
+    expect(writes[0]).not.toContain("v0.2.1-dev");
+    expect(writes[1]).toBe("hello");
+  });
+
+  it("falls back to a version-less banner after the display-only cap", async () => {
+    const hung = new Promise<string | null>(() => {
+      // Intentionally never resolves.
+    });
+    const context = setup({
+      banner: { ...BANNER_INFO, version: null },
+      bannerVersion: hung,
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+    expect(context.terminal().written).toHaveLength(0);
+
+    vi.advanceTimersByTime(BANNER_VERSION_WAIT_MS);
+    const writes = decodeWrites(context.terminal());
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("Gotham ·");
+    expect(writes[0]).not.toContain("v0.2.1-dev");
+  });
+
+  it("uses a version that resolves before the first server bytes", async () => {
+    let resolveVersion: (_value: string | null) => void = () => {};
+    const pending = new Promise<string | null>((resolve) => {
+      resolveVersion = resolve;
+    });
+    const context = setup({
+      banner: { ...BANNER_INFO, version: null },
+      bannerVersion: pending,
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+    expect(context.terminal().written).toHaveLength(0);
+
+    resolveVersion("v0.9.0");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(decodeWrites(context.terminal())[0]).toContain("Gotham v0.9.0");
+
+    context.socket.message(serverFrame(0x01, new TextEncoder().encode("hello")));
+    const writes = decodeWrites(context.terminal());
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toBe("hello");
+  });
+
+  it("flushes the banner before the first keystroke when metadata is slow", async () => {
+    const hung = new Promise<string | null>(() => {
+      // Intentionally never resolves.
+    });
+    const context = setup({
+      banner: { ...BANNER_INFO, version: null },
+      bannerVersion: hung,
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+
+    context.terminal().type("ls");
+    const writes = decodeWrites(context.terminal());
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).not.toContain("v0.2.1-dev");
+    const input = context.socket.sent.find((frame) => frame[0] === CLIENT_INPUT);
+    expect([...(input ?? new Uint8Array())].slice(1)).toEqual([0x6c, 0x73]);
   });
 });

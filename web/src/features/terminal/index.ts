@@ -20,6 +20,7 @@ export { default as TerminalPane } from "./components/TerminalPane.vue";
 export { default as TerminalSurface } from "./components/TerminalSurface.vue";
 export { default as TerminalWindow } from "./components/TerminalWindow.vue";
 export { useTerminalStore } from "./stores/terminal";
+export { useTerminalAppearanceStore } from "./stores/terminalAppearance";
 export type {
   TerminalCloseRequest,
   TerminalMode,
@@ -27,4 +28,12 @@ export type {
   TerminalTab,
 } from "./stores/terminal";
 export { useTerminalWindowStore } from "./stores/terminalWindow";
+export {
+  DEFAULT_TERMINAL_THEME,
+  TERMINAL_THEMES,
+} from "./schemas/terminalAppearance";
+export type {
+  TerminalAppearance,
+  TerminalThemeName,
+} from "./schemas/terminalAppearance";
 export type { TerminalStatus } from "./transport/terminalRuntime";

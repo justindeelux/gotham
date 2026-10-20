@@ -6,6 +6,7 @@ import { useI18n } from "vue-i18n";
 
 import { useTerminalStore } from "@/features/terminal/stores/terminal";
 import type { TerminalTab } from "@/features/terminal/stores/terminal";
+import TerminalThemeMenu from "@/features/terminal/components/TerminalThemeMenu.vue";
 import {
   errorKey,
   isLive,
@@ -93,6 +94,25 @@ function focusTerminal(): void {
   terminal.focus(props.tabId);
 }
 
+/**
+ * onSurfaceClick focuses xterm only when the click is on the terminal itself.
+ * Clicks on the meta bar (theme menu, shortcuts, page actions) and on any
+ * interactive control must keep their own focus: a button activated with
+ * Enter must never hand the next keystroke to the shell.
+ */
+function onSurfaceClick(event: MouseEvent): void {
+  const target = event.target;
+  if (
+    target instanceof Element &&
+    target.closest(
+      "button, a, input, label, [role='radio'], [role='radiogroup'], .term-meta, .n-popover",
+    )
+  ) {
+    return;
+  }
+  focusTerminal();
+}
+
 /** detachToWindow is the one-way page → window transfer. */
 function detachToWindow(): void {
   terminal.detachToWindow(props.tabId);
@@ -164,7 +184,8 @@ watch(
     :aria-labelledby="variant === 'window' ? labelledBy : undefined"
     :aria-describedby="hintId"
     aria-keyshortcuts="Control+Shift+Escape"
-    @click="focusTerminal"
+    :data-theme="terminal.theme"
+    @click="onSurfaceClick"
     @keydown.capture="onSurfaceKeydown"
   >
     <div class="term-meta">
@@ -223,6 +244,7 @@ watch(
         </div>
       </NPopover>
       <span class="grow" />
+      <TerminalThemeMenu />
       <template v-if="variant === 'page'">
         <NButton
           size="tiny"
@@ -336,6 +358,12 @@ watch(
   min-height: 0;
   height: 100%;
   background: var(--surface-warm);
+}
+
+/* The light renderer gets a matching frame instead of a dark gutter around
+ * the xterm canvas. The meta/status bars stay app chrome. */
+.term-surface[data-theme="gotham-light"] {
+  background: var(--term-light-bg);
 }
 
 .term-meta {

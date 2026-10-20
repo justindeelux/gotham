@@ -1,0 +1,3 @@
+# The supplied Gotham logo is display text with significant trailing spaces
+# and no final newline. Never apply text/EOL normalisation to it.
+web/src/features/terminal/assets/gotham-ascii-logo.txt -text

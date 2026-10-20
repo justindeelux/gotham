@@ -8,12 +8,20 @@ import {
   terminalFailure,
 } from "@/features/terminal/api/terminal";
 import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
+import type { TerminalThemeName } from "@/features/terminal/schemas/terminalAppearance";
+import { useTerminalAppearanceStore } from "@/features/terminal/stores/terminalAppearance";
 import { useTerminalWindowStore } from "@/features/terminal/stores/terminalWindow";
 import { TerminalRuntime } from "@/features/terminal/transport/terminalRuntime";
 import type {
   TerminalStatePatch,
   TerminalStatus,
 } from "@/features/terminal/transport/terminalRuntime";
+import {
+  isHostTerminalTarget,
+  knownGothamVersion,
+  runningGothamVersion,
+} from "@/features/terminal/utils/terminalBanner";
+import { i18n } from "@/shared/i18n";
 
 /**
  * Terminal tabs and live sessions (JUS-245).
@@ -111,6 +119,7 @@ export const useTerminalStore = defineStore("terminal", () => {
   const tabs = ref<TerminalTab[]>([]);
   const activeTabId = ref<string>("");
   const closeRequest = ref<TerminalCloseRequest | null>(null);
+  const appearance = useTerminalAppearanceStore();
 
   /** runtimes holds one live renderer/transport per tab (non-reactive). */
   const runtimes = new Map<string, TerminalRuntime>();
@@ -204,6 +213,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     tab.exitCode = null;
     tab.exitSignal = "";
     try {
+      // The version lookup runs beside the HTTP create and never gates the
+      // session: a hung /version only drops the banner's version tag.
+      const hostSession = isHostTerminalTarget(tab.target);
+      const versionRequest = hostSession ? runningGothamVersion() : null;
       const session = await createTerminalSession(tab.serverId, {
         target: tab.target,
         ...(tab.root !== "" ? { root: tab.root } : {}),
@@ -224,6 +237,19 @@ export const useTerminalStore = defineStore("terminal", () => {
       const runtime = new TerminalRuntime({
         session,
         getToken: currentTerminalToken,
+        theme: appearance.theme,
+        ...(hostSession
+          ? {
+              banner: {
+                version: knownGothamVersion(),
+                serverName: tab.serverName,
+                serverId: tab.serverId,
+                target: tab.target,
+                serverLabel: i18n.global.t("terminal.banner.server"),
+              },
+              ...(versionRequest ? { bannerVersion: versionRequest } : {}),
+            }
+          : {}),
         onState: (patch) => applyPatch(tab, patch),
       });
       runtimes.set(tab.id, runtime);
@@ -361,6 +387,18 @@ export const useTerminalStore = defineStore("terminal", () => {
   /** fit refits one live renderer (after a restore or a window resize). */
   function fit(id: string): void {
     runtimes.get(id)?.fit();
+  }
+
+  /**
+   * setTheme applies one named theme to every live renderer and persists it
+   * for this account. It never recreates a session: xterm repaints the same
+   * buffer and the PTY keeps its id/process.
+   */
+  function setTheme(next: TerminalThemeName): void {
+    appearance.setTheme(next);
+    for (const runtime of runtimes.values()) {
+      runtime.setTheme(next);
+    }
   }
 
   /** retry is the ONLY reconnect path: it creates a new session, no replay. */
@@ -530,6 +568,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     windowOpenCount,
     hasLiveSessions,
     closeRequest,
+    theme: computed<TerminalThemeName>(() => appearance.theme),
     findTab,
     findTabForTarget,
     openPageSession,
@@ -540,6 +579,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     detach,
     focus,
     fit,
+    setTheme,
     retry,
     requestClose,
     cancelClose,

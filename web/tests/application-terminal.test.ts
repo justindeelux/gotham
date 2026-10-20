@@ -8,7 +8,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import type { VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import type { Pinia } from "pinia";
-import { nextTick } from "vue";
+import { defineComponent, h, nextTick } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -126,9 +126,11 @@ vi.mock("@/features/terminal/api/terminal", () => ({
     "gotham.terminal.v1",
     `gotham.token.${token}`,
   ],
+  listApplicationTerminalTargets: apiFakes.listTargets,
 }));
 
 const APP_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const APP_B_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const ENV_ID = "22222222-2222-4222-8222-222222222222";
 const SERVER_ID = "33333333-3333-4333-8333-333333333333";
@@ -244,7 +246,6 @@ vi.mock(
       getEnv: applicationApiFakes.getEnv,
       getStorages: applicationApiFakes.getStorages,
       listPreviews: applicationApiFakes.listPreviews,
-      listApplicationTerminalTargets: apiFakes.listTargets,
     };
   },
 );
@@ -285,14 +286,17 @@ vi.mock("naive-ui", async (importOriginal) => {
 const { useTerminalStore } = await import("@/features/terminal/stores/terminal");
 const { useAuthStore } = await import("@/features/auth");
 const { useTeamsStore } = await import("@/features/teams");
+const { useApplicationsStore } = await import(
+  "@/features/applications/stores/applications"
+);
+const { useTerminalAccessBoundary } = await import(
+  "../src/app/layouts/useTerminalAccessBoundary"
+);
 const { default: ApplicationDetailPage } = await import(
   "../src/features/applications/pages/ApplicationDetailPage.vue"
 );
 const { default: TerminalPageDock } = await import(
   "../src/features/terminal/components/TerminalPageDock.vue"
-);
-const { resetApplicationTerminalClosedState } = await import(
-  "../src/features/applications/composables/useApplicationTerminalTab"
 );
 
 /** stub is the lazy route component used outside the page under test. */
@@ -320,6 +324,12 @@ let seq = 0;
 
 /** labelFor resolves the discovered label a session echoes. */
 function labelFor(containerId: string): string {
+  if (containerId === "cid-new") {
+    return "gotham-shop-2";
+  }
+  if (containerId === "cid-blog") {
+    return "gotham-blog-1";
+  }
   const row = [...SINGLE, ...COMPOSE].find(
     (item) => item.container_id === containerId,
   );
@@ -341,7 +351,8 @@ function sessionFor(
     websocket_path: `/api/v1/applications/${applicationId}/terminal/sessions/session-${seq}/ws`,
     subprotocol: "gotham.terminal.v1",
     application_id: applicationId,
-    service: input.service,
+    // Real backend shape: a single-container app omits `service`.
+    ...(input.service !== "" ? { service: input.service } : {}),
     container_id: input.containerId,
     container_name: labelFor(input.containerId).split(" · ").at(-1),
     target_label: labelFor(input.containerId),
@@ -352,10 +363,10 @@ beforeEach(() => {
   registerDiscoveredCatalogs();
   resetLocaleState();
   syncComposerLocale("en");
-  resetApplicationTerminalClosedState();
   document.body.innerHTML = "";
   window.localStorage.clear();
   setActivePinia(createPinia());
+  useTerminalStore().reset();
   runtimeFakes.instances.length = 0;
   seq = 0;
   apiFakes.listTargets.mockReset();
@@ -410,15 +421,15 @@ function login(pinia: Pinia, isAdmin = false): void {
 /** mountDetail mounts the application detail page with heavy tabs stubbed. */
 async function mountDetail(
   path = `/projects/${PROJECT_ID}/environments/${ENV_ID}/applications/${APP_ID}?tab=terminal`,
-  role: "owner" | "admin" | "read_only" = "owner",
+  role: "owner" | "admin" | "read_only" | null = "owner",
   existingPinia?: Pinia,
 ) {
   const pinia = existingPinia ?? createPinia();
   setActivePinia(pinia);
   login(pinia);
   const teams = useTeamsStore();
-  teams.teams = [team(role)];
   teams.activeTeamId = "team-1";
+  teams.teams = role === null ? [] : [team(role)];
   const router = pageRouter();
   await router.push(path);
   await router.isReady();
@@ -790,6 +801,84 @@ describe("application terminal failure states (JUS-247)", () => {
     wrapper.unmount();
   });
 
+  it("retries a replaced container by rediscovering, never re-POSTing the dead id", async () => {
+    apiFakes.listTargets.mockReset();
+    apiFakes.listTargets
+      .mockResolvedValueOnce(
+        targetsResponse([target("", "cid-single", "gotham-shop-1")], "image"),
+      )
+      .mockResolvedValueOnce(
+        targetsResponse([target("", "cid-new", "gotham-shop-2")], "image"),
+      );
+    apiFakes.create.mockRejectedValueOnce({
+      status: 404,
+      message: "the selected container is no longer available; refresh the targets",
+    });
+
+    const { wrapper, terminal } = await mountDetail();
+    expect(apiFakes.create.mock.calls[0]?.[1]).toMatchObject({
+      containerId: "cid-single",
+    });
+    expect(terminal.pageTabs[0]!.errorCode).toBe("containerGone");
+
+    const retry = wrapper
+      .findAll("button")
+      .find((node) => node.text().includes("Start new session"));
+    await retry!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    await flushPromises();
+
+    // One rediscovery, then exactly one POST with the NEW container id.
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(2);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
+      service: "",
+      containerId: "cid-new",
+    });
+    const tab = terminal.pageTabs[0]!;
+    expect(tab.containerId).toBe("cid-new");
+    expect(tab.targetLabel).toBe("gotham-shop-2");
+    expect(apiFakes.hostCreate).toHaveBeenCalledTimes(0);
+    wrapper.unmount();
+  });
+
+  it("recovers a live shell whose container vanished on redeploy", async () => {
+    const { wrapper, terminal } = await mountDetail();
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    const first = terminal.pageTabs[0]!;
+    expect(first.sessionId).toBe("session-1");
+
+    apiFakes.listTargets.mockResolvedValueOnce(
+      targetsResponse([target("", "cid-new", "gotham-shop-2")], "image"),
+    );
+    runtimeFakes.instances[0]!.emit({
+      status: "error",
+      errorCode: "containerGone",
+    });
+    await flushPromises();
+    expect(terminal.pageTabs[0]!.errorCode).toBe("containerGone");
+
+    const retry = wrapper
+      .findAll("button")
+      .find((node) => node.text().includes("Start new session"));
+    await retry!.trigger("click");
+    await flushPromises();
+    await nextTick();
+    await flushPromises();
+
+    expect(apiFakes.close).toHaveBeenCalledTimes(1);
+    expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, "session-1"]);
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(2);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
+      containerId: "cid-new",
+    });
+    expect(terminal.pageTabs).toHaveLength(1);
+    expect(terminal.pageTabs[0]!.sessionId).toBe("session-2");
+    wrapper.unmount();
+  });
+
   it("close leaves an explicit restart card and never auto-creates on re-entry", async () => {
     const { wrapper, terminal } = await mountDetail();
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
@@ -861,6 +950,74 @@ describe("application terminal failure states (JUS-247)", () => {
     second.wrapper.unmount();
   });
 
+  it("forgets the restart marker on logout so a later sign-in opens cleanly", async () => {
+    const first = await mountDetail();
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    first.terminal.closeTabs([first.terminal.pageTabs[0]!.id]);
+    await flushPromises();
+    await nextTick();
+    expect(first.wrapper.find(".term-stage-closed").exists()).toBe(true);
+
+    // Logout resets the store (and therefore the restart marker).
+    first.terminal.reset();
+    const { pinia } = first;
+    first.wrapper.unmount();
+
+    const second = await mountDetail(undefined, "owner", pinia);
+    await flushPromises();
+    await nextTick();
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(second.wrapper.find(".term-stage-closed").exists()).toBe(false);
+    expect(second.wrapper.find(".term-surface").exists()).toBe(true);
+    second.wrapper.unmount();
+  });
+
+  it("switching application opens that application's own container session", async () => {
+    applicationApiFakes.getApplication.mockImplementation(async (id: string) =>
+      id === APP_B_ID
+        ? { ...application, id: APP_B_ID, name: "blog" }
+        : application,
+    );
+    apiFakes.listTargets.mockImplementation(async (id: string) =>
+      id === APP_B_ID
+        ? {
+            ...targetsResponse(SINGLE, "image"),
+            application_id: APP_B_ID,
+            application_name: "blog",
+            containers: [target("", "cid-blog", "gotham-blog-1")],
+          }
+        : targetsResponse(SINGLE, "image"),
+    );
+
+    const { wrapper, router, terminal } = await mountDetail();
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    await router.push(
+      `/projects/${PROJECT_ID}/environments/${ENV_ID}/applications/${APP_B_ID}?tab=terminal`,
+    );
+    await flushPromises();
+    await nextTick();
+    await flushPromises();
+    await nextTick();
+
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(2);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    expect(apiFakes.create.mock.calls[1]?.[0]).toBe(APP_B_ID);
+    expect(apiFakes.create.mock.calls[1]?.[1]).toMatchObject({
+      containerId: "cid-blog",
+    });
+    const tabs = terminal.pageTabs;
+    expect(tabs).toHaveLength(2);
+    expect(tabs.map((tab) => tab.applicationId).sort()).toEqual([
+      APP_ID,
+      APP_B_ID,
+    ]);
+    expect(tabs.find((tab) => tab.applicationId === APP_B_ID)?.targetLabel).toBe(
+      "gotham-blog-1",
+    );
+    wrapper.unmount();
+  });
+
   it("detaches to the window with the same session and keeps the target label", async () => {
     const { wrapper, terminal } = await mountDetail();
     const tab = terminal.pageTabs[0]!;
@@ -903,6 +1060,38 @@ describe("application terminal failure states (JUS-247)", () => {
 });
 
 describe("application terminal permissions (JUS-247)", () => {
+  it("waits for a known role before any request (read_only cold load)", async () => {
+    const { wrapper, teams } = await mountDetail(undefined, null);
+    // Role unknown: the tab is present but neutral, and nothing is requested.
+    expect(wrapper.text()).toContain("Checking terminal access");
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
+    expect(apiFakes.create).toHaveBeenCalledTimes(0);
+
+    teams.teams = [team("read_only")];
+    await flushPromises();
+    await nextTick();
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
+    expect(apiFakes.create).toHaveBeenCalledTimes(0);
+    expect(apiFakes.hostCreate).toHaveBeenCalledTimes(0);
+    expect(wrapper.text()).toContain("Terminal not available");
+    wrapper.unmount();
+  });
+
+  it("discovers only after a write role resolves on a cold load", async () => {
+    const { wrapper, teams } = await mountDetail(undefined, null);
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(0);
+    expect(apiFakes.create).toHaveBeenCalledTimes(0);
+
+    teams.teams = [team("owner")];
+    await flushPromises();
+    await nextTick();
+    await flushPromises();
+    expect(apiFakes.listTargets).toHaveBeenCalledTimes(1);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".term-surface").exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it("hides the tab and issues zero requests for a read_only team role", async () => {
     const { wrapper, terminal } = await mountDetail(undefined, "read_only");
     const labels = wrapper.findAll(".n-tabs-tab").map((node) => node.text());
@@ -916,10 +1105,36 @@ describe("application terminal permissions (JUS-247)", () => {
     wrapper.unmount();
   });
 
-  it("disposes a live container shell and leaves the pane on demotion", async () => {
+  it("leaves the pane on demotion without closing the shell itself", async () => {
     const { wrapper, terminal, teams } = await mountDetail();
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    teams.teams = [team("read_only")];
+    await flushPromises();
+    await nextTick();
+
+    // The tab host only leaves; the app shell owns disposal (next test), so a
+    // transient canWrite gap can never kill a live PTY from here.
+    expect(apiFakes.close).toHaveBeenCalledTimes(0);
+    expect(terminal.pageTabs).toHaveLength(1);
+    expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
+    wrapper.unmount();
+  });
+
+  it("the app-shell boundary disposes container tabs once on demotion", async () => {
+    const { terminal, teams } = await mountDetail();
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
     const tab = terminal.pageTabs[0]!;
+    const Boundary = defineComponent({
+      setup() {
+        useTerminalAccessBoundary();
+        return () => h("div");
+      },
+    });
+    const boundary = mount(Boundary, {
+      global: { plugins: [useAuthStore().$pinia] },
+    });
+    await flushPromises();
 
     teams.teams = [team("read_only")];
     await flushPromises();
@@ -928,8 +1143,30 @@ describe("application terminal permissions (JUS-247)", () => {
     expect(apiFakes.close).toHaveBeenCalledTimes(1);
     expect(apiFakes.close.mock.calls[0]).toEqual([APP_ID, tab.sessionId]);
     expect(terminal.pageTabs).toHaveLength(0);
-    expect(wrapper.findComponent(NTabs).props("value")).toBe("overview");
     expect(apiFakes.hostClose).toHaveBeenCalledTimes(0);
+    boundary.unmount();
+  });
+
+  it("never closes a live shell during a transient application refetch gap", async () => {
+    const { wrapper, terminal } = await mountDetail();
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    const tab = terminal.pageTabs[0]!;
+    const appsStore = useApplicationsStore();
+
+    // The page's application row briefly disappears (refetch/cache churn).
+    appsStore.applicationsById[APP_ID] = null as never;
+    await flushPromises();
+    await nextTick();
+    expect(terminal.findTab(tab.id)).not.toBeNull();
+    expect(apiFakes.close).toHaveBeenCalledTimes(0);
+
+    // Restoring the row re-adopts the same session, no second POST.
+    appsStore.applicationsById[APP_ID] = application as never;
+    await flushPromises();
+    await nextTick();
+    expect(terminal.findTab(tab.id)?.sessionId).toBe(tab.sessionId);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".term-surface").exists()).toBe(true);
     wrapper.unmount();
   });
 

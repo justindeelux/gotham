@@ -4,7 +4,9 @@ import type { ApiError } from "@/shared/api/http";
 import { http } from "@/shared/api/http";
 import { getAccessToken } from "@/shared/api/token";
 import {
+  applicationTerminalTargetsSchema,
   terminalSessionSchema,
+  type ApplicationTerminalTargets,
   type CreateApplicationTerminalInput,
   type CreateTerminalInput,
   type TerminalSessionInfo,
@@ -90,6 +92,27 @@ export async function closeTerminalSession(
     }
     throw error;
   }
+}
+
+/**
+ * listApplicationTerminalTargets discovers the application's running service
+ * containers (GET /applications/{id}/terminal/targets). No session is created:
+ * this is the lazy discovery/recovery step behind the Terminal tab. The route
+ * needs an interactive JWT and team write access; the bounded failures are
+ * classified by `applicationTerminalFailure`.
+ */
+export async function listApplicationTerminalTargets(
+  applicationId: string,
+  signal?: AbortSignal,
+): Promise<ApplicationTerminalTargets> {
+  const response = await http.get<unknown>(
+    `/applications/${encodeURIComponent(applicationId)}/terminal/targets`,
+    signal ? { signal } : undefined,
+  );
+  // Strict parse at the boundary, like the create response (JUS-253): a
+  // drifted 2xx body is a bounded `badResponse` failure, never a cast and
+  // never misreported as a network error.
+  return applicationTerminalTargetsSchema.parse(response.data);
 }
 
 /**
@@ -207,6 +230,11 @@ function isInvalidWorkingDirectory(message: string): boolean {
 export function applicationTerminalFailure(
   error: unknown,
 ): TerminalFailure {
+  // A 2xx body outside the contract is an unexpected response, not a
+  // transport failure (same rule as the host classifier, JUS-253).
+  if (error instanceof ZodError) {
+    return { code: "badResponse", message: "" };
+  }
   const api = error as Partial<ApiError> | null;
   const status = typeof api?.status === "number" ? api.status : null;
   const message = typeof api?.message === "string" ? api.message : "";

@@ -24,6 +24,7 @@ const vi: ApplicationsMessages = {
   terminal: {
     tab: "Terminal",
     title: "Terminal ứng dụng",
+    checkingAccess: "Đang kiểm tra quyền terminal…",
     loading: "Đang tìm các service container đang chạy…",
     serviceLabel: "Service container",
     chooseService: "Chọn một service container",

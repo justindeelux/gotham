@@ -409,59 +409,6 @@ interface StorageListEnvelope {
   storage: StorageMapping[];
 }
 
-/**
- * ApplicationTerminalTarget is one running container the control plane allows
- * a shell into (JUS-244). `container_id` is resolved server-side; the browser
- * may only echo it back with its matching `service`. The list is ordered by
- * service, then container name, then id, so the visible selection is stable.
- */
-export interface ApplicationTerminalTarget {
-  /** Compose service; empty for a single-container application. */
-  service: string;
-  container_id: string;
-  name: string;
-  image: string;
-  state: string;
-  /** 1-based replica index within its service. */
-  replica: number;
-  /** Server-resolved display label: "service · container name". */
-  label: string;
-}
-
-/** ApplicationTerminalTargets is the target discovery response. */
-export interface ApplicationTerminalTargets {
-  application_id: string;
-  application_name: string;
-  server_id: string;
-  source_type: SourceType;
-  containers: ApplicationTerminalTarget[];
-}
-
-/**
- * listApplicationTerminalTargets discovers the application's running service
- * containers (GET /applications/{id}/terminal/targets). No session is created:
- * this is the lazy discovery step behind the Terminal tab. The route needs an
- * interactive JWT and team write access; the bounded failures are classified
- * by `applicationTerminalFailure` in the terminal API layer.
- */
-export async function listApplicationTerminalTargets(
-  appId: string,
-  signal?: AbortSignal,
-): Promise<ApplicationTerminalTargets> {
-  const response = await http.get<ApplicationTerminalTargets>(
-    `/applications/${encodeURIComponent(appId)}/terminal/targets`,
-    signal ? { signal } : undefined,
-  );
-  const data = response.data;
-  return {
-    application_id: data.application_id ?? appId,
-    application_name: data.application_name ?? "",
-    server_id: data.server_id ?? "",
-    source_type: data.source_type,
-    containers: Array.isArray(data.containers) ? data.containers : [],
-  };
-}
-
 /** Non-terminal states: a deployment still moving through the machine. */
 const activeStates: ReadonlySet<DeploymentState> = new Set([
   "queued",

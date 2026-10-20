@@ -1,69 +1,45 @@
 <script setup lang="ts">
 import { NAlert, NButton, NCard, NEmpty, NSpace, NSpin, NTabPane, NTabs } from "naive-ui";
-import { computed, watch } from "vue";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRoute } from "vue-router";
 
 import ApplicationDeleteDialog from "@/features/applications/components/ApplicationDeleteDialog.vue";
-
 import ApplicationDeploymentsTab from "@/features/applications/components/ApplicationDeploymentsTab.vue";
-import ApplicationTerminalTab from "@/features/applications/components/ApplicationTerminalTab.vue";
 import ApplicationEnvTab from "@/features/applications/components/ApplicationEnvTab.vue";
 import ApplicationHeader from "@/features/applications/components/ApplicationHeader.vue";
-import ApplicationLogsTab from "@/features/applications/components/ApplicationLogsTab.vue";
 import ApplicationImagePanel from "@/features/applications/components/ApplicationImagePanel.vue";
+import ApplicationLogsTab from "@/features/applications/components/ApplicationLogsTab.vue";
 import ApplicationOverviewTab from "@/features/applications/components/ApplicationOverviewTab.vue";
 import ApplicationPreviewsTab from "@/features/applications/components/ApplicationPreviewsTab.vue";
 import ApplicationStorageTab from "@/features/applications/components/ApplicationStorageTab.vue";
+import ApplicationTerminalTab from "@/features/applications/components/ApplicationTerminalTab.vue";
 import DomainEditor from "@/features/applications/components/DomainEditor.vue";
 import RollbackDialog from "@/features/applications/components/RollbackDialog.vue";
 import { useApplicationDetail } from "@/features/applications/composables/useApplicationDetail";
+import { useApplicationTerminalAccess } from "@/features/applications/composables/useApplicationTerminalAccess";
 import ProjectBreadcrumb from "@/features/projects/components/ProjectBreadcrumb.vue";
 import ResourceMoveCard from "@/features/projects/components/ResourceMoveCard.vue";
-import { useAuthStore } from "@/features/auth";
-import { useTerminalStore } from "@/features/terminal";
 
 const detail = useApplicationDetail();
-const authStore = useAuthStore();
-const terminal = useTerminalStore();
-const route = useRoute();
 
 const { t } = useI18n();
 
 /**
- * canUseTerminal mirrors the backend capability exactly: a container shell
- * needs team write access (owner/admin), never file or platform-operator
- * access. While the application row is still loading the tab stays hidden, so
- * a read_only account never even mounts the discovery host.
+ * Terminal access mirrors the backend's owner/admin team role and, crucially,
+ * waits until that role is known (JUS-247 r1): the projects store reads
+ * writable while the teams list is loading, so acting on it early would send a
+ * read_only account a discovery/create it may never make. Demotion disposal is
+ * owned once by the app shell (AppLayout); this page only decides visibility.
  */
-const canUseTerminal = computed<boolean>(
-  () => detail.canWrite.value && detail.application.value !== null,
+const {
+  accessKnown,
+  canWrite,
+  showTab: showTerminalTab,
+  blocked: blockedTerminal,
+  resolveTab,
+} = useApplicationTerminalAccess(
+  () => detail.application.value !== null,
 );
-
-/**
- * blockedTerminal exposes the clear not-allowed state for a crafted
- * `?tab=terminal` deep link: no tab, no request, and a bounded explanation.
- */
-const blockedTerminal = computed<boolean>(
-  () =>
-    detail.application.value !== null &&
-    route?.query?.tab === "terminal" &&
-    !canUseTerminal.value,
-);
-
-/**
- * Demotion to read_only is a security boundary: release this application's
- * container sessions before the hidden pane unmounts, then leave the tab. The
- * page owns this (not only the tab host) so the close still runs when `v-if`
- * removes the host in the same tick. A sign-out is not a demotion; the auth
- * flow resets the store itself.
- */
-watch(canUseTerminal, (allowed) => {
-  if (!allowed && authStore.isAuthenticated) {
-    terminal.closeContainerSessions(detail.appId.value);
-    detail.activeTab.value = "overview";
-  }
-});
 
 /** deploymentsTab names the deployment count; 0/1/many all render. */
 const deploymentsTab = computed<string>(() =>
@@ -95,13 +71,11 @@ const showStorageTab = computed<boolean>(
  */
 const activeTab = computed<string>({
   get: () => {
-    if (detail.activeTab.value === "storage" && !showStorageTab.value) {
-      return "overview";
-    }
-    if (detail.activeTab.value === "terminal" && !canUseTerminal.value) {
-      return "overview";
-    }
-    return detail.activeTab.value;
+    const selected =
+      detail.activeTab.value === "storage" && !showStorageTab.value
+        ? "overview"
+        : detail.activeTab.value;
+    return resolveTab(selected);
   },
   set: (value: string) => {
     detail.activeTab.value = value;
@@ -226,7 +200,7 @@ const activeTab = computed<string>({
         </NTabPane>
 
         <NTabPane
-          v-if="canUseTerminal"
+          v-if="showTerminalTab"
           name="terminal"
           :tab="t('applications.terminal.tab')"
           display-directive="show"
@@ -236,7 +210,8 @@ const activeTab = computed<string>({
             class="application-terminal"
             :application-id="detail.application.value.id"
             :application-name="detail.application.value.name"
-            :can-write="canUseTerminal"
+            :access-known="accessKnown"
+            :can-write="canWrite"
             :active="activeTab === 'terminal'"
             @blocked="detail.activeTab.value = 'overview'"
           />

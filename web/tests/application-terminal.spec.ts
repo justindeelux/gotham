@@ -32,6 +32,7 @@ const mimeTypes: Record<string, string> = {
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const ENV_ID = "22222222-2222-4222-8222-222222222222";
 const APP_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const APP_B_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const SERVER_ID = "33333333-3333-4333-8333-333333333333";
 
 const USER = {
@@ -191,10 +192,15 @@ function outputFrame(text: string): Buffer {
 async function mockApi(
   page: Page,
   ledger: Ledger,
-  options: { role?: string; containers?: ReturnType<typeof target>[] } = {},
+  options: {
+    role?: string;
+    containers?: ReturnType<typeof target>[];
+    teams?: ReturnType<typeof team>[];
+  } = {},
 ): Promise<void> {
   const role = options.role ?? "owner";
   const containers = options.containers ?? SINGLE;
+  const teams = options.teams ?? [team(role)];
   const sockets = new Map<string, WebSocketRoute>();
 
   await page.route("**/api/v1/**", async (route) => {
@@ -204,7 +210,7 @@ async function mockApi(
     await route.fulfill({ json: USER });
   });
   await page.route("**/api/v1/teams", async (route) => {
-    await route.fulfill({ json: { teams: [team(role)] } });
+    await route.fulfill({ json: { teams } });
   });
   await page.route("**/api/v1/version", async (route) => {
     await route.fulfill({ json: { version: "v0.2.1-dev" } });
@@ -290,7 +296,8 @@ async function mockApi(
           websocket_path: `/api/v1/applications/${APP_ID}/terminal/sessions/${id}/ws`,
           subprotocol: "gotham.terminal.v1",
           application_id: APP_ID,
-          service: input.service,
+          // Real backend shape: single-container apps omit `service`.
+          ...(input.service !== "" ? { service: input.service } : {}),
           container_id: input.container_id,
           container_name: row?.name ?? input.container_id,
           target_label: row?.label ?? input.container_id,
@@ -360,7 +367,35 @@ async function terminalTabs(page: Page) {
   });
 }
 
+/** navigate pushes an in-SPA route so the terminal store survives. */
+async function navigate(page: Page, path: string): Promise<void> {
+  await page.evaluate(async (next: string) => {
+    const app = (document.querySelector("#app") as unknown as {
+      __vue_app__: {
+        config: { globalProperties: { $router: { push: (_path: string) => Promise<void> } } };
+      };
+    }).__vue_app__;
+    await app.config.globalProperties.$router.push(next);
+  }, path);
+}
+
+/** selectTeam switches the active team in the live shell store. */
+async function selectTeam(page: Page, id: string): Promise<void> {
+  await page.evaluate((teamId: string) => {
+    const app = (document.querySelector("#app") as unknown as {
+      __vue_app__: {
+        config: { globalProperties: { $pinia: { _s: Map<string, unknown> } } };
+      };
+    }).__vue_app__;
+    const store = app.config.globalProperties.$pinia._s.get("teams") as {
+      selectTeam: (_teamId: string) => void;
+    };
+    store.selectTeam(teamId);
+  }, id);
+}
+
 const detailPath = `/projects/${PROJECT_ID}/environments/${ENV_ID}/applications/${APP_ID}`;
+const detailBPath = `/projects/${PROJECT_ID}/environments/${ENV_ID}/applications/${APP_B_ID}`;
 
 test("the Terminal tab sits after Environment and opens one exact container shell", async ({
   page,
@@ -374,6 +409,8 @@ test("the Terminal tab sits after Environment and opens one exact container shel
   await expect(page.locator(".n-tabs-tab", { hasText: "Environment" })).toBeVisible();
   expect(ledger.targets).toBe(0);
   expect(ledger.creates).toHaveLength(0);
+  // The mounted-but-inactive pane shows nothing: no empty selector flash.
+  await expect(page.locator(".app-term-select")).toHaveCount(0);
   const labels = await page.locator(".n-tabs-tab").allInnerTexts();
   const env = labels.indexOf("Environment");
   expect(env).toBeGreaterThanOrEqual(0);
@@ -385,6 +422,12 @@ test("the Terminal tab sits after Environment and opens one exact container shel
   expect(ledger.creates[0]).toEqual({ service: "", container_id: "cid-single" });
   await expect(page.locator(".term-surface .term-state")).toHaveText("Connected");
   await expect(page.locator(".term-surface")).toContainText("gotham-shop-1");
+
+  // A single-target app still offers an explicit refresh control.
+  await expect(page.locator(".app-term-toolbar .app-term-refresh")).toBeVisible();
+  await page.locator(".app-term-toolbar .app-term-refresh").click();
+  await expect.poll(() => ledger.targets).toBe(2);
+  expect(ledger.creates).toHaveLength(1);
 
   const tabs = await terminalTabs(page);
   expect(tabs).toHaveLength(1);
@@ -573,4 +616,372 @@ test("a read_only team member sees no enabled tab and issues zero requests", asy
   expect(ledger.targets).toBe(0);
   expect(ledger.creates).toHaveLength(0);
   await expect(page.locator(".term-surface")).toHaveCount(0);
+});
+
+test("a target discovery failure is bounded, explicit and never auto-retries", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ledger = freshLedger();
+  await mockApi(page, ledger);
+  await page.route(
+    `**/api/v1/applications/${APP_ID}/terminal/targets`,
+    async (route) => {
+      ledger.targets += 1;
+      await route.fulfill({
+        status: 409,
+        json: { message: "the application has no running deployment" },
+      });
+    },
+  );
+  await seedApp(page, `${detailPath}?tab=terminal`);
+
+  await expect(
+    page.getByText("This application has no running deployment."),
+  ).toBeVisible();
+  expect(ledger.targets).toBe(1);
+  expect(ledger.creates).toHaveLength(0);
+  // No auto-retry loop; the explicit retry is the only recovery.
+  await page.waitForTimeout(1000);
+  expect(ledger.targets).toBe(1);
+  await page.locator(".app-term-retry").click();
+  await expect.poll(() => ledger.targets).toBe(2);
+  expect(ledger.creates).toHaveLength(0);
+});
+
+test("a replaced container is rediscovered and recreated with the new id", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ledger = freshLedger();
+  await mockApi(page, ledger);
+  let reads = 0;
+  const rows = [
+    target("", "cid-single", "gotham-shop-1"),
+    target("", "cid-new", "gotham-shop-2"),
+  ];
+  await page.route(
+    `**/api/v1/applications/${APP_ID}/terminal/targets`,
+    async (route) => {
+      ledger.targets += 1;
+      const row = rows[Math.min(reads, rows.length - 1)]!;
+      reads += 1;
+      await route.fulfill({
+        json: {
+          application_id: APP_ID,
+          application_name: "shop",
+          server_id: SERVER_ID,
+          source_type: "image",
+          containers: [row],
+        },
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/applications/${APP_ID}/terminal/sessions**`,
+    async (route) => {
+      const request = route.request();
+      if (request.method() === "DELETE") {
+        ledger.deletes += 1;
+        await route.fulfill({ status: 204, body: "" });
+        return;
+      }
+      const input = request.postDataJSON() as {
+        service: string;
+        container_id: string;
+        cols: number;
+        rows: number;
+      };
+      ledger.creates.push({
+        service: input.service,
+        container_id: input.container_id,
+      });
+      if (ledger.creates.length === 1) {
+        // The first selection was replaced between discovery and create.
+        await route.fulfill({
+          status: 404,
+          json: {
+            message:
+              "the selected container is no longer available; refresh the targets",
+          },
+        });
+        return;
+      }
+      const id = `session-${ledger.creates.length}`;
+      await route.fulfill({
+        status: 201,
+        json: {
+          id,
+          server_id: SERVER_ID,
+          target: "container",
+          cols: input.cols,
+          rows: input.rows,
+          expires_at: "2026-10-20T12:01:00Z",
+          websocket_path: `/api/v1/applications/${APP_ID}/terminal/sessions/${id}/ws`,
+          subprotocol: "gotham.terminal.v1",
+          application_id: APP_ID,
+          container_id: input.container_id,
+          container_name: "gotham-shop-2",
+          target_label: "gotham-shop-2",
+        },
+      });
+    },
+  );
+  await seedApp(page, `${detailPath}?tab=terminal`);
+
+  await expect.poll(() => ledger.creates.length).toBe(1);
+  expect(ledger.creates[0]).toEqual({
+    service: "",
+    container_id: "cid-single",
+  });
+  await expect(page.locator(".term-surface")).toContainText(
+    "The selected container is no longer available.",
+  );
+
+  await page
+    .getByRole("button", { name: "Start new session" })
+    .click();
+  await expect.poll(() => ledger.creates.length).toBe(2);
+  expect(ledger.targets).toBe(2);
+  expect(ledger.creates[1]).toEqual({
+    service: "",
+    container_id: "cid-new",
+  });
+  await expect(page.locator(".term-surface .term-state")).toHaveText(
+    "Connected",
+  );
+  await expect
+    .poll(async () => (await terminalTabs(page))[0]?.containerId)
+    .toBe("cid-new");
+});
+
+test("a live shell whose container vanished recovers through rediscovery", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ledger = freshLedger();
+  await mockApi(page, ledger);
+  let reads = 0;
+  const rows = [
+    target("", "cid-single", "gotham-shop-1"),
+    target("", "cid-new", "gotham-shop-2"),
+  ];
+  await page.route(
+    `**/api/v1/applications/${APP_ID}/terminal/targets`,
+    async (route) => {
+      ledger.targets += 1;
+      const row = rows[Math.min(reads, rows.length - 1)]!;
+      reads += 1;
+      await route.fulfill({
+        json: {
+          application_id: APP_ID,
+          application_name: "shop",
+          server_id: SERVER_ID,
+          source_type: "image",
+          containers: [row],
+        },
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/applications/${APP_ID}/terminal/sessions**`,
+    async (route) => {
+      const request = route.request();
+      if (request.method() === "DELETE") {
+        ledger.deletes += 1;
+        await route.fulfill({ status: 204, body: "" });
+        return;
+      }
+      const input = request.postDataJSON() as {
+        service: string;
+        container_id: string;
+        cols: number;
+        rows: number;
+      };
+      ledger.creates.push({
+        service: input.service,
+        container_id: input.container_id,
+      });
+      const id = `session-${ledger.creates.length}`;
+      await route.fulfill({
+        status: 201,
+        json: {
+          id,
+          server_id: SERVER_ID,
+          target: "container",
+          cols: input.cols,
+          rows: input.rows,
+          expires_at: "2026-10-20T12:01:00Z",
+          websocket_path: `/api/v1/applications/${APP_ID}/terminal/sessions/${id}/ws`,
+          subprotocol: "gotham.terminal.v1",
+          application_id: APP_ID,
+          container_id: input.container_id,
+          container_name: "gotham-shop-1",
+          target_label: "gotham-shop-1",
+        },
+      });
+    },
+  );
+  // The attached PTY reports the container vanished after a redeploy.
+  await page.routeWebSocket(
+    /\/api\/v1\/applications\/[^/]+\/terminal\/sessions\/[^/]+\/ws$/,
+    (ws) => {
+      ws.send(openFrame());
+      ws.send(
+        frame(
+          3,
+          Buffer.from(
+            "the container no longer exists; redeploy the application",
+            "utf8",
+          ),
+        ),
+      );
+    },
+  );
+  await seedApp(page, `${detailPath}?tab=terminal`);
+
+  await expect(page.locator(".term-surface .term-state")).toHaveText("Error");
+  await page
+    .getByRole("button", { name: "Start new session" })
+    .click();
+  await expect.poll(() => ledger.creates.length).toBe(2);
+  expect(ledger.targets).toBe(2);
+  expect(ledger.deletes).toBe(1);
+  expect(ledger.creates[1]).toEqual({
+    service: "",
+    container_id: "cid-new",
+  });
+});
+
+test("switching application keeps both container sessions isolated", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ledger = freshLedger();
+  await mockApi(page, ledger);
+  const appB = {
+    ...application,
+    id: APP_B_ID,
+    name: "blog",
+  };
+  await page.route(`**/api/v1/applications/${APP_B_ID}`, async (route) => {
+    await route.fulfill({ json: { application: appB } });
+  });
+  await page.route(
+    `**/api/v1/applications/${APP_B_ID}/terminal/targets`,
+    async (route) => {
+      ledger.targets += 1;
+      await route.fulfill({
+        json: {
+          application_id: APP_B_ID,
+          application_name: "blog",
+          server_id: SERVER_ID,
+          source_type: "image",
+          containers: [target("", "cid-blog", "gotham-blog-1")],
+        },
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/applications/${APP_B_ID}/terminal/sessions**`,
+    async (route) => {
+      const request = route.request();
+      if (request.method() === "DELETE") {
+        ledger.deletes += 1;
+        await route.fulfill({ status: 204, body: "" });
+        return;
+      }
+      const input = request.postDataJSON() as {
+        service: string;
+        container_id: string;
+      };
+      ledger.creates.push({
+        service: input.service,
+        container_id: input.container_id,
+      });
+      const id = `session-${ledger.creates.length}`;
+      await route.fulfill({
+        status: 201,
+        json: {
+          id,
+          server_id: SERVER_ID,
+          target: "container",
+          cols: 120,
+          rows: 32,
+          expires_at: "2026-10-20T12:01:00Z",
+          websocket_path: `/api/v1/applications/${APP_B_ID}/terminal/sessions/${id}/ws`,
+          subprotocol: "gotham.terminal.v1",
+          application_id: APP_B_ID,
+          container_id: input.container_id,
+          container_name: "gotham-blog-1",
+          target_label: "gotham-blog-1",
+        },
+      });
+    },
+  );
+  await seedApp(page, `${detailPath}?tab=terminal`);
+  await expect.poll(() => ledger.creates.length).toBe(1);
+
+  await navigate(page, `${detailBPath}?tab=terminal`);
+  await expect.poll(() => ledger.creates.length).toBe(2);
+  expect(ledger.creates[1]).toEqual({
+    service: "",
+    container_id: "cid-blog",
+  });
+  const tabs = await terminalTabs(page);
+  expect(tabs).toHaveLength(2);
+  expect(tabs.map((tab) => tab.applicationId).sort()).toEqual([
+    APP_ID,
+    APP_B_ID,
+  ]);
+  expect(
+    tabs.find((tab) => tab.applicationId === APP_B_ID)?.targetLabel,
+  ).toBe("gotham-blog-1");
+  // Returning to the first application reuses its live shell.
+  await navigate(page, `${detailPath}?tab=terminal`);
+  await expect(page.locator(".term-surface .term-state")).toHaveText(
+    "Connected",
+  );
+  expect(ledger.creates).toHaveLength(2);
+});
+
+test("switching team disposes the application container tab", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ledger = freshLedger();
+  const teams = [
+    team("owner"),
+    { ...team("read_only"), id: "team-2", name: "Other" },
+  ];
+  await mockApi(page, ledger, { teams });
+  await seedApp(page, `${detailPath}?tab=terminal`);
+  await expect.poll(() => ledger.creates.length).toBe(1);
+  await expect(page.locator(".rail-btn--terminal .rail-badge")).toHaveText("1");
+
+  await selectTeam(page, "team-2");
+  await expect.poll(() => ledger.deletes).toBe(1);
+  await expect.poll(async () => (await terminalTabs(page)).length).toBe(0);
+  await expect(page.locator(".rail-btn--terminal")).toHaveCount(0);
+});
+
+test("detaching keeps the session, label and window tab without a new POST", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const ledger = freshLedger();
+  await mockApi(page, ledger);
+  await seedApp(page, `${detailPath}?tab=terminal`);
+  await expect.poll(() => ledger.creates.length).toBe(1);
+  const before = (await terminalTabs(page))[0]!;
+
+  await page.locator(".term-open-in-window").click();
+  const window = page.locator(".term-window");
+  await expect(window).toBeVisible();
+  await expect(window).toContainText("shop · gotham-shop-1");
+  await expect(page.locator(".term-detached")).toBeVisible();
+  await expect(page.locator(".rail-btn--terminal .rail-badge")).toHaveText("1");
+  const after = (await terminalTabs(page))[0]!;
+  expect(after.mode).toBe("window");
+  expect(after.sessionId).toBe(before.sessionId);
+  expect(ledger.creates).toHaveLength(1);
+  expect(ledger.deletes).toBe(0);
 });

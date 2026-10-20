@@ -28,6 +28,7 @@ const en = {
   terminal: {
     tab: "Terminal",
     title: "Application terminal",
+    checkingAccess: "Checking terminal access…",
     loading: "Looking for running service containers…",
     serviceLabel: "Service container",
     chooseService: "Choose a service container",

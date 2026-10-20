@@ -8,9 +8,11 @@ import {
   createApplicationTerminalSession,
   createTerminalSession,
   currentTerminalToken,
+  listApplicationTerminalTargets,
   terminalFailure,
 } from "@/features/terminal/api/terminal";
 import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
+import type { ApplicationTerminalTarget } from "@/features/terminal/schemas/terminal";
 import type { TerminalThemeName } from "@/features/terminal/schemas/terminalAppearance";
 import { useTerminalAppearanceStore } from "@/features/terminal/stores/terminalAppearance";
 import { useTerminalWindowStore } from "@/features/terminal/stores/terminalWindow";
@@ -242,6 +244,21 @@ export const useTerminalStore = defineStore("terminal", () => {
   const createTargets = new Map<string, { key: string; mode: TerminalMode }>();
   /** retrying guards a second explicit retry while the first is running. */
   const retrying = new Set<string>();
+  /**
+   * retryHandlers lets an owning page re-resolve a container target before a
+   * retry (JUS-247 r1). A container tab's Retry must discover the fresh target
+   * set, not re-POST an id the control plane already refused; the application
+   * tab registers that resolver while it is mounted. Without one (a window tab
+   * after the page left), `retry` falls back to a bounded rediscovery.
+   */
+  const retryHandlers = new Map<string, () => void | Promise<void>>();
+  /**
+   * dismissedContainerRestarts remembers an application whose container tab
+   * the operator explicitly closed, keyed to the closed target. It lives in the
+   * store lifetime, so logout/account switch clears it and a later user never
+   * inherits a previous account's restart card.
+   */
+  const dismissedContainerRestarts = new Map<string, string>();
   /** closeResolve settles an awaited close confirmation (logout path). */
   let closeResolve: ((_confirmed: boolean) => void) | null = null;
   /** closePromise is shared by overlapping awaited close requests. */
@@ -730,6 +747,118 @@ export const useTerminalStore = defineStore("terminal", () => {
     runtimes.get(id)?.setComposing(composing);
   }
 
+  /**
+   * registerRetryHandler installs the owning page's container retry resolver.
+   * The returned disposer only removes the exact handler it registered, so a
+   * remount cannot clear a newer page's handler.
+   */
+  function registerRetryHandler(
+    id: string,
+    handler: () => void | Promise<void>,
+  ): () => void {
+    retryHandlers.set(id, handler);
+    return () => {
+      if (retryHandlers.get(id) === handler) {
+        retryHandlers.delete(id);
+      }
+    };
+  }
+
+  /** dismissContainerRestart records an explicit close for one application. */
+  function dismissContainerRestart(
+    applicationId: string,
+    target: string,
+  ): void {
+    if (applicationId === "") {
+      return;
+    }
+    dismissedContainerRestarts.set(applicationId, target);
+  }
+
+  /** containerRestartTarget reads the closed target, or null when none. */
+  function containerRestartTarget(applicationId: string): string | null {
+    return dismissedContainerRestarts.get(applicationId) ?? null;
+  }
+
+  /** clearContainerRestart forgets the marker for an explicit restart. */
+  function clearContainerRestart(applicationId: string): void {
+    dismissedContainerRestarts.delete(applicationId);
+  }
+
+  /** applyContainerTarget replaces a tab's identity from a fresh discovery. */
+  function applyContainerTarget(
+    tab: TerminalTab,
+    target: ApplicationTerminalTarget,
+  ): void {
+    tab.service = target.service;
+    tab.containerId = target.container_id;
+    tab.containerName = target.name;
+    tab.targetLabel = target.label || target.name;
+    tab.title = terminalTitle({
+      serverId: tab.serverId,
+      serverName: tab.serverName,
+      target: tab.target,
+      applicationId: tab.applicationId,
+      applicationName: tab.applicationName,
+      containerId: tab.containerId,
+      containerName: tab.containerName,
+      targetLabel: tab.targetLabel,
+    });
+  }
+
+  /**
+   * recoverContainerTab is the fallback when no page resolver is mounted: it
+   * rediscovers the running set and only reconnects an exact or unambiguous
+   * target. It never re-POSTs a refused id, and a multi-target set stays in the
+   * bounded error state for the operator to choose from on the application tab.
+   */
+  async function recoverContainerTab(
+    id: string,
+    tab: TerminalTab,
+  ): Promise<void> {
+    const previousSession = tab.sessionId;
+    const runtime = runtimes.get(id);
+    runtimes.delete(id);
+    runtime?.dispose(true);
+    tab.sessionId = "";
+    try {
+      if (previousSession !== "") {
+        await closeSession(tab, previousSession).catch(() => {
+          // Best-effort: an ended session answers 404, which is success here.
+        });
+      }
+      if (!findTab(id)) {
+        return;
+      }
+      const resolved = await listApplicationTerminalTargets(tab.applicationId);
+      if (!findTab(id)) {
+        return;
+      }
+      const exact = resolved.containers.find(
+        (candidate) =>
+          candidate.service === tab.service &&
+          candidate.container_id === tab.containerId,
+      );
+      const chosen =
+        exact ??
+        (resolved.containers.length === 1 ? resolved.containers[0]! : null);
+      if (chosen === null) {
+        // Zero containers is gone; several need an explicit choice back on the
+        // application tab. Both stay bounded and issue no create.
+        tab.status = "error";
+        tab.errorCode = "containerGone";
+        return;
+      }
+      applyContainerTarget(tab, chosen);
+      await startSession(tab);
+    } catch (error) {
+      if (findTab(id)) {
+        tab.status = "error";
+        tab.errorCode = applicationTerminalFailure(error).code;
+      }
+    }
+  }
+
   /** retry is the ONLY reconnect path: it creates a new session, no replay. */
   async function retry(id: string): Promise<void> {
     const tab = findTab(id);
@@ -744,12 +873,21 @@ export const useTerminalStore = defineStore("terminal", () => {
       return;
     }
     retrying.add(id);
-    const previousSession = tab.sessionId;
-    const runtime = runtimes.get(id);
-    runtimes.delete(id);
-    runtime?.dispose(true);
-    tab.sessionId = "";
     try {
+      if (isContainerTerminalTarget(tab.target)) {
+        const handler = retryHandlers.get(id);
+        if (handler) {
+          await handler();
+          return;
+        }
+        await recoverContainerTab(id, tab);
+        return;
+      }
+      const previousSession = tab.sessionId;
+      const runtime = runtimes.get(id);
+      runtimes.delete(id);
+      runtime?.dispose(true);
+      tab.sessionId = "";
       if (previousSession !== "") {
         await closeSession(tab, previousSession).catch(() => {
           // Best-effort: an ended session answers 404, which is success here.
@@ -852,6 +990,7 @@ export const useTerminalStore = defineStore("terminal", () => {
       surfaces.delete(id);
       displayed.value.delete(id);
       retrying.delete(id);
+      retryHandlers.delete(id);
       if (tab.sessionId !== "") {
         void closeSession(tab, tab.sessionId).catch(() => {
           // The server also revokes an ended session; cleanup is best-effort.
@@ -926,6 +1065,8 @@ export const useTerminalStore = defineStore("terminal", () => {
     windowInflight.clear();
     windowBusyKeys.value.clear();
     retrying.clear();
+    retryHandlers.clear();
+    dismissedContainerRestarts.clear();
     tabs.value = [];
     activeTabId.value = "";
     closeRequest.value = null;
@@ -961,6 +1102,10 @@ export const useTerminalStore = defineStore("terminal", () => {
     dismissSuggestion,
     setComposing,
     retry,
+    registerRetryHandler,
+    dismissContainerRestart,
+    containerRestartTarget,
+    clearContainerRestart,
     requestClose,
     cancelClose,
     confirmClose,

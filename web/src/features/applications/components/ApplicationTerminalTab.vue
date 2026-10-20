@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { NAlert, NButton, NCard, NEmpty, NSelect, NSpin } from "naive-ui";
+import { NAlert, NButton, NCard, NEmpty, NSpin } from "naive-ui";
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 
+import ApplicationTerminalTargetPicker from "@/features/applications/components/ApplicationTerminalTargetPicker.vue";
 import { useApplicationTerminalTab } from "@/features/applications/composables/useApplicationTerminalTab";
 import TerminalSessionStage from "@/features/terminal/components/TerminalSessionStage.vue";
 import { errorKey } from "@/features/terminal/utils/terminal";
@@ -9,16 +11,21 @@ import { errorKey } from "@/features/terminal/utils/terminal";
 /**
  * Application detail Terminal tab (JUS-247).
  *
- * The tab is a thin host: `useApplicationTerminalTab` owns lazy target
- * discovery, the single-target auto-open, the explicit multi-service selector
- * and the shared close/restart lifecycle. The session itself is the same
- * TerminalSessionStage/TerminalPane the server tab uses, so the buffer, dock,
- * rail count, close confirmation and one-way window transfer are shared, never
- * forked. Host and container sessions never share a create path.
+ * The tab is a thin host: the composable owns lazy target discovery, the
+ * single-target auto-open, the explicit multi-service selector and every
+ * recovery path (Retry/Start new session/Refresh rediscover before re-POST).
+ * The session itself is the same TerminalSessionStage/TerminalPane the server
+ * tab uses, so the buffer, dock, rail count, close confirmation and one-way
+ * window transfer are shared, never forked.
+ *
+ * While the team role is still unknown (`accessKnown` false) this renders a
+ * neutral state and mounts no discovery: a read_only account sees zero
+ * terminal requests, not a shell that is revoked a tick later.
  */
 interface Props {
   applicationId: string;
   applicationName: string;
+  accessKnown: boolean;
   canWrite: boolean;
   active: boolean;
 }
@@ -27,8 +34,9 @@ const props = defineProps<Props>();
 const emit = defineEmits<{ blocked: [] }>();
 const { t } = useI18n();
 
+const canUse = computed<boolean>(() => props.accessKnown && props.canWrite);
+
 const {
-  targets,
   targetOptions,
   targetsLoading,
   targetsError,
@@ -37,44 +45,47 @@ const {
   tabId,
   starting,
   closed,
+  showPicker,
   refresh,
   retry,
-  selectTarget,
   startNew,
+  selectTarget,
 } = useApplicationTerminalTab({
   applicationId: () => props.applicationId,
   applicationName: () => props.applicationName,
-  canWrite: () => props.canWrite,
+  canUse: () => canUse.value,
   active: () => props.active,
   onBlocked: () => emit("blocked"),
 });
 
 /** errorText is bounded catalog copy; the backend body is never rendered. */
-function errorText(): string {
-  return t(errorKey(targetsError.value));
-}
+const errorText = computed<string>(() => t(errorKey(targetsError.value)));
 </script>
 
 <template>
   <div class="app-term">
     <div
-      v-if="targets.length > 1 && mode !== 'select'"
-      class="app-term-switch"
+      v-if="!accessKnown"
+      class="app-term-checking"
+      role="status"
+      aria-live="polite"
     >
-      <label class="app-term-label" for="app-term-target">
-        {{ t("applications.terminal.serviceLabel") }}
-      </label>
-      <div class="app-term-switch-row">
-        <NSelect
-          id="app-term-target"
-          class="app-term-select"
-          :value="selection"
-          :options="targetOptions"
-          :placeholder="t('applications.terminal.chooseService')"
-          :loading="targetsLoading"
-          :disabled="starting"
-          @update:value="selectTarget"
-        />
+      <NSpin size="small" :aria-label="t('applications.terminal.checkingAccess')" />
+      <p class="small muted">{{ t("applications.terminal.checkingAccess") }}</p>
+    </div>
+
+    <template v-else>
+      <ApplicationTerminalTargetPicker
+        v-if="mode === 'session' && showPicker"
+        :options="targetOptions"
+        :value="selection"
+        :loading="targetsLoading"
+        :disabled="starting"
+        :label="t('applications.terminal.serviceLabel')"
+        @select="selectTarget"
+        @refresh="refresh"
+      />
+      <div v-else-if="mode === 'session'" class="app-term-toolbar">
         <NButton
           secondary
           class="app-term-refresh"
@@ -84,94 +95,83 @@ function errorText(): string {
           {{ t("applications.terminal.refresh") }}
         </NButton>
       </div>
-    </div>
 
-    <NAlert
-      v-if="mode === 'error'"
-      type="error"
-      :show-icon="true"
-      class="app-term-alert"
-    >
-      <template #header>{{ t("terminal.errors.title") }}</template>
-      <p class="app-term-copy">{{ errorText() }}</p>
-      <div class="app-term-actions">
-        <NButton class="app-term-retry" type="primary" @click="retry">
-          {{ t("applications.terminal.retry") }}
-        </NButton>
-      </div>
-    </NAlert>
-
-    <NCard
-      v-else-if="mode === 'empty'"
-      class="app-term-empty"
-      role="status"
-      aria-live="polite"
-    >
-      <p class="app-term-empty-title">
-        {{ t("applications.terminal.emptyTitle") }}
-      </p>
-      <NEmpty :description="t('applications.terminal.emptyBody')">
-        <template #extra>
-          <NButton secondary class="app-term-refresh" @click="refresh">
-            {{ t("applications.terminal.refresh") }}
+      <NAlert
+        v-if="mode === 'error'"
+        type="error"
+        :show-icon="true"
+        class="app-term-alert"
+      >
+        <template #header>{{ t("terminal.errors.title") }}</template>
+        <p class="app-term-copy">{{ errorText }}</p>
+        <div class="app-term-actions">
+          <NButton class="app-term-retry" type="primary" @click="retry">
+            {{ t("applications.terminal.retry") }}
           </NButton>
-        </template>
-      </NEmpty>
-    </NCard>
+        </div>
+      </NAlert>
 
-    <div
-      v-else-if="mode === 'loading'"
-      class="app-term-loading"
-      role="status"
-      aria-live="polite"
-    >
-      <NSpin size="small" :aria-label="t('applications.terminal.loading')" />
-      <p class="small muted">{{ t("applications.terminal.loading") }}</p>
-    </div>
+      <NCard
+        v-else-if="mode === 'empty'"
+        class="app-term-empty"
+        role="status"
+        aria-live="polite"
+      >
+        <p class="app-term-empty-title">
+          {{ t("applications.terminal.emptyTitle") }}
+        </p>
+        <NEmpty :description="t('applications.terminal.emptyBody')">
+          <template #extra>
+            <NButton secondary class="app-term-refresh" @click="refresh">
+              {{ t("applications.terminal.refresh") }}
+            </NButton>
+          </template>
+        </NEmpty>
+      </NCard>
 
-    <NCard
-      v-else-if="mode === 'select'"
-      class="app-term-select-card"
-      role="status"
-      aria-live="polite"
-    >
-      <p class="app-term-select-title">
-        {{ t("applications.terminal.selectTitle") }}
-      </p>
-      <p class="small muted app-term-copy">
-        {{ t("applications.terminal.selectBody") }}
-      </p>
-      <div class="app-term-switch-row">
-        <NSelect
-          class="app-term-select"
-          :value="selection"
+      <div
+        v-else-if="mode === 'loading'"
+        class="app-term-loading"
+        role="status"
+        aria-live="polite"
+      >
+        <NSpin size="small" :aria-label="t('applications.terminal.loading')" />
+        <p class="small muted">{{ t("applications.terminal.loading") }}</p>
+      </div>
+
+      <NCard
+        v-else-if="mode === 'select'"
+        class="app-term-select-card"
+        role="status"
+        aria-live="polite"
+      >
+        <p class="app-term-select-title">
+          {{ t("applications.terminal.selectTitle") }}
+        </p>
+        <p class="small muted app-term-copy">
+          {{ t("applications.terminal.selectBody") }}
+        </p>
+        <ApplicationTerminalTargetPicker
           :options="targetOptions"
-          :placeholder="t('applications.terminal.chooseService')"
+          :value="selection"
           :loading="targetsLoading"
           :disabled="starting"
-          @update:value="selectTarget"
+          @select="selectTarget"
+          @refresh="refresh"
         />
-        <NButton
-          secondary
-          class="app-term-refresh"
-          :loading="targetsLoading"
-          @click="refresh"
-        >
-          {{ t("applications.terminal.refresh") }}
-        </NButton>
-      </div>
-    </NCard>
+      </NCard>
 
-    <TerminalSessionStage
-      v-else
-      mode="application"
-      :server="null"
-      :ready="true"
-      :tab-id="tabId"
-      :starting="starting"
-      :closed="closed"
-      @start="startNew"
-    />
+      <TerminalSessionStage
+        v-else-if="mode === 'session'"
+        mode="application"
+        :server="null"
+        :ready="true"
+        :tab-id="tabId"
+        :starting="starting"
+        :closed="closed"
+        @start="startNew"
+      />
+    </template>
   </div>
 </template>
 
@@ -183,28 +183,17 @@ function errorText(): string {
   min-height: 0;
 }
 
-.app-term-switch {
+.app-term-toolbar {
   display: flex;
-  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.app-term-checking,
+.app-term-loading {
+  display: flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-.app-term-label {
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.app-term-switch-row {
-  display: flex;
-  flex: 1 1 18rem;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.app-term-select {
-  min-width: 0;
-  flex: 1 1 auto;
+  padding: var(--space-4);
 }
 
 .app-term-alert,
@@ -222,13 +211,6 @@ function errorText(): string {
   gap: var(--space-2);
 }
 
-.app-term-loading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-4);
-}
-
 .app-term-select-title {
   margin: 0;
   font-weight: 600;
@@ -236,13 +218,8 @@ function errorText(): string {
 }
 
 .app-term-empty-title {
+  margin: 0 0 var(--space-2);
   font-weight: 600;
   color: var(--fg-2);
-}
-
-@media (max-width: 640px) {
-  .app-term-switch-row {
-    flex-direction: column;
-  }
 }
 </style>

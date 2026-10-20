@@ -1,48 +1,24 @@
 <script setup lang="ts">
 import { useMediaQuery } from "@vueuse/core";
-import { computed, onMounted, onUnmounted, watch } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { RouterView, useRoute } from "vue-router";
 
 import { TaskProgressCards } from "@/features/tasks";
 import FilesEditor from "@/features/files/components/FilesEditor.vue";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
 import { useServersStore } from "@/features/servers";
-import { useTeamsStore } from "@/features/teams";
-import { TerminalPageDock, TerminalWindow, useTerminalStore } from "@/features/terminal";
+import { TerminalPageDock, TerminalWindow } from "@/features/terminal";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
 import { provideMobileNav } from "./useMobileNav";
+import { useTerminalAccessBoundary } from "./useTerminalAccessBoundary";
 
 const { mobileNavOpen, closeMobileNav } = provideMobileNav();
 const serversStore = useServersStore();
-const teamsStore = useTeamsStore();
-const terminal = useTerminalStore();
 
-/**
- * Container shells are scoped to the team that owns the application (JUS-247).
- * Switching the active team or losing the write role disposes them at the
- * security boundary instead of leaving an unauthorized shell reachable from
- * the dock or the rail; the backend also refuses the next revalidation. Host
- * shells are untouched here (they are an operator capability, and logout uses
- * the auth flow's reset).
- */
-watch(
-  () => teamsStore.activeTeamId,
-  (next, previous) => {
-    if (previous && next !== previous) {
-      terminal.closeContainerSessions();
-    }
-  },
-);
-
-watch(
-  () => teamsStore.activeTeam?.role ?? null,
-  (role, previous) => {
-    if (role === "read_only" && previous !== "read_only") {
-      terminal.closeContainerSessions();
-    }
-  },
-);
+// JUS-247: the shell is the single owner of container-tab disposal at a team
+// role switch/demotion; the app page and tab host only leave their pane.
+useTerminalAccessBoundary();
 
 // JUS-135: below the tablet breakpoint the rail leaves the grid column and
 // moves into the rail drawer (AppTopbar). Only one ServerRail is mounted at a

@@ -37,6 +37,37 @@ export const terminalSessionSchema = z.object({
 });
 export type TerminalSessionInfo = z.infer<typeof terminalSessionSchema>;
 
+/**
+ * applicationTerminalTargetSchema validates one running service container the
+ * control plane allows a shell into (docs/terminal-session-api.md §1a). The Go
+ * wire struct has no omitempty, so every field is required; `service` is the
+ * empty string for a single-container application.
+ */
+export const applicationTerminalTargetSchema = z.object({
+  service: z.string(),
+  container_id: z.string().min(1),
+  name: z.string(),
+  image: z.string(),
+  state: z.string(),
+  replica: z.number().int().min(0),
+  label: z.string(),
+});
+export type ApplicationTerminalTarget = z.infer<
+  typeof applicationTerminalTargetSchema
+>;
+
+/** applicationTerminalTargetsSchema validates the discovery envelope. */
+export const applicationTerminalTargetsSchema = z.object({
+  application_id: z.string().min(1),
+  application_name: z.string(),
+  server_id: z.string().min(1),
+  source_type: z.string(),
+  containers: z.array(applicationTerminalTargetSchema),
+});
+export type ApplicationTerminalTargets = z.infer<
+  typeof applicationTerminalTargetsSchema
+>;
+
 /** CreateTerminalInput is the body accepted by the host create endpoint. */
 export interface CreateTerminalInput {
   target?: string;

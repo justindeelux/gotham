@@ -303,6 +303,14 @@ func TestDockerClientExecHijacksStream(t *testing.T) {
 	if _, err := session.Write([]byte("echo hi\n")); err != nil {
 		t.Fatalf("write input: %v", err)
 	}
+	// The fake daemon reads input on its own goroutine. Wait for that read to
+	// complete before closing the stream: Close can reset the connection and
+	// discard bytes the server has not drained yet.
+	select {
+	case <-api.inputRead:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fake daemon did not read the exec input")
+	}
 	if err := session.Resize(context.Background(), 132, 43); err != nil {
 		t.Fatalf("Resize: %v", err)
 	}
@@ -520,12 +528,15 @@ type fakeExecAPI struct {
 	envs           [][]string
 	imageEnv       []string
 	inputs         strings.Builder
-	resizeQuery    string
+	// inputRead is signalled once per line the interactive exec reads, so
+	// tests can wait for the daemon to drain the hijacked stream.
+	inputRead   chan struct{}
+	resizeQuery string
 }
 
 func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 	t.Helper()
-	api := &fakeExecAPI{running: true, execRunning: true, probeOutput: "/bin/sh\n"}
+	api := &fakeExecAPI{running: true, execRunning: true, probeOutput: "/bin/sh\n", inputRead: make(chan struct{}, 1)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/containers/c1/json", func(w http.ResponseWriter, _ *http.Request) {
 		api.mu.Lock()
@@ -601,6 +612,10 @@ func newFakeExecAPI(t *testing.T) *fakeExecAPI {
 				api.mu.Lock()
 				api.inputs.WriteString(line)
 				api.mu.Unlock()
+				select {
+				case api.inputRead <- struct{}{}:
+				default:
+				}
 			}
 			if err != nil {
 				return

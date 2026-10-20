@@ -769,4 +769,39 @@ describe("TerminalRuntime welcome banner", () => {
     const input = context.socket.sent.find((frame) => frame[0] === CLIENT_INPUT);
     expect([...(input ?? new Uint8Array())].slice(1)).toEqual([0x6c, 0x73]);
   });
+
+  it("keeps the display banner out of the prompt scanner and mirror", async () => {
+    const context = setup({
+      banner: BANNER_INFO,
+      quickCommands: () => [
+        { id: "c1", label: "Git status", command: "git status", abbreviation: "gs" },
+      ],
+    });
+    await context.runtime.connect();
+    context.socket.open();
+    context.socket.message(openFrame());
+    vi.advanceTimersByTime(BANNER_VERSION_WAIT_MS);
+
+    // The banner is a renderer write only; it never becomes prompt state.
+    expect(decodeWrites(context.terminal()).join("")).toContain("Gotham v0.2.1-dev");
+    expect(context.runtime.getPromptState()).toMatchObject({
+      phase: "unknown",
+      detected: false,
+    });
+
+    // Typing with only the banner on screen cannot suggest.
+    context.terminal().type("g");
+    context.terminal().type("s");
+    expect(context.runtime.getSuggestionState().suggestion).toBeNull();
+
+    // A real shell B mark after the banner enables the suggestion normally.
+    context.socket.message(
+      serverFrame(0x01, new TextEncoder().encode("\x1b]133;B\x07")),
+    );
+    context.terminal().type("g");
+    context.terminal().type("s");
+    expect(context.runtime.getSuggestionState().suggestion).toMatchObject({
+      commandId: "c1",
+    });
+  });
 });

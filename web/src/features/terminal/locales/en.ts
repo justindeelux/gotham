@@ -95,6 +95,8 @@ const en = {
       "Alt+M minimizes the window when focus is on its header or a tab.",
     hint:
       "Ctrl+Shift+E or Shift+Tab leaves the terminal input. Inside the shell, Alt and Option keys go to the terminal (readline, vim, tmux); Alt+M and Alt+Shift+W work from the window chrome.",
+    chooseSuggestion:
+      "Ctrl+Shift+Space focuses a visible quick-command suggestion; Enter inserts it without running it.",
   },
   page: {
     navLabel: "Terminal",
@@ -143,6 +145,80 @@ const en = {
   },
   banner: {
     server: "server",
+  },
+  quickCommands: {
+    open: "Quick commands",
+    title: "Quick commands",
+    count: "{count} saved",
+    add: "Add command",
+    atLimit: "You have reached the 40-command limit. Delete one to add another.",
+    addTitle: "New command",
+    editTitle: "Edit command",
+    insert: "Insert",
+    insertLabel: "Insert {label} into the terminal",
+    editLabel: "Edit {label}",
+    deleteLabel: "Delete {label}",
+    save: "Save command",
+    cancel: "Cancel",
+    label: "Label",
+    labelPlaceholder: "Deploy API",
+    command: "Command",
+    commandPlaceholder: "docker compose up -d",
+    abbreviation: "Abbreviation (optional)",
+    abbreviationPlaceholder: "dcu",
+    abbreviationHint:
+      "Type this at a supported prompt to see the command. Letters, digits, dot, dash and underscore only.",
+    empty: "No saved commands yet.",
+    storageNote:
+      "Saved in this browser for this account. Not encrypted — do not store secrets.",
+    saveFailed:
+      "This browser could not save the change. Your commands still work until reload.",
+    saveRejected:
+      "The command could not be saved. Check the fields and the abbreviation.",
+    deleteBody: "Delete {label} from this browser?",
+    inserted: "Inserted {label}. Press Enter in the terminal to run it.",
+    insertMultiline:
+      "Multiline commands need bracketed paste support; nothing was inserted.",
+    insertControl:
+      "The command contains control characters; nothing was inserted.",
+    insertEmpty: "The command is empty; nothing was inserted.",
+    insertUnavailable: "The terminal is not ready; nothing was inserted.",
+    dismissNotice: "Dismiss",
+    hintTitle: "Abbreviation suggestions are off",
+    hintBody:
+      "This shell does not emit prompt marks. Add the optional snippet to your shell rc file; Gotham never injects it into the shell.",
+    hintAlternate:
+      "A fullscreen application is active; suggestions stay off until the shell prompt returns.",
+    hintUnsupported:
+      "Automatic suggestions support bash and zsh. Manual insertion works in every shell.",
+    copySnippet: "Copy setup snippet",
+    copied: "Copied",
+    validation: {
+      labelRequired: "Give this command a label.",
+      labelTooLong: "Labels are limited to 64 characters.",
+      commandRequired: "Enter the command text to insert.",
+      commandTooLong: "Commands are limited to 2,048 characters.",
+      commandNul: "Commands cannot contain NUL characters.",
+      commandControl:
+        "Commands cannot contain control characters other than newline and tab.",
+      commandBidi: "Commands cannot contain bidirectional text control characters.",
+      abbreviationTooLong: "Abbreviations are limited to 24 characters.",
+      abbreviationFormat:
+        "Use letters, digits, dot, dash or underscore, starting with a letter or digit.",
+      abbreviationDuplicate: "Another command already uses this abbreviation.",
+      tooMany: "You can save up to 40 commands.",
+      idInvalid: "This command id is invalid.",
+    },
+  },
+  suggestions: {
+    label: "Quick command suggestions",
+    announce:
+      "Suggestion: {label} for {abbreviation}. Press Control+Shift+Space to choose or Escape to dismiss.",
+    hint: "Ctrl+Shift+Space to choose · Esc dismisses",
+    placeholder: "Type an abbreviation to insert a saved command.",
+    placeholderEmpty: "Save a quick command with an abbreviation to see suggestions here.",
+    choose: "Choose",
+    dismiss: "Dismiss suggestion",
   },
 };
 

@@ -95,6 +95,8 @@ const vi = {
       "Alt+M thu nhỏ cửa sổ khi tiêu điểm ở thanh tiêu đề hoặc tab.",
     hint:
       "Ctrl+Shift+E hoặc Shift+Tab rời khỏi vùng nhập terminal. Trong shell, phím Alt và Option được gửi tới terminal (readline, vim, tmux); Alt+M và Alt+Shift+W hoạt động từ thanh cửa sổ.",
+    chooseSuggestion:
+      "Ctrl+Shift+Space chọn gợi ý lệnh nhanh đang hiện; Enter chèn mà không chạy.",
   },
   page: {
     navLabel: "Terminal",
@@ -143,6 +145,81 @@ const vi = {
   },
   banner: {
     server: "máy chủ",
+  },
+  quickCommands: {
+    open: "Lệnh nhanh",
+    title: "Lệnh nhanh",
+    count: "{count} lệnh đã lưu",
+    add: "Thêm lệnh",
+    atLimit: "Bạn đã đạt giới hạn 40 lệnh. Hãy xóa một lệnh để thêm lệnh khác.",
+    addTitle: "Lệnh mới",
+    editTitle: "Sửa lệnh",
+    insert: "Chèn",
+    insertLabel: "Chèn {label} vào terminal",
+    editLabel: "Sửa {label}",
+    deleteLabel: "Xóa {label}",
+    save: "Lưu lệnh",
+    cancel: "Hủy",
+    label: "Nhãn",
+    labelPlaceholder: "Deploy API",
+    command: "Lệnh",
+    commandPlaceholder: "docker compose up -d",
+    abbreviation: "Viết tắt (tùy chọn)",
+    abbreviationPlaceholder: "dcu",
+    abbreviationHint:
+      "Gõ tại dấu nhắc được hỗ trợ để thấy lệnh. Chỉ dùng chữ, số, dấu chấm, gạch ngang và gạch dưới.",
+    empty: "Chưa có lệnh nào được lưu.",
+    storageNote:
+      "Được lưu trong trình duyệt này cho tài khoản này. Không mã hóa — không lưu bí mật.",
+    saveFailed:
+      "Trình duyệt không thể lưu thay đổi. Các lệnh vẫn dùng được cho đến khi tải lại.",
+    saveRejected:
+      "Không thể lưu lệnh. Hãy kiểm tra các trường và viết tắt.",
+    deleteBody: "Xóa {label} khỏi trình duyệt này?",
+    inserted: "Đã chèn {label}. Nhấn Enter trong terminal để chạy.",
+    insertMultiline:
+      "Lệnh nhiều dòng cần hỗ trợ bracketed paste; không có gì được chèn.",
+    insertControl:
+      "Lệnh chứa ký tự điều khiển; không có gì được chèn.",
+    insertEmpty: "Lệnh trống; không có gì được chèn.",
+    insertUnavailable: "Terminal chưa sẵn sàng; không có gì được chèn.",
+    dismissNotice: "Bỏ qua",
+    hintTitle: "Gợi ý viết tắt đang tắt",
+    hintBody:
+      "Shell này không phát dấu nhắc. Hãy thêm đoạn mã tùy chọn vào tệp rc của shell; Gotham không bao giờ tự chèn vào shell.",
+    hintAlternate:
+      "Ứng dụng toàn màn hình đang hoạt động; gợi ý sẽ tắt cho đến khi dấu nhắc shell trở lại.",
+    hintUnsupported:
+      "Gợi ý tự động hỗ trợ bash và zsh. Chèn thủ công hoạt động với mọi shell.",
+    copySnippet: "Sao chép đoạn mã",
+    copied: "Đã sao chép",
+    validation: {
+      labelRequired: "Hãy đặt nhãn cho lệnh này.",
+      labelTooLong: "Nhãn tối đa 64 ký tự.",
+      commandRequired: "Nhập nội dung lệnh cần chèn.",
+      commandTooLong: "Lệnh tối đa 2.048 ký tự.",
+      commandNul: "Lệnh không được chứa ký tự NUL.",
+      commandControl:
+        "Lệnh không được chứa ký tự điều khiển ngoài xuống dòng và tab.",
+      commandBidi:
+        "Lệnh không được chứa ký tự điều khiển hướng văn bản hai chiều.",
+      abbreviationTooLong: "Viết tắt tối đa 24 ký tự.",
+      abbreviationFormat:
+        "Dùng chữ, số, dấu chấm, gạch ngang hoặc gạch dưới, bắt đầu bằng chữ hoặc số.",
+      abbreviationDuplicate: "Lệnh khác đã dùng viết tắt này.",
+      tooMany: "Bạn có thể lưu tối đa 40 lệnh.",
+      idInvalid: "Mã lệnh không hợp lệ.",
+    },
+  },
+  suggestions: {
+    label: "Gợi ý lệnh nhanh",
+    announce:
+      "Gợi ý: {label} cho {abbreviation}. Nhấn Control+Shift+Space để chọn hoặc Escape để bỏ qua.",
+    hint: "Ctrl+Shift+Space để chọn · Esc để bỏ qua",
+    placeholder: "Gõ viết tắt để chèn một lệnh đã lưu.",
+    placeholderEmpty: "Lưu lệnh nhanh có viết tắt để thấy gợi ý tại đây.",
+    choose: "Chọn",
+    dismiss: "Bỏ qua gợi ý",
   },
 };
 

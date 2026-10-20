@@ -105,12 +105,18 @@ jobs:
         working-directory: web
         run: npm ci
 
+      - name: Install zsh for the real-PTY proof
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+
       - name: Type-check
         working-directory: web
         run: npm run type-check
 
       - name: Frontend harness checks
         working-directory: web
+        env:
+          # Fail instead of silently skipping a PTY shell in CI.
+          GOTHAM_REQUIRE_PTY_SHELLS: bash,zsh,sh
         run: npm test
 
       - name: Lint

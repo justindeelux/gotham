@@ -1012,7 +1012,7 @@ test("a symlink escape is refused as an invalid working directory", async ({
   ).toBeVisible();
 });
 
-test("the toolbar action shows its label, names itself and shows a tooltip", async ({
+test("the toolbar action shows its label, names itself and has no tooltip", async ({
   page,
 }) => {
   const state = newState();
@@ -1020,26 +1020,22 @@ test("the toolbar action shows its label, names itself and shows a tooltip", asy
 
   const button = terminalButton(page);
   // JUS-261: icon + visible label, while the aria-label stays the accessible
-  // name and the described-by hint stays the tooltip.
+  // name. JUS-268: the visible label made the hover/focus tooltip redundant,
+  // so the button no longer carries a description node at all.
   await expect(button.locator(".fm-btn-label")).toHaveText("Terminal");
   await expect(button.locator(".fm-btn-label")).toBeVisible();
   await expect(button).toHaveAttribute("aria-label", "Open terminal here");
-  const describedBy = await button.getAttribute("aria-describedby");
-  expect(describedBy).toBeTruthy();
-  // Per-instance id, never the old shared constant.
-  expect(describedBy).not.toBe("fm-terminal-hint");
-  const hint = page.locator(`[id="${describedBy}"]`);
-  await expect(hint).toHaveAttribute("role", "tooltip");
-  await expect(hint).toHaveText(
-    "Open a host shell in this folder in the floating terminal window.",
-  );
+  await expect(button).not.toHaveAttribute("aria-describedby", /.+/);
+  await expect(page.locator(".fm-terminal-hint")).toHaveCount(0);
 
+  const toolbar = page.locator(".fm-toolbar");
   await button.hover();
-  await expect(hint).toHaveCSS("opacity", "1");
+  await expect(toolbar.getByRole("tooltip")).toHaveCount(0);
   await page.mouse.move(0, 0);
-  await expect(hint).toHaveCSS("opacity", "0");
   await button.focus();
-  await expect(hint).toHaveCSS("opacity", "1");
+  await expect(button).toBeFocused();
+  await expect(toolbar.getByRole("tooltip")).toHaveCount(0);
+  await expect(toolbar.getByText("Open a host shell", { exact: false })).toHaveCount(0);
 });
 
 test("the terminal action follows File operations at every toolbar width", async ({

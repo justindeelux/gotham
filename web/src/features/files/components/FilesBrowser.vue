@@ -40,7 +40,7 @@ import {
   NSelect,
   useMessage,
 } from "naive-ui";
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
 import { useAuthStore } from "@/features/auth";
@@ -2259,10 +2259,6 @@ const terminalTarget = computed<string | null>(() => {
 /** canOpenTerminal is the single gate for the toolbar and both menus. */
 const canOpenTerminal = computed<boolean>(() => terminalTarget.value !== null);
 
-/** terminalHintId is unique per mounted browser, so aria-describedby cannot
- *  resolve to another instance's tooltip (JUS-248 r2). */
-const terminalHintId = useId();
-
 /** terminalOpening is the shared store's per-target busy/settle state. */
 const terminalOpening = computed<boolean>(() => {
   if (terminalTarget.value === null || files.rootName === "") {
@@ -2889,8 +2885,8 @@ function onFolderMenu(key: string): void {
             </NButton>
           </NDropdown>
           <!-- JUS-261: the terminal action sits directly after File operations
-               and carries a visible label. Same platform-operator gate,
-               single-flight guard and hover/focus hint as before (JUS-248). -->
+               and carries a visible label. Same platform-operator gate and
+               single-flight guard as before (JUS-248). -->
           <span v-if="canOpenTerminal" class="fm-terminal-action-wrap">
             <NButton
               size="small"
@@ -2898,7 +2894,6 @@ function onFolderMenu(key: string): void {
               :loading="terminalOpening || terminalRequesting"
               :aria-busy="terminalOpening || terminalRequesting"
               :aria-label="$t('files.terminal.openHere')"
-              :aria-describedby="terminalHintId"
               @click="openTerminalHere()"
             >
               <template #icon>
@@ -2906,9 +2901,6 @@ function onFolderMenu(key: string): void {
               </template>
               <span class="fm-btn-label">{{ $t("files.terminal.label") }}</span>
             </NButton>
-            <span :id="terminalHintId" class="fm-terminal-hint" role="tooltip">
-              {{ $t("files.terminal.openHereHint") }}
-            </span>
           </span>
           <span v-if="files.hasClipboard" class="small muted clipboard-hint">
             {{ files.clipboardMode === "cut" ? $t("files.clipboard.cut") : $t("files.clipboard.copy") }}
@@ -3985,40 +3977,11 @@ function onFolderMenu(key: string): void {
   flex: 0 0 auto;
 }
 
-/* Hover/focus hint for the terminal action (JUS-248 r1). It is a tooltip, not
-   the accessible name: the button keeps its translated aria-label and points
-   here through aria-describedby. */
+/* JUS-268: the terminal action keeps only its layout wrapper — the hover/focus
+   tooltip was dropped once the button gained a visible label. */
 .fm-terminal-action-wrap {
-  position: relative;
   display: inline-flex;
   align-items: center;
-}
-
-.fm-terminal-hint {
-  display: none;
-  position: absolute;
-  top: calc(100% + var(--space-2));
-  right: 0;
-  z-index: 6;
-  width: max-content;
-  max-width: 16rem;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--fg-2);
-  font-size: var(--text-xs);
-  line-height: 1.35;
-  white-space: normal;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-}
-
-.fm-terminal-action-wrap:hover .fm-terminal-hint,
-.fm-terminal-action-wrap:focus-within .fm-terminal-hint {
-  display: block;
-  opacity: 1;
 }
 
 /* JUS-153: the right-hand cluster now follows the per-root actions directly

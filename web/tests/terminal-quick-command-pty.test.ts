@@ -660,7 +660,7 @@ describe.skipIf(!hasPty || zshPath === "")("real PTY: zsh", () => {
     const session = new ShellSession(
       [zshPath, "-i"],
       [command("printf 'ZSH_%s\\n' OK", "gs")],
-      { ZDOTDIR: zdotdir, HOME: dir },
+      { ZDOTDIR: zdotdir, HOME: dir, skip_global_compinit: "1" },
     );
     try {
       await session.waitForPrompt();
@@ -686,7 +686,7 @@ describe.skipIf(!hasPty || zshPath === "")("real PTY: zsh", () => {
     const session = new ShellSession(
       [zshPath, "-i"],
       [command("printf 'ZLE_%s\\n' OK", "gs")],
-      { ZDOTDIR: zdotdir, HOME: dir },
+      { ZDOTDIR: zdotdir, HOME: dir, skip_global_compinit: "1" },
       true,
     );
     try {

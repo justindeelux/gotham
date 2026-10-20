@@ -21,6 +21,7 @@ import {
   Settings,
   ShieldCheck,
   Square,
+  Terminal as TerminalIcon,
   Trash2,
   Users,
 } from "@lucide/vue";
@@ -49,7 +50,8 @@ export type IconName =
   | "chevron-down"
   | "history"
   | "play"
-  | "stop";
+  | "stop"
+  | "terminal";
 
 interface Props {
   name: IconName;
@@ -79,6 +81,7 @@ const components: Record<IconName, Component> = {
   history: History,
   play: Play,
   stop: Square,
+  terminal: TerminalIcon,
 };
 
 const component = computed<Component>(() => components[props.name]);

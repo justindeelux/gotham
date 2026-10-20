@@ -7,7 +7,7 @@ import { TaskProgressCards } from "@/features/tasks";
 import FilesEditor from "@/features/files/components/FilesEditor.vue";
 import ServerRail from "@/features/servers/components/ServerRail.vue";
 import { useServersStore } from "@/features/servers";
-import { TerminalWindow } from "@/features/terminal";
+import { TerminalPageDock, TerminalWindow } from "@/features/terminal";
 import AppSidebar from "./AppSidebar.vue";
 import AppTopbar from "./AppTopbar.vue";
 import { provideMobileNav } from "./useMobileNav";
@@ -82,6 +82,11 @@ const widePage = computed(() => route.meta.wide === true);
          collapses with v-show, so every live PTY survives navigation, tab
          switches and minimize/restore. -->
     <TerminalWindow />
+
+    <!-- JUS-246: page sessions outlive their route. The dock shows a paused
+         card for every page tab without a mounted pane, so a live shell is
+         never invisible, unreachable or unclosable. -->
+    <TerminalPageDock />
   </div>
 </template>
 

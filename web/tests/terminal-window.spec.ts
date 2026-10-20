@@ -641,18 +641,17 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
   expect(state.deletes).toBe(0);
   expect(state.sessions.every((item) => item.closeFrames === 0)).toBe(true);
 
-  // A single tab's close button is a real keyboard button with a name and a
-  // WCAG-sized target.
+  // The tab strip's close control is a pointer target inside the tab (the
+  // tablist owns only role=tab elements) with a WCAG-sized hit box; keyboard
+  // users close the focused tab with Delete, which the tab announces.
   const closeButton = page
     .locator(".term-tab", { hasText: "prod-01 · one" })
     .locator(".term-tab-close");
-  await expect(closeButton).toHaveAttribute("aria-label", "Close prod-01 · one");
+  await expect(closeButton).toHaveAttribute("aria-hidden", "true");
   const closeBox = await closeButton.boundingBox();
   expect(closeBox?.width ?? 0).toBeGreaterThanOrEqual(24);
   expect(closeBox?.height ?? 0).toBeGreaterThanOrEqual(24);
-  // Keyboard path: focus the real button and activate it with Enter.
-  await closeButton.focus();
-  await page.keyboard.press("Enter");
+  await closeButton.click();
   await expect(dialog).toContainText("Close this terminal?");
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
   await expect(page.locator(".term-tab")).toHaveCount(1);
@@ -677,6 +676,13 @@ test("close confirmation cancel/confirm releases only the intended sessions", as
     .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
     .toBe(`term-tab-${remaining}`);
 
+  // Keyboard path: Delete on the focused tab opens the same confirmation.
+  await page.locator(".term-tab-name").first().focus();
+  await page.keyboard.press("Delete");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Keep terminals" }).click();
+  await expect(page.locator(".term-tab")).toHaveCount(1);
+
   // Closing the window confirms the remaining session and removes the badge.
   await page.locator(".term-window-close").click();
   await dialog.getByRole("button", { name: "Close terminal", exact: true }).click();
@@ -693,7 +699,7 @@ test("the window moves, resizes and stays bounded at desktop and phone sizes", a
   await mockTerminalApi(page, state);
   await page.setViewportSize({ width: 1280, height: 800 });
   await seedApp(page, "/dashboard");
-  await openWindow(page, "app");
+  await openWindow(page, "a/deep/working/directory");
   await expect(page.locator(".term-window")).toBeVisible();
   await expectInsideViewport(page, { width: 1280, height: 800 });
 
@@ -732,10 +738,20 @@ test("the window moves, resizes and stays bounded at desktop and phone sizes", a
   await page.setViewportSize({ width: 1366, height: 800 });
   await expectInsideViewport(page, { width: 1366, height: 800 });
 
-  // 390px phone: the window fills the width within its margins and the
+  // 390px phone: the window fills the width within its margins, the meta row
+  // keeps the working directory readable instead of clipping it, and the
   // minimized session is restorable from the mobile rail drawer.
   await page.setViewportSize({ width: 390, height: 844 });
   await expectInsideViewport(page, { width: 390, height: 844 });
+  const cwdValue = page.locator(
+    ".term-window .term-surface:visible .term-cwd .mono",
+  );
+  await expect(cwdValue).toBeVisible();
+  const cwdOverflow = await cwdValue.evaluate((element) => {
+    const node = element as HTMLElement;
+    return node.scrollWidth - node.clientWidth;
+  });
+  expect(cwdOverflow).toBeLessThanOrEqual(1);
   await page.locator(".term-window-min").click();
   await expect(page.locator(".term-window")).toBeHidden();
   await page.locator(".rail-toggle").click();
@@ -867,8 +883,12 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
   await page.locator(".term-shortcuts-btn").click();
   const shortcuts = page.locator(".term-shortcuts");
   await expect(shortcuts).toBeVisible();
-  await expect(shortcuts).toContainText("Ctrl+Shift+Escape");
+  await expect(shortcuts).toContainText("Ctrl+Shift+E");
   await expect(shortcuts).toContainText("Alt+Shift+W");
+  // WCAG 2.5.8: the shortcuts trigger is at least 24x24.
+  const shortcutsBox = await page.locator(".term-shortcuts-btn").boundingBox();
+  expect(shortcutsBox?.width ?? 0).toBeGreaterThanOrEqual(24);
+  expect(shortcutsBox?.height ?? 0).toBeGreaterThanOrEqual(24);
   // Toggle the popover closed deterministically (Escape focus handling differs
   // across platforms), then drive the real xterm input textarea.
   await page.locator(".term-shortcuts-btn").click();
@@ -879,12 +899,13 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
   await input.focus();
 
   // The chord pulls focus out of the shell onto the window tab.
-  await page.keyboard.press("Control+Shift+Escape");
+  await page.keyboard.press("Control+Shift+E");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.id ?? ""))
     .toBe(`term-tab-${tab.id}`);
 
-  // Alt+Shift+W works from the shell and uses the shared dialog.
+  // Inside the shell, Alt/Option chords belong to the PTY (macOptionIsMeta):
+  // they must not open the close dialog or minimize the window.
   await input.focus();
   await expect
     .poll(() =>
@@ -893,21 +914,42 @@ test("shortcuts are discoverable and the documented escape leaves xterm", async 
       ),
     )
     .toBe(true);
+  const inputBefore = state.sessions[0]!.input.length;
+  await page.keyboard.press("Alt+Shift+W");
+  await expect(page.locator(".term-close-modal")).toBeHidden();
+  await expect(page.locator(".term-window")).toBeVisible();
+  await expect
+    .poll(() => state.sessions[0]!.input.length)
+    .toBeGreaterThan(inputBefore);
+  expect(state.sessions[0]!.input).toContain("\u001b");
+
+  // The window chords are documented for the window chrome. Focus the tab and
+  // use Alt+Shift+W: the shared dialog opens; cancel keeps the session.
+  await page.locator(`#term-tab-${tab.id}`).focus();
   await page.keyboard.press("Alt+Shift+W");
   const dialog = page.locator(".term-close-modal");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Keep terminals" }).click();
   await expect(page.locator(".term-tab")).toHaveCount(1);
 
-  // Alt+M is scoped to the terminal: from page chrome it does nothing, from
-  // the shell it minimizes to the rail.
+  // Alt+M from page chrome does nothing; from the shell it types Option+M;
+  // from the window chrome it minimizes to the rail.
   await page.locator(".topbar").click();
   await page.keyboard.press("Alt+M");
   await expect(page.locator(".term-window")).toBeVisible();
-  await page.locator(".term-window .term-surface:visible .xterm-screen").click();
+  await input.focus();
+  const beforeMeta = state.sessions[0]!.input.length;
+  await page.keyboard.press("Alt+M");
+  await expect(page.locator(".term-window")).toBeVisible();
+  await expect
+    .poll(() => state.sessions[0]!.input.length)
+    .toBeGreaterThan(beforeMeta);
+  await page.locator(`#term-tab-${tab.id}`).focus();
   await page.keyboard.press("Alt+M");
   await expect(page.locator(".term-window")).toBeHidden();
   await expect(page.locator(".rail-btn--terminal")).toBeVisible();
+  await page.locator(".rail-btn--terminal").click();
+  await expect(page.locator(".term-window")).toBeVisible();
 });
 
 test("signing out confirms live shells and cancel aborts the logout", async ({

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 
 import RailIconButton from "@/features/servers/components/RailIconButton.vue";
@@ -22,6 +22,7 @@ const editorWindow = useEditorWindowStore();
 const terminal = useTerminalStore();
 const terminalWindow = useTerminalWindowStore();
 const route = useRoute();
+const router = useRouter();
 const { locale, t } = useI18n();
 
 const isDashboard = computed<boolean>(() => route.name === "dashboard");
@@ -47,16 +48,31 @@ function toggleEditor(): void {
   editorWindow.setMinimized(!editorWindow.minimized);
 }
 
-/** terminalCount is the rail badge: the number of floating terminal tabs. */
-const terminalCount = computed<number>(() => terminal.windowOpenCount);
+/** terminalCount is the rail badge: every live session, page or window. */
+const terminalCount = computed<number>(() => terminal.sessionCount);
 
-/** terminalLabel names the rail terminal button with its open-tab count. */
+/** terminalLabel names the rail terminal button with its open-session count. */
 const terminalLabel = computed<string>(() =>
-  t("terminal.rail.openWithCount", { count: terminalCount.value }),
+  terminal.windowOpenCount > 0
+    ? t("terminal.rail.openWithCount", { count: terminalCount.value })
+    : t("terminal.rail.pageWithCount", { count: terminalCount.value }),
 );
 
-/** toggleTerminal restores, raises, or minimizes the terminal window. */
+/**
+ * toggleTerminal restores, raises, or minimizes the terminal window. With
+ * page-only sessions there is no window to toggle, so the rail resumes the
+ * owning page instead of hiding a live shell.
+ */
 function toggleTerminal(): void {
+  if (terminal.windowOpenCount === 0) {
+    const pageTab = terminal.pageTabs[0];
+    if (pageTab?.sourcePath) {
+      void router.push(pageTab.sourcePath);
+      return;
+    }
+    void router.push({ name: "terminal" });
+    return;
+  }
   if (terminalWindow.minimized) {
     terminalWindow.setMinimized(false);
     terminalWindow.raise();

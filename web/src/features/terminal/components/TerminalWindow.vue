@@ -413,10 +413,12 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
 
 /**
  * onGlobalKeydown owns the terminal-wide shortcuts. They deliberately avoid
- * Alt+W (the editor's close-tab binding) and are scoped to focus inside a
- * terminal surface/window, so typing Option+M in a page input is never eaten.
- * Alt+Shift+W closes the window; Alt+M minimizes it; both go through the
- * dialog/document path and are listed in the surface shortcuts popover.
+ * Alt+W (the editor's close-tab binding) and are scoped to focus inside the
+ * window/page chrome, never inside the live shell: readline, vim and tmux
+ * need their Meta bindings, and xterm's `macOptionIsMeta` turns Option into
+ * Meta instead of a composed character. Alt+Shift+W closes the window; Alt+M
+ * minimizes it; both go through the dialog/document path and are listed in
+ * the surface shortcuts popover.
  */
 function onGlobalKeydown(event: KeyboardEvent): void {
   if (
@@ -432,6 +434,11 @@ function onGlobalKeydown(event: KeyboardEvent): void {
     return;
   }
   const active = document.activeElement;
+  // The xterm textarea (and its helper nodes) owns Alt/Option chords while
+  // the shell has focus, so vim/tmux Meta bindings reach the PTY.
+  if (active instanceof Element && active.closest(".xterm") !== null) {
+    return;
+  }
   const inWindow =
     active instanceof Element && active.closest(".term-window") !== null;
   const inTerminal =
@@ -466,7 +473,13 @@ function onConfirmed(): void {
       terminal.focus(pageTab.id);
       return;
     }
-    document.querySelector<HTMLElement>(".rail .rail-btn")?.focus();
+    // Nothing terminal is left: prefer the dock/rail control if one still
+    // renders instead of an arbitrary rail tile.
+    const fallback =
+      document.querySelector<HTMLElement>(".term-dock-resume") ??
+      document.querySelector<HTMLElement>(".rail-btn--terminal") ??
+      document.querySelector<HTMLElement>(".rail .rail-btn");
+    fallback?.focus();
   });
 }
 
@@ -549,6 +562,10 @@ defineExpose({ restoreWindow });
           :class="{ 'is-active': tab.id === activeTab?.id }"
           role="presentation"
         >
+          <!-- The tablist owns only role=tab elements: the close control is a
+               non-interactive span inside the tab (like the file tabs), so
+               aria-required-children stays valid. Keyboard users close the
+               focused tab with Delete, which the tab announces. -->
           <button
             :id="`term-tab-${tab.id}`"
             type="button"
@@ -563,17 +580,15 @@ defineExpose({ restoreWindow });
             @keydown="onTabKeydown($event, index)"
           >
             <span class="term-tab-status" :class="`is-${tab.status}`" aria-hidden="true" />
-            {{ tab.title }}
-          </button>
-          <!-- A real button: Enter/Space closes, its label names the tab, and
-               Delete on the focused tab is the alternative keyboard path. -->
-          <button
-            type="button"
-            class="term-tab-close"
-            :aria-label="t('terminal.window.closeTab', { title: tab.title })"
-            @click.stop="requestCloseTab(tab.id)"
-          >
-            <X :size="12" :stroke-width="2" aria-hidden="true" />
+            <span class="term-tab-label">{{ tab.title }}</span>
+            <span
+              class="term-tab-close"
+              aria-hidden="true"
+              :title="t('terminal.window.closeTab', { title: tab.title })"
+              @click.stop="requestCloseTab(tab.id)"
+            >
+              <X :size="12" :stroke-width="2" aria-hidden="true" />
+            </span>
           </button>
         </div>
       </div>
@@ -741,8 +756,13 @@ defineExpose({ restoreWindow });
   font-size: var(--text-xs);
   cursor: pointer;
   white-space: nowrap;
+}
+
+.term-tab-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .term-tab-name:focus-visible {
@@ -778,21 +798,17 @@ defineExpose({ restoreWindow });
 
 .term-tab-close {
   display: grid;
+  flex: 0 0 auto;
   place-items: center;
   width: var(--space-6);
   height: var(--space-6);
-  margin-right: var(--space-1);
+  margin-right: calc(-1 * var(--space-1));
   padding: 0;
   border: 0;
   background: transparent;
   border-radius: var(--radius-sm);
   color: var(--meta);
   cursor: pointer;
-}
-
-.term-tab-close:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
 }
 
 .term-tab-close:hover {

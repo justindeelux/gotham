@@ -399,8 +399,45 @@ describe("terminal store sessions", () => {
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
   });
 
-  it("queues a surface that mounted before the runtime existed", async () => {
+  it("tracks the page source and pane ownership for the paused-session dock", async () => {
     const terminal = useTerminalStore();
+    const tab = await terminal.openPageSession({
+      ...options(),
+      sourcePath: "/terminal?server=server-1",
+    });
+    expect(tab.sourcePath).toBe("/terminal?server=server-1");
+    expect(terminal.sessionCount).toBe(1);
+    expect(terminal.isDisplayed(tab.id)).toBe(false);
+
+    const container = document.createElement("div");
+    document.body.append(container);
+    terminal.attach(tab.id, container);
+    expect(terminal.isDisplayed(tab.id)).toBe(true);
+
+    // A stale unmount from a different container must not mark the live pane
+    // as paused; the store compares container identity.
+    terminal.detach(tab.id, document.createElement("div"));
+    expect(terminal.isDisplayed(tab.id)).toBe(true);
+    terminal.detach(tab.id, container);
+    expect(terminal.isDisplayed(tab.id)).toBe(false);
+
+    // A second entry point reusing the same shell moves the resume target.
+    await terminal.openPageSession({
+      ...options(),
+      sourcePath: "/servers/server-1?tab=terminal",
+    });
+    expect(tab.sourcePath).toBe("/servers/server-1?tab=terminal");
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    const windowTab = await terminal.openWindowSession(options("two"));
+    expect(terminal.sessionCount).toBe(2);
+    expect(terminal.windowOpenCount).toBe(1);
+    terminal.closeTabs([tab.id, windowTab.id]);
+    expect(terminal.sessionCount).toBe(0);
+    expect(terminal.isDisplayed(tab.id)).toBe(false);
+  });
+
+  it("queues a surface that mounted before the runtime existed", async () => {    const terminal = useTerminalStore();
     const pending = terminal.openPageSession(options());
     const tab = terminal.findTabForTarget(options());
     expect(tab).not.toBeNull();

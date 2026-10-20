@@ -331,6 +331,10 @@ export class TerminalRuntime {
       // Remote output is untrusted: keep proposed APIs (and any future
       // extension surface) off, and never interpret PTY bytes as markup.
       allowProposedApi: false,
+      // On macOS, Option is a Meta key for the shell (readline/vim/tmux), not
+      // a character composer. Without this, Option+b/f/d type ∫ƒ∂ into the
+      // prompt instead of sending ESC-prefixed bindings.
+      macOptionIsMeta: true,
       // xterm's accessible DOM (live region + aria labels) is on by default
       // for keyboard and screen-reader operation.
       screenReaderMode: true,

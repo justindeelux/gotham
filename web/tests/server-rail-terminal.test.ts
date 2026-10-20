@@ -23,8 +23,12 @@ const { default: ServerRail } = await import(
   "../src/features/servers/components/ServerRail.vue"
 );
 
-/** makeTerminal builds one minimal window tab for the badge count. */
-function makeTerminal(id: string): TerminalTab {
+/** makeTerminal builds one minimal terminal tab for the badge count. */
+function makeTerminal(
+  id: string,
+  mode: "page" | "window" = "window",
+  sourcePath = "",
+): TerminalTab {
   return {
     id,
     serverId: "server-1",
@@ -33,7 +37,7 @@ function makeTerminal(id: string): TerminalTab {
     root: "volumes",
     cwd: "app",
     title: `prod-01 · app ${id}`,
-    mode: "window",
+    mode,
     sessionId: `session-${id}`,
     status: "connected",
     cols: 120,
@@ -44,6 +48,7 @@ function makeTerminal(id: string): TerminalTab {
     exitSignal: "",
     errorCode: null,
     createdAt: 0,
+    sourcePath,
   };
 }
 
@@ -94,14 +99,18 @@ beforeEach(() => {
 });
 
 /** mountRail mounts the rail with the given terminal/editor tab counts. */
-async function mountRail(terminalCount: number, editorCount = 0) {
+async function mountRail(
+  terminalCount: number,
+  editorCount = 0,
+  mode: "page" | "window" = "window",
+) {
   const router = railRouter();
   router.push("/");
   await router.isReady();
   useServersStore().servers = [];
   const terminal = useTerminalStore();
   terminal.tabs = Array.from({ length: terminalCount }, (_, index) =>
-    makeTerminal(`t${index}`),
+    makeTerminal(`t${index}`, mode, mode === "page" ? `/servers/server-1` : ""),
   );
   const editor = useEditorStore();
   editor.tabs = Array.from({ length: editorCount }, (_, index) =>
@@ -114,7 +123,7 @@ async function mountRail(terminalCount: number, editorCount = 0) {
     global: { plugins: [router, i18n] },
   });
   await flushPromises();
-  return { wrapper, windowStore };
+  return { wrapper, windowStore, router };
 }
 
 describe("ServerRail terminal icon (JUS-245)", () => {
@@ -147,6 +156,32 @@ describe("ServerRail terminal icon (JUS-245)", () => {
     expect(windowStore.minimized).toBe(false);
     await wrapper.find(".rail-btn--terminal").trigger("click");
     expect(windowStore.minimized).toBe(true);
+    wrapper.unmount();
+  });
+
+  it("counts page-only sessions and resumes their source page (JUS-246)", async () => {
+    const { wrapper, router } = await mountRail(1, 0, "page");
+    const button = wrapper.find(".rail-btn--terminal");
+    expect(button.exists()).toBe(true);
+    expect(button.attributes("aria-label")).toBe("Page terminals, 1 open");
+    expect(button.find(".rail-badge").text()).toBe("1");
+
+    // There is no window to toggle: the click returns to the page that owns
+    // the paused session instead of hiding a live shell.
+    await button.trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe("/servers/server-1");
+    wrapper.unmount();
+  });
+
+  it("counts page and window sessions together", async () => {
+    const { wrapper } = await mountRail(2);
+    useTerminalStore().tabs = [
+      ...useTerminalStore().tabs,
+      makeTerminal("page-1", "page", "/terminal?server=server-1"),
+    ];
+    await flushPromises();
+    expect(wrapper.find(".rail-btn--terminal .rail-badge").text()).toBe("3");
     wrapper.unmount();
   });
 });

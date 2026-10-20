@@ -90,7 +90,14 @@ describe("navSections", () => {
     const flagged = new Set(
       items.filter((item) => item.adminOnly).map((item) => item.key),
     );
-    expect(flagged).toEqual(new Set(["files", "domains", "instance", "updates"]));
+    expect(flagged).toEqual(
+      new Set(["files", "terminal", "domains", "instance", "updates"]),
+    );
+  });
+
+  it("puts Terminal directly below File manager (JUS-246)", () => {
+    const keys = navSections.flatMap((section) => section.items.map((item) => item.key));
+    expect(keys.indexOf("terminal")).toBe(keys.indexOf("files") + 1);
   });
 
   it("drops groups whose items are all hidden from non-admins (JUS-197)", () => {

@@ -79,7 +79,7 @@ function closeDetached(): void {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  max-width: 520px;
+  max-width: min(33rem, 100%);
   margin: auto;
   padding: var(--space-6);
   text-align: center;

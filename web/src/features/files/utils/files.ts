@@ -443,6 +443,55 @@ export function joinPath(base: string, name: string): string {
   return base === "" ? name : `${base}/${name}`;
 }
 
+/**
+ * TerminalDirectoryContext lets the terminal helper consult the current
+ * listing (and the root's absolute path) to identify a symlink's directory
+ * target. Omitting it keeps symlinks ineligible.
+ */
+export interface TerminalDirectoryContext {
+  entries?: FilesEntry[];
+  rootPath?: string;
+}
+
+/**
+ * terminalDirectoryFor resolves the folder an "Open terminal here" action
+ * targets (JUS-248): the folder on screen for the empty-space/current-directory
+ * case (`entry === null`), a directory row's own folder, or a symlink row whose
+ * target the current listing identifies as a directory (`context.entries`).
+ * Files, special entries and unidentifiable symlinks return null and never
+ * masquerade as a directory.
+ *
+ * The result is a root-relative path handed verbatim to the agent's cwd
+ * resolver. It is never quoted, escaped or interpolated into a shell command.
+ * For a symlink it is the LINK path, so the agent follows the link and still
+ * refuses an escape with "invalid working directory".
+ */
+export function terminalDirectoryFor(
+  entry: FilesEntry | null,
+  currentPath: string,
+  context: TerminalDirectoryContext = {},
+): string | null {
+  if (entry === null) {
+    return currentPath;
+  }
+  if (entry.kind === "directory") {
+    return joinPath(currentPath, entry.name);
+  }
+  if (
+    entry.kind === "symlink" &&
+    context.entries !== undefined &&
+    symlinkTargetsDirectory(
+      entry,
+      currentPath,
+      context.entries,
+      context.rootPath ?? "",
+    )
+  ) {
+    return joinPath(currentPath, entry.name);
+  }
+  return null;
+}
+
 /** parentPath returns the enclosing relative path ("" at the root). */
 export function parentPath(path: string): string {
   const slash = path.lastIndexOf("/");
@@ -539,6 +588,50 @@ function resolvePathSegments(base: string[], target: string): string | null {
     parts.push(segment);
   }
   return parts.join("/");
+}
+
+/**
+ * symlinkTargetsDirectory reports whether the CURRENT listing identifies a
+ * symlink's target as a directory (JUS-248 fix round 1): the target resolves
+ * inside the root and is the folder on screen, the root itself, or a direct
+ * child entry listed as a directory. Anything else — a target outside the
+ * listing, a file, a broken link, a chained symlink — stays unproven, so the
+ * terminal action is disabled rather than guessing.
+ */
+export function symlinkTargetsDirectory(
+  entry: FilesEntry,
+  currentDir: string,
+  entries: FilesEntry[],
+  rootPath = "",
+): boolean {
+  if (entry.kind !== "symlink" || !entry.symlink_target) {
+    return false;
+  }
+  const target = resolveSymlinkTarget(
+    currentDir,
+    entry.name,
+    entry.symlink_target,
+    rootPath,
+  );
+  if (target === null) {
+    return false;
+  }
+  // The root and the folder on screen are known directories.
+  if (target === "" || target === currentDir) {
+    return true;
+  }
+  const prefix = currentDir === "" ? "" : `${currentDir}/`;
+  if (!target.startsWith(prefix)) {
+    return false;
+  }
+  const relative = target.slice(prefix.length);
+  // A direct child is the only target the listing can vouch for.
+  if (relative === "" || relative.includes("/")) {
+    return false;
+  }
+  return entries.some(
+    (item) => item.name === relative && item.kind === "directory",
+  );
 }
 
 /** timestampOf parses modified_at into epoch millis (NaN when unknown). */

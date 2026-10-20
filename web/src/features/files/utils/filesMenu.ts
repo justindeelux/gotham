@@ -15,6 +15,7 @@ import {
   Recycle,
   RefreshCw,
   Scissors,
+  Terminal,
   Trash2,
   Upload,
 } from "@lucide/vue";
@@ -44,17 +45,37 @@ export interface FilesMenuContext {
    *  opens (JUS-132), or null when the target cannot be browsed; the action is
    *  offered only for a symlink with a browsable target. Ignored for other rows. */
   symlinkTargetPath?: string | null;
-  t: (_key: string) => string;
+  /** canOpenTerminal is the platform-operator gate for "Open terminal here"
+   *  (JUS-248). It is deliberately independent of the file role and root
+   *  writability: a host shell is administration, not a file action, so read
+   *  access alone must never expose it. */
+  canOpenTerminal: boolean;
+  /** symlinkTargetDirectory is true only when the current listing identifies a
+   *  symlink's target as a directory. A symlink without that proof keeps the
+   *  action visible but disabled, with an explanatory hint. Ignored for other
+   *  rows. */
+  symlinkTargetDirectory?: boolean;
+  t: (_key: string, _named?: Record<string, unknown>) => string;
 }
 
-/** item builds one menu row with the menuitem role NDropdown needs. */
+/** item builds one menu row with the menuitem role NDropdown needs. A `hint`
+ *  becomes the row's native tooltip, used only to explain a disabled action. */
 function item(
   label: string,
   key: string,
   disabled = false,
   icon?: () => VNode,
+  hint?: string,
 ): FilesMenuItem {
-  return { label, key, disabled, icon, props: { role: "menuitem" } };
+  return {
+    label,
+    key,
+    disabled,
+    icon,
+    props: hint
+      ? { role: "menuitem", title: hint }
+      : { role: "menuitem" },
+  };
 }
 
 /** menuIcon renders one lucide icon for a dropdown option, matching the sort menu. */
@@ -83,6 +104,19 @@ export function rowMenuOptions(
     options.push(
       item(t("files.menu.openTab"), "open-tab", false, menuIcon(ExternalLink)),
     );
+    // A real directory can receive a shell in that exact folder (JUS-248). The
+    // action is platform-operator only; files and special entries never offer
+    // it, and a symlink only when its listing target is a known directory.
+    if (ctx.canOpenTerminal) {
+      options.push(
+        item(
+          t("files.terminal.openIn", { name: entry.name }),
+          "open-terminal",
+          false,
+          menuIcon(Terminal),
+        ),
+      );
+    }
   } else if (entry.kind === "file") {
     // Images open in the viewer (JUS-204), the row's default action, so the
     // menu leads with View exactly where folders lead with Open.
@@ -117,6 +151,23 @@ export function rowMenuOptions(
         "go-target",
         false,
         menuIcon(ChevronRight),
+      ),
+    );
+  }
+  // A symlink row can receive a shell only when the current listing proves the
+  // target is a directory. Without that proof the item stays visible (for the
+  // operator) but disabled, with a native hint explaining why (JUS-248 r1).
+  if (entry.kind === "symlink" && ctx.canOpenTerminal) {
+    const knownDirectory = ctx.symlinkTargetDirectory === true;
+    options.push(
+      item(
+        t("files.terminal.openIn", { name: entry.name }),
+        "open-terminal",
+        !knownDirectory,
+        menuIcon(Terminal),
+        knownDirectory
+          ? undefined
+          : t("files.terminal.symlinkTargetUnknown"),
       ),
     );
   }
@@ -200,6 +251,19 @@ export function folderMenuOptions(ctx: FilesMenuContext): FilesMenuItem[] {
       menuIcon(ClipboardPaste),
     ),
     item(t("files.actions.upload"), "upload", !canWrite, menuIcon(Upload)),
+    // "Open terminal here" targets the folder on screen (JUS-248). It is
+    // operator-only and stays available on a read-only root: a shell is not a
+    // write action on the file API.
+    ...(ctx.canOpenTerminal
+      ? [
+          item(
+            t("files.terminal.openHere"),
+            "open-terminal",
+            false,
+            menuIcon(Terminal),
+          ),
+        ]
+      : []),
     item(t("files.menu.recycleBin"), "recycle-bin", false, menuIcon(Recycle)),
     item(t("files.browser.refresh"), "refresh", false, menuIcon(RefreshCw)),
   ];

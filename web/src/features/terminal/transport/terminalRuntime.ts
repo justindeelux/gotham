@@ -8,7 +8,10 @@ import {
 } from "@/features/terminal/transport/frames";
 import type { TerminalErrorCode } from "@/features/terminal/api/terminal";
 import type { TerminalSessionInfo } from "@/features/terminal/schemas/terminal";
-import { terminalWebSocketUrl } from "@/features/terminal/api/terminal";
+import {
+  terminalStreamFailureCode,
+  terminalWebSocketUrl,
+} from "@/features/terminal/api/terminal";
 import {
   DEFAULT_TERMINAL_THEME,
   type TerminalThemeName,
@@ -47,7 +50,6 @@ export interface TerminalStatePatch {
   status?: TerminalStatus;
   exitCode?: number;
   exitSignal?: string;
-  errorMessage?: string;
   errorCode?: TerminalErrorCode | null;
   shell?: string;
   serviceUser?: string;
@@ -196,7 +198,7 @@ export class TerminalRuntime {
       this.mount(modules);
       this.openSocket();
     } catch {
-      this.fail("", "generic");
+      this.fail("generic");
     }
   }
 
@@ -377,7 +379,7 @@ export class TerminalRuntime {
   private openSocket(): void {
     const token = this.options.getToken();
     if (!token) {
-      this.fail("", "auth");
+      this.fail("auth");
       return;
     }
     const url = terminalWebSocketUrl(this.options.session.websocket_path);
@@ -388,7 +390,7 @@ export class TerminalRuntime {
         `gotham.token.${token}`,
       ]);
     } catch {
-      this.fail("", "generic");
+      this.fail("generic");
       return;
     }
     socket.binaryType = "arraybuffer";
@@ -480,9 +482,12 @@ export class TerminalRuntime {
         this.ended = true;
         this.stopHeartbeat();
         this.clearBannerTimer();
-        // The server's message is already a bounded, localized-agnostic
-        // diagnostic; the catalog supplies the title and generic fallback.
-        this.setStatus("error", { errorMessage: frame.message });
+        // Never retain the server's text: it can carry host detail. Only the
+        // translatable class survives; an unknown phrase falls back to generic
+        // (JUS-248 r1/r2).
+        this.setStatus("error", {
+          errorCode: terminalStreamFailureCode(frame.message) ?? "generic",
+        });
         return;
       case "ping":
         return;
@@ -490,7 +495,7 @@ export class TerminalRuntime {
         this.ended = true;
         this.stopHeartbeat();
         this.clearBannerTimer();
-        this.setStatus("error", { errorCode: "generic", errorMessage: "" });
+        this.setStatus("error", { errorCode: "generic" });
         return;
     }
   }
@@ -623,12 +628,12 @@ export class TerminalRuntime {
   }
 
   /** fail ends a session that never reached `opened`. */
-  private fail(message: string, code: TerminalErrorCode): void {
+  private fail(code: TerminalErrorCode): void {
     if (this.disposed || this.ended) {
       return;
     }
     this.ended = true;
     this.stopHeartbeat();
-    this.setStatus("error", { errorCode: code, errorMessage: message });
+    this.setStatus("error", { errorCode: code });
   }
 }

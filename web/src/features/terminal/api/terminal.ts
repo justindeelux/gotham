@@ -22,6 +22,9 @@ export type TerminalErrorCode =
   | "unsupported"
   | "unavailable"
   | "network"
+  | "cwdInvalid"
+  | "cwdMissing"
+  | "cwdUnreadable"
   | "generic";
 
 /** TerminalFailure is a bounded failure a tab can render. */
@@ -35,6 +38,7 @@ export interface TerminalFailure {
 export async function createTerminalSession(
   serverId: string,
   input: CreateTerminalInput,
+  signal?: AbortSignal,
 ): Promise<TerminalSessionInfo> {
   const response = await http.post<unknown>(
     `/servers/${encodeURIComponent(serverId)}/terminal/sessions`,
@@ -45,6 +49,7 @@ export async function createTerminalSession(
       cols: input.cols,
       rows: input.rows,
     },
+    signal ? { signal } : undefined,
   );
   return terminalSessionSchema.parse(response.data);
 }
@@ -98,6 +103,13 @@ export function terminalFailure(error: unknown): TerminalFailure {
   const status = typeof api?.status === "number" ? api.status : null;
   const message = typeof api?.message === "string" ? api.message : "";
   switch (status) {
+    case 400:
+      // A cwd the control plane refuses before the shell starts (absolute,
+      // traversal, over-long). The agent's own refusal arrives later as an
+      // error frame and is classified by terminalStreamFailureCode.
+      return isInvalidWorkingDirectory(message)
+        ? { code: "cwdInvalid", message }
+        : { code: "generic", message };
     case 401:
       return { code: "auth", message };
     case 403:
@@ -112,5 +124,43 @@ export function terminalFailure(error: unknown): TerminalFailure {
       return { code: "unavailable", message };
     default:
       return { code: status === null ? "network" : "generic", message };
+  }
+}
+
+/** isInvalidWorkingDirectory recognises the contract's stable cwd phrase. */
+function isInvalidWorkingDirectory(message: string): boolean {
+  return message.toLowerCase().includes("invalid working directory");
+}
+
+/**
+ * terminalStreamFailureCode maps the control plane's bounded error-frame text
+ * onto a translatable class (JUS-248). The relay deliberately never sends a
+ * host path, so these exact phrases are the contract surface; an unknown text
+ * stays null and the caller shows the bounded message verbatim.
+ */
+export function terminalStreamFailureCode(
+  message: string,
+): TerminalErrorCode | null {
+  const text = message.trim().toLowerCase();
+  if (isInvalidWorkingDirectory(text)) {
+    return "cwdInvalid";
+  }
+  switch (text) {
+    case "the working directory no longer exists":
+      return "cwdMissing";
+    case "the working directory is not readable":
+      return "cwdUnreadable";
+    case "the node agent does not support terminal sessions":
+      return "unsupported";
+    case "the node is running the maximum number of terminal sessions":
+      return "quota";
+    case "the node is unavailable":
+    case "the node agent is unavailable":
+    case "the node registry is unavailable":
+    case "the node did not start the shell in time":
+    case "the session expired before it started":
+      return "unavailable";
+    default:
+      return null;
   }
 }

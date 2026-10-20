@@ -38,7 +38,6 @@ function makeTab(id: string, cwd: string): TerminalTab {
     exitCode: null,
     exitSignal: "",
     errorCode: null,
-    errorMessage: "",
     createdAt: 0,
   };
 }

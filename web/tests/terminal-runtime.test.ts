@@ -361,7 +361,6 @@ describe("TerminalRuntime failure copy", () => {
     expect(context.states.at(-1)).toEqual({
       status: "error",
       errorCode: "auth",
-      errorMessage: "",
     });
   });
 
@@ -371,7 +370,6 @@ describe("TerminalRuntime failure copy", () => {
     expect(context.states.at(-1)).toEqual({
       status: "error",
       errorCode: "generic",
-      errorMessage: "",
     });
   });
 });
@@ -475,17 +473,42 @@ describe("TerminalRuntime lifecycle", () => {
     expect(context.states.filter((state) => state.status === "disconnected")).toHaveLength(1);
   });
 
-  it("surfaces a server error frame and stops the heartbeat", async () => {
+  it("surfaces a server error frame and keeps only the bounded code", async () => {
     const context = await connectedRuntime();
     context.socket.message(serverFrame(0x03, new TextEncoder().encode("agent offline")));
     expect(context.runtime.getStatus()).toBe("error");
+    // Unknown relay text is never retained: it can carry host paths.
     expect(context.states.at(-1)).toEqual({
       status: "error",
-      errorMessage: "agent offline",
+      errorCode: "generic",
     });
     context.socket.sent = [];
     vi.advanceTimersByTime(TERMINAL_HEARTBEAT_MS * 2);
     expect(context.socket.sent).toEqual([]);
+  });
+
+  it("classifies working-directory and agent error frames (JUS-248)", async () => {
+    const cases: Array<[string, string]> = [
+      ["invalid working directory", "cwdInvalid"],
+      ["the working directory no longer exists", "cwdMissing"],
+      ["the working directory is not readable", "cwdUnreadable"],
+      [
+        "the node agent does not support terminal sessions",
+        "unsupported",
+      ],
+      ["the node is running the maximum number of terminal sessions", "quota"],
+      ["the node agent is unavailable", "unavailable"],
+    ];
+    for (const [message, code] of cases) {
+      const context = await connectedRuntime();
+      context.socket.message(serverFrame(0x03, new TextEncoder().encode(message)));
+      expect(context.runtime.getStatus()).toBe("error");
+      expect(context.states.at(-1)).toEqual({
+        status: "error",
+        errorCode: code,
+      });
+      context.runtime.dispose(false);
+    }
   });
 
   it("records the exit code when the shell ends", async () => {

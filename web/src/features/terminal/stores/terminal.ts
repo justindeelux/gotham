@@ -32,6 +32,8 @@ import { i18n } from "@/shared/i18n";
  *
  *   - openPageSession({ serverId, root, cwd })  page mode, idempotent per target
  *   - openWindowSession({ serverId, root, cwd }) floating window, one new tab
+ *                                               per deliberate call; a same-target
+ *                                               create already in flight is shared
  *   - detachToWindow(tabId)                     one-way page → window transfer
  *   - requestClose([tabId])                     same confirmation path as the UI
  *
@@ -61,7 +63,6 @@ export interface TerminalTab {
   exitCode: number | null;
   exitSignal: string;
   errorCode: TerminalErrorCode | null;
-  errorMessage: string;
   createdAt: number;
 }
 
@@ -86,6 +87,15 @@ export interface TerminalCloseRequest {
 /** DEFAULT_TERMINAL_COLS/ROWS seed the create call before the renderer fits. */
 const DEFAULT_TERMINAL_COLS = 120;
 const DEFAULT_TERMINAL_ROWS = 32;
+
+/**
+ * WINDOW_SINGLE_FLIGHT_HOLD_MS keeps a window target's single-flight key (and
+ * its busy state) after a create settles, so a human-speed double-click whose
+ * second click lands after a fast create still joins the first gesture
+ * (JUS-248 fix round 2). A deliberate activation after this window opens a new
+ * independent tab, as documented.
+ */
+export const WINDOW_SINGLE_FLIGHT_HOLD_MS = 600;
 
 /** tabId returns a stable local id without requiring a secure context. */
 function tabId(): string {
@@ -131,6 +141,21 @@ export const useTerminalStore = defineStore("terminal", () => {
   const surfaces = new Map<string, HTMLElement>();
   /** inflight deduplicates rapid page opens for the same target. */
   const inflight = new Map<string, Promise<TerminalTab>>();
+  /**
+   * windowInflight keeps one window create per target. The entry survives for
+   * WINDOW_SINGLE_FLIGHT_HOLD_MS after the create settles so an accidental
+   * second click from the same gesture cannot start another shell even when
+   * the create was fast. A deliberate later activation opens a new tab.
+   */
+  const windowInflight = new Map<string, Promise<TerminalTab>>();
+  /** windowHoldTimers owns the settle windows so teardown can clear them. */
+  const windowHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** windowBusyKeys is the reactive busy state the toolbar reads per target. */
+  const windowBusyKeys = ref<Set<string>>(new Set());
+  /** controllers aborts an in-flight create when its tab/window closes. */
+  const controllers = new Map<string, AbortController>();
+  /** createTargets maps each live tab to its single-flight key and mode. */
+  const createTargets = new Map<string, { key: string; mode: TerminalMode }>();
   /** retrying guards a second explicit retry while the first is running. */
   const retrying = new Set<string>();
   /** closeResolve settles an awaited close confirmation (logout path). */
@@ -171,6 +196,45 @@ export const useTerminalStore = defineStore("terminal", () => {
     );
   }
 
+  /** releaseWindowKey drops one target's hold, timer and busy flag at once. */
+  function releaseWindowKey(key: string): void {
+    const timer = windowHoldTimers.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      windowHoldTimers.delete(key);
+    }
+    windowInflight.delete(key);
+    windowBusyKeys.value.delete(key);
+  }
+
+  /** holdWindowKey starts the short settle window once a create resolves. */
+  function holdWindowKey(
+    key: string,
+    created: Promise<TerminalTab>,
+  ): void {
+    // An abort/close released the key while the create was settling.
+    if (windowInflight.get(key) !== created) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      windowHoldTimers.delete(key);
+      if (windowInflight.get(key) === created) {
+        windowInflight.delete(key);
+        windowBusyKeys.value.delete(key);
+      }
+    }, WINDOW_SINGLE_FLIGHT_HOLD_MS);
+    windowHoldTimers.set(key, timer);
+  }
+
+  /**
+   * isWindowOpening reports whether one window target is creating or inside
+   * its settle window. The toolbar uses it to stay busy/disabled for the same
+   * target only; a different target is unaffected (JUS-248 r2).
+   */
+  function isWindowOpening(options: TerminalOpenOptions): boolean {
+    return windowBusyKeys.value.has(targetKey(options));
+  }
+
   /** applyPatch merges a runtime lifecycle patch into one tab. */
   function applyPatch(tab: TerminalTab, patch: TerminalStatePatch): void {
     if (!findTab(tab.id)) {
@@ -187,9 +251,6 @@ export const useTerminalStore = defineStore("terminal", () => {
     }
     if (patch.errorCode !== undefined) {
       tab.errorCode = patch.errorCode;
-    }
-    if (patch.errorMessage !== undefined) {
-      tab.errorMessage = patch.errorMessage;
     }
     if (patch.shell !== undefined) {
       tab.shell = patch.shell;
@@ -209,21 +270,30 @@ export const useTerminalStore = defineStore("terminal", () => {
   async function startSession(tab: TerminalTab): Promise<void> {
     tab.status = "connecting";
     tab.errorCode = null;
-    tab.errorMessage = "";
     tab.exitCode = null;
     tab.exitSignal = "";
+    const controller = new AbortController();
+    controllers.set(tab.id, controller);
     try {
       // The version lookup runs beside the HTTP create and never gates the
       // session: a hung /version only drops the banner's version tag.
       const hostSession = isHostTerminalTarget(tab.target);
       const versionRequest = hostSession ? runningGothamVersion() : null;
-      const session = await createTerminalSession(tab.serverId, {
-        target: tab.target,
-        ...(tab.root !== "" ? { root: tab.root } : {}),
-        ...(tab.cwd !== "" ? { cwd: tab.cwd } : {}),
-        cols: tab.cols,
-        rows: tab.rows,
-      });
+      const session = await createTerminalSession(
+        tab.serverId,
+        {
+          target: tab.target,
+          ...(tab.root !== "" ? { root: tab.root } : {}),
+          ...(tab.cwd !== "" ? { cwd: tab.cwd } : {}),
+          cols: tab.cols,
+          rows: tab.rows,
+        },
+        controller.signal,
+      );
+      // A closed tab/window aborts the create; never revive its state.
+      if (controller.signal.aborted) {
+        return;
+      }
       // A tab can be closed while the create call is in flight.
       if (!findTab(tab.id)) {
         await closeTerminalSession(tab.serverId, session.id).catch(() => {
@@ -259,10 +329,14 @@ export const useTerminalStore = defineStore("terminal", () => {
       }
       await runtime.connect();
     } catch (error) {
-      const failure = terminalFailure(error);
+      // An abort is a deliberate close: it is not an error state to show.
+      if (controller.signal.aborted) {
+        return;
+      }
       tab.status = "error";
-      tab.errorCode = failure.code;
-      tab.errorMessage = failure.message;
+      tab.errorCode = terminalFailure(error).code;
+    } finally {
+      controllers.delete(tab.id);
     }
   }
 
@@ -289,7 +363,6 @@ export const useTerminalStore = defineStore("terminal", () => {
       exitCode: null,
       exitSignal: "",
       errorCode: null,
-      errorMessage: "",
       createdAt: Date.now(),
     };
     tabs.value.push(tab);
@@ -300,6 +373,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     if (mode === "window") {
       activeTabId.value = stored.id;
     }
+    createTargets.set(stored.id, { key: targetKey(options), mode });
     await startSession(stored);
     return stored;
   }
@@ -331,14 +405,36 @@ export const useTerminalStore = defineStore("terminal", () => {
   }
 
   /**
-   * openWindowSession opens a new tab in the floating window. Repeating the
-   * call is intentional (each call is a new independent shell).
+   * openWindowSession opens a new tab in the floating window. A deliberate
+   * later call is intentional (each call is a new independent shell); a second
+   * activation for the SAME target while the first create is still in flight
+   * is an accident from one gesture and joins that call instead of starting a
+   * second shell.
    */
   async function openWindowSession(
     options: TerminalOpenOptions,
   ): Promise<TerminalTab> {
-    useTerminalWindowStore().setMinimized(false);
-    return createTab(options, "window");
+    const key = targetKey(options);
+    const pending = windowInflight.get(key);
+    if (pending) {
+      return pending;
+    }
+    const windowStore = useTerminalWindowStore();
+    // Restore a minimized window and bring it to the front so a new shell
+    // opened from another surface is actually visible (JUS-248).
+    windowStore.setMinimized(false);
+    windowStore.raise();
+    const created = createTab(options, "window");
+    windowInflight.set(key, created);
+    windowBusyKeys.value.add(key);
+    // Hold the target's single-flight key briefly after settle so a fast create
+    // cannot turn one human double-click into two shells (JUS-248 r2). The
+    // catch keeps this scheduling chain quiet when the create itself rejects;
+    // the caller still receives the rejection through `created`.
+    void created
+      .catch(() => undefined)
+      .then(() => holdWindowKey(key, created));
+    return created;
   }
 
   /**
@@ -507,6 +603,17 @@ export const useTerminalStore = defineStore("terminal", () => {
       if (!tab) {
         continue;
       }
+      // A create still in flight belongs to this tab: abort it and release its
+      // single-flight key immediately instead of waiting for the HTTP timeout.
+      // A settled tab's key is owned by the hold timer, never by this close.
+      const target = createTargets.get(id);
+      const controller = controllers.get(id);
+      controller?.abort();
+      controllers.delete(id);
+      createTargets.delete(id);
+      if (controller !== undefined && target?.mode === "window") {
+        releaseWindowKey(target.key);
+      }
       const runtime = runtimes.get(id);
       runtimes.delete(id);
       runtime?.dispose(true);
@@ -546,12 +653,23 @@ export const useTerminalStore = defineStore("terminal", () => {
    * or credential: the tabs array, runtimes and queued hosts are dropped.
    */
   function reset(): void {
+    for (const controller of controllers.values()) {
+      controller.abort();
+    }
+    controllers.clear();
+    createTargets.clear();
+    for (const timer of windowHoldTimers.values()) {
+      clearTimeout(timer);
+    }
+    windowHoldTimers.clear();
     for (const runtime of runtimes.values()) {
       runtime.dispose(true);
     }
     runtimes.clear();
     surfaces.clear();
     inflight.clear();
+    windowInflight.clear();
+    windowBusyKeys.value.clear();
     retrying.clear();
     tabs.value = [];
     activeTabId.value = "";
@@ -571,6 +689,7 @@ export const useTerminalStore = defineStore("terminal", () => {
     theme: computed<TerminalThemeName>(() => appearance.theme),
     findTab,
     findTabForTarget,
+    isWindowOpening,
     openPageSession,
     openWindowSession,
     detachToWindow,

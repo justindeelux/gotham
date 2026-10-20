@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Scissors,
   Search,
+  Terminal,
   Trash2,
   Upload,
   X,
@@ -39,9 +40,10 @@ import {
   NSelect,
   useMessage,
 } from "naive-ui";
-import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from "vue";
 import { useI18n } from "vue-i18n";
 
+import { useAuthStore } from "@/features/auth";
 import ConflictDialog from "@/features/files/components/ConflictDialog.vue";
 import CompressDialog from "@/features/files/components/CompressDialog.vue";
 import CreateEntryDialog from "@/features/files/components/CreateEntryDialog.vue";
@@ -81,6 +83,8 @@ import {
   joinPath,
   ownerModeLabel,
   resolveSymlinkTarget,
+  symlinkTargetsDirectory,
+  terminalDirectoryFor,
   typeaheadIndex,
   widestBytesLabel,
 } from "@/features/files/utils/files";
@@ -98,7 +102,9 @@ import {
   renderedKey,
   windowRange,
 } from "@/features/files/utils/virtual";
+import { useServersStore } from "@/features/servers";
 import { useTeamsStore } from "@/features/teams";
+import { useTerminalStore } from "@/features/terminal";
 import { useMediaQuery } from "@/shared/composables/useMediaQuery";
 import { formatBytes, relativeTime } from "@/shared/utils/format";
 
@@ -114,6 +120,9 @@ const files = useFilesStore();
 const trash = useTrashStore();
 const editor = useEditorStore();
 const teams = useTeamsStore();
+const auth = useAuthStore();
+const serversStore = useServersStore();
+const terminal = useTerminalStore();
 const { download } = useFileDownload();
 /** initBrowser loads the listing, then restores this user+server's tabs. */
 const { initBrowser } = useFilesTabsPersist(() => props.serverId);
@@ -2203,12 +2212,128 @@ async function pasteAction(destination = files.path): Promise<void> {
   }
 }
 
+/**
+ * serverName labels a terminal tab with the node on screen. The server list is
+ * seeded by the app shell; before it resolves the id still names the target
+ * unambiguously.
+ */
+const serverName = computed<string>(
+  () =>
+    serversStore.servers.find((server) => server.id === props.serverId)?.name ??
+    props.serverId,
+);
+
+/**
+ * terminalRequesting is the immediate gesture guard for a synchronous second
+ * click; terminalOpening is the store's slightly longer single-flight state
+ * (create + ~600 ms settle window) that keeps the control busy for the SAME
+ * target only (JUS-248 r2).
+ */
+const terminalRequesting = ref(false);
+
+/**
+ * terminalTarget is the root-relative folder an "Open terminal here" action
+ * would use, or null when the action must not be offered. It mirrors the
+ * backend gate (JUS-243/248): only a platform operator may open a host shell
+ * (the team file role and root writability deliberately do not count), the root
+ * must still be in this node's allow-list, and the view must match the last
+ * SUCCESSFULLY loaded listing. A failed navigation leaves `path` on a dead
+ * folder, so the action disappears rather than opening a doomed shell; a failed
+ * refresh keeps the listing on screen and stays usable.
+ */
+const terminalTarget = computed<string | null>(() => {
+  if (
+    !auth.isPlatformAdmin ||
+    props.serverId === "" ||
+    files.currentRoot === null
+  ) {
+    return null;
+  }
+  const tab = files.activeTab;
+  if (!tab.loaded || tab.lastLoadedPath !== tab.path) {
+    return null;
+  }
+  return tab.lastLoadedPath;
+});
+
+/** canOpenTerminal is the single gate for the toolbar and both menus. */
+const canOpenTerminal = computed<boolean>(() => terminalTarget.value !== null);
+
+/** terminalHintId is unique per mounted browser, so aria-describedby cannot
+ *  resolve to another instance's tooltip (JUS-248 r2). */
+const terminalHintId = useId();
+
+/** terminalOpening is the shared store's per-target busy/settle state. */
+const terminalOpening = computed<boolean>(() => {
+  if (terminalTarget.value === null || files.rootName === "") {
+    return false;
+  }
+  return terminal.isWindowOpening({
+    serverId: props.serverId,
+    target: "host",
+    root: files.rootName,
+    cwd: terminalTarget.value,
+  });
+});
+
+/** symlinkDirectory reports whether the listing proves a link targets a folder. */
+function symlinkDirectory(entry: FilesEntry): boolean {
+  return symlinkTargetsDirectory(
+    entry,
+    files.activeTab.lastLoadedPath,
+    files.entries,
+    files.currentRoot?.path ?? "",
+  );
+}
+
+/**
+ * openTerminalHere opens a floating-window host session in the folder on
+ * screen, in a directory row's own folder, or in a symlink row whose listing
+ * target is a known directory. The relative path travels in the create-session
+ * payload for the agent to resolve and validate; no `cd` command string is ever
+ * built from a file name, so spaces, quotes, Unicode and shell metacharacters
+ * stay data. A failure (deleted folder, stale root, offline node, unsupported
+ * agent, role change) lands in the new tab, whose error overlay names the
+ * reason.
+ */
+async function openTerminalHere(entry: FilesEntry | null = null): Promise<void> {
+  if (
+    !canOpenTerminal.value ||
+    terminalOpening.value ||
+    terminalRequesting.value
+  ) {
+    return;
+  }
+  const directory = terminalDirectoryFor(entry, files.activeTab.lastLoadedPath, {
+    entries: files.entries,
+    rootPath: files.currentRoot?.path ?? "",
+  });
+  const root = files.rootName;
+  if (directory === null || root === "") {
+    return;
+  }
+  terminalRequesting.value = true;
+  try {
+    await terminal.openWindowSession({
+      serverId: props.serverId,
+      serverName: serverName.value,
+      target: "host",
+      root,
+      cwd: directory,
+    });
+  } finally {
+    terminalRequesting.value = false;
+  }
+}
+
 /** menuContext is the gate set both menus read, rebuilt as the gates change. */
 const menuContext = computed(() => ({
   canWrite: files.canWrite,
   canReadContent: files.canReadContent,
   canPaste: files.hasClipboard && files.pasteProblem === null,
-  t: (key: string) => String(t(key)),
+  canOpenTerminal: canOpenTerminal.value,
+  t: (key: string, named?: Record<string, unknown>) =>
+    String(t(key, named ?? {})),
 }));
 
 /**
@@ -2226,6 +2351,7 @@ function rowMenu(entry: FilesEntry): FilesMenuItem[] {
     ...base,
     canPaste,
     symlinkTargetPath: symlinkTargetPath(entry),
+    symlinkTargetDirectory: symlinkDirectory(entry),
   });
 }
 
@@ -2238,6 +2364,10 @@ function onRowMenu(key: string, entry: FilesEntry): void {
     case "open-tab":
       // Open the folder in a new tab, leaving this one where it is.
       void files.openTab({ root: files.rootName, path: joinPath(files.path, entry.name) });
+      break;
+    case "open-terminal":
+      // Only a real directory row carries this key; the helper re-checks it.
+      void openTerminalHere(entry);
       break;
     case "edit":
       openInEditor(entry);
@@ -2502,6 +2632,9 @@ function onFolderMenu(key: string): void {
       break;
     case "upload":
       openUpload();
+      break;
+    case "open-terminal":
+      void openTerminalHere();
       break;
     case "recycle-bin":
       recycleOpen.value = true;
@@ -2793,6 +2926,30 @@ function onFolderMenu(key: string): void {
         </div>
 
         <div class="fm-toolbar-group fm-toolbar-end">
+          <!-- JUS-248: platform-operator only; opens a host shell in this
+               folder in the floating window. Hidden (not disabled) for anyone
+               else, because file read access never grants a shell. Icon-only:
+               the toolbar row must not grow a second line at 1024px. The
+               wrapper carries the hover/focus hint so the button keeps its
+               aria-label as the accessible name (JUS-210: no bare title). -->
+          <span v-if="canOpenTerminal" class="fm-terminal-action-wrap">
+            <NButton
+              size="small"
+              class="fm-terminal-action"
+              :loading="terminalOpening || terminalRequesting"
+              :aria-busy="terminalOpening || terminalRequesting"
+              :aria-label="$t('files.terminal.openHere')"
+              :aria-describedby="terminalHintId"
+              @click="openTerminalHere()"
+            >
+              <template #icon>
+                <Terminal :size="14" :stroke-width="1.8" aria-hidden="true" />
+              </template>
+            </NButton>
+            <span :id="terminalHintId" class="fm-terminal-hint" role="tooltip">
+              {{ $t("files.terminal.openHereHint") }}
+            </span>
+          </span>
           <!-- The bin belongs to the root, not the folder: any member may open
                it, while restore/purge inside need write. -->
           <NButton
@@ -3810,6 +3967,53 @@ function onFolderMenu(key: string): void {
    phone rule below takes over <=640px). */
 .fm-toolbar .fm-root-select {
   max-width: 100%;
+}
+
+/* JUS-248: the terminal action is icon-only and a 24px square. At 1366px the
+   grid toolbar's two groups are within 2px of the row width, so this control
+   must not take a full small-button box (it would wrap the end group to a
+   second row). 24px still meets the WCAG 2.2 target minimum. */
+.fm-terminal-action {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+/* Hover/focus hint for the icon-only terminal action (JUS-248 r1). It is a
+   tooltip, not the accessible name: the button keeps its translated
+   aria-label and points here through aria-describedby. */
+.fm-terminal-action-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.fm-terminal-hint {
+  display: none;
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 6;
+  width: max-content;
+  max-width: 16rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--fg-2);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  white-space: normal;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.fm-terminal-action-wrap:hover .fm-terminal-hint,
+.fm-terminal-action-wrap:focus-within .fm-terminal-hint {
+  display: block;
+  opacity: 1;
 }
 
 /* JUS-153: the right-hand cluster now follows the per-root actions directly

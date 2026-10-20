@@ -2,10 +2,10 @@
 // faithful fakes that record creates, attaches and disposes, so the tests can
 // prove a page→window transfer issues no new session and that closing releases
 // exactly the confirmed tabs.
-/* global document:readonly, HTMLElement:readonly, localStorage:readonly, window:readonly */
+/* global AbortSignal:readonly, document:readonly, HTMLElement:readonly, localStorage:readonly, window:readonly */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   i18n,
@@ -117,7 +117,9 @@ vi.mock("@/features/terminal/api/terminal", () => ({
   terminalWebSocketUrl: (path: string) => `ws://test${path}`,
 }));
 
-const { useTerminalStore } = await import("@/features/terminal/stores/terminal");
+const { useTerminalStore, WINDOW_SINGLE_FLIGHT_HOLD_MS } = await import(
+  "@/features/terminal/stores/terminal"
+);
 const { useTerminalWindowStore } = await import(
   "@/features/terminal/stores/terminalWindow"
 );
@@ -173,6 +175,11 @@ beforeEach(() => {
   );
 });
 
+afterEach(() => {
+  useTerminalStore().reset();
+  vi.useRealTimers();
+});
+
 describe("terminal store sessions", () => {
   it("reuses one page session per target and creates separate window shells", async () => {
     const terminal = useTerminalStore();
@@ -202,6 +209,172 @@ describe("terminal store sessions", () => {
     const [a, b] = await Promise.all([first, second]);
     expect(a.id).toBe(b.id);
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores and raises the floating window for a new window session", async () => {
+    const terminal = useTerminalStore();
+    const windowStore = useTerminalWindowStore();
+    windowStore.setMinimized(true);
+    windowStore.lower();
+
+    const tab = await terminal.openWindowSession(options("data"));
+
+    expect(tab.mode).toBe("window");
+    expect(tab.cwd).toBe("data");
+    expect(windowStore.minimized).toBe(false);
+    expect(windowStore.raised).toBe(true);
+  });
+
+  it("shares one in-flight window create for the same target, then allows a new one", async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    apiFakes.create.mockImplementationOnce(
+      async (
+        serverId: string,
+        input: { target?: string; root?: string; cwd?: string; cols: number; rows: number },
+      ) => {
+        await gate;
+        sessionSeq += 1;
+        return {
+          id: `session-${sessionSeq}`,
+          server_id: serverId,
+          target: input.target ?? "host",
+          root: input.root ?? "",
+          cwd: input.cwd ?? "",
+          cols: input.cols,
+          rows: input.rows,
+          expires_at: "2026-10-20T12:01:00Z",
+          websocket_path: `/api/v1/servers/${serverId}/terminal/sessions/session-${sessionSeq}/ws`,
+          subprotocol: "gotham.terminal.v1",
+        };
+      },
+    );
+
+    const terminal = useTerminalStore();
+    const first = terminal.openWindowSession(options("data"));
+    const second = terminal.openWindowSession(options("data"));
+    // The second activation joins the in-flight call: no second shell is asked
+    // for, even before either promise settles.
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    // Let the settle-window scheduler run, then prove the key is still held.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(b.id).toBe(a.id);
+    expect(terminal.windowOpenCount).toBe(1);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+    expect(terminal.isWindowOpening(options("data"))).toBe(true);
+
+    // A click inside the settle window is still the same gesture.
+    const held = await terminal.openWindowSession(options("data"));
+    expect(held.id).toBe(a.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    // A deliberate later activation (after the window) opens a new tab.
+    await vi.advanceTimersByTimeAsync(WINDOW_SINGLE_FLIGHT_HOLD_MS);
+    expect(terminal.isWindowOpening(options("data"))).toBe(false);
+    const later = await terminal.openWindowSession(options("data"));
+    expect(later.id).not.toBe(a.id);
+    expect(terminal.windowOpenCount).toBe(2);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds a fast window create for the settle window, then releases it", async () => {
+    vi.useFakeTimers();
+    const terminal = useTerminalStore();
+    const first = await terminal.openWindowSession(options("data"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(terminal.isWindowOpening(options("data"))).toBe(true);
+
+    // Same target inside the window: no new shell.
+    const held = await terminal.openWindowSession(options("data"));
+    expect(held.id).toBe(first.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(1);
+
+    // A different target is never held by this one.
+    expect(terminal.isWindowOpening(options("other"))).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(WINDOW_SINGLE_FLIGHT_HOLD_MS - 1);
+    expect(terminal.isWindowOpening(options("data"))).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(terminal.isWindowOpening(options("data"))).toBe(false);
+
+    const later = await terminal.openWindowSession(options("data"));
+    expect(later.id).not.toBe(first.id);
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+
+    // Teardown clears the new hold timer instead of leaving it behind.
+    terminal.reset();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(terminal.isWindowOpening(options("data"))).toBe(false);
+  });
+
+  it("aborts an in-flight create when the window closes and releases the key", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    apiFakes.create.mockImplementationOnce(
+      (_serverId: string, _input: unknown, nextSignal?: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal = nextSignal;
+          nextSignal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        }),
+    );
+
+    const terminal = useTerminalStore();
+    const opening = terminal.openWindowSession(options("data"));
+    expect(terminal.isWindowOpening(options("data"))).toBe(true);
+    expect(signal).toBeDefined();
+
+    terminal.closeAll();
+
+    expect(signal!.aborted).toBe(true);
+    // The key is released at once, not after the HTTP timeout.
+    expect(terminal.isWindowOpening(options("data"))).toBe(false);
+    await expect(opening).resolves.toBeDefined();
+    expect(apiFakes.close).not.toHaveBeenCalled();
+    // No settle-window timer is left for the aborted target.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts an in-flight create on logout/account switch", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    apiFakes.create.mockImplementationOnce(
+      (_serverId: string, _input: unknown, nextSignal?: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal = nextSignal;
+          nextSignal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        }),
+    );
+
+    const terminal = useTerminalStore();
+    const opening = terminal.openWindowSession(options("data"));
+    expect(signal).toBeDefined();
+
+    terminal.reset();
+
+    expect(signal!.aborted).toBe(true);
+    expect(terminal.isWindowOpening(options("data"))).toBe(false);
+    await expect(opening).resolves.toBeDefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("opens different targets concurrently instead of sharing one create", async () => {
+    const terminal = useTerminalStore();
+    const one = terminal.openWindowSession(options("one"));
+    const two = terminal.openWindowSession(options("two"));
+    expect(apiFakes.create).toHaveBeenCalledTimes(2);
+    const [a, b] = await Promise.all([one, two]);
+    expect(a.id).not.toBe(b.id);
+    expect(terminal.windowOpenCount).toBe(2);
   });
 
   it("transfers page → window with the same session id and no create", async () => {
@@ -245,7 +418,7 @@ describe("terminal store sessions", () => {
     const terminal = useTerminalStore();
     const tab = await terminal.openPageSession(options());
     const first = runtimeFakes.instances[0]!;
-    first.emit({ status: "error", errorMessage: "stream failed" });
+    first.emit({ status: "error", errorCode: "generic" });
     expect(tab.status).toBe("error");
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
@@ -254,7 +427,7 @@ describe("terminal store sessions", () => {
     await terminal.retry(tab.id);
     expect(apiFakes.create).toHaveBeenCalledTimes(1);
 
-    first.emit({ status: "error", errorMessage: "stream failed" });
+    first.emit({ status: "error", errorCode: "generic" });
     await terminal.retry(tab.id);
     expect(first.disposed).toBe(true);
     expect(apiFakes.create).toHaveBeenCalledTimes(2);

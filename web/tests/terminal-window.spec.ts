@@ -1234,6 +1234,71 @@ async function surfaceToText(page: Page): Promise<string> {
     .innerText();
 }
 
+test("quick command suggestions survive a theme change and page → window move", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const state = freshState();
+  await mockTerminalApi(page, state);
+  await seedApp(page, "/dashboard");
+
+  // Seed one command for the signed-in account before the runtime starts.
+  await page.evaluate(() => {
+    window.localStorage.setItem(
+      "gotham.terminal.commands.v1.u-1",
+      JSON.stringify({
+        version: 1,
+        commands: [
+          {
+            id: "c1",
+            label: "Git status",
+            command: "git status",
+            abbreviation: "gs",
+          },
+        ],
+      }),
+    );
+  });
+
+  // Start a page session, choose a theme, then transfer the live session to
+  // the floating window. The suggestion must still work on the same PTY.
+  const tab = (await storeCall(page, "openPageSession", {
+    serverId,
+    serverName: "prod-01",
+    root: "volumes",
+    cwd: "app",
+  })) as { id: string };
+  await expect.poll(() => state.sessions[0]?.socket !== null).toBe(true);
+  await storeCall(page, "setTheme", "gotham-light");
+  await storeCall(page, "detachToWindow", tab.id);
+
+  const surface = page.locator(".term-window .term-surface:visible");
+  await expect(surface).toHaveAttribute("data-theme", "gotham-light");
+  state.sessions[0]?.socket?.send(outputFrame("\x1b]133;B\x07"));
+  const input = surface.locator(".xterm-helper-textarea");
+  await input.focus();
+  await page.keyboard.type("gs");
+  const suggestion = surface.locator(".term-suggest-option");
+  await expect(suggestion).toBeVisible();
+
+  // A theme change repaints in place and does not disturb the suggestion.
+  await storeCall(page, "setTheme", "gotham-dark");
+  await expect(surface).toHaveAttribute("data-theme", "gotham-dark");
+  await expect(suggestion).toBeVisible();
+  expect(state.creates).toBe(1);
+
+  await page.keyboard.press("Control+Shift+Space");
+  await expect
+    .poll(() => page.evaluate(() => document.activeElement?.getAttribute("role") ?? ""))
+    .toBe("option");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => state.sessions[0]?.input ?? "")
+    .toContain("gs\x7f\x7fgit status");
+  expect(state.sessions[0]?.input ?? "").not.toContain("\r");
+  expect(state.creates).toBe(1);
+});
+
 test("quick commands save, insert without Enter, and suggest an abbreviation", async ({
   page,
 }) => {
@@ -1306,15 +1371,26 @@ test("quick commands save, insert without Enter, and suggest an abbreviation", a
         return rect?.x ?? -1;
       })
       .toBeGreaterThanOrEqual(0);
-    const box = await page.locator(".term-window .term-suggest").boundingBox();
-    const screen = await page
-      .locator(".term-window .term-surface:visible .term-screen")
-      .boundingBox();
-    expect(box).not.toBeNull();
-    expect(screen).not.toBeNull();
-    expect(box!.x).toBeGreaterThanOrEqual(0);
-    expect(box!.x + box!.width).toBeLessThanOrEqual(width + 1);
-    expect(box!.y + box!.height).toBeLessThanOrEqual(screen!.y + 1);
+    // The strip is above the xterm viewport; poll because a viewport resize
+    // reflows the window and the boxes settle on the next frame.
+    await expect
+      .poll(async () => {
+        const nextBox = await page
+          .locator(".term-window .term-suggest")
+          .boundingBox();
+        const nextScreen = await page
+          .locator(".term-window .term-surface:visible .term-screen")
+          .boundingBox();
+        if (!nextBox || !nextScreen) {
+          return false;
+        }
+        return (
+          nextBox.x >= 0 &&
+          nextBox.x + nextBox.width <= width + 1 &&
+          nextBox.y + nextBox.height <= nextScreen.y + 1
+        );
+      })
+      .toBe(true);
   }
   await page.setViewportSize({ width: 1280, height: 800 });
   await input.focus();

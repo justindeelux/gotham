@@ -298,6 +298,7 @@ async function mockApi(
   await page.route("**/api/v1/terminal/targets", async (route) => {
     await route.fulfill({
       json: {
+        truncated: false,
         servers: servers
           .filter((row) => row.status === "ready")
           .map((row) => ({ id: row.id, name: row.name, status: row.status })),
@@ -1248,8 +1249,11 @@ test("closing one page tab confirms and keeps the other session", async ({
   await expect(page).toHaveURL(new RegExp(`/terminal\\?server=${SERVER_B}`));
   await expect(page.locator(".term-page-tab")).toHaveCount(2);
 
-  // Cancel keeps both shells and the active tab.
+  // Cancel keeps both shells and the active tab. The close control is its own
+  // labelled button, not a mouse-only span inside the tab.
   const close = page.locator(".term-page-tab.is-active .term-page-tab-close");
+  await expect(close).toHaveAttribute("aria-label", /Close /);
+  expect(await close.evaluate((element) => element.tagName)).toBe("BUTTON");
   await close.click();
   const dialog = page.locator(".term-close-modal");
   await expect(dialog).toBeVisible();

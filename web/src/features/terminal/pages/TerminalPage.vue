@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { X } from "@lucide/vue";
 import { NAlert } from "naive-ui";
-import { computed, nextTick, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { useI18n } from "vue-i18n";
 
 import TerminalPane from "@/features/terminal/components/TerminalPane.vue";
@@ -44,6 +51,50 @@ const {
   selectServer,
   activateTab,
 } = useTerminalPageSession();
+
+const tabsElement = ref<HTMLElement | null>(null);
+
+/** revealActiveTab keeps the selected (or newly opened) tab in view. */
+function revealActiveTab(): void {
+  const strip = tabsElement.value;
+  const active = activeTab.value;
+  if (strip === null || active === null) {
+    return;
+  }
+  const name = document.getElementById(`term-page-tab-${active.id}`);
+  const tab = name?.closest<HTMLElement>(".term-page-tab") ?? null;
+  if (tab === null) {
+    return;
+  }
+  const stripRect = strip.getBoundingClientRect();
+  const tabRect = tab.getBoundingClientRect();
+  if (tabRect.left < stripRect.left) {
+    strip.scrollLeft -= stripRect.left - tabRect.left;
+  } else if (tabRect.right > stripRect.right) {
+    strip.scrollLeft += tabRect.right - stripRect.right;
+  }
+}
+
+watch(
+  () => tabId.value,
+  () => {
+    void nextTick(revealActiveTab);
+  },
+);
+
+function onWindowResize(): void {
+  // rAF runs after the new layout, so the strip measures the resized width.
+  window.requestAnimationFrame(revealActiveTab);
+}
+
+onMounted(() => {
+  window.addEventListener("resize", onWindowResize);
+  void nextTick(revealActiveTab);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", onWindowResize);
+});
 
 const isContainer = computed<boolean>(() =>
   activeTab.value ? isContainerTerminalTarget(activeTab.value.target) : false,
@@ -144,6 +195,7 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
     <div class="term-page-bar">
       <div
         v-if="pageTabs.length > 0"
+        ref="tabsElement"
         class="term-page-tabs"
         role="tablist"
         :aria-label="t('terminal.page.tabs')"
@@ -174,14 +226,15 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
               aria-hidden="true"
             />
             <span class="term-page-tab-label">{{ tab.title }}</span>
-            <span
-              class="term-page-tab-close"
-              aria-hidden="true"
-              :title="t('terminal.page.closeTab', { title: tab.title })"
-              @click.stop="requestCloseTab(tab.id)"
-            >
-              <X :size="12" :stroke-width="2" aria-hidden="true" />
-            </span>
+          </button>
+          <button
+            type="button"
+            class="term-page-tab-close"
+            :aria-label="t('terminal.page.closeTab', { title: tab.title })"
+            :title="t('terminal.page.closeTab', { title: tab.title })"
+            @click.stop="requestCloseTab(tab.id)"
+          >
+            <X :size="12" :stroke-width="2" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -309,7 +362,9 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
 .term-page-tab {
   display: inline-flex;
   align-items: center;
-  min-width: 0;
+  /* A readable minimum makes the strip scroll instead of squeezing every
+   * label to an ellipsis; the active-tab reveal keeps the selection visible. */
+  min-width: min(8rem, 40vw);
   max-width: min(16rem, 45vw);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -384,6 +439,9 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
   width: var(--space-6);
   height: var(--space-6);
   margin-right: calc(-1 * var(--space-1));
+  padding: 0;
+  border: 0;
+  background: transparent;
   border-radius: var(--radius-sm);
   color: var(--meta);
   cursor: pointer;
@@ -392,6 +450,11 @@ function onTabKeydown(event: KeyboardEvent, index: number): void {
 .term-page-tab-close:hover {
   background: var(--border);
   color: var(--fg-2);
+}
+
+.term-page-tab-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 @media (max-width: 640px) {

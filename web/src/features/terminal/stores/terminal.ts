@@ -166,6 +166,14 @@ const DEFAULT_TERMINAL_ROWS = 32;
  */
 export const WINDOW_SINGLE_FLIGHT_HOLD_MS = 600;
 
+/**
+ * PAGE_SINGLE_FLIGHT_HOLD_MS aligns the page create's settle window with the
+ * window's (JUS-248 r2): a popover double activation whose second click lands
+ * just after a fast create still joins the first gesture instead of opening a
+ * second shell. A deliberate later open is a new page tab.
+ */
+export const PAGE_SINGLE_FLIGHT_HOLD_MS = WINDOW_SINGLE_FLIGHT_HOLD_MS;
+
 /** tabId returns a stable local id without requiring a secure context. */
 function tabId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -239,6 +247,8 @@ export const useTerminalStore = defineStore("terminal", () => {
   const displayed = ref<Set<string>>(new Set());
   /** inflight deduplicates rapid page opens for the same target. */
   const inflight = new Map<string, Promise<TerminalTab>>();
+  /** pageHoldTimers owns the page settle windows so teardown can clear them. */
+  const pageHoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /**
    * windowInflight keeps one window create per target. The entry survives for
    * WINDOW_SINGLE_FLIGHT_HOLD_MS after the create settles so an accidental
@@ -329,6 +339,30 @@ export const useTerminalStore = defineStore("terminal", () => {
     return (
       matches.find((tab) => tab.mode === "page") ?? matches[0] ?? null
     );
+  }
+
+  /** releasePageKey drops one page target's settle window at once. */
+  function releasePageKey(key: string): void {
+    const timer = pageHoldTimers.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      pageHoldTimers.delete(key);
+    }
+    inflight.delete(key);
+  }
+
+  /** holdPageKey keeps a settled page create joinable for one gesture window. */
+  function holdPageKey(key: string, created: Promise<TerminalTab>): void {
+    if (inflight.get(key) !== created) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      pageHoldTimers.delete(key);
+      if (inflight.get(key) === created) {
+        inflight.delete(key);
+      }
+    }, PAGE_SINGLE_FLIGHT_HOLD_MS);
+    pageHoldTimers.set(key, timer);
   }
 
   /** releaseWindowKey drops one target's hold, timer and busy flag at once. */
@@ -646,10 +680,11 @@ export const useTerminalStore = defineStore("terminal", () => {
     if (pending) {
       return pending;
     }
-    const created = createTab(options, "page").finally(() => {
-      inflight.delete(key);
-    });
+    const created = createTab(options, "page");
     inflight.set(key, created);
+    void created
+      .catch(() => undefined)
+      .then(() => holdPageKey(key, created));
     return created;
   }
 
@@ -1018,6 +1053,11 @@ export const useTerminalStore = defineStore("terminal", () => {
       if (controller !== undefined && target?.mode === "window") {
         releaseWindowKey(target.key);
       }
+      if (target?.mode === "page") {
+        // Also release a settled create's hold: reopening a just-closed page
+        // tab must start a shell, never hand back the removed tab.
+        releasePageKey(target.key);
+      }
       const runtime = runtimes.get(id);
       runtimes.delete(id);
       runtime?.dispose(true);
@@ -1094,6 +1134,10 @@ export const useTerminalStore = defineStore("terminal", () => {
       clearTimeout(timer);
     }
     windowHoldTimers.clear();
+    for (const timer of pageHoldTimers.values()) {
+      clearTimeout(timer);
+    }
+    pageHoldTimers.clear();
     for (const runtime of runtimes.values()) {
       runtime.dispose(true);
     }

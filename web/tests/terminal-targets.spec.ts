@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import type { Page, Request, WebSocketRoute } from "@playwright/test";
 
-/* global document:readonly, setTimeout:readonly, URL:readonly, window:readonly */
+/* global document:readonly, HTMLElement:readonly, setTimeout:readonly, URL:readonly, window:readonly */
 
 // JUS-265 add-tab picker against faithful fakes.
 //
@@ -92,8 +92,10 @@ function targetPayload(options?: {
   servers?: unknown[];
   applications?: unknown[];
   errors?: unknown[];
+  truncated?: boolean;
 }) {
   return {
+    truncated: options?.truncated ?? false,
     servers: options?.servers ?? [
       { id: SERVER_ID, name: "prod-01", status: "ready" },
       { id: SERVER_B_ID, name: "prod-02", status: "ready" },
@@ -103,6 +105,7 @@ function targetPayload(options?: {
         application_id: APPLICATION_ID,
         application_name: "shop",
         server_id: SERVER_ID,
+        source_type: "image",
         containers: [
           targetContainer("web", CONTAINER_ID, "shop-web-1", 1),
           targetContainer("web", CONTAINER_B_ID, "shop-web-2", 2),
@@ -671,6 +674,143 @@ test.describe("add-tab target picker", () => {
     expect(state.targetsCalls).toHaveLength(2);
   });
 
+  test("page single-flight: a double click opens one page tab", async ({ page }) => {
+    const state = newState();
+    state.createDelayMs = 400;
+    await mockApi(page, state);
+    await seedApp(page, "/terminal");
+    await openPicker(page, "page");
+
+    const option = page
+      .locator(".term-target-option")
+      .filter({ hasText: "prod-01" });
+    await option.dblclick({ delay: 20 });
+    await expect(page.locator(".term-targets")).toHaveCount(0);
+    await expect(page.locator(".term-page-tab")).toHaveCount(1);
+    expect(state.creates).toHaveLength(1);
+    expect(state.creates[0]?.kind).toBe("host");
+  });
+
+  test("keyboard: Enter opens, focus lands in search, arrows/Enter pick, Escape returns focus", async ({
+    page,
+  }) => {
+    const state = newState();
+    await mockApi(page, state);
+    await seedApp(page, "/dashboard");
+    await openWindow(page);
+
+    const trigger = page.locator(".term-window .term-add-tab");
+    // Space opens from the trigger and Escape returns focus without a pick.
+    await trigger.focus();
+    await page.keyboard.press("Space");
+    await expect(page.locator(".term-targets")).toBeVisible();
+    await expect(page.locator(".term-targets input").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".term-targets")).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+
+    // Enter opens; the search box owns focus, then arrows/Enter pick.
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".term-targets")).toBeVisible();
+    await expect(page.locator(".term-targets input").first()).toBeFocused();
+
+    await page.keyboard.type("shop-web-2");
+    await expect(page.locator(".term-target-option")).toHaveCount(1);
+    await page.keyboard.press("ArrowDown");
+    await expect(page.locator(".term-target-option")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".term-tab")).toHaveCount(2);
+    expect(state.creates[1]?.kind).toBe("container");
+    expect(state.creates[1]?.body).toMatchObject({ container_id: CONTAINER_B_ID });
+
+  });
+
+  test("page tab strip scrolls the active tab into view at every width", async ({
+    page,
+  }) => {
+    const state = newState();
+    await mockApi(page, state);
+    await seedApp(page, "/terminal");
+    for (let index = 0; index < 10; index += 1) {
+      await storeCall(page, "openPageSession", {
+        serverId: SERVER_ID,
+        serverName: "prod-01",
+        cwd: `tab-${index}`,
+        fresh: true,
+      });
+    }
+    await expect(page.locator(".term-page-tab")).toHaveCount(10);
+    expect(state.creates).toHaveLength(10);
+
+    for (const width of [1366, 1280, 480, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      // Resize is observed asynchronously; wait for the reveal before measuring.
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const strip = document.querySelector(
+              ".term-page-tabs",
+            ) as HTMLElement;
+            const active = document.querySelector(
+              ".term-page-tab.is-active",
+            ) as HTMLElement;
+            const stripRect = strip.getBoundingClientRect();
+            const tabRect = active.getBoundingClientRect();
+            return (
+              tabRect.left >= stripRect.left - 1 &&
+              tabRect.right <= stripRect.right + 1
+            );
+          }),
+        )
+        .toBe(true);
+      const geometry = await page.evaluate(() => {
+        const strip = document.querySelector(".term-page-tabs") as HTMLElement;
+        const active = document.querySelector(
+          ".term-page-tab.is-active",
+        ) as HTMLElement;
+        const add = document.querySelector(
+          ".term-page .term-add-tab",
+        ) as HTMLElement;
+        const box = (element: HTMLElement) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, right: rect.right };
+        };
+        return {
+          strip: box(strip),
+          active: box(active),
+          add: box(add),
+          scrollWidth: strip.scrollWidth,
+          clientWidth: strip.clientWidth,
+        };
+      });
+      expect(geometry.active.left).toBeGreaterThanOrEqual(geometry.strip.left - 1);
+      expect(geometry.active.right).toBeLessThanOrEqual(geometry.strip.right + 1);
+      expect(geometry.strip.right).toBeLessThanOrEqual(geometry.add.left + 1);
+      if (width <= 480) {
+        expect(geometry.scrollWidth).toBeGreaterThan(geometry.clientWidth);
+      }
+    }
+
+    // Selecting an earlier tab scrolls it back into view.
+    await page.locator(".term-page-tab-name").nth(0).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const strip = document.querySelector(".term-page-tabs") as HTMLElement;
+          const active = document.querySelector(
+            ".term-page-tab.is-active",
+          ) as HTMLElement;
+          const stripRect = strip.getBoundingClientRect();
+          const tabRect = active.getBoundingClientRect();
+          return (
+            tabRect.left >= stripRect.left - 1 &&
+            tabRect.right <= stripRect.right + 1
+          );
+        }),
+      )
+      .toBe(true);
+  });
+
   test("a non-operator payload carries containers but no servers", async ({ page }) => {
     const state = newState();
     state.payload = () =>
@@ -681,10 +821,12 @@ test.describe("add-tab target picker", () => {
             application_id: APPLICATION_ID,
             application_name: "shop",
             server_id: SERVER_ID,
+            source_type: "image",
             containers: [targetContainer("web", CONTAINER_ID, "shop-web-1")],
           },
         ],
         errors: [],
+        truncated: true,
       });
     await mockApi(page, state);
     await seedApp(page, "/dashboard");
@@ -696,5 +838,9 @@ test.describe("add-tab target picker", () => {
     await expect(page.locator(".term-target-option")).toHaveCount(1);
     await expect(page.locator(".term-target-option")).toContainText("shop-web-1");
     await expect(page.locator(".term-targets-partial")).toHaveCount(0);
+    // A truncated response says so instead of pretending the list is complete.
+    await expect(page.locator(".term-targets-truncated")).toContainText(
+      "Showing the first 1 of the available targets.",
+    );
   });
 });

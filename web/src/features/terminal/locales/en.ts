@@ -172,6 +172,7 @@ const en = {
     noMatches: "No targets match your search.",
     retry: "Retry",
     partial: "Some targets could not be loaded.",
+    truncated: "Showing the first {count} of the available targets.",
     createFailed: "The terminal could not be started.",
     opening: "Opening…",
     errors: {
@@ -183,6 +184,8 @@ const en = {
         "Container terminals are disabled on this control plane. Ask a platform administrator to enable them.",
       internal:
         "The control plane sent an unexpected response. Retry, or reload the page.",
+      timeout:
+        "Some targets took too long to load. Retry once the node or control plane is reachable.",
     },
   },
   dock: {

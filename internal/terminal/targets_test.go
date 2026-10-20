@@ -46,8 +46,13 @@ func (f *fakeTargetsSource) ListTargets(_ context.Context, userID uuid.UUID) (Ta
 
 func targetsRouter(t *testing.T, source TargetsSourceFunc) *chi.Mux {
 	t.Helper()
+	return targetsRouterWithTimeout(t, source, 2*time.Second)
+}
+
+func targetsRouterWithTimeout(t *testing.T, source TargetsSourceFunc, timeout time.Duration) *chi.Mux {
+	t.Helper()
 	router := chi.NewRouter()
-	mountTargets(router, targetsAuth, source, targetsUserFrom, nil, 2*time.Second)
+	mountTargets(router, targetsAuth, source, targetsUserFrom, nil, timeout)
 	return router
 }
 
@@ -186,6 +191,110 @@ func TestTerminalTargetsBoundsAndIgnoresUnknownCodes(t *testing.T) {
 	if len(body.Errors) != 1 || body.Errors[0].Code != string(TargetErrorInternal) {
 		t.Fatalf("errors = %+v, want a sanitized internal code", body.Errors)
 	}
+	if !body.Truncated {
+		t.Fatal("truncated = false, want true when applications or containers were cut")
+	}
+}
+
+// TestTerminalTargetsHandlerTimeoutCancelsSource kills the "remove the handler
+// timeout" mutant: the source waits for ctx.Done, so only the handler's
+// WithTimeout makes the request return promptly.
+func TestTerminalTargetsHandlerTimeoutCancelsSource(t *testing.T) {
+	router := targetsRouterWithTimeout(t, func(*http.Request) TargetsSource {
+		return &blockingTimeoutSource{}
+	}, 50*time.Millisecond)
+	start := time.Now()
+	recorder := getTargets(t, router, uuid.New().String())
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("request took %s, want the handler timeout to cancel the source", elapsed)
+	}
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var body targetsListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Errors) != 1 || body.Errors[0].Code != string(TargetErrorTimeout) {
+		t.Fatalf("errors = %+v, want one timeout entry", body.Errors)
+	}
+}
+
+type blockingTimeoutSource struct{}
+
+func (s *blockingTimeoutSource) ListTargets(ctx context.Context, _ uuid.UUID) (Targets, error) {
+	select {
+	case <-ctx.Done():
+		return Targets{Errors: []TargetError{{Source: "applications", Code: TargetErrorTimeout, Count: 3}}}, nil
+	case <-time.After(2 * time.Second):
+		return Targets{}, nil
+	}
+}
+
+func TestTerminalTargetsHandlerCapsErrors(t *testing.T) {
+	errors := make([]TargetError, 80)
+	for index := range errors {
+		errors[index] = TargetError{Source: "application", ID: uuid.NewString(), Name: "app", Code: TargetErrorUnavailable}
+	}
+	router := targetsRouter(t, func(*http.Request) TargetsSource {
+		return &fakeTargetsSource{targets: Targets{Errors: errors}}
+	})
+	recorder := getTargets(t, router, uuid.New().String())
+	var body targetsListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Errors) != maxTargetErrors {
+		t.Fatalf("errors = %d, want the %d cap", len(body.Errors), maxTargetErrors)
+	}
+}
+
+func TestTerminalTargetsHandlerTruncation(t *testing.T) {
+	groups := make([]ContainerTargetGroup, 60)
+	for index := range groups {
+		groups[index] = ContainerTargetGroup{
+			ApplicationID:   uuid.New(),
+			ApplicationName: "app",
+			ServerID:        uuid.New(),
+			SourceType:      "image",
+			Containers: []ContainerTarget{{
+				Service: "web", ContainerID: uuid.NewString(), Name: "web-1", State: "running",
+			}},
+		}
+	}
+	router := targetsRouter(t, func(*http.Request) TargetsSource {
+		return &fakeTargetsSource{targets: Targets{Applications: groups}}
+	})
+	recorder := getTargets(t, router, uuid.New().String())
+	var body targetsListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Applications) != maxContainerApps {
+		t.Fatalf("applications = %d, want %d", len(body.Applications), maxContainerApps)
+	}
+	if !body.Truncated {
+		t.Fatal("truncated = false, want true above the visible cap")
+	}
+	if body.Applications[0].SourceType != "image" {
+		t.Fatalf("source_type = %q, want image", body.Applications[0].SourceType)
+	}
+}
+
+func TestTerminalTargetsTimeoutErrorCarriesCount(t *testing.T) {
+	router := targetsRouter(t, func(*http.Request) TargetsSource {
+		return &fakeTargetsSource{targets: Targets{Errors: []TargetError{{
+			Source: "applications", Code: TargetErrorTimeout, Count: 12,
+		}}}}
+	})
+	recorder := getTargets(t, router, uuid.New().String())
+	var body targetsListResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Errors) != 1 || body.Errors[0].Count != 12 || body.Errors[0].Code != "timeout" {
+		t.Fatalf("errors = %+v, want one timeout with a count", body.Errors)
+	}
 }
 
 func TestTerminalTargetsEmptyListsAreNotNull(t *testing.T) {
@@ -204,6 +313,9 @@ func TestTerminalTargetsEmptyListsAreNotNull(t *testing.T) {
 		if string(raw[key]) != "[]" {
 			t.Fatalf("%s = %s, want []", key, raw[key])
 		}
+	}
+	if string(raw["truncated"]) != "false" {
+		t.Fatalf("truncated = %s, want false", raw["truncated"])
 	}
 }
 

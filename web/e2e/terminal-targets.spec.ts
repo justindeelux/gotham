@@ -374,10 +374,58 @@ test.describe.serial("add-tab picker on the real stack", () => {
         timeout: 30_000,
       })
       .toBe(true);
+    expect(await screenText(page, ".term-page")).not.toContain("server: ");
     expect(reads).toHaveLength(3);
     expect(reads).toEqual([seed.teamId, seed.teamId, seed.teamId]);
     expect(traffic.createCount()).toBe(4);
     expect(traffic.deletes).toHaveLength(0);
+  });
+
+  test("the picker is fully keyboard reachable from the (+) trigger", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    const server = (await requireTerminalNode(request))!;
+    const traffic = watchTerminal(page);
+    const reads = watchTargetReads(page);
+
+    await page.goto(terminalPageURL);
+    await pickServer(page, server.name);
+    await waitForCreate(traffic, 1);
+    await page.getByRole("button", { name: "Open in window" }).first().click();
+    await expect(page.locator(".term-window")).toBeVisible();
+
+    const trigger = page.locator(".term-window .term-add-tab");
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".term-targets")).toBeVisible();
+    await expect(page.locator(".term-targets input").first()).toBeFocused();
+    // Type through real key events: never fill() (which would hide a broken
+    // focus handoff).
+    await page.keyboard.type(seed!.containerLabel);
+    await expect(page.locator(".term-target-option")).toHaveCount(1);
+    await page.keyboard.press("ArrowDown");
+    await expect(page.locator(".term-target-option")).toBeFocused();
+    await page.keyboard.press("Enter");
+    const created = await waitForCreate(traffic, 2);
+    expect(created.body).toMatchObject({
+      service: seed!.service,
+      container_id: seed!.containerId,
+    });
+    await expect(page.locator(".term-tab")).toHaveCount(2);
+
+    // Space opens too, and Escape returns focus to the trigger without
+    // creating anything.
+    await trigger.focus();
+    await page.keyboard.press("Space");
+    await expect(page.locator(".term-targets")).toBeVisible();
+    await expect(page.locator(".term-targets input").first()).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".term-targets")).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    expect(traffic.createCount()).toBe(2);
+    expect(reads).toEqual([seed!.teamId, seed!.teamId]);
   });
 
   test("permission matrix: a member gets no hosts and a read-only viewer no containers", async ({
@@ -479,7 +527,7 @@ test.describe.serial("add-tab picker on the real stack", () => {
     // is stubbed; the window/session stay real.
     await page.route("**/api/v1/terminal/targets", async (route) => {
       await route.fulfill({
-        json: { servers: [], applications: [], errors: [] },
+        json: { servers: [], applications: [], errors: [], truncated: false },
       });
     });
     await openPicker(page, "window");

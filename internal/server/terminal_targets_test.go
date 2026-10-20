@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -41,9 +44,14 @@ func (f fakeTargetDeployService) ListApplications(context.Context, uuid.UUID, de
 type fakeTargetResolver struct {
 	sets map[uuid.UUID]deploy.TerminalTargetSet
 	errs map[uuid.UUID]error
+	// list overrides the map lookup for timeout/concurrency tests.
+	list func(ctx context.Context, appID uuid.UUID) (deploy.TerminalTargetSet, error)
 }
 
-func (f fakeTargetResolver) ListTerminalContainers(_ context.Context, _, appID uuid.UUID) (deploy.TerminalTargetSet, error) {
+func (f fakeTargetResolver) ListTerminalContainers(ctx context.Context, _, appID uuid.UUID) (deploy.TerminalTargetSet, error) {
+	if f.list != nil {
+		return f.list(ctx, appID)
+	}
 	if err := f.errs[appID]; err != nil {
 		return deploy.TerminalTargetSet{}, err
 	}
@@ -204,41 +212,192 @@ func TestTerminalTargetsSourceListFailureIsReported(t *testing.T) {
 	}
 }
 
-func TestTerminalTargetsSourceBoundsAndOrder(t *testing.T) {
-	serverID := uuid.New()
-	registry := newFakeServerService()
-	applications := make([]deploy.Application, 0, 60)
-	sets := make(map[uuid.UUID]deploy.TerminalTargetSet, 60)
-	for index := 0; index < 60; index++ {
-		app := deploy.Application{ID: uuid.New(), Name: "app", ServerID: serverID}
+// liveApps builds count running applications whose UpdatedAt decreases with
+// the index (so index 0 is the newest).
+func liveApps(count int, serverID uuid.UUID) ([]deploy.Application, map[uuid.UUID]deploy.TerminalTargetSet) {
+	applications := make([]deploy.Application, 0, count)
+	sets := make(map[uuid.UUID]deploy.TerminalTargetSet, count)
+	base := time.Now().UTC()
+	for index := 0; index < count; index++ {
+		app := deploy.Application{
+			ID:        uuid.New(),
+			Name:      fmt.Sprintf("app-%02d", index),
+			ServerID:  serverID,
+			UpdatedAt: base.Add(-time.Duration(index) * time.Minute),
+		}
 		applications = append(applications, app)
-		containers := make([]deploy.TerminalContainer, 0, 60)
-		for position := 0; position < 60; position++ {
+		containers := make([]deploy.TerminalContainer, 0, maxTerminalTargetContainers+10)
+		for position := 0; position < maxTerminalTargetContainers+10; position++ {
 			containers = append(containers, runningContainer("web-1"))
 		}
 		sets[app.ID] = targetSet(app, containers...)
 	}
-	for index := 0; index < 60; index++ {
-		id := uuid.New()
-		registry.items[id] = servers.Server{ID: id, Name: "node", Status: "ready"}
-	}
+	return applications, sets
+}
+
+func TestTerminalTargetsSourceCapsAfterFiltering(t *testing.T) {
+	userID := uuid.New()
+	serverID := uuid.New()
+
+	t.Run("stopped applications do not consume the visible cap", func(t *testing.T) {
+		applications, sets := liveApps(50, serverID)
+		// Twenty newer applications have no running deployment: they must not
+		// hide the older running ones behind the cap.
+		errs := make(map[uuid.UUID]error, 20)
+		for index := 0; index < 20; index++ {
+			stopped := deploy.Application{
+				ID:        uuid.New(),
+				Name:      fmt.Sprintf("stopped-%02d", index),
+				ServerID:  serverID,
+				UpdatedAt: time.Now().UTC().Add(time.Duration(index) * time.Minute),
+			}
+			applications = append([]deploy.Application{stopped}, applications...)
+			errs[stopped.ID] = deploy.ErrNoRunningDeployment
+		}
+		source := terminalTargetsSource{
+			apps:     fakeTargetDeployService{applications: applications},
+			resolver: fakeTargetResolver{sets: sets, errs: errs},
+		}
+		targets, err := source.ListTargets(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("ListTargets: %v", err)
+		}
+		if len(targets.Applications) != 50 {
+			t.Fatalf("applications = %d, want the 50 running ones", len(targets.Applications))
+		}
+		for _, group := range targets.Applications {
+			if strings.HasPrefix(group.ApplicationName, "stopped-") {
+				t.Fatalf("stopped application %q consumed a visible slot", group.ApplicationName)
+			}
+		}
+		if len(targets.Errors) != 0 {
+			t.Fatalf("errors = %+v, want no error for an empty application", targets.Errors)
+		}
+		if targets.Truncated {
+			t.Fatal("truncated = true, want false: all 70 scanned rows were resolved")
+		}
+	})
+
+	t.Run("more than 50 running applications are ordered newest first", func(t *testing.T) {
+		applications, sets := liveApps(60, serverID)
+		source := terminalTargetsSource{
+			apps:     fakeTargetDeployService{applications: applications},
+			resolver: fakeTargetResolver{sets: sets},
+		}
+		targets, err := source.ListTargets(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("ListTargets: %v", err)
+		}
+		if len(targets.Applications) != 60 {
+			t.Fatalf("applications = %d, want all 60 resolvable groups (cap is applied after filtering)", len(targets.Applications))
+		}
+		for index := 0; index < len(targets.Applications)-1; index++ {
+			if targets.Applications[index].ApplicationName > targets.Applications[index+1].ApplicationName {
+				t.Fatalf("order = %q then %q, want newest first", targets.Applications[index].ApplicationName, targets.Applications[index+1].ApplicationName)
+			}
+		}
+	})
+
+	t.Run("the host bound reports truncation", func(t *testing.T) {
+		registry := newFakeServerService()
+		for index := 0; index < maxTerminalTargetServers+5; index++ {
+			id := uuid.New()
+			registry.items[id] = servers.Server{ID: id, Name: "node", Status: "ready"}
+		}
+		source := terminalTargetsSource{servers: registry, isOperator: true}
+		targets, err := source.ListTargets(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("ListTargets: %v", err)
+		}
+		if len(targets.Servers) != maxTerminalTargetServers {
+			t.Fatalf("servers = %d, want %d", len(targets.Servers), maxTerminalTargetServers)
+		}
+		if !targets.Truncated {
+			t.Fatal("truncated = false, want true when ready hosts were cut")
+		}
+	})
+
+	t.Run("an oversized scan reports truncation", func(t *testing.T) {
+		applications, sets := liveApps(maxTerminalTargetScannedApplications+1, serverID)
+		source := terminalTargetsSource{
+			apps:     fakeTargetDeployService{applications: applications},
+			resolver: fakeTargetResolver{sets: sets},
+		}
+		targets, err := source.ListTargets(context.Background(), userID)
+		if err != nil {
+			t.Fatalf("ListTargets: %v", err)
+		}
+		if !targets.Truncated {
+			t.Fatal("truncated = false, want true when the scan cap cuts the application list")
+		}
+	})
+}
+
+func TestTerminalTargetsSourceWorkerBound(t *testing.T) {
+	userID := uuid.New()
+	serverID := uuid.New()
+	applications, sets := liveApps(24, serverID)
+	var current, peak int64
+	resolver := fakeTargetResolver{list: func(ctx context.Context, appID uuid.UUID) (deploy.TerminalTargetSet, error) {
+		running := atomic.AddInt64(&current, 1)
+		for {
+			observed := atomic.LoadInt64(&peak)
+			if running <= observed || atomic.CompareAndSwapInt64(&peak, observed, running) {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+		atomic.AddInt64(&current, -1)
+		return sets[appID], nil
+	}}
 	source := terminalTargetsSource{
-		servers: registry, isOperator: true,
 		apps:     fakeTargetDeployService{applications: applications},
-		resolver: fakeTargetResolver{sets: sets},
+		resolver: resolver,
 	}
-	targets, err := source.ListTargets(context.Background(), uuid.New())
+	if _, err := source.ListTargets(context.Background(), userID); err != nil {
+		t.Fatalf("ListTargets: %v", err)
+	}
+	// The bound is a contract (four node dials at most), so assert the literal
+	// value: using the constant would make the test follow the mutation.
+	if peak > 4 {
+		t.Fatalf("peak concurrency = %d, want <= 4", peak)
+	}
+	if peak < 2 {
+		t.Fatalf("peak concurrency = %d, want the pool to run in parallel", peak)
+	}
+}
+
+func TestTerminalTargetsSourceTimeoutCollapses(t *testing.T) {
+	userID := uuid.New()
+	serverID := uuid.New()
+	applications, _ := liveApps(60, serverID)
+	resolver := fakeTargetResolver{list: func(ctx context.Context, _ uuid.UUID) (deploy.TerminalTargetSet, error) {
+		<-ctx.Done()
+		return deploy.TerminalTargetSet{}, ctx.Err()
+	}}
+	source := terminalTargetsSource{
+		apps:     fakeTargetDeployService{applications: applications},
+		resolver: resolver,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	targets, err := source.ListTargets(ctx, userID)
 	if err != nil {
 		t.Fatalf("ListTargets: %v", err)
 	}
-	if len(targets.Servers) != maxTerminalTargetServers {
-		t.Fatalf("servers = %d, want %d", len(targets.Servers), maxTerminalTargetServers)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("ListTargets took %s, want it to honour the deadline", elapsed)
 	}
-	if len(targets.Applications) != maxTerminalTargetApplications {
-		t.Fatalf("applications = %d, want %d", len(targets.Applications), maxTerminalTargetApplications)
+	if len(targets.Errors) != 1 {
+		t.Fatalf("errors = %+v, want one collapsed timeout entry", targets.Errors)
 	}
-	if len(targets.Applications[0].Containers) != maxTerminalTargetContainers {
-		t.Fatalf("containers = %d, want %d", len(targets.Applications[0].Containers), maxTerminalTargetContainers)
+	entry := targets.Errors[0]
+	if entry.Code != terminal.TargetErrorTimeout {
+		t.Fatalf("code = %q, want %q", entry.Code, terminal.TargetErrorTimeout)
+	}
+	if entry.Count < 1 {
+		t.Fatalf("count = %d, want the number of cut-short applications", entry.Count)
 	}
 }
 
@@ -306,5 +465,41 @@ func TestTerminalTargetsSourceForCapturesOperator(t *testing.T) {
 	}
 	if len(targets.Servers) != 1 {
 		t.Fatalf("servers = %+v, want the ready node for the operator", targets.Servers)
+	}
+}
+
+// TestTerminalTargetsRouteTeamScope is the M2 killer: the add-tab read rides
+// the real RequireTeam chain, so a non-member team header is refused instead
+// of silently falling back to another scope.
+func TestTerminalTargetsRouteTeamScope(t *testing.T) {
+	s, _ := newScopeTestServer(t)
+	teamA, teamB := uuid.New(), uuid.New()
+	teamService := newFakeTeamService()
+	teamService.allow(teamA, testUserID, teams.RoleOwner)
+	s.teamService = teamService
+
+	cases := []struct {
+		name   string
+		teamID string
+		want   int
+	}{
+		{"personal fallback", "", http.StatusOK},
+		{"member team", teamA.String(), http.StatusOK},
+		{"foreign team", teamB.String(), http.StatusForbidden},
+		{"invalid header", "not-a-uuid", http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/terminal/targets", nil)
+			request.Header.Set("Authorization", "Bearer valid-token")
+			if tc.teamID != "" {
+				request.Header.Set("X-Team-Id", tc.teamID)
+			}
+			recorder := httptest.NewRecorder()
+			s.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", recorder.Code, tc.want, recorder.Body.String())
+			}
+		})
 	}
 }

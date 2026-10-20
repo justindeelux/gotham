@@ -167,6 +167,7 @@ const vi = {
     noMatches: "Không có đích nào khớp với tìm kiếm.",
     retry: "Thử lại",
     partial: "Một số đích không tải được.",
+    truncated: "Đang hiển thị {count} đích đầu tiên trong số các đích khả dụng.",
     createFailed: "Không thể khởi động terminal.",
     opening: "Đang mở…",
     errors: {
@@ -178,6 +179,8 @@ const vi = {
         "Terminal container bị tắt trên bảng điều khiển này. Hãy nhờ quản trị viên nền tảng bật lại.",
       internal:
         "Bảng điều khiển đã trả về phản hồi không mong đợi. Hãy thử lại hoặc tải lại trang.",
+      timeout:
+        "Một số đích tải quá lâu. Hãy thử lại khi máy chủ hoặc bảng điều khiển kết nối được.",
     },
   },
   dock: {

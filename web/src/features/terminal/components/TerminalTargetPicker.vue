@@ -73,8 +73,12 @@ const loadError = ref<TerminalErrorCode | "">("");
 const targets = ref<TerminalTargets | null>(null);
 const query = ref("");
 const panel = ref<HTMLElement | null>(null);
+const searchInput = ref<InstanceType<typeof NInput> | null>(null);
+const trigger = ref<InstanceType<typeof NButton> | null>(null);
 const pendingKey = ref("");
 const pickError = ref(false);
+/** picked suppresses the trigger refocus when a selection moved focus already. */
+let picked = false;
 /** loadToken discards a superseded load (close, retry, team switch). */
 let loadToken = 0;
 let controller: AbortController | null = null;
@@ -145,6 +149,18 @@ function matches(row: TargetRow, needle: string): boolean {
   return `${row.label} ${row.meta}`.toLowerCase().includes(needle);
 }
 
+/** visibleTargetCount is the number of rows the server returned (post-bound). */
+const visibleTargetCount = computed<number>(() => {
+  const value = targets.value;
+  if (value === null) {
+    return 0;
+  }
+  return value.applications.reduce(
+    (total, group) => total + group.containers.length,
+    value.servers.length,
+  );
+});
+
 /**
  * groups is the filtered view. Server and application headings only render
  * when at least one of their rows matches, so a search for a container never
@@ -207,8 +223,15 @@ function onSearchKeydown(event: KeyboardEvent): void {
   }
   if (event.key === "Escape") {
     event.preventDefault();
-    show.value = false;
+    closePopover();
   }
+}
+
+/** closePopover closes on Escape and returns focus to the trigger. */
+function closePopover(): void {
+  show.value = false;
+  cancelLoad();
+  focusTrigger();
 }
 
 /** onOptionKeydown implements the listbox arrow/home/end pattern. */
@@ -237,7 +260,7 @@ function onOptionKeydown(event: KeyboardEvent): void {
       break;
     case "Escape":
       event.preventDefault();
-      show.value = false;
+      closePopover();
       break;
     default:
       break;
@@ -267,6 +290,8 @@ function sourceErrorText(code: TerminalTargetErrorCode): string {
       return t("terminal.targets.errors.disabled");
     case "internal":
       return t("terminal.targets.errors.internal");
+    case "timeout":
+      return t("terminal.targets.errors.timeout");
     default:
       return t("terminal.targets.errors.unavailable");
   }
@@ -318,7 +343,19 @@ function onGlobalKeydown(event: KeyboardEvent): void {
     return;
   }
   event.preventDefault();
-  show.value = false;
+  closePopover();
+}
+
+/** focusTrigger returns focus after the popover's own hide update settled. */
+function focusTrigger(): void {
+  void nextTick(() => {
+    window.setTimeout(() => {
+      const element = trigger.value?.$el;
+      if (element instanceof HTMLElement) {
+        element.focus();
+      }
+    }, 0);
+  });
 }
 
 /** onShow loads lazily on every open: a just-deployed container must appear. */
@@ -326,10 +363,18 @@ function onShow(value: boolean): void {
   if (value) {
     query.value = "";
     pickError.value = false;
+    picked = false;
     void load();
+    // A popover is teleported outside the trigger's DOM order, so a keyboard
+    // user's next key would otherwise never reach the search box.
+    void nextTick(() => searchInput.value?.focus());
     return;
   }
   cancelLoad();
+  if (!picked) {
+    focusTrigger();
+  }
+  picked = false;
 }
 
 // A team switch while the popover is open must not keep listing the previous
@@ -362,6 +407,7 @@ async function select(row: TargetRow): Promise<void> {
     if (props.surface === "page") {
       terminal.activatePage(tab.id);
     }
+    picked = true;
     show.value = false;
     emit("opened", tab.id);
     void nextTick(() => {
@@ -401,6 +447,7 @@ onBeforeUnmount(() => {
   >
     <template #trigger>
       <NButton
+        ref="trigger"
         quaternary
         size="tiny"
         class="term-add-tab"
@@ -422,6 +469,7 @@ onBeforeUnmount(() => {
         <span class="term-targets-title">{{ t("terminal.targets.title") }}</span>
       </div>
       <NInput
+        ref="searchInput"
         v-model:value="query"
         size="small"
         clearable
@@ -458,8 +506,8 @@ onBeforeUnmount(() => {
             {{ t("terminal.targets.partial") }}
           </p>
           <p
-            v-for="entry in targets.errors"
-            :key="`${entry.source}:${entry.id ?? ''}:${entry.code}`"
+            v-for="(entry, index) in targets.errors"
+            :key="`${entry.source}:${entry.id ?? ''}:${entry.code}:${index}`"
             class="term-targets-empty"
           >
             {{ sourceErrorText(entry.code) }}
@@ -519,12 +567,18 @@ onBeforeUnmount(() => {
         <p v-if="targets !== null && targets.errors.length > 0" class="term-targets-partial">
           {{ t("terminal.targets.partial") }}
           <span
-            v-for="entry in targets.errors"
-            :key="`${entry.source}:${entry.id ?? ''}:${entry.code}`"
+            v-for="(entry, index) in targets.errors"
+            :key="`${entry.source}:${entry.id ?? ''}:${entry.code}:${index}`"
             class="term-targets-partial-item"
           >
             {{ sourceErrorText(entry.code) }}
+            <template v-if="entry.count !== undefined">
+              ({{ entry.count }})
+            </template>
           </span>
+        </p>
+        <p v-if="targets?.truncated" class="term-targets-truncated">
+          {{ t("terminal.targets.truncated", { count: visibleTargetCount }) }}
         </p>
       </div>
 
@@ -672,5 +726,12 @@ onBeforeUnmount(() => {
 .term-targets-partial-item {
   display: block;
   color: var(--muted);
+}
+
+.term-targets-truncated {
+  margin: 0;
+  padding: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
 }
 </style>

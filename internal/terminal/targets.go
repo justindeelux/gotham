@@ -43,6 +43,10 @@ const (
 	// TargetErrorInternal is an unexpected source failure. The raw error never
 	// reaches the DOM.
 	TargetErrorInternal TargetErrorCode = "internal"
+	// TargetErrorTimeout is one collapsed fan-out deadline/cancel. Count says
+	// how many applications it covers, so a slow node never becomes dozens of
+	// separate "internal" rows.
+	TargetErrorTimeout TargetErrorCode = "timeout"
 )
 
 // HostTarget is one node a platform operator may open a host shell on.
@@ -59,6 +63,7 @@ type ContainerTargetGroup struct {
 	ApplicationID   uuid.UUID
 	ApplicationName string
 	ServerID        uuid.UUID
+	SourceType      string
 	Containers      []ContainerTarget
 }
 
@@ -69,6 +74,8 @@ type TargetError struct {
 	ID     string
 	Name   string
 	Code   TargetErrorCode
+	// Count is set on a collapsed timeout entry; zero means one source.
+	Count int
 }
 
 // Targets is the complete add-tab discovery result. A source failure never
@@ -77,6 +84,9 @@ type Targets struct {
 	Servers      []HostTarget
 	Applications []ContainerTargetGroup
 	Errors       []TargetError
+	// Truncated reports that at least one list was cut by a bound (the UI can
+	// say "showing the first N").
+	Truncated bool
 }
 
 // TargetsSource lists the caller's authorised targets. The implementation
@@ -140,6 +150,7 @@ type applicationTargetsResponse struct {
 	ApplicationID   string                    `json:"application_id"`
 	ApplicationName string                    `json:"application_name"`
 	ServerID        string                    `json:"server_id"`
+	SourceType      string                    `json:"source_type"`
 	Containers      []containerTargetResponse `json:"containers"`
 }
 
@@ -149,6 +160,8 @@ type targetErrorResponse struct {
 	ID     string `json:"id,omitempty"`
 	Name   string `json:"name,omitempty"`
 	Code   string `json:"code"`
+	// Count is present only on a collapsed timeout entry.
+	Count int `json:"count,omitempty"`
 }
 
 // targetsListResponse is the picker's single read. Every slice is non-nil so
@@ -157,6 +170,7 @@ type targetsListResponse struct {
 	Servers      []hostTargetResponse         `json:"servers"`
 	Applications []applicationTargetsResponse `json:"applications"`
 	Errors       []targetErrorResponse        `json:"errors"`
+	Truncated    bool                         `json:"truncated"`
 }
 
 func (h *targetHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -189,10 +203,12 @@ func newTargetsListResponse(targets Targets) targetsListResponse {
 		Servers:      make([]hostTargetResponse, 0, len(targets.Servers)),
 		Applications: make([]applicationTargetsResponse, 0, len(targets.Applications)),
 		Errors:       make([]targetErrorResponse, 0, len(targets.Errors)),
+		Truncated:    targets.Truncated,
 	}
 	servers := targets.Servers
 	if len(servers) > maxHostTargets {
 		servers = servers[:maxHostTargets]
+		response.Truncated = true
 	}
 	for _, server := range servers {
 		response.Servers = append(response.Servers, hostTargetResponse{
@@ -204,17 +220,20 @@ func newTargetsListResponse(targets Targets) targetsListResponse {
 	applications := targets.Applications
 	if len(applications) > maxContainerApps {
 		applications = applications[:maxContainerApps]
+		response.Truncated = true
 	}
 	for _, application := range applications {
 		group := applicationTargetsResponse{
 			ApplicationID:   application.ApplicationID.String(),
 			ApplicationName: application.ApplicationName,
 			ServerID:        application.ServerID.String(),
+			SourceType:      application.SourceType,
 			Containers:      make([]containerTargetResponse, 0, len(application.Containers)),
 		}
 		containers := application.Containers
 		if len(containers) > maxContainersPerApp {
 			containers = containers[:maxContainersPerApp]
+			response.Truncated = true
 		}
 		for _, container := range containers {
 			group.Containers = append(group.Containers, containerTargetResponse{
@@ -239,6 +258,7 @@ func newTargetsListResponse(targets Targets) targetsListResponse {
 			ID:     entry.ID,
 			Name:   entry.Name,
 			Code:   string(sanitizeTargetError(entry.Code)),
+			Count:  entry.Count,
 		})
 	}
 	return response
@@ -253,12 +273,8 @@ func SortTargets(targets *Targets) {
 		}
 		return targets.Servers[i].Name < targets.Servers[j].Name
 	})
-	sort.SliceStable(targets.Applications, func(i, j int) bool {
-		if targets.Applications[i].ApplicationName == targets.Applications[j].ApplicationName {
-			return targets.Applications[i].ApplicationID.String() < targets.Applications[j].ApplicationID.String()
-		}
-		return targets.Applications[i].ApplicationName < targets.Applications[j].ApplicationName
-	})
+	// Applications keep the source's deliberate order (most recently updated
+	// first), after the cap has been applied to resolvable targets.
 	for index := range targets.Applications {
 		containers := targets.Applications[index].Containers
 		sort.SliceStable(containers, func(i, j int) bool {
@@ -290,7 +306,7 @@ func SortTargets(targets *Targets) {
 // future mistake from turning into displayed backend text.
 func sanitizeTargetError(code TargetErrorCode) TargetErrorCode {
 	switch code {
-	case TargetErrorUnavailable, TargetErrorDisabled, TargetErrorInternal:
+	case TargetErrorUnavailable, TargetErrorDisabled, TargetErrorInternal, TargetErrorTimeout:
 		return code
 	default:
 		return TargetErrorInternal

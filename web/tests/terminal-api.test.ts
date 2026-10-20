@@ -262,11 +262,13 @@ describe("terminalTargetsSchema (JUS-265)", () => {
     servers: [
       { id: "11111111-1111-4111-8111-111111111111", name: "prod-01", status: "ready" },
     ],
+    truncated: false,
     applications: [
       {
         application_id: "22222222-2222-4222-8222-222222222222",
         application_name: "shop",
         server_id: "11111111-1111-4111-8111-111111111111",
+        source_type: "image",
         containers: [
           {
             service: "web",
@@ -292,8 +294,13 @@ describe("terminalTargetsSchema (JUS-265)", () => {
 
   it("accepts empty lists (a caller with no targets)", () => {
     expect(
-      terminalTargetsSchema.parse({ servers: [], applications: [], errors: [] }),
-    ).toEqual({ servers: [], applications: [], errors: [] });
+      terminalTargetsSchema.parse({
+        servers: [],
+        applications: [],
+        errors: [],
+        truncated: false,
+      }),
+    ).toEqual({ servers: [], applications: [], errors: [], truncated: false });
   });
 
   it("rejects a drifted body instead of rendering a half-valid list", () => {

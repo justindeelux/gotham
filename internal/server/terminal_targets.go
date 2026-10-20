@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 
@@ -31,6 +32,11 @@ const (
 	maxTerminalTargetServers      = 50
 	maxTerminalTargetApplications = 50
 	maxTerminalTargetContainers   = 50
+	// maxTerminalTargetScannedApplications bounds how many application rows one
+	// picker read resolves. The cap is a scan bound, never the visible cap: the
+	// visible 50 is applied after resolution so stopped/forbidden apps cannot
+	// hide a running one.
+	maxTerminalTargetScannedApplications = 100
 	// terminalTargetWorkers bounds concurrent node dials from one picker read.
 	terminalTargetWorkers = 4
 )
@@ -79,7 +85,9 @@ func (s terminalTargetsSource) ListTargets(ctx context.Context, userID uuid.UUID
 				Code:   terminal.TargetErrorUnavailable,
 			})
 		} else {
-			targets.Servers = readyHostTargets(hosts)
+			var truncated bool
+			targets.Servers, truncated = readyHostTargets(hosts)
+			targets.Truncated = targets.Truncated || truncated
 		}
 	}
 	if s.apps != nil && s.resolver != nil {
@@ -89,28 +97,32 @@ func (s terminalTargetsSource) ListTargets(ctx context.Context, userID uuid.UUID
 	return targets, nil
 }
 
-// readyHostTargets keeps nodes an operator can actually start a shell on.
-func readyHostTargets(hosts []servers.Server) []terminal.HostTarget {
+// readyHostTargets keeps nodes an operator can actually start a shell on and
+// reports whether the bound cut the ready set.
+func readyHostTargets(hosts []servers.Server) ([]terminal.HostTarget, bool) {
 	targets := make([]terminal.HostTarget, 0, len(hosts))
 	for _, host := range hosts {
 		if host.Status != "ready" {
 			continue
+		}
+		if len(targets) == maxTerminalTargetServers {
+			return targets, true
 		}
 		targets = append(targets, terminal.HostTarget{
 			ID:     host.ID,
 			Name:   host.Name,
 			Status: host.Status,
 		})
-		if len(targets) == maxTerminalTargetServers {
-			break
-		}
 	}
-	return targets
+	return targets, false
 }
 
 // collectContainers lists the active team's applications and resolves each
-// application's running containers with a bounded worker pool. One slow or
-// broken node never blocks the rest of the list.
+// application's running containers with a bounded worker pool. The visible cap
+// is applied after filtering (in the transport response), so an application
+// with no running container never consumes a slot. One slow or broken node
+// never blocks the rest of the list: the fan-out stops launching work on
+// ctx.Done and collapses all deadline/cancel outcomes into one timeout entry.
 func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uuid.UUID, targets *terminal.Targets) {
 	applications, err := s.apps.ListApplications(ctx, userID, deploy.ApplicationFilter{})
 	if err != nil {
@@ -127,31 +139,57 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 	if len(applications) == 0 {
 		return
 	}
+	// Most recently updated first: a just-redeployed application is the one an
+	// operator is most likely to open, and the order is deterministic.
 	sort.SliceStable(applications, func(i, j int) bool {
-		if applications[i].Name == applications[j].Name {
-			return applications[i].ID.String() < applications[j].ID.String()
+		if !applications[i].UpdatedAt.Equal(applications[j].UpdatedAt) {
+			return applications[i].UpdatedAt.After(applications[j].UpdatedAt)
 		}
-		return applications[i].Name < applications[j].Name
+		if applications[i].Name != applications[j].Name {
+			return applications[i].Name < applications[j].Name
+		}
+		return applications[i].ID.String() < applications[j].ID.String()
 	})
-	if len(applications) > maxTerminalTargetApplications {
-		applications = applications[:maxTerminalTargetApplications]
+	if len(applications) > maxTerminalTargetScannedApplications {
+		applications = applications[:maxTerminalTargetScannedApplications]
+		targets.Truncated = true
 	}
 
+	// Each application is resolved independently because the deploy resolver
+	// authorizes and locks per application; sharing one node read would need a
+	// deploy-domain batch API. The worker bound keeps that at four dials.
 	type resolved struct {
 		group *terminal.ContainerTargetGroup
 		err   *terminal.TargetError
 	}
 	results := make([]resolved, len(applications))
-	work := make(chan int)
-	var workers sync.WaitGroup
+	var (
+		next    int64
+		handled int64
+		timed   int64
+		workers sync.WaitGroup
+	)
 	worker := func() {
 		defer workers.Done()
-		for index := range work {
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			index := int(atomic.AddInt64(&next, 1)) - 1
+			if index >= len(applications) {
+				return
+			}
 			application := applications[index]
+			atomic.AddInt64(&handled, 1)
 			set, err := s.resolver.ListTerminalContainers(ctx, userID, application.ID)
 			if err != nil {
-				entry := targetErrorForApplication(application, err)
-				if entry != nil {
+				if ctx.Err() != nil ||
+					errors.Is(err, context.DeadlineExceeded) ||
+					errors.Is(err, context.Canceled) {
+					atomic.AddInt64(&timed, 1)
+					continue
+				}
+				if entry := targetErrorForApplication(application, err); entry != nil {
 					results[index].err = entry
 				}
 				continue
@@ -163,6 +201,7 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 				ApplicationID:   application.ID,
 				ApplicationName: application.Name,
 				ServerID:        application.ServerID,
+				SourceType:      set.SourceType,
 				Containers:      make([]terminal.ContainerTarget, 0, len(set.Containers)),
 			}
 			for _, container := range set.Containers {
@@ -184,16 +223,15 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 			results[index].group = &group
 		}
 	}
-	workers.Add(min(terminalTargetWorkers, len(applications)))
-	for range min(terminalTargetWorkers, len(applications)) {
+	workerCount := min(terminalTargetWorkers, len(applications))
+	workers.Add(workerCount)
+	for range workerCount {
 		go worker()
 	}
-	for index := range applications {
-		work <- index
-	}
-	close(work)
 	workers.Wait()
 
+	// Results stay in the application order, which is also the order of the
+	// visible cap: the first 50 resolvable applications win.
 	for _, result := range results {
 		if result.group != nil {
 			targets.Applications = append(targets.Applications, *result.group)
@@ -201,6 +239,20 @@ func (s terminalTargetsSource) collectContainers(ctx context.Context, userID uui
 		if result.err != nil {
 			targets.Errors = append(targets.Errors, *result.err)
 		}
+	}
+	// Everything the deadline cut short (never started or cancelled mid-call)
+	// is one bounded entry with a count, not up to 100 "internal" rows.
+	unresolved := int64(len(applications)) - atomic.LoadInt64(&handled)
+	timeouts := atomic.LoadInt64(&timed)
+	if unresolved > 0 {
+		timeouts += unresolved
+	}
+	if timeouts > 0 {
+		targets.Errors = append(targets.Errors, terminal.TargetError{
+			Source: "applications",
+			Code:   terminal.TargetErrorTimeout,
+			Count:  int(timeouts),
+		})
 	}
 }
 

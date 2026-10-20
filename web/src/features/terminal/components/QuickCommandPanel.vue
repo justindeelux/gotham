@@ -188,7 +188,7 @@ function removeCommand(id: string): void {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  width: min(22rem, calc(100vw - 7rem));
+  width: min(22rem, calc(100vw - 10rem));
   max-height: min(70vh, 34rem);
   overflow-y: auto;
   padding: var(--space-1);

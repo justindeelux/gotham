@@ -160,6 +160,8 @@ function onOptionKeydown(event: KeyboardEvent): void {
   align-items: center;
   gap: var(--space-2);
   box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
   height: var(--space-12);
   min-height: var(--space-12);
   max-height: var(--space-12);

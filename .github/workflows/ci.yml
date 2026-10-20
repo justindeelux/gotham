@@ -114,6 +114,9 @@ jobs:
 
       - name: Frontend harness checks
         working-directory: web
+        env:
+          # Fail instead of silently skipping a PTY shell in CI.
+          GOTHAM_REQUIRE_PTY_SHELLS: bash,zsh,sh
         run: npm test
 
       - name: Lint

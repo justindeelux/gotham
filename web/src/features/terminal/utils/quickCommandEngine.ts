@@ -172,6 +172,13 @@ export class QuickCommandEngine {
         this.submitted = false;
         return data;
       }
+      // Enter while suspended still submits the recalled line. On a shell
+      // without a C mark (bash 3.2) the phase never becomes "running", so
+      // record the submission here or the following type-ahead would not
+      // taint the next prompt.
+      if (data.includes("\r") || data.includes("\n")) {
+        this.submitted = true;
+      }
       // Printable input sent while a command is submitted (type-ahead) may
       // already be queued into the next prompt; taint that prompt.
       if (

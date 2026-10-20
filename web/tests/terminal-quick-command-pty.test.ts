@@ -6,7 +6,7 @@
 // bash vi normal/insert mode, Ctrl-R, history/Tab/arrow resets, word
 // boundaries, PS2, password prompts, alternate screen, a failing rc, and the
 // no-marks negative. Each suite skips with a warning when its shell is absent.
-/* global setTimeout:readonly, clearTimeout:readonly, setInterval:readonly, clearInterval:readonly, console:readonly */
+/* global setTimeout:readonly, clearTimeout:readonly, setInterval:readonly, clearInterval:readonly, console:readonly, process:readonly */
 import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -98,6 +98,34 @@ const bashPath = findShell(["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
   "/opt/homebrew/bin/zsh",
 ]);
 const shPath = findShell(["/bin/sh", "/usr/bin/sh"]);
+
+/**
+ * CI sets GOTHAM_REQUIRE_PTY_SHELLS so a missing shell fails the suite instead
+ * of silently skipping the proof. Locally the variable is unset and the
+ * explicit console warning above is the only signal.
+ */
+const requiredShells = (process.env.GOTHAM_REQUIRE_PTY_SHELLS ?? "")
+  .split(",")
+  .map((name) => name.trim())
+  .filter((name) => name !== "");
+if (requiredShells.length > 0) {
+  if (!hasPty) {
+    throw new Error(
+      "[quick-command-pty] python3/pty is required but unavailable",
+    );
+  }
+  const available: Record<string, string> = {
+    bash: bashPath,
+    zsh: zshPath,
+    sh: shPath,
+  };
+  const missing = requiredShells.filter((name) => (available[name] ?? "") === "");
+  if (missing.length > 0) {
+    throw new Error(
+      `[quick-command-pty] required shell(s) missing: ${missing.join(", ")}`,
+    );
+  }
+}
 
 // Real PTY startup and prompt transitions can exceed Vitest's 5s default.
 vi.setConfig({ testTimeout: 15_000 });
@@ -614,6 +642,33 @@ describe.skipIf(!hasPty || bashPath === "")("real PTY: bash", () => {
       session.accept();
       session.key("\r");
       await session.waitFor(/TA_OK/);
+    } finally {
+      session.stop();
+    }
+  });
+
+  it("recall + Enter then type-ahead stays tainted on shells without a C mark", async () => {
+    const session = await startBash([command("printf 'RECALL_%s\\n' OK", "gs")]);
+    try {
+      // Establish history, then recall it and submit while the mirror is
+      // suspended. bash 3.2 emits no C mark, so Enter must set submitted.
+      session.run("sleep 0.5");
+      await session.waitForPrompt();
+      session.key("\x1b[A");
+      session.key("\r");
+      session.typeText("foo");
+      await session.waitForPrompt();
+      session.typeText("gs");
+      await session.expectNoSuggestion();
+      expect(session.engine.getState().suspended).toBe(true);
+
+      session.key("\r");
+      await session.waitForPrompt();
+      session.typeText("gs");
+      expect(session.engine.getState().suggestion).not.toBeNull();
+      session.accept();
+      session.key("\r");
+      await session.waitFor(/RECALL_OK/);
     } finally {
       session.stop();
     }

@@ -52,12 +52,15 @@ PTY** unless the suggestion list is explicitly focused.
 The suggestion bar is a **fixed-height sibling above the terminal viewport**
 whose space is always reserved. Showing or dismissing a suggestion never
 changes the renderer box, so it sends **no resize frame** and never reflows the
-shell; it also never overlays the active prompt row.
+shell; it also never overlays the active prompt row. The cost is about two
+reserved text rows even when no abbreviation exists; that is the deliberate
+trade-off for a stable viewport.
 
 | Chord | Effect |
 |---|---|
 | type the abbreviation | the bar shows the match above the terminal viewport (never over the prompt line) |
 | `Ctrl+Shift+Space` | focus the visible suggestion list |
+| `Ctrl+Shift+E` or `Shift+Tab` | leave xterm's input trap and focus the window tab / page action |
 | `Enter` (list focused) | insert the command, without running it |
 | `Tab` (list focused) | return focus to the terminal, list stays open |
 | `Esc` (list focused) | dismiss the suggestion and return focus |
@@ -192,6 +195,7 @@ absent:
 | bash happy path | `gs` → command, one run, no duplicated prefix |
 | bash vi mode | Esc (normal mode) → no suggestion; fresh insert prompt → replacement runs once, no `echoecho` |
 | type-ahead | `foogs` typed while `sleep` runs taints the next prompt; no false match; following prompt recovers |
+| recall + Enter | Up then Enter while suspended, then type-ahead, still taints on bash 3.2 without a `C` mark |
 | rc sourced twice | one A/B per prompt and at most one C per command |
 | Ctrl-R | no suggestion inside reverse search; fresh prompt recovers |
 | history/Tab/Ctrl-E/`foogs` | no false match after a reset; fresh prompt recovers |
@@ -202,6 +206,16 @@ absent:
 | zsh | marks emitted, no `read-only variable` error, replacement runs once |
 | zsh Ctrl-C | `zle-line-init` re-emits `B`; suggestions recover after cancel |
 | sh/dash | no marks, no suggestion, ordinary typing works |
+
+zsh **Ctrl-U**, **Esc+i** with text on the line, and `reset-prompt` are
+fail-closed: they keep suggestions off until the next `Ctrl-C` or executed
+command re-emits `B`. A blanket pre-redraw hook would also fire inside Ctrl-R
+search and re-enable suggestions there, so it is intentionally not installed.
+The scan stays safe (no wrong match, no shell errors) until the next prompt.
+
+The CI web job installs zsh and sets `GOTHAM_REQUIRE_PTY_SHELLS=bash,zsh,sh`,
+so a missing required shell fails the suite instead of silently skipping it.
+Locally the variable is unset and a missing shell is an explicit warning.
 
 The zsh run sets `ZDOTDIR` to a temp directory so the operator's own config is
 not involved. The CI web job installs zsh on the Ubuntu runner, so the zsh

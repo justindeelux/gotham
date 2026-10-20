@@ -532,6 +532,9 @@ describe("quick command engine", () => {
     expect(engine.getState().suggestion).toBeNull();
     engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
     engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
+    // The type-ahead above tainted the first prompt; the next one is clean.
+    engine.setPrompt({ phase: "prompt", detected: true, alternateScreen: false });
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).not.toBeNull();
@@ -682,6 +685,24 @@ describe("quick command engine", () => {
     engine.handleInput("g");
     engine.handleInput("s");
     expect(engine.getState().suggestion).not.toBeNull();
+  });
+
+  it("records Enter submitted while suspended, even without a C mark", () => {
+    const { engine } = makeEngine();
+    engine.handleInput("\x1b[A"); // recall suspends the mirror
+    expect(engine.getState().suspended).toBe(true);
+    engine.handleInput("\r"); // submit the recalled line while suspended
+    expect(engine.getState().submitted).toBe(true);
+
+    // Type-ahead after the submitted recalled command must taint the prompt.
+    engine.handleInput("f");
+    engine.handleInput("o");
+    engine.handleInput("o");
+    engine.setPrompt({ phase: "input", detected: true, alternateScreen: false });
+    expect(engine.getState().suspended).toBe(true);
+    engine.handleInput("g");
+    engine.handleInput("s");
+    expect(engine.getState().suggestion).toBeNull();
   });
 
   it("does not match a suffix glued to real text from a clean prompt", () => {
